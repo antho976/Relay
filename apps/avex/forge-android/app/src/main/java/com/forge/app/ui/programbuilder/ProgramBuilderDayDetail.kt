@@ -28,6 +28,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
+import com.forge.app.ui.common.ForgeSnackbar
 import com.forge.app.ui.common.window.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -118,7 +119,9 @@ fun ProgramBuilderDayDetail(
     onMoveExercise: (Int, Int) -> Unit,
     onSetExercise: (String, Int, String) -> Unit,
     onDuplicateDay: () -> Unit,
-    onRemoveDay: () -> Unit
+    onRemoveDay: () -> Unit,
+    /** Another day is pinned to a weekday, so the plan runs by weekday and an unpinned day never comes up. */
+    weekdayPlan: Boolean = false
 ) {
     fun closeDialog() = onDialog(DayDialog.None)
 
@@ -136,7 +139,7 @@ fun ProgramBuilderDayDetail(
     Scaffold(
         // §4.6: back alone, never the screen's name — the day name heads the content.
         topBar = { ForgeTopBar(onBack = onBack) },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { SnackbarHost(snackbarHostState) { ForgeSnackbar(it) } },
         bottomBar = {
             // §3: this page's one-shots at the END — add (do-it-now) + duplicate / remove sidekicks.
             Column(
@@ -174,8 +177,9 @@ fun ProgramBuilderDayDetail(
                         .bounceCombinedClick(onClickLabel = "Rename day", onClick = { onDialog(DayDialog.Rename) })
                         .padding(vertical = 4.dp)
                 ) {
+                    // The user's own name wraps (§14); the 24-character cap bounds it.
                     Text(day.name, style = MaterialTheme.typography.headlineSmall, color = onBg,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        modifier = Modifier.weight(1f, fill = false))
                     Box(
                         Modifier.size(36.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHigh),
                         contentAlignment = Alignment.Center
@@ -206,9 +210,15 @@ fun ProgramBuilderDayDetail(
                     ForgeGroupSection(
                         "Day of the week",
                         footer = {
+                            // Once any day has a weekday the plan runs by weekday, and the schedule
+                            // only ever suggests weekday slots: "next in line" told the user the
+                            // opposite of what would happen to an unpinned day.
                             ForgeGroupCaption(
-                                if (day.weekdays.isEmpty()) "No fixed day. It comes up when it's next in line."
-                                else "Home shows this workout on these days. A day can hold one workout."
+                                when {
+                                    day.weekdays.isNotEmpty() -> "Home shows this workout on these days. A day can hold one workout."
+                                    weekdayPlan -> "No fixed day, so it isn't on your week. Start it from Your program."
+                                    else -> "No fixed day. It comes up when it's next in line."
+                                }
                             )
                         }
                     ) {
@@ -340,7 +350,8 @@ fun ProgramBuilderDayDetail(
             },
             title = "Swap ${swapExercise.name}",
             confirmLabel = "Swap",
-            singleSelect = true
+            singleSelect = true,
+            preferMuscle = ExerciseLibrary.byId(swapExercise.libId)?.muscle
         )
     }
 }

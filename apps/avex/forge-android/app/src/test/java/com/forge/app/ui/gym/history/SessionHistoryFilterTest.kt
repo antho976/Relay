@@ -139,6 +139,24 @@ class SessionHistoryFilterTest {
         assertEquals(listOf(3L, 1L), out.workoutIds().sortedDescending())
     }
 
+    @Test
+    fun heavyIsTheUsersOwnTopQuarter() {
+        val sessions = (1..8).map { session(it.toLong(), volumeLb = it * 1000.0) }
+        // 8 sessions: the top quarter starts at the 7th, 7,000 lb.
+        assertEquals(7000.0, heavyThresholdLb(sessions), 0.0)
+        val out = buildFilteredHistory(
+            workouts = sessions, cardio = emptyList(), exerciseNamesBySession = emptyMap(),
+            filters = HistoryFilters(volume = SessionHistoryFilter.HIGH_VOLUME),
+            heavyLb = heavyThresholdLb(sessions)
+        )
+        assertEquals(listOf(8L, 7L), out.workoutIds().sortedDescending())
+    }
+
+    @Test
+    fun heavyFallsBackToTheFixedLineWithLittleHistory() {
+        assertEquals(HIGH_VOLUME_LB, heavyThresholdLb(listOf(session(1, volumeLb = 9000.0))), 0.0)
+    }
+
     // ── Custom cardio names in search (finding 50) ────────────────────────────
 
     @Test

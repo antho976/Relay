@@ -203,7 +203,9 @@ internal fun ProfileHeaderCard(
                     name.ifBlank { "Athlete" },
                     style = MaterialTheme.typography.displaySmall.copy(shadow = NameShadow),
                     color = Color.White,
-                    maxLines = 1,
+                    // Two lines, not one: a 30-character name in displaySmall truncated at large font
+                    // scales (§14), and the cover has the room for a second line.
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.bounceClick { input = name; editing = true }
                 )

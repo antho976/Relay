@@ -17,6 +17,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatVolumeCompact
@@ -31,6 +35,7 @@ import com.forge.app.ui.common.rowShape
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
 import com.forge.app.ui.gym.stats.components.BodyHeatmap
+import com.forge.app.ui.gym.stats.components.musclesReadout
 import com.forge.app.ui.gym.stats.state.PrRecord
 import com.forge.app.ui.gym.stats.state.StatsUiState
 import java.text.SimpleDateFormat
@@ -104,9 +109,13 @@ internal fun ColumnScope.StatsHeroContent(state: StatsUiState, weightUnit: Weigh
         Spacer(Modifier.width(16.dp))
         // The map counts a rolling 7 days, while the figures beside it are the calendar week, so it
         // says so rather than sitting silently under "This week".
-        Column(Modifier.width(108.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        val mapSets = state.weeklySetsByMuscle.associate { it.muscle to it.sets }
+        Column(
+            Modifier.width(108.dp).chartReadout("Last 7 days: ${musclesReadout(mapSets)}."),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             BodyHeatmap(
-                setsByMuscle = state.weeklySetsByMuscle.associate { it.muscle to it.sets },
+                setsByMuscle = mapSets,
                 accent = c.accent,
                 faint = c.outline.copy(alpha = 0.35f),
                 silhouette = c.outline.copy(alpha = 0.25f),
@@ -137,7 +146,8 @@ internal fun ColumnScope.RecordsContent(
     drillableIds: Set<String>? = null
 ) {
     val fmt = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
-    val shown = records.take(6)
+    var showAll by rememberSaveable { mutableStateOf(false) }
+    val shown = if (showAll) records else records.take(LIFTS_SHOWN)
     // One filled group, a member per record, 2dp seams instead of table rules (2026-09-27).
     Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
         shown.forEachIndexed { i, r ->
@@ -168,5 +178,8 @@ internal fun ColumnScope.RecordsContent(
                 )
             }
         }
+    }
+    if (records.size > LIFTS_SHOWN) {
+        StatsShowAll(label = if (showAll) "top $LIFTS_SHOWN only" else "all ${records.size} records", c = c) { showAll = !showAll }
     }
 }

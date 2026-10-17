@@ -118,10 +118,23 @@ class BlockRepository @Inject constructor(
      */
     suspend fun advanceForWeek(weekId: String): TrainingBlock? = lifecycleMutex.withLock {
         val block = active() ?: return@withLock null
+        val snapshot = runCatching { adaptationRepository.snapshotCached() }.getOrNull()
         val fatigue = runCatching {
-            DeloadAdvisor.fatigue(adaptationRepository.snapshotCached())?.score ?: 0
+            snapshot?.let { DeloadAdvisor.fatigue(it)?.score } ?: 0
         }.getOrDefault(0)
-        val advanced = BlockPlanner.advance(block, weekId, clock.nowMs(), fatigue)
+        // Weeks with no finished session hold the block (BlockPlanner.advance). Without a snapshot
+        // every week counts, which is how the block behaved before.
+        val trainedWeeks = snapshot?.sessions
+            ?.filter { it.finishedAt != null && !it.isUntracked }
+            ?.map {
+                java.time.Instant.ofEpochMilli(it.startedAt).atZone(snapshot.zoneId).toLocalDate()
+                    .with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY))
+            }
+            ?.toSet()
+        val advanced = BlockPlanner.advance(
+            block, weekId, clock.nowMs(), fatigue,
+            trainedInWeek = { monday -> trainedWeeks?.contains(monday) ?: true }
+        )
         if (advanced != block) {
             blockDao.update(advanced)
             if (advanced.phase != block.phase) {

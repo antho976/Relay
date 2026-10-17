@@ -45,5 +45,7 @@ class WorkoutSessionBridge @Inject constructor() {
 
 data class SessionNotifState(
     val dayName: String,
-    val startedAtMs: Long
+    val startedAtMs: Long,
+    /** The day the session belongs to, so a tap on its notifications opens the workout itself. */
+    val dayKey: String? = null
 )

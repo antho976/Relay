@@ -1,5 +1,8 @@
 package com.forge.app.ui.gym.train.components
 
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -36,6 +39,12 @@ import com.forge.app.domain.units.unitLabel
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.gym.train.state.ExerciseUiState
+import com.forge.app.ui.common.clickableLabeled
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.Box
 
 /** Reps to PRE-FILL the field with — numeric targets only ("8-12" → 12, "15" → 15); null otherwise. */
 private val TARGET_REPS_REGEX = Regex("""^(\d+)(?:-(\d+))?$""")
@@ -73,6 +82,8 @@ fun ExerciseCard(
     /** When every other exercise's sets this session were logged — see [restBetweenSeconds]. */
     otherSetTimes: List<Long> = emptyList(),
     sessionStartedAtMs: Long? = null,
+    /** Easing back in after a break: the first set opens on the coach's eased target. */
+    easingBack: Boolean = false,
     onToggle: () -> Unit,
     onLogSet: (weightText: String, reps: Int, durationSeconds: Int?) -> Unit,
     onDeleteSet: (setId: Long) -> Unit,
@@ -110,7 +121,7 @@ fun ExerciseCard(
     val longPressModifier = if (onLongPress != null)
         Modifier.combinedClickable(
             onClick = {},
-            onLongClickLabel = "Exercise options — skip, swap, or set the rest timer",
+            onLongClickLabel = "Exercise options: warm-up sets, plate math, goal, swap or skip",
             onLongClick = onLongPress
         )
     else Modifier
@@ -185,10 +196,8 @@ fun ExerciseCard(
                     style = heroStyle,
                     color = onBg,
                     textDecoration = if (state.skipped) TextDecoration.LineThrough else TextDecoration.None,
-                    modifier = Modifier.clickable { onOpenSwapPicker() }
+                    modifier = Modifier.clickableLabeled("Swap ${state.effectiveName}") { onOpenSwapPicker() }
                 )
-
-                Spacer(Modifier.height(6.dp))
 
                 // Plan line — the whole brief for this exercise in ONE line: what to do, what you
                 // did last time, and the one number to aim for. It used to be three stacked italic
@@ -198,6 +207,7 @@ fun ExerciseCard(
                 // rather than moved: the number IS the advice, and the sentence explaining it only
                 // earned its place when it had a line to itself.
                 val priorLastSet = state.priorSets.lastOrNull()
+                var fill by remember(state.effectiveExerciseId) { mutableStateOf<SetFill?>(null) }
                 // The cue is a weight on weighted lifts and reps on bodyweight ones (CO5); it keeps
                 // the accent, since it is the only part of the line asking you to change what you
                 // were about to do. The unit rides along — the field below is labelled in the
@@ -226,15 +236,36 @@ fun ExerciseCard(
                         }
                     }
                 }
-                Text(planLine, style = MaterialTheme.typography.bodySmall, color = muted)
+                // The cue is the coach's number, so the line is one tap from the field: tapping it puts
+                // the suggested weight (or reps) in. It was a number to retype by hand, and the field
+                // kept last session's, so "try 27.5" sat over a 33.2. The row is 48dp on every card,
+                // tappable or not, so a cue that lands after the card is drawn moves nothing.
+                val cueWeight = state.suggestedWeight
+                val cueReps = state.suggestedReps?.toString()
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .then(
+                            if (cue != null) Modifier.clickableLabeled(
+                                "Use the suggested ${if (cueWeight != null) "weight" else "reps"}, " +
+                                    cue.removePrefix("try ") + (state.suggestionReason?.let { ". $it" } ?: "")
+                            ) { fill = SetFill(nonce = (fill?.nonce ?: 0) + 1, weight = cueWeight, reps = cueReps.takeIf { cueWeight == null }) }
+                            else Modifier
+                        ),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    Text(planLine, style = MaterialTheme.typography.bodySmall, color = muted)
+                }
 
-                // Pinned cue
+                // Pinned cue: the one thing the user asked to always see, so it reads at full muted
+                // in the aside voice. It sat at 0.6 inside padded quote marks, under the 0.65 floor.
                 if (state.pinnedNote.isNotBlank()) {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "\" ${state.pinnedNote} \"",
+                        "“${state.pinnedNote.trim()}”",
                         style = MaterialTheme.typography.bodySmall,
-                        color = muted.copy(alpha = 0.6f),
+                        color = muted,
                         fontStyle = FontStyle.Italic
                     )
                 }
@@ -245,10 +276,12 @@ fun ExerciseCard(
                 val formCue = state.plan.formCue.takeUnless { state.isSwapped }
                 if (!formCue.isNullOrBlank()) {
                     Spacer(Modifier.height(4.dp))
+                    // On the 0.65 caption floor (it was 0.55, which fails 4.5:1), and without the
+                    // "ⓘ": a unicode glyph standing in for an icon (§8).
                     Text(
-                        "ⓘ $formCue",
+                        formCue,
                         style = MaterialTheme.typography.bodySmall,
-                        color = muted.copy(alpha = 0.55f),
+                        color = muted.copy(alpha = 0.65f),
                         fontStyle = FontStyle.Italic
                     )
                 }
@@ -361,6 +394,11 @@ fun ExerciseCard(
                         nextSetNumber = state.loggedSets.size + 1,
                         exerciseKey = state.effectiveExerciseId,
                         priorSetForActiveRow = state.priorSets.getOrNull(state.loggedSets.size),
+                        priorSetBeforeActiveRow = state.priorSets.getOrNull(state.loggedSets.size - 1),
+                        todayLastSet = lastLogged,
+                        fill = fill,
+                        rampSeedLb = state.suggestedTargetLb.takeIf { easingBack },
+                        easingBack = easingBack,
                         targetsMet = targetsMet,
                         advanceLabel = advanceLabel,
                         // "I'm done" path — only meaningful once you've logged something and haven't hit
@@ -401,7 +439,17 @@ fun ExerciseCard(
 @Composable
 private fun InlineRestTimerSlot(timer: State<RestTimerState?>, onTap: () -> Unit, onSkip: () -> Unit) {
     val t = timer.value ?: return
+    // Reports whether the row is on screen, so the floating bubble only stands in once it has been
+    // scrolled away. At least half the row showing counts; leaving composition clears it.
+    val onScreen = LocalInlineRestOnScreen.current
+    if (onScreen != null) DisposableEffect(onScreen) { onDispose { onScreen.value = false } }
     Spacer(Modifier.height(10.dp))
-    InlineRestTimer(timer = t, onTap = onTap, onSkip = onSkip)
+    Box(
+        Modifier.onGloballyPositioned { c ->
+            onScreen?.value = c.size.height > 0 && c.boundsInWindow().height >= c.size.height / 2f
+        }
+    ) {
+        InlineRestTimer(timer = t, onTap = onTap, onSkip = onSkip)
+    }
     Spacer(Modifier.height(4.dp))
 }

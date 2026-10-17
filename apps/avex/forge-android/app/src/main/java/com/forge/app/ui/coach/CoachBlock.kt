@@ -78,7 +78,7 @@ internal fun LazyListScope.coachBlock(
             // race the first for the singleton live row. Muted for that moment, so it reads as taken.
             CoachAction(
                 if (state.block == null) "Start a block →" else "End the block →",
-                if (state.block == null && !state.blockBusy) c.accent else c.muted,
+                if (state.block == null && !state.blockBusy) c.onBg else c.muted,
                 if (state.block == null) "Start a training block" else "End the training block"
             ) {
                 if (!state.blockBusy) {

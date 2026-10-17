@@ -1,6 +1,10 @@
 package com.forge.app.ui.gym.stats.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,11 +41,9 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.forge.app.ui.common.bounceClick
 import kotlinx.coroutines.delay
-import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.time.temporal.TemporalAdjusters
 
 /**
  * Today's local date that stays current while the page is composed: re-read on resume and when the
@@ -76,10 +78,10 @@ internal fun rememberToday(): LocalDate {
 
 /** How many weeks (columns) one page of the heatmap shows; [HEATMAP_WEEKS] divides evenly by this. */
 private const val WEEKS_PER_PAGE = 13
-private val RANGE_FMT = DateTimeFormatter.ofPattern("d MMM")
 
 /**
- * GitHub-contributions-style adherence grid: one cell per day (weeks as columns, Mon→Sun rows),
+ * GitHub-contributions-style adherence grid: one cell per day (weeks as columns, the user's week
+ * down each one),
  * tinted by that day's set count. Glanceable "did I show up?" — the most-beloved consistency view.
  * Paged with chevron arrows a page ([WEEKS_PER_PAGE] weeks) at a time rather than free-scrolled — a
  * horizontal scroll nested in the vertically-scrolling Stats page fought the finger — and opens on
@@ -93,11 +95,17 @@ internal fun CalendarHeatmap(
     faint: Color,
     accent: Color,
     modifier: Modifier = Modifier,
-    onDayTap: ((LocalDate) -> Unit)? = null
+    onDayTap: ((LocalDate) -> Unit)? = null,
+    /** Epoch days planned off (a holiday, a scheduled rest day): an outline-only cell, not a gap. */
+    restDays: Set<Long> = emptySet(),
+    restRing: Color = faint
 ) {
     val today = rememberToday()
-    val startMonday = remember(today, weeks) {
-        today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)).minusWeeks((weeks - 1).toLong())
+    // Columns are the user's weeks (Settings → Format → week starts), the same weeks Stats' "This
+    // week" figures count, so a column never splits the week the figures above it describe.
+    val firstDayMonday = com.forge.app.ui.theme.LocalForgeSettings.current.firstDayMonday
+    val startMonday = remember(today, weeks, firstDayMonday) {
+        com.forge.app.core.time.userWeekStart(today, firstDayMonday).minusWeeks((weeks - 1).toLong())
     }
     // Normalize intensity against the busiest day IN THE VISIBLE WINDOW, not all-time — otherwise one
     // huge day from before the window washes every recent day out to near-faint.
@@ -118,10 +126,15 @@ internal fun CalendarHeatmap(
 
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
-    val rangeLabel = remember(firstWeek, lastWeek, startMonday, today) {
+    // In the configuration's locale, built here: a top-level formatter was fixed to the JVM default
+    // locale at class load and never followed a language change.
+    val locale = com.forge.app.ui.common.currentLocale()
+    val rangeFmt = remember(locale) { DateTimeFormatter.ofPattern("d MMM", locale) }
+    val dayFmt = remember(locale) { DateTimeFormatter.ofPattern("EEEE d MMMM", locale) }
+    val rangeLabel = remember(firstWeek, lastWeek, startMonday, today, rangeFmt) {
         val start = startMonday.plusWeeks(firstWeek.coerceAtLeast(0).toLong())
         val end = startMonday.plusWeeks(lastWeek.toLong()).plusDays(6).let { if (it.isAfter(today)) today else it }
-        "${RANGE_FMT.format(start)} – ${RANGE_FMT.format(end)}".uppercase()
+        "${rangeFmt.format(start)} – ${rangeFmt.format(end)}".uppercase()
     }
 
     Column(modifier) {
@@ -161,13 +174,23 @@ internal fun CalendarHeatmap(
                             // read as a bug. Matches the contributions-grid convention.
                             val color = if (sets == 0 || date.isAfter(today)) faint
                                         else lerp(faint, accent, sets.toFloat() / maxSets)
+                            // A day planned off reads as rest, not as a miss: outline only, like Home's
+                            // week strip draws a rest day. A day trained anyway is lit as usual.
+                            val plannedOff = sets == 0 && !date.isAfter(today) && date.toEpochDay() in restDays
                             Box(
                                 cell
                                     .clip(RoundedCornerShape(4.dp))
-                                    .background(color)
                                     .then(
+                                        if (plannedOff) Modifier.border(1.dp, restRing, RoundedCornerShape(4.dp))
+                                        else Modifier.background(color)
+                                    )
+                                    .then(
+                                        // A lit day says which day and how much, so TalkBack can open it
+                                        // by name rather than as one of a hundred unlabelled buttons.
                                         if (onDayTap != null && sets > 0)
-                                            Modifier.bounceClick { onDayTap(date) }
+                                            Modifier
+                                                .semantics { contentDescription = "${dayFmt.format(date)}, ${if (sets == 1) "1 set" else "$sets sets"}" }
+                                                .bounceClick(role = Role.Button) { onDayTap(date) }
                                         else Modifier
                                     )
                             )

@@ -12,6 +12,10 @@ sealed interface DayUiEvent {
     /** Long-press on a logged set row — immediately log another set with the same weight/reps. */
     data class LogSameAsLast(val exerciseId: String, val setId: Long) : DayUiEvent
     data class DeleteSet(val setId: Long) : DayUiEvent
+    /** Put back the set [DeleteSet] just removed (its snackbar's Undo). */
+    data object RestoreDeletedSet : DayUiEvent
+    /** The deleted set's Undo window closed without a tap. */
+    data object ForgetDeletedSet : DayUiEvent
     data class EditSet(val setId: Long, val weightText: String, val reps: Int) : DayUiEvent
     data class RateExercise(val exerciseId: String, val rating: EffortRating) : DayUiEvent
     data class UpdateNote(val exerciseId: String, val note: String) : DayUiEvent
@@ -59,6 +63,9 @@ sealed interface DayUiEvent {
 
     // Session lifecycle
     data object FinishWorkout : DayUiEvent
+    /** Finish although some exercises were never started (answers [DayUiState.finishUntouched]). */
+    data object ConfirmFinishUntouched : DayUiEvent
+    data object DismissFinishUntouched : DayUiEvent
     /** Dismiss the summary sheet. [mood], [tags] and [journal] are saved against the session. */
     data class DismissSummary(val mood: Mood? = null, val tags: List<String> = emptyList(), val journal: String = "") : DayUiEvent
     data object RequestBack : DayUiEvent

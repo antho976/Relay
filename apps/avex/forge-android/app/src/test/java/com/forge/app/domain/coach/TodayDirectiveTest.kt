@@ -119,7 +119,9 @@ class TodayDirectiveTest {
         )
         val d = compute(life = life)
         assertEquals(TodayDirective.Kind.TRAIN, d.kind)
-        assertTrue(d.reason.contains("21 days"))
+        // Three weeks reads as weeks, and the copy states the ease the targets actually carry.
+        assertTrue(d.reason, d.reason.contains("3 weeks"))
+        assertTrue(d.reason, d.reason.contains("10% under"))
     }
 
     // ── Cold start ─────────────────────────────────────────────────────────────

@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -175,10 +176,10 @@ fun SetRow(
                 val pd = wDiff / plateLb
                 (if (pd >= 0) "+" else "") + formatPlateCount(pd) + " pl"
             } else (if (wDiff >= 0) "+" else "") + formatWeightDelta(wDiff, weightUnit)
-        rDiff != 0 -> (if (rDiff > 0) "+" else "") + "$rDiff rep"
+        rDiff != 0 -> (if (rDiff > 0) "+" else "") + "$rDiff rep${if (kotlin.math.abs(rDiff) == 1) "" else "s"}"
         // Matched exactly — show a deliberate zero rather than nothing (#6).
         wDiff != null -> if (isPlates) "+0 pl" else "+0 ${unitLabel(weightUnit)}"
-        else -> "+0 rep"
+        else -> "+0 reps"
     }
     val deltaColor = when {
         deltaPositive -> ForgeLastGreen
@@ -188,6 +189,22 @@ fun SetRow(
 
     if (isEditing) {
         val canConfirm = editWeight.isNotBlank() && editReps.toIntOrNull()?.let { it > 0 } == true
+        // One confirm for the ✓ and the keyboard's Done. Done used to only hide the keyboard, and a
+        // lifter who pressed it and walked off left the edit unsaved behind a 36dp check mark.
+        fun confirmEdit() {
+            if (!canConfirm) return
+            val typed = editWeight.trim()
+            val storedLb = set.weightLb
+            // Untouched free-weight field: hand back the FULL-PRECISION display value rather
+            // than the rounded field text, so the display→lb round-trip on save can't drift
+            // the stored weight (e.g. an imported 135 lb lift shown as "9.6 st" must stay
+            // 135 lb when only the reps change). LB/plates need no conversion, so keep as-is.
+            val weightOut = if (!isPlates && weightUnit != WeightUnit.LB &&
+                storedLb != null && typed == editSeed
+            ) toDisplayWeight(storedLb, weightUnit).toString() else typed
+            onEdit(weightOut, editReps.toInt())
+            isEditing = false
+        }
         Row(
             modifier = modifier.fillMaxWidth().padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -210,25 +227,12 @@ fun SetRow(
                 onValueChange = { if (it.all { c -> c.isDigit() }) editReps = it.take(MAX_REPS_DIGITS) },
                 label = "Reps",
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { confirmEdit() }),
                 modifier = Modifier.width(SetTable.REPS_COL_W + 24.dp)
             )
             Spacer(Modifier.width(6.dp))
             IconButton(
-                onClick = {
-                    if (canConfirm) {
-                        val typed = editWeight.trim()
-                        val storedLb = set.weightLb
-                        // Untouched free-weight field: hand back the FULL-PRECISION display value rather
-                        // than the rounded field text, so the display→lb round-trip on save can't drift
-                        // the stored weight (e.g. an imported 135 lb lift shown as "9.6 st" must stay
-                        // 135 lb when only the reps change). LB/plates need no conversion, so keep as-is.
-                        val weightOut = if (!isPlates && weightUnit != WeightUnit.LB &&
-                            storedLb != null && typed == editSeed
-                        ) toDisplayWeight(storedLb, weightUnit).toString() else typed
-                        onEdit(weightOut, editReps.toInt())
-                        isEditing = false
-                    }
-                },
+                onClick = { confirmEdit() },
                 modifier = Modifier.size(36.dp),
                 enabled = canConfirm
             ) {
@@ -297,19 +301,32 @@ fun SetRow(
         // RPE col — tappable framed box
         Box(modifier = m, contentAlignment = Alignment.Center) {
             if (onSetRpe != null) {
+                // The drawn chip stays small; the touch target around it is 48dp (§14). The chip
+                // alone was about 24×30dp, the most-tapped control after a set.
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                        .combinedClickable(onClick = { showRpePicker = !showRpePicker }, onLongClick = { onSetRpe(null) })
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                        .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                        .combinedClickable(
+                            onClickLabel = if (set.rpe != null) "Change RPE" else "Rate this set's RPE",
+                            onClick = { showRpePicker = !showRpePicker },
+                            onLongClickLabel = if (set.rpe != null) "Clear RPE" else null,
+                            onLongClick = { onSetRpe(null) }
+                        ),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        set.rpe?.let { rpeLabel(it) } ?: "—",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (set.rpe != null) onBg else muted.copy(alpha = 0.35f),
-                        fontSize = 11.sp
-                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            set.rpe?.let { rpeLabel(it) } ?: "—",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (set.rpe != null) onBg else muted.copy(alpha = 0.35f),
+                            fontSize = 11.sp
+                        )
+                    }
                 }
             } else if (set.rpe != null) {
                 Text(rpeLabel(set.rpe), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 11.sp)
@@ -404,10 +421,12 @@ fun SetRow(
                         "$priorDisplay × ${prior.reps}"
                     }
                     if (ghost != null) {
+                        // Named: unlabelled under the same figure, "33.2 lb × 10" read as the row
+                        // printed twice. On the 0.65 caption floor (it was 0.45, which fails 4.5:1).
                         Text(
-                            ghost,
+                            "last $ghost",
                             style = MaterialTheme.typography.labelSmall,
-                            color = muted.copy(alpha = 0.45f),
+                            color = muted.copy(alpha = 0.65f),
                             fontSize = 9.sp
                         )
                     }
@@ -579,7 +598,8 @@ private fun InlineEditField(
     onValueChange: (String) -> Unit,
     label: String,
     keyboardOptions: KeyboardOptions,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    keyboardActions: KeyboardActions = KeyboardActions.Default
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -590,6 +610,7 @@ private fun InlineEditField(
         textStyle = MaterialTheme.typography.titleMedium.copy(color = onBg),
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
         keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
         modifier = modifier.semantics { contentDescription = label },
         decorationBox = { inner ->
             Column(

@@ -79,6 +79,12 @@ internal fun sanitizeReps(reps: Int): Int = reps.coerceIn(0, MAX_LOGGED_REPS)
  */
 internal const val MAX_LOGGED_WEIGHT_LB = 2000.0
 
+/**
+ * An open session untouched for this long is abandoned rather than paused: no gym session idles
+ * twelve hours between sets, and an evening workout left open is closed before the next morning's.
+ */
+internal const val STALE_SESSION_MS = 12L * 60 * 60 * 1000
+
 /** Clamp a set's weight to a sane, non-poisoning range at the write boundary. Pure + testable. */
 internal fun sanitizeWeightLb(weightLb: Double?): Double? = weightLb?.coerceIn(0.0, MAX_LOGGED_WEIGHT_LB)
 
@@ -161,6 +167,11 @@ class WorkoutRepository @Inject constructor(
      * now ([com.forge.app.data.db.SessionWrites.startOrResume]); the loser resumes the winner's row.
      */
     suspend fun startOrResumeSession(dayKey: String): StartedSession = startMutex.withLock {
+        // An open session nobody has touched for half a day was abandoned, not paused. Resuming it
+        // poured today's sets into a workout dated weeks ago (the streak, the week's stats and the
+        // coach's layoff read all take its start date), so it is closed to history first, at its
+        // last logged activity, and today starts fresh.
+        closeStaleLocked()
         sessionDao.getActiveSession()?.let { active ->
             // Don't resume a "zombie" session whose day the program no longer has — resuming it would
             // load the wrong day's plan (Program.day() falls back to the first day) and log under a stale
@@ -615,19 +626,58 @@ class WorkoutRepository @Inject constructor(
         if (validDayKeys.isEmpty()) return null
         val active = sessionDao.getActiveSession() ?: return null
         if (active.dayKey in validDayKeys) return null
-        val sets = loggedSetDao.allForSession(active.id)
-        if (sets.isEmpty()) {
-            discardSession(active.id)
-            return OrphanResolution(finishedToHistory = false)
-        }
-        // Resolution can run days after the session was abandoned, so its finish time is the LAST
-        // logged-set activity, not `now`: `finished_at` drives the streak's trained days and the
-        // weekly stats/export bucketing, and stamping resolution time credited the wrong day/week.
-        val lastActivityMs = sets.maxOf { it.completedAt }.coerceAtLeast(active.startedAt)
-        // Same conditional-stamp + targeted-totals shape as finishSession, in one transaction: a
-        // concurrent finish, tag or journal write is neither overwritten by a stale whole-row copy
-        // nor finished twice.
-        val activeSeconds = database.withTransaction {
+        return closeAbandoned(active)
+    }
+
+    /** What [closeStaleSession] closed: the day, when it started, and whether its work was kept. */
+    data class StaleClosure(val dayKey: String, val startedAtMs: Long, val finishedToHistory: Boolean)
+
+    /**
+     * Close an open session nobody has touched for [STALE_SESSION_MS], as a start would. Run at app
+     * start too, so the feed and the widget never offer to "resume" a workout from weeks ago, which
+     * the next start would close anyway.
+     */
+    suspend fun closeStaleSession(): StaleClosure? = startMutex.withLock { closeStaleLocked() }
+
+    /** [closeStaleSession]'s body, for callers already holding [startMutex] (it is not reentrant). */
+    private suspend fun closeStaleLocked(): StaleClosure? {
+        val active = sessionDao.getActiveSession() ?: return null
+        val res = closeAbandoned(active, staleBy = clock.nowMs() - STALE_SESSION_MS) ?: return null
+        return StaleClosure(active.dayKey, active.startedAt, res.finishedToHistory)
+    }
+
+    /** When [active] was last worked on: its newest logged set, or its start when it has none. */
+    private fun lastActivityMs(active: Session, sets: List<LoggedSet>): Long =
+        (sets.maxOfOrNull { it.completedAt } ?: active.startedAt).coerceAtLeast(active.startedAt)
+
+    /**
+     * Close a session nobody is coming back to, without losing work: an empty one is discarded, one
+     * with logged sets is finished to history at its last activity. Shared by the zombie path
+     * ([resolveOrphanSession]) and the stale path in [startOrResumeSession].
+     *
+     * Everything it decides on is read inside its own transaction, which a set write can't interleave
+     * with. The sets used to be read before it, so a set the watch logged in between (a wrist log is
+     * what wakes the process the startup sweep runs in) was deleted along with an "empty" session, or
+     * left out of a finished one's totals. [staleBy], when given, closes the session only if nothing
+     * happened in it after that instant, judged on the same read, so a set landing first keeps it open.
+     */
+    private suspend fun closeAbandoned(active: Session, staleBy: Long? = null): OrphanResolution? {
+        val closed = database.withTransaction {
+            val sets = loggedSetDao.allForSession(active.id)
+            // Resolution can run days after the session was abandoned, so its finish time is the LAST
+            // logged-set activity, not `now`: `finished_at` drives the streak's trained days and the
+            // weekly stats/export bucketing, and stamping resolution time credited the wrong day/week.
+            val lastActivityMs = lastActivityMs(active, sets)
+            if (staleBy != null && lastActivityMs > staleBy) return@withTransaction null
+            if (sets.isEmpty()) {
+                // Only while still open: a finish that won the race keeps its row.
+                val current = sessionDao.get(active.id)?.takeIf { it.finishedAt == null }
+                    ?: return@withTransaction null
+                sessionDao.delete(current) // CASCADE removes LoggedExercises
+                return@withTransaction AbandonedClose(finishedAtMs = null, activeSeconds = 0)
+            }
+            // Same conditional-stamp + targeted-totals shape as finishSession: a concurrent finish, tag
+            // or journal write is neither overwritten by a stale whole-row copy nor finished twice.
             if (sessionDao.finishIfUnfinished(active.id, lastActivityMs) == 0) return@withTransaction null
             // This session was abandoned earlier (force-stop / regenerate), not finished just now: close any
             // open sitting at the LAST logged-set activity rather than `now` (which could be days later), then
@@ -645,16 +695,20 @@ class WorkoutRepository @Inject constructor(
                 setCount = sets.size,
                 activeSeconds = seconds
             )
-            seconds
-        } ?: return null // someone else finished it first — nothing left to resolve
+            AbandonedClose(finishedAtMs = lastActivityMs, activeSeconds = seconds)
+        } ?: return null // someone else finished it first, or it isn't stale any more
         // Mirror to Health Connect like a normal finish (a recovered session is a real session) — but
         // end the HC record at the LAST logged activity, not `now`: resolution can run days after the
-        // session was abandoned, and `now` would write a multi-day workout into Samsung Health.
-        val hcEndMs = lastActivityMs
-        writeFinishMirrors(active, endMs = hcEndMs, activeSeconds = activeSeconds)
+        // session was abandoned, and `now` would write a multi-day workout into Samsung Health. A
+        // discarded session was open, so it was never mirrored and has no copies to take back.
+        val endMs = closed.finishedAtMs
+        if (endMs != null) writeFinishMirrors(active, endMs = endMs, activeSeconds = closed.activeSeconds)
         refreshWidget()
-        return OrphanResolution(finishedToHistory = true)
+        return OrphanResolution(finishedToHistory = endMs != null)
     }
+
+    /** What [closeAbandoned]'s transaction did: discarded ([finishedAtMs] null) or finished at it. */
+    private data class AbandonedClose(val finishedAtMs: Long?, val activeSeconds: Int)
 
     // ─── Logged exercises ──────────────────────────────────────────────────────
 
@@ -846,6 +900,32 @@ class WorkoutRepository @Inject constructor(
     )
 
     suspend fun deleteSet(set: LoggedSet) = loggedSetDao.delete(set)
+
+    /** What a logged-exercise row is logging now, for [restoreSet]'s check. */
+    suspend fun exerciseIdOfRow(loggedExerciseId: Long): String? = loggedExerciseDao.get(loggedExerciseId)?.exerciseId
+
+    /**
+     * Put a just-deleted set back, same id and position, for the delete's Undo. Only while its
+     * session is still open: a finished session's totals were stamped without it. False when the
+     * set could not go back.
+     *
+     * Its row has to still be the lift it was deleted from ([exerciseIdAtDelete]) and not skipped:
+     * deleting a row's only set re-opens it to a swap, and the undo then credited a bench set to the
+     * DB press swapped in, while a set put back under a skipped row drops out of history. If its
+     * position was taken since (re-logged with corrected numbers, or from the wrist), it goes back
+     * after the last set instead of beside a second set of the same number.
+     */
+    suspend fun restoreSet(set: LoggedSet, exerciseIdAtDelete: String? = null): Boolean = database.withTransaction {
+        val exercise = loggedExerciseDao.get(set.loggedExerciseId) ?: return@withTransaction false
+        val session = sessionDao.get(exercise.sessionId) ?: return@withTransaction false
+        if (session.finishedAt != null) return@withTransaction false
+        if (exercise.skipped) return@withTransaction false
+        if (exerciseIdAtDelete != null && exercise.exerciseId != exerciseIdAtDelete) return@withTransaction false
+        val taken = loggedSetDao.forLoggedExercise(set.loggedExerciseId).any { it.setIndex == set.setIndex }
+        val index = if (taken) (loggedSetDao.maxSetIndex(set.loggedExerciseId) ?: -1) + 1 else set.setIndex
+        loggedSetDao.insert(set.copy(setIndex = index))
+        true
+    }
 
     /**
      * Edit a logged set, through the same clamps as [logSet] — including its weight TEXT. Only the

@@ -90,7 +90,17 @@ class LifeEventsTest {
         assertFalse(layoff.returning)
         assertEquals(21, layoff.days)
         assertTrue(s.easeOff)
-        assertTrue(LifeEvents.explain(s)!!.contains("21 days"))
+        assertTrue(LifeEvents.explain(s)!!.contains("3 weeks"))
+        // The session about to be planned is the first one back: it eases from the start.
+        assertEquals(LifeEvents.RAMP_SCALE, s.loadScale, 0.0001)
+        assertEquals("first session back after 3 weeks", s.rampNote)
+    }
+
+    @Test
+    fun gapsUnderThreeWeeksReadInDaysAndLongerOnesInWeeks() {
+        assertEquals("16 days", LifeEvents.gapPhrase(16))
+        assertEquals("3 weeks", LifeEvents.gapPhrase(21))
+        assertEquals("13 weeks", LifeEvents.gapPhrase(94))
     }
 
     @Test
@@ -108,6 +118,22 @@ class LifeEventsTest {
         assertEquals(26, layoff.days)
         assertEquals(LifeEvents.RAMP_SCALE, s.loadScale, 0.0001)
         assertTrue(LifeEvents.explain(s)!!.contains("First week back"))
+    }
+
+    @Test
+    fun theRampEasesALiftOnceNotEverySessionOfTheWeek() {
+        // Back 4 days ago after a 26-day gap, again 2 days ago.
+        val s = assess(sessions = listOf(session(30), session(4), session(2)))
+        // A lift last trained before the gap steps down from it.
+        assertEquals(LifeEvents.RAMP_SCALE, s.loadScaleFrom(now - 30 * day), 0.0001)
+        // One trained in a session back already carries the ease; easing it again compounded.
+        assertEquals(1.0, s.loadScaleFrom(now - 4 * day), 0.0001)
+        assertEquals(1.0, s.loadScaleFrom(now - 2 * day), 0.0001)
+        // Never trained: nothing to compound, the ramp still speaks.
+        assertEquals(LifeEvents.RAMP_SCALE, s.loadScaleFrom(null), 0.0001)
+        // Still away: every bout is from before the gap.
+        val away = assess(sessions = listOf(session(30), session(28)))
+        assertEquals(LifeEvents.RAMP_SCALE, away.loadScaleFrom(now - 28 * day), 0.0001)
     }
 
     @Test

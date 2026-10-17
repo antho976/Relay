@@ -53,6 +53,31 @@ internal fun LeaveSessionDialog(
 }
 
 /**
+ * FINISH while some exercises were never started. Finishing can't be undone, so this is one of the
+ * few places §12 allows a dialog: it names what stays unlogged, and the safe answer is the primary.
+ */
+@Composable
+internal fun FinishUntouchedDialog(
+    untouched: List<String>,
+    onFinish: () -> Unit,
+    onKeepGoing: () -> Unit
+) {
+    val count = untouched.size
+    val names = when {
+        count == 1 -> untouched.first()
+        count == 2 -> "${untouched[0]} and ${untouched[1]}"
+        else -> "${untouched[0]}, ${untouched[1]} and ${count - 2} more"
+    }
+    AlertDialog(
+        onDismissRequest = onKeepGoing,
+        title = { Text(if (count == 1) "1 exercise not started" else "$count exercises not started") },
+        text = { Text("$names ${if (count == 1) "has" else "have"} no sets. Finishing closes the workout with ${if (count == 1) "it" else "them"} unlogged.") },
+        confirmButton = { Button(onClick = onKeepGoing) { Text("Keep going") } },
+        dismissButton = { TextButton(onClick = onFinish) { Text("Finish anyway") } }
+    )
+}
+
+/**
  * Shown when this day is opened while a DIFFERENT day's workout is still in progress (only one
  * session is active at a time). Resume the other one, or discard it and start this day.
  */
@@ -85,7 +110,7 @@ internal fun GoalSetterDialog(
     val weightLb = com.forge.app.domain.units.parseToLb(weightText, weightUnit)
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Goal weight — $exerciseName") },
+        title = { Text("Goal for $exerciseName") },
         text = {
             OutlinedTextField(
                 value = weightText,

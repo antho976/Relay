@@ -44,7 +44,17 @@ import com.forge.app.ui.common.statsEntrance
 @Composable
 fun SessionDetailScreen(
     onBack: () -> Unit,
+    /** Opens a lift's all-time trend on Stats; null hides the link. */
+    onOpenLiftTrend: ((String) -> Unit)? = null,
     viewModel: SessionDetailViewModel = hiltViewModel()
+) = androidx.compose.runtime.CompositionLocalProvider(LocalOpenLiftTrend provides onOpenLiftTrend) {
+    SessionDetailContent(onBack, viewModel)
+}
+
+@Composable
+private fun SessionDetailContent(
+    onBack: () -> Unit,
+    viewModel: SessionDetailViewModel
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val exportPath by viewModel.exportPath.collectAsStateWithLifecycle()
@@ -73,11 +83,8 @@ fun SessionDetailScreen(
             }.isSuccess
             // Tell the user if the share sheet couldn't open instead of silently swallowing it. The path
             // is cleared either way so the one-shot doesn't loop; tapping export again re-fires cleanly.
-            if (!shared) {
-                android.widget.Toast.makeText(
-                    context, "Couldn't open the share sheet.", android.widget.Toast.LENGTH_SHORT
-                ).show()
-            }
+            // Through the app's one snackbar, like the export's own failure line, not a stock Toast.
+            if (!shared) viewModel.showMessage("Couldn't open the share sheet.")
             viewModel.clearExportPath()
         }
     }

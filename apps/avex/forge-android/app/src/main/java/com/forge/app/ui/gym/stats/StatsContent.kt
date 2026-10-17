@@ -56,6 +56,9 @@ enum class StatsLens(val label: String) {
  */
 object StatsLensRequests {
     val pending = kotlinx.coroutines.flow.MutableStateFlow<StatsLens?>(null)
+
+    /** A lift whose Strength row another screen asks Stats to open (a session's "trend →"). */
+    val pendingLift = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
 }
 
 /**
@@ -90,6 +93,10 @@ fun StatsContent(
     // re-expands its row after a manual collapse.
     var focusLift by rememberSaveable { mutableStateOf<String?>(null) }
     var focusNonce by rememberSaveable { mutableStateOf(0) }
+    // The focus request whose row has already been scrolled into view. Kept here, beside the nonce,
+    // because the row itself leaves composition on every lens switch, pager swipe and rotation, and a
+    // row-level flag came back true each time and yanked the page back to a lift opened long before.
+    var focusShownNonce by rememberSaveable { mutableStateOf(0) }
     // The expanding row is the "str-lifts" card, ABOVE the Records card being tapped, so the page is
     // scrolled up to it or the tap would appear to do nothing.
     val listState = rememberLazyListState()
@@ -117,6 +124,17 @@ fun StatsContent(
             restoredLens = true
             StatsLensRequests.pending.value = null
             listState.scrollToItem(0)
+        }
+    }
+    // Another screen asked for a lift: the Strength lens with that lift's row open, as a record tap does.
+    val requestedLift by StatsLensRequests.pendingLift.collectAsStateWithLifecycle()
+    LaunchedEffect(requestedLift) {
+        requestedLift?.let { id ->
+            focusLift = id; focusNonce++; lens = StatsLens.STRENGTH
+            restoredLens = true
+            StatsLensRequests.pendingLift.value = null
+            // Items above the lens content: "title" (0), "hero" (1), "lens" (2) -> "str-lifts" is 3.
+            listState.scrollToItem(3)
         }
     }
     // Health Connect has no observer, so the Body lens reads it when opened and on every resume.
@@ -196,7 +214,7 @@ fun StatsContent(
 
                 when (lens) {
                     StatsLens.STRENGTH -> strengthLens(
-                        state, weightUnit, c, focusLift, focusNonce, onOpenProfile,
+                        state, weightUnit, c, focusLift, focusNonce, focusShownNonce, { focusShownNonce = it }, onOpenProfile,
                         onOpenLift = { id ->
                             focusLift = id; focusNonce++; lens = StatsLens.STRENGTH
                             // Items above the lens content: "title" (0), "hero" (1), "lens" (2) -> "str-lifts" is 3.
@@ -265,6 +283,8 @@ private fun LazyListScope.strengthLens(
     c: StatsColors,
     focusLift: String?,
     focusNonce: Int,
+    focusShownNonce: Int,
+    onFocusShown: (Int) -> Unit,
     onLogBodyweight: () -> Unit,
     onOpenLift: (String) -> Unit
 ) {
@@ -275,10 +295,13 @@ private fun LazyListScope.strengthLens(
     item("str-lifts") {
         StatsCard(
             c, title = "Strength per lift",
-            caption = "Estimated 1RM per lift and how fast it is climbing. Tap a lift for its trend, PRs and curve.",
+            caption = "Estimated 1RM per lift and how fast it is climbing.",
             index = 2
         ) {
-            E1rmComparisonList(state.e1rmLifts, state.recentPrs, state.strengthCurves, weightUnit, c, focusLift, focusNonce)
+            E1rmComparisonList(
+                state.e1rmLifts, state.recentPrs, state.strengthCurves, weightUnit, c, focusLift, focusNonce,
+                state.plateauFlags, focusShownNonce, onFocusShown
+            )
         }
     }
     // Relative strength — each lift as a multiple of bodyweight.
@@ -290,7 +313,7 @@ private fun LazyListScope.strengthLens(
     // The hall of fame lives here — records ARE strength, and a tap expands that lift's row above.
     if (state.hallOfFame.isNotEmpty()) {
         item("str-records") {
-            StatsCard(c, title = "Records", caption = "Your heaviest set on each lift. Tap one for its trend.", index = 4) {
+            StatsCard(c, title = "Records", caption = "Your heaviest set on each lift.", index = 4) {
                 // Only lifts with a drill row (top e1RM lifts with 2+ sessions) can open one.
                 RecordsContent(
                     state.hallOfFame, weightUnit, c, onOpenLift,
@@ -309,13 +332,13 @@ private fun LazyListScope.daysLens(state: StatsUiState, c: StatsColors, onDayTap
     }
     item("days-consistency") {
         StatsCard(c, title = "Consistency", caption = "Every training day, lit by how much you did.", index = 2) {
-            AdherenceContent(state.dailyActivity, c, onDayTap)
+            AdherenceContent(state.dailyActivity, c, onDayTap, state.restEpochDays)
         }
     }
     // The prettiest chart, deliberately last — viz-only nerd candy, not a decision gate.
     if (state.dailyActivity.size >= 5) {
         item("days-banister") {
-            StatsCard(c, title = "Fitness vs fatigue", caption = "Banister model · viz only.", index = 3) {
+            StatsCard(c, title = "Fitness vs fatigue", caption = "Fitness builds slowly, fatigue fades fast. Form is the gap.", index = 3) {
                 BanisterContent(state.dailyActivity, c)
             }
         }

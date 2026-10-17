@@ -115,6 +115,14 @@ object ProgressionAdvisor {
         phase: com.forge.app.domain.coach.BlockPhase? = null,
         /** The unit the user lifts in: targets snap to its grid, not a pound grid. */
         weightUnit: WeightUnit = WeightUnit.LB,
+        /**
+         * The comeback ramp after a layoff ([com.forge.app.domain.coach.LifeEvents.State.loadScale]),
+         * 1.0 when there is none. Composed with today's scale the same way the pre-session brief
+         * composes it, so the brief and the "try" weight on the card are the same number.
+         */
+        lifeScale: Double = 1.0,
+        /** Why [lifeScale] is under 1.0 ("first session back after 3 weeks"), for the reason line. */
+        lifeNote: String? = null,
         t: AdaptThresholds = AdaptThresholds()
     ): Recommendation.WeightChange? {
         if (unit == ExerciseUnit.BODYWEIGHT) return null
@@ -122,23 +130,32 @@ object ProgressionAdvisor {
         val working = prevSets.filter { !it.isAssisted && it.weightLb != null }
         val prevMax = working.maxOfOrNull { it.weightLb!! } ?: return null
 
-        val dayScale: Double
-        val dayNote: String?
+        val todayScale: Double
+        val todayNote: String?
         when {
             intensity != IntensityIntent.NORMAL -> {
-                dayScale = intensityScale(intensity, t)
-                dayNote = "intensity adjusted"
+                todayScale = intensityScale(intensity, t)
+                todayNote = "intensity adjusted"
             }
             readiness != null -> {
-                dayScale = 1 + readiness.percent / 100.0
-                dayNote = if (readiness.percent < 0) "eased ${-readiness.percent}% — readiness low"
-                else "+${readiness.percent}% — readiness high"
+                todayScale = 1 + readiness.percent / 100.0
+                todayNote = if (readiness.percent < 0) "eased ${-readiness.percent}%, readiness low"
+                else "+${readiness.percent}%, readiness high"
             }
             else -> {
-                dayScale = 1.0
-                dayNote = null
+                todayScale = 1.0
+                todayNote = null
             }
         }
+        // A layoff ramp outranks the day's own note: the comeback is the reason the weight moved,
+        // and readiness already counts it among its parts, so "readiness low" would blame the wrong
+        // thing. The note states the whole ease the card's weight carries.
+        val easing = lifeScale < 1.0 - SCALE_EPSILON
+        val dayScale = todayScale * lifeScale
+        val dayNote = if (easing) {
+            val eased = kotlin.math.round((1.0 - dayScale) * 100).toInt()
+            listOfNotNull("eased $eased%", lifeNote).joinToString(", ")
+        } else todayNote
         // The block's ambition and today's answer, composed once (H-02). No block leaves this
         // exactly as it was: `composedLoadScale(null, x) == x` for any scale in range.
         val scale = com.forge.app.domain.coach.BlockPhase.composedLoadScale(phase, dayScale)
@@ -165,7 +182,7 @@ object ProgressionAdvisor {
             hitTopOnAllTopSets && okToProgress && consolidate ->
                 sameWeightSuggestion(
                     exerciseId, exerciseName, prevMax, unit, plateLb, step, scale, scaleNote,
-                    reason = "calibrated to you — recent jumps haven't stuck, consolidate this weight first",
+                    reason = "calibrated to you: recent jumps haven't stuck, so consolidate this weight first",
                     scaledReason = "calibrated to you · recent jumps haven't stuck, so earn this load before the next jump"
                 )
             hitTopOnAllTopSets && okToProgress ->
@@ -179,7 +196,7 @@ object ProgressionAdvisor {
             range != null && !hitTopOnAllTopSets ->
                 sameWeightSuggestion(
                     exerciseId, exerciseName, prevMax, unit, plateLb, step, scale, scaleNote,
-                    reason = "keep this weight — reach ${range.max} reps on every set before adding load",
+                    reason = "keep this weight, and reach ${range.max} reps on every set before adding load",
                     scaledReason = "reach ${range.max} reps on every set before adding load"
                 )
             else -> null
@@ -275,7 +292,7 @@ object ProgressionAdvisor {
             exerciseName = exerciseName,
             fromReps = repsText,
             targetReps = target,
-            reason = "cleared every set — add a rep",
+            reason = "cleared every set, so add a rep",
             confidence = Confidence.MEDIUM
         )
     }
@@ -306,12 +323,12 @@ object ProgressionAdvisor {
                     if (heavier(capped, prevMax, step)) weightChange(
                         exerciseId, exerciseName, prevMax, capped,
                         inputText = trim(capped),
-                        reason = withNote("hit top of range — capped at your heaviest dumbbell", scaleNote)
+                        reason = withNote("hit top of range, capped at your heaviest dumbbell", scaleNote)
                     ) else weightChange(
                         // The user owns nothing heavier: anchor the weight, progress reps instead.
                         exerciseId, exerciseName, prevMax, prevMax,
                         inputText = trim(prevMax),
-                        reason = "at your heaviest dumbbell — add reps past the range instead"
+                        reason = "at your heaviest dumbbell, so add reps past the range instead"
                     )
                 }
                 else -> weightChange(
@@ -389,10 +406,11 @@ object ProgressionAdvisor {
         val seen = HashSet<String>()
         // Reads UNKNOWN until the weigh-ins support a claim, and UNKNOWN changes nothing (A2).
         val weightPhase = WeightPhase.of(s.bodyweight)
+        val restartMs = lastReturnFromLayoffMs(s)
         for (day in s.program) {
             for (slot in day.slots) {
                 if (!seen.add(slot.exerciseId)) continue
-                val read = stallRead(slot, s, t) ?: continue
+                val read = stallRead(slot, s, t, restartMs) ?: continue
 
                 // A2: holding strength in a deficit is the expected — and good — outcome, so a flat
                 // line while cutting is not a plateau to fix. Escalating it would tell a lifter who
@@ -421,10 +439,11 @@ object ProgressionAdvisor {
         if (WeightPhase.of(s.bodyweight) != WeightPhase.CUT) return emptyList()
         val out = mutableListOf<String>()
         val seen = HashSet<String>()
+        val restartMs = lastReturnFromLayoffMs(s)
         for (day in s.program) {
             for (slot in day.slots) {
                 if (!seen.add(slot.exerciseId)) continue
-                val read = stallRead(slot, s, t) ?: continue
+                val read = stallRead(slot, s, t, restartMs) ?: continue
                 if (read.isHold(t)) out += slot.exerciseId
             }
         }
@@ -446,25 +465,15 @@ object ProgressionAdvisor {
      * [evaluate] didn't count and the Academy unlocked cut lessons for a lift the coach didn't
      * consider stalled.
      */
-    private fun stallRead(slot: ProgramSlotSnap, s: AdaptationSnapshot, t: AdaptThresholds): StallRead? {
+    private fun stallRead(
+        slot: ProgramSlotSnap,
+        s: AdaptationSnapshot,
+        t: AdaptThresholds,
+        /** [lastReturnFromLayoffMs], computed once per pass by the caller. */
+        restartMs: Long?
+    ): StallRead? {
         if (slot.unit == ExerciseUnit.BODYWEIGHT) return null
-        val bouts = (s.exerciseHistory[slot.exerciseId] ?: return null)
-            // A1: test / technique / first-back bouts are not ordinary training — a top
-            // single on a test day would anchor the weight, and a deliberately light
-            // technique day reads as a stall. Filtering here removes them from the e1RM
-            // series, the stall counter AND the prevMax anchor in one place.
-            .filter { b -> b.countsForProgression }
-            // A bout counts only if it has a set an e1RM can be read from. "Any weighted,
-            // unassisted set" also admitted weighted timed holds (imported weighted planks, loaded
-            // carries), which have no e1RM, and the series then crashed on the missing value.
-            .filter { b -> !b.skipped && b.sets.any { it.isWorkingStrengthSet() } }
-            // A swap changes what the series MEASURES. Rotating a barbell row (e1RM ~160) to
-            // a dumbbell row (e1RM ~62) left `best` pinned to the pre-swap lift, so no bout on
-            // the new exercise could ever beat it and the stall counter grew by one every
-            // session — forever. The coach then re-proposed the same rotation every week, and
-            // the outcome watcher, which judges swaps on attendance alone, walked it to
-            // autopilot. The series restarts at the boundary instead.
-            .let { history -> sinceLastSwap(history) }
+        val bouts = progressionSeries(s.exerciseHistory[slot.exerciseId] ?: return null, restartMs)
         if (bouts.size <= t.plateauMinBouts) return null
 
         val e1rms = bouts.mapNotNull { bestWorkingE1rm(it.sets) }
@@ -480,6 +489,39 @@ object ProgressionAdvisor {
         if (stall < t.plateauMinBouts) return null
         return StallRead(bouts, e1rms, best, stall)
     }
+
+    /**
+     * The bouts a lift's progress is read from: ordinary training on the lift the slot holds now,
+     * since the last return from a layoff. One definition, so the stall the coach acts on and the
+     * evidence chart it shows beside the call are drawn from the same sessions.
+     *
+     * @param restartMs [lastReturnFromLayoffMs] for the snapshot, or null for no restart.
+     */
+    fun progressionSeries(history: List<ExerciseBout>, restartMs: Long?): List<ExerciseBout> =
+        history
+            // A1: test / technique / first-back bouts are not ordinary training — a top
+            // single on a test day would anchor the weight, and a deliberately light
+            // technique day reads as a stall. Filtering here removes them from the e1RM
+            // series, the stall counter AND the prevMax anchor in one place.
+            .filter { b -> b.countsForProgression }
+            // A bout counts only if it has a set an e1RM can be read from. "Any weighted,
+            // unassisted set" also admitted weighted timed holds (imported weighted planks, loaded
+            // carries), which have no e1RM, and the series then crashed on the missing value.
+            .filter { b -> !b.skipped && b.sets.any { it.isWorkingStrengthSet() } }
+            // A swap changes what the series MEASURES. Rotating a barbell row (e1RM ~160) to
+            // a dumbbell row (e1RM ~62) left `best` pinned to the pre-swap lift, so no bout on
+            // the new exercise could ever beat it and the stall counter grew by one every
+            // session — forever. The coach then re-proposed the same rotation every week, and
+            // the outcome watcher, which judges swaps on attendance alone, walked it to
+            // autopilot. The series restarts at the boundary instead.
+            .let { bouts -> sinceLastSwap(bouts) }
+            // A layoff changes what the series can SAY. Measured against the pre-break best, the
+            // ordinary detraining dip after six weeks off reads as a stall on every lift, and two
+            // to four weeks back the ladder proposes rep shifts and swaps for a problem that was
+            // never training. The series restarts at the first session back, like it does at a
+            // swap; LifeEvents only remembers the gap for about three weeks, so the boundary is
+            // read from the session dates themselves.
+            .let { bouts -> if (restartMs == null) bouts else bouts.filter { it.sessionStartedAt >= restartMs } }
 
     private fun plateauSuggestion(
         dayKey: String,
@@ -500,7 +542,7 @@ object ProgressionAdvisor {
                 exerciseId = slot.exerciseId,
                 exerciseName = slot.name,
                 candidateIds = slot.swapCandidateIds.take(t.swapCandidateCount),
-                reason = "No estimated-1RM gain on ${slot.name} in $stall sessions — a fresh variation can restart progress",
+                reason = "No estimated-1RM gain on ${slot.name} in $stall sessions. A fresh variation can restart progress",
                 confidence = confidence
             )
         }
@@ -515,7 +557,7 @@ object ProgressionAdvisor {
                 exerciseName = slot.name,
                 fromReps = slot.repsText,
                 toReps = to,
-                reason = "${slot.name} has stalled for $stall sessions — changing the rep range changes the stimulus",
+                reason = "${slot.name} has stalled for $stall sessions. Changing the rep range changes the stimulus",
                 confidence = confidence,
                 dayKey = dayKey
             )
@@ -546,7 +588,7 @@ object ProgressionAdvisor {
             weightChange(
                 slot.exerciseId, slot.name, prevMax, resetTarget,
                 inputText = inputTextFor(resetTarget, slot.unit, plateLb),
-                reason = "${slot.name} stalled $stall sessions at high effort — drop ~$dropPct% and build back up",
+                reason = "${slot.name} stalled $stall sessions at high effort. Drop ~$dropPct% and build back up",
                 confidence = confidence
             )
         } else {
@@ -562,12 +604,12 @@ object ProgressionAdvisor {
             if (!heavier(target, prevMax, step)) weightChange(
                 slot.exerciseId, slot.name, prevMax, prevMax,
                 inputText = inputTextFor(prevMax, slot.unit, plateLb),
-                reason = "${slot.name} hasn't gained in $stall sessions and you're at your heaviest dumbbell — add reps",
+                reason = "${slot.name} hasn't gained in $stall sessions and you're at your heaviest dumbbell, so add reps",
                 confidence = confidence
             ) else weightChange(
                 slot.exerciseId, slot.name, prevMax, target,
                 inputText = inputTextFor(target, slot.unit, plateLb),
-                reason = "${slot.name} hasn't gained in $stall sessions but effort has stayed low — push a small increase",
+                reason = "${slot.name} hasn't gained in $stall sessions but effort has stayed low, so push a small increase",
                 confidence = confidence
             )
         }
@@ -630,6 +672,28 @@ object ProgressionAdvisor {
         } else {
             "${trim(targetLb)} lb"
         }
+    }
+
+    /**
+     * Start of the first session after the most recent training gap of at least
+     * [com.forge.app.domain.coach.LifeEvents.LAYOFF_MIN_DAYS] calendar days, or null when training
+     * has been continuous. Calendar days in the snapshot's zone, the same count LifeEvents uses.
+     */
+    fun lastReturnFromLayoffMs(s: AdaptationSnapshot): Long? {
+        val starts = s.sessions.asSequence()
+            .filter { it.finishedAt != null && !it.isUntracked }
+            .map { it.startedAt }
+            .sorted()
+            .toList()
+        for (i in starts.indices.reversed()) {
+            if (i == 0) break
+            val gap = java.time.temporal.ChronoUnit.DAYS.between(
+                java.time.Instant.ofEpochMilli(starts[i - 1]).atZone(s.zoneId).toLocalDate(),
+                java.time.Instant.ofEpochMilli(starts[i]).atZone(s.zoneId).toLocalDate()
+            )
+            if (gap >= com.forge.app.domain.coach.LifeEvents.LAYOFF_MIN_DAYS) return starts[i]
+        }
+        return null
     }
 
     /**

@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
+import com.forge.app.ui.common.ForgeSnackbar
 import com.forge.app.ui.common.window.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -32,6 +33,8 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -82,6 +85,8 @@ fun ProgramBuilderScreen(
     blank: Boolean,
     startInView: Boolean,
     onClose: () -> Unit,
+    /** Start a workout on this day key; null hides the action (the editor, or no route for it). */
+    onStartDay: ((String) -> Unit)? = null,
     viewModel: ProgramBuilderViewModel = hiltViewModel()
 ) {
     LaunchedEffect(Unit) { viewModel.loadIfNeeded(blank) }
@@ -152,6 +157,7 @@ fun ProgramBuilderScreen(
             onSwapExercise = { exUid, libId -> viewModel.swapExercise(editingDay.uid, exUid, libId) },
             onMoveExercise = { from, to -> viewModel.moveExercise(editingDay.uid, from, to) },
             onSetExercise = { exUid, sets, reps -> viewModel.setExercise(editingDay.uid, exUid, sets, reps) },
+            weekdayPlan = viewModel.days.any { it.uid != editingDay.uid && it.weekdays.isNotEmpty() },
             onDuplicateDay = { viewModel.duplicateDay(editingDay.uid); viewModel.closeDay() },
             onRemoveDay = {
                 viewModel.removeDay(editingDay.uid)
@@ -197,7 +203,7 @@ fun ProgramBuilderScreen(
                 }
             }
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { SnackbarHost(snackbarHostState) { ForgeSnackbar(it) } },
         bottomBar = {
             // §3: the page-level one-shot actions group at the END — one row, not a stacked wall,
             // so edit mode costs the plan as little height as possible.
@@ -305,42 +311,59 @@ fun ProgramBuilderScreen(
                     OpenDay(
                         day = shown,
                         showSets = many,
-                        onEdit = if (editing) ({ viewModel.openDay(shown.uid) }) else null
+                        onEdit = if (editing) ({ viewModel.openDay(shown.uid) }) else null,
+                        // Viewing shows what is trained; editing shows the slot being edited.
+                        swaps = if (editing) emptyMap() else viewModel.userSwaps,
+                        // Home only ever starts the NEXT day. This is the one place to train a
+                        // different one ("legs today, not push"), and in a weekday plan the only way
+                        // to train a day that has no weekday at all. Saved days only: an unsaved
+                        // edit has no session to start.
+                        onStart = onStartDay?.takeIf { !editing && !viewModel.dirty && shown.exercises.isNotEmpty() }
+                            ?.let { start -> { start(shown.key) } }
                     )
                 }
             }
         }
     }
 
+    // The two confirms read like the app's others (the workout guard, Settings): surface fill (§5), the
+    // act named on a filled button, the safe answer plain. Discarding unsaved edits can't be undone,
+    // so its button takes the error fill; both were accent text buttons the weight of Cancel.
+    val scheme = MaterialTheme.colorScheme
     if (showDiscard) {
         AlertDialog(
             onDismissRequest = { showDiscard = false },
+            containerColor = scheme.surface,
             title = { Text("Discard changes?") },
             text = { Text("Your edits to this plan haven't been saved.") },
             confirmButton = {
-                TextButton(onClick = {
-                    showDiscard = false
-                    if (viewOrigin) { viewModel.discardEdits(); viewing = true } else onClose()
-                }) { Text("Discard") }
+                Button(
+                    onClick = {
+                        showDiscard = false
+                        if (viewOrigin) { viewModel.discardEdits(); viewing = true } else onClose()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = scheme.error, contentColor = scheme.onError)
+                ) { Text("Discard edits") }
             },
-            dismissButton = { TextButton(onClick = { showDiscard = false }) { Text("Keep editing") } }
+            dismissButton = { TextButton(onClick = { showDiscard = false }) { Text("Keep editing", color = scheme.onSurface) } }
         )
     }
 
     if (showFreestyleSwitch) {
         AlertDialog(
             onDismissRequest = { showFreestyleSwitch = false },
+            containerColor = scheme.surface,
             title = { Text("Switch to following a plan?") },
             text = {
                 Text("Saving this plan turns off Go with the flow and starts you on it. You can switch " +
                     "back to free logging anytime in Settings → Program.")
             },
             confirmButton = {
-                TextButton(onClick = { showFreestyleSwitch = false; viewModel.save { onSaved() } }) {
+                Button(onClick = { showFreestyleSwitch = false; viewModel.save { onSaved() } }) {
                     Text("Save & follow")
                 }
             },
-            dismissButton = { TextButton(onClick = { showFreestyleSwitch = false }) { Text("Cancel") } }
+            dismissButton = { TextButton(onClick = { showFreestyleSwitch = false }) { Text("Cancel", color = scheme.onSurface) } }
         )
     }
 }
@@ -354,7 +377,15 @@ fun ProgramBuilderScreen(
  * closes on a drawn filled `Edit day` capsule so the affordance is visible rather than implied.
  */
 @Composable
-internal fun OpenDay(day: BuilderDay, showSets: Boolean, onEdit: (() -> Unit)?) {
+internal fun OpenDay(
+    day: BuilderDay,
+    showSets: Boolean,
+    onEdit: (() -> Unit)?,
+    /** Base library id to (name, id) of the lift the user swapped in "every week". */
+    swaps: Map<String, Pair<String, String?>> = emptyMap(),
+    /** Start a workout on this day; null in the editor. */
+    onStart: (() -> Unit)? = null
+) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val exercises = day.exercises
     Column(
@@ -398,20 +429,36 @@ internal fun OpenDay(day: BuilderDay, showSets: Boolean, onEdit: (() -> Unit)?) 
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val swap = swaps[ex.libId]
                     ForgeGlyphBadge(
-                        ExerciseIcons.forEquipment(ExerciseLibrary.byId(ex.libId)?.equipment.orEmpty()),
+                        ExerciseIcons.forEquipment(ExerciseLibrary.byId(swap?.second ?: ex.libId)?.equipment.orEmpty()),
                         selected = false,
                         size = 34.dp
                     )
-                    Text(
-                        ex.name,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            swap?.first ?: ex.name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        if (swap != null) {
+                            Text(
+                                "IN PLACE OF ${ex.name.uppercase()}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = muted
+                            )
+                        }
+                    }
                     Text("${ex.sets} × ${ex.reps}", style = MaterialTheme.typography.labelMedium, color = muted)
                 }
             }
+        }
+        if (onStart != null) {
+            ForgePrimaryCapsule(
+                label = "Start ${day.name}",
+                onClick = onStart,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            )
         }
         if (onEdit != null) {
             // Drawn, not separately clickable: the block above is the one tap target (§2③).

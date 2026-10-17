@@ -34,6 +34,7 @@ class ForgeApp : Application(), Configuration.Provider {
     @Inject lateinit var reminderScheduler: dagger.Lazy<ReminderScheduler>
     @Inject lateinit var wearStatePublisher: dagger.Lazy<com.forge.app.service.wear.WearStatePublisher>
     @Inject lateinit var resetRepository: dagger.Lazy<com.forge.app.data.repo.ResetRepository>
+    @Inject lateinit var workoutRepository: dagger.Lazy<com.forge.app.data.repo.WorkoutRepository>
     private val startupGate = StartupGate()
     internal suspend fun awaitStorageReady() = startupGate.await()
 
@@ -79,6 +80,23 @@ class ForgeApp : Application(), Configuration.Provider {
             runCatching { programRepository.get().reconcilePendingGeneration() }
             // A fixed-weekday schedule set before rest days were recorded starts its record today.
             runCatching { settingsRepository.ensureScheduleHistory() }
+            // A workout left open before a break is closed now, not when the next one starts, so
+            // the feed and the widget stop offering to resume it. Kept work goes to history at its
+            // last set, and the feed says so once.
+            runCatching { workoutRepository.get().closeStaleSession() }.getOrNull()
+                ?.takeIf { it.finishedToHistory }
+                ?.let { closed ->
+                    val day = com.forge.app.program.Program.dayDisplayName(closed.dayKey)
+                    val date = java.time.Instant.ofEpochMilli(closed.startedAtMs)
+                        .atZone(java.time.ZoneId.systemDefault()).toLocalDate()
+                        .format(java.time.format.DateTimeFormatter.ofPattern("MMM d", java.util.Locale.getDefault()))
+                    runCatching {
+                        settingsRepository.addSystemNotice(
+                            com.forge.app.data.repo.NotificationFeed.NOTICE_ORPHAN_SESSION,
+                            "Saved your unfinished $day from $date to history. Today starts fresh."
+                        )
+                    }
+                }
             reminderScheduler.get().ensureScheduled(
                 settingsRepository.trainingReminderEnabled.first(),
                 settingsRepository.trainingReminderHour.first()
@@ -130,6 +148,9 @@ class ForgeApp : Application(), Configuration.Provider {
         } finally { validator.close() }
         if (opened) {
             RestoreApply.confirm(filesDir, liveDb)
+            // The restored database hands out its own session ids again; marks kept for an id from
+            // before the restore would attach to the next session that reuses it.
+            com.forge.app.service.wear.clearSessionMarks(this)
             // One-shot flag so MainActivity can confirm the restore landed on this launch — the swap
             // runs at boot before any UI exists, and the staging path restarts the process silently
             // otherwise. Only written for a fully clean, opened restore so we never claim

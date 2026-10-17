@@ -17,7 +17,9 @@ object SessionOpinion {
         ghostComparable: Int,
         vsLastVolumeDelta: Double?,
         isBestSession: Boolean,
-        honestyPct: Int?
+        honestyPct: Int?,
+        /** The coach eased loads after a break: last time is from before it, so lighter was the plan. */
+        easingBack: Boolean = false
     ): String? {
         if (setCount == 0) return null
 
@@ -25,21 +27,28 @@ object SessionOpinion {
         // Strict majority — an even split (e.g. 3 of 6) is a draw, not "edged out".
         val wonDuel = ghostComparable > 0 && ghostBeats * 2 > ghostComparable
 
-        // Lead with the single strongest thing that happened.
+        // Lead with the single strongest thing that happened, stated as the fact it is (§11): the
+        // lines used to close on poster copy ("You found another gear.", "Momentum is building.",
+        // "Consistency is what moves the needle."), the cliches the voice rules name.
         val lead = when {
-            isBestSession -> "Best session yet for this day. That's a clear step up."
-            prCount > 0 -> "$prCount new ${if (prCount == 1) "PR" else "PRs"} today. You found another gear."
+            isBestSession -> "The most volume you've moved on this day."
+            prCount > 0 -> "$prCount new ${if (prCount == 1) "PR" else "PRs"} today."
             cleanSweep -> "Clean sweep. You beat last session on every comparable set."
             wonDuel -> "You edged out last session on $ghostBeats of $ghostComparable sets."
-            vsLastVolumeDelta != null && vsLastVolumeDelta > 0 -> "Volume's up on last time. Momentum is building."
+            vsLastVolumeDelta != null && vsLastVolumeDelta > 0 -> "More volume than last time."
+            // Back from a break the loads were eased on purpose, so being under the session before
+            // the break is the plan working, not a recovery warning.
+            easingBack && vsLastVolumeDelta != null && vsLastVolumeDelta < 0 ->
+                "Lighter than before the break, as planned. The loads climb from here."
             vsLastVolumeDelta != null && vsLastVolumeDelta < 0 ->
                 "A touch lighter than last time. Fine if it was planned, otherwise watch recovery."
-            else -> "Solid work in the bank. Consistency is what moves the needle."
+            vsLastVolumeDelta != null -> "The same volume as last time."
+            else -> "First time through this day: these numbers are the baseline."
         }
 
-        // At most one gentle, actionable caveat — keep the finish moment encouraging.
+        // At most one caveat, and it states the share rather than scolding.
         val caveat = if (honestyPct != null && honestyPct < 60)
-            " You left a chunk of the plan unlogged; close those sets next time if you can." else ""
+            " You logged $honestyPct% of the planned sets." else ""
 
         return lead + caveat
     }

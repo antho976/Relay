@@ -77,8 +77,39 @@ object LifeEvents {
         /** True when the coach should hold back rather than push: illness or a fresh return. */
         val easeOff: Boolean get() = sick || layoff?.returning == true || layoff?.away == true
 
-        /** Scale to apply to prescribed loads, 1.0 when nothing applies. */
-        val loadScale: Double get() = if (layoff?.returning == true) RAMP_SCALE else 1.0
+        /**
+         * Scale to apply to prescribed loads, 1.0 when nothing applies.
+         *
+         * Still AWAY counts. The layoff only turns `returning` once the first session back is
+         * finished, so a ramp keyed on `returning` alone eased the second session back and handed
+         * the first one, the one that has to be eased most, the full pre-gap weight.
+         */
+        val loadScale: Double get() = if (layoff?.let { it.away || it.returning } == true) RAMP_SCALE else 1.0
+
+        /**
+         * [loadScale] for a lift last trained in a session that started at [lastBoutStartedAtMs].
+         *
+         * The ramp eases the load the athlete left at, once. A bout logged since the return already
+         * carries the ease, and the card builds today's weight from that bout, so easing it again
+         * compounded through the ramp week: three full-body sessions back read 100, 85, 72, 62 lb.
+         * A lift not trained since the return still steps down from its pre-gap bout.
+         */
+        fun loadScaleFrom(lastBoutStartedAtMs: Long?): Double {
+            val returnedAt = layoff?.returnedAtMs ?: return loadScale
+            return if (lastBoutStartedAtMs != null && lastBoutStartedAtMs >= returnedAt) 1.0 else loadScale
+        }
+
+        /**
+         * Why [loadScale] is under 1.0, in the coach's words, or null when it isn't. One home for the
+         * ramp's reason, so the day screen's "try" weight and the brief name the same cause.
+         */
+        val rampNote: String? get() = layoff?.let {
+            when {
+                it.away -> "first session back after ${gapPhrase(it.days)}"
+                it.returning -> "first week back after ${gapPhrase(it.days)}"
+                else -> null
+            }
+        }
 
         /** A muscle is off-limits when it's injured; sore muscles are gated, not banned. */
         fun isRestricted(muscle: MuscleGroup): Boolean = muscle in restrictedMuscles
@@ -230,13 +261,22 @@ object LifeEvents {
         return appliedAtMs <= gapEnd && windowEndMs >= layoff.gapStartMs
     }
 
+    /**
+     * A gap as a person says it: days under three weeks, then weeks. "94 days" is a number to
+     * decode; "13 weeks" is a length of time.
+     */
+    fun gapPhrase(days: Int): String = when {
+        days < 21 -> "$days days"
+        else -> "${days / 7} weeks"
+    }
+
     /** The coach's own words for the current state, or null when life is uneventful. */
     fun explain(state: State): String? = when {
         state.sick -> "You flagged being unwell, so nothing is being pushed until that passes."
         state.layoff?.away == true ->
-            "It's been ${state.layoff.days} days. When you're back, the first week eases in."
+            "It's been ${gapPhrase(state.layoff.days)}. When you're back, the first week eases in."
         state.layoff?.returning == true ->
-            "First week back after ${state.layoff.days} days off, so loads hold about 10% under."
+            "First week back after ${gapPhrase(state.layoff.days)} off, so loads hold about 10% under."
         state.restrictedMuscles.isNotEmpty() || state.restrictedExerciseIds.isNotEmpty() ->
             "Working around what you flagged as injured until you clear it."
         else -> null

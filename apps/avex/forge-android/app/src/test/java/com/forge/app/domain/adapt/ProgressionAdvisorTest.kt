@@ -42,14 +42,17 @@ class ProgressionAdvisorTest {
         fastStep: Boolean = false,
         consolidate: Boolean = false,
         phase: BlockPhase? = null,
-        weightUnit: WeightUnit = WeightUnit.LB
+        weightUnit: WeightUnit = WeightUnit.LB,
+        lifeScale: Double = 1.0,
+        lifeNote: String? = null
     ) = ProgressionAdvisor.suggestNextLoad(
         exerciseId = "ua1", exerciseName = "DB Bench Press",
         prevSets = sets, prevEffort = effort,
         repsText = reps, unit = unit, plateLb = 15.0,
         intensity = intensity, readiness = readiness, dbMaxLb = dbMaxLb,
         fastStep = fastStep, consolidate = consolidate,
-        phase = phase, weightUnit = weightUnit
+        phase = phase, weightUnit = weightUnit,
+        lifeScale = lifeScale, lifeNote = lifeNote
     )
 
     private fun lowReadiness(percent: Int = -4) =
@@ -288,7 +291,30 @@ class ProgressionAdvisorTest {
         val s = suggest(listOf(set(45.0, 10)), EffortRating.JUST_RIGHT, readiness = lowReadiness(-4))
         assertNotNull(s)
         assertEquals(45.0, s!!.targetWeightLb, 0.0001) // (45 + 2.5) × 0.96 = 45.6 → grid 45
-        assertTrue(s.reason.contains("eased 4% — readiness low"))
+        assertTrue(s.reason.contains("eased 4%, readiness low"))
+    }
+
+    // ── The comeback ramp after a layoff ───────────────────────────────────────
+
+    @Test
+    fun theFirstSessionBackIsEasedAndSaysWhy() {
+        // Mid-range last time, so the cue is the same-weight one: 100 × 0.97 × 0.9 = 87.3 → 85.
+        val s = suggest(
+            listOf(set(100.0, 8)), EffortRating.JUST_RIGHT, reps = "8-12", unit = ExerciseUnit.WEIGHT,
+            readiness = lowReadiness(-3), lifeScale = 0.9, lifeNote = "first session back after 3 weeks"
+        )
+        assertNotNull(s)
+        assertEquals(85.0, s!!.targetWeightLb, 0.0001)
+        // The reason names the comeback and the whole ease, not "readiness low".
+        assertTrue(s.reason, s.reason.contains("eased 13%, first session back after 3 weeks"))
+        assertTrue(s.reason, !s.reason.contains("readiness low"))
+    }
+
+    @Test
+    fun noRampLeavesTheSuggestionAsItWas() {
+        val plain = suggest(listOf(set(45.0, 10)), EffortRating.JUST_RIGHT, readiness = lowReadiness(-4))
+        val ramp1 = suggest(listOf(set(45.0, 10)), EffortRating.JUST_RIGHT, readiness = lowReadiness(-4), lifeScale = 1.0)
+        assertEquals(plain, ramp1)
     }
 
     @Test
@@ -360,6 +386,42 @@ class ProgressionAdvisorTest {
     /** [n] flat bouts after an improving baseline → stall length of exactly [n]. */
     private fun stalledBouts(n: Int, effort: EffortRating = EffortRating.JUST_RIGHT): List<ExerciseBout> =
         listOf(bout(45.0, 8, at = 0)) + (1..n).map { i -> bout(45.0, 8, effort, at = i.toLong()) }
+
+    // ── A layoff restarts the stall series ─────────────────────────────────────
+
+    private val day = 24L * 60 * 60 * 1000
+
+    /** Six bouts climbing to 100 lb, a six-week gap, then six bouts rebuilding from 85. */
+    private fun comebackSnapshot(postGap: List<Double>): AdaptationSnapshot {
+        val pre = listOf(90.0, 92.5, 95.0, 97.5, 100.0, 100.0).mapIndexed { i, w -> w to i * 3 * day }
+        val returnAt = pre.last().second + 42 * day
+        val post = postGap.mapIndexed { i, w -> w to returnAt + i * 3 * day }
+        val all = pre + post
+        return AdaptationSnapshot(
+            nowMs = post.last().second + day,
+            program = listOf(ProgramDaySnap("upper-a", "Upper A", listOf(slot()))),
+            sessions = all.mapIndexed { i, (_, at) ->
+                com.forge.app.data.db.entities.Session(id = i + 1L, dayKey = "upper-a", startedAt = at, finishedAt = at + 3_600_000)
+            },
+            exerciseHistory = mapOf("ua1" to all.map { (w, at) -> bout(w, 8, at = at) }),
+            prefs = PrefsSnap()
+        )
+    }
+
+    @Test
+    fun aDetrainingDipAfterALayoffIsNotAPlateau() {
+        // Every post-gap bout sits under the pre-gap best of 100. Measured against it, that is a
+        // six-session stall and a rep-range shift; measured from the return, it is a rebuild.
+        val recs = ProgressionAdvisor.evaluate(comebackSnapshot(listOf(85.0, 87.5, 90.0, 92.5, 95.0, 95.0)))
+        assertTrue(recs.toString(), recs.isEmpty())
+    }
+
+    @Test
+    fun aRealStallAfterTheReturnStillSpeaks() {
+        // Flat for six sessions after coming back: that is a stall on the new series.
+        val recs = ProgressionAdvisor.evaluate(comebackSnapshot(listOf(85.0, 85.0, 85.0, 85.0, 85.0, 85.0, 85.0)))
+        assertEquals(1, recs.size)
+    }
 
     @Test
     fun plateau_coldStart_fourBoutsIsNotEnough() {

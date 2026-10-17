@@ -105,6 +105,13 @@ class CoachViewModel @Inject constructor(
         val readiness: com.forge.app.domain.adapt.Recommendation.ReadinessScale? = null,
         /** Finished sessions readiness needs before it reads anything at all. */
         val readinessGateSessions: Int = AdaptThresholds().readinessMinSessions,
+        /**
+         * The comeback ramp after a layoff, composed with [readiness] into the day's targets (1.0
+         * when there is none), with its reason. Readiness names the comeback among its parts, so
+         * without the ramp the line read "3% lighter" while the targets sat 13% under.
+         */
+        val rampScale: Double = 1.0,
+        val rampNote: String? = null,
         /** Whole days until the next weekly brief (next Monday); 0 when unknown. */
         val daysToNextBrief: Int = 0,
         /** A2: the Goal Portfolio, priority order, each with its live reading and ETA. */
@@ -166,7 +173,10 @@ class CoachViewModel @Inject constructor(
         val activeBlock = runCatching { blockRepo.active() }.getOrNull()
         // Off the snapshot above, so the page reads the same sessions and Health Connect nights
         // the day screen scales its targets from, without a second whole-history walk.
-        val readiness = runCatching { adaptationRepo.readinessScale(snapshot = snap) }
+        val life = runCatching { adaptationRepo.lifeEvents(snap?.nowMs ?: System.currentTimeMillis(), snap?.sessions) }
+            .onFailure { if (it is CancellationException) throw it }
+            .getOrNull()
+        val readiness = runCatching { adaptationRepo.readinessScale(snapshot = snap, life = life) }
             .onFailure { if (it is CancellationException) throw it }
             .getOrNull()
         kotlinx.coroutines.currentCoroutineContext().ensureActive()
@@ -180,6 +190,8 @@ class CoachViewModel @Inject constructor(
             e1rmBySlot = snap?.let(::e1rmSeries).orEmpty(),
             health = snap?.let(::healthSeries) ?: HealthSeries(),
             readiness = readiness,
+            rampScale = life?.loadScale ?: 1.0,
+            rampNote = life?.rampNote,
             daysToNextBrief = snap?.let { 7 - todayIndex(it) } ?: 0,
             block = activeBlock,
             profile = snap?.let { com.forge.app.domain.coach.PersonalProfile.build(it) }
@@ -383,10 +395,20 @@ class CoachViewModel @Inject constructor(
     private fun todayIndex(s: AdaptationSnapshot): Int =
         Instant.ofEpochMilli(s.nowMs).atZone(s.zoneId).toLocalDate().dayOfWeek.value - 1
 
-    private fun e1rmSeries(s: AdaptationSnapshot): Map<String, List<Double>> =
-        s.exerciseHistory.mapValues { (_, bouts) ->
-            bouts.filter { !it.skipped }.mapNotNull { it.bestE1rm() }.takeLast(E1RM_BOUTS_SHOWN)
+    /**
+     * Each slot's e1RM evidence, drawn from the same bouts the stall the coach acts on is read from
+     * (ProgressionAdvisor.progressionSeries). Every non-skipped bout used to chart: a swap call's
+     * evidence showed a cliff from the barbell row to the dumbbell row it replaced, test and
+     * technique days dipped it, and "Where you stand" read the cliff as the lift slipping.
+     */
+    private fun e1rmSeries(s: AdaptationSnapshot): Map<String, List<Double>> {
+        val restart = com.forge.app.domain.adapt.ProgressionAdvisor.lastReturnFromLayoffMs(s)
+        return s.exerciseHistory.mapValues { (_, bouts) ->
+            com.forge.app.domain.adapt.ProgressionAdvisor.progressionSeries(bouts, restart)
+                .mapNotNull { it.bestE1rm() }
+                .takeLast(E1RM_BOUTS_SHOWN)
         }.filterValues { it.size >= 2 }
+    }
 
     private fun healthSeries(s: AdaptationSnapshot): HealthSeries {
         val t = AdaptThresholds()

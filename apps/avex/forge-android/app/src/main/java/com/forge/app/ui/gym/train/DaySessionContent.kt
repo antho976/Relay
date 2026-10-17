@@ -1,5 +1,7 @@
 package com.forge.app.ui.gym.train
 
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -106,10 +108,10 @@ internal fun DayContent(
     onEvent: (DayUiEvent) -> Unit,
     restTimer: State<RestTimerState?> = NoRestTimer
 ) {
+    // §12: loading draws nothing. The session comes from the local database in a frame or two, and
+    // a "Loading session…" line only flashed before the warm-up replaced it.
     if (state.isLoading) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Loading session…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        Box(Modifier.fillMaxSize())
         return
     }
 
@@ -301,6 +303,7 @@ internal fun DayContent(
                                         .flatMap { other -> other.loggedSets.map { it.completedAt } }
                                 },
                                 sessionStartedAtMs = state.elapsedAnchorMs,
+                                easingBack = state.easingBackNote != null,
                                 advanceLabel = if (exNextId != null) "MOVE TO NEXT →" else "FINISH WORKOUT →",
                                 onAdvance = { if (exNextId != null) shownExerciseId = exNextId else onEvent(DayUiEvent.FinishWorkout) },
                                 // Finish an exercise you can't fully complete (AMRAP / gassed out) without
@@ -458,9 +461,15 @@ internal fun SessionHero(
     val outline = MaterialTheme.colorScheme.outline
     val accent = MaterialTheme.colorScheme.primary
 
-    val datePillText = remember(state.sessionStartedAt) {
-        val ms = state.sessionStartedAt ?: System.currentTimeMillis()
-        SimpleDateFormat("EEE · MMM d", Locale.getDefault()).format(Date(ms)).uppercase()
+    // The day only when the workout began on another one (resumed from last night; an older one is
+    // closed at launch): today's date said nothing mid-workout and took the room the day's name
+    // needed at large text. The weekday alone, so the pill never crowds out the name or FINISH.
+    val startedMs = state.sessionStartedAt?.takeIf { !sameLocalDay(it, System.currentTimeMillis()) }
+    val datePillText = remember(startedMs) {
+        startedMs?.let { SimpleDateFormat("EEE", Locale.getDefault()).format(Date(it)).uppercase() }
+    }
+    val datePillSpoken = remember(startedMs) {
+        startedMs?.let { "Started " + SimpleDateFormat("EEEE", Locale.getDefault()).format(Date(it)) }
     }
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -469,21 +478,19 @@ internal fun SessionHero(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Left: back + day name. weight(1f) so it yields space to the date pill + FINISH.
-            Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                ForgeChromeIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    state.displayName.uppercase(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = onBg,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+            // Left: back, then the day name. Only the name yields space to the pill and FINISH: the
+            // back button inside the weighted part was squeezed to a sliver at large text.
+            ForgeChromeIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack)
+            Spacer(Modifier.width(8.dp))
+            // The user's own day name: it wraps to a second line before it is cut (§14).
+            Text(
+                state.displayName.uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                color = onBg,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
             Spacer(Modifier.width(4.dp))
             // Quick session note — jot a thought mid-workout; tinted when the journal has content.
             ForgeChromeIconButton(
@@ -492,15 +499,18 @@ internal fun SessionHero(
                 onEditNote,
                 tint = if (state.sessionJournal.isNotBlank()) accent else muted
             )
-            Spacer(Modifier.width(4.dp))
             // Passive date: a filled capsule, no outline.
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Text(datePillText, style = MaterialTheme.typography.labelSmall, color = muted, maxLines = 1)
+            if (datePillText != null) {
+                Spacer(Modifier.width(4.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .clearAndSetSemantics { contentDescription = datePillSpoken.orEmpty() }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(datePillText, style = MaterialTheme.typography.labelSmall, color = muted, maxLines = 1)
+                }
             }
             Spacer(Modifier.width(8.dp))
             // Outlined until every exercise is done or skipped, then filled. A filled FINISH from the
@@ -526,8 +536,17 @@ internal fun SessionHero(
                 )
             }
         }
+        // Back from a break, last session is the one before it and every eased set would score as
+        // a loss to it, the opposite of what the coach asked for. Say what today is instead.
+        if (state.easingBackNote != null) {
+            Text(
+                "EASING BACK IN · ${state.easingBackNote.uppercase()}",
+                style = MaterialTheme.typography.labelSmall,
+                color = muted,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
+            )
+        } else if (state.ghostComparable > 0) {
         // "Beat the ghost" running scoreboard — the duel vs last session, live as you log.
-        if (state.ghostComparable > 0) {
             val beats = state.ghostBeats
             val total = state.ghostComparable
             val winning = beats * 2 >= total
@@ -537,7 +556,7 @@ internal fun SessionHero(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
-                    if (winning) "⚡ BEATING LAST SESSION" else "VS LAST SESSION",
+                    if (winning) "BEATING LAST SESSION" else "VS LAST SESSION",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (winning) ForgeLastGreen else muted,
                     fontSize = 9.sp
@@ -552,3 +571,7 @@ internal fun SessionHero(
         }
     }
 }
+
+/** Whether two instants fall on the same calendar day in the device's zone. */
+internal fun sameLocalDay(aMs: Long, bMs: Long, zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): Boolean =
+    java.time.Instant.ofEpochMilli(aMs).atZone(zone).toLocalDate() == java.time.Instant.ofEpochMilli(bMs).atZone(zone).toLocalDate()

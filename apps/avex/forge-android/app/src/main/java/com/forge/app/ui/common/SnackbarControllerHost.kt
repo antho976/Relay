@@ -106,9 +106,10 @@ fun SnackbarControllerHost(
 }
 
 /** The app's snackbar, styled to the doctrine (§5): a dark [surface] plate, onBackground text, the
- *  accent on the Undo action — never Material's default light inverse-surface bar. */
+ *  accent on the Undo action — never Material's default light inverse-surface bar. A screen that
+ *  still keeps its own [SnackbarHost] draws through this too: `SnackbarHost(state) { ForgeSnackbar(it) }`. */
 @Composable
-private fun ForgeSnackbar(data: SnackbarData) {
+fun ForgeSnackbar(data: SnackbarData) {
     Snackbar(
         snackbarData = data,
         containerColor = MaterialTheme.colorScheme.surface,

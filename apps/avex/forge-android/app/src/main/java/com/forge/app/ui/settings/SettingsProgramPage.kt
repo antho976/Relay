@@ -123,13 +123,60 @@ private fun ProgramMenu(
         }
     }
 
+    var rebuild by remember { mutableStateOf<Rebuild?>(null) }
     SettingsGroup("Rebuild", footer = "A new plan replaces the current one, built from the settings on this page.") {
         SettingsActionRow("Generate a new ${state.daysPerWeek}-day plan", "A fresh split and exercise picks", Icons.Rounded.AutoAwesome) {
-            vm.generateProgram(state.daysPerWeek)
+            rebuild = Rebuild.GENERATE
         }
-        SettingsActionRow("Re-roll exercises now", "Same split, new movement picks", Icons.Rounded.Shuffle) { vm.rerollProgram() }
-        SettingsActionRow("Deload week", "A lighter week to recover", Icons.AutoMirrored.Rounded.TrendingDown) { vm.generateDeloadWeek() }
+        SettingsActionRow("Re-roll exercises now", "Same split, new movement picks", Icons.Rounded.Shuffle) { rebuild = Rebuild.REROLL }
+        SettingsActionRow("Deload week", "A lighter week to recover", Icons.AutoMirrored.Rounded.TrendingDown) { rebuild = Rebuild.DELOAD }
     }
+    rebuild?.let { r -> RebuildConfirm(r, state.daysPerWeek, vm) { rebuild = null } }
+}
+
+/** The four Settings actions that replace the plan in one tap. */
+private enum class Rebuild { GENERATE, REROLL, DELOAD, REGENERATE }
+
+/**
+ * Each of these replaces the plan and drops its overlay: the plan builder's hand edits, "make
+ * default" swaps and folded coach changes. None can be undone, so §8's confirm names the act and
+ * what is lost. The workout guard still runs behind it when a session is open.
+ */
+@Composable
+private fun RebuildConfirm(
+    r: Rebuild,
+    days: Int,
+    vm: SettingsViewModel,
+    onConfirmed: () -> Unit = {},
+    onDone: () -> Unit
+) {
+    val lost = "Hand edits and swaps in the current plan don't carry over. Your history stays."
+    val (title, body, label) = when (r) {
+        Rebuild.GENERATE -> Triple("Replace your plan?", "A new $days-day split with fresh exercise picks. $lost", "Generate plan")
+        Rebuild.REROLL -> Triple("Re-roll every exercise?", "Same split, new movement picks. $lost", "Re-roll exercises")
+        Rebuild.DELOAD -> Triple(
+            "Start a deload week?",
+            "The same movements at lighter volume for a week, then the plan is rebuilt at full volume. $lost",
+            "Start deload"
+        )
+        Rebuild.REGENERATE -> Triple("Rebuild for this equipment?", "A new $days-day plan that uses only the gear you picked. $lost", "Rebuild plan")
+    }
+    SettingsConfirmDialog(
+        title = title,
+        body = body,
+        confirmLabel = label,
+        destructive = false,
+        onConfirm = {
+            onDone()
+            onConfirmed()
+            when (r) {
+                Rebuild.GENERATE, Rebuild.REGENERATE -> vm.generateProgram(days)
+                Rebuild.REROLL -> vm.rerollProgram()
+                Rebuild.DELOAD -> vm.generateDeloadWeek()
+            }
+        },
+        onDismiss = onDone
+    )
 }
 
 /** "4 days a week · in sequence" — the Plan row's live value. */
@@ -312,7 +359,13 @@ private fun EmphasisSection(state: SettingsUiState, vm: SettingsViewModel) {
 private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
     // True once equipment is touched this visit, so the regenerate prompt only speaks up after a change.
     var equipmentEdited by remember { mutableStateOf(false) }
+    var regenerate by remember { mutableStateOf(false) }
     val active = activePreset(state)
+    if (regenerate) {
+        RebuildConfirm(Rebuild.REGENERATE, state.daysPerWeek, vm, onConfirmed = { equipmentEdited = false }) {
+            regenerate = false
+        }
+    }
 
     SettingsGroup(
         "Setup",
@@ -353,16 +406,23 @@ private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
         }
     }
 
+    // Hardware comes in the user's own unit, as onboarding offers it: a kilo lifter was shown lb
+    // plates read back in kilos ("2.3 kg · 4.5 kg · 20.4 kg"), and since onboarding had stored a
+    // real 10 kg plate (22.05 lb), no chip matched it and none showed as selected. Stored in lb;
+    // selection compares with a tolerance, since a kilo value is never an exact lb number.
+    val metric = state.weightUnit.isMetric
+    fun toLb(v: Double) = com.forge.app.domain.units.fromDisplayWeight(v, metric)
+    fun same(lb: Double?, v: Double) = lb != null && kotlin.math.abs(lb - toLb(v)) < 0.05
     SettingsGroup("Loading") {
         LoadingChips("Weight per plate") {
-            listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0).forEach { w ->
-                SettingsFilterChip(plateHardwareLabel(w, state.weightUnit), state.plateWeightLb == w) { vm.setPlateWeightLb(w) }
+            (if (metric) listOf(1.25, 2.5, 5.0, 10.0, 15.0, 20.0, 25.0) else listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0)).forEach { v ->
+                SettingsFilterChip(plateHardwareLabel(toLb(v), state.weightUnit), same(state.plateWeightLb, v)) { vm.setPlateWeightLb(toLb(v)) }
             }
         }
         LoadingChips("Heaviest dumbbell") {
             SettingsFilterChip("No limit", state.maxDbWeightLb == null) { vm.setMaxDbWeightLb(null) }
-            listOf(15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 75.0, 100.0).forEach { w ->
-                SettingsFilterChip(plateHardwareLabel(w, state.weightUnit), state.maxDbWeightLb == w) { vm.setMaxDbWeightLb(w) }
+            (if (metric) listOf(10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0) else listOf(15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 75.0, 100.0)).forEach { v ->
+                SettingsFilterChip(plateHardwareLabel(toLb(v), state.weightUnit), same(state.maxDbWeightLb, v)) { vm.setMaxDbWeightLb(toLb(v)) }
             }
         }
     }
@@ -374,7 +434,7 @@ private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
             kind = if (equipmentEdited) ButtonKind.Primary else ButtonKind.Tonal,
             icon = Icons.Rounded.AutoAwesome
         ) {
-            vm.generateProgram(state.daysPerWeek); equipmentEdited = false
+            regenerate = true
         }
         SettingsGroupFooter(
             if (equipmentEdited) "Equipment changed. Regenerate so your plan uses only what you have."

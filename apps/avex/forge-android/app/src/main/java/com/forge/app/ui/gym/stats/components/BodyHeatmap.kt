@@ -32,6 +32,16 @@ import kotlinx.coroutines.withContext
 
 private fun parse(d: String): Path = PathParser().parsePathString(d).toPath()
 
+/**
+ * What a muscle map shows, in words: each trained muscle with its sets, most first. The figure is
+ * a drawing, so a screen reader otherwise heard nothing of it.
+ */
+internal fun musclesReadout(setsByMuscle: Map<MuscleGroup, Int>): String {
+    val trained = setsByMuscle.filterValues { it > 0 }.entries.sortedByDescending { it.value }
+    if (trained.isEmpty()) return "No muscles trained"
+    return trained.joinToString(", ") { (m, n) -> "${m.displayName} ${if (n == 1) "1 set" else "$n sets"}" }
+}
+
 /** An [AnatomyPart] with its SVG strings pre-compiled to [Path]s for drawing. */
 private class CompiledPart(val group: MuscleGroup?, val paths: List<Path>)
 

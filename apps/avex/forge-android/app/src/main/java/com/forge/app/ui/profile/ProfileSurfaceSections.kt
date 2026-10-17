@@ -226,8 +226,25 @@ internal data class BodyMetric(
      */
     val zeroLabel: String,
     val icon: ImageVector,
-    val onOpen: () -> Unit
+    val onOpen: () -> Unit,
+    /** When the latest reading was taken; an old one is shown with its age instead of a trend. */
+    val lastRecordedAt: Long? = null
 )
+
+/**
+ * "6 WK AGO" for a reading at least two weeks old, else null (§12 stale: the last-known reading
+ * plus its age). A weigh-in from two months back used to sit beside a 30-day delta with nothing to
+ * say it wasn't this morning's.
+ */
+internal fun staleReadingAge(recordedAt: Long?, nowMs: Long): String? {
+    val days = recordedAt?.let { ((nowMs - it) / 86_400_000L).toInt() } ?: return null
+    return when {
+        days < 14 -> null
+        days < 60 -> "${days / 7} WK AGO"
+        days < 730 -> "${days / 30} MO AGO"
+        else -> "${days / 365} YR AGO"
+    }
+}
 
 /**
  * BODY as one group of filled rows (glyph badge, name, trend, reading), joined by 2dp seams.
@@ -348,7 +365,11 @@ private fun BodyMetricRow(metric: BodyMetric, shape: Shape, accent: Color, onBg:
                         )
                     }
                 }
-                metric.deltaValue?.let { d ->
+                val age = remember(metric.lastRecordedAt) { staleReadingAge(metric.lastRecordedAt, System.currentTimeMillis()) }
+                if (age != null) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(age, style = MaterialTheme.typography.labelSmall, color = muted, maxLines = 1)
+                } else metric.deltaValue?.let { d ->
                     Spacer(Modifier.height(2.dp))
                     Text(
                         "${if (d > 0) "↑" else "↓"} ${metric.deltaText ?: "%.1f".format(abs(d))}",
@@ -402,7 +423,8 @@ internal fun weightMetric(
         action = "Log",
         zeroLabel = "Log your first",
         icon = SettingsIcons.Units,
-        onOpen = onLog
+        onOpen = onLog,
+        lastRecordedAt = entries.lastOrNull()?.recordedAt
     )
 }
 
@@ -417,7 +439,8 @@ private fun bodyFatMetric(entries: List<BodyFatEntry>, onLog: () -> Unit): BodyM
         action = "Log",
         zeroLabel = "Log your first",
         icon = SettingsIcons.Likes,
-        onOpen = onLog
+        onOpen = onLog,
+        lastRecordedAt = entries.lastOrNull()?.recordedAt
     )
 }
 
@@ -436,7 +459,8 @@ private fun leanMassMetric(
         action = "Sync",
         zeroLabel = "Sync from your watch",
         icon = SettingsIcons.Wearable,
-        onOpen = onSync
+        onOpen = onSync,
+        lastRecordedAt = entries.lastOrNull()?.recordedAt
     )
 }
 
@@ -465,7 +489,8 @@ private fun sizesMetric(state: BodyMeasurementsUiState, onOpen: () -> Unit): Bod
         action = "Open",
         zeroLabel = "Measure your first",
         icon = SettingsIcons.Program,
-        onOpen = onOpen
+        onOpen = onOpen,
+        lastRecordedAt = featured?.entries?.lastOrNull()?.recordedAt
     )
 }
 

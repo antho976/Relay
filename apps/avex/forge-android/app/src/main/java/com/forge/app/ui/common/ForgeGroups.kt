@@ -580,10 +580,22 @@ internal fun ForgeFieldRow(
 /** A label with a compact segmented control at its end. At a large font scale the control drops
  *  under the label rather than squeezing it (both must stay whole at 200%). */
 @Composable
-internal fun ForgeChoiceRow(label: String, options: List<String>, selectedIndex: Int, onSelect: (Int) -> Unit) {
+internal fun ForgeChoiceRow(
+    label: String,
+    options: List<String>,
+    selectedIndex: Int,
+    /** One muted line under the label, for a scale whose ends need naming ("1 poor · 5 great"). */
+    caption: String? = null,
+    onSelect: (Int) -> Unit
+) {
     val stacked = LocalDensity.current.fontScale > 1.3f
     val labelText: @Composable () -> Unit = {
-        Text(label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+        Column {
+            Text(label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+            if (caption != null) {
+                Text(caption, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
     }
     if (stacked) {
         Column(

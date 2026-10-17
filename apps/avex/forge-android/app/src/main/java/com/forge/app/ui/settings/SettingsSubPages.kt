@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -178,7 +179,11 @@ internal fun SessionPage(state: SettingsUiState, vm: SettingsViewModel, onBack: 
             )
         }
 
-        SettingsGroup("Rest timer", footer = "Starting points. Hard sets add time, and the timer learns your pace.") {
+        val pace by vm.restPace.collectAsStateWithLifecycle()
+        SettingsGroup(
+            "Rest timer",
+            footer = "Starting points. Hard sets add time, and the timer learns your pace." + pace?.let { " $it" }.orEmpty()
+        ) {
             RestStepper("Compound lifts", "Squat, bench, deadlift, rows", state.restCompoundSeconds, COMPOUND_REST, vm::setRestCompoundSeconds)
             RestStepper("Isolation lifts", "Curls, raises, extensions", state.restIsolationSeconds, ISOLATION_REST, vm::setRestIsolationSeconds)
         }

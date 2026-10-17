@@ -1,5 +1,7 @@
 package com.forge.app.ui.gym.train
 
+import com.forge.app.ui.gym.train.components.LocalInlineRestOnScreen
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -8,10 +10,13 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import com.forge.app.ui.common.ForgeSnackbar
 import com.forge.app.ui.common.window.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -35,6 +40,7 @@ import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -122,6 +128,18 @@ fun DayScreen(
             }
     }
 
+    LaunchedEffect(state.deletedSet) {
+        state.deletedSet ?: return@LaunchedEffect
+        // Newest wins: a still-showing "Set logged" would otherwise queue this one behind it.
+        snackbarHostState.currentSnackbarData?.dismiss()
+        // Long, not Short: four seconds ran out on the emulator before a deliberate tap landed, and
+        // a lifter who swiped by accident is often looking at the bar, not the phone.
+        val result = snackbarHostState.showSnackbar(message = "Set deleted", actionLabel = "Undo", duration = SnackbarDuration.Long)
+        viewModel.onEvent(
+            if (result == SnackbarResult.ActionPerformed) DayUiEvent.RestoreDeletedSet else DayUiEvent.ForgetDeletedSet
+        )
+    }
+
     LaunchedEffect(state.undoableSetId) {
         val setId = state.undoableSetId ?: return@LaunchedEffect
         val result = snackbarHostState.showSnackbar(message = "Set logged", actionLabel = "Undo", duration = SnackbarDuration.Short)
@@ -140,16 +158,23 @@ fun DayScreen(
         viewModel.messages.collect { msg -> snackbarHostState.showSnackbar(msg) }
     }
 
+    val inlineRestOnScreen = remember { mutableStateOf(false) }
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { SnackbarHost(snackbarHostState) { ForgeSnackbar(it) } },
         floatingActionButton = {
             // Retain the last timer so the bubble can animate OUT (scale + fade) when the rest
             // ends instead of snapping away. Enter is handled by the bubble's own pop-in spring.
             val timer = restTimer.value
             var lastTimer by remember { mutableStateOf(timer) }
             LaunchedEffect(timer) { if (timer != null) lastTimer = timer }
+            // The list doesn't make room for the keyboard (edge-to-edge, no IME padding), so the
+            // card's rest row can sit under it while still counting as on screen. Typing the next
+            // set is exactly when that happens, so an open keyboard always gets the bubble.
+            val imeOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
             AnimatedVisibility(
-                visible = timer != null,
+                // Only once the card's own rest row is off screen: with both showing, the same
+                // countdown appeared twice and the bubble covered the card's action row.
+                visible = timer != null && (!inlineRestOnScreen.value || imeOpen),
                 enter = fadeIn(ForgeMotion.enterTween(ForgeMotion.DurationFast)),
                 exit = scaleOut(ForgeMotion.exitTween(), targetScale = 0.6f) + fadeOut(ForgeMotion.exitTween())
             ) {
@@ -166,7 +191,9 @@ fun DayScreen(
         containerColor = Color.Transparent
     ) { inner ->
         Box(Modifier.fillMaxSize().padding(inner)) {
-            DayContent(state = state, onEvent = viewModel::onEvent, restTimer = restTimer)
+            CompositionLocalProvider(LocalInlineRestOnScreen provides inlineRestOnScreen) {
+                DayContent(state = state, onEvent = viewModel::onEvent, restTimer = restTimer)
+            }
             if (showPrBurst) {
                 // PR celebration is now just the confetti burst (over the live screen) plus the gold
                 // ★/text on the record set row — no full-screen "PERSONAL RECORD" takeover.
@@ -182,6 +209,14 @@ fun DayScreen(
             onKeepGoing = { viewModel.onEvent(DayUiEvent.DismissDiscardConfirm) },
             // Back only asks when there is work to keep; an empty FINISH asks too, with nothing to resume.
             nothingLogged = !state.hasUnsavedWork
+        )
+    }
+
+    if (state.finishUntouched.isNotEmpty()) {
+        FinishUntouchedDialog(
+            untouched = state.finishUntouched,
+            onFinish = { viewModel.onEvent(DayUiEvent.ConfirmFinishUntouched) },
+            onKeepGoing = { viewModel.onEvent(DayUiEvent.DismissFinishUntouched) }
         )
     }
 
@@ -253,7 +288,7 @@ fun DayScreen(
     state.pendingWeightJumpWarning?.let { warning ->
         AlertDialog(
             onDismissRequest = { viewModel.onEvent(DayUiEvent.DismissWeightJump) },
-            title = { Text("Big jump — are you sure?") },
+            title = { Text("Big jump") },
             text = { Text("${warning.lastLabel} → ${warning.newLabel} is a ${warning.percent}% increase. Log it anyway?") },
             confirmButton = { Button(onClick = { viewModel.onEvent(DayUiEvent.ConfirmWeightJump) }) { Text("Log it") } },
             dismissButton = { TextButton(onClick = { viewModel.onEvent(DayUiEvent.DismissWeightJump) }) { Text("Go back") } }
@@ -272,10 +307,28 @@ fun DayScreen(
                     // menu, sitting between two rows that do something. The exercise card already
                     // exposes the timer setter directly, so the row was a second, non-working route
                     // to a control one tap away — and the menu is shorter without it.
-                    listOf(
-                        "Toggle skip" to { viewModel.onEvent(DayUiEvent.ToggleSkipped(exId)) },
-                        "Open swap picker" to { viewModel.onEvent(DayUiEvent.OpenSwapPicker(exId)) }
-                    ).forEach { (label, action) ->
+                    //
+                    // The warm-up ladder, plate math and the goal setter were built and wired to
+                    // events nothing raised, so FEATURES.md listed a plate calculator and in-workout
+                    // goals nobody could open. They live here, shown only where they mean something.
+                    val unit = exercise?.effectiveUnit
+                    val loadBearing = unit == com.forge.app.program.ExerciseUnit.WEIGHT ||
+                        unit == com.forge.app.program.ExerciseUnit.DUMBBELL ||
+                        unit == com.forge.app.program.ExerciseUnit.PLATES
+                    val barLoaded = exercise != null && unit == com.forge.app.program.ExerciseUnit.WEIGHT &&
+                        (com.forge.app.program.ExerciseLibrary.byId(exercise.effectiveExerciseId)?.equipment ?: exercise.plan.equipment)
+                            .any { it == com.forge.app.program.Equipment.BARBELL || it == com.forge.app.program.Equipment.TRAP_BAR }
+                    buildList {
+                        if (loadBearing) add("Warm-up sets" to { viewModel.onEvent(DayUiEvent.ShowWarmupSuggester(exId)) })
+                        if (barLoaded) add("Plate math" to { viewModel.onEvent(DayUiEvent.ShowPlateCalculator(exId)) })
+                        if (loadBearing && unit != com.forge.app.program.ExerciseUnit.PLATES) add(
+                            (if (exercise?.goalWeightLb != null) "Change goal" else "Set a goal") to
+                                { viewModel.onEvent(DayUiEvent.OpenGoalSetter(exId)) }
+                        )
+                        add("Swap exercise" to { viewModel.onEvent(DayUiEvent.OpenSwapPicker(exId)) })
+                        add((if (exercise?.skipped == true) "Unskip exercise" else "Skip exercise") to
+                            { viewModel.onEvent(DayUiEvent.ToggleSkipped(exId)) })
+                    }.forEach { (label, action) ->
                         TextButton(onClick = { action(); viewModel.onEvent(DayUiEvent.DismissQuickActions) },
                             modifier = Modifier.fillMaxWidth()) { Text(label, modifier = Modifier.fillMaxWidth()) }
                     }
@@ -335,7 +388,12 @@ fun DayScreen(
     }
     state.plateCalculatorForExerciseId?.let { exerciseId ->
         val ex = state.exercises.firstOrNull { it.plan.id == exerciseId }
-        val workingWeight = ex?.loggedSets?.lastOrNull()?.weightLb ?: ex?.prefillWeight?.toDoubleOrNull()
+        // In pounds. prefillWeight is display-unit text (kg, stones, or a plate count), and passing
+        // it as lb seeded a 100 kg lift as 45.4 kg. Today's last set, else the coach's target, else
+        // last session's first set.
+        val workingWeight = ex?.loggedSets?.lastOrNull()?.weightLb
+            ?: ex?.suggestedTargetLb
+            ?: ex?.priorSets?.firstOrNull()?.weightLb
         PlateCalculatorDialog(initialWeightLb = workingWeight, weightUnit = LocalForgeSettings.current.weightUnit,
             onDismiss = { viewModel.onEvent(DayUiEvent.DismissTrainingHelper) })
     }

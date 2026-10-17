@@ -429,6 +429,10 @@ fun OnboardingScreen(
                             useKg = useKg, onWeightUnit = { kg ->
                                 if (kg != useKg) {
                                     bodyweightInput = convertBodyweightInput(bodyweightInput, fromKg = useKg, toKg = kg)
+                                    // The plate is hardware in the new unit too: 15 lb read in kilos is
+                                    // 6.8 kg, which no kilo plate is and no kilo segment shows as picked.
+                                    // Snap to the new unit's nearest denomination.
+                                    plateWeightLb = snapPlateToUnit(plateWeightLb, toKg = kg)
                                     useKg = kg
                                 }
                             },
@@ -462,9 +466,14 @@ fun OnboardingScreen(
                             "screen, or generate one anytime in Settings → Program."
                         PLAN_FREESTYLE -> "You'll start with no fixed plan, just logging your workouts. " +
                             "Switch to a plan anytime in Settings → Program."
-                        else -> "You'll start with a basic bodyweight program and default settings, with " +
-                            "no plan tailored to your gym or goals. Set your equipment and goal, and " +
-                            "generate a personalized program, anytime in Settings → Program."
+                        // Skipping keeps what was already answered, so the promise depends on how far in it is.
+                        else -> if (equipment.isNotEmpty() || goal.isNotEmpty())
+                            "Your plan is built from what you've answered so far, with defaults for the rest. " +
+                                "Change any of it anytime in Settings → Program."
+                        else
+                            "You'll start with a basic bodyweight program and default settings, with " +
+                                "no plan tailored to your gym or goals. Set your equipment and goal, and " +
+                                "generate a personalized program, anytime in Settings → Program."
                     }
                 )
             },
@@ -475,14 +484,29 @@ fun OnboardingScreen(
                     // Honor a mode the user already picked; default to generated for the usual
                     // early skip where nothing was chosen yet.
                     val effectiveMode = planMode.ifEmpty { PLAN_GENERATED }
+                    // Built from the answers so far, each defaulted only while still blank. Skipping
+                    // on step six used to throw away the goal, experience, day count, gym, sore
+                    // spots, minutes and weekdays already given, and generate a bodyweight plan
+                    // for someone who had just picked a full gym.
                     viewModel.complete(
                         planMode = effectiveMode, name = name.trim(), useKg = useKg, sex = sex ?: "",
                         useMiles = if (distanceTouched) useMilesChoice else null,
-                        bodyweightLb = bwLb, goal = "build_muscle", daysPerWeek = 4,
-                        equipment = setOf(Equipment.BODYWEIGHT_ONLY.name), experience = "intermediate",
+                        bodyweightLb = bwLb,
+                        goal = goal.ifEmpty { "build_muscle" },
+                        daysPerWeek = daysPerWeek.takeIf { it in 1..7 } ?: 4,
+                        equipment = equipment.ifEmpty { setOf(Equipment.BODYWEIGHT_ONLY.name) },
+                        experience = experience.ifEmpty { "intermediate" },
+                        problemAreas = problemAreas, seed = previewSeed,
+                        plateWeightLb = plateWeightLb, frozenIds = frozenIds,
                         // Skipping never reaches the coach row, so the mode's own default stands.
                         coachEnabled = coachChoice ?: (effectiveMode == PLAN_GENERATED),
-                        appLock = appLock
+                        appLock = appLock, sessionMinutes = sessionMinutes,
+                        // Only a complete pick, as Next requires: one weekday per training day. A
+                        // partial set was zipped onto the day keys, and the day left over never
+                        // came up in weekday mode.
+                        trainingWeekdays = weekdays.takeIf {
+                            fixedDays == true && it.size == (daysPerWeek.takeIf { d -> d in 1..7 } ?: 4)
+                        }
                     )
                     onFinished(effectiveMode)
                 }) { Text("Skip anyway") }
@@ -492,4 +516,12 @@ fun OnboardingScreen(
             }
         )
     }
+}
+
+/** [plateLb] as the nearest real plate in the target unit, stored in lb (see the extras step's set). */
+internal fun snapPlateToUnit(plateLb: Double, toKg: Boolean): Double {
+    val denominations = if (toKg) listOf(1.25, 2.5, 5.0, 10.0, 15.0, 20.0, 25.0) else listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0)
+    val target = com.forge.app.domain.units.toDisplayWeight(plateLb, toKg)
+    val nearest = denominations.minBy { kotlin.math.abs(it - target) }
+    return com.forge.app.domain.units.fromDisplayWeight(nearest, toKg)
 }

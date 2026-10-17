@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -19,6 +20,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -68,11 +72,13 @@ private fun MuscleSetBarRow(r: MuscleSetRow, maxTarget: Int, c: StatsColors) {
         Modifier.fillMaxWidth().padding(vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // Minimum widths, not fixed ones (§14): at large font scales a fixed 82dp wrapped
+        // "Hamstrings" and a fixed 48dp split "12/16" across two lines. The bar gives up the room.
         Text(
             r.muscle.displayName,
             style = MaterialTheme.typography.bodySmall,
             color = c.onBg,
-            modifier = Modifier.width(82.dp)
+            modifier = Modifier.widthIn(min = 82.dp).padding(end = 8.dp)
         )
         // Track = this muscle's target; fill = progress. A muscle with no planned target sizes its
         // track by the work actually done instead (fully filled — there's no plan to fall short of).
@@ -89,12 +95,12 @@ private fun MuscleSetBarRow(r: MuscleSetRow, maxTarget: Int, c: StatsColors) {
             Box(
                 Modifier.fillMaxWidth(trackFrac).height(12.dp)
                     .clip(RoundedCornerShape(50))
-                    .background(c.outline.copy(alpha = 0.18f))
+                    .background(c.outline.copy(alpha = 0.25f))
             ) {
                 if (fillFrac > 0f) Box(
                     Modifier.fillMaxWidth(fillFrac).fillMaxHeight()
                         .clip(RoundedCornerShape(50))
-                        .background(if (onPlan) c.accent else c.accent.copy(alpha = 0.55f))
+                        .background(if (onPlan) c.accent else c.accent.copy(alpha = 0.6f))
                 )
             }
         }
@@ -103,7 +109,7 @@ private fun MuscleSetBarRow(r: MuscleSetRow, maxTarget: Int, c: StatsColors) {
             style = MaterialTheme.typography.labelSmall,
             color = if (onPlan) c.accent else c.muted,
             textAlign = TextAlign.End,
-            modifier = Modifier.width(48.dp).padding(start = 8.dp)
+            modifier = Modifier.widthIn(min = 48.dp).padding(start = 8.dp)
         )
     }
 }
@@ -149,12 +155,12 @@ private fun BalanceRow(b: BalanceRatioUi, c: StatsColors) {
         ) {
             Row(Modifier.matchParentSize()) {
                 if (fracA > 0f) Box(Modifier.weight(fracA).fillMaxHeight().background(c.accent))
-                if (fracA < 1f) Box(Modifier.weight(1f - fracA).fillMaxHeight().background(c.accent.copy(alpha = 0.3f)))
+                if (fracA < 1f) Box(Modifier.weight(1f - fracA).fillMaxHeight().background(c.accent.copy(alpha = 0.35f)))
             }
             // The 50/50 ideal — the further the color boundary sits from this tick, the more skewed.
             Box(
                 Modifier.align(Alignment.Center).width(2.dp).fillMaxHeight()
-                    .background(c.onBg.copy(alpha = 0.55f))
+                    .background(c.onBg.copy(alpha = 0.6f))
             )
         }
         Spacer(Modifier.height(6.dp))
@@ -183,16 +189,33 @@ internal fun ColumnScope.TonnageTrendContent(
 ) {
     if (weeklyTonnage.size < 2) return
     val display = weeklyTonnage.map { toDisplayWeight(it.volumeLb, weightUnit) }
+    // Twelve weeks away is twelve zeros: a flat line at the floor reads as broken, not as a fact.
+    if (display.all { it <= 0.0 }) return
     val lo = display.min()
     val hi = display.max()
     val unit = unitLabel(weightUnit)
+    val deloads = weeklyTonnage.mapIndexedNotNull { i, w -> i.takeIf { w.isDeload } }
+    val band = c.outline.copy(alpha = 0.15f)
     LineChart(
         values = display,
         lineColor = c.accent,
         trendColor = c.muted,
         minValue = lo,
         maxValue = hi,
-        modifier = Modifier.fillMaxWidth().height(STATS_CHART_H)
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(STATS_CHART_H)
+            // A deload week dips by design: a shaded column says so, so the dip is not read as a slide.
+            .drawBehind {
+                if (deloads.isEmpty()) return@drawBehind
+                val step = size.width / (display.size - 1)
+                deloads.forEach { i ->
+                    val left = (step * (i - 0.5f)).coerceAtLeast(0f)
+                    val right = (step * (i + 0.5f)).coerceAtMost(size.width)
+                    drawRect(band, topLeft = Offset(left, 0f), size = Size(right - left, size.height))
+                }
+            }
+            .chartReadout(tonnageDescription(display, deloads.size, unit))
     )
     Spacer(Modifier.height(6.dp))
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -200,4 +223,23 @@ internal fun ColumnScope.TonnageTrendContent(
         Text("weekly volume · last ${weeklyTonnage.size} wks", style = MaterialTheme.typography.labelSmall, color = c.muted)
         Text(tonnageLabel(hi, unit), style = MaterialTheme.typography.labelSmall, color = c.muted)
     }
+    if (deloads.isNotEmpty()) {
+        Spacer(Modifier.height(2.dp))
+        Text(
+            if (deloads.size == 1) "The shaded week was a deload." else "The shaded weeks were deloads.",
+            style = MaterialTheme.typography.labelSmall,
+            color = c.muted
+        )
+    }
+}
+
+/** What the tonnage line says, for a screen reader: the span, the range and where it ended. */
+internal fun tonnageDescription(display: List<Double>, deloadWeeks: Int, unit: String): String {
+    val last = display.last().roundToInt()
+    val parts = mutableListOf(
+        "Weekly volume over ${display.size} weeks, from ${display.min().roundToInt()} to ${display.max().roundToInt()} $unit",
+        "last week $last $unit"
+    )
+    if (deloadWeeks > 0) parts += if (deloadWeeks == 1) "1 deload week" else "$deloadWeeks deload weeks"
+    return parts.joinToString(", ") + "."
 }

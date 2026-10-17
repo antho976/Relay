@@ -24,10 +24,13 @@ object Milestones {
      * from the feed rather than rendered as a raw key (DESIGN §11: machine identifiers never render).
      */
     fun messageFor(id: String, weightUnit: WeightUnit): String? = when (id) {
-        SESSIONS_100 -> "100 workouts complete. You've earned this."
+        // The fact, without praise it can't ground (§11): "You've earned this." and "You're building
+        // something real." were the kind of line the voice rules ban. The first full month is the
+        // calendar month after the first session, so it says the month rolled over, not "a month".
+        SESSIONS_100 -> "100 workouts logged."
         // The threshold is fixed in lb; the label honours the user's unit ("10k lb" / "4.5k kg").
         VOLUME_10K_WEEK -> "${formatVolumeCompact(VOLUME_THRESHOLD_LB, weightUnit)} moved in one week, a first."
-        FIRST_FULL_MONTH -> "First full month of training. You're building something real."
+        FIRST_FULL_MONTH -> "A new month on the calendar since your first session."
         else -> null
     }
 }

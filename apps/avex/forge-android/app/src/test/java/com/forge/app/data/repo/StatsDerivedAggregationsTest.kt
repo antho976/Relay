@@ -193,6 +193,26 @@ class StatsDerivedAggregationsTest {
         assertEquals(3, buildWeeklyTonnage(points, zone).size)
     }
 
+    @Test
+    fun weeklyTonnage_showsAWeekWithNoTrainingAtZero() {
+        // Trained, three weeks off, trained again: the gap is three zero weeks, not nothing.
+        val points = listOf(
+            VolumeDeloadPoint(dayMs(monday), "d", 1000.0, isDeload = false),
+            VolumeDeloadPoint(dayMs(monday.plusWeeks(4)), "d", 800.0, isDeload = false)
+        )
+        val weeks = buildWeeklyTonnage(points, zone)
+        assertEquals(listOf(1000.0, 0.0, 0.0, 0.0, 800.0), weeks.map { it.volumeLb })
+    }
+
+    @Test
+    fun weeklyTonnage_runsUpToTheLastCompleteWeekWhileStillAway() {
+        // Last session four weeks before the current one: the chart ends on the week just finished.
+        val points = listOf(VolumeDeloadPoint(dayMs(monday), "d", 1000.0, isDeload = false),
+            VolumeDeloadPoint(dayMs(monday.plusWeeks(1)), "d", 900.0, isDeload = false))
+        val weeks = buildWeeklyTonnage(points, zone, excludeWeekOf = monday.plusWeeks(5).plusDays(2))
+        assertEquals(listOf(1000.0, 900.0, 0.0, 0.0, 0.0), weeks.map { it.volumeLb })
+    }
+
     // ── standingWindowWeeks ────────────────────────────────────────────────────
 
     @Test

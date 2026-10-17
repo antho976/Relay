@@ -26,7 +26,9 @@ private const val HEATMAP_WEEKS = 26
 internal fun ColumnScope.AdherenceContent(
     dailyActivity: List<DayLoad>,
     c: StatsColors,
-    onDayTap: (LocalDate) -> Unit = {}
+    onDayTap: (LocalDate) -> Unit = {},
+    /** Planned days off (holidays, scheduled rest), drawn apart from a missed day. */
+    restEpochDays: Set<Long> = emptySet()
 ) {
     if (dailyActivity.isEmpty()) return
     val byDay = remember(dailyActivity) { dailyActivity.associate { it.epochDay to it.sets } }
@@ -43,11 +45,14 @@ internal fun ColumnScope.AdherenceContent(
         faint = c.outline.copy(alpha = 0.18f),
         accent = c.accent,
         modifier = Modifier.fillMaxWidth(),
-        onDayTap = onDayTap
+        onDayTap = onDayTap,
+        restDays = restEpochDays,
+        restRing = c.outline.copy(alpha = 0.35f)
     )
     Spacer(Modifier.height(8.dp))
     Text(
-        "$windowDays training days in the last $HEATMAP_WEEKS weeks · tap a lit day to see it",
+        "$windowDays training days in the last $HEATMAP_WEEKS weeks · tap a lit day to see it" +
+            if (restEpochDays.isEmpty()) "" else " · outlined days were planned off",
         style = MaterialTheme.typography.labelSmall,
         color = c.muted
     )

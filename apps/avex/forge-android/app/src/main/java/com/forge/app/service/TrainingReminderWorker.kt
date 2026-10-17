@@ -41,7 +41,8 @@ class TrainingReminderWorker @AssistedInject constructor(
     private val sessionDao: SessionDao,
     private val settingsRepo: SettingsRepository,
     private val statsRepo: StatsRepository,
-    private val programRepo: com.forge.app.data.repo.ProgramRepository
+    private val programRepo: com.forge.app.data.repo.ProgramRepository,
+    private val vacationRepo: com.forge.app.data.repo.VacationRepository
 ) : CoroutineWorker(ctx, params) {
 
     override suspend fun doWork(): Result {
@@ -53,6 +54,10 @@ class TrainingReminderWorker @AssistedInject constructor(
 
         val zone = ZoneId.systemDefault()
         val today = LocalDate.now(zone)
+        // A declared holiday is time off the user asked for: no "time to train" every morning of it.
+        // The Monday come-back nudge already honoured it; the daily one did not.
+        val periods = runCatching { vacationRepo.observeAll().first() }.getOrDefault(emptyList())
+        if (com.forge.app.domain.vacation.VacationCalendar.onVacation(periods)(today)) return Result.success()
         val dayStart = today.atStartOfDay(zone).toInstant().toEpochMilli()
         val dayEnd = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
         // TRACKED: an untracked workout still suppressed the day's nudge and fed the schedule
@@ -64,7 +69,18 @@ class TrainingReminderWorker @AssistedInject constructor(
         // never announce a phantom day (a stale seed plan could still resolve one). The reminder stays,
         // just with plan-agnostic copy.
         val freestyle = settingsRepo.freestyleMode.first()
-        val dayName = if (freestyle) null else resolveTodayDayName(today, finishedToday.map { it.dayKey }.toSet())
+        val next = if (freestyle) null else resolveNextUp(today, finishedToday.map { it.dayKey }.toSet())
+        val dayName = WeeklySchedule.trainTodayKey(next)?.let(::nameOf)
+        val upcoming = WeeklySchedule.upcomingKey(next)?.let(::nameOf)
+        val upcomingWhen = next?.takeIf { upcoming != null }?.let { n ->
+            if (n.daysAhead == 1) "tomorrow"
+            else today.plusDays(n.daysAhead.toLong()).dayOfWeek
+                .getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault())
+        }
+        // Calendar days since the last finished, tracked session: the reminder names a real break.
+        val daysSinceLast = sessionDao.finishedAts().firstOrNull()?.let { last ->
+            java.time.temporal.ChronoUnit.DAYS.between(Instant.ofEpochMilli(last).atZone(zone).toLocalDate(), today).toInt()
+        }
         // No plan to name a day (freestyle, OR a custom user who hasn't built their plan yet) → use the
         // plan-agnostic nudge instead of going silent, so an opted-in user still gets their reminder.
         val noFixedPlan = freestyle || Program.dayKeys.isEmpty()
@@ -82,17 +98,26 @@ class TrainingReminderWorker @AssistedInject constructor(
             dayName = dayName,
             streakDays = streak,
             isScheduledRestDay = isRestDay,
-            noFixedPlan = noFixedPlan
+            noFixedPlan = noFixedPlan,
+            daysSinceLast = daysSinceLast,
+            nextDayName = upcoming,
+            nextWhen = upcomingWhen
         ) ?: return Result.success()
 
         ForgeNotifications.ensureChannel(ctx, CHANNEL_ID, CHANNEL_NAME, CHANNEL_DESC)
-        val notification = ForgeNotifications.build(ctx, CHANNEL_ID, nudge.title, nudge.body)
+        // "Push A today" opens Push A: the tap lands on the workout it names, not on Home.
+        val notification = ForgeNotifications.build(
+            ctx, CHANNEL_ID, nudge.title, nudge.body,
+            openDayKey = WeeklySchedule.trainTodayKey(next)
+        )
         (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIF_ID, notification)
         return Result.success()
     }
 
-    /** Today's workout name: weekday mode reads today's slot (rest day ⇒ null); sequence mode the next-up. */
-    private suspend fun resolveTodayDayName(today: LocalDate, trainedTodayKeys: Set<String>): String? {
+    private fun nameOf(key: String): String? = Program.days.firstOrNull { it.key == key }?.defaultName
+
+    /** What the schedule says is next: today's slot in weekday mode (or the next one on a rest day), the next-up in sequence mode. */
+    private suspend fun resolveNextUp(today: LocalDate, trainedTodayKeys: Set<String>): WeeklySchedule.NextUp? {
         val dayKeys = Program.dayKeys
         if (dayKeys.isEmpty()) return null
         val todayIndex = today.dayOfWeek.value - 1
@@ -101,7 +126,7 @@ class TrainingReminderWorker @AssistedInject constructor(
         val recent = sessionDao.finishedForRecoverySince(
             today.minusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
         )
-        val key = WeeklySchedule.trainTodayKey(WeeklySchedule.resolveNextUpWithOffset(
+        return WeeklySchedule.resolveNextUpWithOffset(
             mode = mode, todayIndex = todayIndex, schedule = settingsRepo.weeklySchedule.first(),
             dayKeys = dayKeys, lastFinishedDayKey = sessionDao.lastFinishedDayKey(),
             trainedTodayKeys = trainedTodayKeys,
@@ -110,8 +135,7 @@ class TrainingReminderWorker @AssistedInject constructor(
                     session.finishedAt?.let { session.dayKey to java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
                 }, today
             )
-        ))
-        return key?.let { k -> Program.days.firstOrNull { it.key == k }?.defaultName }
+        )
     }
 
     companion object {

@@ -44,15 +44,21 @@ import com.forge.app.program.ExerciseLibrary
 
 /**
  * Pure, testable filter for the exercise picker. Hides owner-only plate-count stations
- * ([ExerciseDef.curatedOnly]) and anything already on the list ([exclude]); matches [query] against
- * the name or muscle group (case-insensitive). Blank query returns the whole eligible pool.
+ * ([ExerciseDef.curatedOnly]) and anything already on the list ([exclude]); matches [query] through
+ * [com.forge.app.program.ExerciseSearch] (every word, gym shorthand understood, name matches first).
+ * Blank query returns the whole eligible pool.
  */
-fun filterLibrary(query: String, exclude: Set<String>): List<ExerciseDef> {
-    val q = query.trim().lowercase()
-    return ExerciseLibrary.all.filter { def ->
-        !def.curatedOnly && def.id !in exclude &&
-            (q.isEmpty() || def.name.lowercase().contains(q) || def.muscle.displayName.lowercase().contains(q))
-    }
+fun filterLibrary(
+    query: String,
+    exclude: Set<String>,
+    /** Moves for this muscle first (a swap's own muscle), the rest after, each in its own order. */
+    preferMuscle: com.forge.app.program.MuscleGroup? = null
+): List<ExerciseDef> {
+    val hits = com.forge.app.program.ExerciseSearch.filter(
+        ExerciseLibrary.all.filter { def -> !def.curatedOnly && def.id !in exclude },
+        query
+    )
+    return if (preferMuscle == null) hits else hits.sortedByDescending { it.muscle == preferMuscle }
 }
 
 /**
@@ -84,7 +90,9 @@ fun ExerciseLibraryPicker(
     onConfirm: (Set<String>) -> Unit,
     title: String = "Add an exercise",
     confirmLabel: String = "Add",
-    singleSelect: Boolean = false
+    singleSelect: Boolean = false,
+    /** List this muscle's moves first: swapping a bench press starts on chest, not on the alphabet. */
+    preferMuscle: com.forge.app.program.MuscleGroup? = null
 ) {
     // Saveable, not remembered (H-13). The ViewModel restores WHICH dialog was open, so a rotation
     // mid-swap reopened the right picker — with the typed query gone and every pick cleared, which
@@ -93,7 +101,7 @@ fun ExerciseLibraryPicker(
     // slots and cannot inherit each other's draft.
     var query by rememberSaveable { mutableStateOf("") }
     var picked by rememberSaveable(saver = PickedSaver) { mutableStateOf(emptySet<String>()) }
-    val results = remember(query, exclude) { filterLibrary(query, exclude) }
+    val results = remember(query, exclude, preferMuscle) { filterLibrary(query, exclude, preferMuscle) }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(

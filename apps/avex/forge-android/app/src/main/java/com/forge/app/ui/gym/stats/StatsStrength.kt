@@ -29,6 +29,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import com.forge.app.ui.common.clickableLabeled
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
@@ -42,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.domain.adapt.E1rm
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
+import com.forge.app.domain.units.fromDisplayWeight
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.gym.stats.components.LineChart
@@ -49,6 +53,7 @@ import com.forge.app.ui.gym.stats.components.ScatterChart
 import com.forge.app.ui.common.rememberDrawProgressState
 import com.forge.app.ui.common.staggeredProgress
 import com.forge.app.ui.gym.stats.state.E1rmLift
+import com.forge.app.ui.gym.stats.state.PlateauFlagUi
 import com.forge.app.ui.gym.stats.state.PrEntry
 import com.forge.app.ui.gym.stats.state.StrengthCurve
 import com.forge.app.ui.theme.ForgeMotion
@@ -76,14 +81,24 @@ internal fun ColumnScope.E1rmComparisonList(
     /** A lift to open pre-expanded — set when a record tap deep-links here. */
     focusLift: String? = null,
     /** Bumps on every record tap so re-tapping the same [focusLift] re-expands its row. */
-    focusNonce: Int = 0
+    focusNonce: Int = 0,
+    /** The coach's plateau read per exercise id (see [StatsUiState.plateauFlags]). */
+    plateaus: Map<String, PlateauFlagUi> = emptyMap(),
+    /** The [focusNonce] whose row has been scrolled into view already; held by the caller. */
+    focusShownNonce: Int = 0,
+    onFocusShown: (Int) -> Unit = {}
 ) {
     val maxE1 = lifts.maxOf { it.currentE1rm }.coerceAtLeast(1.0)
     // The comparison bars glide in on first appearance, staggered down the list — the same motion
     // as the session screen's per-exercise bars. Each row gets a lambda over the shared reveal and
     // reads it in draw, so the glide never recomposes the list.
     val progress = rememberDrawProgressState(Unit, ForgeMotion.drawTween())
-    lifts.forEachIndexed { i, lift ->
+    // Six, then every lift on request (§12 overflow: trim + "all →" beside the trim). A record tap
+    // that targets a lift past the six opens the full list so its row can expand.
+    var showAll by rememberSaveable { mutableStateOf(false) }
+    val focusPastTrim = focusLift != null && lifts.indexOfFirst { it.exerciseId == focusLift } >= LIFTS_SHOWN
+    val shown = if (showAll || focusPastTrim) lifts else lifts.take(LIFTS_SHOWN)
+    shown.forEachIndexed { i, lift ->
         E1rmDrillRow(
             lift = lift,
             frac = (lift.currentE1rm / maxE1).toFloat(),
@@ -93,8 +108,34 @@ internal fun ColumnScope.E1rmComparisonList(
             weightUnit = weightUnit,
             c = c,
             isFocused = lift.exerciseId == focusLift,
-            focusNonce = focusNonce
+            focusNonce = focusNonce,
+            focusShown = focusShownNonce >= focusNonce,
+            onFocusShown = { onFocusShown(focusNonce) },
+            plateau = plateaus[lift.exerciseId]
         )
+    }
+    if (lifts.size > LIFTS_SHOWN && !focusPastTrim) {
+        StatsShowAll(
+            label = if (showAll) "top $LIFTS_SHOWN only" else "all ${lifts.size} lifts",
+            c = c
+        ) { showAll = !showAll }
+    }
+}
+
+/** Lifts and records shown before the "all →" expansion. */
+internal const val LIFTS_SHOWN = 6
+
+/** The mono `all N lifts →` beside a trimmed list, expanding it in place (§12 overflow). */
+@Composable
+internal fun StatsShowAll(label: String, c: StatsColors, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clickableLabeled(label) { onClick() },
+        contentAlignment = Alignment.CenterEnd
+    ) {
+        Text("${label.uppercase()} →", style = MaterialTheme.typography.labelMedium, color = c.accent)
     }
 }
 
@@ -113,7 +154,11 @@ private fun E1rmDrillRow(
     weightUnit: WeightUnit,
     c: StatsColors,
     isFocused: Boolean,
-    focusNonce: Int
+    focusNonce: Int,
+    /** This focus request has already been scrolled to; a re-entry must not scroll again. */
+    focusShown: Boolean,
+    onFocusShown: () -> Unit,
+    plateau: PlateauFlagUi?
 ) {
     val display = remember(lift.history, weightUnit) { lift.history.map { toDisplayWeight(it, weightUnit) } }
     val expandable = display.size >= 2
@@ -124,15 +169,31 @@ private fun E1rmDrillRow(
     // composition — otherwise returning to Stats or rotating would restore the old nonce, replay
     // the effect, and pop open a row the user had deliberately collapsed.
     var consumedNonce by rememberSaveable(lift.exerciseId) { mutableStateOf(if (isFocused) focusNonce else -1) }
+    // The focused row scrolls itself into view: the list scrolls to the card, but a lift past the
+    // first screenful of rows opened below the fold, so the tap seemed to do nothing.
+    val bringIntoView = remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
+    // A row first composed already focused (a lift past the trim, whose focus opened the full list)
+    // starts with the nonce consumed and expanded by its initial state, but still has to be shown,
+    // once: whether it has been is held above the row, which leaves composition on every lens switch.
     LaunchedEffect(focusNonce) {
-        if (isFocused && expandable && focusNonce > consumedNonce) {
+        val fresh = isFocused && focusNonce > consumedNonce
+        if (fresh) {
             consumedNonce = focusNonce
-            expanded = true
+            if (expandable) expanded = true
+        }
+        if (isFocused && !focusShown) {
+            onFocusShown()
+            // After the expansion and the card's own scroll have laid out.
+            kotlinx.coroutines.delay(ForgeMotion.DurationStandard.toLong())
+            bringIntoView.bringIntoView()
         }
     }
     val current = formatWeight(lift.currentE1rm, weightUnit)
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(
+        modifier = Modifier.bringIntoViewRequester(bringIntoView),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         // No inset and no wash: the row's text sits on the page gutter like every header above it
         // (an 8dp inner pad used to push it off that line), and an open row is told by its weight
         // and caret rather than by an accent block with accent text on it.
@@ -165,7 +226,10 @@ private fun E1rmDrillRow(
                     // How fast it is moving, which the ranked bar below cannot say: a curl ranked
                     // under a squat is not news, a squat that stopped climbing is.
                     val pct = lift.monthlyPct
+                    // The coach's plateau read outranks the row's own three-session check: it
+                    // knows about swaps and time away, and it has a next step to show.
                     val (trend, up) = when {
+                        plateau != null -> "PLATEAU" to false
                         lift.stalling -> "FLAT LATELY" to false
                         pct != null && pct >= 0.5 -> "↑ ${pct.roundToInt().coerceAtLeast(1)}% A MONTH" to true
                         pct != null && pct <= -0.5 -> "↓ ${(-pct).roundToInt().coerceAtLeast(1)}% A MONTH" to false
@@ -213,7 +277,7 @@ private fun E1rmDrillRow(
             exit = shrinkVertically() + fadeOut()
         ) {
             Box(Modifier.padding(bottom = 8.dp)) {
-                LiftDetailBody(lift, display, prsForLift, curve, weightUnit, c)
+                LiftDetailBody(lift, display, prsForLift, curve, weightUnit, c, plateau)
             }
         }
     }
@@ -227,7 +291,8 @@ private fun LiftDetailBody(
     prsForLift: List<PrEntry>,
     curve: StrengthCurve?,
     weightUnit: WeightUnit,
-    c: StatsColors
+    c: StatsColors,
+    plateau: PlateauFlagUi?
 ) {
     val unit = unitLabel(weightUnit)
     val lo = remember(display) { display.minOrNull() ?: 0.0 }
@@ -241,29 +306,44 @@ private fun LiftDetailBody(
             trendColor = c.muted,
             minValue = lo,
             maxValue = hi,
-            modifier = Modifier.fillMaxWidth().height(STATS_CHART_H)
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(STATS_CHART_H)
+                .chartReadout(
+                    "Estimated one-rep max over ${display.size} sessions, from " +
+                        "${formatWeight(fromDisplayWeight(lo, weightUnit), weightUnit)} to " +
+                        "${formatWeight(fromDisplayWeight(hi, weightUnit), weightUnit)}, latest " +
+                        "${formatWeight(fromDisplayWeight(display.last(), weightUnit), weightUnit)}."
+                )
         )
         Spacer(Modifier.height(6.dp))
+        // The range ends through WeightFormatter: a hand-rolled "${'$'}{lo.roundToInt()} st" put 185 lb at
+        // "13 st" (the rule is "13 st 3 lb") and rounded kilos coarsely. The row above already
+        // carries the trend ("↑ 3% A MONTH", "FLAT LATELY"), so its "+3.1%/mo" and "stalling"
+        // repeats are gone from here (§4.3, one home).
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("${lo.roundToInt()} $unit", style = MaterialTheme.typography.labelSmall, color = c.muted)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                lift.monthlyPct?.let { pct ->
-                    Text(
-                        "%+.1f%%/mo".format(pct),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (pct >= 0) c.accent else c.muted
-                    )
-                }
-                if (lift.stalling) Text("stalling", style = MaterialTheme.typography.labelSmall, color = c.muted)
-            }
-            Text("${hi.roundToInt()} $unit", style = MaterialTheme.typography.labelSmall, color = c.muted)
+            Text(formatWeight(fromDisplayWeight(lo, weightUnit), weightUnit), style = MaterialTheme.typography.labelSmall, color = c.muted)
+            Text(formatWeight(fromDisplayWeight(hi, weightUnit), weightUnit), style = MaterialTheme.typography.labelSmall, color = c.muted)
+        }
+
+        // ── The coach's next step, when it reads this lift as stalled ──────
+        plateau?.let { p ->
+            Spacer(Modifier.height(12.dp))
+            DrillEyebrow("COACH'S READ", c)
+            Spacer(Modifier.height(4.dp))
+            Text(p.advice, style = MaterialTheme.typography.labelMedium, color = c.onBg)
+            Text(
+                p.detail.trimEnd('.') + ".",
+                style = MaterialTheme.typography.bodySmall,
+                color = c.muted
+            )
         }
 
         // ── This lift's recent PRs ────────────────────────────────────────
         val recentPrs = remember(prsForLift) { prsForLift.sortedByDescending { it.date }.take(3) }
         if (recentPrs.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
-            Text("RECENT PRS", style = MaterialTheme.typography.labelSmall, color = c.muted, fontSize = 9.sp, letterSpacing = 1.sp)
+            DrillEyebrow("RECENT PRS", c)
             Spacer(Modifier.height(4.dp))
             recentPrs.forEach { pr ->
                 Row(
@@ -282,11 +362,17 @@ private fun LiftDetailBody(
         // ── Load-rep strength curve (needs enough plotted sets to mean anything) ──
         if (curve != null && curve.points.size >= MIN_POINTS_FOR_LIFT_CURVE) {
             Spacer(Modifier.height(12.dp))
-            Text("STRENGTH CURVE", style = MaterialTheme.typography.labelSmall, color = c.muted, fontSize = 9.sp, letterSpacing = 1.sp)
+            DrillEyebrow("STRENGTH CURVE", c)
             Spacer(Modifier.height(6.dp))
             LiftCurveChart(curve, weightUnit, c)
         }
     }
+}
+
+/** A section label inside an open lift: the 9sp figure-caption size §6 allows, in one place. */
+@Composable
+private fun DrillEyebrow(text: String, c: StatsColors) {
+    Text(text, style = MaterialTheme.typography.labelSmall, color = c.muted, fontSize = 9.sp, letterSpacing = 1.sp)
 }
 
 /** Every working set as weight × reps with the fitted Epley curve — scoped to one lift. */
@@ -313,11 +399,17 @@ private fun LiftCurveChart(curve: StrengthCurve, weightUnit: WeightUnit, c: Stat
         minX = 1f, maxX = maxReps.toFloat(),
         minY = minY * 0.95f, maxY = maxY * 1.05f,
         highlightOverlayEnd = true,
-        modifier = Modifier.fillMaxWidth().height(STATS_CHART_H)
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(STATS_CHART_H)
+            .chartReadout(
+                "${curve.points.size} sets plotted by weight and reps, with the curve they fit. " +
+                    "Projected one-rep max about ${formatWeight(curve.e1rmLb, weightUnit)}."
+            )
     )
     Spacer(Modifier.height(4.dp))
     Text(
-        "every set · weight × reps · ● = projected 1-rep max (≈ ${e1.roundToInt()} $unit)",
+        "every set · weight × reps · ● = projected 1-rep max (≈ ${formatWeight(curve.e1rmLb, weightUnit)})",
         style = MaterialTheme.typography.labelSmall, color = c.muted
     )
 }

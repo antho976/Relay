@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.units.fromDisplayWeight
+import com.forge.app.domain.units.normalizeDecimalInput
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.domain.warmup.WarmupEngine
@@ -93,7 +94,8 @@ fun WarmupSuggesterDialog(
     // entered in kg, lb or stones.
     val seed = workingWeightLb?.let { warmupSeedText(it, isPlates, plateLb, weightUnit) }
     var input by remember { mutableStateOf(seed ?: "") }
-    val typed = input.toDoubleOrNull()
+    // A comma-decimal keyboard types "102,5", which toDoubleOrNull reads as nothing.
+    val typed = normalizeDecimalInput(input).toDoubleOrNull()
     val workingStored = typed?.let { if (isPlates) it else fromDisplayWeight(it, weightUnit) }
 
     val ramp = remember(workingStored, unit, isCompound, targetReps, muscleAlreadyWarm, weightUnit, barLoadLb) {
@@ -211,11 +213,11 @@ fun PlateCalculatorDialog(
     var input by remember { mutableStateOf(initialWeightLb?.let { weightInputValue(it, metric) } ?: "") }
     var useHeavyBar by remember { mutableStateOf(true) }
     val bar = if (useHeavyBar) heavyBar else lightBar
-    val target = input.toDoubleOrNull()
+    val target = normalizeDecimalInput(input).toDoubleOrNull()
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Plate Calculator") },
+        title = { Text("Plate math") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
@@ -237,8 +239,11 @@ fun PlateCalculatorDialog(
                     }
                 }
                 if (target != null && target > bar) {
-                    val perSide = (target - bar) / 2
-                    val plates = calculatePlates(perSide, plateSet)
+                    // A target the plates can't make exactly loads the closest it can under it, and
+                    // names the next load up, instead of giving up with "no combination found".
+                    val load = plateLoadUnder(target, bar, plateSet)
+                    val exact = kotlin.math.abs(load.total - target) < 0.01
+                    val perSide = (load.total - bar) / 2
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -249,28 +254,26 @@ fun PlateCalculatorDialog(
                         Text("EACH SIDE (${trimWeight(perSide)} $unit):",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
-                        if (plates.isEmpty()) {
-                            Text("No standard plate combination found.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error)
-                        } else {
-                            plates.forEach { (plate, count) ->
-                                Row(modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text("${trimWeight(plate)} $unit", style = MaterialTheme.typography.bodyMedium)
-                                    Text("× $count", style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.primary)
-                                }
+                        load.plates.forEach { (plate, count) ->
+                            Row(modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("${trimWeight(plate)} $unit", style = MaterialTheme.typography.bodyMedium)
+                                Text("× $count", style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary)
                             }
-                            HorizontalDivider()
-                            val actualTotal = bar + plates.sumOf { (p, c) -> p * c * 2 }
-                            // Float accumulation can leave actualTotal a hair off an exact target;
-                            // compare with a small epsilon so a correct load isn't painted as an error.
-                            Text("Total: ${trimWeight(actualTotal)} $unit",
+                        }
+                        HorizontalDivider()
+                        Text("Total: ${trimWeight(load.total)} $unit",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (exact) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                        if (!exact) {
+                            val up = plateLoadUnder(load.total + 2 * plateSet.last(), bar, plateSet).total
+                            Text(
+                                "${trimWeight(target)} $unit can't be loaded exactly. This is the closest under; the next load up is ${trimWeight(up)} $unit.",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (kotlin.math.abs(actualTotal - target) < 0.01) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.error)
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 } else if (target != null && target <= bar) {
@@ -283,8 +286,16 @@ fun PlateCalculatorDialog(
     )
 }
 
-private fun calculatePlates(perSide: Double, plateSet: List<Double>): List<Pair<Double, Int>> {
-    var remaining = perSide
+/** A barbell load: the plates on each side, heaviest first, and the total with the bar. */
+internal data class PlateLoad(val plates: List<Pair<Double, Int>>, val total: Double)
+
+/**
+ * The heaviest load at or under [target] that [plateSet] (heaviest first) makes on [bar]. Greedy,
+ * which is exact for standard sets, where the smallest plate divides every other one.
+ */
+internal fun plateLoadUnder(target: Double, bar: Double, plateSet: List<Double>): PlateLoad {
+    // A hair of slack so a target that is exactly loadable doesn't lose a plate to float error.
+    var remaining = ((target - bar) / 2).coerceAtLeast(0.0) + 1e-6
     val result = mutableListOf<Pair<Double, Int>>()
     for (plate in plateSet) {
         val count = floor(remaining / plate).toInt()
@@ -293,5 +304,5 @@ private fun calculatePlates(perSide: Double, plateSet: List<Double>): List<Pair<
             remaining -= plate * count
         }
     }
-    return if (remaining < 0.01) result else emptyList()
+    return PlateLoad(result, bar + 2 * result.sumOf { (p, c) -> p * c })
 }

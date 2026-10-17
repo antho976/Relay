@@ -1,5 +1,6 @@
 package com.forge.app.ui.gym.train.components
 
+import com.forge.app.ui.common.forgeHaptic
 import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.foundation.layout.heightIn
 
@@ -47,8 +48,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
@@ -105,7 +104,8 @@ fun RestTimerBubble(
         label = "ring-urgency"
     )
     val flash = remember { Animatable(0f) }
-    val haptic = LocalHapticFeedback.current
+    val view = androidx.compose.ui.platform.LocalView.current
+    val hapticStrength = com.forge.app.ui.theme.LocalForgeSettings.current.hapticStrength
     // Track the previous tick so the 10s flash fires ONLY on the descending transition into 0:10,
     // never on first composition (a rest that simply starts at ≤10s, or a recompose while at 10).
     var prevSeconds by remember { mutableStateOf<Int?>(null) }
@@ -213,12 +213,11 @@ fun RestTimerBubble(
                 if (flash.value > 0f) drawCircle(color = onBg.copy(alpha = flash.value * 0.4f))
             }
             .combinedClickable(
-                onClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onOpenControls()
-                },
+                // Opening the controls is a plain tap (§9 keeps haptics to set, PR and timer); the
+                // hold adds time to the running timer, so it ticks, through the strength setting.
+                onClick = onOpenControls,
                 onLongClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    view.forgeHaptic(com.forge.app.ui.common.ForgeHapticType.COUNTDOWN_TICK, hapticStrength)
                     onLongClick()
                 }
             )
@@ -279,12 +278,12 @@ fun RestTimerControlsDialog(
         val onBg = MaterialTheme.colorScheme.onBackground
         val muted = MaterialTheme.colorScheme.onSurfaceVariant
         val outline = MaterialTheme.colorScheme.outline
-        val bg = MaterialTheme.colorScheme.background
 
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(bg, RoundedCornerShape(8.dp))
+                // A modal takes the surface fill (§3), not the page's own black.
+                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
                 .padding(horizontal = 24.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -344,53 +343,55 @@ fun RestTimerControlsDialog(
                 TimerCapsule("+30s", "Add 30 seconds", muted) { onAddSeconds(30) }
             }
             if (onMakeDefault != null) {
-                Text(
+                ControlsAction(
                     "Always rest ${formatTime(state.totalSeconds)}" + (exerciseName?.let { " on $it" } ?: " on this exercise"),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = muted,
-                    modifier = Modifier
-                        .clickableLabeled("Save ${formatTime(state.totalSeconds)} as this exercise's rest") { onMakeDefault() }
-                        .padding(vertical = 4.dp)
-                )
+                    "Save ${formatTime(state.totalSeconds)} as this exercise's rest",
+                    muted
+                ) { onMakeDefault() }
             }
             if (onClearDefault != null) {
-                Text(
-                    "Use the automatic rest again",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = muted,
-                    modifier = Modifier
-                        .clickableLabeled("Clear this exercise's saved rest") { onClearDefault() }
-                        .padding(vertical = 4.dp)
-                )
+                ControlsAction("Use the automatic rest again", "Clear this exercise's saved rest", muted) { onClearDefault() }
             }
 
+            // The footer's middle action ENDS the rest. It read "done", which is what you tap to close
+            // a dialog, so a lifter closing the controls lost the timer they had just set. Each one
+            // is a 48dp target now (they were ~24dp of padded text), and the quiet two sit on muted
+            // rather than an off-ladder 0.6 that failed contrast. Closing is the scrim or back.
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.End),
+                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    "reset",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.6f),
-                    modifier = Modifier.clickable(onClick = onReset).padding(4.dp)
-                )
-                Text(
-                    "done",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.6f),
-                    modifier = Modifier.clickable(onClick = onSkip).padding(4.dp)
-                )
-                Text(
+                ControlsAction("reset", "Restart the rest from the top", muted, onClick = onReset)
+                ControlsAction("end rest", "End the rest now", muted, onClick = onSkip)
+                ControlsAction(
                     if (state.isPaused) "resume →" else "pause →",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = onBg,
-                    modifier = Modifier
-                        .clickable { if (state.isPaused) onResume() else onPause() }
-                        .padding(4.dp)
-                )
+                    if (state.isPaused) "Resume the rest" else "Pause the rest",
+                    onBg,
+                    style = MaterialTheme.typography.bodyMedium
+                ) { if (state.isPaused) onResume() else onPause() }
             }
         }
+    }
+}
+
+/** One text action on the controls dialog, its touch target 48dp from padding (§14). */
+@Composable
+private fun ControlsAction(
+    label: String,
+    a11y: String,
+    color: androidx.compose.ui.graphics.Color,
+    style: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.labelSmall,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .heightIn(min = 48.dp)
+            .clickableLabeled(a11y, onClick = onClick)
+            .padding(horizontal = 4.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Text(label, style = style, color = color)
     }
 }
 
@@ -402,7 +403,7 @@ private val REST_PRESETS = listOf(60, 90, 120, 180, 300)
 private fun TimerCapsule(label: String, a11y: String, color: androidx.compose.ui.graphics.Color, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .heightIn(min = 40.dp)
+            .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(50))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .clickableLabeled(a11y, onClick = onClick)
@@ -413,10 +414,7 @@ private fun TimerCapsule(label: String, a11y: String, color: androidx.compose.ui
     }
 }
 
-private fun formatTime(totalSeconds: Int): String {
-    val s = totalSeconds.coerceAtLeast(0)
-    return "%d:%02d".format(s / 60, s % 60)
-}
+private fun formatTime(totalSeconds: Int): String = com.forge.app.domain.units.clockText(totalSeconds.toLong())
 
 /** The finished bubble's breathing scale. Its own composable so the transition exists only while
  *  the rest is actually up (P-12). */
@@ -430,3 +428,11 @@ private fun finishedPulseScale(): State<Float> {
         label = "pulse-scale"
     )
 }
+
+/**
+ * Whether the focused card's inline rest row is on screen. DayScreen provides it and hides the
+ * floating bubble while it is true: the two showed the same countdown, and the bubble sat over the
+ * card's action row. Null outside the day screen, where nothing reports.
+ */
+internal val LocalInlineRestOnScreen =
+    androidx.compose.runtime.staticCompositionLocalOf<androidx.compose.runtime.MutableState<Boolean>?> { null }

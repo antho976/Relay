@@ -31,13 +31,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.ui.common.forgeHaptic
 import com.forge.app.Features
 import com.forge.app.security.LocalAppLock
 import com.forge.app.ui.common.ConfettiOverlay
@@ -173,12 +172,13 @@ fun ProfileScreen(
     LaunchedEffect(state.showAvatarHint) { if (state.showAvatarHint) viewModel.markAvatarHintSeen() }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val haptic = LocalHapticFeedback.current
+    val view = androidx.compose.ui.platform.LocalView.current
+    val hapticStrength = com.forge.app.ui.theme.LocalForgeSettings.current.hapticStrength
 
     // One-shot rank-up haptic — fires as soon as the celebration flag goes true (gamification only).
     LaunchedEffect(showRankUpCelebration) {
         if (Features.SHOW_GAMIFICATION && showRankUpCelebration) {
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            view.forgeHaptic(com.forge.app.ui.common.ForgeHapticType.PR_OR_FINISH, hapticStrength)
         }
     }
 

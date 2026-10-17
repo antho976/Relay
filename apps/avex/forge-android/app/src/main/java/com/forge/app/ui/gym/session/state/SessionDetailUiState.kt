@@ -62,7 +62,9 @@ data class ExerciseDetail(
     val e1rmLb: Double?,
     /** True when [e1rmLb] beats every prior session's best working e1RM for this exercise. */
     val e1rmIsBest: Boolean,
-    val sets: List<SetDetail>
+    val sets: List<SetDetail>,
+    /** The lift actually performed (the swapped one after a swap), for its all-time trend on Stats. */
+    val exerciseId: String? = null
 ) {
     /** Avg RPE across the sets that logged one (0 when none) — the overview's per-exercise RPE rollup. */
     val avgRpe: Double get() = sets.mapNotNull { it.rpe }.let { if (it.isEmpty()) 0.0 else it.average() }

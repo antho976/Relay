@@ -61,6 +61,12 @@ data class DayUiState(
      * sitting so far. Differs from [sessionStartedAt] once a session spans multiple sittings.
      */
     val elapsedAnchorMs: Long? = null,
+    /**
+     * Set while the coach eases loads after a break ("first session back after 6 weeks"). Last
+     * session is then the one before the break, so the header shows this instead of scoring every
+     * eased set as a loss to it, and the finish read says the lighter day was the plan.
+     */
+    val easingBackNote: String? = null,
     val exercises: List<ExerciseUiState> = emptyList(),
     /** The generated warmup for this session. Empty until the plan and working loads are known. */
     val warmupProtocol: com.forge.app.domain.warmup.WarmupProtocol =
@@ -82,11 +88,22 @@ data class DayUiState(
     val swapPickerForExerciseId: String? = null,
     val summary: SessionSummary? = null,
     val showDiscardConfirm: Boolean = false,
+    /**
+     * Names of the exercises FINISH would leave unstarted, while it asks first; empty when closed.
+     * A mis-tap on the header's Finish after the first exercise used to close the whole workout
+     * for good with the rest of the day untouched.
+     */
+    val finishUntouched: List<String> = emptyList(),
     /** Non-null when opening this day found another day's workout still in progress (resume-later guard). */
     val crossDaySession: CrossDaySessionInfo? = null,
     val isFinished: Boolean = false,
     /** Set ID that can be undone within the ~5s window after logging (#46). */
     val undoableSetId: Long? = null,
+    /**
+     * The set a swipe just deleted, held for its Undo. Swiping is the only way to delete a set, and
+     * a stray one mid-workout used to lose it outright; §12 asks for undo over confirm.
+     */
+    val deletedSet: LoggedSet? = null,
     /** Exercise whose goal-setter dialog is open. Null when closed (#28). */
     val goalSetterForExerciseId: String? = null,
     /** Pending weight-jump warning (#117): exerciseId + proposed weight text + reps. */
@@ -179,9 +196,12 @@ internal fun beatsPriorSet(cur: LoggedSet, prior: LoggedSet?): Boolean {
     val cw = cur.weightLb
     val pw = prior.weightLb
     if (cw == null || pw == null) return cur.reps > prior.reps
+    // Same tolerance as a PR: a load that only differs from last session's by display rounding is
+    // the same load, so it has to win on reps (PrDetector.HEAVIER_MARGIN_LB).
+    val margin = com.forge.app.domain.pr.PrDetector.HEAVIER_MARGIN_LB
     return when {
-        cw > pw -> true
-        cw == pw -> cur.reps > prior.reps
+        cw > pw + margin -> true
+        cw >= pw - margin -> cur.reps > prior.reps
         else -> cw * cur.reps > pw * prior.reps
     }
 }

@@ -389,6 +389,18 @@ class ReadinessAdvisorTest {
     }
 
     @Test
+    fun theFirstSessionBackIsEasedWhileStillAway() {
+        // The layoff only turns `returning` after the first session back is finished, so the one
+        // being planned right now is still `away`. It used to get no comeback ease at all.
+        val away = LifeEvents.State.NONE.copy(
+            layoff = LifeEvents.Layoff(days = 23, away = true, returning = false, returnedAtMs = null, gapStartMs = now - 23 * day)
+        )
+        val r = ReadinessAdvisor.evaluate(sessions(23), emptyList(), now, lifeEvents = away)
+        assertEquals(-3, r!!.percent)
+        assertTrue(r.reason, r.reason.contains("first session back after 3 weeks"))
+    }
+
+    @Test
     fun assessCarriesSorenessGatesAndLifeState() {
         val life = LifeEvents.State.NONE.copy(soreMuscles = setOf(com.forge.app.program.MuscleGroup.QUADS))
         val read = ReadinessAdvisor.assess(sessions(1), emptyList(), now, lifeEvents = life)

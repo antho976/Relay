@@ -148,6 +148,9 @@ private fun TrainTab(
     var colorPickerForDayKey by remember { mutableStateOf<String?>(null) }
     // Long-press action menu
     var longPressMenuForDayKey by remember { mutableStateOf<String?>(null) }
+    // A re-roll waiting on its confirm: it replaces the day's exercises and drops the edits made to
+    // them, and there is no way back to the old picks.
+    var rerollConfirmForDayKey by remember { mutableStateOf<String?>(null) }
 
     Column(
         Modifier
@@ -242,7 +245,7 @@ private fun TrainTab(
                     if (!dayKey.startsWith("cardio")) {
                         TextButton(modifier = Modifier.fillMaxWidth(), onClick = {
                             longPressMenuForDayKey = null
-                            viewModel.rerollDay(dayKey)
+                            rerollConfirmForDayKey = dayKey
                         }) { Text("Re-roll this day's exercises") }
                     }
                     TextButton(modifier = Modifier.fillMaxWidth(), onClick = {
@@ -258,6 +261,22 @@ private fun TrainTab(
             confirmButton = {
                 TextButton(onClick = { longPressMenuForDayKey = null }) { Text("Cancel") }
             }
+        )
+    }
+
+    rerollConfirmForDayKey?.let { dayKey ->
+        val name = state.days.firstOrNull { it.plan.key == dayKey }?.displayName ?: dayKey
+        AlertDialog(
+            onDismissRequest = { rerollConfirmForDayKey = null },
+            title = { Text("Re-roll $name?") },
+            text = { Text("$name gets new exercises. Swaps and set changes made to it go with the old ones, and the old picks can't be brought back.") },
+            confirmButton = {
+                Button(onClick = {
+                    rerollConfirmForDayKey = null
+                    viewModel.rerollDay(dayKey)
+                }) { Text("Re-roll") }
+            },
+            dismissButton = { TextButton(onClick = { rerollConfirmForDayKey = null }) { Text("Cancel") } }
         )
     }
 
@@ -314,7 +333,7 @@ private fun DayColorPickerDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Accent color — $dayName") },
+        title = { Text("$dayName color") },
         text = {
             androidx.compose.foundation.layout.FlowRow(
                 modifier = androidx.compose.ui.Modifier.selectableGroup(),

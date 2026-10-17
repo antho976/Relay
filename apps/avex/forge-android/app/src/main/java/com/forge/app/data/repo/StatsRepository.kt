@@ -419,6 +419,7 @@ class StatsRepository @Inject constructor(
                 ?.maxOfOrNull { E1rm.epley(it.weightLb, it.reps) }
             ExerciseDetail(
                 name = name,
+                exerciseId = ex.exerciseId,
                 isPr = ex.wasPr,
                 effort = ex.difficulty,
                 hitFullTarget = ex.hitFullTarget,
@@ -427,7 +428,8 @@ class StatsRepository @Inject constructor(
                 totalReps = setDetails.sumOf { it.reps },
                 volumeLb = setDetails.sumOf { it.volumeLb },
                 e1rmLb = e1rm,
-                e1rmIsBest = e1rm != null && (priorBestE1rm == null || e1rm > priorBestE1rm + 1e-6),
+                // A best needs something to beat: a lift's first-ever session is not a best.
+                e1rmIsBest = e1rm != null && priorBestE1rm != null && e1rm > priorBestE1rm + 1e-6,
                 sets = setDetails
             )
         }

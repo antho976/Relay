@@ -13,17 +13,9 @@ import com.forge.app.ui.gym.train.state.ExerciseSessionPoint
 import com.forge.app.ui.gym.train.state.ExerciseUiState
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import java.util.concurrent.TimeUnit
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.weightInputValue
-
-/**
- * When true, fills the day screen with fabricated "last session" / "suggested next" /
- * sparkline data. Off by default — the UI shows real data only, with empty-state hints
- * (e.g. "first time", "Log a couple of sessions…") where there's nothing yet.
- */
-private const val DUMMY_TRAINING_DATA = false
 
 internal suspend fun DayViewModel.buildExerciseUi(
     plan: ExercisePlan,
@@ -69,6 +61,11 @@ internal suspend fun DayViewModel.buildExerciseUi(
         val prevLE = workoutRepo.lastLoggedExerciseBefore(effectiveExerciseId, sessionId)
         prevLE to prevLE?.let { workoutRepo.setsFor(it.id) }.orEmpty()
     }
+    // When that bout was trained, which only matters inside a comeback ramp (see loadScaleFrom).
+    val prevStartedAtDeferred = async {
+        if (life.layoff?.returnedAtMs == null) null
+        else prevDeferred.await().first?.let { workoutRepo.session(it.sessionId)?.startedAt }
+    }
     // Bounded stand-ins for "every set ever logged" (which grew without limit): the per-rep
     // max-weight frontier answers PR questions identically, and the PB is a single LIMIT 1 row.
     val frontierDeferred = async {
@@ -98,7 +95,7 @@ internal suspend fun DayViewModel.buildExerciseUi(
         return if (isPlates || lb == null) set.weightText else formatWeight(lb, weightUnit)
     }
     val preview = prevFirstSet?.let { "Last: ${displayWeight(it)} × ${it.reps}" }
-        ?: "First time — set your baseline"
+        ?: "First time, set your baseline"
 
     val priorFrontier = frontierDeferred.await()
     val (prSetIds, wasPr) = computePrFlags(priorFrontier, hasHistoryDeferred.await(), sets)
@@ -119,6 +116,7 @@ internal suspend fun DayViewModel.buildExerciseUi(
     // Double-progression suggestion (#12/#13) — pure rules in the adaptation engine; the
     // VM only assembles inputs. inputText is unit-correct (plate count on PLATES exercises).
     val stepMode = stepCalibration.modeFor(effectiveExerciseId, effectiveUnit.code)
+    val lifeScale = life.loadScaleFrom(prevStartedAtDeferred.await())
     val suggestion = ProgressionAdvisor.suggestNextLoad(
         exerciseId = effectiveExerciseId,
         exerciseName = plan.name,
@@ -137,7 +135,9 @@ internal suspend fun DayViewModel.buildExerciseUi(
         dbMaxLb = dbMaxLb,
         // Doubling the step only makes sense on the DB grid; PLATES move whole plates anyway.
         fastStep = stepMode == com.forge.app.domain.coach.StepMode.FASTER && effectiveUnit == com.forge.app.program.ExerciseUnit.DUMBBELL,
-        consolidate = stepMode == com.forge.app.domain.coach.StepMode.CONSOLIDATE
+        consolidate = stepMode == com.forge.app.domain.coach.StepMode.CONSOLIDATE,
+        lifeScale = lifeScale,
+        lifeNote = life.rampNote.takeIf { lifeScale < 1.0 }
     )
 
     // Bodyweight movements have no weight to suggest, so they get a rep-progression cue instead (CO5).
@@ -152,30 +152,20 @@ internal suspend fun DayViewModel.buildExerciseUi(
         .map { agg ->
             ExerciseSessionPoint(
                 sessionStartedAt = agg.sessionStartedAt,
-                durationMin = agg.sessionFinishedAt?.let { end ->
-                    TimeUnit.MILLISECONDS.toMinutes(end - agg.sessionStartedAt).toInt().coerceAtLeast(0)
-                },
+                durationMin = com.forge.app.data.db.entities.sessionDurationMinutes(
+                    agg.sessionStartedAt, agg.sessionFinishedAt, agg.activeSeconds
+                ),
                 volumeLb = agg.volumeLb,
                 topWeightLb = agg.topWeightLb
             )
         }
-
-    // ── TEMP dummy fallbacks (gated by DUMMY_TRAINING_DATA) ───────────────────────
-    val displayPrior = if (DUMMY_TRAINING_DATA && prevSets.isEmpty()) {
-        List(plan.sets.coerceAtLeast(3)) { i ->
-            LoggedSet(
-                id = -(i + 1L), loggedExerciseId = -1L, setIndex = i,
-                weightText = "40", weightLb = 40.0, reps = 10 - i, completedAt = 0L, rpe = 8.0
-            )
-        }
-    } else prevSets
 
     // inputText is lb (or, on a PLATES exercise, a plate count). It seeds the weight FIELD, which
     // is labelled in the display unit — so an unconverted lb number invited a kg user to log
     // "Suggested next → 222.5" as 222.5 kg, i.e. 490 lb.
     val displaySuggested = suggestion?.let { s ->
         if (isPlates) s.inputText else weightInputValue(s.targetWeightLb, weightUnit)
-    } ?: if (DUMMY_TRAINING_DATA) "45" else null
+    }
     // Tier 3 — make the invisible weight calibration visible: append the SuggestionCalibrator's
     // StepMode to the suggestion reason, so it shows wherever the reason renders (card + input row).
     val stepModeNote = when (stepMode) {
@@ -184,24 +174,10 @@ internal suspend fun DayViewModel.buildExerciseUi(
         else -> null
     }
     val baseReason = suggestion?.reason
-        ?: if (DUMMY_TRAINING_DATA && displaySuggested != null) "matches set 1" else null
     val displayReason = if (displaySuggested != null)
         listOfNotNull(baseReason, stepModeNote).joinToString(" · ").ifBlank { null }
     else baseReason
 
-    val displayHistory = if (DUMMY_TRAINING_DATA && sessionHistory.isEmpty()) {
-        val now = System.currentTimeMillis()
-        val day = 24L * 60 * 60 * 1000
-        listOf(
-            ExerciseSessionPoint(now - 3 * day, 14, 320.0, 40.0),
-            ExerciseSessionPoint(now - 10 * day, 13, 300.0, 37.5),
-            ExerciseSessionPoint(now - 17 * day, 15, 290.0, 37.5),
-            ExerciseSessionPoint(now - 24 * day, 12, 270.0, 35.0),
-            ExerciseSessionPoint(now - 31 * day, 14, 260.0, 35.0),
-            ExerciseSessionPoint(now - 38 * day, 13, 240.0, 32.5)
-        )
-    } else sessionHistory
-    // ──────────────────────────────────────────────────────────────────────────────
 
     // A blank name is "no swap" (the effectiveUnit precedence above already reads it that way): a
     // customization row that only holds a rest override or pinned note, or a cleared swap, stores "".
@@ -236,14 +212,14 @@ internal suspend fun DayViewModel.buildExerciseUi(
         suggestedDeltaLb = suggestion?.deltaLb,
         suggestedTargetLb = suggestion?.targetWeightLb,
         suggestedReps = repSuggestion?.targetReps,
-        priorSets = displayPrior,
+        priorSets = prevSets,
         priorFrontier = priorFrontier,
         allTimePbLb = allTimePbLb,
         goalWeightLb = goalWeightLb,
         restTimerOverrideSeconds = persistent?.restTimerOverrideSeconds,
         pinnedNote = persistent?.pinnedNote ?: "",
         supersetGroup = logged?.supersetGroup,
-        sessionHistory = displayHistory,
+        sessionHistory = sessionHistory,
         bonusSets = bonusSets,
         finishedEarly = finishedEarly
     )

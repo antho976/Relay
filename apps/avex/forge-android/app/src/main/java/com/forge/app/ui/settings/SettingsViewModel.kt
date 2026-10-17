@@ -132,7 +132,28 @@ class SettingsViewModel @Inject constructor(
     // root by SnackbarControllerHost — the same channel every other feature's Undo uses.
     private val snackbar: com.forge.app.ui.common.SnackbarController,
     private val backupEncryption: com.forge.app.security.BackupEncryption,
+    private val workoutRepo: com.forge.app.data.repo.WorkoutRepository,
 ) : ViewModel() {
+
+    /**
+     * What the rest timer has learned from logged rests, read against the bases being set (the
+     * factor is relative to them), for the Session page's Rest timer footer. Null until enough.
+     */
+    val restPace: StateFlow<String?> = kotlinx.coroutines.flow.combine(
+        settingsRepo.restCompoundSeconds,
+        settingsRepo.restIsolationSeconds
+    ) { c, i -> c to i }
+        .map { (cBase, iBase) ->
+            val tuning = com.forge.app.domain.adapt.RestAdvisor.tuning(
+                com.forge.app.domain.adapt.RestAdvisor.samples(
+                    workoutRepo.recentRestEvents(),
+                    compoundBase = cBase,
+                    isolationBase = iBase
+                ) { com.forge.app.program.Program.exercise(it) }
+            )
+            com.forge.app.domain.adapt.RestAdvisor.paceReading(tuning, cBase, iBase)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /**
      * Write-only sink that forwards an outcome line to [snackbar].

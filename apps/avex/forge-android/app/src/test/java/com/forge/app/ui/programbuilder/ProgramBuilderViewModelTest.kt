@@ -53,6 +53,41 @@ class ProgramBuilderViewModelTest {
         override suspend fun guardProgramChange(action: suspend () -> Unit) = action()
         var deload = false
         override suspend fun deloadWeekRunning(): Boolean = deload
+        var overlays: List<com.forge.app.data.db.entities.ProgramCustomization> = emptyList()
+        override suspend fun overlaysForDay(dayId: String) = overlays.filter { it.dayKey == dayId }
+        var coachSwaps: Map<String, String> = emptyMap()
+        override suspend fun coachSwapTargets(): Map<String, String> = coachSwaps
+    }
+
+    /**
+     * The builder used to open on the base rows only. A save then wrote those as the program and
+     * dropped the overlay, reverting every coach change the user had applied (and bringing back
+     * exercises they had removed) while the decisions were stamped "folded".
+     */
+    @Test
+    fun `the builder opens on the plan as trained so a save keeps coach changes`() {
+        val store = FakeStore().apply {
+            dayRows = listOf(ProgramDay(id = "day-a", position = 0, name = "Push", word = "PUSH", accentHex = "#E85D4A", archetype = "push"))
+            slotRows = listOf(
+                ProgramSlot(id = "day-a-0", dayId = "day-a", position = 0, exerciseLibId = "db-bench-press", sets = 3, reps = "8-12"),
+                ProgramSlot(id = "day-a-1", dayId = "day-a", position = 1, exerciseLibId = "pec-deck", sets = 3, reps = "10-12"),
+                ProgramSlot(id = "day-a-2", dayId = "day-a", position = 2, exerciseLibId = "cable-fly", sets = 2, reps = "12-15")
+            )
+            overlays = listOf(
+                // Coach added a set and shifted the range on the press.
+                com.forge.app.data.db.entities.ProgramCustomization(dayKey = "day-a", exerciseId = "db-bench-press", setsOverride = 4, repRangeOverride = "6-8", source = "coach"),
+                // The user removed the fly.
+                com.forge.app.data.db.entities.ProgramCustomization(dayKey = "day-a", exerciseId = "cable-fly", removed = true)
+            )
+            // And the coach swapped the pec deck for a cable crossover.
+            coachSwaps = mapOf("pec-deck" to "cable-crossover")
+        }
+        val vm = ProgramBuilderViewModel(store, SavedStateHandle())
+        vm.loadIfNeeded(blank = false)
+        val ex = vm.days.single().exercises
+        assertEquals(listOf("db-bench-press", "cable-crossover"), ex.map { it.libId })
+        assertEquals(4, ex[0].sets)
+        assertEquals("6-8", ex[0].reps)
     }
 
     @Before

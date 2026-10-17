@@ -44,7 +44,15 @@ import javax.inject.Singleton
 import com.forge.app.program.Program
 
 /** The one-line "new report ready" banner shown on Overview until the brief is seen. */
-data class CoachBanner(val weekId: String, val text: String)
+data class CoachBanner(
+    val weekId: String,
+    val text: String,
+    /**
+     * The week asks for or reports something: a proposal, an applied change, or a failed pass. A
+     * "holding steady" or observations-only week is still a banner and a feed row, but not a push.
+     */
+    val actionable: Boolean = true
+)
 
 /** Everything the Week Brief screen renders: the pass, its decisions, and the review numbers. */
 data class CoachBrief(
@@ -128,7 +136,9 @@ data class CoachTimeline(
  * The coach's track record in four counts. [applied] counts everything that crossed the apply line
  * (folded and reverted included, as the milestones count it); the other four split it by verdict,
  * so they sum to at most [applied]. A "not_followed" verdict sits in none of them: skipping the
- * work is the user's call, not a miss by the coach.
+ * work is the user's call, not a miss by the coach. It is counted on its own ([notJudged]) so the
+ * line can say where the rest went: after a break, "1 of 4 held · 1 missed" left two unexplained,
+ * which read as the coach failing.
  */
 data class CoachRecord(
     val applied: Int = 0,
@@ -138,6 +148,8 @@ data class CoachRecord(
     val watching: Int = 0,
     /** Taken back with Undo before the watcher reached a verdict. */
     val undone: Int = 0,
+    /** Applied, but no verdict was possible: the work wasn't done, or a break or illness covered the window. */
+    val notJudged: Int = 0,
     /** True once the coach has proposed anything at all, applied or not. */
     val anyProposed: Boolean = false
 )
@@ -268,7 +280,7 @@ class CoachRepository @Inject constructor(
         val pass = runCatching {
             if (VacationCalendar.onVacation(vacationDao.all())(today)) {
                 CoachPass(weekId, clock.nowMs(), STATUS_HOLD,
-                    "On vacation — the coach is paused until you're back. Enjoy it.")
+                    "On holiday. The coach is paused until you're back.")
             } else {
                 val snapshot = adaptationRepository.snapshot()
                 val inputs = assembleInputs(snapshot)
@@ -299,7 +311,7 @@ class CoachRepository @Inject constructor(
             if (e is kotlinx.coroutines.CancellationException) throw e
             // Fail loud: an errored pass is its own status, never a silent hold.
             CoachPass(weekId, clock.nowMs(), STATUS_ERROR,
-                "Couldn't evaluate this week (${e.message ?: e.javaClass.simpleName}) — no changes were considered.")
+                "Couldn't evaluate this week (${e.message ?: e.javaClass.simpleName}), so no changes were considered.")
         }
 
         // Atomic + idempotent (seam fix, finding 14): pass + decisions commit in ONE transaction, so
@@ -386,6 +398,7 @@ class CoachRepository @Inject constructor(
                 it.outcome == "pending" && (it.status == STATUS_APPLIED || it.status == STATUS_FOLDED)
             },
             undone = applied.count { it.status == "reverted" && it.outcome == "pending" },
+            notJudged = applied.count { it.outcome == CoachDecision.OUTCOME_NOT_FOLLOWED },
             anyProposed = all.any { it.status != STATUS_SHADOW }
         )
     }
@@ -1017,13 +1030,19 @@ class CoachRepository @Inject constructor(
                 if (hrReadings > 0) "$hrReadings reading${if (hrReadings == 1) "" else "s"} via Health Connect" else "not connected", hrReadings > 0)
         )
 
+        // Plurals resolved here (§11 bans "set(s)"): these lines render as they are in Learned.
+        fun n(count: Int, one: String, many: String = one + "s") = "$count ${if (count == 1) one else many}"
         val learned = buildList {
             bias.volumeBias.forEach { (muscle, delta) ->
-                add(LearnedBias("${muscle.displayName} volume", "${if (delta > 0) "+" else ""}$delta set(s) carried forward"))
+                val detail = when {
+                    delta > 0 -> "${n(delta, "set")} more, carried forward"
+                    else -> "${n(-delta, "set")} fewer, carried forward"
+                }
+                add(LearnedBias("${muscle.displayName} volume", detail))
             }
-            if (bias.repBias.isNotEmpty()) add(LearnedBias("Rep ranges", "${bias.repBias.size} lift(s) re-ranged"))
-            if (bias.prefer.isNotEmpty()) add(LearnedBias("Preferred rotations", "${bias.prefer.size} swap(s) kept"))
-            if (bias.avoid.isNotEmpty()) add(LearnedBias("Avoided rotations", "${bias.avoid.size} swap(s) steered around"))
+            if (bias.repBias.isNotEmpty()) add(LearnedBias("Rep ranges", "${n(bias.repBias.size, "lift")} re-ranged"))
+            if (bias.prefer.isNotEmpty()) add(LearnedBias("Preferred rotations", "${n(bias.prefer.size, "swap")} kept"))
+            if (bias.avoid.isNotEmpty()) add(LearnedBias("Avoided rotations", "${n(bias.avoid.size, "swap")} steered around"))
         }
 
         val fatigue = DeloadAdvisor.fatigue(s, t)
@@ -1088,7 +1107,9 @@ class CoachRepository @Inject constructor(
             runCatching { adaptationRepository.snapshotCached().sessions.size }
                 .getOrDefault(AutoCoachPlanner.MIN_SESSIONS) < AutoCoachPlanner.MIN_SESSIONS
         ) return null
-        return CoachBanner(pass.weekId, summaryFor(pass))
+        val actionable = pass.status == STATUS_ERROR ||
+            coachDao.decisionsFor(pass.weekId).any { it.status == STATUS_PROPOSED || it.status == STATUS_APPLIED }
+        return CoachBanner(pass.weekId, summaryFor(pass), actionable)
     }
 
     /** Mark a week's brief as seen — clears the Overview banner (opened or dismissed). */

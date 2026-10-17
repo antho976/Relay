@@ -11,6 +11,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.bounceClick
@@ -33,6 +35,12 @@ data class StatsColors(
 internal val STATS_GUTTER = 24.dp
 /** The standard full-width chart height — used by every line/scatter/gauge so they're visually peers. */
 internal val STATS_CHART_H = 132.dp
+
+/**
+ * A chart's reading for a screen reader. A canvas has no text of its own, so without this TalkBack
+ * stepped over every chart in silence and read only the range labels beside it.
+ */
+internal fun Modifier.chartReadout(text: String): Modifier = clearAndSetSemantics { contentDescription = text }
 
 /**
  * Open editorial section — content sits directly on the near-black page (no card shell, no

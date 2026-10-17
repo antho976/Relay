@@ -67,11 +67,16 @@ internal fun readinessLine(state: CoachViewModel.UiState): StandingLine? {
     val logged = state.watch?.sessionsLogged ?: state.brief?.sessionsLogged ?: return null
     val gate = state.readinessGateSessions.coerceAtLeast(1)
     val r = state.readiness
+    // The day's targets carry readiness AND the comeback ramp; the line states both, composed the
+    // way the day screen and the brief compose them.
+    val composed = (1 + (r?.percent ?: 0) / 100.0) * state.rampScale
+    val percent = kotlin.math.round((composed - 1.0) * 100).toInt()
+    val reason = r?.reason?.takeIf { it.isNotBlank() } ?: state.rampNote
     return when {
-        r != null && r.percent != 0 -> StandingLine(
+        percent != 0 -> StandingLine(
             label = "Readiness today",
-            value = if (r.percent < 0) "Targets ${-r.percent}% lighter" else "Targets ${r.percent}% heavier",
-            sub = r.reason.takeIf { it.isNotBlank() }?.replaceFirstChar { it.uppercase() }
+            value = if (percent < 0) "Targets ${-percent}% lighter" else "Targets $percent% heavier",
+            sub = reason?.replaceFirstChar { it.uppercase() }
         )
         logged >= gate -> StandingLine(
             label = "Readiness today",
@@ -177,6 +182,7 @@ internal fun recordLine(record: CoachRecord): StandingLine? {
         if (record.missed > 0) add("${record.missed} missed")
         if (record.watching > 0) add("${record.watching} still proving out")
         if (record.undone > 0) add("${record.undone} undone")
+        if (record.notJudged > 0) add("${record.notJudged} not judged")
     }
     return StandingLine(
         label,

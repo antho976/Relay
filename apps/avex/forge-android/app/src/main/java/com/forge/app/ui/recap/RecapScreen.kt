@@ -101,7 +101,13 @@ fun RecapScreen(
                         onBg, muted
                     )
                 }
-            } ?: RecapSection(title = "THIS MONTH", muted = muted, accent = accent) {
+            } ?: RecapSection(
+                // Named like the populated section, so an empty month still says which one it is.
+                title = java.time.YearMonth.now().let { m ->
+                    "THIS MONTH · ${m.month.name.lowercase().replaceFirstChar { it.uppercase() }} ${m.year}"
+                },
+                muted = muted, accent = accent
+            ) {
                 // §12: an empty period shows the same figures at honest zeros, never a hidden section.
                 RecapFiguresRow(
                     figures = listOf(
@@ -141,7 +147,7 @@ fun RecapScreen(
                         onBg, muted
                     )
                 }
-            } ?: RecapSection(title = "THIS YEAR", muted = muted, accent = accent) {
+            } ?: RecapSection(title = "${java.time.Year.now().value} IN REVIEW", muted = muted, accent = accent) {
                 // §12: honest zeros, same vocabulary as the populated section.
                 RecapFiguresRow(
                     figures = listOf(

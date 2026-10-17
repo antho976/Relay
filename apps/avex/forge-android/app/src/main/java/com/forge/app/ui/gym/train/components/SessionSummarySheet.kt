@@ -1,5 +1,6 @@
 package com.forge.app.ui.gym.train.components
 
+import com.forge.app.ui.common.forgeHaptic
 import com.forge.app.ui.common.ForgePrimaryCapsule
 
 import androidx.compose.foundation.layout.height
@@ -27,9 +28,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -76,11 +75,12 @@ fun SessionSummarySheet(
     // rememberSaveable so a rotation while the sheet is open doesn't replay them.
     val hasPr = summary.prCount > 0
     var showConfetti by rememberSaveable { mutableStateOf(hasPr) }
-    val haptic = LocalHapticFeedback.current
+    val view = androidx.compose.ui.platform.LocalView.current
     var prHapticFired by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        if (!prHapticFired && hasPr && hapticStrength != "off") {
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        if (!prHapticFired && hasPr) {
+            // Through the strength setting: Light and Medium played the same LongPress as Strong.
+            view.forgeHaptic(com.forge.app.ui.common.ForgeHapticType.PR_OR_FINISH, hapticStrength)
             prHapticFired = true
         }
     }
@@ -150,10 +150,10 @@ fun SessionSummarySheet(
                     FlatStat(value = "${summary.durationMinutes} min", label = "TIME", onBg = onBg, muted = muted)
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                    FlatStat(value = "${summary.setCount}", label = "SETS", onBg = onBg, muted = muted)
+                    FlatStat(value = "${summary.setCount}", label = if (summary.setCount == 1) "SET" else "SETS", onBg = onBg, muted = muted)
                     FlatStat(
                         value = "${summary.exercisesLogged}" + (if (summary.exercisesSkipped > 0) " · ${summary.exercisesSkipped} skipped" else ""),
-                        label = "EXERCISES",
+                        label = if (summary.exercisesLogged == 1) "EXERCISE" else "EXERCISES",
                         onBg = onBg,
                         muted = muted
                     )

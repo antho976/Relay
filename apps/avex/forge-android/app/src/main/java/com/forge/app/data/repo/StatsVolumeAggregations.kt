@@ -62,6 +62,12 @@ internal fun buildVolumeDeloadTrend(
  * Weekly tonnage: per-session volume points bucketed into ISO weeks, oldest → newest.
  * A week reads as deload when any session in it was deload-marked. The week containing
  * [excludeWeekOf] (the in-progress one) is dropped when given.
+ *
+ * Every calendar week from the first one trained is a point, an untrained one at an honest zero
+ * (§12). Weeks used to exist only where sessions did, so a six-week break vanished from the line,
+ * "last 12 wks" could span twenty, and the return read as a smooth continuation. With
+ * [excludeWeekOf] the series runs up to the last COMPLETE week, so time away still in progress
+ * shows too.
  */
 internal fun buildWeeklyTonnage(
     points: List<VolumeDeloadPoint>,
@@ -71,17 +77,21 @@ internal fun buildWeeklyTonnage(
 ): List<WeeklyTonnage> {
     if (points.isEmpty()) return emptyList()
     val excludeFrom = excludeWeekOf?.let { it.minusDays(it.dayOfWeek.value.toLong() - 1) }
-    return points
-        .groupBy { p ->
-            val d = java.time.Instant.ofEpochMilli(p.sessionDate).atZone(zone).toLocalDate()
-            d.minusDays(d.dayOfWeek.value.toLong() - 1)
-        }
-        .entries
+    val byWeek = points.groupBy { p ->
+        val d = java.time.Instant.ofEpochMilli(p.sessionDate).atZone(zone).toLocalDate()
+        d.minusDays(d.dayOfWeek.value.toLong() - 1)
+    }
         // [excludeWeekOf] is the unfinished week: its partial total isn't comparable to full weeks.
-        .filter { excludeFrom == null || it.key < excludeFrom }
-        .sortedBy { it.key }
+        .filterKeys { excludeFrom == null || it < excludeFrom }
+    if (byWeek.isEmpty()) return emptyList()
+    val first = byWeek.keys.min()
+    val last = excludeFrom?.minusWeeks(1) ?: byWeek.keys.max()
+    return generateSequence(first) { it.plusWeeks(1) }
+        .takeWhile { !it.isAfter(last) }
+        .toList()
         .takeLast(maxWeeks)
-        .map { (weekStart, ps) ->
+        .map { weekStart ->
+            val ps = byWeek[weekStart].orEmpty()
             WeeklyTonnage(
                 weekLabel = weekStart.toString().substring(5), // "MM-dd"
                 volumeLb = ps.sumOf { it.totalVolumeLb },

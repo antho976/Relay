@@ -11,6 +11,7 @@ import com.forge.app.ui.common.loadDayLog
 import com.forge.app.ui.gym.stats.state.StatsUiState
 import com.forge.app.ui.gym.stats.state.balanceRatioUi
 import com.forge.app.ui.gym.stats.state.buildReadinessPulse
+import com.forge.app.ui.gym.stats.state.plateauFlagOf
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
@@ -34,7 +36,8 @@ class StatsViewModel @Inject constructor(
     private val cardioRepo: CardioRepository,
     engineInputs: com.forge.app.data.repo.EngineInputSignals,
     private val healthConnect: com.forge.app.data.health.HealthConnectManager,
-    private val clock: com.forge.app.core.time.Clock
+    private val clock: com.forge.app.core.time.Clock,
+    vacationRepo: com.forge.app.data.repo.VacationRepository
 ) : ViewModel() {
 
     private val _body = MutableStateFlow<StatsBodyUi?>(null)
@@ -135,11 +138,27 @@ class StatsViewModel @Inject constructor(
         _dayDetail.value = null
     }
 
+    /**
+     * The heatmap's window of planned days off: holidays and the rest days a weekday schedule
+     * planned, over the same 26 weeks the heatmap shows (the streak already bridges both).
+     */
+    private val restDays = combine(vacationRepo.observeAll(), settingsRepo.scheduleHistory) { periods, history ->
+        val onVacation = com.forge.app.domain.vacation.VacationCalendar.onVacation(periods)
+        val today = java.time.Instant.ofEpochMilli(clock.nowMs()).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
+        (0L until 26L * 7).mapNotNullTo(HashSet()) { back ->
+            val d = today.minusDays(back)
+            d.toEpochDay().takeIf {
+                onVacation(d) || com.forge.app.domain.schedule.ScheduleHistory.isPlannedRest(history, d)
+            }
+        }
+    }.flowOn(kotlinx.coroutines.Dispatchers.Default)
+
     val state: StateFlow<StatsUiState> = combine(
         statsRepo.observeGymStats(),
         engineFlow,
-        settingsRepo.userSex
-    ) { snapshot, engine, sex ->
+        settingsRepo.userSex,
+        restDays
+    ) { snapshot, engine, sex, rest ->
         StatsUiState(
             isLoading = false,
             recentPrs = snapshot.recentPrs,
@@ -149,11 +168,13 @@ class StatsViewModel @Inject constructor(
             plannedSetsByMuscle = snapshot.plannedSetsByMuscle,
             weeklyTonnage = snapshot.weeklyTonnage,
             balanceRatios = engine?.ratios.orEmpty().map(::balanceRatioUi),
+            plateauFlags = engine?.plateaus.orEmpty().mapNotNull(::plateauFlagOf).associateBy { it.exerciseId },
             bodyweightPoints = snapshot.bodyweightPoints,
             userSex = sex,
             readinessPulse = engine?.fatigue?.let { buildReadinessPulse(it, engine.deloadScoreThreshold) },
             readinessThreshold = engine?.deloadScoreThreshold,
             dailyActivity = snapshot.dailyActivity,
+            restEpochDays = rest,
             rpeDistribution = snapshot.rpeDistribution,
             avgRpe = snapshot.avgRpe,
             trainingTimes = snapshot.trainingTimes,

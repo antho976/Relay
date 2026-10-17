@@ -16,6 +16,11 @@ import kotlinx.coroutines.withContext
 internal fun DayViewModel.handleSessionEvent(event: DayUiEvent) {
     when (event) {
         is DayUiEvent.FinishWorkout -> finishWorkout()
+        is DayUiEvent.ConfirmFinishUntouched -> {
+            _state.update { it.copy(finishUntouched = emptyList()) }
+            finishWorkout(untouchedConfirmed = true)
+        }
+        is DayUiEvent.DismissFinishUntouched -> _state.update { it.copy(finishUntouched = emptyList()) }
         is DayUiEvent.DismissSummary -> dismissSummary(event.mood, event.tags, event.journal)
         is DayUiEvent.RequestBack -> requestBack()
         is DayUiEvent.ConfirmDiscard -> discardAndExit()
@@ -145,7 +150,7 @@ internal fun DayViewModel.applyOrderedExercises(suggestion: com.forge.app.domain
     _state.update { it.copy(exercises = reordered, orderingSuggestion = null) }
 }
 
-private fun DayViewModel.finishWorkout() {
+private fun DayViewModel.finishWorkout(untouchedConfirmed: Boolean = false) {
     // One finish per session. The FINISH control stays enabled until isFinished lands at the end of
     // ~8 DB round-trips, so a double tap used to run the whole path twice: two finishSession calls,
     // two rotation-counter bumps and the session's calories written to Health Connect twice.
@@ -165,6 +170,18 @@ private fun DayViewModel.finishWorkout() {
                 return@launch
             }
             refreshExercises()
+        }
+        // Exercises with no sets that were neither skipped nor ended early: finishing closes the
+        // session for good, so a finish that leaves any of those behind asks once. A day that is
+        // done (or deliberately skipped through) finishes straight away, as before.
+        if (!untouchedConfirmed) {
+            val untouched = _state.value.exercises
+                .filter { !it.skipped && !it.finishedEarly && it.loggedSets.isEmpty() }
+                .map { it.effectiveName }
+            if (untouched.isNotEmpty()) {
+                _state.update { it.copy(finishUntouched = untouched) }
+                return@launch
+            }
         }
         val exercises = _state.value.exercises
         val allSets = exercises.flatMap { it.loggedSets }
@@ -237,7 +254,8 @@ private fun DayViewModel.finishWorkout() {
                 ghostComparable = _state.value.ghostComparable,
                 vsLastVolumeDelta = vsLastVolumeDelta,
                 isBestSession = isBestSession,
-                honestyPct = honestyPct
+                honestyPct = honestyPct,
+                easingBack = _state.value.easingBackNote != null
             ),
             initialJournal = _state.value.sessionJournal,
             lifetimePrCount = lifetimePrCount

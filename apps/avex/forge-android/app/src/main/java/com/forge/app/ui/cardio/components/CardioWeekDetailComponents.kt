@@ -124,9 +124,10 @@ internal fun StepsByHourSection(
                 bar = { BarGeom(height = 3.dp, fill = outline.copy(alpha = 0.25f)) }
             )
             Spacer(Modifier.height(8.dp))
+            // A sentence takes the prose voice (§6: a sentence is never mono), as a caption.
             Text(
                 "No steps from your watch for this day yet.",
-                style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
+                style = MaterialTheme.typography.bodySmall, color = muted
             )
         }
         }

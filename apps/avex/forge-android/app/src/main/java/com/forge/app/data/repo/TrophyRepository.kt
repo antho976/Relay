@@ -188,32 +188,11 @@ class TrophyRepository @Inject constructor(
 
     // ─── Snapshot helpers ─────────────────────────────────────────────────────
 
-    private fun computeMaxStreak(sessions: List<Session>, zone: ZoneId, onVacation: (LocalDate) -> Boolean): Int {
-        if (sessions.isEmpty()) return 0
-        val days = sessions.mapTo(sortedSetOf()) {
-            Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate()
-        }
-        var maxStreak = 1
-        var streak = 1
-        var prev = days.first()
-        for (day in days.drop(1)) {
-            // A holiday between two sessions doesn't break the streak: bridge if every day
-            // strictly between is a vacation day (a 1-day gap has none, so it bridges trivially).
-            streak = if (allDaysBetweenAreVacation(prev, day, onVacation)) streak + 1 else 1
-            if (streak > maxStreak) maxStreak = streak
-            prev = day
-        }
-        return maxStreak
-    }
-
-    private fun allDaysBetweenAreVacation(prev: LocalDate, next: LocalDate, onVacation: (LocalDate) -> Boolean): Boolean {
-        var d = prev.plusDays(1)
-        while (d.isBefore(next)) {
-            if (!onVacation(d)) return false
-            d = d.plusDays(1)
-        }
-        return true
-    }
+    private fun computeMaxStreak(sessions: List<Session>, zone: ZoneId, onVacation: (LocalDate) -> Boolean): Int =
+        com.forge.app.domain.session.longestBridgedStreak(
+            sessions.map { Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate() },
+            onVacation
+        )
 
     private fun countSessionsBefore(sessions: List<Session>, zone: ZoneId, hour: Int): Int =
         sessions.count { s ->

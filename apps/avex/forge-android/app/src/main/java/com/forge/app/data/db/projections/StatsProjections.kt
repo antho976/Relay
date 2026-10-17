@@ -52,5 +52,7 @@ data class ExerciseSessionAggregate(
     @ColumnInfo(name = "started_at") val sessionStartedAt: Long,
     @ColumnInfo(name = "finished_at") val sessionFinishedAt: Long?,
     @ColumnInfo(name = "volume_lb") val volumeLb: Double,
-    @ColumnInfo(name = "top_weight_lb") val topWeightLb: Double?
+    @ColumnInfo(name = "top_weight_lb") val topWeightLb: Double?,
+    /** The session's active training seconds ([com.forge.app.data.db.entities.Session.activeSeconds]). */
+    @ColumnInfo(name = "active_seconds") val activeSeconds: Int = 0
 )

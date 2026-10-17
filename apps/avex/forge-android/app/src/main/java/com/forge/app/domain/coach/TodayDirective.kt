@@ -125,13 +125,20 @@ object TodayDirective {
         // ── Coming back from a real break ─────────────────────────────────────────
         life.layoff?.let { layoff ->
             if (layoff.away || layoff.returning) {
+                // The ease the day's targets actually carry: the ramp composed with today's readiness,
+                // which itself names the comeback. "About 10%" was the ramp alone, so the copy and the
+                // weights it described disagreed by the readiness part.
+                val easedPercent = kotlin.math.round(
+                    (1.0 - (1 + (readiness?.percent ?: 0) / 100.0) * life.loadScale) * 100
+                ).toInt().coerceAtLeast(0)
+                val gap = LifeEvents.gapPhrase(layoff.days)
                 return Directive(
                     kind = Kind.TRAIN,
                     headline = nextUpDayKey?.let(dayName) ?: "Ease back in",
                     reason = if (layoff.away) {
-                        "It's been ${layoff.days} days. Start light: this one is about showing up."
+                        "It's been $gap. Loads start $easedPercent% under: this one is about showing up."
                     } else {
-                        "First week back after ${layoff.days} days off, so loads hold about 10% under."
+                        "First week back after $gap off, so loads hold $easedPercent% under."
                     },
                     dayKey = nextUpDayKey,
                     soreMuscles = life.soreMuscles,

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -86,13 +87,14 @@ fun browseLibrary(
      *  finds the existing custom id instead of offering to create a second one. */
     custom: List<ExerciseDef> = emptyList()
 ): List<ExerciseDef> {
-    val q = query.trim().lowercase()
-    return (ExerciseLibrary.all + custom).filter { def ->
+    val eligible = (ExerciseLibrary.all + custom).filter { def ->
         !def.curatedOnly && def.id !in exclude &&
             (muscle == null || def.muscle == muscle) &&
-            (!favoritesOnly || def.id in favorites) &&
-            (q.isEmpty() || def.name.lowercase().contains(q) || def.muscle.displayName.lowercase().contains(q))
+            (!favoritesOnly || def.id in favorites)
     }
+    // The shared rule (com.forge.app.program.ExerciseSearch): a miss here offers to create the move,
+    // so a search that cannot read "DB" or "RDL" made duplicates of library lifts.
+    return com.forge.app.program.ExerciseSearch.filter(eligible, query)
 }
 
 /** A user-created move as a browser tile: only its identity and muscle exist, the rest is nominal. */
@@ -540,16 +542,23 @@ private fun ExerciseTile(
                 detail = cs.onSurfaceVariant.copy(alpha = 0.3f),
                 modifier = Modifier.fillMaxSize()
             )
-            Text(
-                if (favorite) "★" else "☆",
-                style = MaterialTheme.typography.titleMedium,
-                color = if (favorite) cs.primary else cs.onSurfaceVariant,
+            // A 48dp target around the drawn star (§14): titleMedium plus 4dp of padding was about
+            // 32dp, nested inside the tile's own tap, so a near miss opened the exercise instead.
+            Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                     .clip(RoundedCornerShape(50))
-                    .clickableLabeled(if (favorite) "Remove bookmark" else "Bookmark", role = Role.Checkbox, onClick = onToggleFavorite)
-                    .padding(4.dp)
-            )
+                    .clickableLabeled(if (favorite) "Remove bookmark" else "Bookmark", role = Role.Checkbox, onClick = onToggleFavorite),
+                contentAlignment = Alignment.TopEnd
+            ) {
+                Text(
+                    if (favorite) "★" else "☆",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (favorite) cs.primary else cs.onSurfaceVariant,
+                    modifier = Modifier.padding(4.dp)
+                )
+            }
         }
         Spacer(Modifier.height(6.dp))
         // Reserve two lines for every name so 1- and 2-line titles occupy identical space (§ uniform grid).

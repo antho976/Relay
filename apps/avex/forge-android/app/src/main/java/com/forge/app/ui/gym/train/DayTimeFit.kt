@@ -67,7 +67,7 @@ internal fun TimeFitRow(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
         Text("SHORT ON TIME?", style = MaterialTheme.typography.labelSmall, color = muted)
         Spacer(Modifier.height(4.dp))
         Text(
-            if (fit == null) "Say how long you have. Avex keeps the work that matters most and skips the rest."
+            if (fit == null) "Say how long you have. The session keeps the work that matters most and skips the rest."
             else timeFitSummary(fit),
             style = MaterialTheme.typography.bodySmall,
             color = if (fit == null) muted else MaterialTheme.colorScheme.onBackground

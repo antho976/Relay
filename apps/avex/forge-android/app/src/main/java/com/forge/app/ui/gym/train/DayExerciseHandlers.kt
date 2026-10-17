@@ -10,6 +10,7 @@ import com.forge.app.ui.gym.train.state.WeightJumpWarning
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -33,10 +34,22 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             val set = findSet(event.setId) ?: return@launch
             val exId = findExerciseIdForSet(event.setId)
             cancelRestForRemovedSet(event.setId)
+            deletedSetExerciseId = workoutRepo.exerciseIdOfRow(set.loggedExerciseId)
             workoutRepo.deleteSet(set)
             dropSuggestionOutcomeForRemovedSet(event.setId)
+            _state.update { it.copy(deletedSet = set) }
             if (exId != null) refreshExercise(exId) else refreshExercises()
         }
+        is DayUiEvent.RestoreDeletedSet -> {
+            val set = _state.value.deletedSet ?: return
+            _state.update { it.copy(deletedSet = null) }
+            viewModelScope.launch {
+                // The rest and the suggestion sample it dropped stay dropped: the set comes back as a
+                // logged set, not as the moment it was logged.
+                if (workoutRepo.restoreSet(set, deletedSetExerciseId)) refreshExerciseForSet(set.id)
+            }
+        }
+        is DayUiEvent.ForgetDeletedSet -> _state.update { it.copy(deletedSet = null) }
         is DayUiEvent.EditSet -> viewModelScope.launch {
             if (event.reps <= 0) return@launch
             val exerciseUi = _state.value.exercises
@@ -221,15 +234,22 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             refreshExerciseForSet(event.setId)
             findExerciseIdForSet(event.setId)?.let { updateRestForLatestEffort(it, event.setId) }
         }
-        is DayUiEvent.AddBonusSet -> _state.update { s ->
-            s.copy(exercises = s.exercises.map {
-                if (it.plan.id == event.exerciseId) it.copy(bonusSets = it.bonusSets + 1, isExpanded = true) else it
-            })
+        is DayUiEvent.AddBonusSet -> {
+            val next = _state.updateAndGet { s ->
+                s.copy(exercises = s.exercises.map {
+                    if (it.plan.id == event.exerciseId) it.copy(bonusSets = it.bonusSets + 1, isExpanded = true) else it
+                })
+            }
+            // Kept with the session, so leaving the workout screen doesn't take the added set away.
+            next.sessionId?.let { sid ->
+                next.exercises.firstOrNull { it.plan.id == event.exerciseId }
+                    ?.let { wearFocusHolder.setBonusSets(sid, event.exerciseId, it.bonusSets) }
+            }
         }
         // Declare the exercise done early — collapse the card and file it under DONE (mirrors the
         // auto-collapse when the final target set is logged). Navigation is the caller's job.
-        // finishedEarly never reaches Room, so the wrist mirror can't see it — the WearFocusHolder
-        // mark lets the watch's current-slot pick scan past this slot instead of pinning to it.
+        // finishedEarly never reaches Room. The WearFocusHolder mark keeps it for the session (the
+        // screen restores it on reopen) and lets the watch's current-slot pick scan past this slot.
         is DayUiEvent.FinishExerciseEarly -> {
             _state.value.sessionId?.let { wearFocusHolder.markEarlyDone(it, event.exerciseId) }
             _state.update { s ->

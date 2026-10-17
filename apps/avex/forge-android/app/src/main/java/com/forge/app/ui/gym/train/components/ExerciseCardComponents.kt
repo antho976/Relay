@@ -1,5 +1,7 @@
 package com.forge.app.ui.gym.train.components
 
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.animateColorAsState
@@ -9,6 +11,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -122,7 +125,7 @@ internal fun CollapsedRow(
             fontSize = 9.sp,
             modifier = Modifier.width(28.dp).padding(top = 5.dp)
         )
-        Column(modifier = Modifier.weight(1f).clickable { onToggle() }) {
+        Column(modifier = Modifier.weight(1f).clickableLabeled("Expand or collapse ${state.effectiveName}") { onToggle() }) {
             val nameText = buildAnnotatedString {
                 append(state.effectiveName)
                 if (isNow) withStyle(SpanStyle(fontSize = 10.sp, color = accent)) { append("  ● NOW") }
@@ -166,17 +169,19 @@ internal fun CollapsedRow(
             // Swap-aware, like the name beside it: the demo search should describe the movement the
             // card is actually showing, not the one the slot started as.
             val machine = state.effectiveUnit == ExerciseUnit.PLATES
-            // 18dp glyphs but a 44dp touch target (a11y minimum) — the icon centers inside a larger box.
+            // 18dp glyphs on a 48dp touch target (§14): the icon centers inside the larger box.
             Box(
-                modifier = Modifier.size(44.dp)
-                    .clickable { runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName, machine)) } },
+                modifier = Modifier.size(48.dp)
+                    .clickableLabeled("Watch a demo of ${state.effectiveName}") {
+                        runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName, machine)) }
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(TrainIcons.Video, contentDescription = "Watch a demo",
                     tint = muted.copy(alpha = 0.55f), modifier = Modifier.size(18.dp))
             }
             Box(
-                modifier = Modifier.size(44.dp).clickable { onOpenSwapPicker() },
+                modifier = Modifier.size(48.dp).clickableLabeled("Swap ${state.effectiveName}") { onOpenSwapPicker() },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(TrainIcons.Swap, contentDescription = "Swap",
@@ -264,7 +269,8 @@ internal fun LastSessionStrip(
         }
     }
     val elapsedSec = sessionStartedAtMs?.let { ((nowMs - it) / 1000L).coerceAtLeast(0) } ?: 0L
-    val elapsedStr = "%d:%02d".format(elapsedSec / 60, elapsedSec % 60)
+    val elapsedStr = workoutClock(elapsedSec)
+    val unit = unitLabel(weightUnit)
 
     Row(
         modifier = Modifier
@@ -272,7 +278,11 @@ internal fun LastSessionStrip(
             // Filled, not outlined: the raised fill is what says "tap for the chart".
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .clickable { onClick() }
+            .clickableLabeled("Open this exercise's chart") { onClick() }
+            // One reading for TalkBack: the figures are bare ("0 lb"), so it says what each one is.
+            .clearAndSetSemantics {
+                contentDescription = "Workout time $elapsedStr, $animatedVolume $unit lifted, $currentSets of $targetSets sets"
+            }
             .padding(horizontal = 14.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -280,7 +290,7 @@ internal fun LastSessionStrip(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(elapsedStr, style = MaterialTheme.typography.labelMedium, color = onBg)
             Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
-            Text("$animatedVolume ${unitLabel(weightUnit)}", style = MaterialTheme.typography.labelMedium, color = onBg)
+            Text("$animatedVolume $unit", style = MaterialTheme.typography.labelMedium, color = onBg)
             Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
             Text("$currentSets of $targetSets sets", style = MaterialTheme.typography.labelMedium, color = muted)
         }
@@ -299,6 +309,12 @@ internal fun LastSessionStrip(
         }
     }
 }
+
+/**
+ * A workout's elapsed time: "5:12", then "1:05:12" past the hour (it read "75:12"). Digits are
+ * padded by hand, not with "%02d".format, which writes the device locale's digits beside ASCII ones.
+ */
+internal fun workoutClock(seconds: Long): String = com.forge.app.domain.units.clockText(seconds)
 
 /**
  * Two overlaid line series sharing one scale: [current] drawn bold, [previous] faint.
@@ -348,7 +364,7 @@ internal fun ActionChip(icon: ImageVector, label: String, onClick: () -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier.clickable { onClick() }.padding(horizontal = 8.dp, vertical = 4.dp)
+        modifier = Modifier.heightIn(min = 48.dp).clickableLabeled(label) { onClick() }.padding(horizontal = 8.dp, vertical = 4.dp)
     ) {
         Icon(icon, contentDescription = label, tint = muted, modifier = Modifier.size(15.dp))
         Text(label, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
@@ -393,8 +409,7 @@ internal fun RestBetweenSets(seconds: Int) {
     if (seconds <= 0) return
     val readyColor = ForgeLastGreen
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val m = seconds / 60; val s = seconds % 60
-    val label = if (m > 0) "$m:${"%02d".format(s)}" else "0:${"%02d".format(s)}"
+    val label = com.forge.app.domain.units.clockText(seconds.toLong())
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -414,13 +429,13 @@ internal fun InlineRestTimer(timer: RestTimerState, onTap: () -> Unit, onSkip: (
     val isReady = timer.isFinished
     val timeColor = if (isReady) readyColor else muted
 
-    fun Int.toTimerLabel(): String {
-        val m = this / 60; val s = this % 60
-        return if (m > 0) "$m:${"%02d".format(s)}" else "%02d".format(s)
-    }
+    // Under a minute it reads bare seconds ("45"), as it always has; the digits are padded by
+    // hand so a locale with its own numerals doesn't mix them into a clock.
+    fun Int.toTimerLabel(): String =
+        if (this >= 60) com.forge.app.domain.units.clockText(toLong()) else toString().padStart(2, '0')
 
     Row(
-        modifier = Modifier.fillMaxWidth().clickableLabeled("Open the rest timer") { onTap() }.padding(vertical = 10.dp),
+        modifier = Modifier.fillMaxWidth().clickableLabeled("Open the rest timer") { onTap() }.padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
@@ -444,15 +459,23 @@ internal fun InlineRestTimer(timer: RestTimerState, onTap: () -> Unit, onSkip: (
         HorizontalDivider(modifier = Modifier.weight(1f), color = muted.copy(alpha = 0.25f))
         // One-tap end-rest — the common "I'm ready, move on" action without opening a dialog.
         // Always "done" (you finish the rest normally, not "skip" it).
+        // A 48dp target of its own: as 9sp text with 2dp of padding inside a row whose tap opens the
+        // controls, a near miss opened the dialog instead of ending the rest.
         if (onSkip != null) {
-            Text(
-                "done",
-                style = MaterialTheme.typography.labelSmall,
-                color = (if (isReady) readyColor else muted).copy(alpha = 0.8f),
-                fontSize = 9.sp,
-                letterSpacing = 1.sp,
-                modifier = Modifier.clickableLabeled("End rest") { onSkip() }.padding(start = 2.dp)
-            )
+            Box(
+                modifier = Modifier
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    .clickableLabeled("End rest") { onSkip() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "done",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isReady) readyColor else muted,
+                    fontSize = 9.sp,
+                    letterSpacing = 1.sp
+                )
+            }
         }
     }
 }
@@ -563,7 +586,7 @@ internal fun UpNextBubble(
         Row(
             modifier = Modifier
                 .groupMember(0, memberCount)
-                .clickable { expanded = !expanded }
+                .clickableLabeled(if (expanded) "Hide what's up next" else "Show what's up next") { expanded = !expanded }
                 .padding(horizontal = ROW_H, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)

@@ -31,8 +31,16 @@ wait_for_android_framework() {
 }
 
 install_release_apk() {
-  local apk=$1 output status
+  local apk=$1 app_id=${2:-} output status
   wait_for_android_framework || return 1
+  # The AVD comes out of a cache whose userdata already holds a copy of the app, installed by the run
+  # that created the cache and signed with THAT runner's throwaway debug key. Every runner makes its
+  # own key, so installing over the leftover failed INSTALL_FAILED_UPDATE_INCOMPATIBLE on every run
+  # since the cache was written. The smoke test is a fresh install, so clear it first. Not installed
+  # is the normal case, and adb reports it as a failure, hence `|| true`.
+  if [[ -n $app_id ]]; then
+    timeout 60s adb uninstall "$app_id" > /dev/null 2>&1 || true
+  fi
   if output=$(timeout 120s adb install -r -d "$apk" 2>&1); then
     printf '%s\n' "$output"
     return 0

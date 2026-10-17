@@ -99,6 +99,14 @@ class DayViewModel @Inject constructor(
      */
     internal var blockPhase: com.forge.app.domain.coach.BlockPhase? = null
 
+    /**
+     * The athlete's life state today, for the comeback ramp after a layoff. Loaded beside readiness
+     * (which reads the same state) and composed into every weight suggestion, so the card's "try"
+     * weight carries the same ease as the pre-session brief.
+     */
+    internal var life: com.forge.app.domain.coach.LifeEvents.State =
+        com.forge.app.domain.coach.LifeEvents.State.NONE
+
     /** The rest interval being measured right now: opened on set log, closed by the next set. */
     internal var openRestEvent: OpenRestEvent? = null
 
@@ -149,6 +157,9 @@ class DayViewModel @Inject constructor(
 
     internal var undoClearJob: Job? = null
 
+    /** The lift the swiped-away set's row was logging, so its Undo can't land under a swap. */
+    internal var deletedSetExerciseId: String? = null
+
     /** In-flight "I have N minutes" fit or its undo — one at a time, so two quick taps can't
      *  interleave their skip writes and leave a mix of both fits behind. */
     internal var timeFitJob: Job? = null
@@ -190,6 +201,11 @@ class DayViewModel @Inject constructor(
             // Only one session is active at a time. If a *different* day's workout is still in
             // progress, prompt (resume it, or discard & start this one) instead of silently
             // resuming the wrong day's sets under this plan.
+            //
+            // A workout untouched for half a day is filed to history first, exactly as the start below
+            // would file it. Asked first, the prompt offered "Discard & start" on last night's
+            // session, and discarding deletes its logged sets.
+            workoutRepo.closeStaleSession()
             val active = workoutRepo.activeSession()
             if (active != null && active.dayKey != dayKey) {
                 val otherName = customizationRepo.getDayName(active.dayKey)?.customName
@@ -276,10 +292,13 @@ class DayViewModel @Inject constructor(
         // days; an explicit intensity pick outranks it. Refresh the cards once it lands so
         // already-built chips pick it up.
         viewModelScope.launch {
-            readiness = adaptationRepo.readinessScale()
+            life = adaptationRepo.lifeEvents()
+            readiness = adaptationRepo.readinessScale(life = life)
             blockPhase = runCatching { blockRepo.active() }.getOrNull()
                 ?.let { com.forge.app.domain.coach.BlockPhase.fromCode(it.phase) }
-            if ((readiness != null || blockPhase != null) && _state.value.exercises.isNotEmpty()) {
+            val eased = life.loadScale < 1.0
+            if (eased) _state.update { it.copy(easingBackNote = life.rampNote) }
+            if ((readiness != null || blockPhase != null || eased) && _state.value.exercises.isNotEmpty()) {
                 refreshExercises()
             }
         }
@@ -309,7 +328,8 @@ class DayViewModel @Inject constructor(
     fun onEvent(event: DayUiEvent) {
         when (event) {
             is DayUiEvent.ToggleExpanded, is DayUiEvent.LogSet, is DayUiEvent.LogSameAsLast,
-            is DayUiEvent.DeleteSet, is DayUiEvent.EditSet, is DayUiEvent.RateExercise,
+            is DayUiEvent.DeleteSet, is DayUiEvent.RestoreDeletedSet, is DayUiEvent.ForgetDeletedSet,
+            is DayUiEvent.EditSet, is DayUiEvent.RateExercise,
             is DayUiEvent.UpdateNote, is DayUiEvent.ToggleSkipped, is DayUiEvent.OpenGoalSetter,
             is DayUiEvent.SetGoal, is DayUiEvent.ClearGoal, is DayUiEvent.DismissGoalSetter,
             is DayUiEvent.SetExerciseUnit, is DayUiEvent.SetRestTimerOverride,
@@ -341,6 +361,7 @@ class DayViewModel @Inject constructor(
             is DayUiEvent.RestTimerAddSeconds, is DayUiEvent.RestTimerSetTo -> handleTimerEvent(event)
 
             is DayUiEvent.FinishWorkout, is DayUiEvent.DismissSummary,
+            is DayUiEvent.ConfirmFinishUntouched, is DayUiEvent.DismissFinishUntouched,
             is DayUiEvent.RequestBack, is DayUiEvent.ConfirmDiscard,
             is DayUiEvent.DismissDiscardConfirm, is DayUiEvent.SaveAndExit,
             is DayUiEvent.LeaveAndResume, is DayUiEvent.CrossDayDiscardAndStart,

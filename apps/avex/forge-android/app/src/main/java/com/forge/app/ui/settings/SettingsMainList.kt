@@ -41,11 +41,15 @@ internal fun MainList(
     onBack: () -> Unit,
     onSearchChange: (String) -> Unit,
     onOpenPage: (SettingsPage) -> Unit,
+    /** A search hit inside Program opens its section, not the Program menu. */
+    onOpenSection: (SettingsPage, ProgramSection?) -> Unit = { page, _ -> onOpenPage(page) },
     onOpenCoachBrief: () -> Unit,
     onOpenDataDialog: () -> Unit,
     onImportData: () -> Unit,
     onResetTarget: (ResetTarget) -> Unit,
-    onOpenResetMenu: () -> Unit
+    onOpenResetMenu: () -> Unit,
+    /** The Backup row's live value (see [backupSubtitle]); null keeps the row's description. */
+    backupStatus: String? = null
 ) {
     // Built once per query rather than on every recomposition, and holding targets rather than
     // lambdas so a fresh callback from the caller never invalidates it.
@@ -55,7 +59,7 @@ internal fun MainList(
     }
     val openResult: (SearchResult) -> Unit = { r ->
         when (r.action) {
-            null -> r.page?.let(onOpenPage)
+            null -> r.page?.let { page -> onOpenSection(page, r.section) }
             SearchAction.DATA -> onOpenDataDialog()
             SearchAction.IMPORT -> onImportData()
             SearchAction.RESET -> onOpenResetMenu()
@@ -106,7 +110,13 @@ internal fun MainList(
             }
             item("data") {
                 SettingsGroup("Data") {
-                    PageRow(SettingsPage.Backup, state, onOpenPage)
+                    // The backup's state, not what the page is for: the date of the last copy, or
+                    // that it failed, is the one thing worth knowing before a phone gets lost.
+                    SettingsNavigationRow(
+                        SettingsPage.Backup.title,
+                        backupStatus ?: rowSubtitle(SettingsPage.Backup, state),
+                        pageGlyph(SettingsPage.Backup)
+                    ) { onOpenPage(SettingsPage.Backup) }
                     SettingsNavigationRow("Export data", "Sessions · weekly · full backup · PDF", SettingsIcons.Export, onClick = onOpenDataDialog)
                     SettingsNavigationRow("Import data", "Strong · Hevy · FitNotes · CSV", SettingsIcons.Import, onClick = onImportData)
                     PageRow(SettingsPage.Storage, state, onOpenPage)
@@ -175,7 +185,8 @@ private class SearchResult(
     val glyph: ImageVector,
     val rank: Int,
     val page: SettingsPage? = null,
-    val action: SearchAction? = null
+    val action: SearchAction? = null,
+    val section: ProgramSection? = null
 )
 
 /** Every hit for [ql] (lowercased), name-prefix hits first, then name substrings, then tag-only. */
@@ -187,7 +198,10 @@ private fun searchHits(ql: String, freestyleMode: Boolean): List<SearchResult> =
     }
     ALL_ITEMS.forEachIndexed { i, item ->
         if (ql in item.name.lowercase() || ql in item.tags) {
-            add(SearchResult("item-$i", item.name, item.page.title, pageGlyph(item.page), searchRank(item.name, ql), page = item.page))
+            add(SearchResult(
+                "item-$i", item.name, item.section?.let { "${item.page.title} · ${it.title}" } ?: item.page.title,
+                pageGlyph(item.page), searchRank(item.name, ql), page = item.page, section = item.section
+            ))
         }
     }
     ACTION_ENTRIES.forEachIndexed { i, e ->
@@ -286,7 +300,7 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
         )
     }.joinToString(" · ")
     SettingsPage.Format -> "${s.weightUnit.label} · ${if (s.useMiles) "mi" else "km"} · ${if (s.useCm) "cm" else "in"} · ${if (s.timeFormat24h) "24h" else "12h"} · week from ${if (s.firstDayMonday) "Mon" else "Sun"}"
-    SettingsPage.Session -> "${s.hapticStrength.replaceFirstChar { it.uppercase() }} haptics · ${restLabel(s.restCompoundSeconds)} rest"
+    SettingsPage.Session -> "${if (s.hapticStrength == "off") "Haptics off" else "${s.hapticStrength.replaceFirstChar { it.uppercase() }} haptics"} · ${restLabel(s.restCompoundSeconds)} rest"
     SettingsPage.Notifications -> {
         val on = buildList {
             if (s.trainingReminderEnabled) add("Reminders")
@@ -302,7 +316,15 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
             "$on · $quiet"
         } else on
     }
-    SettingsPage.Program -> "${s.daysPerWeek} days a week · ${if (s.availableEquipment.isEmpty()) "all equipment" else "${s.availableEquipment.size} pieces of gear"}"
+    SettingsPage.Program -> {
+        // "1 pieces of gear" and a day count for a plan a freestyle user doesn't have, before.
+        val gear = when {
+            s.availableEquipment.isEmpty() || s.availableEquipment.size >= com.forge.app.program.Equipment.entries.size -> "all equipment"
+            s.availableEquipment.size == 1 -> "1 piece of gear"
+            else -> "${s.availableEquipment.size} pieces of gear"
+        }
+        if (s.freestyleMode) "Freestyle · $gear" else "${s.daysPerWeek} days a week · $gear"
+    }
     SettingsPage.Coach -> when {
         !s.coachEnabled -> "Off"
         s.coachMode == "auto" -> "On · earning auto-apply"
@@ -326,6 +348,17 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
     SettingsPage.WhatsNew -> "Version ${com.forge.app.BuildConfig.VERSION_NAME}"
     SettingsPage.PrivacyPolicy -> "Offline use · permissions · deletion"
     SettingsPage.About -> "Privacy, gestures, licenses"
+}
+
+/**
+ * The Backup row's value: whether the weekly copy is on, and when the last one landed. A failure
+ * leads, since it is the line that needs a tap.
+ */
+internal fun backupSubtitle(enabled: Boolean, savedAt: String?, failed: Boolean): String = when {
+    failed -> "Last backup failed · back up now"
+    !enabled -> if (savedAt != null) "Weekly copy off · last $savedAt" else "Weekly copy off"
+    savedAt != null -> "Weekly · last copy $savedAt"
+    else -> "Weekly · no copy yet"
 }
 
 /** "2:30" for a rest time in seconds. */

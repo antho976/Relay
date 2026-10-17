@@ -344,6 +344,7 @@ interface LoggedSetDao {
     @Query("""
         SELECT s.started_at AS started_at,
                s.finished_at AS finished_at,
+               s.active_seconds AS active_seconds,
                COALESCE(SUM(IFNULL(ls.weight_lb, 0) * ls.reps), 0) AS volume_lb,
                MAX(ls.weight_lb) AS top_weight_lb
         FROM logged_set ls

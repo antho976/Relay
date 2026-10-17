@@ -29,6 +29,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.forge.app.ui.common.clickableLabeled
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
@@ -59,6 +61,7 @@ import com.forge.app.ui.gym.session.state.SessionDetailData
 import com.forge.app.ui.gym.session.state.SessionMetric
 import com.forge.app.ui.gym.session.state.SetDetail
 import com.forge.app.ui.gym.stats.components.BodyHeatmap
+import com.forge.app.ui.gym.stats.components.musclesReadout
 import com.forge.app.ui.gym.stats.state.MuscleSetCount
 import com.forge.app.ui.theme.ForgeError
 import com.forge.app.ui.theme.ForgeSuccess
@@ -94,7 +97,10 @@ internal fun SessionHeaderBlock(
         Column(Modifier.weight(1f)) {
             val zone = ZoneId.systemDefault()
             val date = Instant.ofEpochMilli(data.dateMs).atZone(zone).toLocalDate()
-            val dateStr = date.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", currentLocale()))
+            // The year when it isn't this one, as History shows it: "Monday, 14 October" was
+            // ambiguous for last year's sessions.
+            val pattern = if (date.year == java.time.LocalDate.now(zone).year) "EEEE, d MMMM" else "EEEE, d MMMM yyyy"
+            val dateStr = date.format(DateTimeFormatter.ofPattern(pattern, currentLocale()))
             val sub = buildList {
                 // Deload marker wins; otherwise the stored session-type's pill (TEST/TECHNIQUE/… once a
                 // picker writes them) — same resolution as the Overview status pill so the two can't drift.
@@ -143,7 +149,7 @@ private fun CompactBodyMap(
     Box(
         modifier
             .clip(RoundedCornerShape(8.dp))
-            .semantics { contentDescription = "Muscles worked, tap to enlarge"; role = Role.Button }
+            .semantics { contentDescription = "Muscles worked: ${musclesReadout(setsBy)}. Tap to enlarge."; role = Role.Button }
             .clickable { enlarged = true }
     ) {
         BodyHeatmap(
@@ -311,8 +317,13 @@ internal fun ExerciseDetailBody(
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                // "BEST" in words: a best used to only lift the reading from muted to onBg, which
+                // nobody could decode.
                 ex.e1rmLb?.let { e ->
-                    MetaReading("E1RM ${formatWeight(e, weightUnit).uppercase()}", if (ex.e1rmIsBest) onBg else muted)
+                    MetaReading(
+                        "E1RM ${formatWeight(e, weightUnit).uppercase()}" + if (ex.e1rmIsBest) " · BEST" else "",
+                        if (ex.e1rmIsBest) onBg else muted
+                    )
                 }
                 if (ex.isPr) MetaReading("↑ PR", accent)
                 ex.effort?.let { MetaReading(it.displayName.uppercase(), effortColor(it)) }
@@ -322,6 +333,19 @@ internal fun ExerciseDetailBody(
             Text("“${ex.note}”", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
         }
         Text(exerciseSummary(ex, weightUnit), style = MaterialTheme.typography.bodySmall, color = muted)
+        // One session's sets end here; the lift's whole history is a tap away on Stats (§4.5: a
+        // drill-down answers with detail). Weighted lifts only: Strength charts e1RM.
+        val openTrend = LocalOpenLiftTrend.current
+        val liftId = ex.exerciseId
+        if (openTrend != null && liftId != null && ex.e1rmLb != null) {
+            Box(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    .clickableLabeled("Open ${ex.name}'s trend on Stats") { openTrend(liftId) },
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Text("ALL-TIME TREND →", style = MaterialTheme.typography.labelMedium, color = accent)
+            }
+        }
         PerExerciseSetChart(ex, metric, style, accent, muted, outline)
         SetTable(ex.sets, onBg, muted, outline)
     }
@@ -418,3 +442,6 @@ private fun effortColor(effort: EffortRating): Color = when (effort) {
     EffortRating.HARD -> ForgeWarning
     EffortRating.BRUTAL -> ForgeError
 }
+
+/** Opens a lift's all-time trend on Stats, provided by the session detail screen; null hides the link. */
+internal val LocalOpenLiftTrend = androidx.compose.runtime.staticCompositionLocalOf<((String) -> Unit)?> { null }

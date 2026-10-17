@@ -98,7 +98,8 @@ class SessionHistoryViewModel @Inject constructor(
 
     val state: StateFlow<SessionHistoryUiState> = combine(dataFlow, filters) { data, f ->
         val items = buildFilteredHistory(
-            data.workouts, data.cardio, data.namesBySession, f, data.customCardioTypes
+            data.workouts, data.cardio, data.namesBySession, f, data.customCardioTypes,
+            heavyLb = heavyThresholdLb(data.workouts)
         )
         SessionHistoryUiState(
             days = groupByDay(items) { historyDayLabel(it) },

@@ -28,6 +28,9 @@ object BlockPlanner {
     /** A block shorter than this can't express a phase progression. */
     const val MIN_WEEKS = 3
 
+    /** Empty weeks in a row that make a layoff ([LifeEvents.LAYOFF_MIN_DAYS] in whole weeks). */
+    private const val LAYOFF_WEEKS = LifeEvents.LAYOFF_MIN_DAYS / 7
+
     /**
      * Start a block. The shape is deliberately simple and explainable: accumulate for most of it,
      * intensify near the end, and finish with a planned deload week.
@@ -59,28 +62,54 @@ object BlockPlanner {
      *
      * @param fatigueScore the deload advisor's current score; a high one pulls the deload forward,
      *   which is the whole point of keeping the tripwire alive alongside the schedule.
+     * @param trainedInWeek whether the athlete finished a session in the ISO week starting on the
+     *   given Monday. A week with no training holds the block where it is: three weeks away used to
+     *   walk a block from Accumulate into Peak, so the first week back opened on "Test week: take
+     *   one heavy top set". A missed DELOAD week still counts, since rest is what it asked for.
+     *   Defaults to every week trained.
      */
     fun advance(
         block: TrainingBlock,
         weekId: String,
         nowMs: Long,
         fatigueScore: Int = 0,
-        t: AdaptThresholds = AdaptThresholds()
+        t: AdaptThresholds = AdaptThresholds(),
+        trainedInWeek: (LocalDate) -> Boolean = { true }
     ): TrainingBlock {
         if (!block.isActive) return block
         // Ordinal, not equal: a week id that is the same as — or earlier than — the last one it
         // advanced on moves nothing, so a clock change or an out-of-order pass can't rewind a block.
         val weeksElapsed = weeksBetween(block.lastAdvancedWeek, weekId)
         if (weeksElapsed <= 0) return block
+        val firstCompleted = weekStart(block.lastAdvancedWeek)
 
         // A long absence is caught up rather than lost, bounded by the block's own length: stepping
         // past the deload ends the block, so the loop always terminates inside plannedWeeks + 1.
+        // Each elapsed week is the one being COMPLETED, starting with the week last advanced into.
         var out = block
-        repeat(weeksElapsed.coerceAtMost(block.plannedWeeks + 1)) {
-            if (!out.isActive) return out
+        var stepped = 0
+        var heldRun = 0
+        for (k in 0 until weeksElapsed) {
+            if (!out.isActive || stepped > block.plannedWeeks) return out
+            val completed = firstCompleted?.plusWeeks(k.toLong())
+            val held = completed != null && out.phase != BlockPhase.DELOAD.code && !trainedInWeek(completed)
+            if (held) {
+                // Holding alone still lands a lifter on the test week: one session in an Intensify
+                // week steps the block to Peak, and the weeks away then hold it there. A run of
+                // empty weeks as long as a layoff means the build has to be redone, so a block past
+                // Accumulate starts over from week 1.
+                heldRun++
+                if (heldRun >= LAYOFF_WEEKS && out.phase != BlockPhase.ACCUMULATE.code) {
+                    out = out.copy(phase = BlockPhase.ACCUMULATE.code, weekIndex = 1)
+                }
+                continue
+            }
+            heldRun = 0
             out = step(out, weekId, nowMs, fatigueScore, t)
+            stepped++
         }
-        return out
+        // However many weeks were held, the block has been brought up to this week.
+        return if (out.isActive) out.copy(lastAdvancedWeek = weekId) else out
     }
 
     /** One week of block progression — the state machine's single transition. */

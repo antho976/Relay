@@ -33,8 +33,18 @@ data class StatsUiState(
     val readinessPulse: ReadinessPulse? = null,
     /** The learned deload score threshold — draws the threshold line + bands on the fatigue gauge (Body tab). */
     val readinessThreshold: Int? = null,
+    /**
+     * The coach's plateau ladder per lift, by exercise id: the same read the Coach tab acts on, so
+     * a lift Stats calls stalled is one the coach has a next step for.
+     */
+    val plateauFlags: Map<String, PlateauFlagUi> = emptyMap(),
     /** Per-day training load for the adherence calendar + Banister form curves (Trends tab). */
     val dailyActivity: List<DayLoad> = emptyList(),
+    /**
+     * Days off by plan rather than missed, as epoch days: a declared holiday or a rest day the
+     * weekday schedule planned. The consistency heatmap draws them apart from a skipped day.
+     */
+    val restEpochDays: Set<Long> = emptySet(),
     /** Count of sets at each RPE value + overall average (Trends tab). */
     val rpeDistribution: List<RpeBucket> = emptyList(),
     val avgRpe: Double? = null,

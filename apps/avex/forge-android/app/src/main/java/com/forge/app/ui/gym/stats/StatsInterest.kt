@@ -30,36 +30,45 @@ import com.forge.app.ui.gym.stats.state.RpeBucket
 import java.time.LocalDate
 import kotlin.math.exp
 
-private fun rpeLabel(r: Double) = if (r % 1.0 == 0.0) r.toInt().toString() else "%.1f".format(r)
-
 /** Tier 8a — effort distribution as an RPE histogram. Mostly redundant with readiness, so: for interest. */
 @Composable
 internal fun ColumnScope.RpeHistogramContent(buckets: List<RpeBucket>, avgRpe: Double?, c: StatsColors) {
     if (buckets.isEmpty()) return
     val sorted = buckets.sortedBy { it.rpe }
     val max = sorted.maxOf { it.count }.coerceAtLeast(1)
+    // The fixed height belongs to the bars, not the row: a 72dp row holding the bars AND their
+    // labels clipped the labels at large font scales (§14). The labels take what they need below.
     Row(
-        Modifier.fillMaxWidth().height(72.dp),
+        Modifier
+            .fillMaxWidth()
+            .chartReadout(
+                "Sets by RPE: " + sorted.joinToString("; ") { b ->
+                    "${com.forge.app.ui.common.rpeLabel(b.rpe)}, ${b.count} ${if (b.count == 1) "set" else "sets"}"
+                } + "."
+            ),
         verticalAlignment = Alignment.Bottom,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         sorted.forEach { b ->
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(
-                    Modifier
-                        .width(16.dp)
-                        .height((b.count.toFloat() / max * 52f).dp.coerceAtLeast(2.dp))
-                        .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
-                        .background(c.accent.copy(alpha = 0.7f))
-                )
+                Box(Modifier.height(52.dp), contentAlignment = Alignment.BottomCenter) {
+                    Box(
+                        Modifier
+                            .width(16.dp)
+                            .height((b.count.toFloat() / max * 52f).dp.coerceAtLeast(2.dp))
+                            .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
+                            .background(c.accent.copy(alpha = 0.7f))
+                    )
+                }
                 Spacer(Modifier.height(3.dp))
-                Text(rpeLabel(b.rpe), style = MaterialTheme.typography.labelSmall, color = c.muted)
+                Text(com.forge.app.ui.common.rpeLabel(b.rpe), style = MaterialTheme.typography.labelSmall, color = c.muted)
             }
         }
     }
     avgRpe?.let {
         Spacer(Modifier.height(6.dp))
-        Text("Average RPE ${"%.1f".format(it)}", style = MaterialTheme.typography.labelSmall, color = c.muted)
+        // Through the app's RPE format, rounded to a tenth first: "8", not "8.0" (Format.kt).
+        Text("Average RPE ${com.forge.app.ui.common.rpeLabel(kotlin.math.round(it * 10) / 10.0)}", style = MaterialTheme.typography.labelSmall, color = c.muted)
     }
 }
 
@@ -98,8 +107,12 @@ internal fun ColumnScope.BanisterContent(dailyActivity: List<DayLoad>, c: StatsC
         }
         Triple(fitness, fatigue, form)
     }
+    val formNow = series.third.lastOrNull() ?: 0f
     BanisterChart(series.first, series.second, series.third, c.accent, c.muted, c.onBg, c.outline.copy(alpha = 0.12f),
-        Modifier.fillMaxWidth().height(STATS_CHART_H))
+        Modifier.fillMaxWidth().height(STATS_CHART_H).chartReadout(
+            "Fitness and fatigue over the last 26 weeks. " +
+                if (formNow >= 0f) "Form is positive: fatigue sits below fitness." else "Form is negative: fatigue sits above fitness."
+        ))
     Spacer(Modifier.height(6.dp))
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
         LegendDot("Fitness", c.accent, c.muted)

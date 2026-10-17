@@ -110,7 +110,7 @@ internal fun SessionRow(
             ?.let { formatVolume(it, weightUnit) },
         // Flag the exception only (§8): almost every session has no PR, and a column of "0 PR"
         // would be a grey dot column in words.
-        figureNote = session.prCount.takeIf { it > 0 }?.let { "$it PR" },
+        figureNote = session.prCount.takeIf { it > 0 }?.let { if (it == 1) "1 PR" else "$it PRs" },
         clickLabel = "Open $dayName",
         onClick = onClick,
         modifier = modifier,

@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -88,7 +89,9 @@ internal fun recapTopExercise(
 @HiltViewModel
 class RecapViewModel @Inject constructor(
     private val sessionDao: SessionDao,
-    private val loggedExerciseDao: LoggedExerciseDao
+    private val loggedExerciseDao: LoggedExerciseDao,
+    private val vacationDao: com.forge.app.data.db.dao.VacationDao,
+    private val settingsRepo: com.forge.app.data.prefs.SettingsRepository
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(RecapUiState())
@@ -149,23 +152,25 @@ class RecapViewModel @Inject constructor(
         val yearRecap = if (yearSessions.isNotEmpty()) {
             val topEx = recapTopExercise(loggedExerciseDao.sessionExerciseRowsSince(yearStart))
             val totalVol = yearSessions.sumOf { it.totalVolumeLb ?: 0.0 }
-            // Divide by calendar weeks elapsed this year, not sessions/7 (which wildly inflated it).
+            // Divide by calendar weeks elapsed this year, not sessions/7 (which wildly inflated it),
+            // counted from the later of January 1 and the year's first session: someone who started
+            // (or came back) in September had their weekly average diluted by eight empty months.
+            val firstThisYear = yearSessions.minOf { Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate() }
+            val from = maxOf(LocalDate.of(thisYear, 1, 1), firstThisYear)
             val weeksElapsed = (java.time.temporal.ChronoUnit.DAYS
-                .between(LocalDate.of(thisYear, 1, 1), LocalDate.now(zone)) / 7.0).coerceAtLeast(1.0)
+                .between(from, LocalDate.now(zone)) / 7.0).coerceAtLeast(1.0)
             val avgWeekly = totalVol / weeksElapsed
             val bestMonth = yearSessions
                 .groupBy { Instant.ofEpochMilli(it.startedAt).atZone(zone).month.name.lowercase().replaceFirstChar { c -> c.uppercase() } }
                 .maxByOrNull { (_, sessions) -> sessions.sumOf { it.totalVolumeLb ?: 0.0 } }?.key
-            // Longest streak in year
-            val trainingDays = yearSessions.mapTo(sortedSetOf()) {
-                Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate()
-            }
-            var maxStreak = 0; var streak = 0; var prev: LocalDate? = null
-            for (d in trainingDays) {
-                if (prev != null && java.time.temporal.ChronoUnit.DAYS.between(prev, d) == 1L) streak++ else streak = 1
-                if (streak > maxStreak) maxStreak = streak
-                prev = d
-            }
+            // Longest streak in the year, bridged across holidays and planned rest days the way the
+            // live streak and Profile's BEST are: counting only back-to-back days put "2d" here for
+            // a four-day week that Profile read as a run of weeks.
+            val onVacation = com.forge.app.domain.vacation.VacationCalendar.onVacation(vacationDao.all())
+            val restHistory = settingsRepo.scheduleHistory.first()
+            val maxStreak = com.forge.app.domain.session.longestBridgedStreak(
+                yearSessions.map { Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate() }
+            ) { d -> onVacation(d) || com.forge.app.domain.schedule.ScheduleHistory.isPlannedRest(restHistory, d) }
             YearRecap(
                 year = thisYear,
                 sessionCount = yearSessions.size,

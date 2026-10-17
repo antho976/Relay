@@ -21,7 +21,9 @@ data class NotesSearchUiState(
     val query: String = "",
     val results: List<LoggedExerciseDao.NoteSearchResult> = emptyList(),
     /** A query is typed and its search has not returned yet — [results] is empty, not "no matches". */
-    val searching: Boolean = false
+    val searching: Boolean = false,
+    /** [results] answer [query]. False only for the first read of the recent notes, which draws nothing. */
+    val answered: Boolean = false
 )
 
 @OptIn(FlowPreview::class, kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -43,26 +45,36 @@ class NotesSearchViewModel @Inject constructor(
     val state: StateFlow<NotesSearchUiState> = combine(
         _query,
         _query
-            .debounce(300)
+            // A blank field needs no debounce: it is the screen opening, or the field cleared.
+            .debounce { if (it.isBlank()) 0L else 300L }
             .flatMapLatest { q ->
                 // Escape LIKE wildcards so a literal '%' or '_' in the query isn't a wildcard.
-                flow {
-                    emit(q to if (q.isBlank()) emptyList() else loggedExerciseDao.searchNotes(escapeLikePattern(q)))
+                // A blank query reads the most recent notes rather than nothing: the screen opened on
+                // "Type to search" with every note the user had written one keystroke away.
+                flow<Pair<String?, List<LoggedExerciseDao.NoteSearchResult>>> {
+                    emit(
+                        q to if (q.isBlank()) loggedExerciseDao.searchNotes("").take(RECENT_NOTES)
+                        else loggedExerciseDao.searchNotes(escapeLikePattern(q))
+                    )
                 }
             }
-            .onStart { emit("" to emptyList()) }
+            .onStart { emit(null to emptyList()) }
     ) { query, (answeredQuery, results) ->
         NotesSearchUiState(
             query = query,
             results = if (answeredQuery == query) results else emptyList(),
             // Typed something, and the search for it has not come back yet. The screen can say so
             // instead of showing the last query's hits under this one.
-            searching = query.isNotBlank() && answeredQuery != query
+            searching = query.isNotBlank() && answeredQuery != query,
+            answered = answeredQuery == query
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NotesSearchUiState())
 
     fun setQuery(q: String) = _query.update { q }
 }
+
+/** How many recent notes the screen shows before anything is typed. */
+private const val RECENT_NOTES = 20
 
 /** Escape SQL LIKE wildcards (matching `ESCAPE '\'` in the query) so user text matches literally. */
 private fun escapeLikePattern(q: String): String =

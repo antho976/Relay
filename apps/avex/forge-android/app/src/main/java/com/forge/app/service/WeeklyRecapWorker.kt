@@ -51,7 +51,8 @@ class WeeklyRecapWorker @AssistedInject constructor(
     private val trophyRepo: TrophyRepository,
     private val vacationRepo: VacationRepository,
     private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository,
-    private val programRepo: com.forge.app.data.repo.ProgramRepository
+    private val programRepo: com.forge.app.data.repo.ProgramRepository,
+    private val sessionDao: com.forge.app.data.db.dao.SessionDao
 ) : CoroutineWorker(ctx, params) {
 
     override suspend fun doWork(): Result {
@@ -81,10 +82,14 @@ class WeeklyRecapWorker @AssistedInject constructor(
         // compares the latest pass to lastSeenCoachWeekId, so a brief the user has already opened never
         // re-pushes. It self-guards on freestyle/coach-off too; the outer gate just avoids the work.
         if (coachActive) {
-            runCatching { coachRepo.pendingBanner() }.getOrNull()?.let { banner ->
+            // Only a week that asks for or reports something pushes: "holding steady" every Monday
+            // of a layoff was a weekly push about nothing (the feed and Home still carry it). The
+            // body drops the "Coach · " prefix the title already says, as the feed does.
+            runCatching { coachRepo.pendingBanner() }.getOrNull()?.takeIf { it.actionable }?.let { banner ->
                 ForgeNotifications.ensureChannel(ctx, COACH_CHANNEL_ID, "Coach updates", "When your weekly coach brief is ready")
                 nm.notify(COACH_NOTIF_ID, ForgeNotifications.build(
-                    ctx, COACH_CHANNEL_ID, "Your coach has an update", banner.text
+                    ctx, COACH_CHANNEL_ID, "Coach brief",
+                    banner.text.removePrefix("Coach · ").replaceFirstChar { it.uppercase() }
                 ))
             }
         }
@@ -111,21 +116,29 @@ class WeeklyRecapWorker @AssistedInject constructor(
         val streakDays = statsRepo.currentStreakDays()
 
         if (stats.workouts == 0) {
-            // ── Re-engagement (#13): a whole week with no sessions = a lapse. Nudge gently — unless
-            // the user is on holiday, where a "come back" would be guilt-trippy, not helpful.
+            // ── Re-engagement (#13): a whole week with no sessions = a lapse. Nudge, at a taper and
+            // from the user's own record (ComebackNudge), unless the user is on holiday, where a
+            // "come back" would be guilt-trippy, not helpful.
             if (!isOnVacationToday()) {
-                // A freestyle user has no plan "waiting" — keep the nudge plan-agnostic so it doesn't
-                // reference something they didn't set up.
-                val body = if (freestyle)
-                    "No pressure — log whatever you train, whenever. Even one session this week keeps your momentum going."
-                else
-                    "No pressure — your plan's right where you left it. Even one session this week keeps your momentum going."
-                ForgeNotifications.ensureChannel(ctx, REENGAGE_CHANNEL_ID, "Come-back nudges", "A gentle nudge after a week away")
-                nm.notify(REENGAGE_NOTIF_ID, ForgeNotifications.build(
-                    ctx, REENGAGE_CHANNEL_ID,
-                    "Ready when you are",
-                    body
-                ))
+                val zone = ZoneId.systemDefault()
+                val lastAt = sessionDao.finishedAts().firstOrNull()
+                val daysSinceLast = lastAt?.let {
+                    java.time.temporal.ChronoUnit.DAYS.between(
+                        java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalDate(), LocalDate.now(zone)
+                    ).toInt()
+                }
+                val lastDayName = if (freestyle) null else sessionDao.lastFinishedDayKey()?.let { key ->
+                    com.forge.app.program.Program.days.firstOrNull { it.key == key }?.defaultName
+                }
+                com.forge.app.domain.notify.ComebackNudge.build(
+                    daysSinceLast = daysSinceLast,
+                    lastDayName = lastDayName,
+                    cardioMinutesLastWeek = stats.cardioMinutes,
+                    freestyle = freestyle
+                )?.let { nudge ->
+                    ForgeNotifications.ensureChannel(ctx, REENGAGE_CHANNEL_ID, "Come-back nudges", "A nudge after a week away")
+                    nm.notify(REENGAGE_NOTIF_ID, ForgeNotifications.build(ctx, REENGAGE_CHANNEL_ID, nudge.title, nudge.body))
+                }
             }
             return Result.success()
         }
@@ -154,8 +167,14 @@ class WeeklyRecapWorker @AssistedInject constructor(
                     }
                 }
                 runCatching { statsRepo.findOnThisDayMemory() }.getOrNull()?.let { mem ->
-                    val ago = if (mem.monthsAgo % 12 == 0) "${mem.monthsAgo / 12}yr" else "${mem.monthsAgo}mo"
-                    append(" · On this day ($ago ago): ${mem.dayName}")
+                    // Words, not "On this day (1yr ago)" shorthand.
+                    val ago = when {
+                        mem.monthsAgo % 12 == 0 && mem.monthsAgo == 12 -> "A year ago"
+                        mem.monthsAgo % 12 == 0 -> "${mem.monthsAgo / 12} years ago"
+                        mem.monthsAgo == 1 -> "A month ago"
+                        else -> "${mem.monthsAgo} months ago"
+                    }
+                    append(" · $ago this week: ${mem.dayName}")
                 }
             }
             // DESIGN §11: no exclamation marks in a rendered string.

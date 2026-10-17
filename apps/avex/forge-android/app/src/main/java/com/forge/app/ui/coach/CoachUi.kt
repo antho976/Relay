@@ -14,6 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -268,14 +269,17 @@ internal fun CoachAction(
     contentDescription: String,
     onClick: () -> Unit
 ) {
-    Text(
-        text,
-        style = MaterialTheme.typography.titleSmall,
-        color = color,
+    // 48dp from the target, not the text (§14): a titleSmall line plus 8dp of padding was about
+    // 36dp, on Skip for every open call, Apply all and the block's start and end.
+    Box(
         modifier = Modifier
+            .heightIn(min = 48.dp)
             .clickableLabeled(contentDescription) { onClick() }
-            .padding(vertical = 8.dp, horizontal = 2.dp)
-    )
+            .padding(horizontal = 2.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Text(text, style = MaterialTheme.typography.titleSmall, color = color)
+    }
 }
 
 /** A muted mono micro-caption above a chart ("ESTIMATED 1RM · LAST 9 SESSIONS"). */

@@ -263,7 +263,10 @@ fun ForgeNavHost(
             ProgramBuilderScreen(
                 blank = entry.arguments?.getBoolean(Routes.ARG_BLANK) ?: false,
                 startInView = entry.arguments?.getBoolean(Routes.ARG_VIEW) ?: false,
-                onClose = { nav.popBackStack() }
+                onClose = { nav.popBackStack() },
+                // The viewer replaces itself with the workout, so Back from the session lands
+                // where the plan was opened from.
+                onStartDay = { dayKey -> nav.popBackStack(); nav.navigateToGymDay(dayKey) }
             )
         }
         composable(Routes.NUTRITION) {
@@ -280,7 +283,14 @@ fun ForgeNavHost(
             route = Routes.SESSION_DETAIL,
             arguments = listOf(navArgument(Routes.ARG_SESSION_ID) { type = NavType.LongType })
         ) {
-            SessionDetailScreen(onBack = { nav.popBackStack() })
+            SessionDetailScreen(
+                onBack = { nav.popBackStack() },
+                onOpenLiftTrend = { liftId ->
+                    com.forge.app.ui.gym.stats.StatsLensRequests.pendingLift.value = liftId
+                    nav.popBackStack(Routes.OVERVIEW, false)
+                    pendingHubPage = BottomTab.STATS
+                }
+            )
         }
         composable(
             route = Routes.CARDIO_SESSION,
@@ -395,7 +405,7 @@ fun ForgeNavHost(
         composable(Routes.COACH_BRIEF) {
             CoachScreen(
                 onBack = { nav.popBackStack() },
-                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
+                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
             )
         }
         // The lab and timeline used to be lenses of the Coach page. The page is one column now,
@@ -424,14 +434,14 @@ fun ForgeNavHost(
             CoachScreen(
                 onBack = { nav.popBackStack() },
                 entryPoint = CoachEntryPoint.WHERE_YOU_STAND,
-                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
+                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
             )
         }
         composable(Routes.COACH_TIMELINE) {
             CoachScreen(
                 onBack = { nav.popBackStack() },
                 entryPoint = CoachEntryPoint.ACCOUNT,
-                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
+                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
             )
         }
         composable(Routes.GOALS) {
