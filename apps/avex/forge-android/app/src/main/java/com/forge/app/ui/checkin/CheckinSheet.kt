@@ -129,10 +129,12 @@ internal fun CheckinContent(
         }
 
         ForgeRowGroup(
-            { ScaleRow("Sleep", state.sleepQuality, onSleep) },
-            { ScaleRow("Soreness", state.soreness, onSoreness) },
-            { ScaleRow("Stress", state.stress, onStress) },
-            { ScaleRow("Drive", state.motivation, onDrive) }
+            // Each scale names its ends: they run opposite ways (5 is good sleep but bad soreness),
+            // and bare 1–5 segments let a readiness input go in inverted.
+            { ScaleRow("Sleep", "1 poor · 5 great", state.sleepQuality, onSleep) },
+            { ScaleRow("Soreness", "1 none · 5 very sore", state.soreness, onSoreness) },
+            { ScaleRow("Stress", "1 calm · 5 high", state.stress, onStress) },
+            { ScaleRow("Drive", "1 flat · 5 eager", state.motivation, onDrive) }
         )
 
         // Only asked once soreness is real — one generic tap can't gate a muscle, but a menu
@@ -221,12 +223,13 @@ private fun bodyweightRangeText(unit: WeightUnit): String =
 /** One 1–5 question: its label, and a sliding 1–5 control at the row's end. The control IS the
  *  input (§13); no thumb is drawn until it is answered. */
 @Composable
-private fun ScaleRow(label: String, value: Int?, onPick: (Int) -> Unit) {
+private fun ScaleRow(label: String, ends: String, value: Int?, onPick: (Int) -> Unit) {
     ForgeChoiceRow(
         label = label,
         options = SCALE,
         selectedIndex = value?.let { it - 1 } ?: -1,
-        onSelect = { onPick(it + 1) }
+        onSelect = { onPick(it + 1) },
+        caption = ends
     )
 }
 
