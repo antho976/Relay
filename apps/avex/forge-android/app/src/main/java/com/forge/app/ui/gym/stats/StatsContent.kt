@@ -292,7 +292,7 @@ private fun LazyListScope.strengthLens(
             caption = "Estimated 1RM per lift and how fast it is climbing.",
             index = 2
         ) {
-            E1rmComparisonList(state.e1rmLifts, state.recentPrs, state.strengthCurves, weightUnit, c, focusLift, focusNonce)
+            E1rmComparisonList(state.e1rmLifts, state.recentPrs, state.strengthCurves, weightUnit, c, focusLift, focusNonce, state.plateauFlags)
         }
     }
     // Relative strength — each lift as a multiple of bodyweight.

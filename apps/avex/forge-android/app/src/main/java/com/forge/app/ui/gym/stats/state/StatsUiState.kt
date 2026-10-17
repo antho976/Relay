@@ -33,6 +33,11 @@ data class StatsUiState(
     val readinessPulse: ReadinessPulse? = null,
     /** The learned deload score threshold — draws the threshold line + bands on the fatigue gauge (Body tab). */
     val readinessThreshold: Int? = null,
+    /**
+     * The coach's plateau ladder per lift, by exercise id: the same read the Coach tab acts on, so
+     * a lift Stats calls stalled is one the coach has a next step for.
+     */
+    val plateauFlags: Map<String, PlateauFlagUi> = emptyMap(),
     /** Per-day training load for the adherence calendar + Banister form curves (Trends tab). */
     val dailyActivity: List<DayLoad> = emptyList(),
     /**

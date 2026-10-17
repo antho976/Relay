@@ -11,6 +11,7 @@ import com.forge.app.ui.common.loadDayLog
 import com.forge.app.ui.gym.stats.state.StatsUiState
 import com.forge.app.ui.gym.stats.state.balanceRatioUi
 import com.forge.app.ui.gym.stats.state.buildReadinessPulse
+import com.forge.app.ui.gym.stats.state.plateauFlagOf
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -167,6 +168,7 @@ class StatsViewModel @Inject constructor(
             plannedSetsByMuscle = snapshot.plannedSetsByMuscle,
             weeklyTonnage = snapshot.weeklyTonnage,
             balanceRatios = engine?.ratios.orEmpty().map(::balanceRatioUi),
+            plateauFlags = engine?.plateaus.orEmpty().mapNotNull(::plateauFlagOf).associateBy { it.exerciseId },
             bodyweightPoints = snapshot.bodyweightPoints,
             userSex = sex,
             readinessPulse = engine?.fatigue?.let { buildReadinessPulse(it, engine.deloadScoreThreshold) },
