@@ -192,8 +192,21 @@ fun SetInputRow(
     // keying on the volatile seed would wipe a half-typed entry if the prior baseline changed (#11).
     var weight by rememberSaveable(nextSetNumber, exerciseKey) { mutableStateOf(seedWeight) }
     var reps by rememberSaveable(nextSetNumber, exerciseKey) { mutableStateOf(seedReps) }
+    // Except the comeback target, which loads beside the cards: the first card could compose on last
+    // time's weight before its eased target arrived, and the field kept the pre-break number. An
+    // untouched field (still holding the seed it was given) follows it; a typed one is left alone.
+    var seededWeight by rememberSaveable(nextSetNumber, exerciseKey) { mutableStateOf(seedWeight) }
+    LaunchedEffect(rampSeedLb) {
+        if (weight == seededWeight) weight = seedWeight
+        seededWeight = seedWeight
+    }
+    // Each tap applies once. The card keeps its last fill while this row comes and goes (skip, then
+    // unskip), and applying it again on the way back in overwrote the seed or what had been typed.
+    var appliedFill by rememberSaveable(exerciseKey) { mutableStateOf(fill?.nonce ?: 0) }
     LaunchedEffect(fill) {
         val f = fill ?: return@LaunchedEffect
+        if (f.nonce <= appliedFill) return@LaunchedEffect
+        appliedFill = f.nonce
         f.weight?.let { weight = it }
         f.reps?.let { reps = it }
     }
