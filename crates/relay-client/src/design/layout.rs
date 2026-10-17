@@ -31,11 +31,21 @@ pub fn h_sizing(n: &Node) -> Sizing {
 #[derive(Debug, Default, Clone)]
 pub struct Placed {
     pub rects: HashMap<String, Rect>,
+    /// Where a group's children count their `x`/`y` from: its parent's origin plus its own
+    /// `x`/`y` (or where a layout put it). Its box in `rects` is its children's bounds instead.
+    pub origins: HashMap<String, (f64, f64)>,
 }
 
 impl Placed {
     pub fn rect(&self, id: &str) -> Option<Rect> {
         self.rects.get(id).copied()
+    }
+
+    /// The page point `id`'s children count their `x`/`y` from, which is also where its own
+    /// `x`/`y` put it: a group's own point (not its children's bounds), any other node's box
+    /// corner, `(0, 0)` for what is not placed (a page).
+    pub fn origin(&self, id: &str) -> (f64, f64) {
+        self.origins.get(id).copied().or_else(|| self.rect(id).map(|r| (r.x, r.y))).unwrap_or((0.0, 0.0))
     }
 }
 
@@ -183,6 +193,7 @@ impl Pass<'_> {
         let children: Vec<String> = self.scene.children(id).to_vec();
         match (n.kind, n.layout_mode()) {
             (NodeKind::Group, _) => {
+                self.placed.origins.insert(id.to_string(), (rect.x, rect.y));
                 for child in &children {
                     self.free_child(child, rect.x, rect.y);
                 }
@@ -430,6 +441,18 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_group_counts_its_children_from_its_own_point_not_their_bounds() {
+        let s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            node("g", Some("p1"), K::Group, [100.0, 100.0, 0.0, 0.0]),
+            node("r", Some("g"), K::Rect, [50.0, 40.0, 10.0, 10.0]),
+        ]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(p.rect("g"), Some(Rect::new(150.0, 140.0, 10.0, 10.0)));
+        assert_eq!(p.origin("g"), (100.0, 100.0));
+    }
+
+    #[test]
     fn groups_bound_their_children_and_stickies_grow() {
         let mut long = node("s", Some("p1"), K::Sticky, [0.0, 0.0, 0.0, 0.0]);
         long.text = Some("x".repeat(200));
@@ -442,6 +465,7 @@ pub(crate) mod tests {
         ]);
         let p = place(&s, "p1", &Mono);
         assert_eq!(p.rect("g"), Some(Rect::new(100.0, 100.0, 30.0, 40.0)));
+        assert_eq!((p.origin("g"), p.origin("g2"), p.origin("p1")), ((100.0, 100.0), (120.0, 130.0), (0.0, 0.0)));
         // 168 px of text width holds 21 characters a line: 10 lines, 200 + 32 > 200.
         assert_eq!(p.rect("s"), Some(Rect::new(0.0, 0.0, 200.0, 232.0)));
     }

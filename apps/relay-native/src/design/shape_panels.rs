@@ -1,13 +1,13 @@
 //! The inspector's panels for the richer properties: a polygon's corners and star, an icon's
-//! choice and colour, a line's route and the shapes it is attached to, solid or gradient fills,
-//! per-corner radii and dashed strokes.
+//! choice and colour, a line's route and the shapes it is attached to, a path's closing and
+//! smoothing, an ellipse's arc, solid or gradient fills, per-corner radii and dashed strokes.
 
 use super::board::{display_name, Board};
 use super::widgets::{color_key, number, segmented};
 use crate::app::label;
 use gtk::prelude::*;
 use gtk4 as gtk;
-use relay_bus::design::{GradientKind, Node, NodeOp, Route};
+use relay_bus::design::{GradientKind, Node, NodeKind, NodeOp, Route};
 use relay_client::design::shapes;
 use serde_json::{json, Map, Value};
 use std::rc::Rc;
@@ -76,7 +76,9 @@ pub fn icon(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
     });
     sec.append(&change);
     let weak = Rc::downgrade(b);
-    let colour = color_key(b, n.stroke.as_deref(), "Icon colour", true, move |c| {
+    // Automatic shows the colour it is drawn in, not an empty key.
+    let shown = n.stroke.clone().unwrap_or_else(|| super::paint::text_color(&b.doc.scene.borrow(), n));
+    let colour = color_key(b, Some(&shown), "Icon colour", true, move |c| {
         if let Some(b) = weak.upgrade() {
             b.set_selected(set(&[("stroke", json!(c))]));
         }
@@ -106,13 +108,20 @@ pub fn connector(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
             }
         },
     );
-    sec.append(&route);
     if n.from.is_none() && n.to.is_none() {
-        let hint = label("Draw a line from one shape to another and it stays attached as they move.", "design-note");
-        hint.set_wrap(true);
-        sec.append(&hint);
+        let corners = n.points.as_ref().map_or(0, Vec::len);
+        if corners > 2 {
+            // A line of several points is a shape of its own: close it, smooth it.
+            sec.append(&path_flags(b, n, true));
+        } else {
+            sec.append(&route);
+            let hint = label("Draw a line from one shape to another and it stays attached as they move.", "design-note");
+            hint.set_wrap(true);
+            sec.append(&hint);
+        }
         return;
     }
+    sec.append(&route);
     let scene = b.doc.scene.borrow();
     let name = |id: &Option<String>| id.as_deref().and_then(|i| scene.node(i)).map(display_name).unwrap_or_else(|| "a free end".into());
     let caption = label(&format!("Attached: {} → {}", name(&n.from), name(&n.to)), "design-note");
@@ -131,6 +140,78 @@ pub fn connector(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
     sec.append(&detach);
 }
 
+/// A pen path: closed or open.
+pub fn path(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
+    sec.append(&path_flags(b, n, false));
+}
+
+/// Closed (and, for a line, smooth) as checks.
+fn path_flags(b: &Rc<Board>, n: &Node, smooth: bool) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let flags: &[(&'static str, &str, bool)] = if smooth {
+        &[("closed", "Closed", n.closed == Some(true)), ("smooth", "Smooth", n.smooth == Some(true))]
+    } else {
+        &[("closed", "Closed", n.closed == Some(true))]
+    };
+    for (field, caption, on) in flags {
+        let c = gtk::CheckButton::with_label(caption);
+        c.set_active(*on);
+        c.set_tooltip_text(Some(if *field == "closed" { "Join the end back to the start; a fill paints inside" } else { "Curve through the points" }));
+        let weak = Rc::downgrade(b);
+        let field = *field;
+        c.connect_toggled(move |c| {
+            if let Some(b) = weak.upgrade() {
+                b.set_selected(set(&[(field, if c.is_active() { json!(true) } else { Value::Null })]));
+            }
+        });
+        row.append(&c);
+    }
+    row
+}
+
+/// An ellipse's arc: where it starts, how far it goes and the hole in its middle, with the
+/// shapes people reach for.
+pub fn arc(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
+    let a = n.arc.clone().unwrap_or(relay_bus::design::Arc { start: 0.0, sweep: 360.0, inner: 0.0 });
+    let write = {
+        let weak = Rc::downgrade(b);
+        Rc::new(move |start: f64, sweep: f64, inner: f64| {
+            if let Some(b) = weak.upgrade() {
+                let whole = sweep.abs() >= 360.0 && inner <= 0.0;
+                let v = if whole { Value::Null } else { json!({"start": start, "sweep": sweep, "inner": inner}) };
+                b.set_selected(set(&[("arc", v)]));
+            }
+        })
+    };
+    let presets = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    presets.add_css_class("design-segmented");
+    for (caption, tip, start, sweep, inner) in [
+        ("Whole", "The whole ellipse", 0.0, 360.0, 0.0),
+        ("Pie", "A three-quarter pie", 0.0, 270.0, 0.0),
+        ("Donut", "A ring", 0.0, 360.0, 0.6),
+        ("Gauge", "A half ring, open at the bottom", 270.0, 180.0, 0.7),
+    ] {
+        let key = gtk::Button::with_label(caption);
+        key.add_css_class("quiet");
+        key.set_tooltip_text(Some(tip));
+        if (a.start, a.sweep, a.inner) == (start, sweep, inner) {
+            key.add_css_class("selected");
+        }
+        let w = write.clone();
+        key.connect_clicked(move |_| w(start, sweep, inner));
+        presets.append(&key);
+    }
+    sec.append(&presets);
+    let (start, sweep, inner) = (a.start, a.sweep, a.inner);
+    let w = write.clone();
+    let start_field = number("@rotate", Some(start), "Start, degrees clockwise from the top", move |v| w(v.rem_euclid(360.0), sweep, inner));
+    let w = write.clone();
+    let sweep_field = number("@arc", Some(sweep), "Sweep, degrees (negative runs anticlockwise)", move |v| w(start, v.clamp(-360.0, 360.0), inner));
+    sec.append(&pair(start_field, sweep_field));
+    let w = write.clone();
+    sec.append(&number("@ellipse", Some((inner * 100.0).round()), "Hole, % of the radius", move |v| w(start, sweep, (v / 100.0).clamp(0.0, 0.99))));
+}
+
 /// Free a connector's ends where they are drawn now: its points become its own again.
 fn detach_line(b: &Board, id: &str) {
     let placed = b.placed();
@@ -140,7 +221,7 @@ fn detach_line(b: &Board, id: &str) {
     };
     let (pts, curved) = shapes::line_points(&scene, &placed, n);
     let pts = if curved { vec![pts[0], pts[3]] } else { pts };
-    let origin = n.parent.as_deref().and_then(|p| placed.rect(p)).unwrap_or_default();
+    let origin = n.parent.as_deref().map(|p| b.origin_of(p)).unwrap_or_default();
     let x0 = pts.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
     let y0 = pts.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
     let x1 = pts.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
@@ -286,14 +367,17 @@ pub fn dash(b: &Rc<Board>, nodes: &[Node]) -> gtk::Box {
     };
     let current = nodes.first().map(style).filter(|s| nodes.iter().all(|n| style(n) == *s));
     let weak = Rc::downgrade(b);
+    // Gaps grow with the weight, so dots stay dots on a thick stroke.
+    let lines = nodes.iter().all(|n| matches!(n.kind, NodeKind::Line | NodeKind::Path));
+    let width = nodes.first().and_then(|n| n.stroke_width).unwrap_or(if lines { 2.0 } else { 1.0 });
     segmented(
         &[("solid", "dash-solid", "Solid"), ("dashed", "dash", "Dashed"), ("dotted", "dots", "Dotted")],
         current,
         move |v| {
             if let Some(b) = weak.upgrade() {
                 let value = match v {
-                    "dashed" => json!([6, 4]),
-                    "dotted" => json!([0, 4]),
+                    "dashed" => json!([(width * 3.0).max(6.0).round(), (width * 2.0).max(4.0).round()]),
+                    "dotted" => json!([0, (width * 2.0).max(4.0).round()]),
                     _ => Value::Null,
                 };
                 b.set_selected(set(&[("dash", value)]));
@@ -307,7 +391,7 @@ pub fn corners(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
     let toggle = gtk::CheckButton::with_label("Each corner on its own");
     toggle.set_active(n.radii.is_some());
     let weak = Rc::downgrade(b);
-    let radius = n.radius.unwrap_or(0.0);
+    let radius = n.radius.unwrap_or(if n.kind == NodeKind::Sticky { 6.0 } else { 0.0 });
     toggle.connect_toggled(move |c| {
         if let Some(b) = weak.upgrade() {
             let v = if c.is_active() { json!([radius, radius, radius, radius]) } else { Value::Null };

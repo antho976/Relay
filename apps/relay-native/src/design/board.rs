@@ -48,6 +48,8 @@ pub enum Tool {
     Hexagon,
     Star,
     Eraser,
+    /// Click to place points, click the first again to close: a shape of your own.
+    Vector,
 }
 
 impl Tool {
@@ -77,6 +79,7 @@ impl Tool {
             Tool::Hexagon => "hexagon",
             Tool::Star => "star",
             Tool::Eraser => "eraser",
+            Tool::Vector => "vector",
         }
     }
 
@@ -98,6 +101,7 @@ impl Tool {
             Tool::Hexagon => "Hexagon",
             Tool::Star => "Star",
             Tool::Eraser => "Eraser",
+            Tool::Vector => "Vector pen",
         }
     }
 
@@ -119,6 +123,7 @@ impl Tool {
             Tool::Hexagon => "",
             Tool::Star => "Shift S",
             Tool::Eraser => "E",
+            Tool::Vector => "B",
         }
     }
 }
@@ -166,6 +171,9 @@ pub enum Gesture {
         orig: Vec<(String, f64, f64)>,
         rects: Vec<Rect>,
         dup: bool,
+        /// Alt drag: the copies made at the first move, shown but not sent until the drag ends,
+        /// so the copy and its move are one undo step.
+        copies: Vec<NodeOp>,
         moved: bool,
         /// A container the nodes would land in, when it is not their parent.
         target: Option<String>,
@@ -215,6 +223,10 @@ pub struct Board {
     labels: RefCell<HashMap<String, pango::Layout>>,
     pub(super) pen: RefCell<String>,
     pub(super) clip: RefCell<Vec<Node>>,
+    /// A copied style (Ctrl+Alt+C), to lay on other layers.
+    pub(super) style_clip: RefCell<Option<serde_json::Map<String, Value>>>,
+    /// The vector pen's path being placed: its parent and its points, in page coordinates.
+    pub(super) vector: RefCell<Option<(String, Vec<[f64; 2]>)>>,
     pub(super) title: gtk::Label,
     pub(super) terminal: gtk::MenuButton,
     pub(super) terminal_label: gtk::Label,
@@ -446,6 +458,8 @@ impl Board {
             labels: RefCell::default(),
             pen: RefCell::new(String::new()),
             clip: RefCell::default(),
+            style_clip: RefCell::default(),
+            vector: RefCell::default(),
             title,
             terminal,
             terminal_label,
@@ -589,6 +603,13 @@ impl Board {
 
     pub(super) fn to_page(&self, sx: f64, sy: f64) -> (f64, f64) {
         self.cam.get().to_page(sx, sy)
+    }
+
+    /// The page point `id`'s children count their `x`/`y` from (a group's own, not its
+    /// children's bounds), as a box of no size.
+    pub(super) fn origin_of(&self, id: &str) -> Rect {
+        let (x, y) = self.placed().origin(id);
+        Rect::new(x, y, 0.0, 0.0)
     }
 
     pub(super) fn placed(&self) -> Rc<Placed> {
@@ -784,6 +805,8 @@ impl Board {
     fn changed(&self, change: &Change) {
         match change {
             Change::Scene => {
+                // An undo can take away the page on show (one just added, or duplicated).
+                self.keep_page();
                 self.prune_selection();
                 self.invalidate();
             }
@@ -800,13 +823,7 @@ impl Board {
                     self.agent_undo.set_tooltip_text(Some(&format!("Undo {by}'s last change to this design")));
                     self.agent_undo.set_visible(true);
                 }
-                if !self.doc.scene.borrow().node(&self.page.borrow()).is_some() {
-                    let first = self.doc.scene.borrow().pages().first().cloned().unwrap_or_default();
-                    self.set_page(&first);
-                }
-                if let Some(layers) = self.layers.borrow().as_ref() {
-                    layers.pages_changed();
-                }
+                self.keep_page();
             }
             Change::Design => self.design_changed(),
             Change::Saving(on) => {
@@ -815,6 +832,18 @@ impl Board {
                 self.refresh_actions();
             }
             Change::Error(e) => self.toast(e),
+        }
+    }
+
+    /// Show the first page when the one on show is gone, and bring the page list up to date.
+    fn keep_page(&self) {
+        let gone = self.doc.scene.borrow().node(&self.page.borrow()).is_none();
+        if gone {
+            let first = self.doc.scene.borrow().pages().first().cloned().unwrap_or_default();
+            self.set_page(&first);
+        }
+        if let Some(layers) = self.layers.borrow().as_ref() {
+            layers.pages_changed();
         }
     }
 
@@ -1211,6 +1240,7 @@ impl Board {
                     }
                 }
             }
+            _ if self.vector.borrow().is_some() => self.draw_vector(snap),
             Gesture::Draw { points, .. } if points.len() > 1 => {
                 let cam = self.cam.get();
                 let pb = gsk::PathBuilder::new();
@@ -1228,6 +1258,43 @@ impl Board {
                 snap.append_stroke(&pb.to_path(), &stroke, &rgba(&self.pen_color(highlighter)));
             }
             _ => {}
+        }
+    }
+
+    /// The vector pen's path so far, the segment to the pointer, and its points; the first
+    /// grows under the pointer when a click there would close the path.
+    fn draw_vector(&self, snap: &gtk::Snapshot) {
+        let vector = self.vector.borrow();
+        let Some((_, points)) = vector.as_ref() else {
+            return;
+        };
+        let cam = self.cam.get();
+        let screen: Vec<(f64, f64)> = points.iter().map(|p| cam.to_screen(p[0], p[1])).collect();
+        let Some(&first) = screen.first() else {
+            return;
+        };
+        let pointer = self.pointer.get();
+        let closing = screen.len() > 2 && (pointer.0 - first.0).abs() <= 8.0 && (pointer.1 - first.1).abs() <= 8.0;
+        let pb = gsk::PathBuilder::new();
+        pb.move_to(first.0 as f32, first.1 as f32);
+        for q in &screen[1..] {
+            pb.line_to(q.0 as f32, q.1 as f32);
+        }
+        let stroke = gsk::Stroke::new(1.5);
+        snap.append_stroke(&pb.to_path(), &stroke, &rgba(SELECT));
+        let rubber = gsk::PathBuilder::new();
+        let last = screen[screen.len() - 1];
+        rubber.move_to(last.0 as f32, last.1 as f32);
+        let to = if closing { first } else { pointer };
+        rubber.line_to(to.0 as f32, to.1 as f32);
+        let dashed = gsk::Stroke::new(1.0);
+        dashed.set_dash(&[4.0, 3.0]);
+        snap.append_stroke(&rubber.to_path(), &dashed, &rgba(SELECT));
+        for (i, q) in screen.iter().enumerate() {
+            let size = if i == 0 && closing { 10.0 } else { 7.0 };
+            let r = Rect::new(q.0 - size / 2.0, q.1 - size / 2.0, size, size);
+            snap.append_color(&gdk::RGBA::WHITE, &grect(&r));
+            self.outline(snap, &r, SELECT, 1.5);
         }
     }
 
@@ -1312,6 +1379,11 @@ impl Board {
             return Vec::new();
         };
         let cam = self.cam.get();
+        // A connector's ends are where it is drawn: on the shapes it joins.
+        if n.from.is_some() || n.to.is_some() {
+            let (pts, _) = relay_client::design::shapes::line_points(&scene, &placed, n);
+            return [pts.first(), pts.last()].into_iter().flatten().map(|p| cam.to_screen(p.0, p.1)).collect();
+        }
         n.points
             .as_deref()
             .map(|pts| {
@@ -1353,7 +1425,14 @@ impl Board {
             }
             false
         });
-        if !picking && self.edit.borrow().is_none() && matches!(*self.gesture.borrow(), Gesture::Idle) {
+        // Nor while one of its fields has the keyboard (a size being typed or stepped).
+        let typing = self.context.borrow().as_ref().is_some_and(|bar| {
+            self.root
+                .root()
+                .and_then(|r| gtk::prelude::GtkWindowExt::focus(r.downcast_ref::<gtk::Window>()?))
+                .is_some_and(|f| f.is_ancestor(bar))
+        });
+        if !picking && !typing && self.edit.borrow().is_none() && matches!(*self.gesture.borrow(), Gesture::Idle) {
             self.rebuild_context();
         }
         self.refresh_inspector_values();
@@ -1365,18 +1444,22 @@ impl Board {
     }
 
     pub(super) fn set_tool(&self, tool: Tool) {
+        if tool != Tool::Vector {
+            super::tools::finish_vector(self, false);
+        }
         self.tool.set(tool);
         for (t, key) in self.tool_keys.borrow().iter() {
             key.set_active(*t == tool);
         }
         let shapes = tool.is_shape();
         self.shape_key.set_active(shapes);
-        self.pen_key.set_active(matches!(tool, Tool::Pen | Tool::Highlighter | Tool::Eraser));
+        let pens = matches!(tool, Tool::Pen | Tool::Vector | Tool::Highlighter | Tool::Eraser);
+        self.pen_key.set_active(pens);
         if shapes {
             self.shape_key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
             self.shape_key.set_tooltip_text(Some(&format!("{} ({})", tool.caption(), tool.key())));
         }
-        if matches!(tool, Tool::Pen | Tool::Highlighter | Tool::Eraser) {
+        if pens {
             self.pen_key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
             self.pen_key.set_tooltip_text(Some(&format!("{} ({})", tool.caption(), tool.key())));
         }
@@ -1467,7 +1550,7 @@ impl Board {
         self.pen_key.connect_clicked(move |key| {
             if let Some(b) = weak.upgrade() {
                 let tool = match b.tool.get() {
-                    t @ (Tool::Highlighter | Tool::Eraser) => t,
+                    t @ (Tool::Vector | Tool::Highlighter | Tool::Eraser) => t,
                     _ => Tool::Pen,
                 };
                 b.set_tool(tool);
@@ -1475,7 +1558,7 @@ impl Board {
             }
         });
         dock.append(&self.pen_key);
-        dock.append(&self.tool_menu(&[Tool::Pen, Tool::Highlighter, Tool::Eraser]));
+        dock.append(&self.tool_menu(&[Tool::Pen, Tool::Vector, Tool::Highlighter, Tool::Eraser]));
         let icon_key = gtk::MenuButton::new();
         icon_key.add_css_class("design-tool");
         icon_key.set_child(Some(&glyphs::image("icon", 16)));
@@ -1675,8 +1758,10 @@ impl Board {
         menu.append_section(None, &section);
         let section = gio::Menu::new();
         section.append(Some("Export page as PNG…"), Some("design.export-page"));
-        section.append(Some("Export selection as PNG…"), Some("design.export"));
+        section.append(Some("Export page as SVG…"), Some("design.export-page-svg"));
+        section.append(Some("Export page as PDF…"), Some("design.export-page-pdf"));
         menu.append_section(None, &section);
+        menu.append_section(None, &export_menu());
         let section = gio::Menu::new();
         section.append(Some("Delete design"), Some("design.delete-design"));
         menu.append_section(None, &section);
@@ -1801,9 +1886,9 @@ impl Board {
         grid.set_row_spacing(4);
         grid.add_css_class("design-shortcuts");
         let groups: [(&str, &[(&str, &str)]); 4] = [
-            ("Tools", &[("V", "Move"), ("H or Space", "Hand"), ("F", "Frame"), ("R / O", "Rectangle / ellipse"), ("Shift R / Shift S", "Triangle / star"), ("K", "Icon"), ("E", "Eraser"), ("L / Shift L", "Line / arrow"), ("T", "Text"), ("S", "Sticky note"), ("P / Shift P", "Pen / highlighter")]),
+            ("Tools", &[("V", "Move"), ("H or Space", "Hand"), ("F", "Frame"), ("R / O", "Rectangle / ellipse"), ("Shift R / Shift S", "Triangle / star"), ("K", "Icon"), ("E", "Eraser"), ("L / Shift L", "Line / arrow"), ("T", "Text"), ("S", "Sticky note"), ("P / Shift P", "Pen / highlighter"), ("B", "Vector pen: click points, close on the first")]),
             ("Selection", &[("Click", "Select what is under the pointer"), ("Esc", "Select the parent"), ("Enter", "Edit text, or select inside"), ("Shift click", "Add or remove"), ("Ctrl A", "Select all"), ("Alt drag", "Duplicate while moving")]),
-            ("Edit", &[("Ctrl Z / Ctrl Shift Z", "Undo / redo"), ("Ctrl D", "Duplicate"), ("Ctrl G / Ctrl Shift G", "Group / ungroup"), ("Ctrl Alt G", "Frame selection"), ("Ctrl ] / Ctrl [", "Forward / backward"), ("Arrows", "Nudge 1 px (Shift: 10)")]),
+            ("Edit", &[("Ctrl Z / Ctrl Shift Z", "Undo / redo"), ("Ctrl D", "Duplicate"), ("Ctrl G / Ctrl Shift G", "Group / ungroup"), ("Ctrl Alt G", "Frame selection"), ("Ctrl ] / Ctrl [", "Forward / backward"), ("Shift H / Shift V", "Flip across / up and down"), ("Ctrl Alt C / V", "Copy / paste style"), ("Arrows", "Nudge 1 px (Shift: 10)")]),
             ("View", &[("Ctrl scroll / pinch", "Zoom at the pointer"), ("Shift 1", "Zoom to fit"), ("Shift 2", "Zoom to selection"), ("Shift 0", "Zoom to 100%"), ("Alt 1", "Pages and layers"), ("Ctrl .", "Inspector")]),
         ];
         for (col, (heading, rows)) in groups.iter().enumerate() {
@@ -1905,8 +1990,17 @@ impl Board {
         add("zoom-50", |b| b.zoom_to(0.5));
         add("zoom-100", |b| b.zoom_to(1.0));
         add("zoom-200", |b| b.zoom_to(2.0));
-        add("export", |b| super::export::export_selection(b, false));
-        add("export-page", |b| super::export::export_selection(b, true));
+        use super::export::{export_selection, Format};
+        add("export", |b| export_selection(b, false, Format::Png(2.0)));
+        add("export-svg", |b| export_selection(b, false, Format::Svg));
+        add("export-pdf", |b| export_selection(b, false, Format::Pdf));
+        add("export-page", |b| export_selection(b, true, Format::Png(2.0)));
+        add("export-page-svg", |b| export_selection(b, true, Format::Svg));
+        add("export-page-pdf", |b| export_selection(b, true, Format::Pdf));
+        add("flip-h", |b| b.flip(true));
+        add("flip-v", |b| b.flip(false));
+        add("copy-style", |b| b.copy_style());
+        add("paste-style", |b| b.paste_style());
         add("ask", |b| b.ask_agent(b.ask.upcast_ref()));
         add("rename", |b| b.rename_design());
         add("duplicate-design", super::duplicate_design);
@@ -1940,6 +2034,12 @@ impl Board {
             ("lock", has),
             ("hide", has),
             ("export", has),
+            ("export-svg", has),
+            ("export-pdf", has),
+            ("flip-h", has),
+            ("flip-v", has),
+            ("copy-style", has),
+            ("paste-style", has && self.style_clip.borrow().is_some()),
         ] {
             if let Some(a) = self.actions.lookup_action(name).and_downcast::<gio::SimpleAction>() {
                 a.set_enabled(on);
@@ -2010,12 +2110,17 @@ impl Board {
 
     pub(super) fn delete_selection(&self) {
         let ids = self.selected();
+        // A text being typed for the first time is not on the engine yet: its edit drops it.
+        let fresh = self.edit.borrow().as_ref().filter(|e| e.created).map(|e| e.id.clone());
+        if fresh.is_some_and(|f| ids.contains(&f)) {
+            self.end_edit(false);
+        }
+        let ids = self.selected();
+        let placed = self.placed();
         let scene = self.doc.scene.borrow();
-        let ops: Vec<NodeOp> = ids
-            .into_iter()
-            .filter(|id| scene.node(id).is_some_and(|n| n.kind != NodeKind::Page))
-            .map(|id| NodeOp::Delete { id })
-            .collect();
+        let ids: Vec<String> = ids.into_iter().filter(|id| scene.node(id).is_some_and(|n| n.kind != NodeKind::Page)).collect();
+        // Connectors attached to what goes let go where they are drawn, rather than dangle.
+        let ops = edit::delete(&scene, &placed, &ids);
         drop(scene);
         if self.commit(ops) {
             self.select(Vec::new());
@@ -2028,6 +2133,34 @@ impl Board {
         if self.commit(ops) {
             self.select(roots);
         }
+    }
+
+    /// Mirror the selection left to right (`horizontal`) or top to bottom.
+    pub(super) fn flip(&self, horizontal: bool) {
+        let placed = self.placed();
+        let ops = relay_client::design::flip::flip(&self.doc.scene.borrow(), &placed, &self.selection.borrow(), horizontal);
+        self.commit(ops);
+    }
+
+    /// Keep the first selected layer's style, to paste on others.
+    pub(super) fn copy_style(&self) {
+        let first = self.selected().into_iter().next();
+        let style = first.and_then(|id| self.doc.scene.borrow().node(&id).map(relay_client::design::flip::style_of));
+        if style.is_some() {
+            *self.style_clip.borrow_mut() = style;
+            self.refresh_actions();
+            self.toast("Copied the style");
+        }
+    }
+
+    /// Lay the copied style on the selection.
+    pub(super) fn paste_style(&self) {
+        let Some(style) = self.style_clip.borrow().clone() else {
+            self.toast("Copy a style first (Ctrl+Alt+C)");
+            return;
+        };
+        let ops = relay_client::design::flip::paste_style(&self.doc.scene.borrow(), &self.selected(), &style);
+        self.commit(ops);
     }
 
     pub(super) fn copy(&self) {
@@ -2158,7 +2291,7 @@ impl Board {
         let target = self.paste_target();
         let (w, h) = self.size.get();
         let (cx, cy) = self.to_page(w / 2.0, h / 2.0);
-        let origin = self.placed().rect(&target).unwrap_or_default();
+        let origin = self.origin_of(&target);
         let mut n = Node::new(NodeKind::Text);
         n.id = self.doc.scene.borrow_mut().fresh_id(NodeKind::Text);
         n.parent = Some(target);
@@ -2188,6 +2321,9 @@ impl Board {
                     self.select(vec![id]);
                 }
             }
+            None if kind == NodeKind::Group && ids.iter().any(|id| self.doc.scene.borrow().parent(id).is_some_and(|p| edit::lays_out(&self.doc.scene.borrow(), p))) => {
+                self.toast("Auto layout places its layers: frame them instead (Ctrl+Alt+G)")
+            }
             None => self.toast("Only layers in the same parent can be grouped"),
         }
     }
@@ -2195,17 +2331,7 @@ impl Board {
     pub(super) fn ungroup(&self) {
         let ids = self.selected();
         let placed = self.placed();
-        let mut ops = Vec::new();
-        let mut kids = Vec::new();
-        {
-            let scene = self.doc.scene.borrow();
-            for id in &ids {
-                if let Some((mut more, mut k)) = edit::ungroup(&scene, &placed, id) {
-                    ops.append(&mut more);
-                    kids.append(&mut k);
-                }
-            }
-        }
+        let (ops, kids) = edit::ungroup_all(&self.doc.scene.borrow(), &placed, &ids);
         if !ops.is_empty() && self.commit(ops) {
             self.select(kids);
         }
@@ -2369,11 +2495,10 @@ pub fn handle_point(s: &Rect, h: Handle) -> (f64, f64) {
 
 /// A size as the pill shows it: whole pixels, or one decimal under 10.
 pub fn fmt(v: f64) -> String {
-    if (v - v.round()).abs() < 0.05 || v.abs() >= 10.0 {
-        format!("{}", v.round())
-    } else {
-        format!("{v:.1}")
-    }
+    // Up to two decimals, as typed: 13.5 stays 13.5 and 1.25 stays 1.25.
+    let text = format!("{:.2}", (v * 100.0).round() / 100.0);
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    if text == "-0" { "0".into() } else { text.into() }
 }
 
 /// A round colour key; `None` shows the automatic (checkered) swatch.
@@ -2387,8 +2512,10 @@ pub fn swatch_button(color: Option<&str>, tooltip: &str) -> gtk::Button {
     // A transparent colour shows as none: a slashed, empty swatch.
     let color = color.filter(|c| relay_bus::design::parse_color(c).is_some_and(|c| c[3] > 0)).map(str::to_string);
     dot.set_draw_func(move |_, cr, w, h| {
+        // A round swatch in the middle of whatever room the key is given.
         let r = (w.min(h) as f64) / 2.0;
-        cr.arc(w as f64 / 2.0, h as f64 / 2.0, r - 0.5, 0.0, std::f64::consts::TAU);
+        let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+        cr.arc(cx, cy, r - 0.5, 0.0, std::f64::consts::TAU);
         match &color {
             Some(c) => {
                 let c = rgba(c);
@@ -2398,14 +2525,19 @@ pub fn swatch_button(color: Option<&str>, tooltip: &str) -> gtk::Button {
             None => {
                 cr.set_source_rgba(0.5, 0.5, 0.5, 0.35);
                 let _ = cr.fill_preserve();
-                cr.set_source_rgba(0.9, 0.3, 0.3, 0.9);
-                cr.move_to(w as f64 * 0.2, h as f64 * 0.8);
-                cr.line_to(w as f64 * 0.8, h as f64 * 0.2);
             }
         }
         cr.set_source_rgba(1.0, 1.0, 1.0, 0.25);
         cr.set_line_width(1.0);
         let _ = cr.stroke();
+        if color.is_none() {
+            let k = (r - 2.0) * std::f64::consts::FRAC_1_SQRT_2;
+            cr.move_to(cx - k, cy + k);
+            cr.line_to(cx + k, cy - k);
+            cr.set_source_rgba(0.9, 0.3, 0.3, 0.9);
+            cr.set_line_width(1.5);
+            let _ = cr.stroke();
+        }
     });
     swatch.set_child(Some(&dot));
     swatch
@@ -2456,4 +2588,13 @@ pub fn display_name(n: &Node) -> String {
         return line;
     }
     kind_caption(n.kind).to_string()
+}
+
+/// "Export selection as" PNG, SVG or PDF, for the menus that offer it.
+pub(super) fn export_menu() -> gio::Menu {
+    let section = gio::Menu::new();
+    section.append(Some("Export selection as PNG…"), Some("design.export"));
+    section.append(Some("Export selection as SVG…"), Some("design.export-svg"));
+    section.append(Some("Export selection as PDF…"), Some("design.export-pdf"));
+    section
 }

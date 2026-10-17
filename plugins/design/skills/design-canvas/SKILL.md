@@ -35,9 +35,9 @@ so moving a frame moves what is in it. Children paint in order: later ones on to
 | `page` | a sheet; its `fill` is the canvas colour | `name` |
 | `frame` | artboards, cards, buttons, rows: a box that clips and can lay out children | `w h fill radius stroke shadow layout gap padding justify items clip` |
 | `group` | nodes moved together; paints nothing | children at offsets from the group |
-| `rect`, `ellipse` | shapes, avatars, dividers, icons | `w h fill stroke stroke_width radius` |
-| `line` | lines and arrows | `points: [[x,y],[x,y]]` relative to `x/y`, `stroke`, `stroke_width`, `arrow_end`, `arrow_start` |
-| `text` | words | `text font font_size font_weight color align line_height letter_spacing italic underline` |
+| `rect`, `ellipse` | shapes, avatars, dividers, icons; an ellipse with `arc` is a pie, donut or gauge | `w h fill stroke stroke_width radius`, `arc: {start, sweep, inner}` |
+| `line` | lines and arrows; with `closed` (and `fill`) a shape of your own | `points: [[x,y],…]` relative to `x/y`, `stroke`, `stroke_width`, `arrow_end`, `arrow_start`, `closed`, `smooth`, `fill` |
+| `text` | words | `text font font_size font_weight color align line_height letter_spacing italic underline text_case` |
 | `sticky` | a note card | `text`, `fill` (paper), `w h` |
 | `path` | a freehand stroke | `points`, `stroke`, `stroke_width` |
 | `image` | a picture | `src` from `design.asset.add`, `w h`, `fit: cover|contain|stretch`, `radius` |
@@ -51,6 +51,23 @@ Any node can also take `rotation` (degrees clockwise about its centre), `opacity
 images take `radii: [tl, tr, br, bl]` for different corners; any stroke takes `dash` (`[6, 4]`
 dashed, `[0, 4]` dotted). A `rect`, `ellipse` or `polygon` with `text` shows it centred inside: a
 labelled box for a diagram.
+
+More you can reach for:
+
+- **Arcs**: `"arc": {"start": 0, "sweep": 270, "inner": 0.62}` on an ellipse — `start` and
+  `sweep` in degrees clockwise from the top, `inner` the hole as a fraction of the radius. A
+  progress ring is two of them: a full ring in a muted colour, the progress on top.
+- **Your own shapes**: a `line` with three or more `points`, `"closed": true` and a `fill`;
+  `"smooth": true` curves through the points (blobs, waves, chart areas).
+- **Blend**: `"blend": "multiply"` (also `screen`, `overlay`, `darken`, `lighten`, `color_dodge`,
+  `color_burn`, `hard_light`, `soft_light`, `difference`, `exclusion`, `hue`, `saturation`,
+  `color`, `luminosity`) mixes a node with what is under it in the same parent.
+- **Inner shadow**: `"shadow": {"x": 0, "y": 2, "blur": 6, "color": "#00000040", "inset": true}`
+  — pressed buttons, wells, inputs.
+- **Text case**: `"text_case": "upper"` (or `lower`, `title`) draws the letters so while the words
+  stay as written: eyebrow labels, overlines.
+- **Flip**: `"flip_x": true` / `"flip_y": true` mirrors a polygon, image or icon.
+- `line_height` is a multiple of the font size: `1.0` for tight display type, `1.4`–`1.5` for body.
 
 **Connectors.** A `line` with `from` and `to` (node ids) runs from one node's edge to the other's
 and follows them when they move — `points` are not needed. `route` is `straight` (default),

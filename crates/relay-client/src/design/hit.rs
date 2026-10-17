@@ -23,25 +23,21 @@ pub fn on_shape(scene: &Scene, placed: &Placed, n: &Node, rect: &Rect, x: f64, y
             pts.windows(2).any(|w| segment_distance(x, y, w[0], w[1]) <= reach)
         }
         NodeKind::Page | NodeKind::Group => false,
-        NodeKind::Ellipse => {
-            let (rx, ry) = (rect.w / 2.0, rect.h / 2.0);
-            if rx <= 0.0 || ry <= 0.0 {
-                return false;
-            }
-            let (dx, dy) = ((x - rect.cx()) / (rx + slop), (y - rect.cy()) / (ry + slop));
-            dx * dx + dy * dy <= 1.0
-        }
+        // Only what is drawn: an arc's slice, not its missing part or its hole.
+        NodeKind::Ellipse => shapes::on_ellipse(n, rect, x, y, slop),
         NodeKind::Line | NodeKind::Path => {
             let Some(points) = n.points.as_deref() else {
                 return false;
             };
             let reach = n.stroke_width.unwrap_or(2.0) / 2.0 + slop;
-            let at = |p: &[f64; 2]| (rect.x + p[0], rect.y + p[1]);
             if points.len() == 1 {
-                let (px, py) = at(&points[0]);
+                let (px, py) = (rect.x + points[0][0], rect.y + points[0][1]);
                 return ((x - px).powi(2) + (y - py).powi(2)).sqrt() <= reach;
             }
-            points.windows(2).any(|w| segment_distance(x, y, at(&w[0]), at(&w[1])) <= reach)
+            let outline = shapes::stroke_outline(n, rect);
+            // A filled or closed one is a shape: its inside counts.
+            let solid = points.len() > 2 && (n.closed == Some(true) || n.fill.is_some() || n.gradient.is_some());
+            (solid && shapes::inside(&outline, x, y)) || outline.windows(2).any(|w| segment_distance(x, y, w[0], w[1]) <= reach)
         }
         _ => rect.inflate(slop.min(rect.w.min(rect.h) / 4.0).max(0.0)).contains(x, y),
     }
@@ -111,6 +107,22 @@ mod tests {
     use crate::design::layout::{place, tests::Mono};
     use crate::design::scene::tests::{node, sample};
     use relay_bus::design::NodeKind as K;
+
+    #[test]
+    fn closed_paths_hit_inside_and_arcs_only_where_drawn() {
+        let mut shape = node("v", Some("p1"), K::Line, [0.0, 0.0, 100.0, 100.0]);
+        shape.points = Some(vec![[0.0, 0.0], [100.0, 0.0], [50.0, 100.0]]);
+        let r = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let s = Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), shape.clone()]);
+        let p = crate::design::layout::place(&s, "p1", &crate::design::layout::tests::Mono);
+        assert!(!on_shape(&s, &p, &shape, &r, 50.0, 30.0, 1.0), "an open outline is hit on its stroke");
+        shape.closed = Some(true);
+        assert!(on_shape(&s, &p, &shape, &r, 50.0, 30.0, 1.0));
+        let mut ring = node("e", Some("p1"), K::Ellipse, [0.0, 0.0, 100.0, 100.0]);
+        ring.arc = Some(relay_bus::design::Arc { start: 0.0, sweep: 360.0, inner: 0.5 });
+        assert!(!on_shape(&s, &p, &ring, &r, 50.0, 50.0, 0.0), "the hole is not the ring");
+        assert!(on_shape(&s, &p, &ring, &r, 50.0, 10.0, 0.0));
+    }
 
     #[test]
     fn the_chain_runs_from_frame_to_leaf() {

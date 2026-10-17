@@ -78,7 +78,7 @@ pub(super) fn choose(b: &Rc<Board>, name: &str, target: Option<&str>) {
         return;
     }
     let parent = b.paste_target();
-    let origin = b.placed().rect(&parent).unwrap_or_default();
+    let origin = b.origin_of(&parent);
     let (w, h) = b.size.get();
     let (cx, cy) = b.to_page(w / 2.0, h / 2.0);
     let mut n = Node::new(NodeKind::Icon);

@@ -14,6 +14,10 @@ use std::rc::Rc;
 impl Board {
     pub(super) fn ask_agent(&self, anchor: &gtk::Widget) {
         let b = self.me();
+        // The selection toolbar is rebuilt as the design changes, which would take the
+        // composer with it: it opens from the top bar's Ask instead.
+        let in_bar = self.context.borrow().as_ref().is_some_and(|bar| anchor == bar || anchor.is_ancestor(bar));
+        let anchor = if in_bar { self.ask.upcast_ref::<gtk::Widget>() } else { anchor };
         self.end_edit(true);
         match self.doc.session() {
             Some(session) => composer(&b, anchor, session),

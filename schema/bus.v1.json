@@ -25040,6 +25040,67 @@
             }
           ],
           "description": "How a line runs between its ends (default `straight`)."
+        },
+        "closed": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Joins a line's or path's last point back to its first: a shape of your own, which\n`fill` paints inside."
+        },
+        "smooth": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Runs a line through its `points` in a smooth curve instead of straight segments."
+        },
+        "flip_x": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Mirrors a polygon, image or icon left to right (a line or path is flipped by its\n`points`, a box by its corners)."
+        },
+        "flip_y": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Mirrors a polygon, image or icon top to bottom."
+        },
+        "arc": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignArc"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Draws only part of an ellipse: a pie slice, a donut or an arc of a ring."
+        },
+        "blend": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignBlend"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the node mixes with what is under it in its parent (default `normal`)."
+        },
+        "text_case": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignTextCase"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Draws a text's or label's letters upper, lower or title case."
         }
       },
       "required": [
@@ -25131,6 +25192,10 @@
         "color": {
           "type": "string",
           "description": "`#RRGGBB` or `#RRGGBBAA`."
+        },
+        "inset": {
+          "type": "boolean",
+          "description": "An inner shadow, cast inside the edge instead of under the node."
         }
       },
       "required": [
@@ -25316,6 +25381,70 @@
         }
       ],
       "description": "How a connector runs between its ends."
+    },
+    "DesignArc": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "number",
+          "format": "double",
+          "description": "Where it starts, in degrees clockwise from the top (default 0).",
+          "default": 0.0
+        },
+        "sweep": {
+          "type": "number",
+          "format": "double",
+          "description": "How far round it goes, in degrees clockwise (default 360, the whole ellipse).",
+          "default": 360.0
+        },
+        "inner": {
+          "type": "number",
+          "format": "double",
+          "description": "The hole in the middle as a fraction of the radius: 0 (the default) a pie, 0.6 a donut.",
+          "default": 0.0
+        }
+      },
+      "description": "Part of an ellipse: a pie, a donut or a ring segment."
+    },
+    "DesignBlend": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "multiply",
+        "screen",
+        "overlay",
+        "darken",
+        "lighten",
+        "color_dodge",
+        "color_burn",
+        "hard_light",
+        "soft_light",
+        "difference",
+        "exclusion",
+        "hue",
+        "saturation",
+        "color",
+        "luminosity"
+      ],
+      "description": "How a node mixes with what is under it in the same parent."
+    },
+    "DesignTextCase": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "upper",
+            "lower"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "title",
+          "description": "The first letter of each word upper case."
+        }
+      ],
+      "description": "How a text's letters are cased when drawn; the stored words keep theirs."
     },
     "DesignCreateIn": {
       "type": "object",

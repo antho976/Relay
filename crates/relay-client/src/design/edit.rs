@@ -1,11 +1,12 @@
 //! The `design.apply` edits behind the canvas's commands: duplicate, paste, group and frame
-//! the selection, ungroup, align and distribute, reorder, nudge, and put a node in another
-//! parent without it jumping. Each returns the edits; the canvas runs them on its scene and
+//! the selection, ungroup, delete, align and distribute, reorder, nudge, and put a node in
+//! another parent without it jumping. Each returns the edits; the canvas runs them on its scene and
 //! sends them as one list, so one undo reverts the whole command.
 
 use super::geom::Rect;
 use super::layout::Placed;
 use super::scene::Scene;
+use super::shapes;
 use relay_bus::design::{Layout, Node, NodeKind, NodeOp};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -48,8 +49,96 @@ pub fn lays_out(scene: &Scene, parent: &str) -> bool {
     scene.node(parent).is_some_and(|p| p.layout_mode() != Layout::None)
 }
 
+/// Fresh ids for every node of `nodes`, keyed by the old.
+fn fresh_ids(scene: &mut Scene, nodes: &[Node]) -> HashMap<String, String> {
+    nodes.iter().map(|n| (n.id.clone(), scene.fresh_id(n.kind))).collect()
+}
+
+/// The page point a node's `x`/`y` put it at, read from the stored tree (no layout): `nodes`
+/// first, then the scene.
+fn stored_point(scene: &Scene, nodes: &HashMap<&str, &Node>, id: &str) -> Option<(f64, f64)> {
+    let (mut x, mut y, mut at) = (0.0, 0.0, id);
+    for _ in 0..=scene.len() + nodes.len() {
+        let n = nodes.get(at).copied().or_else(|| scene.node(at))?;
+        (x, y) = (x + n.x, y + n.y);
+        match n.parent.as_deref() {
+            Some(parent) => at = parent,
+            None => return Some((x, y)),
+        }
+    }
+    None
+}
+
+/// A connector's two ends relative to its own `x`/`y`, from the stored boxes of the nodes it is
+/// attached to (their centres), for a line that has no points of its own to fall back on.
+fn stored_ends(scene: &Scene, nodes: &HashMap<&str, &Node>, line: &Node) -> Vec<[f64; 2]> {
+    let centre = |end: &Option<String>| {
+        let id = end.as_deref()?;
+        let n = nodes.get(id).copied().or_else(|| scene.node(id))?;
+        let (x, y) = stored_point(scene, nodes, id)?;
+        Some((x + n.w / 2.0, y + n.h / 2.0))
+    };
+    match (stored_point(scene, nodes, &line.id), centre(&line.from), centre(&line.to)) {
+        (Some((ox, oy)), Some(a), Some(b)) => vec![[(a.0 - ox).round(), (a.1 - oy).round()], [(b.0 - ox).round(), (b.1 - oy).round()]],
+        _ => vec![[0.0, 0.0], [line.w, line.h]],
+    }
+}
+
+/// A copied connector's ends: one attached to a node copied with it follows the copy; one
+/// attached to a node left behind lets go, the line keeping where it was last drawn.
+fn rewire(scene: &Scene, nodes: &HashMap<&str, &Node>, fresh: &HashMap<String, String>, copy: &mut Node) {
+    let original = nodes.get(copy.id.as_str()).copied();
+    let mut freed = false;
+    for end in [&mut copy.from, &mut copy.to] {
+        if let Some(id) = end.take() {
+            match fresh.get(&id) {
+                Some(new) => *end = Some(new.clone()),
+                None => freed = true,
+            }
+        }
+    }
+    if freed && copy.points.as_ref().is_none_or(|p| p.len() < 2) {
+        copy.points = Some(original.map_or_else(|| vec![[0.0, 0.0], [copy.w, copy.h]], |o| stored_ends(scene, nodes, o)));
+    }
+}
+
+/// Copies of `nodes` (whole subtrees, parents first) under the ids in `fresh`. `place` says
+/// where each root goes: its parent, index and shift. Returns the edits and the new roots.
+fn copies(
+    scene: &Scene,
+    nodes: &[Node],
+    fresh: &HashMap<String, String>,
+    mut place: impl FnMut(&Node) -> (String, Option<u32>, f64, f64),
+) -> (Vec<NodeOp>, Vec<String>) {
+    let by_id: HashMap<&str, &Node> = nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let mut ops = Vec::new();
+    let mut roots = Vec::new();
+    for n in nodes {
+        if n.kind == NodeKind::Page {
+            continue;
+        }
+        let mut copy = n.clone();
+        rewire(scene, &by_id, fresh, &mut copy);
+        copy.id = fresh[&n.id].clone();
+        let root = n.parent.as_deref().is_none_or(|p| !by_id.contains_key(p));
+        if root {
+            let (parent, index, dx, dy) = place(n);
+            copy.parent = Some(parent);
+            copy.x = (copy.x + dx).round();
+            copy.y = (copy.y + dy).round();
+            roots.push(copy.id.clone());
+            ops.push(NodeOp::Add { node: copy, index });
+        } else {
+            copy.parent = n.parent.as_ref().map(|p| fresh[p].clone());
+            ops.push(NodeOp::Add { node: copy, index: None });
+        }
+    }
+    (ops, roots)
+}
+
 /// Copies of `nodes` (whole subtrees, as `copy` gathered them) under fresh ids: roots go into
-/// `parent` at `index`, moved by `(dx, dy)`. Returns the edits and the new roots.
+/// `parent` at `index`, moved by `(dx, dy)`. A connector between two copied nodes joins the
+/// copies; an end attached to a node not copied lets go. Returns the edits and the new roots.
 pub fn clone_into(
     scene: &mut Scene,
     nodes: &[Node],
@@ -58,34 +147,13 @@ pub fn clone_into(
     dx: f64,
     dy: f64,
 ) -> (Vec<NodeOp>, Vec<String>) {
-    let ids: HashSet<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
-    let mut fresh: HashMap<String, String> = HashMap::new();
-    for n in nodes {
-        fresh.insert(n.id.clone(), scene.fresh_id(n.kind));
-    }
-    let mut ops = Vec::new();
-    let mut roots = Vec::new();
+    let fresh = fresh_ids(scene, nodes);
     let mut at = index;
-    for n in nodes {
-        if n.kind == NodeKind::Page {
-            continue;
-        }
-        let mut copy = n.clone();
-        copy.id = fresh[&n.id].clone();
-        let root = n.parent.as_deref().is_none_or(|p| !ids.contains(p));
-        if root {
-            copy.parent = Some(parent.to_string());
-            copy.x = (copy.x + dx).round();
-            copy.y = (copy.y + dy).round();
-            roots.push(copy.id.clone());
-            ops.push(NodeOp::Add { node: copy, index: at });
-            at = at.map(|i| i + 1);
-        } else {
-            copy.parent = n.parent.as_ref().map(|p| fresh[p].clone());
-            ops.push(NodeOp::Add { node: copy, index: None });
-        }
-    }
-    (ops, roots)
+    copies(scene, nodes, &fresh, |_| {
+        let here = at;
+        at = at.map(|i| i + 1);
+        (parent.to_string(), here, dx, dy)
+    })
 }
 
 /// Every node of the selection's subtrees, parents first: what Copy puts on the clipboard.
@@ -97,42 +165,49 @@ pub fn gather(scene: &Scene, ids: &[String]) -> Vec<Node> {
         .collect()
 }
 
-/// Duplicate the selection in place, each copy just above its original and `offset` away.
+/// Duplicate the selection in place, each copy just above its original and `offset` away. One
+/// set of fresh ids covers the whole selection, so a connector between two duplicated nodes
+/// joins their copies.
 pub fn duplicate(scene: &mut Scene, ids: &[String], offset: f64) -> (Vec<NodeOp>, Vec<String>) {
-    let mut ops = Vec::new();
-    let mut roots = Vec::new();
-    for id in outermost(scene, ids) {
-        let Some(parent) = scene.parent(&id).map(str::to_string) else {
-            continue;
-        };
-        let nodes: Vec<Node> = scene.subtree(&id).iter().filter_map(|n| scene.node(n).cloned()).collect();
-        let index = scene.index(&id).map(|i| i as u32 + 1);
+    let roots: Vec<String> = outermost(scene, ids).into_iter().filter(|id| scene.parent(id).is_some()).collect();
+    let nodes: Vec<Node> = roots.iter().flat_map(|id| scene.subtree(id)).filter_map(|n| scene.node(&n).cloned()).collect();
+    let fresh = fresh_ids(scene, &nodes);
+    // Copies already put in a parent, all below the next original there (roots run in paint
+    // order): each later original sits that much higher.
+    let mut added: HashMap<String, u32> = HashMap::new();
+    copies(scene, &nodes, &fresh, |n| {
+        let parent = n.parent.clone().unwrap_or_default();
+        let before = added.entry(parent.clone()).or_default();
+        let index = scene.index(&n.id).map(|i| i as u32 + 1 + *before);
+        *before += 1;
         let shift = if lays_out(scene, &parent) { 0.0 } else { offset };
-        let (mut more, mut new_roots) = clone_into(scene, &nodes, &parent, index, shift, shift);
-        ops.append(&mut more);
-        roots.append(&mut new_roots);
-    }
-    (ops, roots)
+        (parent, index, shift, shift)
+    })
 }
 
 /// Group (or frame) the selection: a new group in the selection's common parent, at the top
 /// selected node's place, holding the nodes where they were. `None` when they do not share
-/// a parent or the parent lays out its children.
+/// a parent, or for a group when the parent lays out its children (a group has no size of
+/// its own to be laid out by); a frame there is laid out like any child.
 pub fn group(scene: &mut Scene, placed: &Placed, ids: &[String], kind: NodeKind) -> Option<(Vec<NodeOp>, String)> {
     let ids = outermost(scene, ids);
     let parent = scene.parent(ids.first()?)?.to_string();
     if ids.iter().any(|id| scene.parent(id) != Some(parent.as_str())) {
         return None;
     }
+    let laid = lays_out(scene, &parent);
+    if laid && kind != NodeKind::Frame {
+        return None;
+    }
     let bounds = Rect::bounds(ids.iter().filter_map(|id| placed.rects.get(id)))?;
-    let origin = placed.rect(&parent).unwrap_or_default();
+    let origin = placed.origin(&parent);
     let top = ids.iter().filter_map(|id| scene.index(id)).max()? as u32;
     let gid = scene.fresh_id(kind);
     let mut g = Node::new(kind);
     g.id = gid.clone();
     g.parent = Some(parent.clone());
-    g.x = (bounds.x - origin.x).round();
-    g.y = (bounds.y - origin.y).round();
+    g.x = (bounds.x - origin.0).round();
+    g.y = (bounds.y - origin.1).round();
     if kind == NodeKind::Frame {
         g.w = bounds.w.round();
         g.h = bounds.h.round();
@@ -141,11 +216,14 @@ pub fn group(scene: &mut Scene, placed: &Placed, ids: &[String], kind: NodeKind)
         g.clip = Some(false);
     }
     let mut ops = vec![NodeOp::Add { node: g.clone(), index: Some(top + 1) }];
-    let laid = lays_out(scene, &parent);
     for id in &ids {
-        let r = placed.rect(id).unwrap_or_default();
         ops.push(NodeOp::Move { id: id.clone(), parent: Some(gid.clone()), index: None });
-        let (x, y) = if laid { (r.x - origin.x, r.y - origin.y) } else { (scene.node(id)?.x, scene.node(id)?.y) };
+        let (x, y) = if laid {
+            let (x, y) = placed.origin(id);
+            (x - origin.0, y - origin.1)
+        } else {
+            (scene.node(id)?.x, scene.node(id)?.y)
+        };
         ops.push(NodeOp::Update { id: id.clone(), set: set(&[("x", px(x - g.x)), ("y", px(y - g.y))]) });
     }
     Some((ops, gid))
@@ -158,27 +236,116 @@ pub fn ungroup(scene: &Scene, placed: &Placed, id: &str) -> Option<(Vec<NodeOp>,
         return None;
     }
     let parent = node.parent.clone()?;
-    let origin = placed.rect(&parent).unwrap_or_default();
+    // A child of a group or a free frame sits at the container's `x`/`y` plus its own, hidden or
+    // not; one a frame lays out sits where the layout put it.
+    let laid = lays_out(scene, id);
+    let origin = placed.origin(&parent);
     let start = scene.index(id)? as u32;
     let mut ops = Vec::new();
     let kids = scene.children(id).to_vec();
     for (index, child) in (start..).zip(&kids) {
-        let r = placed.rect(child).unwrap_or_default();
+        let c = scene.node(child)?;
+        let (x, y) = if laid {
+            let (x, y) = placed.origin(child);
+            (x - origin.0, y - origin.1)
+        } else {
+            (node.x + c.x, node.y + c.y)
+        };
         ops.push(NodeOp::Move { id: child.clone(), parent: Some(parent.clone()), index: Some(index) });
-        ops.push(NodeOp::Update { id: child.clone(), set: set(&[("x", px(r.x - origin.x)), ("y", px(r.y - origin.y))]) });
+        ops.push(NodeOp::Update { id: child.clone(), set: set(&[("x", px(x)), ("y", px(y))]) });
     }
     ops.push(NodeOp::Delete { id: id.to_string() });
     Some((ops, kids))
 }
 
-/// Put `id` into `parent` at `index` so it stays where it shows (`at` is its page position).
+/// Ungroup every group and frame among `ids` in one list: one inside another selected one goes
+/// with it, and each is ungrouped against the tree the ones before it left. Returns the edits
+/// and the children set free.
+pub fn ungroup_all(scene: &Scene, placed: &Placed, ids: &[String]) -> (Vec<NodeOp>, Vec<String>) {
+    let groups: Vec<String> = ids
+        .iter()
+        .filter(|id| scene.node(id).is_some_and(|n| matches!(n.kind, NodeKind::Group | NodeKind::Frame)))
+        .cloned()
+        .collect();
+    let mut trial = scene.clone();
+    let mut ops = Vec::new();
+    let mut kids = Vec::new();
+    for id in outermost(scene, &groups) {
+        let Some((more, freed)) = ungroup(&trial, placed, &id) else {
+            continue;
+        };
+        if trial.apply_all(&more).is_ok() {
+            ops.extend(more);
+            kids.extend(freed);
+        }
+    }
+    (ops, kids)
+}
+
+/// Put `id` into `parent` at `index` so it stays where it shows (`at` is where its placed box
+/// lands on the page).
 pub fn reparent(scene: &Scene, placed: &Placed, id: &str, parent: &str, index: Option<u32>, at: (f64, f64)) -> Vec<NodeOp> {
-    let origin = placed.rect(parent).unwrap_or_default();
+    let origin = placed.origin(parent);
+    // A group's `x`/`y` is its own point, not its box (its children's bounds).
+    let (ox, oy) = placed.origin(id);
+    let (bx, by) = placed.rect(id).map_or((ox, oy), |r| (r.x, r.y));
+    let (x, y) = (at.0 + ox - bx, at.1 + oy - by);
     let mut ops = vec![NodeOp::Move { id: id.to_string(), parent: Some(parent.to_string()), index }];
     if !lays_out(scene, parent) {
-        ops.push(NodeOp::Update { id: id.to_string(), set: set(&[("x", px(at.0 - origin.x)), ("y", px(at.1 - origin.y))]) });
+        ops.push(NodeOp::Update { id: id.to_string(), set: set(&[("x", px(x - origin.0)), ("y", px(y - origin.1))]) });
     }
     ops
+}
+
+/// Delete the selection. A connector attached to a node going lets go of that end first, where
+/// it is drawn now (its points become its own), so no line names a node that is gone; the
+/// list's undo attaches it again.
+pub fn delete(scene: &Scene, placed: &Placed, ids: &[String]) -> Vec<NodeOp> {
+    let roots = outermost(scene, ids);
+    let doomed: HashSet<String> = roots.iter().flat_map(|id| scene.subtree(id)).collect();
+    let mut ops = Vec::new();
+    for page in scene.pages() {
+        for id in scene.subtree(page) {
+            let Some(n) = scene.node(&id).filter(|_| !doomed.contains(&id)) else {
+                continue;
+            };
+            let gone = |end: &Option<String>| end.as_ref().is_some_and(|e| doomed.contains(e));
+            if gone(&n.from) || gone(&n.to) {
+                ops.push(NodeOp::Update { id: id.clone(), set: let_go(scene, placed, n, gone(&n.from), gone(&n.to)) });
+            }
+        }
+    }
+    ops.extend(roots.into_iter().map(|id| NodeOp::Delete { id }));
+    ops
+}
+
+/// The update that frees a connector's `from` and/or `to` where the line is drawn now.
+fn let_go(scene: &Scene, placed: &Placed, n: &Node, from: bool, to: bool) -> Map<String, Value> {
+    let mut s = Map::new();
+    for (end, freed) in [("from", from), ("to", to)] {
+        if freed {
+            s.insert(end.into(), Value::Null);
+        }
+    }
+    let drawn = placed.rect(&n.id).map(|_| shapes::line_points(scene, placed, n).0);
+    match drawn.as_deref() {
+        Some([a, .., b]) => {
+            let (a, b) = (*a, *b);
+            let (x0, y0) = (a.0.min(b.0), a.1.min(b.1));
+            let origin = n.parent.as_deref().map_or((0.0, 0.0), |p| placed.origin(p));
+            s.insert("x".into(), px(x0 - origin.0));
+            s.insert("y".into(), px(y0 - origin.1));
+            s.insert("w".into(), px((b.0 - a.0).abs()));
+            s.insert("h".into(), px((b.1 - a.1).abs()));
+            s.insert("points".into(), json!([[(a.0 - x0).round(), (a.1 - y0).round()], [(b.0 - x0).round(), (b.1 - y0).round()]]));
+        }
+        // Not on the page shown: keep its own points, or take its ends' stored centres.
+        _ if n.points.as_ref().is_some_and(|p| p.len() >= 2) => {}
+        _ => {
+            s.insert("points".into(), json!(stored_ends(scene, &HashMap::new(), n)));
+        }
+    }
+    s
 }
 
 /// Move the selection by `(dx, dy)` page pixels. Nodes a parent lays out stay put.
@@ -275,25 +442,43 @@ pub fn align(scene: &Scene, placed: &Placed, ids: &[String], how: Align) -> Vec<
 }
 
 /// Raise (`up`) or lower each selected node one step, or (`all`) to the top or bottom of its
-/// siblings.
+/// siblings. Selected siblings keep their order among themselves, and one step never takes a
+/// node past another selected one: a node already at the top holds the one below it.
 pub fn restack(scene: &Scene, ids: &[String], up: bool, all: bool) -> Vec<NodeOp> {
-    let mut ids = outermost(scene, ids);
-    if up {
-        ids.reverse();
+    let ids = outermost(scene, ids);
+    let chosen: HashSet<&str> = ids.iter().map(String::as_str).collect();
+    let mut parents: Vec<&str> = Vec::new();
+    for id in &ids {
+        if let Some(p) = scene.parent(id).filter(|p| !parents.contains(p)) {
+            parents.push(p);
+        }
     }
     let mut ops = Vec::new();
-    for id in ids {
-        let (Some(i), Some(parent)) = (scene.index(&id), scene.parent(&id)) else {
-            continue;
-        };
-        let last = scene.children(parent).len().saturating_sub(1);
-        let to = match (up, all) {
-            (true, true) => last,
-            (true, false) => (i + 1).min(last),
-            (false, true) => 0,
-            (false, false) => i.saturating_sub(1),
-        };
-        if to != i {
+    for parent in parents {
+        let mut order: Vec<String> = scene.children(parent).to_vec();
+        let last = order.len().saturating_sub(1);
+        // Nearest the way they go first for a step, so the one ahead has moved (or holds);
+        // farthest first to the top or bottom, so each lands beyond the ones before it.
+        let mut moving: Vec<String> = order.iter().filter(|c| chosen.contains(c.as_str())).cloned().collect();
+        if up != all {
+            moving.reverse();
+        }
+        for id in moving {
+            let Some(i) = order.iter().position(|c| *c == id) else {
+                continue;
+            };
+            let to = match (up, all) {
+                (true, true) => last,
+                (false, true) => 0,
+                (true, false) if i < last && !chosen.contains(order[i + 1].as_str()) => i + 1,
+                (false, false) if i > 0 && !chosen.contains(order[i - 1].as_str()) => i - 1,
+                _ => i,
+            };
+            if to == i {
+                continue;
+            }
+            order.remove(i);
+            order.insert(to, id.clone());
             ops.push(NodeOp::Move { id, parent: None, index: Some(to as u32) });
         }
     }
@@ -423,5 +608,176 @@ mod tests {
         assert_eq!((root.x, root.kind), (600.0, K::Frame));
         assert_eq!(s.children(&roots[0]).len(), 2);
         assert_eq!(s.len(), 8);
+    }
+
+    fn ids(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn row(n: usize) -> Scene {
+        let mut nodes = vec![node("p1", None, K::Page, [0.0; 4])];
+        nodes.extend((0..n).map(|i| node(&format!("x{i}"), Some("p1"), K::Rect, [i as f64 * 20.0, 0.0, 10.0, 10.0])));
+        Scene::new(nodes)
+    }
+
+    #[test]
+    fn duplicating_siblings_puts_each_copy_just_above_its_own_original() {
+        let mut s = row(3);
+        let (ops, roots) = duplicate(&mut s, &ids(&["x0", "x2"]), 10.0);
+        run(&mut s, &ops);
+        let kids = s.children("p1");
+        assert_eq!(kids.len(), 5);
+        assert_eq!([&kids[0], &kids[2], &kids[3]], ["x0", "x1", "x2"]);
+        assert_eq!([&kids[1], &kids[4]], [&roots[0], &roots[1]]);
+        assert_eq!(s.node(&roots[1]).unwrap().x, 50.0);
+    }
+
+    fn connected() -> Scene {
+        let mut line = node("ln", Some("p1"), K::Line, [0.0; 4]);
+        line.from = Some("x0".into());
+        line.to = Some("x1".into());
+        let mut s = row(3);
+        s.apply(&NodeOp::Add { node: line, index: None }).unwrap();
+        s
+    }
+
+    #[test]
+    fn a_duplicated_connector_joins_the_copies_or_lets_go() {
+        // Both ends and the line copied together: the copy runs between the copies.
+        let mut s = connected();
+        let (ops, roots) = duplicate(&mut s, &ids(&["x0", "x1", "ln"]), 10.0);
+        run(&mut s, &ops);
+        let copy = s.node(&roots[2]).unwrap();
+        assert_eq!((copy.from.as_ref(), copy.to.as_ref()), (Some(&roots[0]), Some(&roots[1])));
+        // Only the line and one end: the other end lets go where the line was drawn.
+        let mut s = connected();
+        let (ops, roots) = duplicate(&mut s, &ids(&["x0", "ln"]), 0.0);
+        run(&mut s, &ops);
+        let copy = s.node(&roots[1]).unwrap();
+        assert_eq!((copy.from.as_ref(), copy.to.as_deref()), (Some(&roots[0]), None));
+        assert_eq!(copy.points, Some(vec![[5.0, 5.0], [25.0, 5.0]]), "its ends' last centres");
+        // Pasted alone: both ends let go; its own points are kept.
+        let mut s = connected();
+        s.node_mut("ln").unwrap().points = Some(vec![[1.0, 2.0], [3.0, 4.0]]);
+        let clip = gather(&s, &ids(&["ln"]));
+        let (ops, roots) = clone_into(&mut s, &clip, "p1", None, 0.0, 0.0);
+        run(&mut s, &ops);
+        let copy = s.node(&roots[0]).unwrap();
+        assert_eq!((copy.from.as_deref(), copy.to.as_deref(), copy.points.clone()), (None, None, Some(vec![[1.0, 2.0], [3.0, 4.0]])));
+    }
+
+    #[test]
+    fn deleting_a_shape_lets_its_connectors_go_where_they_are_drawn() {
+        let mut s = connected();
+        let placed = place(&s, "p1", &Mono);
+        let drawn = shapes::line_points(&s, &placed, s.node("ln").unwrap()).0;
+        let ops = delete(&s, &placed, &ids(&["x1"]));
+        assert!(matches!(&ops[..], [NodeOp::Update { .. }, NodeOp::Delete { id }] if id == "x1"), "{ops:?}");
+        run(&mut s, &ops);
+        let line = s.node("ln").unwrap();
+        assert_eq!((line.from.as_deref(), line.to.as_deref()), (Some("x0"), None));
+        let placed = place(&s, "p1", &Mono);
+        assert_eq!(shapes::line_points(&s, &placed, line).0, drawn, "the line stays where it was");
+        // A line going with the shape is just deleted.
+        let s = connected();
+        let placed = place(&s, "p1", &Mono);
+        assert_eq!(delete(&s, &placed, &ids(&["x1", "ln"])).len(), 2);
+    }
+
+    #[test]
+    fn restacking_several_keeps_their_order() {
+        let order = |s: &Scene| s.children("p1").to_vec();
+        let mut s = row(4);
+        let ops = restack(&s, &ids(&["x0", "x1"]), true, true);
+        run(&mut s, &ops);
+        assert_eq!(order(&s), ["x2", "x3", "x0", "x1"]);
+        let mut s = row(4);
+        let ops = restack(&s, &ids(&["x2", "x3"]), false, true);
+        run(&mut s, &ops);
+        assert_eq!(order(&s), ["x2", "x3", "x0", "x1"]);
+        // One step: a node at the top holds the selected one below it.
+        let mut s = row(4);
+        assert!(restack(&s, &ids(&["x2", "x3"]), true, false).is_empty());
+        let ops = restack(&s, &ids(&["x1", "x3"]), true, false);
+        run(&mut s, &ops);
+        assert_eq!(order(&s), ["x0", "x2", "x1", "x3"]);
+        let ops = restack(&s, &ids(&["x0", "x2"]), false, false);
+        run(&mut s, &ops);
+        assert_eq!(order(&s), ["x0", "x2", "x1", "x3"]);
+        let ops = restack(&s, &ids(&["x2", "x3"]), false, false);
+        run(&mut s, &ops);
+        assert_eq!(order(&s), ["x2", "x0", "x3", "x1"]);
+    }
+
+    #[test]
+    fn a_group_is_not_made_in_a_laid_out_frame_but_a_frame_is() {
+        let mut col = node("col", Some("p1"), K::Frame, [0.0, 0.0, 200.0, 200.0]);
+        col.layout = Some(Layout::Column);
+        let mut s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            col,
+            node("r1", Some("col"), K::Rect, [0.0, 0.0, 10.0, 10.0]),
+            node("r2", Some("col"), K::Rect, [0.0, 0.0, 10.0, 10.0]),
+        ]);
+        let placed = place(&s, "p1", &Mono);
+        assert!(group(&mut s, &placed, &ids(&["r1", "r2"]), K::Group).is_none());
+        let (ops, fid) = group(&mut s, &placed, &ids(&["r1", "r2"]), K::Frame).unwrap();
+        run(&mut s, &ops);
+        assert_eq!(s.children(&fid), ["r1", "r2"]);
+        assert_eq!(s.node("r2").unwrap().y, 10.0, "where the column had put it");
+    }
+
+    /// A page with group `g1` at (100, 100) holding group `g2` at (10, 10) (its rect at (5, 5))
+    /// and a rect at (50, 50); and a lone group `g3`.
+    fn nested() -> Scene {
+        Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            node("g1", Some("p1"), K::Group, [100.0, 100.0, 0.0, 0.0]),
+            node("g2", Some("g1"), K::Group, [10.0, 10.0, 0.0, 0.0]),
+            node("r", Some("g2"), K::Rect, [5.0, 5.0, 10.0, 10.0]),
+            node("r2", Some("g1"), K::Rect, [50.0, 50.0, 10.0, 10.0]),
+            node("g3", Some("p1"), K::Group, [300.0, 0.0, 0.0, 0.0]),
+            node("r3", Some("g3"), K::Rect, [0.0, 0.0, 10.0, 10.0]),
+        ])
+    }
+
+    #[test]
+    fn ungrouping_and_reparenting_count_from_a_groups_own_point() {
+        let mut s = nested();
+        let before = place(&s, "p1", &Mono);
+        let (ops, _) = ungroup(&s, &before, "g1").unwrap();
+        run(&mut s, &ops);
+        let after = place(&s, "p1", &Mono);
+        for id in ["r", "r2", "g2"] {
+            assert_eq!(after.rect(id), before.rect(id), "{id} stays put");
+        }
+        // Into a group whose children's bounds are not its own point.
+        let mut s = nested();
+        let placed = place(&s, "p1", &Mono);
+        let ops = reparent(&s, &placed, "r3", "g2", None, (200.0, 200.0));
+        run(&mut s, &ops);
+        assert_eq!(place(&s, "p1", &Mono).rect("r3").map(|r| (r.x, r.y)), Some((200.0, 200.0)));
+        // A group moved into another keeps its children where they were.
+        let mut s = nested();
+        let placed = place(&s, "p1", &Mono);
+        let at = placed.rect("g2").map(|r| (r.x, r.y)).unwrap();
+        let ops = reparent(&s, &placed, "g2", "g3", None, at);
+        run(&mut s, &ops);
+        assert_eq!(place(&s, "p1", &Mono).rect("r"), placed.rect("r"));
+    }
+
+    #[test]
+    fn ungroup_all_takes_several_groups_at_once() {
+        let mut s = nested();
+        let before = place(&s, "p1", &Mono);
+        let (ops, kids) = ungroup_all(&s, &before, &ids(&["g2", "g3", "g1", "r"]));
+        run(&mut s, &ops);
+        // g2 went with g1, which was selected too; g3 and g1 are gone.
+        assert_eq!(kids, ["g2", "r2", "r3"]);
+        assert_eq!(s.children("p1"), ["g2", "r2", "r3"]);
+        let after = place(&s, "p1", &Mono);
+        for id in ["r", "r2", "r3"] {
+            assert_eq!(after.rect(id), before.rect(id), "{id} stays put");
+        }
     }
 }

@@ -29,7 +29,7 @@ pub struct Edit {
 impl Board {
     /// A new text at `at` (page coordinates) in `parent`, typed into at once.
     pub(super) fn create_text(self: &Rc<Self>, at: (f64, f64), parent: String) {
-        let origin = self.placed().rect(&parent).unwrap_or_default();
+        let origin = self.origin_of(&parent);
         let mut n = Node::new(NodeKind::Text);
         n.id = self.doc.scene.borrow_mut().fresh_id(NodeKind::Text);
         n.parent = Some(parent);
@@ -192,13 +192,21 @@ impl Board {
         scaled.font_size = Some(super::paint::font_size(n) * zoom);
         let desc = font_description(&scaled);
         edit.tag.set_font_desc(Some(&desc));
-        edit.tag.set_line_height(n.line_height.unwrap_or(1.3) as f32);
+        // The tag takes a multiple of the font's own line; the model's is of the font size.
+        let line = n.line_height.unwrap_or(1.3) * super::paint::font_size(n);
+        edit.tag.set_line_height((line / self.painter.natural_line(n)) as f32);
         // GtkTextTag takes no negative tracking (a tight title's -0.6): while typing it reads a
         // touch looser than on the canvas.
         edit.tag.set_letter_spacing((n.letter_spacing.unwrap_or(0.0).max(0.0) * zoom * pango::SCALE as f64) as i32);
         edit.tag.set_foreground_rgba(Some(&rgba(&text_color(&scene, n))));
         edit.tag.set_underline(if n.underline == Some(true) { pango::Underline::Single } else { pango::Underline::None });
         edit.tag.set_strikethrough(n.strike == Some(true));
+        edit.tag.set_text_transform(match n.text_case {
+            Some(relay_bus::design::TextCase::Upper) => pango::TextTransform::Uppercase,
+            Some(relay_bus::design::TextCase::Lower) => pango::TextTransform::Lowercase,
+            Some(relay_bus::design::TextCase::Title) => pango::TextTransform::Capitalize,
+            None => pango::TextTransform::None,
+        });
         let default = if is_shape(n.kind) { TextAlign::Center } else { TextAlign::Left };
         edit.view.set_justification(match n.align.unwrap_or(default) {
             TextAlign::Center => gtk::Justification::Center,

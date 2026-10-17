@@ -25,10 +25,103 @@ pub fn polygon(r: &Rect, sides: u8, star: Option<f64>) -> Vec<(f64, f64)> {
         .collect()
 }
 
-/// The corners of a polygon node in its placed box (a star has 5 points unless it says).
+/// The corners of a polygon node in its placed box (a star has 5 points unless it says),
+/// mirrored as it is flipped.
 pub fn node_polygon(n: &Node, r: &Rect) -> Vec<(f64, f64)> {
     let sides = n.sides.unwrap_or(if n.star.is_some() { 5 } else { 3 });
-    polygon(r, sides, n.star)
+    polygon(r, sides, n.star).into_iter().map(|p| flipped(n, r, p)).collect()
+}
+
+/// `p` mirrored inside `r` as `n` is flipped (`flip_x`, `flip_y`).
+pub fn flipped(n: &Node, r: &Rect, (x, y): (f64, f64)) -> (f64, f64) {
+    let x = if n.flip_x == Some(true) { 2.0 * r.cx() - x } else { x };
+    let y = if n.flip_y == Some(true) { 2.0 * r.cy() - y } else { y };
+    (x, y)
+}
+
+/// An ellipse's arc as start and sweep in degrees (clockwise from the top, the sweep within
+/// ±360) and its hole as a fraction of the radius; `None` for a whole ellipse.
+pub fn arc(n: &Node) -> Option<(f64, f64, f64)> {
+    let a = n.arc.as_ref().filter(|_| n.kind == NodeKind::Ellipse)?;
+    let sweep = a.sweep.clamp(-360.0, 360.0);
+    let inner = a.inner.clamp(0.0, 0.99);
+    (sweep.abs() < 360.0 || inner > 0.0).then_some((a.start, sweep, inner))
+}
+
+/// Whether `(x, y)` is on an ellipse's drawn part: inside its outline, outside its hole and
+/// within its arc's sweep, `slop` page pixels either way.
+pub fn on_ellipse(n: &Node, r: &Rect, x: f64, y: f64, slop: f64) -> bool {
+    let (rx, ry) = (r.w / 2.0, r.h / 2.0);
+    if rx <= 0.0 || ry <= 0.0 {
+        return false;
+    }
+    let (u, v) = ((x - r.cx()) / (rx + slop), (y - r.cy()) / (ry + slop));
+    let d = (u * u + v * v).sqrt();
+    if d > 1.0 {
+        return false;
+    }
+    let Some((start, sweep, inner)) = arc(n) else {
+        return true;
+    };
+    let (hu, hv) = ((x - r.cx()) / (rx * inner - slop).max(1e-9), (y - r.cy()) / (ry * inner - slop).max(1e-9));
+    if inner > 0.0 && hu * hu + hv * hv < 1.0 {
+        return false;
+    }
+    if sweep.abs() >= 360.0 {
+        return true;
+    }
+    let angle = u.atan2(-v).to_degrees().rem_euclid(360.0);
+    if sweep >= 0.0 {
+        (angle - start).rem_euclid(360.0) <= sweep
+    } else {
+        (start - angle).rem_euclid(360.0) <= -sweep
+    }
+}
+
+/// A smooth curve through `pts` (Catmull-Rom) as cubic segments: each its two control points
+/// and its end, from `pts[0]`. Closed, it runs back to the first point.
+pub fn smooth_segments(pts: &[(f64, f64)], closed: bool) -> Vec<[(f64, f64); 3]> {
+    let n = pts.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    let at = |i: isize| -> (f64, f64) {
+        if closed {
+            pts[i.rem_euclid(n as isize) as usize]
+        } else {
+            pts[i.clamp(0, n as isize - 1) as usize]
+        }
+    };
+    let count = if closed { n } else { n - 1 };
+    (0..count as isize)
+        .map(|i| {
+            let (p0, p1, p2, p3) = (at(i - 1), at(i), at(i + 1), at(i + 2));
+            let c1 = (p1.0 + (p2.0 - p0.0) / 6.0, p1.1 + (p2.1 - p0.1) / 6.0);
+            let c2 = (p2.0 - (p3.0 - p1.0) / 6.0, p2.1 - (p3.1 - p1.1) / 6.0);
+            [c1, c2, p2]
+        })
+        .collect()
+}
+
+/// A free line's or path's outline in page coordinates as a polyline: its points, the smooth
+/// curve through them, and back to the start when closed. Connectors are `line_points`'s.
+pub fn stroke_outline(n: &Node, r: &Rect) -> Vec<(f64, f64)> {
+    let pts: Vec<(f64, f64)> = n.points.as_deref().unwrap_or(&[]).iter().map(|p| (r.x + p[0], r.y + p[1])).collect();
+    let closed = n.closed == Some(true) && pts.len() > 2;
+    if n.kind == NodeKind::Line && n.smooth == Some(true) && pts.len() > 2 {
+        let mut out = vec![pts[0]];
+        let mut from = pts[0];
+        for [c1, c2, to] in smooth_segments(&pts, closed) {
+            out.extend(flatten_curve(&[from, c1, c2, to]).into_iter().skip(1));
+            from = to;
+        }
+        return out;
+    }
+    let mut out = pts;
+    if closed {
+        out.push(out[0]);
+    }
+    out
 }
 
 /// Whether `(x, y)` is inside the closed polygon `points` (even-odd).
@@ -173,6 +266,41 @@ mod tests {
         assert!(inside(&star, 50.0, 50.0));
         assert!(!inside(&star, 2.0, 2.0));
         assert!(inside(&tri, 50.0, 60.0) && !inside(&tri, 5.0, 5.0));
+    }
+
+    #[test]
+    fn flips_mirror_corners_and_arcs_cut_the_ellipse() {
+        let r = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let mut tri = node("t", Some("p1"), K::Polygon, [0.0, 0.0, 100.0, 100.0]);
+        tri.flip_y = Some(true);
+        let pts = node_polygon(&tri, &r);
+        assert!((pts[0].1 - 100.0).abs() < 1e-9, "the apex is at the bottom: {pts:?}");
+        let mut pie = node("e", Some("p1"), K::Ellipse, [0.0, 0.0, 100.0, 100.0]);
+        assert!(arc(&pie).is_none());
+        pie.arc = Some(relay_bus::design::Arc { start: 0.0, sweep: 90.0, inner: 0.5 });
+        // The top-right quarter, less its hole.
+        assert!(on_ellipse(&pie, &r, 80.0, 30.0, 0.0));
+        assert!(!on_ellipse(&pie, &r, 20.0, 30.0, 0.0), "outside the sweep");
+        assert!(!on_ellipse(&pie, &r, 55.0, 45.0, 0.0), "in the hole");
+        pie.arc = Some(relay_bus::design::Arc { start: 0.0, sweep: -90.0, inner: 0.0 });
+        assert!(on_ellipse(&pie, &r, 20.0, 30.0, 0.0), "a negative sweep runs anticlockwise");
+    }
+
+    #[test]
+    fn smooth_lines_pass_through_their_points() {
+        let pts = [(0.0, 0.0), (50.0, 40.0), (100.0, 0.0)];
+        let segs = smooth_segments(&pts, false);
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0][2], (50.0, 40.0));
+        assert_eq!(segs[1][2], (100.0, 0.0));
+        assert_eq!(smooth_segments(&pts, true).len(), 3);
+        let mut line = node("l", Some("p1"), K::Line, [0.0; 4]);
+        line.points = Some(vec![[0.0, 0.0], [50.0, 40.0], [100.0, 0.0]]);
+        line.closed = Some(true);
+        let outline = stroke_outline(&line, &Rect::new(10.0, 10.0, 100.0, 40.0));
+        assert_eq!((outline.first(), outline.last()), (Some(&(10.0, 10.0)), Some(&(10.0, 10.0))));
+        line.smooth = Some(true);
+        assert!(stroke_outline(&line, &Rect::new(0.0, 0.0, 100.0, 40.0)).len() > 40);
     }
 
     #[test]

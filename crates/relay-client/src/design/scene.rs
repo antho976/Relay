@@ -12,7 +12,8 @@ const ROOT: &str = "";
 pub struct Scene {
     nodes: HashMap<String, Node>,
     children: HashMap<String, Vec<String>>,
-    /// Makes this client's new ids unlike another's: a few characters of the time it opened.
+    /// Makes this client's new ids unlike another's: eight random characters drawn when the
+    /// scene was made.
     seed: String,
     counter: u64,
 }
@@ -28,6 +29,18 @@ fn base36(mut n: u64) -> String {
     }
     out.reverse();
     String::from_utf8(out).unwrap_or_default()
+}
+
+/// Eight base-36 characters from the time and the process's hash keys, which the standard
+/// library draws at random: two clients (or two scenes of one) start from different seeds.
+fn seed() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(nanos);
+    h.write_u32(std::process::id());
+    let digits = base36(h.finish() % 36u64.pow(8));
+    format!("{digits:0>8}")
 }
 
 fn kind_name(kind: NodeKind) -> &'static str {
@@ -57,11 +70,7 @@ fn insert_at(list: &mut Vec<String>, id: String, index: Option<u32>) {
 impl Scene {
     /// From `design.get`'s nodes: parents before children, siblings bottom to top.
     pub fn new(nodes: Vec<Node>) -> Scene {
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
-        let mut scene = Scene { seed: base36(seed % 36u64.pow(4)), ..Scene::default() };
+        let mut scene = Scene { seed: seed(), ..Scene::default() };
         for node in nodes {
             let key = node.parent.clone().unwrap_or_default();
             scene.children.entry(key).or_default().push(node.id.clone());
@@ -168,11 +177,13 @@ impl Scene {
         out
     }
 
-    /// An id no node has, shaped like the engine's (`frame-…`) and unlike another client's.
+    /// An id no node has, shaped like the engine's but never one it assigns: the engine's are
+    /// `frame-12`, a client's `frame-<seed>-<n>`, the seed random per scene, so neither the
+    /// engine nor another client makes the same one.
     pub fn fresh_id(&mut self, kind: NodeKind) -> String {
         loop {
             self.counter += 1;
-            let id = format!("{}-{}{}", kind_name(kind), self.seed, base36(self.counter));
+            let id = format!("{}-{}-{}", kind_name(kind), self.seed, base36(self.counter));
             if !self.nodes.contains_key(&id) {
                 return id;
             }
@@ -348,5 +359,11 @@ pub(crate) mod tests {
         let fresh = s.fresh_id(NodeKind::Frame);
         assert!(fresh.starts_with("frame-") && valid_id(&fresh) && s.node(&fresh).is_none());
         assert_ne!(fresh, s.fresh_id(NodeKind::Frame));
+        // Never `frame-<digits>`, the engine's own shape, and unlike another scene's.
+        assert_eq!(fresh.matches('-').count(), 2, "{fresh}");
+        assert_ne!(sample().fresh_id(NodeKind::Frame), sample().fresh_id(NodeKind::Frame));
+        let mut long = sample();
+        long.counter = u64::MAX - 1;
+        assert!(valid_id(&long.fresh_id(NodeKind::Polygon)));
     }
 }

@@ -38,6 +38,7 @@ fn tool(name: &str) -> Option<Tool> {
         "hexagon" => Tool::Hexagon,
         "star" => Tool::Star,
         "eraser" => Tool::Eraser,
+        "vector" => Tool::Vector,
         _ => return None,
     })
 }
@@ -87,6 +88,20 @@ fn next(b: Rc<Board>, steps: Vec<String>, at: usize) {
             }
         }
         "endedit" => b.end_edit(true),
+        "flip" => b.flip(arg != "v"),
+        "copy-style" => b.copy_style(),
+        "paste-style" => b.paste_style(),
+        // The page as SVG or PDF, written to a path: what the Export keys save.
+        "svg" | "pdf" => {
+            let format = if verb == "svg" { super::export::Format::Svg } else { super::export::Format::Pdf };
+            match super::export::vector(&b, &[], true, format) {
+                Ok(bytes) => {
+                    let _ = std::fs::write(arg, &bytes);
+                    println!("DESIGN_EXPORT {verb} {} bytes", bytes.len());
+                }
+                Err(e) => println!("DESIGN_EXPORT {verb} failed: {e}"),
+            }
+        }
         "nudge" => {
             if let Some((dx, dy)) = point(arg) {
                 b.nudge(dx, dy);

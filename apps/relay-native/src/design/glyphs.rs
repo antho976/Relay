@@ -62,6 +62,13 @@ pub fn geometry(name: &str) -> &'static str {
         "blur" => r##"<circle cx="8" cy="8" r="5.5" stroke-dasharray="1.5 2"/><circle cx="8" cy="8" r="2.5"/>"##,
         "line-height" => r##"<path d="M2.5 2.5h11M2.5 13.5h11"/><path d="M5.8 11.2L8 4.8l2.2 6.4M6.6 9h2.8"/>"##,
         "letter-spacing" => r##"<path d="M2.5 3v10M13.5 3v10"/><path d="M5.6 11.2L8 4.8l2.4 6.4M6.4 9h3.2"/>"##,
+        "flip-h" => r##"<path d="M8 2v12" stroke-dasharray="1.5 1.5"/><path d="M6 4.5L2.5 12H6zM10 4.5l3.5 7.5H10z"/>"##,
+        "flip-v" => r##"<path d="M2 8h12" stroke-dasharray="1.5 1.5"/><path d="M4.5 6L12 2.5V6zM4.5 10l7.5 3.5V10z"/>"##,
+        "vector" => r##"<path d="M3 12.5L6.5 4l6.5 3.5"/><rect x="1.8" y="11.3" width="2.4" height="2.4" rx=".4"/><rect x="5.3" y="2.8" width="2.4" height="2.4" rx=".4"/><rect x="11.8" y="6.3" width="2.4" height="2.4" rx=".4"/>"##,
+        "arc" => r##"<path d="M8 2.5A5.5 5.5 0 1 1 2.5 8H8z"/>"##,
+        "blend" => r##"<circle cx="6" cy="8" r="4"/><circle cx="10" cy="8" r="4"/>"##,
+        "case" => r##"<path d="M1.8 12L4.8 4l3 8M2.9 9.3h3.8M10 7.6a1.9 1.9 0 0 1 3.8 0V12M13.8 9.6c-.6-.4-1.4-.5-2.1-.4-1 .1-1.7.7-1.7 1.5 0 .8.6 1.3 1.5 1.3 1 0 1.8-.6 2.3-1.4"/>"##,
+        "copy-style" => r##"<path d="M3 3.5h8.5v3H3z"/><path d="M11.5 5h1.5v3.5H7.5V11"/><rect x="6.3" y="11" width="2.4" height="3" rx=".5"/>"##,
         _ => r##"<circle cx="8" cy="8" r="5"/>"##,
     }
 }
