@@ -901,16 +901,29 @@ class WorkoutRepository @Inject constructor(
 
     suspend fun deleteSet(set: LoggedSet) = loggedSetDao.delete(set)
 
+    /** What a logged-exercise row is logging now, for [restoreSet]'s check. */
+    suspend fun exerciseIdOfRow(loggedExerciseId: Long): String? = loggedExerciseDao.get(loggedExerciseId)?.exerciseId
+
     /**
      * Put a just-deleted set back, same id and position, for the delete's Undo. Only while its
      * session is still open: a finished session's totals were stamped without it. False when the
      * set could not go back.
+     *
+     * Its row has to still be the lift it was deleted from ([exerciseIdAtDelete]) and not skipped:
+     * deleting a row's only set re-opens it to a swap, and the undo then credited a bench set to the
+     * DB press swapped in, while a set put back under a skipped row drops out of history. If its
+     * position was taken since (re-logged with corrected numbers, or from the wrist), it goes back
+     * after the last set instead of beside a second set of the same number.
      */
-    suspend fun restoreSet(set: LoggedSet): Boolean = database.withTransaction {
+    suspend fun restoreSet(set: LoggedSet, exerciseIdAtDelete: String? = null): Boolean = database.withTransaction {
         val exercise = loggedExerciseDao.get(set.loggedExerciseId) ?: return@withTransaction false
         val session = sessionDao.get(exercise.sessionId) ?: return@withTransaction false
         if (session.finishedAt != null) return@withTransaction false
-        loggedSetDao.insert(set)
+        if (exercise.skipped) return@withTransaction false
+        if (exerciseIdAtDelete != null && exercise.exerciseId != exerciseIdAtDelete) return@withTransaction false
+        val taken = loggedSetDao.forLoggedExercise(set.loggedExerciseId).any { it.setIndex == set.setIndex }
+        val index = if (taken) (loggedSetDao.maxSetIndex(set.loggedExerciseId) ?: -1) + 1 else set.setIndex
+        loggedSetDao.insert(set.copy(setIndex = index))
         true
     }
 

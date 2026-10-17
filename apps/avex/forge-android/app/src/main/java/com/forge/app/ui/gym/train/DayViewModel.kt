@@ -157,6 +157,9 @@ class DayViewModel @Inject constructor(
 
     internal var undoClearJob: Job? = null
 
+    /** The lift the swiped-away set's row was logging, so its Undo can't land under a swap. */
+    internal var deletedSetExerciseId: String? = null
+
     /** In-flight "I have N minutes" fit or its undo — one at a time, so two quick taps can't
      *  interleave their skip writes and leave a mix of both fits behind. */
     internal var timeFitJob: Job? = null
