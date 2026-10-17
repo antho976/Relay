@@ -11,6 +11,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -135,7 +138,24 @@ internal fun ColumnScope.StatsHeroContent(state: StatsUiState, weightUnit: Weigh
     }
 }
 
-/** Records — the all-time heaviest set per lift, biggest first. Rows tap through to the lift's trend. */
+/** Which way the Records list is ordered. Newest leads: a fresh record is the one worth seeing. */
+private enum class RecordSort(val label: String) { NEWEST("Newest"), HEAVIEST("Heaviest") }
+
+/** A record set this recently carries the accent flag beside its date. */
+private const val FRESH_DAYS = 14L
+
+/** Weeks the "when they were set" strip covers, newest on the right. */
+private const val RECORD_WEEKS = 12
+
+/**
+ * Records: the heaviest set standing on each lift.
+ *
+ * Rebuilt 2026-10-17 (Antho: "redo the record section"). It was a grey slab of every lift ordered
+ * by load, so the same heavy lifts sat on top forever and a record set last Tuesday was buried in
+ * the middle. Now it leads with a mark, the twelve weeks the standing records were set in, so a
+ * run of new ones is visible at a glance; the list opens newest first with a fresh record flagged,
+ * and the same rows can be ordered by load instead. Rows still tap through to the lift's trend.
+ */
 @Composable
 internal fun ColumnScope.RecordsContent(
     records: List<PrRecord>,
@@ -145,12 +165,41 @@ internal fun ColumnScope.RecordsContent(
     /** Lifts whose Strength row can expand; a record outside it isn't tappable. Null = all are. */
     drillableIds: Set<String>? = null
 ) {
-    val fmt = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
+    val today = com.forge.app.ui.gym.stats.components.rememberToday()
+    val zone = remember { java.time.ZoneId.systemDefault() }
+    val locale = com.forge.app.ui.common.currentLocale()
+    val fmt = remember(locale) { SimpleDateFormat("MMM d", locale) }
     var showAll by rememberSaveable { mutableStateOf(false) }
-    val shown = if (showAll) records else records.take(LIFTS_SHOWN)
-    // One filled group, a member per record, 2dp seams instead of table rules (2026-09-27).
+    var sort by rememberSaveable { mutableStateOf(RecordSort.NEWEST) }
+    val sorted = remember(records, sort) {
+        when (sort) {
+            RecordSort.NEWEST -> records.sortedByDescending { it.sessionDate }
+            RecordSort.HEAVIEST -> records.sortedByDescending { it.maxWeightLb }
+        }
+    }
+    fun daysAgo(ms: Long): Long = java.time.temporal.ChronoUnit.DAYS.between(
+        java.time.Instant.ofEpochMilli(ms).atZone(zone).toLocalDate(), today
+    ).coerceAtLeast(0)
+
+    RecordWeeksStrip(records, today, zone, c)
+    Spacer(Modifier.height(14.dp))
+    com.forge.app.ui.common.ForgeSlidingSegments(
+        options = RecordSort.entries.map { it.label },
+        selectedIndex = sort.ordinal,
+        onSelect = { sort = RecordSort.entries[it] }
+    )
+    Spacer(Modifier.height(10.dp))
+    val shown = if (showAll) sorted else sorted.take(LIFTS_SHOWN)
     Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
         shown.forEachIndexed { i, r ->
+            val ago = daysAgo(r.sessionDate)
+            val fresh = ago <= FRESH_DAYS
+            val whenText = when {
+                ago == 0L -> "Today"
+                ago == 1L -> "Yesterday"
+                ago < FRESH_DAYS -> "$ago days ago"
+                else -> fmt.format(Date(r.sessionDate))
+            }
             Row(
                 Modifier.fillMaxWidth()
                     .clip(rowShape(i, shown.size))
@@ -166,20 +215,119 @@ internal fun ColumnScope.RecordsContent(
                 Column(Modifier.weight(1f)) {
                     Text(r.exerciseName, style = MaterialTheme.typography.bodyMedium, color = c.onBg)
                     Spacer(Modifier.height(2.dp))
-                    Text(fmt.format(Date(r.sessionDate)).uppercase(), style = MaterialTheme.typography.labelSmall, color = c.muted)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // The flag is the exception only: a record from the last two weeks.
+                        if (fresh) {
+                            androidx.compose.foundation.layout.Box(
+                                Modifier.size(6.dp).clip(androidx.compose.foundation.shape.CircleShape).background(c.accent)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                        }
+                        Text(
+                            whenText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (fresh) c.onBg else c.muted
+                        )
+                    }
                 }
                 Spacer(Modifier.width(12.dp))
-                // onBg, not accent: a record is content, and accent body text fails contrast under most
-                // accents (§14). formatWeight keeps the real load, so a 7.5 kg set no longer reads "7 kg".
-                Text(
-                    "${formatWeight(r.maxWeightLb, weightUnit)} × ${r.bestReps}",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = c.onBg
-                )
+                Column(horizontalAlignment = Alignment.End) {
+                    // onBg, not accent: a record is content, and accent body text fails contrast under
+                    // most accents (§14). formatWeight keeps the real load ("7.5 kg", not "7 kg").
+                    Text(
+                        "${formatWeight(r.maxWeightLb, weightUnit)} × ${r.bestReps}",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = c.onBg
+                    )
+                    r.relativeStrength?.let { rel ->
+                        Text("${rel}× bodyweight", style = MaterialTheme.typography.bodySmall, color = c.muted)
+                    }
+                }
             }
         }
     }
     if (records.size > LIFTS_SHOWN) {
         StatsShowAll(label = if (showAll) "top $LIFTS_SHOWN only" else "all ${records.size} records", c = c) { showAll = !showAll }
+    }
+}
+
+/**
+ * When the standing records were set: one bar per week for the last twelve, its height the number
+ * of lifts whose current record dates from that week. Works at zero as twelve empty tracks.
+ */
+@Composable
+private fun RecordWeeksStrip(
+    records: List<PrRecord>,
+    today: java.time.LocalDate,
+    zone: java.time.ZoneId,
+    c: StatsColors
+) {
+    val thisMonday = today.with(java.time.DayOfWeek.MONDAY)
+    val counts = remember(records, thisMonday) {
+        IntArray(RECORD_WEEKS).also { arr ->
+            records.forEach { r ->
+                val day = java.time.Instant.ofEpochMilli(r.sessionDate).atZone(zone).toLocalDate()
+                val weeksBack = java.time.temporal.ChronoUnit.WEEKS.between(day.with(java.time.DayOfWeek.MONDAY), thisMonday).toInt()
+                if (weeksBack in 0 until RECORD_WEEKS) arr[RECORD_WEEKS - 1 - weeksBack]++
+            }
+        }
+    }
+    val recent = records.count {
+        java.time.temporal.ChronoUnit.DAYS.between(
+            java.time.Instant.ofEpochMilli(it.sessionDate).atZone(zone).toLocalDate(), today
+        ) in 0..29
+    }
+    val max = (counts.maxOrNull() ?: 0).coerceAtLeast(1)
+    Row(verticalAlignment = Alignment.Bottom) {
+        Text(
+            "$recent",
+            style = MaterialTheme.typography.headlineMedium,
+            color = c.onBg
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            "set in the last 30 days, of ${records.size} ${if (records.size == 1) "lift" else "lifts"}",
+            style = MaterialTheme.typography.bodySmall,
+            color = c.muted,
+            modifier = Modifier.padding(bottom = 6.dp)
+        )
+    }
+    Spacer(Modifier.height(10.dp))
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(40.dp)
+            .chartReadout(
+                "Records set per week over the last $RECORD_WEEKS weeks, oldest first: " +
+                    counts.joinToString(", ") + ". This week: ${counts.last()}."
+            ),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.Bottom
+    ) {
+        counts.forEachIndexed { i, n ->
+            androidx.compose.foundation.layout.Box(
+                Modifier.weight(1f).fillMaxHeight(),
+                contentAlignment = Alignment.BottomCenter
+            ) {
+                // The empty track is the zero shape; a week's records fill it from the floor.
+                androidx.compose.foundation.layout.Box(
+                    Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp))
+                        .background(c.muted.copy(alpha = 0.35f))
+                )
+                if (n > 0) {
+                    androidx.compose.foundation.layout.Box(
+                        Modifier.fillMaxWidth()
+                            .fillMaxHeight(n.toFloat() / max)
+                            .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+                            .background(if (i == counts.lastIndex) c.accent else c.accent.copy(alpha = 0.6f))
+                    )
+                }
+            }
+        }
+    }
+    Spacer(Modifier.height(4.dp))
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text("$RECORD_WEEKS WEEKS AGO", style = MaterialTheme.typography.labelSmall, color = c.muted)
+        Text("THIS WEEK", style = MaterialTheme.typography.labelSmall, color = c.muted)
     }
 }
