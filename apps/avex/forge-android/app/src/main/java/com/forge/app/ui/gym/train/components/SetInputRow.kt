@@ -141,6 +141,8 @@ fun SetInputRow(
     fill: SetFill? = null,
     /** The eased target to open the first set on while easing back in (see [nextSetSeedLb]). */
     rampSeedLb: Double? = null,
+    /** Easing back in after a break: last session's set is shown as "last", not as one to beat. */
+    easingBack: Boolean = false,
     targetsMet: Boolean = false,
     advanceLabel: String = "",
     /** Full-width outlined button shown above LOG SET when [onFinishEarly] is set — ends the
@@ -389,7 +391,9 @@ fun SetInputRow(
                     Text(
                         // The ghost to beat — tap to autofill the weight only so the user
                         // pushes for one extra rep rather than copying the exact same set.
-                        "beat $priorDisplay × ${prior.reps}",
+                        // Back from a break that set is from before it, and the coach asked for
+                        // less: it reads as where you were, not as the number to beat.
+                        "${if (easingBack) "last" else "beat"} $priorDisplay × ${prior.reps}",
                         style = MaterialTheme.typography.labelSmall,
                         color = onBg.copy(alpha = 0.7f),
                         fontSize = 9.sp,
@@ -535,7 +539,7 @@ fun SetInputRow(
                 Box(modifier = Modifier.width(SetTable.DELTA_COL_W), contentAlignment = Alignment.BottomEnd) {
                     priorSetForActiveRow?.durationSeconds?.let { priorSec ->
                         Text(
-                            "beat ${formatHold(priorSec)}",
+                            "${if (easingBack) "last" else "beat"} ${formatHold(priorSec)}",
                             style = MaterialTheme.typography.labelSmall,
                             color = onBg.copy(alpha = 0.7f),
                             fontSize = 9.sp,
