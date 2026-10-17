@@ -97,6 +97,11 @@ class StatsRepository @Inject constructor(
          * sequence mode, which plans no rest days.
          */
         val weekRestDays: Set<Int> = emptySet(),
+        /**
+         * The program day key the same schedule plans on each training day, by the same indices.
+         * Empty in sequence mode, which fixes no day to a weekday.
+         */
+        val weekPlannedDays: Map<Int, String> = emptyMap(),
         /** Next gym day key in the rotation (Upper A → Lower A → Upper B → Lower B). */
         val nextUpDayKey: String = Program.UPPER_A,
         /** Last 5 finished gym sessions for the overview RECENT section. */
@@ -228,7 +233,11 @@ class StatsRepository @Inject constructor(
                     streakDays = computeStreak(ats, streakBridge(periods, history)),
                     weekRestDays = (0 until 7).filterTo(mutableSetOf()) { i ->
                         com.forge.app.domain.schedule.ScheduleHistory.isPlannedRest(history, weekStart.plusDays(i.toLong()))
-                    }
+                    },
+                    weekPlannedDays = (0 until 7).mapNotNull { i ->
+                        com.forge.app.domain.schedule.ScheduleHistory.plannedDayOn(history, weekStart.plusDays(i.toLong()))
+                            ?.let { i to it }
+                    }.toMap()
                 )
             }
             .flowOn(Dispatchers.Default)

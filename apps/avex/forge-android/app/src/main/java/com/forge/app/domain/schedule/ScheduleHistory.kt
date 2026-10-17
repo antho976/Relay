@@ -73,6 +73,15 @@ object ScheduleHistory {
         return entry.slots.getOrElse(date.dayOfWeek.value - 1) { "" }.isBlank()
     }
 
+    /**
+     * The program day key the plan in force on [date] put on it, or null when [planOn] does not
+     * call it a training day (rest, sequence mode, before the history starts).
+     */
+    fun plannedDayOn(entries: List<Entry>, date: LocalDate): String? {
+        if (planOn(entries, date) != false) return null
+        return entryOn(entries, date.toEpochDay())?.slots?.getOrNull(date.dayOfWeek.value - 1)
+    }
+
     /** True when [date] was a planned rest day under the schedule in force on it. */
     fun isPlannedRest(entries: List<Entry>, date: LocalDate): Boolean = planOn(entries, date) == true
 

@@ -17,6 +17,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -103,7 +105,7 @@ import java.util.Locale
  * ## Planned rest (2026-09-28)
  *
  * With fixed training weekdays the plan knows which days were meant to be rest. Those draw the way
- * the Home week strip draws them — unfilled, with a short rest bar — so "rested as planned" and
+ * the Home week strip draws them — unfilled, with a moon (2026-10-17; it was a short rest bar) — so "rested as planned" and
  * "skipped a training day" stop being the same grey square. Each day is judged by the schedule in
  * force ON it ([com.forge.app.domain.schedule.ScheduleHistory]), so changing your days today does
  * not repaint last month. Days before the schedule was first recorded keep the old single tone.
@@ -207,7 +209,7 @@ internal fun ProfileActivityMonth(
         if (monthsBack == 0) MonthStreak.of(streakDays, longestStreakDays) else null
     }
 
-    // Whether the month on screen has a planned rest day, so the key only explains the bar when
+    // Whether the month on screen has a planned rest day, so the key only explains the moon when
     // there is a bar to explain.
     val hasPlannedRest = (1..month.lengthOfMonth()).any { d ->
         val date = month.atDay(d)
@@ -312,11 +314,14 @@ internal fun ProfileActivityMonth(
                                     contentAlignment = Alignment.Center
                                 ) {
                                     if (plannedRest) {
-                                        // The same rest bar the Home week strip draws.
-                                        Box(
-                                            Modifier.size(width = 12.dp, height = 3.dp)
-                                                .clip(MONTH_SWATCH_SHAPE)
-                                                .background(if (date.isAfter(today)) future else muted)
+                                        // The same moon the Home week strip draws. Only the rest
+                                        // mark is shared: the session words Home prints would not
+                                        // fit a month of cells, and the month is a record, not a plan.
+                                        Icon(
+                                            Icons.Rounded.Bedtime,
+                                            contentDescription = null,
+                                            tint = if (date.isAfter(today)) muted.copy(alpha = 0.5f) else muted,
+                                            modifier = Modifier.size(16.dp)
                                         )
                                     }
                                 }
@@ -483,12 +488,12 @@ private fun MonthRampLegend(
     hue: Color,
     muted: Color,
     modifier: Modifier = Modifier,
-    /** Leads the key with the rest bar, when the month on screen has a planned rest day to explain. */
+    /** Leads the key with the rest moon, when the month on screen has a planned rest day to explain. */
     showRest: Boolean = false
 ) {
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         if (showRest) {
-            Box(Modifier.size(width = 12.dp, height = 3.dp).clip(MONTH_SWATCH_SHAPE).background(muted))
+            Icon(Icons.Rounded.Bedtime, contentDescription = null, tint = muted, modifier = Modifier.size(MONTH_SWATCH + 2.dp))
             Spacer(Modifier.width(6.dp))
             Text("REST", style = MaterialTheme.typography.labelSmall, color = muted)
             Spacer(Modifier.width(14.dp))
