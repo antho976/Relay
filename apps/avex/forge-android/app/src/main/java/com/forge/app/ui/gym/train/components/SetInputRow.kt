@@ -75,6 +75,9 @@ import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.theme.LocalForgeSettings
 
+/** "PR at 9 reps": the reps that make the typed weight a record. "1 for PR" read as a score. */
+internal fun prAtRepsLabel(reps: Int): String = if (reps == 1) "PR at 1 rep" else "PR at $reps reps"
+
 /** A value pushed into the next set's fields; [nonce] makes a repeat tap a new request. */
 @androidx.compose.runtime.Immutable
 data class SetFill(val nonce: Int, val weight: String?, val reps: String?)
@@ -428,7 +431,7 @@ fun SetInputRow(
                                 placeholder = "0",
                                 keyboardType = KeyboardType.Text,
                                 imeAction = ImeAction.Next,
-                                supportingText = if (isPlates) null else prRepsHint?.let { "$it for PR" }
+                                supportingText = if (isPlates) null else prRepsHint?.let(::prAtRepsLabel)
                             )
                         }
                     }
@@ -650,7 +653,7 @@ fun SetInputRow(
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("WEIGHT · LB", style = MaterialTheme.typography.labelSmall, color = muted)
-                    BigNumberField(weight, ::onWeightChange, "0", KeyboardType.Text, ImeAction.Next, supportingText = prRepsHint?.let { "$it for PR" })
+                    BigNumberField(weight, ::onWeightChange, "0", KeyboardType.Text, ImeAction.Next, supportingText = prRepsHint?.let(::prAtRepsLabel))
                 }
                 Column(modifier = Modifier.weight(0.7f).padding(start = 16.dp)) {
                     Text("REPS", style = MaterialTheme.typography.labelSmall, color = muted)
