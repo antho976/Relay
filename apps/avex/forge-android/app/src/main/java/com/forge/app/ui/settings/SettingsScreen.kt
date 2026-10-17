@@ -150,10 +150,15 @@ enum class ResetTarget(val label: String, val message: String) {
 }
 
 /** Where Settings is: a page, and inside Program one of its sections. Depth orders the slide. */
-private data class SettingsDestination(val page: SettingsPage?, val section: ProgramSection?) {
+private data class SettingsDestination(
+    val page: SettingsPage?,
+    val section: ProgramSection?,
+    /** The page that opened this one, when one page links to another (Coach → Recovery). */
+    val from: SettingsPage? = null
+) {
     val depth: Int get() = when {
         page == null -> 0
-        section != null -> 2
+        section != null || from != null -> 2
         else -> 1
     }
 }
@@ -186,6 +191,11 @@ fun SettingsScreen(
     // The Program page's open sub-section is hoisted here so EVERY back affordance (top-bar arrow,
     // system back) returns to the Program menu first, then to Settings — never skipping a level.
     var programSection by rememberSaveable { mutableStateOf<ProgramSection?>(null) }
+    // The page a page-to-page link left (Coach's Connect → Watch & health data, About → Privacy
+    // policy). Back returns there rather than to the root, and the jump slides forward like any
+    // deeper page; both pages are depth 1, so it used to slide in backwards.
+    var returnTo by rememberSaveable { mutableStateOf<SettingsPage?>(null) }
+    fun openFrom(from: SettingsPage, to: SettingsPage) { returnTo = from; currentPage = to }
     // Root-list scroll, hoisted here (outside the AnimatedContent that swaps pages) so it survives
     // opening a sub-page and backing out — the list lands where you left it, not scrolled to the top.
     val mainListState = rememberLazyListState()
@@ -246,6 +256,7 @@ fun SettingsScreen(
     fun goBack() {
         when {
             currentPage == SettingsPage.Program && programSection != null -> programSection = null
+            returnTo != null && currentPage != null -> { currentPage = returnTo; returnTo = null }
             onDeepLinkedPage && currentPage != null -> onBack()
             currentPage != null -> { currentPage = null; programSection = null }
             searchQuery.isNotBlank() -> searchQuery = ""
@@ -256,7 +267,7 @@ fun SettingsScreen(
 
     SettingsTheme {
         AnimatedContent(
-            targetState = SettingsDestination(currentPage, programSection),
+            targetState = SettingsDestination(currentPage, programSection, returnTo),
             transitionSpec = {
                 // Material's shared X axis: deeper pages arrive from the end edge, backing out
                 // returns from the start edge, and both halves fade so the titles never collide.
@@ -277,7 +288,7 @@ fun SettingsScreen(
                     listState = mainListState,
                     onBack = back,
                     onSearchChange = { searchQuery = it },
-                    onOpenPage = { currentPage = it; programSection = null },
+                    onOpenPage = { currentPage = it; programSection = null; returnTo = null },
                     onOpenCoachBrief = onOpenCoachBrief,
                     onOpenDataDialog = { showDataDialog = true },
                     onImportData = { showImportDialog = true },
@@ -299,7 +310,7 @@ fun SettingsScreen(
                 )
                 SettingsPage.Coach -> CoachSettingsPage(
                     state, viewModel,
-                    onOpenRecovery = { currentPage = SettingsPage.Recovery },
+                    onOpenRecovery = { openFrom(SettingsPage.Coach, SettingsPage.Recovery) },
                     onBack = back
                 )
                 SettingsPage.Recovery -> RecoveryPage(back)
@@ -314,7 +325,7 @@ fun SettingsScreen(
                     onBack = back,
                     viewModel = viewModel,
                     onOpenExport = { showDataDialog = true },
-                    onOpenPrivacyPolicy = { currentPage = SettingsPage.PrivacyPolicy }
+                    onOpenPrivacyPolicy = { openFrom(SettingsPage.About, SettingsPage.PrivacyPolicy) }
                 )
             }
         }

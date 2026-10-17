@@ -95,7 +95,7 @@ private fun CoachFeedRow(label: String, active: Boolean, onConnect: (() -> Unit)
     val tappable = onConnect != null && !active
     SettingsAdaptiveRow(
         title = label,
-        interaction = if (tappable) Modifier.clickableLabeled("Connect $label in Wearable") { onConnect?.invoke() } else Modifier
+        interaction = if (tappable) Modifier.clickableLabeled("Connect $label in Watch & health data") { onConnect?.invoke() } else Modifier
     ) {
         when {
             active -> SettingsStatus("Receiving", live = true)
