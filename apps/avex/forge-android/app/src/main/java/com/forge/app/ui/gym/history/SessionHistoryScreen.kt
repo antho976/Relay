@@ -75,78 +75,88 @@ fun SessionHistoryScreen(
         topBar = { ForgeTopBar(onBack = onBack) },
         containerColor = Color.Transparent
     ) { inner ->
-        Column(modifier = Modifier.fillMaxSize().padding(inner)) {
-            // ── Tiny hero: the screen names itself in content, then reads itself ──────────
-            Text(
-                "History",
-                style = MaterialTheme.typography.headlineSmall,
-                color = cs.onBackground,
-                modifier = Modifier
-                    .padding(horizontal = 24.dp)
-                    .semantics { heading() }
-            )
-            Spacer(Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-                horizontalArrangement = Arrangement.spacedBy(20.dp)
-            ) {
-                // Honest zeros, never a dash and never hidden (§12) — at zero this is the shape the
-                // screen will keep once there is data in it.
-                EditorialFigure(
-                    value = "${state.summary.sessions}",
-                    label = if (state.summary.sessions == 1) "Session" else "Sessions",
-                    onBg = cs.onBackground, muted = cs.onSurfaceVariant, accent = cs.primary
-                )
-                EditorialFigure(
-                    value = formatVolumeCompact(state.summary.volumeLb, weightUnit),
-                    label = "Volume",
-                    onBg = cs.onBackground, muted = cs.onSurfaceVariant, accent = cs.primary
-                )
-            }
-
-            Spacer(Modifier.height(18.dp))
-            // ── Search: the filled rounded search row ──────────
-            GymSearchRow(
-                query = viewModel.queryText,
-                onQueryChange = viewModel::setQuery,
-                placeholder = "Search day, exercise or note",
-                modifier = Modifier.padding(horizontal = 24.dp)
-            )
-
-            // ── Duration is one pick of three, so it is a sliding segment. "All" still takes every
-            // pill filter back off, as it always has.
-            Spacer(Modifier.height(12.dp))
-            ForgeSlidingSegments(
-                options = listOf("All", "Short", "Long"),
-                selectedIndex = when (state.durationFilter) {
-                    SessionHistoryFilter.SHORT -> 1
-                    SessionHistoryFilter.LONG -> 2
-                    else -> 0
-                },
-                onSelect = { i ->
-                    when (i) {
-                        1 -> viewModel.setDurationFilter(SessionHistoryFilter.SHORT)
-                        2 -> viewModel.setDurationFilter(SessionHistoryFilter.LONG)
-                        else -> viewModel.clearPillFilters()
+        // One scrolling list, header included: at a large font scale the title, figures, search
+        // and filters filled most of the screen, and the sessions scrolled in the strip left
+        // under them (§14). The header now scrolls away with the rows.
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(inner),
+            contentPadding = PaddingValues(bottom = 32.dp)
+        ) {
+            item(key = "header", contentType = "header") {
+                Column {
+                    // ── Tiny hero: the screen names itself in content, then reads itself ──────────
+                    Text(
+                        "History",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = cs.onBackground,
+                        modifier = Modifier
+                            .padding(horizontal = 24.dp)
+                            .semantics { heading() }
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                        horizontalArrangement = Arrangement.spacedBy(20.dp)
+                    ) {
+                        // Honest zeros, never a dash and never hidden (§12) — at zero this is the shape the
+                        // screen will keep once there is data in it.
+                        EditorialFigure(
+                            value = "${state.summary.sessions}",
+                            label = if (state.summary.sessions == 1) "Session" else "Sessions",
+                            onBg = cs.onBackground, muted = cs.onSurfaceVariant, accent = cs.primary
+                        )
+                        EditorialFigure(
+                            value = formatVolumeCompact(state.summary.volumeLb, weightUnit),
+                            label = "Volume",
+                            onBg = cs.onBackground, muted = cs.onSurfaceVariant, accent = cs.primary
+                        )
                     }
-                },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
-            )
 
-            // Heavy and the user's own tags combine with the duration pick, so they stay toggles.
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                item {
-                    ForgeChoiceChip("Heavy", state.volumeFilter == SessionHistoryFilter.HIGH_VOLUME, {
-                        viewModel.setVolumeFilter(if (state.volumeFilter == SessionHistoryFilter.HIGH_VOLUME) null else SessionHistoryFilter.HIGH_VOLUME)
-                    })
-                }
-                items(state.availableTags) { tag ->
-                    ForgeChoiceChip("#$tag", state.tagFilter == tag, {
-                        viewModel.setTagFilter(if (state.tagFilter == tag) null else tag)
-                    })
+                    Spacer(Modifier.height(18.dp))
+                    // ── Search: the filled rounded search row ──────────
+                    GymSearchRow(
+                        query = viewModel.queryText,
+                        onQueryChange = viewModel::setQuery,
+                        placeholder = "Search day, exercise or note",
+                        modifier = Modifier.padding(horizontal = 24.dp)
+                    )
+
+                    // ── Duration is one pick of three, so it is a sliding segment. "All" still takes every
+                    // pill filter back off, as it always has.
+                    Spacer(Modifier.height(12.dp))
+                    ForgeSlidingSegments(
+                        options = listOf("All", "Short", "Long"),
+                        selectedIndex = when (state.durationFilter) {
+                            SessionHistoryFilter.SHORT -> 1
+                            SessionHistoryFilter.LONG -> 2
+                            else -> 0
+                        },
+                        onSelect = { i ->
+                            when (i) {
+                                1 -> viewModel.setDurationFilter(SessionHistoryFilter.SHORT)
+                                2 -> viewModel.setDurationFilter(SessionHistoryFilter.LONG)
+                                else -> viewModel.clearPillFilters()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
+                    )
+
+                    // Heavy and the user's own tags combine with the duration pick, so they stay toggles.
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        item {
+                            ForgeChoiceChip("Heavy", state.volumeFilter == SessionHistoryFilter.HIGH_VOLUME, {
+                                viewModel.setVolumeFilter(if (state.volumeFilter == SessionHistoryFilter.HIGH_VOLUME) null else SessionHistoryFilter.HIGH_VOLUME)
+                            })
+                        }
+                        items(state.availableTags) { tag ->
+                            ForgeChoiceChip("#$tag", state.tagFilter == tag, {
+                                viewModel.setTagFilter(if (state.tagFilter == tag) null else tag)
+                            })
+                        }
+                    }
                 }
             }
 
@@ -154,37 +164,38 @@ fun SessionHistoryScreen(
                 // Nothing until the first read lands: "No sessions yet" flashed for a frame or two
                 // on every open, before the list it claimed was missing appeared.
             } else if (state.isEmpty) {
-                // Quiet italic hint — no boxed empty-state card (§12).
-                val hint = if (state.anyFilterActive)
-                    "No sessions match. Try a different search or clear a filter."
-                else
-                    "No sessions yet. Finish your first workout and it'll show up here."
-                InlineEmptyHint(
-                    text = hint,
-                    color = cs.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp)
-                )
+                item(key = "empty", contentType = "empty") {
+                    // Quiet italic hint — no boxed empty-state card (§12).
+                    val hint = if (state.anyFilterActive)
+                        "No sessions match. Try a different search or clear a filter."
+                    else
+                        "No sessions yet. Finish your first workout and it'll show up here."
+                    InlineEmptyHint(
+                        text = hint,
+                        color = cs.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp)
+                    )
+                }
             } else {
                 // Plain rows under each day's date: a log reads as a list, not a stack of cards
                 // (the grouped-rows pass was reverted here on 2026-09-27).
-                LazyColumn(contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 32.dp)) {
-                    state.days.forEachIndexed { index, day ->
-                        item(key = "day:${day.label}", contentType = "day") {
-                            DayAnchor(day.label, first = index == 0, modifier = forgeItemMotion())
-                        }
-                        items(day.items, key = { it.key }, contentType = { "row" }) { item ->
-                            when (item) {
-                                is HistoryItem.Workout -> SessionRow(
-                                    session = item.session,
-                                    onClick = { onOpenSession(item.session.id) },
-                                    modifier = forgeItemMotion()
-                                )
-                                is HistoryItem.Cardio -> CardioHistoryRow(
-                                    entry = item.entry,
-                                    onClick = { onOpenCardio(item.entry.id) },
-                                    modifier = forgeItemMotion()
-                                )
-                            }
+                state.days.forEachIndexed { index, day ->
+                    item(key = "day:${day.label}", contentType = "day") {
+                        DayAnchor(day.label, first = index == 0, modifier = forgeItemMotion().padding(horizontal = 24.dp))
+                    }
+                    items(day.items, key = { it.key }, contentType = { "row" }) { item ->
+                        val rowModifier = forgeItemMotion().padding(horizontal = 24.dp)
+                        when (item) {
+                            is HistoryItem.Workout -> SessionRow(
+                                session = item.session,
+                                onClick = { onOpenSession(item.session.id) },
+                                modifier = rowModifier
+                            )
+                            is HistoryItem.Cardio -> CardioHistoryRow(
+                                entry = item.entry,
+                                onClick = { onOpenCardio(item.entry.id) },
+                                modifier = rowModifier
+                            )
                         }
                     }
                 }
