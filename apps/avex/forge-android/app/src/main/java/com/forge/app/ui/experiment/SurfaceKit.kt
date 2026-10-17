@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
+import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -366,8 +368,8 @@ private class SparklineGeometry {
  *
  * With fixed training weekdays, an untrained day is one of two very different things: a rest day
  * the plan asked for, or a session that didn't happen. They used to draw the same open cell, so a
- * 4-day week always looked three-sevenths failed. A planned rest day now draws UNFILLED with a short
- * rest bar — present, so the week keeps its seven columns and its calendar shape, but visibly not a
+ * 4-day week always looked three-sevenths failed. A planned rest day now draws UNFILLED with a dashed
+ * outline and a moon (2026-10-16; it was a short bar, which read as skipped) — present, so the week keeps its seven columns and its calendar shape, but visibly not a
  * gap. The filled open cell keeps meaning "a training day, not done (yet)". All seven stay: hiding
  * rest days would make the strip a different width every week and the day letters stop lining up
  * with the calendar underneath the user's thumb.
@@ -432,15 +434,39 @@ fun WeekStrip(
                             }
                         )
                         .then(
-                            if (isToday) Modifier.border(2.dp, accent, CellShape) else Modifier
+                            when {
+                                isToday -> Modifier.border(2.dp, accent, CellShape)
+                                // A rest day is still a day of the plan: the same cell, outlined in
+                                // dashes instead of filled. The old lone dash under no cell read as
+                                // "skipped", the opposite of a rest the plan asked for.
+                                isRest -> Modifier.drawBehind {
+                                    val inset = 1.dp.toPx()
+                                    drawRoundRect(
+                                        color = muted.copy(alpha = 0.6f),
+                                        topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
+                                        size = androidx.compose.ui.geometry.Size(size.width - 2 * inset, size.height - 2 * inset),
+                                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(12.dp.toPx()),
+                                        style = Stroke(
+                                            width = 1.5.dp.toPx(),
+                                            pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx()))
+                                        )
+                                    )
+                                }
+                                else -> Modifier
+                            }
                         ),
                     contentAlignment = Alignment.Center
                 ) {
                     if (done) {
                         Text("✓", style = MaterialTheme.typography.titleSmall, color = bg, maxLines = 1)
                     } else if (isRest) {
-                        // The rest mark: a short bar, the glyph for "nothing planned here".
-                        Box(Modifier.size(width = 12.dp, height = 3.dp).clip(CircleShape).background(muted))
+                        // A moon: rest, said as a picture rather than as an absence.
+                        Icon(
+                            androidx.compose.material.icons.Icons.Rounded.Bedtime,
+                            contentDescription = null,
+                            tint = muted,
+                            modifier = Modifier.size(16.dp)
+                        )
                     }
                 }
             }
