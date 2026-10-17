@@ -40,7 +40,13 @@ import com.forge.app.domain.academy.AcademyCardio
 import com.forge.app.domain.academy.AcademyCoachLessons
 import com.forge.app.domain.academy.AcademyRegistry
 import com.forge.app.domain.academy.AcademyTraining
+import com.forge.app.domain.academy.exampleWeight
+import com.forge.app.domain.academy.proteinBasis
+import com.forge.app.domain.academy.proteinDose
+import com.forge.app.domain.units.WeightUnit
+import com.forge.app.domain.units.trimDecimal
 import com.forge.app.ui.theme.ForgeMotion
+import com.forge.app.ui.theme.LocalForgeSettings
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.PI
 import kotlin.math.cos
@@ -240,9 +246,11 @@ fun LessonSketch(
     // A thumbnail is its own composition (`AcademyThumbs`), not the hero with its words stripped
     // off: a frame cut from a drawing that only makes sense once it has finished read as a piece
     // missing its labels.
-    val sketch = remember(lessonId, labels) {
-        if (labels) AcademySketches.forLesson(lessonId)
-        else AcademyThumbs.forLesson(lessonId) ?: AcademySketches.forLesson(lessonId)
+    // Two drawings print example weights, in the reader's own unit.
+    val unit = LocalForgeSettings.current.weightUnit
+    val sketch = remember(lessonId, labels, unit) {
+        if (labels) AcademySketches.forLesson(lessonId, unit)
+        else AcademyThumbs.forLesson(lessonId) ?: AcademySketches.forLesson(lessonId, unit)
     }
     SketchCanvas(
         sketch = sketch,
@@ -599,32 +607,34 @@ internal fun sketch(description: String, body: Choreo.() -> Unit): Sketch =
  */
 object AcademySketches {
 
-    // Built per lesson on first use and kept, so opening one lesson builds only its own drawing.
-    private val builders: Map<String, () -> Sketch> by lazy {
+    // Built per lesson (and unit) on first use and kept, so opening one lesson builds only its own
+    // drawing. Only the two drawings that print a weight read the unit.
+    private val builders: Map<String, (WeightUnit) -> Sketch> by lazy {
         mapOf(
-            AcademyTraining.gettingStronger.id to { gettingStronger() },
-            AcademyTraining.effort.id to { effort() },
-            AcademyTraining.volume.id to { volume() },
-            AcademyTraining.form.id to { warmupRamp() },
-            AcademyTraining.recovery.id to { recovery() },
-            AcademyTraining.soreness.id to { soreness() },
-            AcademyTraining.protein.id to { protein() },
-            AcademyCoachLessons.howItDecides.id to { coachLoop() },
-            AcademyCoachLessons.readiness.id to { readiness() },
-            AcademyCoachLessons.blocks.id to { block() },
-            AcademyCardio.zone2.id to { zones() },
-            AcademyCardio.intervals.id to { intervals() }
+            AcademyTraining.gettingStronger.id to { u -> gettingStronger(u) },
+            AcademyTraining.effort.id to { _ -> effort() },
+            AcademyTraining.volume.id to { _ -> volume() },
+            AcademyTraining.form.id to { _ -> warmupRamp() },
+            AcademyTraining.recovery.id to { _ -> recovery() },
+            AcademyTraining.soreness.id to { _ -> soreness() },
+            AcademyTraining.protein.id to { u -> protein(u) },
+            AcademyCoachLessons.howItDecides.id to { _ -> coachLoop() },
+            AcademyCoachLessons.readiness.id to { _ -> readiness() },
+            AcademyCoachLessons.blocks.id to { _ -> block() },
+            AcademyCardio.zone2.id to { _ -> zones() },
+            AcademyCardio.intervals.id to { _ -> intervals() }
         )
     }
-    private val cache = ConcurrentHashMap<String, Sketch>()
+    private val cache = ConcurrentHashMap<Pair<String, WeightUnit>, Sketch>()
 
-    private fun cached(key: String): Sketch? = builders[key]?.let { build -> cache.getOrPut(key, build) }
+    private fun cached(key: String, unit: WeightUnit): Sketch? =
+        builders[key]?.let { build -> cache.getOrPut(key to unit) { build(unit) } }
 
     /** Every shipped lesson has a drawing; `AcademySketchesTest` holds that true. */
     fun has(lessonId: String): Boolean = AcademyRegistry.canonical(lessonId) in builders
 
-    fun forLesson(lessonId: String): Sketch =
-        cached(AcademyRegistry.canonical(lessonId)) ?: Sketch(emptyList(), "")
+    fun forLesson(lessonId: String, unit: WeightUnit = WeightUnit.LB): Sketch =
+        cached(AcademyRegistry.canonical(lessonId), unit) ?: Sketch(emptyList(), "")
 
     // ── Geometry ─────────────────────────────────────────────────────────────
 
@@ -733,8 +743,9 @@ object AcademySketches {
      * Double progression, from real sets: eight sessions of three sets each. Reps climb inside the
      * range, and the session where every set reaches 10 is the one that moves the bar up.
      */
-    private fun gettingStronger(): Sketch = sketch(
-        "Eight sessions of three sets. Reps climb from 8 toward 10, and each time every set reaches 10 the weight goes up 2.5 kg."
+    private fun gettingStronger(unit: WeightUnit): Sketch = sketch(
+        "Eight sessions of three sets. Reps climb from 8 toward 10, and each time every set reaches 10 " +
+            "the weight goes up ${exampleWeight(2.5, 5.0, unit)}."
     ) {
         val xs = (0 until 8).map { 28f + it * 16.4f }
         val reps = listOf(
@@ -766,9 +777,14 @@ object AcademySketches {
         at(6.9f, 1.2f, dotted(line(xs[7], ry(10) - 4f, xs[7], 34f, jump2 - 1f, 31f)))
         at(7.2f, 1f, SketchMark.Dot(xs[7], ry(10), 1.6f, Ink.ACCENT, halo = true))
 
-        at(5.4f, 1.6f, label("60 kg", 20f, 34f), label("62.5 kg", jump1 + 2f, 23f), label("65 kg", jump2 - 2f, 12f, Anchor.END))
+        at(
+            5.4f, 1.6f,
+            label(exampleWeight(60.0, 135.0, unit), 20f, 34f),
+            label(exampleWeight(62.5, 140.0, unit), jump1 + 2f, 23f),
+            label(exampleWeight(65.0, 145.0, unit), jump2 - 2f, 12f, Anchor.END)
+        )
         at(6f, 1.8f, label("every set at 10", xs[3] + 3f, 52f, strong = true))
-        at(6.4f, 1.6f, label("+2.5 kg", jump1 - 2f, 35f, Anchor.END, strong = true))
+        at(6.4f, 1.6f, label("+${exampleWeight(2.5, 5.0, unit)}", jump1 - 2f, 35f, Anchor.END, strong = true))
     }
 
     /**
@@ -835,7 +851,7 @@ object AcademySketches {
 
     /** The warm-up ramp: each set heavier and shorter, arriving at the working weight fresh. */
     private fun warmupRamp(): Sketch = sketch(
-        "Warm up by ramping: the empty bar for 10, about half for 5, seventy percent for 3, eighty-five percent for 1 or 2, then your working sets."
+        "Warm up by ramping: the empty bar for 10, about half for 5, about 70 percent for 3, about 85 percent for 1 or 2, then your working sets."
     ) {
         val base = 88f
         val xs = listOf(30f, 56f, 82f, 108f, 136f)
@@ -935,21 +951,31 @@ object AcademySketches {
         at(7.8f, 1.5f, label("sharp, stays", bx(0.6f), 52f))
     }
 
-    /** Protein dose-response: the benefit flattens at about 1.6 g per kg a day. */
-    private fun protein(): Sketch = sketch(
-        "The benefit of protein rises until about 1.6 grams per kilogram of bodyweight a day, then flattens. Up to 2.2 is a sensible margin. For an 80 kg lifter that is about 130 grams."
+    /**
+     * Protein dose-response: the benefit flattens at about 1.6 g per kg a day. The curve is laid out
+     * in g per kg; a pound reader gets the same curve with its axis and figures in g per lb.
+     */
+    private fun protein(unit: WeightUnit): Sketch = sketch(
+        "The benefit of protein rises until about ${trimDecimal(proteinDose(1.6, 0.7, unit))} grams per " +
+            "${proteinBasis(unit)} of bodyweight a day, then flattens. Up to ${trimDecimal(proteinDose(2.2, 1.0, unit))} " +
+            "is a sensible margin. At ${exampleWeight(80.0, 175.0, unit)}, that is about 130 grams a day."
     ) {
         val base = 90f
         fun x(g: Float) = 18f + g * 44f
+        // Grams per display unit of bodyweight, as grams per kg: the scale the curve is drawn on.
+        val perKg = if (unit == WeightUnit.KG) 1f else 1f / 0.45359237f
+        val marks = if (unit == WeightUnit.KG) listOf(0f, 1f, 2f, 3f) else listOf(0f, 0.5f, 1f)
+        fun mark(v: Float) = if (v % 1f == 0f) v.roundToInt().toString() else v.toString()
         fun benefit(px: Float) = base - 50f * (1f - exp(-((px - 18f) / 44f) / 0.55f))
         val c = curve(18f, 150f) { benefit(it) }
         val p = Offset(x(1.6f), benefit(x(1.6f)))
 
-        at(0f, 1.6f, SketchMark.Line(axisX(base, 18f, 150f, listOf(0f, 0.5f, 1f, 1.5f, 2f, 2.5f, 3f).map { x(it) }), Ink.GUIDE))
+        val ticks = (0..12).map { it * (if (unit == WeightUnit.KG) 0.5f else 0.25f) * perKg }.filter { it <= 3f }
+        at(0f, 1.6f, SketchMark.Line(axisX(base, 18f, 150f, ticks.map { x(it) }), Ink.GUIDE))
         at(0.2f, 1.6f, SketchMark.Line(axisY(18f, 30f, base, emptyList()), Ink.GUIDE))
         at(0.4f, 1.6f, dotted(gridH(listOf(base - 25f, base - 50f), 18f, 150f)))
-        at(0.8f, 1.4f, label("0", x(0f), 98f, Anchor.CENTER), label("1", x(1f), 98f, Anchor.CENTER), label("2", x(2f), 98f, Anchor.CENTER), label("3", x(3f), 98f, Anchor.CENTER))
-        at(1f, 1.4f, label("g per kg of bodyweight a day", 150f, 106f, Anchor.END))
+        at(0.8f, 1.4f, *marks.map { label(mark(it), x(it * perKg), 98f, Anchor.CENTER) }.toTypedArray())
+        at(1f, 1.4f, label("g per ${proteinBasis(unit)} of bodyweight a day", 150f, 106f, Anchor.END))
         at(1.2f, 1.4f, label("muscle gained", 21f, 30f))
 
         at(1.6f, 1.8f, SketchMark.Band(x(1.6f), 36f, x(2.2f), base, Ink.ACCENT))
@@ -957,10 +983,14 @@ object AcademySketches {
         at(2.6f, 4f, SketchMark.Area(under(c, 18f, 150f, base), Ink.INK))
         at(5.2f, 1.4f, SketchMark.Line(line(p.x, base, p.x, 36f), Ink.ACCENT))
         at(6.2f, 1.1f, SketchMark.Dot(p.x, p.y, 2.1f, Ink.ACCENT, halo = true))
-        at(5.8f, 2f, figure(1.6f, 1, p.x, 17f, Anchor.CENTER))
-        at(6.6f, 1.5f, label("g per kg", p.x, 29f, Anchor.CENTER, strong = true))
-        at(7f, 1.5f, label("up to 2.2", x(2.2f) + 2f, 52f))
-        at(7.4f, 1.6f, label("80 kg person", 148f, 72f, Anchor.END), label("130 g a day", 148f, 80f, Anchor.END, strong = true))
+        at(5.8f, 2f, figure(proteinDose(1.6, 0.7, unit).toFloat(), 1, p.x, 17f, Anchor.CENTER))
+        at(6.6f, 1.5f, label("g per ${proteinBasis(unit)}", p.x, 29f, Anchor.CENTER, strong = true))
+        at(7f, 1.5f, label("up to ${trimDecimal(proteinDose(2.2, 1.0, unit))}", x(2.2f) + 2f, 52f))
+        at(
+            7.4f, 1.6f,
+            label("at ${exampleWeight(80.0, 175.0, unit)}", 148f, 72f, Anchor.END),
+            label("130 g a day", 148f, 80f, Anchor.END, strong = true)
+        )
     }
 
     // ── Your coach ───────────────────────────────────────────────────────────
@@ -1054,13 +1084,13 @@ object AcademySketches {
      * what you can show stays flat, and the easy week clears the fatigue so it finally shows.
      */
     private fun block(): Sketch = sketch(
-        "Across a block, fatigue climbs faster than fitness, so what you can show stays flat. The easy week clears the fatigue, and what you built shows."
+        "Across a block, fatigue climbs faster than fitness, so what you can show stays flat. The deload week clears the fatigue, and what you built shows."
     ) {
         fun x(w: Float) = 16f + w * 22.3f
         val fitness = smooth(x(0f), 70f, x(2f), 62f, x(4f), 54f, x(5f), 51f, x(6f), 49f)
         val fatigue = smooth(x(0f), 74f, x(2f), 54f, x(4f), 40f, x(5f), 36f, x(6f), 72f)
         val shows = smooth(x(0f), 88f, x(2f), 88f, x(4f), 89f, x(5f), 86f, x(5.6f), 70f, x(6f), 58f)
-        val phases = listOf(Triple(0f, 2f, "build"), Triple(2f, 4f, "heavy"), Triple(4f, 5f, "peak"), Triple(5f, 6f, "easy"))
+        val phases = listOf(Triple(0f, 2f, "accumulate"), Triple(2f, 4f, "intensify"), Triple(4f, 5f, "peak"), Triple(5f, 6f, "deload"))
 
         stagger(0f, 1f, 0.35f, phases.map { (a, b, _) ->
             SketchMark.Band(x(a) + 0.8f, 14f, x(b) - 0.8f, 18f, if (b == 6f) Ink.ACCENT else Ink.GUIDE, radius = 2f)

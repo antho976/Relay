@@ -10,9 +10,13 @@
 # Cost note: soft gradients dominate the encoded size. Glows have been tried and cut twice: a bloom
 # under the generated card's bars as they lock took that file from 147KB to 530KB, and one under each
 # cell of an earlier freestyle design (a heatmap) as it popped took 309KB to 950KB, neither visible
-# at 72dp. If you add bloom, re-check the size. Text that fades or moves is the other cost:
-# freestyle's labels and custom's tilting tiles are why those two are three times the size of
-# generated.
+# at 72dp. If you add bloom, re-check the size. Text that fades or moves is the other cost: fading
+# generated's seven day letters between muted and onBg, rather than switching them in one step, was
+# 152KB against 119KB, which is why every day letter now lights in a step. And a mark whose EDGE
+# moves through a translucent area pays twice (alpha and colour): generated's tracks and shuffling
+# bars are pre-blended onto the card and drawn opaque for that reason (theme.ts CARD).
+# Sizes as of 2026-10-17: generated 133KB, custom 372KB, freestyle 369KB (were 147, 446, 541 before
+# the tilt, the finger dot and the accent rings came out).
 set -euo pipefail
 cd "$(dirname "$0")"
 export PATH="$HOME/.local/opt/node/bin:$PATH"

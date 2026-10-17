@@ -75,7 +75,7 @@ class LessonViewModel @Inject constructor(
         val next = all.getOrNull(all.indexOfFirst { it.id == lesson.id } + 1) ?: return null
         return next.piece(
             if (next.track == lesson.track) "Next in ${lesson.track.displayName}"
-            else "Next chapter: ${next.track.displayName}"
+            else "Next chapter · ${next.track.displayName}"
         )
     }
 

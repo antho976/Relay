@@ -5,6 +5,18 @@ import com.forge.app.ui.common.ForgeChoiceList
 import com.forge.app.ui.common.ForgeGroupSection
 import com.forge.app.ui.common.ForgeRowGroup
 import com.forge.app.ui.common.ForgeSlidingSegments
+import com.forge.app.ui.common.ForgeTileGrid
+import com.forge.app.ui.common.Corners
+import com.forge.app.ui.common.memberFill
+import com.forge.app.ui.common.memberShape
+import com.forge.app.ui.common.bounceClick
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,7 +37,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.schedule.WeeklySchedule
 import com.forge.app.program.SessionEstimate
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import com.forge.app.ui.theme.ForgeWarning
 
@@ -173,9 +184,9 @@ internal fun StepDays(
         // answer trims each day to fit (accessories first, never the main lift).
         val lengths = SessionEstimate.SESSION_LENGTH_CHOICES
         ForgeGroupSection(
-            label = "About how long per session?",
+            label = "Session length",
             meta = "minutes",
-            footer = { StepCaption("Optional. Avex fits each workout to it, and you can still shorten any one workout on the day.") }
+            footer = { StepCaption("Optional. Avex trims each workout to fit, extras first.") }
         ) {
             ForgeRowGroup({
                 ForgeSlidingSegments(
@@ -230,16 +241,34 @@ internal fun StepWeekdays(
                 label = "Your $daysPerWeek days",
                 meta = "${weekdays.size} of $daysPerWeek"
             ) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    WeeklySchedule.WEEKDAY_SHORT.forEachIndexed { i, label ->
-                        ChoiceChip(label, selected = i in weekdays, onClick = { onToggleWeekday(i) })
-                    }
+                // One group of seven cells, a week laid out as a week. Loose chips wrapped Sunday
+                // onto a line of its own at 100%; past 1.3x the cells go four and three.
+                val cols = if (LocalDensity.current.fontScale > 1.3f) 4 else 7
+                ForgeTileGrid(WeeklySchedule.WEEKDAY_SHORT.withIndex().toList(), cols) { (i, label), corners, mod ->
+                    WeekdayCell(label, i in weekdays, corners, { onToggleWeekday(i) }, mod)
                 }
             }
         }
+    }
+}
+
+/** One weekday of [StepWeekdays]: pick-many, so the cell rings and washes but keeps its corners. */
+@Composable
+private fun WeekdayCell(label: String, selected: Boolean, corners: Corners, onClick: () -> Unit, modifier: Modifier) {
+    Box(
+        modifier
+            .memberFill(memberShape(corners, selected = false), selected)
+            .bounceClick(onClick = onClick)
+            .semantics { this.selected = selected; role = Role.Checkbox }
+            .heightIn(min = 48.dp)
+            .padding(vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (selected) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

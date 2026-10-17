@@ -101,7 +101,7 @@ internal fun AboutPage(
         }
 
         // The privacy stance is four claims, each verifiable from the manifest.
-        SettingsGroup("Your data stays on this device") {
+        SettingsGroup("Privacy") {
             SettingsInfoRow("No internet permission", "Avex physically cannot upload anything", Icons.Rounded.CloudOff)
             SettingsInfoRow("No account, no sign-in", "Everything lives in a private database on this phone", Icons.Rounded.NoAccounts)
             SettingsInfoRow("No servers, analytics or tracking", "Nothing is collected, because nothing is sent", Icons.Rounded.VisibilityOff)

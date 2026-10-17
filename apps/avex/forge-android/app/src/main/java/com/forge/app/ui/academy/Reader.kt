@@ -43,6 +43,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.academy.LessonBlock
 import com.forge.app.domain.academy.Source
+import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.ForgeTopBar
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.theme.ForgeMotion
@@ -141,7 +142,7 @@ fun ReaderScreen(
                         color = muted
                     )
                     Spacer(Modifier.height(12.dp))
-                    Text(meta, style = MaterialTheme.typography.labelMedium, color = muted.copy(alpha = 0.65f))
+                    Text(meta.uppercase(), style = MaterialTheme.typography.labelMedium, color = muted.copy(alpha = 0.65f))
                     Spacer(Modifier.height(32.dp))
                 }
             }
@@ -192,13 +193,9 @@ private fun NextBlock(
     onClick: () -> Unit
 ) {
     Column(Modifier.fillMaxWidth()) {
-        Text(
-            next.lead,
-            style = MaterialTheme.typography.titleSmall,
-            color = muted,
-            modifier = Modifier.semantics { heading() }
-        )
-        Spacer(Modifier.height(12.dp))
+        // The forward eyebrow every NEXT item takes (§11), on the anchor the chapters use.
+        EditorialHeader(next.lead, muted = muted, accent = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.height(10.dp))
         Row(
             Modifier.fillMaxWidth().bounceClick { onClick() }.padding(vertical = 4.dp),
             verticalAlignment = Alignment.Top
@@ -213,7 +210,7 @@ private fun NextBlock(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        "${next.minutes} min",
+                        "${next.minutes} min".uppercase(),
                         style = MaterialTheme.typography.labelMedium,
                         color = muted.copy(alpha = 0.65f)
                     )

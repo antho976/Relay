@@ -7,8 +7,8 @@ import {cancelRender, continueRender, delayRender, staticFile} from 'remotion';
  * in the app uses.
  */
 const FACES = [
-  {family: 'VignetteSans', file: 'fonts/NotoSans-Medium.ttf', weight: '500'},
-  {family: 'VignetteMono', file: 'fonts/NotoSansMono-Regular.ttf', weight: '400'},
+  {family: 'VignetteSans', file: 'fonts/Roboto-Medium.ttf', weight: '500'},
+  {family: 'VignetteMono', file: 'fonts/DroidSansMono-Regular.ttf', weight: '400'},
 ];
 
 const handle = delayRender('Loading vignette fonts');

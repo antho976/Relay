@@ -298,13 +298,13 @@ private fun RirExplorer() {
     val rir = left.roundToInt()
     Explorer(
         sketch = FigureSketches.rir(left),
-        control = "Reps left in the tank",
+        control = "Reps in reserve",
         value = "$rir left · RPE ${10 - rir}",
         verdict = when (rir) {
             0 -> "Failure. Fine on the last set of a curl, costly on a heavy squat."
             1 -> "Very hard. Good for the last set of an exercise."
             2 -> "The usual target for a working set."
-            3 -> "Working, still comfortable. It counts fully."
+            3 -> "Working, but comfortable. It counts fully."
             4 -> "On the easy side. It counts, but for less."
             else -> "Warm-up territory. Not a working set."
         },
@@ -698,7 +698,7 @@ internal object FigureSketches {
     }
 
     private fun cutHold(): Sketch = with(AcademySketches) {
-        sketch("Over a cut, bodyweight trends down. A lift that stays flat, instead of slipping the way it usually does, is a win.") {
+        sketch("On a diet, bodyweight trends down. A lift that stays flat, instead of slipping the way it usually does, is a win.") {
             val weight = smooth(14f, 20f, 40f, 24f, 64f, 26f, 88f, 32f, 112f, 36f, 150f, 44f)
             val lift = smooth(14f, 76f, 50f, 75f, 90f, 76f, 120f, 75f, 150f, 75f)
             at(0f, 1.4f, label("bodyweight", 14f, 10f))
@@ -785,7 +785,7 @@ internal object FigureSketches {
     }
 
     private fun hrvNoise(): Sketch = with(AcademySketches) {
-        sketch("Heart-rate variability jumps around from night to night. One bad night barely moves the trend. Several low nights in a row do, and only that counts.") {
+        sketch("Heart-rate variability jumps around from night to night. One low night barely moves the trend. Several low nights in a row do, and only that counts.") {
             val ys = listOf(48f, 44f, 52f, 46f, 50f, 42f, 72f, 47f, 45f, 51f, 43f, 49f, 46f, 50f, 48f, 55f, 58f, 62f, 60f, 64f, 63f)
             val xs = ys.indices.map { 16f + it * 6.5f }
             val trend = ys.indices.map { i ->
@@ -796,7 +796,7 @@ internal object FigureSketches {
             at(0.3f, 1.4f, label("HRV, each night", 16f, 12f), label("3 weeks", 16f, 104f))
             stagger(0.8f, 0.5f, 0.16f, xs.indices.map { SketchMark.Dot(xs[it], ys[it], 1.4f, Ink.INK) })
             at(4.4f, 3f, SketchMark.Line(smooth(*xs.indices.flatMap { listOf(xs[it], trend[it]) }.toFloatArray()), Ink.ACCENT))
-            at(4.6f, 1.4f, label("one bad night", xs[6], 82f, Anchor.CENTER))
+            at(4.6f, 1.4f, label("one low night", xs[6], 82f, Anchor.CENTER))
             at(5.6f, 1.4f, label("your trend", 16f, 32f, strong = true))
             at(7f, 1f, SketchMark.Dot(xs.last(), trend.last(), 2.2f, Ink.ACCENT, halo = true))
             at(7.2f, 1.4f, label("a real drop", 150f, 78f, Anchor.END, strong = true))
@@ -804,11 +804,11 @@ internal object FigureSketches {
     }
 
     private fun volumeVsWeight(): Sketch = with(AcademySketches) {
-        sketch("Through a block, sets come down as the weights go up. In the easy week at the end, both drop.") {
+        sketch("Through a block, sets come down as the weights go up. In the deload week at the end, both drop.") {
             fun x(w: Float) = 16f + w * 22.3f
             val sets = smooth(x(0f), 52f, x(2f), 40f, x(4f), 60f, x(5f), 72f, x(6f), 84f)
             val weight = smooth(x(0f), 78f, x(2f), 66f, x(4f), 48f, x(5f), 36f, x(6f), 74f)
-            val phases = listOf(Triple(0f, 2f, "build"), Triple(2f, 4f, "heavy"), Triple(4f, 5f, "peak"), Triple(5f, 6f, "easy"))
+            val phases = listOf(Triple(0f, 2f, "accumulate"), Triple(2f, 4f, "intensify"), Triple(4f, 5f, "peak"), Triple(5f, 6f, "deload"))
             stagger(0f, 1f, 0.3f, phases.map { (a, b, _) ->
                 SketchMark.Band(x(a) + 0.8f, 12f, x(b) - 0.8f, 16f, if (b == 6f) Ink.ACCENT else Ink.GUIDE, radius = 2f)
             })
