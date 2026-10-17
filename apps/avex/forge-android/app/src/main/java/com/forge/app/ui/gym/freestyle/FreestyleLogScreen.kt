@@ -390,9 +390,15 @@ fun FreestyleLogScreen(
                                 pendingDraft = null
                                 open(restored.lastOrNull()?.libId)
                             },
+                            // Undo over confirm (§12): one tap here dropped an unsaved workout of any
+                            // size for good. The draft comes back, prompt and all, on Undo.
                             onStartFresh = {
                                 viewModel.clearDraft()
                                 pendingDraft = null
+                                viewModel.offerUndo("Unsaved workout discarded") {
+                                    viewModel.saveDraft(draft)
+                                    pendingDraft = draft
+                                }
                             }
                         )
                     } else {
