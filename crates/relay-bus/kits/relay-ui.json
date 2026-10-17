@@ -1,0 +1,4530 @@
+{
+ "id": "relay-ui",
+ "name": "Relay UI",
+ "description": "The dark, warm components of the Relay app itself: controls, navigation, data and feedback.",
+ "items": [
+  {
+   "id": "button-primary",
+   "name": "Button / Primary",
+   "category": "Buttons",
+   "description": "The main action of a screen or dialog.",
+   "slots": {
+    "label": "Button text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      16
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#EDE9E2",
+     "name": "Button / Primary",
+     "w": 97,
+     "h": 40,
+     "w_sizing": "hug",
+     "radius": 10
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Continue",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#131211",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "button-secondary",
+   "name": "Button / Secondary",
+   "category": "Buttons",
+   "description": "A secondary action beside a primary button.",
+   "slots": {
+    "label": "Button text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      16
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#1C1B19",
+     "name": "Button / Secondary",
+     "w": 81,
+     "h": 40,
+     "w_sizing": "hug",
+     "stroke": "#33302D",
+     "radius": 10
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Cancel",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "button-ghost",
+   "name": "Button / Ghost",
+   "category": "Buttons",
+   "description": "A quiet text button for low-emphasis actions.",
+   "slots": {
+    "label": "Button text",
+    "trail-icon": "Trailing icon"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      16
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Button / Ghost",
+     "w": 137,
+     "h": 40,
+     "w_sizing": "hug",
+     "radius": 10
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Learn more",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Label"
+    },
+    {
+     "id": "trail-icon",
+     "parent": "root",
+     "kind": "icon",
+     "icon": "arrow-right",
+     "stroke": "#EDE9E2",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    }
+   ]
+  },
+  {
+   "id": "button-destructive",
+   "name": "Button / Destructive",
+   "category": "Buttons",
+   "description": "An action that deletes or cannot be undone.",
+   "slots": {
+    "lead-icon": "Leading icon",
+    "label": "Button text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      16
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#E5382E",
+     "name": "Button / Danger",
+     "w": 170,
+     "h": 40,
+     "w_sizing": "hug",
+     "radius": 10
+    },
+    {
+     "id": "lead-icon",
+     "parent": "root",
+     "kind": "icon",
+     "icon": "trash",
+     "stroke": "#FFFFFF",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Delete project",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#FFFFFF",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "button-icon",
+   "name": "Button / Icon",
+   "category": "Buttons",
+   "description": "A square button holding only an icon.",
+   "slots": {
+    "icon": "Icon"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#1C1B19",
+     "name": "Icon button",
+     "w": 36,
+     "h": 36,
+     "stroke": "#33302D",
+     "radius": 10
+    },
+    {
+     "id": "icon",
+     "parent": "root",
+     "kind": "icon",
+     "icon": "plus",
+     "stroke": "#EDE9E2",
+     "w": 18,
+     "h": 18,
+     "name": "Icon"
+    }
+   ]
+  },
+  {
+   "id": "button-with-icon",
+   "name": "Button / With icon",
+   "category": "Buttons",
+   "description": "A secondary button with a leading icon.",
+   "slots": {
+    "lead-icon": "Leading icon",
+    "label": "Button text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      16
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#1C1B19",
+     "name": "Button / Secondary",
+     "w": 97,
+     "h": 40,
+     "w_sizing": "hug",
+     "stroke": "#33302D",
+     "radius": 10
+    },
+    {
+     "id": "lead-icon",
+     "parent": "root",
+     "kind": "icon",
+     "icon": "share",
+     "stroke": "#EDE9E2",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Share",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "button-primary-small",
+   "name": "Button / Primary small",
+   "category": "Buttons",
+   "description": "A compact primary button for toolbars and cards.",
+   "slots": {
+    "label": "Button text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      12
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#EDE9E2",
+     "name": "Button / Primary",
+     "w": 54,
+     "h": 32,
+     "w_sizing": "hug",
+     "radius": 8
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Save",
+     "font_size": 13,
+     "font_weight": 600,
+     "color": "#131211",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "button-primary-large",
+   "name": "Button / Primary large",
+   "category": "Buttons",
+   "description": "A large call to action with a trailing arrow.",
+   "slots": {
+    "label": "Button text",
+    "trail-icon": "Trailing icon"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      22
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#EDE9E2",
+     "name": "Button / Primary",
+     "w": 166,
+     "h": 48,
+     "w_sizing": "hug",
+     "radius": 10
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Get started",
+     "font_size": 15,
+     "font_weight": 600,
+     "color": "#131211",
+     "name": "Label"
+    },
+    {
+     "id": "trail-icon",
+     "parent": "root",
+     "kind": "icon",
+     "icon": "arrow-right",
+     "stroke": "#131211",
+     "w": 18,
+     "h": 18,
+     "name": "Icon"
+    }
+   ]
+  },
+  {
+   "id": "text-field",
+   "name": "Input / Text field",
+   "category": "Inputs",
+   "description": "A labelled single-line input with a hint below.",
+   "slots": {
+    "label": "Field label",
+    "value": "Value",
+    "hint": "Hint below the field"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 6,
+     "fill": "#00000000",
+     "name": "Text field",
+     "w": 320,
+     "h": 86,
+     "h_sizing": "hug"
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Project name",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#B5B0A8",
+     "name": "Label"
+    },
+    {
+     "id": "input",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      12
+     ],
+     "items": "center",
+     "fill": "#1A1917",
+     "name": "Input",
+     "w": 320,
+     "h": 40,
+     "w_sizing": "fill",
+     "stroke": "#33302D",
+     "radius": 10
+    },
+    {
+     "id": "value",
+     "parent": "input",
+     "kind": "text",
+     "text": "Northwind redesign",
+     "font_size": 14,
+     "color": "#EDE9E2",
+     "name": "Value",
+     "w": 200,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "hint",
+     "parent": "root",
+     "kind": "text",
+     "text": "Shown in the sidebar and on every task.",
+     "font_size": 12,
+     "color": "#8C877F",
+     "name": "Hint"
+    }
+   ]
+  },
+  {
+   "id": "text-field-empty",
+   "name": "Input / Text field empty",
+   "category": "Inputs",
+   "description": "A labelled input showing its placeholder.",
+   "slots": {
+    "label": "Field label",
+    "lead-icon": "Leading icon",
+    "value": "Placeholder"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 6,
+     "fill": "#00000000",
+     "name": "Text field",
+     "w": 320,
+     "h": 64,
+     "h_sizing": "hug"
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Email",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#B5B0A8",
+     "name": "Label"
+    },
+    {
+     "id": "input",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      12
+     ],
+     "items": "center",
+     "fill": "#1A1917",
+     "name": "Input",
+     "w": 320,
+     "h": 40,
+     "w_sizing": "fill",
+     "stroke": "#33302D",
+     "radius": 10
+    },
+    {
+     "id": "lead-icon",
+     "parent": "input",
+     "kind": "icon",
+     "icon": "mail",
+     "stroke": "#8C877F",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "value",
+     "parent": "input",
+     "kind": "text",
+     "text": "you@company.com",
+     "font_size": 14,
+     "color": "#8C877F",
+     "name": "Value",
+     "w": 200,
+     "w_sizing": "fill"
+    }
+   ]
+  },
+  {
+   "id": "search-field",
+   "name": "Input / Search",
+   "category": "Inputs",
+   "description": "A search box with a magnifier and a keyboard shortcut.",
+   "slots": {
+    "placeholder": "Placeholder text",
+    "shortcut-text": "Keyboard shortcut"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      12
+     ],
+     "items": "center",
+     "fill": "#1A1917",
+     "name": "Search field",
+     "w": 320,
+     "h": 40,
+     "stroke": "#33302D",
+     "radius": 10
+    },
+    {
+     "id": "icon",
+     "parent": "root",
+     "kind": "icon",
+     "icon": "search",
+     "stroke": "#8C877F",
+     "w": 16,
+     "h": 16,
+     "name": "Search icon"
+    },
+    {
+     "id": "placeholder",
+     "parent": "root",
+     "kind": "text",
+     "text": "Search projects, tasks and files",
+     "font_size": 14,
+     "color": "#8C877F",
+     "name": "Placeholder",
+     "w": 200,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "shortcut",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      2,
+      6
+     ],
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Shortcut",
+     "w_sizing": "hug",
+     "h": 20,
+     "stroke": "#33302D",
+     "radius": 5,
+     "w": 46
+    },
+    {
+     "id": "shortcut-text",
+     "parent": "shortcut",
+     "kind": "text",
+     "text": "Ctrl K",
+     "font_size": 11,
+     "font_weight": 500,
+     "color": "#8C877F",
+     "font": "Geist Mono",
+     "name": "Keys"
+    }
+   ]
+  },
+  {
+   "id": "textarea",
+   "name": "Input / Textarea",
+   "category": "Inputs",
+   "description": "A multi-line input with a character count.",
+   "slots": {
+    "label": "Field label",
+    "value": "Text",
+    "counter": "Character count"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 6,
+     "fill": "#00000000",
+     "name": "Textarea",
+     "w": 320,
+     "h": 140,
+     "h_sizing": "hug"
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Description",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#B5B0A8",
+     "name": "Label"
+    },
+    {
+     "id": "box",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "column",
+     "padding": [
+      12
+     ],
+     "justify": "space_between",
+     "fill": "#1A1917",
+     "name": "Box",
+     "w": 320,
+     "h": 112,
+     "w_sizing": "fill",
+     "stroke": "#33302D",
+     "radius": 10
+    },
+    {
+     "id": "value",
+     "parent": "box",
+     "kind": "text",
+     "text": "Rework the onboarding so a new team can create its first project in under a minute.",
+     "font_size": 14,
+     "color": "#EDE9E2",
+     "name": "Value",
+     "w_sizing": "fill",
+     "line_height": 1.45
+    },
+    {
+     "id": "counter",
+     "parent": "box",
+     "kind": "text",
+     "text": "84 / 500",
+     "font_size": 12,
+     "color": "#8C877F",
+     "name": "Counter",
+     "w_sizing": "fill",
+     "align": "right"
+    }
+   ]
+  },
+  {
+   "id": "select",
+   "name": "Input / Select",
+   "category": "Inputs",
+   "description": "A dropdown that shows the chosen option and a chevron.",
+   "slots": {
+    "label": "Field label",
+    "value": "Selected option"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 6,
+     "fill": "#00000000",
+     "name": "Select",
+     "w": 320,
+     "h": 64,
+     "h_sizing": "hug"
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Default branch",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#B5B0A8",
+     "name": "Label"
+    },
+    {
+     "id": "box",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      12
+     ],
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#1A1917",
+     "name": "Box",
+     "w": 320,
+     "h": 40,
+     "w_sizing": "fill",
+     "stroke": "#33302D",
+     "radius": 10
+    },
+    {
+     "id": "value",
+     "parent": "box",
+     "kind": "text",
+     "text": "main",
+     "font_size": 14,
+     "color": "#EDE9E2",
+     "name": "Value"
+    },
+    {
+     "id": "chevron",
+     "parent": "box",
+     "kind": "icon",
+     "icon": "chevron-down",
+     "stroke": "#8C877F",
+     "w": 16,
+     "h": 16,
+     "name": "Chevron"
+    }
+   ]
+  },
+  {
+   "id": "checkbox-checked",
+   "name": "Checkbox / Checked",
+   "category": "Selection",
+   "description": "A ticked checkbox with its label.",
+   "slots": {
+    "label": "Checkbox label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Checkbox / Checked",
+     "w": 251,
+     "h": 22,
+     "w_sizing": "hug"
+    },
+    {
+     "id": "box",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#EDE9E2",
+     "name": "Box",
+     "w": 18,
+     "h": 18,
+     "radius": 5
+    },
+    {
+     "id": "check",
+     "parent": "box",
+     "kind": "icon",
+     "icon": "check",
+     "stroke": "#131211",
+     "w": 14,
+     "h": 14,
+     "stroke_width": 3,
+     "name": "Check"
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Run tests before every commit",
+     "font_size": 14,
+     "color": "#EDE9E2",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "checkbox-unchecked",
+   "name": "Checkbox / Unchecked",
+   "category": "Selection",
+   "description": "An empty checkbox with its label.",
+   "slots": {
+    "label": "Checkbox label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Checkbox / Unchecked",
+     "w": 221,
+     "h": 22,
+     "w_sizing": "hug"
+    },
+    {
+     "id": "box",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#1A1917",
+     "name": "Box",
+     "w": 18,
+     "h": 18,
+     "stroke": "#33302D",
+     "stroke_width": 1.5,
+     "radius": 5
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Email me a weekly summary",
+     "font_size": 14,
+     "color": "#EDE9E2",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "radio-group",
+   "name": "Radio / Group",
+   "category": "Selection",
+   "description": "Three exclusive options, the first selected.",
+   "slots": {
+    "option-1-label": "Option 1",
+    "option-2-label": "Option 2",
+    "option-3-label": "Option 3"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 12,
+     "fill": "#00000000",
+     "name": "Radio group",
+     "w": 260,
+     "h": 90,
+     "h_sizing": "hug"
+    },
+    {
+     "id": "option-1",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Everyone in the workspace",
+     "w_sizing": "hug",
+     "h": 22,
+     "w": 221
+    },
+    {
+     "id": "option-1-ring",
+     "parent": "option-1",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Radio",
+     "w": 18,
+     "h": 18,
+     "stroke": "#EDE9E2",
+     "stroke_width": 1.5,
+     "radius": 999
+    },
+    {
+     "id": "option-1-dot",
+     "parent": "option-1-ring",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 8,
+     "h": 8,
+     "fill": "#EDE9E2"
+    },
+    {
+     "id": "option-1-label",
+     "parent": "option-1",
+     "kind": "text",
+     "text": "Everyone in the workspace",
+     "font_size": 14,
+     "color": "#EDE9E2",
+     "name": "Label"
+    },
+    {
+     "id": "option-2",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Only people I invite",
+     "w_sizing": "hug",
+     "h": 22,
+     "w": 182
+    },
+    {
+     "id": "option-2-ring",
+     "parent": "option-2",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#1A1917",
+     "name": "Radio",
+     "w": 18,
+     "h": 18,
+     "stroke": "#33302D",
+     "stroke_width": 1.5,
+     "radius": 999
+    },
+    {
+     "id": "option-2-label",
+     "parent": "option-2",
+     "kind": "text",
+     "text": "Only people I invite",
+     "font_size": 14,
+     "color": "#EDE9E2",
+     "name": "Label"
+    },
+    {
+     "id": "option-3",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Just me",
+     "w_sizing": "hug",
+     "h": 22,
+     "w": 82
+    },
+    {
+     "id": "option-3-ring",
+     "parent": "option-3",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#1A1917",
+     "name": "Radio",
+     "w": 18,
+     "h": 18,
+     "stroke": "#33302D",
+     "stroke_width": 1.5,
+     "radius": 999
+    },
+    {
+     "id": "option-3-label",
+     "parent": "option-3",
+     "kind": "text",
+     "text": "Just me",
+     "font_size": 14,
+     "color": "#EDE9E2",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "toggle-on",
+   "name": "Toggle / On",
+   "category": "Selection",
+   "description": "A switch turned on, with its label.",
+   "slots": {
+    "label": "Toggle label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Toggle / On",
+     "w": 300,
+     "h": 22,
+     "w_sizing": "hug"
+    },
+    {
+     "id": "switch",
+     "parent": "root",
+     "kind": "frame",
+     "name": "Switch / On",
+     "w": 36,
+     "h": 20,
+     "fill": "#2EC469",
+     "radius": 999
+    },
+    {
+     "id": "knob",
+     "parent": "switch",
+     "kind": "ellipse",
+     "name": "Knob",
+     "x": 18,
+     "y": 2,
+     "w": 16,
+     "h": 16,
+     "fill": "#FFFFFF",
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 2,
+      "spread": 0,
+      "color": "#00000040"
+     }
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Notify me when a session finishes",
+     "font_size": 14,
+     "color": "#EDE9E2",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "toggle-off",
+   "name": "Toggle / Off",
+   "category": "Selection",
+   "description": "A switch turned off, with its label.",
+   "slots": {
+    "label": "Toggle label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Toggle / Off",
+     "w": 262,
+     "h": 22,
+     "w_sizing": "hug"
+    },
+    {
+     "id": "switch",
+     "parent": "root",
+     "kind": "frame",
+     "name": "Switch / Off",
+     "w": 36,
+     "h": 20,
+     "fill": "#33302D",
+     "radius": 999
+    },
+    {
+     "id": "knob",
+     "parent": "switch",
+     "kind": "ellipse",
+     "name": "Knob",
+     "x": 2,
+     "y": 2,
+     "w": 16,
+     "h": 16,
+     "fill": "#B5B0A8",
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 2,
+      "spread": 0,
+      "color": "#00000040"
+     }
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Play a sound on new messages",
+     "font_size": 14,
+     "color": "#EDE9E2",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "segmented",
+   "name": "Segmented control",
+   "category": "Selection",
+   "description": "Three options in one control, one active.",
+   "slots": {
+    "option-1-label": "Option 1",
+    "option-2-label": "Option 2",
+    "option-3-label": "Option 3"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 2,
+     "padding": [
+      3
+     ],
+     "items": "center",
+     "fill": "#1A1917",
+     "name": "Segmented control",
+     "w": 180,
+     "h": 36,
+     "w_sizing": "hug",
+     "stroke": "#262422",
+     "radius": 10
+    },
+    {
+     "id": "option-1",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      0,
+      14
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Day",
+     "w": 49,
+     "h": 30,
+     "w_sizing": "hug",
+     "radius": 7
+    },
+    {
+     "id": "option-1-label",
+     "parent": "option-1",
+     "kind": "text",
+     "text": "Day",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#B5B0A8",
+     "name": "Label"
+    },
+    {
+     "id": "option-2",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      0,
+      14
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#2B2926",
+     "name": "Week",
+     "w": 57,
+     "h": 30,
+     "w_sizing": "hug",
+     "stroke": "#33302D",
+     "radius": 7
+    },
+    {
+     "id": "option-2-label",
+     "parent": "option-2",
+     "kind": "text",
+     "text": "Week",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#EDE9E2",
+     "name": "Label"
+    },
+    {
+     "id": "option-3",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      0,
+      14
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Month",
+     "w": 64,
+     "h": 30,
+     "w_sizing": "hug",
+     "radius": 7
+    },
+    {
+     "id": "option-3-label",
+     "parent": "option-3",
+     "kind": "text",
+     "text": "Month",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#B5B0A8",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "tabs",
+   "name": "Tabs",
+   "category": "Navigation",
+   "description": "A row of tabs with an underline under the active one.",
+   "slots": {
+    "tab-1-label": "Tab 1",
+    "tab-2-label": "Tab 2",
+    "tab-3-label": "Tab 3",
+    "tab-4-label": "Tab 4"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "fill": "#00000000",
+     "name": "Tabs",
+     "w": 420,
+     "h": 36,
+     "h_sizing": "hug"
+    },
+    {
+     "id": "tab-row",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 24,
+     "items": "start",
+     "fill": "#00000000",
+     "name": "Tab row",
+     "w_sizing": "hug",
+     "h": 35
+    },
+    {
+     "id": "tab-1",
+     "parent": "tab-row",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 10,
+     "fill": "#00000000",
+     "name": "Overview",
+     "w_sizing": "hug",
+     "h_sizing": "hug",
+     "w": 62,
+     "h": 35
+    },
+    {
+     "id": "tab-1-label",
+     "parent": "tab-1",
+     "kind": "text",
+     "text": "Overview",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#EDE9E2",
+     "name": "Label"
+    },
+    {
+     "id": "tab-1-indicator",
+     "parent": "tab-1",
+     "kind": "rect",
+     "name": "Indicator",
+     "w": 62,
+     "h": 2,
+     "w_sizing": "fill",
+     "fill": "#EDE9E2",
+     "radius": 1
+    },
+    {
+     "id": "tab-2",
+     "parent": "tab-row",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 10,
+     "fill": "#00000000",
+     "name": "Sessions",
+     "w_sizing": "hug",
+     "h_sizing": "hug",
+     "w": 62,
+     "h": 35
+    },
+    {
+     "id": "tab-2-label",
+     "parent": "tab-2",
+     "kind": "text",
+     "text": "Sessions",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#8C877F",
+     "name": "Label"
+    },
+    {
+     "id": "tab-2-indicator",
+     "parent": "tab-2",
+     "kind": "rect",
+     "name": "Indicator",
+     "w": 62,
+     "h": 2,
+     "w_sizing": "fill",
+     "fill": "#00000000",
+     "radius": 1
+    },
+    {
+     "id": "tab-3",
+     "parent": "tab-row",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 10,
+     "fill": "#00000000",
+     "name": "Files",
+     "w_sizing": "hug",
+     "h_sizing": "hug",
+     "w": 38,
+     "h": 35
+    },
+    {
+     "id": "tab-3-label",
+     "parent": "tab-3",
+     "kind": "text",
+     "text": "Files",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#8C877F",
+     "name": "Label"
+    },
+    {
+     "id": "tab-3-indicator",
+     "parent": "tab-3",
+     "kind": "rect",
+     "name": "Indicator",
+     "w": 38,
+     "h": 2,
+     "w_sizing": "fill",
+     "fill": "#00000000",
+     "radius": 1
+    },
+    {
+     "id": "tab-4",
+     "parent": "tab-row",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 10,
+     "fill": "#00000000",
+     "name": "Settings",
+     "w_sizing": "hug",
+     "h_sizing": "hug",
+     "w": 62,
+     "h": 35
+    },
+    {
+     "id": "tab-4-label",
+     "parent": "tab-4",
+     "kind": "text",
+     "text": "Settings",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#8C877F",
+     "name": "Label"
+    },
+    {
+     "id": "tab-4-indicator",
+     "parent": "tab-4",
+     "kind": "rect",
+     "name": "Indicator",
+     "w": 62,
+     "h": 2,
+     "w_sizing": "fill",
+     "fill": "#00000000",
+     "radius": 1
+    },
+    {
+     "id": "rule",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Divider",
+     "w": 320,
+     "h": 1,
+     "w_sizing": "fill",
+     "fill": "#262422"
+    }
+   ]
+  },
+  {
+   "id": "badge-neutral",
+   "name": "Badge / Neutral",
+   "category": "Badges",
+   "description": "A neutral status pill.",
+   "slots": {
+    "label": "Badge text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "padding": [
+      0,
+      8
+     ],
+     "items": "center",
+     "fill": "#1C1B19",
+     "name": "Badge / Neutral",
+     "w": 61,
+     "h": 22,
+     "w_sizing": "hug",
+     "stroke": "#33302D",
+     "radius": 999
+    },
+    {
+     "id": "dot",
+     "parent": "root",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 6,
+     "h": 6,
+     "fill": "#8C877F"
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Draft",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#B5B0A8",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "badge-success",
+   "name": "Badge / Success",
+   "category": "Badges",
+   "description": "A green status pill for running or done.",
+   "slots": {
+    "label": "Badge text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "padding": [
+      0,
+      8
+     ],
+     "items": "center",
+     "fill": "#2EC4691F",
+     "name": "Badge / Success",
+     "w": 54,
+     "h": 22,
+     "w_sizing": "hug",
+     "radius": 999
+    },
+    {
+     "id": "dot",
+     "parent": "root",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 6,
+     "h": 6,
+     "fill": "#2EC469"
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Live",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#2EC469",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "badge-warning",
+   "name": "Badge / Warning",
+   "category": "Badges",
+   "description": "An amber status pill for something that needs attention.",
+   "slots": {
+    "label": "Badge text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "padding": [
+      0,
+      8
+     ],
+     "items": "center",
+     "fill": "#F0A8281F",
+     "name": "Badge / Warning",
+     "w": 74,
+     "h": 22,
+     "w_sizing": "hug",
+     "radius": 999
+    },
+    {
+     "id": "dot",
+     "parent": "root",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 6,
+     "h": 6,
+     "fill": "#F0A828"
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Waiting",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#F0A828",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "badge-danger",
+   "name": "Badge / Danger",
+   "category": "Badges",
+   "description": "A red status pill for an error.",
+   "slots": {
+    "label": "Badge text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "padding": [
+      0,
+      8
+     ],
+     "items": "center",
+     "fill": "#E5382E1F",
+     "name": "Badge / Danger",
+     "w": 68,
+     "h": 22,
+     "w_sizing": "hug",
+     "radius": 999
+    },
+    {
+     "id": "dot",
+     "parent": "root",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 6,
+     "h": 6,
+     "fill": "#E5382E"
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Failed",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#E5382E",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "avatar",
+   "name": "Avatar",
+   "category": "People",
+   "description": "A round avatar with initials.",
+   "slots": {
+    "initials": "Initials"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#2A2724",
+     "name": "Avatar",
+     "w": 40,
+     "h": 40,
+     "radius": 999
+    },
+    {
+     "id": "initials",
+     "parent": "root",
+     "kind": "text",
+     "text": "AB",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Initials"
+    }
+   ]
+  },
+  {
+   "id": "avatar-group",
+   "name": "Avatar group",
+   "category": "People",
+   "description": "Overlapping avatars with an overflow count.",
+   "slots": {
+    "avatar-1-initials": "Initials",
+    "avatar-2-initials": "Initials",
+    "avatar-3-initials": "Initials",
+    "avatar-4-initials": "Initials",
+    "more-label": "Overflow count"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": -8,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Avatar group",
+     "w": 128,
+     "h": 32,
+     "w_sizing": "hug"
+    },
+    {
+     "id": "avatar-1",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#2A2724",
+     "name": "Avatar",
+     "w": 32,
+     "h": 32,
+     "radius": 999,
+     "stroke": "#131211",
+     "stroke_width": 2
+    },
+    {
+     "id": "avatar-1-initials",
+     "parent": "avatar-1",
+     "kind": "text",
+     "text": "AB",
+     "font_size": 12,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Initials"
+    },
+    {
+     "id": "avatar-2",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#2EC46926",
+     "name": "Avatar",
+     "w": 32,
+     "h": 32,
+     "radius": 999,
+     "stroke": "#131211",
+     "stroke_width": 2
+    },
+    {
+     "id": "avatar-2-initials",
+     "parent": "avatar-2",
+     "kind": "text",
+     "text": "MK",
+     "font_size": 12,
+     "font_weight": 600,
+     "color": "#2EC469",
+     "name": "Initials"
+    },
+    {
+     "id": "avatar-3",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#F0A82826",
+     "name": "Avatar",
+     "w": 32,
+     "h": 32,
+     "radius": 999,
+     "stroke": "#131211",
+     "stroke_width": 2
+    },
+    {
+     "id": "avatar-3-initials",
+     "parent": "avatar-3",
+     "kind": "text",
+     "text": "JS",
+     "font_size": 12,
+     "font_weight": 600,
+     "color": "#F0A828",
+     "name": "Initials"
+    },
+    {
+     "id": "avatar-4",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#E5382E26",
+     "name": "Avatar",
+     "w": 32,
+     "h": 32,
+     "radius": 999,
+     "stroke": "#131211",
+     "stroke_width": 2
+    },
+    {
+     "id": "avatar-4-initials",
+     "parent": "avatar-4",
+     "kind": "text",
+     "text": "RL",
+     "font_size": 12,
+     "font_weight": 600,
+     "color": "#F0827B",
+     "name": "Initials"
+    },
+    {
+     "id": "more",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#1C1B19",
+     "name": "More",
+     "w": 32,
+     "h": 32,
+     "stroke": "#131211",
+     "stroke_width": 2,
+     "radius": 999
+    },
+    {
+     "id": "more-label",
+     "parent": "more",
+     "kind": "text",
+     "text": "+3",
+     "font_size": 11,
+     "font_weight": 600,
+     "color": "#B5B0A8",
+     "name": "Count"
+    }
+   ]
+  },
+  {
+   "id": "card",
+   "name": "Card",
+   "category": "Cards",
+   "description": "A card with a title, a paragraph and two actions.",
+   "slots": {
+    "title": "Card title",
+    "badge-label": "Badge text",
+    "body": "Card body",
+    "secondary-label": "Button text",
+    "primary-label": "Button text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 14,
+     "padding": [
+      20
+     ],
+     "fill": "#1A1917",
+     "name": "Card",
+     "w": 340,
+     "h": 180,
+     "h_sizing": "hug",
+     "stroke": "#262422",
+     "radius": 14
+    },
+    {
+     "id": "header",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#00000000",
+     "name": "Header",
+     "w_sizing": "fill",
+     "h": 24
+    },
+    {
+     "id": "title",
+     "parent": "header",
+     "kind": "text",
+     "text": "Weekly review",
+     "font_size": 16,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Title"
+    },
+    {
+     "id": "badge",
+     "parent": "header",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "padding": [
+      0,
+      8
+     ],
+     "items": "center",
+     "fill": "#2EC4691F",
+     "name": "Badge / Success",
+     "w": 61,
+     "h": 22,
+     "w_sizing": "hug",
+     "radius": 999
+    },
+    {
+     "id": "badge-dot",
+     "parent": "badge",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 6,
+     "h": 6,
+     "fill": "#2EC469"
+    },
+    {
+     "id": "badge-label",
+     "parent": "badge",
+     "kind": "text",
+     "text": "3 new",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#2EC469",
+     "name": "Label"
+    },
+    {
+     "id": "body",
+     "parent": "root",
+     "kind": "text",
+     "text": "Seven tasks moved to done and two are waiting on review. Open the board to see who is blocked.",
+     "font_size": 14,
+     "color": "#B5B0A8",
+     "name": "Body",
+     "w_sizing": "fill",
+     "line_height": 1.5
+    },
+    {
+     "id": "actions",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "items": "center",
+     "justify": "end",
+     "fill": "#00000000",
+     "name": "Actions",
+     "w_sizing": "fill",
+     "h": 32
+    },
+    {
+     "id": "secondary",
+     "parent": "actions",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      12
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Button / Ghost",
+     "w": 77,
+     "h": 32,
+     "w_sizing": "hug",
+     "radius": 8
+    },
+    {
+     "id": "secondary-label",
+     "parent": "secondary",
+     "kind": "text",
+     "text": "Dismiss",
+     "font_size": 13,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Label"
+    },
+    {
+     "id": "primary",
+     "parent": "actions",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      12
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#EDE9E2",
+     "name": "Button / Primary",
+     "w": 54,
+     "h": 32,
+     "w_sizing": "hug",
+     "radius": 8
+    },
+    {
+     "id": "primary-label",
+     "parent": "primary",
+     "kind": "text",
+     "text": "Open",
+     "font_size": 13,
+     "font_weight": 600,
+     "color": "#131211",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "stat-tile",
+   "name": "Stat tile",
+   "category": "Data",
+   "description": "A metric with its label and change since the last period.",
+   "slots": {
+    "label": "Metric name",
+    "icon": "Metric icon",
+    "value": "Metric value",
+    "delta-text": "Change against last period"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 6,
+     "padding": [
+      16,
+      18
+     ],
+     "fill": "#1A1917",
+     "name": "Stat tile",
+     "w": 220,
+     "h": 104,
+     "h_sizing": "hug",
+     "stroke": "#262422",
+     "radius": 14
+    },
+    {
+     "id": "top",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#00000000",
+     "name": "Header",
+     "w_sizing": "fill",
+     "h": 18
+    },
+    {
+     "id": "label",
+     "parent": "top",
+     "kind": "text",
+     "text": "Sessions this week",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#8C877F",
+     "name": "Label"
+    },
+    {
+     "id": "icon",
+     "parent": "top",
+     "kind": "icon",
+     "icon": "terminal",
+     "stroke": "#8C877F",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "value",
+     "parent": "root",
+     "kind": "text",
+     "text": "128",
+     "font_size": 30,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "font": "Sora",
+     "name": "Value"
+    },
+    {
+     "id": "delta",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 4,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Delta",
+     "w_sizing": "hug",
+     "h": 18
+    },
+    {
+     "id": "delta-icon",
+     "parent": "delta",
+     "kind": "icon",
+     "icon": "arrow-up",
+     "stroke": "#2EC469",
+     "w": 14,
+     "h": 14,
+     "name": "Trend"
+    },
+    {
+     "id": "delta-text",
+     "parent": "delta",
+     "kind": "text",
+     "text": "+12% vs last week",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#2EC469",
+     "name": "Change"
+    }
+   ]
+  },
+  {
+   "id": "list-row",
+   "name": "List row",
+   "category": "Lists",
+   "description": "A row with an icon, title, subtitle and a chevron.",
+   "slots": {
+    "icon": "Icon",
+    "title": "Row title",
+    "subtitle": "Row subtitle"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 12,
+     "padding": [
+      0,
+      14
+     ],
+     "items": "center",
+     "fill": "#1A1917",
+     "name": "List row",
+     "w": 360,
+     "h": 64,
+     "radius": 10
+    },
+    {
+     "id": "icon-box",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#1C1B19",
+     "name": "Icon box",
+     "w": 36,
+     "h": 36,
+     "stroke": "#262422",
+     "radius": 10
+    },
+    {
+     "id": "icon",
+     "parent": "icon-box",
+     "kind": "icon",
+     "icon": "folder",
+     "stroke": "#B5B0A8",
+     "w": 18,
+     "h": 18,
+     "name": "Icon"
+    },
+    {
+     "id": "text",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 2,
+     "fill": "#00000000",
+     "name": "Text",
+     "w_sizing": "fill",
+     "h_sizing": "hug",
+     "w": 200
+    },
+    {
+     "id": "title",
+     "parent": "text",
+     "kind": "text",
+     "text": "Northwind redesign",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#EDE9E2",
+     "name": "Title"
+    },
+    {
+     "id": "subtitle",
+     "parent": "text",
+     "kind": "text",
+     "text": "12 tasks · updated 2h ago",
+     "font_size": 12,
+     "color": "#8C877F",
+     "name": "Subtitle"
+    },
+    {
+     "id": "chevron",
+     "parent": "root",
+     "kind": "icon",
+     "icon": "chevron-right",
+     "stroke": "#8C877F",
+     "w": 16,
+     "h": 16,
+     "name": "Chevron"
+    }
+   ]
+  },
+  {
+   "id": "settings-row",
+   "name": "Settings row",
+   "category": "Lists",
+   "description": "A setting with its description and a switch.",
+   "slots": {
+    "title": "Setting name",
+    "description": "Setting description"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 16,
+     "padding": [
+      14,
+      16
+     ],
+     "items": "center",
+     "fill": "#1A1917",
+     "name": "Settings row",
+     "w": 400,
+     "h": 72,
+     "h_sizing": "hug",
+     "stroke": "#262422",
+     "radius": 10
+    },
+    {
+     "id": "text",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 2,
+     "fill": "#00000000",
+     "name": "Text",
+     "w": 316,
+     "h_sizing": "hug"
+    },
+    {
+     "id": "title",
+     "parent": "text",
+     "kind": "text",
+     "text": "Auto-archive finished sessions",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#EDE9E2",
+     "name": "Title"
+    },
+    {
+     "id": "description",
+     "parent": "text",
+     "kind": "text",
+     "text": "Sessions that end cleanly move to the archive after a day.",
+     "font_size": 12,
+     "color": "#8C877F",
+     "name": "Description",
+     "w_sizing": "fill",
+     "line_height": 1.4
+    },
+    {
+     "id": "switch",
+     "parent": "root",
+     "kind": "frame",
+     "name": "Switch / On",
+     "w": 36,
+     "h": 20,
+     "fill": "#2EC469",
+     "radius": 999
+    },
+    {
+     "id": "knob",
+     "parent": "switch",
+     "kind": "ellipse",
+     "name": "Knob",
+     "x": 18,
+     "y": 2,
+     "w": 16,
+     "h": 16,
+     "fill": "#FFFFFF",
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 2,
+      "spread": 0,
+      "color": "#00000040"
+     }
+    }
+   ]
+  },
+  {
+   "id": "navbar-mobile",
+   "name": "Nav bar / Mobile",
+   "category": "Navigation",
+   "description": "A phone top bar: back, title, action.",
+   "slots": {
+    "left-icon": "Left icon",
+    "title": "Screen title",
+    "right-icon": "Right icon"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      0,
+      8
+     ],
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#131211",
+     "name": "Nav bar",
+     "w": 390,
+     "h": 56,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "left",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Back",
+     "w": 40,
+     "h": 40,
+     "radius": 10
+    },
+    {
+     "id": "left-icon",
+     "parent": "left",
+     "kind": "icon",
+     "icon": "chevron-left",
+     "stroke": "#EDE9E2",
+     "w": 24,
+     "h": 24,
+     "name": "Icon"
+    },
+    {
+     "id": "title",
+     "parent": "root",
+     "kind": "text",
+     "text": "Project",
+     "font_size": 16,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Title"
+    },
+    {
+     "id": "right",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Action",
+     "w": 40,
+     "h": 40,
+     "radius": 10
+    },
+    {
+     "id": "right-icon",
+     "parent": "right",
+     "kind": "icon",
+     "icon": "more-horizontal",
+     "stroke": "#EDE9E2",
+     "w": 22,
+     "h": 22,
+     "name": "Icon"
+    }
+   ]
+  },
+  {
+   "id": "tabbar-mobile",
+   "name": "Tab bar / Mobile",
+   "category": "Navigation",
+   "description": "A phone bottom bar with four tabs, one active.",
+   "slots": {
+    "tab-1-icon": "Tab 1 icon",
+    "tab-1-label": "Tab 1 label",
+    "tab-2-icon": "Tab 2 icon",
+    "tab-2-label": "Tab 2 label",
+    "tab-3-icon": "Tab 3 icon",
+    "tab-3-label": "Tab 3 label",
+    "tab-4-icon": "Tab 4 icon",
+    "tab-4-label": "Tab 4 label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "fill": "#1A1917",
+     "name": "Tab bar",
+     "w": 390,
+     "h": 84,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "tab-bar-rule",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Divider",
+     "w": 320,
+     "h": 1,
+     "w_sizing": "fill",
+     "fill": "#262422"
+    },
+    {
+     "id": "tabs",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      8,
+      8,
+      24,
+      8
+     ],
+     "items": "start",
+     "fill": "#00000000",
+     "name": "Tabs",
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "h": 83
+    },
+    {
+     "id": "tab-1",
+     "parent": "tabs",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 4,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Home",
+     "w_sizing": "fill",
+     "h_sizing": "hug",
+     "w": 90,
+     "h": 40
+    },
+    {
+     "id": "tab-1-icon",
+     "parent": "tab-1",
+     "kind": "icon",
+     "icon": "home",
+     "stroke": "#EDE9E2",
+     "w": 22,
+     "h": 22,
+     "name": "Icon"
+    },
+    {
+     "id": "tab-1-label",
+     "parent": "tab-1",
+     "kind": "text",
+     "text": "Home",
+     "font_size": 11,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Label"
+    },
+    {
+     "id": "tab-2",
+     "parent": "tabs",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 4,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Search",
+     "w_sizing": "fill",
+     "h_sizing": "hug",
+     "w": 90,
+     "h": 40
+    },
+    {
+     "id": "tab-2-icon",
+     "parent": "tab-2",
+     "kind": "icon",
+     "icon": "search",
+     "stroke": "#8C877F",
+     "w": 22,
+     "h": 22,
+     "name": "Icon"
+    },
+    {
+     "id": "tab-2-label",
+     "parent": "tab-2",
+     "kind": "text",
+     "text": "Search",
+     "font_size": 11,
+     "font_weight": 500,
+     "color": "#8C877F",
+     "name": "Label"
+    },
+    {
+     "id": "tab-3",
+     "parent": "tabs",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 4,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Inbox",
+     "w_sizing": "fill",
+     "h_sizing": "hug",
+     "w": 90,
+     "h": 40
+    },
+    {
+     "id": "tab-3-icon",
+     "parent": "tab-3",
+     "kind": "icon",
+     "icon": "bell",
+     "stroke": "#8C877F",
+     "w": 22,
+     "h": 22,
+     "name": "Icon"
+    },
+    {
+     "id": "tab-3-label",
+     "parent": "tab-3",
+     "kind": "text",
+     "text": "Inbox",
+     "font_size": 11,
+     "font_weight": 500,
+     "color": "#8C877F",
+     "name": "Label"
+    },
+    {
+     "id": "tab-4",
+     "parent": "tabs",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 4,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Profile",
+     "w_sizing": "fill",
+     "h_sizing": "hug",
+     "w": 90,
+     "h": 40
+    },
+    {
+     "id": "tab-4-icon",
+     "parent": "tab-4",
+     "kind": "icon",
+     "icon": "user",
+     "stroke": "#8C877F",
+     "w": 22,
+     "h": 22,
+     "name": "Icon"
+    },
+    {
+     "id": "tab-4-label",
+     "parent": "tab-4",
+     "kind": "text",
+     "text": "Profile",
+     "font_size": 11,
+     "font_weight": 500,
+     "color": "#8C877F",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "sidebar-item-active",
+   "name": "Sidebar item / Active",
+   "category": "Navigation",
+   "description": "The selected entry of a sidebar.",
+   "slots": {
+    "icon": "Icon",
+    "label": "Label",
+    "count": "Count"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      10
+     ],
+     "items": "center",
+     "fill": "#24221F",
+     "name": "Nav item / Active",
+     "w": 232,
+     "h": 34,
+     "radius": 8
+    },
+    {
+     "id": "icon",
+     "parent": "root",
+     "kind": "icon",
+     "icon": "grid",
+     "stroke": "#EDE9E2",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Projects",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#EDE9E2",
+     "name": "Label",
+     "w": 120,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "count",
+     "parent": "root",
+     "kind": "text",
+     "text": "12",
+     "font_size": 12,
+     "color": "#8C877F",
+     "name": "Count"
+    }
+   ]
+  },
+  {
+   "id": "sidebar-item-idle",
+   "name": "Sidebar item / Idle",
+   "category": "Navigation",
+   "description": "An unselected entry of a sidebar.",
+   "slots": {
+    "icon": "Icon",
+    "label": "Label",
+    "count": "Count"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      10
+     ],
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Nav item / Idle",
+     "w": 232,
+     "h": 34,
+     "radius": 8
+    },
+    {
+     "id": "icon",
+     "parent": "root",
+     "kind": "icon",
+     "icon": "message",
+     "stroke": "#8C877F",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Messages",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#B5B0A8",
+     "name": "Label",
+     "w": 120,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "count",
+     "parent": "root",
+     "kind": "text",
+     "text": "3",
+     "font_size": 12,
+     "color": "#8C877F",
+     "name": "Count"
+    }
+   ]
+  },
+  {
+   "id": "breadcrumb",
+   "name": "Breadcrumb",
+   "category": "Navigation",
+   "description": "The path to the current page.",
+   "slots": {
+    "crumb-1": "Level 1",
+    "crumb-2": "Level 2",
+    "crumb-3": "Level 3"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Breadcrumb",
+     "w": 292,
+     "h": 20,
+     "w_sizing": "hug"
+    },
+    {
+     "id": "crumb-1",
+     "parent": "root",
+     "kind": "text",
+     "text": "Projects",
+     "font_size": 13,
+     "color": "#8C877F",
+     "name": "Crumb"
+    },
+    {
+     "id": "sep-1",
+     "parent": "root",
+     "kind": "icon",
+     "icon": "chevron-right",
+     "stroke": "#8C877F",
+     "w": 14,
+     "h": 14,
+     "name": "Separator"
+    },
+    {
+     "id": "crumb-2",
+     "parent": "root",
+     "kind": "text",
+     "text": "Northwind",
+     "font_size": 13,
+     "color": "#8C877F",
+     "name": "Crumb"
+    },
+    {
+     "id": "sep-2",
+     "parent": "root",
+     "kind": "icon",
+     "icon": "chevron-right",
+     "stroke": "#8C877F",
+     "w": 14,
+     "h": 14,
+     "name": "Separator"
+    },
+    {
+     "id": "crumb-3",
+     "parent": "root",
+     "kind": "text",
+     "text": "Design canvas",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#EDE9E2",
+     "name": "Crumb"
+    }
+   ]
+  },
+  {
+   "id": "pagination",
+   "name": "Pagination",
+   "category": "Navigation",
+   "description": "Previous, page numbers and next.",
+   "slots": {},
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 4,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Pagination",
+     "w": 252,
+     "h": 32,
+     "w_sizing": "hug"
+    },
+    {
+     "id": "prev",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Previous",
+     "w": 32,
+     "h": 32,
+     "stroke": "#33302D",
+     "radius": 8
+    },
+    {
+     "id": "prev-icon",
+     "parent": "prev",
+     "kind": "icon",
+     "icon": "chevron-left",
+     "stroke": "#B5B0A8",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "page-1",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#EDE9E2",
+     "name": "Page 1",
+     "w": 32,
+     "h": 32,
+     "radius": 8
+    },
+    {
+     "id": "page-1-label",
+     "parent": "page-1",
+     "kind": "text",
+     "text": "1",
+     "font_size": 13,
+     "font_weight": 600,
+     "color": "#131211",
+     "name": "Number"
+    },
+    {
+     "id": "page-2",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Page 2",
+     "w": 32,
+     "h": 32,
+     "radius": 8
+    },
+    {
+     "id": "page-2-label",
+     "parent": "page-2",
+     "kind": "text",
+     "text": "2",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#EDE9E2",
+     "name": "Number"
+    },
+    {
+     "id": "page-3",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Page 3",
+     "w": 32,
+     "h": 32,
+     "radius": 8
+    },
+    {
+     "id": "page-3-label",
+     "parent": "page-3",
+     "kind": "text",
+     "text": "3",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#EDE9E2",
+     "name": "Number"
+    },
+    {
+     "id": "page-4",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Page …",
+     "w": 32,
+     "h": 32,
+     "radius": 8
+    },
+    {
+     "id": "page-4-label",
+     "parent": "page-4",
+     "kind": "text",
+     "text": "…",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#8C877F",
+     "name": "Number"
+    },
+    {
+     "id": "page-5",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Page 12",
+     "w": 32,
+     "h": 32,
+     "radius": 8
+    },
+    {
+     "id": "page-5-label",
+     "parent": "page-5",
+     "kind": "text",
+     "text": "12",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#EDE9E2",
+     "name": "Number"
+    },
+    {
+     "id": "next",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Next",
+     "w": 32,
+     "h": 32,
+     "stroke": "#33302D",
+     "radius": 8
+    },
+    {
+     "id": "next-icon",
+     "parent": "next",
+     "kind": "icon",
+     "icon": "chevron-right",
+     "stroke": "#B5B0A8",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    }
+   ]
+  },
+  {
+   "id": "modal",
+   "name": "Modal dialog",
+   "category": "Overlays",
+   "description": "A dialog with a title, text, cancel and confirm.",
+   "slots": {
+    "title": "Dialog title",
+    "body": "Dialog text",
+    "cancel-label": "Button text",
+    "confirm-label": "Button text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 16,
+     "padding": [
+      24
+     ],
+     "fill": "#1C1B19",
+     "name": "Modal",
+     "w": 440,
+     "h": 200,
+     "h_sizing": "hug",
+     "stroke": "#33302D",
+     "radius": 14,
+     "shadow": {
+      "x": 0,
+      "y": 16,
+      "blur": 40,
+      "spread": 0,
+      "color": "#0000008C"
+     }
+    },
+    {
+     "id": "header",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 12,
+     "items": "start",
+     "justify": "space_between",
+     "fill": "#00000000",
+     "name": "Header",
+     "w_sizing": "fill",
+     "h": 24
+    },
+    {
+     "id": "title",
+     "parent": "header",
+     "kind": "text",
+     "text": "Archive this project?",
+     "font_size": 17,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Title"
+    },
+    {
+     "id": "close",
+     "parent": "header",
+     "kind": "icon",
+     "icon": "x",
+     "stroke": "#8C877F",
+     "w": 18,
+     "h": 18,
+     "name": "Close"
+    },
+    {
+     "id": "body",
+     "parent": "root",
+     "kind": "text",
+     "text": "Its sessions stop and its board is hidden. You can restore it from Settings at any time.",
+     "font_size": 14,
+     "color": "#B5B0A8",
+     "name": "Body",
+     "w_sizing": "fill",
+     "line_height": 1.5
+    },
+    {
+     "id": "footer",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "items": "center",
+     "justify": "end",
+     "fill": "#00000000",
+     "name": "Footer",
+     "w_sizing": "fill",
+     "h": 40
+    },
+    {
+     "id": "cancel",
+     "parent": "footer",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      16
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#1C1B19",
+     "name": "Button / Secondary",
+     "w": 81,
+     "h": 40,
+     "w_sizing": "hug",
+     "stroke": "#33302D",
+     "radius": 10
+    },
+    {
+     "id": "cancel-label",
+     "parent": "cancel",
+     "kind": "text",
+     "text": "Cancel",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Label"
+    },
+    {
+     "id": "confirm",
+     "parent": "footer",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      16
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#E5382E",
+     "name": "Button / Danger",
+     "w": 154,
+     "h": 40,
+     "w_sizing": "hug",
+     "radius": 10
+    },
+    {
+     "id": "confirm-label",
+     "parent": "confirm",
+     "kind": "text",
+     "text": "Archive project",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#FFFFFF",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "toast",
+   "name": "Toast",
+   "category": "Feedback",
+   "description": "A short notice that something finished.",
+   "slots": {
+    "icon": "Icon",
+    "title": "Notice title",
+    "body": "Notice text",
+    "action": "Action label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 12,
+     "padding": [
+      12,
+      14
+     ],
+     "items": "center",
+     "fill": "#1C1B19",
+     "name": "Toast",
+     "w": 380,
+     "h": 60,
+     "stroke": "#33302D",
+     "radius": 12,
+     "shadow": {
+      "x": 0,
+      "y": 16,
+      "blur": 40,
+      "spread": 0,
+      "color": "#0000008C"
+     }
+    },
+    {
+     "id": "icon-box",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#2EC4691F",
+     "name": "Icon box",
+     "w": 28,
+     "h": 28,
+     "radius": 999
+    },
+    {
+     "id": "icon",
+     "parent": "icon-box",
+     "kind": "icon",
+     "icon": "check",
+     "stroke": "#2EC469",
+     "w": 14,
+     "h": 14,
+     "name": "Icon"
+    },
+    {
+     "id": "text",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 2,
+     "fill": "#00000000",
+     "name": "Text",
+     "w_sizing": "fill",
+     "h_sizing": "hug",
+     "w": 240
+    },
+    {
+     "id": "title",
+     "parent": "text",
+     "kind": "text",
+     "text": "Session finished",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#EDE9E2",
+     "name": "Title"
+    },
+    {
+     "id": "body",
+     "parent": "text",
+     "kind": "text",
+     "text": "spry-gecko is ready for review",
+     "font_size": 12,
+     "color": "#B5B0A8",
+     "name": "Body"
+    },
+    {
+     "id": "action",
+     "parent": "root",
+     "kind": "text",
+     "text": "View",
+     "font_size": 13,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Action"
+    }
+   ]
+  },
+  {
+   "id": "tooltip",
+   "name": "Tooltip",
+   "category": "Overlays",
+   "description": "A dark hint bubble with an arrow below.",
+   "slots": {
+    "label": "Tooltip text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": -2,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Tooltip",
+     "w": 126,
+     "h": 34,
+     "w_sizing": "hug",
+     "h_sizing": "hug",
+     "clip": false
+    },
+    {
+     "id": "bubble",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      6,
+      10
+     ],
+     "items": "center",
+     "fill": "#EDE9E2",
+     "name": "Bubble",
+     "w_sizing": "hug",
+     "h_sizing": "hug",
+     "w": 126,
+     "h": 28,
+     "radius": 8
+    },
+    {
+     "id": "label",
+     "parent": "bubble",
+     "kind": "text",
+     "text": "Copy branch name",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#131211",
+     "name": "Label"
+    },
+    {
+     "id": "arrow",
+     "parent": "root",
+     "kind": "polygon",
+     "name": "Arrow",
+     "sides": 3,
+     "rotation": 180,
+     "w": 12,
+     "h": 6,
+     "fill": "#EDE9E2"
+    }
+   ]
+  },
+  {
+   "id": "menu",
+   "name": "Menu",
+   "category": "Overlays",
+   "description": "A popover menu of actions with shortcuts.",
+   "slots": {
+    "item-1-icon": "Item 1 icon",
+    "item-1-label": "Item 1 label",
+    "item-1-key": "Item 1 shortcut",
+    "item-2-icon": "Item 2 icon",
+    "item-2-label": "Item 2 label",
+    "item-2-key": "Item 2 shortcut",
+    "item-3-icon": "Item 3 icon",
+    "item-3-label": "Item 3 label",
+    "item-4-icon": "Item 4 icon",
+    "item-4-label": "Item 4 label",
+    "item-4-key": "Item 4 shortcut"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 2,
+     "padding": [
+      6
+     ],
+     "fill": "#1C1B19",
+     "name": "Menu",
+     "w": 224,
+     "h": 200,
+     "h_sizing": "hug",
+     "stroke": "#33302D",
+     "radius": 12,
+     "shadow": {
+      "x": 0,
+      "y": 16,
+      "blur": 40,
+      "spread": 0,
+      "color": "#0000008C"
+     }
+    },
+    {
+     "id": "item-1",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      10
+     ],
+     "items": "center",
+     "fill": "#24221F",
+     "name": "Rename",
+     "w_sizing": "fill",
+     "h": 32,
+     "radius": 8
+    },
+    {
+     "id": "item-1-icon",
+     "parent": "item-1",
+     "kind": "icon",
+     "icon": "edit",
+     "stroke": "#B5B0A8",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "item-1-label",
+     "parent": "item-1",
+     "kind": "text",
+     "text": "Rename",
+     "font_size": 13,
+     "color": "#EDE9E2",
+     "name": "Label",
+     "w": 100,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "item-1-key",
+     "parent": "item-1",
+     "kind": "text",
+     "text": "F2",
+     "font_size": 12,
+     "color": "#8C877F",
+     "name": "Shortcut",
+     "font": "Geist Mono"
+    },
+    {
+     "id": "item-2",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      10
+     ],
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Duplicate",
+     "w_sizing": "fill",
+     "h": 32,
+     "radius": 8
+    },
+    {
+     "id": "item-2-icon",
+     "parent": "item-2",
+     "kind": "icon",
+     "icon": "copy",
+     "stroke": "#B5B0A8",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "item-2-label",
+     "parent": "item-2",
+     "kind": "text",
+     "text": "Duplicate",
+     "font_size": 13,
+     "color": "#EDE9E2",
+     "name": "Label",
+     "w": 100,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "item-2-key",
+     "parent": "item-2",
+     "kind": "text",
+     "text": "Ctrl D",
+     "font_size": 12,
+     "color": "#8C877F",
+     "name": "Shortcut",
+     "font": "Geist Mono"
+    },
+    {
+     "id": "item-3",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      10
+     ],
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Copy link",
+     "w_sizing": "fill",
+     "h": 32,
+     "radius": 8
+    },
+    {
+     "id": "item-3-icon",
+     "parent": "item-3",
+     "kind": "icon",
+     "icon": "link",
+     "stroke": "#B5B0A8",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "item-3-label",
+     "parent": "item-3",
+     "kind": "text",
+     "text": "Copy link",
+     "font_size": 13,
+     "color": "#EDE9E2",
+     "name": "Label",
+     "w": 100,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "separator",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Separator",
+     "w": 212,
+     "h": 1,
+     "w_sizing": "fill",
+     "fill": "#262422"
+    },
+    {
+     "id": "item-4",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      10
+     ],
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Delete",
+     "w_sizing": "fill",
+     "h": 32,
+     "radius": 8
+    },
+    {
+     "id": "item-4-icon",
+     "parent": "item-4",
+     "kind": "icon",
+     "icon": "trash",
+     "stroke": "#E5382E",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "item-4-label",
+     "parent": "item-4",
+     "kind": "text",
+     "text": "Delete",
+     "font_size": 13,
+     "color": "#E5382E",
+     "name": "Label",
+     "w": 100,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "item-4-key",
+     "parent": "item-4",
+     "kind": "text",
+     "text": "Del",
+     "font_size": 12,
+     "color": "#8C877F",
+     "name": "Shortcut",
+     "font": "Geist Mono"
+    }
+   ]
+  },
+  {
+   "id": "progress",
+   "name": "Progress bar",
+   "category": "Feedback",
+   "description": "A labelled bar showing how far along a task is.",
+   "slots": {
+    "label": "What is in progress",
+    "value": "Percentage"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 8,
+     "fill": "#00000000",
+     "name": "Progress bar",
+     "w": 320,
+     "h": 32,
+     "h_sizing": "hug"
+    },
+    {
+     "id": "top",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#00000000",
+     "name": "Header",
+     "w_sizing": "fill",
+     "h": 18
+    },
+    {
+     "id": "label",
+     "parent": "top",
+     "kind": "text",
+     "text": "Indexing files",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#EDE9E2",
+     "name": "Label"
+    },
+    {
+     "id": "value",
+     "parent": "top",
+     "kind": "text",
+     "text": "64%",
+     "font_size": 13,
+     "color": "#8C877F",
+     "name": "Value"
+    },
+    {
+     "id": "track",
+     "parent": "root",
+     "kind": "frame",
+     "name": "Track",
+     "w": 320,
+     "h": 6,
+     "fill": "#33302D",
+     "radius": 999
+    },
+    {
+     "id": "bar",
+     "parent": "track",
+     "kind": "rect",
+     "name": "Bar",
+     "w": 205,
+     "h": 6,
+     "fill": "#2EC469",
+     "radius": 999
+    }
+   ]
+  },
+  {
+   "id": "slider",
+   "name": "Slider",
+   "category": "Inputs",
+   "description": "A labelled slider with its current value.",
+   "slots": {
+    "label": "Setting name",
+    "value": "Current value"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 10,
+     "fill": "#00000000",
+     "name": "Slider",
+     "w": 320,
+     "h": 48,
+     "h_sizing": "hug"
+    },
+    {
+     "id": "top",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#00000000",
+     "name": "Header",
+     "w_sizing": "fill",
+     "h": 18
+    },
+    {
+     "id": "label",
+     "parent": "top",
+     "kind": "text",
+     "text": "Editor font size",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#EDE9E2",
+     "name": "Label"
+    },
+    {
+     "id": "value",
+     "parent": "top",
+     "kind": "text",
+     "text": "14 px",
+     "font_size": 13,
+     "color": "#8C877F",
+     "name": "Value"
+    },
+    {
+     "id": "track",
+     "parent": "root",
+     "kind": "frame",
+     "name": "Track",
+     "w": 320,
+     "h": 20,
+     "fill": "#00000000",
+     "clip": false
+    },
+    {
+     "id": "rail",
+     "parent": "track",
+     "kind": "rect",
+     "name": "Rail",
+     "y": 8,
+     "w": 320,
+     "h": 4,
+     "fill": "#33302D",
+     "radius": 999
+    },
+    {
+     "id": "range",
+     "parent": "track",
+     "kind": "rect",
+     "name": "Range",
+     "y": 8,
+     "w": 144,
+     "h": 4,
+     "fill": "#EDE9E2",
+     "radius": 999
+    },
+    {
+     "id": "knob",
+     "parent": "track",
+     "kind": "ellipse",
+     "name": "Knob",
+     "x": 136,
+     "y": 2,
+     "w": 16,
+     "h": 16,
+     "fill": "#FFFFFF",
+     "stroke": "#EDE9E2",
+     "stroke_width": 2
+    }
+   ]
+  },
+  {
+   "id": "empty-state",
+   "name": "Empty state",
+   "category": "Feedback",
+   "description": "An icon, title, explanation and a first action.",
+   "slots": {
+    "icon": "Icon",
+    "title": "Empty state title",
+    "body": "Empty state text",
+    "action-lead-icon": "Leading icon",
+    "action-label": "Button text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 12,
+     "padding": [
+      32
+     ],
+     "items": "center",
+     "fill": "#1A1917",
+     "name": "Empty state",
+     "w": 360,
+     "h": 260,
+     "h_sizing": "hug",
+     "stroke": "#262422",
+     "radius": 14,
+     "dash": [
+      6,
+      4
+     ]
+    },
+    {
+     "id": "icon-box",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#1C1B19",
+     "name": "Icon box",
+     "w": 48,
+     "h": 48,
+     "stroke": "#262422",
+     "radius": 999
+    },
+    {
+     "id": "icon",
+     "parent": "icon-box",
+     "kind": "icon",
+     "icon": "folder",
+     "stroke": "#B5B0A8",
+     "w": 24,
+     "h": 24,
+     "name": "Icon"
+    },
+    {
+     "id": "title",
+     "parent": "root",
+     "kind": "text",
+     "text": "No projects yet",
+     "font_size": 16,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Title"
+    },
+    {
+     "id": "body",
+     "parent": "root",
+     "kind": "text",
+     "text": "Create a project to start a board, open terminals and invite your team.",
+     "font_size": 13,
+     "color": "#B5B0A8",
+     "name": "Body",
+     "w": 296,
+     "align": "center",
+     "line_height": 1.5
+    },
+    {
+     "id": "action",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      12
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#EDE9E2",
+     "name": "Button / Primary",
+     "w": 131,
+     "h": 32,
+     "w_sizing": "hug",
+     "radius": 8
+    },
+    {
+     "id": "action-lead-icon",
+     "parent": "action",
+     "kind": "icon",
+     "icon": "plus",
+     "stroke": "#131211",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "action-label",
+     "parent": "action",
+     "kind": "text",
+     "text": "New project",
+     "font_size": 13,
+     "font_weight": 600,
+     "color": "#131211",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "table-header",
+   "name": "Table / Header",
+   "category": "Data",
+   "description": "The heading row of a four-column table.",
+   "slots": {
+    "col-1": "Column 1 heading",
+    "col-2": "Column 2 heading",
+    "col-3": "Column 3 heading",
+    "col-4": "Column 4 heading"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "fill": "#00000000",
+     "name": "Table header",
+     "w": 680,
+     "h": 41,
+     "h_sizing": "hug"
+    },
+    {
+     "id": "cells",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 16,
+     "padding": [
+      0,
+      16
+     ],
+     "items": "center",
+     "fill": "#1A1917",
+     "name": "Cells",
+     "w_sizing": "fill",
+     "h": 40,
+     "radii": [
+      10,
+      10,
+      0,
+      0
+     ]
+    },
+    {
+     "id": "col-1",
+     "parent": "cells",
+     "kind": "text",
+     "text": "Name",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#8C877F",
+     "name": "Name",
+     "w": 120,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "col-2",
+     "parent": "cells",
+     "kind": "text",
+     "text": "Status",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#8C877F",
+     "name": "Status",
+     "w": 110
+    },
+    {
+     "id": "col-3",
+     "parent": "cells",
+     "kind": "text",
+     "text": "Owner",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#8C877F",
+     "name": "Owner",
+     "w": 150
+    },
+    {
+     "id": "col-4",
+     "parent": "cells",
+     "kind": "text",
+     "text": "Updated",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#8C877F",
+     "name": "Updated",
+     "align": "right",
+     "w": 90
+    },
+    {
+     "id": "rule",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Divider",
+     "w": 320,
+     "h": 1,
+     "w_sizing": "fill",
+     "fill": "#262422"
+    }
+   ]
+  },
+  {
+   "id": "table-row",
+   "name": "Table / Row",
+   "category": "Data",
+   "description": "One row of the four-column table: name, status, owner, date.",
+   "slots": {
+    "name": "Row name",
+    "status-label": "Badge text",
+    "owner-avatar-initials": "Initials",
+    "owner": "Owner name",
+    "updated": "Last updated"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "fill": "#00000000",
+     "name": "Table row",
+     "w": 680,
+     "h": 53,
+     "h_sizing": "hug"
+    },
+    {
+     "id": "cells",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 16,
+     "padding": [
+      0,
+      16
+     ],
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Cells",
+     "w_sizing": "fill",
+     "h": 52
+    },
+    {
+     "id": "name-cell",
+     "parent": "cells",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Name cell",
+     "w": 200,
+     "w_sizing": "fill",
+     "h": 24
+    },
+    {
+     "id": "name-icon",
+     "parent": "name-cell",
+     "kind": "icon",
+     "icon": "file",
+     "stroke": "#8C877F",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "name",
+     "parent": "name-cell",
+     "kind": "text",
+     "text": "Onboarding flow",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#EDE9E2",
+     "name": "Name"
+    },
+    {
+     "id": "status-cell",
+     "parent": "cells",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Status cell",
+     "w": 110,
+     "h": 24
+    },
+    {
+     "id": "status",
+     "parent": "status-cell",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "padding": [
+      0,
+      8
+     ],
+     "items": "center",
+     "fill": "#F0A8281F",
+     "name": "Badge / Warning",
+     "w": 87,
+     "h": 22,
+     "w_sizing": "hug",
+     "radius": 999
+    },
+    {
+     "id": "status-dot",
+     "parent": "status",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 6,
+     "h": 6,
+     "fill": "#F0A828"
+    },
+    {
+     "id": "status-label",
+     "parent": "status",
+     "kind": "text",
+     "text": "In review",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#F0A828",
+     "name": "Label"
+    },
+    {
+     "id": "owner-cell",
+     "parent": "cells",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Owner cell",
+     "w": 150,
+     "h": 24
+    },
+    {
+     "id": "owner-avatar",
+     "parent": "owner-cell",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#2EC46926",
+     "name": "Avatar",
+     "w": 24,
+     "h": 24,
+     "radius": 999
+    },
+    {
+     "id": "owner-avatar-initials",
+     "parent": "owner-avatar",
+     "kind": "text",
+     "text": "MK",
+     "font_size": 9,
+     "font_weight": 600,
+     "color": "#2EC469",
+     "name": "Initials"
+    },
+    {
+     "id": "owner",
+     "parent": "owner-cell",
+     "kind": "text",
+     "text": "Maya Kim",
+     "font_size": 13,
+     "color": "#B5B0A8",
+     "name": "Owner"
+    },
+    {
+     "id": "updated",
+     "parent": "cells",
+     "kind": "text",
+     "text": "2h ago",
+     "font_size": 13,
+     "color": "#8C877F",
+     "name": "Updated",
+     "w": 90,
+     "align": "right"
+    },
+    {
+     "id": "rule",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Divider",
+     "w": 320,
+     "h": 1,
+     "w_sizing": "fill",
+     "fill": "#262422"
+    }
+   ]
+  },
+  {
+   "id": "alert-info",
+   "name": "Alert / Info",
+   "category": "Feedback",
+   "description": "A info banner with an icon, title and text.",
+   "slots": {
+    "title": "Alert title",
+    "body": "Alert text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 12,
+     "padding": [
+      12,
+      14
+     ],
+     "items": "start",
+     "fill": "#EDE9E214",
+     "name": "Alert / Info",
+     "w": 480,
+     "h": 70,
+     "h_sizing": "hug",
+     "stroke": "#EDE9E24D",
+     "radius": 10
+    },
+    {
+     "id": "icon",
+     "parent": "root",
+     "kind": "icon",
+     "icon": "info",
+     "stroke": "#EDE9E2",
+     "w": 18,
+     "h": 18,
+     "name": "Icon"
+    },
+    {
+     "id": "text",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 2,
+     "fill": "#00000000",
+     "name": "Text",
+     "w": 422,
+     "h_sizing": "hug"
+    },
+    {
+     "id": "title",
+     "parent": "text",
+     "kind": "text",
+     "text": "A new version is ready",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Title"
+    },
+    {
+     "id": "body",
+     "parent": "text",
+     "kind": "text",
+     "text": "Relay 4.2 restarts in the background when every session is idle.",
+     "font_size": 13,
+     "color": "#B5B0A8",
+     "name": "Body",
+     "w_sizing": "fill",
+     "line_height": 1.45
+    }
+   ]
+  },
+  {
+   "id": "alert-warning",
+   "name": "Alert / Warning",
+   "category": "Feedback",
+   "description": "A warning banner with an icon, title and text.",
+   "slots": {
+    "title": "Alert title",
+    "body": "Alert text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 12,
+     "padding": [
+      12,
+      14
+     ],
+     "items": "start",
+     "fill": "#F0A82814",
+     "name": "Alert / Warning",
+     "w": 480,
+     "h": 70,
+     "h_sizing": "hug",
+     "stroke": "#F0A8284D",
+     "radius": 10
+    },
+    {
+     "id": "icon",
+     "parent": "root",
+     "kind": "icon",
+     "icon": "alert",
+     "stroke": "#F0A828",
+     "w": 18,
+     "h": 18,
+     "name": "Icon"
+    },
+    {
+     "id": "text",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 2,
+     "fill": "#00000000",
+     "name": "Text",
+     "w": 422,
+     "h_sizing": "hug"
+    },
+    {
+     "id": "title",
+     "parent": "text",
+     "kind": "text",
+     "text": "Disk space is running low",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Title"
+    },
+    {
+     "id": "body",
+     "parent": "text",
+     "kind": "text",
+     "text": "Worktrees use 18 GB. Remove finished ones to free space.",
+     "font_size": 13,
+     "color": "#B5B0A8",
+     "name": "Body",
+     "w_sizing": "fill",
+     "line_height": 1.45
+    }
+   ]
+  },
+  {
+   "id": "alert-error",
+   "name": "Alert / Error",
+   "category": "Feedback",
+   "description": "A error banner with an icon, title and text.",
+   "slots": {
+    "title": "Alert title",
+    "body": "Alert text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 12,
+     "padding": [
+      12,
+      14
+     ],
+     "items": "start",
+     "fill": "#E5382E14",
+     "name": "Alert / Error",
+     "w": 480,
+     "h": 70,
+     "h_sizing": "hug",
+     "stroke": "#E5382E4D",
+     "radius": 10
+    },
+    {
+     "id": "icon",
+     "parent": "root",
+     "kind": "icon",
+     "icon": "alert",
+     "stroke": "#E5382E",
+     "w": 18,
+     "h": 18,
+     "name": "Icon"
+    },
+    {
+     "id": "text",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 2,
+     "fill": "#00000000",
+     "name": "Text",
+     "w": 422,
+     "h_sizing": "hug"
+    },
+    {
+     "id": "title",
+     "parent": "text",
+     "kind": "text",
+     "text": "The push was rejected",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Title"
+    },
+    {
+     "id": "body",
+     "parent": "text",
+     "kind": "text",
+     "text": "main has commits you do not have. Pull, then push again.",
+     "font_size": 13,
+     "color": "#B5B0A8",
+     "name": "Body",
+     "w_sizing": "fill",
+     "line_height": 1.45
+    }
+   ]
+  },
+  {
+   "id": "divider",
+   "name": "Divider",
+   "category": "Layout",
+   "description": "A thin horizontal rule.",
+   "slots": {},
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "name": "Divider",
+     "w": 320,
+     "h": 1,
+     "fill": "#262422"
+    }
+   ]
+  },
+  {
+   "id": "divider-label",
+   "name": "Divider / With label",
+   "category": "Layout",
+   "description": "A rule with a word in the middle.",
+   "slots": {
+    "label": "Divider text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 12,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Divider / With label",
+     "w": 320,
+     "h": 16
+    },
+    {
+     "id": "rule-left",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Divider",
+     "w": 320,
+     "h": 1,
+     "w_sizing": "fill",
+     "fill": "#262422"
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "or",
+     "font_size": 12,
+     "color": "#8C877F",
+     "name": "Label"
+    },
+    {
+     "id": "rule-right",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Divider",
+     "w": 320,
+     "h": 1,
+     "w_sizing": "fill",
+     "fill": "#262422"
+    }
+   ]
+  },
+  {
+   "id": "chip",
+   "name": "Chip",
+   "category": "Badges",
+   "description": "A removable tag with an x.",
+   "slots": {
+    "label": "Tag text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "padding": [
+      0,
+      6,
+      0,
+      10
+     ],
+     "items": "center",
+     "fill": "#1C1B19",
+     "name": "Chip",
+     "w": 122,
+     "h": 28,
+     "w_sizing": "hug",
+     "stroke": "#33302D",
+     "radius": 999
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "design-system",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#EDE9E2",
+     "name": "Label"
+    },
+    {
+     "id": "remove",
+     "parent": "root",
+     "kind": "icon",
+     "icon": "x",
+     "stroke": "#8C877F",
+     "w": 14,
+     "h": 14,
+     "name": "Remove"
+    }
+   ]
+  },
+  {
+   "id": "session-card",
+   "name": "Session card",
+   "category": "Cards",
+   "description": "A terminal session with its branch, status and last line.",
+   "slots": {
+    "title": "Session name",
+    "status-label": "Badge text",
+    "branch": "Branch name",
+    "output-text": "Last terminal line"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 12,
+     "padding": [
+      16
+     ],
+     "fill": "#1A1917",
+     "name": "Session card",
+     "w": 340,
+     "h": 150,
+     "h_sizing": "hug",
+     "stroke": "#262422",
+     "radius": 14
+    },
+    {
+     "id": "header",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Header",
+     "w_sizing": "fill",
+     "h": 24
+    },
+    {
+     "id": "icon",
+     "parent": "header",
+     "kind": "icon",
+     "icon": "terminal",
+     "stroke": "#B5B0A8",
+     "w": 18,
+     "h": 18,
+     "name": "Icon"
+    },
+    {
+     "id": "title",
+     "parent": "header",
+     "kind": "text",
+     "text": "spry-gecko",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Session",
+     "w": 120,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "status",
+     "parent": "header",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "padding": [
+      0,
+      8
+     ],
+     "items": "center",
+     "fill": "#2EC4691F",
+     "name": "Badge / Success",
+     "w": 54,
+     "h": 22,
+     "w_sizing": "hug",
+     "radius": 999
+    },
+    {
+     "id": "status-dot",
+     "parent": "status",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 6,
+     "h": 6,
+     "fill": "#2EC469"
+    },
+    {
+     "id": "status-label",
+     "parent": "status",
+     "kind": "text",
+     "text": "Live",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#2EC469",
+     "name": "Label"
+    },
+    {
+     "id": "branch-row",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Branch",
+     "w_sizing": "fill",
+     "h": 18
+    },
+    {
+     "id": "branch-icon",
+     "parent": "branch-row",
+     "kind": "icon",
+     "icon": "git-branch",
+     "stroke": "#8C877F",
+     "w": 14,
+     "h": 14,
+     "name": "Icon"
+    },
+    {
+     "id": "branch",
+     "parent": "branch-row",
+     "kind": "text",
+     "text": "relay/spry-gecko-design-kit",
+     "font_size": 12,
+     "color": "#8C877F",
+     "font": "Geist Mono",
+     "name": "Branch"
+    },
+    {
+     "id": "output",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      8,
+      10
+     ],
+     "items": "center",
+     "fill": "#131211",
+     "name": "Last output",
+     "w_sizing": "fill",
+     "h": 34,
+     "radius": 8
+    },
+    {
+     "id": "output-icon",
+     "parent": "output",
+     "kind": "icon",
+     "icon": "check",
+     "stroke": "#2EC469",
+     "w": 14,
+     "h": 14,
+     "name": "Icon"
+    },
+    {
+     "id": "output-text",
+     "parent": "output",
+     "kind": "text",
+     "text": "412 tests passed in 38.2s",
+     "font_size": 12,
+     "color": "#2EC469",
+     "font": "Geist Mono",
+     "name": "Line"
+    }
+   ]
+  }
+ ]
+}

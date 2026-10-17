@@ -6,6 +6,7 @@ use super::geom::Rect;
 use super::layout::Placed;
 use super::scene::Scene;
 use relay_bus::design::{Node, NodeKind, Route};
+use relay_bus::svgpath::{self, Seg};
 
 /// A polygon's (or star's) corners inside `r`, first at the top centre, clockwise.
 pub fn polygon(r: &Rect, sides: u8, star: Option<f64>) -> Vec<(f64, f64)> {
@@ -44,6 +45,34 @@ pub fn inside(points: &[(f64, f64)], x: f64, y: f64) -> bool {
         j = i;
     }
     odd
+}
+
+/// A vector's path in its placed box: `d` scaled from `view` (or its own size) to the box.
+pub fn vector_segments(n: &Node, r: &Rect) -> Vec<Seg> {
+    let Some(segs) = n.d.as_deref().and_then(|d| svgpath::parse(d).ok()) else {
+        return Vec::new();
+    };
+    let [vw, vh] = n.view.unwrap_or([r.w, r.h]);
+    let (sx, sy) = (if vw > 0.0 { r.w / vw } else { 1.0 }, if vh > 0.0 { r.h / vh } else { 1.0 });
+    svgpath::map(&segs, |[x, y]| [r.x + x * sx, r.y + y * sy])
+}
+
+/// A vector's outline as polylines (for hit testing), and whether each is closed.
+pub fn vector_lines(n: &Node, r: &Rect) -> Vec<(Vec<(f64, f64)>, bool)> {
+    svgpath::flatten(&vector_segments(n, r), 12)
+        .into_iter()
+        .map(|(pts, closed)| (pts.into_iter().map(|[x, y]| (x, y)).collect(), closed))
+        .collect()
+}
+
+/// A path drawn in page coordinates as a vector node's `d` and `view`, and the box it covers:
+/// the vector sits at the box's corner (relative to the parent at `origin`), `d` in its own
+/// pixels.
+pub fn vector_from(segs: &[Seg], origin: (f64, f64)) -> Option<(Rect, String, [f64; 2])> {
+    let [x, y, w, h] = svgpath::bounds(segs)?;
+    let (w, h) = (w.max(1.0), h.max(1.0));
+    let local = svgpath::map(segs, |[px, py]| [px - x, py - y]);
+    Some((Rect::new(x - origin.0, y - origin.1, w, h), svgpath::write(&local), [w, h]))
 }
 
 /// `(x, y)` turned by `degrees` clockwise about `(cx, cy)`.

@@ -164,6 +164,7 @@ impl Board {
                     b.set_selected(set(&[("rotation", if v.abs() < 0.05 { Value::Null } else { json!(v) })]));
                 }
             }));
+            b.flip_keys(&geometry, &nodes);
         }
         let sizable = nodes.iter().all(|n| {
             n.kind == NodeKind::Text || n.layout_mode() != Layout::None || n.parent.as_deref().is_some_and(|_| parent_lays_out)
@@ -204,6 +205,17 @@ impl Board {
                 row.append(&cell);
             }
             geometry.append(&row);
+        }
+
+        // Constraints: inside a frame that does not lay its children out.
+        let pinned_in_frame = {
+            let scene = self.doc.scene.borrow();
+            nodes.iter().all(|n| {
+                n.parent.as_deref().and_then(|p| scene.node(p)).is_some_and(|p| p.kind == NodeKind::Frame && p.layout_mode() == Layout::None)
+            })
+        };
+        if pinned_in_frame {
+            b.constraints_panel(body, &nodes);
         }
 
         // Auto layout.
@@ -310,11 +322,15 @@ impl Board {
                 }
             });
             sec.append(&clip);
+            b.grids_panel(body, &first);
         }
 
         // Type.
         if kinds(&[NodeKind::Text, NodeKind::Sticky]) {
             let sec = section(body, "Type");
+            if kinds(&[NodeKind::Text]) {
+                b.style_picker(&sec, &nodes, "text_style");
+            }
             let families = font_families(&self.canvas);
             let current = same(nodes.iter().map(|n| super::paint::font_family(n).to_string()));
             let dd = gtk::DropDown::from_strings(&families.iter().map(String::as_str).collect::<Vec<_>>());
@@ -396,6 +412,9 @@ impl Board {
                     b.set_selected(set(&[("color", json!(c))]));
                 }
             })));
+            if kinds(&[NodeKind::Text]) {
+                b.text_extras(&sec, &nodes);
+            }
         }
 
         // Polygon, icon, connector.
@@ -408,13 +427,20 @@ impl Board {
         if single && first.kind == NodeKind::Line {
             super::shape_panels::connector(&b, &section(body, "Line"), &first);
         }
+        if single && first.kind == NodeKind::Vector {
+            b.vector_panel(body, &first);
+        }
 
         // Fill, border, corners.
         let fills = nodes.iter().all(|n| !matches!(n.kind, NodeKind::Group | NodeKind::Line | NodeKind::Path | NodeKind::Image | NodeKind::Text | NodeKind::Icon));
         if fills {
             let sec = section(body, "Fill");
+            b.style_picker(&sec, &nodes, "fill_style");
             if single {
                 super::shape_panels::fill(&b, &sec, &first);
+                if matches!(first.kind, NodeKind::Rect | NodeKind::Ellipse | NodeKind::Polygon | NodeKind::Frame | NodeKind::Vector) {
+                    b.picture_fill_key(&sec, &first);
+                }
             } else {
                 let fill = same(nodes.iter().map(super::paint::fill_of)).flatten();
                 let weak = Rc::downgrade(&b);
@@ -505,10 +531,14 @@ impl Board {
             });
             sec.append(&replace);
         }
+        if single && (first.kind == NodeKind::Image || first.src.is_some() || first.filters.is_some()) {
+            b.picture_panel(body, &first);
+        }
 
         // Shadow and opacity.
         if nodes.iter().all(|n| !matches!(n.kind, NodeKind::Group | NodeKind::Text | NodeKind::Line | NodeKind::Path)) {
             let sec = section(body, "Shadow");
+            b.style_picker(&sec, &nodes, "effect_style");
             let shadow = same(nodes.iter().map(|n| n.shadow.clone())).flatten();
             let toggle = gtk::CheckButton::with_label("Drop shadow");
             toggle.set_active(shadow.is_some());
@@ -562,6 +592,24 @@ impl Board {
                 b.set_selected(set(&[("blur", if v <= 0.0 { Value::Null } else { json!(v) })]));
             }
         }));
+        if single && first.filters.is_none() && first.kind != NodeKind::Image && first.src.is_none() {
+            let adjust = gtk::Button::with_label("Colour adjustments…");
+            adjust.add_css_class("quiet");
+            adjust.set_halign(gtk::Align::Start);
+            adjust.set_tooltip_text(Some("Brightness, contrast, saturation, hue, sepia and invert over this layer and what is inside it"));
+            let weak = Rc::downgrade(&b);
+            adjust.connect_clicked(move |_| {
+                if let Some(b) = weak.upgrade() {
+                    b.set_selected(set(&[("filters", json!({}))]));
+                }
+            });
+            sec.append(&adjust);
+        }
+
+        // Prototype.
+        if single && first.kind != NodeKind::Page {
+            b.prototype_panel(body, &first);
+        }
 
         // Export.
         let sec = section(body, "Export");
@@ -574,6 +622,33 @@ impl Board {
             key.connect_clicked(move |_| {
                 if let Some(b) = weak.upgrade() {
                     super::export::export_ids(&b, b.selected(), scale);
+                }
+            });
+            row.append(&key);
+        }
+        sec.append(&row);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        for (kind, caption) in [(super::export::Vector::Svg, "SVG"), (super::export::Vector::Pdf, "PDF")] {
+            let key = gtk::Button::with_label(caption);
+            key.add_css_class("design-export-key");
+            key.set_hexpand(true);
+            let weak = Rc::downgrade(&b);
+            key.connect_clicked(move |_| {
+                if let Some(b) = weak.upgrade() {
+                    super::export::export_vector(&b, kind);
+                }
+            });
+            row.append(&key);
+        }
+        if single && first.kind == NodeKind::Frame {
+            let key = gtk::Button::with_label("Code");
+            key.add_css_class("design-export-key");
+            key.set_hexpand(true);
+            key.set_tooltip_text(Some("Copy as HTML and CSS"));
+            let weak = Rc::downgrade(&b);
+            key.connect_clicked(move |_| {
+                if let Some(b) = weak.upgrade() {
+                    b.copy_code();
                 }
             });
             row.append(&key);

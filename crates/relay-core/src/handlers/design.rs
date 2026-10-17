@@ -6,6 +6,11 @@
 //! transaction, so a later edit sees an earlier one and a refusal anywhere rolls back them all.
 //! It answers with the edits that undo it, which the canvas keeps for its undo and `audit.undo`
 //! replays leniently.
+//!
+//! A version (`design_versions`) is the whole node list as `design.get` gives it, saved by name
+//! or kept by the engine before an agent takes over a design someone else changed last, and
+//! before a restore. `design.code` writes a frame out through [`crate::design_code`];
+//! `design.render` only announces a request, which Relay's window answers with a picture.
 
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project, check_project};
@@ -13,7 +18,7 @@ use base64::Engine as _;
 use relay_bus::design::{Node, NodeKind, NodeOp, MAX_NAME, MAX_NODES, MAX_OPS};
 use relay_bus::error::BusError;
 use relay_bus::ops::design::*;
-use relay_bus::types::{Design, Id};
+use relay_bus::types::{Design, DesignVersion, Id};
 use relay_bus::{Empty, ErrorKind};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::{json, Map, Value};
@@ -30,6 +35,15 @@ const DEFAULT_TITLE: &str = "Untitled design";
 /// The largest picture `design.asset.add` copies in from a path, and takes as `bytes_b64`.
 const ASSET_FILE_MAX: u64 = 20 * 1024 * 1024;
 const ASSET_B64_MAX: usize = 1024 * 1024;
+/// The most JSON one version holds: a design at its node limit with its ids and parents, short
+/// of the 2 MiB line `design.version.get` answers in.
+const VERSION_MAX: usize = 1792 * 1024;
+/// Automatic versions kept per design, the newest; named ones stay until deleted.
+const AUTO_KEPT: i64 = 30;
+/// Pictures `design.code` inlines as `data:` URLs, in all, before the rest keep their paths.
+const INLINE_MAX: usize = 1024 * 1024;
+/// How long an agent waits for `design.rendered` before taking Relay's window to be closed.
+const RENDER_WAIT_MS: u64 = 20_000;
 
 macro_rules! design_select {
     ($rest:literal) => {
@@ -127,6 +141,8 @@ fn kind_str(kind: NodeKind) -> &'static str {
         NodeKind::Image => "image",
         NodeKind::Polygon => "polygon",
         NodeKind::Icon => "icon",
+        NodeKind::Vector => "vector",
+        NodeKind::Comment => "comment",
     }
 }
 
@@ -144,6 +160,8 @@ fn kind_of(text: &str) -> Result<NodeKind, BusError> {
         "image" => NodeKind::Image,
         "polygon" => NodeKind::Polygon,
         "icon" => NodeKind::Icon,
+        "vector" => NodeKind::Vector,
+        "comment" => NodeKind::Comment,
         other => return Err(BusError::internal(format!("a design node of unknown kind {other:?}"))),
     })
 }
@@ -241,7 +259,154 @@ fn label(at: usize, op: &NodeOp) -> String {
         NodeOp::Update { id, .. } => format!("ops[{at}] update {id:?}"),
         NodeOp::Move { id, .. } => format!("ops[{at}] move {id:?}"),
         NodeOp::Delete { id } => format!("ops[{at}] delete {id:?}"),
+        NodeOp::Insert { item, .. } => format!("ops[{at}] insert {item:?}"),
     }
+}
+
+/// The fields `copy` must take from `master` to follow it: everything that differs except
+/// the copy's own (`OWN_FIELDS`, an instance root's place) and what it overrode.
+fn follow(master: &Node, copy: &Node, root: bool) -> Map<String, Value> {
+    let (Ok(Value::Object(m)), Ok(Value::Object(c))) = (serde_json::to_value(master), serde_json::to_value(copy)) else {
+        return Map::new();
+    };
+    let own = copy.overridden.clone().unwrap_or_default();
+    let keep = |k: &str| {
+        relay_bus::design::OWN_FIELDS.contains(&k)
+            || (root && (relay_bus::design::ROOT_FIELDS.contains(&k) || k == "name"))
+            || own.iter().any(|o| o == k)
+            || k == "from"
+            || k == "to"
+    };
+    let mut set = Map::new();
+    for (k, v) in &m {
+        if !keep(k) && c.get(k) != Some(v) {
+            set.insert(k.clone(), v.clone());
+        }
+    }
+    for k in c.keys() {
+        if !keep(k) && !m.contains_key(k) {
+            set.insert(k.clone(), Value::Null);
+        }
+    }
+    set
+}
+
+/// Every node of a design in `design.get`'s order, read inside a transaction.
+fn all_nodes(tx: &Connection, design: Id) -> Result<Vec<Node>, BusError> {
+    let mut stmt = tx.prepare_cached("SELECT node_id, parent_id, ord, body FROM design_nodes WHERE design_id = ?1").bus()?;
+    let rows = stmt.query_map([design], |r| Ok(Raw { id: r.get(0)?, parent: r.get(1)?, ord: r.get(2)?, body: r.get(3)? })).bus()?
+        .collect::<rusqlite::Result<Vec<_>>>().bus()?;
+    ordered(rows, None)
+}
+
+/// A design's versions, newest first, without their bodies.
+const VERSIONS_OF: &str = "SELECT id, design_id, rev, label, auto, created_by, created_at, nodes FROM design_versions WHERE design_id = ?1 ORDER BY id DESC";
+
+fn version_row(row: &Row) -> rusqlite::Result<DesignVersion> {
+    Ok(DesignVersion {
+        id: row.get(0)?,
+        design_id: row.get(1)?,
+        rev: row.get(2)?,
+        label: row.get(3)?,
+        auto: row.get(4)?,
+        created_by: row.get(5)?,
+        created_at: row.get(6)?,
+        nodes: row.get(7)?,
+    })
+}
+
+/// Version `version_id` of design `design_id`, and its body.
+fn get_version(conn: &Connection, design_id: Id, version_id: Id) -> Result<(DesignVersion, String), BusError> {
+    conn.prepare_cached("SELECT id, design_id, rev, label, auto, created_by, created_at, nodes, body FROM design_versions WHERE id = ?1 AND design_id = ?2").bus()?
+        .query_row(params![version_id, design_id], |r| Ok((version_row(r)?, r.get::<_, String>(8)?))).optional().bus()?
+        .ok_or_else(|| BusError::not_found("design.version_not_found", format!("design {design_id} has no version {version_id}"))
+            .with_hint("design.version.list names its versions"))
+}
+
+/// `label`, or when it was saved: `2026-10-16 14:03` of an RFC 3339 time.
+fn version_name(version: &DesignVersion) -> String {
+    version.label.clone().unwrap_or_else(|| version.created_at.replacen('T', " ", 1).chars().take(16).collect())
+}
+
+/// `raw` cut to a label's length.
+fn clip_label(raw: &str) -> String {
+    raw.chars().take(MAX_NAME).collect()
+}
+
+/// Keep `design`'s nodes as they stand now as a version; `None` when they are too big for one,
+/// which a caller that only keeps one for safety passes over and one asked to save refuses.
+fn save_version(tx: &Connection, design: &Design, label: Option<&str>, auto: bool, by: &str, now: &str) -> Result<Option<DesignVersion>, BusError> {
+    let nodes = all_nodes(tx, design.id)?;
+    let body = serde_json::to_string(&nodes).bus()?;
+    if body.len() > VERSION_MAX {
+        return Ok(None);
+    }
+    let label = label.map(clip_label);
+    tx.prepare_cached("INSERT INTO design_versions(design_id, rev, label, auto, created_by, created_at, nodes, body) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)").bus()?
+        .execute(params![design.id, design.rev, label, auto, by, now, nodes.len() as i64, body]).bus()?;
+    let id = tx.last_insert_rowid();
+    if auto {
+        tx.prepare_cached("DELETE FROM design_versions WHERE design_id = ?1 AND auto = 1 AND id NOT IN
+            (SELECT id FROM design_versions WHERE design_id = ?1 AND auto = 1 ORDER BY id DESC LIMIT ?2+0)").bus()?
+            .execute(params![design.id, AUTO_KEPT]).bus()?;
+    }
+    Ok(Some(DesignVersion { id, design_id: design.id, rev: design.rev, label, auto, created_by: by.to_string(), created_at: now.to_string(), nodes: nodes.len() as i64 }))
+}
+
+fn too_large_to_keep(design: Id) -> BusError {
+    BusError::invalid("design.too_large", format!("design {design} is over {} KiB with its ids: too big to keep a version of", VERSION_MAX >> 10))
+        .with_hint("split it across designs")
+}
+
+fn emit_version(ctx: &mut Ctx, project_id: Id, version: &DesignVersion) -> Result<(), BusError> {
+    ctx.set_project(project_id);
+    ctx.emit("design.version.changed", serde_json::to_value(version).bus()?);
+    Ok(())
+}
+
+/// Replace design `design`'s nodes with `nodes` (in `design.get`'s order, so each parent comes
+/// before its children and siblings bottom to top). Returns the pages, nodes and bytes now held
+/// and the highest number an id ends in, for the id counter.
+fn put_nodes(tx: &Connection, design: Id, nodes: Vec<Node>) -> Result<(i64, i64, i64, i64), BusError> {
+    tx.prepare_cached("DELETE FROM design_nodes WHERE design_id = ?1").bus()?.execute([design]).bus()?;
+    let mut insert = tx.prepare_cached("INSERT INTO design_nodes(design_id, node_id, parent_id, kind, ord, body) VALUES (?1, ?2, ?3, ?4, ?5, ?6)").bus()?;
+    let mut next_ord: HashMap<Option<String>, f64> = HashMap::new();
+    let (mut pages, mut count, mut bytes, mut top) = (0, 0, 0, 0);
+    for mut node in nodes {
+        let ord = next_ord.entry(node.parent.clone()).or_insert(0.0);
+        *ord += 1.0;
+        let ord = *ord;
+        let body = body_of(&mut node)?;
+        insert.execute(params![design, node.id, node.parent, kind_str(node.kind), ord, body]).bus()?;
+        pages += i64::from(node.kind == NodeKind::Page);
+        count += 1;
+        bytes += body.len() as i64;
+        if let Some(n) = node.id.rsplit_once('-').and_then(|(_, n)| n.parse::<i64>().ok()) {
+            top = top.max(n);
+        }
+    }
+    Ok((pages, count, bytes, top))
+}
+
+/// `design.code`'s pictures: a path beside the page, or the picture itself while the budget
+/// lasts.
+fn code_asset(dir: &Path, inline: bool, budget: &mut usize, src: &str) -> String {
+    if inline && relay_bus::design::valid_src(src) {
+        if let Ok(bytes) = std::fs::read(dir.join(src)) {
+            if bytes.len() <= *budget {
+                *budget -= bytes.len();
+                let mime = match src.rsplit('.').next() {
+                    Some("png") => "image/png",
+                    Some("jpg") => "image/jpeg",
+                    Some("gif") => "image/gif",
+                    Some("webp") => "image/webp",
+                    _ => "image/svg+xml",
+                };
+                return format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes));
+            }
+        }
+    }
+    format!("design-assets/{src}")
 }
 
 /// One `design.apply` under way: the design's counters as its edits change them, and what the
@@ -249,6 +414,8 @@ fn label(at: usize, op: &NodeOp) -> String {
 struct Run<'a> {
     tx: &'a Connection,
     design: Id,
+    /// Who is editing: a comment added without an author is theirs.
+    by: String,
     lenient: bool,
     pages: i64,
     nodes: i64,
@@ -264,6 +431,17 @@ struct Run<'a> {
     ids: Vec<String>,
     /// Each applied edit's undo, in edit order; a delete's is the whole subtree's re-adds.
     inverse: Vec<Vec<NodeOp>>,
+    /// Components an edit touched: their instances follow once the list is done.
+    dirty: HashSet<String>,
+    /// Shared styles an edit changed, and nodes that took up a style: their fields follow.
+    restyle: HashSet<String>,
+    pending: HashSet<String>,
+    /// Nodes known to sit in no component (themselves and every ancestor), so the adds of a
+    /// big list don't walk the same parents again. Cleared when the tree's shape or a
+    /// component flag changes.
+    plain: HashSet<String>,
+    /// Edits made by following a component, which a copy does not remember as its own.
+    syncing: bool,
 }
 
 const NODE_META: &str = "SELECT parent_id, kind, ord FROM design_nodes WHERE design_id = ?1 AND node_id = ?2";
@@ -380,6 +558,7 @@ impl Run<'_> {
 
     fn add(&mut self, mut node: Node, index: Option<u32>) -> Result<Option<String>, BusError> {
         node.validate().map_err(|why| self.fail(ErrorKind::Invalid, "design.node_invalid", why))?;
+        self.sign(&mut node);
         if let Some(parent) = node.parent.as_deref() {
             if !self.container(parent)? {
                 return Ok(None);
@@ -403,6 +582,12 @@ impl Run<'_> {
         self.bytes += body.len() as i64;
         self.touch(&node.id);
         self.inverse.push(vec![NodeOp::Delete { id: node.id.clone() }]);
+        if node.component == Some(true) {
+            self.dirty.insert(node.id.clone());
+        } else if let Some(parent) = node.parent.clone() {
+            self.mark(&parent)?;
+        }
+        self.note_styles(&node, None);
         Ok(Some(node.id))
     }
 
@@ -411,6 +596,27 @@ impl Run<'_> {
         let node = node_of(id, row.parent, &row.body)?;
         let set = canonical(set);
         let mut next = node.patched(&set).map_err(|why| self.fail(ErrorKind::Invalid, "design.node_invalid", why))?;
+        // A copy edited by hand keeps what was changed, whatever its component does next.
+        if !self.syncing && next.master.is_some() && !set.contains_key("overridden") {
+            let mut own = next.overridden.take().unwrap_or_default();
+            for field in relay_bus::design::overriding(&set) {
+                if !own.iter().any(|f| f == field) {
+                    own.push(field.to_string());
+                }
+            }
+            next.overridden = (!own.is_empty()).then_some(own);
+        }
+        // A field set by hand that a shared style lends lets go of the style.
+        let mut let_go = Vec::new();
+        if !self.syncing {
+            for (which, fields) in relay_bus::design::STYLE_FIELDS {
+                if next.style_ref(which).is_some() && !set.contains_key(*which) && set.keys().any(|k| fields.contains(&k.as_str())) {
+                    let_go.push((*which, node.style_ref(which).map(str::to_string)));
+                    next.clear_style_ref(which);
+                }
+            }
+        }
+        self.sign(&mut next);
         let body = body_of(&mut next)?;
         if body != row.body {
             self.tx.prepare_cached("UPDATE design_nodes SET body = ?3 WHERE design_id = ?1 AND node_id = ?2").bus()?
@@ -418,7 +624,32 @@ impl Run<'_> {
             self.bytes += body.len() as i64 - row.body.len() as i64;
         }
         self.touch(&next.id);
-        self.inverse.push(vec![NodeOp::Update { id: next.id.clone(), set: node.before(&set) }]);
+        let mut undo = node.before(&set);
+        // Undoing a hand edit of a copy takes its override back with it.
+        if next.overridden != node.overridden && !undo.contains_key("overridden") {
+            undo.insert("overridden".into(), serde_json::to_value(&node.overridden).unwrap_or(Value::Null));
+        }
+        for (which, was) in let_go {
+            undo.insert(which.into(), was.map_or(Value::Null, Value::String));
+        }
+        self.inverse.push(vec![NodeOp::Update { id: next.id.clone(), set: undo }]);
+        if set.contains_key("component") {
+            self.plain.clear();
+        }
+        self.mark(&next.id)?;
+        self.note_styles(&next, Some(&set));
+        // Overrides reset on a copy: its component's values come back.
+        if set.contains_key("overridden") && next.master.is_some() {
+            let mut at = Some(next.id.clone());
+            while let Some(current) = at {
+                let Some(n) = self.node(&current)? else { break };
+                if let Some(c) = n.instance_of {
+                    self.dirty.insert(c);
+                    break;
+                }
+                at = n.parent;
+            }
+        }
         Ok(Some(next.id))
     }
 
@@ -453,18 +684,307 @@ impl Run<'_> {
         let ord = self.slot(to.as_deref(), index, Some(&id))?;
         self.tx.prepare_cached("UPDATE design_nodes SET parent_id = ?3, ord = ?4 WHERE design_id = ?1 AND node_id = ?2").bus()?
             .execute(params![self.design, id, to, ord]).bus()?;
+        self.plain.clear();
+        if let Some(old) = &from {
+            self.mark(old)?;
+        }
         self.touch(&id);
         self.inverse.push(vec![NodeOp::Move { id: id.clone(), parent: from, index: Some(old_index) }]);
+        self.mark(&id)?;
         Ok(Some(id))
+    }
+
+    /// A pack item's nodes added one by one (its root at `index`), undone by deleting its root.
+    #[allow(clippy::too_many_arguments)]
+    fn insert(&mut self, item: String, parent: String, x: f64, y: f64, index: Option<u32>, id: Option<String>, set: Option<Map<String, Value>>) -> Result<Option<String>, BusError> {
+        if let Some(component) = item.strip_prefix('#') {
+            return self.insert_instance(component, parent, x, y, index, id, set);
+        }
+        let Some((_, found)) = relay_bus::kits::item(&item) else {
+            return Err(self.fail(ErrorKind::NotFound, "design.kit_not_found", format!("no pack item {item:?}"))
+                .with_hint("design.kits lists the packs and their items as kit/item, and #<id> names one of this design's components"));
+        };
+        let root = match id {
+            Some(id) => {
+                if self.meta(&id)?.is_some() {
+                    return Err(self.fail(ErrorKind::Conflict, "design.node_exists", format!("{id:?} is already in the design")));
+                }
+                id
+            }
+            None => loop {
+                let id = format!("{}-{}", found.id, self.next_node);
+                self.next_node += 1;
+                if self.meta(&id)?.is_none() {
+                    break id;
+                }
+            },
+        };
+        let nodes = relay_bus::kits::expand(found, &root, &parent, x, y, set.as_ref())
+            .map_err(|why| self.fail(ErrorKind::Invalid, "design.node_invalid", why))?;
+        let before = self.inverse.len();
+        for (i, node) in nodes.into_iter().enumerate() {
+            if self.add(node, if i == 0 { index } else { None })?.is_none() {
+                return Ok(None);
+            }
+        }
+        self.inverse.truncate(before);
+        self.inverse.push(vec![NodeOp::Delete { id: root.clone() }]);
+        Ok(Some(root))
+    }
+
+    /// An instance of one of this design's components: copies that follow it.
+    #[allow(clippy::too_many_arguments)]
+    fn insert_instance(&mut self, component: &str, parent: String, x: f64, y: f64, index: Option<u32>, id: Option<String>, set: Option<Map<String, Value>>) -> Result<Option<String>, BusError> {
+        let subtree = self.subtree(component)?;
+        if subtree.first().is_none_or(|n| n.component != Some(true)) {
+            return Err(self.fail(ErrorKind::NotFound, "design.not_component", format!("{component:?} is not a component of this design"))
+                .with_hint("make a frame a component by setting component: true"));
+        }
+        let root = match id {
+            Some(id) => id,
+            None => loop {
+                let id = format!("{component}-copy-{}", self.next_node);
+                self.next_node += 1;
+                if self.meta(&id)?.is_none() {
+                    break id;
+                }
+            },
+        };
+        if self.meta(&root)?.is_some() {
+            return Err(self.fail(ErrorKind::Conflict, "design.node_exists", format!("{root:?} is already in the design")));
+        }
+        let nodes = relay_bus::kits::instance(&subtree, &root, &parent, x, y, set.as_ref())
+            .map_err(|why| self.fail(ErrorKind::Invalid, "design.node_invalid", why))?;
+        let before = self.inverse.len();
+        for (i, node) in nodes.into_iter().enumerate() {
+            if self.add(node, if i == 0 { index } else { None })?.is_none() {
+                return Ok(None);
+            }
+        }
+        self.inverse.truncate(before);
+        self.inverse.push(vec![NodeOp::Delete { id: root.clone() }]);
+        Ok(Some(root))
+    }
+
+    fn node(&self, id: &str) -> Result<Option<Node>, BusError> {
+        self.row(id)?.map(|row| node_of(id.to_string(), row.parent, &row.body)).transpose()
+    }
+
+    /// `id` and everything inside it as nodes, parents first, siblings in paint order.
+    fn subtree(&self, id: &str) -> Result<Vec<Node>, BusError> {
+        let Some(root) = self.node(id)? else {
+            return Ok(Vec::new());
+        };
+        let mut out = vec![root];
+        let mut next = 0;
+        let mut children = self.tx
+            .prepare_cached("SELECT node_id, parent_id, body FROM design_nodes WHERE design_id = ?1 AND parent_id = ?2 ORDER BY ord, node_id").bus()?;
+        while next < out.len() {
+            if out[next].kind.holds_children() {
+                let found = children.query_map(params![self.design, out[next].id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, String>(2)?))).bus()?
+                    .collect::<rusqlite::Result<Vec<_>>>().bus()?;
+                for (cid, parent, body) in found {
+                    out.push(node_of(cid, parent, &body)?);
+                }
+            }
+            next += 1;
+        }
+        Ok(out)
+    }
+
+    /// Note the component `id` sits in (itself, or an ancestor), so its copies follow.
+    fn mark(&mut self, id: &str) -> Result<(), BusError> {
+        let mut at = Some(id.to_string());
+        let mut depth = 0;
+        let mut walked = Vec::new();
+        // One indexed row per ancestor, its body unparsed: every add of a big list walks this.
+        let mut up = self.tx
+            .prepare_cached("SELECT parent_id, json_extract(body, '$.component') IS 1 FROM design_nodes WHERE design_id = ?1 AND node_id = ?2").bus()?;
+        while let Some(current) = at {
+            if self.plain.contains(&current) {
+                break;
+            }
+            let Some((parent, component)) = up.query_row(params![self.design, current], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, bool>(1)?))).optional().bus()? else {
+                break;
+            };
+            if component {
+                self.dirty.insert(current);
+                return Ok(());
+            }
+            walked.push(current);
+            at = parent;
+            depth += 1;
+            if depth > 64 {
+                return Ok(());
+            }
+        }
+        self.plain.extend(walked);
+        Ok(())
+    }
+
+    /// A comment, and each reply, without an author is the editor's.
+    fn sign(&self, node: &mut Node) {
+        if node.kind == NodeKind::Comment && node.author.is_none() {
+            node.author = Some(self.by.clone());
+        }
+        for reply in node.replies.iter_mut().flatten() {
+            if reply.author.is_empty() {
+                reply.author = self.by.clone();
+            }
+        }
+    }
+
+    /// A shared style changed, or a node took one up (added with it, or `set` naming it).
+    fn note_styles(&mut self, node: &Node, set: Option<&Map<String, Value>>) {
+        if node.shared == Some(true) {
+            self.restyle.insert(node.id.clone());
+        }
+        let took = relay_bus::design::STYLE_FIELDS.iter().any(|(which, _)| {
+            node.style_ref(which).is_some() && set.is_none_or(|s| s.contains_key(*which))
+        });
+        if took {
+            self.pending.insert(node.id.clone());
+        }
+    }
+
+    /// Every node naming a changed style, and every node that took one up, given its fields.
+    /// Taking one up is part of the edit and of its undo; following a changed style is not
+    /// (undoing the style's edit makes its users follow it back).
+    fn sync_styles(&mut self) -> Result<(), BusError> {
+        if self.restyle.is_empty() && self.pending.is_empty() {
+            return Ok(());
+        }
+        let mut took: Vec<String> = std::mem::take(&mut self.pending).into_iter().collect();
+        took.sort();
+        let mut followers = Vec::new();
+        for style in std::mem::take(&mut self.restyle) {
+            let mut stmt = self.tx.prepare_cached(
+                "SELECT node_id FROM design_nodes WHERE design_id = ?1 AND (json_extract(body, '$.fill_style') = ?2 OR json_extract(body, '$.text_style') = ?2 OR json_extract(body, '$.effect_style') = ?2)",
+            ).bus()?;
+            let found = stmt.query_map(params![self.design, style], |r| r.get::<_, String>(0)).bus()?.collect::<rusqlite::Result<Vec<_>>>().bus()?;
+            followers.extend(found.into_iter().filter(|id| took.binary_search(id).is_err()));
+        }
+        followers.sort();
+        followers.dedup();
+        let was = std::mem::replace(&mut self.syncing, true);
+        for id in took {
+            self.restyle_node(id)?;
+        }
+        let undo_len = self.inverse.len();
+        for id in followers {
+            self.restyle_node(id)?;
+        }
+        self.inverse.truncate(undo_len);
+        self.syncing = was;
+        Ok(())
+    }
+
+    fn restyle_node(&mut self, id: String) -> Result<(), BusError> {
+        let Some(node) = self.node(&id)? else { return Ok(()) };
+        let mut set = Map::new();
+        for (which, _) in relay_bus::design::STYLE_FIELDS {
+            let Some(style) = node.style_ref(which) else { continue };
+            if let Some(style) = self.node(style)?.filter(|s| s.shared == Some(true)) {
+                set.extend(relay_bus::design::styled(&style, &node, which));
+            }
+        }
+        if !set.is_empty() {
+            self.update(id, set)?;
+        }
+        Ok(())
+    }
+
+    /// Bring every instance of the components this list touched up to date: the component's
+    /// fields onto each copy except those the copy changed itself, copies added for new parts
+    /// and removed for parts gone. Nested components follow in turn, a few levels deep.
+    fn sync(&mut self) -> Result<(), BusError> {
+        let mut rounds = 0;
+        while !self.dirty.is_empty() && rounds < 4 {
+            let components: Vec<String> = self.dirty.drain().collect();
+            for c in components {
+                self.sync_component(&c)?;
+            }
+            rounds += 1;
+        }
+        Ok(())
+    }
+
+    fn sync_component(&mut self, component: &str) -> Result<(), BusError> {
+        let master = self.subtree(component)?;
+        if master.first().is_none_or(|n| n.component != Some(true)) {
+            return Ok(());
+        }
+        let instances: Vec<String> = self.tx
+            .prepare_cached("SELECT node_id FROM design_nodes WHERE design_id = ?1 AND json_extract(body, '$.instance_of') = ?2").bus()?
+            .query_map(params![self.design, component], |r| r.get(0)).bus()?
+            .collect::<rusqlite::Result<_>>().bus()?;
+        // What following changes is no part of the undo: undoing the component's edit makes its
+        // copies follow it back, where replaying their own edits would mark them overridden.
+        let was = std::mem::replace(&mut self.syncing, true);
+        let undo_len = self.inverse.len();
+        for instance in instances {
+            let copies = self.subtree(&instance)?;
+            let mut copy_of: HashMap<String, String> = HashMap::new();
+            for (i, m) in master.iter().enumerate() {
+                let copy = if i == 0 {
+                    copies.first()
+                } else {
+                    copies.iter().skip(1).find(|c| c.master.as_deref() == Some(m.id.as_str()))
+                };
+                match copy {
+                    Some(c) => {
+                        copy_of.insert(m.id.clone(), c.id.clone());
+                        let set = follow(m, c, i == 0);
+                        if !set.is_empty() {
+                            self.update(c.id.clone(), set)?;
+                        }
+                    }
+                    None => {
+                        let Some(parent) = m.parent.as_ref().and_then(|p| copy_of.get(p)).cloned() else {
+                            continue;
+                        };
+                        let mut n = 1;
+                        let id = loop {
+                            let id = format!("{instance}.{}", copies.len() + n);
+                            if self.meta(&id)?.is_none() {
+                                break id;
+                            }
+                            n += 1;
+                        };
+                        let mut node = m.clone();
+                        node.id = id.clone();
+                        node.parent = Some(parent);
+                        node.master = Some(m.id.clone());
+                        node.component = None;
+                        node.overridden = None;
+                        copy_of.insert(m.id.clone(), id);
+                        self.add(node, None)?;
+                    }
+                }
+            }
+            for c in copies.iter().skip(1) {
+                let gone = c.master.as_ref().is_some_and(|m| !master.iter().any(|n| n.id == *m));
+                if gone && self.meta(&c.id)?.is_some() {
+                    self.delete(c.id.clone())?;
+                }
+            }
+        }
+        self.inverse.truncate(undo_len);
+        self.syncing = was;
+        Ok(())
     }
 
     fn delete(&mut self, id: String) -> Result<Option<String>, BusError> {
         let Some(root) = self.row(&id)? else { return self.missing("no such node") };
+        self.plain.clear();
         if root.kind == NodeKind::Page && self.pages <= 1 {
             return Err(self.fail(ErrorKind::Conflict, "design.last_page", "a design keeps at least one page")
                 .with_hint("add another page first, or delete the design"));
         }
         let index = self.index_of(root.parent.as_deref(), &id, root.ord)?;
+        if let Some(parent) = &root.parent {
+            self.mark(parent)?;
+        }
         // The subtree, each parent before its children and siblings bottom to top: the order
         // its undo adds them back in, so each lands where it was.
         let mut doomed = vec![(id, root)];
@@ -625,11 +1145,43 @@ pub fn register(e: &mut Engine) {
             "INSERT INTO design_nodes(design_id, node_id, parent_id, kind, ord, body) VALUES (?1, ?2, NULL, 'page', 1.0, ?3)",
             params![id, page.id, body],
         ).bus()?;
+        let mut nodes = vec![page];
+        if let Some(template) = p.template {
+            // A template is a pack item placed on the first page.
+            let mut run = Run {
+                tx: ctx.tx(),
+                design: id,
+                by: by.clone(),
+                lenient: false,
+                pages: 1,
+                nodes: 1,
+                bytes: body.len() as i64,
+                next_node: 2,
+                at: 0,
+                label: format!("template {template:?}"),
+                touched: Vec::new(),
+                seen: HashSet::new(),
+                removed: Vec::new(),
+                ids: Vec::new(),
+                inverse: Vec::new(),
+                dirty: HashSet::new(),
+                restyle: HashSet::new(),
+                pending: HashSet::new(),
+                plain: HashSet::new(),
+                syncing: false,
+            };
+            run.insert(template, "page-1".into(), 0.0, 0.0, None, None, None)?;
+            ctx.tx().execute(
+                "UPDATE designs SET pages = ?2, nodes = ?3, bytes = ?4, next_node = ?5 WHERE id = ?1",
+                params![id, run.pages, run.nodes, run.bytes, run.next_node],
+            ).bus()?;
+            nodes = all_nodes(ctx.tx(), id)?;
+        }
         let design = get_design(ctx.tx(), id)?;
         ctx.set_undo("design.delete", json!({"design_id": id}), None);
         emit_design(ctx, &design)?;
         let assets_dir = ctx.engine().store.design_assets_dir().display().to_string();
-        Ok(GetOut { design, nodes: vec![page], assets_dir })
+        Ok(GetOut { design, nodes, assets_dir })
     });
     e.register::<Update>(|ctx: &mut Ctx, p| {
         let before = live_design(ctx.tx(), p.design_id)?;
@@ -717,6 +1269,7 @@ pub fn register(e: &mut Engine) {
             return Err(BusError::conflict("design.not_deleted", format!("design {} is not deleted", design.id))
                 .with_hint("design.delete it first; only a deleted design is purged"));
         }
+        ctx.tx().execute("DELETE FROM design_versions WHERE design_id = ?1", [design.id]).bus()?;
         ctx.tx().execute("DELETE FROM design_nodes WHERE design_id = ?1", [design.id]).bus()?;
         ctx.tx().execute("DELETE FROM designs WHERE id = ?1", [design.id]).bus()?;
         ctx.set_project(design.project_id);
@@ -735,11 +1288,19 @@ pub fn register(e: &mut Engine) {
                 .with_hint("read it again with design.get and redo the edits against what is there"));
         }
         let by = actor_name(ctx)?;
+        // An agent taking over a design someone else changed last: keep what they left, so the
+        // person can go back to it whatever the agent does.
+        if ctx.actor.is_agent() && design.updated_by != by {
+            if let Some(kept) = save_version(ctx.tx(), &design, Some(&format!("Before {by}'s edits")), true, &by, &ctx.now)? {
+                emit_version(ctx, design.project_id, &kept)?;
+            }
+        }
         let (bytes, next_node): (i64, i64) = ctx.tx().prepare_cached("SELECT bytes, next_node FROM designs WHERE id = ?1").bus()?
             .query_row([design.id], |r| Ok((r.get(0)?, r.get(1)?))).bus()?;
         let mut run = Run {
             tx: ctx.tx(),
             design: design.id,
+            by: by.clone(),
             lenient: p.lenient.unwrap_or(false),
             pages: design.pages,
             nodes: design.nodes,
@@ -752,7 +1313,13 @@ pub fn register(e: &mut Engine) {
             removed: Vec::new(),
             ids: Vec::with_capacity(p.ops.len()),
             inverse: Vec::with_capacity(p.ops.len()),
+            dirty: HashSet::new(),
+            restyle: HashSet::new(),
+            pending: HashSet::new(),
+            plain: HashSet::new(),
+            syncing: false,
         };
+        let p_len = p.ops.len();
         for (at, op) in p.ops.into_iter().enumerate() {
             (run.at, run.label) = (at, label(at, &op));
             let id = match op {
@@ -760,9 +1327,14 @@ pub fn register(e: &mut Engine) {
                 NodeOp::Update { id, set } => run.update(id, set)?,
                 NodeOp::Move { id, parent, index } => run.move_(id, parent, index)?,
                 NodeOp::Delete { id } => run.delete(id)?,
+                NodeOp::Insert { item, parent, x, y, index, id, set } => run.insert(item, parent, x, y, index, id, set)?,
             };
             run.ids.push(id.unwrap_or_default());
         }
+        (run.at, run.label) = (p_len, "following components".to_string());
+        run.sync_styles()?;
+        run.sync()?;
+        run.sync_styles()?;
         if run.bytes > MAX_BYTES {
             return Err(BusError::invalid("design.too_large",
                 format!("the design would hold {} KiB of nodes; the limit is {} KiB", run.bytes >> 10, MAX_BYTES >> 10))
@@ -797,6 +1369,23 @@ pub fn register(e: &mut Engine) {
         emit_design(ctx, &design)?;
         Ok(ApplyOut { design, prev_rev, nodes, removed, ids, inverse })
     });
+    e.register_unlocked::<Kits>(|_ctx, p| {
+        let with_nodes = p.with_nodes.unwrap_or(false);
+        let kits = relay_bus::kits::kits()
+            .iter()
+            .filter(|k| p.kit.as_deref().is_none_or(|want| want == k.id))
+            .map(|k| {
+                let mut k = k.clone();
+                if !with_nodes {
+                    for item in &mut k.items {
+                        item.nodes.truncate(1);
+                    }
+                }
+                k
+            })
+            .collect();
+        Ok(KitsOut { kits })
+    });
     // Staged (D149): the picture is read, sniffed and written beside the store with the lock
     // released — a path may name a 20 MiB file — and the transaction only checks the design.
     e.register_staged::<AssetAdd, StagedAsset>(|ctx, p| {
@@ -828,6 +1417,151 @@ pub fn register(e: &mut Engine) {
         assert_actor_project(ctx, design.project_id)?;
         ctx.set_project(design.project_id);
         Ok(AssetAddOut { src: staged.src, path: staged.path, w: staged.w, h: staged.h })
+    });
+    e.register::<VersionSave>(|ctx: &mut Ctx, p| {
+        let design = live_design(ctx.tx(), p.design_id)?;
+        assert_actor_project(ctx, design.project_id)?;
+        let by = actor_name(ctx)?;
+        let label = p.label.as_deref().map(str::trim).filter(|l| !l.is_empty());
+        if label.is_some_and(|l| l.chars().count() > MAX_NAME) {
+            return Err(BusError::invalid("design.version_label", format!("a version's label is at most {MAX_NAME} characters")));
+        }
+        let version = save_version(ctx.tx(), &design, label, false, &by, &ctx.now)?.ok_or_else(|| too_large_to_keep(design.id))?;
+        ctx.set_undo("design.version.delete", json!({"design_id": design.id, "version_id": version.id}), None);
+        emit_version(ctx, design.project_id, &version)?;
+        Ok(version)
+    });
+    e.register_unlocked::<VersionList>(|ctx, p| {
+        let (session_id, agent) = (ctx.actor_session_id(), ctx.actor.is_agent());
+        let versions = ctx.read(|conn| {
+            let design = get_design(conn, p.design_id)?;
+            check_project(conn, design.project_id, session_id, agent)?;
+            let mut stmt = conn.prepare_cached(VERSIONS_OF).bus()?;
+            let versions = stmt.query_map([design.id], version_row).bus()?.collect::<rusqlite::Result<Vec<_>>>().bus()?;
+            Ok(versions)
+        })?;
+        Ok(VersionListOut { versions })
+    });
+    // Only copying the row out holds the store; parsing its nodes runs after.
+    e.register_unlocked::<VersionGet>(|ctx, p| {
+        let (session_id, agent) = (ctx.actor_session_id(), ctx.actor.is_agent());
+        let (version, body) = ctx.read(|conn| {
+            let design = get_design(conn, p.design_id)?;
+            check_project(conn, design.project_id, session_id, agent)?;
+            get_version(conn, design.id, p.version_id)
+        })?;
+        let nodes: Vec<Node> = serde_json::from_str(&body)
+            .map_err(|e| BusError::internal(format!("version {} of design {} is unreadable: {e}", version.id, version.design_id)))?;
+        Ok(VersionGetOut { version, nodes })
+    });
+    e.register::<VersionRestore>(|ctx: &mut Ctx, p| {
+        let design = live_design(ctx.tx(), p.design_id)?;
+        assert_actor_project(ctx, design.project_id)?;
+        let by = actor_name(ctx)?;
+        let (version, body) = get_version(ctx.tx(), design.id, p.version_id)?;
+        let nodes: Vec<Node> = serde_json::from_str(&body)
+            .map_err(|e| BusError::internal(format!("version {} of design {} is unreadable: {e}", version.id, design.id)))?;
+        // What is there now is kept first, so the restore itself can be undone.
+        let label = format!("Before restoring \u{201c}{}\u{201d}", version_name(&version));
+        let saved = save_version(ctx.tx(), &design, Some(&label), true, &by, &ctx.now)?.ok_or_else(|| too_large_to_keep(design.id))?;
+        let next_node: i64 = ctx.tx().prepare_cached("SELECT next_node FROM designs WHERE id = ?1").bus()?
+            .query_row([design.id], |r| r.get(0)).bus()?;
+        let (pages, count, bytes, top) = put_nodes(ctx.tx(), design.id, nodes)?;
+        ctx.tx().prepare_cached(
+            "UPDATE designs SET rev = rev + 1, pages = ?2, nodes = ?3, bytes = ?4, next_node = ?5, updated_by = ?6, updated_at = ?7 WHERE id = ?1",
+        ).bus()?.execute(params![design.id, pages, count, bytes, next_node.max(top + 1), by, ctx.now]).bus()?;
+        let design = get_design(ctx.tx(), design.id)?;
+        ctx.set_undo("design.version.restore", json!({"design_id": design.id, "version_id": saved.id}), None);
+        emit_version(ctx, design.project_id, &saved)?;
+        emit_design(ctx, &design)?;
+        Ok(VersionRestoreOut { design, saved_version_id: saved.id })
+    });
+    // An agent deletes only a version it saved by name: the person's, and those the engine
+    // kept before an agent's edits, are the person's to let go of.
+    e.register::<VersionDelete>(|ctx: &mut Ctx, p| {
+        let design = get_design(ctx.tx(), p.design_id)?;
+        assert_actor_project(ctx, design.project_id)?;
+        let (version, _) = get_version(ctx.tx(), design.id, p.version_id)?;
+        if let Some(own) = ctx.actor.session_name() {
+            if version.auto || version.created_by != own {
+                return Err(BusError::not_own("version").with_hint("an agent deletes only the versions it saved itself"));
+            }
+        }
+        ctx.tx().prepare_cached("DELETE FROM design_versions WHERE id = ?1").bus()?.execute([version.id]).bus()?;
+        ctx.set_project(design.project_id);
+        ctx.emit("design.version.deleted", json!({"id": version.id, "design_id": design.id, "project_id": design.project_id}));
+        Ok(Empty {})
+    });
+    // Unlocked: the rows are copied out under the lock; writing the page, and reading pictures
+    // to inline, runs after.
+    e.register_unlocked::<Code>(|ctx, p| {
+        let (session_id, agent) = (ctx.actor_session_id(), ctx.actor.is_agent());
+        let rows = ctx.read(|conn| {
+            let design = get_design(conn, p.design_id)?;
+            check_project(conn, design.project_id, session_id, agent)?;
+            let mut stmt = conn.prepare_cached("SELECT node_id, parent_id, ord, body FROM design_nodes WHERE design_id = ?1").bus()?;
+            let rows = stmt.query_map([design.id], |r| Ok(Raw { id: r.get(0)?, parent: r.get(1)?, ord: r.get(2)?, body: r.get(3)? })).bus()?
+                .collect::<rusqlite::Result<Vec<_>>>().bus()?;
+            Ok(rows)
+        })?;
+        let nodes = ordered(rows, None)?;
+        let dir = ctx.engine().store.design_assets_dir();
+        let (inline, mut budget) = (p.inline_assets.unwrap_or(false), INLINE_MAX);
+        let code = crate::design_code::generate(&nodes, &p.node_id, &mut |src| code_asset(&dir, inline, &mut budget, src))
+            .map_err(|refusal| match refusal {
+                crate::design_code::Refusal::NotFound(why) => BusError::not_found("design.node_not_found", why),
+                crate::design_code::Refusal::Page(why) => BusError::invalid("design.code", why).with_hint("name a frame on the page"),
+            })?;
+        Ok(CodeOut { html: code.html, css: code.css, assets: code.assets })
+    });
+    // Event-only: the request id is the design's and this request's own, so the answer names its
+    // design and nothing is kept between the two.
+    e.register_unlocked::<Render>(|ctx, p| {
+        let (session_id, agent) = (ctx.actor_session_id(), ctx.actor.is_agent());
+        let scale = p.scale.unwrap_or(2.0);
+        if !scale.is_finite() || !(1.0..=4.0).contains(&scale) {
+            return Err(BusError::invalid("design.scale", format!("scale is 1 to 4, not {scale}")));
+        }
+        let (design, node_id) = ctx.read(|conn| {
+            let design = live_design(conn, p.design_id)?;
+            check_project(conn, design.project_id, session_id, agent)?;
+            let node_id: Option<String> = match &p.node_id {
+                Some(id) => conn.prepare_cached("SELECT node_id FROM design_nodes WHERE design_id = ?1 AND node_id = ?2").bus()?
+                    .query_row(params![design.id, id], |r| r.get(0)).optional().bus()?,
+                None => conn.prepare_cached("SELECT node_id FROM design_nodes WHERE design_id = ?1 AND parent_id IS NULL ORDER BY ord, node_id LIMIT 1").bus()?
+                    .query_row([design.id], |r| r.get(0)).optional().bus()?,
+            };
+            let node_id = node_id.ok_or_else(|| BusError::not_found("design.node_not_found",
+                format!("design {} has no node {:?}", design.id, p.node_id.as_deref().unwrap_or("(page)"))))?;
+            Ok((design, node_id))
+        })?;
+        let request_id = format!("{}-{}", design.id, ctx.req_id);
+        ctx.set_project(design.project_id);
+        ctx.emit("design.render_requested", json!({
+            "request_id": request_id, "project_id": design.project_id, "design_id": design.id, "node_id": node_id, "scale": scale,
+        }));
+        let wait = json!({"events": ["design.rendered"], "matching": {"request_id": request_id}, "timeout_ms": RENDER_WAIT_MS});
+        Ok(RenderOut { request_id, node_id, wait })
+    });
+    e.register_unlocked::<RenderDone>(|ctx, p| {
+        if p.request_id.is_empty() || p.request_id.len() > 64 {
+            return Err(BusError::invalid("design.render", "request_id is the one design.render_requested carried"));
+        }
+        match (&p.path, &p.error) {
+            (None, None) => return Err(BusError::invalid("design.render", "give the PNG's path, or the error that stopped it")),
+            (Some(path), _) if !Path::new(path).is_absolute() || !Path::new(path).is_file() => {
+                return Err(BusError::invalid("design.render", format!("{path:?} is not a file at an absolute path")));
+            }
+            _ => {}
+        }
+        let design_id: Id = p.request_id.split_once('-').and_then(|(id, _)| id.parse().ok())
+            .ok_or_else(|| BusError::invalid("design.render", "request_id is the one design.render_requested carried"))?;
+        let design = ctx.read(|conn| get_design(conn, design_id))?;
+        ctx.set_project(design.project_id);
+        ctx.emit("design.rendered", json!({
+            "request_id": p.request_id, "project_id": design.project_id, "design_id": design.id, "path": p.path, "error": p.error,
+        }));
+        Ok(Empty {})
     });
 }
 

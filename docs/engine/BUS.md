@@ -188,7 +188,10 @@ with every entity it changed), `noun.deleted` (payload `{id}`),
 plus domain events (`session.state`, `session.output` on the data plane, `guardrail.held`,
 `notify.new`, `integration.result`, `provider.version`, `resource.sample`, `ui.changed` and
 `ui.toast` from the shell model of §6.5). `design.changed` carries the `Design` row, never its
-nodes; `design.deleted` is `{id, project_id}` (§10.18). Rule: **every
+nodes; `design.deleted` is `{id, project_id}`; `design.version.changed` carries a
+`DesignVersion` (never its nodes) and `design.version.deleted` is `{id, design_id, project_id}`;
+`design.render_requested` and `design.rendered` are a request and its answer, matched by
+`request_id` (§10.18). Rule: **every
 mutation emits at least one event**, and every event's payload is reproducible by a query op.
 
 A full-entity `noun.changed` carries the row with its own `id`. A hint carries the scope it
@@ -1144,9 +1147,17 @@ to the parent; siblings paint in order, the last on top.
 | `design.update` | mutation · always · inverse | `{ design_id, title?, session?: string \| null }` → `Design` — bumps `rev` |
 | `design.duplicate` | mutation · always · inverse | `{ design_id, title? = "<title> copy" }` → `Design` — every node, with its id, and the id counter |
 | `design.delete` / `design.restore` | mutation · always · inverse | `{ design_id }` → `{}` / `Design` — soft (§5.4): the retention pass purges a deleted design past `undo.grace_days`. Any change to a deleted design is `conflict` / `design.deleted` |
-| `design.purge` | mutation · always · user_only | `{ design_id }` → `{}` — a deleted one only (`conflict` / `design.not_deleted`), nodes and all; emits `design.deleted` |
+| `design.purge` | mutation · always · user_only | `{ design_id }` → `{}` — a deleted one only (`conflict` / `design.not_deleted`), nodes and versions and all; emits `design.deleted` |
 | `design.apply` | mutation · always · inverse | `{ design_id, ops: DesignNodeOp[], base_rev?, lenient? }` → `{ design, prev_rev, nodes, removed, ids, inverse }` — below |
 | `design.asset.add` | mutation · always | `{ design_id, path? \| bytes_b64? }` → `{ src, path, w, h }` — a PNG, JPEG, GIF, WebP or SVG, by its bytes (`invalid` / `design.asset` for anything else); an absolute `path` up to 20 MiB or `bytes_b64` up to 1 MiB. Stored once by content in `design-assets/` beside the store as `<32 hex of SHA-256>.<ext>`, the `src` an image node names; `w`/`h` its natural size (an SVG's `width`/`height` in px, else its `viewBox`, else 300×150). Staged: the file work runs unlocked |
+| `design.version.save` | mutation · always · inverse | `{ design_id, label? }` → `DesignVersion` — the design's whole node list kept as a version; `label` 1–200 characters (`design.version_label`), absent or blank for none. A design too big to keep (1.75 MiB of nodes with their ids) is `design.too_large`. Undone by deleting it; emits `design.version.changed` |
+| `design.version.list` | query | `{ design_id }` → `{ versions: DesignVersion[] }` — newest first, without their nodes |
+| `design.version.get` | query | `{ design_id, version_id }` → `{ version, nodes: DesignNode[] }` — the nodes in `design.get`'s order, to preview; `not_found` / `design.version_not_found` for a version of another design |
+| `design.version.restore` | mutation · always · inverse | `{ design_id, version_id }` → `{ design, saved_version_id }` — keeps the design as it is first, as an automatic version labelled `Before restoring “<label, or when it was saved>”`, then replaces every node with the version's: `rev` +1, the counters recounted, the id counter kept past every id held. The audit undo restores that kept version. Emits `design.version.changed` and `design.changed` |
+| `design.version.delete` | mutation · always | `{ design_id, version_id }` → `{}` — for good. An agent deletes only a named version it saved itself (`refused` / `actor.scope`): the person's, and the ones the engine kept, are the person's. Emits `design.version.deleted` |
+| `design.code` | query | `{ design_id, node_id, inline_assets? }` → `{ html, css, assets: string[] }` — below. A page is `invalid` / `design.code`; an unknown node `design.node_not_found` |
+| `design.render` | query | `{ design_id, node_id?, scale? = 2 }` → `{ request_id, node_id, wait }` — asks Relay's window for a PNG of `node_id` (default the first page) at `scale` 1–4 (`design.scale`): emits `design.render_requested {request_id, project_id, design_id, node_id, scale}` and keeps nothing. `wait` is the `bus.wait` payload that takes the answer, `{events: ["design.rendered"], matching: {request_id}, timeout_ms: 20000}`; no answer by then means the window is closed. The request's arrival marks the agent's next wait (as a refusal does), so an answer that comes back before the wait is still taken |
+| `design.render.done` | query · user_only | `{ request_id, design_id, path? \| error? }` → `{}` — the window's answer: the PNG it wrote (an absolute path to a file), or why not (`invalid` / `design.render`). Emits `design.rendered {request_id, project_id, design_id, path, error}` |
 
 `design.apply` runs 1–2,000 `add` / `update` / `move` / `delete` edits in order inside the
 request's transaction, all or none, then bumps `rev`. `base_rev` that is no longer current is
@@ -1160,6 +1171,28 @@ into a parent, that is gone (its `ids` entry is `""`). `nodes` are the nodes add
 moved as stored now; `removed` every id now gone, subtrees included; `inverse` the edits that
 undo the list, in the order to apply them (a delete's re-adds the subtree in place). The audit
 row's undo is that `inverse`, applied leniently.
+
+**Versions.** A version (`design_versions`) is the whole node list as `design.get` gives it. Besides
+the ones saved by name, the engine keeps one on its own when an agent edits a design someone else
+changed last (`updated_by` is not that agent): `Before <session>'s edits`, saved inside the same
+`design.apply` before its edits, so the person can always go back to what was there before an
+agent took over. Automatic versions are kept to the newest 30 per design; named ones stay until
+deleted. Versions go with their design on purge, the retention pass and `project.remove`, and come
+back with `project.restore` (a backup from before v29 has none).
+
+**Code.** `design.code` writes `node_id` and everything in it as a static HTML fragment and its CSS,
+by the canvas's rules: a frame laid out as a row or column is a flexbox (`gap`, `padding`,
+`justify`, `items`), `hug` is `max-content` and `fill` is `flex: 1` along the parent's axis or
+`align-self: stretch` across it; any other parent places its children `position: absolute` at
+their `x`/`y`. Fills, gradients (CSS angles), radii, the stroke as a border (dashed, or dotted
+when the dash is no longer than the stroke), shadows, opacity, blur and `filters` (as CSS filter
+functions), rotation and flips, clipping, type and `spans` (`<span>`, `<a href>`, `<code>`),
+lists (`<ul>`, `<ol>`, checkboxes), pictures (`<img>` with `object-fit`, or a background, a crop
+as its size and position), and polygons, vectors, icons, lines and pen paths as inline SVG. Each
+element's class is its layer's name slugified and made unique, with its id in `data-node`; every
+style is a CSS rule. Hidden nodes and comments are left out; links other than web, mail, phone and
+relative ones are dropped. `assets` are the pictures named by path, `design-assets/<src>`;
+`inline_assets` writes them as `data:` URLs instead while they come to at most 1 MiB in all.
 
 ---
 
@@ -1268,6 +1301,8 @@ interface Design { id; project_id; session: string | null; title; rev /* +1 per 
 interface DesignNode { id; parent?: string /* none for a page */; kind: "page" | "frame" | "group" | "rect"
   | "ellipse" | "line" | "text" | "sticky" | "path" | "image"; name?; x; y; w; h; /* optional style,
   text, layout, points and src fields: relay_bus::design::Node */ }
+interface DesignVersion { id; design_id; rev /* the design's when saved */; label: string | null;
+  auto: bool /* kept by the engine */; created_by: string; created_at; nodes /* how many */ }
 interface Message { id; project_id; from: string; to: string; text; re_task: Id | null; sent_at; acked_at: string | null }
 interface Overlap { id; project_id; sessions: [string, string] | [string]; path; symbol: string | null;
   kind: "file" | "symbol" | "claim"; acked_by: string[]; first_seen; last_seen }

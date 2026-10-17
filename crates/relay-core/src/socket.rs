@@ -268,6 +268,10 @@ fn exception_waited(filter: &Filter, matching: Option<&serde_json::Value>) -> Op
     matching?.get("request_id")?.as_i64()
 }
 
+/// Requests whose real answer is a later event an agent waits for: `design.render`'s
+/// `design.rendered` can come back from the window before the agent's `bus.wait` arrives.
+const ANSWERED_BY_EVENT: &[&str] = &["design.render"];
+
 /// How far back a `bus.wait` may look for an event it was too late to see live.
 const REPLAY_WINDOW: Duration = Duration::from_secs(10 * 60);
 const REPLAY_EVENTS: usize = 1024;
@@ -333,15 +337,17 @@ impl Recent {
         self.inner.lock().unwrap_or_else(|poison| poison.into_inner())
     }
 
-    /// Where the stream stands as an agent's request arrives; `None` for anyone else.
-    fn arrival(&self, req: &Request) -> Option<(String, u64)> {
+    /// Where the stream stands as an agent's request arrives, and whether its answer comes
+    /// later as an event ([`ANSWERED_BY_EVENT`]); `None` for anyone else.
+    fn arrival(&self, req: &Request) -> Option<(String, u64, bool)> {
         let relay_bus::Actor::Agent(name) = &req.actor else { return None };
-        Some((name.clone(), self.lock().drain()))
+        Some((name.clone(), self.lock().drain(), ANSWERED_BY_EVENT.contains(&req.op.as_str())))
     }
 
-    /// That request was refused: the agent's next wait looks back to its arrival.
-    fn refused(&self, arrival: Option<(String, u64)>, response: &Response) {
-        let Some((name, at)) = arrival.filter(|_| !response.ok) else { return };
+    /// That request was refused, or is answered by an event that may beat the agent's wait to
+    /// it: the agent's next wait looks back to its arrival.
+    fn refused(&self, arrival: Option<(String, u64, bool)>, response: &Response) {
+        let Some((name, at, _)) = arrival.filter(|(_, _, later)| *later || !response.ok) else { return };
         let mut inner = self.lock();
         inner.refused.retain(|_, (_, when)| when.elapsed() < REPLAY_WINDOW);
         inner.refused.insert(name, (at, std::time::Instant::now()));

@@ -24,6 +24,8 @@ struct Row {
 
 pub struct Layers {
     pub root: gtk::Box,
+    pub tabs: gtk::Stack,
+    pub library: Rc<super::library::Library>,
     board: Weak<Board>,
     pages: gtk::Box,
     model: gtk::StringList,
@@ -33,9 +35,22 @@ pub struct Layers {
 
 impl Layers {
     pub fn new(b: &Rc<Board>) -> Rc<Layers> {
+        // Two tabs: the design's layers, and the assets to place.
+        let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        outer.add_css_class("design-layers");
+        outer.set_size_request(260, -1);
+        let tabs = gtk::Stack::new();
+        tabs.set_vexpand(true);
+        let switcher = gtk::StackSwitcher::new();
+        switcher.set_stack(Some(&tabs));
+        switcher.add_css_class("design-tabs");
+        switcher.set_margin_start(10);
+        switcher.set_margin_end(10);
+        switcher.set_margin_top(6);
+        switcher.set_margin_bottom(4);
+        outer.append(&switcher);
+        outer.append(&tabs);
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        root.add_css_class("design-layers");
-        root.set_size_request(248, -1);
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         head.add_css_class("design-layers-head");
         let title = label("Pages", "design-section-title");
@@ -61,8 +76,13 @@ impl Layers {
         scroll.set_vexpand(true);
         scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
         root.append(&scroll);
+        tabs.add_titled(&root, Some("layers"), "Layers");
+        let library = super::library::Library::new(b);
+        tabs.add_titled(&library.root, Some("assets"), "Assets");
         let layers = Rc::new(Layers {
-            root,
+            root: outer,
+            tabs,
+            library,
             board: Rc::downgrade(b),
             pages,
             model,
@@ -151,7 +171,18 @@ impl Layers {
         while let Some(c) = glyph.first_child() {
             glyph.remove(&c);
         }
-        glyph.append(&glyphs::image(kind_glyph(n.kind), 14));
+        let mark = if n.component == Some(true) {
+            "component"
+        } else if n.instance_of.is_some() {
+            "instance"
+        } else {
+            kind_glyph(n.kind)
+        };
+        let image = glyphs::image(mark, 14);
+        if n.component == Some(true) || n.instance_of.is_some() {
+            image.add_css_class("design-component-mark");
+        }
+        glyph.append(&image);
         name.clone().downcast::<gtk::Label>().expect("label").set_text(&display_name(&n));
         let eye = eye.clone().downcast::<gtk::Button>().expect("button");
         eye.set_child(Some(&glyphs::image(if n.is_hidden() { "eye-off" } else { "eye" }, 14)));
@@ -248,6 +279,10 @@ impl Layers {
         if !b.layers_panel.reveals_child() {
             return;
         }
+        if self.tabs.visible_child_name().as_deref() == Some("assets") {
+            self.library.refresh_design();
+            return;
+        }
         let scene = b.doc.scene.borrow();
         let page = b.page.borrow().clone();
         // The way down to the selection opens by itself.
@@ -264,6 +299,10 @@ impl Layers {
         let mut stack: Vec<(String, u32)> = scene.children(&page).iter().map(|c| (c.clone(), 0)).collect();
         // Children are bottom to top; the stack pops the top layer first.
         while let Some((id, depth)) = stack.pop() {
+            // Comments are pins over the canvas, not layers.
+            if scene.node(&id).is_some_and(|n| n.kind == NodeKind::Comment) {
+                continue;
+            }
             let kids = scene.children(&id);
             let folder = !kids.is_empty();
             let is_open = folder && open.contains(&id);
