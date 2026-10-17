@@ -22,6 +22,17 @@ import com.forge.app.domain.adapt.isWorkingStrengthSet
 object PrDetector {
 
     /**
+     * How much heavier a set must be, in lb, to count as heavier at all.
+     *
+     * Stored loads keep full precision while every screen rounds them: a 13 kg set is 28.66 lb, a
+     * seeded or converted 28.588 lb draws as "28.6". Re-entering the number on screen then beat the
+     * stored one by a hundredth of a pound, and an exact repeat of last session fired the gold PR row
+     * and confetti. 0.15 lb clears both rounding grids (0.05 lb in pounds, 0.05 kg = 0.11 lb in
+     * kilos) and is still under the smallest plate anyone loads (a 0.25 lb fractional).
+     */
+    const val HEAVIER_MARGIN_LB = 0.15
+
+    /**
      * @param history Every previously logged set for the same exercise, across all sessions.
      *                Does NOT include the set being checked.
      * @param newWeightLb The proposed set's parsed weight in lb. Null = bodyweight; never a PR.
@@ -53,6 +64,6 @@ object PrDetector {
             .filter { it.isWorkingStrengthSet() && it.reps >= newReps }
             .maxOfOrNull { it.weightLb!! }
             ?: return true // No prior set at >= this rep count — any weight is a PR
-        return newWeightLb > competingMax
+        return newWeightLb > competingMax + HEAVIER_MARGIN_LB
     }
 }

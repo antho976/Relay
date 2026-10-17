@@ -132,4 +132,23 @@ class PrDetectorTest {
         assertFalse(PrDetector.isPr(history, newWeightLb = 45.0, newReps = 10))
         assertTrue(PrDetector.isPr(history, newWeightLb = 55.0, newReps = 10))
     }
+
+    /**
+     * Stored loads keep full precision; screens round them. A seeded or converted 28.588 lb draws
+     * as "28.6", and typing that back in beat the stored load by 0.012 lb, so an exact repeat of
+     * last session fired the gold row and confetti.
+     */
+    @Test
+    fun reEnteringTheRoundedLoadOnScreenIsNotAPr() {
+        val history = listOf(set(28.587833424881211, 8))
+        assertFalse(PrDetector.isPr(history, newWeightLb = 28.6, newReps = 8))
+        // A kilo user re-entering 13 kg after a pound-side round trip, same story.
+        assertFalse(PrDetector.isPr(listOf(set(13 * 2.20462, 5)), newWeightLb = 28.7, newReps = 5))
+    }
+
+    @Test
+    fun theSmallestRealPlateStillCountsAsHeavier() {
+        // A 0.25 lb fractional plate is the smallest jump anyone loads; the margin stays under it.
+        assertTrue(PrDetector.isPr(listOf(set(100.0, 5)), newWeightLb = 100.25, newReps = 5))
+    }
 }

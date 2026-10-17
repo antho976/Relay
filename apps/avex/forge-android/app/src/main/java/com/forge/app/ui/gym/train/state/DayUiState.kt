@@ -179,9 +179,12 @@ internal fun beatsPriorSet(cur: LoggedSet, prior: LoggedSet?): Boolean {
     val cw = cur.weightLb
     val pw = prior.weightLb
     if (cw == null || pw == null) return cur.reps > prior.reps
+    // Same tolerance as a PR: a load that only differs from last session's by display rounding is
+    // the same load, so it has to win on reps (PrDetector.HEAVIER_MARGIN_LB).
+    val margin = com.forge.app.domain.pr.PrDetector.HEAVIER_MARGIN_LB
     return when {
-        cw > pw -> true
-        cw == pw -> cur.reps > prior.reps
+        cw > pw + margin -> true
+        cw >= pw - margin -> cur.reps > prior.reps
         else -> cw * cur.reps > pw * prior.reps
     }
 }
