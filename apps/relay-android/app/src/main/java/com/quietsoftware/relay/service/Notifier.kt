@@ -99,9 +99,10 @@ class Notifier(private val context: Context, private val relay: Relay, private v
                 .setContentTitle(n.title.ifBlank { if (n.category == "agent_done") "Agent finished" else "Agent blocked" })
                 .setContentText(n.body)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(n.body))
-                .setContentIntent(open("inbox"))
             val session = ((n.link as? JsonObject)?.get("payload") as? JsonObject)?.s("session")
             val project = n.projectId
+            // A tap opens the agent's conversation, where its answer is; one without an agent, the inbox.
+            b.setContentIntent(open(session?.let { MainActivity.OPEN_CHAT + it } ?: "inbox"))
             if (session != null && project != null) {
                 // Answer the agent from here: priority mail, read at its next step.
                 b.addAction(
