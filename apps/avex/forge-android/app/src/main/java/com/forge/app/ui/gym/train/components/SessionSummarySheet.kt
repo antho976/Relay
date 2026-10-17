@@ -150,10 +150,10 @@ fun SessionSummarySheet(
                     FlatStat(value = "${summary.durationMinutes} min", label = "TIME", onBg = onBg, muted = muted)
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                    FlatStat(value = "${summary.setCount}", label = "SETS", onBg = onBg, muted = muted)
+                    FlatStat(value = "${summary.setCount}", label = if (summary.setCount == 1) "SET" else "SETS", onBg = onBg, muted = muted)
                     FlatStat(
                         value = "${summary.exercisesLogged}" + (if (summary.exercisesSkipped > 0) " · ${summary.exercisesSkipped} skipped" else ""),
-                        label = "EXERCISES",
+                        label = if (summary.exercisesLogged == 1) "EXERCISE" else "EXERCISES",
                         onBg = onBg,
                         muted = muted
                     )

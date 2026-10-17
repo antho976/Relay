@@ -148,7 +148,6 @@
 8 font-size ui/profile/RankSection.kt fontSize=
 5 font-size ui/profile/TrophyCaseSection.kt fontSize=
 6 font-size ui/trophies/TrophiesComponents.kt fontSize=
-1 hype domain/coach/SessionOpinion.kt "moves the needle"
 2 hype program/ExerciseLibrary.kt "insane"
 1 hype program/Trophies.kt "Beast"
 1 literal-duration ui/common/AvexWordmark.kt literal duration

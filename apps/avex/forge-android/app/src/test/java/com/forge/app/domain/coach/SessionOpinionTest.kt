@@ -24,7 +24,7 @@ class SessionOpinionTest {
     @Test fun `best session leads`() {
         // Best session outranks PRs / duel in the lead.
         val o = opinion(prCount = 2, isBestSession = true, ghostBeats = 5, ghostComparable = 5)
-        assertTrue(o!!.startsWith("Best session yet"))
+        assertTrue(o!!.startsWith("The most volume"))
     }
 
     @Test fun `prs lead when not a best session`() {
@@ -41,22 +41,23 @@ class SessionOpinionTest {
     }
 
     @Test fun `volume up and down`() {
-        assertTrue(opinion(vsLastVolumeDelta = 120.0)!!.contains("Volume's up"))
+        assertTrue(opinion(vsLastVolumeDelta = 120.0)!!.contains("More volume than last time"))
         assertTrue(opinion(vsLastVolumeDelta = -120.0)!!.contains("lighter than last time"))
     }
 
-    @Test fun `fallback when nothing notable`() {
-        assertTrue(opinion()!!.startsWith("Solid work"))
+    @Test fun `a first time through a day sets the baseline, a repeat says so`() {
+        assertTrue(opinion()!!.startsWith("First time through this day"))
+        assertEquals("The same volume as last time.", opinion(vsLastVolumeDelta = 0.0))
     }
 
     @Test fun `low completion appends a caveat`() {
         val o = opinion(prCount = 1, honestyPct = 45)!!
         assertTrue(o.contains("1 new PR"))
-        assertTrue(o.contains("left a chunk of the plan unlogged"))
+        assertTrue(o.contains("You logged 45% of the planned sets."))
     }
 
     @Test fun `high completion has no caveat`() {
         val o = opinion(prCount = 1, honestyPct = 95)!!
-        assertEquals("1 new PR today. You found another gear.", o)
+        assertEquals("1 new PR today.", o)
     }
 }
