@@ -41,6 +41,8 @@ internal fun MainList(
     onBack: () -> Unit,
     onSearchChange: (String) -> Unit,
     onOpenPage: (SettingsPage) -> Unit,
+    /** A search hit inside Program opens its section, not the Program menu. */
+    onOpenSection: (SettingsPage, ProgramSection?) -> Unit = { page, _ -> onOpenPage(page) },
     onOpenCoachBrief: () -> Unit,
     onOpenDataDialog: () -> Unit,
     onImportData: () -> Unit,
@@ -55,7 +57,7 @@ internal fun MainList(
     }
     val openResult: (SearchResult) -> Unit = { r ->
         when (r.action) {
-            null -> r.page?.let(onOpenPage)
+            null -> r.page?.let { page -> onOpenSection(page, r.section) }
             SearchAction.DATA -> onOpenDataDialog()
             SearchAction.IMPORT -> onImportData()
             SearchAction.RESET -> onOpenResetMenu()
@@ -175,7 +177,8 @@ private class SearchResult(
     val glyph: ImageVector,
     val rank: Int,
     val page: SettingsPage? = null,
-    val action: SearchAction? = null
+    val action: SearchAction? = null,
+    val section: ProgramSection? = null
 )
 
 /** Every hit for [ql] (lowercased), name-prefix hits first, then name substrings, then tag-only. */
@@ -187,7 +190,10 @@ private fun searchHits(ql: String, freestyleMode: Boolean): List<SearchResult> =
     }
     ALL_ITEMS.forEachIndexed { i, item ->
         if (ql in item.name.lowercase() || ql in item.tags) {
-            add(SearchResult("item-$i", item.name, item.page.title, pageGlyph(item.page), searchRank(item.name, ql), page = item.page))
+            add(SearchResult(
+                "item-$i", item.name, item.section?.let { "${item.page.title} · ${it.title}" } ?: item.page.title,
+                pageGlyph(item.page), searchRank(item.name, ql), page = item.page, section = item.section
+            ))
         }
     }
     ACTION_ENTRIES.forEachIndexed { i, e ->

@@ -52,7 +52,13 @@ enum class SettingsPage(val title: String) {
     About("About")
 }
 
-internal data class SettingsItem(val name: String, val tags: String, val page: SettingsPage)
+internal data class SettingsItem(
+    val name: String,
+    val tags: String,
+    val page: SettingsPage,
+    /** Inside Program, the section the row lives in, so a hit opens it rather than the menu. */
+    val section: ProgramSection? = null
+)
 
 /** What a non-page search hit does when tapped — fire an action (dialog/menu), not open a sub-page. */
 enum class SearchAction { DATA, IMPORT, RESET, FACTORY, COACH }
@@ -95,45 +101,56 @@ internal val PAGE_ENTRIES = listOf(
 )
 
 internal val ALL_ITEMS = listOf(
-    SettingsItem("AMOLED mode", "amoled black dark theme display", SettingsPage.Appearance),
+    SettingsItem("Pure black", "amoled mode pure black dark theme display oled", SettingsPage.Appearance),
     SettingsItem("Accent color", "color accent theme tint", SettingsPage.Appearance),
     SettingsItem("App icon", "app icon launcher home screen change alternate", SettingsPage.Appearance),
     SettingsItem("Weight unit", "kg lb weight unit pounds kilograms", SettingsPage.Format),
     SettingsItem("Distance unit", "km mi miles kilometers distance cardio pace", SettingsPage.Format),
     SettingsItem("Length unit", "cm in inches centimeters length body measurements waist chest", SettingsPage.Format),
-    SettingsItem("Time format", "time 12h 24h clock hour", SettingsPage.Format),
-    SettingsItem("First day of week", "week start monday sunday", SettingsPage.Format),
+    SettingsItem("Clock", "time format 12h 24h clock hour", SettingsPage.Format),
+    SettingsItem("Week starts", "first day of week start monday sunday", SettingsPage.Format),
     SettingsItem("Haptic feedback", "haptic vibration strength", SettingsPage.Session),
     SettingsItem("Keep screen on", "keep screen on awake display lock timeout sleep session logging", SettingsPage.Session),
     SettingsItem("Rest times", "rest timer seconds between sets compound isolation default", SettingsPage.Session),
     SettingsItem("Note templates", "notes templates prompts form energy pain focus", SettingsPage.Session),
     SettingsItem("Training reminders", "reminder notify nudge daily streak train schedule engagement", SettingsPage.Notifications),
     SettingsItem("Quiet hours", "quiet hours suppress notifications silent", SettingsPage.Notifications),
-    SettingsItem("Available equipment", "equipment barbell dumbbell cable machine body weight", SettingsPage.Program),
-    SettingsItem("Weight per plate", "plate weight machine plates count", SettingsPage.Program),
-    SettingsItem("Heaviest dumbbell", "dumbbell max heaviest adjustable ceiling", SettingsPage.Program),
+    SettingsItem("Equipment", "available equipment gear gym barbell dumbbell cable machine body weight", SettingsPage.Program, ProgramSection.Equipment),
+    SettingsItem("Weight per plate", "plate weight machine plates count", SettingsPage.Program, ProgramSection.Equipment),
+    SettingsItem("Heaviest dumbbell", "dumbbell max heaviest adjustable ceiling", SettingsPage.Program, ProgramSection.Equipment),
     SettingsItem("Privacy mode", "privacy mode blur screenshot screen recents", SettingsPage.Security),
     SettingsItem("App lock", "app lock biometric fingerprint face pin passcode unlock protect open security", SettingsPage.Security),
     SettingsItem("Photo gallery lock", "gallery lock photos progress pictures biometric fingerprint pin protect security", SettingsPage.Security),
-    SettingsItem("Auto-lock", "auto lock timeout re-lock immediately minutes grace security", SettingsPage.Security),
+    SettingsItem("Lock again", "auto-lock auto lock timeout re-lock immediately minutes grace security", SettingsPage.Security),
     SettingsItem("Strength standards", "strength standards sex male female relative bodyweight ratio elite novice", SettingsPage.Format),
     SettingsItem("Weekly recap", "weekly recap summary notification report", SettingsPage.Notifications),
     SettingsItem("Rest timer alerts", "rest timer alert notification background buzz vibrate", SettingsPage.Notifications),
     SettingsItem("Health Connect", "health connect recovery sync samsung google fit permissions wearable watch", SettingsPage.Recovery),
     SettingsItem("Watch & health data", "wearable watch wear os health connect sleep heart rate steps galaxy pixel fitbit samsung garmin ring band tracker", SettingsPage.Recovery),
-    SettingsItem("Sleep", "sleep recovery hours health connect rest coach deload", SettingsPage.Recovery),
-    SettingsItem("Resting heart rate", "resting heart rate hr recovery health connect coach", SettingsPage.Recovery),
-    SettingsItem("Steps", "steps recovery health connect cardio wearable daily", SettingsPage.Recovery),
+    SettingsItem("Sleep & heart rate", "sleep recovery hours health connect rest coach deload", SettingsPage.Recovery),
+        SettingsItem("Steps & activity", "steps recovery health connect cardio wearable daily", SettingsPage.Recovery),
     SettingsItem("Bodyweight sync", "bodyweight weight sync health connect log recovery", SettingsPage.Recovery),
     SettingsItem("Exercise preferences", "exercise likes dislikes preferred hidden movements favourite heart", SettingsPage.ExercisePrefs),
     SettingsItem("Ask to hide after swapping", "swap dislike prompt hide exercise default", SettingsPage.ExercisePrefs),
-    SettingsItem("Holiday mode", "holiday vacation pause streak break away travel", SettingsPage.Vacation),
+    SettingsItem("Holidays", "holiday mode vacation pause streak break away travel", SettingsPage.Vacation),
     SettingsItem("Coach mode", "coach mode suggest auto apply autopilot earn", SettingsPage.Coach),
     SettingsItem("Daily check-ins", "morning sleep soreness stress drive weight readiness", SettingsPage.Notifications),
+    // Rows the index never had, so searching for them found nothing.
+    SettingsItem("Goals on Home", "goals home pin pinned show", SettingsPage.Appearance),
+    SettingsItem("Icon-themed startup", "launch startup animation intro icon splash", SettingsPage.Appearance),
+    SettingsItem("Match accent to icon", "accent icon match color theme", SettingsPage.Appearance),
+    SettingsItem("Automatic re-roll", "rotation reroll re-roll rotate exercises cadence sessions", SettingsPage.Program),
+    SettingsItem("Plan builder", "plan builder edit days exercises custom program editor", SettingsPage.Program),
+    SettingsItem("Generate a new plan", "generate new plan program split regenerate", SettingsPage.Program),
+    SettingsItem("Deload week", "deload lighter recovery week", SettingsPage.Program),
+    SettingsItem("Days per week", "days per week schedule weekdays split frequency", SettingsPage.Program, ProgramSection.Plan),
+    SettingsItem("Priority muscles", "priority muscles emphasis focus weak", SettingsPage.Program, ProgramSection.Emphasis),
+    SettingsItem("Problem areas", "problem areas injury pain sore avoid joints", SettingsPage.Program, ProgramSection.Emphasis),
+    SettingsItem("Advanced tracking", "advanced tracking coach signals detail", SettingsPage.Coach),
 ) + com.forge.app.program.Equipment.entries.map { equip ->
     // Each piece of equipment is searchable by name, so a query like "kettlebell" surfaces it
     // (tagged to the Program & equipment page) instead of only the generic "Available equipment" row.
-    SettingsItem(equip.display, "equipment ${equip.name.lowercase()} ${equip.display.lowercase()}", SettingsPage.Program)
+    SettingsItem(equip.display, "equipment ${equip.name.lowercase()} ${equip.display.lowercase()}", SettingsPage.Program, ProgramSection.Equipment)
 }
 
 enum class ResetTarget(val label: String, val message: String) {
@@ -289,6 +306,7 @@ fun SettingsScreen(
                     onBack = back,
                     onSearchChange = { searchQuery = it },
                     onOpenPage = { currentPage = it; programSection = null; returnTo = null },
+                    onOpenSection = { page, section -> currentPage = page; programSection = section; returnTo = null },
                     onOpenCoachBrief = onOpenCoachBrief,
                     onOpenDataDialog = { showDataDialog = true },
                     onImportData = { showImportDialog = true },
