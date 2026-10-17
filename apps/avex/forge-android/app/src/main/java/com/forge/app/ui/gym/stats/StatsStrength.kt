@@ -29,6 +29,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.draw.clip
@@ -155,15 +156,31 @@ private fun E1rmDrillRow(
     // composition — otherwise returning to Stats or rotating would restore the old nonce, replay
     // the effect, and pop open a row the user had deliberately collapsed.
     var consumedNonce by rememberSaveable(lift.exerciseId) { mutableStateOf(if (isFocused) focusNonce else -1) }
+    // The focused row scrolls itself into view: the list scrolls to the card, but a lift past the
+    // first screenful of rows opened below the fold, so the tap seemed to do nothing.
+    val bringIntoView = remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
+    // A row first composed already focused (a lift past the trim, whose focus opened the full list)
+    // starts with the nonce consumed and expanded by its initial state, but still has to be shown.
+    var arrivedFocused by remember { mutableStateOf(isFocused) }
     LaunchedEffect(focusNonce) {
-        if (isFocused && expandable && focusNonce > consumedNonce) {
+        val fresh = isFocused && focusNonce > consumedNonce
+        if (fresh) {
             consumedNonce = focusNonce
-            expanded = true
+            if (expandable) expanded = true
+        }
+        if (fresh || arrivedFocused) {
+            arrivedFocused = false
+            // After the expansion and the card's own scroll have laid out.
+            kotlinx.coroutines.delay(ForgeMotion.DurationStandard.toLong())
+            bringIntoView.bringIntoView()
         }
     }
     val current = formatWeight(lift.currentE1rm, weightUnit)
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(
+        modifier = Modifier.bringIntoViewRequester(bringIntoView),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         // No inset and no wash: the row's text sits on the page gutter like every header above it
         // (an 8dp inner pad used to push it off that line), and an open row is told by its weight
         // and caret rather than by an accent block with accent text on it.
