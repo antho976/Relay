@@ -206,7 +206,7 @@ fun HubScreen(
                 BottomTab.COACH -> CoachScreen(
                     onBack = null,
                     isVisible = pagerState.settledPage == page,
-                    onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
+                    onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
                 )
                 BottomTab.ACADEMY -> AcademyScreen(
                     onBack = null,

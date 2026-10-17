@@ -398,7 +398,7 @@ fun ForgeNavHost(
         composable(Routes.COACH_BRIEF) {
             CoachScreen(
                 onBack = { nav.popBackStack() },
-                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
+                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
             )
         }
         // The lab and timeline used to be lenses of the Coach page. The page is one column now,
@@ -427,14 +427,14 @@ fun ForgeNavHost(
             CoachScreen(
                 onBack = { nav.popBackStack() },
                 entryPoint = CoachEntryPoint.WHERE_YOU_STAND,
-                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
+                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
             )
         }
         composable(Routes.COACH_TIMELINE) {
             CoachScreen(
                 onBack = { nav.popBackStack() },
                 entryPoint = CoachEntryPoint.ACCOUNT,
-                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
+                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
             )
         }
         composable(Routes.GOALS) {
