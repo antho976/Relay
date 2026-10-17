@@ -119,7 +119,9 @@ fun ProgramBuilderDayDetail(
     onMoveExercise: (Int, Int) -> Unit,
     onSetExercise: (String, Int, String) -> Unit,
     onDuplicateDay: () -> Unit,
-    onRemoveDay: () -> Unit
+    onRemoveDay: () -> Unit,
+    /** Another day is pinned to a weekday, so the plan runs by weekday and an unpinned day never comes up. */
+    weekdayPlan: Boolean = false
 ) {
     fun closeDialog() = onDialog(DayDialog.None)
 
@@ -207,9 +209,15 @@ fun ProgramBuilderDayDetail(
                     ForgeGroupSection(
                         "Day of the week",
                         footer = {
+                            // Once any day has a weekday the plan runs by weekday, and the schedule
+                            // only ever suggests weekday slots: "next in line" told the user the
+                            // opposite of what would happen to an unpinned day.
                             ForgeGroupCaption(
-                                if (day.weekdays.isEmpty()) "No fixed day. It comes up when it's next in line."
-                                else "Home shows this workout on these days. A day can hold one workout."
+                                when {
+                                    day.weekdays.isNotEmpty() -> "Home shows this workout on these days. A day can hold one workout."
+                                    weekdayPlan -> "No fixed day, so it isn't on your week. Start it from the day list."
+                                    else -> "No fixed day. It comes up when it's next in line."
+                                }
                             )
                         }
                     ) {

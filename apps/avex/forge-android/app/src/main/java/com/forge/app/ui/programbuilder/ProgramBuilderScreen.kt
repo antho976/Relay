@@ -153,6 +153,7 @@ fun ProgramBuilderScreen(
             onSwapExercise = { exUid, libId -> viewModel.swapExercise(editingDay.uid, exUid, libId) },
             onMoveExercise = { from, to -> viewModel.moveExercise(editingDay.uid, from, to) },
             onSetExercise = { exUid, sets, reps -> viewModel.setExercise(editingDay.uid, exUid, sets, reps) },
+            weekdayPlan = viewModel.days.any { it.uid != editingDay.uid && it.weekdays.isNotEmpty() },
             onDuplicateDay = { viewModel.duplicateDay(editingDay.uid); viewModel.closeDay() },
             onRemoveDay = {
                 viewModel.removeDay(editingDay.uid)
