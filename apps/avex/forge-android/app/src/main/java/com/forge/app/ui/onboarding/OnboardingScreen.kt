@@ -165,6 +165,12 @@ fun OnboardingScreen(
     // observing its value here recomposed the whole flow a second time per tap; the value itself is
     // read without a subscription, since only the one-time initialisers below use it.
     val draftLoad = viewModel.draftLoad.collectAsState()
+    // The watch question returned (2026-10-16) as a real connect rather than a brand pick: it now
+    // grants the reads, so the answer changes what Home, Stats and the coach can show from day one.
+    var watchConnected by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
+    val watchLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.health.connect.client.PermissionController.createRequestPermissionResultContract()
+    ) { granted -> watchConnected = granted.isNotEmpty() }
     val loaded by remember { derivedStateOf { draftLoad.value is DraftLoad.Ready } }
     if (!loaded) return
     val draft = androidx.compose.runtime.snapshots.Snapshot.withoutReadObservation {
@@ -435,7 +441,10 @@ fun OnboardingScreen(
                             appLock = appLock, onAppLockToggle = { appLock = it },
                             plateWeightLb = plateWeightLb, onPlateWeight = { plateWeightLb = it },
                             cadence = cadence, everyN = everyN,
-                            onCadence = { c, n -> cadence = c; everyN = n }
+                            onCadence = { c, n -> cadence = c; everyN = n },
+                            watchConnectable = viewModel.watchConnectable,
+                            watchConnected = watchConnected,
+                            onConnectWatch = { watchLauncher.launch(viewModel.watchPermissions) }
                         )
                     }
                 }

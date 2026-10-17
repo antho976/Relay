@@ -78,7 +78,10 @@ internal fun StepExtras(
     onPlateWeight: (Double) -> Unit,
     cadence: String,
     everyN: Int,
-    onCadence: (String, Int) -> Unit
+    onCadence: (String, Int) -> Unit,
+    watchConnectable: Boolean = false,
+    watchConnected: Boolean = false,
+    onConnectWatch: () -> Unit = {}
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(28.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -114,7 +117,18 @@ internal fun StepExtras(
                     onToggle = onCoachToggle
                 )
             },
-            { AppLockRow(enabled = appLock, onToggle = onAppLockToggle) }
+            { AppLockRow(enabled = appLock, onToggle = onAppLockToggle) },
+            *(if (!watchConnectable) emptyArray() else arrayOf<@Composable () -> Unit>({
+                // Opens Health Connect's own screen, where each reading is its own switch. Once
+                // granted the row reads as on; turning it off lives in Settings → Watch & health data.
+                ForgeSwitchRow(
+                    label = "Watch or ring",
+                    description = if (watchConnected) "Connected. Sleep, heart rate and steps show on Home and Stats."
+                    else "Sleep, heart rate and steps through Health Connect, for recovery calls and your Body stats.",
+                    checked = watchConnected,
+                    onToggle = { if (!watchConnected) onConnectWatch() }
+                )
+            }))
         )
 
         OfflineNote()
@@ -190,7 +204,7 @@ private fun AboutYouGroup(
                     color = MaterialTheme.colorScheme.error
                 )
             } else {
-                StepCaption("Your name greets you on Home. Bodyweight and sex scale the strength standards on Stats.")
+                StepCaption("Your name shows on your profile. Bodyweight and sex scale the strength standards on Stats.")
             }
         }
     )

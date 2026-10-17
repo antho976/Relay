@@ -48,8 +48,17 @@ internal class WeekPreview(val inputs: PreviewInputs, val days: List<GeneratedDa
 class OnboardingViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val bodyweightRepo: BodyweightRepository,
-    private val programRepository: ProgramRepository
+    private val programRepository: ProgramRepository,
+    private val healthConnect: com.forge.app.data.health.HealthConnectManager
 ) : ViewModel() {
+
+    /** Health Connect is on this phone, so the last step can offer to connect a watch. */
+    val watchConnectable: Boolean get() = healthConnect.isAvailable
+
+    /** The reads a watch or ring feeds: sleep, resting HR, HRV, steps and its workouts. */
+    val watchPermissions: Set<String>
+        get() = healthConnect.permissions + healthConnect.hrvPermissions + healthConnect.stepsPermissions +
+            healthConnect.watchWorkoutPermissions + healthConnect.exercisePermissions
 
     // The draft's state of truth lives in the ViewModel, not on disk: a screen recreated by a
     // configuration change rehydrates from [draftLoad] synchronously, while the DataStore write
