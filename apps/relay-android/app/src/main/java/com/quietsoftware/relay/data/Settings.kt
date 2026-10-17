@@ -31,6 +31,8 @@ data class Prefs(
     val lastProject: Long = 0,
     /** The agent conversation's row of extra keys (arrows, Tab, Space, ^C) shown over its message box. */
     val chatKeys: Boolean = false,
+    /** The terminal takes the keyboard key by key (vim, a shell, a TUI's menus) instead of a message box. */
+    val terminalDirect: Boolean = false,
 )
 
 class Settings(private val context: Context) {
@@ -47,6 +49,7 @@ class Settings(private val context: Context) {
         name = p[NAME] ?: "",
         lastProject = p[PROJECT]?.toLongOrNull() ?: 0,
         chatKeys = p[CHAT_KEYS] ?: false,
+        terminalDirect = p[DIRECT] ?: false,
     )
 
     suspend fun update(change: (Prefs) -> Prefs) {
@@ -62,6 +65,7 @@ class Settings(private val context: Context) {
             p[NAME] = next.name
             p[PROJECT] = next.lastProject.toString()
             p[CHAT_KEYS] = next.chatKeys
+            p[DIRECT] = next.terminalDirect
         }
     }
 
@@ -76,5 +80,6 @@ class Settings(private val context: Context) {
         val NAME = stringPreferencesKey("name")
         val PROJECT = stringPreferencesKey("last_project")
         val CHAT_KEYS = booleanPreferencesKey("chat_keys")
+        val DIRECT = booleanPreferencesKey("terminal_direct")
     }
 }
