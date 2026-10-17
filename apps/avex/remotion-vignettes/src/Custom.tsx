@@ -1,15 +1,49 @@
 import React from 'react';
 import {AbsoluteFill, useCurrentFrame} from 'remotion';
-import {ACCENT, bump, DP, heldOut, mix, MONO, MUTED, ON_BG, settle, smoothstep, withAlpha} from './theme';
+import {
+  ACCENT,
+  BG,
+  BUILD_END,
+  BUILD_IN,
+  CELL,
+  CELL_RADIUS,
+  DP,
+  heldOut,
+  LABEL_LINE,
+  LABEL_SIZE,
+  LABEL_TRACKING,
+  mix,
+  MONO,
+  MUTED,
+  ON_BG,
+  RUNG,
+  settle,
+  smoothstep,
+  tracked,
+  withAlpha,
+} from './theme';
 
 /**
  * "I'll make my own" — you decide what goes on which day.
  *
- * The week is laid out empty, seven dashed slots, and a finger DRAGS each training day into the slot
- * it chose: PUSH onto Monday, PULL onto Wednesday, LEGS onto Friday. Dragging is the one gesture no
+ * The week is laid out empty, seven dashed cells, and each training day is DRAGGED into the cell it
+ * chose: PUSH onto Monday, PULL onto Wednesday, LEGS onto Friday. Dragging is the one gesture no
  * other card has, and it is the whole difference between this option and the generated one: the
  * same week, but every day in it was put there by hand. The days you leave empty stay dashed, so the
  * frozen frame still reads as a week you could keep filling.
+ *
+ * Everything is drawn in a mark the app already uses, so nothing here has to be learned twice:
+ * - The cell is Home's week-strip cell (`WeekStrip`, `CellShape`): 34dp, 12dp corners. An empty one
+ *   is that strip's dashed outline (muted 0.6, 1.5dp, 4/3dp dashes), which there means a day with no
+ *   session on it, the same thing it means here.
+ * - A tile being carried looks the way a bar being dragged in `WeekBarRail` does: lifted to 1.06 and
+ *   in accent, the one thing on the card under your finger. It drops to scale 1 and settles into an
+ *   onBg fill, Home's filled day. So accent is spent on one tile at a time, at size, and the finished
+ *   week rests without any (§5), and the tile's label never changes colour: bg is both Home's ink on
+ *   an onBg cell and the theme's onPrimary for the default Red.
+ * There is no finger. The app shows a press as scale and a drag as lift, never as a touch dot, and
+ * the dot (a grey blob over the label, off the alpha ladder) was the one thing on the card that read
+ * as a glitch.
  *
  * Frame 0 and the last frame are the same three placed days, so the seam and the freeze land on it.
  */
@@ -21,33 +55,37 @@ const PLACED = [
 ];
 const DAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
-// Geometry, in dp on the 282×72 strip.
-const SLOT_W = 34 * DP;
-const SLOT_H = 40 * DP;
+// Geometry, in dp on the 282×72 strip: cell over day letter, the stack centred.
 const PITCH = 38 * DP;
-const TOP = 8.5 * DP;
-const RADIUS = 8 * DP;
-const DASH = 0.75 * DP;
-const DAY_GAP = 5 * DP;
-const DAY_SIZE = 10 * DP; // labelS
-const CHIP_SIZE = 9 * DP;
-const TOUCH_R = 9 * DP;
-const LEFT = (1128 - (6 * PITCH + SLOT_W)) / 2;
+const DAY_GAP = 6 * DP;
+const TOP = (288 - (CELL + DAY_GAP + LABEL_LINE)) / 2;
+const DASH_W = 1.5 * DP; // Home's dashed day cell, inset 1dp, dashed 4dp on 3dp off
+const DASH_INSET = 1 * DP;
+const DASH_ON = 4 * DP;
+const DASH_OFF = 3 * DP;
+const LIFT = 0.06; // WeekBarRail's drag scale
+const LEFT = (1128 - (6 * PITCH + CELL)) / 2;
 /** Where each drag enters from: just past the right edge, as if from a tray beside the week. */
 const ENTER_X = 1128 + 6 * DP;
 
-// Timeline, in frames. Each drag slides in over TRAVEL frames, drops, then settles.
-const DRAGS = [42, 68, 94];
+// Timeline, in frames. Each drag slides in over TRAVEL frames, drops, then settles; the three are
+// spaced so the first leaves on BUILD_IN and the last settles on BUILD_END.
 const TRAVEL = 20;
 const DROP_LEN = 14;
+const SPACING = (BUILD_END - BUILD_IN - TRAVEL - DROP_LEN) / 2;
+const DRAGS = [0, 1, 2].map((i) => BUILD_IN + i * SPACING);
+/** Frames over which a dropped tile turns from carried (accent) to placed (onBg). */
+const SETTLE_COLOUR = 8;
 
-/** Drag `i` at `frame`: its x, and its lift (1 carried, 0 settled in the slot). */
+/** Drag `i` at `frame`: its x, its lift (1 carried, 0 settled in the cell), and how placed it is. */
 const dragState = (i: number, frame: number) => {
   const start = DRAGS[i];
-  const t = smoothstep(frame, start, start + TRAVEL);
+  const land = start + TRAVEL;
+  const t = smoothstep(frame, start, land);
   const x = ENTER_X + (LEFT + PLACED[i].slot * PITCH - ENTER_X) * t;
-  const lift = frame < start + TRAVEL ? 1 : 1 - settle(frame, start + TRAVEL, DROP_LEN);
-  return {x, lift};
+  const lift = frame < land ? 1 : 1 - settle(frame, land, DROP_LEN);
+  const placed = smoothstep(frame, land, land + SETTLE_COLOUR);
+  return {x, lift, placed};
 };
 
 export const Custom: React.FC = () => {
@@ -58,34 +96,40 @@ export const Custom: React.FC = () => {
     <AbsoluteFill style={{overflow: 'hidden'}}>
       {DAYS.map((day, i) => {
         const p = PLACED.findIndex((d) => d.slot === i);
-        // A day's letter lights once something has been dropped on it.
-        const filled = p < 0 ? 0 : Math.max(held, smoothstep(frame, DRAGS[p] + TRAVEL, DRAGS[p] + TRAVEL + 4));
+        // A day's letter lights, in one step as generated's do, once something has been dropped on it.
+        const lit = p >= 0 && (held >= 0.5 || frame >= DRAGS[p] + TRAVEL + 2);
         const x = LEFT + i * PITCH;
         return (
           <React.Fragment key={i}>
+            <svg
+              width={CELL}
+              height={CELL}
+              style={{position: 'absolute', left: x, top: TOP}}
+            >
+              <rect
+                x={DASH_INSET}
+                y={DASH_INSET}
+                width={CELL - 2 * DASH_INSET}
+                height={CELL - 2 * DASH_INSET}
+                rx={CELL_RADIUS}
+                fill="none"
+                stroke={withAlpha(MUTED, RUNG.dash)}
+                strokeWidth={DASH_W}
+                strokeDasharray={`${DASH_ON} ${DASH_OFF}`}
+              />
+            </svg>
             <div
               style={{
                 position: 'absolute',
                 left: x,
-                top: TOP,
-                width: SLOT_W,
-                height: SLOT_H,
-                boxSizing: 'border-box',
-                borderRadius: RADIUS,
-                border: `${DASH}px dashed ${withAlpha(MUTED, 0.35)}`,
-              }}
-            />
-            <div
-              style={{
-                position: 'absolute',
-                left: x,
-                width: SLOT_W,
-                top: TOP + SLOT_H + DAY_GAP,
+                width: CELL,
+                top: TOP + CELL + DAY_GAP,
                 textAlign: 'center',
                 fontFamily: MONO,
-                fontSize: DAY_SIZE,
-                lineHeight: `${DAY_SIZE}px`,
-                color: mix(MUTED, ON_BG, filled),
+                fontSize: LABEL_SIZE,
+                lineHeight: `${LABEL_LINE}px`,
+                ...tracked(LABEL_TRACKING),
+                color: lit ? ON_BG : MUTED,
               }}
             >
               {day}
@@ -95,59 +139,43 @@ export const Custom: React.FC = () => {
       })}
 
       {PLACED.map((d, i) => {
-        // Held: sitting in its slot, fading out as the week clears.
-        if (held > 0) return <Chip key={d.label} label={d.label} x={LEFT + d.slot * PITCH} lift={0} alpha={held} />;
+        // Held: sitting in its cell, fading out as the week clears.
+        if (held > 0) return <Tile key={d.label} label={d.label} x={LEFT + d.slot * PITCH} lift={0} placed={1} alpha={held} />;
         if (frame < DRAGS[i]) return null;
-        const {x, lift} = dragState(i, frame);
-        return <Chip key={d.label} label={d.label} x={x} lift={lift} alpha={1} />;
-      })}
-
-      {/* The finger: Android's "show taps" dot, riding each tile until it is dropped. */}
-      {PLACED.map((d, i) => {
-        const start = DRAGS[i];
-        const a = Math.min(smoothstep(frame, start, start + 4), 1 - smoothstep(frame, start + TRAVEL + 1, start + TRAVEL + 7));
-        if (a <= 0) return null;
-        const {x} = dragState(i, frame);
-        const r = TOUCH_R * (1 - 0.15 * bump(frame, start + TRAVEL - 2, 8));
-        return (
-          <div
-            key={d.label}
-            style={{
-              position: 'absolute',
-              left: x + SLOT_W / 2 - r,
-              top: TOP + SLOT_H * 0.62 - r,
-              width: r * 2,
-              height: r * 2,
-              borderRadius: '50%',
-              background: withAlpha(ON_BG, 0.35 * a),
-            }}
-          />
-        );
+        const {x, lift, placed} = dragState(i, frame);
+        return <Tile key={d.label} label={d.label} x={x} lift={lift} placed={placed} alpha={1} />;
       })}
     </AbsoluteFill>
   );
 };
 
-/** A training day: an accent tile with its split. [lift] 1 = carried (bigger, tilted), 0 = placed. */
-const Chip: React.FC<{label: string; x: number; lift: number; alpha: number}> = ({label, x, lift, alpha}) => (
+/** A training day. [lift] 1 = carried, 0 = set down; [placed] 0 = accent (in hand), 1 = onBg (in the week). */
+const Tile: React.FC<{label: string; x: number; lift: number; placed: number; alpha: number}> = ({
+  label,
+  x,
+  lift,
+  placed,
+  alpha,
+}) => (
   <div
     style={{
       position: 'absolute',
       left: x,
       top: TOP,
-      width: SLOT_W,
-      height: SLOT_H,
-      borderRadius: RADIUS,
-      background: ACCENT,
+      width: CELL,
+      height: CELL,
+      borderRadius: CELL_RADIUS,
+      background: mix(ACCENT, ON_BG, placed),
       opacity: alpha,
-      transform: `scale(${1 + 0.1 * lift}) rotate(${-5 * lift}deg)`,
+      transform: `scale(${1 + LIFT * lift})`,
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
       fontFamily: MONO,
-      fontSize: CHIP_SIZE,
-      lineHeight: `${CHIP_SIZE}px`,
-      color: ON_BG,
+      fontSize: LABEL_SIZE,
+      lineHeight: `${LABEL_LINE}px`,
+      ...tracked(LABEL_TRACKING),
+      color: BG,
     }}
   >
     {label}

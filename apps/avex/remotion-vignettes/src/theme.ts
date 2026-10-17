@@ -13,8 +13,29 @@
 export const ACCENT = '#E23D3D'; // primary: Red, the default accent
 export const ON_BG = '#F2EFEA'; // onBackground
 export const MUTED = '#BFB6AA'; // onSurfaceVariant
-export const OUTLINE = '#38302A'; // outline: empty tracks and cells
-export const TILE = '#221C16'; // surfaceVariant: the interactive tile fill
+export const OUTLINE = '#38302A'; // outline: tracks and the timeline, at its 0.25 / 0.35 rungs
+/**
+ * background. Also what goes ON a filled mark: Home's trained cell sets its check in it, and it is
+ * `onPrimary` for the default Red (the theme measures Red against bg and onBg and bg wins, 4.5:1 to
+ * 3.7:1), so a label on an accent tile and on an onBg tile is this one colour.
+ */
+export const BG = '#110F0C';
+
+/**
+ * What the videos sit on: the plan-mode card's row fill (`surfaceContainerHigh`), with the accent
+ * 0.15 wash over it when the card is picked. The videos are transparent, but a mark whose EDGE moves
+ * through a translucent area pays for it twice (alpha plane and colour), so generated's tracks and
+ * shuffling bars are pre-blended onto this and drawn opaque (the same picture measured 203KB
+ * translucent, 166KB opaque). The twin blends onto the same token, so the two agree on a picked card
+ * too; there both are a shade darker than the wash around them, as the old opaque track was.
+ */
+export const CARD = '#221C16';
+
+/**
+ * The §5 intensity ladder rungs these use, named so no composition writes a bare alpha. The Canvas
+ * twin is held to the same ladder by DesignDoctrineTest. 0.7 is WeekBarRail's resting-bar rung.
+ */
+export const RUNG = {track: 0.25, rule: 0.35, dash: 0.6, floor: 0.65, bar: 0.7} as const;
 
 /** `rgba()` of a `#RRGGBB` token. */
 export const withAlpha = (hex: string, alpha: number): string => {
@@ -22,15 +43,18 @@ export const withAlpha = (hex: string, alpha: number): string => {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 };
 
-/** Straight-line blend of two `#RRGGBB` tokens: Compose's `lerp(Color, Color, t)`. */
+/**
+ * Straight-line blend of two `#RRGGBB` tokens: Compose's `lerp(Color, Color, t)`. Returns `#RRGGBB`
+ * too, so blends nest (`mix(mix(CARD, MUTED, 0.7), ACCENT, t)`) and feed `withAlpha`.
+ */
 export const mix = (from: string, to: string, t: number): string => {
   const a = parseInt(from.slice(1), 16);
   const b = parseInt(to.slice(1), 16);
   const ch = (shift: number) => Math.round(((a >> shift) & 255) + (((b >> shift) & 255) - ((a >> shift) & 255)) * t);
-  return `rgb(${ch(16)}, ${ch(8)}, ${ch(0)})`;
+  return '#' + ((ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).padStart(6, '0');
 };
 
-/** Families registered in `fonts.ts`: stand-ins for Android's sans and monospace. */
+/** Families registered in `fonts.ts`: Roboto and Droid Sans Mono, the faces Android draws sans and mono in. */
 export const SANS = 'VignetteSans, sans-serif';
 export const MONO = 'VignetteMono, monospace';
 
@@ -40,6 +64,26 @@ export const VIGNETTE_HEIGHT = 288;
 export const FPS = 30;
 /** 1dp on this canvas. Every size below is written as `n * DP` so it can be read against the app. */
 export const DP = 4;
+
+/**
+ * `labelSmall` (`Type.kt`): mono 10sp on a 12sp line, tracked 0.5sp. Every mono label on all three
+ * cards is set in it, as the app's own day letters are (WeekBarRail, Home's strip). Exercise names
+ * are the one sans line, at the same 10 so the two voices sit at one size and rank by voice.
+ */
+export const LABEL_SIZE = 10 * DP;
+export const LABEL_LINE = 12 * DP;
+export const LABEL_TRACKING = 0.5 * DP;
+
+/**
+ * CSS adds letter-spacing AFTER every glyph, so centred tracked text sits half a step left; Android
+ * splits it either side. Indenting by one step balances it, so a centred label lands where the
+ * twin's does.
+ */
+export const tracked = (tracking: number) => ({letterSpacing: tracking, textIndent: tracking});
+
+/** Home's day cell (`CellShape`): 12dp corners on a 34dp cell. Smaller cells keep its proportion. */
+export const CELL = 34 * DP;
+export const CELL_RADIUS = 12 * DP;
 
 /**
  * One seamless pass: frame 0 and the LAST frame are the same finished picture, held still, so the loop
@@ -55,6 +99,8 @@ export const HOLD_END = 18; // the opening picture starts to clear
 export const CLEAR_END = 32; // …and is gone
 export const BUILD_IN = 38; // the rebuild starts
 export const BUILD_END = 124; // every card has landed its last mark; the rest is the closing hold
+// Each card derives its own beats from BUILD_IN and BUILD_END rather than picking frames, so all
+// three start rebuilding together and come to rest together, and the closing hold is equal.
 
 /** 1 while the opening picture is held, 1→0 as it clears, 0 thereafter. */
 export const heldOut = (frame: number): number => 1 - smoothstep(frame, HOLD_END, CLEAR_END);
