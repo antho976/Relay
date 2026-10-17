@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.forge.app.data.db.entities.ProgramCustomization
 import com.forge.app.data.db.entities.ProgramDay
 import com.forge.app.data.db.entities.ProgramSlot
 import com.forge.app.data.prefs.SettingsRepository
@@ -43,6 +44,10 @@ internal interface ProgramBuilderStore {
     suspend fun saveSchedule(schedule: List<String>?) {}
     /** A deload week is running, so the loaded rows carry its reduced set counts. */
     suspend fun deloadWeekRunning(): Boolean = false
+    /** The overlay rows the live plan merges over [dayId]'s base slots. */
+    suspend fun overlaysForDay(dayId: String): List<ProgramCustomization> = emptyList()
+    /** Coach-applied swaps: base library id to the exercise swapped in. */
+    suspend fun coachSwapTargets(): Map<String, String> = emptyMap()
 }
 
 internal class RepositoryProgramBuilderStore(
@@ -70,6 +75,9 @@ internal class RepositoryProgramBuilderStore(
             .mapValues { it.value.toSet() }
     }
     override suspend fun deloadWeekRunning(): Boolean = programRepository.deloadWeekRunning()
+    override suspend fun overlaysForDay(dayId: String): List<ProgramCustomization> =
+        programRepository.overlaysForDay(dayId)
+    override suspend fun coachSwapTargets(): Map<String, String> = programRepository.coachSwapTargets()
     override suspend fun saveSchedule(schedule: List<String>?) {
         if (schedule == null) {
             settingsRepo.setScheduleMode(WeeklySchedule.MODE_SEQUENCE)
@@ -246,18 +254,38 @@ class ProgramBuilderViewModel internal constructor(
         savedStateHandle.remove<String>(KEY_DRAFT)
     }
 
+    /**
+     * The plan as it is TRAINED: base slots with the live overlay merged in, the same way
+     * ProgramCustomizationRepository.editablePlanForDay merges it for the day screen.
+     *
+     * Base rows alone showed the plan from before the coach's applied set and rep changes, brought
+     * back exercises the user had removed, and lost coach swaps. A save then wrote those stale rows
+     * as the program and dropped the overlay, so every applied coach change was reverted while its
+     * decision was stamped "folded". Merged here, a save bakes the overlay into the base rows and
+     * "folded" is true. Legacy custom_ add-rows have no library id and stay out, as before.
+     */
     private suspend fun loadDays(): List<BuilderDay> {
         val weekdays = store.scheduledWeekdays()
+        val coachSwaps = store.coachSwapTargets()
         return store.currentDayRows().map { pd ->
             val slots = store.slotRowsForDay(pd.id)
+            val overlay = store.overlaysForDay(pd.id).associateBy { it.exerciseId }
+            val exercises = slots.mapIndexedNotNull { i, s ->
+                val c = overlay[s.exerciseLibId]
+                if (c?.removed == true) return@mapIndexedNotNull null
+                val libId = coachSwaps[s.exerciseLibId] ?: s.exerciseLibId
+                val def = ExerciseLibrary.byId(libId)
+                val order = c?.orderOverride?.takeIf { it != UNSET_ORDER } ?: (i * 10)
+                order to BuilderExercise(
+                    uid(), libId, def?.name ?: libId, def?.muscle?.displayName ?: "",
+                    c?.setsOverride?.takeIf { it > 0 } ?: s.sets,
+                    c?.repRangeOverride ?: s.reps
+                )
+            }.sortedBy { it.first }.map { it.second }
             BuilderDay(
                 uid = uid(), key = pd.id, name = pd.name, archetype = pd.archetype,
                 accentHex = pd.accentHex, word = pd.word, weekdays = weekdays[pd.id].orEmpty(),
-                exercises = slots.map { s ->
-                    val def = ExerciseLibrary.byId(s.exerciseLibId)
-                    BuilderExercise(uid(), s.exerciseLibId, def?.name ?: s.exerciseLibId,
-                        def?.muscle?.displayName ?: "", s.sets, s.reps)
-                }
+                exercises = exercises
             )
         }
     }
@@ -426,3 +454,6 @@ class ProgramBuilderViewModel internal constructor(
         internal const val KEY_DRAFT = "programBuilderDraft"
     }
 }
+
+/** ProgramCustomization.orderOverride's "no explicit position" default. */
+private const val UNSET_ORDER = 999

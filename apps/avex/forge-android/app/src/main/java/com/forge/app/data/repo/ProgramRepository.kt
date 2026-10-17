@@ -152,6 +152,24 @@ class ProgramRepository @Inject constructor(
     suspend fun slotRowsForDay(dayId: String): List<ProgramSlot> = dao.slotsForDay(dayId)
 
     /**
+     * The overlay the live plan merges over [dayId]'s base slots (coach-applied sets and reps, the
+     * user's removals and reorders), so the builder can open on the plan that is actually trained.
+     * [saveCustomProgram] drops the overlay, so whatever the builder leaves out of its rows is lost.
+     */
+    suspend fun overlaysForDay(dayId: String): List<com.forge.app.data.db.entities.ProgramCustomization> =
+        customizationDao.forDay(dayId)
+
+    /**
+     * Swaps the coach applied: base library id to the exercise it swapped in. [saveCustomProgram]
+     * releases these, so the builder carries them as the slot's exercise to keep them.
+     */
+    suspend fun coachSwapTargets(): Map<String, String> =
+        exerciseCustomizationDao.all()
+            .filter { it.source == com.forge.app.data.db.entities.OverlaySource.COACH }
+            .mapNotNull { c -> c.swappedExerciseId?.takeIf { it.isNotBlank() }?.let { c.exerciseId to it } }
+            .toMap()
+
+    /**
      * What every (re)generation learns from the coach's record (auto-coach): applied volume
      * changes become baseline bias, proven swap replacements are boosted like likes, failed ones
      * softly avoided. Re-derived from the same rows on every call — idempotent, never compounds.
