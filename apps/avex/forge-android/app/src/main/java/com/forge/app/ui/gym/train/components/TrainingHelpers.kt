@@ -215,7 +215,7 @@ fun PlateCalculatorDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Plate Calculator") },
+        title = { Text("Plate math") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(

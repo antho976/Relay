@@ -293,10 +293,28 @@ fun DayScreen(
                     // menu, sitting between two rows that do something. The exercise card already
                     // exposes the timer setter directly, so the row was a second, non-working route
                     // to a control one tap away — and the menu is shorter without it.
-                    listOf(
-                        "Toggle skip" to { viewModel.onEvent(DayUiEvent.ToggleSkipped(exId)) },
-                        "Open swap picker" to { viewModel.onEvent(DayUiEvent.OpenSwapPicker(exId)) }
-                    ).forEach { (label, action) ->
+                    //
+                    // The warm-up ladder, plate math and the goal setter were built and wired to
+                    // events nothing raised, so FEATURES.md listed a plate calculator and in-workout
+                    // goals nobody could open. They live here, shown only where they mean something.
+                    val unit = exercise?.effectiveUnit
+                    val loadBearing = unit == com.forge.app.program.ExerciseUnit.WEIGHT ||
+                        unit == com.forge.app.program.ExerciseUnit.DUMBBELL ||
+                        unit == com.forge.app.program.ExerciseUnit.PLATES
+                    val barLoaded = exercise != null && unit == com.forge.app.program.ExerciseUnit.WEIGHT &&
+                        (com.forge.app.program.ExerciseLibrary.byId(exercise.effectiveExerciseId)?.equipment ?: exercise.plan.equipment)
+                            .any { it == com.forge.app.program.Equipment.BARBELL || it == com.forge.app.program.Equipment.TRAP_BAR }
+                    buildList {
+                        if (loadBearing) add("Warm-up sets" to { viewModel.onEvent(DayUiEvent.ShowWarmupSuggester(exId)) })
+                        if (barLoaded) add("Plate math" to { viewModel.onEvent(DayUiEvent.ShowPlateCalculator(exId)) })
+                        if (loadBearing && unit != com.forge.app.program.ExerciseUnit.PLATES) add(
+                            (if (exercise?.goalWeightLb != null) "Change goal" else "Set a goal") to
+                                { viewModel.onEvent(DayUiEvent.OpenGoalSetter(exId)) }
+                        )
+                        add("Swap exercise" to { viewModel.onEvent(DayUiEvent.OpenSwapPicker(exId)) })
+                        add((if (exercise?.skipped == true) "Unskip exercise" else "Skip exercise") to
+                            { viewModel.onEvent(DayUiEvent.ToggleSkipped(exId)) })
+                    }.forEach { (label, action) ->
                         TextButton(onClick = { action(); viewModel.onEvent(DayUiEvent.DismissQuickActions) },
                             modifier = Modifier.fillMaxWidth()) { Text(label, modifier = Modifier.fillMaxWidth()) }
                     }
@@ -356,7 +374,12 @@ fun DayScreen(
     }
     state.plateCalculatorForExerciseId?.let { exerciseId ->
         val ex = state.exercises.firstOrNull { it.plan.id == exerciseId }
-        val workingWeight = ex?.loggedSets?.lastOrNull()?.weightLb ?: ex?.prefillWeight?.toDoubleOrNull()
+        // In pounds. prefillWeight is display-unit text (kg, stones, or a plate count), and passing
+        // it as lb seeded a 100 kg lift as 45.4 kg. Today's last set, else the coach's target, else
+        // last session's first set.
+        val workingWeight = ex?.loggedSets?.lastOrNull()?.weightLb
+            ?: ex?.suggestedTargetLb
+            ?: ex?.priorSets?.firstOrNull()?.weightLb
         PlateCalculatorDialog(initialWeightLb = workingWeight, weightUnit = LocalForgeSettings.current.weightUnit,
             onDismiss = { viewModel.onEvent(DayUiEvent.DismissTrainingHelper) })
     }

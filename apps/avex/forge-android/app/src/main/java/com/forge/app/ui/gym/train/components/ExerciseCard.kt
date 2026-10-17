@@ -116,7 +116,7 @@ fun ExerciseCard(
     val longPressModifier = if (onLongPress != null)
         Modifier.combinedClickable(
             onClick = {},
-            onLongClickLabel = "Exercise options — skip, swap, or set the rest timer",
+            onLongClickLabel = "Exercise options: warm-up sets, plate math, goal, swap or skip",
             onLongClick = onLongPress
         )
     else Modifier
