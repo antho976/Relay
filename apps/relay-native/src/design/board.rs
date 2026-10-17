@@ -43,9 +43,22 @@ pub enum Tool {
     Sticky,
     Pen,
     Highlighter,
+    Triangle,
+    Diamond,
+    Hexagon,
+    Star,
+    Eraser,
 }
 
 impl Tool {
+    /// The shape tools that share the dock's shape key.
+    pub const SHAPES: [Tool; 8] =
+        [Tool::Rect, Tool::Ellipse, Tool::Triangle, Tool::Diamond, Tool::Hexagon, Tool::Star, Tool::Line, Tool::Arrow];
+
+    pub fn is_shape(self) -> bool {
+        Self::SHAPES.contains(&self)
+    }
+
     pub fn glyph(self) -> &'static str {
         match self {
             Tool::Select => "pointer",
@@ -59,6 +72,11 @@ impl Tool {
             Tool::Sticky => "sticky",
             Tool::Pen => "pen",
             Tool::Highlighter => "highlighter",
+            Tool::Triangle => "triangle",
+            Tool::Diamond => "diamond",
+            Tool::Hexagon => "hexagon",
+            Tool::Star => "star",
+            Tool::Eraser => "eraser",
         }
     }
 
@@ -75,6 +93,11 @@ impl Tool {
             Tool::Sticky => "Sticky note",
             Tool::Pen => "Pen",
             Tool::Highlighter => "Highlighter",
+            Tool::Triangle => "Triangle",
+            Tool::Diamond => "Diamond",
+            Tool::Hexagon => "Hexagon",
+            Tool::Star => "Star",
+            Tool::Eraser => "Eraser",
         }
     }
 
@@ -91,6 +114,11 @@ impl Tool {
             Tool::Sticky => "S",
             Tool::Pen => "P",
             Tool::Highlighter => "Shift P",
+            Tool::Triangle => "Shift R",
+            Tool::Diamond => "",
+            Tool::Hexagon => "",
+            Tool::Star => "Shift S",
+            Tool::Eraser => "E",
         }
     }
 }
@@ -149,8 +177,13 @@ pub enum Gesture {
     },
     Resize { handle: Handle, bounds: Rect, orig: Vec<(String, Node, Rect)>, moved: bool },
     Endpoint { id: String, which: usize, orig: Node, moved: bool },
-    Create { tool: Tool, parent: String, a: (f64, f64), b: (f64, f64) },
+    /// `from`/`to`: the nodes a line's ends attach to, a connector's.
+    Create { tool: Tool, parent: String, a: (f64, f64), b: (f64, f64), from: Option<String>, to: Option<String> },
     Draw { parent: String, points: Vec<[f64; 2]> },
+    /// Turning one node about its centre (page coordinates), from the pointer's first angle.
+    Rotate { id: String, centre: (f64, f64), start: f64, orig: Node, moved: bool },
+    /// Rubbing out strokes: each touched one with the opacity it had.
+    Erase { hits: Vec<(String, Option<f64>)> },
 }
 
 pub struct Board {
@@ -186,6 +219,10 @@ pub struct Board {
     pub(super) terminal: gtk::MenuButton,
     pub(super) terminal_label: gtk::Label,
     pub(super) status: gtk::Label,
+    /// Undo the last change an agent made, shown once one arrives.
+    agent_undo: gtk::Button,
+    /// Whose change that Undo reverts.
+    agent_last: RefCell<Option<String>>,
     pub(super) ask: gtk::Button,
     pub(super) zoom_label: gtk::Label,
     pub(super) tool_keys: RefCell<Vec<(Tool, gtk::ToggleButton)>>,
@@ -259,6 +296,11 @@ impl Board {
         status.set_xalign(1.0);
         status.set_ellipsize(pango::EllipsizeMode::Start);
         top.append(&status);
+        let agent_undo = gtk::Button::with_label("Undo");
+        agent_undo.add_css_class("design-agent-undo");
+        agent_undo.set_widget_name("design-agent-undo");
+        agent_undo.set_visible(false);
+        top.append(&agent_undo);
         let ask = gtk::Button::new();
         ask.add_css_class("design-ask");
         let ask_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -408,6 +450,8 @@ impl Board {
             terminal,
             terminal_label,
             status,
+            agent_undo,
+            agent_last: RefCell::default(),
             ask,
             zoom_label,
             tool_keys: RefCell::default(),
@@ -500,6 +544,12 @@ impl Board {
         board.ask.connect_clicked(move |key| {
             if let Some(b) = weak.upgrade() {
                 b.ask_agent(key.upcast_ref());
+            }
+        });
+        let weak = Rc::downgrade(&board);
+        board.agent_undo.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.undo_agent();
             }
         });
         let weak = Rc::downgrade(&board);
@@ -746,6 +796,9 @@ impl Board {
                     self.status.set_text(&format!("{by} edited it just now"));
                     self.status.add_css_class("design-status-agent");
                     self.start_flash(changed.clone());
+                    *self.agent_last.borrow_mut() = Some(by.clone());
+                    self.agent_undo.set_tooltip_text(Some(&format!("Undo {by}'s last change to this design")));
+                    self.agent_undo.set_visible(true);
                 }
                 if !self.doc.scene.borrow().node(&self.page.borrow()).is_some() {
                     let first = self.doc.scene.borrow().pages().first().cloned().unwrap_or_default();
@@ -1051,7 +1104,28 @@ impl Board {
                     self.outline(snap, &self.screen(&r), SELECT, 1.0);
                 }
             }
-            if let Some(b) = Rect::bounds(selection.iter().filter_map(|id| placed.rects.get(id))) {
+            if let Some((_, r, turn)) = self.single_turn() {
+                // One turned node: its outline and handles turn with it.
+                let s = self.screen(&r);
+                let at = |x: f64, y: f64| relay_client::design::shapes::rotate(x, y, s.cx(), s.cy(), turn);
+                let pb = gsk::PathBuilder::new();
+                let corners = [at(s.x, s.y), at(s.right(), s.y), at(s.right(), s.bottom()), at(s.x, s.bottom())];
+                pb.move_to(corners[0].0 as f32, corners[0].1 as f32);
+                for c in &corners[1..] {
+                    pb.line_to(c.0 as f32, c.1 as f32);
+                }
+                pb.close();
+                snap.append_stroke(&pb.to_path(), &gsk::Stroke::new(1.0), &rgba(SELECT));
+                if !matches!(*gesture, Gesture::Move { moved: true, .. }) {
+                    for h in HANDLES {
+                        let (x, y) = handle_point(&s, h);
+                        let (x, y) = at(x, y);
+                        self.handle(snap, x, y, false);
+                    }
+                }
+                let shown = relay_client::design::shapes::rotated_bounds(&s, turn);
+                self.size_pill(snap, &shown, &r);
+            } else if let Some(b) = Rect::bounds(selection.iter().filter_map(|id| placed.rects.get(id))) {
                 let s = self.screen(&b);
                 if selection.len() > 1 {
                     self.outline(snap, &s, SELECT, 1.0);
@@ -1097,8 +1171,14 @@ impl Board {
                 snap.append_color(&fill, &grect(&r));
                 self.outline(snap, &r, SELECT, 1.0);
             }
-            Gesture::Create { tool, a, b, .. } => {
+            Gesture::Create { tool, a, b, from, to, .. } => {
                 let cam = self.cam.get();
+                // The shapes a connector attaches to.
+                for end in [from, to].into_iter().flatten() {
+                    if let Some(r) = placed.rect(end) {
+                        self.outline(snap, &self.screen(&r).inflate(3.0), SELECT, 2.0);
+                    }
+                }
                 match tool {
                     Tool::Line | Tool::Arrow => {
                         let (x0, y0) = cam.to_screen(a.0, a.1);
@@ -1110,7 +1190,16 @@ impl Board {
                     }
                     _ => {
                         let r = self.screen(&Rect::spanning(*a, *b));
-                        if *tool == Tool::Ellipse {
+                        if let Some((sides, star)) = polygon_of(*tool) {
+                            let pts = relay_client::design::shapes::polygon(&r, sides, star);
+                            let pb = gsk::PathBuilder::new();
+                            pb.move_to(pts[0].0 as f32, pts[0].1 as f32);
+                            for q in &pts[1..] {
+                                pb.line_to(q.0 as f32, q.1 as f32);
+                            }
+                            pb.close();
+                            snap.append_stroke(&pb.to_path(), &gsk::Stroke::new(1.0), &rgba(SELECT));
+                        } else if *tool == Tool::Ellipse {
                             let half = graphene::Size::new(r.w as f32 / 2.0, r.h as f32 / 2.0);
                             let rr = gsk::RoundedRect::new(grect(&r), half, half, half, half);
                             let c = rgba(SELECT);
@@ -1200,6 +1289,21 @@ impl Board {
         snap.restore();
     }
 
+    /// The one selected node when it is turned: its id, unturned page box and turn.
+    pub(super) fn single_turn(&self) -> Option<(String, Rect, f64)> {
+        let sel = self.selection.borrow();
+        let [id] = sel.as_slice() else {
+            return None;
+        };
+        let scene = self.doc.scene.borrow();
+        let n = scene.node(id).filter(|n| n.kind != NodeKind::Line)?;
+        let turn = relay_client::design::shapes::rotation(n);
+        if turn == 0.0 {
+            return None;
+        }
+        Some((id.clone(), self.placed().rect(id)?, turn))
+    }
+
     /// A line's ends, on screen.
     pub(super) fn endpoints(&self, id: &str) -> Vec<(f64, f64)> {
         let placed = self.placed();
@@ -1265,14 +1369,14 @@ impl Board {
         for (t, key) in self.tool_keys.borrow().iter() {
             key.set_active(*t == tool);
         }
-        let shapes = matches!(tool, Tool::Rect | Tool::Ellipse | Tool::Line | Tool::Arrow);
+        let shapes = tool.is_shape();
         self.shape_key.set_active(shapes);
-        self.pen_key.set_active(matches!(tool, Tool::Pen | Tool::Highlighter));
+        self.pen_key.set_active(matches!(tool, Tool::Pen | Tool::Highlighter | Tool::Eraser));
         if shapes {
             self.shape_key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
             self.shape_key.set_tooltip_text(Some(&format!("{} ({})", tool.caption(), tool.key())));
         }
-        if matches!(tool, Tool::Pen | Tool::Highlighter) {
+        if matches!(tool, Tool::Pen | Tool::Highlighter | Tool::Eraser) {
             self.pen_key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
             self.pen_key.set_tooltip_text(Some(&format!("{} ({})", tool.caption(), tool.key())));
         }
@@ -1331,6 +1435,7 @@ impl Board {
             dock.append(&key);
             keys.push((tool, key));
         }
+        dock.append(&self.frame_presets());
         // Shapes share a key; its menu picks which.
         self.shape_key.add_css_class("design-tool");
         self.shape_key.set_child(Some(&glyphs::image("rect", 16)));
@@ -1339,7 +1444,7 @@ impl Board {
         self.shape_key.connect_clicked(move |key| {
             if let Some(b) = weak.upgrade() {
                 let current = b.tool.get();
-                let tool = if matches!(current, Tool::Rect | Tool::Ellipse | Tool::Line | Tool::Arrow) {
+                let tool = if current.is_shape() {
                     current
                 } else {
                     b.last_shape()
@@ -1349,7 +1454,7 @@ impl Board {
             }
         });
         dock.append(&self.shape_key);
-        dock.append(&self.tool_menu(&[Tool::Rect, Tool::Ellipse, Tool::Line, Tool::Arrow]));
+        dock.append(&self.tool_menu(&Tool::SHAPES));
         for tool in [Tool::Text, Tool::Sticky] {
             let key = self.tool_key(tool);
             dock.append(&key);
@@ -1361,13 +1466,32 @@ impl Board {
         let weak = Rc::downgrade(self);
         self.pen_key.connect_clicked(move |key| {
             if let Some(b) = weak.upgrade() {
-                let tool = if b.tool.get() == Tool::Highlighter { Tool::Highlighter } else { Tool::Pen };
+                let tool = match b.tool.get() {
+                    t @ (Tool::Highlighter | Tool::Eraser) => t,
+                    _ => Tool::Pen,
+                };
                 b.set_tool(tool);
                 key.set_active(true);
             }
         });
         dock.append(&self.pen_key);
-        dock.append(&self.tool_menu(&[Tool::Pen, Tool::Highlighter]));
+        dock.append(&self.tool_menu(&[Tool::Pen, Tool::Highlighter, Tool::Eraser]));
+        let icon_key = gtk::MenuButton::new();
+        icon_key.add_css_class("design-tool");
+        icon_key.set_child(Some(&glyphs::image("icon", 16)));
+        icon_key.set_tooltip_text(Some("Place an icon (K)"));
+        icon_key.set_widget_name("design-icon-key");
+        let picker = gtk::Popover::new();
+        picker.add_css_class("design-menu");
+        icon_key.set_popover(Some(&picker));
+        let weak = Rc::downgrade(self);
+        picker.connect_show(move |pop| {
+            if let Some(b) = weak.upgrade() {
+                let target = b.selected().into_iter().find(|id| b.doc.scene.borrow().node(id).is_some_and(|n| n.kind == NodeKind::Icon));
+                pop.set_child(Some(&super::icons::picker(&b, pop, target)));
+            }
+        });
+        dock.append(&icon_key);
         let image_key = gtk::Button::new();
         image_key.add_css_class("design-tool");
         image_key.set_child(Some(&glyphs::image("image", 16)));
@@ -1384,11 +1508,65 @@ impl Board {
         keep_canvas_focus(dock.upcast_ref());
     }
 
+    /// The frame key's menu: the screens people design for, placed beside what is on the page.
+    fn frame_presets(self: &Rc<Self>) -> gtk::MenuButton {
+        let menu = gtk::MenuButton::new();
+        menu.add_css_class("design-tool-more");
+        menu.set_child(Some(&crate::icons::image("chevron-down", 10)));
+        menu.set_tooltip_text(Some("Frame sizes"));
+        let pop = gtk::Popover::new();
+        pop.add_css_class("design-menu");
+        let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        list.append(&label("Frame sizes", "design-menu-heading"));
+        for (name, w, h) in FRAME_PRESETS {
+            let row = gtk::Button::new();
+            row.add_css_class("design-menu-row");
+            let content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+            let caption = label(name, "");
+            caption.set_hexpand(true);
+            content.append(&caption);
+            content.append(&label(&format!("{w}×{h}"), "design-keycap"));
+            row.set_child(Some(&content));
+            let weak = Rc::downgrade(self);
+            let p = pop.downgrade();
+            row.connect_clicked(move |_| {
+                if let Some(p) = p.upgrade() {
+                    p.popdown();
+                }
+                if let Some(b) = weak.upgrade() {
+                    b.place_frame(name, w as f64, h as f64);
+                }
+            });
+            list.append(&row);
+        }
+        pop.set_child(Some(&list));
+        menu.set_popover(Some(&pop));
+        menu
+    }
+
+    /// A new artboard `w` by `h` to the right of the page's content, selected and in view.
+    pub(super) fn place_frame(&self, name: &str, w: f64, h: f64) {
+        let page = self.page.borrow().clone();
+        let (x, y) = self.page_bounds().map_or((0.0, 0.0), |b| ((b.right() + 80.0).round(), b.y.round()));
+        let mut n = Node::new(NodeKind::Frame);
+        n.id = self.doc.scene.borrow_mut().fresh_id(NodeKind::Frame);
+        n.parent = Some(page);
+        n.name = Some(name.to_string());
+        (n.x, n.y, n.w, n.h) = (x, y, w, h);
+        let id = n.id.clone();
+        if self.commit(vec![NodeOp::Add { node: n, index: None }]) {
+            self.select(vec![id]);
+            let r = self.selection_bounds();
+            self.fit(r, false);
+            self.set_tool(Tool::Select);
+        }
+    }
+
     fn last_shape(&self) -> Tool {
         self.shape_key
             .tooltip_text()
             .map(|t| t.to_string())
-            .and_then(|t| [Tool::Rect, Tool::Ellipse, Tool::Line, Tool::Arrow].into_iter().find(|tool| t.starts_with(tool.caption())))
+            .and_then(|t| Tool::SHAPES.into_iter().find(|tool| t.starts_with(tool.caption())))
             .unwrap_or(Tool::Rect)
     }
 
@@ -1426,7 +1604,9 @@ impl Board {
             let name = label(tool.caption(), "");
             name.set_hexpand(true);
             content.append(&name);
-            content.append(&label(tool.key(), "design-keycap"));
+            if !tool.key().is_empty() {
+                content.append(&label(tool.key(), "design-keycap"));
+            }
             row.set_child(Some(&content));
             let weak = Rc::downgrade(self);
             let tool = *tool;
@@ -1621,14 +1801,14 @@ impl Board {
         grid.set_row_spacing(4);
         grid.add_css_class("design-shortcuts");
         let groups: [(&str, &[(&str, &str)]); 4] = [
-            ("Tools", &[("V", "Move"), ("H or Space", "Hand"), ("F", "Frame"), ("R / O", "Rectangle / ellipse"), ("L / Shift L", "Line / arrow"), ("T", "Text"), ("S", "Sticky note"), ("P / Shift P", "Pen / highlighter")]),
+            ("Tools", &[("V", "Move"), ("H or Space", "Hand"), ("F", "Frame"), ("R / O", "Rectangle / ellipse"), ("Shift R / Shift S", "Triangle / star"), ("K", "Icon"), ("E", "Eraser"), ("L / Shift L", "Line / arrow"), ("T", "Text"), ("S", "Sticky note"), ("P / Shift P", "Pen / highlighter")]),
             ("Selection", &[("Click", "Select what is under the pointer"), ("Esc", "Select the parent"), ("Enter", "Edit text, or select inside"), ("Shift click", "Add or remove"), ("Ctrl A", "Select all"), ("Alt drag", "Duplicate while moving")]),
             ("Edit", &[("Ctrl Z / Ctrl Shift Z", "Undo / redo"), ("Ctrl D", "Duplicate"), ("Ctrl G / Ctrl Shift G", "Group / ungroup"), ("Ctrl Alt G", "Frame selection"), ("Ctrl ] / Ctrl [", "Forward / backward"), ("Arrows", "Nudge 1 px (Shift: 10)")]),
             ("View", &[("Ctrl scroll / pinch", "Zoom at the pointer"), ("Shift 1", "Zoom to fit"), ("Shift 2", "Zoom to selection"), ("Shift 0", "Zoom to 100%"), ("Alt 1", "Pages and layers"), ("Ctrl .", "Inspector")]),
         ];
         for (col, (heading, rows)) in groups.iter().enumerate() {
             let x = (col % 2) as i32 * 2;
-            let y0 = (col / 2) as i32 * 9;
+            let y0 = (col / 2) as i32 * 13;
             let h = label(heading, "design-menu-heading");
             grid.attach(&h, x, y0, 2, 1);
             for (i, (keys, what)) in rows.iter().enumerate() {
@@ -1765,6 +1945,57 @@ impl Board {
                 a.set_enabled(on);
             }
         }
+    }
+
+    /// The newest change `agent` made to this design that is still standing: an audited
+    /// `design.apply` with its undo kept and not undone yet.
+    async fn agent_change(ui: &Rc<Ui>, design: i64, project: i64, agent: &str) -> Option<i64> {
+        let listed = ui
+            .call("audit.list", json!({"project_id": project, "actor": format!("agent:{agent}"), "op_prefix": "design.apply", "limit": 500}))
+            .await
+            .ok()?;
+        let mut rows = crate::app::rows(&listed, "rows");
+        rows.sort_by_key(|r| std::cmp::Reverse(r["id"].as_i64().unwrap_or(0)));
+        rows.into_iter()
+            .find(|r| {
+                r["kind"] == "ok"
+                    && r["undone_by"].is_null()
+                    && r["undo_op"]["payload"]["design_id"].as_i64() == Some(design)
+            })
+            .and_then(|r| r["id"].as_i64())
+    }
+
+    /// Revert the last change the agent named by the status made, through `audit.undo`: the
+    /// person's veto over what an agent drew. Each press undoes one more of its changes.
+    pub(super) fn undo_agent(&self) {
+        let (Some(ui), Some(agent)) = (self.ui.upgrade(), self.agent_last.borrow().clone()) else {
+            return;
+        };
+        let design = self.doc.id;
+        let project = self.doc.design.borrow().project_id;
+        let weak = self.me.clone();
+        glib::spawn_future_local(async move {
+            let Some(audit) = Self::agent_change(&ui, design, project, &agent).await else {
+                if let Some(b) = weak.upgrade() {
+                    b.agent_undo.set_visible(false);
+                    b.toast(&format!("Nothing of {agent}'s left to undo here"));
+                }
+                return;
+            };
+            let undone = ui.call("audit.undo", json!({"audit_id": audit})).await;
+            let more = Self::agent_change(&ui, design, project, &agent).await.is_some();
+            let Some(b) = weak.upgrade() else {
+                return;
+            };
+            match undone {
+                Ok(_) => {
+                    b.status.remove_css_class("design-status-agent");
+                    b.status.set_text(&format!("Undid {agent}'s change"));
+                    b.agent_undo.set_visible(more);
+                }
+                Err(e) => b.toast(&format!("Could not undo {agent}'s change: {e}")),
+            }
+        });
     }
 
     pub(super) fn undo(&self) {
@@ -2088,6 +2319,18 @@ fn trace() -> bool {
     ON.with(|on| *on)
 }
 
+/// The frame sizes the frame key offers: name, width, height.
+pub const FRAME_PRESETS: [(&str, u32, u32); 8] = [
+    ("Phone", 390, 844),
+    ("Phone large", 430, 932),
+    ("Tablet", 834, 1194),
+    ("Laptop", 1280, 832),
+    ("Desktop", 1440, 1024),
+    ("Slide 16:9", 1920, 1080),
+    ("Social post", 1080, 1080),
+    ("Watch", 198, 242),
+];
+
 /// How long an agent's change glows, in microseconds.
 const FLASH_US: i64 = 1_600_000;
 
@@ -2104,6 +2347,17 @@ pub fn keep_canvas_focus(root: &gtk::Widget) {
             child = c.next_sibling();
             stack.push(c);
         }
+    }
+}
+
+/// The corners and star of a polygon tool.
+pub fn polygon_of(tool: Tool) -> Option<(u8, Option<f64>)> {
+    match tool {
+        Tool::Triangle => Some((3, None)),
+        Tool::Diamond => Some((4, None)),
+        Tool::Hexagon => Some((6, None)),
+        Tool::Star => Some((5, Some(0.4))),
+        _ => None,
     }
 }
 
@@ -2170,6 +2424,8 @@ pub fn kind_caption(kind: NodeKind) -> &'static str {
         NodeKind::Sticky => "Sticky",
         NodeKind::Path => "Drawing",
         NodeKind::Image => "Image",
+        NodeKind::Polygon => "Polygon",
+        NodeKind::Icon => "Icon",
     }
 }
 
@@ -2185,6 +2441,8 @@ pub fn kind_glyph(kind: NodeKind) -> &'static str {
         NodeKind::Sticky => "sticky",
         NodeKind::Path => "pen",
         NodeKind::Image => "image",
+        NodeKind::Polygon => "triangle",
+        NodeKind::Icon => "icon",
     }
 }
 

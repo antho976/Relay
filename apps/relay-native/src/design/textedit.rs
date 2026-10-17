@@ -51,7 +51,7 @@ impl Board {
         let Some(n) = self.doc.scene.borrow().node(id).cloned() else {
             return;
         };
-        if n.is_locked() || !matches!(n.kind, NodeKind::Text | NodeKind::Sticky) {
+        if n.is_locked() || !takes_text(n.kind) {
             return;
         }
         self.start_edit(n, created);
@@ -163,6 +163,9 @@ impl Board {
         let r = placed.rect(&id)?;
         let scene = self.doc.scene.borrow();
         let n = scene.node(&id)?;
+        if is_shape(n.kind) {
+            return super::paint::shape_text_box(&self.painter, n, &r);
+        }
         Some(if n.kind == NodeKind::Sticky {
             Rect::new(r.x + STICKY_PAD, r.y + STICKY_PAD, (r.w - 2.0 * STICKY_PAD).max(1.0), (r.h - 2.0 * STICKY_PAD).max(1.0))
         } else {
@@ -196,12 +199,13 @@ impl Board {
         edit.tag.set_foreground_rgba(Some(&rgba(&text_color(&scene, n))));
         edit.tag.set_underline(if n.underline == Some(true) { pango::Underline::Single } else { pango::Underline::None });
         edit.tag.set_strikethrough(n.strike == Some(true));
-        edit.view.set_justification(match n.align {
-            Some(TextAlign::Center) => gtk::Justification::Center,
-            Some(TextAlign::Right) => gtk::Justification::Right,
-            _ => gtk::Justification::Left,
+        let default = if is_shape(n.kind) { TextAlign::Center } else { TextAlign::Left };
+        edit.view.set_justification(match n.align.unwrap_or(default) {
+            TextAlign::Center => gtk::Justification::Center,
+            TextAlign::Right => gtk::Justification::Right,
+            TextAlign::Left => gtk::Justification::Left,
         });
-        let wraps = n.kind == NodeKind::Sticky || relay_client::design::layout::w_sizing(n) != Sizing::Hug;
+        let wraps = n.kind == NodeKind::Sticky || is_shape(n.kind) || relay_client::design::layout::w_sizing(n) != Sizing::Hug;
         edit.view.set_wrap_mode(if wraps { gtk::WrapMode::WordChar } else { gtk::WrapMode::None });
     }
 
@@ -242,7 +246,9 @@ impl Board {
                     NodeOp::Delete { id: edit.id.clone() }
                 } else {
                     let mut set = Map::new();
-                    set.insert("text".into(), json!(text));
+                    // A shape whose label was cleared has none.
+                    let empty = text.trim().is_empty();
+                    set.insert("text".into(), if empty { serde_json::Value::Null } else { json!(text) });
                     NodeOp::Update { id: edit.id.clone(), set }
                 };
                 self.commit(vec![op]);
@@ -252,4 +258,14 @@ impl Board {
         self.canvas.grab_focus();
         self.rebuild_context();
     }
+}
+
+/// The kinds whose words can be typed on the canvas.
+pub fn takes_text(kind: NodeKind) -> bool {
+    matches!(kind, NodeKind::Text | NodeKind::Sticky) || is_shape(kind)
+}
+
+/// Shapes that carry a centred label.
+pub fn is_shape(kind: NodeKind) -> bool {
+    matches!(kind, NodeKind::Rect | NodeKind::Ellipse | NodeKind::Polygon)
 }

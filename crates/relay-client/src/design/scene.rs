@@ -42,6 +42,8 @@ fn kind_name(kind: NodeKind) -> &'static str {
         NodeKind::Sticky => "sticky",
         NodeKind::Path => "path",
         NodeKind::Image => "image",
+        NodeKind::Polygon => "polygon",
+        NodeKind::Icon => "icon",
     }
 }
 

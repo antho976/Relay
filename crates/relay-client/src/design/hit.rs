@@ -4,12 +4,24 @@
 use super::geom::{segment_distance, Rect};
 use super::layout::Placed;
 use super::scene::Scene;
+use super::shapes;
 use relay_bus::design::{Node, NodeKind};
 
 /// Whether `(x, y)` is on `n`'s own shape (not its children), within `slop` page pixels for
 /// thin strokes.
-pub fn on_shape(n: &Node, rect: &Rect, x: f64, y: f64, slop: f64) -> bool {
+pub fn on_shape(scene: &Scene, placed: &Placed, n: &Node, rect: &Rect, x: f64, y: f64, slop: f64) -> bool {
     match n.kind {
+        NodeKind::Polygon => shapes::inside(&shapes::node_polygon(n, rect), x, y) || {
+            let pts = shapes::node_polygon(n, rect);
+            let closed: Vec<_> = pts.iter().chain(pts.first()).copied().collect();
+            closed.windows(2).any(|w| segment_distance(x, y, w[0], w[1]) <= slop)
+        },
+        NodeKind::Line if n.from.is_some() || n.to.is_some() || n.route.is_some() => {
+            let (pts, curved) = shapes::line_points(scene, placed, n);
+            let pts = if curved { shapes::flatten_curve(&pts) } else { pts };
+            let reach = n.stroke_width.unwrap_or(2.0) / 2.0 + slop;
+            pts.windows(2).any(|w| segment_distance(x, y, w[0], w[1]) <= reach)
+        }
         NodeKind::Page | NodeKind::Group => false,
         NodeKind::Ellipse => {
             let (rx, ry) = (rect.w / 2.0, rect.h / 2.0);
@@ -52,6 +64,9 @@ fn descend(scene: &Scene, placed: &Placed, parent: &str, x: f64, y: f64, slop: f
         let Some(rect) = placed.rect(id) else {
             continue;
         };
+        // A turned node is tested, children and all, in its own unturned frame.
+        let turn = shapes::rotation(n);
+        let (x, y) = if turn != 0.0 { shapes::rotate(x, y, rect.cx(), rect.cy(), -turn) } else { (x, y) };
         let clips = n.kind == NodeKind::Frame && n.clip != Some(false);
         if n.kind.holds_children() && !(clips && !rect.contains(x, y)) {
             out.push(id.clone());
@@ -68,7 +83,7 @@ fn descend(scene: &Scene, placed: &Placed, parent: &str, x: f64, y: f64, slop: f
         if n.is_locked() {
             continue;
         }
-        if on_shape(n, &rect, x, y, slop) {
+        if on_shape(scene, placed, n, &rect, x, y, slop) {
             out.push(id.clone());
             return true;
         }
@@ -82,7 +97,10 @@ pub fn marquee(scene: &Scene, placed: &Placed, parent: &str, area: &Rect) -> Vec
         .children(parent)
         .iter()
         .filter(|id| scene.node(id).is_some_and(|n| !n.is_hidden() && !n.is_locked()))
-        .filter(|id| placed.rect(id).is_some_and(|r| area.intersects(&r)))
+        .filter(|id| {
+            let turn = scene.node(id).map_or(0.0, shapes::rotation);
+            placed.rect(id).is_some_and(|r| area.intersects(&shapes::rotated_bounds(&r, turn)))
+        })
         .cloned()
         .collect()
 }
@@ -104,6 +122,21 @@ mod tests {
         // The ellipse's corner is outside its shape.
         assert!(chain(&s, &p, "p1", 501.0, 1.0, 0.0).is_empty());
         assert_eq!(chain(&s, &p, "p1", 540.0, 40.0, 0.0), ["d"]);
+    }
+
+    #[test]
+    fn turned_nodes_and_polygons_are_hit_by_their_shape() {
+        let mut bar = node("bar", Some("p1"), K::Rect, [0.0, 0.0, 200.0, 20.0]);
+        bar.rotation = Some(90.0);
+        let mut tri = node("tri", Some("p1"), K::Polygon, [300.0, 0.0, 100.0, 100.0]);
+        tri.sides = Some(3);
+        let s = Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), bar, tri]);
+        let p = place(&s, "p1", &Mono);
+        // Turned upright about its centre (100, 10): it now covers x 90..110, y -90..110.
+        assert_eq!(chain(&s, &p, "p1", 100.0, -80.0, 0.0), ["bar"]);
+        assert!(chain(&s, &p, "p1", 10.0, 10.0, 0.0).is_empty());
+        assert_eq!(chain(&s, &p, "p1", 350.0, 70.0, 0.0), ["tri"]);
+        assert!(chain(&s, &p, "p1", 305.0, 5.0, 0.0).is_empty(), "a triangle's top corners are empty");
     }
 
     #[test]

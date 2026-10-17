@@ -572,10 +572,17 @@ pub fn role_allowlist(cfg: &GuardrailConfig, role: Role) -> &Vec<String> {
     }
 }
 
+/// Ops every role may call whatever its allowlist says, so a saved list that predates them
+/// cannot shut them out. Designs are the person's to ask for and to undo (every `design.apply`
+/// carries its inverse, and the board's Undo replays it); `design.purge` stays the person's
+/// alone by its registry actors.
+pub const OPEN_TO_EVERY_ROLE: &[&str] = &["design.*"];
+
 /// Would layer 3 admit `op` for `role`? The escape hatches (`bus_writes`, `allow_ui`) are a
 /// property of the session, not the role, so callers apply those separately.
 pub fn role_admits(cfg: &GuardrailConfig, role: Role, op: &str) -> bool {
-    role_allowlist(cfg, role).iter().any(|pattern| op_matches(pattern, op))
+    OPEN_TO_EVERY_ROLE.iter().any(|pattern| op_matches(pattern, op))
+        || role_allowlist(cfg, role).iter().any(|pattern| op_matches(pattern, op))
 }
 
 pub fn op_matches(pattern: &str, op: &str) -> bool {

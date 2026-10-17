@@ -248,6 +248,69 @@ fn container_at(b: &Board, p: (f64, f64)) -> String {
         .unwrap_or(page)
 }
 
+/// The node a connector's end attaches to under `p`: the deepest shape there that is not a
+/// line or the page itself.
+fn attachable(b: &Board, p: (f64, f64)) -> Option<String> {
+    let placed = b.placed();
+    let scene = b.doc.scene.borrow();
+    let page = b.page.borrow().clone();
+    let chain = hit::chain(&scene, &placed, &page, p.0, p.1, 2.0 / b.cam.get().zoom);
+    chain
+        .into_iter()
+        .rev()
+        .find(|id| scene.node(id).is_some_and(|n| !matches!(n.kind, NodeKind::Line | NodeKind::Path | NodeKind::Page)))
+}
+
+/// Rub out what the eraser touches at `p`: pen strokes and lines, shown faint until it lets go.
+fn erase_at(b: &Board, p: (f64, f64)) {
+    let placed = b.placed();
+    let page = b.page.borrow().clone();
+    let hit = {
+        let scene = b.doc.scene.borrow();
+        hit::chain(&scene, &placed, &page, p.0, p.1, 6.0 / b.cam.get().zoom)
+            .last()
+            .filter(|id| scene.node(id).is_some_and(|n| matches!(n.kind, NodeKind::Path | NodeKind::Line)))
+            .cloned()
+    };
+    let Some(id) = hit else {
+        return;
+    };
+    let mut gesture = b.gesture.borrow_mut();
+    let Gesture::Erase { hits } = &mut *gesture else {
+        return;
+    };
+    if hits.iter().any(|(h, _)| *h == id) {
+        return;
+    }
+    let mut scene = b.doc.scene.borrow_mut();
+    if let Some(n) = scene.node_mut(&id) {
+        hits.push((id.clone(), n.opacity));
+        n.opacity = Some(0.25);
+    }
+    drop(scene);
+    drop(gesture);
+    b.invalidate();
+}
+
+/// Just outside a corner of the one selected node: where a drag turns it.
+fn rotate_at(b: &Board, x: f64, y: f64) -> Option<String> {
+    let sel = b.selection.borrow();
+    let [id] = sel.as_slice() else {
+        return None;
+    };
+    let scene = b.doc.scene.borrow();
+    let n = scene.node(id).filter(|n| !matches!(n.kind, NodeKind::Page | NodeKind::Line) && !n.is_locked())?;
+    let r = b.cam.get().rect_to_screen(&b.placed().rect(id)?);
+    let turn = relay_client::design::shapes::rotation(n);
+    for (cx, cy, ox, oy) in [(r.x, r.y, -1.0, -1.0), (r.right(), r.y, 1.0, -1.0), (r.right(), r.bottom(), 1.0, 1.0), (r.x, r.bottom(), -1.0, 1.0)] {
+        let (hx, hy) = relay_client::design::shapes::rotate(cx + ox * 10.0, cy + oy * 10.0, r.cx(), r.cy(), turn);
+        if (x - hx).abs() <= 9.0 && (y - hy).abs() <= 9.0 {
+            return Some(id.clone());
+        }
+    }
+    None
+}
+
 /// The colour a mark reads well on inside `container`.
 fn ink_for(b: &Board, container: &str) -> String {
     let scene = b.doc.scene.borrow();
@@ -260,6 +323,14 @@ fn ink_for(b: &Board, container: &str) -> String {
 }
 
 fn handle_at(b: &Board, x: f64, y: f64) -> Option<Handle> {
+    if let Some((_, r, turn)) = b.single_turn() {
+        let s = b.cam.get().rect_to_screen(&r);
+        return HANDLES.into_iter().find(|h| {
+            let (hx, hy) = super::board::handle_point(&s, *h);
+            let (hx, hy) = relay_client::design::shapes::rotate(hx, hy, s.cx(), s.cy(), turn);
+            (x - hx).abs() <= 6.0 && (y - hy).abs() <= 6.0
+        });
+    }
     let bounds = b.selection_bounds()?;
     let s = b.cam.get().rect_to_screen(&bounds);
     HANDLES.into_iter().find(|h| {
@@ -325,9 +396,24 @@ fn begin(b: &Rc<Board>, x: f64, y: f64, mods: gdk::ModifierType) {
     }
     match b.tool.get() {
         Tool::Select => begin_select(b, x, y, p, mods),
-        Tool::Frame | Tool::Rect | Tool::Ellipse | Tool::Line | Tool::Arrow => {
-            let parent = if b.tool.get() == Tool::Frame { frame_parent(b, p) } else { container_at(b, p) };
-            *b.gesture.borrow_mut() = Gesture::Create { tool: b.tool.get(), parent, a: p, b: p };
+        Tool::Frame | Tool::Rect | Tool::Ellipse | Tool::Line | Tool::Arrow | Tool::Triangle | Tool::Diamond | Tool::Hexagon | Tool::Star => {
+            let tool = b.tool.get();
+            let line = matches!(tool, Tool::Line | Tool::Arrow);
+            // A line drawn from a shape attaches to it: a connector, which follows the shape.
+            let from = if line { attachable(b, p) } else { None };
+            let parent = if line && from.is_some() {
+                b.page.borrow().clone()
+            } else if tool == Tool::Frame {
+                frame_parent(b, p)
+            } else {
+                container_at(b, p)
+            };
+            *b.gesture.borrow_mut() = Gesture::Create { tool, parent, a: p, b: p, from, to: None };
+        }
+        Tool::Eraser => {
+            *b.gesture.borrow_mut() = Gesture::Erase { hits: Vec::new() };
+            b.doc.set_hold(true);
+            erase_at(b, p);
         }
         Tool::Text => {
             let parent = container_at(b, p);
@@ -360,6 +446,19 @@ fn begin_select(b: &Rc<Board>, x: f64, y: f64, p: (f64, f64), mods: gdk::Modifie
                 *b.gesture.borrow_mut() = Gesture::Endpoint { id, which: if which == 0 { 0 } else { last }, orig, moved: false };
                 return;
             }
+        }
+    }
+    // Just outside a corner: turn it.
+    if handle_at(b, x, y).is_none() {
+        if let Some(id) = rotate_at(b, x, y) {
+            let placed = b.placed();
+            let Some((orig, r)) = b.doc.scene.borrow().node(&id).cloned().zip(placed.rect(&id)) else {
+                return;
+            };
+            let start = (p.1 - r.cy()).atan2(p.0 - r.cx()).to_degrees();
+            b.doc.set_hold(true);
+            *b.gesture.borrow_mut() = Gesture::Rotate { id, centre: (r.cx(), r.cy()), start, orig, moved: false };
+            return;
         }
     }
     // A resize handle of the selection.
@@ -532,7 +631,10 @@ fn update(b: &Rc<Board>, x: f64, y: f64, dx: f64, dy: f64, mods: gdk::ModifierTy
             }
             b.invalidate();
         }
-        Gesture::Create { tool, a, b: end, .. } => {
+        Gesture::Create { tool, a, b: end, from, to, .. } => {
+            if matches!(tool, Tool::Line | Tool::Arrow) {
+                *to = attachable(b, p).filter(|t| Some(t) != from.as_ref());
+            }
             *end = if shift(mods) {
                 if matches!(tool, Tool::Line | Tool::Arrow) {
                     constrain45(*a, p)
@@ -545,6 +647,26 @@ fn update(b: &Rc<Board>, x: f64, y: f64, dx: f64, dy: f64, mods: gdk::ModifierTy
             };
             drop(gesture);
             b.canvas.queue_draw();
+        }
+        Gesture::Rotate { id, centre, start, orig, moved } => {
+            *moved = true;
+            let angle = (p.1 - centre.1).atan2(p.0 - centre.0).to_degrees();
+            let mut turn = orig.rotation.unwrap_or(0.0) + angle - *start;
+            if shift(mods) {
+                turn = (turn / 15.0).round() * 15.0;
+            }
+            turn = ((turn + 180.0).rem_euclid(360.0) - 180.0) * 10.0;
+            let turn = turn.round() / 10.0;
+            let id = id.clone();
+            drop(gesture);
+            if let Some(n) = b.doc.scene.borrow_mut().node_mut(&id) {
+                n.rotation = Some(turn);
+            }
+            b.invalidate();
+        }
+        Gesture::Erase { .. } => {
+            drop(gesture);
+            erase_at(b, p);
         }
         Gesture::Draw { points, .. } => {
             let last = points.last().copied().unwrap_or([p.0, p.1]);
@@ -693,6 +815,13 @@ fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
         _ => return,
     };
     let zoom = b.cam.get().zoom;
+    // One turned node resizes in its own frame: the pointer is turned back about its centre,
+    // the dragged edges move there, and the new box is turned into place again.
+    let turn = match orig.as_slice() {
+        [(_, node, _)] => relay_client::design::shapes::rotation(node),
+        _ => 0.0,
+    };
+    let p = if turn != 0.0 { relay_client::design::shapes::rotate(p.0, p.1, bounds.cx(), bounds.cy(), -turn) } else { p };
     let (mut x0, mut y0, mut x1, mut y1) = (bounds.x, bounds.y, bounds.right(), bounds.bottom());
     let centred = alt(mods);
     if handle.left {
@@ -737,7 +866,7 @@ fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
         center_y: false,
         bottom: handle.bottom,
     };
-    let (sx, sy, guides) = snap::snap(&moving, &others, edges, SNAP / zoom);
+    let (sx, sy, guides) = if turn != 0.0 { (0.0, 0.0, Vec::new()) } else { snap::snap(&moving, &others, edges, SNAP / zoom) };
     if handle.left { x0 += sx } else if handle.right { x1 += sx }
     if handle.top { y0 += sy } else if handle.bottom { y1 += sy }
     let keep_ratio = shift(mods) || (orig.len() == 1 && orig[0].1.kind == NodeKind::Image && !shift(mods));
@@ -753,7 +882,11 @@ fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
             if handle.left { x0 = x1 - nw * (x1 - x0).signum() } else { x1 = x0 + nw * (x1 - x0).signum() }
         }
     }
-    let new = Rect::new(x0.min(x1), y0.min(y1), (x1 - x0).abs().max(1.0), (y1 - y0).abs().max(1.0));
+    let mut new = Rect::new(x0.min(x1), y0.min(y1), (x1 - x0).abs().max(1.0), (y1 - y0).abs().max(1.0));
+    if turn != 0.0 {
+        let (cx, cy) = relay_client::design::shapes::rotate(new.cx(), new.cy(), bounds.cx(), bounds.cy(), turn);
+        new = Rect::new(cx - new.w / 2.0, cy - new.h / 2.0, new.w, new.h);
+    }
     let sx = new.w / bounds.w.max(1e-9);
     let sy = new.h / bounds.h.max(1e-9);
     {
@@ -787,10 +920,9 @@ fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
     b.invalidate();
 }
 
-fn finish(b: &Rc<Board>, x: f64, y: f64, mods: gdk::ModifierType) {
+fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
     let gesture = std::mem::replace(&mut *b.gesture.borrow_mut(), Gesture::Idle);
     b.guides.borrow_mut().clear();
-    let p = b.to_page(x, y);
     match gesture {
         Gesture::Idle => {}
         Gesture::Pan { .. } => update_cursor(b, None),
@@ -914,7 +1046,34 @@ fn finish(b: &Rc<Board>, x: f64, y: f64, mods: gdk::ModifierType) {
             b.doc.set_hold(false);
             b.invalidate();
         }
-        Gesture::Create { tool, parent, a, b: end } => create_shape(b, tool, parent, a, end, p),
+        Gesture::Create { tool, parent, a, b: end, from, to } => create_shape(b, tool, parent, a, end, from, to),
+        Gesture::Rotate { id, orig, moved, .. } => {
+            if moved {
+                let turned = b.doc.scene.borrow().node(&id).and_then(|n| n.rotation);
+                if let Some(n) = b.doc.scene.borrow_mut().node_mut(&id) {
+                    n.rotation = orig.rotation;
+                }
+                let mut set = Map::new();
+                set.insert("rotation".into(), turned.filter(|r| r.abs() > 0.05).map_or(Value::Null, |r| json!(r)));
+                b.commit(vec![NodeOp::Update { id, set }]);
+            }
+            b.doc.set_hold(false);
+            b.invalidate();
+        }
+        Gesture::Erase { hits } => {
+            {
+                let mut scene = b.doc.scene.borrow_mut();
+                for (id, opacity) in &hits {
+                    if let Some(n) = scene.node_mut(id) {
+                        n.opacity = *opacity;
+                    }
+                }
+            }
+            b.doc.set_hold(false);
+            let ops = hits.into_iter().map(|(id, _)| NodeOp::Delete { id }).collect();
+            b.commit(ops);
+            b.invalidate();
+        }
         Gesture::Draw { parent, points } => finish_drawing(b, parent, points),
     }
     update_cursor(b, None);
@@ -956,7 +1115,7 @@ fn normalize_line(mut n: Node) -> Node {
     n
 }
 
-fn create_shape(b: &Rc<Board>, tool: Tool, parent: String, a: (f64, f64), end: (f64, f64), _p: (f64, f64)) {
+fn create_shape(b: &Rc<Board>, tool: Tool, parent: String, a: (f64, f64), end: (f64, f64), from: Option<String>, to: Option<String>) {
     let zoom = b.cam.get().zoom;
     let dragged = ((end.0 - a.0).abs().max((end.1 - a.1).abs())) * zoom > DRAG;
     let origin = b.placed().rect(&parent).unwrap_or_default();
@@ -964,6 +1123,7 @@ fn create_shape(b: &Rc<Board>, tool: Tool, parent: String, a: (f64, f64), end: (
         Tool::Frame => NodeKind::Frame,
         Tool::Ellipse => NodeKind::Ellipse,
         Tool::Line | Tool::Arrow => NodeKind::Line,
+        t if super::board::polygon_of(t).is_some() => NodeKind::Polygon,
         _ => NodeKind::Rect,
     };
     let mut n = Node::new(kind);
@@ -982,6 +1142,8 @@ fn create_shape(b: &Rc<Board>, tool: Tool, parent: String, a: (f64, f64), end: (
         if tool == Tool::Arrow {
             n.arrow_end = Some(true);
         }
+        n.from = from;
+        n.to = to;
     } else {
         let r = if dragged {
             Rect::spanning(a, end)
@@ -993,6 +1155,10 @@ fn create_shape(b: &Rc<Board>, tool: Tool, parent: String, a: (f64, f64), end: (
         n.y = (r.y - origin.y).round();
         n.w = r.w.round().max(1.0);
         n.h = r.h.round().max(1.0);
+        if let Some((sides, star)) = super::board::polygon_of(tool) {
+            n.sides = Some(sides);
+            n.star = star;
+        }
         if kind == NodeKind::Frame {
             let count = b.doc.scene.borrow().children(&parent).iter().filter(|c| b.doc.scene.borrow().node(c).is_some_and(|n| n.kind == NodeKind::Frame)).count();
             n.name = Some(format!("Frame {}", count + 1));
@@ -1086,9 +1252,16 @@ fn cancel(b: &Rc<Board>) {
                     }
                 }
             }
-            Gesture::Endpoint { id, orig, .. } => {
+            Gesture::Endpoint { id, orig, .. } | Gesture::Rotate { id, orig, .. } => {
                 if let Some(n) = scene.node_mut(id) {
                     *n = orig.clone();
+                }
+            }
+            Gesture::Erase { hits } => {
+                for (id, opacity) in hits {
+                    if let Some(n) = scene.node_mut(id) {
+                        n.opacity = *opacity;
+                    }
                 }
             }
             _ => {}
@@ -1118,7 +1291,7 @@ fn double_click(b: &Rc<Board>, x: f64, y: f64, p: (f64, f64)) {
     };
     let kind = b.doc.scene.borrow().node(&deep).map(|n| n.kind);
     match kind {
-        Some(NodeKind::Text | NodeKind::Sticky) => {
+        Some(NodeKind::Text | NodeKind::Sticky | NodeKind::Rect | NodeKind::Ellipse | NodeKind::Polygon) => {
             b.select(vec![deep.clone()]);
             b.begin_edit(&deep, false);
         }
@@ -1149,6 +1322,8 @@ fn hover(b: &Rc<Board>, x: f64, y: f64) {
             update_cursor(b, Some("crosshair"));
         } else if let Some(h) = handle_at(b, x, y).filter(|_| is_line_selected(b).is_none()) {
             update_cursor(b, Some(h.cursor()));
+        } else if rotate_at(b, x, y).is_some() {
+            update_cursor(b, Some("grab"));
         } else {
             update_cursor(b, None);
         }
@@ -1339,7 +1514,7 @@ fn key_pressed(
             if let [one] = sel.as_slice() {
                 let kind = b.doc.scene.borrow().node(one).map(|n| n.kind);
                 match kind {
-                    Some(NodeKind::Text | NodeKind::Sticky) => b.begin_edit(one, false),
+                    Some(NodeKind::Text | NodeKind::Sticky | NodeKind::Rect | NodeKind::Ellipse | NodeKind::Polygon) => b.begin_edit(one, false),
                     Some(k) if k.holds_children() => {
                         let kids = b.doc.scene.borrow().children(one).to_vec();
                         if !kids.is_empty() {
@@ -1365,16 +1540,25 @@ fn key_pressed(
                 Key::v => Some(Tool::Select),
                 Key::h => Some(Tool::Hand),
                 Key::f | Key::numbersign => Some(Tool::Frame),
+                Key::r if shift => Some(Tool::Triangle),
                 Key::r => Some(Tool::Rect),
+                Key::e => Some(Tool::Eraser),
                 Key::o => Some(Tool::Ellipse),
                 Key::l if shift => Some(Tool::Arrow),
                 Key::l => Some(Tool::Line),
                 Key::t => Some(Tool::Text),
+                Key::s if shift => Some(Tool::Star),
                 Key::s => Some(Tool::Sticky),
                 Key::p if shift => Some(Tool::Highlighter),
                 Key::p => Some(Tool::Pen),
                 _ => None,
             };
+            if key.to_lower() == Key::k {
+                if let Some(picker) = find_named(b.overlay.upcast_ref(), "design-icon-key").and_downcast::<gtk::MenuButton>() {
+                    picker.popup();
+                }
+                return stop;
+            }
             match tool {
                 Some(t) => b.set_tool(t),
                 None => return glib::Propagation::Proceed,
