@@ -550,10 +550,14 @@ private fun LastSessionLine(
         val date = java.time.Instant.ofEpochMilli(entry.date).atZone(zone).toLocalDate()
         val days = java.time.temporal.ChronoUnit.DAYS.between(date, today).toInt()
         val name = com.forge.app.domain.cardio.CardioActivity.resolve(entry.type, customs).displayName
-        val ago = when (days) {
-            0 -> "today"
-            1 -> "yesterday"
-            else -> "$days days ago"
+        // From two weeks on, the date: "94 days ago" is a number to decode, "Jul 14" is a day
+        // (§12, a last-known reading with its age).
+        val ago = when {
+            days == 0 -> "today"
+            days == 1 -> "yesterday"
+            days < 14 -> "$days days ago"
+            date.year == today.year -> date.format(java.time.format.DateTimeFormatter.ofPattern("MMM d", java.util.Locale.getDefault()))
+            else -> date.format(java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy", java.util.Locale.getDefault()))
         }
         "Last: $name, $ago"
     }
