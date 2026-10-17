@@ -1,5 +1,6 @@
 package com.forge.app.ui.gym.train.components
 
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.animateColorAsState
@@ -265,7 +266,8 @@ internal fun LastSessionStrip(
         }
     }
     val elapsedSec = sessionStartedAtMs?.let { ((nowMs - it) / 1000L).coerceAtLeast(0) } ?: 0L
-    val elapsedStr = "%d:%02d".format(elapsedSec / 60, elapsedSec % 60)
+    val elapsedStr = workoutClock(elapsedSec)
+    val unit = unitLabel(weightUnit)
 
     Row(
         modifier = Modifier
@@ -273,7 +275,11 @@ internal fun LastSessionStrip(
             // Filled, not outlined: the raised fill is what says "tap for the chart".
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .clickable { onClick() }
+            .clickableLabeled("Open this exercise's chart") { onClick() }
+            // One reading for TalkBack: the figures are bare ("0 lb"), so it says what each one is.
+            .clearAndSetSemantics {
+                contentDescription = "Workout time $elapsedStr, $animatedVolume $unit lifted, $currentSets of $targetSets sets"
+            }
             .padding(horizontal = 14.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -281,7 +287,7 @@ internal fun LastSessionStrip(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(elapsedStr, style = MaterialTheme.typography.labelMedium, color = onBg)
             Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
-            Text("$animatedVolume ${unitLabel(weightUnit)}", style = MaterialTheme.typography.labelMedium, color = onBg)
+            Text("$animatedVolume $unit", style = MaterialTheme.typography.labelMedium, color = onBg)
             Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
             Text("$currentSets of $targetSets sets", style = MaterialTheme.typography.labelMedium, color = muted)
         }
@@ -299,6 +305,16 @@ internal fun LastSessionStrip(
             }
         }
     }
+}
+
+/**
+ * A workout's elapsed time: "5:12", then "1:05:12" past the hour (it read "75:12"). Digits are
+ * padded by hand, not with "%02d".format, which writes the device locale's digits beside ASCII ones.
+ */
+internal fun workoutClock(seconds: Long): String {
+    val s = seconds.coerceAtLeast(0)
+    val two = { n: Long -> n.toString().padStart(2, '0') }
+    return if (s >= 3600) "${s / 3600}:${two(s % 3600 / 60)}:${two(s % 60)}" else "${s / 60}:${two(s % 60)}"
 }
 
 /**

@@ -191,4 +191,4 @@
 1 unlabelled-clickable ui/gym/session/SessionDetailMetricCards.kt .clickable(
 1 unlabelled-clickable ui/gym/stats/StatsStrength.kt .clickable(
 1 unlabelled-clickable ui/gym/train/components/ExerciseCard.kt .clickable(
-6 unlabelled-clickable ui/gym/train/components/ExerciseCardComponents.kt .clickable(
+5 unlabelled-clickable ui/gym/train/components/ExerciseCardComponents.kt .clickable(
