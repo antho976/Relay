@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import com.forge.app.ui.common.ForgeSnackbar
 import com.forge.app.ui.common.window.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -141,7 +142,7 @@ fun DayScreen(
     }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { SnackbarHost(snackbarHostState) { ForgeSnackbar(it) } },
         floatingActionButton = {
             // Retain the last timer so the bubble can animate OUT (scale + fade) when the rest
             // ends instead of snapping away. Enter is handled by the bubble's own pop-in spring.

@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
+import com.forge.app.ui.common.ForgeSnackbar
 import com.forge.app.ui.common.window.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -197,7 +198,7 @@ fun ProgramBuilderScreen(
                 }
             }
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { SnackbarHost(snackbarHostState) { ForgeSnackbar(it) } },
         bottomBar = {
             // §3: the page-level one-shot actions group at the END — one row, not a stacked wall,
             // so edit mode costs the plan as little height as possible.

@@ -28,6 +28,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
+import com.forge.app.ui.common.ForgeSnackbar
 import com.forge.app.ui.common.window.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -136,7 +137,7 @@ fun ProgramBuilderDayDetail(
     Scaffold(
         // §4.6: back alone, never the screen's name — the day name heads the content.
         topBar = { ForgeTopBar(onBack = onBack) },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { SnackbarHost(snackbarHostState) { ForgeSnackbar(it) } },
         bottomBar = {
             // §3: this page's one-shots at the END — add (do-it-now) + duplicate / remove sidekicks.
             Column(
