@@ -125,6 +125,9 @@ fun SetRow(
     onLongPress: (() -> Unit)? = null,
     onToggleDifficultyTag: ((String?) -> Unit)? = null,
     onSetRpe: ((Double?) -> Unit)? = null,
+    /** Non-null for the few seconds after this set was logged: the LAST cell offers "undo" under
+     *  its delta. It replaced a "Set logged · Undo" snackbar that covered the controls below. */
+    onUndo: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val weightUnit = LocalForgeSettings.current.weightUnit
@@ -336,7 +339,19 @@ fun SetRow(
         val deltaCell: @Composable (Modifier) -> Unit = { m ->
         // Delta col — trend icon + value, green when you beat last session. Suppressed for timed
         // holds (no weight×reps delta; a hold's progress is its longer time, shown as the ghost).
-        Box(modifier = m, contentAlignment = Alignment.CenterEnd) {
+        // Just after logging, the whole cell is the undo target with "undo" under the delta. The
+        // RPE chip already holds the row at 48dp, so the link comes and goes without the row
+        // changing height.
+        Column(
+            modifier = m.then(
+                if (onUndo != null) Modifier
+                    .sizeIn(minHeight = 48.dp)
+                    .clickableLabeled("Undo set $setIndex") { onUndo() }
+                else Modifier
+            ),
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.Center
+        ) {
             if (!isTimed) deltaLabel?.let {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     if (deltaPositive || deltaNegative) {
@@ -352,13 +367,19 @@ fun SetRow(
                     Text(it, style = MaterialTheme.typography.labelSmall, color = deltaColor, fontSize = 9.sp)
                 }
             }
+            if (onUndo != null) {
+                Text("undo", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            }
         }
         }
         Column(
             modifier = tapMod
                 .semantics(mergeDescendants = true) {
                     contentDescription = rowDescription
-                    customActions = listOf(CustomAccessibilityAction("Delete set") { onDelete(); true })
+                    customActions = listOfNotNull(
+                        CustomAccessibilityAction("Delete set") { onDelete(); true },
+                        onUndo?.let { undo -> CustomAccessibilityAction("Undo set") { undo(); true } }
+                    )
                 }
                 .fillMaxWidth()
                 .graphicsLayer {

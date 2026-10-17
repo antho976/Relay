@@ -127,7 +127,7 @@ fun DayScreen(
 
     LaunchedEffect(state.deletedSet) {
         state.deletedSet ?: return@LaunchedEffect
-        // Newest wins: a still-showing "Set logged" would otherwise queue this one behind it.
+        // Newest wins: a still-showing message would otherwise queue this one behind it.
         snackbarHostState.currentSnackbarData?.dismiss()
         // Long, not Short: four seconds ran out on the emulator before a deliberate tap landed, and
         // a lifter who swiped by accident is often looking at the bar, not the phone.
@@ -137,10 +137,10 @@ fun DayScreen(
         )
     }
 
+    // The undo for a just-logged set lives on its row now, not in a snackbar, so nothing else
+    // speaks the log. TalkBack reaches the undo through the row's "Undo set" action.
     LaunchedEffect(state.undoableSetId) {
-        val setId = state.undoableSetId ?: return@LaunchedEffect
-        val result = snackbarHostState.showSnackbar(message = "Set logged", actionLabel = "Undo", duration = SnackbarDuration.Short)
-        if (result == SnackbarResult.ActionPerformed) viewModel.onEvent(DayUiEvent.UndoLastSet)
+        if (state.undoableSetId != null) view.announceForAccessibility("Set logged")
     }
 
     BackHandler(enabled = !state.isFinished) { viewModel.onEvent(DayUiEvent.RequestBack) }

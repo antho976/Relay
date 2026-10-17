@@ -100,6 +100,9 @@ fun ExerciseCard(
     onPinNote: (String) -> Unit = {},
     onToggleSetDifficultyTag: (setId: Long, currentTag: String?) -> Unit = { _, _ -> },
     onSetRpe: (setId: Long, rpe: Double?) -> Unit = { _, _ -> },
+    /** The set logged moments ago that can still be taken back; its row shows "undo". */
+    undoableSetId: Long? = null,
+    onUndoSet: () -> Unit = {},
     onAddSet: () -> Unit = {},
     onOpenChart: () -> Unit = {},
     advanceLabel: String = "",
@@ -361,7 +364,8 @@ fun ExerciseCard(
                             onEdit = { w, r -> onEditSet(set.id, w, r) },
                             onLongPress = { onLogSameAsLast(set.id) },
                             onToggleDifficultyTag = { tag -> onToggleSetDifficultyTag(set.id, tag) },
-                            onSetRpe = { rpe -> onSetRpe(set.id, rpe) }
+                            onSetRpe = { rpe -> onSetRpe(set.id, rpe) },
+                            onUndo = if (set.id == undoableSetId) onUndoSet else null
                         )
                     }
                     // Air between set rows, no rule (grouped-surface pass, 2026-09-27).

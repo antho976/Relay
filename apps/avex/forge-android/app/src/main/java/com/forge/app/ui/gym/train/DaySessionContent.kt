@@ -357,6 +357,8 @@ internal fun DayContent(
                                 onPinNote = { note -> onEvent(DayUiEvent.SetPinnedNote(id, note)) },
                                 onToggleSetDifficultyTag = { setId, tag -> onEvent(DayUiEvent.ToggleSetDifficultyTag(setId, tag)) },
                                 onSetRpe = { setId, rpe -> onEvent(DayUiEvent.SetRpe(setId, rpe)) },
+                                undoableSetId = state.undoableSetId,
+                                onUndoSet = { onEvent(DayUiEvent.UndoLastSet) },
                                 onAddSet = { onEvent(DayUiEvent.AddBonusSet(id)) },
                                 onOpenChart = { chartForExerciseId = id }
                             )
