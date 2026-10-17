@@ -42,6 +42,7 @@ pub fn defaults() -> &'static Value {
                 "destructive_write": { "min_removed_lines": 50, "min_removed_pct": 40, "min_file_lines": 30, "allow_if_recoverable": true },
                 "protected_paths": [],
                 "agent_builds": false,
+                "check_on_push": true,
                 "shape_gates": [],
                 "denied_commands": ["rm -rf", "git reset --hard", "git clean -fd", "git push --force"],
                 "allowed_write_roots": [],

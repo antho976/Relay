@@ -1,7 +1,7 @@
 //! `relay` — the CLI door (BUS.md §8). A thin client of the socket door: argument shaping,
 //! defaults from the environment, exit codes. No logic of its own.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use relay_bus::{Actor, Registry, Request, Response};
 use relay_core::socket::Client;
@@ -113,6 +113,8 @@ enum HookCommand {
     CodexReport { kind: String },
     /// Forward a Codex `notify` payload to `session.report`.
     CodexNotify { payload: String },
+    /// Run the project's check before an agent's push (`guardrails.check_on_push`); refs on stdin.
+    PrePush,
 }
 
 const EXIT_UNREACHABLE: u8 = 5;
@@ -437,6 +439,7 @@ async fn run(cli: Cli) -> Result<u8> {
             }
             Ok(0)
         }
+        Command::Hook { hook: HookCommand::PrePush } => pre_push(instance, cli.actor.as_deref()).await,
         Command::Cmd { op, payload } => do_cmd(instance, cli.actor.as_deref(), op, payload, false).await,
         Command::Q { op, payload } => do_cmd(instance, cli.actor.as_deref(), op, payload, true).await,
     }
@@ -801,6 +804,102 @@ fn resolve_existing(path: &Path) -> PathBuf {
             _ => return path.to_path_buf(),
         }
     }
+}
+
+/// How much of a failed check's output the refusal shows: the end, where the failure is.
+const CHECK_TAIL_LINES: usize = 80;
+
+/// `guardrails.check_on_push` (check.rs): run the project's check in the pushing worktree and
+/// refuse the push when it fails. Its output is shown only on failure, so a passing push costs
+/// the agent one line. Anything that stops the check from being found — no engine, a checkout
+/// that is not a Relay project, a project with nothing to run — lets the push through with a
+/// note: this is a check the agent is meant to pass, not a fence, and GitHub's required checks
+/// are the fence.
+async fn pre_push(instance: Instance, actor_override: Option<&str>) -> Result<u8> {
+    let mut refs = String::new();
+    std::io::stdin().read_to_string(&mut refs)?;
+    if !relay_core::check::pushes_commits(&refs) {
+        return Ok(0);
+    }
+    let worktree = std::env::current_dir()?;
+    let command = match push_check(instance, actor_override, &worktree).await {
+        Ok(Some(command)) => command,
+        Ok(None) => return Ok(0),
+        Err(error) => {
+            eprintln!("relay: the push was not checked: {error:#}");
+            return Ok(0);
+        }
+    };
+    let started = std::time::Instant::now();
+    // One stream, in the order the check wrote it.
+    let ran = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("exec 2>&1\n{command}"))
+        .current_dir(&worktree)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .with_context(|| format!("running `{command}`"))?;
+    let seconds = started.elapsed().as_secs();
+    if ran.status.success() {
+        eprintln!("relay: `{command}` passed in {seconds}s; pushing.");
+        return Ok(0);
+    }
+    let output = String::from_utf8_lossy(&ran.stdout);
+    let lines: Vec<&str> = output.lines().collect();
+    let tail = &lines[lines.len().saturating_sub(CHECK_TAIL_LINES)..];
+    if tail.len() < lines.len() {
+        eprintln!("[… {} earlier lines]", lines.len() - tail.len());
+    }
+    for line in tail {
+        eprintln!("{line}");
+    }
+    let status = ran.status.code().map_or_else(|| "killed by a signal".to_string(), |code| format!("exit {code}"));
+    eprintln!(
+        "relay: push refused: `{command}` failed ({status}, {seconds}s). Fix what it reports and push again; \
+         do not skip the hook. A person can change the check (the project's build command) or turn it off \
+         (guardrails.check_on_push)."
+    );
+    Ok(1)
+}
+
+/// The command [`pre_push`] runs for `worktree`, or `None` when the project has the check off
+/// or nothing to run.
+async fn push_check(instance: Instance, actor_override: Option<&str>, worktree: &Path) -> Result<Option<String>> {
+    // A session worktree's project is the repository its git directory belongs to.
+    let common = std::process::Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(worktree)
+        .output()
+        .context("asking git for the repository")?;
+    if !common.status.success() {
+        bail!("git rev-parse failed: {}", String::from_utf8_lossy(&common.stderr).trim());
+    }
+    let common = PathBuf::from(String::from_utf8_lossy(&common.stdout).trim());
+    let repo = common.parent().map(Path::to_path_buf).context("the git directory has no parent")?;
+    let repo = std::fs::canonicalize(&repo).unwrap_or(repo);
+
+    let (actor, token) = actor_from_env(actor_override)?;
+    let mut client = connect(instance).await?;
+    let mut ask = async |op: &str, payload: Value| -> Result<Value> {
+        let mut request = Request::new(actor.clone(), op, payload);
+        if let Some(token) = &token { request = request.with_token(token.clone()); }
+        client.call(&request, |_| {}).await?.into_result().map_err(|error| anyhow!("{op}: {}: {}", error.code, error.message))
+    };
+    let projects = ask("project.list", json!({})).await?;
+    let repo_s = repo.display().to_string();
+    let Some(project) = projects["projects"].as_array().and_then(|all| all.iter().find(|p| p["path"] == repo_s.as_str())).cloned() else {
+        return Ok(None);
+    };
+    let config = ask("guardrail.config.get", json!({"project_id": project["id"]})).await?;
+    if config["check_on_push"] == false {
+        return Ok(None);
+    }
+    let command = project["build_cmd"].as_str().map(str::trim).filter(|command| !command.is_empty()).map(str::to_owned)
+        .or_else(|| relay_core::check::detect(worktree));
+    if command.is_none() {
+        eprintln!("relay: the push was not checked: project {} has no build command and none could be detected", project["name"]);
+    }
+    Ok(command)
 }
 
 async fn do_cmd(instance: Instance, actor_override: Option<&str>, op: String, payload: Option<String>, pretty: bool) -> Result<u8> {

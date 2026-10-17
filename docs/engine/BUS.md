@@ -802,7 +802,7 @@ unique; nothing else is.
 | `workspace.update` | mutation · always · inverse | `{ workspace_id, name?, order? }` → `Workspace` |
 | `workspace.reorder` | mutation · always · inverse · global | `{ orders: { workspace_id, order }[] }` → `{ workspaces: Workspace[] }` — a sidebar drag in one call: every named workspace takes its `order` in one transaction, unnamed ones keep theirs; one audit row whose inverse is a `workspace.reorder` back to the previous orders, and one `workspace.changed {workspaces}` carrying the rows it wrote. `not_found`/`workspace.not_found` for an unknown id (nothing written); `invalid`/`workspace.orders` for an empty list or an id named twice |
 | `workspace.remove` | mutation · always · global | `{ workspace_id, force?: bool, remove_worktrees?: bool, discard_changes?: bool }` → `{ projects_removed, sessions_closed }` — `conflict` (`workspace.has_projects`, `details.projects`) if it still has projects, unless `force`, which runs `project.remove { force }` for each of them first. With `remove_worktrees`, refused `conflict`/`worktree.dirty` as `project.remove` is, across all its projects, before anything is backed up or closed |
-| `project.add` | mutation · always · global | `{ workspace_id, path, name? }` → `Project` — path must be a git repo root **inside** `workspace.path` (`invalid`/`project.outside_workspace`); one project per path (`conflict`/`project.exists`) |
+| `project.add` | mutation · always · global | `{ workspace_id, path, name? }` → `Project` — path must be a git repo root **inside** `workspace.path` (`invalid`/`project.outside_workspace`); one project per path (`conflict`/`project.exists`); `build_cmd` starts as the test command of the build tool at its root (`cargo test`, `go test ./...`, `./gradlew test`, `npm`/`pnpm`/`yarn`/`bun` `test` when `package.json` has a real test script), else null |
 | `project.clone` | mutation · always · global | `{ workspace_id, url, dest? }` → `{ project: Project }`; clones inside the workspace and registers the result |
 | `project.list` | query | `{ workspace_id? }` → `{ projects: Project[] }` |
 | `project.get` | query | `{ project_id }` → `Project` |
@@ -1286,6 +1286,7 @@ interface GuardrailConfig {
   denied_commands: string[];   /* matched against parsed argv, never a raw substring */
   allowed_write_roots: string[]; /* absolute (a relative or ~ entry fails the config); the process temp dir is always allowed too */
   agent_builds: boolean;  /* default false: an agent's integration build waits for a person */
+  check_on_push: boolean; /* default true: an agent's `git push` first runs the project's build_cmd (else the detected tests) and is refused when it fails; a person's push never runs it */
   roles: { builder: string[]; reviewer: string[]; docs: string[] };
 }
 interface AuditRow { id; ts; req_id; parent_req: string | null; actor; on_behalf_of: Actor | null;
