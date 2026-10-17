@@ -14,7 +14,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.forge.app.ui.gym.stats.state.PulseBand
 import com.forge.app.ui.gym.stats.state.ReadinessPulse
 import com.forge.app.ui.theme.ForgeError
@@ -34,20 +33,20 @@ private val DELOAD = ForgeError
 @Composable
 internal fun ReadinessLine(pulse: ReadinessPulse?, threshold: Int?, c: StatsColors) {
     if (pulse == null || threshold == null) return
+    // Words first, then the number with what it is a number OF. "FATIGUE 0 OF 5" in 9sp mono read
+    // like a debug readout; nothing said that 5 is where a deload gets called.
     val (bandLabel, bandColor) = when (pulse.band) {
-        PulseBand.FRESH -> "FRESH" to FRESH
-        PulseBand.BUILDING -> "BUILDING" to BUILDING
-        PulseBand.DELOAD_SOON -> "DELOAD SOON" to DELOAD
+        PulseBand.FRESH -> "Fresh" to FRESH
+        PulseBand.BUILDING -> "Fatigue building" to BUILDING
+        PulseBand.DELOAD_SOON -> "Deload soon" to DELOAD
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(7.dp).clip(CircleShape).background(bandColor))
-        Spacer(Modifier.width(7.dp))
+        Box(Modifier.size(8.dp).clip(CircleShape).background(bandColor))
+        Spacer(Modifier.width(8.dp))
         Text(
-            "$bandLabel · FATIGUE ${pulse.score} OF $threshold",
-            style = MaterialTheme.typography.labelSmall,
-            color = c.muted,
-            fontSize = 9.sp,
-            letterSpacing = 1.sp
+            "$bandLabel · fatigue ${pulse.score} of $threshold before a deload",
+            style = MaterialTheme.typography.bodySmall,
+            color = c.muted
         )
     }
 }

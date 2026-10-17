@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -64,42 +65,55 @@ class OverviewViewModel @Inject constructor(
      * flagged them as dead. Both are in the history if that branch returns.
      */
 
-    /** Today's watch steps against a typical day (W6) — null hides the Home movement line entirely. */
-    data class TodayMovement(val steps: Int, val typicalSteps: Int?)
-
-    private val _movement = MutableStateFlow<TodayMovement?>(null)
-    val movement: StateFlow<TodayMovement?> = _movement
+    private val _body = MutableStateFlow<HomeBody?>(null)
+    /** Home's BODY section: null hides it (no Health Connect on the phone, or the invite was dismissed). */
+    val body: StateFlow<HomeBody?> = _body
 
     /**
-     * Refresh the Home movement line (W6): today's Health Connect step total + the median of the
-     * previous 14 full days as "typical" (null below 3 days of history — no fake baseline). Fail-soft:
-     * not granted / no provider / read error → null → the line simply doesn't render (GYMAP-64 rule).
+     * Refresh the BODY section: last night's sleep, resting HR and HRV, and today's steps, each
+     * against the user's own usual (see [homeBodyReadings]). Fail-soft: a read error hides the
+     * section rather than showing a broken one.
      */
-    private val movementRefresh = com.forge.app.core.ConflatedRefresh(viewModelScope) {
-        runCatching { loadMovement() }.onFailure {
+    private val bodyRefresh = com.forge.app.core.ConflatedRefresh(viewModelScope) {
+        runCatching { loadBody() }.onFailure {
             if (it is kotlinx.coroutines.CancellationException) throw it
-            _movement.value = null
+            _body.value = null
         }
     }
-    fun refreshMovement() = movementRefresh.request()
+    fun refreshBody() = bodyRefresh.request()
 
-    private suspend fun loadMovement() {
-        if (!healthConnectManager.canReadSteps()) { _movement.value = null; return }
+    private suspend fun loadBody() {
+        if (!healthConnectManager.isAvailable) { _body.value = null; return }
+        val granted = healthConnectManager.grantedPermissions()
+        val bodyReads = healthConnectManager.permissions + healthConnectManager.hrvPermissions +
+            healthConnectManager.stepsPermissions
+        if (granted.none { it in bodyReads }) {
+            _body.value = if (settingsRepo.cardioWearableHintDismissed.first()) null else HomeBody.Invite
+            return
+        }
         val zone = java.time.ZoneId.systemDefault()
         val now = clock.nowMs()
         val today = java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
         val todayStartMs = today.atStartOfDay(zone).toInstant().toEpochMilli()
         val sinceMs = today.minusDays(14).atStartOfDay(zone).toInstant().toEpochMilli()
-        val days = healthConnectManager.readDailyStepTotals(sinceMs, now)
-        val todaySteps = days.lastOrNull { it.dayStartMs == todayStartMs }?.steps ?: 0
-        val prior = days.filter { it.dayStartMs < todayStartMs && it.steps > 0 }.map { it.steps }.sorted()
-        val typical = if (prior.size >= 3) prior[prior.size / 2] else null
-        _movement.value = TodayMovement(steps = todaySteps, typicalSteps = typical)
+        _body.value = homeBodyReadings(healthConnectManager.readRecovery(sinceMs, now), todayStartMs)
+    }
+
+    /** "Not now" on the invite. The same flag clears the notification feed's connect-a-watch row. */
+    fun dismissBodyInvite() {
+        viewModelScope.launch {
+            settingsRepo.setCardioWearableHintDismissed(true)
+            _body.value = null
+            snackbar.showUndo("Watch prompt hidden. Connect anytime in Settings.") {
+                settingsRepo.setCardioWearableHintDismissed(false)
+                refreshBody()
+            }
+        }
     }
 
     /**
      * Today's directive (Coach v3 B2) — the hero's content. Loaded once per open and refreshed on
-     * resume, like the movement line: the answer changes with the day, not with every emission.
+     * resume, like the body section: the answer changes with the day, not with every emission.
      */
     private val _directive = MutableStateFlow<com.forge.app.data.repo.DirectiveRepository.TodayAnswer?>(null)
 

@@ -98,6 +98,7 @@ private fun HomePrimaryAction(
     label: String,
     modifier: Modifier = Modifier,
     onLongClick: (() -> Unit)? = null,
+    emphasized: Boolean = true,
     onClick: () -> Unit
 ) {
     // The drawing moved to `ui/common` when Cardio needed the same button (§2⑥) — this stays as the
@@ -107,6 +108,7 @@ private fun HomePrimaryAction(
         onClick = onClick,
         modifier = modifier,
         label = label,
+        emphasized = emphasized,
         onLongClick = onLongClick,
         onLongClickLabel = if (onLongClick != null) "Start, skipping warmup" else null
     )
@@ -129,7 +131,7 @@ private fun HomePlanAction(text: String, onClick: () -> Unit) {
     ) {
         Text(
             text,
-            style = MaterialTheme.typography.labelLarge,
+            style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onBackground,
         )
@@ -151,7 +153,7 @@ private fun PromptLine(text: String, label: String, onClick: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .bounceCombinedClick(onClickLabel = label, onClick = onClick)
-            .padding(vertical = 14.dp)
+            .padding(vertical = 10.dp)
     ) {
         Text(
             "+",
@@ -206,7 +208,7 @@ private fun RecentRow(
     val title = item.displayTitle(com.forge.app.ui.cardio.LocalCardioTypes.current)
 
     SurfaceListRow(
-        icon = if (item.isGym) SettingsIcons.Session else NavIcons.Cardio,
+        icon = if (item.isGym) com.forge.app.ui.common.ExerciseIcons.Dumbbell else NavIcons.Cardio,
         hue = palette.hues[0],
         label = title,
         sub = sub,
@@ -286,6 +288,10 @@ private fun pinnedGoals(
 /** Half the slack between a top-bar icon's 48dp touch target and its 20dp glyph. */
 private val GUTTER_SLACK = 14.dp
 
+/** "Fri, Oct 16" in the top bar, in the phone's own locale. */
+private val HOME_DATE_FORMAT: java.time.format.DateTimeFormatter =
+    java.time.format.DateTimeFormatter.ofPattern("EEE, MMM d")
+
 /**
  * How far the profile and settings glyphs lean toward each other inside their own targets.
  *
@@ -345,6 +351,10 @@ fun OverviewScreen(
     onViewAllHistory: () -> Unit = {},
     onLogFreestyle: () -> Unit = {},
     onBuildPlan: () -> Unit = {},
+    /** The BODY panel's tap: the full body view on Stats. */
+    onOpenBody: () -> Unit = {},
+    /** The BODY invite's tap: Settings → Wearable. */
+    onConnectWatch: () -> Unit = {},
     viewModel: OverviewViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -352,15 +362,15 @@ fun OverviewScreen(
     val programEmpty by viewModel.programEmpty.collectAsStateWithLifecycle()
     val selectedItem by viewModel.selectedItem.collectAsStateWithLifecycle()
     val summaryLines by viewModel.sessionExerciseLines.collectAsStateWithLifecycle()
-    val movement by viewModel.movement.collectAsStateWithLifecycle()
+    val body by viewModel.body.collectAsStateWithLifecycle()
 
-    // Keep the movement line current across a day of glances (W6) — steps taken while away should
-    // show on return, same resume-refresh rule as the cardio hero's TODAY line (GYMAP-64).
+    // Keep the body section current across a day of glances (W6): a night's sleep that synced, or
+    // steps taken while away, show on return. Same resume-refresh rule as the cardio hero (GYMAP-64).
     val movementLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     androidx.compose.runtime.DisposableEffect(movementLifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                viewModel.refreshMovement()
+                viewModel.refreshBody()
                 // The answer is date- and session-sensitive: a directive that still says "Push day"
                 // after you trained, or after midnight, is worse than none (B2).
                 viewModel.refreshDirective()
@@ -451,29 +461,19 @@ fun OverviewScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                NotificationBell(
-                    modifier = Modifier
-                        .offset(x = (-GUTTER_SLACK))
-                        .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                // The date, so the page says what "today" below means without a lookup. The bell
+                // moved into the right-hand cluster with Profile and Settings: three actions in one
+                // place, where Android puts a screen's actions, instead of one stranded on the left.
+                Text(
+                    today.format(HOME_DATE_FORMAT).uppercase(),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                // Profile + settings read as one cluster, so they are spaced like one (Antho,
-                // 2026-08-24, twice: "make these two closer", then "a bit closer").
-                //
-                // Two moves, because the first one ran out. The slack offset used to be on SETTINGS
-                // alone, to sit its glyph on the page's optical right rail rather than 14dp inside
-                // it — correct for settings, and it dragged that button 14dp further from the icon
-                // beside it, opening a 42dp hole. Giving the offset to the Row slides both onto the
-                // rail at once and hands those 14dp back, which is as far as moving buttons goes:
-                // 48dp targets sit 48dp apart, leaving 28dp between two 20dp glyphs.
-                //
-                // The rest comes from the glyphs leaning inside their own targets — see
-                // [PAIR_LEAN]. The Row takes the lean back on the right so SETTINGS does not walk
-                // off the rail to pay for it, which leaves the whole 12dp on the gap: 16dp between
-                // the glyphs, split evenly either side of the seam.
                 Row(
                     modifier = Modifier.offset(x = GUTTER_SLACK + PAIR_LEAN),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    NotificationBell(modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp))
                     TopBarIconButton(
                         NavIcons.Profile,
                         "Profile",
@@ -524,6 +524,8 @@ fun OverviewScreen(
                 directive?.kind == com.forge.app.domain.coach.TodayDirective.Kind.LEARN -> onOpenAcademy
                 else -> ({ onStartSession(sessionDayKey) })
             }
+            val restDay = resumeKey == null && !freestyleMode && !programEmpty &&
+                directive?.kind == com.forge.app.domain.coach.TodayDirective.Kind.REST
             val startsNewGymSession = resumeKey == null && !freestyleMode && !programEmpty &&
                 directive?.kind != com.forge.app.domain.coach.TodayDirective.Kind.CARDIO &&
                 directive?.kind != com.forge.app.domain.coach.TodayDirective.Kind.LEARN
@@ -572,21 +574,29 @@ fun OverviewScreen(
                     text = actionText,
                     label = actionText,
                     modifier = Modifier.weight(1f),
+                    // The hold stays as a shortcut for people who know it, and TalkBack lists it as
+                    // an action. It is no longer advertised: the warmup screen has its own "Start
+                    // lifting" and "Not today", where the choice actually comes up.
                     onLongClick = if (startsNewGymSession) {
                         { onStartSessionSkipWarmup(sessionDayKey) }
                     } else null,
+                    // A rest day still offers the session, outlined: a filled button under "Done for
+                    // today" told you to do the thing the headline had just said not to.
+                    emphasized = !restDay,
                     onClick = action
                 )
                 if (!programEmpty) {
-                    HomePlanAction("Plan", planAction)
+                    HomePlanAction("View plan", planAction)
                 }
             }
-            if (startsNewGymSession) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Hold start to skip warmup",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+
+            body?.let { currentBody ->
+                Spacer(Modifier.height(28.dp))
+                HomeBodySection(
+                    body = currentBody,
+                    onOpenBody = onOpenBody,
+                    onConnectWatch = onConnectWatch,
+                    onDismissInvite = viewModel::dismissBodyInvite
                 )
             }
 
@@ -631,11 +641,6 @@ fun OverviewScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            movement?.let { currentMovement ->
-                Spacer(Modifier.height(16.dp))
-                MovementLine(currentMovement, muted = muted, outline = outline, accent = accent)
-            }
-
             // Goals can be taken off Home (2026-09-27): "hide" sits beside "view all", Undo follows,
             // and Settings → Appearance brings the section back.
             if (HOME_GOALS_TILE !in settings.hiddenOverviewTiles) {
@@ -652,7 +657,9 @@ fun OverviewScreen(
                     secondaryActionLabel = "Hide goals from Home",
                     onSecondaryAction = viewModel::hideHomeGoals
                 )
-                Spacer(Modifier.height(12.dp))
+                // 4, not 12: an anchor carrying a link is already a 48dp row, so 12 more opened a gap
+                // twice the size of the one under a plain anchor.
+                Spacer(Modifier.height(4.dp))
                 // Nothing before the first read (todayStartMs is 0 until then): the empty prompts
                 // below used to flash for a returning user while their goals and sessions loaded.
                 if (state.todayStartMs == 0L) {
@@ -688,7 +695,7 @@ fun OverviewScreen(
                 actionLabel = "View all sessions",
                 onAction = onViewAllHistory
             )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(4.dp))
             if (state.todayStartMs == 0L) {
                 // Empty until the first read lands, as with the goals above.
             } else if (state.recentItems.isEmpty()) {
@@ -716,58 +723,6 @@ fun OverviewScreen(
             }
 
             Spacer(Modifier.height(28.dp))
-        }
-    }
-}
-
-/**
- * The Home movement line (W6): today's watch steps against a typical day (14-day median), the
- * quiet daily-movement read between sessions. One thin bar (fill `primary` on an outline track,
- * §5) + one mono reading — honest at zero, hidden entirely when steps aren't connected.
- */
-@Composable
-private fun MovementLine(
-    movement: OverviewViewModel.TodayMovement,
-    muted: Color,
-    outline: Color,
-    accent: Color
-) {
-    val reading = buildString {
-        append("%,d".format(movement.steps))
-        append(" STEPS")
-        movement.typicalSteps?.let { append(" · TYPICAL ~%,d".format(it)) }
-    }
-    Column(Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("MOVEMENT", style = MaterialTheme.typography.labelMedium, color = muted)
-            // MOVEMENT is labelMedium (11) and its reading is labelSmall (10): §6 ranks two mono
-            // labels by SIZE, which the scale already does. The 9sp + hand-set tracking on top of
-            // labelSmall was a third, undeclared rung that also stopped following the font setting.
-            Text(reading, style = MaterialTheme.typography.labelSmall, color = muted)
-        }
-        Spacer(Modifier.height(8.dp))
-        // Today against the typical-day mark; with no baseline yet the bar shows today against
-        // itself (full when any steps, empty at zero) — a real reading either way, never fake.
-        val target = movement.typicalSteps ?: movement.steps
-        val fraction = if (target <= 0) 0f else (movement.steps.toFloat() / target).coerceIn(0f, 1f)
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(4.dp)
-                .background(outline.copy(alpha = 0.3f), RoundedCornerShape(2.dp))
-        ) {
-            if (fraction > 0f) {
-                Box(
-                    Modifier
-                        .fillMaxWidth(fraction)
-                        .height(4.dp)
-                        .background(accent, RoundedCornerShape(2.dp))
-                )
-            }
         }
     }
 }

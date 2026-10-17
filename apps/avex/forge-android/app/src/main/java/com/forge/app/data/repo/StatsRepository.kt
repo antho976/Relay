@@ -627,7 +627,10 @@ class StatsRepository @Inject constructor(
         val lastWeekStart = thisWeekStart.minusWeeks(1)
         val toMs = { d: LocalDate -> d.atStartOfDay(zone).toInstant().toEpochMilli() }
         val thisW = sessionDao.aggregateInRange(toMs(thisWeekStart), toMs(thisWeekStart.plusWeeks(1)))
-        val lastW = sessionDao.aggregateInRange(toMs(lastWeekStart), toMs(thisWeekStart))
+        // Last week only up to the same point in the week. Against the whole of last week, every
+        // figure read "down" until Sunday, which is the week not being over, not a drop.
+        val elapsedMs = clock.nowMs() - toMs(thisWeekStart)
+        val lastW = sessionDao.aggregateInRange(toMs(lastWeekStart), toMs(lastWeekStart) + elapsedMs)
         if (lastW.sessionCount == 0 && thisW.sessionCount == 0) return null
         return PeriodComparison(
             label = "WEEK",

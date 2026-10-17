@@ -76,6 +76,19 @@ class CardioViewModel @Inject constructor(
     private val timeSignals: com.forge.app.core.time.TimeSignals
 ) : ViewModel() {
 
+    /** "Not now" on the connect row; the same flag clears the notification feed's watch invite. */
+    val watchInviteDismissed: StateFlow<Boolean> = settingsRepo.cardioWearableHintDismissed
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    fun dismissWatchInvite() {
+        viewModelScope.launch {
+            settingsRepo.setCardioWearableHintDismissed(true)
+            snackbar.showUndo("Watch prompt hidden. Connect anytime in Settings.") {
+                settingsRepo.setCardioWearableHintDismissed(false)
+            }
+        }
+    }
+
     private val transient = MutableStateFlow(TransientState())
 
     /** The in-flight [saveEntry] write, if any — the double-tap guard. */

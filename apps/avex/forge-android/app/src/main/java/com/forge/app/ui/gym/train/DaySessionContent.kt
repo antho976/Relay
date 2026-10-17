@@ -16,6 +16,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -165,6 +166,17 @@ internal fun DayContent(
 
     LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
         if (!state.isWarmupComplete) {
+            // The warmup opened with no way back and no name: you could not tell which workout you
+            // had started, and only the system gesture left it.
+            item(key = "session-hero", contentType = "session-hero") {
+                SessionHero(
+                    state = state,
+                    onBack = { onEvent(DayUiEvent.RequestBack) },
+                    onFinish = { onEvent(DayUiEvent.FinishWorkout) },
+                    onEditNote = { showNoteEditor = true },
+                    showFinish = false
+                )
+            }
             item(key = "warmup", contentType = "warmup") {
                 WarmupFlow(
                     protocol = state.warmupProtocol,
@@ -433,7 +445,14 @@ private fun SessionNoteDialog(initial: String, onSave: (String) -> Unit, onDismi
 }
 
 @Composable
-internal fun SessionHero(state: DayUiState, onBack: () -> Unit, onFinish: () -> Unit, onEditNote: () -> Unit = {}) {
+internal fun SessionHero(
+    state: DayUiState,
+    onBack: () -> Unit,
+    onFinish: () -> Unit,
+    onEditNote: () -> Unit = {},
+    /** Off during the warmup: nothing is logged yet to finish. */
+    showFinish: Boolean = true
+) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
@@ -484,8 +503,27 @@ internal fun SessionHero(state: DayUiState, onBack: () -> Unit, onFinish: () -> 
                 Text(datePillText, style = MaterialTheme.typography.labelSmall, color = muted, maxLines = 1)
             }
             Spacer(Modifier.width(8.dp))
-            Box(modifier = Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(50)).background(accent).clickableLabeled("Finish session") { onFinish() }.padding(horizontal = 16.dp, vertical = 7.dp), contentAlignment = Alignment.Center) {
-                Text("FINISH", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimary, maxLines = 1)
+            // Outlined until every exercise is done or skipped, then filled. A filled FINISH from the
+            // first second competed with LOG SET, the button you actually press thirty times.
+            val allDone = state.exercises.isNotEmpty() && state.exercises.all { it.isComplete }
+            if (showFinish) Box(
+                modifier = Modifier
+                    .heightIn(min = 44.dp)
+                    .clip(RoundedCornerShape(50))
+                    .then(
+                        if (allDone) Modifier.background(accent)
+                        else Modifier.border(1.dp, outline, RoundedCornerShape(50))
+                    )
+                    .clickableLabeled("Finish session") { onFinish() }
+                    .padding(horizontal = 16.dp, vertical = 7.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Finish",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (allDone) MaterialTheme.colorScheme.onPrimary else onBg,
+                    maxLines = 1
+                )
             }
         }
         // "Beat the ghost" running scoreboard — the duel vs last session, live as you log.

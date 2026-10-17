@@ -148,7 +148,8 @@ fun HubScreen(
                     onOpenGoals = { pushOnce(Routes.GOALS) },
                     onOpenWeeks = { pushOnce(Routes.cardioWeeks()) },
                     // Tapping the hero's Mon–Sun strip opens THIS week in full.
-                    onOpenWeek = { weekStartMs -> nav.navigate(Routes.cardioWeeks(weekStartMs)) }
+                    onOpenWeek = { weekStartMs -> nav.navigate(Routes.cardioWeeks(weekStartMs)) },
+                    onConnectWatch = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
                 )
                 BottomTab.STATS -> DayListScreen(
                     onOpenDay = { dayKey -> nav.navigateToGymDay(dayKey) },
@@ -165,6 +166,8 @@ fun HubScreen(
                     // The consistency-heatmap day sheet drills into the same detail screens History uses.
                     onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) },
                     onOpenCardioSession = { cardioId -> nav.navigate(Routes.cardioSession(cardioId)) },
+                    onConnectWatch = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } },
+                    onOpenProfile = { pushOnce(Routes.PROFILE) },
                     initialTab = 1,
                     title = "Stats"
                 )
@@ -191,17 +194,22 @@ fun HubScreen(
                     // entry) rather than a bottom sheet, so Back from a session returns to the list.
                     onViewAllHistory = { pushOnce(Routes.SESSION_HISTORY) },
                     onLogFreestyle = { pushOnce(Routes.FREESTYLE_LOG) },
-                    onBuildPlan = { pushOnce(Routes.programBuilder()) }
+                    onBuildPlan = { pushOnce(Routes.programBuilder()) },
+                    onOpenBody = {
+                        com.forge.app.ui.gym.stats.StatsLensRequests.pending.value = com.forge.app.ui.gym.stats.StatsLens.BODY
+                        goToTab(BottomTab.STATS)
+                    },
+                    onConnectWatch = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
                 )
-                // Coach and Academy sit furthest from Home, so each carries the top-bar back arrow
-                // to it; the system Back already goes there (the BackHandler above).
+                // No back arrow on a tab: the bar below is the navigation, and system Back already
+                // returns Home (the BackHandler above). The page names itself instead.
                 BottomTab.COACH -> CoachScreen(
-                    onBack = { goTo(homeIndex) },
+                    onBack = null,
                     isVisible = pagerState.settledPage == page,
                     onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
                 )
                 BottomTab.ACADEMY -> AcademyScreen(
-                    onBack = { goTo(homeIndex) },
+                    onBack = null,
                     onOpenLesson = { nav.navigate(Routes.lesson(it)) }
                 )
             }

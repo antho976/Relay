@@ -42,7 +42,7 @@ import com.forge.app.ui.theme.ForgeWarning
 
 /** Goal options: key, label, what it changes, and the mono rep-range meta. */
 internal val GOAL_DETAILS = listOf(
-    listOf("build_muscle", "Build muscle", "Balanced for size. The default pick.", "8-12 reps"),
+    listOf("build_muscle", "Build muscle", "Balanced for size. Most people start here.", "8-12 reps"),
     listOf("get_stronger", "Get stronger", "Heavier work on the big lifts.", "4-6 reps"),
     listOf("lose_weight", "Lose weight", "Higher reps with more conditioning.", "12-20 reps"),
     listOf("general_fitness", "General fitness", "Balanced, all-round training.", "8-15 reps")

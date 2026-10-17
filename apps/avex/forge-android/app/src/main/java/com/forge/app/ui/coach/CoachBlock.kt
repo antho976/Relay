@@ -109,7 +109,7 @@ internal fun LazyListScope.coachUnlocks(
             CoachAnchor(
                 if (rungs > 1) "What unlocks" else "Next",
                 c,
-                meta = "${ahead.size} AHEAD"
+                meta = "${ahead.size} TO UNLOCK"
             )
             ahead.take(rungs).forEach { rung ->
                 Spacer(Modifier.height(14.dp))

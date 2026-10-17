@@ -81,6 +81,14 @@ internal fun openHealthConnectInStore(context: android.content.Context) {
     runCatching { context.startActivity(market) }.recoverCatching { context.startActivity(web) }
 }
 
+/** Avex's own Play listing, which offers the Wear OS app's install on a paired watch. */
+internal fun openAvexInStore(context: android.content.Context) {
+    val pkg = context.packageName.removeSuffix(".debug")
+    val market = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$pkg"))
+    val web = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$pkg"))
+    runCatching { context.startActivity(market) }.recoverCatching { context.startActivity(web) }
+}
+
 /** Open the Health Connect app's management UI so the user can review or revoke access. */
 internal fun openHealthConnectSettings(context: android.content.Context) {
     runCatching {

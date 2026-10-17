@@ -120,7 +120,11 @@ fun CoachScreen(
     LaunchedEffect(state.loading, state.advanced, entryPoint) {
         if (!state.loading && !deepLinkHandled && entryPoint == CoachEntryPoint.WHERE_YOU_STAND) {
             deepLinkHandled = true
-            if (state.advanced || hasStanding(state)) listState.scrollToItem(accountItemCount(state))
+            if (state.advanced || hasStanding(state)) {
+                // The title and the offer, when the page draws them, sit above the account.
+                val lead = (if (onBack == null) 1 else 0) + 1
+                listState.scrollToItem(accountItemCount(state) + lead)
+            }
         }
     }
 
@@ -168,21 +172,25 @@ fun CoachScreen(
                     listState = listState,
                     // The top bar already holds the status bar off the account.
                     reserveStatusBar = onBack == null,
-                    modifier = Modifier.padding(inner)
+                    modifier = Modifier.padding(inner),
+                    showTitle = onBack == null,
+                    // The offer waits for a page that has an account to read, and for the hub to be
+                    // showing this page. It sits in the column, under the title, so nothing it
+                    // offers can cover what the page already says.
+                    advancedPrompt = {
+                        CoachAdvancedPrompt(
+                            visible = isVisible && !state.loading && !state.freestyle && !state.advanced &&
+                                (state.brief != null || state.watch != null) &&
+                                System.currentTimeMillis() >= state.advancedPromptAfter,
+                            onTurnOn = { viewModel.setAdvanced(true) },
+                            onRemindLater = viewModel::remindAdvancedLater,
+                            onIgnore = viewModel::ignoreAdvancedPrompt,
+                            inline = true
+                        )
+                    }
                 )
             }
         }
-        // The offer rides OVER the account, never in it, so the page below does not move (§4.6). It
-        // waits for a page that has an account to read, and for the hub to be showing this page.
-        CoachAdvancedPrompt(
-            visible = isVisible && !state.loading && !state.freestyle && !state.advanced &&
-                (state.brief != null || state.watch != null) &&
-                System.currentTimeMillis() >= state.advancedPromptAfter,
-            onTurnOn = { viewModel.setAdvanced(true) },
-            onRemindLater = viewModel::remindAdvancedLater,
-            onIgnore = viewModel::ignoreAdvancedPrompt,
-            belowTopBar = onBack != null
-        )
     }
 }
 
@@ -216,7 +224,10 @@ internal fun CoachLedger(
     actions: CoachActions,
     modifier: Modifier = Modifier,
     listState: LazyListState = rememberLazyListState(),
-    reserveStatusBar: Boolean = true
+    reserveStatusBar: Boolean = true,
+    /** The page names itself as a hub tab, like Stats; pushed as a route the top bar's back says enough. */
+    showTitle: Boolean = false,
+    advancedPrompt: (@Composable () -> Unit)? = null
 ) {
     val c = rememberCoachColors()
     val statusBar = if (reserveStatusBar) WindowInsets.statusBars.asPaddingValues().calculateTopPadding() else 0.dp
@@ -227,6 +238,26 @@ internal fun CoachLedger(
         // so the account was opening hard against the clock. It reserves that space itself.
         contentPadding = PaddingValues(top = statusBar + 20.dp, bottom = 64.dp)
     ) {
+        if (showTitle) {
+            item("coach-title") {
+                Column(Modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER)) {
+                    Text("Coach", style = MaterialTheme.typography.headlineLarge, color = c.onBg)
+                    // While the baseline forms the page has no call to show, so it says how far off
+                    // the first one is instead of leaving a quiet page to explain itself.
+                    val toGo = state.brief?.sessionsToGo ?: 0
+                    if (toGo > 0) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Learning your baseline. $toGo more ${if (toGo == 1) "session" else "sessions"} before the first call.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = c.muted
+                        )
+                    }
+                    Spacer(Modifier.height(16.dp))
+                }
+            }
+        }
+        advancedPrompt?.let { prompt -> item("advanced-prompt") { prompt() } }
         coachAccount(
             state = state,
             weightUnit = weightUnit,

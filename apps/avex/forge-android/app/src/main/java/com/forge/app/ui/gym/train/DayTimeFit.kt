@@ -2,6 +2,9 @@
 
 package com.forge.app.ui.gym.train
 
+import com.forge.app.ui.common.clickableLabeled
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -46,7 +49,21 @@ internal fun timeFitSummary(fit: TimeFitApplied): String = when (fit.skippedName
 internal fun TimeFitRow(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val fit = state.timeFit
-    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp)) {
+    // Folded to one line until asked. Open, it was five chips and a paragraph above the first
+    // exercise on every workout, for a choice most workouts never make.
+    var open by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 6.dp)) {
+        if (fit == null && !open) {
+            Text(
+                "Short on time? Fit this workout to the minutes you have →",
+                style = MaterialTheme.typography.bodySmall,
+                color = muted,
+                modifier = Modifier
+                    .clickableLabeled("Show time limits") { open = true }
+                    .padding(vertical = 10.dp)
+            )
+            return@Column
+        }
         Text("SHORT ON TIME?", style = MaterialTheme.typography.labelSmall, color = muted)
         Spacer(Modifier.height(4.dp))
         Text(

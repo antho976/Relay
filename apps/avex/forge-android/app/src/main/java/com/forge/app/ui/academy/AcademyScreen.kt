@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -117,7 +118,11 @@ fun AcademyContent(
         containerColor = Color.Transparent
     ) { inner ->
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(inner),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(inner)
+                // As a hub tab there is no bar above to hold the list off the status bar.
+                .then(if (onBack == null) Modifier.statusBarsPadding().padding(top = 20.dp) else Modifier),
             contentPadding = PaddingValues(horizontal = GUTTER, vertical = 12.dp)
         ) {
             item("masthead", contentType = "masthead") {

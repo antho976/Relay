@@ -155,6 +155,10 @@ fun GlyphButton(
  * the moment one is touched. A hub tab's primary action is this; a section's is still level ①.
  *
  * [onLongClick] carries the optional hold gesture (Home's start-skipping-warmup).
+ *
+ * [emphasized] = false draws the same button outlined instead of filled, for an action the page offers
+ * but does not recommend (Home's "Train anyway" on a rest day). The label is sans: a button is
+ * something you read as a sentence, and the mono voice made it read like a code token.
  */
 @Composable
 fun ForgeHeroAction(
@@ -163,14 +167,21 @@ fun ForgeHeroAction(
     modifier: Modifier = Modifier,
     label: String = text,
     onLongClick: (() -> Unit)? = null,
-    onLongClickLabel: String? = null
+    onLongClickLabel: String? = null,
+    emphasized: Boolean = true
 ) {
+    val fill = if (emphasized) MaterialTheme.colorScheme.primary else Color.Transparent
+    val ink = if (emphasized) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onBackground
     Box(
         modifier = modifier
             // Height from a minimum, never a fixed one — the label has to survive 200% (§14).
             .heightIn(min = 56.dp)
             .clip(HeroActionShape)
-            .background(MaterialTheme.colorScheme.primary)
+            .background(fill)
+            .then(
+                if (emphasized) Modifier
+                else Modifier.border(1.5.dp, MaterialTheme.colorScheme.outline, HeroActionShape)
+            )
             .bounceCombinedClick(
                 onClickLabel = label,
                 onLongClickLabel = onLongClickLabel,
@@ -182,9 +193,9 @@ fun ForgeHeroAction(
     ) {
         Text(
             text,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onPrimary
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = ink
         )
     }
 }

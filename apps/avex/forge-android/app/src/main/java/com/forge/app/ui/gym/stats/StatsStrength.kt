@@ -161,6 +161,19 @@ private fun E1rmDrillRow(
                 )
                 if (!expandable) {
                     Text("1 SESSION", style = MaterialTheme.typography.labelSmall, color = c.muted.copy(alpha = 0.65f), fontSize = 9.sp)
+                } else {
+                    // How fast it is moving, which the ranked bar below cannot say: a curl ranked
+                    // under a squat is not news, a squat that stopped climbing is.
+                    val pct = lift.monthlyPct
+                    val (trend, up) = when {
+                        lift.stalling -> "FLAT LATELY" to false
+                        pct != null && pct >= 0.5 -> "↑ ${pct.roundToInt().coerceAtLeast(1)}% A MONTH" to true
+                        pct != null && pct <= -0.5 -> "↓ ${(-pct).roundToInt().coerceAtLeast(1)}% A MONTH" to false
+                        else -> null to false
+                    }
+                    trend?.let {
+                        Text(it, style = MaterialTheme.typography.labelSmall, color = if (up) c.accent else c.muted)
+                    }
                 }
                 Text(
                     current,

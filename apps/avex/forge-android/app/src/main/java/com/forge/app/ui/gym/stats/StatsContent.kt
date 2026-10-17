@@ -7,6 +7,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.Alignment
+import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -40,8 +43,19 @@ import kotlinx.coroutines.launch
 enum class StatsLens(val label: String) {
     STRENGTH("Strength"),
     VOLUME("Volume"),
-    EFFORT("Effort"),
+    // Body replaced Effort (2026-10-16): the watch had no home on Stats at all, and the one RPE
+    // histogram Effort held now closes the Volume lens, where how hard the work was sits with how
+    // much of it there was.
+    BODY("Body"),
     DAYS("Days")
+}
+
+/**
+ * A lens another screen asks Stats to open on (Home's BODY "details"). Stats is a pager page that is
+ * often already composed when the request is made, so a nav argument would not reach it.
+ */
+object StatsLensRequests {
+    val pending = kotlinx.coroutines.flow.MutableStateFlow<StatsLens?>(null)
 }
 
 /**
@@ -58,9 +72,17 @@ fun StatsContent(
     onOpenSession: (Long) -> Unit = {},
     /** Opens a cardio session's detail — from the day sheet. */
     onOpenCardioSession: (Long) -> Unit = {},
+    /** The Body lens's connect row: Settings → Wearable. */
+    onConnectWatch: () -> Unit = {},
+    /** The Body lens's bodyweight link: the profile, where weigh-ins are logged. */
+    onOpenProfile: () -> Unit = {},
+    onOpenHistory: () -> Unit = {},
+    onOpenNotes: () -> Unit = {},
+    onOpenRecap: () -> Unit = {},
     viewModel: StatsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val body by viewModel.body.collectAsStateWithLifecycle()
     val weightUnit = LocalForgeSettings.current.weightUnit
     val dayDetail by viewModel.dayDetail.collectAsStateWithLifecycle()
     // A record tap deep-links into the Strength lens with that lift's row already open. focusNonce
@@ -87,6 +109,26 @@ fun StatsContent(
     LaunchedEffect(restoredLens) {
         if (restoredLens) snapshotFlow { lens }.collect { viewModel.saveStatsTab(it.name) }
     }
+    // Another screen asked for a lens: take it, and keep it over the restored one.
+    val requestedLens by StatsLensRequests.pending.collectAsStateWithLifecycle()
+    LaunchedEffect(requestedLens) {
+        requestedLens?.let {
+            lens = it
+            restoredLens = true
+            StatsLensRequests.pending.value = null
+            listState.scrollToItem(0)
+        }
+    }
+    // Health Connect has no observer, so the Body lens reads it when opened and on every resume.
+    LaunchedEffect(lens) { if (lens == StatsLens.BODY) viewModel.refreshBody() }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME && lens == StatsLens.BODY) viewModel.refreshBody()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val c = StatsColors(
         onBg = MaterialTheme.colorScheme.onBackground,
@@ -111,6 +153,15 @@ fun StatsContent(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(top = 4.dp, bottom = 56.dp)
         ) {
+            // The title scrolls with the page. Pinned, it held a sixth of the screen on every lens.
+            item("title") {
+                Text(
+                    "Stats",
+                    style = MaterialTheme.typography.headlineLarge,
+                    color = c.onBg,
+                    modifier = Modifier.padding(start = STATS_GUTTER, end = STATS_GUTTER, top = 12.dp, bottom = 8.dp)
+                )
+            }
             if (state.isLoading) {
                 loadingSkeleton(c)
             } else {
@@ -145,16 +196,28 @@ fun StatsContent(
 
                 when (lens) {
                     StatsLens.STRENGTH -> strengthLens(
-                        state, weightUnit, c, focusLift, focusNonce,
+                        state, weightUnit, c, focusLift, focusNonce, onOpenProfile,
                         onOpenLift = { id ->
                             focusLift = id; focusNonce++; lens = StatsLens.STRENGTH
-                            // Items above the lens content: "hero" (0), "lens" (1) -> "str-lifts" is 2.
-                            scope.launch { listState.animateScrollToItem(2) }
+                            // Items above the lens content: "title" (0), "hero" (1), "lens" (2) -> "str-lifts" is 3.
+                            scope.launch { listState.animateScrollToItem(3) }
                         }
                     )
-                    StatsLens.VOLUME -> volumeLens(state, weightUnit, c)
-                    StatsLens.EFFORT -> effortLens(state, c)
+                    StatsLens.VOLUME -> {
+                        volumeLens(state, weightUnit, c)
+                        effortLens(state, c)
+                    }
+                    StatsLens.BODY -> bodyLens(state, body, weightUnit, c, onConnectWatch, onOpenProfile)
                     StatsLens.DAYS -> daysLens(state, c, onDayTap = viewModel::openDay)
+                }
+                // History, notes and the weekly recap had no way in from Stats after its rebuild;
+                // they are the "look back" half of the app, so they sit at the foot of every lens.
+                item("more") {
+                    StatsCard(c, title = "Look back", index = 7) {
+                        MoreLink("Session history", "Every workout, searchable", onOpenHistory, c)
+                        MoreLink("Notes", "Search what you wrote on sets and sessions", onOpenNotes, c)
+                        MoreLink("Weekly recap", "Last week in one page", onOpenRecap, c)
+                    }
                 }
             }
             item("bottom-gap") { Spacer(Modifier.height(24.dp)) }
@@ -202,6 +265,7 @@ private fun LazyListScope.strengthLens(
     c: StatsColors,
     focusLift: String?,
     focusNonce: Int,
+    onLogBodyweight: () -> Unit,
     onOpenLift: (String) -> Unit
 ) {
     if (state.e1rmLifts.isEmpty()) {
@@ -211,7 +275,7 @@ private fun LazyListScope.strengthLens(
     item("str-lifts") {
         StatsCard(
             c, title = "Strength per lift",
-            caption = "Estimated 1RM, ranked. Tap a lift for its trend, PRs and curve.",
+            caption = "Estimated 1RM per lift and how fast it is climbing. Tap a lift for its trend, PRs and curve.",
             index = 2
         ) {
             E1rmComparisonList(state.e1rmLifts, state.recentPrs, state.strengthCurves, weightUnit, c, focusLift, focusNonce)
@@ -220,7 +284,7 @@ private fun LazyListScope.strengthLens(
     // Relative strength — each lift as a multiple of bodyweight.
     item("str-standards") {
         StatsCard(c, title = "Where you stand", caption = "Each lift as a multiple of bodyweight.", index = 3) {
-            StrengthStandardsContent(state.e1rmLifts, state.bodyweightPoints.lastOrNull()?.weightLb, state.userSex, c)
+            StrengthStandardsContent(state.e1rmLifts, state.bodyweightPoints.lastOrNull()?.weightLb, state.userSex, c, onLogBodyweight)
         }
     }
     // The hall of fame lives here — records ARE strength, and a tap expands that lift's row above.
@@ -294,13 +358,28 @@ private fun LazyListScope.volumeLens(state: StatsUiState, weightUnit: WeightUnit
 
 // ── Effort lens — how hard the work felt ────────────────────────────────────────
 private fun LazyListScope.effortLens(state: StatsUiState, c: StatsColors) {
-    if (state.rpeDistribution.isEmpty()) {
-        tabEmpty("effort-empty", "Rate a few sets (RPE) and your effort picture fills in here.", c)
-        return
-    }
+    // Inside the Volume lens now, so no empty hint of its own: the volume sections speak for the lens.
+    if (state.rpeDistribution.isEmpty()) return
     item("effort-rpe") {
-        StatsCard(c, title = "Effort (RPE)", caption = "Where your working sets actually land.", index = 2) {
+        StatsCard(c, title = "Effort (RPE)", caption = "Where your working sets actually land.", index = 5) {
             RpeHistogramContent(state.rpeDistribution, state.avgRpe, c)
         }
+    }
+}
+
+@Composable
+private fun MoreLink(title: String, sub: String, onClick: () -> Unit, c: StatsColors) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickableLabeled(title, onClick = onClick)
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = c.onBg)
+            Text(sub, style = MaterialTheme.typography.bodySmall, color = c.muted)
+        }
+        Text("→", style = MaterialTheme.typography.titleMedium, color = c.accent)
     }
 }

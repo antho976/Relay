@@ -10,6 +10,12 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- SeedHealthDataReceiver writes fake watch data on an emulator. Debug builds only. -->
+    <uses-permission android:name="android.permission.health.WRITE_SLEEP" />
+    <uses-permission android:name="android.permission.health.WRITE_RESTING_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.WRITE_HEART_RATE_VARIABILITY" />
+    <uses-permission android:name="android.permission.health.WRITE_STEPS" />
+
     <application>
         <activity
             android:name="com.forge.app.ui.recipes.RecipeGalleryActivity"
@@ -42,6 +48,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Sample training history for emulator reviews; see SeedSampleDataReceiver. -->
+        <receiver
+            android:name="com.forge.app.debug.SeedSampleDataReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.forge.app.debug.SEED" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name="com.forge.app.debug.SeedHealthDataReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.forge.app.debug.SEED_HEALTH" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

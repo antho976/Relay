@@ -73,6 +73,13 @@ internal fun MainList(
     ) {
         item("search") { SettingsSearchBar(searchQuery, "Search settings", onSearchChange) }
         if (searchQuery.isBlank()) {
+            // First, on its own: the watch is the one setting that changes what the rest of the app
+            // can show, and it sat third in a group named after the coach.
+            item("devices") {
+                SettingsGroup("Devices") {
+                    PageRow(SettingsPage.Recovery, state, onOpenPage)
+                }
+            }
             item("general") {
                 SettingsGroup("General") {
                     PageRow(SettingsPage.Appearance, state, onOpenPage)
@@ -94,7 +101,6 @@ internal fun MainList(
                     // Coach configuration only; the brief and its record live on the Coach tab.
                     // Freestyle has no plan to coach, so the row goes with the tab.
                     if (!state.freestyleMode) PageRow(SettingsPage.Coach, state, onOpenPage)
-                    PageRow(SettingsPage.Recovery, state, onOpenPage)
                     PageRow(SettingsPage.Vacation, state, onOpenPage)
                 }
             }
@@ -206,7 +212,8 @@ private fun searchRank(name: String, ql: String): Int {
 private fun pageSection(page: SettingsPage): String = when (page) {
     SettingsPage.Appearance, SettingsPage.Format, SettingsPage.Notifications, SettingsPage.Security -> "General"
     SettingsPage.Program, SettingsPage.Session, SettingsPage.ExercisePrefs, SettingsPage.CardioActivities -> "Training"
-    SettingsPage.Coach, SettingsPage.Recovery, SettingsPage.Vacation -> "Coach & recovery"
+    SettingsPage.Recovery -> "Devices"
+    SettingsPage.Coach, SettingsPage.Vacation -> "Coach & recovery"
     SettingsPage.Backup, SettingsPage.Storage -> "Data"
     SettingsPage.WhatsNew, SettingsPage.PrivacyPolicy, SettingsPage.About -> "About"
 }
@@ -306,7 +313,7 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
         if (s.galleryLockEnabled) add("gallery lock")
         if (s.privacyMode) add("privacy mode")
     }.joinToString(" · ").replaceFirstChar { it.uppercase() }.ifEmpty { "No lock set" }
-    SettingsPage.Recovery -> "Health Connect · sleep, weight, workouts"
+    SettingsPage.Recovery -> "Watch app · Health Connect · sleep, heart, steps"
     SettingsPage.ExercisePrefs -> when {
         s.liked.isEmpty() && s.disliked.isEmpty() -> "Prefer or hide any movement"
         else -> "${s.liked.size} preferred · ${s.disliked.size} hidden"

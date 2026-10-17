@@ -67,7 +67,7 @@ internal fun ColumnScope.StatsHeroContent(state: StatsUiState, weightUnit: Weigh
                 // What the arrows are measured against, said once in the header rather than
                 // repeated under every figure (Home's THIS WEEK carries its meta the same way).
                 if (anyDelta) {
-                    Text("VS LAST", style = MaterialTheme.typography.labelSmall, color = c.muted.copy(alpha = 0.65f))
+                    Text("VS LAST WEEK BY NOW", style = MaterialTheme.typography.labelSmall, color = c.muted.copy(alpha = 0.65f))
                 }
             }
             Spacer(Modifier.height(14.dp))
@@ -81,7 +81,8 @@ internal fun ColumnScope.StatsHeroContent(state: StatsUiState, weightUnit: Weigh
                     value = formatVolumeCompact(cur?.volumeLb ?: 0.0, weightUnit),
                     label = "Volume",
                     onBg = c.onBg, muted = c.muted, accent = c.accent,
-                    delta = volumeDelta
+                    delta = volumeDelta,
+                    deltaText = cmp?.takeIf { volumeDelta != null }?.let { formatVolumeCompact(kotlin.math.abs(it.volumeDelta), weightUnit, withUnit = false) }
                 )
                 EditorialFigure(
                     value = "${cur?.sessions ?: 0}",

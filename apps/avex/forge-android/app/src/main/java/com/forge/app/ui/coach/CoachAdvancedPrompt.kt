@@ -62,7 +62,10 @@ internal fun CoachAdvancedPrompt(
     onIgnore: () -> Unit,
     modifier: Modifier = Modifier,
     // Clears the page's top bar when it has one, so the offer never lands on the back arrow.
-    belowTopBar: Boolean = false
+    belowTopBar: Boolean = false,
+    // In the page's own flow instead of over it (2026-10-16). Floating, it sat on top of the
+    // account's first section, so THIS WEEK was hidden until the offer was answered.
+    inline: Boolean = false
 ) {
     // Held back a beat so the account's own entrance lands first and the offer reads as arriving
     // over it, the way a notification does, rather than as part of the page.
@@ -76,7 +79,7 @@ internal fun CoachAdvancedPrompt(
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
 
-    Box(modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+    Box(if (inline) modifier.fillMaxWidth() else modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         AnimatedVisibility(
             visible = visible && armed,
             enter = fadeIn(ForgeMotion.enterTween()) +
@@ -86,9 +89,9 @@ internal fun CoachAdvancedPrompt(
         ) {
             Column(
                 Modifier
-                    .statusBarsPadding()
+                    .then(if (inline) Modifier.padding(bottom = 12.dp) else Modifier.statusBarsPadding())
                     .padding(horizontal = 24.dp)
-                    .padding(top = if (belowTopBar) TOP_BAR_HEIGHT + 8.dp else 8.dp)
+                    .padding(top = if (inline) 0.dp else if (belowTopBar) TOP_BAR_HEIGHT + 8.dp else 8.dp)
                     .widthIn(max = 420.dp)
                     .fillMaxWidth()
                     .semantics {
@@ -104,12 +107,16 @@ internal fun CoachAdvancedPrompt(
                     .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
                     .padding(horizontal = 14.dp, vertical = 12.dp)
             ) {
-                Text(
-                    "COACH",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.65f)
-                )
-                Spacer(Modifier.height(4.dp))
+                // Floating over another screen it had to say whose offer it was; inline, the page's
+                // own title already does.
+                if (!inline) {
+                    Text(
+                        "COACH",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = muted.copy(alpha = 0.65f)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                }
                 Text(
                     "You can turn on advanced tracking",
                     style = MaterialTheme.typography.bodyMedium,

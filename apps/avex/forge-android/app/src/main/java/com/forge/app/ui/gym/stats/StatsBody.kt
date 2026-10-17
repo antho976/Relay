@@ -1,5 +1,7 @@
 package com.forge.app.ui.gym.stats
 
+import com.forge.app.ui.common.clickableLabeled
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -47,13 +49,17 @@ internal fun ColumnScope.StrengthStandardsContent(
     lifts: List<E1rmLift>,
     bodyweightLb: Double?,
     sex: String,
-    c: StatsColors
+    c: StatsColors,
+    onLogBodyweight: () -> Unit = {}
 ) {
     val bw = bodyweightLb ?: 0.0
     if (bw <= 0.0) {
         Text(
-            "Log your bodyweight to see where you stand.",
-            style = MaterialTheme.typography.bodySmall, color = c.muted, fontStyle = FontStyle.Italic
+            "Log your bodyweight to see where you stand →",
+            style = MaterialTheme.typography.bodyMedium, color = c.accent,
+            modifier = Modifier
+                .clickableLabeled("Open your profile to log your bodyweight", onClick = onLogBodyweight)
+                .padding(vertical = 8.dp)
         )
         return
     }

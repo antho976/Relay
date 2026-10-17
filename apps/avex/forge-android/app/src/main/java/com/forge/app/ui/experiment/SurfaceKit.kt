@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
+import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -354,20 +356,20 @@ private class SparklineGeometry {
  *
  * ## Where the colour goes
  *
- * A trained day is filled in `onBg` and carries a check; only TODAY is accent. That is deliberate and
+ * A trained day is filled in `onBg` and carries a check; only TODAY is accent, as a ring. That is deliberate and
  * it is the whole colour budget of this mark: four trained days in ember would be four competing
  * warm blobs under a warm CTA, and the accent would stop meaning anything (§5). One lit dot in a row
  * of seven says "you are here" at a glance and spends one unit of colour to do it.
  *
- * Works at zero — an untrained week is seven open cells with one lit today, which is a real
+ * Works at zero — an untrained week is seven open cells with today ringed, which is a real
  * reading, not an empty state (§12).
  *
  * ## Rest days (2026-09-28)
  *
  * With fixed training weekdays, an untrained day is one of two very different things: a rest day
  * the plan asked for, or a session that didn't happen. They used to draw the same open cell, so a
- * 4-day week always looked three-sevenths failed. A planned rest day now draws UNFILLED with a short
- * rest bar — present, so the week keeps its seven columns and its calendar shape, but visibly not a
+ * 4-day week always looked three-sevenths failed. A planned rest day now draws UNFILLED with a dashed
+ * outline and a moon (2026-10-16; it was a short bar, which read as skipped) — present, so the week keeps its seven columns and its calendar shape, but visibly not a
  * gap. The filled open cell keeps meaning "a training day, not done (yet)". All seven stay: hiding
  * rest days would make the strip a different width every week and the day letters stop lining up
  * with the calendar underneath the user's thumb.
@@ -421,27 +423,50 @@ fun WeekStrip(
                         // constraint and grows at 200% (§14). 34dp, up from 26 — see above.
                         .sizeIn(minWidth = 34.dp, minHeight = 34.dp)
                         .clip(CellShape)
+                        // Today is a RING, never a fill (2026-10-16). A solid accent cell for an
+                        // untrained today was the loudest thing in the row and read as "done", the
+                        // opposite of what it meant. The ring says "you are here" on any cell.
                         .background(
                             when {
                                 done -> onBg
-                                // Today stays lit on a rest day too: "you are here" outranks "rest".
-                                isToday && !isRest -> accent
                                 isRest -> Color.Transparent
                                 else -> openFill
                             }
                         )
-                        // A trained TODAY is filled like any other trained day, so the accent ring
-                        // around it is what still says "you are here".
                         .then(
-                            if ((done || isRest) && isToday) Modifier.border(2.dp, accent, CellShape) else Modifier
+                            when {
+                                isToday -> Modifier.border(2.dp, accent, CellShape)
+                                // A rest day is still a day of the plan: the same cell, outlined in
+                                // dashes instead of filled. The old lone dash under no cell read as
+                                // "skipped", the opposite of a rest the plan asked for.
+                                isRest -> Modifier.drawBehind {
+                                    val inset = 1.dp.toPx()
+                                    drawRoundRect(
+                                        color = muted.copy(alpha = 0.6f),
+                                        topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
+                                        size = androidx.compose.ui.geometry.Size(size.width - 2 * inset, size.height - 2 * inset),
+                                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(12.dp.toPx()),
+                                        style = Stroke(
+                                            width = 1.5.dp.toPx(),
+                                            pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx()))
+                                        )
+                                    )
+                                }
+                                else -> Modifier
+                            }
                         ),
                     contentAlignment = Alignment.Center
                 ) {
                     if (done) {
                         Text("✓", style = MaterialTheme.typography.titleSmall, color = bg, maxLines = 1)
                     } else if (isRest) {
-                        // The rest mark: a short bar, the glyph for "nothing planned here".
-                        Box(Modifier.size(width = 12.dp, height = 3.dp).clip(CircleShape).background(muted))
+                        // A moon: rest, said as a picture rather than as an absence.
+                        Icon(
+                            androidx.compose.material.icons.Icons.Rounded.Bedtime,
+                            contentDescription = null,
+                            tint = muted,
+                            modifier = Modifier.size(16.dp)
+                        )
                     }
                 }
             }

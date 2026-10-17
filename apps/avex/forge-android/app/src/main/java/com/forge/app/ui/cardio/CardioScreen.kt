@@ -24,6 +24,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -70,9 +71,12 @@ fun CardioScreen(
     onOpenWeeks: () -> Unit = {},
     // Opens one week's own page — the hero's Mon–Sun strip, with this week's Monday.
     onOpenWeek: (Long) -> Unit = {},
+    // Settings → Watch & health data, from the connect row that stands in for the steps chart.
+    onConnectWatch: () -> Unit = {},
     viewModel: CardioViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val watchInviteDismissed by viewModel.watchInviteDismissed.collectAsStateWithLifecycle()
 
     // Re-check the Health Connect grants whenever the screen resumes — the user can connect steps/GPS
     // in Settings (or the HC app) and come back, and the placeholders should appear without a reload.
@@ -184,7 +188,10 @@ fun CardioScreen(
             seeAllExpands = onOpenHistory == null,
             onOpenGoals = onOpenGoals,
             onImportWatch = viewModel::importWatchWorkout,
-            onDismissImports = viewModel::dismissWatchImports
+            onDismissImports = viewModel::dismissWatchImports,
+            watchInvite = if (state.stepsConnected || watchInviteDismissed) null else {
+                { WatchInviteSection(onConnectWatch, viewModel::dismissWatchInvite) }
+            }
         ) }
     }
 }
@@ -219,7 +226,8 @@ private fun CardioListContent(
     seeAllExpands: Boolean,
     onOpenGoals: () -> Unit,
     onImportWatch: (com.forge.app.domain.health.WatchWorkout) -> Unit,
-    onDismissImports: () -> Unit
+    onDismissImports: () -> Unit,
+    watchInvite: (@Composable () -> Unit)? = null
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -239,6 +247,17 @@ private fun CardioListContent(
             modifier = Modifier.fillMaxSize().padding(inner),
             contentPadding = PaddingValues(bottom = 56.dp)
         ) {
+            // As a tab the page names itself, like Stats and Coach.
+            if (onBack == null) {
+                item("title") {
+                    Text(
+                        "Cardio",
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = onBg,
+                        modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 16.dp)
+                    )
+                }
+            }
             item("hero") {
                 Column(Modifier.statsEntrance(0)) {
                     CardioHero(
@@ -300,6 +319,7 @@ private fun CardioListContent(
                     seeAllExpands = seeAllExpands,
                     onImportWatch = onImportWatch,
                     onDismissImports = onDismissImports,
+                    watchInvite = watchInvite,
                     onBg = onBg, muted = muted, outline = outline, accent = accent
                 )
                 CardioLens.PROGRESS -> progressLens(
@@ -328,6 +348,7 @@ private fun LazyListScope.weekLens(
     seeAllExpands: Boolean,
     onImportWatch: (com.forge.app.domain.health.WatchWorkout) -> Unit,
     onDismissImports: () -> Unit,
+    watchInvite: (@Composable () -> Unit)?,
     onBg: Color,
     muted: Color,
     outline: Color,
@@ -423,6 +444,14 @@ private fun LazyListScope.weekLens(
 
     // STEPS — the hourly mark cardio owns (`design/MAP.md`), drawn for today. Replaced the hero's bare
     // `TODAY · N STEPS` text line: a data section leads with its mark, not a sentence (§12).
+    // Without a watch the steps slot invites one instead of staying empty: Cardio is where watch
+    // workouts and steps land, and the invite used to live only in the notification feed.
+    if (watchInvite != null && state.todayWearable?.hasData != true) {
+        item("watch-invite") {
+            Spacer(Modifier.height(SECTION_GAP))
+            watchInvite()
+        }
+    }
     if (state.todayWearable?.hasData == true || state.stepsConnected) {
         item("steps") {
             Spacer(Modifier.height(SECTION_GAP))
@@ -556,6 +585,23 @@ private fun SeeAllRow(
             label = if (less) "Show fewer sessions" else "View all sessions",
             onClick = onClick,
             arrow = !less
+        )
+    }
+}
+
+/** The connect row in the steps slot, with a quiet way to never see it again (Settings brings it back). */
+@Composable
+private fun WatchInviteSection(onConnect: () -> Unit, onDismiss: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+        com.forge.app.ui.common.ConnectWatchCard(onConnect)
+        Text(
+            "Not now",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .align(Alignment.End)
+                .clickableLabeled("Hide the watch prompt", onClick = onDismiss)
+                .padding(vertical = 10.dp, horizontal = 4.dp)
         )
     }
 }
