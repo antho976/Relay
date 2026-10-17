@@ -206,6 +206,25 @@ result!(#[schemars(rename = "SessionTranscriptOut")] TranscriptOut {
     pub found: bool,
 });
 op!(Transcript, "session.transcript", TranscriptIn => TranscriptOut, OpMeta::query(Scope::Session, 3, "The agent's conversation as messages, read from the provider's own log, from a cursor"));
+payload!(#[schemars(rename = "SessionUploadIn")] UploadIn {
+    pub session: String,
+    /// A PNG, JPEG, GIF or WebP picture, base64 (at most 4 MiB decoded): a photo or a
+    /// screenshot from the phone for the agent to look at.
+    pub bytes_b64: String,
+});
+result!(#[schemars(rename = "SessionUploadOut")] UploadOut {
+    /// Where it was written, from the session's checkout: `.relay/attachments/<name>`, which
+    /// git never sees. A message naming this path shows the agent the picture.
+    pub path: String,
+    /// The same, absolute.
+    pub absolute: String,
+    /// Its size in px.
+    pub w: u32,
+    pub h: u32,
+});
+op!(Upload, "session.upload", UploadIn => UploadOut,
+    OpMeta::mutation(Scope::Session, 3, "A picture for the agent, into its checkout's .relay/attachments (out of git); returns the path to name in a message")
+        .audit(Audit::AgentOnly).actors(Actors::UserOnly));
 result!(#[schemars(rename = "SessionRestorable")] Restorable { pub session: Session, pub reason: String, pub worktree_dirty: bool });
 result!(#[schemars(rename = "SessionRestorableOut")] RestorableOut { pub sessions: Vec<Restorable> });
 payload!(#[schemars(rename = "SessionRestorableIn")] RestorableIn {
@@ -303,6 +322,7 @@ entries!(
     Resize,
     Scrollback,
     Transcript,
+    Upload,
     RestorableList,
     DiscardRestorable,
     RepoAdd,

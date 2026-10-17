@@ -1,5 +1,8 @@
 package com.quietsoftware.relay.ui.dev
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -39,6 +42,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -58,6 +62,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
@@ -152,6 +157,26 @@ fun ChatScreen(name: String, nav: Nav) {
     fun type(next: String) {
         field = TextFieldValue(next, TextRange(next.length))
     }
+    // Pictures for the next message: each sent to the agent's checkout as soon as it is picked.
+    val context = LocalContext.current
+    val attached = remember(name) { mutableStateListOf<Attachment>() }
+    fun update(id: Long, change: (Attachment) -> Attachment) {
+        val i = attached.indexOfFirst { it.id == id }
+        if (i >= 0) attached[i] = change(attached[i])
+    }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_PICTURES)) { uris ->
+        for (uri in uris.take(MAX_PICTURES - attached.size)) {
+            val id = System.nanoTime()
+            attached += Attachment(id, null)
+            scope.launch {
+                val shrunk = withContext(Dispatchers.IO) { shrink(context, uri) }
+                if (shrunk == null) return@launch update(id) { it.copy(failed = true) }
+                update(id) { it.copy(thumb = shrunk.second) }
+                val path = chat.upload(shrunk.first)
+                update(id) { if (path != null) it.copy(path = path) else it.copy(failed = true) }
+            }
+        }
+    }
 
     val ready = session?.attachable == true && s.online
     val working = session?.state == "running" || session?.state == "spawning"
@@ -177,7 +202,13 @@ fun ChatScreen(name: String, nav: Nav) {
 
     fun send() {
         val typed = text.trim()
-        if (typed.isEmpty()) {
+        if (attached.any { it.sending }) {
+            nav.shell.toast("A picture is still on its way to the PC")
+            return
+        }
+        val pictures = attached.toList()
+        val paths = pictures.mapNotNull { it.path }
+        if (typed.isEmpty() && paths.isEmpty()) {
             // Empty: Esc stops an agent mid-turn; otherwise (a menu up, a prompt) it is the Enter it waits for.
             val stop = working && !asking
             chat.key(if (stop) Keys.ESC else Keys.ENTER)
@@ -185,9 +216,11 @@ fun ChatScreen(name: String, nav: Nav) {
             return
         }
         type("")
+        attached.clear()
         scope.launch {
-            if (!chat.send(typed)) {
+            if (!chat.send(withAttachments(typed, paths))) {
                 if (field.text.isEmpty()) type(typed)
+                if (attached.isEmpty()) attached.addAll(pictures)
                 nav.shell.toast("Not sent: the PC did not take it")
             }
         }
@@ -239,7 +272,12 @@ fun ChatScreen(name: String, nav: Nav) {
                 },
                 focus,
                 ::send,
+                pictures = attached.isNotEmpty(),
+                above = { AttachmentStrip(attached) { id -> attached.removeAll { it.id == id } } },
             ) {
+                Chip("", "Attach a photo or a screenshot", ready && attached.size < MAX_PICTURES, glyph = "file-image") {
+                    picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }
                 Chip("/", "The agent's commands", ready) {
                     if (text.isBlank()) type("/")
                     focus.requestFocus()
@@ -557,11 +595,15 @@ private fun CopyKey(text: String) {
 @Composable
 private fun UserBubble(text: String, sending: Boolean, online: Boolean, modifier: Modifier) {
     val c = Relay.colors
+    val (words, pictures) = remember(text) { splitAttached(text) }
     Column(modifier, horizontalAlignment = Alignment.End) {
-        Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
+        if (pictures.isNotEmpty()) Row(Modifier.padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (p in pictures) AttachedPill(p)
+        }
+        if (words.isNotEmpty()) Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
             SelectionContainer {
                 Box(Modifier.clip(Radii.card).background(c.wash).padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    T(text, style = Relay.type.body, color = c.ink)
+                    T(words, style = Relay.type.body, color = c.ink)
                 }
             }
         }
@@ -972,6 +1014,8 @@ private fun ChatComposer(
     placeholder: String,
     focus: FocusRequester,
     onSend: () -> Unit,
+    pictures: Boolean = false,
+    above: @Composable () -> Unit = {},
     chips: @Composable RowScope.() -> Unit,
 ) {
     val c = Relay.colors
@@ -985,6 +1029,7 @@ private fun ChatComposer(
                 .border(1.dp, if (focused) c.lineFocus else c.strong, Radii.card)
                 .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 4.dp),
         ) {
+            if (pictures) above()
             BasicTextField(
                 value = field,
                 onValueChange = onText,
@@ -1005,11 +1050,12 @@ private fun ChatComposer(
             )
             Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), content = chips)
-                val stop = working && text.isBlank()
+                val empty = text.isBlank() && !pictures
+                val stop = working && empty
                 Box(
                     Modifier.size(TOUCH).clip(Radii.key)
-                        .clickable(enabled = enabled, onClickLabel = if (stop) "Stop" else if (text.isBlank()) "Enter" else "Send", role = Role.Button) {
-                            if (text.isNotBlank()) haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                        .clickable(enabled = enabled, onClickLabel = if (stop) "Stop" else if (empty) "Enter" else "Send", role = Role.Button) {
+                            if (!empty) haptic.performHapticFeedback(HapticFeedbackType.Confirm)
                             onSend()
                         },
                     contentAlignment = Alignment.Center,
@@ -1018,7 +1064,7 @@ private fun ChatComposer(
                         val tint = if (enabled) c.wall else c.ink3
                         when {
                             stop -> Glyph("stop", 15.dp, tint)
-                            text.isBlank() -> ReturnGlyph(17.dp, tint)
+                            empty -> ReturnGlyph(17.dp, tint)
                             else -> Glyph("arrow-up", 16.dp, tint)
                         }
                     }
@@ -1042,12 +1088,12 @@ private fun Chip(label: String, spoken: String, enabled: Boolean, glyph: String?
     ) {
         Row(
             Modifier.alpha(if (enabled) 1f else .45f).heightIn(min = 30.dp).clip(Radii.pill).background(c.slab).border(1.dp, c.strong, Radii.pill)
-                .padding(start = if (glyph != null) 8.dp else 10.dp, end = if (trailing != null) 8.dp else 10.dp),
+                .padding(start = if (glyph != null) 8.dp else 10.dp, end = if (trailing != null || label.isEmpty()) 8.dp else 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-            glyph?.let { Glyph(it, 13.dp, c.ink3) }
-            T(label, style = Relay.type.caption, color = c.ink2, maxLines = 1, weight = FontWeight.Medium)
+            glyph?.let { Glyph(it, if (label.isEmpty()) 15.dp else 13.dp, if (label.isEmpty()) c.ink2 else c.ink3) }
+            if (label.isNotEmpty()) T(label, style = Relay.type.caption, color = c.ink2, maxLines = 1, weight = FontWeight.Medium)
             trailing?.let { Glyph(it, 11.dp, c.ink3) }
         }
     }
@@ -1070,6 +1116,9 @@ internal fun modeOf(screen: String): String? {
 }
 
 private const val MODE_TAIL = 4
+
+/** Pictures one message may carry. */
+private const val MAX_PICTURES = 4
 
 // ---- The agent's commands ----
 

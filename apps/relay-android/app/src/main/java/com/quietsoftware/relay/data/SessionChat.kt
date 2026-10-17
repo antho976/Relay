@@ -114,9 +114,13 @@ class SessionChat(private val relay: Relay, val name: String, private val scope:
         _messages.value = merged.takeLast(KEEP)
         // A sent message the log now has, or one long overdue, stops waiting.
         val now = System.currentTimeMillis()
-        val said = merged.filter { it.role == "user" }.map { it.text.trim() }.toSet()
-        _sending.update { list -> list.filter { it.text.trim() !in said && now - (Instant.parse(it.createdAt).toEpochMilli()) < SENDING_MS } }
+        val said = merged.filter { it.role == "user" }.map { gist(it.text) }.toSet()
+        _sending.update { list -> list.filter { gist(it.text) !in said && now - (Instant.parse(it.createdAt).toEpochMilli()) < SENDING_MS } }
     }
+
+    /** A message as typed, whichever way its provider logged the pictures it named (a path, or `[Image #1]`). */
+    private fun gist(text: String): String =
+        text.lines().filterNot { ATTACHED_LINE in it }.joinToString("\n").replace(IMAGE_TAG, "").trim()
 
     /** Keep the conversation for when the PC is away: the newest part, as the first read's answer. */
     fun save() {
@@ -166,6 +170,17 @@ class SessionChat(private val relay: Relay, val name: String, private val scope:
 
     private fun input(data: String) = buildJsonObject { put("session", name); put("data", data) }
 
+    /** A picture for the agent, into its checkout (`session.upload`): the absolute path a message names, or null when the PC would not take it. */
+    suspend fun upload(picture: ByteArray): String? = try {
+        val payload = buildJsonObject {
+            put("session", name)
+            put("bytes_b64", android.util.Base64.encodeToString(picture, android.util.Base64.NO_WRAP))
+        }
+        ((relay.call("session.upload", payload) as? JsonObject)?.get("absolute") as? JsonPrimitive)?.content
+    } catch (e: BusException) {
+        null
+    }
+
     companion object {
         const val OP = "session.transcript"
         const val LIMIT = 300
@@ -176,5 +191,7 @@ class SessionChat(private val relay: Relay, val name: String, private val scope:
         private const val SENDING_MS = 60_000L
         private const val PASTE_START = "\u001b[200~"
         private const val PASTE_END = "\u001b[201~"
+        private const val ATTACHED_LINE = ".relay/attachments/"
+        private val IMAGE_TAG = Regex("""\[Image #\d+]""")
     }
 }

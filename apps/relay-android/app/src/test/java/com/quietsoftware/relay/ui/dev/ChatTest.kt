@@ -172,4 +172,16 @@ class ChatTest {
         // A name holding the word beats a description that does.
         assertEquals(listOf("context", "clear"), matchCommands(all, "context").map { it.first })
     }
+
+    @Test
+    fun picturesGoAsPathsAndComeBackAsPills() {
+        val path = "/w/brisk-otter/.relay/attachments/phone-0123456789abcdef.jpg"
+        val sent = withAttachments("  what is wrong here?  ", listOf(path))
+        assertEquals("what is wrong here?\n\n$path", sent)
+        assertEquals("what is wrong here?" to listOf("phone-0123456789abcdef.jpg"), splitAttached(sent))
+        // A picture alone, and a message that only mentions the folder.
+        assertEquals(path, withAttachments("", listOf(path)))
+        assertEquals("" to listOf("phone-0123456789abcdef.jpg"), splitAttached(path))
+        assertEquals("see .relay/attachments/ for them" to emptyList<String>(), splitAttached("see .relay/attachments/ for them"))
+    }
 }
