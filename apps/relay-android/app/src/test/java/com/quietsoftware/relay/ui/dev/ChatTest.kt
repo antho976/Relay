@@ -160,4 +160,16 @@ class ChatTest {
         assertEquals(null, took(-5))
         assertEquals(null, took(13 * 3_600_000L))
     }
+
+    @Test
+    fun aSlashAndOneWordAsksForACommandNamesFirst() {
+        assertEquals("", commandAsked("/"))
+        assertEquals("com", commandAsked("/com"))
+        assertEquals(null, commandAsked("/compact keep the plan"))
+        assertEquals(null, commandAsked("fix /tmp"))
+        val all = listOf("compact" to "Summarise the conversation", "context" to "What fills it", "clear" to "Start over with nothing in context")
+        assertEquals(listOf("compact", "context", "clear"), matchCommands(all, "c").map { it.first })
+        // A name holding the word beats a description that does.
+        assertEquals(listOf("context", "clear"), matchCommands(all, "context").map { it.first })
+    }
 }

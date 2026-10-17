@@ -61,9 +61,11 @@ import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -72,6 +74,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quietsoftware.relay.core.model.ThreadMessage
 import com.quietsoftware.relay.core.term.Keys
 import com.quietsoftware.relay.data.SessionChat
+import com.quietsoftware.relay.data.Relay as RelayData
 import com.quietsoftware.relay.data.TerminalFeed
 import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.code.ADD_TEXT
@@ -101,12 +104,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.time.LocalDate
 
 /**
@@ -140,7 +146,12 @@ fun ChatScreen(name: String, nav: Nav) {
     var menu by remember { mutableStateOf(false) }
     var mailing by remember { mutableStateOf(false) }
     var peek by rememberSaveable(name) { mutableStateOf(false) }
-    var text by rememberSaveable(name) { mutableStateOf("") }
+    // A value, not a string: a picked command puts the cursor after itself.
+    var field by rememberSaveable(name, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
+    val text = field.text
+    fun type(next: String) {
+        field = TextFieldValue(next, TextRange(next.length))
+    }
 
     val ready = session?.attachable == true && s.online
     val working = session?.state == "running" || session?.state == "spawning"
@@ -173,10 +184,10 @@ fun ChatScreen(name: String, nav: Nav) {
             if (stop) nav.shell.toast("Asked ${session?.provider ?: "the agent"} to stop")
             return
         }
-        text = ""
+        type("")
         scope.launch {
             if (!chat.send(typed)) {
-                if (text.isEmpty()) text = typed
+                if (field.text.isEmpty()) type(typed)
                 nav.shell.toast("Not sent: the PC did not take it")
             }
         }
@@ -213,9 +224,11 @@ fun ChatScreen(name: String, nav: Nav) {
             }
             if (peek && ready) ScreenPanel(screen) { peek = false }
             if (s.prefs.chatKeys) QuickKeys(chat, ready)
+            val asked = commandAsked(text)
+            if (asked != null && ready) Commands(nav, session?.provider, session?.projectId, asked) { type("/$it ") }
             ChatComposer(
-                text,
-                { text = it },
+                field,
+                { field = it },
                 ready,
                 working && !asking,
                 placeholder = when {
@@ -227,6 +240,10 @@ fun ChatScreen(name: String, nav: Nav) {
                 focus,
                 ::send,
             ) {
+                Chip("/", "The agent's commands", ready) {
+                    if (text.isBlank()) type("/")
+                    focus.requestFocus()
+                }
                 Chip(mode ?: "Mode", "Shift Tab: the agent's next mode", ready, glyph = "shield") { chat.key(Keys.SHIFT_TAB) }
                 Chip("Esc", "Escape", ready) { chat.key(Keys.ESC) }
                 Chip("Keys", if (s.prefs.chatKeys) "Hide the extra keys" else "Show the extra keys", true, trailing = if (s.prefs.chatKeys) "chevron-down" else "chevron-up") {
@@ -948,8 +965,8 @@ private fun QuickKeys(chat: SessionChat, enabled: Boolean) {
  */
 @Composable
 private fun ChatComposer(
-    text: String,
-    onText: (String) -> Unit,
+    field: TextFieldValue,
+    onText: (TextFieldValue) -> Unit,
     enabled: Boolean,
     working: Boolean,
     placeholder: String,
@@ -961,6 +978,7 @@ private fun ChatComposer(
     val source = remember { MutableInteractionSource() }
     val focused by source.collectIsFocusedAsState()
     val haptic = LocalHapticFeedback.current
+    val text = field.text
     Column(Modifier.fillMaxWidth().background(c.wall).navigationBarsPadding().padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 8.dp)) {
         Column(
             Modifier.fillMaxWidth().clip(Radii.card).background(c.raised)
@@ -968,7 +986,7 @@ private fun ChatComposer(
                 .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 4.dp),
         ) {
             BasicTextField(
-                value = text,
+                value = field,
                 onValueChange = onText,
                 modifier = Modifier.fillMaxWidth().padding(end = 8.dp).heightIn(min = 24.dp).alpha(if (enabled) 1f else .6f)
                     .focusRequester(focus).focusProperties { canFocus = enabled },
@@ -1052,3 +1070,97 @@ internal fun modeOf(screen: String): String? {
 }
 
 private const val MODE_TAIL = 4
+
+// ---- The agent's commands ----
+
+/** Claude Code's slash commands a phone is likely to want, in words. */
+private val CLAUDE_COMMANDS = listOf(
+    "compact" to "Summarise the conversation to free its context",
+    "clear" to "Start over with an empty conversation",
+    "context" to "What fills the context window",
+    "model" to "Choose the model",
+    "review" to "Review a pull request",
+    "init" to "Write a CLAUDE.md for this project",
+    "memory" to "Edit what it remembers",
+    "rewind" to "Go back to an earlier point",
+    "resume" to "Pick up an earlier conversation",
+    "usage" to "Plan limits and what is left",
+    "cost" to "What this conversation has cost",
+    "status" to "Version, model and account",
+    "permissions" to "What it may do without asking",
+    "agents" to "Its subagents",
+    "mcp" to "MCP servers",
+    "todos" to "Its to-do list",
+    "export" to "Save the conversation to a file",
+    "help" to "Every command",
+)
+
+/** Codex's. */
+private val CODEX_COMMANDS = listOf(
+    "model" to "Choose the model and its effort",
+    "approvals" to "What it may do without asking",
+    "review" to "Review the changes",
+    "diff" to "Show what changed",
+    "compact" to "Summarise the conversation to free its context",
+    "new" to "Start a new conversation",
+    "init" to "Write an AGENTS.md for this project",
+    "mention" to "Mention a file",
+    "status" to "Model, approvals and token use",
+    "mcp" to "MCP tools",
+)
+
+/** What the person is typing after a leading slash, while it is still one word; null otherwise. */
+internal fun commandAsked(text: String): String? =
+    text.takeIf { it.startsWith("/") }?.drop(1)?.takeIf { rest -> rest.none { it.isWhitespace() } }
+
+/** [all] matching [asked]: names that start with it first, then names and words that hold it. */
+internal fun matchCommands(all: List<Pair<String, String>>, asked: String): List<Pair<String, String>> {
+    val q = asked.lowercase()
+    if (q.isEmpty()) return all
+    val starts = all.filter { it.first.lowercase().startsWith(q) }
+    val holds = all.filter { it !in starts && (q in it.first.lowercase() || q in it.second.lowercase()) }
+    return starts + holds
+}
+
+/**
+ * The agent's commands over the message box while the person types `/` and a word: its
+ * provider's own and, for Claude Code, the project's skills, narrowed as they type. A tap puts
+ * the command in the box to send, with room for what follows it.
+ */
+@Composable
+private fun Commands(nav: Nav, provider: String?, projectId: Long?, asked: String, onPick: (String) -> Unit) {
+    val c = Relay.colors
+    val claude = provider != "codex"
+    val payload = remember(projectId) { buildJsonObject { projectId?.let { put("project_id", it) }; put("enabled", true); put("summary", true) } }
+    val live by remember(payload, claude) { if (claude) nav.relay.live("skill.list", payload) else flowOf(RelayData.Live()) }.collectAsStateWithLifecycle(RelayData.Live())
+    val skills = remember(live.result) {
+        (live.result as? JsonObject)?.get("skills").let { it as? JsonArray }.orEmpty()
+            .mapNotNull { (it as? JsonObject)?.let { o -> o.str("name").takeIf(String::isNotBlank)?.let { n -> n to o.str("description").lineSequence().first() } } }
+    }
+    val own = remember(asked, claude) { matchCommands(if (claude) CLAUDE_COMMANDS else CODEX_COMMANDS, asked) }
+    val theirs = remember(asked, skills) { matchCommands(skills, asked) }
+    if (own.isEmpty() && theirs.isEmpty()) return
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 10.dp).padding(top = 6.dp).heightIn(max = 280.dp)
+            .clip(Radii.card).background(c.raised).border(1.dp, c.strong, Radii.card).verticalScroll(rememberScrollState()).padding(vertical = 6.dp),
+    ) {
+        for ((cmd, about) in own) CommandRow(cmd, about) { onPick(cmd) }
+        if (theirs.isNotEmpty()) {
+            T("Skills", Modifier.padding(start = 14.dp, top = 10.dp, bottom = 2.dp), Relay.type.caption, c.ink3)
+            for ((cmd, about) in theirs) CommandRow(cmd, about) { onPick(cmd) }
+        }
+    }
+}
+
+@Composable
+private fun CommandRow(cmd: String, about: String, onClick: () -> Unit) {
+    val c = Relay.colors
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = TOUCH).clickable(onClickLabel = "Use /$cmd", role = Role.Button, onClick = onClick).padding(horizontal = 14.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        T("/$cmd", style = Relay.type.mono, color = c.ink, maxLines = 1)
+        if (about.isNotBlank()) T(about, Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 1)
+    }
+}
