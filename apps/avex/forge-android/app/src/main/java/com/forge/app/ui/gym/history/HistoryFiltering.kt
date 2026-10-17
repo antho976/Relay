@@ -9,9 +9,20 @@ import com.forge.app.program.Program
 
 enum class SessionHistoryFilter { SHORT, LONG, HIGH_VOLUME }
 
-/** A session counts as "high volume" at/above this many lb. Shared by the filter predicate and the
- *  chip label (which converts it to the display unit) so the two can never drift apart. */
+/** A session counts as "high volume" at/above this many lb when there is too little history to
+ *  read the user's own heavy days from ([heavyThresholdLb]). */
 const val HIGH_VOLUME_LB = 3000.0
+
+/**
+ * Where "Heavy" starts for THIS user: the top quarter of their own sessions by volume, from four
+ * sessions on. A fixed 3,000 lb let nearly every real session through (4 × 10 × 135 is already
+ * 5,400), so the chip filtered nothing and in practice meant "gym only".
+ */
+internal fun heavyThresholdLb(workouts: List<Session>): Double {
+    val volumes = workouts.mapNotNull { it.totalVolumeLb }.filter { it > 0.0 }.sorted()
+    if (volumes.size < 4) return HIGH_VOLUME_LB
+    return volumes[(volumes.size * 3) / 4]
+}
 
 /** One entry in the unified history — either a finished gym workout or a logged cardio session. */
 sealed interface HistoryItem {
@@ -83,10 +94,12 @@ internal fun buildFilteredHistory(
     exerciseNamesBySession: Map<Long, List<String>>,
     filters: HistoryFilters,
     /** The user's own cardio activities, so search matches the name the row actually shows. */
-    customCardioTypes: List<CustomCardioType> = emptyList()
+    customCardioTypes: List<CustomCardioType> = emptyList(),
+    /** Where "Heavy" starts ([heavyThresholdLb]). */
+    heavyLb: Double = HIGH_VOLUME_LB
 ): List<HistoryItem> {
     val needle = filters.query.trim().lowercase()
-    val gym = workouts.filter { matchesWorkout(it, needle, filters, exerciseNamesBySession) }
+    val gym = workouts.filter { matchesWorkout(it, needle, filters, exerciseNamesBySession, heavyLb) }
         .map { HistoryItem.Workout(it) }
     val card = cardio.filter { matchesCardio(it, needle, filters, customCardioTypes) }
         .map { HistoryItem.Cardio(it) }
@@ -105,7 +118,8 @@ private fun matchesWorkout(
     s: Session,
     needle: String,
     f: HistoryFilters,
-    names: Map<Long, List<String>>
+    names: Map<Long, List<String>>,
+    heavyLb: Double
 ): Boolean {
     if (needle.isNotEmpty() && !workoutMatchesQuery(s, needle, names)) return false
     f.tag?.let { tag -> if (s.tags.split(",").none { it.trim().equals(tag, ignoreCase = true) }) return false }
@@ -121,7 +135,7 @@ private fun matchesWorkout(
         // >=, not >. HIGH_VOLUME_LB's own doc says "at/above this many lb", and the chip label is
         // rendered from the same constant — so a session at exactly 3,000 lb was excluded by the
         // filter that named it.
-        if (v == SessionHistoryFilter.HIGH_VOLUME && !(s.totalVolumeLb != null && s.totalVolumeLb >= HIGH_VOLUME_LB)) return false
+        if (v == SessionHistoryFilter.HIGH_VOLUME && !(s.totalVolumeLb != null && s.totalVolumeLb >= heavyLb)) return false
     }
     return true
 }
