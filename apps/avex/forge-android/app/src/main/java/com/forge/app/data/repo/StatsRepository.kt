@@ -427,7 +427,8 @@ class StatsRepository @Inject constructor(
                 totalReps = setDetails.sumOf { it.reps },
                 volumeLb = setDetails.sumOf { it.volumeLb },
                 e1rmLb = e1rm,
-                e1rmIsBest = e1rm != null && (priorBestE1rm == null || e1rm > priorBestE1rm + 1e-6),
+                // A best needs something to beat: a lift's first-ever session is not a best.
+                e1rmIsBest = e1rm != null && priorBestE1rm != null && e1rm > priorBestE1rm + 1e-6,
                 sets = setDetails
             )
         }

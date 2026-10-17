@@ -314,8 +314,13 @@ internal fun ExerciseDetailBody(
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                // "BEST" in words: a best used to only lift the reading from muted to onBg, which
+                // nobody could decode.
                 ex.e1rmLb?.let { e ->
-                    MetaReading("E1RM ${formatWeight(e, weightUnit).uppercase()}", if (ex.e1rmIsBest) onBg else muted)
+                    MetaReading(
+                        "E1RM ${formatWeight(e, weightUnit).uppercase()}" + if (ex.e1rmIsBest) " · BEST" else "",
+                        if (ex.e1rmIsBest) onBg else muted
+                    )
                 }
                 if (ex.isPr) MetaReading("↑ PR", accent)
                 ex.effort?.let { MetaReading(it.displayName.uppercase(), effortColor(it)) }
