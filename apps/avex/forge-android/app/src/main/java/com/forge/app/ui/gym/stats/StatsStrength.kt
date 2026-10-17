@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.domain.adapt.E1rm
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
+import com.forge.app.domain.units.fromDisplayWeight
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.gym.stats.components.LineChart
@@ -244,19 +245,13 @@ private fun LiftDetailBody(
             modifier = Modifier.fillMaxWidth().height(STATS_CHART_H)
         )
         Spacer(Modifier.height(6.dp))
+        // The range ends through WeightFormatter: a hand-rolled "${'$'}{lo.roundToInt()} st" put 185 lb at
+        // "13 st" (the rule is "13 st 3 lb") and rounded kilos coarsely. The row above already
+        // carries the trend ("↑ 3% A MONTH", "FLAT LATELY"), so its "+3.1%/mo" and "stalling"
+        // repeats are gone from here (§4.3, one home).
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("${lo.roundToInt()} $unit", style = MaterialTheme.typography.labelSmall, color = c.muted)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                lift.monthlyPct?.let { pct ->
-                    Text(
-                        "%+.1f%%/mo".format(pct),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (pct >= 0) c.accent else c.muted
-                    )
-                }
-                if (lift.stalling) Text("stalling", style = MaterialTheme.typography.labelSmall, color = c.muted)
-            }
-            Text("${hi.roundToInt()} $unit", style = MaterialTheme.typography.labelSmall, color = c.muted)
+            Text(formatWeight(fromDisplayWeight(lo, weightUnit), weightUnit), style = MaterialTheme.typography.labelSmall, color = c.muted)
+            Text(formatWeight(fromDisplayWeight(hi, weightUnit), weightUnit), style = MaterialTheme.typography.labelSmall, color = c.muted)
         }
 
         // ── This lift's recent PRs ────────────────────────────────────────
@@ -317,7 +312,7 @@ private fun LiftCurveChart(curve: StrengthCurve, weightUnit: WeightUnit, c: Stat
     )
     Spacer(Modifier.height(4.dp))
     Text(
-        "every set · weight × reps · ● = projected 1-rep max (≈ ${e1.roundToInt()} $unit)",
+        "every set · weight × reps · ● = projected 1-rep max (≈ ${formatWeight(curve.e1rmLb, weightUnit)})",
         style = MaterialTheme.typography.labelSmall, color = c.muted
     )
 }
