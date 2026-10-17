@@ -26,6 +26,9 @@ import java.time.temporal.IsoFields
 import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.FormatStyle
 
 /** What a notice does when its row is tapped. [None] renders the row passive (DESIGN §2③). */
 sealed interface NoticeAction {
@@ -201,12 +204,13 @@ class NotificationFeed @Inject constructor(
      * then what's waiting on a decision, then what happened, then housekeeping, then the invite.
      */
     val notices: Flow<List<AppNotice>> = combine(
-        workoutRepo.observeActiveSession(),
+        // Paired with the day so "yesterday at 9:10 PM" re-reads at midnight, not on the next write.
+        combine(workoutRepo.observeActiveSession(), timeSignals.dayStarts()) { session, dayStart -> session to dayStart },
         coachBrief,
         settings.unreadMilestones,
         settings.systemNotices,
         settings.weightUnit,
-    ) { active, brief, milestones, systemNotices, weightUnit ->
+    ) { (active, dayStartMs), brief, milestones, systemNotices, weightUnit ->
         buildList {
             // A session whose day was dropped by a program regenerate can't be resumed — the same
             // guard Home's CTA uses, so the feed never offers a day that no longer exists.
@@ -218,7 +222,7 @@ class NotificationFeed @Inject constructor(
                         glyph = NoticeGlyph.SESSION,
                         eyebrow = "IN PROGRESS",
                         title = Program.days.firstOrNull { it.key == dayKey }?.defaultName ?: "Workout",
-                        detail = "Picks up where you stopped.",
+                        detail = "${sessionStartedLine(active.startedAt, dayStartMs)} Picks up where you stopped.",
                         action = NoticeAction.ResumeSession(dayKey),
                         // Ends by being finished or abandoned, not by being swept out of a list.
                         dismissible = false,
@@ -453,6 +457,27 @@ class NotificationFeed @Inject constructor(
                 n.kind != NoticeKind.ACADEMY -> 0
                 n.id.startsWith(PREFIX_LESSON_GROUP) -> n.id.removePrefix(PREFIX_LESSON_GROUP).split(',').count { it.isNotBlank() }
                 else -> 1
+            }
+        }
+
+        /**
+         * When an unfinished workout began: "Started at 8:41 PM.", "Started yesterday at 11:20 PM."
+         * or, older than that, "Started Mon at 7:05 AM.". The row used to say only that it picks up
+         * where you stopped, which left last night's open session reading like this morning's.
+         */
+        internal fun sessionStartedLine(
+            startedAtMs: Long,
+            dayStartMs: Long,
+            zone: ZoneId = ZoneId.systemDefault(),
+            locale: Locale = Locale.getDefault()
+        ): String {
+            val started = Instant.ofEpochMilli(startedAtMs).atZone(zone)
+            val today = Instant.ofEpochMilli(dayStartMs).atZone(zone).toLocalDate()
+            val time = started.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(locale))
+            return when (started.toLocalDate()) {
+                today -> "Started at $time."
+                today.minusDays(1) -> "Started yesterday at $time."
+                else -> "Started ${started.format(DateTimeFormatter.ofPattern("EEE", locale))} at $time."
             }
         }
 
