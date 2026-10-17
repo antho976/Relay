@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -68,11 +69,13 @@ private fun MuscleSetBarRow(r: MuscleSetRow, maxTarget: Int, c: StatsColors) {
         Modifier.fillMaxWidth().padding(vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // Minimum widths, not fixed ones (§14): at large font scales a fixed 82dp wrapped
+        // "Hamstrings" and a fixed 48dp split "12/16" across two lines. The bar gives up the room.
         Text(
             r.muscle.displayName,
             style = MaterialTheme.typography.bodySmall,
             color = c.onBg,
-            modifier = Modifier.width(82.dp)
+            modifier = Modifier.widthIn(min = 82.dp).padding(end = 8.dp)
         )
         // Track = this muscle's target; fill = progress. A muscle with no planned target sizes its
         // track by the work actually done instead (fully filled — there's no plan to fall short of).
@@ -103,7 +106,7 @@ private fun MuscleSetBarRow(r: MuscleSetRow, maxTarget: Int, c: StatsColors) {
             style = MaterialTheme.typography.labelSmall,
             color = if (onPlan) c.accent else c.muted,
             textAlign = TextAlign.End,
-            modifier = Modifier.width(48.dp).padding(start = 8.dp)
+            modifier = Modifier.widthIn(min = 48.dp).padding(start = 8.dp)
         )
     }
 }
