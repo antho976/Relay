@@ -82,10 +82,14 @@ class WeeklyRecapWorker @AssistedInject constructor(
         // compares the latest pass to lastSeenCoachWeekId, so a brief the user has already opened never
         // re-pushes. It self-guards on freestyle/coach-off too; the outer gate just avoids the work.
         if (coachActive) {
-            runCatching { coachRepo.pendingBanner() }.getOrNull()?.let { banner ->
+            // Only a week that asks for or reports something pushes: "holding steady" every Monday
+            // of a layoff was a weekly push about nothing (the feed and Home still carry it). The
+            // body drops the "Coach · " prefix the title already says, as the feed does.
+            runCatching { coachRepo.pendingBanner() }.getOrNull()?.takeIf { it.actionable }?.let { banner ->
                 ForgeNotifications.ensureChannel(ctx, COACH_CHANNEL_ID, "Coach updates", "When your weekly coach brief is ready")
                 nm.notify(COACH_NOTIF_ID, ForgeNotifications.build(
-                    ctx, COACH_CHANNEL_ID, "Your coach has an update", banner.text
+                    ctx, COACH_CHANNEL_ID, "Coach brief",
+                    banner.text.removePrefix("Coach · ").replaceFirstChar { it.uppercase() }
                 ))
             }
         }

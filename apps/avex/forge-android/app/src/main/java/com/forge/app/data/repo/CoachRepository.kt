@@ -44,7 +44,15 @@ import javax.inject.Singleton
 import com.forge.app.program.Program
 
 /** The one-line "new report ready" banner shown on Overview until the brief is seen. */
-data class CoachBanner(val weekId: String, val text: String)
+data class CoachBanner(
+    val weekId: String,
+    val text: String,
+    /**
+     * The week asks for or reports something: a proposal, an applied change, or a failed pass. A
+     * "holding steady" or observations-only week is still a banner and a feed row, but not a push.
+     */
+    val actionable: Boolean = true
+)
 
 /** Everything the Week Brief screen renders: the pass, its decisions, and the review numbers. */
 data class CoachBrief(
@@ -1088,7 +1096,9 @@ class CoachRepository @Inject constructor(
             runCatching { adaptationRepository.snapshotCached().sessions.size }
                 .getOrDefault(AutoCoachPlanner.MIN_SESSIONS) < AutoCoachPlanner.MIN_SESSIONS
         ) return null
-        return CoachBanner(pass.weekId, summaryFor(pass))
+        val actionable = pass.status == STATUS_ERROR ||
+            coachDao.decisionsFor(pass.weekId).any { it.status == STATUS_PROPOSED || it.status == STATUS_APPLIED }
+        return CoachBanner(pass.weekId, summaryFor(pass), actionable)
     }
 
     /** Mark a week's brief as seen — clears the Overview banner (opened or dismissed). */
