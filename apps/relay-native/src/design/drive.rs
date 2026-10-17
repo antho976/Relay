@@ -124,6 +124,10 @@ fn next(b: Rc<Board>, steps: Vec<String>, at: usize) {
             pause = 400;
         }
         "undo" => b.undo(),
+        "undo-agent" => {
+            b.undo_agent();
+            pause = 600;
+        }
         "redo" => b.redo(),
         "zoom" => {
             if let Ok(z) = arg.parse() {

@@ -186,6 +186,10 @@ pub struct Board {
     pub(super) terminal: gtk::MenuButton,
     pub(super) terminal_label: gtk::Label,
     pub(super) status: gtk::Label,
+    /// Undo the last change an agent made, shown once one arrives.
+    agent_undo: gtk::Button,
+    /// Whose change that Undo reverts.
+    agent_last: RefCell<Option<String>>,
     pub(super) ask: gtk::Button,
     pub(super) zoom_label: gtk::Label,
     pub(super) tool_keys: RefCell<Vec<(Tool, gtk::ToggleButton)>>,
@@ -259,6 +263,11 @@ impl Board {
         status.set_xalign(1.0);
         status.set_ellipsize(pango::EllipsizeMode::Start);
         top.append(&status);
+        let agent_undo = gtk::Button::with_label("Undo");
+        agent_undo.add_css_class("design-agent-undo");
+        agent_undo.set_widget_name("design-agent-undo");
+        agent_undo.set_visible(false);
+        top.append(&agent_undo);
         let ask = gtk::Button::new();
         ask.add_css_class("design-ask");
         let ask_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -408,6 +417,8 @@ impl Board {
             terminal,
             terminal_label,
             status,
+            agent_undo,
+            agent_last: RefCell::default(),
             ask,
             zoom_label,
             tool_keys: RefCell::default(),
@@ -500,6 +511,12 @@ impl Board {
         board.ask.connect_clicked(move |key| {
             if let Some(b) = weak.upgrade() {
                 b.ask_agent(key.upcast_ref());
+            }
+        });
+        let weak = Rc::downgrade(&board);
+        board.agent_undo.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.undo_agent();
             }
         });
         let weak = Rc::downgrade(&board);
@@ -746,6 +763,9 @@ impl Board {
                     self.status.set_text(&format!("{by} edited it just now"));
                     self.status.add_css_class("design-status-agent");
                     self.start_flash(changed.clone());
+                    *self.agent_last.borrow_mut() = Some(by.clone());
+                    self.agent_undo.set_tooltip_text(Some(&format!("Undo {by}'s last change to this design")));
+                    self.agent_undo.set_visible(true);
                 }
                 if !self.doc.scene.borrow().node(&self.page.borrow()).is_some() {
                     let first = self.doc.scene.borrow().pages().first().cloned().unwrap_or_default();
@@ -1765,6 +1785,57 @@ impl Board {
                 a.set_enabled(on);
             }
         }
+    }
+
+    /// The newest change `agent` made to this design that is still standing: an audited
+    /// `design.apply` with its undo kept and not undone yet.
+    async fn agent_change(ui: &Rc<Ui>, design: i64, project: i64, agent: &str) -> Option<i64> {
+        let listed = ui
+            .call("audit.list", json!({"project_id": project, "actor": format!("agent:{agent}"), "op_prefix": "design.apply", "limit": 500}))
+            .await
+            .ok()?;
+        let mut rows = crate::app::rows(&listed, "rows");
+        rows.sort_by_key(|r| std::cmp::Reverse(r["id"].as_i64().unwrap_or(0)));
+        rows.into_iter()
+            .find(|r| {
+                r["kind"] == "ok"
+                    && r["undone_by"].is_null()
+                    && r["undo_op"]["payload"]["design_id"].as_i64() == Some(design)
+            })
+            .and_then(|r| r["id"].as_i64())
+    }
+
+    /// Revert the last change the agent named by the status made, through `audit.undo`: the
+    /// person's veto over what an agent drew. Each press undoes one more of its changes.
+    pub(super) fn undo_agent(&self) {
+        let (Some(ui), Some(agent)) = (self.ui.upgrade(), self.agent_last.borrow().clone()) else {
+            return;
+        };
+        let design = self.doc.id;
+        let project = self.doc.design.borrow().project_id;
+        let weak = self.me.clone();
+        glib::spawn_future_local(async move {
+            let Some(audit) = Self::agent_change(&ui, design, project, &agent).await else {
+                if let Some(b) = weak.upgrade() {
+                    b.agent_undo.set_visible(false);
+                    b.toast(&format!("Nothing of {agent}'s left to undo here"));
+                }
+                return;
+            };
+            let undone = ui.call("audit.undo", json!({"audit_id": audit})).await;
+            let more = Self::agent_change(&ui, design, project, &agent).await.is_some();
+            let Some(b) = weak.upgrade() else {
+                return;
+            };
+            match undone {
+                Ok(_) => {
+                    b.status.remove_css_class("design-status-agent");
+                    b.status.set_text(&format!("Undid {agent}'s change"));
+                    b.agent_undo.set_visible(more);
+                }
+                Err(e) => b.toast(&format!("Could not undo {agent}'s change: {e}")),
+            }
+        });
     }
 
     pub(super) fn undo(&self) {

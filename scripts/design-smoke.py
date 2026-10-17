@@ -242,8 +242,8 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                 e["RELAY_DESIGN_TRACE"] = "1"
                 e["RELAY_SMOKE_DESIGN_SCRIPT"] = "fit;wait:600;pan:6,0,240;zoom:1;wait:400;pan:-4,-2,240;fit;wait:400;select:a0;drag:200,30>900,330;wait:400;print"
             if shot == "agent":
-                e["RELAY_NATIVE_SMOKE_SECONDS"] = "12"
-                e["RELAY_SMOKE_DESIGN_SCRIPT"] = "select:cta;ask:make the button green;wait:3000;print"
+                e["RELAY_NATIVE_SMOKE_SECONDS"] = "15"
+                e["RELAY_SMOKE_DESIGN_SCRIPT"] = "select:cta;ask:make the button green;wait:3000;print;undo-agent;wait:1500;print"
             if shot == "script":
                 e["RELAY_NATIVE_SMOKE_SECONDS"] = "16"
                 e["RELAY_SMOKE_DESIGN_SCRIPT"] = ";".join([
@@ -298,11 +298,14 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                 scroll = call("session.scrollback", {"session": sname})["text"]
                 assert "[Relay design]" in scroll and "Selected: cta" in scroll and "Picture of it:" in scroll, scroll[-1500:]
                 assert "agent applied" in scroll, scroll[-1500:]
-                assert cta.get("fill") == "#2EC469", (cta, scroll[-800:])
-                assert got["design"]["updated_by"] == sname, got["design"]
+                # The board's Undo put the agent's change back, through the audit.
+                assert cta.get("fill") == "#151413", (cta, scroll[-800:])
+                assert got["design"]["updated_by"] == "user", got["design"]
                 scenes = [json.loads(l.split(" ", 1)[1]) for l in logtext.splitlines() if l.startswith("DESIGN_SCENE ")]
+                agent_saw = {n["id"]: n for n in scenes[-2]}
+                assert agent_saw["cta"].get("fill") == "#2EC469", "the board did not read the agent's change"
                 local = {n["id"]: n for n in scenes[-1]}
-                assert local["cta"].get("fill") == "#2EC469", "the board did not read the agent's change"
+                assert local["cta"].get("fill") == "#151413", "the board did not read the undo"
                 print("AGENT_OK", sname)
             if shot == "script":
                 logtext = (OUT / f"design-{shot}.log").read_text()

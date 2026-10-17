@@ -5,6 +5,10 @@ description: Draw and revise designs on Relay's design canvas with the design.* 
 
 # Relay design canvas
 
+**Act only when asked.** Every agent may call the `design.*` tools, but a design is the person's:
+start, change or delete one only when they asked for it (a task, a message, or an Ask from the
+board). They can undo any change you make from the board.
+
 A **design** belongs to a project (and usually to your terminal) and holds **pages**; a page holds
 **nodes**. You read with `design.get`, and change with `design.apply`: a list of edits run in order,
 all or none, which is also **one undo step** for the person. They watch your edits appear live in

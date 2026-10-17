@@ -1,6 +1,9 @@
 //! `design.*` — BUS.md §10.18. Design canvases: a project's designs, each optionally tied to a
 //! terminal, made and changed by the person on the canvas and by agents through these ops.
 //!
+//! Every agent role may call these (`relay_core::guardrail::OPEN_TO_EVERY_ROLE`): a design is
+//! the person's to ask for, and every change carries its undo. Agents act on one only when asked.
+//!
 //! A design is pages of nodes (`crate::design`). Every change goes through `design.apply`, a
 //! list of node edits run in order, all or none; it answers with the nodes as stored and the
 //! edits that undo it, so the canvas's undo and `audit.undo` revert exactly what was done.
@@ -49,7 +52,7 @@ payload!(#[schemars(rename = "DesignCreateIn")] CreateIn {
     pub session: Option<String>,
 });
 op!(Create, "design.create", CreateIn => GetOut,
-    OpMeta::mutation(Scope::Project, 12, "Start a design with one empty page; returns it and its page")
+    OpMeta::mutation(Scope::Project, 12, "Start a design with one empty page, only when the person asked for one; returns it and its page")
         .undo(Undo::Inverse).emits(&["design.changed"]));
 
 payload!(#[schemars(rename = "DesignUpdateIn")] UpdateIn {
@@ -59,7 +62,7 @@ payload!(#[schemars(rename = "DesignUpdateIn")] UpdateIn {
     #[serde(default, deserialize_with = "crate::nullable")] pub session: Option<Option<String>>,
 });
 op!(Update, "design.update", UpdateIn => Design,
-    OpMeta::mutation(Scope::Project, 12, "Rename a design or tie it to another terminal")
+    OpMeta::mutation(Scope::Project, 12, "Rename a design or tie it to another terminal, when the person asked")
         .undo(Undo::Inverse).emits(&["design.changed"]));
 
 payload!(#[schemars(rename = "DesignDuplicateIn")] DuplicateIn {
@@ -72,7 +75,7 @@ op!(Duplicate, "design.duplicate", DuplicateIn => Design,
         .undo(Undo::Inverse).emits(&["design.changed"]));
 
 op!(Delete, "design.delete", IdIn => Empty,
-    OpMeta::mutation(Scope::Project, 12, "Move a design to the project's deleted designs; design.restore brings it back")
+    OpMeta::mutation(Scope::Project, 12, "Move a design to the project's deleted designs, only when the person asked; design.restore brings it back")
         .undo(Undo::Inverse).emits(&["design.changed"]));
 op!(Restore, "design.restore", IdIn => Design,
     OpMeta::mutation(Scope::Project, 12, "Bring back a deleted design")
@@ -107,7 +110,7 @@ result!(#[schemars(rename = "DesignApplyOut")] ApplyOut {
     pub inverse: Vec<NodeOp>,
 });
 op!(Apply, "design.apply", ApplyIn => ApplyOut,
-    OpMeta::mutation(Scope::Project, 12, "Add, change, move or delete a design's nodes in one all-or-none list; returns what changed and its undo")
+    OpMeta::mutation(Scope::Project, 12, "Add, change, move or delete a design's nodes in one all-or-none list, only when the person asked for it; returns what changed and its undo")
         .undo(Undo::Inverse).emits(&["design.changed"]));
 
 payload!(#[schemars(rename = "DesignAssetAddIn")] AssetAddIn {

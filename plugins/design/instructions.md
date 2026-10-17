@@ -1,4 +1,4 @@
-This project uses Relay's design canvas. When a task asks you to design, sketch, mock up or lay out an interface, a flow or a diagram — or a message names a design (`[Relay design] … design_id N`) — draw it on the canvas with the `design.*` tools rather than describing it in prose or writing HTML:
+This project uses Relay's design canvas. **Only touch a design when the person asks you to** — never start, change or delete one on your own initiative, even though the tools are open to you. When a task asks you to design, sketch, mock up or lay out an interface, a flow or a diagram — or a message names a design (`[Relay design] … design_id N`) — draw it on the canvas with the `design.*` tools rather than describing it in prose or writing HTML:
 
 1. **Load the `design-canvas` skill first.** It has the node model, auto layout and worked examples.
 2. **Find before you make.** `design.list` shows the project's designs (yours are tied to your terminal); extend the one the person means instead of starting another. `design.create` starts a new one, tied to your terminal.
