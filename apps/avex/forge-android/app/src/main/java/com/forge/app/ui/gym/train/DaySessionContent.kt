@@ -106,10 +106,10 @@ internal fun DayContent(
     onEvent: (DayUiEvent) -> Unit,
     restTimer: State<RestTimerState?> = NoRestTimer
 ) {
+    // §12: loading draws nothing. The session comes from the local database in a frame or two, and
+    // a "Loading session…" line only flashed before the warm-up replaced it.
     if (state.isLoading) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Loading session…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        Box(Modifier.fillMaxSize())
         return
     }
 
