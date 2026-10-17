@@ -275,7 +275,7 @@ private fun LazyListScope.strengthLens(
     item("str-lifts") {
         StatsCard(
             c, title = "Strength per lift",
-            caption = "Estimated 1RM per lift and how fast it is climbing. Tap a lift for its trend, PRs and curve.",
+            caption = "Estimated 1RM per lift and how fast it is climbing.",
             index = 2
         ) {
             E1rmComparisonList(state.e1rmLifts, state.recentPrs, state.strengthCurves, weightUnit, c, focusLift, focusNonce)
@@ -290,7 +290,7 @@ private fun LazyListScope.strengthLens(
     // The hall of fame lives here — records ARE strength, and a tap expands that lift's row above.
     if (state.hallOfFame.isNotEmpty()) {
         item("str-records") {
-            StatsCard(c, title = "Records", caption = "Your heaviest set on each lift. Tap one for its trend.", index = 4) {
+            StatsCard(c, title = "Records", caption = "Your heaviest set on each lift.", index = 4) {
                 // Only lifts with a drill row (top e1RM lifts with 2+ sessions) can open one.
                 RecordsContent(
                     state.hallOfFame, weightUnit, c, onOpenLift,
@@ -315,7 +315,7 @@ private fun LazyListScope.daysLens(state: StatsUiState, c: StatsColors, onDayTap
     // The prettiest chart, deliberately last — viz-only nerd candy, not a decision gate.
     if (state.dailyActivity.size >= 5) {
         item("days-banister") {
-            StatsCard(c, title = "Fitness vs fatigue", caption = "Banister model · viz only.", index = 3) {
+            StatsCard(c, title = "Fitness vs fatigue", caption = "Fitness builds slowly, fatigue fades fast. Form is the gap.", index = 3) {
                 BanisterContent(state.dailyActivity, c)
             }
         }
