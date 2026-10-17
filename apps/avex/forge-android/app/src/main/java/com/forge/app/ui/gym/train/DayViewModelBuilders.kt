@@ -17,13 +17,6 @@ import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.weightInputValue
 
-/**
- * When true, fills the day screen with fabricated "last session" / "suggested next" /
- * sparkline data. Off by default — the UI shows real data only, with empty-state hints
- * (e.g. "first time", "Log a couple of sessions…") where there's nothing yet.
- */
-private const val DUMMY_TRAINING_DATA = false
-
 internal suspend fun DayViewModel.buildExerciseUi(
     plan: ExercisePlan,
     logged: LoggedExercise?,
@@ -161,22 +154,12 @@ internal suspend fun DayViewModel.buildExerciseUi(
             )
         }
 
-    // ── TEMP dummy fallbacks (gated by DUMMY_TRAINING_DATA) ───────────────────────
-    val displayPrior = if (DUMMY_TRAINING_DATA && prevSets.isEmpty()) {
-        List(plan.sets.coerceAtLeast(3)) { i ->
-            LoggedSet(
-                id = -(i + 1L), loggedExerciseId = -1L, setIndex = i,
-                weightText = "40", weightLb = 40.0, reps = 10 - i, completedAt = 0L, rpe = 8.0
-            )
-        }
-    } else prevSets
-
     // inputText is lb (or, on a PLATES exercise, a plate count). It seeds the weight FIELD, which
     // is labelled in the display unit — so an unconverted lb number invited a kg user to log
     // "Suggested next → 222.5" as 222.5 kg, i.e. 490 lb.
     val displaySuggested = suggestion?.let { s ->
         if (isPlates) s.inputText else weightInputValue(s.targetWeightLb, weightUnit)
-    } ?: if (DUMMY_TRAINING_DATA) "45" else null
+    }
     // Tier 3 — make the invisible weight calibration visible: append the SuggestionCalibrator's
     // StepMode to the suggestion reason, so it shows wherever the reason renders (card + input row).
     val stepModeNote = when (stepMode) {
@@ -185,24 +168,10 @@ internal suspend fun DayViewModel.buildExerciseUi(
         else -> null
     }
     val baseReason = suggestion?.reason
-        ?: if (DUMMY_TRAINING_DATA && displaySuggested != null) "matches set 1" else null
     val displayReason = if (displaySuggested != null)
         listOfNotNull(baseReason, stepModeNote).joinToString(" · ").ifBlank { null }
     else baseReason
 
-    val displayHistory = if (DUMMY_TRAINING_DATA && sessionHistory.isEmpty()) {
-        val now = System.currentTimeMillis()
-        val day = 24L * 60 * 60 * 1000
-        listOf(
-            ExerciseSessionPoint(now - 3 * day, 14, 320.0, 40.0),
-            ExerciseSessionPoint(now - 10 * day, 13, 300.0, 37.5),
-            ExerciseSessionPoint(now - 17 * day, 15, 290.0, 37.5),
-            ExerciseSessionPoint(now - 24 * day, 12, 270.0, 35.0),
-            ExerciseSessionPoint(now - 31 * day, 14, 260.0, 35.0),
-            ExerciseSessionPoint(now - 38 * day, 13, 240.0, 32.5)
-        )
-    } else sessionHistory
-    // ──────────────────────────────────────────────────────────────────────────────
 
     // A blank name is "no swap" (the effectiveUnit precedence above already reads it that way): a
     // customization row that only holds a rest override or pinned note, or a cleared swap, stores "".
@@ -237,14 +206,14 @@ internal suspend fun DayViewModel.buildExerciseUi(
         suggestedDeltaLb = suggestion?.deltaLb,
         suggestedTargetLb = suggestion?.targetWeightLb,
         suggestedReps = repSuggestion?.targetReps,
-        priorSets = displayPrior,
+        priorSets = prevSets,
         priorFrontier = priorFrontier,
         allTimePbLb = allTimePbLb,
         goalWeightLb = goalWeightLb,
         restTimerOverrideSeconds = persistent?.restTimerOverrideSeconds,
         pinnedNote = persistent?.pinnedNote ?: "",
         supersetGroup = logged?.supersetGroup,
-        sessionHistory = displayHistory,
+        sessionHistory = sessionHistory,
         bonusSets = bonusSets,
         finishedEarly = finishedEarly
     )
