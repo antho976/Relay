@@ -79,6 +79,7 @@ import com.forge.app.ui.common.rowShape
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.filterLibrary
 import com.forge.app.ui.theme.LocalForgeSettings
+import com.forge.app.ui.common.ForgeSearchRow
 
 /** Where the editor is in the add/edit flow. Editing an existing goal jumps straight to its form. */
 internal sealed interface EditorStep {
@@ -316,7 +317,7 @@ private fun ColumnScope.LiftPickerStep(
         filterLibrary(query, exclude).sortedBy { rank[it.id] ?: Int.MAX_VALUE }
     }
     val onBg = MaterialTheme.colorScheme.onBackground
-    GoalSearchRow(query, { query = it }, "Search exercises or muscles")
+    ForgeSearchRow(query, { query = it }, "Search exercises or muscles")
     Spacer(Modifier.height(16.dp))
     LazyColumn(
         Modifier.fillMaxWidth().weight(1f),

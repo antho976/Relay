@@ -26,7 +26,7 @@ import com.forge.app.ui.common.ForgeTopBar
 import com.forge.app.ui.common.GROUP_SEAM
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.ROW_H
-import com.forge.app.ui.gym.train.components.GymSearchRow
+import com.forge.app.ui.common.ForgeSearchRow
 import com.forge.app.ui.gym.train.components.groupMember
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -54,7 +54,7 @@ fun NotesSearchScreen(
                 modifier = Modifier.padding(horizontal = 24.dp)
             )
             Spacer(Modifier.height(16.dp))
-            GymSearchRow(
+            ForgeSearchRow(
                 query = state.query,
                 onQueryChange = viewModel::setQuery,
                 placeholder = "Search your notes",

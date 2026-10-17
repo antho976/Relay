@@ -64,7 +64,7 @@ import com.forge.app.ui.common.GROUP_SEAM
 import com.forge.app.ui.common.ROW_H
 import com.forge.app.ui.common.memberFill
 import com.forge.app.ui.common.memberShape
-import com.forge.app.ui.gym.train.components.GymSearchRow
+import com.forge.app.ui.common.ForgeSearchRow
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.bounceClick
@@ -267,7 +267,7 @@ fun ExerciseBrowserScreen(
                     }
                 }
                 item(span = full) {
-                    GymSearchRow(
+                    ForgeSearchRow(
                         query = query,
                         onQueryChange = { query = it },
                         placeholder = "Search exercises or muscles",

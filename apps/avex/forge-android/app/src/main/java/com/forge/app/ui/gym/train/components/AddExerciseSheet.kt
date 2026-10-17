@@ -33,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.forge.app.program.ExercisePlan
 import com.forge.app.program.Program
+import com.forge.app.ui.common.ForgeSearchRow
 
 /**
  * Full-catalog exercise picker shown during an active session (#61).
@@ -77,7 +78,7 @@ fun AddExerciseSheet(
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
             )
-            GymSearchRow(
+            ForgeSearchRow(
                 query = query,
                 onQueryChange = { query = it },
                 placeholder = "Search exercises",

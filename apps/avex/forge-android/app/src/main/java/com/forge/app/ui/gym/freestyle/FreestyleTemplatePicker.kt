@@ -37,7 +37,7 @@ import com.forge.app.ui.common.ForgeTopBar
 import com.forge.app.ui.common.GROUP_SEAM
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.ROW_H
-import com.forge.app.ui.gym.train.components.GymSearchRow
+import com.forge.app.ui.common.ForgeSearchRow
 import com.forge.app.ui.gym.train.components.groupMember
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.gym.history.formatHistoryDate
@@ -99,7 +99,7 @@ fun FreestyleTemplatePicker(
                             )
                         }
                         Spacer(Modifier.height(12.dp))
-                        GymSearchRow(query = query, onQueryChange = { query = it }, placeholder = "Search past workouts")
+                        ForgeSearchRow(query = query, onQueryChange = { query = it }, placeholder = "Search past workouts")
                     }
                 }
                 itemsIndexed(results, key = { _, it -> it.sessionId }) { i, t ->
