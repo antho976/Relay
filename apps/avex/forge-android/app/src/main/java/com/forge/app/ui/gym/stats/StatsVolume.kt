@@ -23,8 +23,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -217,7 +215,7 @@ internal fun ColumnScope.TonnageTrendContent(
                     drawRect(band, topLeft = Offset(left, 0f), size = Size(right - left, size.height))
                 }
             }
-            .clearAndSetSemantics { contentDescription = tonnageDescription(display, deloads.size, unit) }
+            .chartReadout(tonnageDescription(display, deloads.size, unit))
     )
     Spacer(Modifier.height(6.dp))
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

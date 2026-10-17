@@ -289,7 +289,15 @@ private fun LiftDetailBody(
             trendColor = c.muted,
             minValue = lo,
             maxValue = hi,
-            modifier = Modifier.fillMaxWidth().height(STATS_CHART_H)
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(STATS_CHART_H)
+                .chartReadout(
+                    "Estimated one-rep max over ${display.size} sessions, from " +
+                        "${formatWeight(fromDisplayWeight(lo, weightUnit), weightUnit)} to " +
+                        "${formatWeight(fromDisplayWeight(hi, weightUnit), weightUnit)}, latest " +
+                        "${formatWeight(fromDisplayWeight(display.last(), weightUnit), weightUnit)}."
+                )
         )
         Spacer(Modifier.height(6.dp))
         // The range ends through WeightFormatter: a hand-rolled "${'$'}{lo.roundToInt()} st" put 185 lb at
@@ -355,7 +363,13 @@ private fun LiftCurveChart(curve: StrengthCurve, weightUnit: WeightUnit, c: Stat
         minX = 1f, maxX = maxReps.toFloat(),
         minY = minY * 0.95f, maxY = maxY * 1.05f,
         highlightOverlayEnd = true,
-        modifier = Modifier.fillMaxWidth().height(STATS_CHART_H)
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(STATS_CHART_H)
+            .chartReadout(
+                "${curve.points.size} sets plotted by weight and reps, with the curve they fit. " +
+                    "Projected one-rep max about ${formatWeight(curve.e1rmLb, weightUnit)}."
+            )
     )
     Spacer(Modifier.height(4.dp))
     Text(

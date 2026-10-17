@@ -39,7 +39,13 @@ internal fun ColumnScope.RpeHistogramContent(buckets: List<RpeBucket>, avgRpe: D
     // The fixed height belongs to the bars, not the row: a 72dp row holding the bars AND their
     // labels clipped the labels at large font scales (§14). The labels take what they need below.
     Row(
-        Modifier.fillMaxWidth(),
+        Modifier
+            .fillMaxWidth()
+            .chartReadout(
+                "Sets by RPE: " + sorted.joinToString("; ") { b ->
+                    "${com.forge.app.ui.common.rpeLabel(b.rpe)}, ${b.count} ${if (b.count == 1) "set" else "sets"}"
+                } + "."
+            ),
         verticalAlignment = Alignment.Bottom,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
@@ -101,8 +107,12 @@ internal fun ColumnScope.BanisterContent(dailyActivity: List<DayLoad>, c: StatsC
         }
         Triple(fitness, fatigue, form)
     }
+    val formNow = series.third.lastOrNull() ?: 0f
     BanisterChart(series.first, series.second, series.third, c.accent, c.muted, c.onBg, c.outline.copy(alpha = 0.12f),
-        Modifier.fillMaxWidth().height(STATS_CHART_H))
+        Modifier.fillMaxWidth().height(STATS_CHART_H).chartReadout(
+            "Fitness and fatigue over the last 26 weeks. " +
+                if (formNow >= 0f) "Form is positive: fatigue sits below fitness." else "Form is negative: fatigue sits above fitness."
+        ))
     Spacer(Modifier.height(6.dp))
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
         LegendDot("Fitness", c.accent, c.muted)
