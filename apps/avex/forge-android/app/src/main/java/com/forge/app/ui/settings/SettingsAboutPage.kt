@@ -111,9 +111,12 @@ internal fun AboutPage(
         }
 
         SettingsGroup("Gestures & shortcuts") {
-            SettingsInfoRow("Long-press an exercise card", "Skip it, swap it, or set its rest timer")
-            SettingsInfoRow("Swipe a logged set left", "Delete that set")
+            SettingsInfoRow("Hold Start on Home", "Go straight to your first set, past the warm-up")
+            SettingsInfoRow("Long-press an exercise card", "Warm-up sets, plate math, a goal, swap or skip")
+            SettingsInfoRow("Tap the plan line under an exercise", "Use the coach's suggested weight")
+            SettingsInfoRow("Swipe a logged set left", "Delete that set, with an Undo")
             SettingsInfoRow("Long-press Log set", "Repeat your last set, same weight and reps")
+            SettingsInfoRow("Hold the rest timer bubble", "Add 30 seconds to the rest")
             SettingsInfoRow("Tap the session sparkline", "Open the exercise's full history chart")
             SettingsInfoRow("Long-press a day on the Gym list", "Change its color, re-roll it, or edit that day")
         }
