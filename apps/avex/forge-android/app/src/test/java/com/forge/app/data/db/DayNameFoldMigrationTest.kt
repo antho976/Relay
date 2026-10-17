@@ -20,7 +20,7 @@ class DayNameFoldMigrationTest {
 
     private fun day(id: String, name: String, position: Int) = sql.execSQL(
         "INSERT INTO program_day (id, position, name, word, accent_hex, archetype) VALUES (?, ?, ?, 'PUSH', '#FFFFFF', ?)",
-        arrayOf(id, position, name, id)
+        arrayOf<Any>(id, position, name, id)
     )
 
     private fun override(dayKey: String, name: String) =
