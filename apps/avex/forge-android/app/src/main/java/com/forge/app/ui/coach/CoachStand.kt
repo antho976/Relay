@@ -378,10 +378,9 @@ private fun FormingLiftsRow(forming: List<TrackedLift>, showGhost: Boolean, c: C
             Text(
                 if (forming.size == 1) forming.first().name
                 else "${forming.size} lifts building history",
+                // A lift's name is user content and wraps rather than clamping (§14).
                 style = MaterialTheme.typography.bodyMedium,
-                color = c.muted,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+                color = c.muted
             )
             Text(
                 "first read after two sessions",

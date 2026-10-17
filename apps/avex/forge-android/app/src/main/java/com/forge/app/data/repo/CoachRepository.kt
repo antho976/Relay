@@ -1030,13 +1030,19 @@ class CoachRepository @Inject constructor(
                 if (hrReadings > 0) "$hrReadings reading${if (hrReadings == 1) "" else "s"} via Health Connect" else "not connected", hrReadings > 0)
         )
 
+        // Plurals resolved here (§11 bans "set(s)"): these lines render as they are in Learned.
+        fun n(count: Int, one: String, many: String = one + "s") = "$count ${if (count == 1) one else many}"
         val learned = buildList {
             bias.volumeBias.forEach { (muscle, delta) ->
-                add(LearnedBias("${muscle.displayName} volume", "${if (delta > 0) "+" else ""}$delta set(s) carried forward"))
+                val detail = when {
+                    delta > 0 -> "${n(delta, "set")} more, carried forward"
+                    else -> "${n(-delta, "set")} fewer, carried forward"
+                }
+                add(LearnedBias("${muscle.displayName} volume", detail))
             }
-            if (bias.repBias.isNotEmpty()) add(LearnedBias("Rep ranges", "${bias.repBias.size} lift(s) re-ranged"))
-            if (bias.prefer.isNotEmpty()) add(LearnedBias("Preferred rotations", "${bias.prefer.size} swap(s) kept"))
-            if (bias.avoid.isNotEmpty()) add(LearnedBias("Avoided rotations", "${bias.avoid.size} swap(s) steered around"))
+            if (bias.repBias.isNotEmpty()) add(LearnedBias("Rep ranges", "${n(bias.repBias.size, "lift")} re-ranged"))
+            if (bias.prefer.isNotEmpty()) add(LearnedBias("Preferred rotations", "${n(bias.prefer.size, "swap")} kept"))
+            if (bias.avoid.isNotEmpty()) add(LearnedBias("Avoided rotations", "${n(bias.avoid.size, "swap")} steered around"))
         }
 
         val fatigue = DeloadAdvisor.fatigue(s, t)

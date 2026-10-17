@@ -176,7 +176,6 @@
 1 max-lines ui/gym/train/components/SetRow.kt maxLines=1
 2 max-lines ui/profile/ProfileHeader.kt maxLines=1
 1 max-lines ui/programbuilder/ProgramBuilderDayDetail.kt maxLines=1
-4 paren-plural data/repo/CoachRepository.kt (s)
 2 paren-plural domain/trophy/TrophyEvaluator.kt (s)
 1 paren-plural ui/coach/CoachUi.kt (s)
 3 paren-plural ui/gym/train/components/ExerciseCardComponents.kt (s)
