@@ -501,7 +501,12 @@ fun OnboardingScreen(
                         // Skipping never reaches the coach row, so the mode's own default stands.
                         coachEnabled = coachChoice ?: (effectiveMode == PLAN_GENERATED),
                         appLock = appLock, sessionMinutes = sessionMinutes,
-                        trainingWeekdays = weekdays.takeIf { fixedDays == true && it.isNotEmpty() }
+                        // Only a complete pick, as Next requires: one weekday per training day. A
+                        // partial set was zipped onto the day keys, and the day left over never
+                        // came up in weekday mode.
+                        trainingWeekdays = weekdays.takeIf {
+                            fixedDays == true && it.size == (daysPerWeek.takeIf { d -> d in 1..7 } ?: 4)
+                        }
                     )
                     onFinished(effectiveMode)
                 }) { Text("Skip anyway") }
