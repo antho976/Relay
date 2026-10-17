@@ -92,7 +92,7 @@ object OutcomeWatcher {
                 when {
                     skips >= SKIP_FAIL_COUNT -> WatchVerdict(
                         d.id, "failed",
-                        "${d.targetName} has been skipped $skips times since the change — it isn't landing"
+                        "${d.targetName} has been skipped $skips times since the change, so it isn't landing"
                     )
                     // An "ok" needs evidence: at least one non-skipped bout of the changed slot since
                     // the apply. An empty window used to fall through to ok, so a swap the athlete never
@@ -115,7 +115,7 @@ object OutcomeWatcher {
                 when {
                     skips >= SKIP_FAIL_COUNT -> WatchVerdict(
                         d.id, "failed",
-                        "${d.targetName} has been skipped $skips times since the change — it isn't landing"
+                        "${d.targetName} has been skipped $skips times since the change, so it isn't landing"
                     )
                     windowClosed -> {
                         // A rep-range shift is meant to break a stall — judge it on strength, not just
@@ -138,7 +138,7 @@ object OutcomeWatcher {
                             )
                             priorBest != null && sinceBest < priorBest * t.repShiftRegressFraction -> WatchVerdict(
                                 d.id, "failed",
-                                "${d.targetName}'s estimated 1RM slipped after the rep-range change — it didn't restart progress"
+                                "${d.targetName}'s estimated 1RM slipped after the rep-range change, so it didn't restart progress"
                             )
                             else -> WatchVerdict(d.id, "ok")
                         }
@@ -182,7 +182,7 @@ object OutcomeWatcher {
      */
     fun revertProposalsFor(
         failed: List<CoachDecision>,
-        reasonFor: (CoachDecision) -> String = { "${it.targetName} didn't land — undo the change" }
+        reasonFor: (CoachDecision) -> String = { "${it.targetName} didn't land, so undo the change" }
     ): List<ShadowDecision> =
         // Newest-first: when two decisions chained on one slot both failed, Apply All must revert the
         // NEWER one first (it owns the overlay), so the per-slot LIFO guard lets the chain unwind

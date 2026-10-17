@@ -254,7 +254,7 @@ object InsightEngine {
         }.maxByOrNull { it.second } ?: return null
         return insight(
             "skip.${worst.first}", "Often skipped",
-            "${worst.first} was skipped ${worst.second} of the last ${worst.third} times — swap it for something you'll actually do, or drop it."
+            "${worst.first} was skipped ${worst.second} of the last ${worst.third} times. Swap it for something you'll actually do, or drop it."
         )
     }
 
@@ -272,7 +272,7 @@ object InsightEngine {
         }.maxByOrNull { it.third } ?: return null
         return insight(
             "swap.${worst.first}", "Make the swap permanent?",
-            "You've swapped ${worst.first} (usually to ${worst.second}) in ${worst.third} of your last ${t.insightAdherenceWindow} sessions — set it as a persistent swap, or dislike the original."
+            "You've swapped ${worst.first} (usually to ${worst.second}) in ${worst.third} of your last ${t.insightAdherenceWindow} sessions. Make it a persistent swap, or dislike the original."
         )
     }
 
@@ -369,7 +369,7 @@ object InsightEngine {
         }.maxByOrNull { it.total } ?: return null
         return insight(
             "sweetspot.${best.name}", "Your strongest rep range",
-            "${best.name} hits its highest estimated 1RM at ${best.label} reps — that's your strength sweet spot."
+            "${best.name} hits its highest estimated 1RM at ${best.label} reps: that's your strength sweet spot."
         )
     }
 
@@ -419,7 +419,7 @@ object InsightEngine {
         return insight(
             "lagging.${laggard.second}", "A lift falling behind",
             "On ${muscle.displayName}: ${grower.second} is climbing (+${grower.third}%) but ${laggard.second} has stalled " +
-                "($lagSign${laggard.third}%) — give it some focus."
+                "($lagSign${laggard.third}%). Give it some focus."
         )
     }
 
@@ -462,8 +462,8 @@ object InsightEngine {
         val gap = if (strongerAm) amMean / pmMean - 1 else pmMean / amMean - 1
         if (!gap.isFinite() || gap * 100 < t.insightTimePerfPct) return null
         val pct = (gap * 100).roundToInt()
-        val tail = if (strongerAm) "earlier in the day — put the hard sessions in the morning."
-        else "later in the day — save the hard sessions for the afternoon."
+        val tail = if (strongerAm) "earlier in the day. Put the hard sessions in the morning."
+        else "later in the day. Save the hard sessions for the afternoon."
         return insight("timeofdayperf", "When you're strongest", "Your estimated 1RMs run ~$pct% higher when you train $tail")
     }
 
@@ -490,10 +490,10 @@ object InsightEngine {
         val splitSets = candidate.splitSets
         return if (candidate.gapPct > 0) insight(
             "volumeresponse.${muscle.code}", "Responds to volume",
-            "${muscle.displayName}: your higher-volume weeks (above ~$splitSets sets) added strength faster — it's responding to more volume, so there's room to push it."
+            "${muscle.displayName}: your higher-volume weeks (above ~$splitSets sets) added strength faster. It's responding to more volume, so there's room to push it."
         ) else insight(
             "volumeresponse.${muscle.code}", "Near its volume ceiling",
-            "${muscle.displayName}: past ~$splitSets sets/week your strength stopped moving — you may be near its volume ceiling, so extra sets aren't paying off."
+            "${muscle.displayName}: past ~$splitSets sets/week your strength stopped moving. You may be near its volume ceiling, so extra sets aren't paying off."
         )
     }
 
@@ -533,10 +533,10 @@ object InsightEngine {
         val pct = (gap * 100).roundToInt()
         return if (restedBetter) insight(
             "restresponse", "Your recovery window",
-            "You move ~$pct% more volume with ${t.insightRestSplitDays}+ days' rest before a session than with less — your body rewards the extra recovery."
+            "You move ~$pct% more volume with ${t.insightRestSplitDays}+ days' rest before a session than with less. Your body rewards the extra recovery."
         ) else insight(
             "restresponse", "Your recovery window",
-            "You actually move ~$pct% more volume training more often (under ${t.insightRestSplitDays} days' rest) than when you wait longer — you recover fast."
+            "You actually move ~$pct% more volume training more often (under ${t.insightRestSplitDays} days' rest) than when you wait longer. You recover fast."
         )
     }
 

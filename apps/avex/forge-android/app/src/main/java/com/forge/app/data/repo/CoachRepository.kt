@@ -280,7 +280,7 @@ class CoachRepository @Inject constructor(
         val pass = runCatching {
             if (VacationCalendar.onVacation(vacationDao.all())(today)) {
                 CoachPass(weekId, clock.nowMs(), STATUS_HOLD,
-                    "On vacation — the coach is paused until you're back. Enjoy it.")
+                    "On holiday. The coach is paused until you're back.")
             } else {
                 val snapshot = adaptationRepository.snapshot()
                 val inputs = assembleInputs(snapshot)
@@ -311,7 +311,7 @@ class CoachRepository @Inject constructor(
             if (e is kotlinx.coroutines.CancellationException) throw e
             // Fail loud: an errored pass is its own status, never a silent hold.
             CoachPass(weekId, clock.nowMs(), STATUS_ERROR,
-                "Couldn't evaluate this week (${e.message ?: e.javaClass.simpleName}) — no changes were considered.")
+                "Couldn't evaluate this week (${e.message ?: e.javaClass.simpleName}), so no changes were considered.")
         }
 
         // Atomic + idempotent (seam fix, finding 14): pass + decisions commit in ONE transaction, so

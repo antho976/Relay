@@ -182,7 +182,7 @@ object ProgressionAdvisor {
             hitTopOnAllTopSets && okToProgress && consolidate ->
                 sameWeightSuggestion(
                     exerciseId, exerciseName, prevMax, unit, plateLb, step, scale, scaleNote,
-                    reason = "calibrated to you — recent jumps haven't stuck, consolidate this weight first",
+                    reason = "calibrated to you: recent jumps haven't stuck, so consolidate this weight first",
                     scaledReason = "calibrated to you · recent jumps haven't stuck, so earn this load before the next jump"
                 )
             hitTopOnAllTopSets && okToProgress ->
@@ -196,7 +196,7 @@ object ProgressionAdvisor {
             range != null && !hitTopOnAllTopSets ->
                 sameWeightSuggestion(
                     exerciseId, exerciseName, prevMax, unit, plateLb, step, scale, scaleNote,
-                    reason = "keep this weight — reach ${range.max} reps on every set before adding load",
+                    reason = "keep this weight, and reach ${range.max} reps on every set before adding load",
                     scaledReason = "reach ${range.max} reps on every set before adding load"
                 )
             else -> null
@@ -292,7 +292,7 @@ object ProgressionAdvisor {
             exerciseName = exerciseName,
             fromReps = repsText,
             targetReps = target,
-            reason = "cleared every set — add a rep",
+            reason = "cleared every set, so add a rep",
             confidence = Confidence.MEDIUM
         )
     }
@@ -323,12 +323,12 @@ object ProgressionAdvisor {
                     if (heavier(capped, prevMax, step)) weightChange(
                         exerciseId, exerciseName, prevMax, capped,
                         inputText = trim(capped),
-                        reason = withNote("hit top of range — capped at your heaviest dumbbell", scaleNote)
+                        reason = withNote("hit top of range, capped at your heaviest dumbbell", scaleNote)
                     ) else weightChange(
                         // The user owns nothing heavier: anchor the weight, progress reps instead.
                         exerciseId, exerciseName, prevMax, prevMax,
                         inputText = trim(prevMax),
-                        reason = "at your heaviest dumbbell — add reps past the range instead"
+                        reason = "at your heaviest dumbbell, so add reps past the range instead"
                     )
                 }
                 else -> weightChange(
@@ -542,7 +542,7 @@ object ProgressionAdvisor {
                 exerciseId = slot.exerciseId,
                 exerciseName = slot.name,
                 candidateIds = slot.swapCandidateIds.take(t.swapCandidateCount),
-                reason = "No estimated-1RM gain on ${slot.name} in $stall sessions — a fresh variation can restart progress",
+                reason = "No estimated-1RM gain on ${slot.name} in $stall sessions. A fresh variation can restart progress",
                 confidence = confidence
             )
         }
@@ -557,7 +557,7 @@ object ProgressionAdvisor {
                 exerciseName = slot.name,
                 fromReps = slot.repsText,
                 toReps = to,
-                reason = "${slot.name} has stalled for $stall sessions — changing the rep range changes the stimulus",
+                reason = "${slot.name} has stalled for $stall sessions. Changing the rep range changes the stimulus",
                 confidence = confidence,
                 dayKey = dayKey
             )
@@ -588,7 +588,7 @@ object ProgressionAdvisor {
             weightChange(
                 slot.exerciseId, slot.name, prevMax, resetTarget,
                 inputText = inputTextFor(resetTarget, slot.unit, plateLb),
-                reason = "${slot.name} stalled $stall sessions at high effort — drop ~$dropPct% and build back up",
+                reason = "${slot.name} stalled $stall sessions at high effort. Drop ~$dropPct% and build back up",
                 confidence = confidence
             )
         } else {
@@ -604,12 +604,12 @@ object ProgressionAdvisor {
             if (!heavier(target, prevMax, step)) weightChange(
                 slot.exerciseId, slot.name, prevMax, prevMax,
                 inputText = inputTextFor(prevMax, slot.unit, plateLb),
-                reason = "${slot.name} hasn't gained in $stall sessions and you're at your heaviest dumbbell — add reps",
+                reason = "${slot.name} hasn't gained in $stall sessions and you're at your heaviest dumbbell, so add reps",
                 confidence = confidence
             ) else weightChange(
                 slot.exerciseId, slot.name, prevMax, target,
                 inputText = inputTextFor(target, slot.unit, plateLb),
-                reason = "${slot.name} hasn't gained in $stall sessions but effort has stayed low — push a small increase",
+                reason = "${slot.name} hasn't gained in $stall sessions but effort has stayed low, so push a small increase",
                 confidence = confidence
             )
         }

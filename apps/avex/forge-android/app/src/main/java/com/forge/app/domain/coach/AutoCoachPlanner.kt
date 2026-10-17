@@ -164,7 +164,7 @@ object AutoCoachPlanner {
                 listOf(
                     ShadowDecision(
                         type = "deload", targetKey = "week", targetName = "Whole week",
-                        summary = "Run a deload week — lighter volume across the board",
+                        summary = "Run a deload week: lighter volume across the board",
                         reason = deload.reason
                     )
                 )
@@ -301,7 +301,7 @@ object AutoCoachPlanner {
             out += ShadowDecision(
                 "volume_down", slot.exerciseId, slot.name,
                 "Drop a set from ${slot.name} (${slot.targetSets} → ${slot.targetSets - 1})",
-                "Skipped $skips of the last 4 times — a plan you'll actually finish beats a bigger one you won't.",
+                "Skipped $skips of the last 4 times. A plan you'll actually finish beats a bigger one you won't.",
                 dayKey = dayKey, payload = (slot.targetSets - 1).toString()
             )
         }
@@ -371,7 +371,7 @@ object AutoCoachPlanner {
                 out += ShadowDecision(
                     "volume_up", pick.slot.exerciseId, pick.slot.name,
                     "Add a set to ${pick.slot.name} (${pick.slot.targetSets} → ${pick.slot.targetSets + 1})",
-                    "${pick.muscle.displayName} is responding but is your slowest-climbing muscle right now — an " +
+                    "${pick.muscle.displayName} is responding but is your slowest-climbing muscle right now. An " +
                         "extra set puts the work on the lagging area while recovery is fresh and last week hit the target.",
                     dayKey = pick.dayKey, payload = (pick.slot.targetSets + 1).toString()
                 )

@@ -93,14 +93,8 @@
 1 divider ui/trophies/TrophiesComponents.kt Divider(
 1 divider ui/trophies/TrophiesScreen.kt Divider(
 1 em-dash data/importer/ImportModels.kt em dash in string
-2 em-dash data/repo/CoachRepository.kt em dash in string
 2 em-dash data/repo/PdfExportRepository.kt em dash in string
 20 em-dash data/repo/ProgramRepository.kt em dash in string
-10 em-dash domain/adapt/InsightEngine.kt em dash in string
-10 em-dash domain/adapt/ProgressionAdvisor.kt em dash in string
-3 em-dash domain/coach/AutoCoachPlanner.kt em dash in string
-1 em-dash domain/coach/GoalPortfolio.kt em dash in string
-4 em-dash domain/coach/OutcomeWatcher.kt em dash in string
 1 em-dash domain/engine/ZoneCoach.kt em dash in string
 53 em-dash program/ExerciseLibrary.kt em dash in string
 19 em-dash program/Program.kt em dash in string
