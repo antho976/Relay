@@ -503,17 +503,20 @@ class WorkoutRepository @Inject constructor(
     /** The session row, for callers that need its real start time / fields. */
     suspend fun session(sessionId: Long): Session? = sessionDao.get(sessionId)
 
-    /** Open a new active sitting for this session. */
-    suspend fun openSessionSegment(sessionId: Long, startedAt: Long) =
+    /** Open a new active sitting for this session; returns its id, for [touchSessionSegment]. */
+    suspend fun openSessionSegment(sessionId: Long, startedAt: Long): Long =
         sessionSegmentDao.insert(SessionSegment(sessionId = sessionId, startedAt = startedAt))
+
+    /** The workout screen's heartbeat for its open sitting (see [SessionSegment.lastSeenAt]). */
+    suspend fun touchSessionSegment(segmentId: Long, at: Long) = sessionSegmentDao.touch(segmentId, at)
 
     /** Close every open segment of a session at [endedAt] (explicit leave / finish). */
     suspend fun closeOpenSegments(sessionId: Long, endedAt: Long) =
         sessionSegmentDao.closeOpen(sessionId, endedAt)
 
     /**
-     * Close segments left open by process death (app killed mid-sitting): end each at the last
-     * logged-set activity within it, so the time the app was simply gone isn't counted.
+     * Close segments left open by process death (app killed mid-sitting), so the time the app was
+     * simply gone isn't counted. See [danglingSegmentEnd] for where each one ends.
      */
     suspend fun closeDanglingSegments(sessionId: Long) {
         val open = sessionSegmentDao.openForSession(sessionId)
@@ -521,7 +524,7 @@ class WorkoutRepository @Inject constructor(
         val sets = allSetsForSession(sessionId)
         open.forEach { seg ->
             val lastActivity = sets.filter { it.completedAt >= seg.startedAt }.maxOfOrNull { it.completedAt }
-            sessionSegmentDao.close(seg.id, lastActivity ?: seg.startedAt)
+            sessionSegmentDao.close(seg.id, danglingSegmentEnd(seg, lastActivity))
         }
     }
 
@@ -1026,3 +1029,18 @@ class WorkoutRepository @Inject constructor(
         )
     }
 }
+
+/**
+ * Where a sitting the process died in really ended: the later of its last logged set and its last
+ * heartbeat, never before it started. The heartbeat is trusted only [HEARTBEAT_TRUST_MS] past the
+ * last set (or the sitting's start): a workout screen left open on the bench overnight keeps beating,
+ * and that idle night is not training time.
+ */
+internal fun danglingSegmentEnd(seg: SessionSegment, lastActivityMs: Long?): Long {
+    val floor = maxOf(seg.startedAt, lastActivityMs ?: seg.startedAt)
+    val seen = seg.lastSeenAt ?: return floor
+    return maxOf(floor, minOf(seen, floor + HEARTBEAT_TRUST_MS))
+}
+
+/** How far past the last set a heartbeat may extend a killed sitting: a long rest, not a nap. */
+internal const val HEARTBEAT_TRUST_MS = 30 * 60_000L

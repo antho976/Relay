@@ -355,12 +355,19 @@ class MigrationTest {
     }
 
     @Test
-    fun migrateFullChain12To38_runsEveryStepInOrder() {
+    fun migrate38To39_addsTheSittingHeartbeat() {
+        helper.createDatabase(dbName, 38).close()
+        val db = helper.runMigrationsAndValidate(dbName, 39, true, MIGRATION_38_39)
+        db.query("SELECT last_seen_at FROM session_segment").use { assertEquals(0, it.count) }
+    }
+
+    @Test
+    fun migrateFullChain12To39_runsEveryStepInOrder() {
         // The pairwise tests above each validate one hop. This runs the WHOLE locked chain in a
         // single pass — a real v12 install upgrading straight to today's schema — so a gap or an
         // out-of-order/incompatible step between any two versions is caught, not just each hop alone.
         helper.createDatabase(dbName, 12).close()
-        helper.runMigrationsAndValidate(dbName, 38, true, *ALL_MIGRATIONS)
+        helper.runMigrationsAndValidate(dbName, 39, true, *ALL_MIGRATIONS)
     }
 
     @Test

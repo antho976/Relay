@@ -521,6 +521,13 @@ val MIGRATION_37_38 = object : Migration(37, 38) {
     }
 }
 
+/** The open sitting's heartbeat, so a process death mid-rest no longer drops the rest. */
+val MIGRATION_38_39 = object : Migration(38, 39) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `session_segment` ADD COLUMN `last_seen_at` INTEGER")
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
@@ -548,5 +555,6 @@ val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_34_35,
     MIGRATION_35_36,
     MIGRATION_36_37,
-    MIGRATION_37_38
+    MIGRATION_37_38,
+    MIGRATION_38_39
 )

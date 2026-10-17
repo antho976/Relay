@@ -120,4 +120,63 @@ class WorkoutSessionLifecycleTest {
         db.sessionDao().insert(Session(dayKey = "upper-a", startedAt = now))
         assertNull(repo.closeStaleSession())
     }
+
+    // ── A sitting the process died in (session_segment.last_seen_at) ──────────────────────────
+
+    @Test fun `a sitting killed mid-rest keeps the time up to its last heartbeat`() = runBlocking {
+        val repo = repo()
+        val startedAt = now
+        val session = db.sessionDao().insert(Session(dayKey = "upper-a", startedAt = startedAt))
+        val ex = repo.addExerciseToSession(session, "bench", 0)
+        val seg = repo.openSessionSegment(session, startedAt)
+        now = startedAt + 2 * 60_000
+        repo.logSet(ex, "100", 100.0, 5)
+        // Resting, screen open, then the process is killed: the last beat landed 3 min later.
+        repo.touchSessionSegment(seg, startedAt + 5 * 60_000)
+
+        now = startedAt + 40 * 60_000
+        repo.closeDanglingSegments(session)
+
+        // Five minutes banked, not the two up to the set the old rule stopped at.
+        assertEquals(5 * 60_000L, repo.closedSegmentMs(session))
+    }
+
+    @Test fun `a sitting killed during the warm-up keeps it`() = runBlocking {
+        val repo = repo()
+        val session = db.sessionDao().insert(Session(dayKey = "upper-a", startedAt = now))
+        val seg = repo.openSessionSegment(session, now)
+        repo.touchSessionSegment(seg, now + 8 * 60_000)
+
+        repo.closeDanglingSegments(session)
+
+        assertEquals(8 * 60_000L, repo.closedSegmentMs(session))
+    }
+
+    @Test fun `a screen left open overnight does not bank the night`() = runBlocking {
+        val repo = repo()
+        val startedAt = now
+        val session = db.sessionDao().insert(Session(dayKey = "upper-a", startedAt = startedAt))
+        val ex = repo.addExerciseToSession(session, "bench", 0)
+        val seg = repo.openSessionSegment(session, startedAt)
+        now = startedAt + 10 * 60_000
+        repo.logSet(ex, "100", 100.0, 5)
+        repo.touchSessionSegment(seg, startedAt + 9 * 60 * 60_000)
+
+        repo.closeDanglingSegments(session)
+
+        // The last set plus the heartbeat's trust window, not nine hours.
+        assertEquals(10 * 60_000L + HEARTBEAT_TRUST_MS, repo.closedSegmentMs(session))
+    }
+
+    @Test fun `a beat after the sitting was closed does not move it`() = runBlocking {
+        val repo = repo()
+        val session = db.sessionDao().insert(Session(dayKey = "upper-a", startedAt = now))
+        val seg = repo.openSessionSegment(session, now)
+        repo.closeOpenSegments(session, now + 60_000)
+        repo.touchSessionSegment(seg, now + 30 * 60_000)
+
+        repo.closeDanglingSegments(session)
+
+        assertEquals(60_000L, repo.closedSegmentMs(session))
+    }
 }
