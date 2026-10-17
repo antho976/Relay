@@ -498,6 +498,85 @@ impl Run<'_> {
         self.inverse.push(undo);
         Ok(Some(id))
     }
+
+    /// Node `id` as stored now, or as an edit of this list deleted it (its undo re-adds it).
+    fn stored(&self, id: &str) -> Result<Option<Node>, BusError> {
+        if let Some(row) = self.row(id)? {
+            return node_of(id.to_string(), row.parent, &row.body).map(Some);
+        }
+        Ok(self.inverse.iter().rev().flatten().find_map(|op| match op {
+            NodeOp::Add { node, .. } if node.id == id => Some(node.clone()),
+            _ => None,
+        }))
+    }
+
+    /// The page box of node `id` from the stored `x`/`y` up its parents (no auto layout).
+    fn stored_box(&self, id: &str) -> Result<Option<(f64, f64, f64, f64)>, BusError> {
+        let Some(node) = self.stored(id)? else { return Ok(None) };
+        let (w, h) = (node.w, node.h);
+        let (mut x, mut y, mut up) = (node.x, node.y, node.parent);
+        for _ in 0..MAX_NODES {
+            let Some(parent) = up else { return Ok(Some((x, y, w, h))) };
+            let Some(p) = self.stored(&parent)? else { return Ok(None) };
+            (x, y, up) = (x + p.x, y + p.y, p.parent);
+        }
+        Ok(None)
+    }
+
+    /// Connectors attached to a node this list deleted let go of that end, so no line names a
+    /// node that is gone. A line keeps its own points (where it was last drawn); one with none
+    /// is given its ends' stored centres. The undo attaches it again.
+    fn release_ends(&mut self) -> Result<(), BusError> {
+        if self.removed.is_empty() {
+            return Ok(());
+        }
+        let removed: HashSet<&str> = self.removed.iter().map(String::as_str).collect();
+        // The text test is loose (a text could hold the words); each body is read to be sure.
+        let attached: Vec<(String, Option<String>, String)> = self.tx
+            .prepare_cached("SELECT node_id, parent_id, body FROM design_nodes WHERE design_id = ?1
+                AND (instr(body, '\"from\":') > 0 OR instr(body, '\"to\":') > 0)").bus()?
+            .query_map([self.design], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).bus()?
+            .collect::<rusqlite::Result<_>>().bus()?;
+        let mut releases = Vec::new();
+        for (id, parent, body) in attached {
+            let node = node_of(id, parent, &body)?;
+            let mut set = Map::new();
+            for (field, end) in [("from", &node.from), ("to", &node.to)] {
+                if let Some(end) = end.as_deref().filter(|e| removed.contains(e)) {
+                    if self.meta(end)?.is_none() {
+                        set.insert(field.to_string(), Value::Null);
+                    }
+                }
+            }
+            if !set.is_empty() {
+                releases.push((node, set, body.len() as i64));
+            }
+        }
+        drop(removed);
+        for (node, mut set, old_len) in releases {
+            if node.points.as_ref().is_none_or(|p| p.len() < 2) {
+                let centre = |b: Option<(f64, f64, f64, f64)>| b.map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0));
+                let ends = match node.from.as_deref().zip(node.to.as_deref()) {
+                    Some((from, to)) => (self.stored_box(&node.id)?, centre(self.stored_box(from)?), centre(self.stored_box(to)?)),
+                    None => (None, None, None),
+                };
+                let points = match ends {
+                    (Some((ox, oy, _, _)), Some(a), Some(b)) => json!([[(a.0 - ox).round(), (a.1 - oy).round()], [(b.0 - ox).round(), (b.1 - oy).round()]]),
+                    _ => json!([[0.0, 0.0], [node.w, node.h]]),
+                };
+                set.insert("points".into(), points);
+            }
+            // A line that cannot be freed (none should fail) keeps its attachment.
+            let Ok(mut next) = node.patched(&set) else { continue };
+            let body = body_of(&mut next)?;
+            self.tx.prepare_cached("UPDATE design_nodes SET body = ?3 WHERE design_id = ?1 AND node_id = ?2").bus()?
+                .execute(params![self.design, next.id, body]).bus()?;
+            self.bytes += body.len() as i64 - old_len;
+            self.touch(&next.id);
+            self.inverse.push(vec![NodeOp::Update { id: next.id.clone(), set: node.before(&set) }]);
+        }
+        Ok(())
+    }
 }
 
 /// The node an asset name stands for, and its natural size: `design.asset.add`'s read phase,
@@ -724,8 +803,12 @@ pub fn register(e: &mut Engine) {
         Ok(Empty {})
     });
     e.register::<Apply>(|ctx: &mut Ctx, p| {
-        if p.ops.is_empty() || p.ops.len() > MAX_OPS {
-            return Err(BusError::invalid("design.ops", format!("give 1 to {MAX_OPS} edits; this list has {}", p.ops.len())));
+        // An undo re-adds every node a delete took, one edit each, so a lenient list (an undo or
+        // a redo) may hold a whole design's worth besides a list's.
+        let lenient = p.lenient.unwrap_or(false);
+        let most = if lenient { MAX_NODES + MAX_OPS } else { MAX_OPS };
+        if p.ops.is_empty() || p.ops.len() > most {
+            return Err(BusError::invalid("design.ops", format!("give 1 to {most} edits; this list has {}", p.ops.len())));
         }
         let design = live_design(ctx.tx(), p.design_id)?;
         assert_actor_project(ctx, design.project_id)?;
@@ -740,7 +823,7 @@ pub fn register(e: &mut Engine) {
         let mut run = Run {
             tx: ctx.tx(),
             design: design.id,
-            lenient: p.lenient.unwrap_or(false),
+            lenient,
             pages: design.pages,
             nodes: design.nodes,
             bytes,
@@ -763,6 +846,7 @@ pub fn register(e: &mut Engine) {
             };
             run.ids.push(id.unwrap_or_default());
         }
+        run.release_ends()?;
         if run.bytes > MAX_BYTES {
             return Err(BusError::invalid("design.too_large",
                 format!("the design would hold {} KiB of nodes; the limit is {} KiB", run.bytes >> 10, MAX_BYTES >> 10))

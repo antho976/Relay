@@ -859,7 +859,16 @@ impl Gallery {
             if let Ok(got) = got.map_err(|e| e.to_string()).and_then(|v| serde_json::from_value::<GetOut>(v).map_err(|e| e.to_string())) {
                 *g.painter.assets_dir.borrow_mut() = got.assets_dir.clone();
                 let rev = got.design.rev.max(rev);
-                if let Some(texture) = g.draw_thumb(Scene::new(got.nodes)) {
+                let scene = Scene::new(got.nodes);
+                // Pictures decode off the main thread: wait for them (a few seconds at most), or
+                // the thumbnail would keep their grey placeholders until the design changes.
+                for _ in 0..100 {
+                    if !g.painter.loading(&scene) {
+                        break;
+                    }
+                    glib::timeout_future(std::time::Duration::from_millis(50)).await;
+                }
+                if let Some(texture) = g.draw_thumb(scene) {
                     let path = thumb_path(id, rev);
                     let rt = ui.rt.clone();
                     let p = path.clone();

@@ -83,7 +83,11 @@ impl Board {
         }
         let all = |k: &[NodeKind]| nodes.iter().all(|n| k.contains(&n.kind));
         if all(&[NodeKind::Icon]) {
-            let colour = same(nodes.iter().map(|n| n.stroke.clone())).flatten();
+            // Automatic shows the colour it is drawn in.
+            let colour = {
+                let scene = b.doc.scene.borrow();
+                same(nodes.iter().map(|n| n.stroke.clone().unwrap_or_else(|| super::paint::text_color(&scene, n))))
+            };
             let weak = Rc::downgrade(&b);
             bar.append(&color_key(&b, colour.as_deref(), "Icon colour", true, move |c| {
                 if let Some(b) = weak.upgrade() {
@@ -272,10 +276,16 @@ impl Board {
         section.append(Some("Ungroup"), Some("design.ungroup"));
         menu.append_section(None, &section);
         let section = gtk::gio::Menu::new();
+        section.append(Some("Flip horizontally"), Some("design.flip-h"));
+        section.append(Some("Flip vertically"), Some("design.flip-v"));
+        section.append(Some("Copy style"), Some("design.copy-style"));
+        section.append(Some("Paste style"), Some("design.paste-style"));
+        menu.append_section(None, &section);
+        let section = gtk::gio::Menu::new();
         section.append(Some("Lock"), Some("design.lock"));
         section.append(Some("Hide"), Some("design.hide"));
-        section.append(Some("Export as PNG…"), Some("design.export"));
         menu.append_section(None, &section);
+        menu.append_section(None, &super::board::export_menu());
         more.set_menu_model(Some(&menu));
         bar.append(&more);
 

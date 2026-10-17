@@ -161,16 +161,28 @@ pub fn number(caption: &str, value: Option<f64>, tooltip: &str, commit: impl Fn(
     entry.set_text(&value.map(super::board::fmt).unwrap_or_default());
     entry.set_placeholder_text(Some("Mixed"));
     row.append(&entry);
-    let commit = Rc::new(commit);
+    // The value last sent (or shown): leaving the field sends only what was typed since,
+    // not the field's rounded text of a value it never changed.
+    let last = Rc::new(std::cell::Cell::new(value));
+    let commit: Rc<dyn Fn(f64)> = {
+        let last = last.clone();
+        Rc::new(move |v: f64| {
+            last.set(Some(v));
+            commit(v);
+        })
+    };
     let c = commit.clone();
+    let l = last.clone();
     entry.connect_activate(move |e| {
-        if let Some(v) = eval(&e.text()) {
+        let shown = l.get().map(super::board::fmt).unwrap_or_default();
+        if let Some(v) = eval(&e.text()).filter(|v| e.text() != shown && Some(*v) != l.get()) {
             c(v);
         }
     });
     let keys = gtk::EventControllerKey::new();
     let c = commit.clone();
     let e = entry.downgrade();
+    let l = last.clone();
     keys.connect_key_pressed(move |_, key, _, mods| {
         let step = if mods.contains(gdk::ModifierType::SHIFT_MASK) { 10.0 } else { 1.0 };
         let dir = match key {
@@ -181,7 +193,11 @@ pub fn number(caption: &str, value: Option<f64>, tooltip: &str, commit: impl Fn(
         let Some(e) = e.upgrade() else {
             return glib::Propagation::Proceed;
         };
-        let v = eval(&e.text()).unwrap_or(0.0) + dir * step;
+        // Mixed values have no one value to step from.
+        let Some(from) = eval(&e.text()).or(l.get()) else {
+            return glib::Propagation::Stop;
+        };
+        let v = from + dir * step;
         e.set_text(&super::board::fmt(v));
         c(v);
         glib::Propagation::Stop
@@ -190,36 +206,42 @@ pub fn number(caption: &str, value: Option<f64>, tooltip: &str, commit: impl Fn(
     let focus = gtk::EventControllerFocus::new();
     let c = commit.clone();
     let e = entry.downgrade();
-    let original = value;
+    let l = last.clone();
     focus.connect_leave(move |_| {
         if let Some(e) = e.upgrade() {
-            if let Some(v) = eval(&e.text()).filter(|v| Some(*v) != original) {
-                c(v);
+            let shown = l.get().map(super::board::fmt).unwrap_or_default();
+            if e.text() != shown {
+                if let Some(v) = eval(&e.text()).filter(|v| Some(*v) != l.get()) {
+                    c(v);
+                }
             }
         }
     });
     entry.add_controller(focus);
     let scrub = gtk::GestureDrag::new();
-    let start = Rc::new(std::cell::Cell::new(0.0));
+    let start = Rc::new(std::cell::Cell::new(None::<f64>));
     let s = start.clone();
     let e = entry.downgrade();
     scrub.connect_drag_begin(move |_, _, _| {
         if let Some(e) = e.upgrade() {
-            s.set(eval(&e.text()).unwrap_or(0.0));
+            s.set(eval(&e.text()));
         }
     });
     let e = entry.downgrade();
     let s = start.clone();
     scrub.connect_drag_update(move |g, dx, _| {
         let fine = g.current_event_state().contains(gdk::ModifierType::SHIFT_MASK);
-        let v = (s.get() + (dx * if fine { 0.1 } else { 1.0 })).round();
+        let Some(from) = s.get() else {
+            return;
+        };
+        let v = (from + (dx * if fine { 0.1 } else { 1.0 })).round();
         if let Some(e) = e.upgrade() {
             e.set_text(&super::board::fmt(v));
         }
     });
     let e = entry.downgrade();
     scrub.connect_drag_end(move |_, dx, _| {
-        if dx.abs() < 1.0 {
+        if dx.abs() < 1.0 || start.get().is_none() {
             return;
         }
         if let Some(v) = e.upgrade().and_then(|e| eval(&e.text())) {

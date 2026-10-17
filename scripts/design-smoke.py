@@ -9,7 +9,9 @@ Shots (default all): gallery, board, board-select, edit (layers and typing in pl
 fixture terminal, whose fake agent edits the layer; the open board must show it), media (a picture
 through design.asset.add, copy and paste), perf (a 1,721-node design: layout, content and frame
 times), shapes (polygons, icons, gradients, dashes, rotation, connectors and labels as an agent writes
-them, then the tools that make them). Needs target/debug/relay and target/debug/relay-native, and a display: run it inside a
+them, then the tools that make them), more (arcs, closed and smooth paths, flips, blends, inner
+shadows and text case as an agent writes them, then the vector pen, flip, copy and paste style
+and an SVG export). Needs target/debug/relay and target/debug/relay-native, and a display: run it inside a
 headless compositor (kwin_wayland --virtual), never on someone's desktop. Captures and logs go to
 .impeccable/review/design-*."""
 import json, os, socket, statistics, struct, subprocess, sys, tempfile, time, uuid, zlib
@@ -17,7 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / ".impeccable/review"; OUT.mkdir(parents=True, exist_ok=True)
-SHOTS = sys.argv[1:] or ["gallery", "board", "board-select", "edit", "script", "agent", "media", "shapes", "perf"]
+SHOTS = sys.argv[1:] or ["gallery", "board", "board-select", "edit", "script", "agent", "media", "shapes", "more", "perf"]
 FAKE_AGENT = r'''#!/usr/bin/env python3
 """A fixture provider: echoes input, and answers a [Relay design] prompt by turning the
 selected layer green through design.apply, as the session's own agent."""
@@ -203,6 +205,24 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                 raise AssertionError("an unknown icon must be refused")
             except RuntimeError as error:
                 assert "is not one of Relay" in str(error), error
+        if "more" in SHOTS:
+            mr = call("design.create", {"project_id": pid, "title": "More shapes"})
+            mp = mr["nodes"][0]["id"]
+            call("design.apply", {"design_id": mr["design"]["id"], "ops": [
+                node("donut", mp, "ellipse", x=0, y=0, w=160, h=160, fill="#4C9DFF", arc={"start": 0, "sweep": 270, "inner": 0.62}),
+                node("pie", mp, "ellipse", x=200, y=0, w=160, h=160, fill="#FFB020", arc={"start": 30, "sweep": 120}),
+                node("gauge", mp, "ellipse", x=400, y=0, w=160, h=160, fill="#2EC469", arc={"start": 270, "sweep": 180, "inner": 0.7}),
+                node("blob", mp, "line", x=600, y=10, w=160, h=140, closed=True, smooth=True, fill="#A178FF", stroke="#EDE9E2", stroke_width=2,
+                     points=[[0, 70], [60, 0], [160, 40], [120, 140], [30, 120]]),
+                node("tri", mp, "polygon", x=0, y=220, w=140, h=120, sides=3, fill="#FF5C5C", flip_y=True),
+                node("c1", mp, "ellipse", x=200, y=210, w=120, h=120, fill="#FFD60A"),
+                node("c2", mp, "ellipse", x=260, y=240, w=120, h=120, fill="#4C9DFF", blend="multiply"),
+                node("card", mp, "rect", x=430, y=220, w=200, h=110, fill="#2A2826", radius=18,
+                     shadow={"x": 0, "y": 3, "blur": 10, "spread": 0, "color": "#00000099", "inset": True}),
+                text("label", mp, "section heading", x=0, y=380, font_size=13, font_weight=600, letter_spacing=1.2, text_case="upper", color="#8C877F"),
+                text("tight", mp, "Tight\nheading", x=0, y=410, font_size=40, font_weight=700, line_height=1.0, color="#EDE9E2"),
+                node("dashes", mp, "line", x=240, y=430, w=300, h=0, points=[[0, 0], [300, 0]], stroke="#EDE9E2", stroke_width=6, dash=[18, 12]),
+            ]})
         if "perf" in SHOTS:
             big = call("design.create", {"project_id": pid, "title": "Big design"})
             bp = big["nodes"][0]["id"]
@@ -248,7 +268,7 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
         for shot in SHOTS:
             output = OUT / f"design-{shot}.png"; output.unlink(missing_ok=True)
             # The board opens the gallery's first card, the most recently changed design.
-            target = big if shot == "perf" else sh if shot == "shapes" else d1
+            target = big if shot == "perf" else sh if shot == "shapes" else mr if shot == "more" else d1
             call("design.update", {"design_id": target["design"]["id"], "title": target["design"]["title"]})
             time.sleep(0.01)
             e = dict(native_env, RELAY_NATIVE_SCREENSHOT=str(output), RELAY_NATIVE_SIZE="1440,900", RELAY_NATIVE_FIXTURE="1",
@@ -276,6 +296,15 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                     "tool:pen", "drag:850,600>950,640", "tool:eraser", "drag:900,580>900,660",
                     "icon:globe",
                     "select:i4", "wait:200", "print"])
+            if shot == "more":
+                e["RELAY_NATIVE_SMOKE_SECONDS"] = "14"
+                svg = OUT / "design-more.svg"; svg.unlink(missing_ok=True)
+                e["RELAY_SMOKE_DESIGN_SCRIPT"] = ";".join([
+                    "fit", "wait:300",
+                    "tool:vector", "click:700,240", "click:820,240", "click:760,340", "click:700,240",
+                    "select:tri", "flip:h",
+                    "select:card", "copy-style", "select:pie", "paste-style",
+                    f"svg:{svg}", "wait:300", "select:blob", "wait:200", "print"])
             if shot == "perf":
                 e["RELAY_NATIVE_SMOKE_SECONDS"] = "20"
                 e["RELAY_DESIGN_TRACE"] = "1"
@@ -329,6 +358,18 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                 assert not any(n["kind"] == "path" for n in got.values()), "the eraser left the stroke"
                 assert any(n["kind"] == "icon" and n.get("icon") == "globe" for n in got.values())
                 print("SHAPES_OK")
+            if shot == "more":
+                logtext = (OUT / f"design-{shot}.log").read_text()
+                assert "DESIGN_SCRIPT_DONE" in logtext, logtext[-2000:]
+                got = {n["id"]: n for n in call("design.get", {"design_id": mr["design"]["id"]})["nodes"]}
+                drawn = [n for n in got.values() if n["kind"] == "line" and n["id"] not in ("blob", "dashes")]
+                assert len(drawn) == 1 and drawn[0].get("closed") is True and len(drawn[0]["points"]) == 3, drawn
+                assert got["tri"].get("flip_x") is True and got["tri"].get("flip_y") is True, got["tri"]
+                assert got["pie"].get("fill") == "#2A2826" and got["pie"]["shadow"].get("inset") is True, got["pie"]
+                assert got["pie"].get("arc", {}).get("sweep") == 120, "a pasted style keeps the shape's own arc"
+                text_svg = (OUT / "design-more.svg").read_text()
+                assert text_svg.lstrip().startswith("<?xml") and "<svg" in text_svg, text_svg[:200]
+                print("MORE_OK", len(text_svg), "bytes of SVG")
             if shot == "perf":
                 logtext = (OUT / f"design-{shot}.log").read_text()
                 assert "DESIGN_SCRIPT_DONE" in logtext, logtext[-2000:]

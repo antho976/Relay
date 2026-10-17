@@ -12,6 +12,8 @@ use std::rc::Rc;
 thread_local! {
     /// Open design windows by design id.
     static WINDOWS: RefCell<Vec<(i64, gtk::Window)>> = const { RefCell::new(Vec::new()) };
+    /// Designs whose window is still opening: a second click waits for the first.
+    static OPENING: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
 }
 
 pub fn open(ui: &Rc<Ui>, _project: i64, id: i64) {
@@ -20,9 +22,15 @@ pub fn open(ui: &Rc<Ui>, _project: i64, id: i64) {
         window.present();
         return;
     }
+    if OPENING.with(|o| o.borrow().contains(&id)) {
+        return;
+    }
+    OPENING.with(|o| o.borrow_mut().push(id));
     let ui = ui.clone();
     glib::spawn_future_local(async move {
-        let doc = match Doc::open(&ui, id).await {
+        let opened = Doc::open(&ui, id).await;
+        OPENING.with(|o| o.borrow_mut().retain(|d| *d != id));
+        let doc = match opened {
             Ok(doc) => doc,
             Err(e) => {
                 ui.show_error(&format!("Could not open the design: {e}"));

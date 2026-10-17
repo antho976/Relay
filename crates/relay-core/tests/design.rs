@@ -212,6 +212,70 @@ fn a_lenient_list_skips_edits_of_nodes_that_are_gone() {
     assert_eq!(out["inverse"], json!([{"op": "update", "id": "photo", "set": {"x": 0.0}}]));
 }
 
+/// Deleting a frame of more nodes than one list may hold: its undo re-adds each, and still
+/// runs as one lenient list, from the canvas and from the audit.
+#[test]
+fn a_delete_bigger_than_a_list_is_undone_in_one() {
+    let (e, _root) = project();
+    let id = create(&e);
+    let mut ops = vec![json!({"op": "add", "node": {"id": "big", "parent": "page-1", "kind": "frame", "w": 100, "h": 100}})];
+    ops.extend((0..1999).map(|_| json!({"op": "add", "node": {"parent": "big", "kind": "rect"}})));
+    apply(&e, id, json!(ops));
+    apply(&e, id, json!((0..200).map(|_| json!({"op": "add", "node": {"parent": "big", "kind": "rect"}})).collect::<Vec<_>>()));
+    let before = nodes(&e, id);
+    let out = apply(&e, id, json!([{"op": "delete", "id": "big"}]));
+    let inverse = out["inverse"].clone();
+    assert_eq!(inverse.as_array().unwrap().len(), 2200);
+    assert_eq!(code(call(&e, "design.apply", json!({"design_id": id, "ops": inverse}))), "design.ops", "a list a person sends");
+    let undone = ok(&e, "design.apply", json!({"design_id": id, "ops": inverse, "lenient": true}));
+    assert_eq!(nodes(&e, id), before);
+    // And redone, as one lenient list too.
+    ok(&e, "design.apply", json!({"design_id": id, "ops": undone["inverse"], "lenient": true}));
+    assert_eq!(ids(&nodes(&e, id)), ["page-1"]);
+
+    let row = ok(&e, "audit.list", json!({"op_prefix": "design.apply", "limit": 1}))["rows"][0].clone();
+    assert_eq!(row["undo_op"]["payload"]["ops"].as_array().map(Vec::len), Some(2200));
+    ok(&e, "audit.undo", json!({"audit_id": row["id"]}));
+    assert_eq!(nodes(&e, id), before);
+}
+
+/// A connector attached to a node that is deleted lets go of that end where it was drawn, so
+/// none names a node that is gone; the undo attaches it again.
+#[test]
+fn deleting_a_shape_frees_the_connectors_attached_to_it() {
+    let (e, _root) = project();
+    let id = create(&e);
+    apply(&e, id, json!([
+        {"op": "add", "node": {"id": "box", "parent": "page-1", "kind": "group", "x": 100, "y": 100}},
+        {"op": "add", "node": {"id": "a", "parent": "box", "kind": "rect", "x": 0, "y": 0, "w": 20, "h": 20}},
+        {"op": "add", "node": {"id": "b", "parent": "page-1", "kind": "rect", "x": 300, "y": 100, "w": 20, "h": 40}},
+        {"op": "add", "node": {"id": "joined", "parent": "page-1", "kind": "line", "x": 100, "y": 100, "from": "a", "to": "b"}},
+        {"op": "add", "node": {"id": "drawn", "parent": "page-1", "kind": "line", "points": [[0, 0], [5, 5]], "from": "b", "to": "a"}},
+        {"op": "add", "node": {"id": "other", "parent": "page-1", "kind": "line", "points": [[0, 0], [5, 5]], "from": "b"}},
+    ]));
+    let before = nodes(&e, id);
+    let out = apply(&e, id, json!([{"op": "delete", "id": "box"}]));
+    assert_eq!(out["removed"], json!(["box", "a"]));
+    let got = nodes(&e, id);
+    let find = |id: &str| got.as_array().unwrap().iter().find(|n| n["id"] == id).unwrap().clone();
+    let joined = find("joined");
+    assert!(joined.get("from").is_none() && joined["to"] == "b", "{joined}");
+    // From a's centre (110, 110) to b's (310, 120), counted from the line's own (100, 100).
+    assert_eq!(joined["points"], json!([[10.0, 10.0], [210.0, 20.0]]));
+    let drawn = find("drawn");
+    assert!(drawn["from"] == "b" && drawn.get("to").is_none() && drawn["points"] == json!([[0.0, 0.0], [5.0, 5.0]]), "{drawn}");
+    assert_eq!(find("other"), before.as_array().unwrap().iter().find(|n| n["id"] == "other").unwrap().clone(), "not attached to it");
+    let changed: Vec<String> = ids(&out["nodes"]);
+    assert!(changed.contains(&"joined".to_string()) && changed.contains(&"drawn".to_string()), "the answer carries them: {changed:?}");
+    // A node deleted and added back in the same list keeps its connectors.
+    let again = apply(&e, id, json!([{"op": "delete", "id": "b"}, {"op": "add", "node": {"id": "b", "parent": "page-1", "kind": "rect"}}]));
+    assert_eq!(ids(&again["nodes"]), ["b"]);
+    apply(&e, id, again["inverse"].clone());
+
+    apply(&e, id, out["inverse"].clone());
+    assert_eq!(nodes(&e, id), before, "the undo attaches them again");
+}
+
 #[test]
 fn a_stale_base_rev_is_refused_with_the_current_one() {
     let (e, _root) = project();

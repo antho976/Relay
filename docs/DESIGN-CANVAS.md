@@ -25,8 +25,18 @@ the project's terminals draw and revise designs alongside you.
 - **Dock** (top left): pages and layers, the page menu, then Move (V), Hand (H), Frame (F) with
   its sizes (phone, tablet, laptop, desktop, slide, social post, watch: placed beside the page's
   content), shapes (R rectangle, O ellipse, Shift R triangle, diamond, hexagon, Shift S star, L line,
-  Shift L arrow), Text (T), Sticky (S), Pen (P) / Highlighter (Shift P) / Eraser (E), Icon (K: a
-  searchable set of 70 interface icons) and Place image.
+  Shift L arrow), Text (T), Sticky (S), Pen (P) / Vector pen (B) / Highlighter (Shift P) /
+  Eraser (E), Icon (K: a searchable set of 70 interface icons) and Place image.
+- **Vector pen** (B): click to place points (Shift: 45° steps), click the first point to close the
+  shape, click the last again, press Enter or Esc to leave it open; Backspace takes the last point
+  back. The result is a line of your own points: the inspector closes it, smooths it into a curve
+  through its points, and fills it.
+- **Arcs**: an ellipse's Arc section turns it into a pie, donut, ring or gauge (start, sweep and
+  hole, with presets).
+- **Flip** (Shift H / Shift V, or the keys beside the rotation): mirrors the selection about its
+  centre; a frame mirrors what is in it.
+- **Copy and paste style** (Ctrl Alt C / Ctrl Alt V): fill, stroke, corners, shadow, blend, opacity
+  and type from one layer onto others, each taking what fits it.
 - **Connectors**: a line or arrow drawn from one shape to another attaches to both and follows
   them; its route is straight, elbow or curved (the toolbar key steps through them), and the
   inspector can detach its ends.
@@ -45,7 +55,9 @@ the project's terminals draw and revise designs alongside you.
   (direction, gap, padding, along and across), polygon corners and star, icon and its colour, line
   route and attachments, type (any installed family, weight, size, line height, letter spacing),
   solid or linear/radial gradient fills with their stops, border with solid/dashed/dotted styles,
-  corners (one radius or each its own), picture fit, shadow, opacity, layer blur, and PNG export. Number
+  corners (one radius or each its own), picture fit, drop or inner shadow, opacity, blend mode
+  (multiply, screen, overlay and the rest), layer blur, text case, and export as PNG (1× or 2×),
+  SVG or PDF. Number
   fields take arithmetic (`120+16`), step with ↑/↓ (Shift: 10) and scrub by dragging their caption.
 - **Pages and layers** (Alt+1): pages to add, rename, duplicate and delete, and the layer tree, top
   layer first, opened along the way to the selection, with hide and lock on each row.
@@ -115,7 +127,9 @@ engine, writes fixture designs through `design.apply` as an agent would, and dri
 the layers panel and typing in place; runs gestures and commands (nudge, a snapped drag, editing a
 text, drawing a rectangle, undo and redo, group and ungroup, duplicate, delete) and asserts that the
 client's scene equals the engine's; types an Ask into a fixture terminal whose fake agent edits the
-layer, and asserts the open board shows it; places a picture and pastes between frames; and times a
+layer, and asserts the open board shows it; places a picture and pastes between frames; draws a
+closed shape with the vector pen, flips a polygon, pastes a style and exports the page as SVG over
+fixture arcs, blends, inner shadows and smooth paths (`more`); and times a
 1,721-node design (`RELAY_DESIGN_TRACE`). `scripts/native-smoke.py` captures the Design view among
 its pages. The engine side is `crates/relay-core/tests/design.rs`; the scene, layout, hit testing,
 snapping and edit builders are tested in `crates/relay-client`.

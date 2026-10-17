@@ -210,6 +210,130 @@ pub struct Shadow {
     pub spread: f64,
     /// `#RRGGBB` or `#RRGGBBAA`.
     pub color: String,
+    /// An inner shadow, cast inside the edge instead of under the node.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inset: bool,
+}
+
+/// Part of an ellipse: a pie, a donut or a ring segment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "DesignArc")]
+pub struct Arc {
+    /// Where it starts, in degrees clockwise from the top (default 0).
+    #[serde(default)]
+    pub start: f64,
+    /// How far round it goes, in degrees clockwise (default 360, the whole ellipse).
+    #[serde(default = "full_turn")]
+    pub sweep: f64,
+    /// The hole in the middle as a fraction of the radius: 0 (the default) a pie, 0.6 a donut.
+    #[serde(default)]
+    pub inner: f64,
+}
+
+fn full_turn() -> f64 {
+    360.0
+}
+
+/// How a node mixes with what is under it in the same parent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "DesignBlend")]
+pub enum Blend {
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+}
+
+impl Blend {
+    pub const ALL: [Blend; 16] = [
+        Blend::Normal,
+        Blend::Multiply,
+        Blend::Screen,
+        Blend::Overlay,
+        Blend::Darken,
+        Blend::Lighten,
+        Blend::ColorDodge,
+        Blend::ColorBurn,
+        Blend::HardLight,
+        Blend::SoftLight,
+        Blend::Difference,
+        Blend::Exclusion,
+        Blend::Hue,
+        Blend::Saturation,
+        Blend::Color,
+        Blend::Luminosity,
+    ];
+
+    /// Its name as stored: `color_dodge`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Blend::Normal => "normal",
+            Blend::Multiply => "multiply",
+            Blend::Screen => "screen",
+            Blend::Overlay => "overlay",
+            Blend::Darken => "darken",
+            Blend::Lighten => "lighten",
+            Blend::ColorDodge => "color_dodge",
+            Blend::ColorBurn => "color_burn",
+            Blend::HardLight => "hard_light",
+            Blend::SoftLight => "soft_light",
+            Blend::Difference => "difference",
+            Blend::Exclusion => "exclusion",
+            Blend::Hue => "hue",
+            Blend::Saturation => "saturation",
+            Blend::Color => "color",
+            Blend::Luminosity => "luminosity",
+        }
+    }
+}
+
+/// How a text's letters are cased when drawn; the stored words keep theirs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "DesignTextCase")]
+pub enum TextCase {
+    Upper,
+    Lower,
+    /// The first letter of each word upper case.
+    Title,
+}
+
+impl TextCase {
+    /// `text` as this case draws it.
+    pub fn apply(self, text: &str) -> String {
+        match self {
+            TextCase::Upper => text.to_uppercase(),
+            TextCase::Lower => text.to_lowercase(),
+            TextCase::Title => {
+                let mut out = String::with_capacity(text.len());
+                let mut start = true;
+                for c in text.chars() {
+                    if start && c.is_alphanumeric() {
+                        out.extend(c.to_uppercase());
+                        start = false;
+                    } else {
+                        start = c.is_whitespace() || (start && !c.is_alphanumeric());
+                        out.push(c);
+                    }
+                }
+                out
+            }
+        }
+    }
 }
 
 /// One node of a design. Every field but `kind` is optional on input; an absent style field
@@ -372,6 +496,29 @@ pub struct Node {
     /// How a line runs between its ends (default `straight`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<Route>,
+    /// Joins a line's or path's last point back to its first: a shape of your own, which
+    /// `fill` paints inside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed: Option<bool>,
+    /// Runs a line through its `points` in a smooth curve instead of straight segments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smooth: Option<bool>,
+    /// Mirrors a polygon, image or icon left to right (a line or path is flipped by its
+    /// `points`, a box by its corners).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip_x: Option<bool>,
+    /// Mirrors a polygon, image or icon top to bottom.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip_y: Option<bool>,
+    /// Draws only part of an ellipse: a pie slice, a donut or an arc of a ring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arc: Option<Arc>,
+    /// How the node mixes with what is under it in its parent (default `normal`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blend: Option<Blend>,
+    /// Draws a text's or label's letters upper, lower or title case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_case: Option<TextCase>,
 }
 
 /// One edit of a design. `design.apply` runs a list of them in order, all or none.
@@ -505,6 +652,13 @@ impl Node {
             from: None,
             to: None,
             route: None,
+            closed: None,
+            smooth: None,
+            flip_x: None,
+            flip_y: None,
+            arc: None,
+            blend: None,
+            text_case: None,
         }
     }
 
@@ -664,6 +818,15 @@ impl Node {
         for (field, end) in [("from", &self.from), ("to", &self.to)] {
             if let Some(id) = end.as_deref().filter(|id| !valid_id(id)) {
                 return Err(format!("{field}: {id:?} is not a node id"));
+            }
+        }
+        if let Some(arc) = &self.arc {
+            if [arc.start, arc.sweep, arc.inner].iter().any(|v| !v.is_finite())
+                || arc.start.abs() > 3600.0
+                || !(-360.0..=360.0).contains(&arc.sweep)
+                || !(0.0..1.0).contains(&arc.inner)
+            {
+                return Err("arc: start within ±3600 degrees, sweep within ±360, inner from 0 to below 1".into());
             }
         }
         if let Some(name) = self.icon.as_deref().filter(|n| !ICONS.contains(n)) {
@@ -837,6 +1000,26 @@ mod tests {
         dots.parent = Some("p".into());
         dots.dash = Some(vec![0.0, 0.0]);
         assert!(dots.validate().is_err());
+    }
+
+    #[test]
+    fn arcs_blends_and_cases_read_as_agents_write_them() {
+        let donut: Node = serde_json::from_value(json!({"kind": "ellipse", "parent": "p",
+            "arc": {"sweep": 270, "inner": 0.6}, "blend": "color_dodge", "text_case": "upper",
+            "shadow": {"y": 2, "blur": 6, "color": "#00000033", "inset": true}})).unwrap();
+        assert!(donut.validate().is_ok());
+        let arc = donut.arc.clone().unwrap();
+        assert_eq!((arc.start, arc.sweep, arc.inner), (0.0, 270.0, 0.6));
+        assert_eq!(donut.blend.map(Blend::name), Some("color_dodge"));
+        assert!(donut.shadow.as_ref().unwrap().inset);
+        let mut full = donut.clone();
+        full.arc = Some(Arc { start: 0.0, sweep: 360.0, inner: 1.0 });
+        assert!(full.validate().unwrap_err().starts_with("arc"));
+        // An outer shadow writes no `inset`, so older readers keep reading it.
+        let plain = Shadow { x: 0.0, y: 1.0, blur: 2.0, spread: 0.0, color: "#000".into(), inset: false };
+        assert!(serde_json::to_value(&plain).unwrap().get("inset").is_none());
+        assert_eq!(TextCase::Title.apply("hello  wide-world 2go"), "Hello  Wide-world 2go");
+        assert_eq!(TextCase::Upper.apply("straße"), "STRASSE");
     }
 
     #[test]

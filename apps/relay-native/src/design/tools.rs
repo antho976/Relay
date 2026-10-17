@@ -63,6 +63,10 @@ pub fn install(b: &Rc<Board>) {
     let weak = Rc::downgrade(b);
     pan.connect_drag_begin(move |_, _, _| {
         if let Some(b) = weak.upgrade() {
+            // Not in the middle of another gesture: its preview would never be sent.
+            if !matches!(*b.gesture.borrow(), Gesture::Idle) {
+                return;
+            }
             *b.gesture.borrow_mut() = Gesture::Pan { cam: b.cam.get() };
             update_cursor(&b, Some("grabbing"));
         }
@@ -80,8 +84,10 @@ pub fn install(b: &Rc<Board>) {
     let weak = Rc::downgrade(b);
     pan.connect_drag_end(move |_, _, _| {
         if let Some(b) = weak.upgrade() {
-            *b.gesture.borrow_mut() = Gesture::Idle;
-            update_cursor(&b, None);
+            if matches!(*b.gesture.borrow(), Gesture::Pan { .. }) {
+                *b.gesture.borrow_mut() = Gesture::Idle;
+                update_cursor(&b, None);
+            }
         }
     });
     canvas.add_controller(pan);
@@ -178,6 +184,18 @@ pub fn install(b: &Rc<Board>) {
         }
     });
     canvas.add_controller(keys);
+
+    // Space released elsewhere (another window, a field) would leave the hand on.
+    let focus = gtk::EventControllerFocus::new();
+    let weak = Rc::downgrade(b);
+    focus.connect_leave(move |_| {
+        if let Some(b) = weak.upgrade() {
+            if b.space.replace(false) {
+                update_cursor(&b, None);
+            }
+        }
+    });
+    canvas.add_controller(focus);
 
     let drop = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
     let weak = Rc::downgrade(b);
@@ -376,13 +394,18 @@ fn begin(b: &Rc<Board>, x: f64, y: f64, mods: gdk::ModifierType) {
         b.end_edit(true);
     }
     let p = b.to_page(x, y);
-    // A second press close by in time and place is a double click.
+    if b.tool.get() == Tool::Vector && !b.space.get() {
+        vector_press(b, x, y, p, mods);
+        return;
+    }
+    // A second press close by in time and place is a double click (which only the Move tool
+    // reads: a pen's quick second stroke is a stroke).
     let now = glib::monotonic_time();
     let (t, lx, ly) = b.last_press.get();
     let settings = gtk::Settings::default();
     let window = settings.as_ref().map_or(400, |s| s.gtk_double_click_time()) as i64 * 1000;
     let distance = settings.as_ref().map_or(5, |s| s.gtk_double_click_distance()) as f64;
-    if now - t < window && (x - lx).abs() <= distance && (y - ly).abs() <= distance {
+    if b.tool.get() == Tool::Select && now - t < window && (x - lx).abs() <= distance && (y - ly).abs() <= distance {
         b.last_press.set((0, x, y));
         *b.gesture.borrow_mut() = Gesture::Idle;
         double_click(b, x, y, p);
@@ -424,7 +447,79 @@ fn begin(b: &Rc<Board>, x: f64, y: f64, mods: gdk::ModifierType) {
             let parent = container_at(b, p);
             *b.gesture.borrow_mut() = Gesture::Draw { parent, points: vec![[p.0, p.1]] };
         }
-        Tool::Hand => {}
+        Tool::Hand | Tool::Vector => {}
+    }
+}
+
+/// A click of the vector pen: the first starts a path, each next adds a point (Shift: at 45°
+/// steps), a click on the first point closes it and a click on the last ends it open.
+fn vector_press(b: &Rc<Board>, x: f64, y: f64, p: (f64, f64), mods: gdk::ModifierType) {
+    *b.gesture.borrow_mut() = Gesture::Idle;
+    let cam = b.cam.get();
+    let near = |q: &[f64; 2]| {
+        let (sx, sy) = cam.to_screen(q[0], q[1]);
+        (sx - x).abs() <= 8.0 && (sy - y).abs() <= 8.0
+    };
+    let ends = b.vector.borrow().as_ref().map(|(_, pts)| (pts.len(), pts.first().copied(), pts.last().copied()));
+    match ends {
+        None => {
+            let parent = container_at(b, p);
+            *b.vector.borrow_mut() = Some((parent, vec![[p.0, p.1]]));
+        }
+        Some((n, Some(first), _)) if n > 2 && near(&first) => finish_vector(b, true),
+        Some((n, _, Some(last))) if n > 1 && near(&last) => finish_vector(b, false),
+        Some((_, _, last)) => {
+            let at = match last {
+                Some(l) if mods.contains(gdk::ModifierType::SHIFT_MASK) => constrain45((l[0], l[1]), p),
+                _ => p,
+            };
+            if let Some((_, pts)) = b.vector.borrow_mut().as_mut() {
+                if pts.len() < relay_bus::design::MAX_POINTS {
+                    pts.push([at.0, at.1]);
+                }
+            }
+        }
+    }
+    b.canvas.queue_draw();
+}
+
+/// End the vector pen's path: a line through its points, closed or open, selected. Fewer than
+/// two points is no path.
+pub fn finish_vector(b: &Board, closed: bool) {
+    let Some((parent, points)) = b.vector.borrow_mut().take() else {
+        return;
+    };
+    b.canvas.queue_draw();
+    if points.len() < 2 || b.doc.scene.borrow().node(&parent).is_none() {
+        return;
+    }
+    let min_x = points.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
+    let min_y = points.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
+    let max_x = points.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
+    let max_y = points.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
+    let origin = b.origin_of(&parent);
+    let mut n = Node::new(NodeKind::Line);
+    n.id = b.doc.scene.borrow_mut().fresh_id(NodeKind::Line);
+    n.name = Some(if closed { "Shape" } else { "Path" }.into());
+    n.parent = Some(parent);
+    n.x = (min_x - origin.x).round();
+    n.y = (min_y - origin.y).round();
+    n.w = (max_x - min_x).max(1.0).round();
+    n.h = (max_y - min_y).max(1.0).round();
+    // Whole pixels from the box's own rounded corner, so nothing shifts on the way in.
+    let (ox, oy) = (origin.x + n.x, origin.y + n.y);
+    n.points = Some(points.iter().map(|p| [(p[0] - ox).round(), (p[1] - oy).round()]).collect());
+    n.stroke = Some(b.pen_color(false));
+    n.stroke_width = Some(2.0);
+    if closed && points.len() > 2 {
+        n.closed = Some(true);
+    }
+    let id = n.id.clone();
+    if b.commit(vec![NodeOp::Add { node: n, index: None }]) {
+        b.select(vec![id]);
+    }
+    if !b.tool_lock.get() && b.tool.get() == Tool::Vector {
+        b.set_tool(Tool::Select);
     }
 }
 
@@ -559,6 +654,7 @@ fn start_move(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType, click: Opti
         orig,
         rects,
         dup: alt(mods),
+        copies: Vec::new(),
         moved: false,
         target: None,
         reorder: None,
@@ -613,21 +709,39 @@ fn update(b: &Rc<Board>, x: f64, y: f64, dx: f64, dy: f64, mods: gdk::ModifierTy
         Gesture::Endpoint { id, which, orig, moved } => {
             *moved = true;
             let mut q = p;
-            let pts = orig.points.clone().unwrap_or_default();
             let placed = b.placed();
             let origin = placed.rect(id).map(|r| (r.x, r.y)).unwrap_or((orig.x, orig.y));
+            // A connector's end lets go of its shape as it is dragged, and takes hold of the
+            // one it is dropped on; its other end stays where it is drawn.
+            let connector = orig.from.is_some() || orig.to.is_some();
+            let pts = if connector {
+                let (drawn, _) = relay_client::design::shapes::line_points(&b.doc.scene.borrow(), &placed, orig);
+                [drawn.first(), drawn.last()].into_iter().flatten().map(|d| [d.0 - origin.0, d.1 - origin.1]).collect()
+            } else {
+                orig.points.clone().unwrap_or_default()
+            };
+            let which = if connector && *which != 0 { 1 } else { *which };
+            let other_end = if which == 0 { orig.to.clone() } else { orig.from.clone() };
+            let held = if connector { attachable(b, p).filter(|t| *t != *id && Some(t) != other_end.as_ref()) } else { None };
             if shift(mods) {
-                let other = if *which == 0 { pts.last() } else { pts.first() }.copied().unwrap_or([0.0, 0.0]);
+                let other = if which == 0 { pts.last() } else { pts.first() }.copied().unwrap_or([0.0, 0.0]);
                 q = constrain45((origin.0 + other[0], origin.1 + other[1]), p);
             }
             let mut pts = pts;
-            if let Some(pt) = pts.get_mut(*which) {
+            if let Some(pt) = pts.get_mut(which) {
                 *pt = [q.0 - origin.0, q.1 - origin.1];
             }
             let id = id.clone();
             drop(gesture);
             if let Some(n) = b.doc.scene.borrow_mut().node_mut(&id) {
                 n.points = Some(pts);
+                if connector {
+                    if which == 0 {
+                        n.from = held;
+                    } else {
+                        n.to = held;
+                    }
+                }
             }
             b.invalidate();
         }
@@ -696,15 +810,19 @@ fn move_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
             Gesture::Move { ids, .. } => ids.clone(),
             _ => Vec::new(),
         };
+        b.doc.set_hold(true);
         let (ops, roots) = edit::duplicate(&mut b.doc.scene.borrow_mut(), &ids, 0.0);
-        if b.commit(ops) {
+        let shown = b.doc.scene.borrow_mut().apply_all(&ops);
+        if shown.is_ok() {
+            b.invalidate();
             let placed = b.placed();
             let scene = b.doc.scene.borrow();
-            if let Gesture::Move { ids, orig, rects, dup, .. } = &mut *b.gesture.borrow_mut() {
+            if let Gesture::Move { ids, orig, rects, dup, copies, .. } = &mut *b.gesture.borrow_mut() {
                 *ids = roots.clone();
                 *orig = roots.iter().filter_map(|id| scene.node(id).map(|n| (id.clone(), n.x, n.y))).collect();
                 *rects = roots.iter().filter_map(|id| placed.rect(id)).collect();
                 *dup = false;
+                *copies = ops;
             }
             drop(scene);
             *b.selection.borrow_mut() = roots;
@@ -936,8 +1054,13 @@ fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
             }
             b.canvas.queue_draw();
         }
-        Gesture::Move { ids, orig, moved, target, reorder, click, at, start, .. } => {
+        Gesture::Move { ids, orig, moved, target, reorder, click, at, start, copies, .. } => {
             if !moved {
+                if !copies.is_empty() {
+                    let gone: Vec<NodeOp> = ids.iter().map(|id| NodeOp::Delete { id: id.clone() }).collect();
+                    let _ = b.doc.scene.borrow_mut().apply_all(&gone);
+                    b.invalidate();
+                }
                 if let Some(c) = click.filter(|_| !shift(mods)) {
                     b.select(vec![c]);
                 }
@@ -1001,6 +1124,14 @@ fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
                 }
             }
             drop(scene);
+            let ops = if copies.is_empty() {
+                ops
+            } else {
+                // The copies were only shown: they go out now, with their move, as one step.
+                let gone: Vec<NodeOp> = ids.iter().map(|id| NodeOp::Delete { id: id.clone() }).collect();
+                let _ = b.doc.scene.borrow_mut().apply_all(&gone);
+                copies.into_iter().chain(ops).collect()
+            };
             b.commit(ops);
             b.doc.set_hold(false);
         }
@@ -1118,7 +1249,7 @@ fn normalize_line(mut n: Node) -> Node {
 fn create_shape(b: &Rc<Board>, tool: Tool, parent: String, a: (f64, f64), end: (f64, f64), from: Option<String>, to: Option<String>) {
     let zoom = b.cam.get().zoom;
     let dragged = ((end.0 - a.0).abs().max((end.1 - a.1).abs())) * zoom > DRAG;
-    let origin = b.placed().rect(&parent).unwrap_or_default();
+    let origin = b.origin_of(&parent);
     let kind = match tool {
         Tool::Frame => NodeKind::Frame,
         Tool::Ellipse => NodeKind::Ellipse,
@@ -1184,7 +1315,7 @@ fn finish_drawing(b: &Rc<Board>, parent: String, points: Vec<[f64; 2]>) {
     if !min_x.is_finite() {
         return;
     }
-    let origin = b.placed().rect(&parent).unwrap_or_default();
+    let origin = b.origin_of(&parent);
     let mut n = Node::new(NodeKind::Path);
     n.id = b.doc.scene.borrow_mut().fresh_id(NodeKind::Path);
     n.parent = Some(parent);
@@ -1203,7 +1334,7 @@ fn finish_drawing(b: &Rc<Board>, parent: String, points: Vec<[f64; 2]>) {
 
 fn create_sticky(b: &Rc<Board>, p: (f64, f64)) {
     let parent = container_at(b, p);
-    let origin = b.placed().rect(&parent).unwrap_or_default();
+    let origin = b.origin_of(&parent);
     let mut n = Node::new(NodeKind::Sticky);
     n.id = b.doc.scene.borrow_mut().fresh_id(NodeKind::Sticky);
     n.parent = Some(parent);
@@ -1237,6 +1368,12 @@ fn cancel(b: &Rc<Board>) {
     {
         let mut scene = b.doc.scene.borrow_mut();
         match &gesture {
+            // Copies an Alt drag only showed simply go.
+            Gesture::Move { ids, copies, .. } if !copies.is_empty() => {
+                let gone: Vec<NodeOp> = ids.iter().map(|id| NodeOp::Delete { id: id.clone() }).collect();
+                let _ = scene.apply_all(&gone);
+                b.selection.borrow_mut().clear();
+            }
             Gesture::Move { orig, .. } => {
                 for (id, x, y) in orig {
                     if let Some(n) = scene.node_mut(id) {
@@ -1257,6 +1394,8 @@ fn cancel(b: &Rc<Board>) {
                     *n = orig.clone();
                 }
             }
+            // Esc during a marquee keeps the selection it started from.
+            Gesture::Marquee { base, .. } => *b.selection.borrow_mut() = base.clone(),
             Gesture::Erase { hits } => {
                 for (id, opacity) in hits {
                     if let Some(n) = scene.node_mut(id) {
@@ -1310,6 +1449,9 @@ fn double_click(b: &Rc<Board>, x: f64, y: f64, p: (f64, f64)) {
 
 fn hover(b: &Rc<Board>, x: f64, y: f64) {
     b.pointer.set((x, y));
+    if b.vector.borrow().is_some() {
+        b.canvas.queue_draw();
+    }
     if !matches!(*b.gesture.borrow(), Gesture::Idle) {
         return;
     }
@@ -1377,9 +1519,15 @@ fn context_menu(b: &Rc<Board>, x: f64, y: f64) {
         section.append(Some("Hide"), Some("design.hide"));
         menu.append_section(None, &section);
         let section = gio::Menu::new();
-        section.append(Some("Ask the agent about this…"), Some("design.ask"));
-        section.append(Some("Export as PNG…"), Some("design.export"));
+        section.append(Some("Flip horizontally"), Some("design.flip-h"));
+        section.append(Some("Flip vertically"), Some("design.flip-v"));
+        section.append(Some("Copy style"), Some("design.copy-style"));
+        section.append(Some("Paste style"), Some("design.paste-style"));
         menu.append_section(None, &section);
+        let section = gio::Menu::new();
+        section.append(Some("Ask the agent about this…"), Some("design.ask"));
+        menu.append_section(None, &section);
+        menu.append_section(None, &super::board::export_menu());
     } else {
         let section = gio::Menu::new();
         section.append(Some("Select all"), Some("design.select-all"));
@@ -1427,6 +1575,8 @@ fn key_pressed(
     }
     if ctrl {
         match key.to_lower() {
+            Key::c if alt => b.copy_style(),
+            Key::v if alt => b.paste_style(),
             Key::z if shift => b.redo(),
             Key::z => b.undo(),
             Key::y => b.redo(),
@@ -1497,6 +1647,40 @@ fn key_pressed(
             return stop;
         }
     }
+    // The vector pen's path being placed takes Enter, Esc and Backspace.
+    if b.vector.borrow().is_some() && !ctrl {
+        match key {
+            Key::Return | Key::KP_Enter | Key::Escape => {
+                finish_vector(b, false);
+                return stop;
+            }
+            Key::BackSpace | Key::Delete => {
+                let empty = b.vector.borrow_mut().as_mut().is_some_and(|(_, pts)| {
+                    pts.pop();
+                    pts.is_empty()
+                });
+                if empty {
+                    b.vector.borrow_mut().take();
+                }
+                b.canvas.queue_draw();
+                return stop;
+            }
+            _ => {}
+        }
+    }
+    if shift && !ctrl && !alt {
+        match key.to_lower() {
+            Key::h => {
+                b.flip(true);
+                return stop;
+            }
+            Key::v => {
+                b.flip(false);
+                return stop;
+            }
+            _ => {}
+        }
+    }
     let step = if shift { 10.0 } else { 1.0 };
     match key {
         Key::Escape => {
@@ -1551,6 +1735,7 @@ fn key_pressed(
                 Key::s => Some(Tool::Sticky),
                 Key::p if shift => Some(Tool::Highlighter),
                 Key::p => Some(Tool::Pen),
+                Key::b => Some(Tool::Vector),
                 _ => None,
             };
             if key.to_lower() == Key::k {

@@ -9,7 +9,7 @@ use super::widgets::{color_key, number, segmented};
 use crate::app::label;
 use gtk::prelude::*;
 use gtk4 as gtk;
-use relay_bus::design::{ImageFit, Items, Justify, Layout, Node, NodeKind, Sizing, TextAlign};
+use relay_bus::design::{Blend, ImageFit, Items, Justify, Layout, Node, NodeKind, Sizing, TextAlign, TextCase};
 use relay_client::design::{edit, layout};
 use serde_json::{json, Map, Value};
 use std::rc::Rc;
@@ -158,12 +158,29 @@ impl Board {
         if nodes.iter().all(|n| !matches!(n.kind, NodeKind::Line | NodeKind::Page)) {
             let turn = same(nodes.iter().map(|n| bits(n.rotation.unwrap_or(0.0)))).map(f64::from_bits);
             let weak = Rc::downgrade(&b);
-            geometry.append(&number("@rotate", turn, "Rotation, degrees clockwise (drag just outside a corner to turn)", move |v| {
+            let rotate = number("@rotate", turn, "Rotation, degrees clockwise (drag just outside a corner to turn)", move |v| {
                 if let Some(b) = weak.upgrade() {
                     let v = (v + 180.0).rem_euclid(360.0) - 180.0;
                     b.set_selected(set(&[("rotation", if v.abs() < 0.05 { Value::Null } else { json!(v) })]));
                 }
-            }));
+            });
+            rotate.set_hexpand(true);
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            row.append(&rotate);
+            for (horizontal, glyph, tip) in [(true, "flip-h", "Flip horizontally (Shift+H)"), (false, "flip-v", "Flip vertically (Shift+V)")] {
+                let key = gtk::Button::new();
+                key.add_css_class("design-icon-field");
+                key.set_child(Some(&glyphs::image(glyph, 16)));
+                key.set_tooltip_text(Some(tip));
+                let weak = Rc::downgrade(&b);
+                key.connect_clicked(move |_| {
+                    if let Some(b) = weak.upgrade() {
+                        b.flip(horizontal);
+                    }
+                });
+                row.append(&key);
+            }
+            geometry.append(&row);
         }
         let sizable = nodes.iter().all(|n| {
             n.kind == NodeKind::Text || n.layout_mode() != Layout::None || n.parent.as_deref().is_some_and(|_| parent_lays_out)
@@ -313,7 +330,12 @@ impl Board {
         }
 
         // Type.
-        if kinds(&[NodeKind::Text, NodeKind::Sticky]) {
+        let labelled_shapes = nodes.iter().all(|n| match n.kind {
+            NodeKind::Text | NodeKind::Sticky => true,
+            NodeKind::Rect | NodeKind::Ellipse | NodeKind::Polygon => n.text.as_deref().is_some_and(|t| !t.is_empty()),
+            _ => false,
+        });
+        if labelled_shapes {
             let sec = section(body, "Type");
             let families = font_families(&self.canvas);
             let current = same(nodes.iter().map(|n| super::paint::font_family(n).to_string()));
@@ -322,9 +344,8 @@ impl Board {
             dd.set_expression(Some(gtk::PropertyExpression::new(gtk::StringObject::static_type(), None::<gtk::Expression>, "string")));
             dd.add_css_class("design-dropdown");
             dd.set_tooltip_text(Some("Font"));
-            if let Some(i) = current.and_then(|c| families.iter().position(|f| *f == c)) {
-                dd.set_selected(i as u32);
-            }
+            // Mixed, or a family this machine lacks: nothing chosen, so any choice applies.
+            dd.set_selected(current.and_then(|c| families.iter().position(|f| *f == c)).map_or(gtk::INVALID_LIST_POSITION, |i| i as u32));
             let weak = Rc::downgrade(&b);
             let names = families.clone();
             dd.connect_selected_notify(move |dd| {
@@ -338,9 +359,11 @@ impl Board {
             wdd.add_css_class("design-dropdown");
             wdd.set_tooltip_text(Some("Weight"));
             let weight = same(nodes.iter().map(|n| n.font_weight.unwrap_or(400)));
-            if let Some(i) = weight.and_then(|w| WEIGHTS.iter().position(|(v, _)| *v == (w + 50) / 100 * 100)) {
-                wdd.set_selected(i as u32);
-            }
+            wdd.set_selected(
+                weight
+                    .and_then(|w| WEIGHTS.iter().position(|(v, _)| *v == ((w + 50) / 100 * 100).clamp(100, 900)))
+                    .map_or(gtk::INVALID_LIST_POSITION, |i| i as u32),
+            );
             let weak = Rc::downgrade(&b);
             wdd.connect_selected_notify(move |dd| {
                 if let (Some(b), Some((w, _))) = (weak.upgrade(), WEIGHTS.get(dd.selected() as usize)) {
@@ -375,7 +398,7 @@ impl Board {
                 }),
             ));
             let weak = Rc::downgrade(&b);
-            sec.append(&segmented(
+            let align = segmented(
                 &[("left", "text-left", "Align left"), ("center", "text-center", "Centre"), ("right", "text-right", "Align right")],
                 Some(match same(nodes.iter().map(|n| n.align.unwrap_or(TextAlign::Left))) {
                     Some(TextAlign::Center) => "center",
@@ -388,7 +411,25 @@ impl Board {
                         b.set_selected(set(&[("align", if v == "left" { Value::Null } else { json!(v) })]));
                     }
                 },
-            ));
+            );
+            let weak = Rc::downgrade(&b);
+            let case = segmented(
+                &[("none", "—", "As typed"), ("upper", "AA", "Upper case"), ("lower", "aa", "Lower case"), ("title", "Aa", "Title case")],
+                Some(match same(nodes.iter().map(|n| n.text_case)) {
+                    Some(None) => "none",
+                    Some(Some(TextCase::Upper)) => "upper",
+                    Some(Some(TextCase::Lower)) => "lower",
+                    Some(Some(TextCase::Title)) => "title",
+                    None => "",
+                }),
+                move |v| {
+                    if let Some(b) = weak.upgrade() {
+                        b.set_selected(set(&[("text_case", if v == "none" { Value::Null } else { json!(v) })]));
+                    }
+                },
+            );
+            sec.append(&align);
+            sec.append(&case);
             let color = same(nodes.iter().map(|n| n.color.clone())).flatten();
             let weak = Rc::downgrade(&b);
             sec.append(&labelled("Colour", color_key(&b, color.as_deref(), "Text colour", true, move |c| {
@@ -408,9 +449,17 @@ impl Board {
         if single && first.kind == NodeKind::Line {
             super::shape_panels::connector(&b, &section(body, "Line"), &first);
         }
+        if single && first.kind == NodeKind::Path {
+            super::shape_panels::path(&b, &section(body, "Path"), &first);
+        }
+        if single && first.kind == NodeKind::Ellipse {
+            super::shape_panels::arc(&b, &section(body, "Arc"), &first);
+        }
 
         // Fill, border, corners.
-        let fills = nodes.iter().all(|n| !matches!(n.kind, NodeKind::Group | NodeKind::Line | NodeKind::Path | NodeKind::Image | NodeKind::Text | NodeKind::Icon));
+        // A line or path fills too: closed, it is a shape of your own.
+        let free_line = |n: &Node| matches!(n.kind, NodeKind::Line | NodeKind::Path) && n.from.is_none() && n.to.is_none();
+        let fills = nodes.iter().all(|n| free_line(n) || !matches!(n.kind, NodeKind::Group | NodeKind::Line | NodeKind::Path | NodeKind::Image | NodeKind::Text | NodeKind::Icon));
         if fills {
             let sec = section(body, "Fill");
             if single {
@@ -467,9 +516,13 @@ impl Board {
         if kinds(&[NodeKind::Frame, NodeKind::Rect, NodeKind::Image, NodeKind::Sticky]) {
             let sec = section(body, "Corners");
             let weak = Rc::downgrade(&b);
-            sec.append(&number("@radius", same(nodes.iter().map(|n| bits(n.radius.unwrap_or(0.0)))).map(f64::from_bits), "Corner radius", move |v| {
+            let stickies = kinds(&[NodeKind::Sticky]);
+            let default = if stickies { 6.0 } else { 0.0 };
+            sec.append(&number("@radius", same(nodes.iter().map(|n| bits(n.radius.unwrap_or(default)))).map(f64::from_bits), "Corner radius", move |v| {
                 if let Some(b) = weak.upgrade() {
-                    b.set_selected(set(&[("radius", if v <= 0.0 { Value::Null } else { json!(v) }), ("radii", Value::Null)]));
+                    let v = v.max(0.0);
+                    // A sticky's own corners are round: square ones are written out.
+                    b.set_selected(set(&[("radius", if v == default { Value::Null } else { json!(v) }), ("radii", Value::Null)]));
                 }
             }));
             if single {
@@ -507,19 +560,29 @@ impl Board {
         }
 
         // Shadow and opacity.
-        if nodes.iter().all(|n| !matches!(n.kind, NodeKind::Group | NodeKind::Text | NodeKind::Line | NodeKind::Path)) {
+        if nodes.iter().all(|n| !matches!(n.kind, NodeKind::Group | NodeKind::Text | NodeKind::Line | NodeKind::Path | NodeKind::Icon)) {
             let sec = section(body, "Shadow");
             let shadow = same(nodes.iter().map(|n| n.shadow.clone())).flatten();
-            let toggle = gtk::CheckButton::with_label("Drop shadow");
-            toggle.set_active(shadow.is_some());
             let weak = Rc::downgrade(&b);
-            toggle.connect_toggled(move |c| {
-                if let Some(b) = weak.upgrade() {
-                    let v = if c.is_active() { json!({"x": 0, "y": 4, "blur": 12, "spread": 0, "color": "#00000033"}) } else { Value::Null };
-                    b.set_selected(set(&[("shadow", v)]));
-                }
-            });
-            sec.append(&toggle);
+            sec.append(&segmented(
+                &[("none", "None", "No shadow"), ("drop", "Drop", "A drop shadow under it"), ("inner", "Inner", "An inner shadow inside its edge")],
+                Some(match &shadow {
+                    None if nodes.iter().all(|n| n.shadow.is_none()) => "none",
+                    None => "",
+                    Some(s) if s.inset => "inner",
+                    Some(_) => "drop",
+                }),
+                move |v| {
+                    if let Some(b) = weak.upgrade() {
+                        let v = match v {
+                            "drop" => json!({"x": 0, "y": 4, "blur": 12, "spread": 0, "color": "#00000033"}),
+                            "inner" => json!({"x": 0, "y": 2, "blur": 6, "spread": 0, "color": "#00000040", "inset": true}),
+                            _ => Value::Null,
+                        };
+                        b.set_selected(set(&[("shadow", v)]));
+                    }
+                },
+            ));
             if let Some(s) = shadow {
                 let field = |cap: &'static str, value: f64, tip: &'static str, key: &'static str| {
                     let weak = Rc::downgrade(&b);
@@ -554,6 +617,26 @@ impl Board {
                 b.set_selected(set(&[("opacity", if o >= 1.0 { Value::Null } else { json!(o) })]));
             }
         }));
+        let names: Vec<String> = Blend::ALL.iter().map(|m| blend_caption(*m)).collect();
+        let dd = gtk::DropDown::from_strings(&names.iter().map(String::as_str).collect::<Vec<_>>());
+        dd.add_css_class("design-dropdown");
+        dd.set_tooltip_text(Some("Blend: how it mixes with what is under it"));
+        let current = same(nodes.iter().map(|n| n.blend.unwrap_or(Blend::Normal)));
+        dd.set_selected(current.and_then(|m| Blend::ALL.iter().position(|x| *x == m)).map_or(gtk::INVALID_LIST_POSITION, |i| i as u32));
+        let weak = Rc::downgrade(&b);
+        dd.connect_selected_notify(move |dd| {
+            if let (Some(b), Some(mode)) = (weak.upgrade(), Blend::ALL.get(dd.selected() as usize)) {
+                b.set_selected(set(&[("blend", if *mode == Blend::Normal { Value::Null } else { json!(mode.name()) })]));
+            }
+        });
+        dd.set_hexpand(true);
+        let blend_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        blend_row.add_css_class("design-number");
+        let blend_glyph = glyphs::image("blend", 14);
+        blend_glyph.add_css_class("design-number-caption");
+        blend_row.append(&blend_glyph);
+        blend_row.append(&dd);
+        sec.append(&blend_row);
         let weak = Rc::downgrade(&b);
         let blur = same(nodes.iter().map(|n| bits(n.blur.unwrap_or(0.0)))).map(f64::from_bits);
         sec.append(&number("@blur", blur, "Layer blur, px", move |v| {
@@ -566,14 +649,20 @@ impl Board {
         // Export.
         let sec = section(body, "Export");
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        for (scale, caption) in [(1.0, "PNG 1×"), (2.0, "PNG 2×")] {
+        row.set_homogeneous(true);
+        for (format, caption, tip) in [
+            (super::export::Format::Png(1.0), "PNG", "A picture at 1×"),
+            (super::export::Format::Png(2.0), "2×", "A picture at 2×, for sharp screens"),
+            (super::export::Format::Svg, "SVG", "Vector, for the web and other design tools"),
+            (super::export::Format::Pdf, "PDF", "Vector, to print or share"),
+        ] {
             let key = gtk::Button::with_label(caption);
             key.add_css_class("design-export-key");
-            key.set_hexpand(true);
+            key.set_tooltip_text(Some(tip));
             let weak = Rc::downgrade(&b);
             key.connect_clicked(move |_| {
                 if let Some(b) = weak.upgrade() {
-                    super::export::export_ids(&b, b.selected(), scale);
+                    super::export::export_ids(&b, b.selected(), format);
                 }
             });
             row.append(&key);
@@ -622,6 +711,13 @@ impl Board {
         drop(scene);
         self.commit(ops);
     }
+}
+
+/// A blend mode as the menu names it: "Color dodge".
+fn blend_caption(m: Blend) -> String {
+    let name = m.name().replace('_', " ");
+    let mut chars = name.chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
 fn sizing_name(s: Sizing) -> &'static str {

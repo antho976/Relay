@@ -400,8 +400,9 @@ fn page_menu(b: &Rc<Board>, page: &str, anchor: &gtk::Widget) {
                 p.popdown();
             }
             if let Some(b) = weak.upgrade() {
+                // Away from it only when it is the page on show.
                 let next = b.doc.scene.borrow().pages().iter().find(|p| **p != id).cloned();
-                if let Some(next) = next {
+                if let Some(next) = next.filter(|_| *b.page.borrow() == id) {
                     b.set_page(&next);
                 }
                 b.commit(vec![NodeOp::Delete { id: id.clone() }]);
@@ -438,6 +439,9 @@ fn duplicate_page(b: &Rc<Board>, page: &str) {
         let mut copy = n.clone();
         copy.id = fresh[&n.id].clone();
         copy.parent = n.parent.as_ref().map(|p| fresh[p].clone());
+        // Connectors follow the copies of the shapes they joined, all on the new page.
+        copy.from = n.from.as_ref().map(|e| fresh.get(e).cloned().unwrap_or_else(|| e.clone()));
+        copy.to = n.to.as_ref().map(|e| fresh.get(e).cloned().unwrap_or_else(|| e.clone()));
         if n.kind == NodeKind::Page {
             copy.name = Some(format!("{} copy", b.page_name(page)));
             ops.push(NodeOp::Add { node: copy, index });

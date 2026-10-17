@@ -53,9 +53,9 @@ button.design-ask:hover { background: white; border-color: white; }
   background: @slab_solid; border: 1px solid @strong; box-shadow: 0 10px 28px alpha(black, 0.38), 0 1px 3px alpha(black, 0.3);
 }
 .design-dock { padding: 4px; border-radius: 12px; }
-button.design-tool, menubutton.design-page-key > button { min-height: 32px; min-width: 32px; padding: 0 6px; border-radius: 8px; border: 0; background: transparent; color: @secondary; }
-button.design-tool:hover, menubutton.design-page-key > button:hover { background: @wash_solid; color: @ink; }
-button.design-tool:checked { background: @track; color: @ink; }
+button.design-tool, menubutton.design-tool > button, menubutton.design-page-key > button { min-height: 32px; min-width: 32px; padding: 0 6px; border-radius: 8px; border: 0; background: transparent; color: @secondary; }
+button.design-tool:hover, menubutton.design-tool > button:hover, menubutton.design-page-key > button:hover { background: @wash_solid; color: @ink; }
+button.design-tool:checked, menubutton.design-tool > button:checked { background: @track; color: @ink; }
 menubutton.design-tool-more > button { min-height: 32px; min-width: 14px; padding: 0 1px; margin-left: -2px; border: 0; border-radius: 6px; background: transparent; color: @faint; }
 menubutton.design-tool-more > button:hover { background: @wash_solid; color: @ink; }
 menubutton.design-page-key > button { padding: 0 8px 0 10px; font-weight: 500; color: @ink; }
@@ -102,7 +102,14 @@ entry.design-hex.error { border-color: @held; }
 .design-segmented button { min-height: 26px; min-width: 32px; padding: 0 6px; border: 0; border-radius: 7px; background: transparent; color: @faint; font-size: 12px; }
 .design-segmented button:hover { color: @ink; }
 .design-segmented button.selected { background: @track; color: @ink; }
-dropdown.design-dropdown > button { min-height: 28px; border-radius: 8px; border: 1px solid transparent; background: @glass_control; font-size: 12.5px; }
+dropdown.design-dropdown > button { min-height: 28px; padding: 0 8px 0 10px; border-radius: 8px; border: 1px solid transparent; background: @glass_control; font-size: 12.5px; }
+dropdown.design-dropdown > button:hover { background: @glass_hover; }
+/* The theme's arrow is a full-size icon; the board's chevrons are small and quiet. */
+dropdown.design-dropdown > button arrow { -gtk-icon-size: 10px; min-width: 10px; min-height: 10px; margin-left: 6px; color: @faint; }
+.design-number dropdown.design-dropdown > button { background: transparent; }
+/* A key the size of a number field: flip beside the rotation. */
+button.design-icon-field { min-height: 30px; min-width: 32px; padding: 0; border-radius: 8px; border: 1px solid transparent; background: @glass_control; color: @secondary; }
+button.design-icon-field:hover { background: @glass_hover; color: @ink; }
 
 /* The inspector. */
 .page-stack scrolledwindow.design-inspector, scrolledwindow.design-inspector { border-radius: 14px; }
@@ -117,7 +124,7 @@ entry.design-name:hover { background: @glass_control; }
 .design-note { color: @faint; font-size: 12px; }
 .design-row-caption { color: @faint; font-size: 12px; }
 .design-hex-caption { color: @secondary; font-family: 'Geist Mono'; font-size: 12px; }
-button.design-export-key { min-height: 28px; border-radius: 8px; font-size: 12px; }
+button.design-export-key { min-height: 28px; padding: 0 4px; border-radius: 8px; font-size: 12px; font-family: 'Geist Mono'; }
 .design-inspector checkbutton { font-size: 12.5px; color: @secondary; }
 
 /* Pages and layers. */
