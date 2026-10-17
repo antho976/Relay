@@ -127,7 +127,9 @@ fun DayScreen(
         state.deletedSet ?: return@LaunchedEffect
         // Newest wins: a still-showing "Set logged" would otherwise queue this one behind it.
         snackbarHostState.currentSnackbarData?.dismiss()
-        val result = snackbarHostState.showSnackbar(message = "Set deleted", actionLabel = "Undo", duration = SnackbarDuration.Short)
+        // Long, not Short: four seconds ran out on the emulator before a deliberate tap landed, and
+        // a lifter who swiped by accident is often looking at the bar, not the phone.
+        val result = snackbarHostState.showSnackbar(message = "Set deleted", actionLabel = "Undo", duration = SnackbarDuration.Long)
         viewModel.onEvent(
             if (result == SnackbarResult.ActionPerformed) DayUiEvent.RestoreDeletedSet else DayUiEvent.ForgetDeletedSet
         )
