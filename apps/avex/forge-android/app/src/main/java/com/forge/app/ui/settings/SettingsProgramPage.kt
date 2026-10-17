@@ -406,16 +406,23 @@ private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
         }
     }
 
+    // Hardware comes in the user's own unit, as onboarding offers it: a kilo lifter was shown lb
+    // plates read back in kilos ("2.3 kg · 4.5 kg · 20.4 kg"), and since onboarding had stored a
+    // real 10 kg plate (22.05 lb), no chip matched it and none showed as selected. Stored in lb;
+    // selection compares with a tolerance, since a kilo value is never an exact lb number.
+    val metric = state.weightUnit.isMetric
+    fun toLb(v: Double) = com.forge.app.domain.units.fromDisplayWeight(v, metric)
+    fun same(lb: Double?, v: Double) = lb != null && kotlin.math.abs(lb - toLb(v)) < 0.05
     SettingsGroup("Loading") {
         LoadingChips("Weight per plate") {
-            listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0).forEach { w ->
-                SettingsFilterChip(plateHardwareLabel(w, state.weightUnit), state.plateWeightLb == w) { vm.setPlateWeightLb(w) }
+            (if (metric) listOf(1.25, 2.5, 5.0, 10.0, 15.0, 20.0, 25.0) else listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0)).forEach { v ->
+                SettingsFilterChip(plateHardwareLabel(toLb(v), state.weightUnit), same(state.plateWeightLb, v)) { vm.setPlateWeightLb(toLb(v)) }
             }
         }
         LoadingChips("Heaviest dumbbell") {
             SettingsFilterChip("No limit", state.maxDbWeightLb == null) { vm.setMaxDbWeightLb(null) }
-            listOf(15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 75.0, 100.0).forEach { w ->
-                SettingsFilterChip(plateHardwareLabel(w, state.weightUnit), state.maxDbWeightLb == w) { vm.setMaxDbWeightLb(w) }
+            (if (metric) listOf(10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0) else listOf(15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 75.0, 100.0)).forEach { v ->
+                SettingsFilterChip(plateHardwareLabel(toLb(v), state.weightUnit), same(state.maxDbWeightLb, v)) { vm.setMaxDbWeightLb(toLb(v)) }
             }
         }
     }
