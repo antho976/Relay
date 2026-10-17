@@ -541,6 +541,26 @@ pub struct Design {
     pub deleted_at: Option<Ts>,
 }
 
+/// A saved copy of a design's nodes (`design.version.*`): one the person or an agent named, or
+/// one the engine kept on its own before an agent took over the design or before a restore.
+/// `design.version.get` has its nodes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DesignVersion {
+    pub id: Id,
+    pub design_id: Id,
+    /// The design's `rev` when it was saved.
+    pub rev: i64,
+    /// What it was saved as; `None` for a version saved without a name.
+    pub label: Option<String>,
+    /// Kept by the engine (the newest 30 per design), not named by anyone.
+    pub auto: bool,
+    /// `user` or the session that saved it.
+    pub created_by: String,
+    pub created_at: Ts,
+    /// How many nodes it holds.
+    pub nodes: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Message {
     pub id: Id,

@@ -3,8 +3,9 @@
 //! places every node of a page (auto layout, hugging text) given a text measurer; `hit` finds
 //! what is under the pointer; `snap` lines a moving box up with its neighbours; `edit` builds
 //! the `design.apply` edits behind duplicate, paste, group, frame, align and reparent; `shapes`
-//! is polygons, rotation and connectors; `icons` the icon set; `geom` is rectangles and the camera.
+//! is polygons, rotation, connectors and vector paths; `filters` a node's colour adjustments; `icons` the icon set; `geom` is rectangles and the camera.
 pub mod edit;
+pub mod filters;
 pub mod geom;
 pub mod hit;
 pub mod icons;

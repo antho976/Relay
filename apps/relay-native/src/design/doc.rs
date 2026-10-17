@@ -221,8 +221,20 @@ impl Doc {
                         }
                         {
                             let mut scene = doc.scene.borrow_mut();
+                            // The engine added or removed nodes we did not (a component's
+                            // copies following it): read the design again once we are done.
+                            if out.nodes.iter().any(|n| scene.node(&n.id).is_none()) || out.removed.iter().any(|id| scene.node(id).is_some()) {
+                                doc.stale.set(true);
+                            }
+                            // Or changed some beyond what we ran ahead with (copies, a style's
+                            // users, a comment signed): draw what it says.
+                            let synced = out.nodes.iter().any(|n| scene.node(&n.id).is_some_and(|mine| mine != n));
                             for node in out.nodes {
                                 scene.confirm(node);
+                            }
+                            if synced {
+                                drop(scene);
+                                doc.tell(Change::Scene);
                             }
                         }
                         let target = match undoing {

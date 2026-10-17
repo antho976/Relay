@@ -123,6 +123,19 @@ impl Gallery {
         row.append(&label("New design", ""));
         new.set_child(Some(&row));
         new.set_valign(gtk::Align::Center);
+        let templates = gtk::MenuButton::new();
+        templates.add_css_class("design-template-key");
+        templates.set_widget_name("design-templates");
+        let trow = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        trow.append(&super::glyphs::image("assets", 14));
+        trow.append(&label("From a template", ""));
+        templates.set_child(Some(&trow));
+        templates.set_tooltip_text(Some("Start from a ready design: an app, a landing page, a dashboard, a flowchart, a board…"));
+        templates.set_valign(gtk::Align::Center);
+        let tpop = gtk::Popover::new();
+        tpop.add_css_class("design-menu");
+        templates.set_popover(Some(&tpop));
+        head.append(&templates);
         head.append(&new);
         page.append(&head);
 
@@ -221,6 +234,12 @@ impl Gallery {
         gallery.root.connect_map(move |_| {
             if let Some(g) = weak.upgrade() {
                 g.next_thumb();
+            }
+        });
+        let weak = Rc::downgrade(&gallery);
+        tpop.connect_show(move |pop| {
+            if let Some(g) = weak.upgrade() {
+                pop.set_child(Some(&g.templates(pop)));
             }
         });
         for key in [&new, &empty_new] {
@@ -803,6 +822,67 @@ impl Gallery {
             _ => None,
         };
         super::create(&self.ui, self.project.get(), session);
+    }
+
+    /// The template picker: each template as a picture, a click starts a design from it.
+    fn templates(&self, pop: &gtk::Popover) -> gtk::Widget {
+        let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        body.append(&label("Start from a template", "design-menu-heading"));
+        let grid = gtk::FlowBox::new();
+        grid.set_selection_mode(gtk::SelectionMode::None);
+        grid.set_homogeneous(true);
+        grid.set_min_children_per_line(3);
+        grid.set_max_children_per_line(3);
+        grid.set_column_spacing(10);
+        grid.set_row_spacing(10);
+        let Some(kit) = relay_bus::kits::kits().iter().find(|k| k.id == "templates") else {
+            return body.upcast();
+        };
+        for item in &kit.items {
+            let tile = gtk::Button::new();
+            tile.add_css_class("design-template");
+            let col = gtk::Box::new(gtk::Orientation::Vertical, 4);
+            let picture = gtk::Picture::new();
+            picture.set_size_request(200, 125);
+            picture.set_content_fit(gtk::ContentFit::Cover);
+            picture.add_css_class("design-asset-thumb");
+            let mut nodes = vec![{
+                let mut page = relay_bus::design::Node::new(relay_bus::design::NodeKind::Page);
+                page.id = "p".into();
+                page
+            }];
+            if let Ok(parts) = relay_bus::kits::expand(item, "t", "p", 0.0, 0.0, None) {
+                nodes.extend(parts);
+            }
+            if let Some(t) = self.draw_thumb(Scene::new(nodes)) {
+                picture.set_paintable(Some(&t));
+            }
+            col.append(&picture);
+            let name = label(&item.name, "design-asset-name");
+            name.set_xalign(0.0);
+            col.append(&name);
+            tile.set_child(Some(&col));
+            tile.set_tooltip_text(Some(&item.description));
+            let weak = self.me.clone();
+            let p = pop.downgrade();
+            let path = format!("{}/{}", kit.id, item.id);
+            let title = item.name.clone();
+            tile.connect_clicked(move |_| {
+                if let Some(p) = p.upgrade() {
+                    p.popdown();
+                }
+                if let Some(g) = weak.upgrade() {
+                    let session = match &*g.filter.borrow() {
+                        Filter::Terminal(s) => Some(s.clone()),
+                        _ => None,
+                    };
+                    super::create_from(&g.ui, g.project.get(), session, Some((path.clone(), title.clone())));
+                }
+            });
+            grid.insert(&tile, -1);
+        }
+        body.append(&grid);
+        body.upcast()
     }
 
     pub fn toast(&self, text: &str, undo: Option<Rc<dyn Fn()>>) {

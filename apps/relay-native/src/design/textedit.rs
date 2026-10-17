@@ -9,11 +9,11 @@ use super::paint::{font_description, rgba, text_color};
 use gtk::prelude::*;
 use gtk::{gdk, pango};
 use gtk4 as gtk;
-use relay_bus::design::{Node, NodeKind, NodeOp, Sizing, TextAlign};
+use relay_bus::design::{parse_color, Node, NodeKind, NodeOp, Sizing, Span, TextAlign};
 use relay_client::design::layout::STICKY_PAD;
 use relay_client::design::Rect;
 use serde_json::{json, Map};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 pub struct Edit {
@@ -24,6 +24,10 @@ pub struct Edit {
     /// Added for this edit: it is sent only if words were typed.
     pub created: bool,
     pub zoom: Cell<f64>,
+    /// A tag per run style in use (the span with no words), over the node's own tag.
+    styles: RefCell<Vec<(gtk::TextTag, Span)>>,
+    /// Words just typed: where, how many characters, in the style of what was before them.
+    typed: RefCell<Option<(i32, i32, Span)>>,
 }
 
 impl Board {
@@ -73,6 +77,7 @@ impl Board {
         let buffer = view.buffer();
         buffer.set_text(n.text.as_deref().unwrap_or(""));
         let tag = buffer.create_tag(None, &[]).expect("an anonymous tag");
+        tag.set_priority(0);
         let edit = Edit {
             id: n.id.clone(),
             view: view.clone(),
@@ -80,8 +85,34 @@ impl Board {
             original: n.clone(),
             created,
             zoom: Cell::new(0.0),
+            styles: RefCell::default(),
+            typed: RefCell::default(),
         };
         *self.edit.borrow_mut() = Some(edit);
+        // The words' runs, each in its style.
+        if let Some(spans) = n.live_spans() {
+            let mut at = 0;
+            for span in spans {
+                let len = span.text.chars().count() as i32;
+                let style = Span { text: String::new(), ..span.clone() };
+                if style != Span::default() {
+                    if let Some(tag) = self.style_tag(&style) {
+                        buffer.apply_tag(&tag, &buffer.iter_at_offset(at), &buffer.iter_at_offset(at + len));
+                    }
+                }
+                at += len;
+            }
+        }
+        let weak = Rc::downgrade(self);
+        buffer.connect_insert_text(move |buffer, iter, text| {
+            if let Some(b) = weak.upgrade() {
+                let at = iter.offset();
+                let style = if at > 0 { b.style_at(&buffer.iter_at_offset(at - 1)) } else { b.style_at(iter) };
+                if let Some(e) = b.edit.borrow().as_ref() {
+                    *e.typed.borrow_mut() = Some((at, text.chars().count() as i32, style));
+                }
+            }
+        });
         *self.painter.editing.borrow_mut() = Some(n.id.clone());
         self.style_edit();
         self.overlay.add_overlay(&view);
@@ -93,13 +124,19 @@ impl Board {
                 return;
             };
             let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
-            let id = match b.edit.borrow().as_ref() {
+            let (id, typed) = match b.edit.borrow().as_ref() {
                 Some(e) => {
                     buffer.apply_tag(&e.tag, &buffer.start_iter(), &buffer.end_iter());
-                    e.id.clone()
+                    (e.id.clone(), e.typed.borrow_mut().take())
                 }
                 None => return,
             };
+            // Typing inside a styled run carries its style on.
+            if let Some((at, len, style)) = typed.filter(|t| t.2 != Span::default()) {
+                if let Some(tag) = b.style_tag(&style) {
+                    buffer.apply_tag(&tag, &buffer.iter_at_offset(at), &buffer.iter_at_offset(at + len));
+                }
+            }
             if let Some(node) = b.doc.scene.borrow_mut().node_mut(&id) {
                 node.text = Some(text);
             }
@@ -115,8 +152,25 @@ impl Board {
                 return glib::Propagation::Proceed;
             };
             let ctrl = mods.contains(gdk::ModifierType::CONTROL_MASK);
+            let shift = mods.contains(gdk::ModifierType::SHIFT_MASK);
             if key == gdk::Key::Escape || (ctrl && matches!(key, gdk::Key::Return | gdk::Key::KP_Enter)) {
                 b.end_edit(true);
+                return glib::Propagation::Stop;
+            }
+            if ctrl {
+                let field = match key.to_lower() {
+                    gdk::Key::b => "weight",
+                    gdk::Key::i => "italic",
+                    gdk::Key::u => "underline",
+                    gdk::Key::x if shift => "strike",
+                    gdk::Key::e => "code",
+                    gdk::Key::k => {
+                        b.ask_link();
+                        return glib::Propagation::Stop;
+                    }
+                    _ => return glib::Propagation::Proceed,
+                };
+                b.toggle_run(field, None);
                 return glib::Propagation::Stop;
             }
             glib::Propagation::Proceed
@@ -217,6 +271,7 @@ impl Board {
         *self.painter.editing.borrow_mut() = None;
         let buffer = edit.view.buffer();
         let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
+        let spans = runs(&buffer, &edit.styles.borrow());
         self.overlay.remove_overlay(&edit.view);
         // Back to the words it had; the edit below makes the change for real. A style set
         // while typing has been sent already (or, on a new text, rides along with it).
@@ -231,17 +286,19 @@ impl Board {
         }
         self.doc.set_hold(false);
         let before = edit.original.text.clone().unwrap_or_default();
+        let spans_before = edit.original.live_spans().map(<[Span]>::to_vec);
         if commit {
             if edit.created {
                 if !text.trim().is_empty() {
                     let mut node = current.unwrap_or_else(|| edit.original.clone());
                     node.text = Some(text);
+                    node.spans = spans;
                     self.commit(vec![NodeOp::Add { node, index: None }]);
                     self.select(vec![edit.id.clone()]);
                 } else {
                     self.select(Vec::new());
                 }
-            } else if text != before {
+            } else if text != before || spans != spans_before {
                 let op = if text.trim().is_empty() && edit.original.kind == NodeKind::Text {
                     NodeOp::Delete { id: edit.id.clone() }
                 } else {
@@ -249,6 +306,7 @@ impl Board {
                     // A shape whose label was cleared has none.
                     let empty = text.trim().is_empty();
                     set.insert("text".into(), if empty { serde_json::Value::Null } else { json!(text) });
+                    set.insert("spans".into(), spans.as_ref().filter(|_| !empty).map_or(serde_json::Value::Null, |s| json!(s)));
                     NodeOp::Update { id: edit.id.clone(), set }
                 };
                 self.commit(vec![op]);
@@ -258,6 +316,157 @@ impl Board {
         self.canvas.grab_focus();
         self.rebuild_context();
     }
+}
+
+impl Board {
+    /// The tag for a run style, made once per edit and scaled with the zoom.
+    fn style_tag(&self, style: &Span) -> Option<gtk::TextTag> {
+        let edit = self.edit.borrow();
+        let e = edit.as_ref()?;
+        if let Some((t, _)) = e.styles.borrow().iter().find(|(_, s)| s == style) {
+            return Some(t.clone());
+        }
+        let tag = e.view.buffer().create_tag(None, &[])?;
+        let zoom = self.cam.get().zoom;
+        if let Some(w) = style.weight {
+            tag.set_weight(w as i32);
+        }
+        if style.italic == Some(true) {
+            tag.set_style(pango::Style::Italic);
+        }
+        if style.underline == Some(true) || style.link.is_some() {
+            tag.set_underline(pango::Underline::Single);
+        }
+        if style.strike == Some(true) {
+            tag.set_strikethrough(true);
+        }
+        if let Some(c) = style.color.as_deref().or(style.link.as_ref().map(|_| "#4C8DFF")).filter(|c| parse_color(c).is_some()) {
+            tag.set_foreground_rgba(Some(&rgba(c)));
+        }
+        if let Some(size) = style.size {
+            tag.set_size_points(size * zoom * 0.75);
+        }
+        if style.code == Some(true) {
+            tag.set_family(Some("Geist Mono"));
+            tag.set_background_rgba(Some(&gdk::RGBA::new(0.5, 0.5, 0.5, 0.19)));
+        } else if let Some(f) = &style.font {
+            tag.set_family(Some(f));
+        }
+        e.styles.borrow_mut().push((tag.clone(), style.clone()));
+        Some(tag)
+    }
+
+    /// The run style at `iter`: the style tag on it, or none.
+    fn style_at(&self, iter: &gtk::TextIter) -> Span {
+        let edit = self.edit.borrow();
+        let Some(e) = edit.as_ref() else { return Span::default() };
+        let styles = e.styles.borrow();
+        iter.tags().iter().find_map(|t| styles.iter().find(|(s, _)| s == t).map(|(_, st)| st.clone())).unwrap_or_default()
+    }
+
+    /// Turn `field` on or off across the selected words (a link to `link`, or off).
+    pub(super) fn toggle_run(&self, field: &str, link: Option<Option<String>>) {
+        let Some((view, buffer)) = self.edit.borrow().as_ref().map(|e| (e.view.clone(), e.view.buffer())) else { return };
+        let Some((a, z)) = buffer.selection_bounds() else { return };
+        let (start, end) = (a.offset(), z.offset());
+        // On when any selected word lacks it.
+        let on = (start..end).any(|i| {
+            let s = self.style_at(&buffer.iter_at_offset(i));
+            match field {
+                "weight" => s.weight.is_none_or(|w| w < 600),
+                "italic" => s.italic != Some(true),
+                "underline" => s.underline != Some(true),
+                "strike" => s.strike != Some(true),
+                "code" => s.code != Some(true),
+                _ => true,
+            }
+        });
+        let styles: Vec<gtk::TextTag> = self.edit.borrow().as_ref().map(|e| e.styles.borrow().iter().map(|(t, _)| t.clone()).collect()).unwrap_or_default();
+        let mut i = start;
+        while i < end {
+            let style = self.style_at(&buffer.iter_at_offset(i));
+            let mut j = i + 1;
+            while j < end && self.style_at(&buffer.iter_at_offset(j)) == style {
+                j += 1;
+            }
+            let mut next = style.clone();
+            match field {
+                "weight" => next.weight = on.then_some(700),
+                "italic" => next.italic = on.then_some(true),
+                "underline" => next.underline = on.then_some(true),
+                "strike" => next.strike = on.then_some(true),
+                "code" => next.code = on.then_some(true),
+                "link" => next.link = link.clone().flatten(),
+                _ => {}
+            }
+            let (ri, rj) = (buffer.iter_at_offset(i), buffer.iter_at_offset(j));
+            for t in &styles {
+                buffer.remove_tag(t, &ri, &rj);
+            }
+            if next != Span::default() {
+                if let Some(tag) = self.style_tag(&next) {
+                    buffer.apply_tag(&tag, &buffer.iter_at_offset(i), &buffer.iter_at_offset(j));
+                }
+            }
+            i = j;
+        }
+        view.grab_focus();
+    }
+
+    /// Ctrl+K while typing: a web address for the selected words.
+    fn ask_link(&self) {
+        let Some(view) = self.edit.borrow().as_ref().map(|e| e.view.clone()) else { return };
+        let buffer = view.buffer();
+        let Some((a, _)) = buffer.selection_bounds() else {
+            self.toast("Select the words to link first");
+            return;
+        };
+        let current = self.style_at(&a).link;
+        let pop = gtk::Popover::new();
+        pop.add_css_class("design-menu");
+        pop.set_parent(&view);
+        let location = view.iter_location(&a);
+        let (x, y) = view.buffer_to_window_coords(gtk::TextWindowType::Widget, location.x(), location.y());
+        pop.set_pointing_to(Some(&gdk::Rectangle::new(x, y, 1, location.height())));
+        let entry = gtk::Entry::new();
+        entry.set_placeholder_text(Some("https://… (empty removes the link)"));
+        entry.set_text(current.as_deref().unwrap_or(""));
+        entry.set_width_chars(36);
+        pop.set_child(Some(&entry));
+        let weak = self.me_weak();
+        let p = pop.downgrade();
+        entry.connect_activate(move |e| {
+            let url = e.text().trim().to_string();
+            if let Some(b) = weak.upgrade() {
+                b.toggle_run("link", Some((!url.is_empty()).then_some(url)));
+            }
+            if let Some(p) = p.upgrade() {
+                p.popdown();
+            }
+        });
+        pop.connect_closed(|p| {
+            let p = p.clone();
+            glib::idle_add_local_once(move || p.unparent());
+        });
+        pop.popup();
+        entry.grab_focus();
+    }
+}
+
+/// The buffer's words as styled runs, or `None` when none has a style of its own.
+fn runs(buffer: &gtk::TextBuffer, styles: &[(gtk::TextTag, Span)]) -> Option<Vec<Span>> {
+    let mut out: Vec<Span> = Vec::new();
+    let mut iter = buffer.start_iter();
+    while !iter.is_end() {
+        let style = iter.tags().iter().find_map(|t| styles.iter().find(|(s, _)| s == t).map(|(_, st)| st.clone())).unwrap_or_default();
+        let ch = iter.char();
+        match out.last_mut() {
+            Some(last) if Span { text: String::new(), ..last.clone() } == style => last.text.push(ch),
+            _ => out.push(Span { text: ch.to_string(), ..style }),
+        }
+        iter.forward_char();
+    }
+    out.iter().any(|s| Span { text: String::new(), ..s.clone() } != Span::default()).then_some(out)
 }
 
 /// The kinds whose words can be typed on the canvas.

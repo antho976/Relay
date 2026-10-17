@@ -23,6 +23,8 @@ use std::rc::{Rc, Weak};
 
 /// Selection, hover and handles.
 pub const SELECT: &str = "#4C9DFF";
+/// Components and their copies, on the canvas and in the layers.
+pub const COMPONENT: &str = "#A178FF";
 /// Smart guides and spacing.
 pub const GUIDE: &str = "#FF3D71";
 /// What an agent just changed glows briefly in the live colour.
@@ -48,6 +50,10 @@ pub enum Tool {
     Hexagon,
     Star,
     Eraser,
+    /// The bézier pen: click for corners, drag for curves.
+    Vector,
+    /// Pin a comment.
+    Comment,
 }
 
 impl Tool {
@@ -77,6 +83,8 @@ impl Tool {
             Tool::Hexagon => "hexagon",
             Tool::Star => "star",
             Tool::Eraser => "eraser",
+            Tool::Vector => "vector",
+            Tool::Comment => "comment",
         }
     }
 
@@ -98,6 +106,8 @@ impl Tool {
             Tool::Hexagon => "Hexagon",
             Tool::Star => "Star",
             Tool::Eraser => "Eraser",
+            Tool::Vector => "Vector pen",
+            Tool::Comment => "Comment",
         }
     }
 
@@ -119,6 +129,8 @@ impl Tool {
             Tool::Hexagon => "",
             Tool::Star => "Shift S",
             Tool::Eraser => "E",
+            Tool::Vector => "B",
+            Tool::Comment => "C",
         }
     }
 }
@@ -184,6 +196,27 @@ pub enum Gesture {
     Rotate { id: String, centre: (f64, f64), start: f64, orig: Node, moved: bool },
     /// Rubbing out strokes: each touched one with the opacity it had.
     Erase { hits: Vec<(String, Option<f64>)> },
+    /// The vector pen pulling the handles out of the anchor just placed.
+    PenHandle { anchor: (f64, f64) },
+    /// Dragging one point of the vector being edited: an anchor (moving its handles with it)
+    /// or one of its handles. `orig` is the path data before.
+    VectorPoint { id: String, point: super::pen::PointRef, orig: Node, rect: Rect, moved: bool },
+}
+
+/// State of the tools added beside the first ones: the pen's path under way, the vector whose
+/// points are being edited, the comment thread open, what resizing a frame takes along.
+#[derive(Default)]
+pub struct Extra {
+    pub pen: RefCell<Option<super::pen::PenPath>>,
+    pub vector_edit: RefCell<Option<String>>,
+    pub comment_open: RefCell<Option<String>>,
+    pub show_resolved: Cell<bool>,
+    pub hide_comments: Cell<bool>,
+    /// Alt held: distances from the selection to what the pointer is over.
+    pub alt: Cell<bool>,
+    pub hide_grids: Cell<bool>,
+    /// A frame being resized by hand: its children with constraints, as they were.
+    pub pinned: RefCell<Vec<(String, Node)>>,
 }
 
 pub struct Board {
@@ -245,6 +278,7 @@ pub struct Board {
     /// Back to the gallery, when the board sits in the Design view.
     pub(super) back: RefCell<Option<Rc<dyn Fn()>>>,
     pub(super) windowed: bool,
+    pub(super) extra: Extra,
     me: Weak<Board>,
 }
 
@@ -310,6 +344,10 @@ impl Board {
         ask.set_tooltip_text(Some("Ask the terminal's agent to change the selection or this page"));
         ask.set_widget_name("design-ask");
         top.append(&ask);
+        let present = crate::app::icon_button("play", "Present: click through the prototype (Ctrl+Alt+Enter)");
+        present.set_child(Some(&glyphs::image("play", 16)));
+        present.set_widget_name("design-present");
+        top.append(&present);
         let pop_out = crate::app::icon_button("window", "Open in a new window");
         pop_out.set_child(Some(&glyphs::image("window", 16)));
         pop_out.set_visible(!windowed);
@@ -473,6 +511,7 @@ impl Board {
             actions,
             back: RefCell::default(),
             windowed,
+            extra: Extra::default(),
             me: me.clone(),
         });
 
@@ -547,6 +586,12 @@ impl Board {
             }
         });
         let weak = Rc::downgrade(&board);
+        present.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.present();
+            }
+        });
+        let weak = Rc::downgrade(&board);
         board.agent_undo.connect_clicked(move |_| {
             if let Some(b) = weak.upgrade() {
                 b.undo_agent();
@@ -583,6 +628,10 @@ impl Board {
 
     pub(super) fn me(&self) -> Rc<Board> {
         self.me.upgrade().expect("board alive while called")
+    }
+
+    pub(super) fn me_weak(&self) -> Weak<Board> {
+        self.me.clone()
     }
 
     // ------------------------------------------------------------------ geometry
@@ -947,8 +996,12 @@ impl Board {
             snap.append_node(&node);
             snap.restore();
         }
+        self.layout_grids(snap, &scene, &placed);
         self.frame_labels(snap, &scene, &placed, &page);
         self.overlays(snap, &scene, &placed);
+        self.marks(snap, &scene, &placed);
+        self.pen_overlay(snap, &scene, &placed);
+        self.comment_pins(snap, &scene, &placed, &page);
     }
 
     /// A dot every 8, 16, 32… page pixels, whichever falls 16 to 32 screen pixels apart.
@@ -1024,7 +1077,14 @@ impl Board {
             layout.set_ellipsize(pango::EllipsizeMode::End);
             let (_, lh) = layout.pixel_size();
             let lit = selection.contains(id) || hover.as_deref() == Some(id.as_str());
-            let color = if lit { rgba(SELECT) } else { gdk::RGBA::new(0.62, 0.6, 0.57, 1.0) };
+            let component = n.component == Some(true) || n.instance_of.is_some();
+            let color = if component {
+                rgba(COMPONENT)
+            } else if lit {
+                rgba(SELECT)
+            } else {
+                gdk::RGBA::new(0.62, 0.6, 0.57, 1.0)
+            };
             snap.save();
             snap.translate(&graphene::Point::new(s.x as f32, (s.y - lh as f64 - 6.0) as f32));
             snap.append_layout(&layout, &color);
@@ -1371,12 +1431,15 @@ impl Board {
         }
         let shapes = tool.is_shape();
         self.shape_key.set_active(shapes);
-        self.pen_key.set_active(matches!(tool, Tool::Pen | Tool::Highlighter | Tool::Eraser));
+        if tool != Tool::Vector {
+            self.finish_pen();
+        }
+        self.pen_key.set_active(matches!(tool, Tool::Pen | Tool::Highlighter | Tool::Eraser | Tool::Vector));
         if shapes {
             self.shape_key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
             self.shape_key.set_tooltip_text(Some(&format!("{} ({})", tool.caption(), tool.key())));
         }
-        if matches!(tool, Tool::Pen | Tool::Highlighter | Tool::Eraser) {
+        if matches!(tool, Tool::Pen | Tool::Highlighter | Tool::Eraser | Tool::Vector) {
             self.pen_key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
             self.pen_key.set_tooltip_text(Some(&format!("{} ({})", tool.caption(), tool.key())));
         }
@@ -1467,7 +1530,7 @@ impl Board {
         self.pen_key.connect_clicked(move |key| {
             if let Some(b) = weak.upgrade() {
                 let tool = match b.tool.get() {
-                    t @ (Tool::Highlighter | Tool::Eraser) => t,
+                    t @ (Tool::Highlighter | Tool::Eraser | Tool::Vector) => t,
                     _ => Tool::Pen,
                 };
                 b.set_tool(tool);
@@ -1475,7 +1538,7 @@ impl Board {
             }
         });
         dock.append(&self.pen_key);
-        dock.append(&self.tool_menu(&[Tool::Pen, Tool::Highlighter, Tool::Eraser]));
+        dock.append(&self.tool_menu(&[Tool::Vector, Tool::Pen, Tool::Highlighter, Tool::Eraser]));
         let icon_key = gtk::MenuButton::new();
         icon_key.add_css_class("design-tool");
         icon_key.set_child(Some(&glyphs::image("icon", 16)));
@@ -1503,6 +1566,9 @@ impl Board {
             }
         });
         dock.append(&image_key);
+        let key = self.tool_key(Tool::Comment);
+        dock.append(&key);
+        keys.push((Tool::Comment, key));
         *self.tool_keys.borrow_mut() = keys;
         self.set_tool(Tool::Select);
         keep_canvas_focus(dock.upcast_ref());
@@ -1672,10 +1738,19 @@ impl Board {
         if !self.windowed {
             section.append(Some("Open in a new window"), Some("design.pop-out"));
         }
+        section.append(Some("Version history…"), Some("design.history"));
+        section.append(Some("Present"), Some("design.present"));
         menu.append_section(None, &section);
         let section = gio::Menu::new();
         section.append(Some("Export page as PNG…"), Some("design.export-page"));
         section.append(Some("Export selection as PNG…"), Some("design.export"));
+        section.append(Some("Export as SVG…"), Some("design.export-svg"));
+        section.append(Some("Export as PDF…"), Some("design.export-pdf"));
+        section.append(Some("Copy as HTML and CSS"), Some("design.copy-code"));
+        menu.append_section(None, &section);
+        let section = gio::Menu::new();
+        section.append(Some("Show comments"), Some("design.toggle-comments"));
+        section.append(Some("Show layout grids"), Some("design.toggle-grids"));
         menu.append_section(None, &section);
         let section = gio::Menu::new();
         section.append(Some("Delete design"), Some("design.delete-design"));
@@ -1920,6 +1995,37 @@ impl Board {
             }
         });
         add("add-page", |b| b.add_page());
+        add("make-component", |b| b.make_component());
+        add("create-instance", |b| b.create_instance());
+        add("go-to-component", |b| b.go_to_component());
+        add("reset-overrides", |b| b.reset_overrides());
+        add("detach-instance", |b| b.detach_instance());
+        add("flip-x", |b| b.flip("flip_x"));
+        add("flip-y", |b| b.flip("flip_y"));
+        add("present", |b| b.present());
+        add("edit-points", |b| {
+            if let [id] = b.selected().as_slice() {
+                b.edit_points(id);
+            }
+        });
+        add("to-vector", |b| {
+            if let [id] = b.selected().as_slice() {
+                b.convert_to_vector(id);
+            }
+        });
+        add("export-svg", |b| super::export::export_vector(b, super::export::Vector::Svg));
+        add("export-pdf", |b| super::export::export_vector(b, super::export::Vector::Pdf));
+        add("copy-code", |b| b.copy_code());
+        add("history", |b| b.show_history());
+        add("make-style", |b| b.make_style());
+        add("toggle-comments", |b| {
+            b.extra.hide_comments.set(!b.extra.hide_comments.get());
+            b.canvas.queue_draw();
+        });
+        add("toggle-grids", |b| {
+            b.extra.hide_grids.set(!b.extra.hide_grids.get());
+            b.canvas.queue_draw();
+        });
     }
 
     fn refresh_actions(&self) {
@@ -2426,6 +2532,8 @@ pub fn kind_caption(kind: NodeKind) -> &'static str {
         NodeKind::Image => "Image",
         NodeKind::Polygon => "Polygon",
         NodeKind::Icon => "Icon",
+        NodeKind::Vector => "Vector",
+        NodeKind::Comment => "Comment",
     }
 }
 
@@ -2443,6 +2551,8 @@ pub fn kind_glyph(kind: NodeKind) -> &'static str {
         NodeKind::Image => "image",
         NodeKind::Polygon => "triangle",
         NodeKind::Icon => "icon",
+        NodeKind::Vector => "vector",
+        NodeKind::Comment => "comment",
     }
 }
 

@@ -1,6 +1,6 @@
 ---
 name: design-canvas
-description: Draw and revise designs on Relay's design canvas with the design.* tools - the node model (pages, frames, groups, rects, ellipses, lines and arrows, text, stickies, pen paths, images), coordinates relative to the parent, auto layout (layout row or column, gap, padding, justify, items, w_sizing and h_sizing hug or fill) so screens lay themselves out without measuring text, choosing your own node ids so one design.apply builds a whole screen, revising exactly the layers a person selected and asked about, pictures through design.asset.add, reading validation errors, and the craft that makes a mockup look real. Use whenever a task asks to design, sketch, mock up, wireframe or diagram something, or a message starts with "[Relay design]".
+description: Draw and revise designs on Relay's design canvas with the design.* tools - the node model (pages, frames, groups, rects, ellipses, lines and arrows, text with rich spans and lists, stickies, pen paths, vectors, images, polygons, icons, comments), the asset packs and templates (design.kits, insert), components and their copies, shared styles, constraints and layout grids, prototype links, versions, rendering a picture to look at (design.render), HTML/CSS (design.code), coordinates relative to the parent, auto layout (layout row or column, gap, padding, justify, items, w_sizing and h_sizing hug or fill) so screens lay themselves out without measuring text, choosing your own node ids so one design.apply builds a whole screen, revising exactly the layers a person selected and asked about, pictures through design.asset.add, reading validation errors, and the craft that makes a mockup look real. Use whenever a task asks to design, sketch, mock up, wireframe or diagram something, or a message starts with "[Relay design]".
 ---
 
 # Relay design canvas
@@ -24,6 +24,11 @@ the Design view.
 | `design.apply {design_id, ops, base_rev?}` | Add, update, move, delete nodes. Answers the changed nodes and their ids. |
 | `design.update {design_id, title?}` | Rename the design. |
 | `design.asset.add {design_id, path}` | Store a PNG/JPEG/GIF/WebP/SVG; answers `{src, w, h}` for an image node. |
+| `design.kits {kit?, with_nodes?}` | The asset packs and templates: `relay-ui`, `wireframe`, `flowchart`, `devices`, `templates`, each item `kit/item` with its `slots`. |
+| `design.create {…, template}` | Start from a template (`templates/<item>`) instead of a blank page. |
+| `design.render {design_id, node_id?, scale?}` | Ask the open window for a PNG of a frame or page; then `bus.wait` for `design.rendered` with your `request_id` and read its `path`. Look at your work this way. |
+| `design.code {design_id, node_id}` | The frame as HTML and CSS. |
+| `design.version.save/list/get/restore/delete` | Named versions. Relay saves one by itself before you start editing what someone else edited last. |
 
 ## Nodes
 
@@ -44,6 +49,9 @@ so moving a frame moves what is in it. Children paint in order: later ones on to
 | `polygon` | triangles, diamonds, hexagons, stars, flowchart decisions | `sides` (3 triangle, 4 diamond, 6 hexagon…), `star` (inner ratio, e.g. 0.4), `fill`, `stroke`, `text` |
 | `icon` | interface icons in mockups | `icon` (home, search, settings, user, bell, mail, heart, star, plus, check, x, chevron-*, arrow-*, menu, more-horizontal, trash, edit, copy, calendar, clock, image, file, folder, shopping-cart, credit-card, globe, map-pin, phone, message, send, filter, sliders, grid, list, play, pause, refresh, lock, eye, info, alert, help, sun, moon, wifi, battery, terminal, code, zap, cloud, git-branch, bar-chart…), `stroke` (its colour), `w h` (24 is the native size) |
 
+| `vector` | any shape the others can't make: logos, blobs, custom icons, curves | `d` (SVG path data: M L H V C S Q T A Z), `view: [w, h]` (the box `d` is in; it scales to `w h`), `fill`, `stroke`, `open: true` for a line |
+| `comment` | a review note pinned on the canvas, never part of the design | `text`, `replies: [{text}]` (you are filled in as the author), `resolved` |
+
 Any node can also take `rotation` (degrees clockwise about its centre), `opacity`, `blur` (px),
 `shadow`, and a shape `gradient` instead of `fill`:
 `{"kind": "linear", "angle": 135, "stops": [{"at": 0, "color": "#4C9DFF"}, {"at": 1, "color": "#A178FF"}]}`
@@ -57,6 +65,36 @@ and follows them when they move — `points` are not needed. `route` is `straigh
 `elbow` (right angles) or `curve`; `arrow_end: true` puts a head on it:
 `{"op":"add","node":{"parent":"page-1","kind":"line","from":"start","to":"decide","route":"elbow","arrow_end":true}}`.
 Build flowcharts this way: boxes and diamonds with `text`, connectors between them.
+
+**Asset packs.** Don't rebuild buttons, inputs, cards, nav bars, flowchart shapes or device frames
+from scratch: `design.kits` lists them, and one `insert` places a whole piece as ordinary editable
+nodes, ids `<id>.<part>`; `set` fills its slots:
+`{"op":"insert","item":"relay-ui/button-primary","parent":"login","id":"cta","set":{"label":{"text":"Continue"}}}`.
+
+**Components.** A frame with `component: true` is a main component; `{"op":"insert","item":"#card"}`
+places a copy whose parts follow every change to it, except fields you set on the copy (those are
+its overrides; `overridden: null` resets them). Change the component, not each copy.
+
+**Shared styles.** A node with `shared: true` (usually on a page named Styles) is a style; others
+name it in `fill_style`, `text_style` (font, size, weight, line height, spacing) or `effect_style`
+(shadow, blur) and the engine keeps them in step. Setting such a field by hand detaches the style.
+
+**Rich text.** `spans: [{"text": "Bold ", "weight": 700}, {"text": "link", "link": "https://…"}]`,
+whose words together must equal `text`; spans take `weight italic underline strike color size font
+code link`. `list: "bullet" | "number" | "check"` marks each line (`[x] ` ticks a checklist line).
+
+**Pictures as fills, crop, adjustments.** Any rect, ellipse, polygon, frame or vector takes `src`
+(from `design.asset.add`) to fill with a picture; `crop: [x, y, w, h]` as fractions shows part of
+it. `filters: {brightness, contrast, saturation (-1..1), hue (-180..180), sepia, invert (0..1)}`
+adjusts any node's colours. `flip_x` / `flip_y` mirror it.
+
+**Constraints and grids.** Inside a frame without auto layout, `constraints: {"h": "start|end|both|center|scale", "v": …}`
+says how a child follows when the frame is resized. A frame's `grids: [{"kind": "columns", "count": 12, "gutter": 20, "margin": 24}]`
+(or `rows`, or `square` with `size`) is drawn while designing and snapped to.
+
+**Prototypes.** `goto: "<frame id>"` on any node makes a click on it go to that frame when
+presenting, with `transition` (`dissolve`, `instant`, `slide_left`, `slide_right`, `slide_up`,
+`slide_down`); `start: true` on a top-level frame is where presenting begins.
 
 Colours are `#RRGGBB` or `#RRGGBBAA` (`#00000000` is transparent). Defaults: a frame is white, a
 shape `#D9D9D9`, a sticky yellow; text is 16 px Geist 400, dark on a light ground and light on a
@@ -111,6 +149,7 @@ A request from the board reads like `[Relay design] "Settings" (design_id 12, pa
 Selected: save-button (frame "Button"). Picture of it: /…/ab12….png. Request: make it green.`
 
 1. Look at the picture (it is a PNG path you can read) and `design.get` the design (or `page`).
+   After your change, `design.render` the frame and look again before you say it is done.
 2. Change those layers with `update`: `{"op":"update","id":"save-button","set":{"fill":"#2EC469"}}`.
    `set` takes any node field except `id`, `kind` and `parent`; `null` puts a field back to default.
 3. `move` reparents or reorders: `{"op":"move","id":"x","parent":"card","index":0}` (index 0 is the
@@ -119,6 +158,10 @@ Selected: save-button (frame "Button"). Picture of it: /…/ab12….png. Request
    request → one `design.apply`, so one Ctrl+Z undoes it.
 5. Pass `base_rev` (the `rev` you read) when your edit assumes nothing changed since; a
    `design.stale` refusal means read again first.
+
+A **comment thread** handed to you reads `Comment thread comment-3 says: "…"`: do what it asks,
+then answer in it — `update` `comment-3` with `replies` (the earlier ones plus `{"text": "…"}`),
+or `resolved: true`.
 
 ## Errors
 

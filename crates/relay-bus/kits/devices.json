@@ -1,0 +1,3356 @@
+{
+ "id": "devices",
+ "name": "Devices & chrome",
+ "description": "Phone, tablet, watch, browser and desktop frames with their status bars, to put designs in context.",
+ "items": [
+  {
+   "id": "phone",
+   "name": "Phone",
+   "category": "Phones",
+   "description": "An iPhone-sized screen (390×844) with status bar and home indicator.",
+   "slots": {
+    "time": "Clock",
+    "content-hint": "Placeholder text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "fill": "#FFFFFF",
+     "name": "Phone",
+     "w": 390,
+     "h": 844,
+     "radius": 48,
+     "stroke": "#E5E5EA"
+    },
+    {
+     "id": "status-bar",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      0,
+      28
+     ],
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#00000000",
+     "name": "Status bar",
+     "w": 390,
+     "h": 54,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "time",
+     "parent": "status-bar",
+     "kind": "text",
+     "text": "9:41",
+     "font_size": 16,
+     "font_weight": 600,
+     "color": "#111111",
+     "name": "Time",
+     "w": 60
+    },
+    {
+     "id": "island",
+     "parent": "status-bar",
+     "kind": "rect",
+     "name": "Dynamic island",
+     "w": 122,
+     "h": 34,
+     "fill": "#000000",
+     "radius": 20
+    },
+    {
+     "id": "status-icons",
+     "parent": "status-bar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "items": "center",
+     "justify": "end",
+     "fill": "#00000000",
+     "name": "Status icons",
+     "w": 60,
+     "h": 20
+    },
+    {
+     "id": "wifi",
+     "parent": "status-icons",
+     "kind": "icon",
+     "icon": "wifi",
+     "stroke": "#111111",
+     "w": 18,
+     "h": 18,
+     "name": "Wi-Fi"
+    },
+    {
+     "id": "battery",
+     "parent": "status-icons",
+     "kind": "icon",
+     "icon": "battery",
+     "stroke": "#111111",
+     "w": 22,
+     "h": 22,
+     "name": "Battery"
+    },
+    {
+     "id": "content",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "column",
+     "items": "center",
+     "justify": "center",
+     "fill": "#F5F5F7",
+     "name": "Content",
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "w": 390,
+     "h": 700
+    },
+    {
+     "id": "content-hint",
+     "parent": "content",
+     "kind": "text",
+     "text": "Your screen",
+     "font_size": 15,
+     "font_weight": 500,
+     "color": "#8E8E93",
+     "name": "Hint"
+    },
+    {
+     "id": "home-indicator",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Home indicator",
+     "w": 390,
+     "h": 34,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "home-bar",
+     "parent": "home-indicator",
+     "kind": "rect",
+     "name": "Bar",
+     "w": 134,
+     "h": 5,
+     "fill": "#111111",
+     "radius": 3
+    }
+   ]
+  },
+  {
+   "id": "phone-bezel",
+   "name": "Phone / With bezel",
+   "category": "Phones",
+   "description": "A 390×844 screen inside a black device bezel.",
+   "slots": {
+    "time": "Clock",
+    "content-hint": "Placeholder text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      12
+     ],
+     "items": "center",
+     "fill": "#0E0E10",
+     "name": "Phone with bezel",
+     "w": 414,
+     "h": 868,
+     "radius": 60,
+     "stroke": "#2C2C2E",
+     "stroke_width": 2
+    },
+    {
+     "id": "screen",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "column",
+     "fill": "#FFFFFF",
+     "name": "Screen",
+     "w": 390,
+     "h": 844,
+     "radius": 48
+    },
+    {
+     "id": "status-bar",
+     "parent": "screen",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      0,
+      28
+     ],
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#00000000",
+     "name": "Status bar",
+     "w": 390,
+     "h": 54,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "time",
+     "parent": "status-bar",
+     "kind": "text",
+     "text": "9:41",
+     "font_size": 16,
+     "font_weight": 600,
+     "color": "#111111",
+     "name": "Time",
+     "w": 60
+    },
+    {
+     "id": "island",
+     "parent": "status-bar",
+     "kind": "rect",
+     "name": "Dynamic island",
+     "w": 122,
+     "h": 34,
+     "fill": "#000000",
+     "radius": 20
+    },
+    {
+     "id": "status-icons",
+     "parent": "status-bar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "items": "center",
+     "justify": "end",
+     "fill": "#00000000",
+     "name": "Status icons",
+     "w": 60,
+     "h": 20
+    },
+    {
+     "id": "wifi",
+     "parent": "status-icons",
+     "kind": "icon",
+     "icon": "wifi",
+     "stroke": "#111111",
+     "w": 18,
+     "h": 18,
+     "name": "Wi-Fi"
+    },
+    {
+     "id": "battery",
+     "parent": "status-icons",
+     "kind": "icon",
+     "icon": "battery",
+     "stroke": "#111111",
+     "w": 22,
+     "h": 22,
+     "name": "Battery"
+    },
+    {
+     "id": "content",
+     "parent": "screen",
+     "kind": "frame",
+     "layout": "column",
+     "items": "center",
+     "justify": "center",
+     "fill": "#F5F5F7",
+     "name": "Content",
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "w": 390,
+     "h": 700
+    },
+    {
+     "id": "content-hint",
+     "parent": "content",
+     "kind": "text",
+     "text": "Your screen",
+     "font_size": 15,
+     "font_weight": 500,
+     "color": "#8E8E93",
+     "name": "Hint"
+    },
+    {
+     "id": "home-indicator",
+     "parent": "screen",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Home indicator",
+     "w": 390,
+     "h": 34,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "home-bar",
+     "parent": "home-indicator",
+     "kind": "rect",
+     "name": "Bar",
+     "w": 134,
+     "h": 5,
+     "fill": "#111111",
+     "radius": 3
+    }
+   ]
+  },
+  {
+   "id": "phone-dark",
+   "name": "Phone / Dark",
+   "category": "Phones",
+   "description": "A dark 390×844 screen for dark-mode designs.",
+   "slots": {
+    "time": "Clock",
+    "content-hint": "Placeholder text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "fill": "#000000",
+     "name": "Phone dark",
+     "w": 390,
+     "h": 844,
+     "radius": 48,
+     "stroke": "#2C2C2E"
+    },
+    {
+     "id": "status-bar",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      0,
+      28
+     ],
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#00000000",
+     "name": "Status bar",
+     "w": 390,
+     "h": 54,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "time",
+     "parent": "status-bar",
+     "kind": "text",
+     "text": "9:41",
+     "font_size": 16,
+     "font_weight": 600,
+     "color": "#FFFFFF",
+     "name": "Time",
+     "w": 60
+    },
+    {
+     "id": "island",
+     "parent": "status-bar",
+     "kind": "rect",
+     "name": "Dynamic island",
+     "w": 122,
+     "h": 34,
+     "fill": "#000000",
+     "radius": 20
+    },
+    {
+     "id": "status-icons",
+     "parent": "status-bar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "items": "center",
+     "justify": "end",
+     "fill": "#00000000",
+     "name": "Status icons",
+     "w": 60,
+     "h": 20
+    },
+    {
+     "id": "wifi",
+     "parent": "status-icons",
+     "kind": "icon",
+     "icon": "wifi",
+     "stroke": "#FFFFFF",
+     "w": 18,
+     "h": 18,
+     "name": "Wi-Fi"
+    },
+    {
+     "id": "battery",
+     "parent": "status-icons",
+     "kind": "icon",
+     "icon": "battery",
+     "stroke": "#FFFFFF",
+     "w": 22,
+     "h": 22,
+     "name": "Battery"
+    },
+    {
+     "id": "content",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "column",
+     "items": "center",
+     "justify": "center",
+     "fill": "#131211",
+     "name": "Content",
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "w": 390,
+     "h": 700
+    },
+    {
+     "id": "content-hint",
+     "parent": "content",
+     "kind": "text",
+     "text": "Your screen",
+     "font_size": 15,
+     "font_weight": 500,
+     "color": "#8C877F",
+     "name": "Hint"
+    },
+    {
+     "id": "home-indicator",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Home indicator",
+     "w": 390,
+     "h": 34,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "home-bar",
+     "parent": "home-indicator",
+     "kind": "rect",
+     "name": "Bar",
+     "w": 134,
+     "h": 5,
+     "fill": "#FFFFFF",
+     "radius": 3
+    }
+   ]
+  },
+  {
+   "id": "android-phone",
+   "name": "Phone / Android",
+   "category": "Phones",
+   "description": "An Android screen (412×915) with status and gesture bars.",
+   "slots": {
+    "time": "Clock",
+    "content-hint": "Placeholder text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "fill": "#FFFFFF",
+     "name": "Android phone",
+     "w": 412,
+     "h": 915,
+     "radius": 32,
+     "stroke": "#DADCE0"
+    },
+    {
+     "id": "status-bar",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      0,
+      24
+     ],
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#00000000",
+     "name": "Status bar",
+     "w_sizing": "fill",
+     "h": 36
+    },
+    {
+     "id": "time",
+     "parent": "status-bar",
+     "kind": "text",
+     "text": "9:41",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#1F1F1F",
+     "name": "Time",
+     "w": 60
+    },
+    {
+     "id": "camera",
+     "parent": "status-bar",
+     "kind": "ellipse",
+     "name": "Camera",
+     "w": 12,
+     "h": 12,
+     "fill": "#111111"
+    },
+    {
+     "id": "status-icons",
+     "parent": "status-bar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "items": "center",
+     "justify": "end",
+     "fill": "#00000000",
+     "name": "Status icons",
+     "w": 60,
+     "h": 18
+    },
+    {
+     "id": "wifi",
+     "parent": "status-icons",
+     "kind": "icon",
+     "icon": "wifi",
+     "stroke": "#1F1F1F",
+     "w": 16,
+     "h": 16,
+     "name": "Wi-Fi"
+    },
+    {
+     "id": "battery",
+     "parent": "status-icons",
+     "kind": "icon",
+     "icon": "battery",
+     "stroke": "#1F1F1F",
+     "w": 18,
+     "h": 18,
+     "name": "Battery"
+    },
+    {
+     "id": "content",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "column",
+     "items": "center",
+     "justify": "center",
+     "fill": "#F8F9FA",
+     "name": "Content",
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "w": 390,
+     "h": 700
+    },
+    {
+     "id": "content-hint",
+     "parent": "content",
+     "kind": "text",
+     "text": "Your screen",
+     "font_size": 15,
+     "font_weight": 500,
+     "color": "#80868B",
+     "name": "Hint"
+    },
+    {
+     "id": "gesture-bar",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Gesture bar",
+     "w_sizing": "fill",
+     "h": 24
+    },
+    {
+     "id": "gesture-handle",
+     "parent": "gesture-bar",
+     "kind": "rect",
+     "name": "Handle",
+     "w": 108,
+     "h": 4,
+     "fill": "#1F1F1F",
+     "radius": 2
+    }
+   ]
+  },
+  {
+   "id": "tablet",
+   "name": "Tablet",
+   "category": "Tablets",
+   "description": "An iPad-sized screen (834×1194) with status bar and home indicator.",
+   "slots": {
+    "time": "Clock and date",
+    "content-hint": "Placeholder text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "fill": "#FFFFFF",
+     "name": "Tablet",
+     "w": 834,
+     "h": 1194,
+     "radius": 32,
+     "stroke": "#E5E5EA"
+    },
+    {
+     "id": "status-bar",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      0,
+      24
+     ],
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#00000000",
+     "name": "Status bar",
+     "w_sizing": "fill",
+     "h": 32
+    },
+    {
+     "id": "time",
+     "parent": "status-bar",
+     "kind": "text",
+     "text": "9:41  Fri 16 Oct",
+     "font_size": 13,
+     "font_weight": 600,
+     "color": "#111111",
+     "name": "Time and date"
+    },
+    {
+     "id": "status-icons",
+     "parent": "status-bar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Status icons",
+     "w_sizing": "hug",
+     "h": 18,
+     "w": 90
+    },
+    {
+     "id": "wifi",
+     "parent": "status-icons",
+     "kind": "icon",
+     "icon": "wifi",
+     "stroke": "#111111",
+     "w": 16,
+     "h": 16,
+     "name": "Wi-Fi"
+    },
+    {
+     "id": "battery-level",
+     "parent": "status-icons",
+     "kind": "text",
+     "text": "100%",
+     "font_size": 12,
+     "font_weight": 600,
+     "color": "#111111",
+     "name": "Battery level"
+    },
+    {
+     "id": "battery",
+     "parent": "status-icons",
+     "kind": "icon",
+     "icon": "battery",
+     "stroke": "#111111",
+     "w": 20,
+     "h": 20,
+     "name": "Battery"
+    },
+    {
+     "id": "content",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "column",
+     "items": "center",
+     "justify": "center",
+     "fill": "#F5F5F7",
+     "name": "Content",
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "w": 390,
+     "h": 700
+    },
+    {
+     "id": "content-hint",
+     "parent": "content",
+     "kind": "text",
+     "text": "Your screen",
+     "font_size": 15,
+     "font_weight": 500,
+     "color": "#8E8E93",
+     "name": "Hint"
+    },
+    {
+     "id": "home-indicator",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Home indicator",
+     "w_sizing": "fill",
+     "h": 24
+    },
+    {
+     "id": "home-bar",
+     "parent": "home-indicator",
+     "kind": "rect",
+     "name": "Bar",
+     "w": 315,
+     "h": 5,
+     "fill": "#111111",
+     "radius": 3
+    }
+   ]
+  },
+  {
+   "id": "browser",
+   "name": "Browser window",
+   "category": "Browsers",
+   "description": "A 1440×900 browser with tabs, address bar and a page area.",
+   "slots": {
+    "tab-title": "Tab title",
+    "url": "Address",
+    "content-hint": "Placeholder text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "fill": "#FFFFFF",
+     "name": "Browser window",
+     "w": 1440,
+     "h": 900,
+     "radius": 12,
+     "stroke": "#D0D3D8",
+     "shadow": {
+      "x": 0,
+      "y": 24,
+      "blur": 60,
+      "spread": 0,
+      "color": "#0F172A26"
+     }
+    },
+    {
+     "id": "tab-strip",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      14
+     ],
+     "items": "end",
+     "fill": "#E8EAED",
+     "name": "Tab strip",
+     "w_sizing": "fill",
+     "h": 44
+    },
+    {
+     "id": "window-dots",
+     "parent": "tab-strip",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Window controls",
+     "w": 60,
+     "h": 36
+    },
+    {
+     "id": "dot-1",
+     "parent": "window-dots",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 12,
+     "h": 12,
+     "fill": "#FF5F57"
+    },
+    {
+     "id": "dot-2",
+     "parent": "window-dots",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 12,
+     "h": 12,
+     "fill": "#FEBC2E"
+    },
+    {
+     "id": "dot-3",
+     "parent": "window-dots",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 12,
+     "h": 12,
+     "fill": "#28C840"
+    },
+    {
+     "id": "tab",
+     "parent": "tab-strip",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      12
+     ],
+     "items": "center",
+     "fill": "#FFFFFF",
+     "name": "Active tab",
+     "w": 240,
+     "h": 36,
+     "radii": [
+      10,
+      10,
+      0,
+      0
+     ]
+    },
+    {
+     "id": "tab-icon",
+     "parent": "tab",
+     "kind": "icon",
+     "icon": "globe",
+     "stroke": "#5F6368",
+     "w": 14,
+     "h": 14,
+     "name": "Favicon"
+    },
+    {
+     "id": "tab-title",
+     "parent": "tab",
+     "kind": "text",
+     "text": "Northwind — Projects",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#202124",
+     "name": "Title",
+     "w": 150,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "tab-close",
+     "parent": "tab",
+     "kind": "icon",
+     "icon": "x",
+     "stroke": "#5F6368",
+     "w": 12,
+     "h": 12,
+     "name": "Close"
+    },
+    {
+     "id": "tab-2",
+     "parent": "tab-strip",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      12
+     ],
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Tab",
+     "w": 200,
+     "h": 36
+    },
+    {
+     "id": "tab-2-icon",
+     "parent": "tab-2",
+     "kind": "icon",
+     "icon": "file",
+     "stroke": "#5F6368",
+     "w": 14,
+     "h": 14,
+     "name": "Favicon"
+    },
+    {
+     "id": "tab-2-title",
+     "parent": "tab-2",
+     "kind": "text",
+     "text": "Release notes",
+     "font_size": 12,
+     "color": "#5F6368",
+     "name": "Title",
+     "w": 130,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "new-tab",
+     "parent": "tab-strip",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "New tab",
+     "w": 28,
+     "h": 36
+    },
+    {
+     "id": "new-tab-icon",
+     "parent": "new-tab",
+     "kind": "icon",
+     "icon": "plus",
+     "stroke": "#5F6368",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "toolbar",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "padding": [
+      0,
+      12
+     ],
+     "items": "center",
+     "fill": "#FFFFFF",
+     "name": "Toolbar",
+     "w_sizing": "fill",
+     "h": 48
+    },
+    {
+     "id": "arrow-left",
+     "parent": "toolbar",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Arrow Left",
+     "w": 32,
+     "h": 32,
+     "radius": 999
+    },
+    {
+     "id": "arrow-left-icon",
+     "parent": "arrow-left",
+     "kind": "icon",
+     "icon": "arrow-left",
+     "stroke": "#5F6368",
+     "w": 18,
+     "h": 18,
+     "name": "Icon"
+    },
+    {
+     "id": "arrow-right",
+     "parent": "toolbar",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Arrow Right",
+     "w": 32,
+     "h": 32,
+     "radius": 999
+    },
+    {
+     "id": "arrow-right-icon",
+     "parent": "arrow-right",
+     "kind": "icon",
+     "icon": "arrow-right",
+     "stroke": "#5F6368",
+     "w": 18,
+     "h": 18,
+     "name": "Icon"
+    },
+    {
+     "id": "refresh",
+     "parent": "toolbar",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Refresh",
+     "w": 32,
+     "h": 32,
+     "radius": 999
+    },
+    {
+     "id": "refresh-icon",
+     "parent": "refresh",
+     "kind": "icon",
+     "icon": "refresh",
+     "stroke": "#5F6368",
+     "w": 18,
+     "h": 18,
+     "name": "Icon"
+    },
+    {
+     "id": "address-bar",
+     "parent": "toolbar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      14
+     ],
+     "items": "center",
+     "fill": "#F1F3F4",
+     "name": "Address bar",
+     "w_sizing": "fill",
+     "h": 34,
+     "radius": 999
+    },
+    {
+     "id": "lock",
+     "parent": "address-bar",
+     "kind": "icon",
+     "icon": "lock",
+     "stroke": "#5F6368",
+     "w": 14,
+     "h": 14,
+     "name": "Lock"
+    },
+    {
+     "id": "url",
+     "parent": "address-bar",
+     "kind": "text",
+     "text": "northwind.app/projects",
+     "font_size": 13,
+     "color": "#202124",
+     "name": "URL",
+     "w": 400,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "bookmark",
+     "parent": "address-bar",
+     "kind": "icon",
+     "icon": "star",
+     "stroke": "#5F6368",
+     "w": 16,
+     "h": 16,
+     "name": "Bookmark"
+    },
+    {
+     "id": "profile",
+     "parent": "toolbar",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#D2E3FC",
+     "name": "Profile",
+     "w": 28,
+     "h": 28,
+     "radius": 999
+    },
+    {
+     "id": "profile-initial",
+     "parent": "profile",
+     "kind": "text",
+     "text": "S",
+     "font_size": 12,
+     "font_weight": 600,
+     "color": "#1A56C4",
+     "name": "Initial"
+    },
+    {
+     "id": "more",
+     "parent": "toolbar",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Menu",
+     "w": 32,
+     "h": 32,
+     "radius": 999
+    },
+    {
+     "id": "more-icon",
+     "parent": "more",
+     "kind": "icon",
+     "icon": "more-vertical",
+     "stroke": "#5F6368",
+     "w": 18,
+     "h": 18,
+     "name": "Icon"
+    },
+    {
+     "id": "toolbar-rule",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Divider",
+     "w": 320,
+     "h": 1,
+     "w_sizing": "fill",
+     "fill": "#DADCE0"
+    },
+    {
+     "id": "content",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "column",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "Page",
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "w": 1440,
+     "h": 807
+    },
+    {
+     "id": "content-hint",
+     "parent": "content",
+     "kind": "text",
+     "text": "Page content",
+     "font_size": 15,
+     "font_weight": 500,
+     "color": "#9AA0A6",
+     "name": "Hint"
+    }
+   ]
+  },
+  {
+   "id": "desktop-window",
+   "name": "Desktop app window",
+   "category": "Desktop",
+   "description": "A light app window with title bar, window dots and sidebar.",
+   "slots": {
+    "title": "Window title",
+    "nav-1-icon": "Icon",
+    "nav-1-label": "Label",
+    "nav-2-icon": "Icon",
+    "nav-2-label": "Label",
+    "nav-3-icon": "Icon",
+    "nav-3-label": "Label",
+    "nav-4-icon": "Icon",
+    "nav-4-label": "Label",
+    "nav-5-icon": "Icon",
+    "nav-5-label": "Label",
+    "heading": "Page heading",
+    "subheading": "Page description"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "fill": "#FFFFFF",
+     "name": "App window",
+     "w": 1200,
+     "h": 760,
+     "radius": 12,
+     "stroke": "#E4E4E7",
+     "shadow": {
+      "x": 0,
+      "y": 24,
+      "blur": 60,
+      "spread": 0,
+      "color": "#0F172A26"
+     }
+    },
+    {
+     "id": "title-bar",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      0,
+      16
+     ],
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#F4F4F5",
+     "name": "Title bar",
+     "w_sizing": "fill",
+     "h": 44
+    },
+    {
+     "id": "window-dots",
+     "parent": "title-bar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Window controls",
+     "w": 60,
+     "h": 12
+    },
+    {
+     "id": "dot-1",
+     "parent": "window-dots",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 12,
+     "h": 12,
+     "fill": "#FF5F57"
+    },
+    {
+     "id": "dot-2",
+     "parent": "window-dots",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 12,
+     "h": 12,
+     "fill": "#FEBC2E"
+    },
+    {
+     "id": "dot-3",
+     "parent": "window-dots",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 12,
+     "h": 12,
+     "fill": "#28C840"
+    },
+    {
+     "id": "title",
+     "parent": "title-bar",
+     "kind": "text",
+     "text": "Northwind — Projects",
+     "font_size": 13,
+     "font_weight": 600,
+     "color": "#18181B",
+     "name": "Window title"
+    },
+    {
+     "id": "balance",
+     "parent": "title-bar",
+     "kind": "frame",
+     "name": "Spacer",
+     "w": 60,
+     "h": 12,
+     "fill": "#00000000"
+    },
+    {
+     "id": "title-rule",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Divider",
+     "w": 320,
+     "h": 1,
+     "w_sizing": "fill",
+     "fill": "#E4E4E7"
+    },
+    {
+     "id": "body",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "stretch",
+     "fill": "#00000000",
+     "name": "Body",
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "h": 715
+    },
+    {
+     "id": "sidebar",
+     "parent": "body",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 2,
+     "padding": [
+      12
+     ],
+     "fill": "#FAFAFA",
+     "name": "Sidebar",
+     "w": 220,
+     "h": 715
+    },
+    {
+     "id": "nav-1",
+     "parent": "sidebar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      10
+     ],
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Nav item / Idle",
+     "w": 232,
+     "h": 34,
+     "w_sizing": "fill",
+     "radius": 10
+    },
+    {
+     "id": "nav-1-icon",
+     "parent": "nav-1",
+     "kind": "icon",
+     "icon": "home",
+     "stroke": "#71717A",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "nav-1-label",
+     "parent": "nav-1",
+     "kind": "text",
+     "text": "Home",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#52525B",
+     "name": "Label",
+     "w": 120,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "nav-2",
+     "parent": "sidebar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      10
+     ],
+     "items": "center",
+     "fill": "#ECECEE",
+     "name": "Nav item / Active",
+     "w": 232,
+     "h": 34,
+     "w_sizing": "fill",
+     "radius": 10
+    },
+    {
+     "id": "nav-2-icon",
+     "parent": "nav-2",
+     "kind": "icon",
+     "icon": "grid",
+     "stroke": "#18181B",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "nav-2-label",
+     "parent": "nav-2",
+     "kind": "text",
+     "text": "Projects",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#18181B",
+     "name": "Label",
+     "w": 120,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "nav-3",
+     "parent": "sidebar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      10
+     ],
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Nav item / Idle",
+     "w": 232,
+     "h": 34,
+     "w_sizing": "fill",
+     "radius": 10
+    },
+    {
+     "id": "nav-3-icon",
+     "parent": "nav-3",
+     "kind": "icon",
+     "icon": "calendar",
+     "stroke": "#71717A",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "nav-3-label",
+     "parent": "nav-3",
+     "kind": "text",
+     "text": "Calendar",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#52525B",
+     "name": "Label",
+     "w": 120,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "nav-4",
+     "parent": "sidebar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      10
+     ],
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Nav item / Idle",
+     "w": 232,
+     "h": 34,
+     "w_sizing": "fill",
+     "radius": 10
+    },
+    {
+     "id": "nav-4-icon",
+     "parent": "nav-4",
+     "kind": "icon",
+     "icon": "message",
+     "stroke": "#71717A",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "nav-4-label",
+     "parent": "nav-4",
+     "kind": "text",
+     "text": "Messages",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#52525B",
+     "name": "Label",
+     "w": 120,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "nav-5",
+     "parent": "sidebar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      10
+     ],
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Nav item / Idle",
+     "w": 232,
+     "h": 34,
+     "w_sizing": "fill",
+     "radius": 10
+    },
+    {
+     "id": "nav-5-icon",
+     "parent": "nav-5",
+     "kind": "icon",
+     "icon": "settings",
+     "stroke": "#71717A",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "nav-5-label",
+     "parent": "nav-5",
+     "kind": "text",
+     "text": "Settings",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#52525B",
+     "name": "Label",
+     "w": 120,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "sidebar-rule",
+     "parent": "body",
+     "kind": "rect",
+     "name": "Rule",
+     "w": 1,
+     "h": 715,
+     "fill": "#E4E4E7"
+    },
+    {
+     "id": "content",
+     "parent": "body",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 6,
+     "padding": [
+      28
+     ],
+     "fill": "#FFFFFF",
+     "name": "Content",
+     "w_sizing": "fill",
+     "w": 979,
+     "h": 715
+    },
+    {
+     "id": "heading",
+     "parent": "content",
+     "kind": "text",
+     "text": "Projects",
+     "font_size": 22,
+     "font_weight": 600,
+     "color": "#18181B",
+     "name": "Heading"
+    },
+    {
+     "id": "subheading",
+     "parent": "content",
+     "kind": "text",
+     "text": "Everything your team is working on this week.",
+     "font_size": 14,
+     "color": "#71717A",
+     "name": "Subheading"
+    }
+   ]
+  },
+  {
+   "id": "desktop-window-dark",
+   "name": "Desktop app window / Dark",
+   "category": "Desktop",
+   "description": "A dark, Relay-styled app window.",
+   "slots": {
+    "title": "Window title",
+    "nav-1-icon": "Icon",
+    "nav-1-label": "Label",
+    "nav-2-icon": "Icon",
+    "nav-2-label": "Label",
+    "nav-3-icon": "Icon",
+    "nav-3-label": "Label",
+    "nav-4-icon": "Icon",
+    "nav-4-label": "Label",
+    "nav-5-icon": "Icon",
+    "nav-5-label": "Label",
+    "heading": "Page heading",
+    "subheading": "Page description"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "fill": "#131211",
+     "name": "App window",
+     "w": 1200,
+     "h": 760,
+     "radius": 12,
+     "stroke": "#262422",
+     "shadow": {
+      "x": 0,
+      "y": 24,
+      "blur": 60,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "title-bar",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      0,
+      16
+     ],
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#1A1917",
+     "name": "Title bar",
+     "w_sizing": "fill",
+     "h": 44
+    },
+    {
+     "id": "window-dots",
+     "parent": "title-bar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Window controls",
+     "w": 60,
+     "h": 12
+    },
+    {
+     "id": "dot-1",
+     "parent": "window-dots",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 12,
+     "h": 12,
+     "fill": "#FF5F57"
+    },
+    {
+     "id": "dot-2",
+     "parent": "window-dots",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 12,
+     "h": 12,
+     "fill": "#FEBC2E"
+    },
+    {
+     "id": "dot-3",
+     "parent": "window-dots",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 12,
+     "h": 12,
+     "fill": "#28C840"
+    },
+    {
+     "id": "title",
+     "parent": "title-bar",
+     "kind": "text",
+     "text": "Relay — Northwind",
+     "font_size": 13,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Window title"
+    },
+    {
+     "id": "balance",
+     "parent": "title-bar",
+     "kind": "frame",
+     "name": "Spacer",
+     "w": 60,
+     "h": 12,
+     "fill": "#00000000"
+    },
+    {
+     "id": "title-rule",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Divider",
+     "w": 320,
+     "h": 1,
+     "w_sizing": "fill",
+     "fill": "#262422"
+    },
+    {
+     "id": "body",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "stretch",
+     "fill": "#00000000",
+     "name": "Body",
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "h": 715
+    },
+    {
+     "id": "sidebar",
+     "parent": "body",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 2,
+     "padding": [
+      12
+     ],
+     "fill": "#161514",
+     "name": "Sidebar",
+     "w": 220,
+     "h": 715
+    },
+    {
+     "id": "nav-1",
+     "parent": "sidebar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      10
+     ],
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Nav item / Idle",
+     "w": 232,
+     "h": 34,
+     "w_sizing": "fill",
+     "radius": 8
+    },
+    {
+     "id": "nav-1-icon",
+     "parent": "nav-1",
+     "kind": "icon",
+     "icon": "home",
+     "stroke": "#8C877F",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "nav-1-label",
+     "parent": "nav-1",
+     "kind": "text",
+     "text": "Home",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#B5B0A8",
+     "name": "Label",
+     "w": 120,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "nav-2",
+     "parent": "sidebar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      10
+     ],
+     "items": "center",
+     "fill": "#24221F",
+     "name": "Nav item / Active",
+     "w": 232,
+     "h": 34,
+     "w_sizing": "fill",
+     "radius": 8
+    },
+    {
+     "id": "nav-2-icon",
+     "parent": "nav-2",
+     "kind": "icon",
+     "icon": "grid",
+     "stroke": "#EDE9E2",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "nav-2-label",
+     "parent": "nav-2",
+     "kind": "text",
+     "text": "Projects",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#EDE9E2",
+     "name": "Label",
+     "w": 120,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "nav-3",
+     "parent": "sidebar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      10
+     ],
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Nav item / Idle",
+     "w": 232,
+     "h": 34,
+     "w_sizing": "fill",
+     "radius": 8
+    },
+    {
+     "id": "nav-3-icon",
+     "parent": "nav-3",
+     "kind": "icon",
+     "icon": "calendar",
+     "stroke": "#8C877F",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "nav-3-label",
+     "parent": "nav-3",
+     "kind": "text",
+     "text": "Calendar",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#B5B0A8",
+     "name": "Label",
+     "w": 120,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "nav-4",
+     "parent": "sidebar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      10
+     ],
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Nav item / Idle",
+     "w": 232,
+     "h": 34,
+     "w_sizing": "fill",
+     "radius": 8
+    },
+    {
+     "id": "nav-4-icon",
+     "parent": "nav-4",
+     "kind": "icon",
+     "icon": "message",
+     "stroke": "#8C877F",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "nav-4-label",
+     "parent": "nav-4",
+     "kind": "text",
+     "text": "Messages",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#B5B0A8",
+     "name": "Label",
+     "w": 120,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "nav-5",
+     "parent": "sidebar",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "padding": [
+      0,
+      10
+     ],
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Nav item / Idle",
+     "w": 232,
+     "h": 34,
+     "w_sizing": "fill",
+     "radius": 8
+    },
+    {
+     "id": "nav-5-icon",
+     "parent": "nav-5",
+     "kind": "icon",
+     "icon": "settings",
+     "stroke": "#8C877F",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "nav-5-label",
+     "parent": "nav-5",
+     "kind": "text",
+     "text": "Settings",
+     "font_size": 13,
+     "font_weight": 500,
+     "color": "#B5B0A8",
+     "name": "Label",
+     "w": 120,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "sidebar-rule",
+     "parent": "body",
+     "kind": "rect",
+     "name": "Rule",
+     "w": 1,
+     "h": 715,
+     "fill": "#262422"
+    },
+    {
+     "id": "content",
+     "parent": "body",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 6,
+     "padding": [
+      28
+     ],
+     "fill": "#131211",
+     "name": "Content",
+     "w_sizing": "fill",
+     "w": 979,
+     "h": 715
+    },
+    {
+     "id": "heading",
+     "parent": "content",
+     "kind": "text",
+     "text": "Projects",
+     "font_size": 22,
+     "font_weight": 600,
+     "color": "#EDE9E2",
+     "name": "Heading"
+    },
+    {
+     "id": "subheading",
+     "parent": "content",
+     "kind": "text",
+     "text": "Everything your team is working on this week.",
+     "font_size": 14,
+     "color": "#8C877F",
+     "name": "Subheading"
+    }
+   ]
+  },
+  {
+   "id": "watch",
+   "name": "Watch",
+   "category": "Watches",
+   "description": "A 198×242 watch face showing a calendar reminder.",
+   "slots": {
+    "app": "App name",
+    "time": "Clock",
+    "title": "Event title",
+    "detail": "Event time",
+    "place": "Event place",
+    "button-label": "Button text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 4,
+     "padding": [
+      14,
+      16,
+      16,
+      16
+     ],
+     "fill": "#000000",
+     "name": "Watch",
+     "w": 198,
+     "h": 242,
+     "radius": 48,
+     "stroke": "#2C2C2E",
+     "stroke_width": 3
+    },
+    {
+     "id": "top",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#00000000",
+     "name": "Top",
+     "w_sizing": "fill",
+     "h": 18
+    },
+    {
+     "id": "app",
+     "parent": "top",
+     "kind": "text",
+     "text": "Calendar",
+     "font_size": 13,
+     "font_weight": 600,
+     "color": "#F0A828",
+     "name": "App"
+    },
+    {
+     "id": "time",
+     "parent": "top",
+     "kind": "text",
+     "text": "10:09",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#FFFFFF",
+     "name": "Time"
+    },
+    {
+     "id": "spacer-1",
+     "parent": "root",
+     "kind": "frame",
+     "name": "Spacer",
+     "w": 10,
+     "h": 6,
+     "fill": "#00000000"
+    },
+    {
+     "id": "title",
+     "parent": "root",
+     "kind": "text",
+     "text": "Standup",
+     "font_size": 22,
+     "font_weight": 600,
+     "color": "#FFFFFF",
+     "name": "Title"
+    },
+    {
+     "id": "detail",
+     "parent": "root",
+     "kind": "text",
+     "text": "10:15 – 10:30",
+     "font_size": 14,
+     "color": "#9A9A9F",
+     "name": "Time range"
+    },
+    {
+     "id": "place",
+     "parent": "root",
+     "kind": "text",
+     "text": "Room 4B",
+     "font_size": 14,
+     "color": "#9A9A9F",
+     "name": "Place"
+    },
+    {
+     "id": "spacer-2",
+     "parent": "root",
+     "kind": "frame",
+     "name": "Spacer",
+     "w": 10,
+     "h": 10,
+     "h_sizing": "fill",
+     "fill": "#00000000"
+    },
+    {
+     "id": "button",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#2C2C2E",
+     "name": "Button",
+     "w_sizing": "fill",
+     "h": 40,
+     "radius": 999
+    },
+    {
+     "id": "button-label",
+     "parent": "button",
+     "kind": "text",
+     "text": "Snooze",
+     "font_size": 15,
+     "font_weight": 600,
+     "color": "#FFFFFF",
+     "name": "Label"
+    }
+   ]
+  },
+  {
+   "id": "notification",
+   "name": "Notification",
+   "category": "System",
+   "description": "A phone notification banner with app icon, title and text.",
+   "slots": {
+    "app-glyph": "App icon",
+    "app": "App name",
+    "when": "Time",
+    "title": "Notification title",
+    "body": "Notification text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 12,
+     "padding": [
+      14
+     ],
+     "items": "start",
+     "fill": "#F2F2F7",
+     "name": "Notification",
+     "w": 360,
+     "h": 84,
+     "h_sizing": "hug",
+     "radius": 22,
+     "shadow": {
+      "x": 0,
+      "y": 8,
+      "blur": 30,
+      "spread": 0,
+      "color": "#0000002E"
+     }
+    },
+    {
+     "id": "app-icon",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "App icon",
+     "w": 38,
+     "h": 38,
+     "radius": 9,
+     "gradient": {
+      "kind": "linear",
+      "angle": 160,
+      "stops": [
+       {
+        "at": 0,
+        "color": "#3AD87A"
+       },
+       {
+        "at": 1,
+        "color": "#1E9E52"
+       }
+      ]
+     }
+    },
+    {
+     "id": "app-glyph",
+     "parent": "app-icon",
+     "kind": "icon",
+     "icon": "terminal",
+     "stroke": "#FFFFFF",
+     "w": 20,
+     "h": 20,
+     "name": "Glyph"
+    },
+    {
+     "id": "text",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 2,
+     "fill": "#00000000",
+     "name": "Text",
+     "w_sizing": "fill",
+     "h_sizing": "hug",
+     "w": 270
+    },
+    {
+     "id": "header",
+     "parent": "text",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#00000000",
+     "name": "Header",
+     "w_sizing": "fill",
+     "h": 16
+    },
+    {
+     "id": "app",
+     "parent": "header",
+     "kind": "text",
+     "text": "Relay",
+     "font_size": 13,
+     "font_weight": 600,
+     "color": "#1C1C1E",
+     "name": "App"
+    },
+    {
+     "id": "when",
+     "parent": "header",
+     "kind": "text",
+     "text": "now",
+     "font_size": 12,
+     "color": "#8E8E93",
+     "name": "When"
+    },
+    {
+     "id": "title",
+     "parent": "text",
+     "kind": "text",
+     "text": "spry-gecko finished",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#1C1C1E",
+     "name": "Title"
+    },
+    {
+     "id": "body",
+     "parent": "text",
+     "kind": "text",
+     "text": "412 tests passed · ready for review",
+     "font_size": 14,
+     "color": "#3A3A3C",
+     "name": "Body"
+    }
+   ]
+  },
+  {
+   "id": "keyboard",
+   "name": "Keyboard",
+   "category": "System",
+   "description": "A phone keyboard (390×291) with letter rows, space and return.",
+   "slots": {},
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 12,
+     "padding": [
+      8,
+      3,
+      0,
+      3
+     ],
+     "fill": "#D1D4DA",
+     "name": "Keyboard",
+     "w": 390,
+     "h": 291
+    },
+    {
+     "id": "row-1",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Row 1",
+     "w_sizing": "fill",
+     "h": 42
+    },
+    {
+     "id": "key-q",
+     "parent": "row-1",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "q",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-q-label",
+     "parent": "key-q",
+     "kind": "text",
+     "text": "q",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-w",
+     "parent": "row-1",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "w",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-w-label",
+     "parent": "key-w",
+     "kind": "text",
+     "text": "w",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-e",
+     "parent": "row-1",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "e",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-e-label",
+     "parent": "key-e",
+     "kind": "text",
+     "text": "e",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-r",
+     "parent": "row-1",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "r",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-r-label",
+     "parent": "key-r",
+     "kind": "text",
+     "text": "r",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-t",
+     "parent": "row-1",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "t",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-t-label",
+     "parent": "key-t",
+     "kind": "text",
+     "text": "t",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-y",
+     "parent": "row-1",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "y",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-y-label",
+     "parent": "key-y",
+     "kind": "text",
+     "text": "y",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-u",
+     "parent": "row-1",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "u",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-u-label",
+     "parent": "key-u",
+     "kind": "text",
+     "text": "u",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-i",
+     "parent": "row-1",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "i",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-i-label",
+     "parent": "key-i",
+     "kind": "text",
+     "text": "i",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-o",
+     "parent": "row-1",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "o",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-o-label",
+     "parent": "key-o",
+     "kind": "text",
+     "text": "o",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-p",
+     "parent": "row-1",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "p",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-p-label",
+     "parent": "key-p",
+     "kind": "text",
+     "text": "p",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "row-2",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "padding": [
+      0,
+      19
+     ],
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Row 2",
+     "w_sizing": "fill",
+     "h": 42
+    },
+    {
+     "id": "key-a",
+     "parent": "row-2",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "a",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-a-label",
+     "parent": "key-a",
+     "kind": "text",
+     "text": "a",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-s",
+     "parent": "row-2",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "s",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-s-label",
+     "parent": "key-s",
+     "kind": "text",
+     "text": "s",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-d",
+     "parent": "row-2",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "d",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-d-label",
+     "parent": "key-d",
+     "kind": "text",
+     "text": "d",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-f",
+     "parent": "row-2",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "f",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-f-label",
+     "parent": "key-f",
+     "kind": "text",
+     "text": "f",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-g",
+     "parent": "row-2",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "g",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-g-label",
+     "parent": "key-g",
+     "kind": "text",
+     "text": "g",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-h",
+     "parent": "row-2",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "h",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-h-label",
+     "parent": "key-h",
+     "kind": "text",
+     "text": "h",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-j",
+     "parent": "row-2",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "j",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-j-label",
+     "parent": "key-j",
+     "kind": "text",
+     "text": "j",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-k",
+     "parent": "row-2",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "k",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-k-label",
+     "parent": "key-k",
+     "kind": "text",
+     "text": "k",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-l",
+     "parent": "row-2",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "l",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-l-label",
+     "parent": "key-l",
+     "kind": "text",
+     "text": "l",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "row-3",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Row 3",
+     "w_sizing": "fill",
+     "h": 42
+    },
+    {
+     "id": "shift",
+     "parent": "row-3",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#ABB0BA",
+     "name": "arrow-up",
+     "w": 42,
+     "h": 42,
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "shift-icon",
+     "parent": "shift",
+     "kind": "icon",
+     "icon": "arrow-up",
+     "stroke": "#000000",
+     "w": 20,
+     "h": 20,
+     "name": "Icon"
+    },
+    {
+     "id": "shift-gap",
+     "parent": "row-3",
+     "kind": "frame",
+     "name": "Gap",
+     "w": 6,
+     "h": 42,
+     "fill": "#00000000"
+    },
+    {
+     "id": "key-z",
+     "parent": "row-3",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "z",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-z-label",
+     "parent": "key-z",
+     "kind": "text",
+     "text": "z",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-x",
+     "parent": "row-3",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "x",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-x-label",
+     "parent": "key-x",
+     "kind": "text",
+     "text": "x",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-c",
+     "parent": "row-3",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "c",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-c-label",
+     "parent": "key-c",
+     "kind": "text",
+     "text": "c",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-v",
+     "parent": "row-3",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "v",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-v-label",
+     "parent": "key-v",
+     "kind": "text",
+     "text": "v",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-b",
+     "parent": "row-3",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "b",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-b-label",
+     "parent": "key-b",
+     "kind": "text",
+     "text": "b",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-n",
+     "parent": "row-3",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "n",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-n-label",
+     "parent": "key-n",
+     "kind": "text",
+     "text": "n",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "key-m",
+     "parent": "row-3",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "m",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "key-m-label",
+     "parent": "key-m",
+     "kind": "text",
+     "text": "m",
+     "font_size": 22,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "delete-gap",
+     "parent": "row-3",
+     "kind": "frame",
+     "name": "Gap",
+     "w": 6,
+     "h": 42,
+     "fill": "#00000000"
+    },
+    {
+     "id": "delete",
+     "parent": "row-3",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#ABB0BA",
+     "name": "arrow-left",
+     "w": 42,
+     "h": 42,
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "delete-icon",
+     "parent": "delete",
+     "kind": "icon",
+     "icon": "arrow-left",
+     "stroke": "#000000",
+     "w": 20,
+     "h": 20,
+     "name": "Icon"
+    },
+    {
+     "id": "row-4",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Row 4",
+     "w_sizing": "fill",
+     "h": 42
+    },
+    {
+     "id": "numbers",
+     "parent": "row-4",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#ABB0BA",
+     "name": "123",
+     "w": 88,
+     "h": 42,
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "numbers-label",
+     "parent": "numbers",
+     "kind": "text",
+     "text": "123",
+     "font_size": 16,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "space",
+     "parent": "row-4",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#FFFFFF",
+     "name": "space",
+     "w": 33,
+     "h": 42,
+     "w_sizing": "fill",
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "space-label",
+     "parent": "space",
+     "kind": "text",
+     "text": "space",
+     "font_size": 16,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "return",
+     "parent": "row-4",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#ABB0BA",
+     "name": "return",
+     "w": 88,
+     "h": 42,
+     "radius": 5,
+     "shadow": {
+      "x": 0,
+      "y": 1,
+      "blur": 0,
+      "spread": 0,
+      "color": "#0000004D"
+     }
+    },
+    {
+     "id": "return-label",
+     "parent": "return",
+     "kind": "text",
+     "text": "return",
+     "font_size": 16,
+     "color": "#000000",
+     "name": "Letter"
+    },
+    {
+     "id": "bottom",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      0,
+      22
+     ],
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Bottom",
+     "w_sizing": "fill",
+     "h": 40
+    },
+    {
+     "id": "globe",
+     "parent": "bottom",
+     "kind": "icon",
+     "icon": "globe",
+     "stroke": "#50555C",
+     "w": 24,
+     "h": 24,
+     "name": "Globe"
+    }
+   ]
+  },
+  {
+   "id": "status-bar",
+   "name": "Status bar",
+   "category": "System",
+   "description": "A phone status bar: time, dynamic island, Wi-Fi and battery.",
+   "slots": {
+    "time": "Clock"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      0,
+      28
+     ],
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#FFFFFF",
+     "name": "Status bar",
+     "w": 390,
+     "h": 54,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "time",
+     "parent": "root",
+     "kind": "text",
+     "text": "9:41",
+     "font_size": 16,
+     "font_weight": 600,
+     "color": "#111111",
+     "name": "Time",
+     "w": 60
+    },
+    {
+     "id": "island",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Dynamic island",
+     "w": 122,
+     "h": 34,
+     "fill": "#000000",
+     "radius": 20
+    },
+    {
+     "id": "status-icons",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 6,
+     "items": "center",
+     "justify": "end",
+     "fill": "#00000000",
+     "name": "Status icons",
+     "w": 60,
+     "h": 20
+    },
+    {
+     "id": "wifi",
+     "parent": "status-icons",
+     "kind": "icon",
+     "icon": "wifi",
+     "stroke": "#111111",
+     "w": 18,
+     "h": 18,
+     "name": "Wi-Fi"
+    },
+    {
+     "id": "battery",
+     "parent": "status-icons",
+     "kind": "icon",
+     "icon": "battery",
+     "stroke": "#111111",
+     "w": 22,
+     "h": 22,
+     "name": "Battery"
+    }
+   ]
+  },
+  {
+   "id": "home-indicator",
+   "name": "Home indicator",
+   "category": "System",
+   "description": "The bar at the bottom of a phone screen.",
+   "slots": {},
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Home indicator",
+     "w": 390,
+     "h": 34,
+     "w_sizing": "fill"
+    },
+    {
+     "id": "home-bar",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Bar",
+     "w": 134,
+     "h": 5,
+     "fill": "#111111",
+     "radius": 3
+    }
+   ]
+  }
+ ]
+}

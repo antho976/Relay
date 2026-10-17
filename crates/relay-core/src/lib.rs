@@ -10,6 +10,7 @@ pub mod audit;
 pub mod awareness;
 pub mod branch_cleanup;
 pub mod build_seed;
+pub mod design_code;
 pub mod device;
 pub mod device_lease;
 pub mod engine;

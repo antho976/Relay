@@ -1,0 +1,1989 @@
+{
+ "id": "flowchart",
+ "name": "Flowchart & diagrams",
+ "description": "Flowchart symbols, swimlanes, sequence and UML pieces in a calm palette; connect them with connectors.",
+ "items": [
+  {
+   "id": "start",
+   "name": "Start",
+   "category": "Flowchart",
+   "description": "A rounded terminator where a flow begins.",
+   "slots": {
+    "shape": "Label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Start",
+     "w": 160,
+     "h": 56,
+     "clip": false
+    },
+    {
+     "id": "shape",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Start",
+     "w": 160,
+     "h": 56,
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "fill": "#E3F5EA",
+     "stroke": "#2F9E5B",
+     "stroke_width": 1.5,
+     "text": "Start",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#1F2933",
+     "radius": 28
+    }
+   ]
+  },
+  {
+   "id": "end",
+   "name": "End",
+   "category": "Flowchart",
+   "description": "A rounded terminator where a flow ends.",
+   "slots": {
+    "shape": "Label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "fill": "#00000000",
+     "name": "End",
+     "w": 160,
+     "h": 56,
+     "clip": false
+    },
+    {
+     "id": "shape",
+     "parent": "root",
+     "kind": "rect",
+     "name": "End",
+     "w": 160,
+     "h": 56,
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "fill": "#FCE8EA",
+     "stroke": "#C9424F",
+     "stroke_width": 1.5,
+     "text": "End",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#1F2933",
+     "radius": 28
+    }
+   ]
+  },
+  {
+   "id": "process",
+   "name": "Process",
+   "category": "Flowchart",
+   "description": "A step someone or something does.",
+   "slots": {
+    "shape": "Label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Process",
+     "w": 160,
+     "h": 64,
+     "clip": false
+    },
+    {
+     "id": "shape",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Process",
+     "w": 160,
+     "h": 64,
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "fill": "#E8EFFC",
+     "stroke": "#3D6FD9",
+     "stroke_width": 1.5,
+     "text": "Review the request",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#1F2933",
+     "radius": 8
+    }
+   ]
+  },
+  {
+   "id": "decision",
+   "name": "Decision",
+   "category": "Flowchart",
+   "description": "A diamond for a yes/no question; keep its label short.",
+   "slots": {
+    "shape": "Label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Decision",
+     "w": 170,
+     "h": 104,
+     "clip": false
+    },
+    {
+     "id": "shape",
+     "parent": "root",
+     "kind": "polygon",
+     "name": "Decision",
+     "w": 170,
+     "h": 104,
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "fill": "#FDF2DC",
+     "stroke": "#C98A12",
+     "stroke_width": 1.5,
+     "text": "Approved?",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#1F2933",
+     "sides": 4
+    }
+   ]
+  },
+  {
+   "id": "input-output",
+   "name": "Input / Output",
+   "category": "Flowchart",
+   "description": "Data coming in or going out, drawn as a dashed box (the canvas has no parallelogram).",
+   "slots": {
+    "shape": "Label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Input / Output",
+     "w": 160,
+     "h": 64,
+     "clip": false
+    },
+    {
+     "id": "shape",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Input / Output",
+     "w": 160,
+     "h": 64,
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "fill": "#EFE9FB",
+     "stroke": "#7A5AD6",
+     "stroke_width": 1.5,
+     "text": "Upload invoice",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#1F2933",
+     "radius": 2,
+     "dash": [
+      6,
+      4
+     ]
+    }
+   ]
+  },
+  {
+   "id": "subprocess-plain",
+   "name": "Rounded step",
+   "category": "Flowchart",
+   "description": "A softer process box for user-facing steps.",
+   "slots": {
+    "shape": "Label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Rounded step",
+     "w": 160,
+     "h": 64,
+     "clip": false
+    },
+    {
+     "id": "shape",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Rounded step",
+     "w": 160,
+     "h": 64,
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "fill": "#E0F4F4",
+     "stroke": "#1F8A8A",
+     "stroke_width": 1.5,
+     "text": "Customer pays",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#1F2933",
+     "radius": 20
+    }
+   ]
+  },
+  {
+   "id": "document",
+   "name": "Document",
+   "category": "Flowchart",
+   "description": "A document or report produced by a step.",
+   "slots": {
+    "shape": "Label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "name": "Document",
+     "w": 160,
+     "h": 72,
+     "fill": "#00000000",
+     "clip": false
+    },
+    {
+     "id": "shape",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Page",
+     "w": 160,
+     "h": 72,
+     "fill": "#F1F3F5",
+     "stroke": "#5B6472",
+     "stroke_width": 1.5,
+     "text": "Monthly report",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#1F2933",
+     "radius": 4
+    },
+    {
+     "id": "fold",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Folded corner",
+     "x": 140,
+     "y": 0,
+     "w": 20,
+     "h": 20,
+     "fill": "#D9DEE4",
+     "stroke": "#5B6472",
+     "stroke_width": 1.5,
+     "radii": [
+      0,
+      4,
+      0,
+      8
+     ]
+    }
+   ]
+  },
+  {
+   "id": "documents",
+   "name": "Multiple documents",
+   "category": "Flowchart",
+   "description": "A stack of documents, such as a batch of invoices.",
+   "slots": {
+    "shape": "Label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "name": "Multiple documents",
+     "w": 172,
+     "h": 84,
+     "fill": "#00000000",
+     "clip": false
+    },
+    {
+     "id": "sheet-1",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Sheet",
+     "x": 12,
+     "y": 0,
+     "w": 160,
+     "h": 72,
+     "radius": 4,
+     "fill": "#F1F3F5",
+     "stroke": "#5B6472",
+     "stroke_width": 1.5
+    },
+    {
+     "id": "sheet-2",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Sheet",
+     "x": 6,
+     "y": 6,
+     "w": 160,
+     "h": 72,
+     "radius": 4,
+     "fill": "#F1F3F5",
+     "stroke": "#5B6472",
+     "stroke_width": 1.5
+    },
+    {
+     "id": "shape",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Top sheet",
+     "x": 0,
+     "y": 12,
+     "w": 160,
+     "h": 72,
+     "radius": 4,
+     "fill": "#F1F3F5",
+     "stroke": "#5B6472",
+     "stroke_width": 1.5,
+     "text": "Invoices",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#1F2933"
+    }
+   ]
+  },
+  {
+   "id": "database",
+   "name": "Database",
+   "category": "Flowchart",
+   "description": "A data store drawn as a cylinder.",
+   "slots": {
+    "label": "Label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "name": "Database",
+     "w": 140,
+     "h": 96,
+     "fill": "#00000000",
+     "clip": false
+    },
+    {
+     "id": "base",
+     "parent": "root",
+     "kind": "ellipse",
+     "name": "Base",
+     "x": 0,
+     "y": 72,
+     "w": 140,
+     "h": 24,
+     "fill": "#E0F4F4",
+     "stroke": "#1F8A8A",
+     "stroke_width": 1.5
+    },
+    {
+     "id": "body",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Body",
+     "x": 0,
+     "y": 12,
+     "w": 140,
+     "h": 72,
+     "fill": "#E0F4F4"
+    },
+    {
+     "id": "side-left",
+     "parent": "root",
+     "kind": "line",
+     "name": "Side",
+     "w": 140,
+     "h": 96,
+     "points": [
+      [
+       0.75,
+       12
+      ],
+      [
+       0.75,
+       84
+      ]
+     ],
+     "stroke": "#1F8A8A",
+     "stroke_width": 1.5
+    },
+    {
+     "id": "side-right",
+     "parent": "root",
+     "kind": "line",
+     "name": "Side",
+     "w": 140,
+     "h": 96,
+     "points": [
+      [
+       139.25,
+       12
+      ],
+      [
+       139.25,
+       84
+      ]
+     ],
+     "stroke": "#1F8A8A",
+     "stroke_width": 1.5
+    },
+    {
+     "id": "top",
+     "parent": "root",
+     "kind": "ellipse",
+     "name": "Top",
+     "x": 0,
+     "y": 0,
+     "w": 140,
+     "h": 24,
+     "fill": "#C7EBEB",
+     "stroke": "#1F8A8A",
+     "stroke_width": 1.5
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Orders DB",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#1F2933",
+     "name": "Label",
+     "x": 10,
+     "y": 44,
+     "w": 120,
+     "align": "center"
+    }
+   ]
+  },
+  {
+   "id": "subprocess",
+   "name": "Subprocess",
+   "category": "Flowchart",
+   "description": "A step defined in its own diagram, with a double border.",
+   "slots": {
+    "shape": "Label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      5
+     ],
+     "items": "center",
+     "fill": "#E8EFFC",
+     "name": "Subprocess",
+     "w": 160,
+     "h": 64,
+     "stroke": "#3D6FD9",
+     "stroke_width": 1.5,
+     "radius": 8
+    },
+    {
+     "id": "shape",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Inner border",
+     "w": 150,
+     "h": 54,
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "fill": "#00000000",
+     "stroke": "#3D6FD9",
+     "stroke_width": 1.5,
+     "radius": 4,
+     "text": "Verify identity",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#1F2933"
+    }
+   ]
+  },
+  {
+   "id": "preparation",
+   "name": "Preparation",
+   "category": "Flowchart",
+   "description": "A hexagon for setup before the main steps.",
+   "slots": {
+    "shape": "Label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Preparation",
+     "w": 150,
+     "h": 90,
+     "clip": false
+    },
+    {
+     "id": "shape",
+     "parent": "root",
+     "kind": "polygon",
+     "name": "Preparation",
+     "w": 150,
+     "h": 90,
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "fill": "#EFE9FB",
+     "stroke": "#7A5AD6",
+     "stroke_width": 1.5,
+     "text": "Load settings",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#1F2933",
+     "sides": 6
+    }
+   ]
+  },
+  {
+   "id": "connector",
+   "name": "On-page connector",
+   "category": "Flowchart",
+   "description": "A small circle that continues a flow elsewhere.",
+   "slots": {
+    "shape": "Label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "fill": "#00000000",
+     "name": "On-page connector",
+     "w": 44,
+     "h": 44,
+     "clip": false
+    },
+    {
+     "id": "shape",
+     "parent": "root",
+     "kind": "ellipse",
+     "name": "On-page connector",
+     "w": 44,
+     "h": 44,
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "fill": "#F1F3F5",
+     "stroke": "#5B6472",
+     "stroke_width": 1.5,
+     "text": "A",
+     "font_size": 14,
+     "font_weight": 700,
+     "color": "#1F2933"
+    }
+   ]
+  },
+  {
+   "id": "merge",
+   "name": "Merge",
+   "category": "Flowchart",
+   "description": "A downward triangle where branches join.",
+   "slots": {},
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Merge",
+     "w": 64,
+     "h": 56,
+     "clip": false
+    },
+    {
+     "id": "shape",
+     "parent": "root",
+     "kind": "polygon",
+     "name": "Merge",
+     "w": 64,
+     "h": 56,
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "fill": "#F1F3F5",
+     "stroke": "#5B6472",
+     "stroke_width": 1.5,
+     "text": "",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#1F2933",
+     "rotation": 180,
+     "sides": 3
+    }
+   ]
+  },
+  {
+   "id": "note",
+   "name": "Note",
+   "category": "Diagrams",
+   "description": "A sticky note for comments on a diagram.",
+   "slots": {
+    "note": "Note text"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Note",
+     "w": 200,
+     "h": 120,
+     "clip": false
+    },
+    {
+     "id": "note",
+     "parent": "root",
+     "kind": "sticky",
+     "text": "Check with legal before we launch in the EU.",
+     "name": "Sticky",
+     "w": 200,
+     "h": 120,
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "fill": "#FFE58F",
+     "color": "#1F2933",
+     "font_size": 15
+    }
+   ]
+  },
+  {
+   "id": "annotation",
+   "name": "Annotation",
+   "category": "Diagrams",
+   "description": "A bracketed comment that points at part of a diagram.",
+   "slots": {
+    "text": "Comment"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 10,
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Annotation",
+     "w": 230,
+     "h": 52,
+     "w_sizing": "hug"
+    },
+    {
+     "id": "bracket",
+     "parent": "root",
+     "kind": "frame",
+     "name": "Bracket",
+     "w": 10,
+     "h": 52,
+     "fill": "#00000000",
+     "clip": false
+    },
+    {
+     "id": "bracket-line",
+     "parent": "bracket",
+     "kind": "line",
+     "name": "Bracket",
+     "w": 10,
+     "h": 52,
+     "points": [
+      [
+       10,
+       1
+      ],
+      [
+       1,
+       1
+      ],
+      [
+       1,
+       51
+      ],
+      [
+       10,
+       51
+      ]
+     ],
+     "stroke": "#5B6472",
+     "stroke_width": 1.5
+    },
+    {
+     "id": "text",
+     "parent": "root",
+     "kind": "text",
+     "text": "Retries three times, then hands the order to support.",
+     "font_size": 13,
+     "color": "#5B6472",
+     "name": "Comment",
+     "w": 210,
+     "italic": true,
+     "line_height": 1.4
+    }
+   ]
+  },
+  {
+   "id": "label",
+   "name": "Label",
+   "category": "Diagrams",
+   "description": "A free caption for a connector or region.",
+   "slots": {
+    "text": "Caption"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      4,
+      8
+     ],
+     "items": "center",
+     "fill": "#FFFFFF",
+     "name": "Label",
+     "w": 80,
+     "h": 26,
+     "w_sizing": "hug",
+     "stroke": "#D5DAE0",
+     "radius": 6
+    },
+    {
+     "id": "text",
+     "parent": "root",
+     "kind": "text",
+     "text": "Yes",
+     "font_size": 13,
+     "font_weight": 600,
+     "color": "#1F2933",
+     "name": "Text"
+    }
+   ]
+  },
+  {
+   "id": "swimlane",
+   "name": "Swimlane",
+   "category": "Diagrams",
+   "description": "One lane with a name column; drop steps into its body.",
+   "slots": {
+    "label": "Lane name"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "stretch",
+     "fill": "#FFFFFF",
+     "name": "Lane / Customer",
+     "w": 960,
+     "h": 180,
+     "stroke": "#3D6FD9",
+     "stroke_width": 1
+    },
+    {
+     "id": "label-cell",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "column",
+     "padding": [
+      12
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#E8EFFC",
+     "name": "Label column",
+     "w": 120,
+     "h": 180,
+     "stroke": "#3D6FD9"
+    },
+    {
+     "id": "label",
+     "parent": "label-cell",
+     "kind": "text",
+     "text": "Customer",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#1F2933",
+     "name": "Lane name",
+     "w": 96,
+     "align": "center"
+    },
+    {
+     "id": "body",
+     "parent": "root",
+     "kind": "frame",
+     "name": "Lane body",
+     "w": 840,
+     "h": 180,
+     "w_sizing": "fill",
+     "fill": "#00000000"
+    }
+   ]
+  },
+  {
+   "id": "swimlanes",
+   "name": "Swimlanes / Three lanes",
+   "category": "Diagrams",
+   "description": "Three stacked lanes for who does what.",
+   "slots": {
+    "lane-1-label": "Lane name",
+    "lane-2-label": "Lane name",
+    "lane-3-label": "Lane name"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "fill": "#FFFFFF",
+     "name": "Swimlanes",
+     "w": 960,
+     "h": 540,
+     "radius": 8,
+     "stroke": "#C9CFD6"
+    },
+    {
+     "id": "lane-1",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "stretch",
+     "fill": "#FFFFFF",
+     "name": "Lane / Customer",
+     "w": 960,
+     "h": 180,
+     "w_sizing": "fill",
+     "stroke": "#3D6FD9",
+     "stroke_width": 1
+    },
+    {
+     "id": "lane-1-label-cell",
+     "parent": "lane-1",
+     "kind": "frame",
+     "layout": "column",
+     "padding": [
+      12
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#E8EFFC",
+     "name": "Label column",
+     "w": 120,
+     "h": 180,
+     "stroke": "#3D6FD9"
+    },
+    {
+     "id": "lane-1-label",
+     "parent": "lane-1-label-cell",
+     "kind": "text",
+     "text": "Customer",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#1F2933",
+     "name": "Lane name",
+     "w": 96,
+     "align": "center"
+    },
+    {
+     "id": "lane-1-body",
+     "parent": "lane-1",
+     "kind": "frame",
+     "name": "Lane body",
+     "w": 840,
+     "h": 180,
+     "w_sizing": "fill",
+     "fill": "#00000000"
+    },
+    {
+     "id": "lane-2",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "stretch",
+     "fill": "#FFFFFF",
+     "name": "Lane / Support",
+     "w": 960,
+     "h": 180,
+     "w_sizing": "fill",
+     "stroke": "#2F9E5B",
+     "stroke_width": 1
+    },
+    {
+     "id": "lane-2-label-cell",
+     "parent": "lane-2",
+     "kind": "frame",
+     "layout": "column",
+     "padding": [
+      12
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#E3F5EA",
+     "name": "Label column",
+     "w": 120,
+     "h": 180,
+     "stroke": "#2F9E5B"
+    },
+    {
+     "id": "lane-2-label",
+     "parent": "lane-2-label-cell",
+     "kind": "text",
+     "text": "Support",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#1F2933",
+     "name": "Lane name",
+     "w": 96,
+     "align": "center"
+    },
+    {
+     "id": "lane-2-body",
+     "parent": "lane-2",
+     "kind": "frame",
+     "name": "Lane body",
+     "w": 840,
+     "h": 180,
+     "w_sizing": "fill",
+     "fill": "#00000000"
+    },
+    {
+     "id": "lane-3",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "stretch",
+     "fill": "#FFFFFF",
+     "name": "Lane / Engineering",
+     "w": 960,
+     "h": 180,
+     "w_sizing": "fill",
+     "stroke": "#7A5AD6",
+     "stroke_width": 1
+    },
+    {
+     "id": "lane-3-label-cell",
+     "parent": "lane-3",
+     "kind": "frame",
+     "layout": "column",
+     "padding": [
+      12
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#EFE9FB",
+     "name": "Label column",
+     "w": 120,
+     "h": 180,
+     "stroke": "#7A5AD6"
+    },
+    {
+     "id": "lane-3-label",
+     "parent": "lane-3-label-cell",
+     "kind": "text",
+     "text": "Engineering",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#1F2933",
+     "name": "Lane name",
+     "w": 96,
+     "align": "center"
+    },
+    {
+     "id": "lane-3-body",
+     "parent": "lane-3",
+     "kind": "frame",
+     "name": "Lane body",
+     "w": 840,
+     "h": 180,
+     "w_sizing": "fill",
+     "fill": "#00000000"
+    }
+   ]
+  },
+  {
+   "id": "group",
+   "name": "Group / Container",
+   "category": "Diagrams",
+   "description": "A dashed region that groups related steps under a title.",
+   "slots": {
+    "title": "Group title"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "name": "Group",
+     "w": 400,
+     "h": 260,
+     "fill": "#F6F8FA",
+     "stroke": "#9AA5B1",
+     "stroke_width": 1.5,
+     "dash": [
+      6,
+      4
+     ],
+     "radius": 12
+    },
+    {
+     "id": "title",
+     "parent": "root",
+     "kind": "text",
+     "text": "Payment service",
+     "font_size": 13,
+     "font_weight": 600,
+     "color": "#5B6472",
+     "name": "Title",
+     "x": 16,
+     "y": 12
+    }
+   ]
+  },
+  {
+   "id": "mindmap-central",
+   "name": "Mind map / Central topic",
+   "category": "Diagrams",
+   "description": "The big central idea of a mind map.",
+   "slots": {
+    "shape": "Label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Central topic",
+     "w": 220,
+     "h": 72,
+     "clip": false
+    },
+    {
+     "id": "shape",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Shape",
+     "w": 220,
+     "h": 72,
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "fill": "#EFE9FB",
+     "stroke": "#7A5AD6",
+     "stroke_width": 1.5,
+     "text": "Launch plan",
+     "font_size": 18,
+     "font_weight": 700,
+     "color": "#1F2933",
+     "radius": 36
+    }
+   ]
+  },
+  {
+   "id": "mindmap-topic",
+   "name": "Mind map / Topic",
+   "category": "Diagrams",
+   "description": "A branch topic around the central idea.",
+   "slots": {
+    "shape": "Label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "fill": "#00000000",
+     "name": "Topic",
+     "w": 150,
+     "h": 44,
+     "clip": false
+    },
+    {
+     "id": "shape",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Topic",
+     "w": 150,
+     "h": 44,
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "fill": "#FFFFFF",
+     "stroke": "#7A5AD6",
+     "stroke_width": 1.5,
+     "radius": 22,
+     "text": "Pricing page",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#1F2933"
+    }
+   ]
+  },
+  {
+   "id": "actor",
+   "name": "Actor",
+   "category": "Sequence & UML",
+   "description": "A stick figure for a person or outside system.",
+   "slots": {
+    "label": "Actor name"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "name": "Actor",
+     "w": 100,
+     "h": 118,
+     "fill": "#00000000",
+     "clip": false
+    },
+    {
+     "id": "head",
+     "parent": "root",
+     "kind": "ellipse",
+     "name": "Head",
+     "x": 38,
+     "y": 0,
+     "w": 24,
+     "h": 24,
+     "fill": "#FFFFFF",
+     "stroke": "#1F2933",
+     "stroke_width": 2
+    },
+    {
+     "id": "body",
+     "parent": "root",
+     "kind": "line",
+     "name": "Body",
+     "w": 100,
+     "h": 118,
+     "points": [
+      [
+       50,
+       24
+      ],
+      [
+       50,
+       62
+      ]
+     ],
+     "stroke": "#1F2933",
+     "stroke_width": 2
+    },
+    {
+     "id": "arms",
+     "parent": "root",
+     "kind": "line",
+     "name": "Arms",
+     "w": 100,
+     "h": 118,
+     "points": [
+      [
+       30,
+       38
+      ],
+      [
+       70,
+       38
+      ]
+     ],
+     "stroke": "#1F2933",
+     "stroke_width": 2
+    },
+    {
+     "id": "leg",
+     "parent": "root",
+     "kind": "line",
+     "name": "Leg",
+     "w": 100,
+     "h": 118,
+     "points": [
+      [
+       50,
+       62
+      ],
+      [
+       34,
+       88
+      ]
+     ],
+     "stroke": "#1F2933",
+     "stroke_width": 2
+    },
+    {
+     "id": "leg-2",
+     "parent": "root",
+     "kind": "line",
+     "name": "Leg",
+     "w": 100,
+     "h": 118,
+     "points": [
+      [
+       50,
+       62
+      ],
+      [
+       66,
+       88
+      ]
+     ],
+     "stroke": "#1F2933",
+     "stroke_width": 2
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "Customer",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#1F2933",
+     "name": "Name",
+     "x": 0,
+     "y": 96,
+     "w": 100,
+     "align": "center"
+    }
+   ]
+  },
+  {
+   "id": "lifeline",
+   "name": "Sequence / Lifeline",
+   "category": "Sequence & UML",
+   "description": "A participant box with its dashed lifeline and an activation bar.",
+   "slots": {
+    "box": "Participant name"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "name": "Lifeline",
+     "w": 150,
+     "h": 420,
+     "fill": "#00000000",
+     "clip": false
+    },
+    {
+     "id": "line",
+     "parent": "root",
+     "kind": "line",
+     "name": "Lifeline",
+     "w": 150,
+     "h": 420,
+     "points": [
+      [
+       75,
+       48
+      ],
+      [
+       75,
+       420
+      ]
+     ],
+     "stroke": "#5B6472",
+     "stroke_width": 1.5,
+     "dash": [
+      6,
+      5
+     ]
+    },
+    {
+     "id": "activation",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Activation",
+     "x": 69,
+     "y": 120,
+     "w": 12,
+     "h": 140,
+     "fill": "#FFFFFF",
+     "stroke": "#3D6FD9",
+     "stroke_width": 1.5
+    },
+    {
+     "id": "box",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Participant",
+     "w": 150,
+     "h": 48,
+     "radius": 6,
+     "fill": "#E8EFFC",
+     "stroke": "#3D6FD9",
+     "stroke_width": 1.5,
+     "text": "Web app",
+     "font_size": 14,
+     "font_weight": 600,
+     "color": "#1F2933"
+    }
+   ]
+  },
+  {
+   "id": "message",
+   "name": "Sequence / Message",
+   "category": "Sequence & UML",
+   "description": "A labelled call arrow between two lifelines.",
+   "slots": {
+    "label": "Message"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "name": "Message",
+     "w": 240,
+     "h": 36,
+     "fill": "#00000000",
+     "clip": false
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "POST /sessions",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#1F2933",
+     "name": "Label",
+     "x": 0,
+     "y": 0,
+     "w": 240,
+     "align": "center",
+     "font": "Geist Mono"
+    },
+    {
+     "id": "arrow",
+     "parent": "root",
+     "kind": "line",
+     "name": "Arrow",
+     "w": 240,
+     "h": 36,
+     "points": [
+      [
+       0,
+       28
+      ],
+      [
+       240,
+       28
+      ]
+     ],
+     "stroke": "#1F2933",
+     "stroke_width": 1.5,
+     "arrow_end": true
+    }
+   ]
+  },
+  {
+   "id": "reply",
+   "name": "Sequence / Reply",
+   "category": "Sequence & UML",
+   "description": "A dashed return arrow carrying a response.",
+   "slots": {
+    "label": "Response"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "name": "Reply",
+     "w": 240,
+     "h": 36,
+     "fill": "#00000000",
+     "clip": false
+    },
+    {
+     "id": "label",
+     "parent": "root",
+     "kind": "text",
+     "text": "201 Created",
+     "font_size": 12,
+     "font_weight": 500,
+     "color": "#5B6472",
+     "name": "Label",
+     "x": 0,
+     "y": 0,
+     "w": 240,
+     "align": "center",
+     "font": "Geist Mono"
+    },
+    {
+     "id": "arrow",
+     "parent": "root",
+     "kind": "line",
+     "name": "Arrow",
+     "w": 240,
+     "h": 36,
+     "points": [
+      [
+       240,
+       28
+      ],
+      [
+       0,
+       28
+      ]
+     ],
+     "stroke": "#5B6472",
+     "stroke_width": 1.5,
+     "dash": [
+      6,
+      4
+     ],
+     "arrow_end": true
+    }
+   ]
+  },
+  {
+   "id": "uml-class",
+   "name": "UML / Class",
+   "category": "Sequence & UML",
+   "description": "A class box: name, attributes and methods.",
+   "slots": {
+    "name": "Class name",
+    "attribute-1": "Attribute 1",
+    "attribute-2": "Attribute 2",
+    "attribute-3": "Attribute 3",
+    "attribute-4": "Attribute 4",
+    "method-1": "Method 1",
+    "method-2": "Method 2"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "fill": "#FFFFFF",
+     "name": "Class",
+     "w": 220,
+     "h": 200,
+     "h_sizing": "hug",
+     "stroke": "#1F2933",
+     "stroke_width": 1.5,
+     "radius": 4
+    },
+    {
+     "id": "header",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      10
+     ],
+     "items": "center",
+     "justify": "center",
+     "fill": "#E8EFFC",
+     "name": "Header",
+     "w_sizing": "fill",
+     "h": 40
+    },
+    {
+     "id": "name",
+     "parent": "header",
+     "kind": "text",
+     "text": "Invoice",
+     "font_size": 14,
+     "font_weight": 700,
+     "color": "#1F2933",
+     "name": "Class name"
+    },
+    {
+     "id": "rule-1",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Rule",
+     "w": 220,
+     "h": 1.5,
+     "w_sizing": "fill",
+     "fill": "#1F2933"
+    },
+    {
+     "id": "attributes",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 4,
+     "padding": [
+      10,
+      12
+     ],
+     "fill": "#00000000",
+     "name": "Attributes",
+     "w_sizing": "fill",
+     "h_sizing": "hug"
+    },
+    {
+     "id": "attribute-1",
+     "parent": "attributes",
+     "kind": "text",
+     "text": "+ id: UUID",
+     "font_size": 12,
+     "color": "#1F2933",
+     "font": "Geist Mono",
+     "name": "Attribute"
+    },
+    {
+     "id": "attribute-2",
+     "parent": "attributes",
+     "kind": "text",
+     "text": "+ total: Money",
+     "font_size": 12,
+     "color": "#1F2933",
+     "font": "Geist Mono",
+     "name": "Attribute"
+    },
+    {
+     "id": "attribute-3",
+     "parent": "attributes",
+     "kind": "text",
+     "text": "+ dueDate: Date",
+     "font_size": 12,
+     "color": "#1F2933",
+     "font": "Geist Mono",
+     "name": "Attribute"
+    },
+    {
+     "id": "attribute-4",
+     "parent": "attributes",
+     "kind": "text",
+     "text": "- status: Status",
+     "font_size": 12,
+     "color": "#1F2933",
+     "font": "Geist Mono",
+     "name": "Attribute"
+    },
+    {
+     "id": "rule-2",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Rule",
+     "w": 220,
+     "h": 1.5,
+     "w_sizing": "fill",
+     "fill": "#1F2933"
+    },
+    {
+     "id": "methods",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "column",
+     "gap": 4,
+     "padding": [
+      10,
+      12
+     ],
+     "fill": "#00000000",
+     "name": "Methods",
+     "w_sizing": "fill",
+     "h_sizing": "hug"
+    },
+    {
+     "id": "method-1",
+     "parent": "methods",
+     "kind": "text",
+     "text": "+ send(): void",
+     "font_size": 12,
+     "color": "#1F2933",
+     "font": "Geist Mono",
+     "name": "Method"
+    },
+    {
+     "id": "method-2",
+     "parent": "methods",
+     "kind": "text",
+     "text": "+ markPaid(at: Date)",
+     "font_size": 12,
+     "color": "#1F2933",
+     "font": "Geist Mono",
+     "name": "Method"
+    }
+   ]
+  },
+  {
+   "id": "er-entity",
+   "name": "ER / Entity",
+   "category": "Sequence & UML",
+   "description": "A database table with its columns and keys.",
+   "slots": {
+    "name": "Table name",
+    "column-1-name": "Column 1 name",
+    "column-1-type": "Column 1 type",
+    "column-2-name": "Column 2 name",
+    "column-2-type": "Column 2 type",
+    "column-3-name": "Column 3 name",
+    "column-3-type": "Column 3 type",
+    "column-4-name": "Column 4 name",
+    "column-4-type": "Column 4 type"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "column",
+     "fill": "#FFFFFF",
+     "name": "Entity",
+     "w": 240,
+     "h": 180,
+     "h_sizing": "hug",
+     "stroke": "#1F8A8A",
+     "stroke_width": 1.5,
+     "radius": 8
+    },
+    {
+     "id": "header",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "gap": 8,
+     "padding": [
+      0,
+      12
+     ],
+     "items": "center",
+     "fill": "#E0F4F4",
+     "name": "Header",
+     "w_sizing": "fill",
+     "h": 38
+    },
+    {
+     "id": "icon",
+     "parent": "header",
+     "kind": "icon",
+     "icon": "grid",
+     "stroke": "#1F8A8A",
+     "w": 16,
+     "h": 16,
+     "name": "Icon"
+    },
+    {
+     "id": "name",
+     "parent": "header",
+     "kind": "text",
+     "text": "customers",
+     "font_size": 14,
+     "font_weight": 700,
+     "color": "#1F2933",
+     "font": "Geist Mono",
+     "name": "Table name"
+    },
+    {
+     "id": "rule-1",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Rule",
+     "w": 240,
+     "h": 1,
+     "w_sizing": "fill",
+     "fill": "#D5E9E9"
+    },
+    {
+     "id": "column-1",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      0,
+      12
+     ],
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#00000000",
+     "name": "id",
+     "w_sizing": "fill",
+     "h": 32
+    },
+    {
+     "id": "column-1-name",
+     "parent": "column-1",
+     "kind": "text",
+     "text": "id",
+     "font_size": 12,
+     "font_weight": 600,
+     "color": "#1F2933",
+     "font": "Geist Mono",
+     "name": "Column"
+    },
+    {
+     "id": "column-1-type",
+     "parent": "column-1",
+     "kind": "text",
+     "text": "uuid  PK",
+     "font_size": 12,
+     "color": "#5B6472",
+     "font": "Geist Mono",
+     "name": "Type"
+    },
+    {
+     "id": "rule-2",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Rule",
+     "w": 240,
+     "h": 1,
+     "w_sizing": "fill",
+     "fill": "#D5E9E9"
+    },
+    {
+     "id": "column-2",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      0,
+      12
+     ],
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#00000000",
+     "name": "email",
+     "w_sizing": "fill",
+     "h": 32
+    },
+    {
+     "id": "column-2-name",
+     "parent": "column-2",
+     "kind": "text",
+     "text": "email",
+     "font_size": 12,
+     "color": "#1F2933",
+     "font": "Geist Mono",
+     "name": "Column"
+    },
+    {
+     "id": "column-2-type",
+     "parent": "column-2",
+     "kind": "text",
+     "text": "text",
+     "font_size": 12,
+     "color": "#5B6472",
+     "font": "Geist Mono",
+     "name": "Type"
+    },
+    {
+     "id": "rule-3",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Rule",
+     "w": 240,
+     "h": 1,
+     "w_sizing": "fill",
+     "fill": "#D5E9E9"
+    },
+    {
+     "id": "column-3",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      0,
+      12
+     ],
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#00000000",
+     "name": "plan_id",
+     "w_sizing": "fill",
+     "h": 32
+    },
+    {
+     "id": "column-3-name",
+     "parent": "column-3",
+     "kind": "text",
+     "text": "plan_id",
+     "font_size": 12,
+     "color": "#1F2933",
+     "font": "Geist Mono",
+     "name": "Column"
+    },
+    {
+     "id": "column-3-type",
+     "parent": "column-3",
+     "kind": "text",
+     "text": "uuid  FK",
+     "font_size": 12,
+     "color": "#5B6472",
+     "font": "Geist Mono",
+     "name": "Type"
+    },
+    {
+     "id": "rule-4",
+     "parent": "root",
+     "kind": "rect",
+     "name": "Rule",
+     "w": 240,
+     "h": 1,
+     "w_sizing": "fill",
+     "fill": "#D5E9E9"
+    },
+    {
+     "id": "column-4",
+     "parent": "root",
+     "kind": "frame",
+     "layout": "row",
+     "padding": [
+      0,
+      12
+     ],
+     "items": "center",
+     "justify": "space_between",
+     "fill": "#00000000",
+     "name": "created_at",
+     "w_sizing": "fill",
+     "h": 32
+    },
+    {
+     "id": "column-4-name",
+     "parent": "column-4",
+     "kind": "text",
+     "text": "created_at",
+     "font_size": 12,
+     "color": "#1F2933",
+     "font": "Geist Mono",
+     "name": "Column"
+    },
+    {
+     "id": "column-4-type",
+     "parent": "column-4",
+     "kind": "text",
+     "text": "timestamptz",
+     "font_size": 12,
+     "color": "#5B6472",
+     "font": "Geist Mono",
+     "name": "Type"
+    }
+   ]
+  },
+  {
+   "id": "state",
+   "name": "State",
+   "category": "Sequence & UML",
+   "description": "A state of a state machine.",
+   "slots": {
+    "shape": "Label"
+   },
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "fill": "#00000000",
+     "name": "State",
+     "w": 180,
+     "h": 56,
+     "clip": false
+    },
+    {
+     "id": "shape",
+     "parent": "root",
+     "kind": "rect",
+     "name": "State",
+     "w": 180,
+     "h": 56,
+     "w_sizing": "fill",
+     "h_sizing": "fill",
+     "fill": "#E8EFFC",
+     "stroke": "#3D6FD9",
+     "stroke_width": 1.5,
+     "text": "Awaiting payment",
+     "font_size": 14,
+     "font_weight": 500,
+     "color": "#1F2933",
+     "radius": 16
+    }
+   ]
+  },
+  {
+   "id": "state-initial",
+   "name": "State / Initial",
+   "category": "Sequence & UML",
+   "description": "The filled dot a state machine starts from.",
+   "slots": {},
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Initial state",
+     "w": 28,
+     "h": 28,
+     "clip": false
+    },
+    {
+     "id": "dot",
+     "parent": "root",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 24,
+     "h": 24,
+     "fill": "#1F2933"
+    }
+   ]
+  },
+  {
+   "id": "state-final",
+   "name": "State / Final",
+   "category": "Sequence & UML",
+   "description": "The ringed dot a state machine ends at.",
+   "slots": {},
+   "nodes": [
+    {
+     "id": "root",
+     "kind": "frame",
+     "layout": "row",
+     "items": "center",
+     "justify": "center",
+     "fill": "#00000000",
+     "name": "Final state",
+     "w": 28,
+     "h": 28,
+     "stroke": "#1F2933",
+     "stroke_width": 2,
+     "radius": 999
+    },
+    {
+     "id": "dot",
+     "parent": "root",
+     "kind": "ellipse",
+     "name": "Dot",
+     "w": 16,
+     "h": 16,
+     "fill": "#1F2933"
+    }
+   ]
+  }
+ ]
+}

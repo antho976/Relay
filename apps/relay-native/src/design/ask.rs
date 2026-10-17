@@ -194,7 +194,7 @@ pub(super) fn ask_now(b: &Rc<Board>, request: &str) {
     }
 }
 
-fn send_request(b: &Rc<Board>, session: String, request: String, with_picture: bool) {
+pub(super) fn send_request(b: &Rc<Board>, session: String, request: String, with_picture: bool) {
     let Some(ui) = b.ui.upgrade() else {
         return;
     };

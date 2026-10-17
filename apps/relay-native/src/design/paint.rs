@@ -6,7 +6,7 @@
 use gtk::prelude::*;
 use gtk::{gdk, graphene, gsk, pango};
 use gtk4 as gtk;
-use relay_bus::design::{parse_color, Gradient, GradientKind, ImageFit, Node, NodeKind, TextAlign};
+use relay_bus::design::{parse_color, Gradient, GradientKind, ImageFit, ListStyle, Node, NodeKind, Span, TextAlign};
 use relay_client::design::layout::{self, Measure, Placed, STICKY_PAD};
 use relay_client::design::{shapes, Rect, Scene};
 use std::cell::RefCell;
@@ -122,6 +122,15 @@ fn text_key(n: &Node, wrap: Option<f64>) -> u64 {
     n.line_height.map(f64::to_bits).hash(&mut h);
     n.letter_spacing.map(f64::to_bits).hash(&mut h);
     wrap.map(|w| (w * 100.0).round() as i64).hash(&mut h);
+    n.list.hash(&mut h);
+    if let Some(spans) = n.live_spans() {
+        for s in spans {
+            s.text.hash(&mut h);
+            (s.weight, s.italic, s.underline, s.strike, s.code).hash(&mut h);
+            (&s.color, &s.font, &s.link).hash(&mut h);
+            s.size.map(f64::to_bits).hash(&mut h);
+        }
+    }
     h.finish()
 }
 
@@ -185,9 +194,12 @@ impl Painter {
     fn new_layout(&self, n: &Node, wrap: Option<f64>) -> pango::Layout {
         let layout = pango::Layout::new(&self.ctx);
         layout.set_font_description(Some(&font_description(n)));
-        let text = n.text.as_deref().unwrap_or("");
-        layout.set_text(text);
+        let (text, runs) = rich_text(n);
+        layout.set_text(&text);
         let attrs = pango::AttrList::new();
+        for (start, end, span) in &runs {
+            span_attrs(&attrs, *start as u32, *end as u32, span);
+        }
         if n.underline == Some(true) {
             attrs.insert(pango::AttrInt::new_underline(pango::Underline::Single));
         }
@@ -341,6 +353,25 @@ impl Painter {
             snap.rotate(turn as f32);
             snap.translate(&graphene::Point::new(-r.cx() as f32, -r.cy() as f32));
         }
+        let flip = (n.flip_x == Some(true), n.flip_y == Some(true));
+        if flip.0 || flip.1 {
+            snap.save();
+            snap.translate(&graphene::Point::new(r.cx() as f32, r.cy() as f32));
+            snap.scale(if flip.0 { -1.0 } else { 1.0 }, if flip.1 { -1.0 } else { 1.0 });
+            snap.translate(&graphene::Point::new(-r.cx() as f32, -r.cy() as f32));
+        }
+        let filtered = n.filters.as_ref().and_then(relay_client::design::filters::matrix);
+        if let Some((m, o)) = &filtered {
+            // GSK multiplies a row vector by the matrix: the transpose of `rgb' = m · rgb`.
+            let f = |i: usize, j: usize| m[j][i] as f32;
+            let matrix = graphene::Matrix::from_float([
+                f(0, 0), f(0, 1), f(0, 2), 0.0,
+                f(1, 0), f(1, 1), f(1, 2), 0.0,
+                f(2, 0), f(2, 1), f(2, 2), 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ]);
+            snap.push_color_matrix(&matrix, &graphene::Vec4::new(o[0] as f32, o[1] as f32, o[2] as f32, 0.0));
+        }
         let blur = n.blur.filter(|b| *b > 0.0);
         if let Some(b) = blur {
             snap.push_blur(b);
@@ -385,7 +416,11 @@ impl Painter {
             }
             NodeKind::Polygon => {
                 let path = polygon_path(n, &r);
-                if let Some(g) = &n.gradient {
+                if n.src.is_some() {
+                    snap.push_fill(&path, gsk::FillRule::Winding);
+                    self.picture_in(snap, n, &r);
+                    snap.pop();
+                } else if let Some(g) = &n.gradient {
                     snap.push_fill(&path, gsk::FillRule::Winding);
                     gradient(snap, g, &r);
                     snap.pop();
@@ -413,9 +448,18 @@ impl Painter {
             }
             NodeKind::Line | NodeKind::Path => self.stroke(snap, scene, placed, n, &r),
             NodeKind::Image => self.image(snap, n, &r),
+            NodeKind::Vector => self.vector(snap, n, &r),
+            // Pinned over the canvas by the board, never part of what is drawn or exported.
+            NodeKind::Comment => {}
         }
         if blur.is_some() {
             snap.pop();
+        }
+        if filtered.is_some() {
+            snap.pop();
+        }
+        if flip.0 || flip.1 {
+            snap.restore();
         }
         if turn != 0.0 {
             snap.restore();
@@ -430,7 +474,12 @@ impl Painter {
         if let Some(s) = &n.shadow {
             snap.append_outset_shadow(rr, &rgba(&s.color), s.x as f32, s.y as f32, s.spread as f32, s.blur as f32);
         }
-        if let Some(g) = &n.gradient {
+        if n.src.is_some() {
+            snap.push_rounded_clip(rr);
+            let b = rr.bounds();
+            self.picture_in(snap, n, &Rect::new(b.x() as f64, b.y() as f64, b.width() as f64, b.height() as f64));
+            snap.pop();
+        } else if let Some(g) = &n.gradient {
             snap.push_rounded_clip(rr);
             let b = rr.bounds();
             gradient(snap, g, &Rect::new(b.x() as f64, b.y() as f64, b.width() as f64, b.height() as f64));
@@ -578,56 +627,203 @@ impl Painter {
             snap.append_outset_shadow(&rr, &rgba(&s.color), s.x as f32, s.y as f32, s.spread as f32, s.blur as f32);
         }
         snap.push_rounded_clip(&rr);
+        self.picture_in(snap, n, r);
+        snap.pop();
+        self.border(snap, n, r);
+    }
+
+    /// The node's picture (`src`) over `r` by its `fit` and `crop`; the caller clips. While it
+    /// loads, or if it is missing, a quiet tile with a picture glyph.
+    fn picture_in(&self, snap: &gtk::Snapshot, n: &Node, r: &Rect) {
         let picture = n.src.as_deref().map(|s| self.picture(s)).unwrap_or(Picture::Failed);
         let natural = match &picture {
             Picture::Ready(t) => Some((t.width() as f64, t.height() as f64)),
             Picture::Vector(svg) => Some((svg.intrinsic_width().max(1) as f64, svg.intrinsic_height().max(1) as f64)),
             _ => None,
         };
-        match natural {
-            Some((tw, th)) => {
-                let (sx, sy) = (r.w / tw.max(1.0), r.h / th.max(1.0));
-                let target = match n.fit.unwrap_or(ImageFit::Cover) {
-                    ImageFit::Stretch => *r,
-                    fit => {
-                        let s = if fit == ImageFit::Cover { sx.max(sy) } else { sx.min(sy) };
-                        let (w, h) = (tw * s, th * s);
-                        Rect::new(r.cx() - w / 2.0, r.cy() - h / 2.0, w, h)
-                    }
-                };
-                match &picture {
-                    Picture::Ready(t) => snap.append_scaled_texture(t, gsk::ScalingFilter::Trilinear, &grect(&target)),
-                    Picture::Vector(svg) => {
-                        snap.save();
-                        snap.translate(&graphene::Point::new(target.x as f32, target.y as f32));
-                        svg.snapshot(snap.upcast_ref::<gdk::Snapshot>(), target.w, target.h);
-                        snap.restore();
-                    }
-                    _ => {}
-                }
+        let Some((pw, ph)) = natural else {
+            snap.append_color(&gdk::RGBA::new(0.55, 0.55, 0.55, 0.25), &grect(r));
+            let s = (r.w.min(r.h) * 0.25).clamp(6.0, 48.0);
+            let b = gsk::PathBuilder::new();
+            let (cx, cy) = (r.cx() as f32, r.cy() as f32);
+            let s = s as f32;
+            b.add_rect(&graphene::Rect::new(cx - s, cy - s * 0.75, s * 2.0, s * 1.5));
+            b.move_to(cx - s, cy + s * 0.5);
+            b.line_to(cx - s * 0.2, cy - s * 0.2);
+            b.line_to(cx + s * 0.3, cy + s * 0.3);
+            b.line_to(cx + s * 0.6, cy);
+            b.line_to(cx + s, cy + s * 0.4);
+            let stroke = gsk::Stroke::new((s / 8.0).max(1.0));
+            stroke.set_line_join(gsk::LineJoin::Round);
+            snap.append_stroke(&b.to_path(), &stroke, &gdk::RGBA::new(0.55, 0.55, 0.55, 0.8));
+            return;
+        };
+        // The crop is the part shown: fit it, then draw the whole picture around it.
+        let [cx0, cy0, cw, ch] = n.crop.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+        let (tw, th) = (pw * cw, ph * ch);
+        let (sx, sy) = (r.w / tw.max(1.0), r.h / th.max(1.0));
+        let (kx, ky) = match n.fit.unwrap_or(ImageFit::Cover) {
+            ImageFit::Stretch => (sx, sy),
+            ImageFit::Cover => (sx.max(sy), sx.max(sy)),
+            ImageFit::Contain => (sx.min(sy), sx.min(sy)),
+        };
+        let shown = Rect::new(r.cx() - tw * kx / 2.0, r.cy() - th * ky / 2.0, tw * kx, th * ky);
+        let whole = Rect::new(shown.x - pw * cx0 * kx, shown.y - ph * cy0 * ky, pw * kx, ph * ky);
+        let cropped = n.crop.is_some();
+        if cropped {
+            snap.push_clip(&grect(&shown));
+        }
+        match &picture {
+            Picture::Ready(t) => snap.append_scaled_texture(t, gsk::ScalingFilter::Trilinear, &grect(&whole)),
+            Picture::Vector(svg) => {
+                snap.save();
+                snap.translate(&graphene::Point::new(whole.x as f32, whole.y as f32));
+                svg.snapshot(snap.upcast_ref::<gdk::Snapshot>(), whole.w, whole.h);
+                snap.restore();
             }
+            _ => {}
+        }
+        if cropped {
+            snap.pop();
+        }
+    }
+
+    /// A vector: its path scaled to its box, filled unless open, then stroked.
+    fn vector(&self, snap: &gtk::Snapshot, n: &Node, r: &Rect) {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        n.d.hash(&mut h);
+        n.view.map(|v| (v[0].to_bits(), v[1].to_bits())).hash(&mut h);
+        (r.x.to_bits(), r.y.to_bits(), r.w.to_bits(), r.h.to_bits()).hash(&mut h);
+        let key = h.finish();
+        let cached = self.paths.borrow().get(&n.id).filter(|(k, _)| *k == key).map(|(_, p)| p.clone());
+        let path = match cached {
+            Some(p) => p,
             None => {
-                // Loading or missing: a quiet tile with a picture glyph.
-                snap.append_color(&gdk::RGBA::new(0.55, 0.55, 0.55, 0.25), &grect(r));
-                let s = (r.w.min(r.h) * 0.25).clamp(6.0, 48.0);
-                let b = gsk::PathBuilder::new();
-                let (cx, cy) = (r.cx() as f32, r.cy() as f32);
-                let s = s as f32;
-                b.add_rect(&graphene::Rect::new(cx - s, cy - s * 0.75, s * 2.0, s * 1.5));
-                b.move_to(cx - s, cy + s * 0.5);
-                b.line_to(cx - s * 0.2, cy - s * 0.2);
-                b.line_to(cx + s * 0.3, cy + s * 0.3);
-                b.line_to(cx + s * 0.6, cy);
-                b.line_to(cx + s, cy + s * 0.4);
-                let stroke = gsk::Stroke::new((s / 8.0).max(1.0));
-                stroke.set_line_join(gsk::LineJoin::Round);
-                snap.append_stroke(&b.to_path(), &stroke, &gdk::RGBA::new(0.55, 0.55, 0.55, 0.8));
+                let p = vector_path(&shapes::vector_segments(n, r));
+                self.paths.borrow_mut().insert(n.id.clone(), (key, p.clone()));
+                p
+            }
+        };
+        if n.open != Some(true) {
+            if n.src.is_some() {
+                snap.push_fill(&path, gsk::FillRule::Winding);
+                self.picture_in(snap, n, r);
+                snap.pop();
+            } else if let Some(g) = &n.gradient {
+                snap.push_fill(&path, gsk::FillRule::Winding);
+                gradient(snap, g, r);
+                snap.pop();
+            } else if let Some(fill) = n.fill.as_deref().or(Some(SHAPE_FILL)).filter(|f| parse_color(f).is_some_and(|c| c[3] > 0)) {
+                snap.append_fill(&path, gsk::FillRule::Winding, &rgba(fill));
             }
         }
-        snap.pop();
-        self.border(snap, n, r);
+        let stroke = n.stroke.as_deref().or(if n.open == Some(true) { Some(STROKE) } else { None });
+        if let Some(stroke) = stroke {
+            let w = n.stroke_width.unwrap_or(if n.open == Some(true) { 2.0 } else { 1.0 });
+            if w > 0.0 {
+                snap.append_stroke(&path, &stroke_of(n, w), &rgba(stroke));
+            }
+        }
     }
 }
+
+/// A GSK path through svgpath segments.
+pub fn vector_path(segs: &[relay_bus::svgpath::Seg]) -> gsk::Path {
+    use relay_bus::svgpath::Seg;
+    let b = gsk::PathBuilder::new();
+    for s in segs {
+        match *s {
+            Seg::Move([x, y]) => b.move_to(x as f32, y as f32),
+            Seg::Line([x, y]) => b.line_to(x as f32, y as f32),
+            Seg::Cubic(a, c, e) => b.cubic_to(a[0] as f32, a[1] as f32, c[0] as f32, c[1] as f32, e[0] as f32, e[1] as f32),
+            Seg::Close => b.close(),
+        }
+    }
+    b.to_path()
+}
+
+/// What a text lays out: its words with each list line's marker before it, and its live spans
+/// as byte ranges of that.
+pub fn rich_text(n: &Node) -> (String, Vec<(usize, usize, Span)>) {
+    let text = n.text.as_deref().unwrap_or("");
+    let plain = [Span { text: text.to_string(), ..Span::default() }];
+    let spans = n.live_spans().unwrap_or(&plain);
+    let styled = n.live_spans().is_some();
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut runs = Vec::new();
+    let mut line = 0;
+    let mut line_start = true;
+    for span in spans {
+        let start = out.len();
+        let mut rest = span.text.as_str();
+        while !rest.is_empty() {
+            if line_start {
+                line += 1;
+                if let Some(list) = n.list {
+                    let (mark, skip) = match list {
+                        ListStyle::Bullet => ("•  ".to_string(), 0),
+                        ListStyle::Number => (format!("{line}.  "), 0),
+                        ListStyle::Check if rest.starts_with("[x] ") || rest.starts_with("[X] ") => ("☑  ".to_string(), 4),
+                        ListStyle::Check if rest.starts_with("[ ] ") => ("☐  ".to_string(), 4),
+                        ListStyle::Check => ("☐  ".to_string(), 0),
+                    };
+                    out.push_str(&mark);
+                    rest = &rest[skip..];
+                }
+            }
+            let cut = rest.find('\n').map_or(rest.len(), |i| i + 1);
+            out.push_str(&rest[..cut]);
+            line_start = rest[..cut].ends_with('\n');
+            rest = &rest[cut..];
+        }
+        if styled && out.len() > start {
+            runs.push((start, out.len(), span.clone()));
+        }
+    }
+    (out, runs)
+}
+
+/// Pango attributes for one styled run.
+fn span_attrs(attrs: &pango::AttrList, start: u32, end: u32, s: &Span) {
+    let put = |mut a: pango::Attribute| {
+        a.set_start_index(start);
+        a.set_end_index(end);
+        attrs.insert(a);
+    };
+    if let Some(w) = s.weight {
+        put(pango::AttrInt::new_weight(weight(w)).upcast());
+    }
+    if s.italic == Some(true) {
+        put(pango::AttrInt::new_style(pango::Style::Italic).upcast());
+    }
+    if s.underline == Some(true) || s.link.is_some() {
+        put(pango::AttrInt::new_underline(pango::Underline::Single).upcast());
+    }
+    if s.strike == Some(true) {
+        put(pango::AttrInt::new_strikethrough(true).upcast());
+    }
+    let color = s.color.as_deref().or(s.link.as_ref().map(|_| LINK));
+    if let Some([r, g, b, a]) = color.and_then(parse_color) {
+        let c = |v: u8| v as u16 * 257;
+        put(pango::AttrColor::new_foreground(c(r), c(g), c(b)).upcast());
+        if a < 255 {
+            put(pango::AttrInt::new_foreground_alpha(c(a)).upcast());
+        }
+    }
+    if let Some(size) = s.size {
+        put(pango::AttrSize::new_size_absolute((size * pango::SCALE as f64) as i32).upcast());
+    }
+    if s.code == Some(true) {
+        put(pango::AttrString::new_family("Geist Mono, monospace").upcast());
+        put(pango::AttrColor::new_background(0x8080, 0x8080, 0x8080).upcast());
+        put(pango::AttrInt::new_background_alpha(0x3000).upcast());
+    } else if let Some(font) = &s.font {
+        put(pango::AttrString::new_family(font).upcast());
+    }
+}
+
+/// A link's words, when they name no colour.
+const LINK: &str = "#4C8DFF";
 
 /// A node's outline: an ellipse, or its box with its corner radii (`radii`, else `radius`; a
 /// sticky's 6 by default).
