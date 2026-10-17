@@ -45,6 +45,16 @@ class ExerciseSearchTest {
     }
 
     @Test
+    fun aSynonymMatchesWholeWordsNotTheStartOfOne() {
+        val hits = names("lats")
+        assertTrue(hits.contains("Lat Pulldown"))
+        // "lat" is lats' synonym, not a prefix to chase into "lateral".
+        assertTrue(hits.none { it.contains("Lateral") })
+        // What the user typed still matches as the start of a word.
+        assertTrue(names("lat").contains("DB Lateral Raise"))
+    }
+
+    @Test
     fun aBlankQueryKeepsTheGivenOrder() {
         assertEquals(ExerciseLibrary.all.map { it.name }, names("  "))
     }
