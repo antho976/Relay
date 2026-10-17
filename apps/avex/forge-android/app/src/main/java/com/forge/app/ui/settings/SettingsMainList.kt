@@ -286,7 +286,7 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
         )
     }.joinToString(" · ")
     SettingsPage.Format -> "${s.weightUnit.label} · ${if (s.useMiles) "mi" else "km"} · ${if (s.useCm) "cm" else "in"} · ${if (s.timeFormat24h) "24h" else "12h"} · week from ${if (s.firstDayMonday) "Mon" else "Sun"}"
-    SettingsPage.Session -> "${s.hapticStrength.replaceFirstChar { it.uppercase() }} haptics · ${restLabel(s.restCompoundSeconds)} rest"
+    SettingsPage.Session -> "${if (s.hapticStrength == "off") "Haptics off" else "${s.hapticStrength.replaceFirstChar { it.uppercase() }} haptics"} · ${restLabel(s.restCompoundSeconds)} rest"
     SettingsPage.Notifications -> {
         val on = buildList {
             if (s.trainingReminderEnabled) add("Reminders")
@@ -302,7 +302,15 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
             "$on · $quiet"
         } else on
     }
-    SettingsPage.Program -> "${s.daysPerWeek} days a week · ${if (s.availableEquipment.isEmpty()) "all equipment" else "${s.availableEquipment.size} pieces of gear"}"
+    SettingsPage.Program -> {
+        // "1 pieces of gear" and a day count for a plan a freestyle user doesn't have, before.
+        val gear = when {
+            s.availableEquipment.isEmpty() || s.availableEquipment.size >= com.forge.app.program.Equipment.entries.size -> "all equipment"
+            s.availableEquipment.size == 1 -> "1 piece of gear"
+            else -> "${s.availableEquipment.size} pieces of gear"
+        }
+        if (s.freestyleMode) "Freestyle · $gear" else "${s.daysPerWeek} days a week · $gear"
+    }
     SettingsPage.Coach -> when {
         !s.coachEnabled -> "Off"
         s.coachMode == "auto" -> "On · earning auto-apply"
