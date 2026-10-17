@@ -17,7 +17,9 @@ object SessionOpinion {
         ghostComparable: Int,
         vsLastVolumeDelta: Double?,
         isBestSession: Boolean,
-        honestyPct: Int?
+        honestyPct: Int?,
+        /** The coach eased loads after a break: last time is from before it, so lighter was the plan. */
+        easingBack: Boolean = false
     ): String? {
         if (setCount == 0) return null
 
@@ -34,6 +36,10 @@ object SessionOpinion {
             cleanSweep -> "Clean sweep. You beat last session on every comparable set."
             wonDuel -> "You edged out last session on $ghostBeats of $ghostComparable sets."
             vsLastVolumeDelta != null && vsLastVolumeDelta > 0 -> "More volume than last time."
+            // Back from a break the loads were eased on purpose, so being under the session before
+            // the break is the plan working, not a recovery warning.
+            easingBack && vsLastVolumeDelta != null && vsLastVolumeDelta < 0 ->
+                "Lighter than before the break, as planned. The loads climb from here."
             vsLastVolumeDelta != null && vsLastVolumeDelta < 0 ->
                 "A touch lighter than last time. Fine if it was planned, otherwise watch recovery."
             vsLastVolumeDelta != null -> "The same volume as last time."

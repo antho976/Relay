@@ -289,6 +289,7 @@ class DayViewModel @Inject constructor(
             blockPhase = runCatching { blockRepo.active() }.getOrNull()
                 ?.let { com.forge.app.domain.coach.BlockPhase.fromCode(it.phase) }
             val eased = life.loadScale < 1.0
+            if (eased) _state.update { it.copy(easingBackNote = life.rampNote) }
             if ((readiness != null || blockPhase != null || eased) && _state.value.exercises.isNotEmpty()) {
                 refreshExercises()
             }

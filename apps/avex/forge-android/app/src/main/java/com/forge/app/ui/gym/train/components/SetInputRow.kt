@@ -89,13 +89,26 @@ data class SetFill(val nonce: Int, val weight: String?, val reps: String?)
  * two positions, so a change made today carries through the sets while a pyramid keeps its shape.
  * Null when there is no weight to seed (bodyweight, or nothing to go on).
  */
-internal fun nextSetSeedLb(todayLast: LoggedSet?, priorForRow: LoggedSet?, priorBefore: LoggedSet?): Double? {
-    val todayLb = todayLast?.weightLb?.takeIf { !todayLast.isAssisted } ?: return priorForRow?.weightLb
+internal fun nextSetSeedLb(
+    todayLast: LoggedSet?,
+    priorForRow: LoggedSet?,
+    priorBefore: LoggedSet?,
+    /**
+     * The coach's eased target while easing back in after a break. It caps the first set's seed:
+     * last session is from before the break, and opening on its weight put a tap of LOG SET on the
+     * load the coach had just said to come in under. Never raises a lighter prior set.
+     */
+    rampLb: Double? = null
+): Double? {
+    val todayLb = todayLast?.weightLb?.takeIf { !todayLast.isAssisted } ?: return firstSetSeed(priorForRow?.weightLb, rampLb)
     val rowLb = priorForRow?.weightLb
     val beforeLb = priorBefore?.weightLb
     return if (rowLb != null && beforeLb != null) (todayLb + (rowLb - beforeLb)).takeIf { it > 0.0 } ?: todayLb
     else todayLb
 }
+
+private fun firstSetSeed(priorLb: Double?, rampLb: Double?): Double? =
+    if (priorLb != null && rampLb != null) minOf(priorLb, rampLb) else priorLb ?: rampLb
 
 // Hoisted so it isn't recompiled on every weight keystroke. Matches a full "WxR"
 // entry (e.g. a pasted "45x10" or "22,5x10") so it splits into both fields at once.
@@ -126,6 +139,8 @@ fun SetInputRow(
     todayLastSet: LoggedSet? = null,
     /** A value pushed into the fields from outside (the coach's cue on the plan line). */
     fill: SetFill? = null,
+    /** The eased target to open the first set on while easing back in (see [nextSetSeedLb]). */
+    rampSeedLb: Double? = null,
     targetsMet: Boolean = false,
     advanceLabel: String = "",
     /** Full-width outlined button shown above LOG SET when [onFinishEarly] is set — ends the
@@ -166,7 +181,7 @@ fun SetInputRow(
     // last session moved between these two sets. Straight sets carry today's weight, a pyramid or
     // back-off keeps its shape, and a session that went up 2.5 on set one stays up on every set
     // instead of re-seeding last time's lighter number, which took a +2.5 tap per set.
-    val seedLb = nextSetSeedLb(todayLastSet, priorSetForActiveRow, priorSetBeforeActiveRow)
+    val seedLb = nextSetSeedLb(todayLastSet, priorSetForActiveRow, priorSetBeforeActiveRow, rampSeedLb)
     val seedWeight = seedLb?.let { lb -> if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, weightUnit) }
         ?: priorSetForActiveRow?.weightText
         ?: prefillWeight.orEmpty()

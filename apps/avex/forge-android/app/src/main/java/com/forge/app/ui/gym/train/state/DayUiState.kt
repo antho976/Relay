@@ -61,6 +61,12 @@ data class DayUiState(
      * sitting so far. Differs from [sessionStartedAt] once a session spans multiple sittings.
      */
     val elapsedAnchorMs: Long? = null,
+    /**
+     * Set while the coach eases loads after a break ("first session back after 6 weeks"). Last
+     * session is then the one before the break, so the header shows this instead of scoring every
+     * eased set as a loss to it, and the finish read says the lighter day was the plan.
+     */
+    val easingBackNote: String? = null,
     val exercises: List<ExerciseUiState> = emptyList(),
     /** The generated warmup for this session. Empty until the plan and working loads are known. */
     val warmupProtocol: com.forge.app.domain.warmup.WarmupProtocol =

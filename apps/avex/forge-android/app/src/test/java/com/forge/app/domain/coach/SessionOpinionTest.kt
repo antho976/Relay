@@ -14,8 +14,9 @@ class SessionOpinionTest {
         ghostComparable: Int = 0,
         vsLastVolumeDelta: Double? = null,
         isBestSession: Boolean = false,
-        honestyPct: Int? = null
-    ) = SessionOpinion.of(setCount, prCount, ghostBeats, ghostComparable, vsLastVolumeDelta, isBestSession, honestyPct)
+        honestyPct: Int? = null,
+        easingBack: Boolean = false
+    ) = SessionOpinion.of(setCount, prCount, ghostBeats, ghostComparable, vsLastVolumeDelta, isBestSession, honestyPct, easingBack)
 
     @Test fun `empty session has no opinion`() {
         assertNull(opinion(setCount = 0, prCount = 3))
@@ -59,5 +60,13 @@ class SessionOpinionTest {
     @Test fun `high completion has no caveat`() {
         val o = opinion(prCount = 1, honestyPct = 95)!!
         assertEquals("1 new PR today.", o)
+    }
+
+    @Test fun `back from a break, lighter reads as the plan, not a warning`() {
+        val o = opinion(vsLastVolumeDelta = -400.0, easingBack = true)!!
+        assertTrue(o.startsWith("Lighter than before the break, as planned."))
+        // A PR still leads, and a first time through still says baseline.
+        assertTrue(opinion(prCount = 1, vsLastVolumeDelta = -400.0, easingBack = true)!!.startsWith("1 new PR"))
+        assertTrue(opinion(easingBack = true)!!.startsWith("First time through this day"))
     }
 }

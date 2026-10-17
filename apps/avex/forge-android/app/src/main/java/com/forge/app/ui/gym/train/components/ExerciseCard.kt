@@ -82,6 +82,8 @@ fun ExerciseCard(
     /** When every other exercise's sets this session were logged — see [restBetweenSeconds]. */
     otherSetTimes: List<Long> = emptyList(),
     sessionStartedAtMs: Long? = null,
+    /** Easing back in after a break: the first set opens on the coach's eased target. */
+    easingBack: Boolean = false,
     onToggle: () -> Unit,
     onLogSet: (weightText: String, reps: Int, durationSeconds: Int?) -> Unit,
     onDeleteSet: (setId: Long) -> Unit,
@@ -395,6 +397,7 @@ fun ExerciseCard(
                         priorSetBeforeActiveRow = state.priorSets.getOrNull(state.loggedSets.size - 1),
                         todayLastSet = lastLogged,
                         fill = fill,
+                        rampSeedLb = state.suggestedTargetLb.takeIf { easingBack },
                         targetsMet = targetsMet,
                         advanceLabel = advanceLabel,
                         // "I'm done" path — only meaningful once you've logged something and haven't hit

@@ -303,6 +303,7 @@ internal fun DayContent(
                                         .flatMap { other -> other.loggedSets.map { it.completedAt } }
                                 },
                                 sessionStartedAtMs = state.elapsedAnchorMs,
+                                easingBack = state.easingBackNote != null,
                                 advanceLabel = if (exNextId != null) "MOVE TO NEXT →" else "FINISH WORKOUT →",
                                 onAdvance = { if (exNextId != null) shownExerciseId = exNextId else onEvent(DayUiEvent.FinishWorkout) },
                                 // Finish an exercise you can't fully complete (AMRAP / gassed out) without
@@ -535,8 +536,17 @@ internal fun SessionHero(
                 )
             }
         }
+        // Back from a break, last session is the one before it and every eased set would score as
+        // a loss to it, the opposite of what the coach asked for. Say what today is instead.
+        if (state.easingBackNote != null) {
+            Text(
+                "EASING BACK IN · ${state.easingBackNote.uppercase()}",
+                style = MaterialTheme.typography.labelSmall,
+                color = muted,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
+            )
+        } else if (state.ghostComparable > 0) {
         // "Beat the ghost" running scoreboard — the duel vs last session, live as you log.
-        if (state.ghostComparable > 0) {
             val beats = state.ghostBeats
             val total = state.ghostComparable
             val winning = beats * 2 >= total

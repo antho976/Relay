@@ -254,7 +254,8 @@ private fun DayViewModel.finishWorkout(untouchedConfirmed: Boolean = false) {
                 ghostComparable = _state.value.ghostComparable,
                 vsLastVolumeDelta = vsLastVolumeDelta,
                 isBestSession = isBestSession,
-                honestyPct = honestyPct
+                honestyPct = honestyPct,
+                easingBack = _state.value.easingBackNote != null
             ),
             initialJournal = _state.value.sessionJournal,
             lifetimePrCount = lifetimePrCount

@@ -41,4 +41,20 @@ class NextSetSeedTest {
         assertEquals(100.0, nextSetSeedLb(set(null), set(100.0), set(100.0))!!, 0.0)
         assertNull(nextSetSeedLb(null, set(null), null))
     }
+
+    @Test
+    fun easingBackTheFirstSetOpensOnTheCoachesTarget() {
+        // Last time (before the break) 100; the coach eases to 85, so set one opens on 85.
+        assertEquals(85.0, nextSetSeedLb(null, set(100.0), null, rampLb = 85.0)!!, 0.0)
+        // ...and set two follows today's set one, as always.
+        assertEquals(85.0, nextSetSeedLb(set(85.0), set(100.0), set(100.0), rampLb = 85.0)!!, 0.0)
+    }
+
+    @Test
+    fun theRampNeverRaisesALighterPriorSet() {
+        // A pyramid's lighter first set stays where it was.
+        assertEquals(60.0, nextSetSeedLb(null, set(60.0), null, rampLb = 85.0)!!, 0.0)
+        // With no prior set at all, the target is the seed.
+        assertEquals(85.0, nextSetSeedLb(null, null, null, rampLb = 85.0)!!, 0.0)
+    }
 }
