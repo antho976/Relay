@@ -154,7 +154,7 @@ fun RestTimerBubble(
             // single flat colour. The accent now lives in the ring, not the whole fill.
             .background(face)
             // Hairline rim to separate the disc from the background gradient at any accent.
-            .border(width = 1.dp, color = onBg.copy(alpha = 0.08f), shape = CircleShape)
+            .border(width = 1.dp, color = onBg.copy(alpha = 0.15f), shape = CircleShape)
             // Countdown ring: a depleting accent arc on a faint track — the hero of the design.
             .drawBehind {
                 val sw = 4.dp.toPx()
@@ -163,7 +163,7 @@ fun RestTimerBubble(
                 // Faint full-circle track so remaining rest reads as a shrinking arc on a track
                 // rather than an arc appearing/vanishing.
                 drawArc(
-                    color = onBg.copy(alpha = 0.10f),
+                    color = onBg.copy(alpha = 0.15f),
                     startAngle = -90f,
                     sweepAngle = 360f,
                     useCenter = false,
@@ -184,7 +184,7 @@ fun RestTimerBubble(
                     )
                     // Paused: the remaining arc goes dashed and dim so the held state reads instantly.
                     isPaused -> drawArc(
-                        color = accent.copy(alpha = 0.45f),
+                        color = accent.copy(alpha = 0.6f),
                         startAngle = -90f,
                         sweepAngle = 360f * animFraction,
                         useCenter = false,
