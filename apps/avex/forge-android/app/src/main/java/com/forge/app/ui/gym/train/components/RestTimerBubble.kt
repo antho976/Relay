@@ -431,3 +431,11 @@ private fun finishedPulseScale(): State<Float> {
         label = "pulse-scale"
     )
 }
+
+/**
+ * Whether the focused card's inline rest row is on screen. DayScreen provides it and hides the
+ * floating bubble while it is true: the two showed the same countdown, and the bubble sat over the
+ * card's action row. Null outside the day screen, where nothing reports.
+ */
+internal val LocalInlineRestOnScreen =
+    androidx.compose.runtime.staticCompositionLocalOf<androidx.compose.runtime.MutableState<Boolean>?> { null }

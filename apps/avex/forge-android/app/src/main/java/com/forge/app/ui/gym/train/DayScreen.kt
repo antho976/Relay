@@ -1,5 +1,7 @@
 package com.forge.app.ui.gym.train
 
+import com.forge.app.ui.gym.train.components.LocalInlineRestOnScreen
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -153,6 +155,7 @@ fun DayScreen(
         viewModel.messages.collect { msg -> snackbarHostState.showSnackbar(msg) }
     }
 
+    val inlineRestOnScreen = remember { mutableStateOf(false) }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) { ForgeSnackbar(it) } },
         floatingActionButton = {
@@ -162,7 +165,9 @@ fun DayScreen(
             var lastTimer by remember { mutableStateOf(timer) }
             LaunchedEffect(timer) { if (timer != null) lastTimer = timer }
             AnimatedVisibility(
-                visible = timer != null,
+                // Only once the card's own rest row is off screen: with both showing, the same
+                // countdown appeared twice and the bubble covered the card's action row.
+                visible = timer != null && !inlineRestOnScreen.value,
                 enter = fadeIn(ForgeMotion.enterTween(ForgeMotion.DurationFast)),
                 exit = scaleOut(ForgeMotion.exitTween(), targetScale = 0.6f) + fadeOut(ForgeMotion.exitTween())
             ) {
@@ -179,7 +184,9 @@ fun DayScreen(
         containerColor = Color.Transparent
     ) { inner ->
         Box(Modifier.fillMaxSize().padding(inner)) {
-            DayContent(state = state, onEvent = viewModel::onEvent, restTimer = restTimer)
+            CompositionLocalProvider(LocalInlineRestOnScreen provides inlineRestOnScreen) {
+                DayContent(state = state, onEvent = viewModel::onEvent, restTimer = restTimer)
+            }
             if (showPrBurst) {
                 // PR celebration is now just the confetti burst (over the live screen) plus the gold
                 // ★/text on the record set row — no full-screen "PERSONAL RECORD" takeover.

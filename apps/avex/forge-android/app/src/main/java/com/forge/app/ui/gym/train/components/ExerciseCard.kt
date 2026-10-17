@@ -1,5 +1,8 @@
 package com.forge.app.ui.gym.train.components
 
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -432,7 +435,17 @@ fun ExerciseCard(
 @Composable
 private fun InlineRestTimerSlot(timer: State<RestTimerState?>, onTap: () -> Unit, onSkip: () -> Unit) {
     val t = timer.value ?: return
+    // Reports whether the row is on screen, so the floating bubble only stands in once it has been
+    // scrolled away. At least half the row showing counts; leaving composition clears it.
+    val onScreen = LocalInlineRestOnScreen.current
+    if (onScreen != null) DisposableEffect(onScreen) { onDispose { onScreen.value = false } }
     Spacer(Modifier.height(10.dp))
-    InlineRestTimer(timer = t, onTap = onTap, onSkip = onSkip)
+    Box(
+        Modifier.onGloballyPositioned { c ->
+            onScreen?.value = c.size.height > 0 && c.boundsInWindow().height >= c.size.height / 2f
+        }
+    ) {
+        InlineRestTimer(timer = t, onTap = onTap, onSkip = onSkip)
+    }
     Spacer(Modifier.height(4.dp))
 }
