@@ -147,6 +147,7 @@ class WorkoutSessionLifecycleTest {
         val seg = repo.openSessionSegment(session, now)
         repo.touchSessionSegment(seg, now + 8 * 60_000)
 
+        now += 60 * 60_000
         repo.closeDanglingSegments(session)
 
         assertEquals(8 * 60_000L, repo.closedSegmentMs(session))
@@ -162,10 +163,45 @@ class WorkoutSessionLifecycleTest {
         repo.logSet(ex, "100", 100.0, 5)
         repo.touchSessionSegment(seg, startedAt + 9 * 60 * 60_000)
 
+        now = startedAt + 10 * 60 * 60_000
         repo.closeDanglingSegments(session)
 
         // The last set plus the heartbeat's trust window, not nine hours.
         assertEquals(10 * 60_000L + HEARTBEAT_TRUST_MS, repo.closedSegmentMs(session))
+    }
+
+    @Test fun `a clock set back after the last beat cannot close the sitting in the future`() = runBlocking {
+        val repo = repo()
+        val startedAt = now
+        val session = db.sessionDao().insert(Session(dayKey = "upper-a", startedAt = startedAt))
+        val seg = repo.openSessionSegment(session, startedAt)
+        repo.touchSessionSegment(seg, startedAt + 20 * 60_000)
+
+        // The process died; the clock was then corrected ten minutes back before the resume.
+        now = startedAt + 10 * 60_000
+        repo.closeDanglingSegments(session)
+
+        assertEquals(10 * 60_000L, repo.closedSegmentMs(session))
+    }
+
+    @Test fun `a session closed as abandoned stops at its last set, heartbeat or not`() = runBlocking {
+        val repo = repo()
+        val startedAt = now
+        val session = db.sessionDao().insert(Session(dayKey = "upper-a", startedAt = startedAt))
+        val ex = repo.addExerciseToSession(session, "bench", 0)
+        val seg = repo.openSessionSegment(session, startedAt)
+        now = startedAt + 5 * 60_000
+        repo.logSet(ex, "100", 100.0, 5)
+        // The screen kept beating for 20 more minutes, then the process died and nobody came back.
+        repo.touchSessionSegment(seg, startedAt + 25 * 60_000)
+
+        now = startedAt + 13 * 60 * 60_000
+        repo.closeStaleSession()
+
+        val closed = db.sessionDao().get(session)!!
+        assertEquals(startedAt + 5 * 60_000, closed.finishedAt)
+        // Active time never runs past the finish it was stamped with.
+        assertEquals(5 * 60, closed.activeSeconds)
     }
 
     @Test fun `a beat after the sitting was closed does not move it`() = runBlocking {
