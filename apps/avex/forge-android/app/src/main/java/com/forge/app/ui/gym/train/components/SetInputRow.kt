@@ -389,16 +389,15 @@ fun SetInputRow(
                     val priorDisplay = prior.weightLb?.let { lb ->
                         if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else weightInputValue(lb, weightUnit)
                     } ?: prior.weightText
-                    Text(
-                        // The ghost to beat — tap to autofill the weight only so the user
-                        // pushes for one extra rep rather than copying the exact same set.
-                        // Back from a break that set is from before it, and the coach asked for
-                        // less: it reads as where you were, not as the number to beat.
-                        "${if (easingBack) "last" else "beat"} $priorDisplay × ${prior.reps}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = onBg.copy(alpha = 0.7f),
-                        fontSize = 9.sp,
-                        textAlign = TextAlign.End,
+                    // The ghost to beat — tap to autofill the weight only so the user
+                    // pushes for one extra rep rather than copying the exact same set.
+                    // Back from a break that set is from before it, and the coach asked for
+                    // less: it reads as where you were, not as the number to beat.
+                    // Two lines by design: on one, the mono "beat 28.6 × 8" broke wherever the
+                    // 72dp column ran out, which was usually just before the reps.
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.Bottom,
                         modifier = Modifier
                             .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                             .clickableLabeled(
@@ -409,7 +408,16 @@ fun SetInputRow(
                                 } ?: prior.weightText
                                 // Reps intentionally left for the user — aim for one more.
                             }
-                    )
+                    ) {
+                        val caption = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp)
+                        Text(if (easingBack) "last" else "beat", style = caption, color = muted)
+                        Text(
+                            "$priorDisplay × ${prior.reps}",
+                            style = caption,
+                            color = onBg.copy(alpha = 0.7f),
+                            textAlign = TextAlign.End
+                        )
+                    }
                 }
             }
             }
