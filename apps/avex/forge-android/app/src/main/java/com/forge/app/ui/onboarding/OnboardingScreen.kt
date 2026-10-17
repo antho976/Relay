@@ -429,6 +429,10 @@ fun OnboardingScreen(
                             useKg = useKg, onWeightUnit = { kg ->
                                 if (kg != useKg) {
                                     bodyweightInput = convertBodyweightInput(bodyweightInput, fromKg = useKg, toKg = kg)
+                                    // The plate is hardware in the new unit too: 15 lb read in kilos is
+                                    // 6.8 kg, which no kilo plate is and no kilo segment shows as picked.
+                                    // Snap to the new unit's nearest denomination.
+                                    plateWeightLb = snapPlateToUnit(plateWeightLb, toKg = kg)
                                     useKg = kg
                                 }
                             },
@@ -507,4 +511,12 @@ fun OnboardingScreen(
             }
         )
     }
+}
+
+/** [plateLb] as the nearest real plate in the target unit, stored in lb (see the extras step's set). */
+internal fun snapPlateToUnit(plateLb: Double, toKg: Boolean): Double {
+    val denominations = if (toKg) listOf(1.25, 2.5, 5.0, 10.0, 15.0, 20.0, 25.0) else listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0)
+    val target = com.forge.app.domain.units.toDisplayWeight(plateLb, toKg)
+    val nearest = denominations.minBy { kotlin.math.abs(it - target) }
+    return com.forge.app.domain.units.fromDisplayWeight(nearest, toKg)
 }
