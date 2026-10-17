@@ -158,6 +158,11 @@ internal fun LazyListScope.coachAccount(
                     .padding(horizontal = COACH_GUTTER)
                     .padding(top = 2.dp, bottom = 26.dp)
             ) {
+                // The review covers the week that ENDED, under the THIS WEEK anchor: on a return
+                // Monday "0 of 4 · 0 · 0" read as this week's result, and on a Thursday it
+                // contradicted the three sessions just done. One caption says whose week it is.
+                CoachChartLabel("Last week", c)
+                Spacer(Modifier.height(6.dp))
                 // A dense numeric row clamps its own scaling rather than truncating: a readable
                 // "4 of 4" at 130% beats an unreadable "4 …" at 200%.
                 val d = LocalDensity.current
