@@ -517,6 +517,30 @@ pub struct Note {
     pub deleted_at: Option<Ts>,
 }
 
+/// A design canvas (`design.*`): pages of frames, shapes, text and pictures in a project,
+/// optionally tied to one terminal. `design.get` has its nodes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Design {
+    pub id: Id,
+    pub project_id: Id,
+    /// The terminal it belongs to: the agent session that made it, or the one it was linked
+    /// to. `None` when it belongs to the project alone.
+    pub session: Option<String>,
+    pub title: String,
+    /// Bumped by every change to it; a `rev` above the one you last read means someone else
+    /// changed it since.
+    pub rev: i64,
+    pub pages: i64,
+    pub nodes: i64,
+    /// `user` or the session that made it.
+    pub created_by: String,
+    /// `user` or the session that changed it last.
+    pub updated_by: String,
+    pub created_at: Ts,
+    pub updated_at: Ts,
+    pub deleted_at: Option<Ts>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Message {
     pub id: Id,
@@ -1013,4 +1037,5 @@ pub enum Page {
     Skills,
     Plugins,
     Settings,
+    Design,
 }

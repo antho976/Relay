@@ -50,6 +50,7 @@ pub mod money;
 pub mod thread;
 pub mod arbiter;
 pub mod gym;
+pub mod design;
 
 /// Every op, in catalogue order.
 pub fn all() -> Vec<crate::registry::OpEntry> {
@@ -74,5 +75,6 @@ pub fn all() -> Vec<crate::registry::OpEntry> {
     v.extend(thread::entries());
     v.extend(arbiter::entries());
     v.extend(gym::entries());
+    v.extend(design::entries());
     v
 }

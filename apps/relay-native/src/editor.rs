@@ -176,6 +176,10 @@ impl Editor {
         agents_button.set_widget_name("project-agents");
         agents_button.add_css_class("selected");
         views.append(&agents_button);
+        let design_button = button("Design", "quiet");
+        design_button.set_widget_name("project-design");
+        design_button.set_tooltip_text(Some("The project's designs: canvases you and its agents draw on"));
+        views.append(&design_button);
         root.append(&project_tools);
 
         let caption = label("No file open", "title");
@@ -538,6 +542,12 @@ impl Editor {
             }
         });
         let weak = Rc::downgrade(&editor);
+        design_button.connect_clicked(move |_| {
+            if let Some(editor) = weak.upgrade() {
+                editor.show_design();
+            }
+        });
+        let weak = Rc::downgrade(&editor);
         files_button.connect_clicked(move |_| {
             if let Some(editor) = weak.upgrade() {
                 editor.toggle_files();
@@ -558,12 +568,15 @@ impl Editor {
         }
         let weak = Rc::downgrade(&editor);
         let agents_tab = agents_button.clone();
+        let design_tab = design_button.clone();
         editor
             .content_stack
             .connect_visible_child_name_notify(move |_| {
                 if let Some(editor) = weak.upgrade() {
-                    let document = !editor.agents_visible();
-                    if document { agents_tab.remove_css_class("selected") } else { agents_tab.add_css_class("selected") }
+                    let design = editor.design_visible();
+                    let document = !editor.agents_visible() && !design;
+                    if editor.agents_visible() { agents_tab.add_css_class("selected") } else { agents_tab.remove_css_class("selected") }
+                    if design { design_tab.add_css_class("selected") } else { design_tab.remove_css_class("selected") }
                     editor.document_tools.set_visible(document && !editor.image_mode.get());
                     editor.position.set_visible(document);
                     if !document || editor.image_mode.get() {
@@ -584,7 +597,7 @@ impl Editor {
         self.is_dirty() || self.busy.get()
     }
     fn set_busy(&self, busy: bool) {
-        if busy || !self.agents_visible() {
+        if busy || !(self.agents_visible() || self.design_visible()) {
             self.content_stack
                 .set_visible_child_name(if self.image_mode.get() {
                     "image"

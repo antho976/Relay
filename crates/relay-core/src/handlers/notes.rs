@@ -68,7 +68,7 @@ pub(crate) fn assert_actor_project(ctx: &Ctx, project_id: Id) -> Result<(), BusE
     check_project(ctx.tx(), project_id, ctx.actor_session_id(), ctx.actor.is_agent())
 }
 
-fn check_project(conn: &Connection, project_id: Id, session_id: Option<Id>, agent: bool) -> Result<(), BusError> {
+pub(crate) fn check_project(conn: &Connection, project_id: Id, session_id: Option<Id>, agent: bool) -> Result<(), BusError> {
     crate::handlers::workspace::get_project(conn, project_id)?;
     if session_project(conn, session_id, agent)?.is_some_and(|own| own != project_id) {
         return Err(BusError::not_own("project"));

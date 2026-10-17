@@ -1,10 +1,11 @@
 [package]
 name = "relay-client"
-description = "The native client's GTK-free logic: the Git panel's diff, graph and status helpers and the device mirror's decoder gate and input payloads. No GTK, so CI tests it."
+description = "The native client's GTK-free logic: the Git panel's diff, graph and status helpers, the device mirror's decoder gate and input payloads, and the design canvas's scene, layout and edits. No GTK, so CI tests it."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [dependencies]
+relay-bus.workspace = true
 serde_json.workspace = true

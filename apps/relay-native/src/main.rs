@@ -1,5 +1,6 @@
 mod app;
 mod client;
+mod design;
 mod editor;
 mod fonts;
 mod icons;

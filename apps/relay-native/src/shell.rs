@@ -324,6 +324,7 @@ impl Ui {
     fn layout_state(&self) -> Value {
         // "agents" is both the agent wall and Files and Git; keep which one was showing.
         let page = match self.page.borrow().as_str() {
+            "agents" if self.editor.design_visible() => String::from("design"),
             "agents" if !self.editor.agents_visible() => String::from("code"),
             // Money is not a project's layout: Dev comes back on the agent wall.
             page if crate::money::is_page(page) => String::from("agents"),
@@ -428,7 +429,7 @@ impl Ui {
         if let Some(page) = state["page"]
             .as_str()
             .filter(|_| !keep_page)
-            .filter(|p| *p == "agents" || *p == "code" || self.pages.contains_key(*p))
+            .filter(|p| *p == "agents" || *p == "code" || *p == "design" || self.pages.contains_key(*p))
         {
             self.navigate(page);
         } else {
@@ -1098,6 +1099,7 @@ impl Ui {
         let mut entries = Vec::new();
         for (page, name) in [
             ("agents", "Agents"),
+            ("design", "Design"),
             ("code", "Code"),
             ("board", "Board"),
             ("modules", "Modules"),

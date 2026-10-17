@@ -9,6 +9,7 @@
 // handler signature would obscure the API for no measurable gain.
 #![allow(clippy::result_large_err)]
 
+pub mod design;
 pub mod envelope;
 pub mod error;
 pub mod registry;

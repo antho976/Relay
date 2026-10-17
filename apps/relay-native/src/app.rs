@@ -441,6 +441,7 @@ pub fn run(rt: Handle) -> glib::ExitCode {
             include_str!("css/settings.css"),
             include_str!("css/launch.css"),
             include_str!("css/gaming.css"),
+            include_str!("css/design.css"),
         ));
         if let Some(display) = gtk::gdk::Display::default() {
             gtk::style_context_add_provider_for_display(
@@ -1161,6 +1162,7 @@ impl Ui {
         let mut dev_only: Vec<gtk::Widget> = vec![side.nav.clone().upcast(), top.layouts_key.clone().upcast(), top.launch_key.clone().upcast()];
         dev_only.extend(side.workspaces.iter().cloned());
         crate::money::install(&ui, &side.money_nav, &top.money_add, dev_only);
+        crate::design::install(&ui);
         ui
     }
 
@@ -1541,7 +1543,7 @@ impl Ui {
                         return;
                     }
                     *ui.client.borrow_mut() = Some(client);
-                    if let Err(e)=ui.call("bus.subscribe",json!({"events":["project.changed","project.deleted","workspace.changed","workspace.deleted","session.changed","task.changed","task.deleted","mailbox.new","mailbox.changed","guardrail.held","guardrail.resolved","guardrail.grant_used","overlap.changed","notes.changed","notes.deleted","file.changed","git.changed","worktree.changed","module.changed","module.deleted","skill.changed","skill.deleted","plugin.changed","settings.changed","provider.update.changed","notify.new","notify.changed","device.changed","device.lease.acquired","device.lease.released","run.changed","run.crash","device.signing.changed","avd.changed","layout.changed","ui.changed","ui.toast","usage.changed","integration.changed","integration.result","money.changed","arbiter.changed","gym.changed","thread.changed","thread.message","thread.delta","thread.local","thread.proposal","gaming.changed"]})).await {
+                    if let Err(e)=ui.call("bus.subscribe",json!({"events":["project.changed","project.deleted","workspace.changed","workspace.deleted","session.changed","task.changed","task.deleted","mailbox.new","mailbox.changed","guardrail.held","guardrail.resolved","guardrail.grant_used","overlap.changed","notes.changed","notes.deleted","file.changed","git.changed","worktree.changed","module.changed","module.deleted","skill.changed","skill.deleted","plugin.changed","settings.changed","provider.update.changed","notify.new","notify.changed","device.changed","device.lease.acquired","device.lease.released","run.changed","run.crash","device.signing.changed","avd.changed","layout.changed","ui.changed","ui.toast","usage.changed","integration.changed","integration.result","money.changed","arbiter.changed","gym.changed","thread.changed","thread.message","thread.delta","thread.local","thread.proposal","gaming.changed","design.changed","design.deleted"]})).await {
                         if generation == ui.generation.get() {
                             ui.show_error(&e.to_string());
                         }
@@ -1653,6 +1655,11 @@ impl Ui {
                                 // Notes retains its own project when the main window switches.
                                 if matches!(e.ev.as_str(), "notes.changed" | "notes.deleted") {
                                     crate::pages::refresh_notes(&ui);
+                                    continue;
+                                }
+                                // So does a design in a window of its own.
+                                if e.ev.starts_with("design.") {
+                                    crate::design::event(&ui, &e.ev, &e.payload);
                                     continue;
                                 }
                                 if e.project_id.is_some_and(|id| id != ui.project.get())
@@ -1801,7 +1808,8 @@ impl Ui {
             return;
         }
         let files = page == "code";
-        let page = if files { "agents" } else { page };
+        let design = page == "design";
+        let page = if files || design { "agents" } else { page };
         // A restored layout or an engine echo does not take the window out of Money.
         if self.applying_ui.get() && crate::money::active() && !crate::money::is_page(page) {
             return;
@@ -1844,6 +1852,8 @@ impl Ui {
             self.editor.prepare_project(self);
             if files {
                 self.editor.show_files();
+            } else if design {
+                self.editor.show_design();
             } else {
                 self.editor.show_agents();
             }

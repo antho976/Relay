@@ -648,6 +648,19 @@ impl Ui {
             });
         });
         tools.append(&brief);
+        let designs = tool_key("design", "Designs", "This terminal's designs: what its agent drew, and canvases tied to it");
+        designs.set_widget_name("agent-menu-designs");
+        let weak = Rc::downgrade(self);
+        let n = name.clone();
+        let p = popover.downgrade();
+        designs.connect_clicked(move |_| {
+            let Some(ui) = weak.upgrade() else { return };
+            if let Some(p) = p.upgrade() {
+                p.popdown();
+            }
+            crate::design::show(&ui, Some(n.clone()));
+        });
+        tools.append(&designs);
         body.append(&tools);
 
         // Permissions: a switch takes effect when flipped, and flips back if the engine refuses.

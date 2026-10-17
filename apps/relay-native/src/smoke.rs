@@ -981,6 +981,10 @@ pub fn install(ui: &Rc<Ui>) {
                 crate::pages::new_task(&navigate, navigate.project.get(), "backlog");
                 return;
             }
+            if page == "design" {
+                crate::design::smoke_open(&navigate);
+                return;
+            }
             navigate.navigate(if page == "launch" { "agents" } else { &page });
             if fixture && matches!(page.as_str(), "board" | "notes" | "launch") {
                 track("fixture edit", edit_fixture(navigate.clone(), page.clone()));

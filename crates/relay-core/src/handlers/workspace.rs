@@ -576,6 +576,11 @@ pub fn register(e: &mut Engine) {
             return Err(BusError::not_found("project.not_in_backup", format!("{} holds no project {}", path.display(), p.project_id)));
         }
         RESTORED.iter().map(|&(part, table, sql)| -> Result<Copied, BusError> {
+            // A backup from before a table existed has none of its rows to bring back.
+            let held: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)", [table], |r| r.get(0)).bus()?;
+            if !held {
+                return Ok(Copied { part, table, columns: Vec::new(), rows: Vec::new() });
+            }
             let mut stmt = conn.prepare(sql).bus()?;
             let columns: Vec<String> = stmt.column_names().into_iter().map(str::to_string).collect();
             let rows = stmt.query_map([p.project_id], |r| (0..columns.len()).map(|i| r.get::<_, rusqlite::types::Value>(i)).collect())
@@ -606,6 +611,8 @@ const RESTORED: &[(&str, &str, &str)] = &[
     ("module_unlinked_tasks", "module_unlinked_tasks", "SELECT * FROM module_unlinked_tasks WHERE module_id IN (SELECT id FROM modules WHERE project_id = ?1)
         OR task_id IN (SELECT id FROM tasks WHERE project_id = ?1)"),
     ("notes", "notes", "SELECT * FROM notes WHERE project_id = ?1"),
+    ("designs", "designs", "SELECT * FROM designs WHERE project_id = ?1"),
+    ("design_nodes", "design_nodes", "SELECT * FROM design_nodes WHERE design_id IN (SELECT id FROM designs WHERE project_id = ?1)"),
     ("notifications", "notifications", "SELECT * FROM notifications WHERE project_id = ?1"),
     ("file_trash", "file_trash", "SELECT * FROM file_trash WHERE project_id = ?1"),
     ("ui_layouts", "ui_layouts", "SELECT * FROM ui_layouts WHERE project_id = ?1"),
@@ -998,6 +1005,8 @@ fn remove_project(ctx: &mut Ctx, project_id: Id, force: bool, remove_worktrees: 
         "DELETE FROM labels WHERE project_id=?1",
         "DELETE FROM modules WHERE project_id=?1",
         "DELETE FROM notes WHERE project_id=?1",
+        "DELETE FROM design_nodes WHERE design_id IN (SELECT id FROM designs WHERE project_id=?1)",
+        "DELETE FROM designs WHERE project_id=?1",
         "DELETE FROM notifications WHERE project_id=?1",
         "DELETE FROM overlaps WHERE project_id=?1",
         "DELETE FROM file_trash WHERE project_id=?1",
