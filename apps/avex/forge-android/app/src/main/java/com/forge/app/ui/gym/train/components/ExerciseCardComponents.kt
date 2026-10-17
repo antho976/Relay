@@ -71,6 +71,7 @@ import com.forge.app.program.ExerciseUnit
 import com.forge.app.ui.gym.train.state.ExerciseUiState
 import com.forge.app.ui.common.ForgeDisclosureCaret
 import kotlin.math.roundToInt
+import androidx.compose.foundation.layout.FlowRow
 
 /**
  * A YouTube search for how to perform [exerciseName] — no per-exercise link curation needed.
@@ -276,40 +277,57 @@ internal fun LastSessionStrip(
     val elapsedStr = workoutClock(elapsedSec)
     val unit = unitLabel(weightUnit)
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            // Filled, not outlined: the raised fill is what says "tap for the chart".
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .clickableLabeled("Open this exercise's chart") { onClick() }
-            // One reading for TalkBack: the figures are bare ("0 lb"), so it says what each one is.
-            .clearAndSetSemantics {
-                contentDescription = "Workout time $elapsedStr, $animatedVolume $unit lifted, $currentSets of $targetSets sets"
-            }
-            .padding(horizontal = 14.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    // Filled, not outlined: the raised fill is what says "tap for the chart".
+    val stripModifier = Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(12.dp))
+        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+        .clickableLabeled("Open this exercise's chart") { onClick() }
+        // One reading for TalkBack: the figures are bare ("0 lb"), so it says what each one is.
+        .clearAndSetSemantics {
+            contentDescription = "Workout time $elapsedStr, $animatedVolume $unit lifted, $currentSets of $targetSets sets"
+        }
+        .padding(horizontal = 14.dp, vertical = 11.dp)
+    // A FlowRow, so at large text the figures wrap between items, never inside "3 of 4 sets".
+    val figures: @Composable () -> Unit = {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            itemVerticalAlignment = Alignment.CenterVertically
+        ) {
             Text(elapsedStr, style = MaterialTheme.typography.labelMedium, color = onBg)
             Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f))
             Text("$animatedVolume $unit", style = MaterialTheme.typography.labelMedium, color = onBg)
             Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f))
             Text("$currentSets of $targetSets sets", style = MaterialTheme.typography.labelMedium, color = muted)
         }
-        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-            // Only show the comparison line once you've logged a set this session —
-            // a lone prior line over an empty session just looks like noise.
-            if (currentVolumes.isNotEmpty()) {
-                DualSparkline(
-                    current = currentVolumes,
-                    previous = priorVolumes,
-                    currentColor = MaterialTheme.colorScheme.primary,
-                    previousColor = muted.copy(alpha = 0.65f),
-                    modifier = Modifier.width(60.dp).height(16.dp)
-                )
-            }
+    }
+    // Only show the comparison line once you've logged a set this session —
+    // a lone prior line over an empty session just looks like noise.
+    val sparkline: @Composable () -> Unit = {
+        DualSparkline(
+            current = currentVolumes,
+            previous = priorVolumes,
+            currentColor = MaterialTheme.colorScheme.primary,
+            previousColor = muted.copy(alpha = 0.65f),
+            modifier = Modifier.width(60.dp).height(16.dp)
+        )
+    }
+    if (SetTable.stacked()) {
+        // At large text the figures need the whole width; the line gets its own row under them
+        // instead of being squeezed to a few pixels beside them.
+        Column(stripModifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            figures()
+            if (currentVolumes.isNotEmpty()) sparkline()
+        }
+    } else {
+        Row(
+            stripModifier,
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(Modifier.weight(1f)) { figures() }
+            if (currentVolumes.isNotEmpty()) sparkline()
         }
     }
 }
@@ -607,7 +625,9 @@ internal fun UpNextBubble(
                 Text("UP NEXT", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
                 val label = buildString {
                     append(nextName ?: "Last exercise · finish or add another")
-                    if (!nextTarget.isNullOrBlank()) append(" · $nextTarget")
+                    // Non-breaking inside the target, so large text breaks at the "·" rather than
+                    // leaving "Lat Pulldown · 3" over "× 6-10".
+                    if (!nextTarget.isNullOrBlank()) append(" · ${nextTarget.replace(' ', '\u00A0')}")
                 }
                 Text(label, style = MaterialTheme.typography.bodyMedium, color = onBg)
             }
