@@ -535,7 +535,7 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     // Its natural width at full size; a narrower window shortens the words, not the bar's reach
     // (at 300px it alone kept a 1024px window from fitting its window controls).
     palette_text.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    palette_text.set_width_chars(8);
+    palette_text.set_width_chars(6);
     palette_row.append(&palette_text);
     palette_row.append(&label("Ctrl K", "keycap"));
     palette_key.set_child(Some(&palette_row));
