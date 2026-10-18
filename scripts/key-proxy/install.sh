@@ -1,27 +1,34 @@
 #!/bin/bash
-# Install, update or remove Relay's API-key proxy (docs/KEY-PROXY.md, "Setting it up").
+# Install or update Relay's API-key proxy (docs/KEY-PROXY.md, "Setting it up").
 #
 # It runs as root, from a root login at a text console, from a root-owned clone of a commit you
 # name in full, and only while nothing at all runs as you. Your own account is where agents run:
 # they can rewrite its files, its shell, its desktop and its terminals, so nothing from it may
 # reach root, the build, or the moment the key is typed.
 #
-# It builds only crates/relay-key-proxy, copied out of the clone (its own workspace, its own
-# Cargo.lock), and on an update only a tree you approved with the key-proxy-review the last
-# install left, which shows you this script's changes too before any of it runs.
+# It builds and installs only the files listed in STAGED, copied out of the clone, each of them
+# plain printable ASCII (so nothing in them can hide from less), and on an update only the exact
+# tree you approved with the key-proxy-review the last install left. Never run this script from a
+# clone before you have read it (first install) or approved it (an update).
 #
-#   (powered on with systemd.unit=multi-user.target systemd.mask=user@<uid>.service, logged in as
-#   root on a text console:)
+#   (powered on with systemd.unit=multi-user.target systemd.mask=user@<uid>.service
+#   systemd.mask=bluetooth.service, logged in as root on a text console:)
 #   git clone --no-tags https://github.com/antho976/Relay /root/relay-key-proxy
 #   cd /root/relay-key-proxy && git checkout --detach <full 40-character commit>
-#   first install: read the files docs/KEY-PROXY.md lists, with less
+#   first install: read the files docs/KEY-PROXY.md lists, with less -U
 #   an update:     /usr/local/libexec/relay/key-proxy-review /root/relay-key-proxy
 #   bash scripts/key-proxy/install.sh --user <login> --commit <same commit>                  # install or update
 #   bash scripts/key-proxy/install.sh --user <login> --commit <same commit> --replace-key    # new key
-#   bash scripts/key-proxy/install.sh --user <login> --commit <same commit> --uninstall      # remove everything
+#   removing it:   /usr/local/libexec/relay/key-proxy-uninstall --user <login>
 #
 # Everything is in main(), and the script exits before reading further, so bash has parsed it
 # whole before running any of it.
+
+# Everything the install builds or runs, relative to crates/ and scripts/. Any other file beside
+# them stops it. (Kept identical to review.sh.)
+STAGED=(relay-key-proxy/Cargo.toml relay-key-proxy/Cargo.lock relay-key-proxy/src/main.rs
+    key-proxy/install.sh key-proxy/review.sh key-proxy/uninstall.sh
+    key-proxy/relay-key-proxy.service key-proxy/relay-key-proxy.socket)
 
 main() {
     set -euo pipefail
@@ -34,7 +41,6 @@ main() {
             --user) user=${2:-}; shift 2 ;;
             --commit) commit=${2:-}; shift 2 ;;
             --replace-key) mode=replace-key; shift ;;
-            --uninstall) mode=uninstall; shift ;;
             *) die "unknown option $1" ;;
         esac
     done
@@ -73,7 +79,7 @@ main() {
     [[ $(git -C "$repo" rev-parse HEAD) == "$commit" ]] || die "the clone is not at $commit"
     [[ -z $(git -C "$repo" status --porcelain --ignored) ]] || die "the clone has changes or extra files; use a fresh clone"
     # A slip check, not a defence: whoever can push to main decides what is on it. The defence is
-    # you reading what this builds, with less or key-proxy-review, before it runs.
+    # you reading what this builds, with less -U or key-proxy-review, before it runs.
     git -C "$repo" merge-base --is-ancestor "$commit" refs/remotes/origin/main 2>/dev/null || die "$commit is not on origin/main"
 
     local libexec=/usr/local/libexec/relay units=/etc/systemd/system state=/var/lib/relay-key-proxy
@@ -81,26 +87,30 @@ main() {
     local key_cred=$creds/relay-anthropic-key token_cred=$creds/relay-proxy-token
     local token_dir=$home/.config/relay
 
-    if [[ $mode == uninstall ]]; then
-        systemctl disable --now relay-key-proxy.socket relay-key-proxy.service 2>/dev/null || true
-        rm -f -- "$units/relay-key-proxy.service" "$units/relay-key-proxy.socket" "$key_cred" "$token_cred" \
-            "$libexec/relay-key-proxy" "$libexec/key-proxy-review"
-        rmdir -- "$libexec" 2>/dev/null || true
-        rm -rf -- "$cache" "$state"
-        systemctl daemon-reload
-        as_user "$uid" "$gid" rm -f -- "$token_dir/key-proxy-token"
-        echo "key-proxy: removed. Revoke the key in the Anthropic console if it may have been exposed."
-        return
-    fi
-
-    # What is built: the proxy's folder alone, copied out of the clone, with nothing in it that
-    # could make cargo take code from elsewhere.
+    # What is built: the listed files alone, copied out of the clone.
     install -d -o root -g root -m 0700 "$cache" "$state"
     local stage=$cache/stage crate
     rm -rf -- "$stage"
     stage "$repo" "$stage"
     crate=$stage/relay-key-proxy
-    [[ ! -e $crate/.cargo && ! -e $crate/build.rs ]] || die "relay-key-proxy has a .cargo folder or a build script"
+
+    # Only what you read, before cargo touches anything. An update must be the exact tree
+    # key-proxy-review showed you (the copy the last install left, so this commit could not change
+    # it); a first install, the files you read with less -U.
+    if [[ -d $state/installed ]]; then
+        [[ -f $state/approved && $(tree_hash "$stage") == $(<"$state/approved") ]] \
+            || die "this tree is not the one you approved: run /usr/local/libexec/relay/key-proxy-review $repo first"
+    else
+        echo "key-proxy: first install of $commit. It builds and installs exactly the files you read:"
+        printf '           %s\n' "${STAGED[@]}"
+        local answer
+        read -r -p "key-proxy: did you read every one of them with less -U? Type yes: " answer
+        [[ $answer == yes ]] || die "stopped; nothing was installed"
+    fi
+
+    # Nothing in them may make cargo take code from elsewhere: a build script, a source file outside
+    # the folder (asked of cargo metadata, which runs nothing), a proc macro, or a dependency not
+    # from crates.io.
     local meta src
     meta=$(root_cargo "$cache" metadata --no-deps --offline --format-version 1 --manifest-path "$crate/Cargo.toml")
     ! grep -q '"custom-build"' <<<"$meta" || die "relay-key-proxy names a build script"
@@ -110,37 +120,23 @@ main() {
     done < <(grep -o '"src_path":"[^"]*"' <<<"$meta" | cut -d'"' -f4)
     local tree foreign
     tree=$(root_cargo "$cache" tree --locked --manifest-path "$crate/Cargo.toml" -e normal,build --prefix none --format '{p}' \
-        | sed 1d | sed -e 's/ (\*)$//' -e 's/ (proc-macro)$//' | sort -u)
+        | sed 1d | sed -e 's/ (\*)$//' | sort -u)
     foreign=$(grep '(' <<<"$tree" || true)
-    [[ -z $foreign ]] || die "dependencies from outside crates.io:
+    [[ -z $foreign ]] || die "dependencies that are proc macros or come from outside crates.io:
 $foreign"
-
-    # Only what you read. An update must be the exact tree key-proxy-review showed you (it is the
-    # copy the last install left, so this commit could not change it); a first install, the files
-    # you read with less.
-    if [[ -d $state/installed ]]; then
-        [[ -f $state/approved && $(tree_hash "$stage") == $(<"$state/approved") ]] \
-            || die "this tree is not the one you approved: run /usr/local/libexec/relay/key-proxy-review $repo first"
-    else
-        echo "key-proxy: first install of $commit. It builds and installs exactly what you read:"
-        echo "           crates/relay-key-proxy/ (Cargo.toml, Cargo.lock, src/main.rs) and scripts/key-proxy/."
-        echo "           From crates.io, at the versions Cargo.lock pins:"
-        tr '\n' ' ' <<<"$tree" | fold -s -w 100
-        echo
-        local answer
-        read -r -p "key-proxy: did you read them, and build this as root? Type yes: " answer
-        [[ $answer == yes ]] || die "stopped; nothing was installed"
-    fi
+    echo "key-proxy: from crates.io, at the versions Cargo.lock pins:"
+    tr '\n' ' ' <<<"$tree" | fold -s -w 100
+    echo
 
     echo "key-proxy: building $commit"
     root_cargo "$cache" build --locked --release --manifest-path "$crate/Cargo.toml"
-    local binary=$cache/target/release/relay-key-proxy dep
-    [[ -f $binary && ! -L $binary ]] || die "the build left no $binary"
+    local binary=$cache/target/release/relay-key-proxy deps=$cache/target/release/relay-key-proxy.d dep
+    [[ -f $binary && ! -L $binary && -s $deps ]] || die "the build left no $binary or no record of what it read"
     # What the compiler actually read for the binary: the staged folder and pinned crates only.
     while read -r dep; do
         dep=$(realpath -m -- "$dep")
         [[ $dep == "$crate/"* || $dep == "$cache/cargo/registry/src/"* ]] || die "the build read $dep"
-    done < <(cut -d: -f2- "$cache/target/release/relay-key-proxy.d" | tr ' ' '\n' | grep -v '^$')
+    done < <(cut -d: -f2- "$deps" | tr ' ' '\n' | grep -v '^$')
 
     local key=""
     if [[ ! -s $key_cred || $mode == replace-key ]]; then
@@ -148,7 +144,7 @@ $foreign"
         echo "key-proxy: type the key from the screen you made it on (your phone, not this PC)."
         echo "           Nothing shows as you type, and there is no time limit."
         key=$(systemd-ask-password --timeout=0 --echo=no -n "Anthropic API key:") || die "no key was entered; nothing was installed"
-        [[ $key =~ ^sk-ant-api[0-9]{2}-[A-Za-z0-9_-]{20,}$ ]] || { key=""; die "that is not an ordinary Anthropic API key (sk-ant-api…); admin keys are refused"; }
+        [[ $key =~ ^sk-ant-api[0-9]{2}-[A-Za-z0-9_-]{20,}$ ]] || { key=""; die "that is not an ordinary Anthropic API key (sk-ant-api...); admin keys are refused"; }
     fi
 
     # The socket stays up throughout: PID 1 keeps the port while the service is replaced.
@@ -156,6 +152,7 @@ $foreign"
     install -d -o root -g root -m 0755 "$libexec"
     install -o root -g root -m 0755 "$binary" "$libexec/relay-key-proxy"
     install -o root -g root -m 0755 "$stage/key-proxy/review.sh" "$libexec/key-proxy-review"
+    install -o root -g root -m 0755 "$stage/key-proxy/uninstall.sh" "$libexec/key-proxy-uninstall"
     install -o root -g root -m 0644 "$stage/key-proxy/relay-key-proxy.service" "$units/relay-key-proxy.service"
     install -o root -g root -m 0644 "$stage/key-proxy/relay-key-proxy.socket" "$units/relay-key-proxy.socket"
     install -d -o root -g root -m 0700 "$creds"
@@ -181,10 +178,9 @@ $foreign"
     systemctl enable relay-key-proxy.service >/dev/null
     systemctl restart relay-key-proxy.service
     systemctl is-active --quiet relay-key-proxy.service || die "the service did not start: journalctl -u relay-key-proxy"
-    # What the next update is compared with, and what it may only replace once you approve it.
+    # What the next update is compared with, and may only replace once you approve it.
     rm -rf -- "$state/installed" "$state/approved"
     cp -R --no-dereference --preserve=mode -- "$stage" "$state/installed"
-    rm -rf -- "$state/installed/relay-key-proxy/target"
     printf '%s\n' "$commit" > "$state/commit"
 
     # One free call through the proxy, as a session would make it: proves the key and the path.
@@ -251,14 +247,22 @@ trusted_tree() {
         || die "something in $1 is not root's, is writable by others, or is a symbolic link"
 }
 
-# The proxy's folder and its scripts, copied out of the clone: all this builds and installs.
-# (Kept identical to review.sh.)
+# The STAGED files, copied out of the clone: all this builds and installs. The proxy's folders must
+# hold exactly those files, and each must be plain printable ASCII (tab, newline, space to tilde):
+# a backspace, an escape or a carriage return could hide a line from less. (Kept identical to
+# review.sh.)
 stage() {
-    local clone=$1 dest=$2
-    [[ ! -e $clone/crates/relay-key-proxy/target ]] || die "the clone has a build folder in it; use a fresh clone"
-    mkdir -p -- "$dest"
-    cp -R --no-dereference --preserve=mode -- "$clone/crates/relay-key-proxy" "$dest/relay-key-proxy"
-    cp -R --no-dereference --preserve=mode -- "$clone/scripts/key-proxy" "$dest/key-proxy"
+    local clone=$1 dest=$2 found file
+    found=$({ (cd "$clone/crates" && find relay-key-proxy -mindepth 1 ! -type d); \
+        (cd "$clone/scripts" && find key-proxy -mindepth 1 ! -type d); } | sort)
+    [[ $found == "$(printf '%s\n' "${STAGED[@]}" | sort)" ]] || die "the proxy's folders hold other files than these:
+$(printf '  %s\n' "${STAGED[@]}")"
+    for file in "${STAGED[@]}"; do
+        local from=$clone/crates/$file
+        [[ $file == key-proxy/* ]] && from=$clone/scripts/$file
+        ! LC_ALL=C grep -q $'[^\t -~]' -- "$from" || die "$file holds bytes other than printable ASCII"
+        install -D -m 0644 -- "$from" "$dest/$file"
+    done
 }
 
 # One hash for a staged tree: every file's path and content. (Kept identical to review.sh.)

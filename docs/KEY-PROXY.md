@@ -34,8 +34,10 @@ Claude (you) ──x-api-key: <pass token>──▶ 127.0.0.1:7445  relay-key-pr
 - **The port** is held by PID 1 (`relay-key-proxy.socket`) and handed to the service, so no other
   program can take it, and collect the token, while the service is stopped or replaced.
 - **The service** may connect only to loopback and Anthropic's published API ranges
-  (`160.79.104.0/23`, `2607:6bc0::/48`), and marks itself undumpable. Should Anthropic move its
-  API, the service fails closed; widen `IPAddressAllow=` in the unit.
+  (`160.79.104.0/23`, `2607:6bc0::/48`), and marks itself undumpable. That narrows where a
+  tampered build could send anything, but it is no defence on its own (it could still answer its
+  caller, reach a local listener or use DNS): reading the code before it is installed is. Should
+  Anthropic move its API, the service fails closed; widen `IPAddressAllow=` in the unit.
 - **The program** is `crates/relay-key-proxy`, its own workspace with its own `Cargo.lock`: about
   700 lines (half of them tests), 22 crates from crates.io, no proc macros, and no build script of
   its own (four of its crates have one: `httparse`, `libc`, `ring`, `rustls`). Root builds that
@@ -51,15 +53,20 @@ root login on a real text console, from a root-owned clone of a commit you name 
 
 **Before you start**
 
-- **Cut the phone off from this PC first.** Agents can read this PC's adb key. While USB or
-  wireless debugging is on and the phone trusts this PC, an agent can capture the phone's screen
-  or drive its browser. On the phone, in Developer options: turn off USB debugging and Wireless
-  debugging, and tap **Revoke USB debugging authorisations**. Turn them back on after the install
-  if you need them.
-- **Make the key on your phone**, in the Anthropic console, with a monthly spending limit, and
-  type it from the phone's screen. A key made, copied or pasted on this PC can be read there
-  (browser, clipboard history). An ordinary key only: admin keys are refused. Sign out of the
-  console on the phone afterwards.
+- **Use a device agents have never reached** to make the key and to read the commit hash. Agents
+  can read this PC's adb key, and your phone trusts it: over adb they can install apps (Relay's
+  own app among them), turn on an accessibility service that reads the screen, or grant an app
+  the right to draw over others, and none of that is undone by revoking adb later. Best is another
+  device that has never been plugged into this PC. If it has to be this phone: in Developer options
+  turn off USB debugging and Wireless debugging and tap **Revoke USB debugging authorisations**;
+  then check Settings > Accessibility (no service you did not turn on yourself), Special app access
+  > Display over other apps and Device admin apps, and the installed apps, before you go on.
+- **Make the key on that device**, in the Anthropic console, with a monthly spending limit, and
+  type it from its screen. A key made, copied or pasted on this PC can be read there (browser,
+  clipboard history). An ordinary key only: admin keys are refused. Sign out of the console
+  afterwards.
+- **Remove Bluetooth pairings you do not use** (any program of yours can pair a device, and a
+  paired phone app can pose as a keyboard). The console boot below also keeps Bluetooth off.
 - **Pick the commit on your phone too**: a commit on `main` you trust, and its full 40-character
   hash (on GitHub, open the commit and copy the hash from its page).
 - **Restart only with the power button.** Every step below that needs a real console starts from
@@ -74,28 +81,35 @@ root login on a real text console, from a root-owned clone of a commit you name 
   polkit, whose vendor rules also let `wheel` change network connections, flash firmware and
   install system-wide apps without asking), and you type it into things agents can replace: the
   lock screen, a polkit prompt, `sudo` in a terminal. An agent that learns it can become root, and
-  root can decrypt the key. As root at the console: `gpasswd -d <you> wheel`. From then on, do
-  admin work at a root console, and never type root's password anywhere else.
+  root can decrypt the key. As root at the console: `gpasswd -d <you> wheel`. Then check that no
+  other rule lets you in: `sudo -l -U <you>` must say you may not run sudo, and nothing in
+  `/etc/sudoers.d` may name you. From then on, do admin work at a root console, and never type
+  root's password anywhere else.
 
 **The first install**
 
 1. Power off with the button, turn on, and in the boot menu edit the entry and add
-   `systemd.unit=multi-user.target systemd.mask=user@1000.service` to the kernel line (1000 is your
-   user id). The desktop does not start, and neither do your lingering user services, so nothing
-   of yours can watch the screen, listen, or answer for the console.
+   `systemd.unit=multi-user.target systemd.mask=user@1000.service systemd.mask=bluetooth.service`
+   to the kernel line (1000 is your user id). The desktop does not start, nor do your lingering user
+   services or Bluetooth, so nothing of yours can watch the screen, listen, type, or answer for the
+   console.
 2. Log in as **root** on the console. Not as yourself followed by `su` or `sudo`: the script
    checks the login itself.
-3. Clone the commit, and read everything that will run as root, with `less` (it shows control
-   characters and anything outside ASCII as codes, so nothing in a file can redraw the screen):
+3. Clone the commit, check that everything that will run as root is plain printable ASCII (the
+   first command must print nothing, and the installer refuses anything else anyway), and read it
+   all with `less -U`, which shows a backspace, carriage return or escape as `^H`, `^M`, `^[`
+   instead of obeying it, so no line can hide:
 
    ```sh
    git clone --no-tags https://github.com/antho976/Relay /root/relay-key-proxy
    cd /root/relay-key-proxy && git checkout --detach <full commit hash>
-   LC_ALL=C less scripts/key-proxy/* crates/relay-key-proxy/Cargo.toml crates/relay-key-proxy/Cargo.lock crates/relay-key-proxy/src/main.rs
+   LC_ALL=C grep -rn $'[^\t -~]' crates/relay-key-proxy scripts/key-proxy
+   LC_ALL=C LESSSECURE=1 less -U crates/relay-key-proxy/Cargo.toml crates/relay-key-proxy/Cargo.lock crates/relay-key-proxy/src/main.rs scripts/key-proxy/*
    ```
 
-   That is all the install builds or runs, besides the crates `Cargo.lock` pins, by name, version
-   and checksum.
+   Those files are all the install builds, installs or runs, besides the crates `Cargo.lock` pins,
+   by name, version and checksum; any other file in those folders stops it. Never run a script
+   from a clone before you have read it like this, or approved it with `key-proxy-review`.
 4. Run it, and type `yes` when it asks whether you read them:
 
    ```sh
@@ -108,13 +122,14 @@ root login on a real text console, from a root-owned clone of a commit you name 
    masked until it ends; the clone is root's all the way up, writable by no one else, holds no
    symbolic link, is exactly at the commit you named, clean, and on `origin/main`.
 
-   It copies `crates/relay-key-proxy` and `scripts/key-proxy` out of the clone and builds that copy
-   alone, from outside it (so no `.cargo/config` applies), with a root-owned cargo home and
-   `--locked`. It refuses a build script, a source file outside the folder (asked of
-   `cargo metadata`, which runs nothing, and checked again in what the compiler read), and any
-   dependency not from crates.io. It then asks for the key with no time limit and nothing shown as
-   you type, checks its shape before touching anything, installs the binary, both units and
-   `key-proxy-review` to root-owned places, pipes the key straight into `systemd-creds`, writes a
+   It copies exactly the listed files out of the clone, each checked to be printable ASCII, and
+   builds that copy alone, from outside it (so no `.cargo/config` applies), with a root-owned cargo
+   home and `--locked`. It refuses a build script, a source file outside the folder (asked of
+   `cargo metadata`, which runs nothing, and checked again in what the compiler read), a proc
+   macro, and any dependency not from crates.io. It then asks for the key with no time limit and
+   nothing shown as you type, checks its shape before touching anything, installs the binary, both
+   units, `key-proxy-review` and `key-proxy-uninstall` to root-owned places, pipes the key straight
+   into `systemd-creds`, writes a
    new pass token to your `~/.config/relay` (as you, without a login, so nothing of yours starts),
    starts the socket and the service, keeps a copy of what it installed for the next update to be
    compared with, and makes one free call (`GET /v1/models`) through the proxy to tell you whether
@@ -126,7 +141,8 @@ root login on a real text console, from a root-owned clone of a commit you name 
 Start as for the first install (steps 1 and 2), then fetch the new commit and review it with the
 `key-proxy-review` the last install left. It is root-owned and was itself reviewed, so the new
 commit cannot change what shows it to you; it compares with the copy installed last, not with
-GitHub, and shows every difference, the installer's own changes included, in `less`:
+GitHub, refuses any file off the list or not printable ASCII, and shows every difference, the
+installer's own changes included, in `less -U`:
 
 ```sh
 cd /root/relay-key-proxy && git fetch --no-tags origin && git checkout --detach <full commit hash>
@@ -134,10 +150,17 @@ cd /root/relay-key-proxy && git fetch --no-tags origin && git checkout --detach 
 bash scripts/key-proxy/install.sh --user <you> --commit <full commit hash>
 ```
 
-The installer builds only the exact tree you approved. A new token is made on every run.
+The installer builds only the exact tree you approved. A new token is made on every run. For a
+new key, add `--replace-key` (after the review, if the commit changed).
 
-- New key: add `--replace-key` (review first if the commit changed).
-- Remove everything: add `--uninstall`.
+### Removing it
+
+Booted and logged in as for an install, run the uninstaller the install left. It is root-owned and
+reviewed, so removing the proxy never runs a script from a newer clone:
+
+```sh
+/usr/local/libexec/relay/key-proxy-uninstall --user <you>
+```
 
 Status: `systemctl status relay-key-proxy.socket relay-key-proxy`, `journalctl -u relay-key-proxy`
 (it never logs a request), `systemd-analyze security relay-key-proxy`.
@@ -150,7 +173,9 @@ every agent could read it.
 
 - **Spending.** The pass token is readable by anything running as you, so such a program can make
   API calls through the proxy, billed to the key. It can never learn the key. The spending limit
-  bounds the cost; stopping the socket and the service, or `--uninstall`, ends it.
+  bounds the cost; stopping the socket and the service, or `key-proxy-uninstall`, ends it.
+- **A certificate a public authority issues wrongly** for `api.anthropic.com` would let someone on
+  the network path read the traffic: the proxy trusts the same public roots browsers do.
 - **Your Anthropic console login.** If this PC's browser is signed in to console.anthropic.com, a
   program running as you can use that session to make keys of its own. Sign in there from your
   phone only.

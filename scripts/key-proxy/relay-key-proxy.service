@@ -1,7 +1,7 @@
 # Relay's API-key proxy (docs/KEY-PROXY.md). Installed by scripts/key-proxy/install.sh.
 #
 # It holds the Anthropic API key as a throwaway system user (DynamicUser), so nothing that runs
-# as the person — agents included — can read the key from a file or from its memory. systemd
+# as the person - agents included - can read the key from a file or from its memory. systemd
 # decrypts the key from /etc/credstore.encrypted with a root-only host key (and the TPM where
 # there is one) and gives it to this service alone, under $CREDENTIALS_DIRECTORY.
 
@@ -38,8 +38,10 @@ ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-# Out to Anthropic's published API ranges only (and loopback, for the resolver and its callers):
-# a build that tried to send the key anywhere else could not connect.
+# Out to Anthropic's published API ranges only (and loopback, for the resolver and its callers).
+# This narrows where a tampered build could connect; it is no defence on its own (such a build
+# could still answer its caller, reach a loopback listener or a local socket, or use DNS).
+# Reading the code before it is installed is.
 IPAddressDeny=any
 IPAddressAllow=localhost 160.79.104.0/23 2607:6bc0::/48
 RestrictNamespaces=yes

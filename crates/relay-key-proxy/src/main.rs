@@ -1,8 +1,8 @@
-//! `relay-key-proxy` — holds the Anthropic API key for Relay's API-key sessions (docs/KEY-PROXY.md).
+//! `relay-key-proxy` - holds the Anthropic API key for Relay's API-key sessions (docs/KEY-PROXY.md).
 //!
 //! It runs as its own throwaway system user (`relay-key-proxy.service`, `DynamicUser=yes`), and
 //! systemd hands it the key from a credential encrypted with the host's root-only key. Nothing that
-//! runs as the person — an agent, a repository's hooks, a line injected over the phone link — can
+//! runs as the person - an agent, a repository's hooks, a line injected over the phone link - can
 //! read another user's files or memory, so none of them can learn the key.
 //!
 //! A session's Claude talks to it on loopback with a local pass token in `x-api-key`. One request
@@ -95,7 +95,7 @@ fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// An ordinary API key. An admin key (`sk-ant-admin…`) manages the organisation, its members and
+/// An ordinary API key. An admin key (`sk-ant-admin...`) manages the organisation, its members and
 /// its keys, and is refused: the pass token must never be worth more than API calls.
 fn key_shaped(key: &str) -> bool {
     key.len() > 30
@@ -138,7 +138,7 @@ fn start() -> Result<(), String> {
         .ok_or("no credentials: run this as relay-key-proxy.service (scripts/key-proxy/install.sh)")?;
     let key = credential(Path::new(&dir), KEY_CREDENTIAL)?;
     if !key_shaped(&key) {
-        return Err(format!("credential {KEY_CREDENTIAL} is not an Anthropic API key (sk-ant-api…); admin keys are refused"));
+        return Err(format!("credential {KEY_CREDENTIAL} is not an Anthropic API key (sk-ant-api...); admin keys are refused"));
     }
     let token = credential(Path::new(&dir), TOKEN_CREDENTIAL)?;
     if token.len() < 32 {
@@ -673,6 +673,50 @@ mod tests {
             assert!(!key_shaped(bad), "{bad:?}");
         }
         assert!(same(b"abc", b"abc") && !same(b"abc", b"abd") && !same(b"abc", b"ab"));
+    }
+
+    /// What root builds and installs is exactly the STAGED list both scripts carry, and every file
+    /// in it is plain printable ASCII: the installer refuses anything else, so a backspace or an
+    /// escape that could hide a line from less fails here first.
+    #[test]
+    fn the_shipped_files_are_the_staged_list_and_plain_ascii() {
+        let crate_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = crate_dir.join("../..");
+        let staged = |script: &str| -> Vec<String> {
+            let text = std::fs::read_to_string(root.join("scripts/key-proxy").join(script)).unwrap();
+            let start = text.find("\nSTAGED=(").expect("a STAGED list") + "\nSTAGED=(".len();
+            let end = start + text[start..].find(')').unwrap();
+            let mut files: Vec<String> = text[start..end].split_whitespace().map(String::from).collect();
+            files.sort();
+            files
+        };
+        let listed = staged("install.sh");
+        assert_eq!(listed, staged("review.sh"), "install.sh and review.sh must stage the same files");
+        let mut found = Vec::new();
+        let mut walk = vec![(root.join("crates"), "relay-key-proxy".to_string()), (root.join("scripts"), "key-proxy".to_string())];
+        while let Some((base, rel)) = walk.pop() {
+            for entry in std::fs::read_dir(base.join(&rel)).unwrap() {
+                let entry = entry.unwrap();
+                let name = format!("{rel}/{}", entry.file_name().to_string_lossy());
+                // A developer's build folder; a clean clone has none, and the installer refuses one.
+                if name == "relay-key-proxy/target" {
+                    continue;
+                }
+                if entry.file_type().unwrap().is_dir() {
+                    walk.push((base.clone(), name));
+                } else {
+                    found.push(name);
+                }
+            }
+        }
+        found.sort();
+        assert_eq!(found, listed, "the proxy's folders must hold exactly the STAGED files");
+        for file in &listed {
+            let path = if file.starts_with("key-proxy/") { root.join("scripts").join(file) } else { root.join("crates").join(file) };
+            let bytes = std::fs::read(&path).unwrap();
+            let bad = bytes.iter().position(|&b| !(b == b'\t' || b == b'\n' || (0x20..0x7f).contains(&b)));
+            assert!(bad.is_none(), "{file} holds a byte other than printable ASCII at offset {bad:?}");
+        }
     }
 
     /// The units that run the proxy: PID 1 holds the port sessions are sent to, and the service

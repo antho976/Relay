@@ -7,10 +7,16 @@
 #   /usr/local/libexec/relay/key-proxy-review /root/relay-key-proxy
 #
 # It compares the clone's proxy folder and scripts with the copy installed last
-# (/var/lib/relay-key-proxy/installed), shows every difference in less, with control bytes and
-# anything outside ASCII shown as codes (^[, <E2>) so nothing in the diff can redraw the screen or
-# pass for something else, and on `yes` records that exact tree as approved. The installer builds
-# only an approved tree.
+# (/var/lib/relay-key-proxy/installed), shows every difference in less -U (control bytes as
+# codes: ^H, ^M, ^[), and on `yes` records that exact tree as approved. The installer builds only an
+# approved tree. Every file must be plain printable ASCII and on the STAGED list, or it refuses,
+# so nothing in the diff can hide a line or redraw the screen.
+
+# Everything the install builds or runs, relative to crates/ and scripts/. Any other file beside
+# them stops it. (Kept identical to install.sh.)
+STAGED=(relay-key-proxy/Cargo.toml relay-key-proxy/Cargo.lock relay-key-proxy/src/main.rs
+    key-proxy/install.sh key-proxy/review.sh key-proxy/uninstall.sh
+    key-proxy/relay-key-proxy.service key-proxy/relay-key-proxy.socket)
 
 main() {
     set -euo pipefail
@@ -39,14 +45,14 @@ main() {
     (cd "$state" && diff -ruN --text installed "$work/new") > "$work/diff" || rc=$?
     case $rc in
         0) echo "key-proxy: no differences from what is installed." ;;
-        1) env -i PATH=/usr/bin:/bin TERM="${TERM:-linux}" LC_ALL=C LESSSECURE=1 less -- "$work/diff" ;;
+        1) env -i PATH=/usr/bin:/bin TERM="${TERM:-linux}" LC_ALL=C LESSSECURE=1 less -U -- "$work/diff" ;;
         *) die "diff failed" ;;
     esac
     local answer
     read -r -p "key-proxy: approve exactly this for the installer? Type yes: " answer
     [[ $answer == yes ]] || die "not approved"
     tree_hash "$work/new" > "$state/approved"
-    echo "key-proxy: approved. Now run the installer from the clone (bash scripts/key-proxy/install.sh …)."
+    echo "key-proxy: approved. Now run the installer from the clone (bash scripts/key-proxy/install.sh ...)."
 }
 
 die() {
@@ -69,14 +75,22 @@ trusted_tree() {
         || die "something in $1 is not root's, is writable by others, or is a symbolic link"
 }
 
-# The proxy's folder and its scripts, copied out of the clone: all the installer builds and
-# installs. (Kept identical to install.sh.)
+# The STAGED files, copied out of the clone: all this builds and installs. The proxy's folders must
+# hold exactly those files, and each must be plain printable ASCII (tab, newline, space to tilde):
+# a backspace, an escape or a carriage return could hide a line from less. (Kept identical to
+# install.sh.)
 stage() {
-    local clone=$1 dest=$2
-    [[ ! -e $clone/crates/relay-key-proxy/target ]] || die "the clone has a build folder in it; use a fresh clone"
-    mkdir -p -- "$dest"
-    cp -R --no-dereference --preserve=mode -- "$clone/crates/relay-key-proxy" "$dest/relay-key-proxy"
-    cp -R --no-dereference --preserve=mode -- "$clone/scripts/key-proxy" "$dest/key-proxy"
+    local clone=$1 dest=$2 found file
+    found=$({ (cd "$clone/crates" && find relay-key-proxy -mindepth 1 ! -type d); \
+        (cd "$clone/scripts" && find key-proxy -mindepth 1 ! -type d); } | sort)
+    [[ $found == "$(printf '%s\n' "${STAGED[@]}" | sort)" ]] || die "the proxy's folders hold other files than these:
+$(printf '  %s\n' "${STAGED[@]}")"
+    for file in "${STAGED[@]}"; do
+        local from=$clone/crates/$file
+        [[ $file == key-proxy/* ]] && from=$clone/scripts/$file
+        ! LC_ALL=C grep -q $'[^\t -~]' -- "$from" || die "$file holds bytes other than printable ASCII"
+        install -D -m 0644 -- "$from" "$dest/$file"
+    done
 }
 
 # One hash for a staged tree: every file's path and content. (Kept identical to install.sh.)
