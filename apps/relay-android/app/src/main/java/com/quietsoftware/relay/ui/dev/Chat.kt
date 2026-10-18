@@ -6,11 +6,15 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -250,6 +254,10 @@ fun ChatScreen(name: String, nav: Nav) {
         }
     }
 
+    fun resend(again: String) {
+        scope.launch { if (!chat.send(again)) nav.shell.toast("Not sent: the PC did not take it") }
+    }
+
     Page {
         Column(Modifier.fillMaxSize()) {
             Header(session, name, onBack = nav::back, onDetails = { nav.session(name) }, onMenu = { menu = true }) {
@@ -267,7 +275,14 @@ fun ChatScreen(name: String, nav: Nav) {
                     else Key("Open the terminal", { nav.console(name) }, glyph = "terminal", compact = true)
                 }
                 when {
-                    pieces.isNotEmpty() || asking -> Conversation(pieces, doing, since, asking, screen, chat, s.online)
+                    pieces.isNotEmpty() || asking -> Conversation(
+                        pieces, doing, since, asking, screen, chat, s.online,
+                        onEdit = { words ->
+                            type(words)
+                            focus.requestFocus()
+                        },
+                        onResend = if (ready) ::resend else null,
+                    )
                     error != null && status != TerminalFeed.Status.Saved -> Empty(
                         "terminal", "Can't read the conversation",
                         said(error!!.error, "The PC's Relay is older than this app: update it to see agents as a conversation. The terminal works meanwhile."),
@@ -558,7 +573,17 @@ private fun transcriptText(messages: List<ThreadMessage>): String = messages.map
 // ---- Drawing it ----
 
 @Composable
-private fun Conversation(pieces: List<ChatPiece>, doing: String?, since: Long?, asking: Boolean, screen: State<String?>, chat: SessionChat, online: Boolean) {
+private fun Conversation(
+    pieces: List<ChatPiece>,
+    doing: String?,
+    since: Long?,
+    asking: Boolean,
+    screen: State<String?>,
+    chat: SessionChat,
+    online: Boolean,
+    onEdit: (String) -> Unit,
+    onResend: ((String) -> Unit)?,
+) {
     val c = Relay.colors
     val state = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -570,13 +595,27 @@ private fun Conversation(pieces: List<ChatPiece>, doing: String?, since: Long?, 
     var seen by remember { mutableIntStateOf(0) }
     LaunchedEffect(away) { if (away) seen = pieces.size }
     val fresh = if (away) (pieces.size - seen).coerceAtLeast(0) else 0
+    // The one message of the person's showing its keys, if any.
+    var opened by remember { mutableStateOf<String?>(null) }
     Box(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize(), state = state, reverseLayout = true, horizontalAlignment = Alignment.CenterHorizontally) {
             val cell = Modifier.widthIn(max = 720.dp).fillMaxWidth().padding(horizontal = 16.dp)
             item(key = "end") { Box(Modifier.height(12.dp)) }
             if (asking) item(key = "ask") { AskCard(chat, screen, online, cell.padding(top = 14.dp)) }
             if (doing != null) item(key = "doing") { WorkingRow(doing, since, cell.padding(top = 12.dp)) }
-            items(shown, key = { it.key }, contentType = { it::class }) { p -> PieceView(p, cell, online) }
+            items(shown, key = { it.key }, contentType = { it::class }) { p ->
+                if (p is ChatPiece.User) UserBubble(
+                    p.text,
+                    p.sending,
+                    online,
+                    cell.padding(top = 18.dp),
+                    open = opened == p.key,
+                    onOpen = { opened = if (opened == p.key) null else p.key },
+                    onEdit = { opened = null; onEdit(it) },
+                    onResend = onResend?.takeIf { !p.sending }?.let { r -> { again -> opened = null; r(again) } },
+                )
+                else PieceView(p, cell, online)
+            }
             item(key = "start") { Box(Modifier.height(8.dp)) }
         }
         AnimatedVisibility(away, Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp), enter = fadeIn(), exit = fadeOut()) {
@@ -695,25 +734,62 @@ private fun PlanStrip(name: String, plan: List<PlanStep>) {
     }
 }
 
-/** The person's message: a bubble on the right, as a thread draws it. */
+/**
+ * The person's message: a bubble on the right, as a thread draws it. A tap or a long press shows
+ * its keys under it: Copy, Edit (back into the message box) and Send again.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun UserBubble(text: String, sending: Boolean, online: Boolean, modifier: Modifier) {
+private fun UserBubble(
+    text: String,
+    sending: Boolean,
+    online: Boolean,
+    modifier: Modifier,
+    open: Boolean = false,
+    onOpen: (() -> Unit)? = null,
+    onEdit: ((String) -> Unit)? = null,
+    onResend: ((String) -> Unit)? = null,
+) {
     val c = Relay.colors
     val (words, pictures) = remember(text) { splitAttached(text) }
+    val haptic = LocalHapticFeedback.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    val touch = if (onOpen == null) Modifier else Modifier.combinedClickable(
+        onClickLabel = if (open) "Hide this message's keys" else "Show this message's keys",
+        onLongClick = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            if (!open) onOpen()
+        },
+        onClick = onOpen,
+    )
     Column(modifier, horizontalAlignment = Alignment.End) {
-        if (pictures.isNotEmpty()) Row(Modifier.padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (pictures.isNotEmpty()) Row(Modifier.padding(bottom = 6.dp).clip(Radii.pill).then(if (words.isEmpty()) touch else Modifier), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             for (p in pictures) AttachedPill(p)
         }
         if (words.isNotEmpty()) Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
-            SelectionContainer {
-                Box(Modifier.clip(Radii.card).background(c.wash).padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    T(words, style = Relay.type.body, color = c.ink)
-                }
+            Box(
+                Modifier.clip(Radii.card).background(c.wash).then(if (open) Modifier.border(1.dp, c.strong, Radii.card) else Modifier).then(touch)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+            ) {
+                T(words, style = Relay.type.body, color = c.ink)
             }
         }
         if (sending) Row(Modifier.padding(top = 5.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Dot(c.waiting, 5.dp)
             T(if (online) "Sent to the terminal" else "Waiting for the PC", style = Relay.type.caption.copy(fontSize = 11.5.sp), color = c.ink3)
+        }
+        AnimatedVisibility(open, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (words.isNotEmpty()) {
+                    Chip("Copy", "Copy this message", true, glyph = "copy") {
+                        scope.launch { clipboard.copy(words) }
+                        onOpen?.invoke()
+                    }
+                    onEdit?.let { edit -> Chip("Edit", "Edit it in the message box", true, glyph = "edit") { edit(words) } }
+                }
+                onResend?.let { again -> Chip("Send again", "Send this message again", true, glyph = "refresh") { again(text) } }
+            }
         }
     }
 }

@@ -9,7 +9,9 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.navigation.compose.rememberNavController
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -168,6 +170,14 @@ class ScreensTest {
         compose.onRoot().captureRoboImage("src/test/screenshots/$name.png", OPTIONS)
     }
 
+    /** [route] after a tap on the text [tap]. */
+    private fun shootAfterTap(name: String, route: String, tap: String) {
+        shoot("$name-before", route)
+        compose.onNodeWithText(tap, substring = true).performClick()
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.onRoot().captureRoboImage("src/test/screenshots/$name.png", OPTIONS)
+    }
+
     @Test fun start() = shoot("start", "start")
     @Test fun agents() = shoot("agents", "agents")
     @Test fun board() = shoot("board", "board?project=1")
@@ -182,6 +192,8 @@ class ScreensTest {
     @Test fun outbox() = shoot("outbox", "outbox")
     @Test fun terminal() = shoot("terminal", "terminal/brisk-otter")
     @Test fun chat() = shoot("chat", "chat/brisk-otter")
+    /** A message of the person's, tapped: its Copy, Edit and Send again keys. */
+    @Test fun chatMessageKeys() = shootAfterTap("chat-message-keys", "chat/brisk-otter", "The board drops a card")
     /** The chat's view of the agent's screen, which shows only with the PC in reach: here over what the phone saved. */
     @Test fun screenPanel() = shoot("screen-panel") { nav ->
         val shown = remember { androidx.compose.runtime.mutableStateOf<String?>("") }
