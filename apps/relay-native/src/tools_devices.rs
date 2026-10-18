@@ -802,9 +802,18 @@ fn device_list(ui: &Rc<Ui>, parent: &gtk::Box, devices: &[Value], avds: &[Value]
         }
         let copy = crate::app::icon_button("copy", "Copy device ID");
         copy.set_valign(gtk::Align::Center);
+        // A tick says it was copied, for a moment, as Threads' Copy keys do.
         copy.connect_clicked(move |key| {
             key.clipboard().set_text(&serial);
+            key.set_child(Some(&crate::icons::image("check", 16)));
             key.set_tooltip_text(Some("Copied"));
+            let key = key.downgrade();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(1400), move || {
+                if let Some(key) = key.upgrade() {
+                    key.set_child(Some(&crate::icons::image("copy", 16)));
+                    key.set_tooltip_text(Some("Copy device ID"));
+                }
+            });
         });
         row.append(&copy);
         list.append(&row);
@@ -1205,6 +1214,12 @@ impl Live {
             key.connect_clicked(move |key| {
                 key.clipboard().set_text(&artifact);
                 key.set_label("Copied");
+                let key = key.downgrade();
+                glib::timeout_add_local_once(std::time::Duration::from_millis(1400), move || {
+                    if let Some(key) = key.upgrade() {
+                        key.set_label("Copy path");
+                    }
+                });
             });
             output.append(&key);
             self.release_states.append(&output);
