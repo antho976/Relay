@@ -1832,7 +1832,11 @@ impl Editor {
                     meta.add_css_class("commit-meta");
                     meta.append(&crate::icons::image("user", 13));
                     meta.append(&label(text(commit, "author"), "commit-author"));
-                    meta.append(&label(text(commit, "at"), "commit-when"));
+                    // "3 h ago", the moment itself on hover.
+                    let at = text(commit, "at");
+                    let when = label(&crate::relative::ago(at, crate::relative::Form::Long).unwrap_or_else(|| at.to_string()), "commit-when");
+                    when.set_tooltip_text(Some(at));
+                    meta.append(&when);
                     let sha_label = label(full, "commit-sha");
                     sha_label.set_selectable(true);
                     sha_label.set_hexpand(true);
