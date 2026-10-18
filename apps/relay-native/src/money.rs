@@ -650,8 +650,9 @@ pub fn run_palette(ui: &Rc<Ui>, key: &str) {
     }
 }
 
-/// After the first connection: read the remembered space, then greet. Display smoke runs
-/// (RELAY_NATIVE_SCREENSHOT) start in Dev with no greeting, as they always have.
+/// After the first connection: read the remembered space and the Threads page as it was left,
+/// then greet. Display smoke runs (RELAY_NATIVE_SCREENSHOT) start in Dev with no greeting and
+/// the Threads page's defaults, as they always have.
 pub fn startup(ui: &Rc<Ui>) {
     if STATE.with(|s| s.started.replace(true)) {
         return;
@@ -661,6 +662,7 @@ pub fn startup(ui: &Rc<Ui>) {
     if std::env::var_os("RELAY_NATIVE_SCREENSHOT").is_some() {
         return;
     }
+    threads::restore(ui);
     let ui = ui.clone();
     glib::spawn_future_local(async move {
         let money = match ui.call("settings.get", json!({"path":"native.space"})).await {

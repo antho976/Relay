@@ -83,6 +83,9 @@ const SOURCES: [(&str, &str, &str); 3] = [
 const COLUMN_MAX: i32 = 720;
 /// Under this page width the Tally panel steps aside, unless the person opened it.
 const PANEL_FROM: i32 = 1000;
+/// The panel's width until the person drags it, and the least it takes ([`restore`]).
+const PANEL_WIDTH: i32 = 340;
+const PANEL_MIN: i32 = 300;
 /// What the working row says before the agent has started.
 const STARTING: &str = "Starting Claude…";
 /// What a new thread asks Claude when the person picks "Connect Wealthsimple".
@@ -135,6 +138,8 @@ struct View {
     pending: gtk::Box,
     working: gtk::Box,
     working_text: gtk::Label,
+    /// The conversation and the panel, side by side: its position is the panel's width.
+    split: gtk::Paned,
     panel: gtk::Box,
     panel_key: gtk::ToggleButton,
     panel_body: gtk::Box,
@@ -238,6 +243,13 @@ struct State {
     panel_serial: Cell<u64>,
     /// `None` until the person opens or closes the panel; until then it follows the page width.
     panel_pinned: Cell<Option<bool>>,
+    /// The panel's width as last dragged (0 for [`PANEL_WIDTH`]), and the write of a new one,
+    /// waiting for the drag to settle ([`keep_width`]).
+    panel_width: Cell<i32>,
+    width_due: RefCell<Option<glib::SourceId>>,
+    /// What the last run kept (`native.threads`) has been read: until then nothing is kept, so a
+    /// default never writes over it ([`restore`]).
+    restored: Cell<bool>,
     /// Overview shows every budget, not the first [`BUDGETS_SHOWN`].
     all_budgets: Cell<bool>,
     /// A budget's editor is open over the panel: a read waits for it to close ([`edit_budget`]),
@@ -574,11 +586,12 @@ pub fn page() -> gtk::Box {
     body.set_resize_start_child(true);
     body.set_shrink_start_child(false);
 
-    // The panel: 340 pixels as it opens, 300 at the least. Its source, Tally, Arbiter or Avex,
-    // above that source's tabs: the one switch that says where the thread looks.
+    // The panel: 340 pixels as it first opens, then as wide as it was left; 300 at the least.
+    // Its source, Tally, Arbiter or Avex, above that source's tabs: the one switch that says
+    // where the thread looks.
     let side = gtk::Box::new(gtk::Orientation::Vertical, 18);
     side.add_css_class("threads-panel");
-    side.set_size_request(300, -1);
+    side.set_size_request(PANEL_MIN, -1);
     let source_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     source_row.add_css_class("threads-sources");
     let mut sources = Vec::new();
@@ -634,14 +647,16 @@ pub fn page() -> gtk::Box {
     body.set_end_child(Some(&side));
     body.set_resize_end_child(false);
     body.set_shrink_end_child(false);
-    // Place the split once the page has a width: the panel opens at 340.
+    // Place the split once the page has a width, the panel as wide as it was left; a drag is
+    // kept for the next run.
     body.add_tick_callback(|split, _| {
         if split.width() <= 0 {
             return glib::ControlFlow::Continue;
         }
-        split.set_position((split.width() - 340).max(0));
+        split.set_position((split.width() - panel_width()).max(0));
         glib::ControlFlow::Break
     });
+    body.connect_position_notify(|_| keep_width());
     let panel = side.clone();
     root.append(&body);
 
@@ -674,7 +689,7 @@ pub fn page() -> gtk::Box {
     let built = Rc::new(View {
         title, title_key, rename, middle, empty, empty_slot, empty_line, suggestions, dock, dock_slot, message_box,
         notice, notice_text, input, hint, send: send_key, limits, model, effort, scroll, jump, column, pending,
-        working, working_text, panel, panel_key, panel_body, panel_tabs,
+        working, working_text, split: body.clone(), panel, panel_key, panel_body, panel_tabs,
         tally_tabs: tabs, arbiter_tabs, arbiter_panel_tabs, avex_tabs, avex_panel_tabs, sources,
     });
     STATE.with(|s| {
@@ -728,6 +743,9 @@ fn set_source(source: &'static str) {
     show_source(&v);
     if !v.panel_key.is_active() {
         v.panel_key.set_active(true);
+    }
+    if changed {
+        keep("source", json!(source));
     }
     let Some(ui) = the_ui() else { return };
     refresh_panel(&ui);
@@ -838,6 +856,7 @@ fn wire(v: &Rc<View>, delete: &gtk::Button) {
             if STATE.with(|s| s.panel_tab.replace(key)) == key {
                 return;
             }
+            keep("panel_tab", json!(key));
             if let Some(v) = view() {
                 clear(&v.panel_body);
             }
@@ -910,6 +929,103 @@ fn apply_panel(v: &View) {
             refresh_panel(&ui);
         }
     }
+}
+
+/// The panel's width: as last dragged, else [`PANEL_WIDTH`].
+fn panel_width() -> i32 {
+    match STATE.with(|s| s.panel_width.get()) {
+        0 => PANEL_WIDTH,
+        width => width,
+    }
+}
+
+/// Keeps the panel's width once a drag of the split settles. A window resized moves the split
+/// too, but leaves the panel as wide as it was, so nothing new is kept.
+fn keep_width() {
+    if !STATE.with(|s| s.restored.get()) {
+        return;
+    }
+    if let Some(due) = STATE.with(|s| s.width_due.take()) {
+        due.remove();
+    }
+    let due = glib::timeout_add_local_once(std::time::Duration::from_millis(500), || {
+        // It has fired: forget it rather than remove it.
+        STATE.with(|s| s.width_due.take());
+        let Some(v) = view().filter(|v| v.panel.is_visible() && v.split.width() > 0) else { return };
+        let width = v.split.width() - v.split.position();
+        if width >= PANEL_MIN && width != panel_width() {
+            STATE.with(|s| s.panel_width.set(width));
+            keep("panel_width", json!(width));
+        }
+    });
+    STATE.with(|s| *s.width_due.borrow_mut() = Some(due));
+}
+
+/// Keeps `key` under `native.threads` for the next run ([`restore`]): nothing before the last
+/// run's are read. A write that fails is let go, as the notes window's are: it only remembers.
+fn keep(key: &str, value: Value) {
+    let Some(ui) = the_ui().filter(|_| STATE.with(|s| s.restored.get())) else { return };
+    let path = format!("native.threads.{key}");
+    glib::spawn_future_local(async move {
+        let _ = ui.call("settings.set", json!({"path": path, "value": value})).await;
+    });
+}
+
+/// What the last run left (`native.threads`): the panel's source, the Tally panel's tab and the
+/// panel's width, and the model and effort a new thread starts with. Read once, after the first
+/// connection (`money::startup`); from then on each is kept as it changes ([`keep`]).
+pub fn restore(ui: &Rc<Ui>) {
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        // Unread, the defaults stand, and what the person changes from here is still kept.
+        let kept = ui.call("settings.get", json!({"path": "native.threads"})).await.map(|v| v["value"].clone()).unwrap_or_default();
+        let source = SOURCES.iter().map(|(key, _, _)| *key).find(|key| kept["source"].as_str() == Some(*key));
+        let tab = PANEL_TABS.iter().map(|(key, _)| *key).find(|key| kept["panel_tab"].as_str() == Some(*key));
+        let source_moved = source.is_some_and(|key| STATE.with(|s| s.source.replace(key)) != key);
+        let tab_moved = tab.is_some_and(|key| STATE.with(|s| s.panel_tab.replace(key)) != key);
+        if let Some(width) = kept["panel_width"].as_i64() {
+            let width = width.clamp(i64::from(PANEL_MIN), 2000) as i32;
+            STATE.with(|s| s.panel_width.set(width));
+            // Placed already, it moves; otherwise the first frame places it so.
+            if let Some(v) = view().filter(|v| v.split.width() > 0) {
+                v.split.set_position((v.split.width() - width).max(0));
+            }
+        }
+        let model = kept["model"].as_str().filter(|m| m.len() <= 64).map(str::to_string);
+        let effort = kept["effort"].as_str().filter(|e| EFFORTS.iter().any(|(value, _)| value == e)).map(str::to_string);
+        if model.is_some() || effort.is_some() {
+            let (model, effort) = STATE.with(|s| {
+                let mut choice = s.choice.borrow_mut();
+                if let Some(m) = model {
+                    choice.0 = m;
+                }
+                if let Some(e) = effort {
+                    choice.1 = e;
+                }
+                choice.clone()
+            });
+            // A new thread shows them; an open one keeps showing its own.
+            if let Some(v) = view().filter(|_| current().is_none()) {
+                show_choice(&v, &model, &effort);
+            }
+        }
+        STATE.with(|s| s.restored.set(true));
+        if !(source_moved || tab_moved) {
+            return;
+        }
+        if let Some(v) = view() {
+            show_source(&v);
+            clear(&v.panel_body);
+        }
+        // Off the page, its next showing reads them.
+        if *ui.page.borrow() != PAGE {
+            return;
+        }
+        refresh_panel(&ui);
+        if source_moved && current().is_none() {
+            greet(&ui).await;
+        }
+    });
 }
 
 /// The message box goes where the middle is: centred on a new thread, at the foot of an open one.
@@ -1101,8 +1217,13 @@ fn show_choice(v: &View, model: &str, effort: &str) {
 }
 
 /// A model or an effort picked: the thread showing takes it (`thread.set`), and new threads start
-/// with it.
+/// with it, in this run and the next.
 fn choose(model: Option<&str>, effort: Option<&str>) {
+    for (key, value) in [("model", model), ("effort", effort)] {
+        if let Some(value) = value {
+            keep(key, json!(value));
+        }
+    }
     let picked = model;
     let (model, effort) = STATE.with(|s| {
         let mut choice = s.choice.borrow_mut();
