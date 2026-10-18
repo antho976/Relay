@@ -236,9 +236,12 @@ private fun PublishCard(
     val upstream = st.upstream
     val ahead = st.ahead ?: 0
     val behind = st.behind ?: 0
-    val canPush = st.branch.isNotEmpty() && online && (upstream == null || (ahead > 0 && behind == 0))
+    // git.status names a detached head "HEAD": no branch to publish (code_git.rs does the same).
+    val detached = st.branch.isEmpty() || st.branch == "HEAD"
+    val canPush = !detached && online && (upstream == null || (ahead > 0 && behind == 0))
     // The desktop's words (code_git.rs): what the key would do, else why it does nothing.
     val pushLabel = when {
+        detached -> "No branch"
         upstream == null -> "Publish"
         ahead > 0 && behind == 0 -> "Push $ahead"
         behind > 0 -> "Pull first"
@@ -246,6 +249,7 @@ private fun PublishCard(
         else -> "Synced"
     }
     val pushDetail = when {
+        detached -> "A detached checkout has no branch to push"
         upstream == null -> "This branch is not on a remote yet"
         st.ahead == null || st.behind == null -> "$upstream · fetch to compare"
         ahead == 0 && behind == 0 -> "Up to date with $upstream"
