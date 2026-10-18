@@ -501,6 +501,37 @@ async fn read_attachment(path: String, image: bool) -> std::io::Result<(Vec<u8>,
     .await
     .unwrap_or_else(|_| Err(std::io::Error::other("reading the file failed")))
 }
+/// Escape in an inline editor's field presses its Cancel, so it closes the edit and not the page.
+fn cancel_on_escape(field: &impl IsA<gtk::Widget>, cancel: &gtk::Button) {
+    let keys = gtk::EventControllerKey::new();
+    let cancel = cancel.downgrade();
+    keys.connect_key_pressed(move |_, key, _, _| {
+        if key != gtk::gdk::Key::Escape {
+            return glib::Propagation::Proceed;
+        }
+        if let Some(cancel) = cancel.upgrade() {
+            cancel.emit_clicked();
+        }
+        glib::Propagation::Stop
+    });
+    field.add_controller(keys);
+}
+
+/// Ctrl+Enter in a text view runs `submit`. It listens in the capture phase, before the view
+/// types the key as a new line.
+fn on_ctrl_enter(view: &gtk::TextView, submit: impl Fn() + 'static) {
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    keys.connect_key_pressed(move |_, key, _, mods| {
+        if matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter) && mods.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
+            submit();
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+    view.add_controller(keys);
+}
+
 /// Files and images dropped on `widget`, or pasted with Ctrl+V while it shows, go to `take`.
 /// A paste of plain text is left to the text field it lands in.
 ///
@@ -1411,6 +1442,12 @@ impl Detail {
         });
         unsafe { panel.body.set_data("relay-task-detail", detail.clone()) };
         let weak = Rc::downgrade(&detail);
+        on_ctrl_enter(&detail.comment.view, move || {
+            if let Some(d) = weak.upgrade() {
+                d.post_comment(|d| d.reload());
+            }
+        });
+        let weak = Rc::downgrade(&detail);
         accept_attachments(&panel.body, move |incoming| {
             if let Some(d) = weak.upgrade() {
                 d.attach(incoming);
@@ -1523,15 +1560,17 @@ impl Detail {
             }
         });
     }
-    /// `task.update` of one field, checked against the value this page shows.
-    fn update(self: &Rc<Self>, field: &str, value: Value) {
+    /// `task.update` of one field, checked against the value this page shows; false when the
+    /// value is unchanged and nothing was sent.
+    fn update(self: &Rc<Self>, field: &str, value: Value) -> bool {
         let before = self.task.borrow()[field].clone();
         if before == value {
-            return;
+            return false;
         }
         let mut payload = json!({"task_id": self.id, "expected": {field: before}});
         payload[field] = value;
         self.act("task.update", payload);
+        true
     }
 
     fn render(self: &Rc<Self>, loaded: Loaded) {
@@ -1696,15 +1735,18 @@ impl Detail {
             }
         });
         let original = text(task, "title").to_string();
-        let (shown, pane, field, was) = (line.downgrade(), editor.downgrade(), entry.downgrade(), original.clone());
+        let (shown, pane, field, was, pencil) = (line.downgrade(), editor.downgrade(), entry.downgrade(), original.clone(), edit.downgrade());
         cancel.connect_clicked(move |_| {
             if let (Some(line), Some(editor), Some(entry)) = (shown.upgrade(), pane.upgrade(), field.upgrade()) {
                 entry.set_text(&was);
                 editor.set_visible(false);
                 line.set_visible(true);
+                if let Some(pencil) = pencil.upgrade() {
+                    pencil.grab_focus();
+                }
             }
         });
-        let (weak, field) = (Rc::downgrade(self), entry.downgrade());
+        let (weak, field, close) = (Rc::downgrade(self), entry.downgrade(), cancel.downgrade());
         save.connect_clicked(move |_| {
             let (Some(d), Some(entry)) = (weak.upgrade(), field.upgrade()) else { return };
             let next = entry.text().trim().to_string();
@@ -1712,7 +1754,12 @@ impl Detail {
                 d.say("A task needs a title.");
                 return;
             }
-            d.update("title", json!(next));
+            // Nothing changed: the editor just closes.
+            if !d.update("title", json!(next)) {
+                if let Some(cancel) = close.upgrade() {
+                    cancel.emit_clicked();
+                }
+            }
         });
         let submit = save.downgrade();
         entry.connect_activate(move |_| {
@@ -1720,6 +1767,8 @@ impl Detail {
                 save.emit_clicked();
             }
         });
+        // Escape leaves the edit, not the page.
+        cancel_on_escape(&entry, &cancel);
         let field = entry.downgrade();
         self.editing.borrow_mut().push(("title", Box::new(move || field.upgrade().is_some_and(|e| e.text().trim() != original))));
 
@@ -1824,12 +1873,15 @@ impl Detail {
         }
         let hint = label("Paste or drop images and files anywhere on this page to attach them", "attachment-hint");
         card.append(&hint);
-        let (display, pane, key) = (shown.downgrade(), editor.downgrade(), edit.downgrade());
+        let (display, pane, key, view) = (shown.downgrade(), editor.downgrade(), edit.downgrade(), field.view.downgrade());
         edit.connect_clicked(move |_| {
             if let (Some(display), Some(editor), Some(key)) = (display.upgrade(), pane.upgrade(), key.upgrade()) {
                 display.set_visible(false);
                 key.set_visible(false);
                 editor.set_visible(true);
+                if let Some(view) = view.upgrade() {
+                    view.grab_focus();
+                }
             }
         });
         let view = field.view.downgrade();
@@ -1840,12 +1892,27 @@ impl Detail {
                 editor.set_visible(false);
                 display.set_visible(true);
                 key.set_visible(true);
+                key.grab_focus();
             }
         });
-        let (weak, view) = (Rc::downgrade(self), field.view.downgrade());
+        let (weak, view, close) = (Rc::downgrade(self), field.view.downgrade(), cancel.downgrade());
         save.connect_clicked(move |_| {
             if let (Some(d), Some(view)) = (weak.upgrade(), view.upgrade()) {
-                d.update("body", json!(buffer_text(&view.buffer())));
+                // Nothing changed (an empty field over no description included): the editor just closes.
+                let body = buffer_text(&view.buffer());
+                let unchanged = body == text(&d.task.borrow(), "body");
+                if unchanged || !d.update("body", json!(body)) {
+                    if let Some(cancel) = close.upgrade() {
+                        cancel.emit_clicked();
+                    }
+                }
+            }
+        });
+        cancel_on_escape(&field.view, &cancel);
+        let submit = save.downgrade();
+        on_ctrl_enter(&field.view, move || {
+            if let Some(save) = submit.upgrade() {
+                save.emit_clicked();
             }
         });
         let view = field.view.downgrade();
@@ -2119,6 +2186,7 @@ impl Detail {
         self.actions.append(&close);
         let send = button("Comment", "primary");
         send.set_widget_name("task-comment");
+        send.set_tooltip_text(Some("Comment (Ctrl+Enter)"));
         let weak = Rc::downgrade(self);
         send.connect_clicked(move |_| {
             if let Some(d) = weak.upgrade() {
