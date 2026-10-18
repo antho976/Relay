@@ -116,6 +116,9 @@ entry.search > text { font-size: 13px; }
 entry.search > text > placeholder { color: @faint; }
 selection { background: alpha(@ink, 0.22); color: @ink; }
 dropdown > button { background: @slab; }
+/* The theme's arrow is a full-size icon set hard against the words ("All accounts⌄"): small,
+   quiet and apart from them in every dropdown, as Design and Settings already had it. */
+dropdown > button arrow { -gtk-icon-size: 12px; min-width: 12px; min-height: 12px; margin-left: 8px; color: @faint; }
 popover contents { background: @slab; color: @ink; border: 1px solid @edge; border-radius: 12px; box-shadow: 0 12px 32px alpha(black, 0.45); }
 /* Menus hold a stack (and long ones a scrolled window): let the menu's own surface show. */
 popover stack, popover scrolledwindow, popover viewport { background: transparent; }
