@@ -136,13 +136,37 @@ fn start() -> Result<(), String> {
         return Err(format!("credential {TOKEN_CREDENTIAL} is shorter than 32 characters"));
     }
     let upstream = Upstream::anthropic()?;
+    // Under relay-key-proxy.socket, PID 1 holds the port and hands it over, so no other program
+    // can take it while this service is stopped or restarting.
+    let inherited = inherited_listener().map_err(|e| format!("the socket systemd passed: {e}"))?;
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().map_err(|e| e.to_string())?;
     runtime.block_on(async move {
-        let listener = TcpListener::bind(addr).await.map_err(|e| format!("listening on {addr}: {e}"))?;
-        eprintln!("relay-key-proxy: listening on {addr}, forwarding to https://{UPSTREAM}");
-        serve(listener, Arc::new(Secrets { key, token }), Arc::new(upstream), Arc::new(host_names(addr.port()))).await;
+        let listener = match inherited {
+            Some(listener) => TcpListener::from_std(listener).map_err(|e| e.to_string())?,
+            None => TcpListener::bind(addr).await.map_err(|e| format!("listening on {addr}: {e}"))?,
+        };
+        let local = listener.local_addr().map_err(|e| e.to_string())?;
+        if !local.ip().is_loopback() {
+            return Err(format!("{local} is not a loopback address: the proxy answers this machine only"));
+        }
+        eprintln!("relay-key-proxy: listening on {local}, forwarding to https://{UPSTREAM}");
+        serve(listener, Arc::new(Secrets { key, token }), Arc::new(upstream), Arc::new(host_names(local.port()))).await;
         Ok(())
     })
+}
+
+/// The listening socket systemd passed (`sd_listen_fds`: fd 3, named by `LISTEN_PID` and
+/// `LISTEN_FDS`), if it passed one to this process.
+fn inherited_listener() -> std::io::Result<Option<std::net::TcpListener>> {
+    let ours = std::env::var("LISTEN_PID").ok().and_then(|pid| pid.parse::<u32>().ok()) == Some(std::process::id());
+    if !ours || std::env::var("LISTEN_FDS").ok().as_deref() != Some("1") {
+        return Ok(None);
+    }
+    use std::os::fd::FromRawFd;
+    // SAFETY: systemd passed this process exactly one socket, as fd 3, and nothing else owns it.
+    let listener = unsafe { std::net::TcpListener::from_raw_fd(3) };
+    listener.set_nonblocking(true)?;
+    Ok(Some(listener))
 }
 
 /// The `Host` a request to this proxy carries: anything else reached it by another name, as a
@@ -371,10 +395,51 @@ async fn handle(mut client: TcpStream, secrets: &Secrets, upstream: &Upstream, h
     server.write_all(early).await?;
     pump(&mut client, &mut server, Some(body - early.len() as u64)).await?;
     // One request per connection (`connection: close` upstream): the response ends when Anthropic
-    // closes, and the caller's connection with it.
+    // closes, and the caller's connection with it. Its head says so whatever Anthropic's did, so
+    // the caller never pools a connection this proxy is about to close.
+    let mut response = Vec::with_capacity(8192);
+    let head_len = read_response_head(&mut server, &mut response).await?;
+    client.write_all(&closing(&response[..head_len])?).await?;
+    client.write_all(&response[head_len..]).await?;
     pump(&mut server, &mut client, None).await?;
     let _ = client.shutdown().await;
     Ok(())
+}
+
+async fn read_response_head<R: AsyncRead + Unpin>(server: &mut R, buf: &mut Vec<u8>) -> std::io::Result<usize> {
+    let bad = |why: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Anthropic's response: {why}"));
+    let mut chunk = [0u8; 8192];
+    loop {
+        let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
+        match httparse::Response::new(&mut headers).parse(buf) {
+            Ok(httparse::Status::Complete(len)) if len <= MAX_HEAD => return Ok(len),
+            Ok(httparse::Status::Partial) if buf.len() <= MAX_HEAD => {}
+            Ok(_) => return Err(bad("head too large")),
+            Err(_) => return Err(bad("malformed head")),
+        }
+        let n = tokio::time::timeout(IDLE_TIMEOUT, server.read(&mut chunk)).await.map_err(|_| bad("timed out"))??;
+        if n == 0 {
+            return Err(bad("closed before its head ended"));
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+}
+
+/// A response head, with `connection: close` in place of whatever it said about the connection.
+fn closing(head: &[u8]) -> std::io::Result<Vec<u8>> {
+    let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut response = httparse::Response::new(&mut headers);
+    response.parse(head).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    let code = response.code.unwrap_or(502);
+    let mut out = format!("HTTP/1.1 {code} {}\r\n", response.reason.unwrap_or("")).into_bytes();
+    for header in response.headers.iter().filter(|h| !["connection", "keep-alive"].iter().any(|d| h.name.eq_ignore_ascii_case(d))) {
+        out.extend_from_slice(header.name.as_bytes());
+        out.extend_from_slice(b": ");
+        out.extend_from_slice(header.value);
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(b"connection: close\r\n\r\n");
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -418,7 +483,7 @@ mod tests {
                         buf.extend_from_slice(&chunk[..n]);
                     }
                     tx.send(buf).unwrap();
-                    socket.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await.unwrap();
+                    socket.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: keep-alive\r\nkeep-alive: timeout=5\r\n\r\n").await.unwrap();
                     for part in ["event: a\n\n", "event: b\n\n"] {
                         socket.write_all(part.as_bytes()).await.unwrap();
                         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -466,6 +531,9 @@ mod tests {
         let answer = send(proxy, request(proxy.port(), &auth, r#"{"hello":"x"}"#).as_bytes()).await;
         assert!(answer.starts_with("HTTP/1.1 200 OK") && answer.ends_with("event: a\n\nevent: b\n\n"), "{answer:?}");
         assert!(!answer.contains(KEY));
+        // Whatever Anthropic said of the connection, the caller is told it closes.
+        let (response_head, _) = answer.split_once("\r\n\r\n").unwrap();
+        assert_eq!(response_head, "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close");
         let sent = String::from_utf8(seen.recv().await.unwrap()).unwrap();
         let (head, body) = sent.split_once("\r\n\r\n").unwrap();
         assert_eq!(body, r#"{"hello":"x"}"#);
@@ -587,15 +655,18 @@ mod tests {
         assert!(same(b"abc", b"abc") && !same(b"abc", b"abd") && !same(b"abc", b"ab"));
     }
 
-    /// The unit that runs the proxy listens where sessions are sent, loads both credentials, and
-    /// keeps every line of its isolation: dropping one fails here.
+    /// The units that run the proxy: PID 1 holds the port sessions are sent to, and the service
+    /// loads both credentials and keeps every line of its isolation: dropping one fails here.
     #[test]
-    fn the_unit_keeps_its_port_credentials_and_isolation() {
+    fn the_units_keep_the_port_credentials_and_isolation() {
+        let socket: Vec<&str> = include_str!("../../../scripts/key-proxy/relay-key-proxy.socket").lines().collect();
+        assert!(socket.contains(&format!("ListenStream=127.0.0.1:{PORT}").as_str()) && socket.contains(&"Accept=no"));
+        assert_eq!(socket.iter().filter(|line| line.starts_with("Listen")).count(), 1, "one loopback listener only");
         let unit = include_str!("../../../scripts/key-proxy/relay-key-proxy.service");
         let lines: Vec<&str> = unit.lines().collect();
-        assert!(lines.contains(&format!("ExecStart=/usr/local/libexec/relay/relay-key-proxy --listen 127.0.0.1:{PORT}").as_str()));
+        assert!(lines.contains(&"ExecStart=/usr/local/libexec/relay/relay-key-proxy"));
         for line in [
-            "DynamicUser=yes", "LoadCredentialEncrypted=relay-anthropic-key", "LoadCredentialEncrypted=relay-proxy-token",
+            "Requires=relay-key-proxy.socket", "DynamicUser=yes", "LoadCredentialEncrypted=relay-anthropic-key", "LoadCredentialEncrypted=relay-proxy-token",
             "NoNewPrivileges=yes", "CapabilityBoundingSet=", "AmbientCapabilities=", "ProtectSystem=strict", "ProtectHome=yes",
             "PrivateTmp=yes", "PrivateDevices=yes", "ProtectKernelTunables=yes", "ProtectKernelModules=yes",
             "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX", "RestrictNamespaces=yes", "RestrictSUIDSGID=yes",

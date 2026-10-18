@@ -8,11 +8,12 @@
 [Unit]
 Description=Relay API-key proxy (holds the Anthropic API key for Relay's API-key sessions)
 Documentation=https://github.com/antho976/Relay/blob/main/docs/KEY-PROXY.md
+Requires=relay-key-proxy.socket
+After=relay-key-proxy.socket network-online.target
 Wants=network-online.target
-After=network-online.target
 
 [Service]
-ExecStart=/usr/local/libexec/relay/relay-key-proxy --listen 127.0.0.1:7445
+ExecStart=/usr/local/libexec/relay/relay-key-proxy
 DynamicUser=yes
 LoadCredentialEncrypted=relay-anthropic-key
 LoadCredentialEncrypted=relay-proxy-token

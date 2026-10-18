@@ -30,64 +30,90 @@ Claude (you) ──x-api-key: <pass token>──▶ 127.0.0.1:7445  relay-key-pr
 - **Relay** stores only the session's on/off choice (`use_api_key`). An API-key session's
   `--settings` point Claude at the proxy (`env.ANTHROPIC_BASE_URL`) and give it
   `apiKeyHelper: /usr/bin/cat ~/.config/relay/key-proxy-token`. A launch is refused
-  (`session.key_proxy`) while the token file is missing or the proxy is not answering.
+  (`session.key_proxy`) while the token file is missing or nothing answers on the port.
+- **The port** is held by PID 1 (`relay-key-proxy.socket`) and handed to the service, so no other
+  program can take it, and collect the token, while the service is stopped or replaced.
 
 ## Setting it up
 
-The install runs as root, and it is the one moment the key is typed, so it must not touch anything
-your account controls. Agents run as you: they can rewrite your checkout, your build, your shell
-configuration and your desktop's terminals, any of which could catch the key or turn root's work
-against you. So the install happens at a root text console, from a root-owned clone:
+The install runs as root, and it is the one moment the key is typed, so nothing your account
+controls may take part. Agents run as you: they can rewrite your checkout, your build, your shell,
+your desktop (on Wayland the desktop itself handles Ctrl+Alt+F3, so a tampered one can draw a fake
+console) and your terminals. So the install happens with no program of yours running at all, at a
+root login on a real text console, from a root-owned clone of a commit you name in full.
 
-1. Pick a commit on `main` that you trust, on github.com (your phone will do), not in a terminal on
-   this PC.
-2. Press **Ctrl+Alt+F3** and log in as **root**. (Not `sudo` or `su` from your desktop.)
-3. Run:
+**Before you start**
+
+- **Make the key on your phone**, in the Anthropic console, with a monthly spending limit, and
+  type it from the phone's screen. A key made, copied or pasted on this PC can be read there
+  (browser, clipboard history). An ordinary key only: admin keys are refused.
+- **Pick the commit on your phone too**: a commit on `main` you trust, and its full 40-character
+  hash (on GitHub, open the commit and copy the hash from its page).
+- **Root needs its own password**, set from a root shell, never typed in your desktop. If root has
+  none ("account locked" at the console), set it at boot: in the boot menu, edit the entry, add
+  `init=/bin/bash` to the kernel line, boot, then `mount -o remount,rw /`, `passwd root`, `sync`,
+  `reboot -f`.
+- **Check your sudo and polkit.** From your desktop, list what sudo lets you do (`sudo -l`): if it
+  shows `NOPASSWD`, or sudo shares one timestamp across terminals, anything running as you can
+  become root, and no setup on this PC can keep a secret from it. You are in `wheel`, which polkit
+  treats as an administrator who answers prompts with your own password: never approve a password
+  prompt you did not start, and keep your account's password non-empty.
+
+**The install**
+
+1. Reboot into a text console, without the desktop: in the boot menu, edit the entry and add
+   `systemd.unit=multi-user.target` to the kernel line. (Your lingering user services still start;
+   the script asks you to stop them.)
+2. Log in as **root** on the console. Not as yourself followed by `su` or `sudo`: the script
+   checks the login itself.
+3. Stop everything of yours, then clone, read and run:
 
    ```sh
-   git clone https://github.com/antho976/Relay /root/relay-key-proxy
-   cd /root/relay-key-proxy && git checkout --detach <that commit>
+   systemctl stop user@1000.service; loginctl terminate-user <you>; pkill -KILL -u <you>
+   git clone --no-tags https://github.com/antho976/Relay /root/relay-key-proxy
+   cd /root/relay-key-proxy && git checkout --detach <full commit hash>
    less scripts/key-proxy/install.sh
-   bash scripts/key-proxy/install.sh --user <your login>
+   bash scripts/key-proxy/install.sh --user <you> --commit <full commit hash>
    ```
 
-   The script refuses to run anywhere else: through sudo, outside a text console, or from a clone
-   any part of which is not root's. It builds `relay-key-proxy` as root with a root-owned cargo
-   home and `--locked`, installs it and the unit to root-owned places, asks for the key at a hidden
-   prompt (`systemd-ask-password`) and pipes it straight into `systemd-creds`, writes a new pass
-   token to your `~/.config/relay`, as you, and starts the service. It needs a root-owned Rust
-   (`pacman -S rust`).
-4. Log out (`exit`), go back with **Ctrl+Alt+F1** (or F2), and turn on **Use API key** when
-   launching a Claude session.
+   The script refuses unless: it runs as root from a root login (`/proc/self/loginuid` is 0) at a
+   text console that is root's; no process of yours is running; the clone is root's all the way up,
+   writable by no one else and holds no symbolic link; it is exactly at the commit you named, clean,
+   and that commit is on `origin/main`; and the build would read no `[patch]` section or build
+   script. It then builds `relay-key-proxy` as root, from outside the clone (so no `.cargo/config`
+   in it applies), with a root-owned cargo home and `--locked`; asks for the key at a hidden prompt
+   (`systemd-ask-password`) and checks its shape before touching anything; installs the binary and
+   both units to root-owned places; pipes the key straight into `systemd-creds`; writes a new pass
+   token to your `~/.config/relay`, as you; starts the socket and the service; and makes one free
+   call (`GET /v1/models`) through the proxy to tell you whether Anthropic accepts the key. On an
+   update it shows what changed under the proxy since the commit installed last.
+4. `exit`, reboot normally, and turn on **Use API key** when launching a Claude session.
 
-Use a key made for this, with a monthly spending limit, in the Anthropic console.
+### Afterwards
 
-**Check your sudo first.** Run `sudo -l`. If it shows `NOPASSWD`, or your sudo keeps one timestamp
-for every terminal (`timestamp_type=global`), anything running as you can become root, and no
-setup on this PC can keep a secret from it. Fix that first.
+Each of these runs the same way: booted without the desktop, as root at the console, nothing of
+yours running, from the root-owned clone (`git fetch` and check out the new full commit first):
+
+- Update the proxy: `bash scripts/key-proxy/install.sh --user <you> --commit <hash>`. It also
+  makes a new token.
+- New key: add `--replace-key`.
+- Remove everything: add `--uninstall`.
+
+Status: `systemctl status relay-key-proxy.socket relay-key-proxy`, `journalctl -u relay-key-proxy`
+(it never logs a request), `systemd-analyze security relay-key-proxy`.
 
 **If you used the first version of this feature** (the key in the desktop keyring), remove it with
 `secret-tool clear service relay account anthropic-api-key` and revoke that key in the console:
 every agent could read it.
 
-### Afterwards
-
-Each of these runs the same way, as root at the console, from the root-owned clone (`git fetch`
-and check out the new commit first to update):
-
-- Update the proxy: `bash scripts/key-proxy/install.sh --user <you>`. It also makes a new token.
-- New key: `bash scripts/key-proxy/install.sh --user <you> --replace-key`.
-- Remove everything: `bash scripts/key-proxy/install.sh --user <you> --uninstall`.
-
-Status: `systemctl status relay-key-proxy`, `journalctl -u relay-key-proxy` (it never logs a
-request), `systemd-analyze security relay-key-proxy`.
-
 ## What it does not stop
 
 - **Spending.** The pass token is readable by anything running as you, so such a program can make
   API calls through the proxy, billed to the key. It can never learn the key. The spending limit
-  bounds the cost; stopping the service, or `--uninstall`, ends it. While the service is down, a
-  program could listen on its port and collect the token: still not the key.
+  bounds the cost; stopping the socket and the service, or `--uninstall`, ends it.
+- **Your Anthropic console login.** If this PC's browser is signed in to console.anthropic.com, a
+  program running as you can use that session to make keys of its own. Sign in there from your
+  phone only.
 - **Root**, and anyone who can become root: they can read the credential.
 - **The code you choose.** The service runs what the commit you picked builds. The script prints
   the commit and the binary's sha256 for your records.

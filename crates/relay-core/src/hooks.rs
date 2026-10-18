@@ -1037,9 +1037,9 @@ mod tests {
         assert_eq!(settings["apiKeyHelper"], helper);
         assert_eq!(settings["env"], json!({"ANTHROPIC_BASE_URL": format!("http://127.0.0.1:{}", super::KEY_PROXY_PORT)}));
         assert_eq!(settings["statusLine"]["command"], claude_statusline_script());
-        // The proxy's unit listens where sessions are sent (the proxy's own test checks its side).
-        let unit = include_str!("../../../scripts/key-proxy/relay-key-proxy.service");
-        assert!(unit.contains(&format!("--listen 127.0.0.1:{}\n", super::KEY_PROXY_PORT)));
+        // The proxy's socket listens where sessions are sent (the proxy's own test checks its side).
+        let socket = include_str!("../../../scripts/key-proxy/relay-key-proxy.socket");
+        assert!(socket.contains(&format!("ListenStream=127.0.0.1:{}\n", super::KEY_PROXY_PORT)));
     }
 
     /// A checkout with no hook path of its own gets none back, not the one that was in effect;
