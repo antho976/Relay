@@ -336,7 +336,9 @@ fn draw_data(body: &gtk::Box, legend: &gtk::Box, kind: ChartKind, data: Data) {
     clear(body);
     clear(legend);
     if data.labels.is_empty() || data.series.iter().all(|(_, values)| values.iter().all(|x| *x == 0)) {
-        body.append(&label("Nothing to draw yet: no entries match.", "threads-chart-note"));
+        // Only Avex's charts count in a unit: what they count is workouts, not entries.
+        let what = if matches!(data.fmt, Fmt::Unit(_)) { "workouts" } else { "entries" };
+        body.append(&label(&format!("Nothing to draw yet: no {what} match."), "threads-chart-note"));
         return;
     }
     match kind {

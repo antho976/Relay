@@ -2232,6 +2232,15 @@ fn doing(name: &str) -> &'static str {
         Some("money.invest.add") => "Recording investment activity…",
         Some("thread.propose") => "Asking you first…",
         Some("bus.schema") => "Checking how a tool works…",
+        // Avex's and Arbiter's: what changes or adds up by name, every other read as the phone
+        // says it.
+        Some("gym.series") => "Adding up training…",
+        Some("arbiter.backtest") => "Running a backtest…",
+        Some("arbiter.propose") => "Proposing a change…",
+        Some("arbiter.order.place") => "Asking for an order…",
+        Some("arbiter.halt") => "Halting Arbiter…",
+        Some(op) if op.starts_with("gym.") => "Reading your training…",
+        Some(op) if op.starts_with("arbiter.") => "Reading Arbiter…",
         _ => "Working…",
     }
 }

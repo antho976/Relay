@@ -217,26 +217,41 @@ fn fill(slot: &gtk::Box, p: &Value) {
             let reviewed = REVIEWED.with(|r| r.borrow().get(&id) == Some(&seen));
             if gone {
                 primary.set_sensitive(false);
+                primary.set_tooltip_text(Some("Some of this is no longer in the ledger"));
                 let l = label("Some of this is no longer in the ledger: choose Not now, and ask again.", "threads-card-detail");
                 l.set_wrap(true);
                 card.append(&keys);
                 card.append(&l);
             } else if p["stale"] == true && !reviewed {
                 primary.set_sensitive(false);
+                primary.set_tooltip_text(Some("Something changed since Claude asked: Review again first"));
                 let again = button("Review again", "quiet");
                 keys.append(&again);
                 card.append(&keys);
-                let s = slot.downgrade();
+                let (s, problem) = (slot.downgrade(), problem.clone());
                 again.connect_clicked(move |key| {
                     let Some(ui) = super::threads::the_ui_pub() else { return };
                     key.set_sensitive(false);
-                    let s = s.clone();
+                    let (s, key, problem) = (s.clone(), key.downgrade(), problem.clone());
                     glib::spawn_future_local(async move {
                         // What the person looks at now is what they approve.
-                        if let Ok(fresh) = ui.call("thread.proposal.get", json!({"id": id})).await {
-                            REVIEWED.with(|r| r.borrow_mut().insert(id, fresh["seen"].as_str().unwrap_or("").to_string()));
-                            if let Some(slot) = s.upgrade() {
-                                fill(&slot, &fresh);
+                        match ui.call("thread.proposal.get", json!({"id": id})).await {
+                            Ok(fresh) => {
+                                REVIEWED.with(|r| r.borrow_mut().insert(id, fresh["seen"].as_str().unwrap_or("").to_string()));
+                                if let Some(slot) = s.upgrade() {
+                                    fill(&slot, &fresh);
+                                }
+                            }
+                            // Not read: why, and the key again to try once more.
+                            Err(e) => {
+                                problem.set_text(&match &e {
+                                    crate::client::Error::Bus(b) => b.message.clone(),
+                                    other => other.to_string(),
+                                });
+                                problem.set_visible(true);
+                                if let Some(key) = key.upgrade() {
+                                    key.set_sensitive(true);
+                                }
                             }
                         }
                     });
