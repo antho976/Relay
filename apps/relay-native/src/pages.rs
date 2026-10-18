@@ -165,6 +165,32 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
     }
     match name {
         "mailbox" => {
+            // Newest first, as the phone lists them; the engine answers oldest first.
+            for message in data.iter().rev() {
+                let row = gtk::Box::new(gtk::Orientation::Vertical, 6);
+                row.add_css_class("record");
+                row.append(&label(
+                    &format!(
+                        "{} → {}{}",
+                        who(text(message, "from")),
+                        who(text(message, "to")),
+                        if message["priority"].as_bool() == Some(true) {
+                            " · PRIORITY"
+                        } else {
+                            ""
+                        }
+                    ),
+                    "dim",
+                ));
+                row.append(&paragraph(text(message, "text")));
+                // "5 min ago", the moment itself on hover: it showed the engine's nanoseconds.
+                let sent = text(message, "sent_at");
+                let when = label(&crate::relative::ago(sent, crate::relative::Form::Long).unwrap_or_else(|| sent.to_string()), "dim");
+                when.set_tooltip_text(Some(sent));
+                row.append(&when);
+                body.append(&row);
+            }
+            // Older messages sit below the oldest one shown.
             let widest = MAILBOX_LIMIT.with(|limit| limit.get()) >= MAILBOX_PAGE_MAX;
             if older && !widest {
                 let more = button("Show older messages", "secondary");
@@ -179,39 +205,32 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
             } else if older {
                 body.append(&label(&format!("Showing the newest {MAILBOX_PAGE_MAX} messages."), "dim"));
             }
-            for message in data {
-                let row = gtk::Box::new(gtk::Orientation::Vertical, 6);
-                row.add_css_class("record");
-                let to = match text(&message, "to") {
-                    "*" => "everyone",
-                    to => to,
-                };
-                row.append(&label(
-                    &format!(
-                        "{} → {}{}",
-                        text(&message, "from"),
-                        to,
-                        if message["priority"].as_bool() == Some(true) {
-                            " · PRIORITY"
-                        } else {
-                            ""
-                        }
-                    ),
-                    "dim",
-                ));
-                row.append(&paragraph(text(&message, "text")));
-                // "5 min ago", the moment itself on hover: it showed the engine's nanoseconds.
-                let sent = text(&message, "sent_at");
-                let when = label(&crate::relative::ago(sent, crate::relative::Form::Long).unwrap_or_else(|| sent.to_string()), "dim");
-                when.set_tooltip_text(Some(sent));
-                row.append(&when);
-                body.append(&row);
-            }
         }
         "modules" => board_view::modules(ui, &body, &data),
         _ => {}
     }
 }
+/// A mail address as the page shows it: your own messages are "You", a broadcast "everyone".
+fn who(name: &str) -> &str {
+    match name {
+        "user" => "You",
+        "*" => "everyone",
+        name => name,
+    }
+}
+
+/// What `mailbox.send`'s `delivery` means for the person who sent it to `recipients` agents;
+/// an error when nobody got it.
+fn delivery(value: &str, recipients: usize) -> Result<&'static str, &'static str> {
+    match value {
+        "session_parked" if recipients > 1 => Ok("Sent · the agents are parked and read it when they wake"),
+        "session_parked" => Ok("Sent · the agent is parked and reads it when it wakes"),
+        "not_running" => Ok("Sent · no recipient is running yet"),
+        "no_recipients" => Err("No agent to deliver to"),
+        _ => Ok("Sent"),
+    }
+}
+
 pub fn workspace_picker(ui: &Rc<Ui>, project: i64, destination: &str) -> gtk::MenuButton {
     let picker = gtk::MenuButton::new();
     picker.add_css_class("workspace-picker");
@@ -386,24 +405,33 @@ fn mail_composer(ui: &Rc<Ui>, page: &gtk::Box, project: i64) {
     let popover = gtk::Popover::new();
     popover.set_child(Some(&choices));
     pick.set_popover(Some(&popover));
-    let mut names = vec![(String::from("*"), String::from("Everyone"))];
-    names.extend(
-        ui.sessions
-            .borrow()
-            .iter()
-            .filter(|s| s["project_id"].as_i64() == Some(project) && text(s, "state") != "closed")
-            .map(|s| (text(s, "name").to_string(), format!("{} · {} {}", text(s, "name"), text(s, "provider"), text(s, "role")))),
-    );
-    for (name, caption) in names {
-        let choice = button(&caption, "nav");
-        choice.set_halign(gtk::Align::Fill);
-        let (to, popover) = (to.clone(), popover.clone());
-        choice.connect_clicked(move |_| {
-            to.set_text(&name);
-            popover.popdown();
-        });
-        choices.append(&choice);
-    }
+    // Listed as the popup opens, so an agent started since the page was built is there too.
+    let weak = Rc::downgrade(ui);
+    let (entry, shown) = (to.clone(), popover.downgrade());
+    pick.set_create_popup_func(move |_| {
+        let Some(ui) = weak.upgrade() else { return };
+        clear(&choices);
+        let mut names = vec![(String::from("*"), String::from("Everyone"))];
+        names.extend(
+            ui.sessions
+                .borrow()
+                .iter()
+                .filter(|s| s["project_id"].as_i64() == Some(project) && text(s, "state") != "closed")
+                .map(|s| (text(s, "name").to_string(), format!("{} · {} {}", text(s, "name"), text(s, "provider"), text(s, "role")))),
+        );
+        for (name, caption) in names {
+            let choice = button(&caption, "nav");
+            choice.set_halign(gtk::Align::Fill);
+            let (to, popover) = (entry.clone(), shown.clone());
+            choice.connect_clicked(move |_| {
+                to.set_text(&name);
+                if let Some(popover) = popover.upgrade() {
+                    popover.popdown();
+                }
+            });
+            choices.append(&choice);
+        }
+    });
     to_row.append(&pick);
     field("To", &to_row, &form);
     field("Message", &message, &form);
@@ -453,8 +481,13 @@ fn mail_composer(ui: &Rc<Ui>, page: &gtk::Box, project: i64) {
                         && priority_control.is_active() == priority
                     {
                         buffer.set_text("");
+                        // As on the phone: the next message is ordinary unless asked again.
+                        priority_control.set_active(false);
                     }
-                    ui.show_info(&format!("Message: {}", crate::app::text(&v, "delivery")));
+                    match delivery(crate::app::text(&v, "delivery"), rows(&v, "recipients").len()) {
+                        Ok(info) => ui.show_info(info),
+                        Err(error) => ui.show_error(error),
+                    }
                     ui.refresh_page();
                 }
                 Err(e) => ui.show_error(&e.to_string()),
