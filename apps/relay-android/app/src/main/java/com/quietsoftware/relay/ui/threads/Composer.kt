@@ -31,8 +31,10 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -90,6 +92,9 @@ internal fun Composer(
     val c = Relay.colors
     val source = remember { MutableInteractionSource() }
     val focused by source.collectIsFocusedAsState()
+    // The text with its cursor: a change from outside (Edit, dictation) puts the cursor at its end.
+    var field by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
+    val shown = if (field.text == value) field else TextFieldValue(value, TextRange(value.length))
     BoxWithConstraints(modifier.fillMaxWidth()) {
         val wide = maxWidth >= 440.dp
         Column {
@@ -99,8 +104,11 @@ internal fun Composer(
                     .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 6.dp),
             ) {
                 BasicTextField(
-                    value = value,
-                    onValueChange = onValue,
+                    value = shown,
+                    onValueChange = {
+                        field = it
+                        if (it.text != value) onValue(it.text)
+                    },
                     modifier = Modifier.fillMaxWidth().padding(end = 8.dp).heightIn(min = 24.dp).then(if (focus != null) Modifier.focusRequester(focus) else Modifier),
                     textStyle = Relay.type.body.copy(color = c.ink),
                     cursorBrush = SolidColor(c.ink),

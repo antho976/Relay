@@ -41,6 +41,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.res.ResourcesCompat
@@ -68,7 +69,8 @@ import kotlin.math.floor
  * pinch changes the text size. [onFit] gets the columns and rows that fit, whenever they change,
  * so the screen can borrow the PTY at this phone's size. With [onCopy], a long press selects the
  * word under the finger and a drag carries the selection on, for a Copy key; with [onLink], a tap
- * on a printed web address opens it.
+ * on a printed web address opens it. [hiddenBelow] is how much of the view's bottom its parent
+ * clips away; the scroll thumb and the Latest key keep above it.
  */
 @Composable
 fun TerminalView(
@@ -81,6 +83,7 @@ fun TerminalView(
     interactive: Boolean = true,
     onCopy: ((String) -> Unit)? = null,
     onLink: ((String) -> Unit)? = null,
+    hiddenBelow: Dp = 0.dp,
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -313,7 +316,7 @@ fun TerminalView(
                 }
                 if (scroll > 0 && total > visible) {
                     // Where the view sits in the scrollback: a thin thumb on the right edge.
-                    val track = size.height - padY * 2
+                    val track = size.height - padY * 2 - with(density) { hiddenBelow.toPx() }
                     val thumb = (track * visible / total).coerceAtLeast(with(density) { 24.dp.toPx() })
                     val top = padY + (track - thumb) * first / (total - visible).coerceAtLeast(1)
                     val w = with(density) { 3.dp.toPx() }
@@ -351,7 +354,7 @@ fun TerminalView(
             }
         }
         if (back > 0) {
-            Box(Modifier.align(Alignment.BottomEnd).padding(10.dp)) {
+            Box(Modifier.align(Alignment.BottomEnd).padding(start = 10.dp, top = 10.dp, end = 10.dp, bottom = 10.dp + hiddenBelow)) {
                 Key("Latest", {
                     fling?.cancel()
                     back = 0

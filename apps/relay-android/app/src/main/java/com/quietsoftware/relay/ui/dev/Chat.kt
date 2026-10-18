@@ -279,7 +279,7 @@ fun ChatScreen(name: String, nav: Nav) {
                     pieces.isNotEmpty() || asking -> Conversation(
                         pieces, doing, since, asking, screen, chat, s.online,
                         onEdit = { words ->
-                            type(words)
+                            type(joinDraft(field.text, words))
                             focus.requestFocus()
                         },
                         onResend = if (ready) ::resend else null,
@@ -796,13 +796,14 @@ internal fun MessageKeys(open: Boolean, words: String, onClose: () -> Unit, onEd
     AnimatedVisibility(open, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             if (words.isNotEmpty()) {
-                Chip("Copy", "Copy this message", true, glyph = "copy") {
+                Chip("Copy", "Copy this message", open, glyph = "copy") {
                     scope.launch { clipboard.copy(words) }
                     onClose()
                 }
-                onEdit?.let { edit -> Chip("Edit", "Edit it in the message box", true, glyph = "edit") { edit(words) } }
+                onEdit?.let { edit -> Chip("Edit", "Edit it in the message box", open, glyph = "edit") { edit(words) } }
             }
-            onResend?.let { again -> Chip("Send again", "Send this message again", true, glyph = "refresh", onClick = again) }
+            // Off while the keys fold away, so a quick second tap never sends it twice.
+            onResend?.let { again -> Chip("Send again", "Send this message again", open, glyph = "refresh", onClick = again) }
         }
     }
 }
@@ -1175,6 +1176,7 @@ internal fun ScreenPanel(nav: Nav, name: String, screen: State<String?>, onClose
                         }
                     },
                     onLink = { url -> runCatching { uris.openUri(url) }.onFailure { nav.shell.toast("No app here opens $url") } },
+                    hiddenBelow = extra,
                 )
             }
         }
@@ -1246,6 +1248,8 @@ internal fun ChatComposer(
     pictures: Boolean = false,
     lines: Int = 6,
     keyboard: KeyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+    // A terminal sends spaces as typed: only no text at all is its Enter.
+    blankIsEmpty: Boolean = true,
     above: @Composable () -> Unit = {},
     chips: @Composable RowScope.() -> Unit,
 ) {
@@ -1281,7 +1285,7 @@ internal fun ChatComposer(
             )
             Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), content = chips)
-                val empty = text.isBlank() && !pictures
+                val empty = (if (blankIsEmpty) text.isBlank() else text.isEmpty()) && !pictures
                 val stop = working && empty
                 Box(
                     Modifier.size(TOUCH).clip(Radii.key)
@@ -1346,6 +1350,9 @@ internal fun rememberDictation(onSaid: (String) -> Unit): (() -> Unit)? {
     if (!can) return null
     return { speech.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)) }
 }
+
+/** A message brought back to edit: in place of an empty box, or after what is being written, never over it. */
+internal fun joinDraft(draft: String, words: String): String = draft.trimEnd().let { if (it.isEmpty()) words else "$it\n\n$words" }
 
 /** What was typed, then what was said after a space. */
 internal fun joinSaid(typed: String, said: String): String = typed.trimEnd().let { if (it.isEmpty()) said else "$it $said" }

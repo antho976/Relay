@@ -82,6 +82,7 @@ import com.quietsoftware.relay.core.wire.s
 import com.quietsoftware.relay.data.Relay as RelayData
 import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.dev.MessageKeys
+import com.quietsoftware.relay.ui.dev.joinDraft
 import com.quietsoftware.relay.ui.dev.messageTouch
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Empty
@@ -683,7 +684,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
         toggle = { k -> keysOn = if (keysOn == k) null else k },
         edit = { words ->
             keysOn = null
-            draft = words
+            draft = joinDraft(draft, words)
             focus.requestFocus()
         },
         resend = if (target != null && !createFailed) ::resend else null,

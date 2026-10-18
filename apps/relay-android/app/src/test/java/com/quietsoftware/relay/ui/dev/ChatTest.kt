@@ -203,6 +203,13 @@ class ChatTest {
     }
 
     @Test
+    fun aMessageBroughtBackToEditNeverReplacesADraft() {
+        assertEquals("Fix the board", joinDraft("", "Fix the board"))
+        assertEquals("Fix the board", joinDraft("  \n", "Fix the board"))
+        assertEquals("Also the tests\n\nFix the board", joinDraft("Also the tests \n", "Fix the board"))
+    }
+
+    @Test
     fun theLatestPlanIsReadFromEitherProvidersSteps() {
         val first = msg("a1", "assistant", """{"blocks":[{"type":"tool_use","id":"t1","name":"TodoWrite","summary":"0 of 2 done","detail":"[ ] read\n[ ] fix"}]}""")
         val later = msg("a2", "assistant", """{"blocks":[{"type":"text","text":"On it."},{"type":"tool_use","id":"t2","name":"update_plan","summary":"1 of 3 done","detail":"[x] read\n[~] fix\n[ ] test"}]}""")

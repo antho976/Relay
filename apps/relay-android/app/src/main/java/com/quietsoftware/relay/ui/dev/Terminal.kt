@@ -253,6 +253,7 @@ fun TerminalScreen(name: String, nav: Nav) {
                 },
                 lines = 4,
                 keyboard = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
+                blankIsEmpty = false,
             ) {
                 Chip("Type direct", "Type straight to the terminal", ready, icon = { KeyboardGlyph(15.dp, c.ink2) }) { setDirect(true) }
                 if (dictate != null) Chip("", "Dictate", ready, icon = { MicGlyph(15.dp, c.ink2) }, onClick = dictate)
