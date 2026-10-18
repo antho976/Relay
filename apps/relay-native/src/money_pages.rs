@@ -1,7 +1,7 @@
 //! Money's pages: Home, Transactions, Plan and Data, drawn after Tally's screens. Investments
 //! has its own module (`money_invest.rs`) built from the parts here.
 use super::{formatter, message, page, remember_currency, Action, Page};
-use crate::app::{button, clear, confirm_inline, label, rows, text, Ui};
+use crate::app::{button, clear, label, rows, text, Ui};
 use crate::client::Error;
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -1747,7 +1747,7 @@ fn empty_state(ui: &Rc<Ui>, body: &gtk::Box) {
     let weak = Rc::downgrade(ui);
     import_key.connect_clicked(move |_| {
         if let Some(ui) = weak.upgrade() {
-            import(&ui, true);
+            import(&ui, true, false);
         }
     });
     let weak = Rc::downgrade(ui);
@@ -2329,6 +2329,8 @@ fn data(ui: &Rc<Ui>, page: &Page, summary: Option<&Value>, lists: Option<&Value>
     title(&page.head, "Data", "Your ledger lives on this PC, in money.db beside Relay's store. Nothing here leaves it.");
     clear(&page.body);
     let empty = summary.is_none_or(|s| s["empty"] == true);
+    // A phone that syncs takes an erase or a restore whole on its next sync (MONEY.md, Generation).
+    let syncs = lists.is_some_and(|l| !rows(l, "devices").is_empty());
     let pair = columns(&page.body, 2);
     if let Some(lists) = lists {
         phones(&pair[0], lists);
@@ -2336,7 +2338,8 @@ fn data(ui: &Rc<Ui>, page: &Page, summary: Option<&Value>, lists: Option<&Value>
     let backups = card(&pair[0], "Backups", None);
     let import_key = button("Import…", "");
     import_key.set_widget_name("money-import");
-    setting_row(&backups, "download", "Import a Tally backup", "The .json from Tally's Settings, Backup. Replaces everything here.", &import_key);
+    let replaces = if syncs { "Replaces everything here, and on the phone when it next syncs." } else { "Replaces everything here." };
+    setting_row(&backups, "download", "Import a Tally backup", &format!("The .json from Tally's Settings, Backup. {replaces}"), &import_key);
     let export_key = button("Export…", "");
     export_key.set_widget_name("money-export");
     export_key.set_sensitive(!empty);
@@ -2365,7 +2368,12 @@ fn data(ui: &Rc<Ui>, page: &Page, summary: Option<&Value>, lists: Option<&Value>
     if empty {
         erase.set_tooltip_text(Some("The ledger is already empty"));
     }
-    setting_row(&ledger, "trash", "Erase everything", "Every entry, account, budget, bill and goal on this PC. The phone keeps its own.", &erase);
+    let erases = if syncs {
+        "Every entry, account, budget, bill and goal on this PC, and on the phone the next time it syncs. Export a backup first."
+    } else {
+        "Every entry, account, budget, bill and goal on this PC."
+    };
+    setting_row(&ledger, "trash", "Erase everything", erases, &erase);
     if let Some(summary) = summary {
         ledger_settings(ui, &pair[1], summary);
     }
@@ -2379,7 +2387,7 @@ fn data(ui: &Rc<Ui>, page: &Page, summary: Option<&Value>, lists: Option<&Value>
     let weak = Rc::downgrade(ui);
     import_key.connect_clicked(move |_| {
         if let Some(ui) = weak.upgrade() {
-            import(&ui, empty);
+            import(&ui, empty, syncs);
         }
     });
     let weak = Rc::downgrade(ui);
@@ -2401,16 +2409,36 @@ fn data(ui: &Rc<Ui>, page: &Page, summary: Option<&Value>, lists: Option<&Value>
         }
     });
     let weak = Rc::downgrade(ui);
-    confirm_inline(&erase, "Erase all of it", move |key| {
-        let Some(ui) = weak.upgrade() else { return };
+    erase.connect_clicked(move |key| {
+        if let Some(ui) = weak.upgrade() {
+            erase_all(&ui, key, syncs);
+        }
+    });
+}
+
+/// Erases the ledger after a yes on a sheet that says what goes, as a restore asks first: a phone
+/// that syncs loses it too, and nothing is kept unless a backup was exported.
+fn erase_all(ui: &Rc<Ui>, key: &gtk::Button, syncs: bool) {
+    let (ui, key) = (ui.clone(), key.clone());
+    glib::spawn_future_local(async move {
+        let panel = crate::panel::Panel::new(&ui, "Erase everything?", 440);
+        panel.add_css_class("money-sheet");
+        let phone = if syncs { ", and on the phone the next time it syncs" } else { "" };
+        let about = label(
+            &format!("This erases every entry, account, budget, bill and goal on this PC{phone}. Export a backup first if you might want them back."),
+            "money-muted",
+        );
+        about.set_wrap(true);
+        panel.body.append(&about);
+        if !panel.response("Erase everything").await {
+            return;
+        }
         key.set_sensitive(false);
-        glib::spawn_future_local(async move {
-            match ui.call("money.reset", json!({})).await {
-                Ok(_) => super::toast(&ui, "Erased. The ledger on this PC is empty.", None),
-                Err(e) => ui.show_error(&unavailable(&e)),
-            }
-            ui.refresh_page();
-        });
+        match ui.call("money.reset", json!({})).await {
+            Ok(_) => super::toast(&ui, "Erased. The ledger on this PC is empty.", None),
+            Err(e) => ui.show_error(&unavailable(&e)),
+        }
+        ui.refresh_page();
     });
 }
 
@@ -2509,8 +2537,9 @@ fn load_sample(ui: &Rc<Ui>, key: &gtk::Button) {
     });
 }
 
-/// Choose a Tally backup and restore it; over a ledger with anything in it, only after a yes.
-fn import(ui: &Rc<Ui>, empty: bool) {
+/// Choose a Tally backup and restore it; over a ledger with anything in it, only after a yes,
+/// which says so when a phone that `syncs` will take it too.
+fn import(ui: &Rc<Ui>, empty: bool, syncs: bool) {
     let ui = ui.clone();
     glib::spawn_future_local(async move {
         let filter = gtk::FileFilter::new();
@@ -2527,9 +2556,10 @@ fn import(ui: &Rc<Ui>, empty: bool) {
         if !empty {
             let panel = crate::panel::Panel::new(&ui, "Replace everything?", 440);
             panel.add_css_class("money-sheet");
+            let phone = if syncs { " A phone that syncs with this PC takes it too on its next sync." } else { "" };
             let about = label(
                 &format!(
-                    "{} replaces every entry, account, budget, bill and goal on this PC. Export a backup first if you might want them back.",
+                    "{} replaces every entry, account, budget, bill and goal on this PC. Export a backup first if you might want them back.{phone}",
                     path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
                 ),
                 "money-muted",
