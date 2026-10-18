@@ -655,8 +655,9 @@ impl Pane {
             "restorable" => "The previous process ended. Resume restores scrollback and the worktree.",
             // Never started: a launch still on its way (the phone queues the start behind the
             // create), one cut short, or a start that failed. The row cannot tell them apart.
-            "created" => "Not started yet. Start launches the provider in its worktree.",
-            "exited" => "The process exited. Resume starts it again where it left off.",
+            // The state word above already says what happened; the hint says what to do.
+            "created" => "Start launches the provider in its worktree.",
+            "exited" => "Resume starts it again where it left off.",
             _ => "No signal from this session.",
         });
         for class in ["live", "held", "waiting", "off", "starting"] {

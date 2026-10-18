@@ -1303,7 +1303,7 @@ const CATEGORIES: [Category; 7] = [
         title: "Keyboard",
         icon: r##"<rect x="1.75" y="4" width="12.5" height="8" rx="1.75" /><path d="M4.5 6.75h.01M7 6.75h.01M9.5 6.75h.01M12 6.75h.01M5.5 9.5h5" />"##,
         nav: "Global shortcuts",
-        lede: "Shortcuts that work anywhere in Relay.",
+        lede: "Shortcuts across Relay. A focused terminal keeps Ctrl with a letter, which its program reads.",
     },
     Category {
         name: "maintenance",
