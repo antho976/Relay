@@ -542,9 +542,10 @@ pub fn page() -> gtk::Box {
     notice.append(&notice_text);
     let settings_key = button("Open Settings", "quiet");
     settings_key.set_valign(gtk::Align::Center);
+    // On Agents, where Claude Code's row and its refresh key are.
     settings_key.connect_clicked(|_| {
         if let Some(ui) = the_ui() {
-            ui.navigate("settings");
+            crate::tools::settings::open_on(&ui, "agents");
         }
     });
     notice.append(&settings_key);

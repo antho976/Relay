@@ -251,10 +251,39 @@ struct Mounted {
     autosave: Rc<Autosave>,
     providers: glib::WeakRef<gtk::Box>,
     detected: RefCell<Value>,
+    /// The category keys, for [`open_on`].
+    nav: glib::WeakRef<gtk::Box>,
 }
 
 thread_local! {
     static MOUNTED: RefCell<Option<Rc<Mounted>>> = const { RefCell::new(None) };
+    /// The category the page shows next, when a key elsewhere asked for one ([`open_on`]).
+    static OPEN_ON: Cell<Option<&'static str>> = const { Cell::new(None) };
+}
+
+/// Shows Settings on its `name` category: Threads' notice about Claude Code opens Agents.
+pub(crate) fn open_on(ui: &Rc<Ui>, name: &'static str) {
+    OPEN_ON.with(|o| o.set(Some(name)));
+    ui.navigate("settings");
+    // A panel that would not close kept the window where it was: no later visit opens there.
+    if ui.page.borrow().as_str() != "settings" {
+        OPEN_ON.with(|o| o.set(None));
+    }
+}
+
+/// Lights `name`'s key in the category list, which shows its page.
+fn show_category(nav: &gtk::Box, name: &str) {
+    let wanted = format!("settings-category-{name}");
+    let mut key = nav.first_child();
+    while let Some(widget) = key {
+        if widget.widget_name().as_str() == wanted {
+            if let Some(toggle) = widget.downcast_ref::<gtk::ToggleButton>() {
+                toggle.set_active(true);
+            }
+            return;
+        }
+        key = widget.next_sibling();
+    }
 }
 
 impl Mounted {
@@ -285,6 +314,9 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
         // Keep the form, and any edits in it, across project switches and a reconnect; only
         // re-read the providers, which change behind the page (an install, an update).
         ui.page_projects.borrow_mut().insert("settings".into(), generation as i64);
+        if let (Some(name), Some(nav)) = (OPEN_ON.with(Cell::take), mounted.nav.upgrade()) {
+            show_category(&nav, name);
+        }
         if let Some(draft) = ui.wallpaper_draft.borrow().as_ref() {
             if draft.stale.replace(false) {
                 if let Some(gallery) = draft.gallery.upgrade() {
@@ -347,6 +379,7 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
         autosave: autosave.clone(),
         providers: providers.downgrade(),
         detected: RefCell::new(data["detected"].clone()),
+        nav: nav.downgrade(),
     });
     MOUNTED.with(|m| *m.borrow_mut() = Some(mounted.clone()));
     appearance(ui, &stack, &form, &data, &wallpapers, &saved_wallpapers);
@@ -358,6 +391,10 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
     maintenance(ui, &stack);
     let search = search_field(ui);
     wire_search(&search, &shell, &nav, &stack);
+    // Appearance shows first unless a key elsewhere asked for another; its page exists only now.
+    if let Some(name) = OPEN_ON.with(Cell::take) {
+        show_category(&nav, name);
+    }
     // Taken from the built controls, so a value a range clamped counts as unchanged.
     *autosave.baseline.borrow_mut() = Some(fields.borrow().snapshot());
 }
