@@ -239,7 +239,7 @@ fn spawn_profile(drv: &dyn Driver) -> Value {
     let session = Session {
         id: 0, name: "<session>".into(), intent: None, project_id: 0, provider: Provider::Claude, role: Role::Builder,
         model: Some("<model>".into()), effort: Some("<effort>".into()), branch: String::new(), worktree: String::new(),
-        task_id: None, module_id: None, pair_with: None, bus_writes: false, allow_ui: false, state: relay_bus::types::SessionState::Created,
+        task_id: None, module_id: None, pair_with: None, bus_writes: false, allow_ui: false, use_api_key: false, state: relay_bus::types::SessionState::Created,
         pid: None, exit_code: None, provider_ref: None, spawned_at: None, last_output_at: None, usage: None,
         created_at: String::new(), updated_at: String::new(), closed_at: None,
     };
@@ -280,7 +280,7 @@ impl Driver for Claude {
     fn args(&self, session: &Session, launch: Launch<'_>, _brief: Option<&str>) -> Vec<String> {
         let mut args = vec![
             "--mcp-config".into(), crate::hooks::MCP_CONFIG_RELATIVE.into(),
-            "--settings".into(), crate::hooks::claude_settings(),
+            "--settings".into(), crate::hooks::claude_settings(session.use_api_key.then(crate::hooks::api_key_helper).as_deref()),
             "--append-system-prompt-file".into(), role_instructions_relative(&session.name),
         ];
         match launch {
@@ -510,7 +510,7 @@ mod tests {
     fn session(provider: Provider) -> Session {
         Session { id: 1, name: "calm-otter".into(), intent: None, project_id: 1, provider, role: Role::Builder,
             model: Some("model-x".into()), effort: Some("high".into()), branch: "relay/calm-otter".into(), worktree: "/tmp/w".into(),
-            task_id: None, module_id: None, pair_with: None, bus_writes: false, allow_ui: false, state: SessionState::Created,
+            task_id: None, module_id: None, pair_with: None, bus_writes: false, allow_ui: false, use_api_key: false, state: SessionState::Created,
             pid: None, exit_code: None, provider_ref: None, spawned_at: None, last_output_at: None, usage: None,
             created_at: "now".into(), updated_at: "now".into(), closed_at: None }
     }
@@ -530,11 +530,19 @@ mod tests {
         assert!(role_instructions(Role::Builder).contains("query task.list"));
         assert_eq!(codex_notify_config(Path::new("/opt/Relay 2/relay")), "notify=[\"/opt/Relay 2/relay\",\"hook\",\"codex-notify\"]");
         let claude = session(Provider::Claude);
-        let settings = crate::hooks::claude_settings();
+        let settings = crate::hooks::claude_settings(None);
         assert_eq!(driver(Provider::Claude).args(&claude, Launch::Fresh, None),
             ["--mcp-config", ".relay/relay.mcp.json", "--settings", settings.as_str(), "--append-system-prompt-file", ".relay/sessions/calm-otter/role-instructions.md", "--name", "calm-otter", "--model", "model-x", "--effort", "high"]);
         assert_eq!(driver(Provider::Claude).args(&claude, Launch::Resume { provider_ref: Some("cc-id") }, None),
             ["--mcp-config", ".relay/relay.mcp.json", "--settings", settings.as_str(), "--append-system-prompt-file", ".relay/sessions/calm-otter/role-instructions.md", "--resume", "cc-id", "--model", "model-x", "--effort", "high"]);
+        // An API-key session differs only in its settings, on resume as on a fresh launch.
+        let mut keyed = claude.clone();
+        keyed.use_api_key = true;
+        let keyed_settings = crate::hooks::claude_settings(Some(&crate::hooks::api_key_helper()));
+        for launch in [Launch::Fresh, Launch::Resume { provider_ref: Some("cc-id") }] {
+            let args = driver(Provider::Claude).args(&keyed, launch, None);
+            assert_eq!(args[3], keyed_settings);
+        }
         let mut codex = session(Provider::Codex);
         codex.role = Role::Reviewer;
         let args = driver(Provider::Codex).args(&codex, Launch::Resume { provider_ref: Some("cx-id") }, None);

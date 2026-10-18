@@ -1694,6 +1694,7 @@ mod inline_path_tests {
                 cmd: "/bin/cat".into(),
                 args: Vec::new(),
                 env: Vec::new(),
+                env_remove: Vec::new(),
                 cwd: std::env::temp_dir(),
                 cols: 80,
                 rows: 24,

@@ -122,6 +122,7 @@ pub fn row(r: &Row) -> rusqlite::Result<Row_> {
             pair_with: r.get("pair_with")?,
             bus_writes: r.get::<_, i64>("bus_writes")? != 0,
             allow_ui: r.get::<_, i64>("allow_ui")? != 0,
+            use_api_key: r.get::<_, i64>("use_api_key")? != 0,
             state: parse_state(&r.get::<_, String>("state")?),
             pid: r.get("pid")?,
             exit_code: r.get("exit_code")?,

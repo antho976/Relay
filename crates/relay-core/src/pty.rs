@@ -27,6 +27,8 @@ pub struct SpawnSpec {
     pub cmd: String,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
+    /// Variables of the engine's own environment the child does not inherit.
+    pub env_remove: Vec<String>,
     pub cwd: PathBuf,
     pub cols: u16,
     pub rows: u16,
@@ -451,6 +453,9 @@ impl Pty {
         // The daemon may have been started by a noninteractive, monochrome tool.
         // Its log preference must not disable colors in an interactive agent PTY.
         cmd.env_remove("NO_COLOR");
+        for k in &spec.env_remove {
+            cmd.env_remove(k);
+        }
         for (k, v) in &spec.env {
             cmd.env(k, v);
         }
@@ -481,12 +486,15 @@ impl Pty {
         let sh = shared.clone();
         std::thread::Builder::new().name(format!("pty-read-{pid}")).spawn(move || {
             let mut buf = vec![0u8; 64 * 1024];
+            // Before the ring: what it holds is stored as scrollback and streamed to a phone.
+            let mut redactor = crate::redact::Redactor::default();
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
                         sh.last_output_ms.store(unix_millis(), Ordering::Relaxed);
-                        let data = buf[..n].to_vec();
+                        let mut data = buf[..n].to_vec();
+                        redactor.redact(&mut data);
                         // Outside the lock: the scan is this thread's alone (RA-242).
                         let mark = term.mark();
                         term.feed(&data);
@@ -1111,7 +1119,7 @@ mod tests {
             2 * ATTACH_CATCHUP_BYTES,
         );
         let spec = SpawnSpec {
-            cmd: "sh".into(), args: vec!["-c".into(), script], env: Vec::new(),
+            cmd: "sh".into(), args: vec!["-c".into(), script], env: Vec::new(), env_remove: Vec::new(),
             cwd: std::env::temp_dir(), cols: 80, rows: 24, epoch: 1, initial_scrollback: Vec::new(),
         };
         let pty = Pty::spawn(spec, |_| {}).unwrap();
@@ -1150,7 +1158,7 @@ mod tests {
 
     fn sh(script: &str) -> SpawnSpec {
         SpawnSpec {
-            cmd: "sh".into(), args: vec!["-c".into(), script.into()], env: Vec::new(),
+            cmd: "sh".into(), args: vec!["-c".into(), script.into()], env: Vec::new(), env_remove: Vec::new(),
             cwd: std::env::temp_dir(), cols: 80, rows: 24, epoch: 1, initial_scrollback: Vec::new(),
         }
     }
@@ -1161,6 +1169,19 @@ mod tests {
             assert!(Instant::now() < deadline, "{what} never happened");
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// A variable named in `env_remove` is not inherited, and a key the child prints reaches the
+    /// ring, so the scrollback and every attach, blanked.
+    #[test]
+    fn removed_variables_are_not_inherited_and_printed_keys_are_blanked() {
+        let mut spec = sh("echo \"home=${HOME:-gone}\"; printf 'k=sk-ant-'; sleep 0.1; printf 'api03-SECRET\\n'; echo done");
+        spec.env_remove = vec!["HOME".into()];
+        let pty = Pty::spawn(spec, |_| {}).unwrap();
+        wait_for("the output", || String::from_utf8_lossy(&pty.attach(None, None).catch_up).contains("done"));
+        let out = String::from_utf8_lossy(&pty.attach(None, None).catch_up).into_owned();
+        assert!(out.contains("home=gone"), "{out:?}");
+        assert!(out.contains("k=sk-ant-************") && !out.contains("SECRET"), "{out:?}");
     }
 
     #[test]

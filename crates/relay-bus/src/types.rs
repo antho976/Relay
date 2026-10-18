@@ -581,6 +581,10 @@ pub struct Session {
     pub pair_with: Option<String>,
     pub bus_writes: bool,
     pub allow_ui: bool,
+    /// Claude runs on the API key in the local keyring instead of the signed-in account. Relay
+    /// never reads the key: Claude does, with `apiKeyHelper`. The agent can read it too.
+    #[serde(default)]
+    pub use_api_key: bool,
     pub state: SessionState,
     pub pid: Option<i64>,
     pub exit_code: Option<i64>,

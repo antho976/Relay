@@ -1902,6 +1902,7 @@ os.replace(out_path + ".tmp", out_path)
             cmd: "sh".into(),
             args,
             env: Vec::new(),
+            env_remove: Vec::new(),
             cwd: f.dir.path().to_path_buf(),
             cols: 80,
             rows: 24,

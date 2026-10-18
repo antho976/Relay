@@ -125,6 +125,10 @@ pub fn append(tx: &Transaction, e: &AuditEntry) -> Result<Id> {
         }
         Err(err) => (kind_of(e.outcome), Some(err.code.clone()), Some(serde_json::to_string(err)?)),
     };
+    // A guardrail's record of a shell command keeps the whole command line, key and all. The
+    // hash above is of what was asked.
+    let payload_col = crate::redact::text(payload_col);
+    let summary = summary.map(|s| crate::redact::text(&s).into_owned());
     tx.prepare_cached(
         "INSERT INTO audit (ts, req_id, parent_req, actor, on_behalf_of, session_id, op, project_id, kind, code, hold_id,
                             payload_hash, payload, result_summary, undo_op, undo_of)
@@ -144,7 +148,7 @@ pub fn append(tx: &Transaction, e: &AuditEntry) -> Result<Id> {
             code,
             e.hold_id,
             payload_hash,
-            payload_col.as_str(),
+            &*payload_col,
             summary,
             e.undo_op.map(|u| serde_json::to_string(u).unwrap_or_default()),
             e.undo_of,
