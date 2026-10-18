@@ -15,7 +15,7 @@ publish = false
 # The toolchain CI builds with (.github/workflows/ci.yml); bump both together. Clippy's
 # incompatible_msrv then flags a std API newer than this on a newer local toolchain, for every
 # member that inherits it (`rust-version.workspace = true`).
-rust-version = "1.94"
+rust-version = "1.99"
 
 [workspace.dependencies]
 relay-bus = { path = "crates/relay-bus" }

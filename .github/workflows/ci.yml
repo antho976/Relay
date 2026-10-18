@@ -48,7 +48,7 @@ jobs:
       # together with `rust-version` in the root Cargo.toml.
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
-          toolchain: "1.94"
+          toolchain: "1.99"
           components: clippy
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2

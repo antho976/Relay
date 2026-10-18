@@ -19,7 +19,7 @@
 # This image is also where the bot's container copies its relay binary from (relay-server-image.yml);
 # a COPY takes the file only, never the ENV below.
 
-FROM rust:1.94-bookworm AS build
+FROM rust:1.99-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
