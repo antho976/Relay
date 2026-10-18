@@ -122,7 +122,7 @@ fun GuardrailsScreen(projectId: Long?, nav: Nav) {
                 when {
                     pid == null -> T("Open a project to see the files its sessions share.", style = Relay.type.caption, color = c.ink3)
                     overlapLive.result == null -> T(overlapLive.error?.message ?: "Loading…", style = Relay.type.caption, color = c.ink3)
-                    overlaps.isEmpty() -> Empty("swap", "No overlap", "No two sessions are changing the same files right now.")
+                    overlaps.isEmpty() -> Empty("merge", "No overlap", "No two sessions are changing the same files right now.")
                     else -> Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
                         overlaps.forEachIndexed { index, o ->
                             if (index > 0) Hairline()

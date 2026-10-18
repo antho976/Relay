@@ -29,11 +29,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.quietsoftware.relay.core.link.LinkState
@@ -49,8 +53,9 @@ import com.quietsoftware.relay.ui.kit.ago
 import com.quietsoftware.relay.ui.kit.lampAlpha
 import com.quietsoftware.relay.ui.theme.Relay
 import com.quietsoftware.relay.core.wire.BusException
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The top bar (theme.css `.topbar`, 52px): the sidebar key, the ring mark and wordmark, the
@@ -68,7 +73,7 @@ fun TopBar(
 ) {
     val c = Relay.colors
     Row(
-        Modifier.fillMaxWidth().background(c.wall).statusBarsPadding().height(56.dp).padding(start = 4.dp, end = 4.dp),
+        Modifier.fillMaxWidth().background(c.wall).statusBarsPadding().heightIn(min = 56.dp).padding(start = 4.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconKey("sidebar", onSidebar, size = 18.dp)
@@ -77,7 +82,7 @@ fun TopBar(
         SpaceSwitch(space, onSpace)
         Fill()
         IconKey("search", onSearch, size = 18.dp)
-        IconKey("bell", onBell, size = 18.dp, badge = bell, badgeColor = if (bellRed) c.held else c.ink)
+        IconKey("bell", onBell, size = 18.dp, badge = bell, badgeColor = if (bellRed) c.held else c.ink, label = if (bell > 0) "Inbox, $bell new" else "Inbox")
     }
 }
 
@@ -132,7 +137,7 @@ fun StatusBar(s: ShellState, onLink: () -> Unit, onOutbox: () -> Unit) {
         Column(Modifier.fillMaxWidth()) {
             Box(Modifier.fillMaxWidth().height(1.dp).background(c.edge))
             Row(
-                Modifier.fillMaxWidth().height(32.dp).padding(horizontal = 12.dp),
+                Modifier.fillMaxWidth().heightIn(min = 32.dp).padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -195,7 +200,8 @@ fun BoxScope.ToastHost(model: ShellModel) {
     LaunchedEffect(Unit) {
         model.toasts.collect {
             toast = it
-            delay(if (it.undo != null) 7_000 else 4_000)
+            // Its time, or less when Undo has put it away, so the next one is not kept waiting.
+            withTimeoutOrNull(if (it.undo != null) 7_000L else 4_000L) { snapshotFlow { toast }.first { shown -> shown !== it } }
             if (toast === it) toast = null
         }
     }
@@ -208,7 +214,10 @@ fun BoxScope.ToastHost(model: ShellModel) {
     ) {
         val t = toast ?: return@AnimatedVisibility
         Row(
-            Modifier.widthIn(max = 520.dp).shadow(8.dp, Radii.popover).clip(Radii.popover).background(c.slab).border(1.dp, c.strong, Radii.popover).padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+            Modifier.widthIn(max = 520.dp).shadow(8.dp, Radii.popover).clip(Radii.popover).background(c.slab).border(1.dp, c.strong, Radii.popover)
+                // A screen reader reads it out when it comes, without moving off what the person is on.
+                .semantics { liveRegion = LiveRegionMode.Polite }
+                .padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             T(t.text, Modifier.weight(1f, fill = false).padding(vertical = 6.dp), Relay.type.ui, c.ink)

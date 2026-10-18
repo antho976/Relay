@@ -92,7 +92,7 @@ class ShellModel @Inject constructor(val relay: Relay, private val settings: Set
             if (c is Hub.Change.Queued && !state.value.online) toast("$label · saved on this phone, sent when the PC is back")
             after(c)
         } catch (e: BusException) {
-            toast(e.error.message.ifBlank { e.error.code })
+            toast(if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code })
         }
     }
 

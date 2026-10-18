@@ -132,7 +132,7 @@ fun HoldCard(hold: Hold, more: Int, model: ShellModel, onLater: (() -> Unit)?, o
                             model.relay.call("guardrail.confirm", buildJsonObject { put("hold_id", hold.id) })
                             model.toast("Allowed once")
                         } catch (e: BusException) {
-                            model.toast(e.error.message.ifBlank { e.error.code })
+                            model.toast(if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code })
                         }
                         busy = false
                     }
@@ -144,7 +144,7 @@ fun HoldCard(hold: Hold, more: Int, model: ShellModel, onLater: (() -> Unit)?, o
                             model.relay.call("guardrail.reject", buildJsonObject { put("hold_id", hold.id); put("reason", "Denied from the phone") })
                             model.toast("Denied")
                         } catch (e: BusException) {
-                            model.toast(e.error.message.ifBlank { e.error.code })
+                            model.toast(if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code })
                         }
                         busy = false
                     }
