@@ -326,9 +326,9 @@ private fun Slate(session: Session, nav: Nav, online: Boolean, life: Lifecycle) 
     ) {
         T(session.stateLabel, style = Relay.type.plateState.copy(fontSize = 13.sp, letterSpacing = 0.1.em), color = c.ink2)
         T(slateHint(session, online), style = Relay.type.caption, color = c.ink3, maxLines = 2)
-        if (lines.isNotEmpty()) {
+        if (!lines.isNullOrEmpty()) {
             Excerpt(lines, Modifier.weight(1f, fill = false).padding(top = 2.dp))
-        } else if (session.attachable && !online) {
+        } else if (lines != null && session.attachable && !online) {
             T("Nothing saved on this phone yet.", style = Relay.type.caption, color = c.ink3)
         }
         val revive = if (session.pending) null else reviveAct(session.state)
