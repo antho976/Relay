@@ -1951,15 +1951,20 @@ impl Board {
         };
         let s = self.screen(&b);
         let (cw, ch) = self.size.get();
-        // Left of the inspector when it shows and the bar fits there; it sat over the inspector's
-        // own controls otherwise.
+        // Between the layers panel and the inspector when they show and the bar fits there; it
+        // sat over their own controls otherwise. Too narrow for both, it keeps clear of what it can.
         let inspector = self.inspector_scroll.is_visible().then(|| f64::from(self.inspector_scroll.width().max(INSPECTOR_W as i32)) + 12.0);
-        let right = match inspector {
-            Some(iw) if cw - iw - 8.0 - w as f64 >= 8.0 => cw - iw - 8.0,
-            _ => cw - 8.0,
-        };
+        let layers = self.layers_panel.reveals_child().then(|| f64::from(self.layers_panel.width()) + 12.0);
+        let mut right = cw - 8.0;
+        if let Some(iw) = inspector.filter(|iw| cw - iw - 8.0 - w as f64 >= 8.0) {
+            right = cw - iw - 8.0;
+        }
+        let mut left = 8.0;
+        if let Some(lw) = layers.filter(|lw| right - w as f64 >= lw + 8.0) {
+            left = lw + 8.0;
+        }
         let mut x = (s.cx() - w as f64 / 2.0).round();
-        x = x.clamp(8.0, (right - w as f64).max(8.0));
+        x = x.clamp(left, (right - w as f64).max(left));
         let above = s.y - h as f64 - 12.0;
         let mut y = if above > 56.0 { above } else { s.bottom() + 36.0 };
         y = y.clamp(56.0, (ch - h as f64 - 56.0).max(56.0));

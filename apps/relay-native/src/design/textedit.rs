@@ -85,6 +85,9 @@ impl Board {
         *self.painter.editing.borrow_mut() = Some(n.id.clone());
         self.style_edit();
         self.overlay.add_overlay(&view);
+        // Drawn just above the canvas and under the floating panels (dock, layers, inspector):
+        // added last, it painted over the layers panel when the text sat beside it.
+        view.insert_after(&self.overlay, Some(&self.canvas));
         self.invalidate();
 
         let weak = Rc::downgrade(self);
