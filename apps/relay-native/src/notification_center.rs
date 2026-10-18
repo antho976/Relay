@@ -2,6 +2,7 @@
 //! without replacing the page the person is working on.
 use super::session_context::relative_time;
 use super::{button, clear, icon_button, label, rows, text, Ui};
+use crate::tools::plugins::explain_error as refusal;
 use gtk::prelude::*;
 use gtk4 as gtk;
 use serde_json::{json, Value};
@@ -86,7 +87,7 @@ pub(super) fn install(ui: &Rc<Ui>, key: &gtk::Button) {
         // Its notify.changed event reloads the list and the bell.
         glib::spawn_future_local(async move {
             if let Err(e) = ui.call("notify.ack_all", json!({})).await {
-                ui.show_error(&e.to_string());
+                ui.show_error(&refusal("notify.ack_all", &e));
                 center.load();
             }
         });
@@ -154,7 +155,7 @@ impl Center {
                         );
                         center.render(&ui, &entries, unread)
                     }
-                    Err(e) => center.placeholder("Notifications are unavailable", &e.to_string()),
+                    Err(e) => center.placeholder("Notifications are unavailable", &refusal("notify.list", &e)),
                 }
             }
             center.loading.set(false);
@@ -251,12 +252,12 @@ impl Center {
         }
         // What kind, then where: a long project name is cut, not the kind, and no longer
         // widens the popover.
-        let mut meta = vec![category.replace('_', " ")];
+        let mut meta = vec![kind(category)];
         if let Some(project) = project.filter(|p| !p.is_empty()) {
             meta.push(project.to_string());
         }
         let meta = meta.join(" · ");
-        let meta_label = label(&meta.to_uppercase(), "notification-meta");
+        let meta_label = label(&meta, "notification-meta");
         meta_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
         meta_label.set_xalign(0.0);
         meta_label.set_tooltip_text(Some(&meta));
@@ -299,7 +300,7 @@ impl Center {
                 let id = id.clone();
                 glib::spawn_future_local(async move {
                     if let Err(e) = ui.call("notify.ack", json!({"notification_id": id})).await {
-                        ui.show_error(&e.to_string());
+                        ui.show_error(&refusal("notify.ack", &e));
                         center.load();
                     }
                 });
@@ -345,6 +346,29 @@ impl Center {
             }
         }
     }
+}
+
+/// A notification's kind in a few words, after the switch in Settings › Notifications that
+/// silences it ("Agent needs you"; "Integration" for one of Integrations). A guardrail notice
+/// may be a refusal filed quietly, so it reads "Guardrail", not "Guardrail needs you".
+fn kind(category: &str) -> String {
+    match category {
+        "agent_blocked" => "Agent needs you",
+        "agent_done" => "Agent finished",
+        "guardrail" => "Guardrail",
+        "provider" => "Provider",
+        "integration" => "Integration",
+        "disk" => "Disk",
+        "system" => "System",
+        other => {
+            let mut words = other.replace('_', " ");
+            if let Some(first) = words.get_mut(0..1) {
+                first.make_ascii_uppercase();
+            }
+            return words;
+        }
+    }
+    .to_string()
 }
 
 /// The page following `item` opens, or None when its link names nothing the UI can route
