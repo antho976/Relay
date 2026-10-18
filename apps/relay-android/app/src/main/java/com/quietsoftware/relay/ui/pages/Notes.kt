@@ -212,6 +212,8 @@ fun NoteScreen(id: String?, projectId: Long?, nav: Nav) {
     var created by remember { mutableStateOf<Note?>(null) }
     var draft by remember { mutableStateOf(if (id == null) Draft("", "", null) else null) }
     var leave by remember { mutableStateOf<(() -> Unit)?>(null) }
+    // Discard on a changed draft asks first, as the PC's editor does before it drops edits.
+    var discarding by remember { mutableStateOf(false) }
 
     // A note made on this phone keeps its temp id until the PC numbers it; follow it there.
     val current by remember(ref) { ref?.let { nav.relay.resolved(it) } ?: flowOf<String?>(null) }
@@ -312,6 +314,18 @@ fun NoteScreen(id: String?, projectId: Long?, nav: Nav) {
         }
     }
 
+    // A new note's draft goes with the screen; an open note's, back to the note.
+    fun discard() {
+        if (note == null) nav.back() else draft = null
+    }
+
+    if (discarding) {
+        Ask(title = "Discard your changes?", body = "The draft is not saved.", onDismiss = { discarding = false }) {
+            Key("Cancel", { discarding = false }, kind = KeyKind.Quiet, compact = true)
+            Key("Discard", { discarding = false; discard() }, kind = KeyKind.Danger, compact = true)
+        }
+    }
+
     Page {
         Column(Modifier.fillMaxSize()) {
             PageBar(
@@ -348,10 +362,10 @@ fun NoteScreen(id: String?, projectId: Long?, nav: Nav) {
                         onChange = { draft = it },
                         onSave = { save() },
                         onDiscard = {
-                            if (n == null) {
-                                nav.back()
+                            if (d.changed) {
+                                discarding = true
                             } else {
-                                draft = null
+                                discard()
                             }
                         },
                     )
