@@ -182,11 +182,15 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
             for message in data {
                 let row = gtk::Box::new(gtk::Orientation::Vertical, 6);
                 row.add_css_class("record");
+                let to = match text(&message, "to") {
+                    "*" => "everyone",
+                    to => to,
+                };
                 row.append(&label(
                     &format!(
                         "{} → {}{}",
                         text(&message, "from"),
-                        text(&message, "to"),
+                        to,
                         if message["priority"].as_bool() == Some(true) {
                             " · PRIORITY"
                         } else {
@@ -196,7 +200,11 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
                     "dim",
                 ));
                 row.append(&paragraph(text(&message, "text")));
-                row.append(&label(text(&message, "sent_at"), "dim"));
+                // "5 min ago", the moment itself on hover: it showed the engine's nanoseconds.
+                let sent = text(&message, "sent_at");
+                let when = label(&crate::relative::ago(sent, crate::relative::Form::Long).unwrap_or_else(|| sent.to_string()), "dim");
+                when.set_tooltip_text(Some(sent));
+                row.append(&when);
                 body.append(&row);
             }
         }
@@ -366,7 +374,38 @@ fn mail_composer(ui: &Rc<Ui>, page: &gtk::Box, project: i64) {
     let message = gtk::TextView::new();
     message.set_wrap_mode(gtk::WrapMode::WordChar);
     message.set_size_request(-1, 90);
-    field("To", &to, &form);
+    // Who there is to write to, a click away: everyone, or one of the project's agents.
+    let to_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    to.set_hexpand(true);
+    to_row.append(&to);
+    let pick = gtk::MenuButton::new();
+    pick.set_child(Some(&crate::icons::image("chevron-down", 12)));
+    pick.set_tooltip_text(Some("Pick who to write to"));
+    pick.add_css_class("mail-pick");
+    let choices = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    let popover = gtk::Popover::new();
+    popover.set_child(Some(&choices));
+    pick.set_popover(Some(&popover));
+    let mut names = vec![(String::from("*"), String::from("Everyone"))];
+    names.extend(
+        ui.sessions
+            .borrow()
+            .iter()
+            .filter(|s| s["project_id"].as_i64() == Some(project) && text(s, "state") != "closed")
+            .map(|s| (text(s, "name").to_string(), format!("{} · {} {}", text(s, "name"), text(s, "provider"), text(s, "role")))),
+    );
+    for (name, caption) in names {
+        let choice = button(&caption, "nav");
+        choice.set_halign(gtk::Align::Fill);
+        let (to, popover) = (to.clone(), popover.clone());
+        choice.connect_clicked(move |_| {
+            to.set_text(&name);
+            popover.popdown();
+        });
+        choices.append(&choice);
+    }
+    to_row.append(&pick);
+    field("To", &to_row, &form);
     field("Message", &message, &form);
     let priority =
         gtk::CheckButton::with_label("Priority: ask this agent to read it at the next safe point");

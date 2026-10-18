@@ -361,7 +361,11 @@ pub fn modules(ui: &Rc<Ui>, body: &gtk::Box, modules: &[Value]) {
         let mark = crate::icons::image("modules", 28);
         mark.add_css_class("modules-empty-mark");
         empty.append(&mark);
-        empty.append(&label("No modules yet", "modules-empty-title"));
+        // Centred as the mark and the key are: the title sat at the left edge, and the hint's
+        // centred lines inside a left-aligned label read as a stray indent.
+        let title = label("No modules yet", "modules-empty-title");
+        title.set_xalign(0.5);
+        empty.append(&title);
         let hint = label(
             "A module bundles tasks into one release. It gets its own board with progress and patch notes, and its tasks still show on the main board.",
             "modules-empty-hint",
@@ -369,6 +373,7 @@ pub fn modules(ui: &Rc<Ui>, body: &gtk::Box, modules: &[Value]) {
         hint.set_wrap(true);
         hint.set_max_width_chars(52);
         hint.set_justify(gtk::Justification::Center);
+        hint.set_xalign(0.5);
         empty.append(&hint);
         let add = button("", "primary");
         add.set_halign(gtk::Align::Center);
