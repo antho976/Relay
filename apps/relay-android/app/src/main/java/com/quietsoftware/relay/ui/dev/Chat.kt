@@ -24,12 +24,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -1154,11 +1157,14 @@ private const val SCREEN_READS_PER_S = 8
  * a pinch to change it), the newest line in view. A drag scrolls back, a long press copies, a tap
  * on an address opens it. A fresh TUI leaves its bottom rows blank; they are drawn under the edge.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ScreenPanel(nav: Nav, name: String, screen: State<String?>, onClose: () -> Unit) {
     val c = Relay.colors
     val feed = rememberFeed(nav.relay, name)
     val reading = screen.value == null
+    // With the keyboard up the panel is shorter, so the conversation keeps some room over the message box.
+    val tall = if (WindowInsets.isImeVisible) SCREEN_PANEL_IME_H else SCREEN_PANEL_H
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboard.current
     val uris = LocalUriHandler.current
@@ -1178,7 +1184,7 @@ internal fun ScreenPanel(nav: Nav, name: String, screen: State<String?>, onClose
             T(if (reading) "Reading the agent's screen…" else "The agent's screen", Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 1)
             IconKey("close", onClose, size = 14.dp, tint = c.ink3, label = "Hide the agent's screen")
         }
-        BoxWithConstraints(Modifier.fillMaxWidth().height(SCREEN_PANEL_H).clipToBounds()) {
+        BoxWithConstraints(Modifier.fillMaxWidth().height(tall).clipToBounds()) {
             val widthPx = constraints.maxWidth.toFloat()
             val (cols, blank) = shape
             val sp = pinched ?: fitSp(widthPx, cols, ratio, density).takeIf { it > 0f }?.coerceIn(SCREEN_MIN_SP, SCREEN_SP) ?: SCREEN_SP
@@ -1190,7 +1196,7 @@ internal fun ScreenPanel(nav: Nav, name: String, screen: State<String?>, onClose
                     sp,
                     onFontSp = { pinched = it },
                     onFit = { _, _ -> },
-                    modifier = Modifier.width(with(density) { maxOf(widthPx, needPx).toDp() }).wrapContentHeight(Alignment.Top, unbounded = true).height(SCREEN_PANEL_H + extra),
+                    modifier = Modifier.width(with(density) { maxOf(widthPx, needPx).toDp() }).wrapContentHeight(Alignment.Top, unbounded = true).height(tall + extra),
                     onCopy = { picked ->
                         scope.launch {
                             clipboard.copy(picked)
@@ -1206,6 +1212,7 @@ internal fun ScreenPanel(nav: Nav, name: String, screen: State<String?>, onClose
 }
 
 private val SCREEN_PANEL_H = 240.dp
+private val SCREEN_PANEL_IME_H = 120.dp
 private const val SCREEN_SP = 10.5f
 private const val SCREEN_MIN_SP = 8f
 

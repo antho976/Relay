@@ -61,6 +61,8 @@ class SessionChat(private val relay: Relay, val name: String, private val scope:
     private val before = java.util.concurrent.ConcurrentHashMap<String, Set<String>>()
     private var cursor: Long? = null
     private var at = 0L
+    /** The agent is mid-turn: a message sent meanwhile waits in its queue, not in the log. */
+    @Volatile private var working = false
     private var job: Job? = null
     private val sendLock = Mutex()
     private val first = buildJsonObject { put("session", name); put("limit", LIMIT) }
@@ -74,6 +76,7 @@ class SessionChat(private val relay: Relay, val name: String, private val scope:
             combine(relay.state, relay.hub.session, relay.session(name)) { link, bus, s -> Triple(link is LinkState.Online && bus != null, s?.attachable == true, s?.state == "running" || s?.state == "spawning") }
                 .distinctUntilChanged()
                 .collectLatest { (online, attachable, busy) ->
+                    working = busy
                     if (!online) {
                         if (_status.value != TerminalFeed.Status.Connecting || _messages.value.isNotEmpty()) _status.value = TerminalFeed.Status.Saved
                         return@collectLatest
@@ -117,15 +120,17 @@ class SessionChat(private val relay: Relay, val name: String, private val scope:
         if (!replace && got.isEmpty()) return
         val merged = if (replace) got else (_messages.value + got).distinctBy { it.id }
         _messages.value = merged.takeLast(KEEP)
-        // A sent message the log now has, or one long overdue, stops waiting.
+        // A sent message the log now has, or one long overdue, stops waiting. While the agent
+        // works it is queued, and shows in the log only once the agent takes it: kept till then.
         val now = System.currentTimeMillis()
+        val queued = working
         val users = merged.filter { it.role == "user" }
         _sending.update { list ->
             list.filter { mine ->
                 // Only a message logged since this one was sent can be it: a picture alone has no words to tell it by.
                 val known = before[mine.id].orEmpty()
                 val said = users.any { it.id !in known && gist(it.text) == gist(mine.text) }
-                !said && now - Instant.parse(mine.createdAt).toEpochMilli() < SENDING_MS
+                !said && (queued || now - Instant.parse(mine.createdAt).toEpochMilli() < SENDING_MS)
             }
         }
         before.keys.retainAll(_sending.value.mapTo(HashSet()) { it.id })
