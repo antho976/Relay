@@ -1497,13 +1497,13 @@ impl Ui {
     }
     /// The main window's close: refused while a launch runs or any work is unsaved, otherwise
     /// every panel, note, mirror and pane is closed before the window goes.
-    fn close_request(&self) -> glib::Propagation {
+    fn close_request(self: &Rc<Self>) -> glib::Propagation {
         if self.launch_busy.get() {
             self.show_error("Wait for agent launch to finish before closing.");
             return glib::Propagation::Stop;
         }
-        if crate::pages::unsaved_notes() {
-            self.show_error("Save or discard note changes before closing.");
+        if let Some(refusal) = crate::pages::unsaved_notes(self) {
+            self.show_error(&refusal);
             return glib::Propagation::Stop;
         }
         if self.editor.is_dirty() {

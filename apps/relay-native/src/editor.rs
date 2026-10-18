@@ -132,8 +132,8 @@ const TREE_PAGE: usize = 500;
 /// What runs once a save lands (`save_then`).
 type AfterSave = Box<dyn FnOnce(&Rc<Editor>, &Rc<Ui>)>;
 thread_local! {
-    /// The last query Code's find bar searched for, which F3 takes up when the field is empty.
-    static FIND_QUERY: RefCell<String> = const { RefCell::new(String::new()) };
+    /// The last search Code's find bar ran, which F3 takes up when the field is empty.
+    static FIND_QUERY: RefCell<find_bar::Memory> = const { RefCell::new(find_bar::Memory::new()) };
 }
 struct TreeLoadGuard(Rc<Editor>, Rc<Ui>);
 impl Drop for TreeLoadGuard {

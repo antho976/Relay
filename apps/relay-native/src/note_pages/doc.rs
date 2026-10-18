@@ -56,6 +56,11 @@ pub struct Doc {
     tasks: gtk::Box,
     /// Bumped by every `load_tasks`, so a slow answer never overwrites a newer one.
     tasks_generation: Cell<u64>,
+    /// The tab was asked to close while a save ran: it closes once that save lands.
+    close_pending: Cell<bool>,
+    /// Made empty by New note (which creates it at once) and stored as made since: closing
+    /// its tab deletes it, so an untouched Ctrl+N leaves no "Untitled" note behind.
+    pub fresh: Cell<bool>,
 }
 
 /// The largest body this client sends. Replies and `notes.changed` events carry the whole
@@ -333,6 +338,8 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
         last_task: Cell::new(0),
         tasks,
         tasks_generation: Cell::new(0),
+        close_pending: Cell::new(false),
+        fresh: Cell::new(false),
     });
     let weak_ui = Rc::downgrade(ui);
     let weak = Rc::downgrade(&doc);
@@ -389,6 +396,14 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
     doc.buffer.connect_has_selection_notify(move |_| selection());
     let pinned = with(pin_changed);
     doc.pin.connect_toggled(move |_| pinned());
+    // The key and File › Pin to top say whether the note is pinned, whoever pinned it.
+    let pin_shown = with(|ui, doc| {
+        doc.show_pin();
+        if super::current_doc(ui).is_some_and(|current| Rc::ptr_eq(&current, doc)) {
+            super::menu::sync(Some(doc));
+        }
+    });
+    doc.pin.connect_toggled(move |_| pin_shown());
     let close = with(request_close);
     tab_close.connect_clicked(move |_| close());
     let middle = gtk::GestureClick::new();
@@ -402,11 +417,13 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
 
     let opened = with(|_, doc| {
         doc.goto_entry.set_text("");
-        doc.goto_entry.remove_css_class("error");
-        doc.goto_hint.set_text(&format!("Line 1–{}, column optional", doc.buffer.line_count()));
+        doc.goto_hint_reset();
         doc.goto_entry.grab_focus();
     });
     goto.connect_show(move |_| opened());
+    // A refused entry is marked until it is typed over.
+    let typed = with(|_, doc| doc.goto_hint_reset());
+    goto_entry.connect_changed(move |_| typed());
     let jump = with(|_, doc| doc.goto_from_entry());
     goto_entry.connect_activate(move |_| jump());
     let jump = with(|_, doc| doc.goto_from_entry());
@@ -452,6 +469,7 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
     doc.view.add_controller(wheel);
 
     doc.apply_prefs(&prefs);
+    doc.show_pin();
     super::inline::schedule(&doc);
     doc.update_meta();
     doc.update_position();
@@ -485,6 +503,8 @@ impl Doc {
     }
 
     pub fn set_base(&self, note: Value) {
+        // Saved or changed elsewhere: no longer the empty note New note made.
+        self.fresh.set(false);
         *self.stored_title.borrow_mut() = note["title"].clone();
         *self.draft.base.borrow_mut() = note;
         self.sync_pin();
@@ -514,6 +534,14 @@ impl Doc {
             self.pin.set_active(pinned);
             self.syncing.set(false);
         }
+    }
+
+    fn show_pin(&self) {
+        self.pin.set_tooltip_text(Some(if self.pin.is_active() {
+            "Unpin this note"
+        } else {
+            "Pin this note to the top of the library"
+        }));
     }
 
     pub fn update_meta(&self) {
@@ -814,8 +842,20 @@ impl Doc {
                 }
                 self.goto(line, column);
             }
-            None => entry.add_css_class("error"),
+            None => {
+                entry.add_css_class("error");
+                self.goto_hint.set_text("Type a line number, or line:column");
+            }
         }
+    }
+
+    /// The go-to field's hint as it opens: the lines there are to go to.
+    fn goto_hint_reset(&self) {
+        self.goto_entry.remove_css_class("error");
+        self.goto_hint.set_text(&match self.buffer.line_count() {
+            1 => String::from("Line 1, column optional"),
+            lines => format!("Line 1–{lines}, column optional"),
+        });
     }
 
     // ---- find and replace (`crate::editor::find_bar`, shared with Code) -------------
@@ -1140,6 +1180,7 @@ fn pin_changed(ui: &Rc<Ui>, doc: &Rc<Doc>) {
     if doc.syncing.get() {
         return;
     }
+    doc.fresh.set(false);
     let pinned = doc.pin.is_active();
     let (ui, doc) = (ui.clone(), doc.clone());
     glib::spawn_future_local(async move {
@@ -1207,6 +1248,9 @@ pub fn save(ui: &Rc<Ui>, doc: &Rc<Doc>, then: AfterSave) {
     glib::spawn_future_local(async move {
         let result = ui.call("notes.update", payload).await;
         doc.draft.busy.set(false);
+        // A close asked for meanwhile waits for this save: done once it lands, and dropped
+        // with the notice when it does not.
+        let close = doc.close_pending.take();
         match result {
             Ok(note) => {
                 let forced = !next["title"].is_null() && note["title"] != next["title"];
@@ -1223,6 +1267,9 @@ pub fn save(ui: &Rc<Ui>, doc: &Rc<Doc>, then: AfterSave) {
                 }
                 if let Some(then) = then {
                     then(&ui, &doc);
+                }
+                if close && ui.note_tabs.page_num(&doc.draft.layout).is_some() {
+                    close_saved(&ui, &doc);
                 }
             }
             Err(error) if bus_code(&error) == "notes.edit_conflict" => {
@@ -1301,6 +1348,7 @@ pub fn save_as(ui: &Rc<Ui>, doc: &Rc<Doc>) {
         match result {
             Ok(note) => {
                 let position = ui.note_tabs.page_num(&doc.draft.layout);
+                let close = doc.close_pending.take();
                 // The editor stayed open during the round trip: keep what was typed meanwhile
                 // (over the stored copy, so it shows as modified) and the cursor with it.
                 let current = (doc.draft.snapshot)();
@@ -1318,8 +1366,13 @@ pub fn save_as(ui: &Rc<Ui>, doc: &Rc<Doc>) {
                 fresh.buffer.place_cursor(&fresh.buffer.iter_at_offset(cursor.min(fresh.buffer.char_count())));
                 fresh.view.grab_focus();
                 super::refresh_notes(&ui);
+                // Closed while it was saved: the copy's tab closes in its place.
+                if close {
+                    request_close(&ui, &fresh);
+                }
             }
             Err(error) => {
+                doc.close_pending.set(false);
                 doc.show_notice(&ui, &format!("Could not save a copy: {}", readable(&error)), Vec::new());
                 doc.refresh_state(&ui);
             }
@@ -1395,7 +1448,10 @@ fn close_saved(ui: &Rc<Ui>, doc: &Rc<Doc>) {
 
 /// Ctrl+W, the tab's close button and middle-click.
 pub fn request_close(ui: &Rc<Ui>, doc: &Rc<Doc>) {
+    // Common with autosave on: the tab closes once the save in flight lands.
     if doc.draft.busy.get() {
+        doc.close_pending.set(true);
+        doc.flash("Closing once saved");
         return;
     }
     if !doc.dirty() {

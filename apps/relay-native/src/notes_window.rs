@@ -118,6 +118,24 @@ impl NotesWindow {
             restored: Cell::new(false),
             persist_timer: RefCell::new(None),
         });
+        // The size it is left at is kept with the rest of the window (`persist`): GTK follows
+        // a resize in the default size, except while the window is maximized.
+        let keep = |ui: &Rc<Ui>| {
+            let weak = Rc::downgrade(ui);
+            move || {
+                if let Some(ui) = weak.upgrade() {
+                    if let Some(owner) = ui.notes_window.borrow().as_ref() {
+                        owner.persist(&ui);
+                    }
+                }
+            }
+        };
+        let kept = keep(ui);
+        owned.window.connect_default_width_notify(move |_| kept());
+        let kept = keep(ui);
+        owned.window.connect_default_height_notify(move |_| kept());
+        let kept = keep(ui);
+        owned.window.connect_maximized_notify(move |_| kept());
         let weak = Rc::downgrade(ui);
         owned.window.connect_close_request(move |window| {
             window.set_visible(false);
@@ -152,7 +170,9 @@ impl NotesWindow {
                         return;
                     };
                     owner.persist_timer.borrow_mut().take();
-                    let mut value = json!({"rail_width":owner.rail_width.get(),"rail_collapsed":owner.rail_collapsed.get()});
+                    let window = &owner.window;
+                    let mut value = json!({"rail_width":owner.rail_width.get(),"rail_collapsed":owner.rail_collapsed.get(),
+                        "width":window.default_width(),"height":window.default_height(),"maximized":window.is_maximized()});
                     if let (Some(value), Value::Object(state)) = (value.as_object_mut(), super::note_pages::saved_state()) {
                         value.extend(state);
                     }
@@ -217,6 +237,13 @@ pub fn refresh_notes(ui: &Rc<Ui>) {
                 Ok(value) => {
                     if let Some(width) = value["value"]["rail_width"].as_i64() {
                         window.rail_width.set(width.clamp(180, 600) as i32);
+                    }
+                    // Back at the size it was left at; it opened at the default a moment ago.
+                    if let (Some(width), Some(height)) = (value["value"]["width"].as_i64(), value["value"]["height"].as_i64()) {
+                        window.window.set_default_size(width.clamp(480, 8192) as i32, height.clamp(360, 8192) as i32);
+                    }
+                    if value["value"]["maximized"] == true {
+                        window.window.maximize();
                     }
                     window
                         .rail_collapsed

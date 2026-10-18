@@ -1,8 +1,8 @@
 //! The find and replace bar Notes and Code share, in the KWrite mould: match case, whole words
 //! and regular expressions, "3 of 12", Previous and Next (Shift+F3 and F3, which work with the
-//! bar closed too, from the last query) and a Replace row Ctrl+H shows. GtkSourceView's search
-//! finds; each owner places the bar, names it and binds its own shortcuts to `open`, `step`
-//! and `close`.
+//! bar closed too, from the last search and its options) and a Replace row Ctrl+H shows.
+//! GtkSourceView's search finds; each owner places the bar, names it and binds its own
+//! shortcuts to `open`, `step` and `close`.
 use crate::app::{button, label};
 use gtk4 as gtk;
 use sourceview5::prelude::*;
@@ -10,19 +10,36 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::thread::LocalKey;
 
+/// The last search a bar ran: its query and its three options, which go together to the next
+/// bar that starts from it.
+pub struct Memory {
+    query: String,
+    case: bool,
+    word: bool,
+    regex: bool,
+}
+impl Memory {
+    pub const fn new() -> Self {
+        Self { query: String::new(), case: false, word: false, regex: false }
+    }
+}
+
 pub struct FindBar {
     pub bar: gtk::Grid,
     pub query: gtk::Entry,
     replacement: gtk::Entry,
     count: gtk::Label,
     replace_row: gtk::Box,
+    case: gtk::ToggleButton,
+    word: gtk::ToggleButton,
+    regex: gtk::ToggleButton,
     view: sourceview5::View,
     buffer: sourceview5::Buffer,
     search: sourceview5::SearchContext,
     /// A result ("Replaced 3") the count shows until the next search.
     note: RefCell<Option<String>>,
-    /// The last query, which an empty bar starts from: one for every note, Code's its own.
-    memory: &'static LocalKey<RefCell<String>>,
+    /// The last search, which an empty bar starts from: one for every note, Code's its own.
+    memory: &'static LocalKey<RefCell<Memory>>,
 }
 
 fn small_key(icon: &str, tip: &str) -> gtk::Button {
@@ -61,7 +78,7 @@ impl FindBar {
         buffer: &sourceview5::Buffer,
         name: &str,
         placeholder: &str,
-        memory: &'static LocalKey<RefCell<String>>,
+        memory: &'static LocalKey<RefCell<Memory>>,
     ) -> Rc<Self> {
         let settings = sourceview5::SearchSettings::new();
         settings.set_wrap_around(true);
@@ -114,6 +131,9 @@ impl FindBar {
             replacement,
             count,
             replace_row,
+            case: case.clone(),
+            word: word.clone(),
+            regex: regex.clone(),
             view: view.clone(),
             buffer: buffer.clone(),
             search,
@@ -184,7 +204,7 @@ impl FindBar {
                 query.set_text(&selected);
             }
         } else if query.text().is_empty() {
-            query.set_text(&self.memory.with(|q| q.borrow().clone()));
+            self.recall();
         }
         self.replacement.set_visible(replace);
         self.replace_row.set_visible(replace);
@@ -216,6 +236,20 @@ impl FindBar {
         self.bar.is_visible()
     }
 
+    /// Take up the last search: its options first, so the query is searched with them.
+    fn recall(&self) {
+        let (query, case, word, regex) = self.memory.with(|m| {
+            let m = m.borrow();
+            (m.query.clone(), m.case, m.word, m.regex)
+        });
+        for (key, on) in [(&self.case, case), (&self.word, word), (&self.regex, regex)] {
+            if key.is_active() != on {
+                key.set_active(on);
+            }
+        }
+        self.query.set_text(&query);
+    }
+
     fn sync_query(&self) {
         self.note.borrow_mut().take();
         let value = self.query.text();
@@ -224,7 +258,11 @@ impl FindBar {
             settings.set_search_text(None);
         } else {
             settings.set_search_text(Some(&value));
-            self.memory.with(|q| value.as_str().clone_into(&mut q.borrow_mut()));
+            self.memory.with(|m| {
+                let mut m = m.borrow_mut();
+                value.as_str().clone_into(&mut m.query);
+                (m.case, m.word, m.regex) = (self.case.is_active(), self.word.is_active(), self.regex.is_active());
+            });
         }
     }
 
@@ -250,7 +288,7 @@ impl FindBar {
             (at, at)
         });
         if self.query.text().is_empty() {
-            self.query.set_text(&self.memory.with(|q| q.borrow().clone()));
+            self.recall();
         }
         self.sync_query();
         if self.query.text().is_empty() {
