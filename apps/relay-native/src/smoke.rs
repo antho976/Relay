@@ -985,6 +985,11 @@ pub fn install(ui: &Rc<Ui>) {
                 crate::design::smoke_open(&navigate);
                 return;
             }
+            // Threads: the newest thread (scripts/threads-smoke.py seeds it), or a new one.
+            if page == "thread" || page == "threads" {
+                crate::money::threads::smoke_open(&navigate, page == "thread");
+                return;
+            }
             navigate.navigate(if page == "launch" { "agents" } else { &page });
             if fixture && matches!(page.as_str(), "board" | "notes" | "launch") {
                 track("fixture edit", edit_fixture(navigate.clone(), page.clone()));

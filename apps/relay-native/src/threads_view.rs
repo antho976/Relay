@@ -367,6 +367,9 @@ pub fn page() -> gtk::Box {
     title_key.set_child(Some(&title_row));
     title_key.add_css_class("threads-title-key");
     title_key.set_widget_name("threads-title");
+    // 34px and centred in the strip, as the Dev view's project pill: filling the strip's 52px it
+    // ran down onto the conversation's first line.
+    title_key.set_valign(gtk::Align::Center);
     let menu = gtk::Box::new(gtk::Orientation::Vertical, 6);
     menu.add_css_class("threads-menu");
     let rename = gtk::Entry::new();
@@ -1478,6 +1481,21 @@ fn check_claude(ui: &Rc<Ui>) {
     });
 }
 
+/// The capture harness's way in (smoke.rs `thread` and `threads`): the newest thread, or a new one.
+pub fn smoke_open(ui: &Rc<Ui>, newest: bool) {
+    crate::money::set_space(ui, true);
+    if !newest {
+        new_thread(ui);
+        return;
+    }
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        if let Some(id) = ui.call("thread.list", json!({})).await.ok().and_then(|list| list["threads"][0]["id"].as_i64()) {
+            open(&ui, id);
+        }
+    });
+}
+
 /// Open thread `id`: read it whole and draw it.
 pub fn open(ui: &Rc<Ui>, id: i64) {
     reset(Some(id));
@@ -1981,6 +1999,9 @@ fn draw_reply(parent: &gtk::Box, text: &str) {
     }
 }
 
+/// The width in characters a table cell is measured at before it may wrap.
+const TABLE_CELL_CHARS: i32 = 24;
+
 /// A Markdown table: its header over a rule, figures right-aligned in Geist Mono, and a scroller
 /// of its own when it is wider than the column.
 fn table(rows: &[Vec<String>]) -> gtk::ScrolledWindow {
@@ -2001,6 +2022,12 @@ fn table(rows: &[Vec<String>]) -> gtk::ScrolledWindow {
         let at = if r == 0 { 0 } else { r as i32 + 1 };
         for (c, cell) in row.iter().enumerate() {
             let l = reply_label(cell, if r == 0 { "threads-table-head" } else { "threads-table-cell" });
+            // In a scroller of its own, a wrapping cell is measured at its narrowest, a letter a
+            // line, and the table took that height: four rows stood 750px tall, mostly blank. A
+            // cell keeps its words on one line up to TABLE_CELL_CHARS, and wraps past twice that.
+            let chars = l.text().chars().count() as i32;
+            l.set_width_chars(chars.min(TABLE_CELL_CHARS));
+            l.set_max_width_chars(TABLE_CELL_CHARS * 2);
             if figures.get(c).copied().unwrap_or(false) {
                 l.set_xalign(1.0);
                 if r > 0 {
@@ -2015,7 +2042,9 @@ fn table(rows: &[Vec<String>]) -> gtk::ScrolledWindow {
         rule.add_css_class("threads-table-rule");
         grid.attach(&rule, 0, 1, width as i32, 1);
     }
-    let scroll = gtk::ScrolledWindow::builder().child(&grid).propagate_natural_height(true).build();
+    // As wide as its columns, up to the column's width, where it scrolls.
+    let scroll = gtk::ScrolledWindow::builder().child(&grid).propagate_natural_height(true).propagate_natural_width(true).build();
+    scroll.set_halign(gtk::Align::Start);
     scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
     scroll.add_css_class("threads-table-scroll");
     scroll

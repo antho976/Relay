@@ -1600,6 +1600,13 @@ impl Editor {
         self.scope_revision.set(self.scope_revision.get() + 1);
         let revision = self.scope_revision.get();
         let project = ui.project.get();
+        if project == 0 {
+            // No project (a fresh install, or one used for Threads alone): no worktrees to list,
+            // where asking showed "NotFound project.not_found: no project 0" on every start.
+            self.worktrees.borrow_mut().clear();
+            self.update_scope_label(ui);
+            return;
+        }
         let e = self.clone();
         let ui = ui.clone();
         glib::spawn_future_local(async move {
