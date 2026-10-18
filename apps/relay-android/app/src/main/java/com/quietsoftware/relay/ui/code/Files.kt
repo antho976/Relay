@@ -38,8 +38,11 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -88,21 +91,29 @@ private sealed interface TreeRow {
     class Note(val key: String, val text: String, override val depth: Int) : TreeRow
 }
 
+/** The open folders as a plain list, for the screen's saved state. */
+private val OPEN_SAVER = listSaver<SnapshotStateList<String>, String>(save = { it.toList() }, restore = { it.toMutableStateList() })
+
 /**
  * The tree of one worktree. The root and each open folder are read on their own, one level
- * deep: a folder costs one `file.tree` call, and nothing below an open folder is read.
+ * deep: a folder costs one `file.tree` call, and nothing below an open folder is read. [open]
+ * is the screen's, so the folders stay open after a file and back.
  */
 private class TreeModel(
     private val nav: Nav,
     private val projectId: Long,
     private val worktree: String?,
     private val scope: CoroutineScope,
+    val open: SnapshotStateList<String>,
 ) {
-    val open = mutableStateListOf<String>()
     val reads = mutableStateMapOf<String, Live>()
     private val jobs = HashMap<String, Job>()
 
-    fun start() = read("")
+    /** The root, and every folder still open from before. */
+    fun start() {
+        read("")
+        for (path in open) read(path)
+    }
 
     fun stop() {
         jobs.values.forEach { it.cancel() }
@@ -181,7 +192,8 @@ fun FilesScreen(projectId: Long, worktree: String?, nav: Nav) {
     val listed = rememberLive(nav, "worktree.list", codePayload(projectId, null)).result?.decodeAs<WorktreeList>()?.worktrees.orEmpty()
     val primary = primaryOf(listed, project?.path)
     val current = listed.firstOrNull { it.path == wt } ?: primary
-    val tree = remember(wt) { TreeModel(nav, projectId, wt, scope) }
+    val opened = rememberSaveable(wt, saver = OPEN_SAVER) { mutableStateListOf<String>() }
+    val tree = remember(wt) { TreeModel(nav, projectId, wt, scope, opened) }
     DisposableEffect(tree) {
         tree.start()
         onDispose { tree.stop() }
@@ -193,7 +205,11 @@ fun FilesScreen(projectId: Long, worktree: String?, nav: Nav) {
     var query by rememberSaveable { mutableStateOf("") }
     var glob by rememberSaveable { mutableStateOf("") }
     var regex by rememberSaveable { mutableStateOf(false) }
-    var submitted by remember { mutableStateOf<SearchReq?>(null) }
+    // The search that ran, kept in its parts so its hits are back after a file.
+    var askedText by rememberSaveable { mutableStateOf<String?>(null) }
+    var askedGlob by rememberSaveable { mutableStateOf("") }
+    var askedRegex by rememberSaveable { mutableStateOf(false) }
+    val submitted = askedText?.let { SearchReq(it, askedGlob, askedRegex) }
     val hits = rememberLive(nav, "file.search", submitted?.let { req ->
         codePayload(projectId, wt) {
             put("query", req.text)
@@ -245,7 +261,10 @@ fun FilesScreen(projectId: Long, worktree: String?, nav: Nav) {
 
     fun submit() {
         val text = query.trim()
-        if (text.isNotEmpty()) submitted = SearchReq(text, glob.trim(), regex)
+        if (text.isEmpty()) return
+        askedText = text
+        askedGlob = glob.trim()
+        askedRegex = regex
     }
 
     Page {
@@ -255,8 +274,8 @@ fun FilesScreen(projectId: Long, worktree: String?, nav: Nav) {
                 onBack = nav::back,
                 subtitle = listOfNotNull(project?.name?.ifBlank { null }, current?.branch?.ifBlank { null }).joinToString(" · ").ifBlank { null },
                 actions = {
-                    IconKey("search", { searching = !searching }, selected = searching)
-                    IconKey("file-plus", { sheet = FilesSheet.NewIn("") }, enabled = online)
+                    IconKey("search", { searching = !searching }, selected = searching, label = if (searching) "Hide the search" else "Search")
+                    IconKey("file-plus", { sheet = FilesSheet.NewIn("") }, enabled = online, label = "New file or folder")
                 },
             )
             CodeBody {
@@ -275,7 +294,7 @@ fun FilesScreen(projectId: Long, worktree: String?, nav: Nav) {
                             modifier = Modifier.weight(1f),
                             placeholder = "Search in worktree",
                             leading = "search",
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(onSearch = { submit() }),
                         )
                     }
@@ -286,7 +305,7 @@ fun FilesScreen(projectId: Long, worktree: String?, nav: Nav) {
                             modifier = Modifier.weight(1f),
                             placeholder = "Only files like *.kt",
                             leading = "file",
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(onSearch = { submit() }),
                         )
                         Pill("Regex", selected = regex, onClick = { regex = !regex })
@@ -328,6 +347,9 @@ fun FilesScreen(projectId: Long, worktree: String?, nav: Nav) {
                                 )
                                 is TreeRow.Note -> NoteLine(row.text, row.depth)
                             }
+                        }
+                        if (!unread && rows.isNotEmpty()) {
+                            item(key = "hint") { T("Hold a folder or file for more", Modifier.padding(horizontal = 16.dp, vertical = 10.dp), Relay.type.caption, Relay.colors.ink3) }
                         }
                     }
                 }
@@ -603,10 +625,10 @@ fun FileScreen(projectId: Long, path: String, worktree: String?, nav: Nav) {
                 actions = {
                     if (editing) {
                         Key("Save", { save(false) }, kind = KeyKind.Primary, compact = true, enabled = dirty && online && !saving)
-                        IconKey("close", { requestClose() }, tint = c.ink2)
+                        IconKey("close", { requestClose() }, tint = c.ink2, label = if (dirty) "Discard edits" else "Stop editing")
                     } else if (trashed == null) {
-                        if (editable) IconKey("edit", { startEdit() }, enabled = online)
-                        IconKey("more", { sheet = FileSheet.Menu })
+                        if (editable) IconKey("edit", { startEdit() }, enabled = online, label = "Edit file")
+                        IconKey("more", { sheet = FileSheet.Menu }, label = "File actions")
                     }
                 },
             )
@@ -711,7 +733,7 @@ private fun ColumnScope.EditArea(draft: String, onChange: (String) -> Unit) {
             modifier = Modifier.fillMaxWidth(),
             textStyle = codeTextStyle.copy(color = c.ink),
             cursorBrush = SolidColor(c.ink),
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
         )
     }
 }

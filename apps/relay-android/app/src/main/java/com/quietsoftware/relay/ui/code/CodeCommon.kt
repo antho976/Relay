@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -48,6 +49,7 @@ import com.quietsoftware.relay.ui.kit.Pill
 import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.column
+import com.quietsoftware.relay.ui.tasks.rememberSheetFocus
 import com.quietsoftware.relay.ui.theme.Palette
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.CoroutineScope
@@ -146,15 +148,17 @@ fun ActionSheet(title: String, subtitle: String?, actions: List<SheetAction>, on
         T(title, style = Relay.type.title, color = c.ink, maxLines = 1)
         subtitle?.let { T(it, style = Relay.type.mono, color = c.ink3, maxLines = 1) }
         Gap(8.dp)
+        // An action that is off reads quiet, red or not, and does not take the tap.
         for (a in actions) {
             val tint = when {
+                !a.enabled -> c.ink3
                 a.danger -> c.heldText
-                a.enabled -> c.ink2
-                else -> c.ink3
+                else -> c.ink2
             }
-            ListRow(onClick = { if (a.enabled) { onDismiss(); a.run() } }) {
+            ListRow(onClick = if (a.enabled) ({ onDismiss(); a.run() }) else null) {
                 Glyph(a.glyph, 18.dp, tint)
-                T(a.label, Modifier.weight(1f), Relay.type.ui, if (a.danger) c.heldText else if (a.enabled) c.ink else c.ink3)
+                T(a.label, Modifier.weight(1f), Relay.type.ui, if (!a.enabled) c.ink3 else if (a.danger) c.heldText else c.ink)
+                if (!a.enabled) T("Needs the PC", style = Relay.type.caption, color = c.ink3, maxLines = 1)
             }
         }
     }
@@ -183,13 +187,15 @@ fun NameSheet(title: String, initial: String, confirm: String, onSubmit: (String
     var name by remember { mutableStateOf(initial) }
     val clean = name.trim()
     SheetFrame(onDismiss) {
+        val focus = rememberSheetFocus()
         T(title, style = Relay.type.title, color = c.ink)
         Gap(12.dp)
         Field(
             value = name,
             onValueChange = { name = it },
+            modifier = Modifier.focusRequester(focus),
             placeholder = "Name",
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { if (clean.isNotEmpty()) onSubmit(clean) }),
         )
         Gap(16.dp)
