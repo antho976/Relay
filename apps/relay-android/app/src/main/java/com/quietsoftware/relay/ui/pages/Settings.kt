@@ -50,6 +50,8 @@ import com.quietsoftware.relay.ui.kit.TOUCH
 import com.quietsoftware.relay.ui.kit.Toggle
 import com.quietsoftware.relay.ui.shell.Page
 import com.quietsoftware.relay.ui.shell.PageBar
+import com.quietsoftware.relay.ui.term.MAX_SP
+import com.quietsoftware.relay.ui.term.MIN_SP
 import com.quietsoftware.relay.ui.theme.Palette
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.launch
@@ -144,12 +146,20 @@ fun SettingsScreen(nav: Nav) {
                         Toggle(p.keepScreenOn, { on -> nav.shell.update { prefs -> prefs.copy(keepScreenOn = on) } })
                     }
                     Hairline()
-                    SettingRow("Text size", "In a terminal, from 9 to 16 points.") {
+                    SettingRow("Type straight to the terminal", "Each key goes as it is pressed, for vim, a shell or a menu, with Ctrl and Alt on the key row. Off, a message box sends a line at a time.") {
+                        Toggle(p.terminalDirect, { on -> nav.shell.update { prefs -> prefs.copy(terminalDirect = on) } })
+                    }
+                    Hairline()
+                    SettingRow("Extra keys in a conversation", "Arrows, Tab, Space, Enter and Ctrl-C over an agent's message box.") {
+                        Toggle(p.chatKeys, { on -> nav.shell.update { prefs -> prefs.copy(chatKeys = on) } })
+                    }
+                    Hairline()
+                    SettingRow("Text size", "In a terminal, from ${MIN_SP.toInt()} to ${MAX_SP.toInt()} points; a pinch changes it too.") {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconKey(
                                 "minus",
-                                { nav.shell.update { prefs -> prefs.copy(terminalFont = (prefs.terminalFont - 1f).coerceIn(9f, 16f)) } },
-                                enabled = p.terminalFont > 9f,
+                                { nav.shell.update { prefs -> prefs.copy(terminalFont = (prefs.terminalFont - 1f).coerceIn(MIN_SP, MAX_SP)) } },
+                                enabled = p.terminalFont > MIN_SP,
                             )
                             T(
                                 "${p.terminalFont.toInt()} sp",
@@ -159,8 +169,8 @@ fun SettingsScreen(nav: Nav) {
                             )
                             IconKey(
                                 "plus",
-                                { nav.shell.update { prefs -> prefs.copy(terminalFont = (prefs.terminalFont + 1f).coerceIn(9f, 16f)) } },
-                                enabled = p.terminalFont < 16f,
+                                { nav.shell.update { prefs -> prefs.copy(terminalFont = (prefs.terminalFont + 1f).coerceIn(MIN_SP, MAX_SP)) } },
+                                enabled = p.terminalFont < MAX_SP,
                             )
                         }
                     }
