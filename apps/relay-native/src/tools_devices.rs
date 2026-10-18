@@ -12,12 +12,11 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
     if !current(ui, "devices", project, generation) {
         return;
     }
-    let devices = match result {
-        Ok(v) => rows(&v, "devices"),
-        Err(e) => {
-            ui.show_error(&e.to_string());
-            return;
-        }
+    // adb missing or not answering: the page is built anyway, since a release build needs no
+    // device, and the device list says why it is empty.
+    let (devices, unavailable) = match result {
+        Ok(v) => (rows(&v, "devices"), None),
+        Err(e) => (Vec::new(), Some(e)),
     };
     let avds = avds.map(|value| rows(&value, "avds"));
     let page = &ui.pages["devices"];
@@ -89,6 +88,9 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
     let list = signing_box.prev_sibling().unwrap().downcast::<gtk::Box>().unwrap();
     clear(&list);
     let all = section(&list, "Devices");
+    if let Some(error) = unavailable {
+        unavailable_devices(&all, &error);
+    }
     let avds = listed_avds(&all, avds);
     device_list(ui, &all, &devices, &avds);
     match signing {
@@ -143,11 +145,12 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
                         text(&run, "state")
                     ),
                 );
+                let started = text(&run, "started_at");
                 row.append(&paragraph(&format!(
                     "{}\n{} · {}",
                     text(&run, "worktree"),
                     text(&run, "variant"),
-                    text(&run, "started_at")
+                    crate::relative::ago(started, crate::relative::Form::Long).unwrap_or_else(|| started.to_string())
                 )));
                 if let Some(artifact) = run["artifact"].as_str() {
                     row.append(&paragraph(&format!(
@@ -158,7 +161,17 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
                     let copy = button("Copy artifact path", "quiet");
                     row.append(&copy);
                     let path = artifact.to_string();
-                    copy.connect_clicked(move |b| b.clipboard().set_text(&path));
+                    // It says Copied for a moment, as the panel's Copy path does.
+                    copy.connect_clicked(move |key| {
+                        key.clipboard().set_text(&path);
+                        key.set_label("Copied");
+                        let key = key.downgrade();
+                        glib::timeout_add_local_once(std::time::Duration::from_millis(1400), move || {
+                            if let Some(key) = key.upgrade() {
+                                key.set_label("Copy artifact path");
+                            }
+                        });
+                    });
                 }
                 if is_active(&run) {
                     action(
@@ -208,10 +221,17 @@ fn listed_avds(parent: &gtk::Box, avds: Result<Vec<Value>, crate::client::Error>
     match avds {
         Ok(avds) => avds,
         Err(error) => {
-            parent.append(&paragraph(&format!("Virtual devices unavailable: {error}")));
+            let why = super::plugins::explain_error("avd.list", &error);
+            parent.append(&paragraph(&format!("Virtual devices unavailable: {why}")));
             Vec::new()
         }
     }
+}
+
+/// The line in `parent` saying why `device.list` gave no devices.
+fn unavailable_devices(parent: &gtk::Box, error: &crate::client::Error) {
+    let why = super::plugins::explain_error("device.list", error);
+    parent.append(&paragraph(&format!("Devices unavailable: {why}")));
 }
 
 /// A build or run that is still going, and so has a Stop button.
@@ -636,12 +656,12 @@ fn build_form(ui: &Rc<Ui>, page: &gtk::Box, project: i64, worktrees: &[Value], l
         ("Build artifact", "device.build"),
     ] {
         let key = button(title, "primary");
-        key.set_sensitive(project > 0 && (op != "device.run" || target.active_id().is_some()));
+        ready(&key, project, (op == "device.run").then(|| target.active_id().is_some()));
         if op == "device.run" {
             let run = key.downgrade();
             target.connect_changed(move |target| {
                 if let Some(run) = run.upgrade() {
-                    run.set_sensitive(project > 0 && target.active_id().is_some());
+                    ready(&run, project, Some(target.active_id().is_some()));
                 }
             });
         }
@@ -669,6 +689,20 @@ fn build_form(ui: &Rc<Ui>, page: &gtk::Box, project: i64, worktrees: &[Value], l
         }
     }
     tree
+}
+
+/// Turns a build or run key on, or off with why as its tooltip. `device` is whether a target
+/// is chosen, for a run; a build needs none.
+fn ready(key: &gtk::Button, project: i64, device: Option<bool>) {
+    let why = if project <= 0 {
+        Some("Open a project first")
+    } else if device == Some(false) {
+        Some("Connect a device or start a virtual one first")
+    } else {
+        None
+    };
+    key.set_sensitive(why.is_none());
+    key.set_tooltip_text(why);
 }
 
 fn avd_form(ui: &Rc<Ui>, page: &gtk::Box) {
@@ -1085,7 +1119,7 @@ impl Parts {
 /// artifact format and a signing key being typed stay as they are.
 struct Live {
     devices: gtk::Box,
-    /// "Run on" and its devices: absent without a project, hidden with no device connected.
+    /// "Target device" and its devices: absent without a project, hidden with no device connected.
     target: Option<(gtk::Label, gtk::ComboBoxText)>,
     /// Release signing: absent without a project.
     signing: Option<gtk::Box>,
@@ -1116,7 +1150,7 @@ impl Live {
             let devices = match devices {
                 Ok(v) => rows(&v, "devices"),
                 Err(e) => {
-                    self.devices.append(&paragraph(&e.to_string()));
+                    unavailable_devices(&self.devices, &e);
                     Vec::new()
                 }
             };
@@ -1152,7 +1186,7 @@ impl Live {
         }
     }
 
-    /// Refills "Run on", keeping the chosen device while it is still connected.
+    /// Refills "Target device", keeping the chosen device while it is still connected.
     fn sync_target(&self, devices: &[Value], avds: &[Value]) {
         let Some((caption, target)) = &self.target else { return };
         let selected = target.active_id();
@@ -1253,8 +1287,8 @@ pub fn open(ui: &Rc<Ui>) {
     panel.body.append(&switch);
     let run = gtk::Box::new(gtk::Orientation::Vertical, 12);
     let release = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    tabs.add_titled(&run, Some("run"), "RUN");
-    tabs.add_titled(&release, Some("release"), "RELEASE");
+    tabs.add_titled(&run, Some("run"), "Run");
+    tabs.add_titled(&release, Some("release"), "Release");
     panel.body.append(&tabs);
     run.append(&paragraph("Loading devices…"));
     release.append(&paragraph("Loading worktrees…"));
@@ -1266,7 +1300,8 @@ pub fn open(ui: &Rc<Ui>) {
         clear(&release);
         let live = Live {
             devices: gtk::Box::new(gtk::Orientation::Vertical, 6),
-            target: (project > 0).then(|| (label("Run on", "dim"), gtk::ComboBoxText::new())),
+            // The page's words: "Target device", "Artifact format", "APK".
+            target: (project > 0).then(|| (label("Target device", "dim"), gtk::ComboBoxText::new())),
             signing: (project > 0).then(|| gtk::Box::new(gtk::Orientation::Vertical, 12)),
             run_states: gtk::Box::new(gtk::Orientation::Vertical, 12),
             release_states: gtk::Box::new(gtk::Orientation::Vertical, 12),
@@ -1296,11 +1331,11 @@ pub fn open(ui: &Rc<Ui>) {
                 form.append(target);
             }
             let format = gtk::ComboBoxText::new();
-            format.append(Some("bundle"), "Android App Bundle (.aab) · Google Play");
-            format.append(Some("apk"), "Android package (.apk)");
+            format.append(Some("bundle"), "Android App Bundle");
+            format.append(Some("apk"), "APK");
             format.set_active(Some(0));
             if is_release {
-                field("Artifact", &format, form);
+                field("Artifact format", &format, form);
                 form.append(signing);
             }
             let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -1319,12 +1354,12 @@ pub fn open(ui: &Rc<Ui>) {
                     },
                     if publish { "quiet" } else { "primary" },
                 );
-                key.set_sensitive(is_release);
                 if !is_release {
+                    ready(&key, project, Some(target.active_id().is_some()));
                     let run = key.downgrade();
                     target.connect_changed(move |target| {
                         if let Some(run) = run.upgrade() {
-                            run.set_sensitive(target.active_id().is_some());
+                            ready(&run, project, Some(target.active_id().is_some()));
                         }
                     });
                 }
