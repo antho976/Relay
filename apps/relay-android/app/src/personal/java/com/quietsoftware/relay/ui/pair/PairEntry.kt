@@ -51,8 +51,9 @@ import kotlinx.coroutines.launch
 
 /**
  * PERSONAL BUILD ONLY. Pairing goes through Antho's server instead of a QR code (docs/CLOUD.md,
- * "Connecting through your server"): one tap on Discord, then Accept on the PC's screen. The
- * builds anyone can install keep `PairScreen` (src/standard).
+ * "Connecting through your server"): one tap on Discord, then Accept on the PC's screen. Then the
+ * server's copy, the same way, as a second host beside the PC. The builds anyone can install keep
+ * `PairScreen` (src/standard).
  */
 @Composable
 fun PairEntry(@Suppress("UNUSED_PARAMETER") link: String?, nav: Nav) = ConnectScreen(nav)
@@ -66,6 +67,19 @@ private sealed interface Step {
     /** The PC's window is open: the phone presents its code, and the PC asks on its screen. */
     data class Pairing(val host: String) : Step
     data class Problem(val text: String) : Step
+}
+
+/** Once the PC is paired: its server's copy too (docs/CLOUD.md), asked of the bot as `relay-cloud`. */
+private sealed interface CopyStep : Step {
+    /** Paired with the PC; the server's copy is offered. */
+    data class Offered(val host: String) : CopyStep
+
+    /** Asking the bot; [asked] is null until it took the request. */
+    data class Waiting(val asked: Asked?) : CopyStep
+
+    /** The bot does not know `relay-cloud` yet: a link printed on the server, pasted. */
+    data object Paste : CopyStep
+    data class Problem(val text: String) : CopyStep
 }
 
 @Composable
@@ -112,7 +126,10 @@ private fun ConnectScreen(nav: Nav) {
                             .onSuccess {
                                 // The background link only when the person keeps it (Stay connected).
                                 if (nav.shell.state.value.prefs.stayConnected) LinkService.start(context)
-                                nav.start()
+                                // Its server's copy is offered next, unless this phone holds one already.
+                                val copied = nav.relay.cloud.current() != null
+                                if (!copied) step = CopyStep.Offered(target.host)
+                                if (copied) nav.start()
                             }
                             .onFailure { e ->
                                 step = Step.Problem((e as? RefusalException)?.refusal?.text ?: e.message ?: "Pairing failed")
@@ -147,6 +164,61 @@ private fun ConnectScreen(nav: Nav) {
         step = Step.Idle
     }
 
+    /** The server's copy, asked of the bot the same way; a bot that does not offer it yet gets a pasted link instead. */
+    fun connectCopy() {
+        if (job?.isActive == true) return
+        job = scope.launch {
+            step = CopyStep.Waiting(null)
+            val asked = try {
+                api.ask(deviceName(), ServerConnect.KIND_CLOUD)
+            } catch (e: ConnectFailure) {
+                step = if (e.unsupported) CopyStep.Paste else CopyStep.Problem(e.message.orEmpty())
+                return@launch
+            }
+            step = CopyStep.Waiting(asked)
+            var troubles = 0
+            while (true) {
+                delay(2_000)
+                when (val reply = api.claim(asked)) {
+                    Reply.Waiting, Reply.WaitingPc -> Unit
+                    is Reply.Ready -> {
+                        val target = PairLink.parse(reply.link)
+                        if (target == null) {
+                            step = CopyStep.Problem("Your server's link did not read. Ask again.")
+                            return@launch
+                        }
+                        nav.relay.pairCloud(target)
+                            .onSuccess { nav.start() }
+                            .onFailure { e -> step = CopyStep.Problem((e as? RefusalException)?.refusal?.text ?: e.message ?: "Connecting failed") }
+                        return@launch
+                    }
+                    Reply.Denied -> {
+                        step = CopyStep.Problem("The request was denied on Discord.")
+                        return@launch
+                    }
+                    Reply.Expired -> {
+                        step = CopyStep.Problem("The request expired. Ask again.")
+                        return@launch
+                    }
+                    Reply.Spent -> {
+                        step = CopyStep.Problem("The request was used up. Ask again.")
+                        return@launch
+                    }
+                    is Reply.Trouble -> if (++troubles >= 10) {
+                        step = CopyStep.Problem(reply.reason)
+                        return@launch
+                    }
+                }
+            }
+        }
+    }
+
+    /** Done with pairing, with or without the server's copy. */
+    fun finish() {
+        job?.cancel()
+        nav.start()
+    }
+
     Page {
         Column(Modifier.fillMaxSize()) {
             if (paired.pc != null) PageBar("Pair a PC", nav::back) else Gap(0.dp)
@@ -161,13 +233,15 @@ private fun ConnectScreen(nav: Nav) {
                             T("relay", Modifier.padding(start = 9.dp), Relay.type.brand.copy(fontSize = Relay.type.heading.fontSize), c.ink)
                         }
                     }
-                    T("Pair this phone with your PC", Modifier.padding(top = 12.dp), Relay.type.heading, c.ink)
+                    val copying = step is CopyStep
+                    T(if (copying) "Your server's copy" else "Pair this phone with your PC", Modifier.padding(top = 12.dp), Relay.type.heading, c.ink)
                     T(
-                        "Your server asks you on Discord, then your PC asks you on its screen. Nothing to scan or type, on your WiFi or away from it.",
+                        if (copying) "Tally and Avex sync with your server, PC on or off. Connected, this phone reads them there while the PC is off."
+                        else "Your server asks you on Discord, then your PC asks you on its screen. Nothing to scan or type, on your WiFi or away from it.",
                         style = Relay.type.body,
                         color = c.ink2,
                     )
-                    paired.pc?.let { pc ->
+                    paired.pc?.takeIf { !copying }?.let { pc ->
                         val unsent = paired.outbox.size
                         T(
                             "Pairing a different PC replaces ${pc.name.ifBlank { "this one" }}: this phone's copy of its data" +
@@ -201,6 +275,41 @@ private fun ConnectScreen(nav: Nav) {
                         is Step.Problem -> {
                             T(s.text, style = Relay.type.ui, color = c.heldText)
                             Key("Ask again", { step = Step.Idle; connect() }, Modifier.fillMaxWidth(), kind = KeyKind.Primary, glyph = "refresh")
+                        }
+                        is CopyStep.Offered -> {
+                            Slab(Modifier.fillMaxWidth()) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Dot(c.live, 7.dp)
+                                    T("  Paired with ${s.host.ifBlank { "your PC" }}", style = Relay.type.uiMedium, color = c.ink)
+                                }
+                                T("Connect your server's copy as well, and Tally's and Avex's readings stay current here while the PC is off.", Modifier.padding(top = 6.dp), Relay.type.caption, c.ink3)
+                            }
+                            Key("Also connect your server's copy", ::connectCopy, Modifier.fillMaxWidth(), kind = KeyKind.Primary, glyph = "cloud")
+                            Key("Not now", ::finish, Modifier.fillMaxWidth(), kind = KeyKind.Quiet)
+                        }
+                        is CopyStep.Waiting -> {
+                            val asked = s.asked
+                            if (asked == null) {
+                                Waiting("Asking your server…", null)
+                            } else {
+                                Code(asked.code)
+                                Waiting(
+                                    if (asked.notified) "Your bot sent you a message on Discord. Tap Allow if it shows this code."
+                                    else "Your bot could not message you. Allow the request on its dashboard, Devices, where it shows this code.",
+                                    null,
+                                )
+                            }
+                            Key("Not now", ::finish, Modifier.fillMaxWidth(), kind = KeyKind.Quiet)
+                        }
+                        CopyStep.Paste -> {
+                            T("Your server does not hand out its copy's link yet. Paste one printed there instead.", style = Relay.type.ui, color = c.ink2)
+                            Slab(Modifier.fillMaxWidth()) { ServerCopyPaste(nav, onConnected = { nav.start() }) }
+                            Key("Not now", ::finish, Modifier.fillMaxWidth(), kind = KeyKind.Quiet)
+                        }
+                        is CopyStep.Problem -> {
+                            T(s.text, style = Relay.type.ui, color = c.heldText)
+                            Key("Ask again", ::connectCopy, Modifier.fillMaxWidth(), kind = KeyKind.Primary, glyph = "refresh")
+                            Key("Not now", ::finish, Modifier.fillMaxWidth(), kind = KeyKind.Quiet)
                         }
                     }
                     // While it waits on the server, Discord or the PC; pairing itself ends on its own.

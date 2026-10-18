@@ -1,9 +1,6 @@
 package com.quietsoftware.relay.data.link
 
 import android.content.Context
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
-import android.util.Base64
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -19,11 +16,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import java.security.KeyStore
-import javax.crypto.Cipher
-import javax.crypto.KeyGenerator
-import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
 
 private val Context.pcStore by preferencesDataStore(name = "pc")
 
@@ -58,7 +50,7 @@ class PcStore(private val context: Context) : Link.ProfileSource {
 
     val profile: Flow<PcProfile?> = context.pcStore.data.map { prefs ->
         val stored = prefs[PROFILE]?.let { runCatching { json.decodeFromString<Stored>(it) }.getOrNull() } ?: return@map null
-        val token = prefs[TOKEN]?.let { unseal(it) } ?: return@map null
+        val token = prefs[TOKEN]?.let { Seal.unseal(KEY_ALIAS, it) } ?: return@map null
         stored.toProfile(token)
     }
 
@@ -88,7 +80,7 @@ class PcStore(private val context: Context) : Link.ProfileSource {
     suspend fun save(profile: PcProfile) {
         context.pcStore.edit { prefs ->
             prefs[PROFILE] = json.encodeToString(storedFrom(profile))
-            prefs[TOKEN] = seal(profile.token)
+            prefs[TOKEN] = Seal.seal(KEY_ALIAS, profile.token)
         }
     }
 
@@ -136,34 +128,5 @@ class PcStore(private val context: Context) : Link.ProfileSource {
             pairedAt = p.pairedAt,
             version = p.version,
         )
-
-        fun key(): SecretKey {
-            val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-            (ks.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
-            val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-            gen.init(
-                KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    .setKeySize(256)
-                    .build(),
-            )
-            return gen.generateKey()
-        }
-
-        fun seal(plain: String): String {
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.ENCRYPT_MODE, key())
-            val sealed = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
-            return Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(sealed, Base64.NO_WRAP)
-        }
-
-        /** Null when the key is gone (the phone was restored from elsewhere): pair again. */
-        fun unseal(text: String): String? = runCatching {
-            val (iv, sealed) = text.split(':', limit = 2)
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP)))
-            String(cipher.doFinal(Base64.decode(sealed, Base64.NO_WRAP)), Charsets.UTF_8)
-        }.getOrNull()
     }
 }

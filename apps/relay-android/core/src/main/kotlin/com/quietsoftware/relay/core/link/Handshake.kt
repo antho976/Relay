@@ -14,7 +14,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicInteger
 
-/** A PC this phone paired with, and everything needed to reach it again. */
+/**
+ * A PC this phone paired with, and everything needed to reach it again. The server's copy
+ * (docs/CLOUD.md) is kept in the same shape: it is a door too, with fewer ops behind it.
+ */
 data class PcProfile(
     val hostId: String,
     val name: String,
@@ -39,6 +42,22 @@ sealed class Refusal(val code: String, val text: String) {
 
     /** Anything else the door said no to. */
     class Denied(code: String, text: String) : Refusal(code, text)
+
+    /**
+     * The door let this phone in, but it is not what was asked for: a server's copy where a PC
+     * was meant, or a PC where the server's copy was. Its welcome said which ([Wire.OPS_PC],
+     * [Wire.OPS_CLOUD]); a door too old to say is taken at its word.
+     */
+    class WrongDoor(expected: String) : Refusal(
+        "link.wrong_door",
+        if (expected == Wire.OPS_CLOUD) "That is a PC, not your server's copy. Use a link that relay remote pair --via-only printed on the server."
+        else "That is your server's copy, not a PC. Add it on the PC's page, under Your server's copy.",
+    ) {
+        companion object {
+            /** Whether a welcome that let this phone in came from the kind of door [expected]. */
+            fun matches(expected: String, welcome: Welcome): Boolean = welcome.ops == null || welcome.ops == expected
+        }
+    }
 
     companion object {
         fun of(error: String?): Refusal = when (error) {
@@ -107,8 +126,8 @@ object Handshake {
         else Result.failure(RefusalException(refused ?: Refusal.Unreachable(routes.map { it.url })))
     }
 
-    /** Prove this phone holds its token, on a socket that greeted. */
-    suspend fun prove(greeted: Greeted, device: String, token: String): Result<Welcome> {
+    /** Prove this phone holds its token, on a socket that greeted; the door must be the kind [ops] names. */
+    suspend fun prove(greeted: Greeted, device: String, token: String, ops: String = Wire.OPS_PC): Result<Welcome> {
         val socket = greeted.socket
         if (!socket.send(Wire.proofHello(device, greeted.greeting.challenge, token))) {
             socket.close()
@@ -124,15 +143,20 @@ object Handshake {
             socket.close()
             return Result.failure(RefusalException(Refusal.of(welcome.error)))
         }
+        if (!Refusal.WrongDoor.matches(ops, welcome)) {
+            socket.close()
+            return Result.failure(RefusalException(Refusal.WrongDoor(ops)))
+        }
         return Result.success(welcome)
     }
 
     /**
      * Present a pairing code. The code is spent the moment it is sent, so once one route has
      * greeted no other is tried. The PC may ask a person to approve this phone first, which can
-     * take up to 75 seconds.
+     * take up to 75 seconds. A door of another kind than [ops] is refused once it has answered:
+     * the code is spent by then, and the credential it gave is dropped.
      */
-    suspend fun pair(dialer: Dialer, link: PairLink, deviceName: String): Result<PcProfile> {
+    suspend fun pair(dialer: Dialer, link: PairLink, deviceName: String, ops: String = Wire.OPS_PC): Result<PcProfile> {
         val greeted = greet(dialer, link.routes).getOrElse { return Result.failure(it) }
         val socket = greeted.socket
         try {
@@ -143,6 +167,7 @@ object Handshake {
             val welcome = line?.let { Wire.welcome(it) }
                 ?: return Result.failure(RefusalException(Refusal.of("pair.unconfirmed")))
             if (!welcome.ok) return Result.failure(RefusalException(Refusal.of(welcome.error)))
+            if (!Refusal.WrongDoor.matches(ops, welcome)) return Result.failure(RefusalException(Refusal.WrongDoor(ops)))
             val device = welcome.device ?: return Result.failure(RefusalException(Refusal.of("hello.shape")))
             val token = welcome.token ?: return Result.failure(RefusalException(Refusal.of("hello.shape")))
             val g = greeted.greeting.admittedBy(welcome)

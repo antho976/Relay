@@ -40,6 +40,17 @@ class WireTest {
     }
 
     @Test
+    fun `a welcome says which door let the phone in, and an older one says nothing`() {
+        val g = Wire.greeting("""{"v":1,"relay":"remote","host":"","host_id":"","instance":"stable","version":"","challenge":"ab"}""")!!
+        val cloud = Wire.welcome("""{"v":1,"ok":true,"device":"d1","host":"server","ops":"cloud"}""")!!
+        assertEquals(Wire.OPS_CLOUD, cloud.ops)
+        assertEquals(Wire.OPS_CLOUD, g.admittedBy(cloud).ops)
+        val older = Wire.welcome("""{"v":1,"ok":true,"device":"d1"}""")!!
+        assertNull(older.ops)
+        assertNull(g.admittedBy(older).ops)
+    }
+
+    @Test
     fun `lines are classified by their second key`() {
         assertTrue(Wire.classify("""{"v":1,"ev":"task.changed","ts":"t","actor":"user","payload":{"task_id":3}}""") is Incoming.Ev)
         assertTrue(Wire.classify("""{"v":1,"stream":"pty","session":"a","epoch":1,"seq":2,"data":"aGk="}""") is Incoming.Fr)

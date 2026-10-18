@@ -3,6 +3,7 @@ package com.quietsoftware.relay.core.link
 import com.quietsoftware.relay.core.wire.BusException
 import com.quietsoftware.relay.core.wire.Greeting
 import com.quietsoftware.relay.core.wire.Route
+import com.quietsoftware.relay.core.wire.Wire
 import com.quietsoftware.relay.core.wire.orderRoutes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -41,12 +42,15 @@ sealed interface LinkState {
  * Keeps one admitted [BusSession] to the paired PC while the app wants one: dials every route
  * (direct first), proves the token, subscribes, keeps the session alive with `bus.ping`, and
  * redials with backoff when it drops. Everything that talks to the PC goes through [session].
+ * [ops] is the kind of door it must reach: a PC's, or the server's copy for the second link
+ * ([com.quietsoftware.relay.core.Hub.cloud]).
  */
 class Link(
     private val scope: CoroutineScope,
     private val dialer: Dialer,
     private val profiles: ProfileSource,
     private val now: () -> Long = System::currentTimeMillis,
+    private val ops: String = Wire.OPS_PC,
 ) {
     /** Where the paired PC's profile lives. The app persists it; tests keep it in memory. */
     interface ProfileSource {
@@ -121,9 +125,10 @@ class Link(
                 backoff = waitOut(refusal?.text ?: "The PC did not answer", backoff)
                 continue
             }
-            val welcome = Handshake.prove(greeted, profile.device, profile.token).getOrElse { e ->
+            val welcome = Handshake.prove(greeted, profile.device, profile.token, ops).getOrElse { e ->
                 val refusal = (e as? RefusalException)?.refusal
-                if (refusal is Refusal.Unpaired) {
+                // Neither a forgotten credential nor the wrong kind of door gets better by dialing again.
+                if (refusal is Refusal.Unpaired || refusal is Refusal.WrongDoor) {
                     _state.value = LinkState.Revoked(refusal.text)
                     wanted = false
                     return

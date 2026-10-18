@@ -30,6 +30,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quietsoftware.relay.core.link.LinkState
+import com.quietsoftware.relay.core.link.PcProfile
 import com.quietsoftware.relay.core.link.RefusalException
 import com.quietsoftware.relay.core.wire.PairLink
 import com.quietsoftware.relay.core.wire.Route
@@ -282,6 +283,8 @@ fun PcScreen(nav: Nav) {
                         }
                     }
 
+                    ServerCopy(nav, pcOnline = s.link is LinkState.Online)
+
                     Slab(Modifier.fillMaxWidth()) {
                         Row(
                             Modifier.switchRow(s.prefs.stayConnected) { on ->
@@ -339,4 +342,111 @@ fun PcScreen(nav: Nav) {
             }
         }
     }
+}
+
+/**
+ * The server's copy (docs/CLOUD.md): a second, data-only host that answers Tally's and Avex's
+ * reads while the PC is away. Paired here with a link printed on the server, beside the PC and
+ * never in its place: nothing here pairs, forgets or wipes the PC or this phone's copy of its data.
+ */
+@Composable
+private fun ServerCopy(nav: Nav, pcOnline: Boolean) {
+    val copy by nav.relay.cloudProfile.collectAsStateWithLifecycle(null)
+    val state by nav.relay.cloudState.collectAsStateWithLifecycle()
+    val seen by nav.relay.cloudLastSeen.collectAsStateWithLifecycle(0L)
+    Slab(Modifier.fillMaxWidth()) {
+        Eyebrow("Your server's copy")
+        Gap(6.dp)
+        val p = copy
+        if (p == null) ServerCopyPaste(nav) else ServerCopyState(nav, p, state, seen, pcOnline)
+    }
+}
+
+/** A paired server's copy: how its link stands, and forgetting it. */
+@Composable
+private fun ServerCopyState(nav: Nav, p: PcProfile, state: LinkState, seen: Long, pcOnline: Boolean) {
+    val c = Relay.colors
+    val scope = rememberCoroutineScope()
+    var confirmForget by remember { mutableStateOf(false) }
+    Column {
+        val refused = state is LinkState.Revoked
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Dot(linkColor(state), 8.dp)
+            T("  " + serverLine(state, pcOnline), Modifier.weight(1f), Relay.type.uiMedium, c.ink)
+        }
+        p.routes.firstOrNull()?.let { T(it.url, Modifier.padding(top = 4.dp), Relay.type.mono, c.ink3, maxLines = 1) }
+        T(
+            if (refused) "It did not let this phone in. Forget it here, then connect again with a new link."
+            else "While the PC is off, Tally's and Avex's readings come from it, marked \"From your server's copy\". Nothing else is sent there.",
+            Modifier.padding(top = 6.dp), Relay.type.caption, if (refused) c.heldText else c.ink3,
+        )
+        if (seen > 0 && state !is LinkState.Online) T("Last reached ${ago(seen)}", Modifier.padding(top = 4.dp), Relay.type.caption, c.ink3)
+        Hairline(Modifier.padding(vertical = 10.dp))
+        T("This phone is device ${p.device} there. To cut it off from the server: relay remote revoke ${p.device}.", style = Relay.type.caption, color = c.ink3)
+        if (!confirmForget) {
+            Key("Forget the server's copy", { confirmForget = true }, Modifier.padding(top = 8.dp), KeyKind.Danger)
+        } else {
+            T("Forget the server's copy? The PC and this phone's copy of its data stay.", Modifier.padding(top = 10.dp), Relay.type.ui, c.heldText)
+            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Key("Forget", {
+                    scope.launch {
+                        nav.relay.forgetCloud()
+                        confirmForget = false
+                    }
+                }, kind = KeyKind.Danger)
+                Key("Keep", { confirmForget = false }, kind = KeyKind.Quiet)
+            }
+        }
+    }
+}
+
+/** Where the link to the server's copy stands, in the words of the PC's line above it. */
+private fun serverLine(state: LinkState, pcOnline: Boolean): String = when (state) {
+    is LinkState.Online -> "Connected · reading Tally and Avex"
+    is LinkState.Connecting, is LinkState.Starting, LinkState.Unpaired -> "Reaching your server"
+    is LinkState.Offline -> "Your server is out of reach"
+    LinkState.Stopped -> if (pcOnline) "Not needed while the PC is connected" else "Waiting on the PC"
+    is LinkState.Revoked -> "Your server refused this phone"
+}
+
+/**
+ * Connecting the server's copy with the link `relay --instance stable remote pair --via-only`
+ * printed on the server (docs/CLOUD.md, "Setting it up"): on the PC's page, and in the personal
+ * build when its bot cannot hand the link over itself. [onConnected] runs once it is paired.
+ */
+@Composable
+internal fun ServerCopyPaste(nav: Nav, onConnected: () -> Unit = {}) {
+    val c = Relay.colors
+    val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboardManager.current
+    var pasted by remember { mutableStateOf("") }
+    var waiting by remember { mutableStateOf(false) }
+    var problem by remember { mutableStateOf<String?>(null) }
+
+    fun connect(target: PairLink) {
+        if (waiting) return
+        waiting = true
+        problem = null
+        scope.launch {
+            nav.relay.pairCloud(target)
+                .onSuccess {
+                    pasted = ""
+                    onConnected()
+                }
+                .onFailure { e -> problem = (e as? RefusalException)?.refusal?.text ?: e.message ?: "Connecting failed" }
+            waiting = false
+        }
+    }
+
+    T("Your server keeps Tally's ledger and Avex's history too. Connect it, and this phone reads them from there while the PC is off.", style = Relay.type.caption, color = c.ink2)
+    T("On the server, run relay --instance stable remote pair --via-only and paste the link it prints.", Modifier.padding(top = 6.dp), Relay.type.caption, c.ink3)
+    Field(pasted, { pasted = it }, Modifier.fillMaxWidth().padding(top = 10.dp), placeholder = "relay://pair?v=1&code=…", singleLine = false, maxLines = 4, leading = "link")
+    Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Key("Paste", { clipboard.getText()?.text?.let { pasted = it.trim() } }, glyph = "copy")
+        Key(if (waiting) "Connecting…" else "Connect", {
+            PairLink.parse(pasted)?.let(::connect) ?: run { problem = "That is not a relay://pair link" }
+        }, kind = KeyKind.Primary, enabled = pasted.isNotBlank() && !waiting)
+    }
+    if (waiting) T("Answer y on the server when it asks. The code works once.", Modifier.padding(top = 6.dp), Relay.type.caption, c.ink3)
+    problem?.let { T(it, Modifier.padding(top = 6.dp), Relay.type.ui, c.heldText) }
 }

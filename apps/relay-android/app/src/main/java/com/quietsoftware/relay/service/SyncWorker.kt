@@ -21,7 +21,8 @@ import java.util.concurrent.TimeUnit
 /**
  * The background catch-up when the link is not kept open: every half hour on a network, reach
  * the PC, send what the outbox holds, read what changed. The [Notifier] announces whatever the
- * read brought in that needs the person.
+ * read brought in that needs the person. With the PC out of reach, the server's copy is asked
+ * for the ledger's and the training history's readings instead (docs/CLOUD.md).
  */
 @HiltWorker
 class SyncWorker @AssistedInject constructor(
@@ -34,7 +35,11 @@ class SyncWorker @AssistedInject constructor(
         relay.start()
         relay.kick()
         val online = withTimeoutOrNull(45_000) { relay.state.first { it is LinkState.Online || it is LinkState.Revoked } }
-        if (online !is LinkState.Online) return Result.success()
+        if (online !is LinkState.Online) {
+            // The PC is away: the server's copy, if one is paired, brings Tally's and Avex's readings up to date.
+            relay.hub.catchUpFromCloud()
+            return Result.success()
+        }
         // The full read runs as the session opens; give it and the outbox time to finish.
         withTimeoutOrNull(60_000) {
             relay.hub.syncer.syncedAt.first { it > 0 }

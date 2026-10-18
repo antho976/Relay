@@ -69,6 +69,8 @@ class Pipe : LineSocket {
 /**
  * A PC door in a test: greets, checks the proof against [token], then answers bus requests with
  * [handle] and records them. Requests are deduplicated by id the way the engine does (BUS.md §5.3).
+ * [ops] is what its welcome says it opens (`phone`, `cloud`, or nothing, as an older door); a
+ * pairing code is taken as given, and answered with [device] and [token].
  */
 class FakeDoor(
     private val scope: CoroutineScope,
@@ -76,8 +78,9 @@ class FakeDoor(
     val token: String = "t0k3n",
     var engine: String? = null,
     var handle: (op: String, payload: JsonObject) -> JsonElement = { _, _ -> JsonObject(emptyMap()) },
+    var ops: String? = null,
 ) : Dialer {
-    val requests = mutableListOf<Pair<String, JsonObject>>()
+    val requests: MutableList<Pair<String, JsonObject>> = java.util.concurrent.CopyOnWriteArrayList()
     private val answered = HashMap<String, String>()
     var reachable = setOf("ws://192.168.1.20:7420")
     var dials = 0
@@ -110,8 +113,16 @@ class FakeDoor(
             engine?.let { put("engine", it) }
         }.toString())
         val hello = Wire.parse(pipe.toPc.receiveCatching().getOrNull() ?: return) ?: return
+        if (hello.s("pair") != null) {
+            pipe.toPhone.send(buildJsonObject { put("v", 1); put("ok", true); put("device", device); put("token", token); ops?.let { put("ops", it) } }.toString())
+            return pipe.close()
+        }
         val ok = hello.s("device") == device && hello.s("proof") == Wire.proof(challenge, token)
-        pipe.toPhone.send(buildJsonObject { put("v", 1); put("ok", ok); if (ok) put("device", device) else put("error", "auth.bad_proof") }.toString())
+        pipe.toPhone.send(buildJsonObject {
+            put("v", 1); put("ok", ok)
+            if (ok) put("device", device) else put("error", "auth.bad_proof")
+            if (ok) ops?.let { put("ops", it) }
+        }.toString())
         if (!ok) return pipe.close()
         for (line in pipe.toPc) {
             val req = Wire.parse(line) ?: continue

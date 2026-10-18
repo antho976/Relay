@@ -37,6 +37,7 @@ import com.quietsoftware.relay.data.db.RoomOutbox
 import com.quietsoftware.relay.data.db.RoomReplica
 import com.quietsoftware.relay.data.db.toEntry
 import com.quietsoftware.relay.data.db.toRow
+import com.quietsoftware.relay.data.link.CloudStore
 import com.quietsoftware.relay.data.link.OkHttpDialer
 import com.quietsoftware.relay.data.link.PcStore
 import kotlinx.coroutines.CoroutineScope
@@ -68,14 +69,20 @@ class Relay(
     private val db: RelayDb,
     val pc: PcStore,
     private val scope: CoroutineScope,
+    val cloud: CloudStore = CloudStore(context),
 ) {
     private val replica = RoomReplica(db)
     private val dialer = OkHttpDialer()
-    val hub = Hub(scope, dialer, pc, replica, RoomOutbox(db))
+    val hub = Hub(scope, dialer, pc, replica, RoomOutbox(db), cloudProfiles = cloud)
 
     val state: StateFlow<LinkState> get() = hub.state
     val profile: Flow<PcProfile?> = pc.profile
     val lastSeen: Flow<Long> = pc.lastSeen
+
+    /** The link to the server's copy (docs/CLOUD.md), which answers Tally's and Avex's reads while the PC is away. */
+    val cloudState: StateFlow<LinkState> get() = hub.cloud.state
+    val cloudProfile: Flow<PcProfile?> = cloud.profile
+    val cloudLastSeen: Flow<Long> = cloud.lastSeen
 
     /** A thread's reply as it streams in: (thread id, text so far is built by the screen). */
     val deltas: SharedFlow<Pair<Long, String>> get() = hub.syncer.deltas
@@ -85,7 +92,11 @@ class Relay(
 
     fun start() = hub.start()
 
-    fun kick() = hub.link.kick()
+    /** Dial now instead of waiting out the backoff; the server's copy too, if it is standing in for the PC. */
+    fun kick() {
+        hub.link.kick()
+        hub.cloud.kick()
+    }
 
     fun disconnect() = hub.link.stop()
 
@@ -159,33 +170,40 @@ class Relay(
         db.queries().observe(QueryKey.of(op, payload)).map { row -> row?.let { Answer(Wire.json.parseToJsonElement(it.json), it.at, fresh = false) } }
 
     /**
-     * A query a screen shows: the cached answer first, then the PC's, read again whenever an
-     * event says that domain moved or the link comes back. Never errors with the PC away while
-     * there is a cached answer.
+     * A query a screen shows: the cached answer first, then the PC's (or, with the PC away, the
+     * server's copy's for a read it holds), read again whenever an event on either says that
+     * domain moved or the PC link comes back. Never errors with the PC away while there is a
+     * cached answer.
      */
     fun live(op: String, payload: JsonObject = JsonObject(emptyMap())): Flow<Live> = channelFlow {
         val key = QueryKey.of(op, payload)
         val domain = QueryKey.domain(key)
         var last: Live = Live()
-        hub.cached(op, payload)?.let { last = Live(it.result, it.at, fresh = false); send(last) }
+        hub.cached(op, payload)?.let { last = shown(it); send(last) }
         suspend fun read() {
             try {
-                val a = hub.query(op, payload)
-                last = Live(a.result, a.at, fresh = a.fresh)
+                last = shown(hub.query(op, payload))
             } catch (e: BusException) {
                 last = last.copy(error = e.error)
             }
             send(last)
         }
         read()
-        launch { hub.syncer.stale.filter { domain in it || "*" in it }.collect { read() } }
+        launch { hub.stale.filter { domain in it || "*" in it }.collect { read() } }
         launch { hub.state.filter { it is LinkState.Online }.distinctUntilChanged().collect { if (!last.fresh) read() } }
         awaitClose()
     }.flowOn(Dispatchers.Default)
 
+    /** A hub answer as a screen holds it; one from the server's copy is remembered for its caption. */
+    private fun shown(a: Hub.Answer): Live {
+        if (a.cloud) serverAnswers += a.at
+        return Live(a.result, a.at, fresh = a.fresh, cloud = a.cloud)
+    }
+
     data class Answer(val result: JsonElement, val at: Long, val fresh: Boolean)
 
-    data class Live(val result: JsonElement? = null, val at: Long = 0, val fresh: Boolean = false, val error: BusError? = null) {
+    /** [cloud]: the answer came from the server's copy while the PC was away, not from the phone's own. */
+    data class Live(val result: JsonElement? = null, val at: Long = 0, val fresh: Boolean = false, val error: BusError? = null, val cloud: Boolean = false) {
         val loading: Boolean get() = result == null && error == null
     }
 
@@ -223,6 +241,27 @@ class Relay(
     }
 
     /**
+     * Pair the server's copy (docs/CLOUD.md) with a link `relay remote pair --via-only` printed on
+     * the server. It is a second host beside the PC, never in its place: the PC's pairing and this
+     * phone's copy of its data stay as they are. A link that turns out to be a PC's is refused.
+     */
+    suspend fun pairCloud(link: PairLink): Result<PcProfile> = withContext(Dispatchers.IO) {
+        val result = Handshake.pair(dialer, link, deviceName(), Wire.OPS_CLOUD)
+        result.onSuccess { profile ->
+            cloud.save(profile)
+            hub.cloudChanged()
+        }
+        result
+    }
+
+    /** Forget the server's copy: its credential only. What it answered stays, marked as its, until read again. */
+    suspend fun forgetCloud() {
+        hub.cloud.stop()
+        cloud.forget()
+        hub.cloudChanged()
+    }
+
+    /**
      * Wake a sleeping PC with a Wake-on-LAN packet to each network card it reported. Only reaches
      * it from its own network. True when at least one packet left the phone.
      */
@@ -250,6 +289,12 @@ class Relay(
     private fun deviceName(): String = listOf(Build.MANUFACTURER.replaceFirstChar { it.uppercase() }, Build.MODEL).distinct().joinToString(" ").take(64)
 
     companion object {
+        /** When each answer the server's copy gave was cached: the caption under a reading says so. */
+        private val serverAnswers: MutableSet<Long> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+        /** Whether the answer a screen shows, cached at [at], came from the server's copy (ui/kit `StaleNote`). */
+        fun fromServer(at: Long): Boolean = at in serverAnswers
+
         /** Needs you first, then working, then the rest (the old app's order, and the PC's). */
         private val STATE_ORDER = listOf("blocked", "running", "spawning", "idle", "created", "restorable", "parked", "exited", "closed")
         val SESSION_ORDER: Comparator<Session> = compareBy({ STATE_ORDER.indexOf(it.state).let { i -> if (i < 0) 99 else i } }, { it.name })
