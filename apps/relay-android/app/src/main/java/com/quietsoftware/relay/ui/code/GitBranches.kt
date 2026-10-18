@@ -77,7 +77,8 @@ fun ColumnScope.BranchesTab(nav: Nav, projectId: Long, wt: String?, refresh: Int
                     add(SheetAction("Switch to ${s.branch.name}", "branch", enabled = online) { sheet = BranchSheet.Switch(s.branch) })
                 }
                 add(SheetAction("New branch from ${s.branch.name}", "commit", enabled = online) { sheet = BranchSheet.Create(s.branch.name) })
-                if (!s.branch.current) {
+                // Only a merged branch no session holds can go (code_git.rs); the engine refuses the rest.
+                if (!s.branch.current && s.branch.merged && s.branch.session == null) {
                     add(SheetAction("Delete ${s.branch.name}", "trash", danger = true, enabled = online) { sheet = BranchSheet.Delete(s.branch) })
                 }
             },

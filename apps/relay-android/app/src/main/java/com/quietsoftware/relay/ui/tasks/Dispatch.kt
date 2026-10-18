@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewModelScope
 import com.quietsoftware.relay.core.model.Task
 import com.quietsoftware.relay.core.sync.Optimistic
 import com.quietsoftware.relay.core.wire.BusException
@@ -43,7 +44,10 @@ import com.quietsoftware.relay.ui.kit.Segmented
 import com.quietsoftware.relay.ui.kit.StaleNote
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.Toggle
+import com.quietsoftware.relay.ui.kit.plural
+import com.quietsoftware.relay.ui.kit.switchRow
 import com.quietsoftware.relay.ui.theme.Relay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -116,13 +120,15 @@ internal fun DispatchSheet(task: Task, nav: Nav, onDismiss: () -> Unit) {
                 }
             }
             busy = true
-            scope.launch {
+            // On the app's scope, so a sheet swiped away meanwhile still says how it went; only
+            // a sheet still open goes on to the agent.
+            nav.shell.viewModelScope.launch {
                 try {
                     val out = nav.relay.call("task.dispatch", payload) as? JsonObject
                     val name = out?.o("session")?.s("name")
-                    val more = out?.arr("fanned")?.size?.takeIf { it > 0 }?.let { " (+$it sub-tasks)" }.orEmpty()
+                    val more = out?.arr("fanned")?.size?.takeIf { it > 0 }?.let { " (+${plural(it, "sub-task")})" }.orEmpty()
                     nav.shell.toast(if (start) "Sent to ${name ?: "the agent"}$more" else "Staged on ${name ?: "the agent"}$more")
-                    close { if (start && name != null) nav.terminal(name) }
+                    if (scope.isActive) close { if (start && name != null) nav.terminal(name) }
                 } catch (e: BusException) {
                     busy = false
                     nav.shell.toast(if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code })
@@ -194,11 +200,11 @@ internal fun DispatchSheet(task: Task, nav: Nav, onDismiss: () -> Unit) {
 @Composable
 internal fun SwitchRow(label: String, detail: String?, checked: Boolean, onChange: (Boolean) -> Unit) {
     val c = Relay.colors
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).switchRow(checked, onChange = onChange).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(end = 12.dp)) {
             T(label, style = Relay.type.ui, color = c.ink)
             detail?.let { T(it, style = Relay.type.caption, color = c.ink3) }
         }
-        Toggle(checked, onChange)
+        Toggle(checked, null)
     }
 }

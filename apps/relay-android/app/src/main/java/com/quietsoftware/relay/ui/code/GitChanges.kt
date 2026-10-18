@@ -6,9 +6,11 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -21,7 +23,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewModelScope
 import com.quietsoftware.relay.core.model.decodeAs
 import com.quietsoftware.relay.data.Relay.Live
 import com.quietsoftware.relay.ui.Nav
@@ -37,8 +41,10 @@ import com.quietsoftware.relay.ui.kit.SectionLabel
 import com.quietsoftware.relay.ui.kit.Slab
 import com.quietsoftware.relay.ui.kit.StaleNote
 import com.quietsoftware.relay.ui.kit.T
+import com.quietsoftware.relay.ui.kit.TOUCH
 import com.quietsoftware.relay.ui.kit.Toggle
 import com.quietsoftware.relay.ui.kit.Empty
+import com.quietsoftware.relay.ui.kit.switchRow
 import com.quietsoftware.relay.ui.theme.Palette
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.serialization.json.JsonPrimitive
@@ -326,7 +332,7 @@ private fun ChangeRow(
                 T("new", style = Relay.type.caption, color = c.ink3)
             }
             if (letter.isNotEmpty()) T(letter, style = Relay.type.mono, color = statusTint(letter, c), weight = FontWeight.Medium)
-            IconKey(if (staged) "minus" else "plus", onStage, size = 16.dp, enabled = online)
+            IconKey(if (staged) "minus" else "plus", onStage, size = 16.dp, enabled = online, label = if (staged) "Unstage" else "Stage")
         }
         if (expanded) DiffHunks(nav, projectId, wt, refresh, file.path, file.renamedFrom, staged, count?.binary == true)
     }
@@ -362,7 +368,6 @@ private fun CommitSheet(
     onDismiss: () -> Unit,
 ) {
     val c = Relay.colors
-    val scope = rememberCoroutineScope()
     val suggest = rememberLive(nav, "git.suggest_message", codePayload(projectId, wt))
     val suggested = suggest.result?.decodeAs<Suggestion>()?.message
     var message by remember { mutableStateOf("") }
@@ -387,14 +392,15 @@ private fun CommitSheet(
             singleLine = false,
             minLines = 3,
             maxLines = 8,
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
         )
         Gap(12.dp)
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().heightIn(min = TOUCH).switchRow(all, enabled = online) { all = it }, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 T("Stage everything", style = Relay.type.uiMedium, color = c.ink)
                 T("Commit every change, not only what is staged.", style = Relay.type.caption, color = c.ink3)
             }
-            Toggle(all, { all = it }, enabled = online)
+            Toggle(all, null, enabled = online)
         }
         Gap(16.dp)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
@@ -404,7 +410,8 @@ private fun CommitSheet(
                 if (busy) "Committing…" else "Commit",
                 {
                     busy = true
-                    scope.write(nav, "git.commit", codePayload(projectId, wt) {
+                    // On the app's scope: a sheet swiped away mid-commit still says how it went.
+                    nav.shell.viewModelScope.write(nav, "git.commit", codePayload(projectId, wt) {
                         put("message", message.trim())
                         put("all", all)
                     }) { r ->
@@ -433,7 +440,6 @@ private fun OpenPrSheet(
     onDismiss: () -> Unit,
 ) {
     val c = Relay.colors
-    val scope = rememberCoroutineScope()
     var title by remember { mutableStateOf("") }
     var body by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -446,9 +452,9 @@ private fun OpenPrSheet(
             color = c.ink3,
         )
         Gap(12.dp)
-        Field(value = title, onValueChange = { title = it }, placeholder = "Title")
+        Field(value = title, onValueChange = { title = it }, placeholder = "Title", keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
         Gap(8.dp)
-        Field(value = body, onValueChange = { body = it }, placeholder = "Body", singleLine = false, minLines = 4, maxLines = 10)
+        Field(value = body, onValueChange = { body = it }, placeholder = "Body", singleLine = false, minLines = 4, maxLines = 10, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
         Gap(16.dp)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
             Key("Cancel", onDismiss, kind = KeyKind.Quiet)
@@ -457,7 +463,8 @@ private fun OpenPrSheet(
                 if (busy) "Opening…" else "Open pull request",
                 {
                     busy = true
-                    scope.write(nav, "git.pr.open", codePayload(projectId, wt) {
+                    // On the app's scope: a sheet swiped away meanwhile still opens the pull request it asked for.
+                    nav.shell.viewModelScope.write(nav, "git.pr.open", codePayload(projectId, wt) {
                         if (title.isNotBlank()) put("title", title.trim())
                         if (body.isNotBlank()) put("body", body.trim())
                     }) { r ->

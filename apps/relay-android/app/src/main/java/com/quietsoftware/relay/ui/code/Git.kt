@@ -49,6 +49,7 @@ fun GitScreen(projectId: Long, worktree: String?, session: String?, nav: Nav) {
     var picking by remember { mutableStateOf(false) }
     var tab by rememberSaveable { mutableStateOf("changes") }
     var refresh by remember { mutableIntStateOf(0) }
+    var fetching by remember { mutableStateOf(false) }
     val wt: String? = if (session != null) sess?.worktree?.ifEmpty { null } else picked
     val ready = session == null || wt != null
     val listed = rememberLive(nav, "worktree.list", codePayload(projectId, null)).result?.decodeAs<WorktreeList>()?.worktrees.orEmpty()
@@ -63,7 +64,10 @@ fun GitScreen(projectId: Long, worktree: String?, session: String?, nav: Nav) {
     }
 
     fun fetch() {
+        if (fetching) return
+        fetching = true
         scope.write(nav, "git.fetch", buildJsonObject { put("project_id", projectId) }) { r ->
+            fetching = false
             if (r == null) return@write
             val out = r.decodeAs<FetchOut>()
             val ahead = out?.ahead
@@ -78,9 +82,10 @@ fun GitScreen(projectId: Long, worktree: String?, session: String?, nav: Nav) {
             PageBar(
                 title = "Git",
                 onBack = nav::back,
-                subtitle = listOfNotNull(st?.branch?.ifBlank { "detached HEAD" }, sync).joinToString(" ").ifBlank { null },
+                subtitle = listOfNotNull(listOfNotNull(st?.branch?.ifBlank { "detached HEAD" }, sync).joinToString(" ").ifBlank { null }, "fetching…".takeIf { fetching })
+                    .joinToString(" · ").ifBlank { null },
                 actions = {
-                    IconKey("download", { fetch() }, enabled = online && ready)
+                    IconKey("download", { fetch() }, enabled = online && ready && !fetching, label = if (fetching) "Fetching" else "Fetch")
                 },
             )
             if (session != null) {
