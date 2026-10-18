@@ -27,7 +27,7 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
         // The title with its refresh key at the end of the line, as the other pages' headers:
         // alone in the middle of the page it read as a stray link.
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let title = label("Device control", "title");
+        let title = label("Device control", "page-title");
         title.set_hexpand(true);
         title.set_xalign(0.0);
         head.append(&title);
@@ -41,7 +41,10 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
         reload.set_valign(gtk::Align::Center);
         head.append(&reload);
         page.append(&head);
-        page.append(&paragraph("Run Android builds from the selected checkout. A release build needs no connected device."));
+        let lede = paragraph("Run Android builds from the selected checkout. A release build needs no connected device.");
+        lede.remove_css_class("body");
+        lede.add_css_class("page-lede");
+        page.append(&lede);
         let weak = Rc::downgrade(ui);
         reload.connect_clicked(move |_| {
             if let Some(ui) = weak.upgrade() {
