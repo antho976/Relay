@@ -12,7 +12,9 @@
 //! One exception, and a narrow one: a thread's agent (docs/THREADS.md) is the person's own
 //! conversation and has no session, so Relay's MCP server under it speaks as `user`. A process in a
 //! thread agent's tree may, but only for the ops that thread is given (`threads::AGENT_OPS`); the
-//! engine checks the op on every request, whatever the client in between lists.
+//! engine checks the op on every request, whatever the client in between lists. A thread the
+//! person gave full access may also read anything, and change what the person allowed it to, op
+//! by op (`threads::asks::admits`); never answer an ask or set a thread's access.
 
 use crate::engine::Engine;
 use std::collections::{HashMap, HashSet};

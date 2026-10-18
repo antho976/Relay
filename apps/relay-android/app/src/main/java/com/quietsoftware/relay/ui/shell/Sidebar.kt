@@ -38,6 +38,7 @@ import com.quietsoftware.relay.ui.kit.SectionLabel
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.epoch
 import com.quietsoftware.relay.ui.theme.Relay
+import com.quietsoftware.relay.ui.threads.waitingThreads
 import java.time.LocalDate
 import java.time.ZoneId
 
@@ -68,9 +69,11 @@ interface SidebarNav {
 @Composable
 fun Sidebar(s: ShellState, route: String?, nav: SidebarNav, space: String = s.prefs.space) {
     val c = Relay.colors
+    // Threads whose agent waits for the person's answer (full access): read only in that space.
+    val asking = if (space == "threads") waitingThreads() else emptySet()
     Column(Modifier.fillMaxHeight().width(300.dp).background(c.wall).statusBarsPadding().navigationBarsPadding()) {
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp)) {
-            if (space == "threads") threads(s, route, nav) else dev(s, route, nav)
+            if (space == "threads") threads(s, route, nav, asking) else dev(s, route, nav)
         }
         Hairline(Modifier.padding(horizontal = 10.dp), c.edge)
         Column(Modifier.padding(10.dp)) {
@@ -140,7 +143,7 @@ private fun ProjectRow(p: Project, s: ShellState, nav: SidebarNav) {
     }
 }
 
-private fun androidx.compose.foundation.lazy.LazyListScope.threads(s: ShellState, route: String?, nav: SidebarNav) {
+private fun androidx.compose.foundation.lazy.LazyListScope.threads(s: ShellState, route: String?, nav: SidebarNav, asking: Set<String>) {
     item {
         Key("New thread", nav::newThread, Modifier.fillMaxWidth().padding(bottom = 6.dp), KeyKind.Plain, glyph = "plus")
     }
@@ -163,9 +166,11 @@ private fun androidx.compose.foundation.lazy.LazyListScope.threads(s: ShellState
         val list = groups[name] ?: continue
         item { SectionLabel(name) }
         items(list, key = { "t${it.id}" }) { t ->
+            // One waiting on the person says so in the amber of a hold, over the lamp of one at work.
+            val waits = t.id in asking
             ListRow(selected = route == "thread/${t.id}", onClick = { nav.thread(t.id) }) {
-                T(t.title.ifBlank { "New thread" }, Modifier.weight(1f), Relay.type.ui, Relay.colors.ink2, maxLines = 1)
-                if (t.working) Dot(Relay.colors.live, 6.dp)
+                T(t.title.ifBlank { "New thread" }, Modifier.weight(1f), Relay.type.ui, if (waits) Relay.colors.waiting else Relay.colors.ink2, maxLines = 1)
+                if (waits) Dot(Relay.colors.waiting, 6.dp) else if (t.working) Dot(Relay.colors.live, 6.dp)
             }
         }
     }

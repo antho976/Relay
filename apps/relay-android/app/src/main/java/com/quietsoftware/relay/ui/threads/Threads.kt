@@ -527,6 +527,36 @@ private fun toolOp(name: String): String = name.removePrefix("mcp__relay__").tak
 
 private val WRITES = setOf("money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "arbiter.propose", "arbiter.order.place", "arbiter.halt")
 
+/** Claude Code's own tools that change something, which a full-access thread's agent has: each stands alone, as a write does. */
+private val CHANGES = setOf("Bash", "Edit", "MultiEdit", "Write", "NotebookEdit")
+
+/** What one of Claude Code's own tools did, in words, for a full-access thread; null for any other. */
+private fun ownCaption(name: String): String? = when (name) {
+    "Bash" -> "Ran a command"
+    "Edit", "MultiEdit" -> "Edited a file"
+    "Write" -> "Wrote a file"
+    "NotebookEdit" -> "Edited a notebook"
+    "Read" -> "Read a file"
+    "Glob" -> "Found files"
+    "Grep" -> "Searched files"
+    "WebFetch" -> "Fetched a page"
+    "WebSearch" -> "Searched the web"
+    "TodoWrite" -> "Updated its plan"
+    else -> null
+}
+
+/** What one of Claude Code's own tools is doing, while it runs. */
+private fun ownDoing(name: String): String? = when (name) {
+    "Bash" -> "Running a command…"
+    "Edit", "MultiEdit", "NotebookEdit" -> "Editing a file…"
+    "Write" -> "Writing a file…"
+    "Read" -> "Reading a file…"
+    "Glob", "Grep" -> "Searching files…"
+    "WebFetch" -> "Fetching a page…"
+    "WebSearch" -> "Searching the web…"
+    else -> null
+}
+
 /** What a tool call did, in words (relay_client::thread_view::tool_caption, arbiter_pages.rs). */
 private fun toolCaption(name: String, op: String): String = when (op) {
     "money.summary" -> "Read the budget"
@@ -560,7 +590,7 @@ private fun toolCaption(name: String, op: String): String = when (op) {
     "arbiter.order.place" -> "Asked for an order"
     "arbiter.halt" -> "Halted Arbiter"
     "bus.schema" -> "Checked how a tool works"
-    "" -> "Used $name"
+    "" -> ownCaption(name) ?: "Used $name"
     else -> "Used $op"
 }
 
@@ -674,7 +704,7 @@ private fun pieces(messages: List<ThreadMessage>, working: Boolean, today: Local
                         val name = o.str("name")
                         val op = toolOp(name)
                         // Asking first stands alone, as a change does: it is what the agent did instead of one.
-                        val writes = op in WRITES || op == "thread.propose"
+                        val writes = op in WRITES || op == "thread.propose" || (op.isEmpty() && name in CHANGES)
                         val id = o.s("id")
                         val answer = id?.let { answers[it] }
                         val step = when {
@@ -844,11 +874,29 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
         val byId = (askedLive.result as? JsonObject)?.objs("proposals")?.mapNotNull { p -> p.l("id")?.let { it to p } }?.toMap().orEmpty()
         AskedReading(byId, askedLive) { rereads++ }
     }
+    // What a full-access agent waits to be allowed to do, oldest first, above the message box;
+    // one answered here goes at once, before the PC's next reading says so.
+    val asksLive by remember(num) {
+        if (num != null) nav.relay.live("thread.ask.list", buildJsonObject { put("thread_id", num); put("pending", true) }) else flowOf(RelayData.Live())
+    }.collectAsStateWithLifecycle(RelayData.Live())
+    var answeredAsks by remember(tid) { mutableStateOf(setOf<Long>()) }
+    val waiting = (asksLive.result as? JsonObject)?.objs("asks")?.filter { it.s("status") == "pending" && (it.l("id") ?: -1L) !in answeredAsks }.orEmpty()
+    // The thread's access, which the phone's copy of it does not keep; the PC's answer to the
+    // switch here until its next reading of the threads.
+    val standing = rememberStandings()[tid]
+    var accessSaid by remember(tid) { mutableStateOf<String?>(null) }
+    LaunchedEffect(standing?.access) { accessSaid = null }
+    val access = accessSaid ?: standing?.access ?: "data"
+    var granting by remember { mutableStateOf(false) }
     val local = rememberLocalModels()
     // A tool line turning says what the agent does; the working row shows only while none does
     // (threads_view.rs `set_working`).
     val running = rows.any { p -> p is Piece.Tool && p.call.step == Step.Running || p is Piece.Reads && p.calls.any { x -> x.step == Step.Running } }
-    val doingText = if (thread?.live == true || hasStream) "Working…" else "Starting Claude…"
+    val doingText = when {
+        waiting.isNotEmpty() -> "Waiting for your answer…"
+        thread?.live == true || hasStream -> "Working…"
+        else -> "Starting Claude…"
+    }
     val showWorking = working && !running
 
     val providers by remember { nav.relay.live("provider.list") }.collectAsStateWithLifecycle(RelayData.Live())
@@ -943,6 +991,15 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
             put("effort", effort ?: thread?.effort.orEmpty())
         }, "Model and effort")
         model?.let { nav.pickModel(it, local) }
+    }
+    // Full access (the assistant): the PC's answer is the thread as it now stands.
+    fun setAccess(to: String) {
+        val n = num ?: return
+        nav.shell.act("thread.access", buildJsonObject { put("id", n); put("access", to) }) { v -> (v as? JsonObject)?.s("access")?.let { accessSaid = it } }
+    }
+    // Turning it on asks first; turning it off denies what still waits, and is the safe way.
+    fun switchAccess(on: Boolean) {
+        if (on) granting = true else setAccess("data")
     }
     // Try again (threads_view.rs `retry_key`): under the newest failed or stopped reply, until the
     // next message, sending the person's newest message once more.
@@ -1081,6 +1138,15 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
         BoxWithConstraints(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(top = 4.dp, bottom = 8.dp), contentAlignment = Alignment.TopCenter) {
             val dictate = com.quietsoftware.relay.ui.dev.rememberDictation { said -> draft = com.quietsoftware.relay.ui.dev.joinSaid(draft, said) }
             Column(Modifier.column().fillMaxWidth().padding(horizontal = gutter(maxWidth))) {
+                // The oldest ask first, answering it brings the next; a long one scrolls rather
+                // than pushing the message box off a phone's screen.
+                waiting.firstOrNull()?.let { ask ->
+                    androidx.compose.runtime.key(ask.l("id")) {
+                        ToolAskCard(ask, more = waiting.size - 1, online = s.online, modifier = Modifier.padding(bottom = 8.dp).heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                            answeredAsks = answeredAsks + it
+                        }
+                    }
+                }
                 claude?.let { (why, _) -> NoteRow(why, Modifier.padding(start = 4.dp, end = 4.dp, bottom = 8.dp)) }
                 Composer(
                     value = draft,
@@ -1102,11 +1168,23 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                     onUnpick = { id -> attached.removeAll { it.id == id } },
                     online = s.online,
                     local = local,
+                    access = access,
                     limits = sourceLimits(ThreadSource.key),
+                    // Only a thread the PC has: one still on this phone has no agent to give it to.
+                    onAccess = if (num != null) ::switchAccess else null,
                 )
             }
         }
     }
+
+    if (granting) ConfirmDialog(
+        title = "Give this thread full access?",
+        body = "Its agent gets a shell, your files, the web and all of Relay on this PC. It asks you before each thing it does that changes anything, and runs what you allow as you.",
+        action = "Give full access",
+        onDismiss = { granting = false },
+        cancel = "Not now",
+        kind = KeyKind.Primary,
+    ) { setAccess("full") }
 
     if (renaming) RenameDialog(thread?.title.orEmpty(), { renaming = false }) { title ->
         target?.let { nav.shell.change("thread.rename", buildJsonObject { put("id", it); put("title", title) }, "Rename thread") }
@@ -1291,7 +1369,7 @@ private fun ToolView(t: ToolCall, money: Money, proposals: Map<Long, JsonObject>
                 StepMark(t.step, t.writes)
                 // While it runs the line says what the agent is doing, and is the only working line
                 // (threads_view.rs `draw_tool`): the working row under it said the same again.
-                val now = doing(t.op)
+                val now = if (t.op.isEmpty()) ownDoing(t.name) ?: "Working…" else doing(t.op)
                 T(if (t.step == Step.Running && now != "Working…") now else toolCaption(t.name, t.op), style = Relay.type.caption, color = if (t.step == Step.Failed) c.heldText else c.ink3, maxLines = 1)
             }
             if (t.step == Step.Failed) {
@@ -1412,15 +1490,15 @@ private fun RenameDialog(current: String, onDismiss: () -> Unit, onRename: (Stri
 }
 
 @Composable
-internal fun ConfirmDialog(title: String, body: String, action: String, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+internal fun ConfirmDialog(title: String, body: String, action: String, onDismiss: () -> Unit, cancel: String = "Cancel", kind: KeyKind = KeyKind.Danger, onConfirm: () -> Unit) {
     val c = Relay.colors
     Dialog(onDismissRequest = onDismiss) {
         DialogCard {
             T(title, style = Relay.type.title, color = c.ink)
             T(body, style = Relay.type.ui.copy(lineHeight = 20.sp), color = c.ink2)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
-                Key("Cancel", onDismiss, kind = KeyKind.Quiet)
-                Key(action, { onConfirm(); onDismiss() }, kind = KeyKind.Danger)
+                Key(cancel, onDismiss, kind = KeyKind.Quiet)
+                Key(action, { onConfirm(); onDismiss() }, kind = kind)
             }
         }
     }

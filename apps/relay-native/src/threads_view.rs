@@ -9,6 +9,9 @@
 //! a paste or a drop adds one, and each thread's draft keeps its own. Preparing, sending and
 //! showing them is `threads_pictures.rs`'s.
 //!
+//! Full access is chosen in the model picker, for the open thread; what its agent then asks to
+//! do waits on cards over the message box (`threads_access.rs`), and its row in the list is amber.
+//!
 //! The page never holds the window open: its scrollers keep their content's width to themselves
 //! (`PolicyType::External`), and width probes size the conversation (`fit`) and put the panel away
 //! on a narrow page (`apply_panel`).
@@ -147,6 +150,11 @@ struct View {
     limits: gtk::Label,
     model: Picker,
     effort: Picker,
+    /// Full access, under the models in the model picker: there for an open thread, checked
+    /// while it has it ([`show_access`]).
+    access: gtk::Box,
+    access_key: gtk::Button,
+    access_mark: gtk::Image,
     scroll: gtk::ScrolledWindow,
     jump: gtk::Button,
     column: gtk::Box,
@@ -294,6 +302,8 @@ struct State {
     one_column: Cell<bool>,
     /// Claude Code is not on this PC: a thread cannot answer, so nothing is sent.
     claude_missing: Cell<bool>,
+    /// The open thread has full access (`thread.access`), as the engine last said.
+    full: Cell<bool>,
     /// What [`tell`] could not send while the agent was still answering in its thread: (thread,
     /// words), oldest first. Each goes when its thread's turn ends ([`tell_waiting`]).
     to_tell: RefCell<Vec<(i64, String)>>,
@@ -573,6 +583,16 @@ pub fn page() -> gtk::Box {
     row.append(&picture_key);
     let model = picker("threads-model", MODEL_ABOUT, &MODELS, |value| choose(Some(value), None));
     row.append(&model.key);
+    // Full access, under the models: it needs a Claude model, and waits for a reply to end as
+    // the model does. Turning it on asks first ([`toggle_access`]).
+    let access = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    access.append(&label("Access", "threads-menu-heading"));
+    let (access_key, access_mark) = option("threads-access", "full", "Full access", &model.popover, |_| toggle_access());
+    access.append(&access_key);
+    access.set_visible(false);
+    if let Some(list) = model.local.parent().and_downcast::<gtk::Box>() {
+        list.append(&access);
+    }
     let effort = picker("threads-effort", "How hard the agent thinks before answering", &EFFORTS, |value| choose(None, Some(value)));
     row.append(&effort.key);
     // What the agent may do, said plainly: words, not a key.
@@ -617,6 +637,8 @@ pub fn page() -> gtk::Box {
     notice.set_visible(false);
     let message_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
     message_box.append(&notice);
+    // What a full-access thread's agent waits on, over the box; hidden while nothing waits.
+    message_box.append(&super::access::tray());
     message_box.append(&composer);
     // Pictures dropped on the message box go with the message, before its text field would type
     // their names; dropped anywhere else on the conversation, too.
@@ -738,7 +760,7 @@ pub fn page() -> gtk::Box {
     let built = Rc::new(View {
         title, title_key, rename, middle, empty, empty_slot, empty_line, suggestions, dock, dock_slot, message_box,
         notice, notice_text, composer, input, hint, chips, chips_scroll, picture_key, picture_note, send: send_key,
-        limits, model, effort, scroll, jump, column, pending,
+        limits, model, effort, access, access_key, access_mark, scroll, jump, column, pending,
         working, working_text, split: body.clone(), panel, panel_key, panel_body, panel_tabs,
         tally_tabs: tabs, arbiter_tabs, arbiter_panel_tabs, avex_tabs, avex_panel_tabs, sources,
     });
@@ -818,16 +840,38 @@ fn show_source(v: &View) {
     v.tally_tabs.set_visible(source == "tally");
     v.arbiter_tabs.set_visible(source == "arbiter");
     v.avex_tabs.set_visible(source == "avex" && super::avex::PANEL_TABS.len() > 1);
-    if source == "arbiter" {
-        v.limits.set_text("Proposes, you approve");
-        v.limits.set_tooltip_text(Some("It reads, backtests and proposes. Orders follow each strategy's mode, always within its limits, and only you change those."));
-    } else if source == "avex" {
-        v.limits.set_text("Reads only");
-        v.limits.set_tooltip_text(Some("It reads your training as last exported from Avex. It cannot change anything in Avex."));
+    show_access(v);
+}
+
+/// What the agent may do, in the line under the message box: what the source showing lets it do
+/// alone, or full access for an open thread that has it. And Full access in the model picker,
+/// there for an open thread and checked while it has it; a model on this PC is not given a shell,
+/// so there it cannot be turned on.
+fn show_access(v: &View) {
+    let open = current().is_some();
+    let full = open && STATE.with(|s| s.full.get());
+    let (words, about) = if full {
+        ("Full access · asks before each change", super::access::FULL_ABOUT)
     } else {
-        v.limits.set_text("Edits with Undo · asks first");
-        v.limits.set_tooltip_text(Some("It adds and changes entries and investment activity, each with an Undo. Before deleting, changing many at once, budgets or accounts, it asks you on a card."));
-    }
+        match STATE.with(|s| s.source.get()) {
+            "arbiter" => ("Proposes, you approve", "It reads, backtests and proposes. Orders follow each strategy's mode, always within its limits, and only you change those."),
+            "avex" => ("Reads only", "It reads your training as last exported from Avex. It cannot change anything in Avex."),
+            _ => ("Edits with Undo · asks first", "It adds and changes entries and investment activity, each with an Undo. Before deleting, changing many at once, budgets or accounts, it asks you on a card."),
+        }
+    };
+    v.limits.set_text(words);
+    v.limits.set_tooltip_text(Some(about));
+    v.access.set_visible(open);
+    v.access_mark.set_opacity(if full { 1.0 } else { 0.0 });
+    let local = is_local(&STATE.with(|s| s.shown_model.borrow().clone()));
+    v.access_key.set_sensitive(full || !local);
+    v.access_key.set_tooltip_text(Some(if full {
+        "Back to its data only: what still waits for you is denied, and what you allowed for this thread is forgotten"
+    } else if local {
+        "Full access needs a Claude model: a model on this PC is not given a shell"
+    } else {
+        super::access::FULL_ABOUT
+    }));
 }
 
 fn wire(v: &Rc<View>, delete: &gtk::Button) {
@@ -974,6 +1018,8 @@ fn fit(v: &View, width: i32) {
     if STATE.with(|s| s.one_column.replace(one)) != one {
         fill_suggestions(v);
     }
+    // The cards over the message box wrap at the new width.
+    super::access::fit();
 }
 
 /// Show or hide the Tally panel: the person's choice, else whether the page is wide enough.
@@ -1512,6 +1558,7 @@ fn show_choice(v: &View, model: &str, effort: &str) {
     }
     effort_sensitive(v);
     picture_key_shown(v);
+    show_access(v);
 }
 
 /// A model or an effort picked: the thread showing takes it (`thread.set`), and new threads start
@@ -1559,6 +1606,28 @@ fn choose(model: Option<&str>, effort: Option<&str>) {
     });
 }
 
+/// Full access picked in the model picker, for the open thread (`thread.access`): turning it on
+/// asks first, turning it off does not. The engine refuses either while the agent answers.
+fn toggle_access() {
+    let (Some(ui), Some(id)) = (the_ui(), current()) else { return };
+    let full = !STATE.with(|s| s.full.get());
+    glib::spawn_future_local(async move {
+        if full && !super::access::confirm(&ui).await {
+            return;
+        }
+        let access = if full { "full" } else { "data" };
+        match ui.call("thread.access", json!({"id": id, "access": access})).await {
+            Ok(thread) => {
+                if let Some(v) = view().filter(|_| current() == Some(id)) {
+                    header(&v, &thread);
+                }
+            }
+            Err(crate::client::Error::Bus(e)) if e.code == "thread.busy" => ui.show_error(STILL_ANSWERING),
+            Err(e) => ui.show_error(&super::access::said(&e)),
+        }
+    });
+}
+
 /// Draw the model picker again for what it shows: the local models or their state moved.
 fn reshow_model(v: &View) {
     let model = STATE.with(|s| s.shown_model.borrow().clone());
@@ -1569,6 +1638,7 @@ fn reshow_model(v: &View) {
     effort_sensitive(v);
     // The models on this PC came in: the one shown may be among them.
     picture_key_shown(v);
+    show_access(v);
 }
 
 /// The effort picker waits for a reply like the model picker, and a local model has no efforts.
@@ -1631,10 +1701,13 @@ fn reset(id: Option<i64>) {
         *s.retry.borrow_mut() = None;
         s.added.borrow_mut().clear();
         s.stopping.set(false);
+        s.full.set(false);
         if let Some(id) = id {
             s.unread.borrow_mut().remove(&id);
         }
     });
+    // The last thread's asks are not this one's: its own are read once it is.
+    super::access::forget();
 }
 
 /// Start a new thread: the page shows the greeting until the first message is sent.
@@ -1993,6 +2066,8 @@ pub fn open(ui: &Rc<Ui>, id: i64) {
         v.middle.set_visible_child_name("thread");
         v.title_key.set_visible(true);
         place_composer(&v, false);
+        // The last thread's access goes now, this one's comes with its reading.
+        show_access(&v);
     }
     if *ui.page.borrow() != PAGE {
         ui.navigate(PAGE);
@@ -2149,6 +2224,8 @@ fn hold_from_bottom(v: &View, from_bottom: f64) {
 
 fn header(v: &View, thread: &Value) {
     v.title.set_text(thread["title"].as_str().unwrap_or("Thread"));
+    // Before the pickers, which show it with the model.
+    STATE.with(|s| s.full.set(thread["access"] == "full"));
     show_choice(v, thread["model"].as_str().unwrap_or(""), thread["effort"].as_str().unwrap_or(""));
     let live = thread["live"] == true;
     STATE.with(|s| s.live.set(live));
@@ -2156,6 +2233,8 @@ fn header(v: &View, thread: &Value) {
         v.working_text.set_text("Working…");
     }
     set_working(v, thread["working"] == true);
+    // What its agent waits on: read when it opens, and again each time it moves.
+    super::access::shown(thread);
 }
 
 fn set_working(v: &View, working: bool) {
@@ -3581,6 +3660,9 @@ pub fn event(ui: &Rc<Ui>, ev: &str, payload: &Value) {
             stick_to_bottom(&v, false);
         }
         "thread.proposal" => super::ask::changed(&payload["proposal"]),
+        // A full-access agent asked to do something, or was answered; `thread.changed` follows
+        // with the thread's count, for the list.
+        "thread.ask" => super::access::changed(&payload["ask"]),
         "thread.local" => {
             let (model, state) = (payload["model"].as_str().unwrap_or(""), payload["state"].as_str().unwrap_or(""));
             STATE.with(|s| *s.local_state.borrow_mut() = (model.to_string(), state.to_string()));
@@ -3711,11 +3793,12 @@ fn age(updated_at: &str) -> &'static str {
     }
 }
 
-/// What a thread's row shows at its end: the green lamp while the agent answers, an ink dot for a
-/// reply not yet read, or nothing.
+/// What a thread's row shows at its end: the amber lamp while its agent waits for the person's
+/// answer, the green one while it answers, an ink dot for a reply not yet read, or nothing.
 #[derive(Clone, Copy, PartialEq)]
 enum Mark {
     None,
+    Asking,
     Working,
     Unread,
 }
@@ -3769,9 +3852,10 @@ fn show_list_row(r: &mut ListRow, title: &str, mark: Mark, preview: Option<&str>
         if let Some(old) = r.mark.take() {
             r.row.remove(&old);
         }
-        // Green while the agent answers; an ink dot for a reply not yet read. A finished reply is
-        // news, not an alarm.
+        // Amber while the agent waits on the person, as a held action does; green while it
+        // answers; an ink dot for a reply not yet read. A finished reply is news, not an alarm.
         let (class, said) = match mark {
+            Mark::Asking => ("threads-asking", "Needs your approval"),
             Mark::Working => ("threads-lamp", "Claude is answering"),
             Mark::Unread => ("threads-unread", "New reply"),
             Mark::None => ("", ""),
@@ -3822,8 +3906,13 @@ fn draw_list(threads: &Value) {
             if !seen.insert(id) {
                 continue;
             }
-            let mark = if t["working"] == true {
+            if t["working"] == true {
                 STATE.with(|s| s.was_working.borrow_mut().insert(id));
+            }
+            // A thread whose agent waits on an answer is working too: the wait shows first.
+            let mark = if t["asking"].as_u64().is_some_and(|n| n > 0) {
+                Mark::Asking
+            } else if t["working"] == true {
                 Mark::Working
             } else if STATE.with(|s| s.unread.borrow().contains(&id)) {
                 Mark::Unread

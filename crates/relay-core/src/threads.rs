@@ -21,7 +21,11 @@
 //!
 //! What the agent may not change alone it proposes, and the person answers on a card
 //! ([`proposals`]); the agent hears the answers at the head of the person's next message.
+//!
+//! A thread the person gave full access ([`asks`]) runs Claude Code with its own tools and every
+//! Relay op instead, and asks the person before each thing it does that changes anything.
 
+pub mod asks;
 pub mod images;
 pub mod proposals;
 
@@ -440,10 +444,15 @@ pub struct Stored {
     pub created_at: String,
     pub updated_at: String,
     pub preview: Option<String>,
+    /// `data` or `full` ([`asks`]).
+    pub access: String,
+    /// Asks waiting for the person.
+    pub asking: u32,
 }
 
 const THREAD_COLUMNS: &str = "t.id, t.title, t.provider, t.model, t.agent_ref, t.created_at, t.updated_at,
-    (SELECT m.body FROM message m WHERE m.thread_id = t.id AND m.role IN ('user', 'assistant') ORDER BY m.id DESC LIMIT 1), t.effort";
+    (SELECT m.body FROM message m WHERE m.thread_id = t.id AND m.role IN ('user', 'assistant') ORDER BY m.id DESC LIMIT 1), t.effort,
+    t.access, (SELECT COUNT(*) FROM ask a WHERE a.thread_id = t.id AND a.status = 'pending')";
 
 fn stored(row: &rusqlite::Row) -> rusqlite::Result<Stored> {
     let last: Option<String> = row.get(7)?;
@@ -457,6 +466,8 @@ fn stored(row: &rusqlite::Row) -> rusqlite::Result<Stored> {
         updated_at: row.get(6)?,
         preview: last.and_then(|body| serde_json::from_str::<Value>(&body).ok()).and_then(|body| preview(&body)),
         effort: row.get(8)?,
+        access: row.get(9)?,
+        asking: row.get(10)?,
     })
 }
 
@@ -540,8 +551,15 @@ impl ThreadStore {
             conn.execute_batch(images::SCHEMA)?;
             conn.pragma_update(None, "user_version", 4)?;
         }
+        // 5: a thread's access, and what a full-access agent asks the person (`asks`).
+        if version < 5 {
+            conn.execute_batch(asks::SCHEMA)?;
+            conn.pragma_update(None, "user_version", 5)?;
+        }
         let store = ThreadStore { conn };
-        store.settle_interrupted(&crate::time::now())?;
+        let now = crate::time::now();
+        store.settle_interrupted(&now)?;
+        store.settle_asks(&now)?;
         Ok(store)
     }
 
@@ -659,6 +677,11 @@ struct Live {
     working: HashMap<Id, Turn>,
     /// Counts both agents' serials and turns' tokens.
     next_serial: u64,
+    /// Asks waiting for the person, by id, with the agent waiting on each (`asks`).
+    asks: HashMap<Id, asks::Waiting>,
+    /// Relay ops the person allowed once, by thread: how many more times the socket door
+    /// admits each from that thread's agent tree (`asks::admits`).
+    grants: HashMap<(Id, String), u32>,
 }
 
 impl Live {
@@ -725,6 +748,8 @@ fn view(engine: &Engine, t: Stored) -> ThreadView {
         created_at: t.created_at,
         updated_at: t.updated_at,
         preview: t.preview,
+        access: t.access,
+        asking: t.asking,
     }
 }
 
@@ -800,6 +825,11 @@ pub fn set_agent(engine: &Engine, id: Id, model: Option<&str>, effort: Option<&s
     if model.as_deref().and_then(crate::local_models::find).is_some() && !with_db(engine, |db| db.carried_by(id))?.is_empty() {
         return Err(BusError::refused("thread.images_unsupported", IMAGES_IN_HISTORY).with_hint("start a new thread for a model on this PC"));
     }
+    // A model on this PC is not given a shell.
+    if model.as_deref().and_then(crate::local_models::find).is_some() && asks::full(engine, id) {
+        return Err(BusError::refused("thread.access_local", "This thread has full access, which needs a Claude model")
+            .with_hint("take the thread back to its data first"));
+    }
     if !with_db(engine, |db| db.set_agent(id, model.as_deref(), effort.as_deref()))? {
         return Err(not_found(id));
     }
@@ -856,6 +886,7 @@ pub fn stop(engine: &Engine, id: Id) -> bool {
     let Some(agent) = live.agents.remove(&id) else { return was_working };
     drop(live);
     kill(agent.pid);
+    asks::cancel(engine, id);
     true
 }
 
@@ -1097,15 +1128,33 @@ fn mcp_config(engine: &Engine) -> String {
 /// The agent's command line for `thread`: resumed by `agent_ref` when Claude reported one. A
 /// `lean` agent (a local model's, [`LocalStyle::lean`]) is given [`LOCAL_PROMPT`] in place of
 /// Claude Code's own prompt; any other gets [`PROMPT`] after it.
-pub fn agent_args(mcp: &str, model: Option<&str>, effort: Option<&str>, agent_ref: Option<&str>, lean: bool) -> Vec<String> {
-    let prompt = if lean { ["--system-prompt", LOCAL_PROMPT] } else { ["--append-system-prompt", PROMPT] };
+///
+/// A `full` agent ([`asks`]) has Claude Code's own tools besides Relay's, and none of them is
+/// allowed ahead: in the default permission mode, set here because a print session may start in
+/// another, Claude Code asks for each on its stdout (`--permission-prompt-tool stdio`), and Relay
+/// answers ([`asks::request`]).
+pub fn agent_args(mcp: &str, model: Option<&str>, effort: Option<&str>, agent_ref: Option<&str>, lean: bool, full: bool) -> Vec<String> {
+    let assistant;
+    let prompt = if lean {
+        ["--system-prompt", LOCAL_PROMPT]
+    } else if full {
+        assistant = format!("{PROMPT}\n\n{}", asks::PROMPT);
+        ["--append-system-prompt", assistant.as_str()]
+    } else {
+        ["--append-system-prompt", PROMPT]
+    };
+    let tools: &[&str] = if full {
+        &["--tools", asks::TOOLS, "--permission-mode", "default", "--permission-prompt-tool", "stdio"]
+    } else {
+        &["--tools", "", "--allowedTools", "mcp__relay"]
+    };
     let mut args: Vec<String> = [
         "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
         "--include-partial-messages", "--strict-mcp-config", "--mcp-config", mcp,
-        "--tools", "", "--allowedTools", "mcp__relay", "--setting-sources", "",
-        prompt[0], prompt[1],
     ]
     .into_iter()
+    .chain(tools.iter().copied())
+    .chain(["--setting-sources", "", prompt[0], prompt[1]])
     .map(str::to_string)
     .collect();
     if let Some(model) = model.filter(|m| crate::providers::is_provider_ref(m)) {
@@ -1136,7 +1185,9 @@ fn spawn(engine: &Arc<Engine>, id: Id, token: u64, first_line: &str, local: Opti
     // A local model has no efforts: Claude Code would ask it for thinking the server turns off.
     let effort = if local.is_some() { None } else { thread.effort.as_deref() };
     let style = if local.is_some() { LocalStyle::from_env() } else { LocalStyle::CLASSIC };
-    cmd.args(agent_args(&mcp_config(engine), thread.model.as_deref(), effort, thread.agent_ref.as_deref(), style.lean))
+    // A model on this PC never runs with full access (`asks::set_access`).
+    let full = local.is_none() && thread.access == "full";
+    cmd.args(agent_args(&mcp_config(engine), thread.model.as_deref(), effort, thread.agent_ref.as_deref(), style.lean, full))
         .current_dir(&dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1145,7 +1196,12 @@ fn spawn(engine: &Arc<Engine>, id: Id, token: u64, first_line: &str, local: Opti
     for var in ["RELAY_SESSION", "RELAY_TOKEN", "RELAY_PROJECT_ID", "RELAY_WORKTREE", "RELAY_BRIEF"] {
         cmd.env_remove(var);
     }
-    cmd.env("RELAY_MCP_OPS", if style.lean { local_ops() } else { AGENT_OPS.to_vec() }.join(","));
+    if full {
+        // Every op the person may call is listed: the agent asks for each change (`asks`).
+        cmd.env_remove("RELAY_MCP_OPS");
+    } else {
+        cmd.env("RELAY_MCP_OPS", if style.lean { local_ops() } else { AGENT_OPS.to_vec() }.join(","));
+    }
     // The MCP server inherits it: how it answers a small model (`relay_cli::mcp`).
     cmd.env("RELAY_MCP_STYLE", style.door());
     if let Some((model, port)) = local {
@@ -1244,6 +1300,9 @@ fn ended(engine: &Engine, id: Id, serial: u64, stderr: &str) {
         let turn = if ours { live.agents.remove(&id).map(|a| a.turn).filter(|t| live.current(id, *t)) } else { None };
         (ours, turn)
     };
+    if ours {
+        asks::cancel(engine, id);
+    }
     if let Some(turn) = turn {
         let detail = stderr.lines().rev().find(|l| !l.trim().is_empty()).map(|l| format!(": {}", cut(l.trim(), 300))).unwrap_or_default();
         fail(engine, id, turn, &format!("The agent stopped before it finished{detail}"));
@@ -1262,6 +1321,9 @@ fn handle(engine: &Engine, id: Id, serial: u64, event: &Value) {
     // belongs to a turn that is over.
     let Some(turn) = lock(&engine.threads.live).agents.get(&id).filter(|a| a.serial == serial).map(|a| a.turn) else { return };
     match event["type"].as_str() {
+        // A full-access agent asks before a tool runs (`asks`).
+        Some("control_request") => asks::request(engine, id, serial, event),
+        Some("control_cancel_request") => asks::withdrawn(engine, id, event),
         Some("system") if event["subtype"] == "init" => {
             if let Some(reference) = event["session_id"].as_str().filter(|r| crate::providers::is_provider_ref(r)) {
                 let _ = with_db(engine, |db| db.set_agent_ref(id, reference));
@@ -1454,21 +1516,44 @@ mod tests {
 
     #[test]
     fn the_agent_resumes_by_its_own_id_and_never_by_an_option() {
-        let args = agent_args("{}", Some("opus"), Some("high"), Some("eac9663f-1a29"), false);
+        let args = agent_args("{}", Some("opus"), Some("high"), Some("eac9663f-1a29"), false, false);
         assert!(args.windows(2).any(|w| w == ["--resume", "eac9663f-1a29"]));
         assert!(args.windows(2).any(|w| w == ["--model", "opus"]));
         assert!(args.windows(2).any(|w| w == ["--effort", "high"]));
         assert!(args.windows(2).any(|w| w == ["--tools", ""]), "no built-in tools");
-        let args = agent_args("{}", Some("--dangerously-skip-permissions"), Some("--x"), Some("-x"), false);
+        let args = agent_args("{}", Some("--dangerously-skip-permissions"), Some("--x"), Some("-x"), false, false);
         assert!(!args.iter().any(|a| a == "--resume" || a == "--model" || a == "--effort"));
     }
 
     #[test]
+    fn a_full_access_agent_has_its_tools_and_asks_relay_before_each() {
+        let args = agent_args("{}", Some("opus"), None, Some("eac9663f-1a29"), false, true);
+        assert!(args.windows(2).any(|w| w == ["--tools", asks::TOOLS]));
+        assert!(args.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]));
+        // A print session may start in another mode, one that runs tools unasked.
+        assert!(args.windows(2).any(|w| w == ["--permission-mode", "default"]));
+        assert!(!args.iter().any(|a| a == "--allowedTools" || a == "--dangerously-skip-permissions"), "nothing allowed ahead");
+        assert!(args.windows(2).any(|w| w == ["--setting-sources", ""]), "no settings of the person's own allow anything");
+        assert!(args.windows(2).any(|w| w[0] == "--append-system-prompt" && w[1].starts_with(PROMPT) && w[1].ends_with(asks::PROMPT)));
+        assert!(args.windows(2).any(|w| w == ["--resume", "eac9663f-1a29"]));
+        assert_eq!(asks::relay_op("mcp__relay__task_create"), Some("task.create"));
+        assert_eq!(asks::relay_op("mcp__relay__thread_ask_answer"), Some("thread.ask.answer"));
+        assert_eq!(asks::relay_op("mcp__relay__no_such"), None);
+        assert_eq!(asks::relay_op("Bash"), None);
+        // Claude Code's tool names stand for one op each.
+        let ops = relay_bus::registry::Registry::global().entries();
+        let mut tools: Vec<String> = ops.iter().map(|e| asks::tool_of(e.name)).collect();
+        tools.sort();
+        tools.dedup();
+        assert_eq!(tools.len(), ops.len());
+    }
+
+    #[test]
     fn a_lean_agent_gets_relays_prompt_in_place_of_claude_codes() {
-        let args = agent_args("{}", Some("qwen35-4b"), None, None, true);
+        let args = agent_args("{}", Some("qwen35-4b"), None, None, true, false);
         assert!(args.windows(2).any(|w| w[0] == "--system-prompt" && w[1] == LOCAL_PROMPT));
         assert!(!args.iter().any(|a| a == "--append-system-prompt" || a == PROMPT));
-        let args = agent_args("{}", None, None, None, false);
+        let args = agent_args("{}", None, None, None, false, false);
         assert!(args.windows(2).any(|w| w[0] == "--append-system-prompt" && w[1] == PROMPT));
         assert_eq!(LocalStyle::parse(" lean, Readings"), LocalStyle { lean: true, readings: true, prefetch: false, docs: false, think: None });
         assert_eq!(LocalStyle::parse("lean,think").think, Some(-1));

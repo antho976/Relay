@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 329,
+  "op_count": 332,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -5529,6 +5529,66 @@
       },
       "result": {
         "$ref": "#/$defs/ThreadProposal"
+      }
+    },
+    "thread.access": {
+      "summary": "Give a thread's agent full access (Claude Code's own tools and every Relay op, each action that changes anything waiting for the person's answer) or take it back to the thread's data. A running agent restarts with it on the next message",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "thread.changed",
+        "thread.ask"
+      ],
+      "since": "1.0",
+      "phase": 5,
+      "payload": {
+        "$ref": "#/$defs/ThreadAccessIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ThreadView"
+      }
+    },
+    "thread.ask.list": {
+      "summary": "What full-access agents asked to do, newest last: one thread's, or every thread's",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 5,
+      "payload": {
+        "$ref": "#/$defs/ThreadAskListIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ThreadAsksOut"
+      }
+    },
+    "thread.ask.answer": {
+      "summary": "Allow or deny what a full-access agent asked to do. The person's alone: no thread's agent answers an ask, its own or another's",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "thread.ask",
+        "thread.changed"
+      ],
+      "since": "1.0",
+      "phase": 5,
+      "payload": {
+        "$ref": "#/$defs/ThreadAskAnswerIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ThreadAsk"
       }
     },
     "arbiter.summary": {
@@ -20337,6 +20397,18 @@
             "null"
           ],
           "description": "The start of the last message, for the thread list."
+        },
+        "access": {
+          "type": "string",
+          "description": "`data`: the agent reads and changes the person's data through the thread's own ops\n(Tally, Arbiter, Avex). `full`: it also has Claude Code's own tools (shell, files, web) and\nevery Relay op, and each action that changes anything waits for the person\n(`thread.ask.answer`). Absent from an engine before full access, which is `data`.",
+          "default": "data"
+        },
+        "asking": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Actions waiting for the person in this thread (`thread.ask.list`).",
+          "default": 0
         }
       },
       "required": [
@@ -21065,6 +21137,169 @@
       "required": [
         "id",
         "approve"
+      ]
+    },
+    "ThreadAccessIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "access": {
+          "type": "string",
+          "description": "`data` or `full`."
+        }
+      },
+      "required": [
+        "id",
+        "access"
+      ]
+    },
+    "ThreadAskListIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "thread_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "One thread's; every thread's when absent."
+        },
+        "pending": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Only those still waiting when true."
+        }
+      }
+    },
+    "ThreadAsksOut": {
+      "type": "object",
+      "properties": {
+        "asks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ThreadAsk"
+          }
+        }
+      },
+      "required": [
+        "asks"
+      ]
+    },
+    "ThreadAsk": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "thread_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tool": {
+          "type": "string",
+          "description": "The agent's tool, as Claude Code names it: `Bash`, `Edit`, `Write`, `Read`, `WebFetch`,\nor one of Relay's, `mcp__relay__task_create`."
+        },
+        "op": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "For one of Relay's tools, the op it calls (`task.create`)."
+        },
+        "title": {
+          "type": "string",
+          "description": "What it is, in words: \"Run a command\", \"Edit a file\", \"Create a task\"."
+        },
+        "detail": {
+          "type": "string",
+          "description": "Exactly what: the command, the file, the address, or the op's payload in one line."
+        },
+        "input": {
+          "description": "The tool's input as the agent gave it."
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why Claude Code asks, when it says: \"Path is outside allowed working directories\"."
+        },
+        "status": {
+          "type": "string",
+          "description": "`pending`, `allowed`, `denied` or `cancelled` (the agent stopped first)."
+        },
+        "scope": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "How it was allowed: `once`, or `thread` (this tool, in this thread, from now on)."
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What the person said with a denial; the agent is told it."
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "answered_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "tool",
+        "title",
+        "detail",
+        "input",
+        "status",
+        "created_at"
+      ]
+    },
+    "ThreadAskAnswerIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "allow": {
+          "type": "boolean"
+        },
+        "scope": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`once` (the default) or `thread`: this tool, in this thread, without asking again until\nthe thread's access goes back to `data`."
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Said to the agent with a denial."
+        }
+      },
+      "required": [
+        "id",
+        "allow"
       ]
     },
     "ArbiterSummary": {

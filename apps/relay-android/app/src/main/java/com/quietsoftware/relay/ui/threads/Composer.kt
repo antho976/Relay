@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
@@ -98,8 +99,9 @@ private const val WAITS = "Waits for this reply to finish"
 /** Why a thread on a model on the PC takes no pictures (threads_pictures.rs `LOCAL_CANNOT`). */
 internal const val LOCAL_CANNOT_READ = "This model on your PC cannot read pictures: choose a Claude model"
 
-/** What a thread's agent may do, under the message box. */
+/** What a thread's agent may do, under the message box: its data's line, or full access's. */
 internal const val DATA_LIMITS = "Edits with Undo · asks first"
+private const val FULL_LIMITS = "Full access · asks before each change"
 
 /**
  * The models on the PC itself (`thread.models`, "On this PC" in the picker; docs/THREADS.md "Local
@@ -177,7 +179,9 @@ internal fun Nav.pickModel(model: String, local: LocalModels) {
  * ([online]). A model on the PC itself ([local]) cannot read them, so on one the key steps aside
  * and the box says why; it has no effort either.
  *
- * [limits] is the line on what the agent may do, under the box.
+ * With [onAccess], an open thread's Full access switch follows its model and effort ([access] is
+ * `data` or `full`), and the line on what the agent may do says which; [limits] is a data
+ * thread's line.
  */
 @Composable
 internal fun Composer(
@@ -201,6 +205,8 @@ internal fun Composer(
     onUnpick: (Long) -> Unit = {},
     online: Boolean = true,
     local: LocalModels = LocalModels.None,
+    access: String = "data",
+    onAccess: ((Boolean) -> Unit)? = null,
     limits: String = DATA_LIMITS,
 ) {
     val c = Relay.colors
@@ -212,6 +218,8 @@ internal fun Composer(
     val shown = if (field.text == value) field else TextFieldValue(value, TextRange(value.length))
     val reads = local.readsPictures(model)
     val onPc = local.has(model)
+    val full = onAccess != null && access == "full"
+    val line = if (full) FULL_LIMITS else limits
     // The models a thread may run on, the PC's own under their heading.
     val models = remember(local) { MODELS + local.present }
     val groups = remember(local) { local.present.firstOrNull()?.let { mapOf(it.first to "On this PC") }.orEmpty() }
@@ -262,7 +270,17 @@ internal fun Composer(
                             "sliders", effortChip(effort), "Effort: ${effortName(effort)}", EFFORTS, effort, onEffort, canPick && !onPc,
                             whyOff = if (onPc) "A model on this PC has no effort setting" else WAITS.takeIf { working },
                         )
-                        if (wide) T(limits.substringBefore(" · "), Modifier.padding(start = 4.dp), Relay.type.caption, c.ink3, maxLines = 1)
+                        // `thread.access` is refused while the agent answers, as a choice of model is; and a
+                        // model on this PC is not given a shell, so on one it cannot be turned on.
+                        if (onAccess != null) {
+                            AccessChip(
+                                full,
+                                enabled = canPick && (full || !onPc),
+                                whyOff = if (working) WAITS else "Full access needs a Claude model: a model on this PC is not given a shell".takeIf { onPc && !full },
+                                onChange = onAccess,
+                            )
+                        }
+                        if (wide) T(if (full) "Asks before each change" else line.substringBefore(" · "), Modifier.padding(start = 4.dp), Relay.type.caption, c.ink3, maxLines = 1)
                     }
                     if (onDictate != null && !working) {
                         Box(
@@ -275,7 +293,7 @@ internal fun Composer(
                 }
             }
             val caption = Relay.type.caption.copy(fontSize = 11.5.sp, textAlign = TextAlign.Center)
-            if (!wide) T(limits, Modifier.fillMaxWidth().padding(top = 6.dp), caption, c.ink3, maxLines = 1)
+            if (!wide) T(line, Modifier.fillMaxWidth().padding(top = 6.dp), caption, c.ink3, maxLines = 1)
             if (onPick != null && !reads) {
                 T(if (onPc) LOCAL_CANNOT_READ else "$PICTURES_NEED_CLAUDE: this one runs on the PC itself", Modifier.fillMaxWidth().padding(top = if (wide) 6.dp else 2.dp), caption, c.ink3, maxLines = 2)
             }
@@ -318,6 +336,37 @@ private fun Picker(
             Glyph("chevron-down", 11.dp, c.ink3)
         }
         Choices(open, { open = false }, options, selected, onPick, above = true, anchor = TOUCH, groups = groups)
+    }
+}
+
+/**
+ * An open thread's Full access switch, beside its model and effort (the contract's "Full
+ * access"): off, its agent works on the thread's data; on, it also has a shell, the files, the
+ * web and all of Relay on the PC, and asks before each thing that changes anything.
+ */
+@Composable
+private fun AccessChip(on: Boolean, enabled: Boolean, whyOff: String?, onChange: (Boolean) -> Unit) {
+    val c = Relay.colors
+    val nav = LocalNav.current
+    Box(
+        Modifier.heightIn(min = TOUCH)
+            .then(
+                if (enabled) Modifier.toggleable(value = on, role = Role.Switch, onValueChange = onChange)
+                else Modifier.clickable(enabled = whyOff != null, role = Role.Switch) { whyOff?.let { nav.shell.toast(it) } },
+            )
+            .semantics { contentDescription = "Full access" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            Modifier.alpha(if (enabled) 1f else .45f).heightIn(min = 30.dp).clip(Radii.pill)
+                .background(if (on) c.wash else c.slab).border(1.dp, if (on) c.ink3 else c.strong, Radii.pill).padding(start = 8.dp, end = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Glyph("shield", 13.dp, if (on) c.ink else c.ink3)
+            T("Full access", style = Relay.type.caption, color = if (on) c.ink else c.ink2, maxLines = 1, weight = FontWeight.Medium)
+            if (on) Glyph("check", 11.dp, c.ink)
+        }
     }
 }
 

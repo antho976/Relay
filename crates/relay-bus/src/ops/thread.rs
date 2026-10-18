@@ -36,7 +36,20 @@ result!(#[schemars(rename = "ThreadView")] ThreadView {
     pub live: bool,
     /// The start of the last message, for the thread list.
     pub preview: Option<String>,
+    /// `data`: the agent reads and changes the person's data through the thread's own ops
+    /// (Tally, Arbiter, Avex). `full`: it also has Claude Code's own tools (shell, files, web) and
+    /// every Relay op, and each action that changes anything waits for the person
+    /// (`thread.ask.answer`). Absent from an engine before full access, which is `data`.
+    #[serde(default = "data_access")]
+    pub access: String,
+    /// Actions waiting for the person in this thread (`thread.ask.list`).
+    #[serde(default)]
+    pub asking: u32,
 });
+
+fn data_access() -> String {
+    "data".into()
+}
 result!(#[schemars(rename = "ThreadMessage")] MessageView {
     pub id: Id,
     pub thread_id: Id,
@@ -328,4 +341,64 @@ op!(ProposalUndo, "thread.proposal.undo", IdIn => ProposalView,
     OpMeta::mutation(Scope::Global, 5, "Put an approved proposal back: entries and activities restored, budgets and accounts as they were, all or none")
         .actors(Actors::UserOnly).emits(&["thread.proposal", "money.changed"]));
 
-entries!(List, Get, Create, Send, Upload, Image, Stop, Set, Rename, Delete, Models, Pick, Propose, ProposalList, ProposalGet, ProposalResolve, ProposalUndo);
+// ── Full access (docs/THREADS.md, "Full access") ─────────────────────────
+
+payload!(#[schemars(rename = "ThreadAccessIn")] AccessIn {
+    pub id: Id,
+    /// `data` or `full`.
+    pub access: String,
+});
+op!(Access, "thread.access", AccessIn => ThreadView,
+    OpMeta::mutation(Scope::Global, 5, "Give a thread's agent full access (Claude Code's own tools and every Relay op, each action that changes anything waiting for the person's answer) or take it back to the thread's data. A running agent restarts with it on the next message")
+        .actors(Actors::UserOnly).emits(&["thread.changed", "thread.ask"]));
+
+result!(#[schemars(rename = "ThreadAsk")] AskView {
+    pub id: Id,
+    pub thread_id: Id,
+    /// The agent's tool, as Claude Code names it: `Bash`, `Edit`, `Write`, `Read`, `WebFetch`,
+    /// or one of Relay's, `mcp__relay__task_create`.
+    pub tool: String,
+    /// For one of Relay's tools, the op it calls (`task.create`).
+    pub op: Option<String>,
+    /// What it is, in words: "Run a command", "Edit a file", "Create a task".
+    pub title: String,
+    /// Exactly what: the command, the file, the address, or the op's payload in one line.
+    pub detail: String,
+    /// The tool's input as the agent gave it.
+    pub input: Value,
+    /// Why Claude Code asks, when it says: "Path is outside allowed working directories".
+    pub reason: Option<String>,
+    /// `pending`, `allowed`, `denied` or `cancelled` (the agent stopped first).
+    pub status: String,
+    /// How it was allowed: `once`, or `thread` (this tool, in this thread, from now on).
+    pub scope: Option<String>,
+    /// What the person said with a denial; the agent is told it.
+    pub message: Option<String>,
+    pub created_at: String,
+    pub answered_at: Option<String>,
+});
+
+payload!(#[schemars(rename = "ThreadAskListIn")] AskListIn {
+    /// One thread's; every thread's when absent.
+    pub thread_id: Option<Id>,
+    /// Only those still waiting when true.
+    pub pending: Option<bool>,
+});
+result!(#[schemars(rename = "ThreadAsksOut")] AsksOut { pub asks: Vec<AskView> });
+op!(AskList, "thread.ask.list", AskListIn => AsksOut,
+    OpMeta::query(Scope::Global, 5, "What full-access agents asked to do, newest last: one thread's, or every thread's").actors(Actors::UserOnly));
+
+payload!(#[schemars(rename = "ThreadAskAnswerIn")] AskAnswerIn {
+    pub id: Id,
+    pub allow: bool,
+    /// `once` (the default) or `thread`: this tool, in this thread, without asking again until
+    /// the thread's access goes back to `data`.
+    pub scope: Option<String>,
+    /// Said to the agent with a denial.
+    pub message: Option<String>,
+});
+op!(AskAnswer, "thread.ask.answer", AskAnswerIn => AskView,
+    OpMeta::mutation(Scope::Global, 5, "Allow or deny what a full-access agent asked to do. The person's alone: no thread's agent answers an ask, its own or another's")
+        .actors(Actors::UserOnly).emits(&["thread.ask", "thread.changed"]));
+
+entries!(List, Get, Create, Send, Upload, Image, Stop, Set, Rename, Delete, Models, Pick, Propose, ProposalList, ProposalGet, ProposalResolve, ProposalUndo, Access, AskList, AskAnswer);

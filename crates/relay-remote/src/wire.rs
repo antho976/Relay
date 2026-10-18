@@ -185,11 +185,12 @@ pub const PHONE_OPS: &[&str] = &[
     "task.update",
     // The Threads space on the phone: the same conversations as the PC's, and their pictures
     // (`thread.upload` writes one for a message to carry, `thread.image` reads one to draw); the
-    // models on the PC; and the cards the agent asks on (`thread.proposal.*`).
-    "thread.create", "thread.delete", "thread.get", "thread.image", "thread.list", "thread.models",
-    "thread.pick", "thread.proposal.get", "thread.proposal.list", "thread.proposal.resolve",
-    "thread.proposal.undo", "thread.rename", "thread.send", "thread.set", "thread.stop",
-    "thread.upload",
+    // models on the PC; the cards the agent asks on (`thread.proposal.*`); and full access, with
+    // the answers to what a full-access agent asks to do (`thread.ask.*`).
+    "thread.access", "thread.ask.answer", "thread.ask.list", "thread.create", "thread.delete",
+    "thread.get", "thread.image", "thread.list", "thread.models", "thread.pick",
+    "thread.proposal.get", "thread.proposal.list", "thread.proposal.resolve", "thread.proposal.undo",
+    "thread.rename", "thread.send", "thread.set", "thread.stop", "thread.upload",
     "ui.page.switch",
     "usage.get",
     "workspace.create", "workspace.discover", "workspace.list", "workspace.remove", "workspace.update",

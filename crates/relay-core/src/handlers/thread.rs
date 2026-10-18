@@ -5,7 +5,7 @@
 //! and handing it a message happen after the handler returns.
 
 use crate::engine::{Ctx, Engine};
-use crate::threads::proposals;
+use crate::threads::{asks, proposals};
 use crate::{local_models, threads};
 use relay_bus::ops::thread::*;
 use relay_bus::{BusError, Empty};
@@ -116,6 +116,33 @@ pub fn register(e: &mut Engine) {
         Ok(Empty {})
     });
     register_proposals(e);
+    register_asks(e);
+}
+
+/// Full access (`threads::asks`). The access and the answers are short writes to `threads.db`;
+/// the agent is told its answer after the handler, as a message is handed on.
+fn register_asks(e: &mut Engine) {
+    e.register::<Access>(|ctx, p| {
+        person(ctx)?;
+        asks::set_access(ctx.engine(), p.id, p.access.trim())?;
+        let thread = threads::get(ctx.engine(), p.id)?;
+        ctx.emit("thread.changed", json!({"thread": thread}));
+        Ok(thread)
+    });
+    e.register_unlocked::<AskList>(|ctx, p| Ok(AsksOut { asks: asks::list(ctx.engine(), p.thread_id, p.pending.unwrap_or(false))? }));
+    e.register::<AskAnswer>(|ctx, p| {
+        person(ctx)?;
+        let now = ctx.now.clone();
+        let (ask, told) = asks::answer(ctx.engine(), p.id, p.allow, p.scope.as_deref(), p.message.as_deref(), &now)?;
+        for other in asks::others(ctx.engine(), ask.id, &told) {
+            ctx.emit("thread.ask", json!({"thread": other.thread_id, "ask": other}));
+        }
+        ctx.emit("thread.ask", json!({"thread": ask.thread_id, "ask": ask}));
+        ctx.emit("thread.changed", json!({"thread": threads::get(ctx.engine(), ask.thread_id)?}));
+        let message = ask.message.clone();
+        ctx.after_commit(move |engine| asks::deliver(&engine, &told, message.as_deref()));
+        Ok(ask)
+    });
 }
 
 /// Asking first (`threads::proposals`). Proposing reads the ledger and stores a row, and an
@@ -150,11 +177,11 @@ fn register_proposals(e: &mut Engine) {
     });
 }
 
-/// An answer is the person's: a thread's agent never answers a proposal, its own or another's,
-/// whatever its door lets through.
+/// An answer is the person's: a thread's agent never answers a proposal or an ask, its own or
+/// another's, nor sets a thread's access, whatever its door lets through.
 fn person(ctx: &Ctx) -> Result<(), BusError> {
     match ctx.thread() {
-        Some(thread) => Err(BusError::refused("thread.not_person", format!("Thread {thread}'s agent cannot answer a proposal: the person does"))),
+        Some(thread) => Err(BusError::refused("thread.not_person", format!("Thread {thread}'s agent cannot answer for the person: the person does"))),
         None => Ok(()),
     }
 }

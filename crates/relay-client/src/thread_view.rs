@@ -224,10 +224,13 @@ pub fn markdown(text: &str) -> Vec<Block> {
     blocks
 }
 
-/// The op an agent's tool call ran: `mcp__relay__money_tx_add` is `money.tx.add`.
+/// The op an agent's tool call ran: `mcp__relay__money_tx_add` is `money.tx.add`. Claude Code
+/// writes an op's dots as underscores, so an op with an underscore of its own
+/// (`git.branch.clean_merged`) is found in the bus's catalogue.
 pub fn tool_op(name: &str) -> Option<String> {
     let rest = name.strip_prefix("mcp__relay__")?;
-    Some(rest.replace('_', "."))
+    let known = relay_bus::registry::Registry::global().entries().iter().map(|e| e.name).find(|op| op.replace('.', "_") == rest);
+    Some(known.map_or_else(|| rest.replace('_', "."), str::to_string))
 }
 
 /// What a tool call did, in words: "Read the budget", "Added an entry".
@@ -253,7 +256,19 @@ pub fn tool_caption(name: &str) -> String {
         "gym.cardio" => "Read cardio".into(),
         "gym.series" => "Added up training".into(),
         "bus.schema" => "Checked how a tool works".into(),
-        "" => format!("Used {name}"),
+        // Claude Code's own tools, which a full-access thread's agent has.
+        "" => match name {
+            "Bash" => "Ran a command".into(),
+            "Edit" | "MultiEdit" => "Edited a file".into(),
+            "Write" => "Wrote a file".into(),
+            "Read" => "Read a file".into(),
+            "Glob" | "Grep" | "LS" => "Looked through files".into(),
+            "NotebookEdit" => "Edited a notebook".into(),
+            "WebFetch" => "Fetched a page".into(),
+            "WebSearch" => "Searched the web".into(),
+            "TodoWrite" => "Updated its plan".into(),
+            _ => format!("Used {name}"),
+        },
         other => format!("Used {other}"),
     }
 }
@@ -411,7 +426,12 @@ mod tests {
         assert_eq!(tool_caption("mcp__relay__money_series"), "Added up spending");
         assert!(tool_writes("mcp__relay__money_tx_update"));
         assert!(!tool_writes("mcp__relay__money_tx_list"));
-        assert_eq!(tool_caption("WebSearch"), "Used WebSearch");
+        // A full-access thread's agent has Claude Code's own tools, and every op.
+        assert_eq!(tool_caption("WebSearch"), "Searched the web");
+        assert_eq!(tool_caption("Bash"), "Ran a command");
+        assert_eq!(tool_caption("SomethingNew"), "Used SomethingNew");
+        assert_eq!(tool_op("mcp__relay__git_branch_clean_merged").as_deref(), Some("git.branch.clean_merged"));
+        assert_eq!(tool_caption("mcp__relay__task_create"), "Used task.create");
         assert_eq!(tool_op("mcp__relay__money_invest_summary").as_deref(), Some("money.invest.summary"));
         assert_eq!(tool_caption("mcp__relay__money_invest_summary"), "Read your investments");
         assert_eq!(tool_caption("mcp__relay__money_invest_list"), "Listed investment activity");

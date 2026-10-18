@@ -11,8 +11,12 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.RemoteInput
 import android.os.Build
+import com.quietsoftware.relay.core.wire.arr
+import com.quietsoftware.relay.core.wire.l
 import com.quietsoftware.relay.core.wire.s
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import androidx.core.content.ContextCompat
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
@@ -36,8 +40,10 @@ private val Context.notifyState by preferencesDataStore(name = "notified")
 
 /**
  * Says on the phone what the PC says needs the person: a held command, a blocked agent, an agent
- * that finished. It reads the replica, not the wire, so the same rule covers the open link and a
- * background sync: anything newer than what was already shown, while the app is not on screen.
+ * that finished, what a full-access thread's agent asks to do. It reads the replica, not the wire,
+ * so the same rule covers the open link and a background sync: anything newer than what was
+ * already shown, while the app is not on screen. Asks are not in the replica: they are read from
+ * the PC (`thread.ask.list`) whenever a thread's event says they moved, so only while it is in reach.
  */
 class Notifier(private val context: Context, private val relay: Relay, private val settings: Settings) {
     fun start(scope: CoroutineScope, foreground: () -> Boolean) {
@@ -47,6 +53,65 @@ class Notifier(private val context: Context, private val relay: Relay, private v
                 // With notifications off what comes is still recorded, so turning them on announces nothing old.
                 post(holds, notes, quiet = foreground() || !prefs.notify)
             }
+        }
+        scope.launch {
+            combine(relay.live("thread.ask.list", buildJsonObject { put("pending", true) }), settings.prefs) { a, p -> a to p }.collect { (asks, prefs) ->
+                // Only the PC's own answer says what waits: the phone's copy may hold asks long answered.
+                if (!asks.fresh || asks.error != null) return@collect
+                val list = (asks.result as? JsonObject)?.arr("asks")?.mapNotNull { it as? JsonObject }.orEmpty().filter { it.s("status") == "pending" }
+                postAsks(list, quiet = foreground() || !prefs.notify)
+            }
+        }
+    }
+
+    /**
+     * Post what a full-access agent newly asks to do, as a hold is posted, with Deny and Allow
+     * once. An ask answered anywhere, or cancelled, takes its notification with it.
+     */
+    private suspend fun postAsks(asks: List<JsonObject>, quiet: Boolean) {
+        val state = context.notifyState.data.first()
+        // The first look records what is already there instead of announcing all of it.
+        val seen = state[ASKS]
+        val ids = asks.mapNotNull { it.l("id")?.toString() }.toSet()
+        val fresh = if (seen == null) emptyList() else asks.filter { a -> a.l("id")?.let { it.toString() !in seen } == true }
+        context.notifyState.edit { it[ASKS] = ids }
+        val nm = NotificationManagerCompat.from(context)
+        for (gone in seen.orEmpty() - ids) gone.toLongOrNull()?.let { nm.cancel(askId(it)) }
+        if (quiet || !allowed() || fresh.isEmpty()) return
+        val titles = relay.threads().first().associate { it.id to it.title }
+        for (a in fresh) {
+            val ask = a.l("id") ?: continue
+            val thread = a.l("thread_id")
+            val id = askId(ask)
+            // Exactly what it would do, as the card in the thread shows it, under what it is.
+            val what = "${a.s("title") ?: "An action"}: ${reveal(a.s("detail").orEmpty()).first}"
+            val why = a.s("reason")?.takeIf { it.isNotBlank() }?.let { "\n$it" }.orEmpty()
+            val b = base(CH_ATTENTION)
+                .setContentTitle("${thread?.let { titles[it.toString()] }?.ifBlank { null } ?: "A thread"} needs your answer")
+                .setContentText(what)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(what + why))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setContentIntent(open("new-thread"))
+                .addAction(
+                    NotificationCompat.Action.Builder(0, "Deny", action(ActionReceiver.ACTION_ASK_DENY, id) {
+                        putExtra(ActionReceiver.EXTRA_ASK, ask)
+                        thread?.let { putExtra(ActionReceiver.EXTRA_THREAD, it) }
+                        putExtra(ActionReceiver.EXTRA_CREATED, a.s("created_at"))
+                    }).build(),
+                )
+            // Allowing from a notification needs the phone unlocked, which only Android 12 can require.
+            if (Build.VERSION.SDK_INT >= 31) {
+                b.addAction(
+                    NotificationCompat.Action.Builder(0, "Allow once", action(ActionReceiver.ACTION_ASK_ALLOW, id) {
+                        putExtra(ActionReceiver.EXTRA_ASK, ask)
+                        thread?.let { putExtra(ActionReceiver.EXTRA_THREAD, it) }
+                        putExtra(ActionReceiver.EXTRA_CREATED, a.s("created_at"))
+                    })
+                        .setAuthenticationRequired(true)
+                        .build(),
+                )
+            }
+            show(nm, id, b.build())
         }
     }
 
@@ -142,6 +207,8 @@ class Notifier(private val context: Context, private val relay: Relay, private v
 
     private fun holdId(hold: Long) = HOLD_BASE + (hold % 10_000).toInt()
 
+    private fun askId(ask: Long) = ASK_BASE + (ask % 10_000).toInt()
+
     private fun base(channel: String) = NotificationCompat.Builder(context, channel)
         .setSmallIcon(R.drawable.ic_stat_relay)
         .setAutoCancel(true)
@@ -186,9 +253,11 @@ class Notifier(private val context: Context, private val relay: Relay, private v
         const val LINK_ID = 1
         private const val HOLD_BASE = 10_000
         private const val NOTE_BASE = 20_000
+        private const val ASK_BASE = 30_000
         // Not "guardrail": the PC files one with every hold, which is announced as itself above.
         private val LOUD = setOf("agent_done", "agent_blocked")
         private val HOLDS = stringSetPreferencesKey("holds")
+        private val ASKS = stringSetPreferencesKey("asks")
         private val LAST_NOTE = longPreferencesKey("last_note")
     }
 }

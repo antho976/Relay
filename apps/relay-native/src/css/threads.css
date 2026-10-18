@@ -107,6 +107,15 @@ button.threads-card-key { min-height: 30px; }
 .threads-ask-changed { font-size: 12px; color: @waiting; }
 .threads-ask-gone { font-size: 12px; color: @held_text; }
 
+/* What a full-access agent asks to do (threads_access.rs): the same asking cards, in a tray over
+   the message box. The command or the path in Geist Mono, why in small type, an edit's text before
+   and after as code; a hidden character spelled out, and said in red. */
+.threads-asks { padding: 0 0 2px; }
+.threads-ask-detail { font-family: "Geist Mono", monospace; font-size: 12px; line-height: 18px; color: @ink; }
+.threads-ask-reason { font-size: 12px; line-height: 17px; color: @faint; }
+.threads-ask-caption { font-size: 11px; font-weight: 600; color: @faint; }
+.threads-ask-hidden { font-size: 12px; line-height: 17px; color: @held_text; }
+
 /* The message box: the column's width, its text set in line with the pickers under it. */
 .threads-dock { padding: 0 0 18px; }
 .threads-composer { padding: 12px 12px 10px 16px; border: 1px solid @strong; border-radius: 14px; background: @raised; }
@@ -164,11 +173,13 @@ button.threads-row-key:hover, button.threads-row-key.from-thread { background: @
 button.threads-row-key:focus-visible { outline: 2px solid alpha(@ink, 0.35); outline-offset: -2px; }
 button.threads-row-key.from-thread .threads-panel-detail { color: @secondary; }
 
-/* The sidebar's thread list: green while an agent answers, an ink dot for a reply not yet read. */
+/* The sidebar's thread list: amber while an agent waits on the person (a held action's amber),
+   green while it answers, an ink dot for a reply not yet read. */
 .threads-list { padding: 0 0 8px; }
 button.threads-row { min-height: 34px; }
 .threads-list-note { padding: 6px 12px; font-size: 12px; color: @faint; }
 .threads-unread { min-width: 6px; min-height: 6px; border-radius: 3px; background: @ink; }
+.threads-asking { min-width: 6px; min-height: 6px; border-radius: 3px; background: @waiting; }
 .threads-panel-figures.money-over, .threads-panel-detail.money-over { color: @held_text; }
 .threads-panel-figures.money-ahead { color: @waiting; }
 .threads-panel-figures.money-in, .threads-panel-detail.money-in { color: @live; }

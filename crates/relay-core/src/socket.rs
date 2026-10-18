@@ -806,9 +806,11 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
         }
         // `user` and `test` carry no token: what vouches for them is the process that connected.
         // A liveness ping claims nothing, so `socket::probe` works from anywhere.
-        // A thread's agent may claim `user` for its own ops alone (`peer::Peer::Thread`).
-        let admitted = match req.actor {
-            relay_bus::Actor::User => peer.may_act_as_user_for(&req.op),
+        // A thread's agent may claim `user` for its own ops alone (`peer::Peer::Thread`); a
+        // full-access one also for reads, and for a change once the person allowed it.
+        let admitted = match (&req.actor, thread) {
+            (relay_bus::Actor::User, Some(thread)) => crate::threads::asks::admits(&engine, thread, &req.op),
+            (relay_bus::Actor::User, None) => peer.may_act_as_user_for(&req.op),
             _ => peer.may_act_as_user(),
         };
         if matches!(req.actor, relay_bus::Actor::User | relay_bus::Actor::Test)
@@ -816,7 +818,11 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
             && req.op != relay_bus::ops::bus::Ping::NAME
         {
             tracing::warn!(?peer, op = %req.op, actor = %req.actor, "refused a user claim from inside Relay's process tree");
-            let refused = Response::err(req.id, peer.refusal(&req.actor.to_string()));
+            let why = match (&req.actor, thread) {
+                (relay_bus::Actor::User, Some(thread)) => crate::threads::asks::refusal(&engine, thread, &req.op),
+                _ => None,
+            };
+            let refused = Response::err(req.id, why.unwrap_or_else(|| peer.refusal(&req.actor.to_string())));
             let _ = out_tx.send(serde_json::to_string(&refused)?).await;
             continue;
         }
