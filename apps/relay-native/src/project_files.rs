@@ -87,7 +87,7 @@ impl Editor {
             !worktrees.is_empty() && !worktrees.iter().any(|w| text(w, "path") == current)
         };
         if removed && !self.is_dirty() {
-            ui.show_error(&format!("The checkout {current} was removed; showing the primary checkout."));
+            ui.show_info(&format!("The checkout {current} was removed; showing the primary checkout."));
             self.select_checkout(ui, "");
             return;
         }
@@ -118,8 +118,11 @@ impl Editor {
         if self.worktree.borrow().as_str() == path {
             return;
         }
-        if self.is_dirty() {
-            ui.show_error("Save or discard your changes before switching checkouts.");
+        // Unsaved edits are asked about first, a save or Git action waited for (`after_unsaved`);
+        // a file still loading is no reason to wait.
+        if self.writing.get() || self.git_busy.get() || (self.buffer.is_modified() && !self.busy.get()) {
+            let path = path.to_owned();
+            self.after_unsaved(ui, move |e, ui| e.select_checkout(ui, &path));
             return;
         }
         let agents = self.agents_visible();

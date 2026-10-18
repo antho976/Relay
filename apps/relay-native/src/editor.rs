@@ -110,6 +110,8 @@ pub struct Editor {
     /// Where the next `read_file` puts the caret: 1-based line, 1-based byte column, and the
     /// length in characters to select (a search hit).
     goto: Cell<Option<(u32, u32, usize)>>,
+    /// The trash entry the explorer's Restore key brings back.
+    undo_trash: Cell<i64>,
     /// Shown when the open document changed on disk while it has unsaved edits.
     conflict_bar: gtk::Box,
     conflict_label: gtk::Label,
@@ -119,6 +121,8 @@ pub struct Editor {
 }
 /// Entries of one folder the explorer draws before a "Show more" row.
 const TREE_PAGE: usize = 500;
+/// What runs once a save lands (`save_then`).
+type AfterSave = Box<dyn FnOnce(&Rc<Editor>, &Rc<Ui>)>;
 thread_local! {
     /// The last query Code's find bar searched for, which F3 takes up when the field is empty.
     static FIND_QUERY: RefCell<String> = const { RefCell::new(String::new()) };
@@ -178,6 +182,7 @@ impl Editor {
         project_tools.append(&views);
         let agents_button = button("Agents", "quiet");
         agents_button.set_widget_name("project-agents");
+        agents_button.set_tooltip_text(Some("The project's agents: their terminals, side by side"));
         agents_button.add_css_class("selected");
         views.append(&agents_button);
         let design_button = button("Design", "quiet");
@@ -208,6 +213,7 @@ impl Editor {
         tools.append(&diff_switch);
         let save = button("Save", "primary");
         save.set_widget_name("project-save");
+        save.set_tooltip_text(Some("Save (Ctrl+S)"));
         let discard = crate::app::icon_button("undo", "Discard changes");
         discard.set_widget_name("project-discard");
         tools.append(&discard);
@@ -366,6 +372,7 @@ impl Editor {
         tools.append(&find_button);
         let files_button = button("Files", "quiet");
         files_button.set_widget_name("project-files");
+        files_button.set_tooltip_text(Some("Show or hide the explorer: the checkout's files, and a search in them"));
         views.append(&files_button);
         let edit_button = crate::app::icon_button("edit", "Edit file");
         // Only a diff has a file to open for editing.
@@ -374,6 +381,7 @@ impl Editor {
         tools.append(&edit_button);
         let git_button = button("Git", "quiet");
         git_button.set_widget_name("project-git");
+        git_button.set_tooltip_text(Some("Show or hide the Git panel: changes, commits, branches and the remote"));
         views.append(&git_button);
         let mut control = tools.first_child();
         while let Some(widget) = control {
@@ -457,6 +465,7 @@ impl Editor {
             tree_badges: RefCell::default(),
             status_requests: Cell::new(0),
             goto: Cell::new(None),
+            undo_trash: Cell::new(0),
             conflict_bar,
             conflict_label,
             disk_text: RefCell::new(None),
@@ -495,6 +504,11 @@ impl Editor {
                 e.save
                     .set_sensitive(b.is_modified() && e.view.is_editable());
                 e.discard.set_sensitive(b.is_modified() && !e.busy.get());
+                // Unsaved edits show by the name too, as a note's do in Notes.
+                let path = e.path.borrow();
+                if !path.is_empty() && !e.diff.get() && !e.image_mode.get() {
+                    e.caption.set_text(&if b.is_modified() { format!("{path}  •") } else { path.clone() });
+                }
             }
         });
         let weak = Rc::downgrade(&editor);
@@ -591,6 +605,67 @@ impl Editor {
     fn is_occupied(&self) -> bool {
         self.is_dirty() || self.busy.get()
     }
+    /// Why the document cannot be replaced now, if it cannot. A save, an explorer change or a
+    /// Git action finishes first, and unsaved edits are saved or discarded first (`unsaved`
+    /// says so; None when they are the ones being discarded). A file or diff still loading is
+    /// no reason: whatever replaces it bumps `revision`, which drops the load.
+    fn replace_refusal(&self, unsaved: Option<&'static str>) -> Option<&'static str> {
+        if self.writing.get() || self.git_busy.get() {
+            return Some("Wait for the save or Git action to finish.");
+        }
+        unsaved.filter(|_| self.buffer.is_modified() && !self.busy.get())
+    }
+    /// Run `then`, which replaces the document, once its unsaved edits are dealt with: asked
+    /// Save / Don't Save / Cancel, as Notes asks before closing a tab. Save runs it once the
+    /// save lands; Don't Save puts the file back as it was read first, so an open that fails
+    /// leaves no edits passing for saved. Without edits it runs at once, and a save or Git
+    /// action in flight is waited for.
+    fn after_unsaved(self: &Rc<Self>, ui: &Rc<Ui>, then: impl FnOnce(&Rc<Self>, &Rc<Ui>) + 'static) {
+        if let Some(refusal) = self.replace_refusal(None) {
+            ui.show_error(refusal);
+            return;
+        }
+        // Loading, the edits are already being discarded.
+        if !self.buffer.is_modified() || self.busy.get() {
+            then(self, ui);
+            return;
+        }
+        let path = self.path.borrow().clone();
+        let (project, worktree, revision) = (ui.project.get(), self.worktree.borrow().clone(), self.revision.get());
+        let (e, ui) = (self.clone(), ui.clone());
+        glib::spawn_future_local(async move {
+            let dialog = gtk::AlertDialog::builder()
+                .message(format!("Save changes to “{path}”?"))
+                .detail("If you don't save, your changes will be lost.")
+                .buttons(["Cancel", "Don't Save", "Save"])
+                .cancel_button(0)
+                .default_button(2)
+                .modal(true)
+                .build();
+            let answer = dialog.choose_future(Some(&ui.window)).await;
+            // Saved, discarded or replaced meanwhile: what this asked about is gone.
+            if !e.matches(&ui, project, &worktree) || e.revision.get() != revision || !e.buffer.is_modified() {
+                return;
+            }
+            match answer {
+                Ok(1) => {
+                    let original = e.original.borrow().clone();
+                    e.reload_in_place(&original);
+                    then(&e, &ui);
+                }
+                Ok(2) => e.save_then(&ui, Some(Box::new(then))),
+                _ => {}
+            }
+        });
+    }
+    /// The caret as `goto` takes it (1-based line and byte column), for reopening a document
+    /// where it was.
+    fn caret(&self) -> (u32, u32, usize) {
+        let at = self.buffer.iter_at_mark(&self.buffer.get_insert());
+        let mut start = at;
+        start.set_line_offset(0);
+        (at.line() as u32 + 1, self.buffer.text(&start, &at, true).len() as u32 + 1, 0)
+    }
     fn set_busy(&self, busy: bool) {
         if busy || !(self.agents_visible() || self.design_visible()) {
             self.content_stack
@@ -652,7 +727,9 @@ impl Editor {
         clear(&self.tree);
         self.tree_rows.borrow_mut().clear();
         self.tree_signature.set(0);
-        self.caption.set_text("Open a file");
+        // As before any file was opened: emptying the text put the caret at "Ln 1, Col 1".
+        self.caption.set_text("No file open");
+        self.position.set_text("Select a file to edit");
     }
     /// A file, git, worktree or integration event: `event` is its name and payload, and
     /// `None` refreshes unconditionally.
@@ -959,8 +1036,10 @@ impl Editor {
     }
     fn read_file(self: &Rc<Self>, ui: &Rc<Ui>, path: String, discard: bool) {
         let goto = self.goto.take();
-        if self.busy.get() || (self.buffer.is_modified() && !discard) {
-            ui.show_error("Save or discard this file's changes before opening another file.");
+        if let Some(refusal) = self.replace_refusal(
+            (!discard).then_some("Save or discard this file's changes before opening another file."),
+        ) {
+            ui.show_error(refusal);
             return;
         }
         if image_preview::is_image(&path) {
@@ -990,8 +1069,12 @@ impl Editor {
             }
             match result {
                 Ok(v) => {
-                    if v["truncated"] == true || v["text"].as_str().is_none() {
-                        ui.show_error("This file is binary or exceeds the 1 MiB editor limit. It was not opened for editing.");
+                    if v["truncated"] == true {
+                        ui.show_error("This file is larger than the 1 MiB editor limit, so it was not opened.");
+                        return;
+                    }
+                    if v["text"].as_str().is_none() {
+                        ui.show_error("This looks like a binary file, so it was not opened for editing.");
                         return;
                     }
                     e.diff.set(false);
@@ -1028,6 +1111,10 @@ impl Editor {
         });
     }
     fn save_file(self: &Rc<Self>, ui: &Rc<Ui>) {
+        self.save_then(ui, None);
+    }
+    /// Save, then run `then` once the file is written; it is dropped when the save is not.
+    fn save_then(self: &Rc<Self>, ui: &Rc<Ui>, then: Option<AfterSave>) {
         let project = self.project.get();
         if project != ui.project.get()
             || !self.buffer.is_modified()
@@ -1074,6 +1161,9 @@ impl Editor {
                     e.disk_text.borrow_mut().take();
                     e.conflict_bar.set_visible(false);
                     e.refresh_git(&ui);
+                    if let Some(then) = then {
+                        then(&e, &ui);
+                    }
                 }
                 Err(err) => {
                     ui.show_error(&readable(&err));
@@ -1586,11 +1676,19 @@ impl Editor {
     }
     /// A file clicked in the explorer. Switching checkout is `select_checkout`'s job.
     fn open_path(self: &Rc<Self>, ui: &Rc<Ui>, path: String) {
-        if self.is_occupied() {
-            ui.show_error("Save or discard your changes before opening another file.");
+        // The file already open is brought forward as it is: reading it again was refused
+        // with edits, and put the caret back on line 1 without them. One still loading is
+        // read again, as another file would be.
+        if *self.path.borrow() == path
+            && !self.diff.get()
+            && !self.image_mode.get()
+            && (!self.busy.get() || self.writing.get())
+        {
+            self.show_files();
+            self.view.grab_focus();
             return;
         }
-        self.open(ui, path);
+        self.after_unsaved(ui, move |e, ui| e.open(ui, path));
     }
     fn refresh_scopes(self: &Rc<Self>, ui: &Rc<Ui>) {
         self.scope_project.set(ui.project.get());
@@ -1668,6 +1766,16 @@ impl Editor {
                 e.load_tree(&ui);
             }
         });
+        // The field's clear icon empties it as Escape does: the files come back in place of
+        // the results. A tree on screen (a signature drawn) or on its way is left alone.
+        let e = self.clone();
+        let weak = Rc::downgrade(ui);
+        self.search.connect_search_changed(move |search| {
+            let results = e.tree_signature.get() == 0 && !e.tree_load_pending.get();
+            if let Some(ui) = weak.upgrade().filter(|_| results && search.text().trim().is_empty()) {
+                e.load_tree(&ui);
+            }
+        });
         for (icon, title, op) in [
             ("file-plus", "New file or folder", "file.create"),
             ("edit", "Rename the selected file", "file.rename"),
@@ -1723,8 +1831,12 @@ impl Editor {
         let keys = gtk::EventControllerKey::new();
         let e = self.clone();
         let weak = Rc::downgrade(ui);
-        keys.connect_key_pressed(move |_, key, _, state| {
-            if state.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
+        keys.connect_key_pressed(move |_, key, keycode, state| {
+            use gtk::gdk::ModifierType as M;
+            // As Notes reads its keys: Caps Lock gives S, and a Cyrillic layout another letter.
+            let key = crate::shortcuts::latin(key, keycode).to_lower();
+            let mods = state & (M::CONTROL_MASK | M::SHIFT_MASK | M::ALT_MASK | M::SUPER_MASK | M::META_MASK);
+            if mods == M::CONTROL_MASK {
                 if key == gtk::gdk::Key::s {
                     if let Some(ui) = weak.upgrade() {
                         e.save_file(&ui);
@@ -1740,11 +1852,8 @@ impl Editor {
                 }
             }
             // F3 and Shift+F3 step through the matches with the bar open or closed, as in Notes.
-            if key == gtk::gdk::Key::F3
-                && !state.intersects(gtk::gdk::ModifierType::CONTROL_MASK | gtk::gdk::ModifierType::ALT_MASK)
-                && e.document_tools.is_visible()
-            {
-                e.find.step(state.contains(gtk::gdk::ModifierType::SHIFT_MASK));
+            if key == gtk::gdk::Key::F3 && (mods.is_empty() || mods == M::SHIFT_MASK) && e.document_tools.is_visible() {
+                e.find.step(mods == M::SHIFT_MASK);
                 return glib::Propagation::Stop;
             }
             if key == gtk::gdk::Key::Escape && e.find.visible() {
@@ -1846,8 +1955,11 @@ impl Editor {
                                     ed.reveal(line, col, length);
                                     return;
                                 }
-                                ed.goto.set(Some((line, col, length)));
-                                ed.open(&ui, path.clone());
+                                let path = path.clone();
+                                ed.after_unsaved(&ui, move |ed, ui| {
+                                    ed.goto.set(Some((line, col, length)));
+                                    ed.open(ui, path);
+                                });
                             }
                         });
                         e.tree.append(&b);
@@ -1871,9 +1983,13 @@ impl Editor {
             ui.show_error("Select a file or folder first.");
             return;
         }
+        // The open document is a file; a selected row says what it is.
+        let is_folder = !self.selected_path.borrow().is_empty() && self.selected_directory.get();
         let title = match op {
             "file.create" => "Create file",
+            "file.rename" if is_folder => "Rename folder",
             "file.rename" => "Rename file",
+            _ if is_folder => "Move folder to Relay trash",
             _ => "Move file to Relay trash",
         };
         let dialog = crate::panel::Panel::new(ui, title, 480);
@@ -1886,6 +2002,8 @@ impl Editor {
         entry.set_widget_name("project-file-path");
         entry.set_placeholder_text(Some(if op == "file.create" {
             "relative/path.rs"
+        } else if is_folder {
+            "new-name"
         } else {
             "new-name.rs"
         }));
@@ -1981,6 +2099,7 @@ impl Editor {
                         // The ID is also kept by the engine; no permanent deletion is offered here.
                         // One key, for the latest trash; older ones are in Recently trashed (RA-460).
                         let id = v["trash_id"].as_i64().unwrap_or(0);
+                        e.undo_trash.set(id);
                         clear(&e.file_undo);
                         let restore = button(&format!("Restore {path}"), "quiet");
                         restore.set_widget_name("project-file-undo");
@@ -2046,7 +2165,10 @@ impl Editor {
         let document = self.path.borrow().clone();
         match remap(&document).filter(|_| !document.is_empty()) {
             Some(Some(moved)) => {
+                // A renamed or moved file reopens where its caret was.
+                let caret = (!self.diff.get() && !self.image_mode.get()).then(|| self.caret());
                 self.clear_document();
+                self.goto.set(caret);
                 self.open(ui, moved);
             }
             Some(None) => self.clear_document(),
@@ -2076,10 +2198,16 @@ impl Editor {
             else {
                 return false;
             };
-            if data["project"] != ui.project.get()
-                || data["worktree"] != *ed.worktree.borrow()
-                || ed.is_occupied()
-            {
+            if data["project"] != ui.project.get() || data["worktree"] != *ed.worktree.borrow() {
+                return false;
+            }
+            // Refused, the row snaps back to where it was: say why.
+            if ed.is_occupied() {
+                ui.show_error(if ed.buffer.is_modified() && !ed.busy.get() {
+                    "Save or discard the current file before moving files."
+                } else {
+                    "Wait for the save or Git action to finish."
+                });
                 return false;
             }
             let Some(path) = data["path"].as_str().filter(|path| !path.is_empty()) else {
@@ -2178,6 +2306,7 @@ impl Editor {
                 item.append(&restore);
                 list.append(&item);
                 let audit = row["id"].clone();
+                let trash = row["undo_op"]["payload"]["trash_id"].as_i64();
                 let weak = Rc::downgrade(&ui);
                 let ed = e.clone();
                 restore.connect_clicked(move |button| {
@@ -2191,6 +2320,10 @@ impl Editor {
                         match ui.call("audit.undo", json!({"audit_id":audit})).await {
                             Ok(_) => {
                                 item.set_visible(false);
+                                // The explorer's Restore key for the same file would now fail.
+                                if trash.is_some_and(|id| id == ed.undo_trash.get()) {
+                                    clear(&ed.file_undo);
+                                }
                                 if ui.project.get() == project {
                                     ed.load_tree(&ui);
                                     ed.refresh_git(&ui);

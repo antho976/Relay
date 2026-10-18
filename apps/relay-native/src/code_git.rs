@@ -1301,12 +1301,15 @@ impl Editor {
         };
         open.connect_clicked(move |_| {
             if let Some(ui) = weak.upgrade() {
-                // open_diff refuses a dirty buffer and shows an image instead; keep its message.
-                let text_diff = !ed.is_occupied() && !super::image_preview::is_image(&diff_path);
-                ed.open_diff(&ui, diff_path.clone());
-                if let Some(caveat) = caveat.as_deref().filter(|_| text_diff) {
-                    ui.show_error(caveat);
-                }
+                let (path, caveat) = (diff_path.clone(), caveat.clone());
+                ed.after_unsaved(&ui, move |ed, ui| {
+                    // open_diff says why it refused, and shows an image instead: keep its message.
+                    if ed.open_diff(ui, path) {
+                        if let Some(caveat) = caveat {
+                            ui.show_info(&caveat);
+                        }
+                    }
+                });
             }
         });
         self.bind_image_hover(ui, &open, &path, format!("{code}:{}", self.git_revision.get()), None);
@@ -1793,15 +1796,17 @@ impl Editor {
             e.git_action(&ui, "git.stage", json!({"paths":paths}), None);
         });
     }
-    fn open_diff(self: &Rc<Self>, ui: &Rc<Ui>, path: String) {
-        if self.is_occupied() {
-            ui.show_error("Save or discard your edits before opening a diff.");
-            return;
+    /// Show `path`'s changes against HEAD; false when it was refused, or is a picture, which
+    /// shows instead.
+    fn open_diff(self: &Rc<Self>, ui: &Rc<Ui>, path: String) -> bool {
+        if let Some(refusal) = self.replace_refusal(Some("Save or discard your edits before opening a diff.")) {
+            ui.show_error(refusal);
+            return false;
         }
         // An image's diff is bytes; show the picture instead.
         if super::image_preview::is_image(&path) {
             self.open_image(ui, path);
-            return;
+            return false;
         }
         self.revision.set(self.revision.get() + 1);
         let revision = self.revision.get();
@@ -1840,6 +1845,7 @@ impl Editor {
                 Err(err) => ui.show_error(&readable(&err)),
             }
         });
+        true
     }
     /// Draw the open diff split or inline, with removed lines red and added lines green
     /// over the file's own syntax colours.
