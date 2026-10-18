@@ -85,6 +85,11 @@ const PANEL_FROM: i32 = 1000;
 const STARTING: &str = "Starting Claude…";
 /// What a new thread asks Claude when the person picks "Connect Wealthsimple".
 const CONNECT: &str = "Help me connect my Wealthsimple accounts";
+/// The model picker's tooltip, and what it and the effort picker say while a reply is written.
+const MODEL_ABOUT: &str = "The model this thread's agent runs on";
+const WAITS: &str = "Waits for this reply to finish";
+/// What Enter says while the agent is still answering, as the phone does.
+const STILL_ANSWERING: &str = "Claude is still answering: stop it first, or wait";
 
 /// A chip that opens a list of choices: the key, the caption it shows, and each choice's check.
 struct Picker {
@@ -254,6 +259,9 @@ struct State {
     /// What [`tell`] could not send while the agent was still answering in its thread: (thread,
     /// words), oldest first. Each goes when its thread's turn ends ([`tell_waiting`]).
     to_tell: RefCell<Vec<(i64, String)>>,
+    /// What the message box held in each thread left with words in it, `None` a new thread's:
+    /// they come back when that thread shows again ([`reset`]).
+    drafts: RefCell<HashMap<Option<i64>, String>>,
     ui: RefCell<std::rc::Weak<Ui>>,
     /// The model and effort a new thread starts with: the last ones chosen.
     choice: RefCell<(String, String)>,
@@ -498,7 +506,7 @@ pub fn page() -> gtk::Box {
     field.add_overlay(&hint);
     composer.append(&field);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let model = picker("threads-model", "The model this thread's agent runs on", &MODELS, |value| choose(Some(value), None));
+    let model = picker("threads-model", MODEL_ABOUT, &MODELS, |value| choose(Some(value), None));
     row.append(&model.key);
     let effort = picker("threads-effort", "How hard the agent thinks before answering", &EFFORTS, |value| choose(None, Some(value)));
     row.append(&effort.key);
@@ -829,10 +837,13 @@ fn wire(v: &Rc<View>, delete: &gtk::Button) {
             }
         });
     }
+    // The name shows selected, so typing replaces it.
     v.title_key.connect_notify_local(Some("active"), |key, _| {
         if key.is_active() {
             if let Some(v) = view() {
                 v.rename.set_text(&v.title.text());
+                v.rename.grab_focus();
+                v.rename.select_region(0, -1);
             }
         }
     });
@@ -1133,8 +1144,15 @@ fn reshow_model(v: &View) {
 /// The effort picker waits for a reply like the model picker, and a local model has no efforts.
 fn effort_sensitive(v: &View) {
     let local = is_local(&STATE.with(|s| s.shown_model.borrow().clone()));
-    v.effort.key.set_sensitive(!STATE.with(|s| s.working.get()) && !local);
-    v.effort.key.set_tooltip_text(Some(if local { "A model on this PC has no effort setting" } else { "How hard the agent thinks before answering" }));
+    let working = STATE.with(|s| s.working.get());
+    v.effort.key.set_sensitive(!working && !local);
+    v.effort.key.set_tooltip_text(Some(if local {
+        "A model on this PC has no effort setting"
+    } else if working {
+        WAITS
+    } else {
+        "How hard the agent thinks before answering"
+    }));
 }
 
 fn show_empty(v: &View) {
@@ -1147,10 +1165,24 @@ fn show_empty(v: &View) {
     set_working(v, false);
 }
 
-/// Forget the thread drawn: `id` shows next, or a new thread when `None`.
+/// Forget the thread drawn: `id` shows next, or a new thread when `None`. The message box keeps
+/// what was written for the thread it was written in, and shows `id`'s own.
 fn reset(id: Option<i64>) {
     if let Some(v) = view() {
         drop_pending(&v);
+        let buffer = v.input.buffer();
+        let written = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
+        let back = STATE.with(|s| {
+            let mut drafts = s.drafts.borrow_mut();
+            if written.trim().is_empty() {
+                drafts.remove(&s.current.get());
+            } else {
+                drafts.insert(s.current.get(), written);
+            }
+            drafts.remove(&id)
+        });
+        buffer.set_text(back.as_deref().unwrap_or(""));
+        buffer.place_cursor(&buffer.end_iter());
     }
     STATE.with(|s| {
         s.shown_serial.set(s.shown_serial.get() + 1);
@@ -1173,13 +1205,20 @@ fn reset(id: Option<i64>) {
 
 /// Start a new thread: the page shows the greeting until the first message is sent.
 pub fn new_thread(ui: &Rc<Ui>) {
+    start_thread(ui, true);
+}
+
+/// [`new_thread`]; with `show` false the window stays on the page it shows, its focus too.
+fn start_thread(ui: &Rc<Ui>, show: bool) {
     reset(None);
     if let Some(v) = view() {
         show_empty(&v);
         v.empty_line.set_text("");
-        v.input.grab_focus();
+        if show {
+            v.input.grab_focus();
+        }
     }
-    if *ui.page.borrow() != PAGE {
+    if show && *ui.page.borrow() != PAGE {
         ui.navigate(PAGE);
     }
     refresh_list(ui);
@@ -1209,18 +1248,12 @@ pub(crate) fn ask(ui: &Rc<Ui>, text: &str) {
 /// stays, the draft on a line after it. With no thread open the words wait in a new thread's
 /// message box, still not sent: a draft such as "About Legs A on Thu 8 Oct: " is unfinished.
 pub(crate) fn draft(ui: &Rc<Ui>, text: &str) {
-    let Some(v) = view().filter(|_| current().is_some()) else {
+    if current().is_none() {
         new_thread(ui);
-        if let Some(v) = view() {
-            let buffer = v.input.buffer();
-            buffer.set_text(text);
-            buffer.place_cursor(&buffer.end_iter());
-        }
-        return;
-    };
-    if *ui.page.borrow() != PAGE {
+    } else if *ui.page.borrow() != PAGE {
         ui.navigate(PAGE);
     }
+    let Some(v) = view() else { return };
     let buffer = v.input.buffer();
     let written = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
     if written.trim().is_empty() {
@@ -1480,7 +1513,7 @@ fn check_claude(ui: &Rc<Ui>) {
         let why = if missing {
             "Threads need Claude Code on this PC. Install it, then refresh it in Settings."
         } else if signed_out {
-            "Claude Code isn't signed in on this PC. Sign in, then refresh it in Settings."
+            "Claude Code is not signed in on this PC. Sign in, then refresh it in Settings."
         } else {
             ""
         };
@@ -1692,8 +1725,9 @@ fn set_working(v: &View, working: bool) {
     v.send.set_child(Some(&crate::icons::image_with_stroke(icon, 15, 2.0)));
     v.send.set_tooltip_text(Some(tip));
     v.send.update_property(&[gtk::accessible::Property::Label(name)]);
-    // `thread.set` closes a running agent: the choice waits for the reply to end.
+    // `thread.set` closes a running agent: the choice waits for the reply to end, and says so.
     v.model.key.set_sensitive(!working);
+    v.model.key.set_tooltip_text(Some(if working { WAITS } else { MODEL_ABOUT }));
     STATE.with(|s| {
         if let Some((edit, _)) = s.last_user.borrow().as_ref() {
             edit.set_sensitive(!working);
@@ -2942,12 +2976,16 @@ fn tell_waiting(ui: &Rc<Ui>, id: i64) {
 
 fn submit(ui: &Rc<Ui>) {
     let Some(v) = view() else { return };
-    if STATE.with(|s| s.working.get()) || !v.send.is_sensitive() {
-        return;
-    }
     let buffer = v.input.buffer();
     let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).trim().to_string();
-    if text.is_empty() {
+    // Words written while the agent answers stay in the box, and Enter says why.
+    if STATE.with(|s| s.working.get()) {
+        if !text.is_empty() {
+            ui.show_info(STILL_ANSWERING);
+        }
+        return;
+    }
+    if text.is_empty() || !v.send.is_sensitive() {
         return;
     }
     buffer.set_text("");
@@ -3037,13 +3075,20 @@ pub fn event(ui: &Rc<Ui>, ev: &str, payload: &Value) {
             }
             if thread == current() {
                 if payload["deleted"] == true {
-                    new_thread(ui);
+                    // Deleted elsewhere: a new thread takes its place, without taking the window
+                    // from the page it shows.
+                    let showing = *ui.page.borrow() == PAGE;
+                    start_thread(ui, showing);
                 } else {
                     header(&v, &payload["thread"]);
                     if payload["thread"]["working"] == true {
                         stick_to_bottom(&v, false);
                     }
                 }
+            }
+            // A deleted thread's draft goes with it; leaving the thread above had kept it.
+            if let Some(id) = thread.filter(|_| payload["deleted"] == true) {
+                STATE.with(|s| s.drafts.borrow_mut().remove(&Some(id)));
             }
             refresh_list_shown(ui);
         }
