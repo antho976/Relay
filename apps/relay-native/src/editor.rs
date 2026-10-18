@@ -6,7 +6,7 @@ mod code_git;
 #[path = "project_files.rs"]
 mod project_files;
 #[path = "image_preview.rs"]
-mod image_preview;
+pub(crate) mod image_preview;
 #[path = "find_bar.rs"]
 pub mod find_bar;
 use sourceview5::prelude::*;

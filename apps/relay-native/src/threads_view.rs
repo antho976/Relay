@@ -5,10 +5,15 @@
 //! `thread.message` and `thread.delta`. The page is one stack page, `threads`, whose middle shows
 //! either a new thread (a greeting and the message box) or the open one.
 //!
+//! Pictures go with a message when the thread's model reads them: the message box's picture key,
+//! a paste or a drop adds one, and each thread's draft keeps its own. Preparing, sending and
+//! showing them is `threads_pictures.rs`'s.
+//!
 //! The page never holds the window open: its scrollers keep their content's width to themselves
 //! (`PolicyType::External`), and width probes size the conversation (`fit`) and put the panel away
 //! on a narrow page (`apply_panel`).
 use super::pages::{badge, badge_sized, human_date, meter_in, tile, tone, tone_class, Tone};
+use super::pictures::{self, Attached, Source, MAX_PICTURES};
 use crate::app::{button, clear, label, Ui};
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -95,6 +100,11 @@ const MODEL_ABOUT: &str = "The model this thread's agent runs on";
 const WAITS: &str = "Waits for this reply to finish";
 /// What Enter says while the agent is still answering, as the phone does.
 const STILL_ANSWERING: &str = "Claude is still answering: stop it first, or wait";
+/// What the message box says while a picture keeps it from sending.
+const STILL_GOING: &str = "A picture is still on its way: send once it is up";
+const REFUSED_PICTURE: &str = "A picture was not added: remove it to send";
+/// What a drop of files that are not pictures says.
+const ONLY_PICTURES: &str = "Only PNG, JPEG, GIF or WebP pictures go in a message";
 
 /// A chip that opens a list of choices: the key, the caption it shows, and each choice's check.
 struct Picker {
@@ -124,8 +134,15 @@ struct View {
     message_box: gtk::Box,
     notice: gtk::Box,
     notice_text: gtk::Label,
+    composer: gtk::Box,
     input: gtk::TextView,
     hint: gtk::Label,
+    /// The pictures going with the message: a chip each, above the words ([`set_pictures`]); the
+    /// key that adds one; and a quiet line on why one did not go in or the message waits.
+    chips: gtk::Box,
+    chips_scroll: gtk::ScrolledWindow,
+    picture_key: gtk::Button,
+    picture_note: gtk::Label,
     send: gtk::Button,
     limits: gtk::Label,
     model: Picker,
@@ -199,6 +216,13 @@ struct Turn {
     copy: gtk::Button,
 }
 
+/// What a thread's message box held when the person left it: its words and its pictures.
+#[derive(Default)]
+struct Draft {
+    text: String,
+    pictures: Vec<Rc<Attached>>,
+}
+
 #[derive(Default)]
 struct State {
     view: RefCell<Option<Rc<View>>>,
@@ -225,9 +249,9 @@ struct State {
     /// Tool calls drawn in this thread, by id.
     tools: RefCell<HashMap<String, Tool>>,
     turn: RefCell<Option<Turn>>,
-    /// The newest message the person sent: its Edit key and its words, which Try again sends
-    /// again.
-    last_user: RefCell<Option<(gtk::Button, String)>>,
+    /// The newest message the person sent: its Edit key, its words and its pictures, which Try
+    /// again sends again.
+    last_user: RefCell<Option<(gtk::Button, String, Vec<Value>)>>,
     /// The Try again key under the last error or stopped reply, while nothing came after it.
     retry: RefCell<Option<gtk::Button>>,
     /// The run of reads the next read joins, while it is the last thing in its turn.
@@ -273,9 +297,11 @@ struct State {
     /// What [`tell`] could not send while the agent was still answering in its thread: (thread,
     /// words), oldest first. Each goes when its thread's turn ends ([`tell_waiting`]).
     to_tell: RefCell<Vec<(i64, String)>>,
-    /// What the message box held in each thread left with words in it, `None` a new thread's:
-    /// they come back when that thread shows again ([`reset`]).
-    drafts: RefCell<HashMap<Option<i64>, String>>,
+    /// What the message box held in each thread left with words or pictures in it, `None` a new
+    /// thread's: they come back when that thread shows again ([`reset`]).
+    drafts: RefCell<HashMap<Option<i64>, Draft>>,
+    /// The pictures in the message box now, in order.
+    pictures: RefCell<Vec<Rc<Attached>>>,
     ui: RefCell<std::rc::Weak<Ui>>,
     /// The model and effort a new thread starts with: the last ones chosen.
     choice: RefCell<(String, String)>,
@@ -524,8 +550,27 @@ pub fn page() -> gtk::Box {
     hint.set_valign(gtk::Align::Start);
     hint.set_ellipsize(gtk::pango::EllipsizeMode::End);
     field.add_overlay(&hint);
+    // The pictures going with the message, above the words; they scroll sideways in a narrow box
+    // rather than hold the window wide.
+    let chips = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    chips.add_css_class("threads-chips");
+    let chips_scroll = gtk::ScrolledWindow::builder().child(&chips).propagate_natural_height(true).build();
+    chips_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
+    chips_scroll.set_visible(false);
+    composer.append(&chips_scroll);
     composer.append(&field);
+    let picture_note = label("", "threads-picture-note");
+    picture_note.set_wrap(true);
+    picture_note.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    picture_note.set_visible(false);
+    composer.append(&picture_note);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    // Pictures, for a model that reads them ([`picture_key_shown`]).
+    let picture_key = crate::app::icon_button("file-image", "Add a picture");
+    picture_key.add_css_class("threads-picture-key");
+    picture_key.set_widget_name("threads-picture");
+    picture_key.set_valign(gtk::Align::Center);
+    row.append(&picture_key);
     let model = picker("threads-model", MODEL_ABOUT, &MODELS, |value| choose(Some(value), None));
     row.append(&model.key);
     let effort = picker("threads-effort", "How hard the agent thinks before answering", &EFFORTS, |value| choose(None, Some(value)));
@@ -573,6 +618,10 @@ pub fn page() -> gtk::Box {
     let message_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
     message_box.append(&notice);
     message_box.append(&composer);
+    // Pictures dropped on the message box go with the message, before its text field would type
+    // their names; dropped anywhere else on the conversation, too.
+    composer.add_controller(picture_drop(true));
+    conversation.add_controller(picture_drop(false));
 
     // An open thread's message box sits under the conversation, as wide as its column; its
     // scroller keeps the pickers' width from holding the window open.
@@ -688,7 +737,8 @@ pub fn page() -> gtk::Box {
 
     let built = Rc::new(View {
         title, title_key, rename, middle, empty, empty_slot, empty_line, suggestions, dock, dock_slot, message_box,
-        notice, notice_text, input, hint, send: send_key, limits, model, effort, scroll, jump, column, pending,
+        notice, notice_text, composer, input, hint, chips, chips_scroll, picture_key, picture_note, send: send_key,
+        limits, model, effort, scroll, jump, column, pending,
         working, working_text, split: body.clone(), panel, panel_key, panel_body, panel_tabs,
         tally_tabs: tabs, arbiter_tabs, arbiter_panel_tabs, avex_tabs, avex_panel_tabs, sources,
     });
@@ -803,6 +853,17 @@ fn wire(v: &Rc<View>, delete: &gtk::Button) {
     v.input.buffer().connect_changed(|_| {
         if let Some(v) = view() {
             update_send(&v);
+        }
+    });
+    // A picture on the clipboard, or picture files copied in a file manager, go with the message.
+    v.input.connect_paste_clipboard(|input| {
+        if paste_pictures(input) {
+            input.stop_signal_emission_by_name("paste-clipboard");
+        }
+    });
+    v.picture_key.connect_clicked(|_| {
+        if let Some(ui) = the_ui() {
+            choose_pictures(&ui);
         }
     });
     v.send.connect_clicked(|_| {
@@ -1060,11 +1121,247 @@ fn update_send(v: &View) {
     let buffer = v.input.buffer();
     v.hint.set_visible(buffer.char_count() == 0);
     let written = !buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).trim().is_empty();
+    let pictures = STATE.with(|s| !s.pictures.borrow().is_empty());
+    let held = pictures_hold();
     let working = STATE.with(|s| s.working.get());
     let missing = STATE.with(|s| s.claude_missing.get());
     let reachable = the_ui().is_none_or(|ui| ui.is_connected()) && !missing;
-    v.send.set_sensitive(working || (written && reachable));
+    // Pictures alone are a message; one still going up, or refused, keeps it back and says why.
+    v.send.set_sensitive(working || ((written || pictures) && reachable && held.is_none()));
+    if !working {
+        v.send.set_tooltip_text(Some(held.unwrap_or("Send · Enter")));
+    }
     v.suggestions.set_sensitive(!missing);
+}
+
+/// What keeps the message box's pictures from going: a model on this PC, which cannot read them,
+/// one still going up, or one refused. `None` when they may go, or there are none.
+fn pictures_hold() -> Option<&'static str> {
+    STATE.with(|s| {
+        let pictures = s.pictures.borrow();
+        if pictures.is_empty() {
+            None
+        } else if !pictures_allowed() {
+            Some(pictures::LOCAL_CANNOT)
+        } else if pictures.iter().any(|p| p.going()) {
+            Some(STILL_GOING)
+        } else if pictures.iter().any(|p| p.refused().is_some()) {
+            Some(REFUSED_PICTURE)
+        } else {
+            None
+        }
+    })
+}
+
+/// Whether the model showing reads pictures: Claude's do, a model on this PC does not.
+fn pictures_allowed() -> bool {
+    !is_local(&STATE.with(|s| s.shown_model.borrow().clone()))
+}
+
+/// The picture key shows while the model reads pictures. On a model on this PC it steps aside,
+/// and pictures already in the box say why they cannot go.
+fn picture_key_shown(v: &View) {
+    let allowed = pictures_allowed();
+    v.picture_key.set_visible(allowed);
+    let held = STATE.with(|s| !s.pictures.borrow().is_empty());
+    if !allowed && held {
+        note(v, pictures::LOCAL_CANNOT);
+    } else if allowed && v.picture_note.text() == pictures::LOCAL_CANNOT {
+        note(v, "");
+    }
+    update_send(v);
+}
+
+/// The message box's quiet line about its pictures; empty hides it.
+fn note(v: &View, text: &str) {
+    v.picture_note.set_text(text);
+    v.picture_note.set_visible(!text.is_empty());
+}
+
+/// Show `pictures` in the message box, in place of what it held.
+fn set_pictures(v: &View, pictures: Vec<Rc<Attached>>) {
+    clear(&v.chips);
+    for picture in &pictures {
+        v.chips.append(picture.widget());
+    }
+    v.chips_scroll.set_visible(!pictures.is_empty());
+    STATE.with(|s| *s.pictures.borrow_mut() = pictures);
+    update_send(v);
+}
+
+/// Add pictures to the message box, as many as it has room for, each going up at once.
+fn attach(sources: Vec<Source>) {
+    let (Some(v), Some(ui)) = (view(), the_ui()) else { return };
+    if sources.is_empty() {
+        return;
+    }
+    if !pictures_allowed() {
+        note(&v, pictures::LOCAL_CANNOT);
+        return;
+    }
+    let mut held = STATE.with(|s| s.pictures.borrow().clone());
+    let room = MAX_PICTURES.saturating_sub(held.len());
+    let left_out = sources.len().saturating_sub(room);
+    for source in sources.into_iter().take(room) {
+        held.push(Attached::add(&ui, source, picture_done, remove_picture));
+    }
+    set_pictures(&v, held);
+    let said = match (left_out, room) {
+        (0, _) => String::new(),
+        (_, 0) => format!("At most {MAX_PICTURES} pictures go in one message"),
+        (n, _) => format!("At most {MAX_PICTURES} pictures go in one message: {} left out", plural(n as i64, "picture")),
+    };
+    note(&v, &said);
+    v.input.grab_focus();
+}
+
+/// A picture went up, or was refused: the message box says so if it holds it. One in a draft put
+/// away shows how it went on its chip when its thread comes back.
+fn picture_done(picture: &Attached) {
+    let Some(v) = view() else { return };
+    if !STATE.with(|s| s.pictures.borrow().iter().any(|p| p.serial == picture.serial)) {
+        return;
+    }
+    if let Some(why) = picture.refused() {
+        note(&v, &format!("{} was not added: {why}", picture.name()));
+    } else if v.picture_note.text() == STILL_GOING && pictures_hold() != Some(STILL_GOING) {
+        note(&v, "");
+    }
+    update_send(&v);
+}
+
+/// A chip's remove key: the picture leaves the message box.
+fn remove_picture(serial: u64) {
+    let Some(v) = view() else { return };
+    let left: Vec<Rc<Attached>> = STATE.with(|s| s.pictures.borrow().iter().filter(|p| p.serial != serial).cloned().collect());
+    set_pictures(&v, left);
+    // What it said is done with; that a model on this PC cannot read the others still holds.
+    note(&v, if pictures_hold() == Some(pictures::LOCAL_CANNOT) { pictures::LOCAL_CANNOT } else { "" });
+    v.input.grab_focus();
+}
+
+/// The picture key: a chooser of PNG, JPEG, GIF and WebP pictures, several at once.
+fn choose_pictures(ui: &Rc<Ui>) {
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some("Pictures (PNG, JPEG, GIF, WebP)"));
+    for mime in pictures::MEDIA_TYPES {
+        filter.add_mime_type(mime);
+    }
+    for suffix in pictures::SUFFIXES {
+        filter.add_suffix(suffix);
+    }
+    let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+    filters.append(&filter);
+    let dialog = gtk::FileDialog::builder().title("Add pictures").modal(true).filters(&filters).default_filter(&filter).build();
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        // Closing the chooser is not an error.
+        let Ok(files) = dialog.open_multiple_future(Some(&ui.window)).await else { return };
+        let chosen = (0..files.n_items())
+            .filter_map(|i| files.item(i).and_downcast::<gtk::gio::File>())
+            .filter_map(|f| f.path())
+            .map(Source::Path)
+            .collect();
+        attach(chosen);
+    });
+}
+
+/// Ctrl+V in the message box with a picture on the clipboard, or picture files copied in a file
+/// manager: they go with the message instead of their names. Whether it took the paste; words, and
+/// anything Relay copied itself, paste as words.
+fn paste_pictures(input: &gtk::TextView) -> bool {
+    let clipboard = input.clipboard();
+    if clipboard.is_local() {
+        return false;
+    }
+    let formats = clipboard.formats();
+    let files = formats.contains_type(gtk::gdk::FileList::static_type()) || formats.contain_mime_type("text/uri-list");
+    let picture = formats.contains_type(gtk::gdk::Texture::static_type());
+    let words = formats.contains_type(glib::GString::static_type()) || formats.contain_mime_type("text/plain") || formats.contain_mime_type("text/plain;charset=utf-8");
+    if !files && !(picture && !words) {
+        return false;
+    }
+    let input = input.downgrade();
+    glib::spawn_future_local(async move {
+        if files {
+            if let Ok(value) = clipboard.read_value_future(gtk::gdk::FileList::static_type(), glib::Priority::DEFAULT).await {
+                let found: Vec<Source> = value
+                    .get::<gtk::gdk::FileList>()
+                    .map(|list| list.files().iter().filter_map(|f| f.path()).filter(|p| pictures::is_picture(p)).map(Source::Path).collect())
+                    .unwrap_or_default();
+                if !found.is_empty() {
+                    attach(found);
+                    return;
+                }
+            }
+        }
+        if picture {
+            if let Ok(Some(texture)) = clipboard.read_texture_future().await {
+                attach(vec![Source::Texture(texture)]);
+                return;
+            }
+        }
+        // No picture after all: the words paste as they would have.
+        if let Some(input) = input.upgrade() {
+            input.buffer().paste_clipboard(&clipboard, None, input.is_editable());
+        }
+    });
+    true
+}
+
+/// Pictures dropped on the conversation, or on the message box (`in_box`), whose text field would
+/// otherwise type their names: its target listens first. Anything else dropped on the box goes in
+/// as words, as the field would have put it; on the conversation it says what goes.
+fn picture_drop(in_box: bool) -> gtk::DropTarget {
+    let target = gtk::DropTarget::new(glib::Type::INVALID, gtk::gdk::DragAction::COPY);
+    // A picture dragged out of a browser also offers its address as a file: the picture first.
+    target.set_types(&[gtk::gdk::Texture::static_type(), gtk::gdk::FileList::static_type()]);
+    if in_box {
+        target.set_propagation_phase(gtk::PropagationPhase::Capture);
+    } else {
+        // The conversation's lights the message box while a drag is over it.
+        target.connect_enter(|_, _, _| {
+            if let Some(v) = view() {
+                v.composer.add_css_class("threads-dropping");
+            }
+            gtk::gdk::DragAction::COPY
+        });
+        target.connect_leave(|_| {
+            if let Some(v) = view() {
+                v.composer.remove_css_class("threads-dropping");
+            }
+        });
+    }
+    target.connect_drop(move |_, value, _, _| {
+        let Some(v) = view() else { return false };
+        v.composer.remove_css_class("threads-dropping");
+        if let Ok(texture) = value.get::<gtk::gdk::Texture>() {
+            attach(vec![Source::Texture(texture)]);
+            return true;
+        }
+        let Ok(list) = value.get::<gtk::gdk::FileList>() else { return false };
+        let files = list.files();
+        let (found, others): (Vec<PathBuf>, Vec<PathBuf>) = files.iter().filter_map(|f| f.path()).partition(|p| pictures::is_picture(p));
+        if found.is_empty() && in_box {
+            // A link, or a file that is not a picture: its address, as the text field takes one.
+            let words: Vec<String> = files.iter().map(|f| f.path().map_or_else(|| f.uri().to_string(), |p| p.to_string_lossy().to_string())).collect();
+            if words.is_empty() {
+                return false;
+            }
+            v.input.buffer().insert_at_cursor(&words.join(" "));
+            return true;
+        }
+        if found.is_empty() {
+            note(&v, ONLY_PICTURES);
+            return false;
+        }
+        attach(found.into_iter().map(Source::Path).collect());
+        if !others.is_empty() && v.picture_note.text().is_empty() {
+            note(&v, &format!("{ONLY_PICTURES}: {} left out", plural(others.len() as i64, "file")));
+        }
+        true
+    });
+    target
 }
 
 /// A chip that opens a list of `options` and runs `pick` with the one chosen. The current choice
@@ -1214,6 +1511,7 @@ fn show_choice(v: &View, model: &str, effort: &str) {
         }
     }
     effort_sensitive(v);
+    picture_key_shown(v);
 }
 
 /// A model or an effort picked: the thread showing takes it (`thread.set`), and new threads start
@@ -1269,6 +1567,8 @@ fn reshow_model(v: &View) {
         mark.set_opacity(if *choice == model { 1.0 } else { 0.0 });
     }
     effort_sensitive(v);
+    // The models on this PC came in: the one shown may be among them.
+    picture_key_shown(v);
 }
 
 /// The effort picker waits for a reply like the model picker, and a local model has no efforts.
@@ -1296,23 +1596,27 @@ fn show_empty(v: &View) {
 }
 
 /// Forget the thread drawn: `id` shows next, or a new thread when `None`. The message box keeps
-/// what was written for the thread it was written in, and shows `id`'s own.
+/// what was written, and the pictures added, for the thread they were meant for, and shows `id`'s
+/// own. A picture still going up goes on meanwhile.
 fn reset(id: Option<i64>) {
     if let Some(v) = view() {
         drop_pending(&v);
         let buffer = v.input.buffer();
         let written = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
+        let pictures = STATE.with(|s| std::mem::take(&mut *s.pictures.borrow_mut()));
         let back = STATE.with(|s| {
             let mut drafts = s.drafts.borrow_mut();
-            if written.trim().is_empty() {
+            if written.trim().is_empty() && pictures.is_empty() {
                 drafts.remove(&s.current.get());
             } else {
-                drafts.insert(s.current.get(), written);
+                drafts.insert(s.current.get(), Draft { text: written, pictures });
             }
-            drafts.remove(&id)
+            drafts.remove(&id).unwrap_or_default()
         });
-        buffer.set_text(back.as_deref().unwrap_or(""));
+        buffer.set_text(&back.text);
         buffer.place_cursor(&buffer.end_iter());
+        set_pictures(&v, back.pictures);
+        note(&v, "");
     }
     STATE.with(|s| {
         s.shown_serial.set(s.shown_serial.get() + 1);
@@ -1673,7 +1977,7 @@ pub fn smoke_open(ui: &Rc<Ui>, newest: bool) {
         // scripts/threads-smoke.py thread-edit: the newest message's Edit key, pressed.
         if std::env::var("RELAY_SMOKE_THREAD_EDIT").as_deref() == Ok("1") {
             glib::timeout_future(std::time::Duration::from_millis(1500)).await;
-            if let Some(edit) = STATE.with(|s| s.last_user.borrow().as_ref().map(|(e, _)| e.clone())) {
+            if let Some(edit) = STATE.with(|s| s.last_user.borrow().as_ref().map(|(e, _, _)| e.clone())) {
                 edit.emit_clicked();
             }
         }
@@ -1864,7 +2168,7 @@ fn set_working(v: &View, working: bool) {
     v.model.key.set_sensitive(!working);
     v.model.key.set_tooltip_text(Some(if working { WAITS } else { MODEL_ABOUT }));
     STATE.with(|s| {
-        if let Some((edit, _)) = s.last_user.borrow().as_ref() {
+        if let Some((edit, _, _)) = s.last_user.borrow().as_ref() {
             edit.set_sensitive(!working);
         }
         if let Some(retry) = s.retry.borrow().as_ref() {
@@ -1963,22 +2267,24 @@ fn copy_key(tip: &'static str, words: impl Fn() -> String + 'static) -> gtk::But
     copy
 }
 
-/// Put the person's newest message back in the box, to change and send again.
-fn edit_last(words: &str) {
-    let Some(v) = view() else { return };
+/// Put the person's newest message back in the box, its pictures too, to change and send again.
+fn edit_last(words: &str, images: &[Value]) {
+    let (Some(v), Some(ui)) = (view(), the_ui()) else { return };
     if STATE.with(|s| s.working.get()) {
         return;
     }
     let buffer = v.input.buffer();
     buffer.set_text(words);
     buffer.place_cursor(&buffer.end_iter());
+    set_pictures(&v, images.iter().take(MAX_PICTURES).map(|image| Attached::again(&ui, image, remove_picture)).collect());
+    note(&v, "");
     v.input.grab_focus();
 }
 
 /// Try again, after a reply that failed or was stopped: sends the person's newest message once
 /// more. Hidden by the next message.
 fn retry_key(parent: &gtk::Box) {
-    let Some(words) = STATE.with(|s| s.last_user.borrow().as_ref().map(|(_, w)| w.clone())) else {
+    let Some((words, images)) = STATE.with(|s| s.last_user.borrow().as_ref().map(|(_, w, i)| (w.clone(), i.clone()))) else {
         return;
     };
     let key = gtk::Button::new();
@@ -1993,7 +2299,7 @@ fn retry_key(parent: &gtk::Box) {
     key.connect_clicked(move |_| {
         if let Some(ui) = the_ui() {
             if !STATE.with(|s| s.working.get()) {
-                send(&ui, &words);
+                send_with(&ui, &words, images.clone(), Vec::new());
             }
         }
     });
@@ -2053,11 +2359,12 @@ fn draw_message(v: &View, m: &Value) {
     match m["role"].as_str().unwrap_or("") {
         "user" => {
             let text = body["text"].as_str().unwrap_or("");
+            let images: Vec<Value> = body["images"].as_array().cloned().unwrap_or_default();
             STATE.with(|s| {
                 *s.turn.borrow_mut() = None;
                 *s.group.borrow_mut() = None;
                 // Only the newest message is edited, and only the newest failure retried.
-                if let Some((edit, _)) = s.last_user.borrow_mut().take() {
+                if let Some((edit, _, _)) = s.last_user.borrow_mut().take() {
                     edit.set_visible(false);
                 }
                 if let Some(retry) = s.retry.borrow_mut().take() {
@@ -2081,17 +2388,28 @@ fn draw_message(v: &View, m: &Value) {
             let keys = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             keys.add_css_class("threads-user-keys");
             keys.set_valign(gtk::Align::End);
-            let words = text.to_string();
-            keys.append(&copy_key("Copy this message", move || words.clone()));
+            if !text.is_empty() {
+                let words = text.to_string();
+                keys.append(&copy_key("Copy this message", move || words.clone()));
+            }
             let edit = crate::app::icon_button("edit", "Edit and send again");
             edit.set_child(Some(&crate::icons::image("edit", 16)));
-            let words = text.to_string();
-            edit.connect_clicked(move |_| edit_last(&words));
+            let (words, sent) = (text.to_string(), images.clone());
+            edit.connect_clicked(move |_| edit_last(&words, &sent));
             edit.set_sensitive(!STATE.with(|s| s.working.get()));
             keys.append(&edit);
             wrap.append(&keys);
-            wrap.append(&bubble);
-            STATE.with(|s| *s.last_user.borrow_mut() = Some((edit, text.to_string())));
+            // Its pictures above its words, both at the column's end.
+            let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
+            content.set_halign(gtk::Align::End);
+            if let Some(ui) = the_ui().filter(|_| !images.is_empty()) {
+                content.append(&pictures::in_message(&ui, &images));
+            }
+            if !text.is_empty() || images.is_empty() {
+                content.append(&bubble);
+            }
+            wrap.append(&content);
+            STATE.with(|s| *s.last_user.borrow_mut() = Some((edit, text.to_string(), images)));
             v.column.append(&wrap);
         }
         "assistant" => {
@@ -3122,30 +3440,64 @@ fn submit(ui: &Rc<Ui>) {
     let Some(v) = view() else { return };
     let buffer = v.input.buffer();
     let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).trim().to_string();
+    let attached = STATE.with(|s| s.pictures.borrow().clone());
     // Words written while the agent answers stay in the box, and Enter says why.
     if STATE.with(|s| s.working.get()) {
-        if !text.is_empty() {
+        if !text.is_empty() || !attached.is_empty() {
             ui.show_info(STILL_ANSWERING);
         }
         return;
     }
-    if text.is_empty() || !v.send.is_sensitive() {
+    if text.is_empty() && attached.is_empty() {
+        return;
+    }
+    // A picture still going up, or refused, keeps the message back: the box says which.
+    if let Some(why) = pictures_hold() {
+        note(&v, why);
+        return;
+    }
+    if !v.send.is_sensitive() {
         return;
     }
     buffer.set_text("");
-    send(ui, &text);
+    let images = attached.iter().filter_map(|p| p.image()).collect();
+    set_pictures(&v, Vec::new());
+    note(&v, "");
+    send_with(ui, &text, images, attached);
 }
 
 /// Send `text`: in the thread showing, or as the first message of a new one.
 fn send(ui: &Rc<Ui>, text: &str) {
+    send_with(ui, text, Vec::new(), Vec::new());
+}
+
+/// Send `text` with `images` (the engine's, already up): in the thread showing, or as the first
+/// message of a new one. Refused, the words and the pictures (`attached`) go back where they were
+/// written.
+fn send_with(ui: &Rc<Ui>, text: &str, images: Vec<Value>, attached: Vec<Rc<Attached>>) {
     let ui = ui.clone();
     let text = text.to_string();
     glib::spawn_future_local(async move {
-        let result = match current() {
-            Some(id) => ui.call("thread.send", json!({"id": id, "text": text})).await.map(|_| id),
+        let ids: Vec<Value> = images.iter().map(|image| image["id"].clone()).collect();
+        let to = current();
+        let result = match to {
+            Some(id) => {
+                let mut payload = json!({"id": id, "text": text});
+                if !ids.is_empty() {
+                    payload["images"] = json!(ids);
+                }
+                ui.call("thread.send", payload).await.map(|_| id)
+            }
             None => {
                 let (model, effort) = STATE.with(|s| s.choice.borrow().clone());
-                let payload = json!({"text": text, "model": (!model.is_empty()).then_some(model), "effort": (!effort.is_empty()).then_some(effort)});
+                let mut payload = json!({"model": (!model.is_empty()).then_some(model), "effort": (!effort.is_empty()).then_some(effort)});
+                // Pictures alone start a thread too.
+                if !text.is_empty() {
+                    payload["text"] = json!(text);
+                }
+                if !ids.is_empty() {
+                    payload["images"] = json!(ids);
+                }
                 ui.call("thread.create", payload).await.map(|t| t["id"].as_i64().unwrap_or(0))
             }
         };
@@ -3153,12 +3505,41 @@ fn send(ui: &Rc<Ui>, text: &str) {
             Ok(id) if current() != Some(id) => open(&ui, id),
             Ok(_) => {}
             Err(e) => {
-                if let Some(v) = view() {
-                    v.input.buffer().set_text(&text);
+                let why = pictures::said(&e);
+                put_back(to, &text, attached);
+                if let Some(v) = view().filter(|_| current() == to && !ids.is_empty()) {
+                    note(&v, &why);
                 }
-                ui.show_error(&e.to_string());
+                ui.show_error(&why);
             }
         }
+    });
+}
+
+/// What a refused send gives back: into the message box when its thread shows, the words in place
+/// of what it holds; else into that thread's draft, to wait there.
+fn put_back(to: Option<i64>, text: &str, attached: Vec<Rc<Attached>>) {
+    let Some(v) = view() else { return };
+    if current() == to {
+        v.input.buffer().set_text(text);
+        if !attached.is_empty() {
+            let mut all = attached;
+            all.extend(STATE.with(|s| s.pictures.borrow().clone()));
+            all.truncate(MAX_PICTURES);
+            set_pictures(&v, all);
+        }
+        return;
+    }
+    STATE.with(|s| {
+        let mut drafts = s.drafts.borrow_mut();
+        let draft = drafts.entry(to).or_default();
+        if draft.text.trim().is_empty() {
+            draft.text = text.to_string();
+        }
+        let mut all = attached;
+        all.append(&mut draft.pictures);
+        all.truncate(MAX_PICTURES);
+        draft.pictures = all;
     });
 }
 

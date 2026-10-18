@@ -27,6 +27,8 @@ pub(crate) mod threads;
 mod chart;
 #[path = "threads_ask.rs"]
 mod ask;
+#[path = "threads_pictures.rs"]
+mod pictures;
 #[path = "arbiter_pages.rs"]
 mod arbiter;
 #[path = "avex_pages.rs"]

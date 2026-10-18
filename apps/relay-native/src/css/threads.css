@@ -52,6 +52,19 @@ label.threads-quote { padding: 2px 0 2px 14px; border-left: 2px solid @line_emph
 .threads-turn button.threads-copy { margin-left: -6px; opacity: 0; transition: opacity 120ms ease-out; }
 .threads-user-keys { margin-bottom: 4px; opacity: 0; transition: opacity 120ms ease-out; }
 .threads-user-wrap:hover .threads-user-keys, .threads-user-keys:focus-within { opacity: 1; }
+/* A message's pictures, above its words: rounded as the bubble, a glass edge that brightens under
+   the pointer; one that cannot be shown is a quiet stand-in with the reason. */
+.threads-user-pictures flowboxchild { padding: 0; min-width: 0; min-height: 0; background: transparent; }
+button.threads-user-picture { min-height: 0; padding: 0; border: 1px solid @glass_edge; border-radius: 14px; background: @glass_card; box-shadow: none; }
+button.threads-user-picture:hover { border-color: @glass_line_hover; background: @glass_card; }
+button.threads-user-picture:focus-visible { outline: 2px solid alpha(@ink, 0.35); outline-offset: 0; }
+button.threads-user-picture:disabled { opacity: 1; }
+.threads-picture-missing { padding: 8px 10px; }
+.threads-picture-missing image { color: @ink_dim; }
+.threads-picture-why { font-size: 12px; line-height: 16px; color: @faint; }
+/* A picture opened larger: on the ground, its close key in the corner. */
+window.threads-viewer { background: @wall_solid; }
+.threads-viewer-note { font-size: 13px; color: @faint; }
 button.threads-retry { min-height: 26px; padding: 0 10px; border: 1px solid @edge; border-radius: 8px; background: transparent; color: @secondary; font-size: 12px; font-weight: 500; }
 button.threads-retry:hover { background: @wash; color: @ink; }
 .threads-turn:hover button.threads-copy, .threads-turn button.threads-copy:focus-visible { opacity: 1; }
@@ -105,6 +118,24 @@ textview.threads-input { padding: 4px 0; }
 .threads-limits { padding: 0 4px; font-size: 12px; color: @faint; }
 .threads-dot, .threads-lamp { min-width: 6px; min-height: 6px; border-radius: 3px; background: @live; }
 button.primary.threads-send { min-width: 34px; min-height: 34px; padding: 0; border-radius: 10px; }
+/* A drag over the conversation lights the box its pictures go into. */
+.threads-composer.threads-dropping { border-color: @line_focus; background: @wash; }
+
+/* Pictures going with the message (threads_pictures.rs): a glass chip each, the thumbnail covering
+   it and rounded as a key; a spinner while it goes up, a red edge and mark when refused, an ink
+   key in its corner that takes it out. The quiet line says why one did not go in. */
+.threads-chips { padding: 0 0 2px; }
+.threads-chip { border: 1px solid @glass_line; border-radius: 10px; background: @glass_control; }
+.threads-chip image { color: @faint; }
+.threads-chip.refused { border-color: @held; }
+.threads-chip-state { min-width: 24px; min-height: 24px; border-radius: 12px; background: alpha(@wall_solid, 0.72); }
+.threads-chip-state image { color: @held_text; }
+.threads-chip-state spinner { color: @ink; }
+button.threads-chip-remove { min-width: 20px; min-height: 20px; padding: 0; border: 0; border-radius: 10px; background: @ink; box-shadow: none; }
+button.threads-chip-remove image { color: @wall_solid; }
+button.threads-chip-remove:hover { background: white; }
+button.threads-chip-remove:focus-visible { outline: 2px solid alpha(@ink, 0.35); outline-offset: 0; }
+.threads-picture-note { font-size: 12px; line-height: 17px; color: @faint; }
 
 /* Above the message box when a thread cannot answer. */
 .threads-notice { padding: 10px 12px; border: 1px solid @edge; border-radius: 10px; background: @slab; }

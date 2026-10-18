@@ -160,7 +160,7 @@ const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
 /// An image's declared width and height, read from its header before any decoder runs.
 /// `None` is an SVG. Content that is none of the previewed formats is refused, so it cannot
 /// reach whatever other decoder is installed.
-fn header_size(bytes: &[u8]) -> Result<Option<(u64, u64)>, String> {
+pub(crate) fn header_size(bytes: &[u8]) -> Result<Option<(u64, u64)>, String> {
     let size = if bytes.starts_with(PNG) {
         png_size(bytes)
     } else if bytes.starts_with(&[0xff, 0xd8]) {

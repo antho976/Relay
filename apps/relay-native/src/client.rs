@@ -146,11 +146,17 @@ impl Client {
     /// Binary file responses use a separate bounded connection. Keep the normal
     /// control/event channel's 2 MiB limit and responsiveness unchanged.
     pub async fn image_read(rt: &Handle, path: PathBuf, payload: Value) -> Result<Value, Error> {
+        Self::bulk_request(rt, path, "file.read", payload).await
+    }
+    /// A request that carries a picture either way (`file.read`, `thread.upload`, `thread.image`):
+    /// on a connection of its own whose lines may reach 24 MiB, so a picture neither fails the
+    /// control connection's 2 MiB limit nor holds the keystrokes queued behind it.
+    pub async fn bulk_request(rt: &Handle, path: PathBuf, op: &str, payload: Value) -> Result<Value, Error> {
         let (client, _notices) = rt
             .spawn(async move { Self::open_with_limit(path, 24 * 1024 * 1024).await })
             .await
             .map_err(|e| Error::Io(e.to_string()))??;
-        client.request(rt, "file.read", payload).await
+        client.request(rt, op, payload).await
     }
     /// Session lifecycle actions must not sit behind slow reads on the UI socket.
     /// This connection has no subscriptions and exists only for this one action.
