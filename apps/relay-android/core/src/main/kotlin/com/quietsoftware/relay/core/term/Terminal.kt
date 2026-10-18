@@ -66,6 +66,18 @@ class Terminal(cols: Int, rows: Int, scrollbackLimit: Int = 5000) {
     var scrollbackSize: Int = 0
         private set
 
+    /**
+     * Lines that have left the top of a full scrollback for good. A row index (as [lineAt]
+     * counts) taken earlier names the same line now once this has grown by as much is taken
+     * off it: what keeps a selection on its text while output goes on.
+     */
+    var dropped: Long = 0
+        private set
+
+    /** Bumps when the scrollback is cleared or the terminal reset: row indices taken before name nothing now. */
+    var cleared: Int = 0
+        private set
+
     /** Throw instead of recovering when a bug surfaces mid-feed; tests turn it on. */
     internal var strict = false
 
@@ -336,6 +348,7 @@ class Terminal(cols: Int, rows: Int, scrollbackLimit: Int = 5000) {
         sb = arrayOfNulls(0)
         sbStart = 0
         scrollbackSize = 0
+        cleared++
     }
 
     // ---- printing ----
@@ -529,7 +542,10 @@ class Terminal(cols: Int, rows: Int, scrollbackLimit: Int = 5000) {
     /** Appends to the scrollback ring; returns the line it evicted (free for reuse), or null. */
     private fun pushScrollback(line: Line): Line? {
         val limit = scrollbackLimit
-        if (limit == 0) return line
+        if (limit == 0) {
+            dropped++
+            return line
+        }
         if (scrollbackSize < limit) {
             if (scrollbackSize == sb.size) {
                 val grown = arrayOfNulls<Line>(minOf(maxOf(64, sb.size * 2), limit))
@@ -544,6 +560,7 @@ class Terminal(cols: Int, rows: Int, scrollbackLimit: Int = 5000) {
         val evicted = sb[sbStart]
         sb[sbStart] = line
         sbStart = (sbStart + 1) % sb.size
+        dropped++
         return evicted
     }
 

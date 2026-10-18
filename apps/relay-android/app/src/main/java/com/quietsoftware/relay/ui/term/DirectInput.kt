@@ -52,10 +52,23 @@ internal class DirectInput(
             }
 
             override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-                // Nothing is kept here, so a keyboard's delete is the terminal's: one DEL per character it asked for.
-                val held = editable?.length ?: 0
-                if (held == 0) repeat(beforeLength.coerceAtLeast(1)) { onKey(Keys.BACKSPACE) }
+                deleted(beforeLength, afterLength)
                 return super.deleteSurroundingText(beforeLength, afterLength)
+            }
+
+            override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
+                deleted(beforeLength, afterLength)
+                return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
+            }
+
+            /**
+             * Nothing is kept here, so a keyboard's delete is the terminal's: Backspace per character
+             * before the cursor it asked for, Delete per one after (at least one Backspace).
+             */
+            private fun deleted(before: Int, after: Int) {
+                if ((editable?.length ?: 0) > 0) return
+                repeat(if (before == 0 && after == 0) 1 else before) { onKey(Keys.BACKSPACE) }
+                repeat(after) { onKey(Keys.DELETE) }
             }
 
             override fun performEditorAction(editorAction: Int): Boolean {

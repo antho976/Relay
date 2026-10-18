@@ -332,7 +332,7 @@ private fun Settings(session: Session, nav: Nav) {
         if (spawned) {
             T(modelName(form.model), style = Relay.type.ui, color = c.ink2)
         } else {
-            Models(session.provider, form.model) { edit(form.copy(model = it)) }
+            Models(session.provider, form.model, owner = session.name) { edit(form.copy(model = it)) }
         }
         Eyebrow("Reasoning effort", Modifier.padding(top = 14.dp))
         FlowRow(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {

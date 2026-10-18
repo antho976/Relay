@@ -179,6 +179,7 @@ fun TerminalView(
                             var travel = 0f
                             var gesture = flung
                             var pinched = false
+                            var moved = false
                             // A pinch scales the size it started from: touches arrive several times
                             // per frame, faster than the size shown can follow.
                             var pinchFrom = 0f
@@ -196,8 +197,11 @@ fun TerminalView(
                                 }
                                 if (ended == null) {
                                     val (row, col) = cellAt(down.position)
-                                    val word = synchronized(feed.lock) { feed.terminal.wordAt(row, col) } ?: col..col
-                                    selection = Selection(row, word.first, row, word.last)
+                                    selection = synchronized(feed.lock) {
+                                        val t = feed.terminal
+                                        val word = t.wordAt(row, col) ?: col..col
+                                        Selection(row, word.first, row, word.last, t.dropped, t.cleared)
+                                    }
                                     selecting = true
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     do {
@@ -205,7 +209,11 @@ fun TerminalView(
                                         val f = e.changes.firstOrNull { it.pressed } ?: break
                                         if ((f.position - down.position).getDistance() > slop) {
                                             val (r, cc) = cellAt(f.position)
-                                            selection = selection?.copy(endRow = r, endCol = cc)
+                                            selection = synchronized(feed.lock) { selection?.now(feed.terminal) }?.let { now ->
+                                                // Kept as the press began it: the anchor stays, the end follows the finger.
+                                                val anchored = selection!!.let { it.copy(startRow = it.startRow - (now.dropped - it.dropped).toInt()) }
+                                                anchored.copy(endRow = r, endCol = cc, dropped = now.dropped)
+                                            }
                                         }
                                         e.changes.forEach { it.consume() }
                                     } while (e.changes.any { it.pressed })
@@ -213,10 +221,14 @@ fun TerminalView(
                                     return@awaitEachGesture
                                 }
                                 pending = ended
+                                // What the finger travelled while the wait went on, up to the event that ended it.
+                                ended.changes.firstOrNull { it.id == down.id }?.let { travel = it.previousPosition.y - down.position.y }
                             }
                             do {
                                 val event = pending ?: awaitPointerEvent()
                                 pending = null
+                                // Moved off the spot (sideways too, as a pan of a wide terminal does, or as it lifts): not a tap.
+                                event.changes.firstOrNull { it.id == down.id }?.let { if ((it.position - down.position).getDistance() > slop) moved = true }
                                 val pressed = event.changes.count { it.pressed }
                                 if (pressed >= 2) {
                                     pinched = true
@@ -256,7 +268,7 @@ fun TerminalView(
                                 dragCarry = 0f
                             }
                             // A touch that only stopped a flick is not a tap; one with a selection up puts it away.
-                            if (!gesture) {
+                            if (!gesture && !moved) {
                                 if (selection != null) {
                                     selection = null
                                 } else {
@@ -285,10 +297,10 @@ fun TerminalView(
                     if (index >= total) break
                     drawLine(canvas, t.lineAt(index), padX, padY + i * cellH, cellW, cellH, baseline, paint, regular, bold, c.termFg.toArgb())
                 }
-                selection?.let { sel ->
+                selection?.now(t)?.let { sel ->
                     // The selection, in reading order, over the rows in view.
                     val (sr, sc, er, ec) = sel.ordered()
-                    for (row in maxOf(sr, first)..minOf(er, first + visible - 1)) {
+                    for (row in maxOf(sr, first)..minOf(er, first + visible - 1, total - 1)) {
                         val from = if (row == sr) sc else 0
                         val to = if (row == er) ec else t.lineAt(row).length - 1
                         if (to < from) continue
@@ -329,8 +341,9 @@ fun TerminalView(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Key("Copy", {
-                    val (sr, sc, er, ec) = sel.ordered()
-                    val text = synchronized(feed.lock) { feed.terminal.textBetween(sr, sc, er, ec) }
+                    val text = synchronized(feed.lock) {
+                        sel.now(feed.terminal)?.ordered()?.let { (sr, sc, er, ec) -> feed.terminal.textBetween(sr, sc, er, ec) }.orEmpty()
+                    }
                     selection = null
                     if (text.isNotEmpty()) onCopy(text)
                 }, kind = KeyKind.Primary, glyph = "copy", compact = true)
@@ -348,11 +361,26 @@ fun TerminalView(
     }
 }
 
-/** A stretch of cells from where a long press began ([startRow], [startCol]) to where the finger went. */
-private data class Selection(val startRow: Int, val startCol: Int, val endRow: Int, val endCol: Int) {
+/**
+ * A stretch of cells from where a long press began ([startRow], [startCol]) to where the finger
+ * went, rows as the buffer counted them when it had [dropped] lines and [cleared] clears.
+ */
+private data class Selection(val startRow: Int, val startCol: Int, val endRow: Int, val endCol: Int, val dropped: Long, val cleared: Int) {
     /** Start and end in reading order, whichever way the finger went. */
     fun ordered(): List<Int> =
         if (endRow < startRow || (endRow == startRow && endCol < startCol)) listOf(endRow, endCol, startRow, startCol) else listOf(startRow, startCol, endRow, endCol)
+
+    /** The same text in [t] as it is now: moved up by the lines it lost off the top; null once cleared or gone. */
+    fun now(t: Terminal): Selection? {
+        if (t.cleared != cleared) return null
+        val shift = (t.dropped - dropped).toInt()
+        val last = t.scrollbackSize + t.rows - 1
+        val (sr, sc, er, ec) = ordered()
+        if (er - shift < 0 || sr - shift > last) return null
+        val start = if (sr - shift < 0) 0 to 0 else (sr - shift) to sc
+        val end = if (er - shift > last) last to Int.MAX_VALUE - 1 else (er - shift) to ec
+        return Selection(start.first, start.second, end.first, end.second, t.dropped, t.cleared)
+    }
 }
 
 private const val FRAME_MS = 16L

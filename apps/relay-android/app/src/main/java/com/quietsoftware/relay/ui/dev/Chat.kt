@@ -220,6 +220,10 @@ fun ChatScreen(name: String, nav: Nav) {
             nav.shell.toast("A picture is still on its way to the PC")
             return
         }
+        if (attached.any { it.failed }) {
+            nav.shell.toast("A picture did not reach the PC: take it out, or pick it again")
+            return
+        }
         val pictures = attached.toList()
         val paths = pictures.mapNotNull { it.path }
         if (typed.isEmpty() && paths.isEmpty()) {
@@ -407,11 +411,14 @@ internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessa
     }
     messages.forEachIndexed { index, m ->
         if (m.role == "tool") return@forEachIndexed
+        // The turn before ends (its Copy key) ahead of the day the next one starts on.
+        if (m.role == "user") {
+            flush()
+            endTurn()
+        }
         day(m)
         when (m.role) {
             "user" -> {
-                flush()
-                endTurn()
                 turn = m.id
                 out += ChatPiece.User("m:${m.id}", m.text, sending = false)
             }

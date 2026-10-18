@@ -266,8 +266,6 @@ fn owns(
     Ok(())
 }
 
-/// [`assert_own`] with PAIR reads allowed, for a handler with no transaction: one short read
-/// for the target row and the actor's own.
 /// Where `session.upload` puts pictures, from a session's checkout: inside `.relay/`, which
 /// Relay keeps out of git in every checkout it manages.
 const ATTACHMENTS: &str = ".relay/attachments";
@@ -301,7 +299,12 @@ fn attachments_dir(worktree: &Path) -> Result<PathBuf, BusError> {
         match fs::symlink_metadata(&dir) {
             Ok(meta) if meta.is_dir() => {}
             Ok(_) => return Err(BusError::conflict("session.upload_path", format!("{} is not a folder", dir.display()))),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => fs::create_dir(&dir).bus()?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => match fs::create_dir(&dir) {
+                Ok(()) => {}
+                // Another upload made it first: fine, if it is a real folder.
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && fs::symlink_metadata(&dir).is_ok_and(|meta| meta.is_dir()) => {}
+                Err(error) => return Err(crate::engine::internal(error)),
+            },
             Err(error) => return Err(crate::engine::internal(error)),
         }
     }
@@ -326,6 +329,8 @@ fn store_upload(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), BusError> {
     }
 }
 
+/// [`assert_own`] with PAIR reads allowed, for a handler with no transaction: one short read
+/// for the target row and the actor's own.
 fn read_own_or_pair(ctx: &crate::engine::Unlocked, session: &str) -> Result<Row_, BusError> {
     let (row, own) = ctx.read(|conn| Ok((
         sessions::by_name(conn, session)?,

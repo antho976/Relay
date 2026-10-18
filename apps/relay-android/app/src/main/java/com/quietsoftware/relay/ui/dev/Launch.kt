@@ -272,7 +272,7 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                     T(account(providers, chosen), Modifier.padding(start = 4.dp, top = 6.dp), Relay.type.caption, c.ink3, maxLines = 2)
 
                     Label("Model")
-                    Models(chosen, profile.model) { patch(profile.copy(model = it)) }
+                    Models(chosen, profile.model, owner = index) { patch(profile.copy(model = it)) }
 
                     Label("Reasoning effort")
                     Efforts(effortsFor(chosen), profile.effortFor(chosen)) { patch(profile.copy(effort = it)) }
@@ -464,9 +464,10 @@ internal fun modelName(id: String): String =
 /** The provider's default, Claude's models by name, or any model id. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun Models(provider: String, model: String, onModel: (String) -> Unit) {
+internal fun Models(provider: String, model: String, owner: Any, onModel: (String) -> Unit) {
     val named = if (provider == "claude") MODELS.filter { it.first.isNotEmpty() } else emptyList()
-    var other by rememberSaveable(provider) { mutableStateOf(model.isNotEmpty() && named.none { it.first == model }) }
+    // Per agent: a review group's members each keep their own choice.
+    var other by rememberSaveable(provider, owner) { mutableStateOf(model.isNotEmpty() && named.none { it.first == model }) }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Pill("Default", Modifier.heightIn(min = 36.dp), selected = model.isEmpty() && !other, onClick = { other = false; onModel("") })
         for ((id, name) in named) Pill(name, Modifier.heightIn(min = 36.dp), selected = model == id && !other, onClick = { other = false; onModel(id) })
