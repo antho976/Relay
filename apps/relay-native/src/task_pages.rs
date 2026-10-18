@@ -1251,6 +1251,10 @@ fn open_detail(id: i64) -> Option<Rc<Detail>> {
     })
 }
 
+/// The task page's add fields, by widget name: an add rebuilds them, and focus returns to them.
+const LABEL_FIELD: &str = "task-label-add";
+const SUBTASK_FIELD: &str = "task-subtask-add";
+
 /// Open inline editors, by the part of the page they are in, each saying whether it holds
 /// text that differs from the task.
 type Editing = Vec<(&'static str, Box<dyn Fn() -> bool>)>;
@@ -1344,6 +1348,9 @@ pub struct Detail {
     messages: RefCell<Vec<Value>>,
     comments: RefCell<Vec<Value>>,
     cursors: Cell<(Option<i64>, Option<i64>)>,
+    /// The add field (by widget name) an add was made from: the redraw rebuilds it, and the
+    /// caret goes back into the new one, so the next label or sub-task needs no click.
+    refocus: Cell<Option<&'static str>>,
 }
 
 impl Detail {
@@ -1409,6 +1416,7 @@ impl Detail {
             messages: RefCell::new(Vec::new()),
             comments: RefCell::new(Vec::new()),
             cursors: Cell::new((None, None)),
+            refocus: Cell::new(None),
         });
         let weak = Rc::downgrade(&detail);
         refresh.connect_clicked(move |_| {
@@ -1686,6 +1694,11 @@ impl Detail {
         if let Some((value, adjustment)) = scroll.filter(|_| changed) {
             adjustment.set_value(value);
             glib::idle_add_local_once(move || adjustment.set_value(value));
+        }
+        if let Some(name) = self.refocus.take() {
+            if let Some(field) = widgets(&self.side).into_iter().chain(widgets(&self.main)).find(|w| w.widget_name() == name) {
+                field.grab_focus();
+            }
         }
     }
 
@@ -1976,6 +1989,7 @@ impl Detail {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             row.add_css_class("issue-comment-body");
             let entry = gtk::Entry::builder().placeholder_text("Add a sub-task title").hexpand(true).build();
+            entry.set_widget_name(SUBTASK_FIELD);
             let add = button("Create sub-task", "quiet");
             row.append(&entry);
             row.append(&add);
@@ -1985,7 +1999,8 @@ impl Detail {
                 let (Some(d), Some(entry)) = (weak.upgrade(), field.upgrade()) else { return };
                 let title = entry.text().trim().to_string();
                 if !title.is_empty() {
-                    d.act("task.create", json!({"project_id":project,"parent_id":d.id,"title":title,"column":"backlog"}));
+                    let payload = json!({"project_id":project,"parent_id":d.id,"title":title,"column":"backlog"});
+                    d.act_then("task.create", payload, |d| d.refocus.set(Some(SUBTASK_FIELD)));
                 }
             });
             let submit = add.downgrade();
@@ -2311,11 +2326,12 @@ impl Detail {
         }
         let entry = gtk::Entry::builder().placeholder_text("Add a label").build();
         entry.add_css_class("issue-side-entry");
+        entry.set_widget_name(LABEL_FIELD);
         let weak = Rc::downgrade(self);
         entry.connect_activate(move |entry| {
             let tag = entry.text().trim().to_string();
             if let (Some(d), false) = (weak.upgrade(), tag.is_empty()) {
-                d.act("task.label.add", json!({"task_id":id,"label":tag}));
+                d.act_then("task.label.add", json!({"task_id":id,"label":tag}), |d| d.refocus.set(Some(LABEL_FIELD)));
             }
         });
         tags.append(&entry);
