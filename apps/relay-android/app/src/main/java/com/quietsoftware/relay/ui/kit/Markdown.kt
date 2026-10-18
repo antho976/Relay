@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicText
@@ -32,6 +33,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -147,14 +151,15 @@ private fun CodeBlock(b: Block.Code) {
         Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             T(b.lang.ifBlank { "code" }, Modifier.weight(1f), Relay.type.mono, c.ink3, maxLines = 1)
             Box(
-                Modifier.clip(Radii.icon).clickable {
+                Modifier.size(TOUCH).clip(Radii.icon).clickable(role = Role.Button) {
                     scope.launch {
                         clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("code", b.text)))
                         copied = true
                         kotlinx.coroutines.delay(1400)
                         copied = false
                     }
-                }.padding(horizontal = 10.dp, vertical = 8.dp),
+                }.semantics { contentDescription = if (copied) "Copied" else "Copy the code" },
+                contentAlignment = Alignment.Center,
             ) { Glyph(if (copied) "check" else "copy", 14.dp, c.ink3) }
         }
         Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, bottom = 11.dp)) {
@@ -313,6 +318,9 @@ private fun blocks(lines: List<String>, st: Inline): List<Block> {
             val indents = ArrayList<Int>()
             val texts = ArrayList<StringBuilder>()
             val markers = ArrayList<Triple<Int, String, Boolean>>()
+            // A numbered run counts up from its first number, as the PC's does, where "1." on
+            // every item (as models often write them) read 1, 1, 1.
+            val next = HashMap<Int, Int>()
             while (i < lines.size) {
                 val l = lines[i]
                 val b = bullet(l)
@@ -322,7 +330,16 @@ private fun blocks(lines: List<String>, st: Inline): List<Block> {
                     while (indents.isNotEmpty() && indents.last() > indent) indents.removeAt(indents.lastIndex)
                     if (indents.isEmpty() || indents.last() < indent) indents += indent
                     val depth = (indents.size - 1).coerceAtMost(3)
-                    markers += if (n != null) Triple(depth, "${n.first}.", true) else Triple(depth, BULLETS[depth], false)
+                    // Back at this depth, the lists nested deeper are done: the next one counts afresh.
+                    next.keys.removeAll { it > depth }
+                    markers += if (n != null) {
+                        val k = next[depth] ?: n.first
+                        next[depth] = k + 1
+                        Triple(depth, "$k.", true)
+                    } else {
+                        next.remove(depth)
+                        Triple(depth, BULLETS[depth], false)
+                    }
                     texts += StringBuilder((n?.second ?: b).orEmpty().trim())
                 } else if (l.isNotBlank() && (l.startsWith("  ") || l.startsWith("\t")) && texts.isNotEmpty()) {
                     texts.last().append(' ').append(l.trim())
