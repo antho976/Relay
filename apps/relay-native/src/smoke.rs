@@ -755,6 +755,20 @@ pub fn install(ui: &Rc<Ui>) {
             assert_eq!(navigate.sidebar.is_visible(), visible);
         }
         if let Ok(page) = std::env::var("RELAY_NATIVE_PAGE") {
+            // RELAY_NATIVE_CLICK=name,name: once the page shows, press those buttons in turn, as
+            // a person would (the editor's Git tab, the bell), for captures of what they open.
+            if let Ok(names) = std::env::var("RELAY_NATIVE_CLICK") {
+                let window = navigate.window.clone();
+                track("clicks", async move {
+                    glib::timeout_future(Duration::from_millis(1200)).await;
+                    for name in names.split(',').filter(|n| !n.is_empty()) {
+                        wait_for(|| clickable(&window, name), &format!("{name} shown and enabled")).await?;
+                        click(&window, name)?;
+                        glib::timeout_future(Duration::from_millis(700)).await;
+                    }
+                    Ok(())
+                });
+            }
             if page == "workspace-project-submit" {
                 click(&navigate.window, "new-session").unwrap();
                 assert!(
@@ -1163,6 +1177,9 @@ fn capture(ui: Rc<Ui>, path: String, fixture: bool) {
         let target: gtk::Widget =
             if std::env::var("RELAY_NATIVE_PAGE").as_deref() == Ok("agent-settings") {
                 agent_settings_popover(&ui).expect("Agent settings popover")
+            } else if std::env::var("RELAY_NATIVE_CAPTURE_POPOVER").as_deref() == Ok("1") {
+                // The popover a click opened, alone: it is a surface of its own.
+                util::find(&ui.window.clone().upcast(), &|w| w.is::<gtk::Popover>() && w.is_mapped()).expect("An open popover")
             } else if std::env::var("RELAY_NATIVE_PAGE").as_deref() == Ok("notes") {
                 ui.notes_window
                     .borrow()

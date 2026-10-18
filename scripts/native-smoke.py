@@ -213,8 +213,9 @@ for line in sys.stdin:
             assert output.is_file(), f"No screenshot at {output}"
             captured.append(output.name)
             expected_size = (1080, 760) if page == "notes" else tuple(map(int, size.split(",")))
-            # The agent settings capture is the popover alone, sized by its content.
-            if page != "agent-settings":
+            # The agent settings capture is the popover alone, sized by its content, as is any
+            # capture with RELAY_NATIVE_CAPTURE_POPOVER=1 (a popover a RELAY_NATIVE_CLICK opened).
+            if page != "agent-settings" and os.environ.get("RELAY_NATIVE_CAPTURE_POPOVER") != "1":
                 assert struct.unpack(">II", output.read_bytes()[16:24]) == expected_size, viewport
             contents = (OUT / f"{viewport}.log").read_text()
             check_gtk_log(contents)
