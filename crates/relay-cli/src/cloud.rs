@@ -77,6 +77,43 @@ async fn ask_and_wait(api: &Server, name: &str) -> Result<(String, Option<String
     }
 }
 
+/// What `connect` did with this PC's own rendezvous (`remote.json`).
+#[derive(Debug, PartialEq)]
+enum DoorRoute {
+    /// There was none: the server's now.
+    Set(relay_remote::registry::Rendezvous),
+    /// One was set already, and is kept.
+    Kept(String),
+    /// None, and the server is not on TLS: left to `relay remote via`, which warns about it.
+    Plain(String),
+}
+
+/// Points this PC's phone door at the server's rendezvous (`wss://<server>/relay`, docs/CLOUD.md)
+/// when it has none, so a Relay phone paired through the server is also handed a route through it,
+/// not only this PC's LAN addresses. A rendezvous set before, by `relay remote via`, stays.
+fn point_door_at_server(registry: &std::path::Path, base: &str) -> Result<DoorRoute> {
+    Registry::update(registry, |r| {
+        Ok::<_, anyhow::Error>(match (&r.rendezvous, base.strip_prefix("https://")) {
+            (Some(old), _) => DoorRoute::Kept(old.url.clone()),
+            (None, Some(host)) => DoorRoute::Set(r.set_rendezvous(&format!("wss://{host}/relay")).clone()),
+            (None, None) => DoorRoute::Plain(format!("{}/relay", base.replacen("http://", "ws://", 1))),
+        })
+    })
+}
+
+/// `point_door_at_server`, said.
+fn print_door_route(instance: Instance, base: &str) -> Result<()> {
+    match point_door_at_server(&Registry::path_for(instance), base)? {
+        DoorRoute::Set(r) => {
+            println!("Phones reach this PC through {base} too once `relay serve --remote` restarts (rendezvous {}, room {}).", r.url, r.room);
+            println!("The server must host this room: add {} to RELAY_RENDEZVOUS_ROOMS there, beside the cloud copy's (docs/CLOUD.md, Security). `relay remote via off` undoes it.", r.room);
+        }
+        DoorRoute::Kept(url) => println!("Phones reach this PC through {url}, as before (`relay remote via` changes it)."),
+        DoorRoute::Plain(url) => println!("{base} is not on https, so phones are not sent through it. To do so anyway: relay remote via {url}"),
+    }
+    Ok(())
+}
+
 /// Whose ledger stays when the link held a replace from the cloud (`relay cloud accept`).
 #[derive(Clone, Copy, clap::ValueEnum)]
 pub enum Keep {
@@ -153,6 +190,7 @@ pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
             if let Some(old) = &existing {
                 if old.server.as_deref() == Some(api.base()) && old.server_token.is_some() {
                     println!("This PC is already connected through {}.", api.base());
+                    print_door_route(instance, api.base())?;
                     return Ok(0);
                 }
             }
@@ -174,6 +212,7 @@ pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
             link.server_token = token;
             link.save(&path)?;
             println!("Connected to {} ({}) as device {}.", link.host, api.base(), link.device);
+            print_door_route(instance, api.base())?;
             println!("Restart `relay serve --remote` (or Relay) to start merging with the cloud copy and taking the Relay app's requests to pair; `relay cloud sync` merges now.");
             Ok(0)
         }
@@ -234,7 +273,25 @@ pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{refuse_in_agent_session, CloudCommand};
+    use super::{point_door_at_server, refuse_in_agent_session, CloudCommand, DoorRoute};
+    use relay_remote::Registry;
+
+    #[test]
+    fn connecting_points_a_door_with_no_rendezvous_at_the_servers_and_keeps_any_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("remote.json");
+        let DoorRoute::Set(set) = point_door_at_server(&path, "https://bot.example.org").unwrap() else { panic!("set") };
+        assert_eq!(set.url, "wss://bot.example.org/relay");
+        assert_eq!(Registry::load(&path).unwrap().rendezvous, Some(set.clone()));
+        // Connecting again, or to another server, moves nothing: the room stays the server's to list.
+        assert_eq!(point_door_at_server(&path, "https://other.example.org").unwrap(), DoorRoute::Kept(set.url.clone()));
+        assert_eq!(Registry::load(&path).unwrap().rendezvous, Some(set));
+
+        // A server without TLS is left to `relay remote via`, and nothing is written.
+        let plain = dir.path().join("plain.json");
+        assert_eq!(point_door_at_server(&plain, "http://127.0.0.1:3901").unwrap(), DoorRoute::Plain("ws://127.0.0.1:3901/relay".into()));
+        assert!(!plain.exists());
+    }
 
     #[test]
     fn an_agent_session_cannot_connect_pair_or_forget_the_link() {

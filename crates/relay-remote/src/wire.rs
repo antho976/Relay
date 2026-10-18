@@ -75,6 +75,11 @@ pub struct Welcome {
     /// This PC's network cards, for Wake-on-LAN from a phone on the same network (`wake.rs`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wake: Vec<crate::wake::WakeTarget>,
+    /// Which list the door gates with (`OpProfile::as_str`): `phone` on a PC, `cloud` on a cloud
+    /// copy, so a device can refuse to take one for the other. Text, not the enum, so a list
+    /// added later does not stop an older reader parsing the welcome; absent from older doors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ops: Option<String>,
 }
 
 impl Welcome {
@@ -220,6 +225,14 @@ impl OpProfile {
             "phone" => Some(OpProfile::Phone),
             "cloud" => Some(OpProfile::Cloud),
             _ => None,
+        }
+    }
+
+    /// What `parse` reads, and what an admitted device is told in its welcome.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OpProfile::Phone => "phone",
+            OpProfile::Cloud => "cloud",
         }
     }
 }
@@ -368,6 +381,19 @@ mod tests {
         let registry = relay_bus::registry::Registry::global();
         for op in CLOUD_OPS {
             assert!(registry.get(op).is_some(), "{op} is not a bus op");
+        }
+    }
+
+    #[test]
+    fn a_welcome_reads_with_or_without_the_door_it_came_from() {
+        let older: Welcome = serde_json::from_str(r#"{"v":1,"ok":true,"device":"d1"}"#).unwrap();
+        assert_eq!(older.ops, None);
+        let newer: Welcome = serde_json::from_str(r#"{"v":1,"ok":true,"device":"d1","ops":"cloud","later":1}"#).unwrap();
+        assert_eq!(newer.ops.as_deref().and_then(OpProfile::parse), Some(OpProfile::Cloud));
+        // Nothing is added to a welcome that does not say it.
+        assert!(!serde_json::to_string(&Welcome::admitted("d1")).unwrap().contains("ops"));
+        for profile in [OpProfile::Phone, OpProfile::Cloud] {
+            assert_eq!(OpProfile::parse(profile.as_str()), Some(profile));
         }
     }
 
