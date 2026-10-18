@@ -372,8 +372,10 @@ impl Board {
         inspector_key.add_css_class("quiet");
         inspector_key.add_css_class("icon-key");
         inspector_key.set_child(Some(&crate::icons::image("sidebar", 16)));
-        tip(&inspector_key, inspector_tip(true));
-        inspector_key.set_active(true);
+        // As it was left on the last design opened.
+        let inspector_on = INSPECTOR_ON.with(Cell::get);
+        tip(&inspector_key, inspector_tip(inspector_on));
+        inspector_key.set_active(inspector_on);
         top.append(&inspector_key);
         let mut key = top.first_child();
         while let Some(widget) = key {
@@ -623,6 +625,7 @@ impl Board {
         let weak = Rc::downgrade(&board);
         board.inspector_key.connect_toggled(move |key| {
             tip(key, inspector_tip(key.is_active()));
+            INSPECTOR_ON.with(|on| on.set(key.is_active()));
             if let Some(b) = weak.upgrade() {
                 b.refresh_chrome();
             }
@@ -1668,6 +1671,7 @@ impl Board {
         dock.append(&layers_key);
         let weak = Rc::downgrade(self);
         layers_key.connect_toggled(move |key| {
+            LAYERS_ON.with(|on| on.set(key.is_active()));
             if let Some(b) = weak.upgrade() {
                 b.layers_panel.set_reveal_child(key.is_active());
                 if let Some(l) = b.layers.borrow().as_ref() {
@@ -1682,6 +1686,10 @@ impl Board {
             }
         });
         self.layers_panel.set_can_target(false);
+        // Open again if it was open on the last design.
+        if LAYERS_ON.with(Cell::get) {
+            layers_key.set_active(true);
+        }
         let page_key = gtk::MenuButton::new();
         page_key.add_css_class("design-page-key");
         let page_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
@@ -2692,6 +2700,10 @@ impl Board {
 thread_local! {
     /// The nodes last copied in this process, for a paste whose clipboard is our own.
     static CLIP: RefCell<Vec<Node>> = const { RefCell::new(Vec::new()) };
+    /// Whether the inspector and the pages and layers panel show, kept for the session from
+    /// one design (and window) to the next.
+    static INSPECTOR_ON: Cell<bool> = const { Cell::new(true) };
+    static LAYERS_ON: Cell<bool> = const { Cell::new(false) };
 }
 
 /// `RELAY_DESIGN_TRACE` set: print how long layout, content rebuilds and draws take.
