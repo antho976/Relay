@@ -62,6 +62,7 @@ import com.quietsoftware.relay.ui.kit.Key
 import com.quietsoftware.relay.ui.kit.KeyKind
 import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.Segmented
+import com.quietsoftware.relay.ui.kit.plural
 import com.quietsoftware.relay.ui.kit.StaleNote
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.column
@@ -126,7 +127,6 @@ private fun Reading(live: RelayData.Live, missing: String, content: @Composable 
     }
 }
 
-private fun plural(n: Long, word: String) = if (n == 1L) "1 $word" else "$n ${word}s"
 
 /** A figure in a small card: caption, figure, a line under it. */
 @Composable
