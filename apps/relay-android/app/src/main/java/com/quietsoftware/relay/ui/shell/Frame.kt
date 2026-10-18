@@ -155,7 +155,7 @@ fun StatusBar(s: ShellState, onLink: () -> Unit, onOutbox: () -> Unit) {
                 val live = s.sessions.count { it.state in setOf("running", "idle", "spawning") }
                 if (s.needsYou > 0) {
                     Dot(c.held.copy(alpha = lampAlpha()), 6.dp)
-                    T("${s.needsYou} needs you", style = Relay.type.mono, color = c.ink3)
+                    T(if (s.needsYou == 1) "1 needs you" else "${s.needsYou} need you", style = Relay.type.mono, color = c.ink3)
                 }
                 Dot(if (live > 0) c.live.copy(alpha = lampAlpha()) else c.ink3, 6.dp)
                 T("$live live", style = Relay.type.mono, color = c.ink3)
