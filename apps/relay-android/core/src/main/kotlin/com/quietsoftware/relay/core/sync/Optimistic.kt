@@ -185,7 +185,7 @@ object Optimistic {
                 put("updated_at", ts)
                 put("working", false)
                 put("live", false)
-                payload.s("text")?.let { put("preview", it.take(120)) }
+                (payload.s("text")?.ifBlank { null } ?: pictures(images(payload).size))?.let { put("preview", it.take(120)) }
             }
             "thread.send" -> buildJsonObject {
                 put("id", tempId(entryId))
@@ -196,7 +196,7 @@ object Optimistic {
                     else -> put("thread_id", t)
                 }
                 put("role", "user")
-                put("body", buildJsonObject { put("text", payload.s("text").orEmpty()) })
+                put("body", messageBody(payload))
                 put("created_at", ts)
             }
             "thread.rename" -> row?.patch(payload, setOf("title"), ts)
@@ -220,6 +220,30 @@ object Optimistic {
             "workspace.update" -> row?.patch(payload, setOf("name"), ts)
             else -> row
         }
+    }
+
+    /**
+     * The pictures a `thread.send` or `thread.create` names: the ids `thread.upload` gave them on
+     * the PC. A picture is never queued itself: it needs the PC to be picked, so a message that
+     * waits for the PC names pictures the PC already has.
+     */
+    private fun images(payload: JsonObject): List<JsonElement> = (payload["images"] as? JsonArray).orEmpty().filter { it is JsonPrimitive && it !is JsonNull }
+
+    /**
+     * The person's message as the PC will store it (`{"text", "images"}`), so its bubble shows
+     * its pictures while it goes. Only the ids are known here; their size comes with the PC's row.
+     */
+    private fun messageBody(payload: JsonObject): JsonObject = buildJsonObject {
+        put("text", payload.s("text").orEmpty())
+        val ids = images(payload)
+        if (ids.isNotEmpty()) put("images", JsonArray(ids.map { id -> buildJsonObject { put("id", id) } }))
+    }
+
+    /** A thread's preview when its first message is only pictures. */
+    private fun pictures(n: Int): String? = when (n) {
+        0 -> null
+        1 -> "Picture"
+        else -> "$n pictures"
     }
 
     private fun JsonObject.patch(payload: JsonObject, fields: Set<String>, ts: String): JsonObject {

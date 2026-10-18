@@ -101,6 +101,19 @@ Shift-Tab for the mode, arrows, Enter, `/`, Ctrl-C) covers the rest, and the ter
 one tap away in the header for whatever a conversation cannot show. The conversation is kept on
 the phone, so it opens with the PC away.
 
+## Threads on the phone
+
+A thread's message box takes pictures as the agent chat's does (`ui/dev/Attach.kt` serves both):
+up to four photos or screenshots, each shrunk to 2048 px and sent to the PC as soon as it is
+picked (`thread.upload`), so the message names them by id (`images`), with or without words.
+Picking needs the PC; a message naming pictures already sent may wait in the outbox like any
+other, and its bubble shows them meanwhile (`Optimistic` carries `images` into the shown body).
+The key is offered only on a Claude model: a thread on one of the PC's own models says pictures
+need a Claude model, and a message the PC refuses for it (`thread.images_unsupported`) says so
+under its bubble. A message's pictures are read once with `thread.image` and kept in the app's
+cache (the op cache keeps at most 600,000 characters of an answer), so they show with the PC
+away; a tap opens one full screen.
+
 ## On the phone itself
 
 - **Notifications** say when an agent is held by a guardrail, blocked, or done. A held command's

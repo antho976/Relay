@@ -8,6 +8,7 @@ import com.quietsoftware.relay.core.wire.BusError
 import com.quietsoftware.relay.core.wire.s
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -118,6 +119,35 @@ class LedgerTest {
         assertEquals("[3]", shown("7")["blocked_by"].toString())
         ledger.enqueue("task.unrelate", obj("task_id" to 7, "relation" to "blocked_by", "other_id" to 3), "Unblock")
         assertEquals("[]", shown("7")["blocked_by"].toString())
+    }
+
+    @Test
+    fun `a message to a thread shows at once, in the thread it was sent to`() = runBlocking {
+        val sent = ledger.enqueue("thread.send", obj("id" to 7, "text" to "Am I on pace?"), "Message")
+        val row = replica.get(Kind.Message, Optimistic.tempId(sent.id))!!
+        assertEquals("7", row.parent)
+        assertEquals("user", row.json.s("role"))
+        val body = row.json["body"] as JsonObject
+        assertEquals("Am I on pace?", body.s("text"))
+        assertFalse(body.containsKey("images"))
+    }
+
+    @Test
+    fun `a message's pictures show with it while it goes, and a thread begun with only pictures says so`() = runBlocking {
+        val sent = ledger.enqueue("thread.send", obj("id" to 7, "text" to "", "images" to listOf(JsonPrimitive("img-1"), JsonPrimitive(42))), "Message")
+        val body = replica.get(Kind.Message, Optimistic.tempId(sent.id))!!.json["body"] as JsonObject
+        assertEquals("", body.s("text"))
+        assertEquals("""[{"id":"img-1"},{"id":42}]""", body["images"].toString())
+
+        val create = ledger.enqueue("thread.create", obj("text" to "", "images" to listOf(JsonPrimitive("img-3"))), "New thread")
+        val thread = replica.get(Kind.Thread, Optimistic.tempId(create.id))!!.json
+        assertEquals("New thread", thread.s("title"))
+        assertEquals("Picture", thread.s("preview"))
+        // Its first message, sent offline after the create, waits under the create's temp id.
+        val next = ledger.enqueue("thread.send", obj("id" to Refs.ref(create.id), "text" to "And this one", "images" to listOf(JsonPrimitive("img-4"))), "Message")
+        val queued = replica.get(Kind.Message, Optimistic.tempId(next.id))!!
+        assertEquals(Optimistic.tempId(create.id), queued.parent)
+        assertEquals("""[{"id":"img-4"}]""", (queued.json["body"] as JsonObject)["images"].toString())
     }
 
     @Test
