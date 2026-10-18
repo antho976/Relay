@@ -49,6 +49,8 @@ SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
 UMask=0077
 LimitCORE=0
+# It binds nothing itself: PID 1 holds the port. A build that tried to listen would be refused.
+SocketBindDeny=any
 
 [Install]
 WantedBy=multi-user.target

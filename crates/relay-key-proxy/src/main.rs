@@ -12,8 +12,8 @@
 //! token swapped for the key. Anything else is answered here and goes nowhere. The token lets a
 //! program running as the person spend through the proxy; it never lets one see the key.
 //!
-//! Deliberately small, with four dependencies, so root can build it from a clean clone and read
-//! what it runs (scripts/key-proxy/install.sh).
+//! Deliberately small, with six direct dependencies, so root can build it from a clean clone and
+//! read what it runs (scripts/key-proxy/install.sh).
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -32,9 +32,13 @@ const TOKEN_CREDENTIAL: &str = "relay-proxy-token";
 const UPSTREAM: &str = "api.anthropic.com";
 const MAX_HEAD: usize = 64 * 1024;
 const MAX_HEADERS: usize = 64;
+/// Anthropic's responses carry more headers than Claude Code's requests.
+const MAX_RESPONSE_HEADERS: usize = 256;
 /// A long conversation with pictures is a few megabytes; this is far above that.
 const MAX_BODY: u64 = 64 * 1024 * 1024;
-const MAX_CONNECTIONS: usize = 64;
+const MAX_CONNECTIONS: usize = 256;
+/// Connections over the limit being told so; beyond these, closed unanswered.
+const MAX_REFUSALS: usize = 16;
 const HEAD_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Longest silence in either direction once a request is under way. Anthropic's streams send a
@@ -115,6 +119,11 @@ fn main() -> ExitCode {
 }
 
 fn start() -> Result<(), String> {
+    // No core dump and no ptrace by another process of this user id, whatever the unit says.
+    // SAFETY: prctl with PR_SET_DUMPABLE takes plain integers and touches no memory of ours.
+    if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
+        return Err(format!("prctl(PR_SET_DUMPABLE): {}", std::io::Error::last_os_error()));
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let listen = match args.as_slice() {
         [] => format!("127.0.0.1:{PORT}"),
@@ -177,6 +186,7 @@ fn host_names(port: u16) -> Vec<String> {
 
 async fn serve(listener: TcpListener, secrets: Arc<Secrets>, upstream: Arc<Upstream>, hosts: Arc<Vec<String>>) {
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+    let refusals = Arc::new(tokio::sync::Semaphore::new(MAX_REFUSALS));
     loop {
         let client = match listener.accept().await {
             Ok((client, _)) => client,
@@ -186,8 +196,18 @@ async fn serve(listener: TcpListener, secrets: Arc<Secrets>, upstream: Arc<Upstr
                 continue;
             }
         };
-        // Over the limit the connection is closed unanswered; answering would cost a task each.
-        let Ok(slot) = slots.clone().try_acquire_owned() else { continue };
+        // Over the limit a few are told so; the rest are closed unanswered, as answering each
+        // would cost a task.
+        let Ok(slot) = slots.clone().try_acquire_owned() else {
+            if let Ok(refusal) = refusals.clone().try_acquire_owned() {
+                let mut client = client;
+                tokio::spawn(async move {
+                    let _refusal = refusal;
+                    let _ = answer(&mut client, 503, "the key proxy is busy; try again").await;
+                });
+            }
+            continue;
+        };
         let (secrets, upstream, hosts) = (secrets.clone(), upstream.clone(), hosts.clone());
         tokio::spawn(async move {
             let _slot = slot;
@@ -410,7 +430,7 @@ async fn read_response_head<R: AsyncRead + Unpin>(server: &mut R, buf: &mut Vec<
     let bad = |why: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Anthropic's response: {why}"));
     let mut chunk = [0u8; 8192];
     loop {
-        let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
+        let mut headers = [httparse::EMPTY_HEADER; MAX_RESPONSE_HEADERS];
         match httparse::Response::new(&mut headers).parse(buf) {
             Ok(httparse::Status::Complete(len)) if len <= MAX_HEAD => return Ok(len),
             Ok(httparse::Status::Partial) if buf.len() <= MAX_HEAD => {}
@@ -427,7 +447,7 @@ async fn read_response_head<R: AsyncRead + Unpin>(server: &mut R, buf: &mut Vec<
 
 /// A response head, with `connection: close` in place of whatever it said about the connection.
 fn closing(head: &[u8]) -> std::io::Result<Vec<u8>> {
-    let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut headers = [httparse::EMPTY_HEADER; MAX_RESPONSE_HEADERS];
     let mut response = httparse::Response::new(&mut headers);
     response.parse(head).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     let code = response.code.unwrap_or(502);
@@ -671,7 +691,7 @@ mod tests {
             "PrivateTmp=yes", "PrivateDevices=yes", "ProtectKernelTunables=yes", "ProtectKernelModules=yes",
             "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX", "RestrictNamespaces=yes", "RestrictSUIDSGID=yes",
             "MemoryDenyWriteExecute=yes", "SystemCallArchitectures=native", "SystemCallFilter=@system-service",
-            "LimitCORE=0", "UMask=0077",
+            "LimitCORE=0", "UMask=0077", "SocketBindDeny=any",
         ] {
             assert!(lines.contains(&line), "the unit lost {line:?}");
         }

@@ -7,9 +7,12 @@ license.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 
-# Kept to four dependencies: root builds this from a clean clone (scripts/key-proxy/install.sh).
+# Kept small: root builds this from a clean clone (scripts/key-proxy/install.sh), and the installer
+# shows the whole dependency tree before it does.
 [dependencies]
 tokio.workspace = true
+# prctl(PR_SET_DUMPABLE); already in the tree through tokio.
+libc = "0.2"
 # HTTPS to api.anthropic.com with the roots built in, so a certificate added to the system store
 # cannot read the key in flight. One crypto provider.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

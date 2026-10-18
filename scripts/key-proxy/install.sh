@@ -6,7 +6,8 @@
 # they can rewrite its files, its shell, its desktop and its terminals, so nothing from it may
 # reach root, the build, or the moment the key is typed.
 #
-#   (booted without the desktop, logged in as root on a text console:)
+#   (booted with systemd.unit=multi-user.target systemd.mask=user@<uid>.service, logged in as
+#   root on a text console:)
 #   git clone --no-tags https://github.com/antho976/Relay /root/relay-key-proxy
 #   cd /root/relay-key-proxy && git checkout --detach <full 40-character commit>
 #   less scripts/key-proxy/install.sh
@@ -43,18 +44,20 @@ main() {
     [[ $(stat -c %u -- "$console") == 0 ]] || die "$console is not root's"
 
     [[ -n $user ]] || die "name your login: --user <name>"
-    local entry uid home
+    local entry uid gid home
     entry=$(getent passwd "$user") || die "no user $user"
     uid=$(cut -d: -f3 <<<"$entry")
+    gid=$(cut -d: -f4 <<<"$entry")
     home=$(cut -d: -f6 <<<"$entry")
     ((uid >= 1000)) || die "$user is a system account"
     [[ -d $home ]] || die "no home directory for $user"
-    # Nothing of theirs may run: not a desktop, a lingering service, an agent or a process left
-    # behind. Then nothing of theirs can watch, steer or draw over what happens here.
-    if pgrep -u "$uid" >/dev/null; then
-        die "programs of $user are running. Stop them all first, then run this again:
-    systemctl stop user@$uid.service; loginctl terminate-user $user; pkill -KILL -u $uid"
-    fi
+    # Nothing of theirs may run: not a desktop, a lingering service, an agent, a container under
+    # their sub-ids or a process left behind. Then nothing of theirs can watch, steer, hear or draw
+    # over what happens here. And nothing of theirs may start until this ends: logind starts their
+    # user manager for any session opened as them, and lingering keeps it.
+    nothing_runs_as "$uid" "$user"
+    systemctl mask --runtime "user@$uid.service" >/dev/null
+    trap "systemctl unmask --runtime user@$uid.service >/dev/null 2>&1" EXIT
 
     # Exactly the commit named, in full: a tag or branch named like a short hash cannot stand in.
     [[ $commit =~ ^[0-9a-f]{40}$ ]] || die "name the commit in full: --commit <40 hex characters>"
@@ -64,6 +67,8 @@ main() {
     trusted_tree "$repo"
     [[ $(git -C "$repo" rev-parse HEAD) == "$commit" ]] || die "the clone is not at $commit"
     [[ -z $(git -C "$repo" status --porcelain --ignored) ]] || die "the clone has changes or extra files; use a fresh clone"
+    # A slip check, not a defence: whoever can push to main decides what is on it. The defence is
+    # you reading what this builds, below.
     git -C "$repo" merge-base --is-ancestor "$commit" refs/remotes/origin/main 2>/dev/null || die "$commit is not on origin/main"
 
     local libexec=/usr/local/libexec/relay units=/etc/systemd/system state=/var/lib/relay-key-proxy
@@ -77,37 +82,55 @@ main() {
         rmdir -- "$libexec" 2>/dev/null || true
         rm -rf -- "$cache" "$state"
         systemctl daemon-reload
-        as_user "$user" rm -f -- "$token_dir/key-proxy-token"
+        as_user "$uid" "$gid" rm -f -- "$token_dir/key-proxy-token"
         echo "key-proxy: removed. Revoke the key in the Anthropic console if it may have been exposed."
         return
     fi
 
-    # What the build reads that could change how it builds, beyond the proxy's own sources and
-    # the dependencies Cargo.lock pins: none of it is expected, so any of it stops the install.
-    grep -qE '^\[(patch|replace)' "$repo/Cargo.toml" && die "Cargo.toml has a [patch] or [replace] section"
+    # What would make the build take code from anywhere but the proxy's own sources and the
+    # crates.io versions Cargo.lock pins: a patch or replacement, a build script of its own, or a
+    # dependency from a path, a git repository or another registry. None is expected; any stops it.
+    grep -qE '^[[:space:]]*(\[[[:space:]]*(patch|replace)|(patch|replace)[[:space:]]*[.=])' "$repo/Cargo.toml" \
+        && die "Cargo.toml patches or replaces dependencies"
     [[ ! -e $repo/crates/relay-key-proxy/build.rs ]] || die "relay-key-proxy has a build script"
+    grep -qE '^[[:space:]]*build[[:space:]]*=' "$repo/crates/relay-key-proxy/Cargo.toml" && die "relay-key-proxy names a build script"
     [[ -x /usr/bin/cargo && $(stat -c %u /usr/bin/cargo) == 0 ]] || die "no root-owned /usr/bin/cargo: install Rust from your distribution (pacman -S rust)"
+    install -d -o root -g root -m 0700 "$cache" "$state"
+    local tree foreign
+    tree=$(root_cargo "$cache" "$repo" tree --locked -p relay-key-proxy -e normal,build --prefix none --format '{p}' \
+        | sed -e 's/ (\*)$//' -e 's/ (proc-macro)$//' | sort -u)
+    foreign=$(grep -v '^relay-key-proxy ' <<<"$tree" | grep '(' || true)
+    [[ -z $foreign ]] || die "dependencies from outside crates.io:
+$foreign"
+
+    # What is about to run as root, for you to read: on an update everything that changed under
+    # the proxy since the commit installed last, and always every crate it builds from.
     local previous=""
     [[ -f $state/commit ]] && previous=$(<"$state/commit")
     if [[ -n $previous && $previous != "$commit" ]]; then
-        echo "key-proxy: changes since the installed $previous:"
-        git -C "$repo" diff --stat "$previous" "$commit" -- crates/relay-key-proxy scripts/key-proxy Cargo.toml Cargo.lock || true
+        echo "key-proxy: what changed since the installed $previous:"
+        git -C "$repo" --no-pager diff "$previous" "$commit" -- crates/relay-key-proxy scripts/key-proxy Cargo.toml Cargo.lock || true
+    else
+        echo "key-proxy: $(git -C "$repo" --no-pager log -1 --format='%H %an, %ad: %s')"
     fi
+    echo "key-proxy: the crates it builds from, each from crates.io at the version Cargo.lock pins:"
+    grep -v '^relay-key-proxy ' <<<"$tree" | tr '\n' ' ' | fold -s -w 100
+    echo
+    local answer
+    read -r -p "key-proxy: build this and install it as root? Type yes: " answer
+    [[ $answer == yes ]] || die "stopped; nothing was installed"
 
     echo "key-proxy: building $commit as root"
-    install -d -o root -g root -m 0700 "$cache" "$state"
-    # Run from the root-owned cache, not the clone: cargo reads .cargo/config files from where it
-    # runs, so the clone's (if a commit ever adds one) never applies. A clean environment, a
-    # root-owned cargo home, and dependencies exactly as Cargo.lock pins them.
-    (cd "$cache" && env -i PATH=/usr/bin:/bin HOME=/root LC_ALL=C CARGO_HOME="$cache/cargo" CARGO_TARGET_DIR="$cache/target" \
-        /usr/bin/cargo build --locked --release --manifest-path "$repo/Cargo.toml" -p relay-key-proxy)
+    root_cargo "$cache" "$repo" build --locked --release -p relay-key-proxy
     local binary=$cache/target/release/relay-key-proxy
     [[ -f $binary && ! -L $binary ]] || die "the build left no $binary"
 
     local key=""
     if [[ ! -s $key_cred || $mode == replace-key ]]; then
-        echo "key-proxy: type the key from the screen you made it on (your phone, not this PC). Nothing echoes."
-        key=$(systemd-ask-password -n "Anthropic API key:")
+        nothing_runs_as "$uid" "$user"
+        echo "key-proxy: type the key from the screen you made it on (your phone, not this PC)."
+        echo "           Nothing shows as you type, and there is no time limit."
+        key=$(systemd-ask-password --timeout=0 --echo=no -n "Anthropic API key:") || die "no key was entered; nothing was installed"
         [[ $key =~ ^sk-ant-api[0-9]{2}-[A-Za-z0-9_-]{20,}$ ]] || { key=""; die "that is not an ordinary Anthropic API key (sk-ant-api…); admin keys are refused"; }
     fi
 
@@ -130,9 +153,8 @@ main() {
     token=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
     printf '%s' "$token" | systemd-creds encrypt --name=relay-proxy-token - "$token_cred"
     chmod 0600 "$token_cred"
-    # Written as the person, so a link planted in their home cannot turn it into a root write;
-    # detached from this console, and given ten seconds.
-    printf '%s' "$token" | as_user "$user" /bin/sh -c \
+    # Written as the person, so a link planted in their home cannot turn it into a root write.
+    printf '%s' "$token" | as_user "$uid" "$gid" /bin/sh -c \
         'umask 077 && mkdir -p "$1" && cat > "$1/key-proxy-token.new" && mv -f "$1/key-proxy-token.new" "$1/key-proxy-token"' sh "$token_dir" \
         || die "could not write $token_dir/key-proxy-token"
 
@@ -163,12 +185,33 @@ die() {
     exit 1
 }
 
-# As the person: detached from root's console (no terminal to hold, nothing written to it), and
-# given ten seconds, so a mount of theirs that never answers cannot stall the install.
+# As the person, without a login: setpriv opens no PAM session, so logind starts nothing of
+# theirs. Detached from root's console (no terminal to hold, nothing written to it), and given ten
+# seconds, so a mount of theirs that never answers cannot stall the install.
 as_user() {
-    local user=$1
-    shift
-    timeout 10 setsid runuser -u "$user" -- "$@" >/dev/null 2>&1
+    local uid=$1 gid=$2
+    shift 2
+    timeout 10 setsid setpriv --reuid="$uid" --regid="$gid" --init-groups --reset-env -- "$@" >/dev/null 2>&1
+}
+
+# No process of theirs, their user manager stopped and their slice empty (a container under their
+# sub-ids runs there with another uid).
+nothing_runs_as() {
+    local uid=$1 user=$2
+    if pgrep -u "$uid" >/dev/null || systemctl is-active --quiet "user@$uid.service" || systemctl is-active --quiet "user-$uid.slice"; then
+        die "programs of $user are running. Stop them all, then run this again:
+    loginctl terminate-user $user; systemctl stop user-$uid.slice"
+    fi
+}
+
+# cargo as root, run from the root-owned cache rather than the clone (cargo reads .cargo/config
+# files from where it runs, so the clone's, should a commit add one, never applies), with a clean
+# environment and a root-owned cargo home.
+root_cargo() {
+    local cache=$1 repo=$2
+    shift 2
+    (cd "$cache" && env -i PATH=/usr/bin:/bin HOME=/root LC_ALL=C CARGO_HOME="$cache/cargo" CARGO_TARGET_DIR="$cache/target" \
+        /usr/bin/cargo "$@" --manifest-path "$repo/Cargo.toml")
 }
 
 # The clone and every folder above it must be root's and writable by no one else, and it may hold

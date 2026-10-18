@@ -53,23 +53,34 @@ root login on a real text console, from a root-owned clone of a commit you name 
   none ("account locked" at the console), set it at boot: in the boot menu, edit the entry, add
   `init=/bin/bash` to the kernel line, boot, then `mount -o remount,rw /`, `passwd root`, `sync`,
   `reboot -f`.
-- **Check your sudo and polkit.** From your desktop, list what sudo lets you do (`sudo -l`): if it
-  shows `NOPASSWD`, or sudo shares one timestamp across terminals, anything running as you can
-  become root, and no setup on this PC can keep a secret from it. You are in `wheel`, which polkit
-  treats as an administrator who answers prompts with your own password: never approve a password
-  prompt you did not start, and keep your account's password non-empty.
+- **Make your password stop being root's.** You are in `wheel`: sudo and polkit let your own
+  password act as root's, and you type it into things agents can replace (the lock screen, the
+  polkit prompt, `sudo` in a terminal). An agent that learns it can become root, and root can
+  decrypt the key. Once, as root at the console, make elevation ask for **root's** password
+  instead (this changes elevation only, nothing else):
+
+  ```sh
+  echo 'Defaults rootpw' > /etc/sudoers.d/10-rootpw && chmod 0440 /etc/sudoers.d/10-rootpw && visudo -c
+  printf '%s\n' 'polkit.addAdminRule(function(action, subject) { return ["unix-user:root"]; });' \
+      > /etc/polkit-1/rules.d/40-admin-root.rules
+  ```
+
+  Then never type root's password anywhere but a root console: that means no more `sudo` or admin
+  prompts from your desktop; do admin work at a root console. If your sudo also allows
+  `NOPASSWD` or shares one timestamp across terminals (list it with `sudo -l`), anything running as
+  you can already become root: fix that too.
 
 **The install**
 
-1. Reboot into a text console, without the desktop: in the boot menu, edit the entry and add
-   `systemd.unit=multi-user.target` to the kernel line. (Your lingering user services still start;
-   the script asks you to stop them.)
+1. Reboot into a text console with nothing of yours running: in the boot menu, edit the entry and
+   add `systemd.unit=multi-user.target systemd.mask=user@1000.service` to the kernel line (1000 is
+   your user id). The desktop does not start, and neither do your lingering user services, so
+   nothing of yours can watch the screen, listen, or answer for the console.
 2. Log in as **root** on the console. Not as yourself followed by `su` or `sudo`: the script
    checks the login itself.
-3. Stop everything of yours, then clone, read and run:
+3. Clone, read and run:
 
    ```sh
-   systemctl stop user@1000.service; loginctl terminate-user <you>; pkill -KILL -u <you>
    git clone --no-tags https://github.com/antho976/Relay /root/relay-key-proxy
    cd /root/relay-key-proxy && git checkout --detach <full commit hash>
    less scripts/key-proxy/install.sh
@@ -77,22 +88,31 @@ root login on a real text console, from a root-owned clone of a commit you name 
    ```
 
    The script refuses unless: it runs as root from a root login (`/proc/self/loginuid` is 0) at a
-   text console that is root's; no process of yours is running; the clone is root's all the way up,
-   writable by no one else and holds no symbolic link; it is exactly at the commit you named, clean,
-   and that commit is on `origin/main`; and the build would read no `[patch]` section or build
-   script. It then builds `relay-key-proxy` as root, from outside the clone (so no `.cargo/config`
-   in it applies), with a root-owned cargo home and `--locked`; asks for the key at a hidden prompt
-   (`systemd-ask-password`) and checks its shape before touching anything; installs the binary and
-   both units to root-owned places; pipes the key straight into `systemd-creds`; writes a new pass
-   token to your `~/.config/relay`, as you; starts the socket and the service; and makes one free
-   call (`GET /v1/models`) through the proxy to tell you whether Anthropic accepts the key. On an
-   update it shows what changed under the proxy since the commit installed last.
+   text console that is root's; no process of yours runs, your user manager is stopped and your
+   slice is empty (it says how to stop them); the clone is root's all the way up, writable by no
+   one else and holds no symbolic link; it is exactly at the commit you named, clean, and on
+   `origin/main`; nothing patches or replaces a dependency, the proxy has no build script, and every
+   crate it builds from comes from crates.io at the version `Cargo.lock` pins. It keeps your user
+   manager masked until it ends, so nothing of yours starts meanwhile.
+
+   Before building, it shows you what is about to run as root: on an update, the full diff under
+   the proxy since the commit installed last; always, every crate it builds from. Read it, and
+   type `yes` only if it is what you expect: agents can push to `main`, so this, and the commit
+   you picked, are what stands between their code and root.
+
+   It then builds `relay-key-proxy` as root, from outside the clone (so no `.cargo/config` in it
+   applies), with a root-owned cargo home and `--locked`; asks for the key with no time limit and
+   nothing shown as you type (`systemd-ask-password`), and checks its shape before touching
+   anything; installs the binary and both units to root-owned places; pipes the key straight into
+   `systemd-creds`; writes a new pass token to your `~/.config/relay`, as you but without a login,
+   so nothing of yours starts; starts the socket and the service; and makes one free call
+   (`GET /v1/models`) through the proxy to tell you whether Anthropic accepts the key.
 4. `exit`, reboot normally, and turn on **Use API key** when launching a Claude session.
 
 ### Afterwards
 
-Each of these runs the same way: booted without the desktop, as root at the console, nothing of
-yours running, from the root-owned clone (`git fetch` and check out the new full commit first):
+Each of these runs the same way: booted as in step 1, as root at the console, from the root-owned
+clone (`git fetch` and check out the new full commit first):
 
 - Update the proxy: `bash scripts/key-proxy/install.sh --user <you> --commit <hash>`. It also
   makes a new token.
@@ -115,11 +135,13 @@ every agent could read it.
   program running as you can use that session to make keys of its own. Sign in there from your
   phone only.
 - **Root**, and anyone who can become root: they can read the credential.
-- **The code you choose.** The service runs what the commit you picked builds. The script prints
-  the commit and the binary's sha256 for your records.
+- **The code you choose.** The service runs what the commit you picked builds, with its crates.
+  The script shows you that before it builds, and prints the binary's sha256 for your records.
 - **Anthropic's side**, including Cloudflare, which ends TLS for it.
 - **Anywhere you paste the key yourself.** Relay blanks `sk-ant-` keys in terminal output,
   transcript replies and audit rows (`crates/relay-core/src/redact.rs`), as a best effort.
 
 A paired phone cannot start an API-key session (`remote.api_key`); one started at the PC can be
-used from the phone like any other, which spends but never shows the key.
+used from the phone like any other. That refusal limits spending, not more: anything that can
+write a Claude settings file or type into a session (the phone among them) can point a session at
+the proxy, as anything running as you can. Each of these spends; none shows the key.
