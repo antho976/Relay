@@ -88,7 +88,7 @@ fun ColumnScope.ChangesTab(nav: Nav, projectId: Long, wt: String?, status: Live,
 
     LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 24.dp)) {
         if (st == null) {
-            item { LiveWait(status) }
+            item { LiveWait(status, page = true) }
         } else {
             if (!status.fresh) item { StaleNote(status.at) }
             item {

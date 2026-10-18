@@ -51,7 +51,7 @@ fun ColumnScope.HistoryTab(nav: Nav, projectId: Long, wt: String?, refresh: Int)
     val commits = log.result?.decodeAs<CommitLog>()?.commits.orEmpty()
     LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 24.dp)) {
         if (log.result == null) {
-            item { LiveWait(log) }
+            item { LiveWait(log, page = true) }
         } else if (!log.fresh) {
             item { StaleNote(log.at) }
         }
