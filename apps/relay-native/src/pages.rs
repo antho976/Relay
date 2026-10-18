@@ -155,20 +155,59 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
         guardrail_pages::page(ui, &body, project, data).await;
         return;
     }
+    // The mailbox keeps the rows it has, so a new message leaves a selection in another alone.
+    if name == "mailbox" {
+        mailbox(ui, &body, &data, older);
+        return;
+    }
     clear(&body);
     // Modules draws its own empty state (`board_view::modules`).
-    if data.is_empty() && name != "modules" {
-        body.append(&paragraph(match name {
-            "mailbox" => "No messages in this project.",
-            _ => "No modules yet. A module bundles tasks into one release: choose New module to start one.",
-        }));
+    if name == "modules" {
+        board_view::modules(ui, &body, &data);
     }
-    match name {
-        "mailbox" => {
-            // Newest first, as the phone lists them; the engine answers oldest first.
-            for message in data.iter().rev() {
+}
+
+/// The mailbox's rows, newest first, reconciled by message id as the Guardrails page keeps its
+/// cards: a row already shown stays put (and its selection with it), a new message gets a row
+/// in its place and a message gone from the page takes its row with it.
+fn mailbox(ui: &Rc<Ui>, body: &gtk::Box, data: &[Value], older: bool) {
+    let listed: std::collections::HashSet<i64> = data.iter().filter_map(|m| m["id"].as_i64()).collect();
+    let mut shown = std::collections::HashMap::new();
+    let mut child = body.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        match widget.widget_name().strip_prefix("mail-").and_then(|id| id.parse::<i64>().ok()) {
+            Some(id) if listed.contains(&id) => {
+                shown.insert(id, widget);
+            }
+            // A message no longer on the page, the empty line, Show older and its limit.
+            _ => body.remove(&widget),
+        }
+    }
+    if data.is_empty() {
+        body.append(&paragraph("No messages in this project."));
+    }
+    // Newest first, as the phone lists them; the engine answers oldest first.
+    let mut previous: Option<gtk::Widget> = None;
+    for message in data.iter().rev() {
+        // "5 min ago", the moment itself on hover: it showed the engine's nanoseconds.
+        let sent = text(message, "sent_at");
+        let ago = crate::relative::ago(sent, crate::relative::Form::Long).unwrap_or_else(|| sent.to_string());
+        let row = match message["id"].as_i64().and_then(|id| shown.remove(&id)) {
+            Some(row) => {
+                // A kept row's message cannot change; only how long ago it was sent does.
+                if let Some(when) = row.last_child().and_downcast::<gtk::Label>() {
+                    when.set_label(&ago);
+                }
+                if row.prev_sibling() != previous {
+                    body.reorder_child_after(&row, previous.as_ref());
+                }
+                row
+            }
+            None => {
                 let row = gtk::Box::new(gtk::Orientation::Vertical, 6);
                 row.add_css_class("record");
+                row.set_widget_name(&format!("mail-{}", message["id"]));
                 row.append(&label(
                     &format!(
                         "{} → {}{}",
@@ -183,31 +222,29 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
                     "dim",
                 ));
                 row.append(&paragraph(text(message, "text")));
-                // "5 min ago", the moment itself on hover: it showed the engine's nanoseconds.
-                let sent = text(message, "sent_at");
-                let when = label(&crate::relative::ago(sent, crate::relative::Form::Long).unwrap_or_else(|| sent.to_string()), "dim");
+                let when = label(&ago, "dim");
                 when.set_tooltip_text(Some(sent));
                 row.append(&when);
-                body.append(&row);
+                body.insert_child_after(&row, previous.as_ref());
+                row.upcast()
             }
-            // Older messages sit below the oldest one shown.
-            let widest = MAILBOX_LIMIT.with(|limit| limit.get()) >= MAILBOX_PAGE_MAX;
-            if older && !widest {
-                let more = button("Show older messages", "secondary");
-                let weak = Rc::downgrade(ui);
-                more.connect_clicked(move |_| {
-                    MAILBOX_LIMIT.with(|limit| limit.set((limit.get() + MAILBOX_PAGE).min(MAILBOX_PAGE_MAX)));
-                    if let Some(ui) = weak.upgrade() {
-                        ui.refresh_page();
-                    }
-                });
-                body.append(&more);
-            } else if older {
-                body.append(&label(&format!("Showing the newest {MAILBOX_PAGE_MAX} messages."), "dim"));
+        };
+        previous = Some(row);
+    }
+    // Older messages sit below the oldest one shown.
+    let widest = MAILBOX_LIMIT.with(|limit| limit.get()) >= MAILBOX_PAGE_MAX;
+    if older && !widest {
+        let more = button("Show older messages", "secondary");
+        let weak = Rc::downgrade(ui);
+        more.connect_clicked(move |_| {
+            MAILBOX_LIMIT.with(|limit| limit.set((limit.get() + MAILBOX_PAGE).min(MAILBOX_PAGE_MAX)));
+            if let Some(ui) = weak.upgrade() {
+                ui.refresh_page();
             }
-        }
-        "modules" => board_view::modules(ui, &body, &data),
-        _ => {}
+        });
+        body.append(&more);
+    } else if older {
+        body.append(&label(&format!("Showing the newest {MAILBOX_PAGE_MAX} messages."), "dim"));
     }
 }
 /// A mail address as the page shows it: your own messages are "You", a broadcast "everyone".
