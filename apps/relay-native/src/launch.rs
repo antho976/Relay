@@ -830,6 +830,14 @@ impl Sheet {
         self.status.set_text(&line);
     }
 
+    /// The keyboard starts on the chosen mode key, inside the sheet, so Ctrl+Enter launches and
+    /// Enter or Space on the title bar's key cannot close it unseen.
+    fn focus_start(&self) {
+        if let Some(key) = self.mode.keys.get(self.mode.selected() as usize) {
+            key.grab_focus();
+        }
+    }
+
     /// Show `slot`'s settings, building its task rows the first time.
     fn show(&self, slot: usize) {
         self.current.set(slot);
@@ -894,12 +902,19 @@ impl Ui {
         }
         // Already open (Ctrl+N again): keep what the user has filled in.
         if self.launch.reveals_child() {
-            self.launch_box.child_focus(gtk::DirectionType::TabForward);
+            match SHEET.with(|s| s.borrow().clone()) {
+                Some(sheet) => sheet.focus_start(),
+                None => {
+                    self.launch_box.child_focus(gtk::DirectionType::TabForward);
+                }
+            }
             return;
         }
         if !self.dismiss_panels() {
             return;
         }
+        // What had the keyboard gets it back when the sheet hides, as a panel's opener does.
+        let opener = gtk::prelude::GtkWindowExt::focus(&self.window);
         clear(&self.launch_box);
         self.launch.set_reveal_child(true);
         // The form holds a row per open task for every agent shown; once the sheet has
@@ -916,6 +931,9 @@ impl Ui {
                     clear(&launch_box);
                 }
                 SHEET.with(|s| s.borrow_mut().take());
+                if let Some(opener) = opener.as_ref().filter(|w| w.is_sensitive() && w.is_mapped()) {
+                    opener.grab_focus();
+                }
                 if let Some(id) = hidden.take() {
                     launch.disconnect(id);
                 }
@@ -930,6 +948,7 @@ impl Ui {
         sheet.profiles[0].reset();
         sheet.rail_members[0].key.set_active(true);
         sheet.render();
+        sheet.focus_start();
 
         let ui = self.clone();
         let weak = Rc::downgrade(&sheet);

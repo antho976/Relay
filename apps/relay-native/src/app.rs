@@ -917,6 +917,8 @@ fn launch_sheet(body: &gtk::Box) -> LaunchSheet {
     overlay.set_child(Some(body));
     let scrim = gtk::Button::new();
     scrim.add_css_class("launch-scrim");
+    // Clicked, never a Tab stop: Space on it would close the sheet.
+    scrim.set_focusable(false);
     scrim.set_visible(false);
     scrim.update_property(&[gtk::accessible::Property::Label("Close new session")]);
     overlay.add_overlay(&scrim);
