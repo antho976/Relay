@@ -175,13 +175,13 @@ fun TallyScreen(nav: Nav) {
             Segmented(listOf("overview" to "Overview", "entries" to "Entries", "budgets" to "Budgets", "invest" to "Invest"), tab, { tab = it }, Modifier.fillMaxWidth(), fill = true)
             val missing = "This engine does not read Tally yet. Update Relay's engine to see it here."
             when (tab) {
-                "entries" -> Reading(rememberLive("money.tx.list", remember { buildJsonObject { put("limit", 100) } }), missing) { TallyEntries(it, Money.of(ledger?.result as? JsonObject)) }
+                "entries" -> Reading(rememberLive("money.tx.list", remember { buildJsonObject { put("limit", ENTRIES_SHOWN) } }), missing) { TallyEntries(it, Money.of(ledger?.result as? JsonObject)) }
                 "budgets" -> Reading(rememberLive("money.summary"), missing) { s -> Budgets(s, Int.MAX_VALUE) }
                 "invest" -> {
                     val lists = rememberLive("money.lists")
                     Reading(rememberLive("money.invest.summary"), "This engine does not read investments yet. Update Relay's engine to see them here.") { Invest(it, lists.result as? JsonObject) }
                 }
-                else -> Reading(rememberLive("money.summary"), missing) { TallyOverview(it) }
+                else -> Reading(rememberLive("money.summary"), missing) { TallyOverview(it) { tab = "budgets" } }
             }
             T(
                 "Tally on this phone is its own app; this is the PC's copy of the same ledger.",
@@ -200,8 +200,12 @@ private fun statusTone(status: String?): Color? = when (status) {
     else -> null
 }
 
+/** How many of the period's entries, newest first, Entries reads (threads_view.rs `ENTRIES_SHOWN`). */
+private const val ENTRIES_SHOWN = 60
+
+/** Overview; [onAllBudgets] shows every budget, past the five it keeps. */
 @Composable
-private fun TallyOverview(s: JsonObject) {
+private fun TallyOverview(s: JsonObject, onAllBudgets: () -> Unit) {
     val c = Relay.colors
     if (s.b("empty") == true) {
         Quiet("Tally has nothing yet. Add an account, load the sample household or import a backup in Tally on the PC.")
@@ -237,7 +241,7 @@ private fun TallyOverview(s: JsonObject) {
             T("In ${money.whole(income)} · no monthly budget yet: set one in Tally's Plan.", style = Relay.type.caption, color = c.ink3)
         }
     }
-    Budgets(s, 5)
+    Budgets(s, 5, onAllBudgets)
     val bills = s.objs("bills").take(3)
     if (bills.isNotEmpty()) Card("Coming up") {
         bills.forEachIndexed { i, bill ->
@@ -261,15 +265,18 @@ private fun TallyOverview(s: JsonObject) {
     }
 }
 
-/** The budgets furthest along first, each with its hue badge and a meter against the period's pace. */
+/**
+ * The budgets furthest along first, each with its hue badge and a meter against the period's
+ * pace; past [most], "Show all 8" opens the rest ([onAll], the Budgets tab), as the desktop's panel.
+ */
 @Composable
-private fun Budgets(s: JsonObject, most: Int) {
+private fun Budgets(s: JsonObject, most: Int, onAll: (() -> Unit)? = null) {
     val c = Relay.colors
     val money = Money.of(s)
     val tick = s.o("pace")?.d("pace_fraction")?.toFloat()
     val budgets = s.objs("budgets").filter { (it.l("budget") ?: 0L) > 0 }
         .sortedByDescending { (it.l("spent") ?: 0L).toDouble() / maxOf(it.l("budget") ?: 1L, 1L) }
-    Card("Budgets", aside = if (budgets.size > most) "$most of ${budgets.size}" else null) {
+    Card("Budgets", aside = if (budgets.size > most && onAll == null) "$most of ${budgets.size}" else null) {
         if (budgets.isEmpty()) Quiet("No budgets yet. Set them in Tally's Plan.")
         budgets.take(most).forEachIndexed { i, b ->
             val spent = b.l("spent") ?: 0L
@@ -288,6 +295,7 @@ private fun Budgets(s: JsonObject, most: Int) {
                 }
             }
         }
+        if (budgets.size > most && onAll != null) Key("Show all ${budgets.size}", onAll, Modifier.padding(bottom = 4.dp), kind = KeyKind.Quiet)
     }
 }
 
@@ -312,14 +320,18 @@ private fun EntryRow(tx: JsonObject, money: Money, dated: Boolean, divider: Bool
     )
 }
 
-/** This period's entries, by day with each day's net. */
+/** This period's newest [ENTRIES_SHOWN] entries, by day with each day's net; in, out and net over them, as the Entries page reads. */
 @Composable
 private fun TallyEntries(page: JsonObject, money: Money) {
     val c = Relay.colors
     val rows = page.objs("transactions")
+    val income = page.l("income") ?: 0L
+    val spent = page.l("spent") ?: 0L
+    val balance = income - spent
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Eyebrow(periodName(page.o("period")))
-        T("Out ${money.whole(page.l("spent") ?: 0L)} · In ${money.whole(page.l("income") ?: 0L)}", style = Relay.type.mono.copy(fontSize = 12.sp), color = c.ink2)
+        // A full read is only the newest of the period, and its figures count only those.
+        Eyebrow(periodName(page.o("period")) + if (rows.size >= ENTRIES_SHOWN) " · latest $ENTRIES_SHOWN" else "")
+        T("In ${money.whole(income)} · Out ${money.whole(spent)} · Net ${if (balance > 0) "+" else ""}${money.whole(balance)}", style = Relay.type.mono.copy(fontSize = 12.sp), color = c.ink2)
     }
     if (rows.isEmpty()) {
         Quiet("No entries this period.")
@@ -368,7 +380,7 @@ private fun Invest(p: JsonObject, lists: JsonObject?) {
         else -> c.ink3
     }
     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        Eyebrow(p.s("as_of")?.takeIf { it.isNotBlank() }?.let { "As of ${humanDate(it.take(10))}" } ?: "No report imported yet")
+        Eyebrow(p.s("as_of")?.takeIf { it.isNotBlank() }?.let { "As of ${inlineDate(it.take(10))}" } ?: "No report imported yet")
         Figure(money.whole((p.l("value") ?: 0L) + hand))
         T("${if (gain > 0) "+" else ""}${money.whole(gain)} gain${p.l("gain_bps")?.let { " · ${bps(it)} on book value" }.orEmpty()}", style = Relay.type.caption, color = gainColor(gain))
         val parts = p.objs("allocation").filter { (it.l("value") ?: 0L) > 0 }
@@ -384,7 +396,7 @@ private fun Invest(p: JsonObject, lists: JsonObject?) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 for (a in parts) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Dot(registrationHue(a.s("registration")), 7.dp)
-                    T("${registrationName(a.s("registration"))} ${Math.round((a.l("share_bps") ?: 0L) / 100.0)}%", style = Relay.type.caption, color = c.ink2)
+                    T("${registrationName(a.s("registration"))} ${share(a.l("share_bps") ?: 0L)}", style = Relay.type.caption, color = c.ink2)
                 }
             }
         }
@@ -429,7 +441,7 @@ private fun Invest(p: JsonObject, lists: JsonObject?) {
     if (holdings.isNotEmpty()) Card("Top holdings", aside = if (holdings.size > 5) "5 of ${holdings.size}" else null) {
         holdings.take(5).forEachIndexed { i, h ->
             val symbol = h.str("symbol")
-            val detail = listOf(h.str("account"), if (h.b("no_price") == true) "no price yet" else "${Math.round((h.l("weight_bps") ?: 0L) / 100.0)}% of the total").joinToString(" · ")
+            val detail = listOf(h.str("account"), if (h.b("no_price") == true) "no price yet" else "${share(h.l("weight_bps") ?: 0L)} of the total").joinToString(" · ")
             InvestRow(h.s("name")?.takeIf { it.isNotBlank() } ?: symbol, detail, money.whole(h.l("value") ?: 0L), h.l("gain_bps"), divider = i > 0) {
                 Box(Modifier.width(42.dp).height(24.dp).clip(Radii.keycap).background(c.wash), contentAlignment = Alignment.Center) {
                     T(symbol.take(5), style = Relay.type.mono.copy(fontSize = 10.5.sp), color = c.ink2, maxLines = 1)
@@ -484,7 +496,7 @@ fun ArbiterScreen(nav: Nav) {
         SourcePage(
             "Arbiter",
             context = s?.o("connection")?.let { { Connection(it) } },
-            actions = { Key("Halt all", { halting = true }, kind = KeyKind.Danger, enabled = s != null && s.b("halted") != true, compact = true) },
+            actions = { Key("Halt all", { halting = true }, kind = KeyKind.Danger, enabled = s != null && s.b("halted") != true) },
         ) {
             Segmented(listOf("overview" to "Overview", "orders" to "Orders"), tab, { tab = it }, Modifier.fillMaxWidth(), fill = true)
             if (tab == "orders") {
@@ -554,7 +566,7 @@ private fun ArbiterOverview(s: JsonObject, nav: Nav) {
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             T("Arbiter is halted: ${s.s("halt_reason") ?: "the kill switch is on"}. No strategy places an order until you restart.", style = Relay.type.ui, color = c.ink)
-            Key("Restart", { nav.shell.act("arbiter.restart", JsonObject(emptyMap()), done = "Restarted. Strategies run again from their next bar.") }, compact = true)
+            Key("Restart", { nav.shell.act("arbiter.restart", JsonObject(emptyMap()), done = "Restarted. Strategies run again from their next bar.") })
         }
     }
     s.s("runner_error")?.takeIf { it.isNotBlank() }?.let { T("The last pass went wrong: $it", style = Relay.type.caption, color = c.heldText) }
@@ -694,7 +706,7 @@ private fun StrategyRow(r: JsonObject, divider: Boolean, nav: Nav) {
                 T(listOfNotNull(r.s("product"), plural(r.l("trades") ?: 0L, "trade"), "version ${r.l("version") ?: 1}").joinToString(" · "), style = Relay.type.mono.copy(fontSize = 11.5.sp), color = c.ink3)
                 if (state == "halted") Key("Restart", {
                     nav.shell.act("arbiter.restart", buildJsonObject { put("strategy_id", r.l("id") ?: 0L) }, done = "Restarted. It runs again from its next bar.")
-                }, Modifier.padding(top = 4.dp), compact = true)
+                }, Modifier.padding(top = 4.dp))
             }
         }
     }
@@ -760,14 +772,21 @@ fun AvexScreen(nav: Nav) {
     SpaceFrame(nav) {
         val c = Relay.colors
         var tab by rememberSaveable { mutableStateOf("overview") }
-        val summary = rememberLive("gym.summary")
-        val s = summary.result as? JsonObject
+        val now = rememberLive("gym.summary")
+        // A copy from before this week is read again as of its export's day, so its week is the
+        // one it was exported in, never a week without training (avex_pages.rs `summary`).
+        val exported = (now.result as? JsonObject)?.let(::staleExport)
+        val asOf = if (exported != null) rememberLive("gym.summary", remember(exported) { buildJsonObject { put("today", exported) } }) else null
+        // Until that reads, or with the PC away before it ever did, today's reading.
+        val summary = asOf?.takeIf { it.result != null || it.error == null } ?: now
+        val stale = summary !== now
+        val s = (summary.result ?: now.result) as? JsonObject
         val unit = s?.s("unit") ?: "lb"
         val missing = "This engine does not read Avex yet. Update Relay's engine to see your training here."
         val imported = s?.o("imported")
         SourcePage("Avex", context = {
             T(
-                imported?.let { i -> listOfNotNull(i.s("user_name")?.takeIf { it.isNotBlank() }?.let { "$it's training" }, i.s("exported_at")?.let { "exported ${humanDate(it.take(10))}" }, agoOf(i.s("imported_at")).takeIf { it.isNotEmpty() }?.let { "imported $it" }).joinToString(" · ") }
+                imported?.let { i -> listOfNotNull(i.s("user_name")?.takeIf { it.isNotBlank() }?.let { "$it's training" }, i.s("exported_at")?.let { "exported ${inlineDate(it.take(10))}" }, agoOf(i.s("imported_at")).takeIf { it.isNotEmpty() }?.let { "imported $it" }).joinToString(" · ") }
                     ?: "Your training, read from Avex's export",
                 style = Relay.type.caption, color = c.ink3,
             )
@@ -788,7 +807,7 @@ fun AvexScreen(nav: Nav) {
                         lifts.forEachIndexed { i, lift -> LiftRow(lift, l.s("unit") ?: unit, divider = i > 0) }
                     }
                 }
-                else -> Reading(summary, missing) { AvexOverview(it, unit) }
+                else -> Reading(summary, missing) { AvexOverview(it, unit, stale) }
             }
         }
     }
@@ -806,8 +825,43 @@ private fun setWords(w: Double?, reps: Long, unit: String) = if (w != null) "${w
 
 private fun word(key: String) = key.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() }
 
+/** The export's day when it is from before this week (avex_pages.rs `age_of`); null for a fresh copy. */
+private fun staleExport(s: JsonObject): String? {
+    val day = s.o("imported")?.s("exported_at")?.take(10)?.takeIf { it.length == 10 } ?: return null
+    val start = s.o("this_week")?.s("start") ?: return null
+    return day.takeIf { it < start }
+}
+
+/**
+ * The four figures of a copy from before this week, read as of its export: its week is the one
+ * it was exported in, named by its day, beside the week before (avex_pages.rs `home`).
+ */
 @Composable
-private fun AvexOverview(s: JsonObject, unit: String) {
+private fun ExportWeek(s: JsonObject, unit: String) {
+    val week = s.o("this_week")
+    val last = s.o("last_week")
+    val target = s.o("imported")?.l("days_per_week") ?: 0L
+    val vol = week?.d("volume") ?: 0.0
+    val before = last?.d("volume") ?: 0.0
+    // An empty week says so: a percentage of nothing reads as a collapse.
+    val change = when {
+        vol <= 0 -> "No workouts that week"
+        before > 0 -> "${Math.round((vol / before - 1) * 100).let { if (it < 0) "−${-it}" else "+$it" }}% on the week before"
+        else -> "Nothing the week before"
+    }
+    // Days since, counted from the export, would be wrong by the copy's age: the day is said instead.
+    val lastDay = s.objs("recent").firstOrNull { it.b("untracked") != true }?.s("day")?.let(::humanDate) ?: "Never"
+    StatGrid(listOf(
+        { m -> Stat("Week of ${dayWords(week?.s("start"))}", "${week?.l("sessions") ?: 0}${if (target > 0) " of $target" else ""}", "The week before ${last?.l("sessions") ?: 0}", m) },
+        { m -> Stat("Volume", volume(vol, unit), change, m) },
+        { m -> Stat("Streak", plural(maxOf(s.l("streak_weeks") ?: 0L, 0L), "week"), "In a row with a workout", m) },
+        { m -> Stat("Last workout", lastDay, "${minutes(week?.l("active_minutes") ?: 0L)} training that week", m) },
+    ))
+}
+
+/** Avex's overview; [stale] when it was read as of an export from before this week. */
+@Composable
+private fun AvexOverview(s: JsonObject, unit: String, stale: Boolean) {
     val c = Relay.colors
     if (s.o("imported") == null) {
         Card("Bring in your training") {
@@ -828,7 +882,7 @@ private fun AvexOverview(s: JsonObject, unit: String) {
         1L -> "Yesterday"
         else -> "$d days ago"
     }
-    StatGrid(listOf(
+    if (stale) ExportWeek(s, unit) else StatGrid(listOf(
         { m -> Stat("This week", "$sessions${if (target > 0) " of $target" else ""}", "Last week ${last?.l("sessions") ?: 0}", m) },
         { m -> Stat("Volume", volume(vol, unit), if (vol <= 0) "No workouts yet this week" else if (before > 0) String.format(java.util.Locale.ROOT, "%+.0f%% on last week", (vol / before - 1) * 100) else "Nothing last week", m) },
         { m -> Stat("Streak", plural(maxOf(streak, 0L), "week"), "In a row with a workout", m) },
@@ -858,7 +912,7 @@ private fun AvexOverview(s: JsonObject, unit: String) {
                 g.d("target_value") != null -> "${word(g.str("target_key"))} · ${weight(g.d("target_value")!!)}"
                 else -> word(g.str("target_key"))
             }
-            FigureRow("${word(g.str("kind"))}: $target2", g.s("note")?.takeIf { it.isNotBlank() } ?: "Set ${humanDate(g.s("created_day"))}", divider = i > 0)
+            FigureRow("${word(g.str("kind"))}: $target2", g.s("note")?.takeIf { it.isNotBlank() } ?: "Set ${inlineDate(g.s("created_day"))}", divider = i > 0)
         }
     }
 }
@@ -881,7 +935,7 @@ private fun WeekBars(weeks: List<JsonObject>, unit: String) {
             }
         }
         weeks.getOrNull(picked)?.let { w ->
-            T("Week of ${humanDate(w.s("start"))} · ${volume(w.d("volume"), unit)} · ${plural(w.l("sessions") ?: 0L, "workout")}", style = Relay.type.caption, color = c.ink2)
+            T("Week of ${dayWords(w.s("start"))} · ${volume(w.d("volume"), unit)} · ${plural(w.l("sessions") ?: 0L, "workout")}", style = Relay.type.caption, color = c.ink2)
         }
     }
 }
@@ -932,13 +986,13 @@ private fun LiftRow(l: JsonObject, unit: String, divider: Boolean) {
     val best = l.o("best")
     val detail = listOfNotNull(
         plural(l.l("sessions") ?: 0L, "workout"),
-        "last ${humanDate(l.s("last_day"))}",
+        "last ${inlineDate(l.s("last_day"))}",
         best?.let { "best ${setWords(it.d("weight"), it.l("reps") ?: 0L, unit)}" },
     ).joinToString(" · ")
     val e = l.d("recent_e1rm")
     val change = l.d("change_pct")
     val figure = when {
-        e != null && change != null -> "${weight(e)} $unit ${String.format(java.util.Locale.ROOT, "%+.1f%%", change)}"
+        e != null && change != null -> "${weight(e)} $unit ${pct(change)}"
         e != null -> "${weight(e)} $unit"
         else -> ""
     }
