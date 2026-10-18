@@ -14,7 +14,8 @@ use std::rc::Rc;
 /// the engine that is running was started from an older build: `run.sh` reuses a running engine.
 pub(crate) const STALE_ENGINE: &str = "The running Relay engine is older than this app and does not know about plugins yet. Restart it: when your agents are idle, run `target/debug/relay --instance dev q app.quit '{\"force\":true}'` (use your instance name), then ./run.sh again. Live agents come back as restorable; resume them from their tiles.";
 
-/// What to say when a `plugin.*` request fails. An engine that predates plugins refuses the op
+/// What to say when a request fails: the engine's own sentence, never its kind and code
+/// ("Conflict skill.name_exists: …"). An engine that predates plugins refuses a `plugin.*` op
 /// or its payload, and the bus names that in `code`; its message may change and is not parsed.
 pub(crate) fn explain_error(op: &str, error: &Error) -> String {
     match error {
@@ -24,6 +25,9 @@ pub(crate) fn explain_error(op: &str, error: &Error) -> String {
         {
             STALE_ENGINE.to_string()
         }
+        // Its message names the other skill by id.
+        Error::Bus(bus) if bus.code == "skill.name_exists" => "Another skill already has that name.".into(),
+        Error::Bus(bus) => bus.message.clone(),
         _ => error.to_string(),
     }
 }
@@ -39,7 +43,7 @@ static SPEC: Spec = Spec {
     icon: "plugins",
     noun: ("plugin", "plugins"),
     placeholder: "Search plugins, skills and tools",
-    filters: &["All", "Enabled", "Available", "Suggested"],
+    filters: &["All", "On", "Off", "Suggested"],
     list_op: "plugin.list",
     list_payload: || json!({}),
     list_key: "plugins",
@@ -197,19 +201,26 @@ fn card(ui: &Rc<Ui>, market: &Rc<Market>, plugin: &Value) -> gtk::Widget {
     summary.set_ellipsize(gtk::pango::EllipsizeMode::End);
     summary.set_max_width_chars(44);
     words.append(&summary);
-    let mut tags = vec![
-        market::chip(&plural(rows(plugin, "skills").len(), "skill", "skills"), ""),
-        market::chip(&plural(tool_count(plugin), "MCP tool", "MCP tools"), ""),
-        market::chip(&plural(rows(plugin, "docs").len(), "doc", "docs"), ""),
-    ];
+    // What it brings, leaving out what it has none of.
+    let mut tags: Vec<gtk::Label> = [
+        (rows(plugin, "skills").len(), "skill", "skills"),
+        (tool_count(plugin), "MCP tool", "MCP tools"),
+        (rows(plugin, "docs").len(), "doc", "docs"),
+    ]
+    .into_iter()
+    .filter(|(n, _, _)| *n > 0)
+    .map(|(n, one, many)| market::chip(&plural(n, one, many), ""))
+    .collect();
     if suggested(plugin, scope) {
         let hint = market::chip("Suggested", "hint");
         hint.set_tooltip_text(Some("This project's files match what the plugin is for"));
         tags.push(hint);
     }
-    let flow = market::chips(&tags);
-    flow.set_margin_top(2);
-    words.append(&flow);
+    if !tags.is_empty() {
+        let flow = market::chips(&tags);
+        flow.set_margin_top(2);
+        words.append(&flow);
+    }
     card.append(&words);
     let switch = market::toggle(ui, market, plugin, scope, format!("plugin-{id}-{scope}"));
     switch.set_valign(gtk::Align::Start);
@@ -265,7 +276,8 @@ fn detail(ui: &Rc<Ui>, market: &Rc<Market>, plugin: &Value, parent: &gtk::Box) {
             ("overview", "Overview", None, overview(plugin).upcast()),
             ("skills", "Skills", Some(skills.len()), skill_list(ui, market, &id, &skills).upcast()),
             ("tools", "MCP tools", Some(tools), tool_list(&servers).upcast()),
-            ("docs", "Rules & docs", Some(rows(plugin, "docs").len()), documents(ui, market, &id).upcast()),
+            // The rules every agent receives, then each document: what the tab shows.
+            ("docs", "Rules & docs", Some(1 + rows(plugin, "docs").len()), documents(ui, market, &id).upcast()),
             (
                 "projects",
                 "Projects",
@@ -537,10 +549,19 @@ mod tests {
     fn a_stale_engine_is_read_from_the_error_code() {
         let unknown: Error = BusError::unknown_op("plugin.list").into();
         assert_eq!(explain_error("plugin.list", &unknown), STALE_ENGINE);
-        assert_eq!(explain_error("skill.list", &unknown), unknown.to_string());
+        assert_eq!(explain_error("skill.list", &unknown), "unknown op \"plugin.list\"");
         let worded: Error = BusError::invalid("plugin.not_found", "plugin. unknown field; not implemented").into();
-        assert_eq!(explain_error("plugin.get", &worded), worded.to_string());
+        assert_eq!(explain_error("plugin.get", &worded), "plugin. unknown field; not implemented");
         assert_eq!(explain_error("plugin.get", &Error::Timeout), Error::Timeout.to_string());
+    }
+
+    #[test]
+    fn a_refusal_says_the_engines_sentence_without_its_code() {
+        let taken: Error = BusError::conflict("skill.name_exists", "that name is used by skill 4").into();
+        assert_eq!(explain_error("skill.update", &taken), "Another skill already has that name.");
+        let refused: Error = BusError::invalid("notify.not_found", "no such notification").into();
+        assert!(refused.to_string().contains("notify.not_found"));
+        assert_eq!(explain_error("notify.ack", &refused), "no such notification");
     }
 
     #[test]
