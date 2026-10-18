@@ -2340,6 +2340,9 @@ fn data(ui: &Rc<Ui>, page: &Page, summary: Option<&Value>, lists: Option<&Value>
     let export_key = button("Export…", "");
     export_key.set_widget_name("money-export");
     export_key.set_sensitive(!empty);
+    if empty {
+        export_key.set_tooltip_text(Some("Nothing to export yet"));
+    }
     setting_row(&backups, "upload", "Export a backup", "The same file, to keep or to restore on the phone.", &export_key);
 
     let ledger = card(&pair[1], "Ledger", None);
@@ -2359,6 +2362,9 @@ fn data(ui: &Rc<Ui>, page: &Page, summary: Option<&Value>, lists: Option<&Value>
     let erase = button("Erase…", "money-destructive");
     erase.set_widget_name("money-reset");
     erase.set_sensitive(!empty);
+    if empty {
+        erase.set_tooltip_text(Some("The ledger is already empty"));
+    }
     setting_row(&ledger, "trash", "Erase everything", "Every entry, account, budget, bill and goal on this PC. The phone keeps its own.", &erase);
     if let Some(summary) = summary {
         ledger_settings(ui, &pair[1], summary);
@@ -2451,6 +2457,19 @@ fn ledger_settings(ui: &Rc<Ui>, column: &gtk::Box, summary: &Value) {
     save.set_halign(gtk::Align::End);
     save.add_css_class("tally-save");
     list.append(&save);
+    // Enter in either field saves, as the key does; not again while a save is on its way.
+    let key = save.clone();
+    currency.connect_activate(move |_| {
+        if key.is_sensitive() {
+            key.emit_clicked();
+        }
+    });
+    let key = save.clone();
+    start.connect_activate(move |_| {
+        if key.is_sensitive() {
+            key.emit_clicked();
+        }
+    });
     let weak = Rc::downgrade(ui);
     save.connect_clicked(move |key| {
         let Some(ui) = weak.upgrade() else { return };
