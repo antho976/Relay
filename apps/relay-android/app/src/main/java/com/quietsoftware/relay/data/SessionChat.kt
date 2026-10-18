@@ -68,7 +68,8 @@ class SessionChat(private val relay: Relay, val name: String, private val scope:
     fun start() {
         if (job?.isActive == true) return
         job = scope.launch(Dispatchers.Default) {
-            relay.hub.cached(OP, first)?.let { show(it.result, replace = true); at = it.at; _status.value = TerminalFeed.Status.Saved }
+            // Shown at once, while the PC is asked: the link decides whether it is still "saved".
+            relay.hub.cached(OP, first)?.let { show(it.result, replace = true); at = it.at }
             combine(relay.state, relay.hub.session, relay.session(name)) { link, bus, s -> Triple(link is LinkState.Online && bus != null, s?.attachable == true, s?.state == "running" || s?.state == "spawning") }
                 .distinctUntilChanged()
                 .collectLatest { (online, attachable, busy) ->
@@ -83,8 +84,9 @@ class SessionChat(private val relay: Relay, val name: String, private val scope:
                             _error.value = null
                             _status.value = if (attachable) TerminalFeed.Status.Live else TerminalFeed.Status.Stopped
                         } catch (e: BusException) {
+                            // The PC is there and refused this read: what the agent is doing still stands.
                             _error.value = e
-                            _status.value = if (_messages.value.isNotEmpty()) TerminalFeed.Status.Saved else TerminalFeed.Status.Stopped
+                            _status.value = if (attachable) TerminalFeed.Status.Live else TerminalFeed.Status.Stopped
                         }
                         delay(if (busy || _sending.value.isNotEmpty()) BUSY_MS else if (attachable) WAITING_MS else STOPPED_MS)
                     }

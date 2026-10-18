@@ -294,7 +294,7 @@ fun ChatScreen(name: String, nav: Nav) {
                         "The conversation shows here once ${session?.provider ?: "the agent"} starts. Its screen shows everything meanwhile.",
                         action = openTerminal,
                     )
-                    status == TerminalFeed.Status.Connecting -> Empty("terminal", "Reading the conversation")
+                    status == TerminalFeed.Status.Connecting && s.online -> Empty("terminal", "Reading the conversation")
                     else -> Empty("terminal", "Nothing said yet", if (s.online) null else "The PC is away, and this phone has not read this agent before.", action = openTerminal)
                 }
             }
@@ -590,9 +590,12 @@ private fun Conversation(
     val scope = rememberCoroutineScope()
     // Newest at the bottom, and kept in view as it grows while the person reads the end.
     val shown = remember(pieces) { pieces.asReversed() }
-    LaunchedEffect(pieces.size, doing, asking) { if (state.firstVisibleItemIndex <= 1) state.animateScrollToItem(0) }
+    // What the person just sent always comes into view: it is the last piece until the log has it.
+    LaunchedEffect(pieces.size, doing, asking) {
+        if (state.firstVisibleItemIndex <= 1 || (pieces.lastOrNull() as? ChatPiece.User)?.sending == true) state.animateScrollToItem(0)
+    }
     // Scrolled up to read: a key back to the newest, counting what arrived meanwhile.
-    val away by remember { derivedStateOf { state.firstVisibleItemIndex > 2 } }
+    val away by remember { derivedStateOf { state.firstVisibleItemIndex > 1 } }
     var seen by remember { mutableIntStateOf(0) }
     LaunchedEffect(away) { if (away) seen = pieces.size }
     val fresh = if (away) (pieces.size - seen).coerceAtLeast(0) else 0
