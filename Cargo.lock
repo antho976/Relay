@@ -2970,19 +2970,23 @@ dependencies = [
  "anyhow",
  "base64",
  "clap",
+ "httparse",
  "jiff",
  "regex",
  "relay-bus",
  "relay-core",
  "relay-money",
  "relay-remote",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "webpki-roots",
 ]
 
 [[package]]

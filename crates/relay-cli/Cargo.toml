@@ -26,6 +26,13 @@ tracing-subscriber.workspace = true
 base64.workspace = true
 regex.workspace = true
 serde.workspace = true
+# `relay key-proxy` (key_proxy.rs): HTTPS to api.anthropic.com with the roots built in, so a
+# certificate added to the system store cannot read the key in flight. One crypto provider, as
+# relay-remote's.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false }
+webpki-roots = "1"
+httparse = "1"
 
 [dev-dependencies]
 tempfile = "3"

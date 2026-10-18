@@ -278,9 +278,11 @@ impl Driver for Claude {
     fn binary(&self) -> &'static str { "claude" }
     fn guarded(&self) -> bool { true }
     fn args(&self, session: &Session, launch: Launch<'_>, _brief: Option<&str>) -> Vec<String> {
+        let helper = session.use_api_key
+            .then(|| crate::hooks::api_key_helper(&crate::hooks::key_proxy_token_path().unwrap_or_default()));
         let mut args = vec![
             "--mcp-config".into(), crate::hooks::MCP_CONFIG_RELATIVE.into(),
-            "--settings".into(), crate::hooks::claude_settings(session.use_api_key.then(crate::hooks::api_key_helper).as_deref()),
+            "--settings".into(), crate::hooks::claude_settings(helper.as_deref()),
             "--append-system-prompt-file".into(), role_instructions_relative(&session.name),
         ];
         match launch {
@@ -538,7 +540,7 @@ mod tests {
         // An API-key session differs only in its settings, on resume as on a fresh launch.
         let mut keyed = claude.clone();
         keyed.use_api_key = true;
-        let keyed_settings = crate::hooks::claude_settings(Some(&crate::hooks::api_key_helper()));
+        let keyed_settings = crate::hooks::claude_settings(Some(&crate::hooks::api_key_helper(&crate::hooks::key_proxy_token_path().unwrap_or_default())));
         for launch in [Launch::Fresh, Launch::Resume { provider_ref: Some("cc-id") }] {
             let args = driver(Provider::Claude).args(&keyed, launch, None);
             assert_eq!(args[3], keyed_settings);

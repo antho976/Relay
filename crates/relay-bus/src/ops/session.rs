@@ -11,7 +11,7 @@ payload!(#[schemars(rename = "SessionCreateIn")] CreateIn {
     pub worktree: Option<String>,
     pub task_id: Option<Id>, pub module_id: Option<Id>, pub pair_with: Option<String>,
     pub bus_writes: Option<bool>, pub allow_ui: Option<bool>,
-    /// Claude only: run on the API key in the local keyring instead of the signed-in account.
+    /// Claude only: run on the API key the key proxy holds instead of the signed-in account.
     pub use_api_key: Option<bool>,
     /// Persist the initial assignment before spawning, so a partial launch can recover it.
     pub prompt: Option<String>,

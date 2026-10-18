@@ -365,8 +365,8 @@ impl Profile {
         for (caption, hint, on) in [
             ("Agent bus writes", "Let it write files, stage and commit through Relay, with guardrails checked as it goes.", true),
             ("UI control", "Let it drive the Relay window.", false),
-            ("Use API key", "Bill this session to the API key in your keyring instead of your subscription. \
-              Relay never reads or stores the key, but the agent in this session can read it from your keyring.", false),
+            ("Use API key", "Bill this session to your API key instead of your subscription. The key stays in \
+              Relay's key proxy, where no agent can read it; programs running as you can still spend through it.", false),
         ] {
             let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
             line.add_css_class("launch-switch");

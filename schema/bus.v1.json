@@ -9946,7 +9946,7 @@
             "boolean",
             "null"
           ],
-          "description": "Claude only: run on the API key in the local keyring instead of the signed-in account."
+          "description": "Claude only: run on the API key the key proxy holds instead of the signed-in account."
         },
         "prompt": {
           "type": [
@@ -10057,7 +10057,7 @@
         },
         "use_api_key": {
           "type": "boolean",
-          "description": "Claude runs on the API key in the local keyring instead of the signed-in account. Relay\nnever reads the key: Claude does, with `apiKeyHelper`. The agent can read it too.",
+          "description": "Claude runs on an API key instead of the signed-in account, through the key proxy, which\nholds the key as its own system user (docs/KEY-PROXY.md). Relay never has the key.",
           "default": false
         },
         "state": {

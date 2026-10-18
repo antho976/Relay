@@ -1,0 +1,53 @@
+# Relay's API-key proxy (docs/KEY-PROXY.md). Installed by scripts/key-proxy/install.sh.
+#
+# It holds the Anthropic API key as a throwaway system user (DynamicUser), so nothing that runs
+# as the person — agents included — can read the key from a file or from its memory. systemd
+# decrypts the key from /etc/credstore.encrypted with a root-only host key (and the TPM where
+# there is one) and gives it to this service alone, under $CREDENTIALS_DIRECTORY.
+
+[Unit]
+Description=Relay API-key proxy (holds the Anthropic API key for Relay's API-key sessions)
+Documentation=file:///usr/local/libexec/relay/KEY-PROXY.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/libexec/relay/relay-key-proxy key-proxy --listen 127.0.0.1:7445
+DynamicUser=yes
+LoadCredentialEncrypted=relay-anthropic-key
+LoadCredentialEncrypted=relay-proxy-token
+Restart=on-failure
+RestartSec=2
+
+# Nothing it does needs more than a loopback listener and an outbound HTTPS connection.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+UMask=0077
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

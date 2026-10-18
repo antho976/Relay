@@ -20,6 +20,7 @@ mod blender;
 mod blender_sandbox;
 mod remote;
 mod cloud;
+mod key_proxy;
 mod write_targets;
 
 #[derive(Parser)]
@@ -92,6 +93,12 @@ enum Command {
     Cloud {
         #[command(subcommand)]
         cloud: cloud::CloudCommand,
+    },
+    /// Hold the Anthropic API key for API-key sessions (docs/KEY-PROXY.md). Run only as
+    /// relay-key-proxy.service, which scripts/key-proxy/install.sh sets up
+    KeyProxy {
+        #[arg(long, default_value_t = format!("127.0.0.1:{}", relay_core::hooks::KEY_PROXY_PORT))]
+        listen: String,
     },
     /// Internal provider hook adapters. Enforcement fails closed; lifecycle reports are best-effort.
     #[command(hide = true)]
@@ -281,6 +288,7 @@ async fn run(cli: Cli) -> Result<u8> {
         }
         Command::Remote { remote } => remote::run(instance, remote).await,
         Command::Cloud { cloud } => cloud::run(instance, cloud).await,
+        Command::KeyProxy { listen } => key_proxy::run(&listen).await,
         Command::Schema { op } => {
             match op {
                 None => print!("{}", relay_bus::schema::render_pretty()),
