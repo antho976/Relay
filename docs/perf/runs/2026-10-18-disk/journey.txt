@@ -1,0 +1,9 @@
+full round1: exit 0, 21.0 s, peak rss sum/single MB 12175 1673, linked 50 exes 22.4 GB
+lt round1: exit 0, 7.5 s, peak rss sum/single MB 5986 929, linked 50 exes 8.4 GB
+full round2: exit 0, 20.4 s, peak rss sum/single MB 13207 1694, linked 50 exes 22.4 GB
+lt round2: exit 0, 7.7 s, peak rss sum/single MB 5848 922, linked 50 exes 8.4 GB
+full round3: exit 0, 25.0 s, peak rss sum/single MB 12491 1686, linked 50 exes 22.4 GB
+lt round3: exit 0, 7.5 s, peak rss sum/single MB 5493 937, linked 50 exes 8.4 GB
+lt 16 jobs round1: 9019 ms, peak rss sum/single MB 13386 984
+lt 16 jobs round2: 8624 ms, peak rss sum/single MB 12652 988
+lt 16 jobs round3: 10317 ms, peak rss sum/single MB 12297 929

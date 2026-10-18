@@ -137,25 +137,25 @@ pub fn register(e: &mut Engine) {
         Err(BusError::not_implemented("app.log.tail", 9))
     });
     e.register::<Reconcile>(|ctx, _| {
-        // The trust-but-verify pass, on demand. Retention is what it does today; the same pass
-        // also runs on the engine's own timer (`purge::spawn_timer`).
+        // The trust-but-verify pass, on demand: retention, then the disk closed sessions left
+        // behind (`disk_sweep`). The same pass also runs on the engine's own timer
+        // (`purge::spawn_timer`).
         let store_dir = ctx.engine().store.path().parent().map(Path::to_path_buf).unwrap_or_default();
         let purged = crate::purge::run(ctx.tx(), &store_dir).map_err(crate::engine::internal)?;
         if !purged.actions.is_empty() {
             ctx.emit("notify.changed", json!({"purged": true}));
         }
-        if !purged.paths.is_empty() {
-            let paths = purged.paths;
-            ctx.after_commit(move |_| {
-                std::thread::Builder::new()
-                    .name("purge-files".into())
-                    .spawn(move || {
-                        crate::background_priority();
-                        crate::purge::remove_paths(&paths)
-                    })
-                    .ok();
-            });
-        }
+        let paths = purged.paths;
+        ctx.after_commit(move |engine| {
+            std::thread::Builder::new()
+                .name("purge-files".into())
+                .spawn(move || {
+                    crate::background_priority();
+                    crate::purge::remove_paths(&paths);
+                    crate::disk_sweep::run(&engine);
+                })
+                .ok();
+        });
         Ok(ReconcileOut { actions: purged.actions })
     });
 }

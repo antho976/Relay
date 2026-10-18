@@ -506,11 +506,28 @@ mod tests {
         std::fs::write(ini.join("Install.ini"), format!("[Installations]\n{{0A1B2C3D-0000}}={}\n", engine.display())).unwrap();
         let project = home.path().join("Game");
         std::fs::create_dir_all(&project).unwrap();
-        // SAFETY: the only test in this binary that reads HOME or UE_ROOT.
+        // SAFETY: the only test in this binary that writes HOME or UE_ROOT. HOME is put back
+        // before `home` is deleted: the Blender tests here read it too, and one that ran after
+        // this used to recreate `<deleted temp dir>/.cache/relay/blender-sandbox` (11 MB, left in
+        // /tmp for good, one per test run).
+        let saved_home = std::env::var_os("HOME");
         unsafe {
             std::env::set_var("HOME", home.path());
             std::env::remove_var("UE_ROOT");
         }
+        struct RestoreHome(Option<std::ffi::OsString>);
+        impl Drop for RestoreHome {
+            fn drop(&mut self) {
+                // SAFETY: as above.
+                unsafe {
+                    match self.0.take() {
+                        Some(home) => std::env::set_var("HOME", home),
+                        None => std::env::remove_var("HOME"),
+                    }
+                }
+            }
+        }
+        let _restore = RestoreHome(saved_home);
         let log = project.join("Saved/Logs/Game.log");
         let by_guid = engine_root(&project.join("Game.uproject"), &project, "{0A1B2C3D-0000}", &log).unwrap();
         assert_eq!(by_guid, engine);

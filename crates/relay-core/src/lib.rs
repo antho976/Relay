@@ -13,6 +13,7 @@ pub mod build_seed;
 pub mod check;
 pub mod device;
 pub mod device_lease;
+pub mod disk_sweep;
 pub mod engine;
 pub mod gaming;
 pub mod guardrail;

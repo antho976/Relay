@@ -64,9 +64,16 @@ similar = "2"
 # the difference between a responsive terminal wall and a sluggish one. Dependencies are built
 # once and cached, so paying full optimization for them is nearly free; workspace crates stay at
 # `opt-level = 1`, which removes the worst of the debug-build overhead while keeping incremental
-# rebuilds quick. Debug assertions, overflow checks and debug info are all unchanged.
+# rebuilds quick. Debug assertions and overflow checks are unchanged.
+#
+# Debug info is line tables only: panics and backtraces keep their files and lines, a debugger
+# loses variables. Full debug info was 90% of every test executable (383 of 427 MB), and
+# `cargo test` links some sixty of them, sixteen at a time at up to 1.6 GB of RAM each
+# (docs/perf/FIXES-2026-10-18.md). `CARGO_PROFILE_DEV_DEBUG=true` brings it back for a session
+# at the debugger.
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3

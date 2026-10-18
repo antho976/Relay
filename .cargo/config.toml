@@ -1,0 +1,7 @@
+# Eight jobs, not one per core. A `relay-core` test rebuild is mostly linking its ~50 test
+# executables, and on the 16-thread reference machine sixteen at a time was slower than eight
+# (8.6–10.3 s against 7.5 s) and held twice the RAM (12.3–13.4 GB against 5.5–6.0 GB), with
+# agents' sessions building side by side (docs/perf/FIXES-2026-10-18.md). `-j` or
+# `CARGO_BUILD_JOBS` overrides it for one build.
+[build]
+jobs = 8

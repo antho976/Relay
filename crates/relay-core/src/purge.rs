@@ -231,6 +231,8 @@ pub fn spawn_timer(engine: &std::sync::Arc<crate::engine::Engine>) {
                 }
                 Err(error) => tracing::warn!(error = %error, "retention pass failed"),
             }
+            // Build output and scratch space closed sessions left behind (`disk_sweep`).
+            crate::disk_sweep::run(&engine);
             drop(engine);
             wait = EVERY;
         }
