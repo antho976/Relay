@@ -51,6 +51,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -903,7 +904,7 @@ private fun UserBubble(
         Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
             Box(
                 Modifier.clip(Radii.card).background(c.wash).then(if (open) Modifier.border(1.dp, c.strong, Radii.card) else Modifier)
-                    .then(messageTouch(open, onOpen)).padding(horizontal = 14.dp, vertical = 10.dp),
+                    .messageTouch(open, LocalHapticFeedback.current, onOpen).padding(horizontal = 14.dp, vertical = 10.dp),
             ) {
                 T(text, style = Relay.type.body, color = c.ink)
             }

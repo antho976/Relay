@@ -78,6 +78,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
@@ -752,7 +753,7 @@ private fun UserBubble(
 ) {
     val c = Relay.colors
     val (words, pictures) = remember(text) { splitAttached(text) }
-    val touch = messageTouch(open, onOpen)
+    val touch = Modifier.messageTouch(open, LocalHapticFeedback.current, onOpen)
     Column(modifier, horizontalAlignment = Alignment.End) {
         if (pictures.isNotEmpty()) Row(Modifier.padding(bottom = 6.dp).clip(Radii.pill).then(if (words.isEmpty()) touch else Modifier), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             for (p in pictures) AttachedPill(p)
@@ -775,11 +776,9 @@ private fun UserBubble(
 
 /** A tap or a long press on a message of the person's: [onOpen] shows its keys, or a tap hides them. */
 @OptIn(ExperimentalFoundationApi::class)
-@Composable
-internal fun messageTouch(open: Boolean, onOpen: (() -> Unit)?): Modifier {
-    if (onOpen == null) return Modifier
-    val haptic = LocalHapticFeedback.current
-    return Modifier.combinedClickable(
+internal fun Modifier.messageTouch(open: Boolean, haptic: HapticFeedback, onOpen: (() -> Unit)?): Modifier {
+    if (onOpen == null) return this
+    return combinedClickable(
         onClickLabel = if (open) "Hide this message's keys" else "Show this message's keys",
         onLongClick = {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
