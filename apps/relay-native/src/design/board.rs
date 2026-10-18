@@ -6,6 +6,7 @@ use super::canvas::Canvas;
 use super::doc::{Change, Doc};
 use super::glyphs;
 use super::paint::{self, fill_of, grect, rgba, Painter, CANVAS};
+use super::widgets::tip;
 use crate::app::{label, Ui};
 use gtk::prelude::*;
 use gtk::{gdk, gio, graphene, gsk, pango};
@@ -124,6 +125,14 @@ impl Tool {
             Tool::Star => "Shift S",
             Tool::Eraser => "E",
             Tool::Vector => "B",
+        }
+    }
+
+    /// Its key's tooltip: "Arrow (Shift+L)", or the caption alone when it has no key.
+    pub fn tip(self) -> String {
+        match self.key() {
+            "" => self.caption().to_string(),
+            key => format!("{} ({})", self.caption(), key.replace(' ', "+")),
         }
     }
 }
@@ -337,7 +346,7 @@ impl Board {
         ask_row.append(&glyphs::image("spark", 14));
         ask_row.append(&label("Ask agent", ""));
         ask.set_child(Some(&ask_row));
-        ask.set_tooltip_text(Some("Ask the terminal's agent to change the selection or this page"));
+        ask.set_tooltip_text(Some("Ask the terminal's agent to change the selection or this page (Ctrl+Enter)"));
         ask.set_widget_name("design-ask");
         top.append(&ask);
         let pop_out = crate::app::icon_button("window", "Open in a new window");
@@ -348,7 +357,7 @@ impl Board {
         inspector_key.add_css_class("quiet");
         inspector_key.add_css_class("icon-key");
         inspector_key.set_child(Some(&crate::icons::image("sidebar", 16)));
-        inspector_key.set_tooltip_text(Some(inspector_tip(true)));
+        tip(&inspector_key, inspector_tip(true));
         inspector_key.set_active(true);
         top.append(&inspector_key);
         let mut key = top.first_child();
@@ -594,7 +603,7 @@ impl Board {
         });
         let weak = Rc::downgrade(&board);
         board.inspector_key.connect_toggled(move |key| {
-            key.set_tooltip_text(Some(inspector_tip(key.is_active())));
+            tip(key, inspector_tip(key.is_active()));
             if let Some(b) = weak.upgrade() {
                 b.refresh_chrome();
             }
@@ -896,6 +905,10 @@ impl Board {
     fn design_changed(&self) {
         let design = self.doc.design.borrow().clone();
         self.title.set_text(&design.title);
+        // The whole title, which the key cuts short past 48 characters.
+        if let Some(key) = self.title.ancestor(gtk::MenuButton::static_type()) {
+            key.set_tooltip_text(Some(&format!("{} — rename, duplicate, export or delete it", design.title)));
+        }
         if let Some(window) = self.root.root().and_downcast::<gtk::Window>().filter(|_| self.windowed) {
             window.set_title(Some(&format!("{} — Relay Design", design.title)));
         }
@@ -906,7 +919,7 @@ impl Board {
                 self.terminal.set_tooltip_text(Some(&format!("This design belongs to {s}'s terminal")));
             }
             None => {
-                self.terminal_label.set_text("No terminal");
+                self.terminal_label.set_text("Project only");
                 self.terminal.add_css_class("unlinked");
                 self.terminal.set_tooltip_text(Some("Tie this design to a terminal so its agent can be asked about it"));
             }
@@ -1473,7 +1486,12 @@ impl Board {
         if let Some(layers) = self.layers.borrow().as_ref() {
             layers.refresh();
         }
-        self.page_label.set_text(&self.page_name(&self.page.borrow()));
+        let page = self.page_name(&self.page.borrow());
+        self.page_label.set_text(&page);
+        // The whole name, which the key cuts short.
+        if let Some(key) = self.page_label.ancestor(gtk::MenuButton::static_type()) {
+            key.set_tooltip_text(Some(&format!("Pages: {page}")));
+        }
         self.overlay.queue_allocate();
     }
 
@@ -1556,11 +1574,11 @@ impl Board {
         self.pen_key.set_active(pens);
         if shapes {
             self.shape_key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
-            self.shape_key.set_tooltip_text(Some(&format!("{} ({})", tool.caption(), tool.key())));
+            tip(&self.shape_key, &tool.tip());
         }
         if pens {
             self.pen_key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
-            self.pen_key.set_tooltip_text(Some(&format!("{} ({})", tool.caption(), tool.key())));
+            tip(&self.pen_key, &tool.tip());
         }
         if tool != Tool::Select {
             self.end_edit(true);
@@ -1572,7 +1590,7 @@ impl Board {
         let layers_key = gtk::ToggleButton::new();
         layers_key.add_css_class("design-tool");
         layers_key.set_child(Some(&glyphs::image("layers", 16)));
-        layers_key.set_tooltip_text(Some("Pages and layers (Alt+1)"));
+        tip(&layers_key, "Pages and layers (Alt+1)");
         layers_key.set_widget_name("design-layers-key");
         dock.append(&layers_key);
         let weak = Rc::downgrade(self);
@@ -1621,7 +1639,7 @@ impl Board {
         // Shapes share a key; its menu picks which.
         self.shape_key.add_css_class("design-tool");
         self.shape_key.set_child(Some(&glyphs::image("rect", 16)));
-        self.shape_key.set_tooltip_text(Some("Rectangle (R)"));
+        tip(&self.shape_key, &Tool::Rect.tip());
         let weak = Rc::downgrade(self);
         self.shape_key.connect_clicked(move |key| {
             if let Some(b) = weak.upgrade() {
@@ -1644,7 +1662,7 @@ impl Board {
         }
         self.pen_key.add_css_class("design-tool");
         self.pen_key.set_child(Some(&glyphs::image("pen", 16)));
-        self.pen_key.set_tooltip_text(Some("Pen (P)"));
+        tip(&self.pen_key, &Tool::Pen.tip());
         let weak = Rc::downgrade(self);
         self.pen_key.connect_clicked(move |key| {
             if let Some(b) = weak.upgrade() {
@@ -1661,7 +1679,7 @@ impl Board {
         let icon_key = gtk::MenuButton::new();
         icon_key.add_css_class("design-tool");
         icon_key.set_child(Some(&glyphs::image("icon", 16)));
-        icon_key.set_tooltip_text(Some("Place an icon (K)"));
+        tip(&icon_key, "Place an icon (K)");
         icon_key.set_widget_name("design-icon-key");
         let picker = gtk::Popover::new();
         picker.add_css_class("design-menu");
@@ -1677,7 +1695,7 @@ impl Board {
         let image_key = gtk::Button::new();
         image_key.add_css_class("design-tool");
         image_key.set_child(Some(&glyphs::image("image", 16)));
-        image_key.set_tooltip_text(Some("Place an image (Shift+Ctrl+K)"));
+        tip(&image_key, "Place an image (Ctrl+Shift+K)");
         let weak = Rc::downgrade(self);
         image_key.connect_clicked(move |_| {
             if let Some(b) = weak.upgrade() {
@@ -1695,7 +1713,7 @@ impl Board {
         let menu = gtk::MenuButton::new();
         menu.add_css_class("design-tool-more");
         menu.set_child(Some(&crate::icons::image("chevron-down", 10)));
-        menu.set_tooltip_text(Some("Frame sizes"));
+        tip(&menu, "Frame sizes");
         let pop = gtk::Popover::new();
         pop.add_css_class("design-menu");
         let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -1756,7 +1774,7 @@ impl Board {
         let key = gtk::ToggleButton::new();
         key.add_css_class("design-tool");
         key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
-        key.set_tooltip_text(Some(&format!("{} ({})", tool.caption(), tool.key())));
+        key.set_tooltip_text(Some(&tool.tip()));
         key.set_widget_name(&format!("design-tool-{}", tool.glyph()));
         key.update_property(&[gtk::accessible::Property::Label(tool.caption())]);
         let weak = Rc::downgrade(self);
@@ -1774,7 +1792,7 @@ impl Board {
         let menu = gtk::MenuButton::new();
         menu.add_css_class("design-tool-more");
         menu.set_child(Some(&crate::icons::image("chevron-down", 10)));
-        menu.set_tooltip_text(Some("More tools"));
+        tip(&menu, "More tools");
         let pop = gtk::Popover::new();
         pop.add_css_class("design-menu");
         let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -1833,15 +1851,15 @@ impl Board {
     fn build_zoom_menu(self: &Rc<Self>, key: &gtk::MenuButton) {
         let menu = gio::Menu::new();
         let section = gio::Menu::new();
-        section.append(Some("Zoom in"), Some("design.zoom-in"));
-        section.append(Some("Zoom out"), Some("design.zoom-out"));
+        section.append_item(&menu_item("Zoom in", "zoom-in", Some("<Control>equal")));
+        section.append_item(&menu_item("Zoom out", "zoom-out", Some("<Control>minus")));
         menu.append_section(None, &section);
         let section = gio::Menu::new();
-        section.append(Some("Zoom to fit"), Some("design.zoom-fit"));
-        section.append(Some("Zoom to selection"), Some("design.zoom-selection"));
-        section.append(Some("Zoom to 50%"), Some("design.zoom-50"));
-        section.append(Some("Zoom to 100%"), Some("design.zoom-100"));
-        section.append(Some("Zoom to 200%"), Some("design.zoom-200"));
+        section.append_item(&menu_item("Zoom to fit", "zoom-fit", Some("<Shift>1")));
+        section.append_item(&menu_item("Zoom to selection", "zoom-selection", Some("<Shift>2")));
+        section.append_item(&menu_item("Zoom to 50%", "zoom-50", None));
+        section.append_item(&menu_item("Zoom to 100%", "zoom-100", Some("<Shift>0")));
+        section.append_item(&menu_item("Zoom to 200%", "zoom-200", None));
         menu.append_section(None, &section);
         key.set_menu_model(Some(&menu));
     }
@@ -1856,7 +1874,7 @@ impl Board {
         }
         menu.append_section(None, &section);
         let section = gio::Menu::new();
-        section.append(Some("Export page as PNG…"), Some("design.export-page"));
+        section.append(Some("Export page as PNG (2×)…"), Some("design.export-page"));
         section.append(Some("Export page as SVG…"), Some("design.export-page-svg"));
         section.append(Some("Export page as PDF…"), Some("design.export-page-pdf"));
         menu.append_section(None, &section);
@@ -1930,8 +1948,16 @@ impl Board {
                     });
                     list.append(&row);
                 }
-                let none = gtk::Button::with_label("The project only");
+                let none = gtk::Button::new();
                 none.add_css_class("design-menu-row");
+                let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                let caption = label("Project only", "");
+                caption.set_hexpand(true);
+                content.append(&caption);
+                if current.is_none() {
+                    content.append(&crate::icons::image("check", 14));
+                }
+                none.set_child(Some(&content));
                 let weak = Rc::downgrade(&b);
                 let pp = pop.downgrade();
                 none.connect_clicked(move |_| {
@@ -1984,20 +2010,23 @@ impl Board {
         grid.set_column_spacing(24);
         grid.set_row_spacing(4);
         grid.add_css_class("design-shortcuts");
-        let groups: [(&str, &[(&str, &str)]); 4] = [
-            ("Tools", &[("V", "Move"), ("H or Space", "Hand"), ("F", "Frame"), ("R / O", "Rectangle / ellipse"), ("Shift R / Shift S", "Triangle / star"), ("K", "Icon"), ("E", "Eraser"), ("L / Shift L", "Line / arrow"), ("T", "Text"), ("S", "Sticky note"), ("P / Shift P", "Pen / highlighter"), ("B", "Vector pen: click points, close on the first")]),
-            ("Selection", &[("Click", "Select what is under the pointer"), ("Esc", "Select the parent"), ("Enter", "Edit text, or select inside"), ("Shift click", "Add or remove"), ("Ctrl A", "Select all"), ("Alt drag", "Duplicate while moving")]),
-            ("Edit", &[("Ctrl Z / Ctrl Shift Z", "Undo / redo"), ("Ctrl D", "Duplicate"), ("Ctrl G / Ctrl Shift G", "Group / ungroup"), ("Ctrl Alt G", "Frame selection"), ("Ctrl ] / Ctrl [", "Forward / backward"), ("Shift H / Shift V", "Flip across / up and down"), ("Ctrl Alt C / V", "Copy / paste style"), ("Arrows", "Nudge 1 px (Shift: 10)")]),
-            ("View", &[("Ctrl scroll / pinch", "Zoom at the pointer"), ("Shift 1", "Zoom to fit"), ("Shift 2", "Zoom to selection"), ("Shift 0", "Zoom to 100%"), ("Alt 1", "Pages and layers"), ("Ctrl .", "Inspector")]),
-        ];
-        for (col, (heading, rows)) in groups.iter().enumerate() {
-            let x = (col % 2) as i32 * 2;
-            let y0 = (col / 2) as i32 * 13;
-            let h = label(heading, "design-menu-heading");
-            grid.attach(&h, x, y0, 2, 1);
-            for (i, (keys, what)) in rows.iter().enumerate() {
-                grid.attach(&label(keys, "design-keycap"), x, y0 + 1 + i as i32, 1, 1);
-                grid.attach(&label(what, "dim"), x + 1, y0 + 1 + i as i32, 1, 1);
+        type Group<'a> = (&'a str, &'a [(&'a str, &'a str)]);
+        let tools: Group = ("Tools", &[("V", "Move"), ("H or Space", "Hand"), ("F", "Frame"), ("R / O", "Rectangle / ellipse"), ("Shift R / Shift S", "Triangle / star"), ("K", "Icon"), ("E", "Eraser"), ("L / Shift L", "Line / arrow"), ("T", "Text"), ("S", "Sticky note"), ("P / Shift P", "Pen / highlighter"), ("B", "Vector pen: click points, close on the first")]);
+        let text: Group = ("Text", &[("Esc or Ctrl Enter", "Finish typing"), ("Ctrl B / I / U", "Bold / italic / underline")]);
+        let view: Group = ("View", &[("Ctrl scroll / pinch", "Zoom at the pointer"), ("Ctrl − / Ctrl =", "Zoom out / in"), ("Shift 1", "Zoom to fit"), ("Shift 2", "Zoom to selection"), ("Shift 0 or Ctrl 0", "Zoom to 100%"), ("Alt 1", "Pages and layers"), ("Ctrl .", "Inspector")]);
+        let selection: Group = ("Selection", &[("Click", "Select what is under the pointer"), ("Esc", "Select the parent"), ("Enter", "Edit text, or select inside"), ("Tab / Shift Tab", "Next / previous layer"), ("Shift click", "Add or remove"), ("Ctrl A", "Select all"), ("Alt drag", "Duplicate while moving")]);
+        let edit: Group = ("Edit", &[("Ctrl Z / Ctrl Shift Z", "Undo / redo"), ("Ctrl C / X / V", "Copy / cut / paste"), ("Ctrl D", "Duplicate"), ("Delete / Backspace", "Delete"), ("Ctrl G / Ctrl Shift G", "Group / ungroup"), ("Ctrl Alt G", "Frame selection"), ("Ctrl ] / Ctrl [", "Forward / backward"), ("Shift H / Shift V", "Flip horizontally / vertically"), ("Ctrl Alt C / V", "Copy / paste style"), ("Alt A / D / W / S", "Align left / right / top / bottom"), ("Alt H / Alt V", "Align centres / middles"), ("Ctrl Shift L / H", "Lock / hide"), ("Ctrl Shift K", "Place an image"), ("Ctrl Enter", "Ask the agent"), ("Arrows", "Nudge 1 px (Shift: 10)")]);
+        // Two columns, each group under the last, so a longer group never runs into the next.
+        for (col, groups) in [[tools, text, view].as_slice(), &[selection, edit]].iter().enumerate() {
+            let x = col as i32 * 2;
+            let mut y = 0;
+            for (heading, rows) in groups.iter() {
+                grid.attach(&label(heading, "design-menu-heading"), x, y, 2, 1);
+                for (i, (keys, what)) in rows.iter().enumerate() {
+                    grid.attach(&label(keys, "design-keycap"), x, y + 1 + i as i32, 1, 1);
+                    grid.attach(&label(what, "dim"), x + 1, y + 1 + i as i32, 1, 1);
+                }
+                y += 1 + rows.len() as i32;
             }
         }
         pop.set_child(Some(&grid));
@@ -2090,10 +2119,7 @@ impl Board {
         };
         add("undo", |b| b.undo());
         add("redo", |b| b.redo());
-        add("cut", |b| {
-            b.copy();
-            b.delete_selection();
-        });
+        add("cut", |b| b.cut());
         add("copy", |b| b.copy());
         add("paste", |b| b.paste());
         add("duplicate", |b| b.duplicate());
@@ -2295,9 +2321,24 @@ impl Board {
     }
 
     pub(super) fn copy(&self) {
+        if let Some(count) = self.copy_quietly() {
+            self.toast(&format!("Copied {count} {}", if count == 1 { "layer" } else { "layers" }));
+        }
+    }
+
+    /// Copy the selection and take it away.
+    pub(super) fn cut(&self) {
+        if let Some(count) = self.copy_quietly() {
+            self.delete_selection();
+            self.toast(&format!("Cut {count} {}", if count == 1 { "layer" } else { "layers" }));
+        }
+    }
+
+    /// Put the selection on the clipboard; how many layers that was.
+    fn copy_quietly(&self) -> Option<usize> {
         let nodes = edit::gather(&self.doc.scene.borrow(), &self.selection.borrow());
         if nodes.is_empty() {
-            return;
+            return None;
         }
         let texts: Vec<String> = nodes.iter().filter_map(|n| n.text.clone()).collect();
         let bytes = serde_json::to_vec(&json!({"relay_design": 1, "nodes": nodes})).unwrap_or_default();
@@ -2310,9 +2351,9 @@ impl Board {
         let union = gdk::ContentProvider::new_union(&providers);
         if let Err(e) = self.canvas.clipboard().set_content(Some(&union)) {
             self.toast(&e.to_string());
+            return None;
         }
-        let count = self.selected().len();
-        self.toast(&format!("Copied {count} {}", if count == 1 { "layer" } else { "layers" }));
+        Some(self.selected().len())
     }
 
     pub(super) fn paste(&self) {
@@ -2486,6 +2527,16 @@ impl Board {
         if on && flag == "hidden" {
             self.select(Vec::new());
         }
+    }
+
+    /// What Lock and Hide do to the selection now, as `toggle_flag` turns them: Unlock when
+    /// all of it is locked, Show when all of it is hidden.
+    pub(super) fn flag_captions(&self) -> (&'static str, &'static str) {
+        let ids = self.selected();
+        let scene = self.doc.scene.borrow();
+        let nodes: Vec<&Node> = ids.iter().filter_map(|id| scene.node(id)).collect();
+        let all = |f: fn(&Node) -> bool| !nodes.is_empty() && nodes.iter().all(|n| f(n));
+        (if all(Node::is_locked) { "Unlock" } else { "Lock" }, if all(Node::is_hidden) { "Show" } else { "Hide" })
     }
 
     pub(super) fn select_all(&self) {
@@ -2716,16 +2767,30 @@ pub fn display_name(n: &Node) -> String {
         return name.to_string();
     }
     if let Some(text) = n.text.as_deref().filter(|t| !t.trim().is_empty()) {
-        let line: String = text.lines().next().unwrap_or("").chars().take(40).collect();
+        let first = text.lines().next().unwrap_or("");
+        let mut line: String = first.chars().take(40).collect();
+        if line.len() < first.len() {
+            line.push('…');
+        }
         return line;
     }
     kind_caption(n.kind).to_string()
 }
 
+/// A menu entry for `design.{action}` that shows its shortcut (`<Control>c`), as the notes'
+/// menus do. Only shown: the board's own keys run it.
+pub(super) fn menu_item(caption: &str, action: &str, accel: Option<&str>) -> gio::MenuItem {
+    let item = gio::MenuItem::new(Some(caption), Some(&format!("design.{action}")));
+    if let Some(accel) = accel {
+        item.set_attribute_value("accel", Some(&accel.to_variant()));
+    }
+    item
+}
+
 /// "Export selection as" PNG, SVG or PDF, for the menus that offer it.
 pub(super) fn export_menu() -> gio::Menu {
     let section = gio::Menu::new();
-    section.append(Some("Export selection as PNG…"), Some("design.export"));
+    section.append(Some("Export selection as PNG (2×)…"), Some("design.export"));
     section.append(Some("Export selection as SVG…"), Some("design.export-svg"));
     section.append(Some("Export selection as PDF…"), Some("design.export-pdf"));
     section

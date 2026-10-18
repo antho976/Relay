@@ -507,6 +507,7 @@ impl Gallery {
         card.append(&frame);
         let title = label(&d.title, "design-card-title");
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        title.set_tooltip_text(Some(&d.title));
         card.append(&title);
         let meta = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         meta.add_css_class("design-card-meta");
@@ -519,7 +520,7 @@ impl Gallery {
                 meta.append(&lamp);
                 meta.append(&label(s, "design-card-terminal"));
             }
-            None => meta.append(&label("Project", "design-card-terminal")),
+            None => meta.append(&label("Project only", "design-card-terminal")),
         }
         let when = if deleted {
             format!("deleted {}", d.deleted_at.as_deref().and_then(|t| ago(t, Form::CompactAgo)).unwrap_or_default())
@@ -656,7 +657,7 @@ impl Gallery {
                 }));
             }
             let weak = self.me.clone();
-            item(&format!("The project only{}", if d.session.is_none() { CHECKED } else { "" }), Rc::new(move || {
+            item(&format!("Project only{}", if d.session.is_none() { CHECKED } else { "" }), Rc::new(move || {
                 if let Some(g) = weak.upgrade() {
                     g.mutate("design.update", id, Some(json!({"session": null})));
                 }

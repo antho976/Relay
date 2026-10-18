@@ -4,7 +4,7 @@
 
 use super::board::{display_name, kind_glyph, Board};
 use super::glyphs;
-use super::widgets::color_key;
+use super::widgets::{color_key, tip};
 use crate::app::label;
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -168,18 +168,27 @@ impl Layers {
         let disclose = disclose.clone().downcast::<gtk::Button>().expect("button");
         disclose.set_child(row.folder.then(|| crate::icons::image(if row.open { "chevron-down" } else { "chevron-right" }, 10)).as_ref());
         disclose.set_sensitive(row.folder);
+        if row.folder {
+            tip(&disclose, if row.open { "Collapse" } else { "Expand" });
+        } else {
+            disclose.set_tooltip_text(None);
+        }
         let glyph = glyph.clone().downcast::<gtk::Box>().expect("box");
         while let Some(c) = glyph.first_child() {
             glyph.remove(&c);
         }
         glyph.append(&glyphs::image(kind_glyph(n.kind), 14));
-        name.clone().downcast::<gtk::Label>().expect("label").set_text(&display_name(&n));
+        // The whole name under the pointer, where the row cuts it short.
+        let shown = display_name(&n);
+        let name = name.clone().downcast::<gtk::Label>().expect("label");
+        name.set_text(&shown);
+        name.set_tooltip_text(Some(&shown));
         let eye = eye.clone().downcast::<gtk::Button>().expect("button");
         eye.set_child(Some(&glyphs::image(if n.is_hidden() { "eye-off" } else { "eye" }, 14)));
-        eye.set_tooltip_text(Some(if n.is_hidden() { "Show" } else { "Hide" }));
+        tip(&eye, if n.is_hidden() { "Show" } else { "Hide" });
         let lock = lock.clone().downcast::<gtk::Button>().expect("button");
         lock.set_child(Some(&glyphs::image(if n.is_locked() { "lock" } else { "unlock" }, 14)));
-        lock.set_tooltip_text(Some(if n.is_locked() { "Unlock" } else { "Lock" }));
+        tip(&lock, if n.is_locked() { "Unlock" } else { "Lock" });
         if n.is_locked() {
             lock.add_css_class("on");
         } else {
@@ -534,7 +543,7 @@ pub fn pages_menu(b: &Rc<Board>, pop: &gtk::Popover) -> gtk::Widget {
     let fill = b.doc.scene.borrow().node(&current).and_then(|n| n.fill.clone());
     let weak = Rc::downgrade(b);
     let page = current.clone();
-    canvas.append(&color_key(b, Some(fill.as_deref().unwrap_or(super::paint::CANVAS)), "Canvas colour", true, move |c| {
+    canvas.append(&color_key(b, Some(fill.as_deref().unwrap_or(super::paint::CANVAS)), "Canvas colour", Some("Automatic"), move |c| {
         if let Some(b) = weak.upgrade() {
             let mut set = Map::new();
             set.insert("fill".into(), json!(c));

@@ -5,7 +5,7 @@
 
 use super::board::{display_name, kind_caption, kind_glyph, Board};
 use super::glyphs;
-use super::widgets::{color_key, number, number_step, segmented};
+use super::widgets::{color_key, number, number_step, segmented, tip};
 use crate::app::label;
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -110,12 +110,16 @@ impl Board {
             l.set_hexpand(true);
             head.append(&l);
         }
-        for (flag, on_glyph, off_glyph, tip) in [("locked", "lock", "unlock", "Lock (Ctrl+Shift+L)"), ("hidden", "eye-off", "eye", "Hide (Ctrl+Shift+H)")] {
+        // Each says what a press does now: Unlock while locked, Show while hidden.
+        for (flag, on_glyph, off_glyph, on_tip, off_tip) in [
+            ("locked", "lock", "unlock", "Unlock (Ctrl+Shift+L)", "Lock (Ctrl+Shift+L)"),
+            ("hidden", "eye-off", "eye", "Show (Ctrl+Shift+H)", "Hide (Ctrl+Shift+H)"),
+        ] {
             let on = nodes.iter().all(|n| if flag == "locked" { n.is_locked() } else { n.is_hidden() });
             let key = gtk::ToggleButton::new();
             key.add_css_class("design-context-key");
             key.set_child(Some(&glyphs::image(if on { on_glyph } else { off_glyph }, 14)));
-            key.set_tooltip_text(Some(tip));
+            tip(&key, if on { on_tip } else { off_tip });
             key.set_active(on);
             let weak = Rc::downgrade(&b);
             key.connect_toggled(move |_| {
@@ -188,11 +192,11 @@ impl Board {
             rotate.set_hexpand(true);
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             row.append(&rotate);
-            for (horizontal, glyph, tip) in [(true, "flip-h", "Flip horizontally (Shift+H)"), (false, "flip-v", "Flip vertically (Shift+V)")] {
+            for (horizontal, glyph, caption) in [(true, "flip-h", "Flip horizontally (Shift+H)"), (false, "flip-v", "Flip vertically (Shift+V)")] {
                 let key = gtk::Button::new();
                 key.add_css_class("design-icon-field");
                 key.set_child(Some(&glyphs::image(glyph, 16)));
-                key.set_tooltip_text(Some(tip));
+                tip(&key, caption);
                 let weak = Rc::downgrade(&b);
                 key.connect_clicked(move |_| {
                     if let Some(b) = weak.upgrade() {
@@ -419,9 +423,12 @@ impl Board {
                 }),
             ));
             let weak = Rc::downgrade(&b);
+            // A shape's label is centred until told otherwise; a text starts at the left.
+            let shape = |n: &Node| super::textedit::is_shape(n.kind);
+            let shapes = nodes.iter().any(shape);
             let align = segmented(
                 &[("left", "text-left", "Align left"), ("center", "text-center", "Centre"), ("right", "text-right", "Align right")],
-                Some(match same(nodes.iter().map(|n| n.align.unwrap_or(TextAlign::Left))) {
+                Some(match same(nodes.iter().map(|n| n.align.unwrap_or(if shape(n) { TextAlign::Center } else { TextAlign::Left }))) {
                     Some(TextAlign::Center) => "center",
                     Some(TextAlign::Right) => "right",
                     Some(TextAlign::Left) => "left",
@@ -429,7 +436,7 @@ impl Board {
                 }),
                 move |v| {
                     if let Some(b) = weak.upgrade() {
-                        b.set_selected(set(&[("align", if v == "left" { Value::Null } else { json!(v) })]));
+                        b.set_selected(set(&[("align", if v == "left" && !shapes { Value::Null } else { json!(v) })]));
                     }
                 },
             );
@@ -453,7 +460,7 @@ impl Board {
             sec.append(&case);
             let color = same(nodes.iter().map(|n| n.color.clone())).flatten();
             let weak = Rc::downgrade(&b);
-            sec.append(&labelled("Colour", color_key(&b, color.as_deref(), "Text colour", true, move |c| {
+            sec.append(&labelled("Colour", color_key(&b, color.as_deref(), "Text colour", Some("Automatic"), move |c| {
                 if let Some(b) = weak.upgrade() {
                     b.set_selected(set(&[("color", json!(c))]));
                 }
@@ -486,15 +493,22 @@ impl Board {
             if single {
                 super::shape_panels::fill(&b, &sec, &first);
             } else {
-                let fill = same(nodes.iter().map(super::paint::fill_of)).flatten();
+                let fill = same(nodes.iter().map(super::paint::fill_of));
                 let weak = Rc::downgrade(&b);
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-                row.append(&color_key(&b, fill.as_deref(), "Fill", true, move |c| {
+                // Lines and paths fill with nothing until given a colour.
+                let clear = if nodes.iter().all(free_line) { "None" } else { "Automatic" };
+                row.append(&color_key(&b, fill.clone().flatten().as_deref(), "Fill", Some(clear), move |c| {
                     if let Some(b) = weak.upgrade() {
                         b.set_selected(set(&[("fill", json!(c)), ("gradient", Value::Null)]));
                     }
                 }));
-                row.append(&label(fill.as_deref().unwrap_or("Mixed"), "design-hex-caption"));
+                let caption = match &fill {
+                    Some(Some(c)) => c.as_str(),
+                    Some(None) => "None",
+                    None => "Mixed",
+                };
+                row.append(&label(caption, "design-hex-caption"));
                 sec.append(&row);
             }
         }
@@ -504,7 +518,7 @@ impl Board {
             let stroke = same(nodes.iter().map(|n| n.stroke.clone())).flatten();
             let weak = Rc::downgrade(&b);
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            row.append(&color_key(&b, stroke.as_deref(), "Colour", !lines, move |c| {
+            row.append(&color_key(&b, stroke.as_deref(), "Colour", (!lines).then_some("None"), move |c| {
                 if let Some(b) = weak.upgrade() {
                     b.set_selected(set(&[("stroke", json!(c))]));
                 }
@@ -621,7 +635,7 @@ impl Board {
                 sec.append(&pair(field("Blur", s.blur, "Blur", "blur"), field("Spread", s.spread, "Spread", "spread")));
                 let weak = Rc::downgrade(&b);
                 let s2 = s.clone();
-                sec.append(&labelled("Colour", color_key(&b, Some(&s.color), "Shadow colour", false, move |c| {
+                sec.append(&labelled("Colour", color_key(&b, Some(&s.color), "Shadow colour", None, move |c| {
                     if let (Some(b), Some(c)) = (weak.upgrade(), c) {
                         let mut v = serde_json::to_value(&s2).unwrap_or_default();
                         v["color"] = json!(c);
@@ -673,8 +687,8 @@ impl Board {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         row.set_homogeneous(true);
         for (format, caption, tip) in [
-            (super::export::Format::Png(1.0), "PNG", "A picture at 1×"),
-            (super::export::Format::Png(2.0), "2×", "A picture at 2×, for sharp screens"),
+            (super::export::Format::Png(1.0), "PNG 1×", "A picture at 1×"),
+            (super::export::Format::Png(2.0), "PNG 2×", "A picture at 2×, for sharp screens"),
             (super::export::Format::Svg, "SVG", "Vector, for the web and other design tools"),
             (super::export::Format::Pdf, "PDF", "Vector, to print or share"),
         ] {

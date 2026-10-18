@@ -36,18 +36,18 @@ fn document_colors(b: &Board) -> Vec<String> {
     colors.into_iter().take(16).map(|(c, _)| c).collect()
 }
 
-/// A colour key showing `current`; choosing calls `pick` (`None` clears it back to automatic
-/// when `clearable`).
+/// A colour key showing `current`; choosing calls `pick`. With `clear`, a key so named
+/// ("Automatic" for a fill or a text, "None" for a border) picks `None`.
 pub fn color_key(
     b: &Rc<Board>,
     current: Option<&str>,
     tooltip: &str,
-    clearable: bool,
+    clear: Option<&'static str>,
     pick: impl Fn(Option<String>) + 'static,
 ) -> gtk::MenuButton {
     let key = gtk::MenuButton::new();
     key.add_css_class("design-color-key");
-    key.set_tooltip_text(Some(tooltip));
+    tip(&key, tooltip);
     let swatch = swatch_button(current, tooltip);
     swatch.set_can_target(false);
     swatch.set_focusable(false);
@@ -120,10 +120,10 @@ pub fn color_key(
             }
         });
         row.append(&entry);
-        if clearable {
-            let none = gtk::Button::with_label("None");
+        if let Some(caption) = clear {
+            let none = gtk::Button::with_label(caption);
             none.add_css_class("quiet");
-            none.set_tooltip_text(Some("Back to the automatic colour"));
+            none.set_tooltip_text(Some(if caption == "None" { "No colour" } else { "Back to the automatic colour" }));
             let pick3 = pick.clone();
             let p = pop.downgrade();
             none.connect_clicked(move |_| {
@@ -177,6 +177,7 @@ pub fn number_step(caption: &str, value: Option<f64>, step: f64, tooltip: &str, 
     entry.set_hexpand(true);
     entry.set_text(&value.map(super::board::fmt).unwrap_or_default());
     entry.set_placeholder_text(Some("Mixed"));
+    entry.update_property(&[gtk::accessible::Property::Label(tooltip)]);
     row.append(&entry);
     // The value last sent (or shown): leaving the field sends only what was typed since,
     // not the field's rounded text of a value it never changed.
@@ -330,6 +331,14 @@ pub fn eval(text: &str) -> Option<f64> {
     None
 }
 
+/// A key's tooltip, and its name for a screen reader: the tooltip less a shortcut or an aside
+/// in brackets at its end ("Lock (Ctrl+Shift+L)" is named "Lock").
+pub fn tip(widget: &impl IsA<gtk::Widget>, text: &str) {
+    widget.set_tooltip_text(Some(text));
+    let name = text.rsplit_once(" (").filter(|(_, rest)| rest.ends_with(')')).map_or(text, |(name, _)| name);
+    widget.as_ref().update_property(&[gtk::accessible::Property::Label(name)]);
+}
+
 /// A row of glyph keys of which one is lit.
 pub fn segmented(choices: &[(&str, &str, &str)], current: Option<&str>, pick: impl Fn(&str) + 'static) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -344,7 +353,7 @@ pub fn segmented(choices: &[(&str, &str, &str)], current: Option<&str>, pick: im
         } else {
             key.set_label(glyph);
         }
-        key.set_tooltip_text(Some(tip));
+        self::tip(&key, tip);
         if current == Some(*value) {
             key.add_css_class("selected");
         }
