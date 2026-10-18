@@ -87,7 +87,8 @@ fn signature(config: &Value, library: &Value) -> u64 {
     hash.finish()
 }
 
-fn images(library: &Value) -> Vec<&str> {
+/// The distinct images a rotation shuffles through; Settings counts them too.
+pub(crate) fn images(library: &Value) -> Vec<&str> {
     let mut images = Vec::new();
     if let Some(library) = library.as_array() {
         for item in library {
