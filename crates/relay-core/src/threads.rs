@@ -158,6 +158,8 @@ pub const MAX_LIVE: usize = 4;
 pub const MAX_TEXT: usize = 32_000;
 /// The most of a tool's answer kept with the thread, in characters.
 const MAX_TOOL_TEXT: usize = 20_000;
+/// Why a thread that carries pictures keeps a model that reads them.
+pub const IMAGES_IN_HISTORY: &str = "This thread has pictures, which a model on this PC cannot read: start a new thread to use it.";
 /// The longest a thread title may be, in characters.
 const MAX_TITLE: usize = 80;
 
@@ -792,6 +794,11 @@ pub fn set_agent(engine: &Engine, id: Id, model: Option<&str>, effort: Option<&s
     if lock(&engine.threads.live).working.contains_key(&id) {
         return Err(BusError::conflict("thread.busy", "The agent is still answering in this thread")
             .with_hint("wait for its reply, or stop it with thread.stop"));
+    }
+    // A resume hands the new model the whole conversation, pictures and all, and a model on
+    // this PC cannot read them.
+    if model.as_deref().and_then(crate::local_models::find).is_some() && !with_db(engine, |db| db.carried_by(id))?.is_empty() {
+        return Err(BusError::refused("thread.images_unsupported", IMAGES_IN_HISTORY).with_hint("start a new thread for a model on this PC"));
     }
     if !with_db(engine, |db| db.set_agent(id, model.as_deref(), effort.as_deref()))? {
         return Err(not_found(id));

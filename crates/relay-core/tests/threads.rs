@@ -621,8 +621,14 @@ fn a_message_carries_up_to_four_pictures_to_a_claude_model() {
     assert_eq!((local.code.as_str(), local.kind), ("thread.images_unsupported", relay_bus::ErrorKind::Refused));
     assert_eq!(local.message, "This thread runs on a model on this PC, which cannot read pictures: choose a Claude model for it to send them.");
     assert_eq!(threads(), 2);
-    ok(&engine, "thread.set", json!({"id": two["id"], "model": "qwen35-4b"}));
-    assert_eq!(code(call(&engine, "thread.send", json!({"id": two["id"], "text": "And this?", "images": [ids[0]]}))), "thread.images_unsupported");
+    // A thread whose conversation already holds pictures keeps a model that reads them.
+    let held = call(&engine, "thread.set", json!({"id": two["id"], "model": "qwen35-4b"})).error.unwrap();
+    assert_eq!((held.code.as_str(), held.kind), ("thread.images_unsupported", relay_bus::ErrorKind::Refused));
+    assert_eq!(held.message, "This thread has pictures, which a model on this PC cannot read: start a new thread to use it.");
+    // One without pictures may move to it, and then sends words alone.
+    let words = ok(&engine, "thread.create", json!({}));
+    ok(&engine, "thread.set", json!({"id": words["id"], "model": "qwen35-4b"}));
+    assert_eq!(code(call(&engine, "thread.send", json!({"id": words["id"], "text": "And this?", "images": [ids[0]]}))), "thread.images_unsupported");
 }
 
 #[test]
