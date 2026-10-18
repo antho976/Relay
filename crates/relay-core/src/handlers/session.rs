@@ -743,6 +743,8 @@ fn retire_session(ctx: &mut Ctx, s: &Session) -> Result<(), BusError> {
         ctx.after_commit(move |_| kill_detached(pty, Duration::from_millis(150)));
     }
     ctx.tx().execute("UPDATE sessions SET state = 'closed', pid = NULL, closed_at = ?1, updated_at = ?1 WHERE id = ?2", params![ctx.now, s.id]).bus()?;
+    // A kept checkout's build output and the agent's scratch space go once the agent is gone.
+    ctx.after_commit(|engine| crate::disk_sweep::soon(std::sync::Arc::downgrade(&engine)));
     // A partner left pointing at the closed session takes the next member still linked to it:
     // a reviewer whose first builder closes keeps its second one, so the group stays whole
     // for validate_pair and assert_own. Anyone else is unpaired (RA-398).

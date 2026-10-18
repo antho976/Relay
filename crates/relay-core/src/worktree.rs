@@ -519,6 +519,23 @@ pub fn purge_build(wt: &Path) -> u64 {
     freed
 }
 
+/// The [`BUILD_DIRS`] of `wt` that git ignores: what a checkout that stays can lose without
+/// losing a file it tracks, or one a project keeps in a folder of that name (`disk_sweep`).
+pub fn ignored_build_dirs(wt: &Path) -> Vec<PathBuf> {
+    let dirs: Vec<(PathBuf, String)> = build_dirs(wt)
+        .map(|dir| {
+            let name = format!("{}/", dir.strip_prefix(wt).unwrap_or(&dir).display());
+            (dir, name)
+        })
+        .collect();
+    if dirs.is_empty() { return Vec::new(); }
+    let mut args = vec!["check-ignore", "--"];
+    args.extend(dirs.iter().map(|(_, name)| name.as_str()));
+    // Exit 1 is "none of them": nothing to take, as for any failure.
+    let ignored = git(wt, &args).unwrap_or_default();
+    dirs.into_iter().filter(|(_, name)| ignored.lines().any(|line| line == name)).map(|(dir, _)| dir).collect()
+}
+
 /// The directories Relay creates checkouts in: the session pool and the integration area.
 fn managed_dirs(repo: &Path) -> [PathBuf; 2] {
     [pool_dir(repo), repo.join(".relay").join("integrations")]
