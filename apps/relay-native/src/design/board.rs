@@ -246,6 +246,14 @@ pub struct Board {
     pub(super) page_label: gtk::Label,
     pub(super) context: RefCell<Option<gtk::Widget>>,
     pub(super) context_at: Cell<(i32, i32)>,
+    /// The toolbar's width with its words showing, measured before it was made compact.
+    pub(super) context_full: Cell<Option<i32>>,
+    /// Its words are hidden and its keys tighter: it did not fit beside the inspector.
+    pub(super) context_compact: Cell<bool>,
+    /// What the toolbar was built for (text, shape, alignment…), so a rebuild for the same kind
+    /// starts compact rather than showing its words for a frame.
+    pub(super) context_kind: Cell<&'static str>,
+    context_refit: Cell<bool>,
     pub(super) inspector: gtk::Box,
     pub(super) inspector_scroll: gtk::ScrolledWindow,
     /// The tools along the top left, which the inspector keeps clear of.
@@ -479,6 +487,10 @@ impl Board {
             page_label,
             context: RefCell::default(),
             context_at: Cell::new((0, 0)),
+            context_full: Cell::new(None),
+            context_compact: Cell::new(false),
+            context_kind: Cell::new(""),
+            context_refit: Cell::new(false),
             inspector,
             inspector_scroll,
             dock: dock.clone(),
@@ -1955,6 +1967,26 @@ impl Board {
         // sat over their own controls otherwise. Too narrow for both, it keeps clear of what it can.
         let inspector = self.inspector_scroll.is_visible().then(|| f64::from(self.inspector_scroll.width().max(INSPECTOR_W as i32)) + 12.0);
         let layers = self.layers_panel.reveals_child().then(|| f64::from(self.layers_panel.width()) + 12.0);
+        // Wider than the room beside the inspector, the bar drops its words and tightens its keys
+        // (a text's ran 640px, over the inspector in windows under ~1150px); wide enough again,
+        // they come back. The switch waits for this layout pass to end, out of sight meanwhile.
+        if !self.context_compact.get() {
+            self.context_full.set(Some(w));
+        }
+        let full = f64::from(self.context_full.get().unwrap_or(w));
+        let compact = full > cw - inspector.unwrap_or(0.0) - 16.0;
+        if compact != self.context_compact.get() {
+            if !self.context_refit.replace(true) {
+                let weak = self.me.clone();
+                glib::idle_add_local_once(move || {
+                    if let Some(b) = weak.upgrade() {
+                        b.context_refit.set(false);
+                        b.set_context_compact(compact);
+                    }
+                });
+            }
+            return Some(away);
+        }
         let mut right = cw - 8.0;
         if let Some(iw) = inspector.filter(|iw| cw - iw - 8.0 - w as f64 >= 8.0) {
             right = cw - iw - 8.0;

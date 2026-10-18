@@ -4,7 +4,8 @@ an agent would, then relay-native captures and scripted runs of the board (desig
 
     python3 scripts/design-smoke.py [shot ...]
 
-Shots (default all): gallery, board, board-select, edit (layers and typing in place), script
+Shots (default all): gallery, board, board-select, board-narrow (the text toolbar in a 1080 px
+window), edit (layers and typing in place), script
 (gestures and commands; the client's scene must equal the engine's), agent (Ask types into the
 fixture terminal, whose fake agent edits the layer; the open board must show it), media (a picture
 through design.asset.add, copy and paste), perf (a 1,721-node design: layout, content and frame
@@ -19,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / ".impeccable/review"; OUT.mkdir(parents=True, exist_ok=True)
-SHOTS = sys.argv[1:] or ["gallery", "board", "board-select", "edit", "script", "agent", "media", "shapes", "more", "perf"]
+SHOTS = sys.argv[1:] or ["gallery", "board", "board-select", "board-narrow", "edit", "script", "agent", "media", "shapes", "more", "perf"]
 FAKE_AGENT = r'''#!/usr/bin/env python3
 """A fixture provider: echoes input, and answers a [Relay design] prompt by turning the
 selected layer green through design.apply, as the session's own agent."""
@@ -276,6 +277,10 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
             if shot != "gallery":
                 e["RELAY_SMOKE_DESIGN_BOARD"] = "1"
             if shot == "board-select":
+                e["RELAY_SMOKE_DESIGN_SELECT"] = "cta-label"
+            if shot == "board-narrow":
+                # A window under ~1150 px: the text toolbar must keep clear of the inspector.
+                e["RELAY_NATIVE_SIZE"] = "1080,760"
                 e["RELAY_SMOKE_DESIGN_SELECT"] = "cta-label"
             if shot == "edit":
                 e["RELAY_NATIVE_SMOKE_SECONDS"] = "8"
