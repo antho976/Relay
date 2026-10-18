@@ -4376,13 +4376,19 @@ fn panel_invest(ui: &Rc<Ui>, body: &gtk::Box, p: &Value, lists: Option<&Value>) 
     // meters carry no tick.
     let room: Vec<&Value> = p["room"].as_array().into_iter().flatten().collect();
     if let Some(year) = room.first().and_then(|r| r["year"].as_i64()) {
-        let list = block(body, &format!("Room left in {year}"), "");
+        // Until about March the RRSP's room is last year's: rows of two years each say theirs.
+        let one_year = room.iter().all(|r| r["year"].as_i64() == Some(year));
+        let list = block(body, &if one_year { format!("Room left in {year}") } else { String::from("Room left") }, "");
         for r in room {
             let registration = r["registration"].as_str();
             let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
             row.add_css_class("threads-budget");
             let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            let name = label(registration_name(registration), "threads-panel-name");
+            let shown = match r["year"].as_i64() {
+                Some(own) if !one_year => format!("{} · {own}", registration_name(registration)),
+                _ => registration_name(registration).to_string(),
+            };
+            let name = label(&shown, "threads-panel-name");
             name.set_hexpand(true);
             line.append(&name);
             let over = r["over"].as_i64().unwrap_or(0);

@@ -985,7 +985,7 @@ fn activity_row(ui: &Rc<Ui>, a: &Value) -> gtk::Box {
     trash.set_valign(gtk::Align::Center);
     let weak = Rc::downgrade(ui);
     // Said as an entry's delete is: "Deleted Bought 10 XEQT · Thu 8 Oct".
-    let (id, what) = (a["id"].clone(), format!("Deleted {} · {}", title.trim(), human_date(text(a, "date"))));
+    let (id, what) = (a["id"].clone(), format!("Deleted “{}” · {}", title.trim(), human_date(text(a, "date"))));
     trash.connect_clicked(move |_| {
         if let Some(ui) = weak.upgrade() {
             delete_activity(&ui, id.clone(), what.clone());
