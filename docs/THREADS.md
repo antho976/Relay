@@ -280,14 +280,16 @@ Not yet: ticking rows to approve part of a batch, an amber dot on the thread's s
 - **Each thread picks its model and effort** in the message box (Default, Opus 5.5, Sonnet 5.5,
   Haiku 5.5, Fable 5.1; effort Default, Low to Max). `thread.set` stores them (`threads.db`
   version 2 adds `effort`) and closes a running agent, so the next message resumes the same
-  conversation with `--model` and `--effort`. A new thread starts with the last choice.
+  conversation with `--model` and `--effort`. A new thread starts with the last choice, kept
+  across restarts (`native.threads.model`, `.effort`).
 - **Tally's pages are dense:** each opens on a strip of figures (Overview: left to spend, spent,
   income, net worth and the pace; Entries: count, in, out, net; Plan: monthly budget, given to
   categories, unassigned, spent), then cards of compact rows with category badges and icons.
   Overview fits budgets, bills and recent entries on one screen; Entries groups days with their net;
   Plan is one table; Data is a two-column settings list.
 - **The sidebar and the Tally panel can be dragged** wider or narrower (sidebar 200 to 420 pixels;
-  the panel opens at 340).
+  the panel opens at 340, then at the width it was left at; its source and tab are kept too, under
+  `native.threads.*`).
 
 ## Tally's pages, distilled (2026-10-15)
 
