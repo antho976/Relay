@@ -184,4 +184,15 @@ class ChatTest {
         assertEquals("" to listOf("phone-0123456789abcdef.jpg"), splitAttached(path))
         assertEquals("see .relay/attachments/ for them" to emptyList<String>(), splitAttached("see .relay/attachments/ for them"))
     }
+
+    @Test
+    fun theWorkingRowNamesAStepOnlyWhenItIsFoldedOutOfSight() {
+        val alone = chatPieces(listOf(msg("u", "user", """{"text":"go"}"""), tool("1", "Bash", "cargo test")), emptyList(), working = true, today = today)
+        assertEquals("Working…", doingNow(alone))
+        val folded = chatPieces(
+            listOf(msg("u", "user", """{"text":"go"}"""), tool("1", "Read", "a.rs"), answer("1"), tool("2", "Read", "b.rs"), answer("2"), tool("3", "Bash", "cargo test")),
+            emptyList(), working = true, today = today,
+        )
+        assertEquals("Running cargo test…", doingNow(folded))
+    }
 }

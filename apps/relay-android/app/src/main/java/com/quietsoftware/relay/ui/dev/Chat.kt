@@ -476,13 +476,12 @@ internal fun waitsOnAsk(pieces: List<ChatPiece>): Boolean =
 internal fun diffCounts(lines: List<String>): Pair<Int, Int> =
     lines.count { it.startsWith("+") && !it.startsWith("+++") } to lines.count { it.startsWith("-") && !it.startsWith("---") }
 
-/** What the working row says: the step running now, in words. */
-private fun doingNow(pieces: List<ChatPiece>): String {
-    val call = when (val last = pieces.lastOrNull()) {
-        is ChatPiece.Tool -> last.call
-        is ChatPiece.Steps -> last.calls.last()
-        else -> null
-    }?.takeIf { it.step == Step.Running } ?: return "Working…"
+/**
+ * What the working row says: the step running now, in words, when it is folded out of sight in a
+ * group of steps; a step on a line of its own already says so there.
+ */
+internal fun doingNow(pieces: List<ChatPiece>): String {
+    val call = (pieces.lastOrNull() as? ChatPiece.Steps)?.calls?.last()?.takeIf { it.step == Step.Running } ?: return "Working…"
     return "${verb(call.name).doing}${call.summary.takeIf { it.isNotBlank() }?.let { " $it" }.orEmpty()}…"
 }
 
@@ -701,7 +700,8 @@ private fun ToolLine(call: Call, startOpen: Boolean = false) {
             horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
             StepMark(call.step, v.glyph)
-            T(v.did, style = Relay.type.caption, color = if (call.step == Step.Failed) c.heldText else c.ink3, maxLines = 1)
+            // Running, it says what the agent is doing; after, what it did.
+            T(if (call.step == Step.Running) v.doing else v.did, style = Relay.type.caption, color = if (call.step == Step.Failed) c.heldText else c.ink3, maxLines = 1)
             if (call.summary.isNotBlank()) T(call.summary, Modifier.weight(1f), Relay.type.mono, c.ink2, maxLines = 1) else Box(Modifier.weight(1f))
             if (more) Glyph(if (open) "chevron-up" else "chevron-down", 12.dp, c.inkDim)
         }
@@ -780,7 +780,7 @@ private fun EditView(call: Call) {
     Column(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
         Row(Modifier.fillMaxWidth().heightIn(min = 30.dp).padding(end = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             StepMark(call.step, v.glyph)
-            T(v.did, style = Relay.type.caption, color = if (call.step == Step.Failed) c.heldText else c.ink3, maxLines = 1)
+            T(if (call.step == Step.Running) v.doing else v.did, style = Relay.type.caption, color = if (call.step == Step.Failed) c.heldText else c.ink3, maxLines = 1)
             T(call.summary, Modifier.weight(1f), Relay.type.mono, c.ink2, maxLines = 1)
             if (added > 0) T("+$added", style = Relay.type.mono.copy(fontSize = 11.sp), color = ADD_TEXT, maxLines = 1)
             if (removed > 0) T("−$removed", style = Relay.type.mono.copy(fontSize = 11.sp), color = DEL_TEXT, maxLines = 1)
