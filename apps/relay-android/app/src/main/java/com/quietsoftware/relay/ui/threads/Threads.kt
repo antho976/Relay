@@ -80,6 +80,8 @@ import com.quietsoftware.relay.core.wire.o
 import com.quietsoftware.relay.core.wire.s
 import com.quietsoftware.relay.data.Relay as RelayData
 import com.quietsoftware.relay.ui.Nav
+import com.quietsoftware.relay.ui.dev.MessageKeys
+import com.quietsoftware.relay.ui.dev.messageTouch
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Empty
 import com.quietsoftware.relay.ui.kit.Field
@@ -638,6 +640,9 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     }
 
     var draft by rememberSaveable(opened) { mutableStateOf("") }
+    val focus = remember { FocusRequester() }
+    // The one message of the person's showing its keys, if any.
+    var keysOn by remember(tid) { mutableStateOf<String?>(null) }
     var menu by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
@@ -660,6 +665,28 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
         stopped = null
         follow = true
     }
+    // Again as a new message: through the outbox, so it waits for the PC like any other.
+    fun resend(text: String) {
+        val t = target ?: return
+        if (working) {
+            nav.shell.toast("Claude is still answering: stop it first, or wait")
+            return
+        }
+        keysOn = null
+        nav.shell.change("thread.send", buildJsonObject { put("id", t); put("text", text) }, "Message")
+        stopped = null
+        follow = true
+    }
+    val keys = BubbleKeys(
+        keysOn,
+        toggle = { k -> keysOn = if (keysOn == k) null else k },
+        edit = { words ->
+            keysOn = null
+            draft = words
+            focus.requestFocus()
+        },
+        resend = if (target != null && !createFailed) ::resend else null,
+    )
     fun stop() {
         val n = num ?: return
         stopping = true
@@ -746,7 +773,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     if (firstText != null) item("first") { UserBubble(firstText, queued = false, online = s.online, modifier = cell.padding(top = 12.dp)) }
-                    items(rows, key = { it.key }, contentType = { it::class }) { p -> PieceView(p, cell, s.online, money, current) }
+                    items(rows, key = { it.key }, contentType = { it::class }) { p -> PieceView(p, cell, s.online, money, current, keys) }
                     stopped?.let { text ->
                         item("stopped") {
                             Column(cell.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -791,6 +818,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                 modifier = Modifier.column().fillMaxWidth().padding(horizontal = gutter(maxWidth)),
                 canSend = target != null && !createFailed,
                 canPick = !working && target != null,
+                focus = focus,
             )
         }
     }
@@ -814,6 +842,13 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     }
 }
 
+/** What a message of the person's offers under it, and which one shows its keys. */
+private class BubbleKeys(val opened: String?, val toggle: ((String) -> Unit)?, val edit: ((String) -> Unit)?, val resend: ((String) -> Unit)?) {
+    companion object {
+        val None = BubbleKeys(null, null, null, null)
+    }
+}
+
 /** Keep the newest piece in view: the last item, then to its very end. */
 private suspend fun LazyListState.toEnd(count: Int) {
     if (count <= 0) return
@@ -823,11 +858,20 @@ private suspend fun LazyListState.toEnd(count: Int) {
 }
 
 @Composable
-private fun PieceView(p: Piece, cell: Modifier, online: Boolean, money: Money, proposals: Map<Long, JsonObject>) {
+private fun PieceView(p: Piece, cell: Modifier, online: Boolean, money: Money, proposals: Map<Long, JsonObject>, keys: BubbleKeys = BubbleKeys.None) {
     val c = Relay.colors
     when (p) {
         is Piece.Day -> T(p.label, cell.padding(top = 18.dp, bottom = 2.dp), Relay.type.caption.copy(textAlign = TextAlign.Center), c.ink3)
-        is Piece.User -> UserBubble(p.text, p.queued, online, cell.padding(top = 18.dp))
+        is Piece.User -> UserBubble(
+            p.text,
+            p.queued,
+            online,
+            cell.padding(top = 18.dp),
+            open = keys.opened == p.key,
+            onOpen = keys.toggle?.let { t -> { t(p.key) } },
+            onEdit = keys.edit,
+            onResend = keys.resend?.takeIf { !p.queued },
+        )
         is Piece.Reply -> Markdown(p.text, cell.padding(top = 12.dp))
         is Piece.Tool -> Box(cell.padding(top = if (p.call.card != null) 10.dp else 2.dp)) { ToolView(p.call, money, proposals) }
         is Piece.Reads -> Box(cell.padding(top = 2.dp)) { ReadsView(p, money, proposals) }
@@ -839,18 +883,32 @@ private fun PieceView(p: Piece, cell: Modifier, online: Boolean, money: Money, p
     }
 }
 
-/** The person's message: a bubble on the right, at most about six sevenths of the column. */
+/**
+ * The person's message: a bubble on the right, at most about six sevenths of the column. A tap or
+ * a long press shows its keys under it (the agent chat's): Copy, Edit and Send again.
+ */
 @Composable
-private fun UserBubble(text: String, queued: Boolean, online: Boolean, modifier: Modifier) {
+private fun UserBubble(
+    text: String,
+    queued: Boolean,
+    online: Boolean,
+    modifier: Modifier,
+    open: Boolean = false,
+    onOpen: (() -> Unit)? = null,
+    onEdit: ((String) -> Unit)? = null,
+    onResend: ((String) -> Unit)? = null,
+) {
     val c = Relay.colors
     Column(modifier, horizontalAlignment = Alignment.End) {
         Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
-            SelectionContainer {
-                Box(Modifier.clip(Radii.card).background(c.wash).padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    T(text, style = Relay.type.body, color = c.ink)
-                }
+            Box(
+                Modifier.clip(Radii.card).background(c.wash).then(if (open) Modifier.border(1.dp, c.strong, Radii.card) else Modifier)
+                    .then(messageTouch(open, onOpen)).padding(horizontal = 14.dp, vertical = 10.dp),
+            ) {
+                T(text, style = Relay.type.body, color = c.ink)
             }
         }
+        MessageKeys(open, text, onClose = { onOpen?.invoke() }, onEdit = onEdit, onResend = onResend?.let { again -> { again(text) } })
         if (queued) Row(Modifier.padding(top = 5.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Dot(c.waiting, 5.dp)
             T(if (online) "Sending…" else "Waiting for the PC", style = Relay.type.caption.copy(fontSize = 11.5.sp), color = c.ink3)

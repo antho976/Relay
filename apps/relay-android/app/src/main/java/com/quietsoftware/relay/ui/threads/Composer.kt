@@ -25,6 +25,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -83,6 +85,7 @@ internal fun Composer(
     canSend: Boolean = true,
     canPick: Boolean = true,
     onDictate: (() -> Unit)? = null,
+    focus: FocusRequester? = null,
 ) {
     val c = Relay.colors
     val source = remember { MutableInteractionSource() }
@@ -98,7 +101,7 @@ internal fun Composer(
                 BasicTextField(
                     value = value,
                     onValueChange = onValue,
-                    modifier = Modifier.fillMaxWidth().padding(end = 8.dp).heightIn(min = 24.dp),
+                    modifier = Modifier.fillMaxWidth().padding(end = 8.dp).heightIn(min = 24.dp).then(if (focus != null) Modifier.focusRequester(focus) else Modifier),
                     textStyle = Relay.type.body.copy(color = c.ink),
                     cursorBrush = SolidColor(c.ink),
                     minLines = 1,

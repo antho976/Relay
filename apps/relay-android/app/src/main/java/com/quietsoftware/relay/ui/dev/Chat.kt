@@ -752,17 +752,7 @@ private fun UserBubble(
 ) {
     val c = Relay.colors
     val (words, pictures) = remember(text) { splitAttached(text) }
-    val haptic = LocalHapticFeedback.current
-    val clipboard = LocalClipboard.current
-    val scope = rememberCoroutineScope()
-    val touch = if (onOpen == null) Modifier else Modifier.combinedClickable(
-        onClickLabel = if (open) "Hide this message's keys" else "Show this message's keys",
-        onLongClick = {
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            if (!open) onOpen()
-        },
-        onClick = onOpen,
-    )
+    val touch = messageTouch(open, onOpen)
     Column(modifier, horizontalAlignment = Alignment.End) {
         if (pictures.isNotEmpty()) Row(Modifier.padding(bottom = 6.dp).clip(Radii.pill).then(if (words.isEmpty()) touch else Modifier), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             for (p in pictures) AttachedPill(p)
@@ -779,17 +769,41 @@ private fun UserBubble(
             Dot(c.waiting, 5.dp)
             T(if (online) "Sent to the terminal" else "Waiting for the PC", style = Relay.type.caption.copy(fontSize = 11.5.sp), color = c.ink3)
         }
-        AnimatedVisibility(open, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (words.isNotEmpty()) {
-                    Chip("Copy", "Copy this message", true, glyph = "copy") {
-                        scope.launch { clipboard.copy(words) }
-                        onOpen?.invoke()
-                    }
-                    onEdit?.let { edit -> Chip("Edit", "Edit it in the message box", true, glyph = "edit") { edit(words) } }
+        MessageKeys(open, words, onClose = { onOpen?.invoke() }, onEdit = onEdit, onResend = onResend?.let { again -> { again(text) } })
+    }
+}
+
+/** A tap or a long press on a message of the person's: [onOpen] shows its keys, or a tap hides them. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun messageTouch(open: Boolean, onOpen: (() -> Unit)?): Modifier {
+    if (onOpen == null) return Modifier
+    val haptic = LocalHapticFeedback.current
+    return Modifier.combinedClickable(
+        onClickLabel = if (open) "Hide this message's keys" else "Show this message's keys",
+        onLongClick = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            if (!open) onOpen()
+        },
+        onClick = onOpen,
+    )
+}
+
+/** The keys under a message of the person's, while it is [open]: Copy and Edit for its [words], and Send again. */
+@Composable
+internal fun MessageKeys(open: Boolean, words: String, onClose: () -> Unit, onEdit: ((String) -> Unit)?, onResend: (() -> Unit)?) {
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    AnimatedVisibility(open, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (words.isNotEmpty()) {
+                Chip("Copy", "Copy this message", true, glyph = "copy") {
+                    scope.launch { clipboard.copy(words) }
+                    onClose()
                 }
-                onResend?.let { again -> Chip("Send again", "Send this message again", true, glyph = "refresh") { again(text) } }
+                onEdit?.let { edit -> Chip("Edit", "Edit it in the message box", true, glyph = "edit") { edit(words) } }
             }
+            onResend?.let { again -> Chip("Send again", "Send this message again", true, glyph = "refresh", onClick = again) }
         }
     }
 }

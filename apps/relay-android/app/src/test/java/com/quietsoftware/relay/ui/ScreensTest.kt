@@ -192,6 +192,8 @@ class ScreensTest {
     @Test fun outbox() = shoot("outbox", "outbox")
     @Test fun terminal() = shoot("terminal", "terminal/brisk-otter")
     @Test fun chat() = shoot("chat", "chat/brisk-otter")
+    /** A message of the person's in a thread, tapped: Send again goes through the outbox, so it shows with the PC away. */
+    @Test fun threadMessageKeys() = shootAfterTap("thread-message-keys", "thread/301", "How much did I spend")
     /** A message of the person's, tapped: its Copy, Edit and Send again keys. */
     @Test fun chatMessageKeys() = shootAfterTap("chat-message-keys", "chat/brisk-otter", "The board drops a card")
     /** The chat's view of the agent's screen, which shows only with the PC in reach: here over what the phone saved. */
