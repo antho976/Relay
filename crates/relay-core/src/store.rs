@@ -464,7 +464,7 @@ pub const MIGRATIONS: &[&str] = &[
     ) WITHOUT ROWID;
     CREATE INDEX design_nodes_parent ON design_nodes(design_id, parent_id, ord);
     "#,
-    // v29 - a Claude session may run on the API key in the user's keyring instead of their
+    // v29 - a Claude session may run on an API key, through the key proxy, instead of the user's
     // subscription (`session.create` `use_api_key`). Only the choice is stored, never the key.
     r#"
     ALTER TABLE sessions ADD COLUMN use_api_key INTEGER NOT NULL DEFAULT 0;

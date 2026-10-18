@@ -887,12 +887,20 @@ fn prepare_launch(engine: &Engine, plan: LaunchPlan) -> Result<PreparedLaunch, B
     if row.session.provider == Provider::Claude {
         crate::hooks::install_claude(&cwd, instance, &relay_bin).bus()?;
         crate::hooks::add_claude_mcp_servers(&cwd, &plugin_servers).bus()?;
-        // The key itself is the key proxy's (docs/KEY-PROXY.md); without its pass token Claude
-        // could only fail. A test engine has no proxy and checks the arguments alone.
-        let token = crate::hooks::key_proxy_token_path().filter(|path| path.is_file());
-        if row.session.use_api_key && token.is_none() && instance != crate::Instance::Test {
-            return Err(BusError::unavailable("session.key_proxy", "this session runs on your API key, and the key proxy is not set up")
-                .with_hint("run scripts/key-proxy/install.sh once (docs/KEY-PROXY.md), or start the session without the API key"));
+        // The key itself is the key proxy's (docs/KEY-PROXY.md); without its pass token, or with
+        // the proxy down, Claude could only fail. A loopback connect answers at once either way,
+        // and this is the launch's unlocked phase. A test engine has no proxy and checks the
+        // arguments alone.
+        if row.session.use_api_key && instance != crate::Instance::Test {
+            if !crate::hooks::key_proxy_token_path().is_some_and(|path| path.is_file()) {
+                return Err(BusError::unavailable("session.key_proxy", "this session runs on your API key, and the key proxy is not set up")
+                    .with_hint("set it up once (docs/KEY-PROXY.md), or start the session without the API key"));
+            }
+            let proxy = std::net::SocketAddr::from(([127, 0, 0, 1], crate::hooks::KEY_PROXY_PORT));
+            if std::net::TcpStream::connect_timeout(&proxy, std::time::Duration::from_millis(500)).is_err() {
+                return Err(BusError::unavailable("session.key_proxy", format!("this session runs on your API key, and the key proxy is not answering on {proxy}"))
+                    .with_hint("systemctl status relay-key-proxy; or start the session without the API key"));
+            }
         }
     } else if row.session.provider == Provider::Codex {
         crate::hooks::install_codex(&cwd, instance, &relay_bin).map_err(codex_hooks_error)?;
@@ -992,7 +1000,7 @@ fn prepare_launch(engine: &Engine, plan: LaunchPlan) -> Result<PreparedLaunch, B
         ],
         // Claude takes a key from these before anything else, and its tools inherit them: one
         // exported where Relay started would reach every agent's shell and override the
-        // session's own choice between the subscription and the keyring's key.
+        // session's own choice between the subscription and the key proxy.
         // An API-key session also drops what would bill it to another account or provider.
         env_remove: match (row.session.provider, row.session.use_api_key) {
             (Provider::Claude, false) => ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"].map(String::from).to_vec(),

@@ -2970,23 +2970,19 @@ dependencies = [
  "anyhow",
  "base64",
  "clap",
- "httparse",
  "jiff",
  "regex",
  "relay-bus",
  "relay-core",
  "relay-money",
  "relay-remote",
- "rustls",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
- "tokio-rustls",
  "tracing",
  "tracing-subscriber",
  "uuid",
- "webpki-roots",
 ]
 
 [[package]]
@@ -3045,6 +3041,17 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "relay-key-proxy"
+version = "4.0.0-dev"
+dependencies = [
+ "httparse",
+ "rustls",
+ "tokio",
+ "tokio-rustls",
+ "webpki-roots",
 ]
 
 [[package]]

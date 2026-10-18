@@ -1,5 +1,5 @@
-//! Anthropic API keys blanked out of what Relay keeps and sends on. Relay never reads a key
-//! (`hooks::API_KEY_HELPER`), but one an agent prints would otherwise land in the terminal ring,
+//! Anthropic API keys blanked out of what Relay keeps and sends on. Relay never holds a key (the
+//! key proxy does, docs/KEY-PROXY.md), but one someone pastes or prints would otherwise land in the terminal ring,
 //! the stored scrollback, the phone's attach stream, a transcript reply or an audit row. Every key
 //! starts `sk-ant-`; what follows it is overwritten with `*` byte for byte, so a terminal's columns
 //! and a JSON document's shape are unchanged. A best effort: a key split by a cursor move or a

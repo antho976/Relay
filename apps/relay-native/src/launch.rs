@@ -207,7 +207,7 @@ struct Profile {
     prompt: gtk::TextView,
     writes: gtk::Switch,
     ui_access: gtk::Switch,
-    /// Claude only: bill the session to the API key in the keyring, not the signed-in account.
+    /// Claude only: bill the session to the key proxy's API key, not the signed-in account.
     api_key: gtk::Switch,
     more: gtk::Revealer,
     more_summary: gtk::Label,
