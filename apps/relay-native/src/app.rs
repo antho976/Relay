@@ -529,13 +529,11 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     palette_key.set_widget_name("command-palette");
     let palette_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     palette_row.append(&crate::icons::image("search", 14));
-    let palette_text = label("Search or run a command", "command-search-text");
-    palette_text.set_hexpand(true);
-    palette_text.set_xalign(0.0);
     // Its natural width at full size; a narrower window shortens the words, not the bar's reach
-    // (at 300px it alone kept a 1024px window from fitting its window controls).
-    palette_text.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    palette_text.set_width_chars(6);
+    // (at 300px it alone kept a 1024px window from fitting its window controls), and to one
+    // word rather than "Search or r…".
+    let palette_text = crate::fit_label::FitLabel::new("Search or run a command", "Search", "command-search-text");
+    palette_text.set_hexpand(true);
     palette_row.append(&palette_text);
     palette_row.append(&label("Ctrl K", "keycap"));
     palette_key.set_child(Some(&palette_row));
@@ -946,9 +944,14 @@ fn status_bar() -> (StatusBar, status::UsageState) {
     status_branch.set_max_width_chars(18);
     bottom.append(&status_project);
     bottom.append(&gtk::Separator::new(gtk::Orientation::Vertical));
-    bottom.append(&crate::icons::image("branch", 11));
-    bottom.append(&status_branch);
-    bottom.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+    // The branch, when there is a project to have one: no bare branch mark beside "No project".
+    let branch_cell = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    branch_cell.append(&crate::icons::image("branch", 11));
+    branch_cell.append(&status_branch);
+    branch_cell.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+    branch_cell.set_visible(false);
+    bottom.append(&branch_cell);
+    status_branch.connect_label_notify(move |l| branch_cell.set_visible(!l.label().is_empty()));
     bottom.append(&label("linux · local", "status-platform"));
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
@@ -1033,9 +1036,30 @@ impl Ui {
         split.set_resize_start_child(false);
         split.set_shrink_start_child(false);
         split.set_position(SIDEBAR_WIDTH);
-        split.connect_position_notify(|split| {
-            if split.position() > SIDEBAR_MAX {
-                split.set_position(SIDEBAR_MAX);
+        // The width the person chose, which a window too narrow for it squeezes and a wider one
+        // gives back; GtkPaned alone kept the squeezed width (a window opened small, or made
+        // narrower and wide again, left the sidebar at its 220px minimum for good).
+        let chosen = Rc::new(Cell::new(SIDEBAR_WIDTH));
+        split.connect_position_notify({
+            let chosen = chosen.clone();
+            move |split| {
+                if split.position() > SIDEBAR_MAX {
+                    split.set_position(SIDEBAR_MAX);
+                } else if split.position() < split.max_position() {
+                    chosen.set(split.position());
+                }
+            }
+        });
+        split.connect_max_position_notify(move |split| {
+            let want = chosen.get().min(split.max_position());
+            if split.position() < want {
+                // Not during the allocation that changed the room.
+                let split = split.downgrade();
+                glib::idle_add_local_once(move || {
+                    if let Some(split) = split.upgrade() {
+                        split.set_position(want);
+                    }
+                });
             }
         });
         body.append(&split);
@@ -1458,10 +1482,21 @@ impl Ui {
     pub fn show_error(&self, message: &str) {
         self.show_notice(message, (6 + message.chars().count() / 20).min(20));
     }
+    /// `show_error` for good news (an approval, a commit, a push): the same banner, its rule not
+    /// the red of a refusal.
+    pub fn show_info(&self, message: &str) {
+        self.show_notice(message, (6 + message.chars().count() / 20).min(20));
+        if let Some(bar) = self.notice.parent() {
+            bar.add_css_class("info");
+        }
+    }
     /// `show_error` with its own reading time, in seconds.
     fn show_notice(&self, message: &str, seconds: usize) {
         self.notice.set_text(message);
         self.notice.set_visible(true);
+        if let Some(bar) = self.notice.parent() {
+            bar.remove_css_class("info");
+        }
         let serial = NOTICE_SERIAL.with(|s| {
             s.set(s.get().wrapping_add(1));
             s.get()

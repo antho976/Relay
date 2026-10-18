@@ -497,7 +497,8 @@ impl Board {
             }));
             sec.append(&row);
             sec.append(&super::shape_panels::dash(&b, &nodes));
-            if kinds(&[NodeKind::Line]) {
+            // A closed line draws no arrowheads.
+            if kinds(&[NodeKind::Line]) && !nodes.iter().all(super::context::closed_shape) {
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
                 for (field, caption) in [("arrow_start", "Start arrow"), ("arrow_end", "End arrow")] {
                     let c = gtk::CheckButton::with_label(caption);

@@ -87,6 +87,8 @@ button.nav image { color: @faint; }
 button.nav:hover image, button.nav.selected image { color: @ink; }
 button.nav.selected { background: @wash; color: @ink; }
 .title { font-size: 15px; font-weight: 600; }
+.page-title { font-size: 22px; font-weight: 600; color: @ink; letter-spacing: -0.02em; }
+.page-lede { font-size: 13px; color: @faint; }
 .dim { color: @secondary; font-size: 12px; }
 .toolbar { min-height: 38px; padding: 0 12px; background: @console; border-bottom: 1px solid @edge; }
 .statusbar { background: @console; color: @faint; min-height: 30px; padding: 0 16px; border-top: 1px solid @edge; font-family: 'Geist Mono', monospace; font-size: 11.5px; }
@@ -116,6 +118,9 @@ entry.search > text { font-size: 13px; }
 entry.search > text > placeholder { color: @faint; }
 selection { background: alpha(@ink, 0.22); color: @ink; }
 dropdown > button { background: @slab; }
+/* The theme's arrow is a full-size icon set hard against the words ("All accounts⌄"): small,
+   quiet and apart from them in every dropdown, as Design and Settings already had it. */
+dropdown > button arrow, combobox button arrow { -gtk-icon-size: 12px; min-width: 12px; min-height: 12px; margin-left: 8px; color: @faint; }
 popover contents { background: @slab; color: @ink; border: 1px solid @edge; border-radius: 12px; box-shadow: 0 12px 32px alpha(black, 0.45); }
 /* Menus hold a stack (and long ones a scrolled window): let the menu's own surface show. */
 popover stack, popover scrolledwindow, popover viewport { background: transparent; }
@@ -232,6 +237,10 @@ paned.sidebar-split > separator:hover { background-color: @line_focus; }
 .code-commit .dim { font-size: 10px; }
 
 .small-key { min-height: 22px; min-width: 22px; padding: 0; font-size: 11px; }
+/* A small key with words (Publish, Push 2, Open PR): room around them, and an edge on the quiet
+   ones so a disabled Open PR still reads as a key, not stray text. */
+button.small-key.text-button { min-height: 26px; padding: 0 10px; border-radius: 8px; }
+button.small-key.text-button.quiet { border-color: @edge; }
 .small-lamp { min-width: 4px; min-height: 4px; }
 .wall-split > separator { min-width: 6px; background: transparent; }
 .wall-split > separator:hover { background: @strong; }

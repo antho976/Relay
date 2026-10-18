@@ -65,6 +65,7 @@ impl Board {
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
                 row.append(&crate::icons::image("arrow-up", 12));
                 let name = label(&display_name(parent), "design-crumb-label");
+                name.add_css_class("design-context-word");
                 name.set_max_width_chars(14);
                 name.set_ellipsize(gtk::pango::EllipsizeMode::End);
                 row.append(&name);
@@ -82,7 +83,9 @@ impl Board {
             }
         }
         let all = |k: &[NodeKind]| nodes.iter().all(|n| k.contains(&n.kind));
+        let kind;
         if all(&[NodeKind::Icon]) {
+            kind = "icon";
             // Automatic shows the colour it is drawn in.
             let colour = {
                 let scene = b.doc.scene.borrow();
@@ -112,8 +115,22 @@ impl Board {
                 bar.append(&swap);
             }
         } else if all(&[NodeKind::Text, NodeKind::Sticky]) {
+            kind = "text";
             self.text_controls(&b, &bar, &nodes);
         } else if all(&[NodeKind::Line, NodeKind::Path]) {
+            kind = "stroke";
+            // Closed, a free line is a shape of its own: it fills, and has no ends to route or
+            // put arrowheads on (routing it would open it and drop the fill).
+            let closed = nodes.iter().all(closed_shape);
+            if closed {
+                let fill = same(nodes.iter().map(super::paint::fill_of)).flatten();
+                let weak = Rc::downgrade(&b);
+                bar.append(&color_key(&b, fill.as_deref(), "Fill", true, move |c| {
+                    if let Some(b) = weak.upgrade() {
+                        b.set_selected(set(&[("fill", json!(c)), ("gradient", Value::Null)]));
+                    }
+                }));
+            }
             let stroke = same(nodes.iter().map(|n| n.stroke.clone())).flatten();
             let weak = Rc::downgrade(&b);
             bar.append(&color_key(&b, stroke.as_deref(), "Stroke colour", false, move |c| {
@@ -128,7 +145,7 @@ impl Board {
                     b.set_selected(set(&[("stroke_width", json!(v.clamp(0.5, 200.0)))]));
                 }
             }));
-            if all(&[NodeKind::Line]) {
+            if all(&[NodeKind::Line]) && !closed {
                 // Straight, elbow, curve: one key that steps through them.
                 let route = same(nodes.iter().map(|n| n.route.unwrap_or(relay_bus::design::Route::Straight)))
                     .unwrap_or(relay_bus::design::Route::Straight);
@@ -163,6 +180,7 @@ impl Board {
                 bar.append(&arrow);
             }
         } else if nodes.len() == 1 || all(&[NodeKind::Frame, NodeKind::Rect, NodeKind::Ellipse, NodeKind::Image]) {
+            kind = "shape";
             let fillable = nodes.iter().all(|n| n.kind != NodeKind::Group);
             if fillable {
                 let fill = same(nodes.iter().map(super::paint::fill_of)).flatten();
@@ -214,6 +232,7 @@ impl Board {
                 }
             }
         } else {
+            kind = "align";
             for (how, glyph, tip) in [
                 (Align::Left, "align-left", "Align left (Alt+A)"),
                 (Align::CenterX, "align-center-x", "Align centres (Alt+H)"),
@@ -249,7 +268,7 @@ impl Board {
         ask.add_css_class("design-context-ask");
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 5);
         row.append(&glyphs::image("spark", 14));
-        row.append(&label("Ask", ""));
+        row.append(&label("Ask", "design-context-word"));
         ask.set_child(Some(&row));
         ask.set_tooltip_text(Some("Ask the terminal's agent to change this (Ctrl+Enter)"));
         let weak = Rc::downgrade(&b);
@@ -292,6 +311,41 @@ impl Board {
         super::board::keep_canvas_focus(bar.upcast_ref());
         self.overlay.add_overlay(&bar);
         *self.context.borrow_mut() = Some(bar.upcast());
+        // Built with its words and measured as such on the next layout; a rebuild of a compact
+        // bar for the same kind of selection (each edit rebuilds it) stays compact.
+        if self.context_compact.get() && self.context_kind.replace(kind) == kind {
+            self.set_context_compact(true);
+        } else {
+            self.context_kind.set(kind);
+            self.context_full.set(None);
+            self.context_compact.set(false);
+        }
+        self.overlay.queue_allocate();
+    }
+
+    /// Hide the toolbar's words (the parent's name, the style's, Ask's) and tighten its keys,
+    /// or bring them back. Their tooltips keep what the words said.
+    pub(super) fn set_context_compact(&self, compact: bool) {
+        self.context_compact.set(compact);
+        let Some(bar) = self.context.borrow().clone() else {
+            return;
+        };
+        if compact {
+            bar.add_css_class("compact");
+        } else {
+            bar.remove_css_class("compact");
+        }
+        fn walk(w: &gtk::Widget, show: bool) {
+            let mut child = w.first_child();
+            while let Some(c) = child {
+                if c.has_css_class("design-context-word") {
+                    c.set_visible(show);
+                }
+                walk(&c, show);
+                child = c.next_sibling();
+            }
+        }
+        walk(&bar, !compact);
         self.overlay.queue_allocate();
     }
 
@@ -325,10 +379,10 @@ impl Board {
         style.add_css_class("design-style-key");
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         row.append(&label("Aa", "design-style-glyph"));
-        row.append(&label(current, ""));
+        row.append(&label(current, "design-context-word"));
         row.append(&crate::icons::image("chevron-down", 10));
         style.set_child(Some(&row));
-        style.set_tooltip_text(Some("Text style"));
+        style.set_tooltip_text(Some(&format!("Text style: {current}")));
         let pop = gtk::Popover::new();
         pop.add_css_class("design-menu");
         let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -480,6 +534,11 @@ impl Board {
         drop(scene);
         self.commit(ops);
     }
+}
+
+/// A free line joined back to its start: no connector ends, no route.
+pub(super) fn closed_shape(n: &relay_bus::design::Node) -> bool {
+    n.closed == Some(true) && n.route.is_none() && n.from.is_none() && n.to.is_none()
 }
 
 fn sep() -> gtk::Separator {

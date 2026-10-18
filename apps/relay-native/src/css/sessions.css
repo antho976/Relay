@@ -10,6 +10,7 @@ button.confirm-armed label { color: white; }
 
 /* The banner under the title bar: dismissible, clears itself. */
 .notice-bar { background: @slab; border-bottom: 1px solid @held; padding-right: 6px; }
+.notice-bar.info { border-bottom-color: @live; }
 .notice-bar .notice { background: transparent; border: 0; padding: 8px 12px; }
 .notice-bar button.notice-dismiss { margin-top: 4px; color: @secondary; }
 .notice-bar button.notice-dismiss:hover { color: @ink; }

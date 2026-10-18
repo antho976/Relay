@@ -6,7 +6,8 @@ captures the conversation and a new thread.
     python3 scripts/threads-smoke.py [shot ...]
 
 Shots (default the first three): thread, threads, thread-compact, thread-tall (1440x1700),
-thread-working (a thread whose agent is mid-turn). Needs target/debug/relay and
+thread-working (a thread whose agent is mid-turn), thread-edit (the newest message's Edit key
+pressed: its words back in the box). Needs target/debug/relay and
 target/debug/relay-native, and a display: run it inside a headless compositor
 (kwin_wayland --virtual), never on someone's desktop. Captures and logs go to
 .impeccable/review/threads-*. No model is called and nothing reaches the person's own engine."""
@@ -148,6 +149,8 @@ with tempfile.TemporaryDirectory(prefix="relay-threads-shot-") as temporary:
             page = "threads" if shot == "threads" else "thread"
             e = dict(native_env, RELAY_NATIVE_SCREENSHOT=str(output), RELAY_NATIVE_SIZE=size, RELAY_NATIVE_FIXTURE="1",
                      RELAY_NATIVE_PAGE=page, RELAY_NATIVE_SMOKE_SECONDS="6")
+            if shot == "thread-edit":
+                e["RELAY_SMOKE_THREAD_EDIT"] = "1"
             with (OUT / f"threads-{shot}.log").open("w") as nl:
                 native = subprocess.Popen([str(NATIVE)], env=e, stdout=nl, stderr=nl)
                 try:

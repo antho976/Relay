@@ -249,11 +249,18 @@ impl Center {
             body_label.set_tooltip_text(Some(body));
             copy.append(&body_label);
         }
+        // What kind, then where: a long project name is cut, not the kind, and no longer
+        // widens the popover.
         let mut meta = vec![category.replace('_', " ")];
         if let Some(project) = project.filter(|p| !p.is_empty()) {
-            meta.insert(0, project.to_string());
+            meta.push(project.to_string());
         }
-        copy.append(&label(&meta.join(" · ").to_uppercase(), "notification-meta"));
+        let meta = meta.join(" · ");
+        let meta_label = label(&meta.to_uppercase(), "notification-meta");
+        meta_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        meta_label.set_xalign(0.0);
+        meta_label.set_tooltip_text(Some(&meta));
+        copy.append(&meta_label);
         content.append(&copy);
         // A notification whose link the UI cannot route, or that has none, offers no "Open"
         // (D121): its row is plain text, and only Mark read acts on it.

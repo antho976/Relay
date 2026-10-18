@@ -213,6 +213,11 @@ struct State {
     /// Tool calls drawn in this thread, by id.
     tools: RefCell<HashMap<String, Tool>>,
     turn: RefCell<Option<Turn>>,
+    /// The newest message the person sent: its Edit key and its words, which Try again sends
+    /// again.
+    last_user: RefCell<Option<(gtk::Button, String)>>,
+    /// The Try again key under the last error or stopped reply, while nothing came after it.
+    retry: RefCell<Option<gtk::Button>>,
     /// The run of reads the next read joins, while it is the last thing in its turn.
     group: RefCell<Option<Group>>,
     /// Entries this thread added, marked in the panel.
@@ -1156,6 +1161,8 @@ fn reset(id: Option<i64>) {
         s.tools.borrow_mut().clear();
         *s.turn.borrow_mut() = None;
         *s.group.borrow_mut() = None;
+        *s.last_user.borrow_mut() = None;
+        *s.retry.borrow_mut() = None;
         s.added.borrow_mut().clear();
         s.stopping.set(false);
         if let Some(id) = id {
@@ -1495,6 +1502,13 @@ pub fn smoke_open(ui: &Rc<Ui>, newest: bool) {
         if let Some(id) = ui.call("thread.list", json!({})).await.ok().and_then(|list| list["threads"][0]["id"].as_i64()) {
             open(&ui, id);
         }
+        // scripts/threads-smoke.py thread-edit: the newest message's Edit key, pressed.
+        if std::env::var("RELAY_SMOKE_THREAD_EDIT").as_deref() == Ok("1") {
+            glib::timeout_future(std::time::Duration::from_millis(1500)).await;
+            if let Some(edit) = STATE.with(|s| s.last_user.borrow().as_ref().map(|(e, _)| e.clone())) {
+                edit.emit_clicked();
+            }
+        }
     });
 }
 
@@ -1680,6 +1694,14 @@ fn set_working(v: &View, working: bool) {
     v.send.update_property(&[gtk::accessible::Property::Label(name)]);
     // `thread.set` closes a running agent: the choice waits for the reply to end.
     v.model.key.set_sensitive(!working);
+    STATE.with(|s| {
+        if let Some((edit, _)) = s.last_user.borrow().as_ref() {
+            edit.set_sensitive(!working);
+        }
+        if let Some(retry) = s.retry.borrow().as_ref() {
+            retry.set_sensitive(!working);
+        }
+    });
     effort_sensitive(v);
     if working {
         if !was {
@@ -1706,7 +1728,10 @@ fn set_working(v: &View, working: bool) {
                 draw_reply(&turn.body, &pending);
                 note_text(&turn, &pending);
             }
-            turn.body.append(&label("Stopped", "threads-note"));
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            row.append(&label("Stopped", "threads-note"));
+            turn.body.append(&row);
+            retry_key(&row);
         }
         settle_tools();
     }
@@ -1769,6 +1794,46 @@ fn copy_key(tip: &'static str, words: impl Fn() -> String + 'static) -> gtk::But
     copy
 }
 
+/// Put the person's newest message back in the box, to change and send again.
+fn edit_last(words: &str) {
+    let Some(v) = view() else { return };
+    if STATE.with(|s| s.working.get()) {
+        return;
+    }
+    let buffer = v.input.buffer();
+    buffer.set_text(words);
+    buffer.place_cursor(&buffer.end_iter());
+    v.input.grab_focus();
+}
+
+/// Try again, after a reply that failed or was stopped: sends the person's newest message once
+/// more. Hidden by the next message.
+fn retry_key(parent: &gtk::Box) {
+    let Some(words) = STATE.with(|s| s.last_user.borrow().as_ref().map(|(_, w)| w.clone())) else {
+        return;
+    };
+    let key = gtk::Button::new();
+    key.add_css_class("threads-retry");
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    row.append(&crate::icons::image("refresh", 13));
+    row.append(&label("Try again", ""));
+    key.set_child(Some(&row));
+    key.set_tooltip_text(Some("Send your last message again"));
+    key.set_halign(gtk::Align::Start);
+    key.set_sensitive(!STATE.with(|s| s.working.get()));
+    key.connect_clicked(move |_| {
+        if let Some(ui) = the_ui() {
+            if !STATE.with(|s| s.working.get()) {
+                send(&ui, &words);
+            }
+        }
+    });
+    parent.append(&key);
+    if let Some(old) = STATE.with(|s| s.retry.replace(Some(key))) {
+        old.set_visible(false);
+    }
+}
+
 /// The box the agent's current turn draws into.
 fn turn(v: &View) -> gtk::Box {
     turn_of(v).body
@@ -1818,11 +1883,22 @@ fn draw_message(v: &View, m: &Value) {
     let body = &m["body"];
     match m["role"].as_str().unwrap_or("") {
         "user" => {
+            let text = body["text"].as_str().unwrap_or("");
             STATE.with(|s| {
                 *s.turn.borrow_mut() = None;
                 *s.group.borrow_mut() = None;
+                // Only the newest message is edited, and only the newest failure retried.
+                if let Some((edit, _)) = s.last_user.borrow_mut().take() {
+                    edit.set_visible(false);
+                }
+                if let Some(retry) = s.retry.borrow_mut().take() {
+                    retry.set_visible(false);
+                }
             });
-            let bubble = label(body["text"].as_str().unwrap_or(""), "threads-user");
+            let wrap = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            wrap.add_css_class("threads-user-wrap");
+            wrap.set_halign(gtk::Align::End);
+            let bubble = label(text, "threads-user");
             bubble.set_wrap(true);
             bubble.set_wrap_mode(gtk::pango::WrapMode::WordChar);
             bubble.set_selectable(true);
@@ -1830,7 +1906,24 @@ fn draw_message(v: &View, m: &Value) {
             bubble.set_focusable(false);
             bubble.set_halign(gtk::Align::End);
             bubble.set_max_width_chars(60);
-            v.column.append(&bubble);
+            // Beside it on hover, so the conversation keeps its spacing: Copy, and on the newest
+            // one Edit, which puts the words back in the box to change and send again. The agent
+            // keeps the first version too; it reads the new one as the person's correction.
+            let keys = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            keys.add_css_class("threads-user-keys");
+            keys.set_valign(gtk::Align::End);
+            let words = text.to_string();
+            keys.append(&copy_key("Copy this message", move || words.clone()));
+            let edit = crate::app::icon_button("edit", "Edit and send again");
+            edit.set_child(Some(&crate::icons::image("edit", 16)));
+            let words = text.to_string();
+            edit.connect_clicked(move |_| edit_last(&words));
+            edit.set_sensitive(!STATE.with(|s| s.working.get()));
+            keys.append(&edit);
+            wrap.append(&keys);
+            wrap.append(&bubble);
+            STATE.with(|s| *s.last_user.borrow_mut() = Some((edit, text.to_string())));
+            v.column.append(&wrap);
         }
         "assistant" => {
             drop_pending(v);
@@ -1863,7 +1956,9 @@ fn draw_message(v: &View, m: &Value) {
             text.set_selectable(true);
             text.set_focusable(false);
             row.append(&text);
-            turn(v).append(&row);
+            let turn = turn(v);
+            turn.append(&row);
+            retry_key(&turn);
         }
         _ => {}
     }

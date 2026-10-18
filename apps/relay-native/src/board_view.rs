@@ -2433,7 +2433,9 @@ impl Board {
                 if blocked > 0 { "Waiting on other tasks" } else { "Nothing blocked" },
                 if blocked > 0 { "stat-alert" } else { "" },
             ),
-            stat_tile("Shipped", &shipped.to_string(), &format!("This week · {done} in all"), ""),
+            // The count in all is Progress's "n of m done"; with it the note was cut to
+            // "This week · 0 in …" at 1440px, the widest the tiles get beside the sidebar.
+            stat_tile("Shipped", &shipped.to_string(), "This week", ""),
         ] {
             tiles.append(&tile);
         }

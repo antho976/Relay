@@ -1058,7 +1058,10 @@ fn limit_meter(l: &Value, currency: &str) -> gtk::Box {
     }
     top.append(&figures);
     b.append(&top);
-    b.append(&meter_in(fraction, None, tone, 5));
+    // No limit, nothing to fill: an empty bar read as a limit not reached.
+    if limit.is_some() {
+        b.append(&meter_in(fraction, None, tone, 5));
+    }
     b
 }
 
@@ -1467,12 +1470,15 @@ fn shown_value(v: &Value) -> String {
 
 fn paper_card(ui: &Rc<Ui>, column: &gtk::Box, st: &Value) {
     let list = card(column, "Paper account", None);
-    let home = field_entry("arbiter-home-currency", text(st, "home"), 6);
+    let home = field_entry("arbiter-home-currency", text(st, "home"), 8);
     home.set_max_length(5);
     home.set_placeholder_text(Some("CAD"));
-    setting_row(&list, "coins", "Home currency", "Totals are shown in it. Each strategy trades in its product's own currency.", &home);
-    let cash = field_entry("arbiter-paper-cash", &shown_value(&st["paper_cash"]), 10);
-    setting_row(&list, "cash", "Paper starts with", "What the paper account holds when it starts, in the home currency.", &cash);
+    // An empty unit slot, so its edge meets the amount's under it.
+    setting_row(&list, "coins", "Home currency", "Totals are shown in it. Each strategy trades in its product's own currency.", &with_unit(&home, ""));
+    let cash = field_entry("arbiter-paper-cash", &shown_value(&st["paper_cash"]), 8);
+    cash.update_property(&[gtk::accessible::Property::Label("Paper starts with")]);
+    let currency = if text(st, "home").is_empty() { "CAD" } else { text(st, "home") };
+    setting_row(&list, "cash", "Paper starts with", "What the paper account holds when it starts, in the home currency.", &with_unit(&cash, currency));
     let save = button("Save", "");
     save.set_widget_name("arbiter-settings-save");
     save.set_halign(gtk::Align::End);
@@ -1528,21 +1534,46 @@ const GLOBAL: [(&str, &str, &str, &str, bool); 6] = [
     ("slippage_pct", "Slippage assumed", "Added to market orders in backtests and paper fills, percent.", "percent", true),
 ];
 
+/// A field with its unit after it ("1000 CAD", "10 min", "2 %"), in a slot of one width so the
+/// fields of a card keep one edge.
+fn with_unit(entry: &gtk::Entry, unit: &str) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let suffix = label(unit, "money-suffix");
+    suffix.set_valign(gtk::Align::Center);
+    suffix.set_xalign(0.0);
+    suffix.set_size_request(48, -1);
+    // As wide as it asks and no wider, whatever the description beside it wraps to.
+    entry.set_max_width_chars(entry.width_chars());
+    entry.set_hexpand(false);
+    row.append(entry);
+    row.append(&suffix);
+    row
+}
+
 fn global_limits(ui: &Rc<Ui>, column: &gtk::Box, st: &Value) {
     let list = card(column, "Limits across every strategy", None);
     let g = st["global"].clone();
+    let home = text(st, "home");
+    let home = if home.is_empty() { "CAD" } else { home };
     let mut fields = Vec::new();
-    for (key, caption, about, _, required) in GLOBAL {
-        let e = field_entry(&format!("arbiter-global-{key}"), &shown_value(&g[key]), 9);
+    for (key, caption, about, unit, required) in GLOBAL {
+        let e = field_entry(&format!("arbiter-global-{key}"), &shown_value(&g[key]), 7);
+        e.update_property(&[gtk::accessible::Property::Label(caption)]);
         if required {
             e.set_placeholder_text(Some(""));
         }
+        let words = match (unit, key) {
+            ("money", _) => home,
+            (_, "orders_per_hour") => "an hour",
+            (_, "approval_minutes") => "min",
+            _ => "%",
+        };
         setting_row(&list, match key {
             "max_exposure" => "coins",
             "daily_loss" => "gauge",
             "approval_minutes" => "calendar",
             _ => "list",
-        }, caption, about, &e);
+        }, caption, about, &with_unit(&e, words));
         fields.push(e);
     }
     let save = button("Save limits", "");

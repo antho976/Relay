@@ -50,6 +50,10 @@ label.threads-quote { padding: 2px 0 2px 14px; border-left: 2px solid @line_emph
 .threads-day { font-size: 12px; color: @faint; margin: 6px 0; }
 .threads-note { font-size: 12px; color: @faint; }
 .threads-turn button.threads-copy { margin-left: -6px; opacity: 0; transition: opacity 120ms ease-out; }
+.threads-user-keys { margin-bottom: 4px; opacity: 0; transition: opacity 120ms ease-out; }
+.threads-user-wrap:hover .threads-user-keys, .threads-user-keys:focus-within { opacity: 1; }
+button.threads-retry { min-height: 26px; padding: 0 10px; border: 1px solid @edge; border-radius: 8px; background: transparent; color: @secondary; font-size: 12px; font-weight: 500; }
+button.threads-retry:hover { background: @wash; color: @ink; }
 .threads-turn:hover button.threads-copy, .threads-turn button.threads-copy:focus-visible { opacity: 1; }
 
 /* What the agent did: a quiet line per tool, turning while it runs; reads in a row fold. */

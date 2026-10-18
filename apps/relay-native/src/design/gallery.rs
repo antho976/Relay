@@ -90,7 +90,10 @@ impl Gallery {
         let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
         page.add_css_class("design-gallery-page");
         let scroll = gtk::ScrolledWindow::new();
-        scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
+        // External, not Never: the cards are sized from the page's width, and Never made that
+        // width the page's minimum, so the window could not be made narrower while the gallery
+        // showed (at 1440px it held the window to 1432).
+        scroll.set_hscrollbar_policy(gtk::PolicyType::External);
         scroll.set_vexpand(true);
         scroll.set_child(Some(&page));
         root.set_child(Some(&scroll));

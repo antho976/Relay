@@ -627,7 +627,7 @@ pub fn exception_card(ui: &Rc<Ui>, request: &Value, compact: bool) -> (gtk::Box,
                 match ui.call("guardrail.confirm", json!({"hold_id": id, "scope": scope})).await {
                     Ok(_) => {
                         close_prompt(&ui, id);
-                        ui.show_error(&notice);
+                        ui.show_info(&notice);
                         ui.refresh_page();
                     }
                     Err(e) => {

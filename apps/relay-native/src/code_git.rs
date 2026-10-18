@@ -1607,11 +1607,11 @@ impl Editor {
                         }
                     }
                     if let Some(url) = v["url"].as_str() {
-                        ui.show_error(url);
+                        ui.show_info(url);
                     } else if let Some(sha) = v["sha"].as_str() {
-                        ui.show_error(&format!("Committed {}", &sha[..sha.len().min(7)]));
+                        ui.show_info(&format!("Committed {}", &sha[..sha.len().min(7)]));
                     } else if op == "git.branch.switch" && v["created"] == true {
-                        ui.show_error(&format!(
+                        ui.show_info(&format!(
                             "Created the local branch {} tracking {}",
                             text(&v, "branch"),
                             text(&retry, "name")
