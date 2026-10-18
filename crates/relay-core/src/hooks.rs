@@ -83,8 +83,12 @@ pub fn writes() -> std::sync::MutexGuard<'static, ()> {
 const FORWARDED_HOOKS: &[&str] = &[
     "applypatch-msg", "pre-applypatch", "post-applypatch", "pre-merge-commit",
     "prepare-commit-msg", "commit-msg", "post-commit", "pre-rebase", "post-checkout",
-    "post-merge", "pre-push", "post-rewrite", "pre-auto-gc",
+    "post-merge", "post-rewrite", "pre-auto-gc",
 ];
+
+/// The hooks Relay writes itself, each running the user's own hook of that name first:
+/// pre-commit gates the commit, pre-push runs the project's check (`guardrails.check_on_push`).
+const OWN_HOOKS: &[&str] = &["pre-commit", "pre-push"];
 
 fn absolute_in(worktree: &Path, path: impl Into<PathBuf>) -> PathBuf {
     let path = path.into();
@@ -213,7 +217,7 @@ fn write_executable(path: &Path, contents: &str) -> Result<()> {
     write_replacing(path, contents, 0o755)
 }
 
-/// Forward every hook but pre-commit from `hook_dir` to the user's `chain` directory: the
+/// Forward every hook but [`OWN_HOOKS`] from `hook_dir` to the user's `chain` directory: the
 /// fixed [`FORWARDED_HOOKS`], plus any other executable hook `chain` holds right now. Stale
 /// forwarders from an earlier install are removed.
 fn write_forwarders(hook_dir: &Path, chain: Option<&Path>) -> Result<()> {
@@ -222,7 +226,7 @@ fn write_forwarders(hook_dir: &Path, chain: Option<&Path>) -> Result<()> {
         names.extend(FORWARDED_HOOKS.iter().map(|name| name.to_string()));
         for entry in fs::read_dir(chain).into_iter().flatten().flatten() {
             let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue };
-            if name != "pre-commit" && !name.contains('.') && !names.contains(&name) && is_executable(&entry.path()) {
+            if !OWN_HOOKS.contains(&name.as_str()) && !name.contains('.') && !names.contains(&name) && is_executable(&entry.path()) {
                 names.push(name);
             }
         }
@@ -236,7 +240,7 @@ fn write_forwarders(hook_dir: &Path, chain: Option<&Path>) -> Result<()> {
     }
     for entry in fs::read_dir(hook_dir).into_iter().flatten().flatten() {
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue };
-        if name != "pre-commit" && !name.starts_with('.') && !names.contains(&name) && entry.path().is_file() {
+        if !OWN_HOOKS.contains(&name.as_str()) && !name.starts_with('.') && !names.contains(&name) && entry.path().is_file() {
             let _ = fs::remove_file(entry.path());
         }
     }
@@ -295,6 +299,7 @@ pub fn install_git(
         shell_quote(&user_payload),
     );
     write_executable(&hook_path, &script)?;
+    write_executable(&hook_dir.join("pre-push"), &pre_push_script(before.chain.as_deref(), instance, relay))?;
     // Always written, empty when the checkout had no hook path of its own: uninstalling then
     // unsets it instead of pinning whatever was in effect.
     write_replacing(
@@ -313,6 +318,34 @@ pub fn install_git(
         )?;
     }
     Ok(())
+}
+
+/// The pre-push hook: the user's own pre-push first, with the same arguments and refs on
+/// stdin, then — for an agent's push only — `relay hook pre-push`, which runs the project's
+/// check and refuses the push when it fails. A person's push (the Git panel's, from the
+/// engine, has no `RELAY_SESSION`) runs only their own hook. A `relay` older than the check
+/// (`RELAY_BIN` naming another checkout's build) lets the push through rather than fail it on
+/// an unknown subcommand.
+fn pre_push_script(chain: Option<&Path>, instance: Instance, relay: &Path) -> String {
+    let previous = chain
+        .map(|dir| shell_quote_path(&dir.join("pre-push")))
+        .unwrap_or_else(|| "''".to_string());
+    let relay = shell_quote_path(relay);
+    format!(
+        "#!/bin/sh\n\
+         set -u\n\
+         previous={previous}\n\
+         refs=$(mktemp) || exit 1\n\
+         trap 'rm -f \"$refs\"' EXIT\n\
+         cat > \"$refs\"\n\
+         if [ -n \"$previous\" ] && [ -x \"$previous\" ]; then\n\
+           \"$previous\" \"$@\" < \"$refs\" || exit $?\n\
+         fi\n\
+         [ -n \"${{RELAY_SESSION:-}}\" ] || exit 0\n\
+         {relay} hook pre-push --help >/dev/null 2>&1 || exit 0\n\
+         {relay} --instance {} hook pre-push < \"$refs\"\n",
+        shell_quote(instance.as_str()),
+    )
 }
 
 /// Rewrite the currently active Relay-owned hook with the current CLI path. Existing worktrees can
@@ -1030,6 +1063,51 @@ mod tests {
         install_git(&repo, &repo, "calm-otter", Instance::Test, Path::new("/bin/true")).unwrap();
         assert!(!relay.join("reference-transaction").exists(), "a stale forwarder survived");
         assert!(relay.join(super::PREVIOUS_HOOKS_PATH).is_file());
+    }
+
+    #[test]
+    fn an_agents_push_runs_the_check_after_the_users_own_hook() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        let out = dir.path().join("pre-push.out");
+        let relay = dir.path().join("fake-relay");
+        executable(&relay, "#!/bin/sh\ncase \"$*\" in *--help) exit 0;; esac\necho \"relay $*\" >> \"$GIT_DIR_OUT\"\ncat >> \"$GIT_DIR_OUT\"\nexit 1\n");
+        let push = |session: Option<&str>| {
+            let mut command = Command::new(repo.join(".relay/hooks/calm-otter/pre-push"));
+            command.args(["origin", "url"]).env("GIT_DIR_OUT", &out).env_remove("RELAY_SESSION").stdin(std::process::Stdio::piped());
+            if let Some(session) = session {
+                command.env("RELAY_SESSION", session);
+            }
+            let mut child = command.spawn().unwrap();
+            child.stdin.take().unwrap().write_all(b"refs/heads/main sha\n").unwrap();
+            child.wait().unwrap().code()
+        };
+
+        install_git(&repo, &repo, "calm-otter", Instance::Test, &relay).unwrap();
+        assert_eq!(push(None), Some(0), "a person's push ran the check");
+        assert!(!out.exists());
+        assert_eq!(push(Some("calm-otter")), Some(1), "a failed check let the push through");
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "relay --instance test hook pre-push\nrefs/heads/main sha\n");
+
+        // The user's own pre-push runs first, sees the same refs, and a refusal there ends it.
+        std::fs::remove_file(&out).unwrap();
+        executable(&repo.join(".git/hooks/pre-push"), "#!/bin/sh\necho \"user $*\" >> \"$GIT_DIR_OUT\"\ncat >> \"$GIT_DIR_OUT\"\n");
+        install_git(&repo, &repo, "calm-otter", Instance::Test, &relay).unwrap();
+        assert_eq!(push(Some("calm-otter")), Some(1));
+        assert_eq!(
+            std::fs::read_to_string(&out).unwrap(),
+            "user origin url\nrefs/heads/main sha\nrelay --instance test hook pre-push\nrefs/heads/main sha\n",
+        );
+        std::fs::remove_file(&out).unwrap();
+        executable(&repo.join(".git/hooks/pre-push"), "#!/bin/sh\nexit 4\n");
+        assert_eq!(push(Some("calm-otter")), Some(4));
+        assert!(!out.exists(), "the check ran after the user's hook refused");
+
+        // A relay too old to know the check lets the push through instead of failing it.
+        std::fs::remove_file(repo.join(".git/hooks/pre-push")).unwrap();
+        install_git(&repo, &repo, "calm-otter", Instance::Test, Path::new("/bin/false")).unwrap();
+        assert_eq!(push(Some("calm-otter")), Some(0));
     }
 
     #[test]

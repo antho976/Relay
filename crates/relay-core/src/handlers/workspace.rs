@@ -255,10 +255,13 @@ pub fn register(e: &mut Engine) {
         let name = p.name.unwrap_or_else(|| name_of(&path));
         let ord: i64 = ctx.tx().query_row("SELECT COALESCE(MAX(ord), -1) + 1 FROM projects WHERE workspace_id = ?1", [ws.id], |r| r.get(0)).bus()?;
         let base = detect_default_branch(&path);
+        // The check an agent's push runs and an integration builds with, until the person
+        // names a stricter one (`check::detect`).
+        let build_cmd = crate::check::detect(&path);
         let id = next_id(ctx.tx(), NEXT_PROJECT_ID, "ids.projects")?;
         ctx.tx().execute(
-            "INSERT INTO projects(id, workspace_id, path, name, base_branch, ord, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
-            params![id, ws.id, path_s, name, base, ord, ctx.now],
+            "INSERT INTO projects(id, workspace_id, path, name, base_branch, build_cmd, ord, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+            params![id, ws.id, path_s, name, base, build_cmd, ord, ctx.now],
         ).bus()?;
         let pr = get_project(ctx.tx(), id)?;
         // Skills are app-wide (D147): a project added today starts with every installed skill
