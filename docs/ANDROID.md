@@ -114,6 +114,13 @@ under its bubble. A message's pictures are read once with `thread.image` and kep
 cache (the op cache keeps at most 600,000 characters of an answer), so they show with the PC
 away; a tap opens one full screen.
 
+A chart block may carry the reply's own numbers instead of a question (`data`), for what the
+ledger does not hold, such as what is to come: amounts as decimals (numbers or strings) in the
+ledger's currency, or figures in a `unit` ("kg", "%", "" for a count). A point missing or not a
+number is left out rather than drawn as 0; a `projected` series is dashed on a line and lighter
+as bars, and its key says "(projected)". The card's foot says they are Claude's numbers, not
+Tally's, and that it does not redraw (`ui/threads/Charts.kt`, `readWritten`).
+
 ## On the phone itself
 
 - **Notifications** say when an agent is held by a guardrail, blocked, or done. A held command's

@@ -30,6 +30,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -46,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quietsoftware.relay.core.wire.Wire
 import com.quietsoftware.relay.core.wire.arr
+import com.quietsoftware.relay.core.wire.b
 import com.quietsoftware.relay.core.wire.s
 import com.quietsoftware.relay.data.Relay as RelayData
 import com.quietsoftware.relay.ui.LocalNav
@@ -58,10 +60,13 @@ import com.quietsoftware.relay.ui.theme.Fonts
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
+import java.math.RoundingMode
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -85,7 +90,11 @@ internal data class ChartSpec(
     val query: JsonObject? = null,
     /** A `gym.series` payload: Avex's history instead of the ledger. */
     val gym: JsonObject? = null,
-    /** `{"labels", "series": [{"name", "values"}]}` in minor units, drawn as written. */
+    /**
+     * The reply's own numbers, for what the ledger does not hold (a plan, a projection):
+     * `{"labels", "series": [{"name", "values", "projected"?}], "unit"?}`, drawn as written
+     * ([readWritten]).
+     */
     val data: JsonObject? = null,
     /** An `arbiter.series` payload, for a price chart. */
     val price: JsonObject? = null,
@@ -134,7 +143,7 @@ private val PRICE_KEYS = setOf("product", "granularity", "bars", "strategy_id")
 private fun JsonObject.only(keys: Set<String>) = JsonObject(filterKeys { it in keys })
 
 /** How a chart's values read: money in minor units, or a training figure in tenths of its unit. */
-private sealed interface Fmt {
+internal sealed interface Fmt {
     val digits: Int
     fun format(v: Long): String
     fun whole(v: Long): String
@@ -153,6 +162,7 @@ private sealed interface Fmt {
             val n = if (whole || tenths % 10 == 0L) group(Math.round(tenths / 10.0)) else String.format(java.util.Locale.ROOT, "%.1f", tenths / 10.0)
             return when (unit) {
                 "" -> n
+                "%" -> "$n%"
                 "sessions", "sets", "minutes" -> if (whole) n else "$n $unit"
                 else -> "$n $unit"
             }
@@ -167,10 +177,16 @@ private sealed interface Fmt {
     }
 }
 
-private class Numbers(
+/**
+ * One line, or one set of bars: its name, a value for each label (null where it has none, which
+ * draws nothing, not a zero), and whether it is a projection, drawn dashed or lighter.
+ */
+internal data class Series(val name: String, val values: List<Long?>, val projected: Boolean = false)
+
+internal class Numbers(
     val labels: List<String>,
     val colors: List<Long?>,
-    val series: List<Pair<String, List<Long>>>,
+    val series: List<Series>,
     /** How many labels each series has reached (a period still running), else all of them. */
     val known: List<Int>,
     val fmt: Fmt,
@@ -189,7 +205,7 @@ private fun readMoney(v: JsonObject, cumulative: Boolean, categories: Boolean): 
     val labels = v.arr("labels").map { (it as? JsonPrimitive)?.content.orEmpty() }
     val colors = v.arr("label_colors").let { c -> labels.indices.map { i -> (c.getOrNull(i) as? JsonPrimitive)?.longOrNull } }
     val lines = v.arr("series").mapNotNull { it as? JsonObject }
-    val series = lines.map { s -> s.str("name") to labels.indices.map { i -> (s.arr("values").getOrNull(i) as? JsonPrimitive)?.longOrNull ?: 0L } }
+    val series = lines.map { s -> Series(s.str("name"), labels.indices.map { i -> (s.arr("values").getOrNull(i) as? JsonPrimitive)?.longOrNull ?: 0L }) }
     val known = lines.map { s -> (s["known"] as? JsonPrimitive)?.longOrNull?.toInt()?.coerceAtMost(labels.size) ?: labels.size }
     return Numbers(labels, colors, series, known, Fmt.Cash(Money.of(v)), cumulative = cumulative, categories = categories)
 }
@@ -199,15 +215,34 @@ private fun readGym(v: JsonObject, kind: ChartKind): Numbers {
     val labels = v.arr("labels").map { (it as? JsonPrimitive)?.content.orEmpty() }
     val lines = v.arr("series").mapNotNull { it as? JsonObject }.map { s -> s.str("name") to labels.indices.map { i -> (s.arr("values").getOrNull(i) as? JsonPrimitive)?.doubleOrNull } }
     val keep = labels.indices.filter { i -> lines.any { it.second[i] != null } }
-    val series = lines.map { (name, values) -> name to keep.map { i -> ((values[i] ?: 0.0) * 10).roundToLong() } }
+    val series = lines.map { (name, values) -> Series(name, keep.map { i -> values[i]?.let { (it * 10).roundToLong() } }) }
     val measure = v.str("measure")
     return Numbers(keep.map { labels[it] }, keep.map { null }, series, List(series.size) { keep.size }, Fmt.Unit(v.str("unit")), fromZero = !(kind == ChartKind.Line && measure in setOf("e1rm", "top_weight")))
 }
 
-private fun readWritten(d: JsonObject): Numbers {
+/**
+ * A chart's own numbers (`data`), for what the ledger does not hold, such as a plan or what is to
+ * come. Without `unit` they are amounts in [money]'s currency as plain decimals (1234.56, or the
+ * string "1234.56"), kept in its minor units; with one ("kg", "%", "km", "" for a count) they are
+ * figures in that unit, kept in tenths as Avex's are. A point missing or not a number is left
+ * out, not drawn as 0. A series marked `projected` draws dashed or lighter.
+ */
+internal fun readWritten(d: JsonObject, money: Money): Numbers {
     val labels = d.arr("labels").map { (it as? JsonPrimitive)?.content.orEmpty() }
-    val series = d.arr("series").mapNotNull { it as? JsonObject }.map { s -> s.str("name") to labels.indices.map { i -> (s.arr("values").getOrNull(i) as? JsonPrimitive)?.let { p -> p.longOrNull ?: p.doubleOrNull?.roundToLong() } ?: 0L } }
-    return Numbers(labels, labels.map { null }, series, List(series.size) { labels.size }, Fmt.Cash(Money.of(d)))
+    val unit = (d["unit"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+    val fmt = if (unit != null) Fmt.Unit(unit) else Fmt.Cash(money)
+    val series = d.arr("series").mapNotNull { it as? JsonObject }.map { s ->
+        val values = s.arr("values")
+        Series(s.str("name"), labels.indices.map { i -> decimal(values.getOrNull(i), fmt.digits) }, projected = s.b("projected") == true)
+    }
+    return Numbers(labels, labels.map { null }, series, List(series.size) { labels.size }, fmt)
+}
+
+/** A decimal number, or a string holding one, as a whole count of 10^-[digits]; null for anything else. */
+internal fun decimal(e: JsonElement?, digits: Int): Long? {
+    val p = e as? JsonPrimitive ?: return null
+    if (p is JsonNull) return null
+    return runCatching { p.content.trim().toBigDecimal().movePointRight(digits).setScale(0, RoundingMode.HALF_EVEN).longValueExact() }.getOrNull()
 }
 
 /** Closes in hundredths, buys and sells at their bar. */
@@ -263,10 +298,13 @@ internal fun ChartCard(spec: ChartSpec) {
     }
     val flow = remember(op, payload) { if (op != null && payload != null) nav.relay.live(op, payload) else flowOf(RelayData.Live()) }
     val live by flow.collectAsStateWithLifecycle(RelayData.Live())
-    val data = remember(live.result, spec) {
+    // The reply's own amounts are in the ledger's currency, as the phone last read it, unless the chart names one.
+    val ledger by remember(spec.data != null) { if (spec.data != null) nav.relay.cached("money.summary") else flowOf(null) }.collectAsStateWithLifecycle(null)
+    val cash = spec.data?.takeIf { it.s("currency") != null }?.let { Money.of(it) } ?: Money.of(ledger?.result as? JsonObject)
+    val data = remember(live.result, spec, cash.currency, cash.digits) {
         val r = live.result as? JsonObject
         when {
-            spec.data != null -> readWritten(spec.data)
+            spec.data != null -> readWritten(spec.data, cash)
             r == null -> null
             spec.kind == ChartKind.Price -> readPrice(r)
             spec.gym != null -> readGym(r, spec.kind)
@@ -292,10 +330,17 @@ internal fun ChartCard(spec: ChartSpec) {
                 },
                 style = Relay.type.caption, color = c.ink3,
             )
-            // Only Avex's charts count in a unit: what they count is workouts, not entries.
-            data.labels.isEmpty() || data.series.all { (_, v) -> v.all { it == 0L } } -> T("Nothing to draw yet: no ${if (data.fmt is Fmt.Unit) "workouts" else "entries"} match.", style = Relay.type.caption, color = c.ink3)
+            data.labels.isEmpty() || data.series.all { s -> s.values.all { it == null || it == 0L } } -> T(
+                when {
+                    spec.data != null -> "Nothing to draw: this chart came with no numbers."
+                    // Of the ledger's and Avex's, only Avex's count in a unit: workouts, not entries.
+                    data.fmt is Fmt.Unit -> "Nothing to draw yet: no workouts match."
+                    else -> "Nothing to draw yet: no entries match."
+                },
+                style = Relay.type.caption, color = c.ink3,
+            )
             spec.kind == ChartKind.Donut -> Donut(data)
-            spec.kind == ChartKind.Bar && data.categories && data.series.all { (_, v) -> v.all { it >= 0L } } -> {
+            spec.kind == ChartKind.Bar && data.categories && data.series.all { s -> s.values.all { it == null || it >= 0L } } -> {
                 Legend(data, spec.kind)
                 CategoryRows(data)
             }
@@ -313,21 +358,29 @@ internal fun ChartCard(spec: ChartSpec) {
 @Composable
 private fun Legend(data: Numbers, kind: ChartKind) {
     val count = data.series.size
-    if (count < 2 && kind != ChartKind.Line) return
+    // One series needs no key, unless it is a projection, which says so.
+    if (count < 2 && kind != ChartKind.Line && data.series.none { it.projected }) return
     FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        data.series.forEachIndexed { i, (name, _) ->
+        data.series.forEachIndexed { i, s ->
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Dot(if (kind == ChartKind.Price) PALETTE[1] else seriesColor(i, count), 8.dp)
-                T(name.ifBlank { "Total" }, style = Relay.type.caption, color = Relay.colors.ink2, maxLines = 1)
+                val color = if (kind == ChartKind.Price) PALETTE[1] else seriesColor(i, count)
+                Dot(if (s.projected) color.copy(alpha = PROJECTED_ALPHA) else color, 8.dp)
+                T(s.title(), style = Relay.type.caption, color = Relay.colors.ink2, maxLines = 1)
             }
         }
     }
 }
 
-/** What group [j] holds, newest series first: "Groceries $412.30 · Dining $96.00". */
+/** A series as its key names it: "Savings", "Total", "Savings (projected)". */
+internal fun Series.title(): String = name.ifBlank { "Total" }.let { if (projected) "$it (projected)" else it }
+
+/** How strong a projected series' bars and key are against the drawn ones. */
+private const val PROJECTED_ALPHA = .45f
+
+/** What group [j] holds, newest series first: "Groceries $412.30 · Dining $96.00"; a series with no value there is left out. */
 private fun Numbers.parts(j: Int, between: String = "  ·  "): String =
-    series.asReversed().filter { (_, v) -> j < v.size }.joinToString(between) { (name, v) ->
-        if (name.isBlank() || series.size == 1) fmt.format(v[j]) else "$name ${fmt.format(v[j])}"
+    series.asReversed().mapNotNull { s -> s.values.getOrNull(j)?.let { v -> s to v } }.joinToString(between) { (s, v) ->
+        if (series.size == 1 || (s.name.isBlank() && !s.projected)) fmt.format(v) else "${s.title()} ${fmt.format(v)}"
     }
 
 /** What a tapped group holds, under its name in full. */
@@ -347,7 +400,7 @@ private fun Plot(data: Numbers, kind: ChartKind, picked: Int?, onPick: (Int) -> 
     val pick by rememberUpdatedState(onPick)
     val measurer = rememberTextMeasurer()
     val axisStyle = TextStyle(fontFamily = Fonts.GeistMono, fontSize = 10.5.sp, color = c.ink3)
-    val all = data.series.flatMap { it.second } + data.marks.map { it.second }
+    val all = data.series.flatMap { it.values.filterNotNull() } + data.marks.map { it.second }
     val lo = min(all.minOrNull() ?: 0L, 0L)
     val hi = max(all.maxOrNull() ?: 0L, 0L)
     val least = all.minOrNull() ?: 0L
@@ -395,16 +448,32 @@ private fun Plot(data: Numbers, kind: ChartKind, picked: Int?, onPick: (Int) -> 
         val zero = y(base)
         when (kind) {
             ChartKind.Line, ChartKind.Price -> {
-                data.series.forEachIndexed { i, (_, values) ->
+                data.series.forEachIndexed { i, s ->
+                    val values = s.values
                     val shown = values.take(max(1, min(data.known.getOrElse(i) { values.size }, values.size)))
                     val color = if (kind == ChartKind.Price) PALETTE[1] else seriesColor(i, count)
+                    // A point with no value is stepped over: the line joins the ones either side.
                     val path = Path()
+                    var started = false
                     shown.forEachIndexed { j, v ->
+                        if (v == null) return@forEachIndexed
                         val x = left + (j + .5f) * gw
-                        if (j == 0) path.moveTo(x, y(v)) else path.lineTo(x, y(v))
+                        if (started) path.lineTo(x, y(v)) else path.moveTo(x, y(v))
+                        started = true
                     }
-                    drawPath(path, color, style = Stroke(if (kind == ChartKind.Price) 1.75.dp.toPx() else 2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-                    if (groups <= 16 && kind == ChartKind.Line) shown.forEachIndexed { j, v -> drawCircle(color, 3.dp.toPx(), Offset(left + (j + .5f) * gw, y(v))) }
+                    // A projection is dashed, its points open.
+                    val dashes = if (s.projected) PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 5.dp.toPx())) else null
+                    drawPath(path, color, style = Stroke(if (kind == ChartKind.Price) 1.75.dp.toPx() else 2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round, pathEffect = dashes))
+                    if (groups <= 16 && kind == ChartKind.Line) shown.forEachIndexed { j, v ->
+                        if (v == null) return@forEachIndexed
+                        val o = Offset(left + (j + .5f) * gw, y(v))
+                        if (s.projected) {
+                            drawCircle(c.slab, 3.dp.toPx(), o)
+                            drawCircle(color, 3.dp.toPx(), o, style = Stroke(1.5.dp.toPx()))
+                        } else {
+                            drawCircle(color, 3.dp.toPx(), o)
+                        }
+                    }
                 }
                 for ((j, price, buy) in data.marks) {
                     val o = Offset(left + (j + .5f) * gw, y(price))
@@ -420,8 +489,8 @@ private fun Plot(data: Numbers, kind: ChartKind, picked: Int?, onPick: (Int) -> 
                 val inner = bw * count + 3.dp.toPx() * (count - 1)
                 for (j in 0 until groups) {
                     val x0 = left + j * gw + (gw - inner) / 2
-                    data.series.forEachIndexed { i, (_, values) ->
-                        val v = values.getOrElse(j) { 0L }
+                    data.series.forEachIndexed { i, s ->
+                        val v = s.values.getOrNull(j) ?: return@forEachIndexed
                         if (v == 0L) return@forEachIndexed
                         val x = x0 + i * (bw + 3.dp.toPx())
                         val y1 = min(y(v), zero)
@@ -438,7 +507,8 @@ private fun Plot(data: Numbers, kind: ChartKind, picked: Int?, onPick: (Int) -> 
                             p.quadraticTo(x + bw, y2, x + bw, y2 - r); p.lineTo(x + bw, y1)
                         }
                         p.close()
-                        drawPath(p, seriesColor(i, count))
+                        // A projection's bars are lighter than what was.
+                        drawPath(p, seriesColor(i, count).let { if (s.projected) it.copy(alpha = PROJECTED_ALPHA) else it })
                     }
                 }
             }
@@ -473,8 +543,8 @@ private fun Plot(data: Numbers, kind: ChartKind, picked: Int?, onPick: (Int) -> 
 private fun CategoryRows(data: Numbers) {
     val c = Relay.colors
     val count = data.series.size
-    val hi = max(data.series.maxOf { (_, v) -> v.maxOrNull() ?: 0L }, 1L)
-    val shown = data.labels.indices.filter { i -> data.series.any { (_, v) -> v.getOrElse(i) { 0L } > 0 } }
+    val hi = max(data.series.maxOf { s -> s.values.filterNotNull().maxOrNull() ?: 0L }, 1L)
+    val shown = data.labels.indices.filter { i -> data.series.any { s -> (s.values.getOrNull(i) ?: 0L) > 0 } }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         for (i in shown) {
             val tint = data.colors[i]?.let { hue(it) } ?: PALETTE[i % PALETTE.size]
@@ -483,10 +553,10 @@ private fun CategoryRows(data: Numbers) {
                 T(data.labels[i], Modifier.weight(.42f), Relay.type.caption, c.ink2, maxLines = 1)
                 Column(Modifier.weight(.58f)) {
                     for (k in data.series.indices.reversed()) {
-                        PaceMeter(data.series[k].second.getOrElse(i) { 0L }.toFloat() / hi, if (count == 1) tint else seriesColor(k, count))
+                        PaceMeter((data.series[k].values.getOrNull(i) ?: 0L).toFloat() / hi, if (count == 1) tint else seriesColor(k, count))
                     }
                 }
-                T(data.series.asReversed().joinToString(" · ") { (_, v) -> data.fmt.whole(v.getOrElse(i) { 0L }) }, style = Relay.type.mono.copy(fontSize = 12.sp), color = c.ink, maxLines = 1)
+                T(data.series.asReversed().joinToString(" · ") { s -> data.fmt.whole(s.values.getOrNull(i) ?: 0L) }, style = Relay.type.mono.copy(fontSize = 12.sp), color = c.ink, maxLines = 1)
             }
         }
     }
@@ -497,8 +567,8 @@ private fun CategoryRows(data: Numbers) {
 private fun Donut(data: Numbers) {
     val c = Relay.colors
     val (name, values) = data.series.last()
-    val parts = data.labels.indices.filter { values.getOrElse(it) { 0L } > 0 }.map { i ->
-        Triple(data.labels[i], values[i], data.colors[i]?.let { hue(it) } ?: PALETTE[i % PALETTE.size])
+    val parts = data.labels.indices.filter { (values.getOrNull(it) ?: 0L) > 0 }.map { i ->
+        Triple(data.labels[i], values[i] ?: 0L, data.colors[i]?.let { hue(it) } ?: PALETTE[i % PALETTE.size])
     }
     val total = parts.sumOf { it.second }
     BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -546,16 +616,17 @@ private fun Foot(spec: ChartSpec, live: RelayData.Live, data: Numbers?) {
     val asked = spec.data == null
     val stale = asked && live.result != null && !live.fresh
     val note = when {
-        !asked -> "Numbers as written in the reply"
+        !asked -> "Claude's numbers from this reply, not Tally's: it does not redraw"
         stale -> "Saved on this phone · ${ago(live.at)}"
         spec.gym != null -> "From Avex's last export, redraws when a newer one comes in"
         spec.price != null -> "Live from Arbiter, redraws when it trades"
         else -> "Live from Tally, redraws when the ledger changes"
     }
-    // The figure says what it is: the newest series' name, or "Total".
-    val total = data?.takeIf { spec.kind != ChartKind.Donut && it.series.isNotEmpty() }?.let { d ->
+    // The figure says what it is: the newest series' name, or "Total". A reply's own numbers
+    // have none: summed, a projection or a balance over months says nothing.
+    val total = data?.takeIf { asked && spec.kind != ChartKind.Donut && it.series.isNotEmpty() }?.let { d ->
         val i = d.series.lastIndex
-        val values = d.series[i].second.take(d.known.getOrElse(i) { d.labels.size })
+        val values = d.series[i].values.take(d.known.getOrElse(i) { d.labels.size }).filterNotNull()
         val figure = when {
             values.isEmpty() -> null
             spec.kind == ChartKind.Price -> d.fmt.format(values.last())
@@ -563,7 +634,7 @@ private fun Foot(spec: ChartSpec, live: RelayData.Live, data: Numbers?) {
             d.fmt is Fmt.Cash -> d.fmt.whole(values.sum())
             else -> null
         }
-        figure?.let { d.series[i].first.ifBlank { "Total" } to it }
+        figure?.let { d.series[i].name.ifBlank { "Total" } to it }
     }
     Column {
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.lineSubtle))
