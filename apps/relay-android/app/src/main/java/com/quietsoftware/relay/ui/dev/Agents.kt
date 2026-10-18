@@ -375,7 +375,11 @@ private fun StoppedFold(list: List<Stopped>, online: Boolean, life: Lifecycle, n
             if (progress == null) {
                 Key(
                     if (list.size == 1) "Resume" else "Resume all",
-                    { life.resumeAll(list.map { it.name }) },
+                    {
+                        // One agent resumes as its row's key does, without a question; several are asked about.
+                        val one = list.singleOrNull()
+                        if (one != null) life.resume(one) { nav.terminal(one.name) } else life.resumeAll(list.map { it.name })
+                    },
                     Modifier.alpha(if (online) 1f else .5f),
                     kind = KeyKind.Quiet,
                     enabled = life.busy == null,

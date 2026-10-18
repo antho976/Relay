@@ -311,8 +311,12 @@ internal fun LifecycleSheets(life: Lifecycle) {
         DevSheet({ life.closing = null }, "Close ${s.name}?", "Stops its process and takes it off the wall. Its branch is kept unless its work is already merged.") { close ->
             Column(Modifier.padding(horizontal = 6.dp)) {
                 if (s.worktree.isNotBlank()) T(s.worktree, Modifier.padding(bottom = 4.dp), Relay.type.mono, c.ink3, maxLines = 2)
-                SwitchRow("Remove worktree", "Delete the checkout after closing. Refused while a paired session still uses it.", removeWorktree, { removeWorktree = it })
-                SwitchRow("Purge build output", "Free the disk its build directories use.", purgeBuild, { purgeBuild = it })
+                // session.close purges build output only from a worktree it removes: Purge waits on Remove, as on the PC.
+                SwitchRow("Also remove the worktree", "Delete the checkout after closing. Refused while a paired session still uses it.", removeWorktree, {
+                    removeWorktree = it
+                    if (!it) purgeBuild = false
+                })
+                SwitchRow("Purge build output", "Free the disk its build directories use.", purgeBuild, { purgeBuild = it }, enabled = removeWorktree)
             }
             SheetKeys("Close session", { close { life.close(s.name, removeWorktree, purgeBuild) } }, { close {} }, KeyKind.Danger)
         }
