@@ -5,7 +5,6 @@ import android.os.SystemClock
 import android.speech.RecognizerIntent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -186,32 +185,12 @@ fun ChatScreen(name: String, nav: Nav) {
     fun type(next: String) {
         field = TextFieldValue(next, TextRange(next.length))
     }
-    // Pictures for the next message: each sent to the agent's checkout as soon as it is picked.
-    val context = LocalContext.current
+    // Pictures for the next message: each sent to the agent's checkout as soon as it is picked,
+    // and arriving all the same when the person opens the terminal meanwhile.
     val attached = draft.attached
-    fun update(id: Long, change: (Attachment) -> Attachment) {
-        val i = attached.indexOfFirst { it.id == id }
-        if (i >= 0) attached[i] = change(attached[i])
-    }
     // Dictation through the phone's own recognizer: what was said joins what is typed.
     val dictate = rememberDictation { said -> type(joinSaid(field.text, said)) }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_PICTURES)) { uris ->
-        val room = (MAX_PICTURES - attached.size).coerceAtLeast(0)
-        if (uris.size > room) nav.shell.toast("Up to $MAX_PICTURES pictures in one message")
-        val app = context.applicationContext
-        for (uri in uris.take(room)) {
-            val id = System.nanoTime()
-            attached += Attachment(id, null)
-            // Past this screen: a picture still going when the person opens the terminal arrives all the same.
-            Feeds.scope.launch {
-                val shrunk = withContext(Dispatchers.IO) { shrink(app, uri) }
-                if (shrunk == null) return@launch update(id) { it.copy(failed = true) }
-                update(id) { it.copy(thumb = shrunk.second) }
-                val path = chat.upload(shrunk.first)
-                update(id) { if (path != null) it.copy(path = path) else it.copy(failed = true) }
-            }
-        }
-    }
+    val pickPictures = rememberPicturePicker(attached) { picture -> chat.upload(picture) }
 
     val ready = session?.attachable == true && s.online
     val working = session?.state == "running" || session?.state == "spawning"
@@ -250,7 +229,7 @@ fun ChatScreen(name: String, nav: Nav) {
             return
         }
         val pictures = attached.toList()
-        val paths = pictures.mapNotNull { it.path }
+        val paths = pictures.mapNotNull { it.sent }
         if (typed.isEmpty() && paths.isEmpty()) {
             // Empty: Esc stops an agent mid-turn; otherwise (a menu up, a prompt) it is the Enter it waits for.
             val stop = working && !asking
@@ -336,9 +315,7 @@ fun ChatScreen(name: String, nav: Nav) {
                 pictures = attached.isNotEmpty(),
                 above = { AttachmentStrip(attached) { id -> attached.removeAll { it.id == id } } },
             ) {
-                Chip("", "Attach a photo or a screenshot", ready && attached.size < MAX_PICTURES, glyph = "file-image") {
-                    picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                }
+                Chip("", "Attach a photo or a screenshot", ready && attached.size < MAX_PICTURES, glyph = "file-image", onClick = pickPictures)
                 if (dictate != null) Chip("", "Dictate a message", ready, icon = { MicGlyph(15.dp, c.ink2) }, onClick = dictate)
                 Chip("/", "The agent's commands", ready) {
                     if (text.isBlank()) type("/")
@@ -1341,15 +1318,22 @@ internal fun ChatComposer(
     }
 }
 
-/** A key of the agent's under the message box, drawn as a thread's chips are: a pill in a full-size target. */
+/**
+ * A key of the agent's under the message box, drawn as a thread's chips are: a pill in a
+ * full-size target. Off, a tap does nothing, or says why when it has [whyOff].
+ */
 @Composable
-internal fun Chip(label: String, spoken: String, enabled: Boolean, glyph: String? = null, trailing: String? = null, icon: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
+internal fun Chip(label: String, spoken: String, enabled: Boolean, glyph: String? = null, trailing: String? = null, icon: (@Composable () -> Unit)? = null, whyOff: (() -> Unit)? = null, onClick: () -> Unit) {
     val c = Relay.colors
     val haptic = LocalHapticFeedback.current
     Box(
-        Modifier.heightIn(min = TOUCH).clickable(enabled = enabled, onClickLabel = spoken, role = Role.Button) {
-            haptic.performHapticFeedback(HapticFeedbackType.KeyboardTap)
-            onClick()
+        Modifier.heightIn(min = TOUCH).clickable(enabled = enabled || whyOff != null, onClickLabel = spoken, role = Role.Button) {
+            if (enabled) {
+                haptic.performHapticFeedback(HapticFeedbackType.KeyboardTap)
+                onClick()
+            } else {
+                whyOff?.invoke()
+            }
         },
         contentAlignment = Alignment.Center,
     ) {
@@ -1428,9 +1412,6 @@ internal fun modeOf(screen: String): String? {
 }
 
 private const val MODE_TAIL = 4
-
-/** Pictures one message may carry. */
-private const val MAX_PICTURES = 4
 
 /** How long after a message the empty box's key will not stop the agent. */
 private const val STOP_AFTER_SEND_MS = 1_000L

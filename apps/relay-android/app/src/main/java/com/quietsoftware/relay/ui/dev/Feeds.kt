@@ -197,7 +197,7 @@ internal fun rememberChat(relay: Relay, name: String): SessionChat {
 internal object ChatDrafts {
     class Draft {
         var text = TextFieldValue()
-        val attached = mutableStateListOf<Attachment>()
+        val attached = mutableStateListOf<Attachment<String>>()
     }
 
     private val drafts = HashMap<String, Draft>()
