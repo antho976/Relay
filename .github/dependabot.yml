@@ -1,0 +1,12 @@
+# The workflows pin every action to a commit (ci.yml), which no tag move can change and nothing
+# updates either. Once a month, one grouped pull request proposes the new commits, security
+# fixes included; CI runs on it like any other.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]

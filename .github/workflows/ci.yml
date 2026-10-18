@@ -1,13 +1,14 @@
 name: CI
 
-# The engine, the bus and the CLI are checked on every push and every pull request.
-# `relay-native` is not — see the note at the bottom. The phone app has its own workflow,
-# `relay-android.yml`, which runs only when it changes.
+# Every push to main and every pull request: the headless crates on Ubuntu, and the GTK desktop
+# client in an Arch Linux container. The phone app has its own workflow, relay-android.yml, which
+# runs only when it changes; relay-server-image.yml calls this one before it publishes.
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 
 # A newer push to a pull request supersedes its running check; a push to main does not, so
 # every merge keeps its own result.
@@ -16,70 +17,91 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Nothing here writes to the repository. Actions are pinned to commits, with the tag they
-# were resolved from beside them, so a moved tag or branch cannot change what runs.
+# were resolved from beside them, so a moved tag or branch cannot change what runs; Dependabot
+# proposes the bumps (.github/dependabot.yml).
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  # Debug-info test binaries fill the runner's disk; line tables keep a panic's file and line.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 jobs:
   engine:
     name: engine, bus and CLI
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    # The hosted runner's disk fills up with the workspace's debug-info test binaries; line
-    # tables are kept so a panic's backtrace still names its file and line.
-    env:
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
-      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
       # The image ships toolchains this job never uses; dropping them frees about 20 GB.
       - name: Free disk space
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
-      # Pinned rather than `stable`: a toolchain bump can introduce new lints, and a build
-      # that goes red because Rust shipped on a Tuesday teaches people to ignore the build.
-      # Bumping this line is how a new toolchain gets adopted — deliberately, in its own PR,
-      # together with `rust-version` in the root Cargo.toml.
+      # Pinned rather than `stable`, so a Rust release cannot turn the build red on its own; and
+      # pinned to what the developer machine runs, since a lint one version reports and another
+      # does not is how main went red from #103 to #110. Bump it with `rust-version` (Cargo.toml)
+      # and the image in deploy/rendezvous.Dockerfile, in a commit of its own.
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: "1.99"
+          components: clippy
+
+      # Saved from main only: a pull request restores main's cache, and its own would only
+      # crowd main's out of the repository's 10 GB.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # `--locked` fails if Cargo.lock would have to change; `--no-fail-fast` reports every
+      # failing crate in one run instead of stopping at the first.
+      - name: Test
+        run: cargo test --locked --no-fail-fast
+
+      - name: Clippy
+        if: ${{ !cancelled() }}
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      # run.sh against a fake cargo, engine and client: no GTK, no display, nothing installed.
+      - name: Launcher
+        if: ${{ !cancelled() }}
+        run: python3 scripts/test-launcher.py
+
+  native:
+    name: native client (GTK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # relay-native pins GTK 4.22, VTE 0.84, GtkSourceView 5.18 and pango 1.56, which Ubuntu does
+    # not carry. Arch does, as the developer machine (CachyOS) does; its tests need no display.
+    container: archlinux:base-devel
+    steps:
+      - name: GTK, VTE, GtkSourceView, FFmpeg headers and libclang
+        run: pacman -Syu --noconfirm --needed git gtk4 vte4 gtksourceview5 ffmpeg clang
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
           toolchain: "1.99"
           components: clippy
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # `--locked` fails if Cargo.lock would have to change, so a dependency cannot drift in
-      # through a build that happened to resolve differently.
-      - name: Test
-        run: cargo test --locked
-
+      # gtk-rs marks APIs deprecated a release before GTK drops them; those are read, not gated.
       - name: Clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --locked -p relay-native --all-targets -- -D warnings -A deprecated
 
-      # run.sh against a fake cargo, engine and client: no GTK, no display, nothing installed.
-      - name: Launcher
-        run: python3 scripts/test-launcher.py
+      - name: Test
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p relay-native
 
-# `relay-native` is deliberately absent, and this is the honest reason rather than an
-# oversight to rediscover later.
-#
-# The crate pins GTK 4.22, VTE 0.84, GtkSourceView 5.18 and pango 1.56. `ubuntu-latest`
-# currently carries GTK 4.14 and pango 1.52, so `cargo check -p relay-native` stops at
-# `pango-sys` before it compiles a line of Relay's own code. The same gap applies to agent
-# sessions run against an Ubuntu image, which is why changes to the native client have to be
-# verified on a developer machine today.
-#
-# Covering it needs a runner image that actually carries those versions — a container with a
-# current GNOME stack, or a self-hosted runner. Whoever adds that job should confirm the
-# image's `pkg-config --modversion gtk4 pango vte-2.91-gtk4 gtksourceview-5` before wiring it
-# up (the mirror's decoder also needs FFmpeg's libavcodec headers and libclang to build), and can then add `cargo clippy -p relay-native --all-targets -- -D warnings -A deprecated`.
-#
-# `cargo fmt --check` is absent, for relay-native as for every other crate, for a different
-# reason: the workspace is not rustfmt-clean and deliberately so in places (~900 hunks differ
-# from rustfmt's default). Enforcing it would be a reformat of the repository, which is a
-# decision to take on purpose and not a side effect of turning CI on.
+# `cargo fmt --check` is absent on purpose: the workspace is not rustfmt-clean, deliberately in
+# places, and enforcing it would be a reformat of the repository (CLAUDE.md).
