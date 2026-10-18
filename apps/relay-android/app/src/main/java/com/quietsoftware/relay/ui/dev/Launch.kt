@@ -105,9 +105,17 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
     var busy by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    // A create the PC refused waits in the outbox until it is tried again or dropped there: another
+    // launch from this form meanwhile would be a second agent, so the key stays off until then.
+    var refused by rememberSaveable { mutableStateOf<String?>(null) }
+    var refusedWhy by rememberSaveable { mutableStateOf("") }
+    val outbox by remember(refused) { if (refused != null) nav.relay.outbox() else flowOf(emptyList()) }.collectAsStateWithLifecycle<List<OutboxEntry>?>(null)
+    // Held until the outbox has answered, then for as long as it holds the entry.
+    val held = refused?.let { id -> outbox?.any { it.id == id } ?: true } == true
     var pickingProject by remember { mutableStateOf(false) }
     var pickingTask by remember { mutableStateOf(false) }
     var leaving by remember { mutableStateOf(false) }
+    val scroll = rememberScrollState()
     val promptFocus = remember { FocusRequester() }
     // A new agent with nothing written yet: the keyboard is up for its first message.
     LaunchedEffect(Unit) { if (prompt.isNullOrEmpty() && taskId == null) runCatching { promptFocus.requestFocus() } }
@@ -134,7 +142,7 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
 
     fun launch() {
         val id = pid ?: return
-        if (busy) return
+        if (busy || held) return
         // Allocation order (launch.rs): builder 1, the reviewer, builder 2, each pairing with the one before.
         val order = if (group) (if (builders == 2) listOf(0, 2, 1) else listOf(0, 2)) else listOf(0)
         for (i in order) {
@@ -208,7 +216,8 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                 is Settled.Refused -> {
                     busy = false
                     note = null
-                    error = "Not created: ${done.why}. The outbox holds it until you decide."
+                    refusedWhy = done.why
+                    refused = done.entry
                 }
                 Settled.Waiting -> {
                     nav.shell.toast("New agent · starting when the PC has made it")
@@ -218,8 +227,8 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
         }
     }
 
-    // What was written for an agent is not dropped by Back without asking.
-    val written = !busy && profiles.any { it.prompt.isNotBlank() }
+    // What was written for an agent is not dropped by Back without asking; a refused one the outbox keeps.
+    val written = !busy && !held && profiles.any { it.prompt.isNotBlank() }
     BackHandler(enabled = written) { leaving = true }
 
     Page {
@@ -230,7 +239,7 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                 return@Column
             }
             Column(
-                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+                Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -293,6 +302,8 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                     More(
                         group = group,
                         onGroup = {
+                            // A review group's builders and reviewer are set at the top of the form: brought into view.
+                            if (it && !group) scope.launch { scroll.animateScrollTo(0) }
                             group = it
                             member = 0
                         },
@@ -319,14 +330,15 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
             }
             Footer(
                 when {
+                    held -> "Not created: $refusedWhy. The outbox holds it until you try it again or drop it there."
                     error != null -> error!!
                     note != null -> note!!
                     !s.online -> "The PC is away · starts when it is back"
                     else -> null
                 },
-                error != null,
+                held || error != null,
                 if (group) "Launch review group" else "Launch agent",
-                enabled = project != null && !busy,
+                enabled = project != null && !busy && !held,
                 onStart = ::launch,
             )
         }
@@ -398,7 +410,8 @@ private fun refOf(c: Hub.Change): JsonElement = when (c) {
 
 private sealed interface Settled {
     data class Made(val name: String) : Settled
-    data class Refused(val why: String) : Settled
+    /** [entry]: the outbox entry that holds the create meanwhile. */
+    data class Refused(val why: String, val entry: String) : Settled
     data object Waiting : Settled
 }
 
@@ -419,7 +432,7 @@ private suspend fun settled(nav: Nav, change: Hub.Change): Settled {
     }
     return when {
         end?.state == OutboxEntry.State.Done -> (end.result as? JsonObject)?.s("name")?.let { Settled.Made(it) } ?: Settled.Waiting
-        end?.parked == true -> Settled.Refused(end.error?.let(::refusal) ?: "the PC refused it")
+        end?.parked == true -> Settled.Refused(end.error?.let(::refusal) ?: "the PC refused it", end.id)
         else -> Settled.Waiting
     }
 }
