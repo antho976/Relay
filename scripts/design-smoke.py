@@ -274,10 +274,12 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
             time.sleep(0.01)
             e = dict(native_env, RELAY_NATIVE_SCREENSHOT=str(output), RELAY_NATIVE_SIZE="1440,900", RELAY_NATIVE_FIXTURE="1",
                      RELAY_NATIVE_PAGE="design", RELAY_NATIVE_SMOKE_SECONDS="7")
-            if shot != "gallery":
+            if not shot.startswith("gallery"):
                 e["RELAY_SMOKE_DESIGN_BOARD"] = "1"
             if shot == "board-select":
                 e["RELAY_SMOKE_DESIGN_SELECT"] = "cta-label"
+            if shot == "gallery-narrow":
+                e["RELAY_NATIVE_SIZE"] = "1080,760"
             if shot == "board-narrow":
                 # A window under ~1150 px: the text toolbar must keep clear of the inspector.
                 e["RELAY_NATIVE_SIZE"] = "1080,760"

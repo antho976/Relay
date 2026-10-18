@@ -1190,7 +1190,9 @@ fn category(stack: &gtk::Stack, name: &str, autosave: Option<&Form>) -> gtk::Box
     }
     column.append(&head);
     let scroll = crate::app::scrolled(&column);
-    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    // External, not Never: the margin that caps the column follows the page's width, and Never
+    // counted it in the page's minimum, so the window narrowed only a step at a time.
+    scroll.set_policy(gtk::PolicyType::External, gtk::PolicyType::Automatic);
     cap_width(&column, &scroll);
     stack.add_titled(&scroll, Some(name), title);
     column
