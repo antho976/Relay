@@ -476,7 +476,13 @@ pub fn page() -> gtk::Box {
     jump.set_visible(false);
     reading.add_overlay(&jump);
     middle.add_named(&reading, Some("thread"));
-    conversation.append(&middle);
+    // The page's toast, as a Tally page's (`money::toast`): what a sheet saved or deleted, with
+    // Undo. It sits over the conversation's foot, never over the message box.
+    let foot = gtk::Overlay::new();
+    foot.set_vexpand(true);
+    foot.set_child(Some(&middle));
+    super::add_toast(&foot, PAGE, 12);
+    conversation.append(&foot);
 
     let pending = gtk::Box::new(gtk::Orientation::Vertical, 0);
     pending.append(&pending_label());

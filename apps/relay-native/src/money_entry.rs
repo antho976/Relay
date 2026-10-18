@@ -336,10 +336,10 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, lists: &Value, tx: Option<Value>) {
         let weak = Rc::downgrade(ui);
         let sheet = Rc::downgrade(panel);
         let gone = t.clone();
-        // A Tally page's toast offers Undo, so it deletes at once; elsewhere (the Threads panel)
-        // nothing would, so it asks first.
+        // The page's toast offers Undo, on Tally's pages and the Threads page alike, so it
+        // deletes at once; a page with no toast would offer none, so there it asks first.
         let asking = Rc::downgrade(ui);
-        let needed = move || asking.upgrade().is_some_and(|ui| super::page(&ui.page.borrow()).is_none());
+        let needed = move || asking.upgrade().is_some_and(|ui| !super::has_toast(&ui.page.borrow()));
         crate::app::confirm_inline_if(&delete, "Delete this entry?", needed, move |_| {
             if let (Some(ui), Some(sheet)) = (weak.upgrade(), sheet.upgrade()) {
                 sheet.close();
@@ -451,7 +451,6 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, lists: &Value, tx: Option<Value>) {
                         if let Some(sheet) = sheet.upgrade() {
                             sheet.close();
                         }
-                        // On the Threads page the banner says it, without the Undo a page's toast has.
                         let undo = undo_save(&ui, &saved, before.as_ref());
                         super::toast(&ui, &format!("{} {said}", if before.is_some() { "Saved" } else { "Added" }), Some(undo));
                     }
