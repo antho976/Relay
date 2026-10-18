@@ -41,6 +41,7 @@ import com.quietsoftware.relay.ui.kit.RelayMark
 import com.quietsoftware.relay.ui.kit.Slab
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.column
+import com.quietsoftware.relay.ui.kit.plural
 import com.quietsoftware.relay.ui.shell.Page
 import com.quietsoftware.relay.ui.shell.PageBar
 import com.quietsoftware.relay.ui.theme.Relay
@@ -109,7 +110,8 @@ private fun ConnectScreen(nav: Nav) {
                         step = Step.Pairing(target.host)
                         nav.relay.pair(target)
                             .onSuccess {
-                                LinkService.start(context)
+                                // The background link only when the person keeps it (Stay connected).
+                                if (nav.shell.state.value.prefs.stayConnected) LinkService.start(context)
                                 nav.start()
                             }
                             .onFailure { e ->
@@ -162,7 +164,7 @@ private fun ConnectScreen(nav: Nav) {
                         val unsent = paired.outbox.size
                         T(
                             "Pairing a different PC replaces ${pc.name.ifBlank { "this one" }}: this phone's copy of its data" +
-                                (if (unsent > 0) " and $unsent changes not yet sent" else "") + " will be dropped.",
+                                (if (unsent > 0) " and ${plural(unsent, "change")} not yet sent" else "") + " will be dropped.",
                             style = Relay.type.caption,
                             color = if (unsent > 0) c.heldText else c.ink3,
                         )

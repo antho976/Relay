@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
@@ -23,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -52,6 +54,8 @@ import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.Toggle
 import com.quietsoftware.relay.ui.kit.ago
 import com.quietsoftware.relay.ui.kit.column
+import com.quietsoftware.relay.ui.kit.plural
+import com.quietsoftware.relay.ui.kit.switchRow
 import com.quietsoftware.relay.ui.shell.Page
 import com.quietsoftware.relay.ui.shell.PageBar
 import com.quietsoftware.relay.ui.shell.linkColor
@@ -86,7 +90,8 @@ fun PairScreen(link: String?, nav: Nav) {
             nav.relay.pair(target)
                 .onSuccess {
                     waiting = null
-                    LinkService.start(context)
+                    // The background link only when the person keeps it (Stay connected).
+                    if (nav.shell.state.value.prefs.stayConnected) LinkService.start(context)
                     nav.start()
                 }
                 .onFailure { e ->
@@ -122,7 +127,7 @@ fun PairScreen(link: String?, nav: Nav) {
                         val unsent = paired.outbox.size
                         T(
                             "Pairing a different PC replaces ${pc.name.ifBlank { "this one" }}: this phone's copy of its data" +
-                                (if (unsent > 0) " and $unsent changes not yet sent" else "") + " will be dropped.",
+                                (if (unsent > 0) " and ${plural(unsent, "change")} not yet sent" else "") + " will be dropped.",
                             style = Relay.type.caption,
                             color = if (unsent > 0) c.heldText else c.ink3,
                         )
@@ -143,13 +148,15 @@ fun PairScreen(link: String?, nav: Nav) {
                             }
                         }
                         else -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Field(address, { address = it }, Modifier.fillMaxWidth(), placeholder = "PC address, e.g. 192.168.1.20 or my-pc.tail1234.ts.net", leading = "wifi",
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-                            Field(code, { code = it.uppercase() }, Modifier.fillMaxWidth(), placeholder = "Code, e.g. ABCD-EFGH", leading = "shield",
-                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters))
-                            Key("Pair", {
+                            val typed: () -> Unit = {
                                 PairLink.manual(address, code)?.let(::pair) ?: run { problem = "Enter the PC's address and the code it printed" }
-                            }, kind = KeyKind.Primary, enabled = address.isNotBlank() && code.isNotBlank())
+                            }
+                            Field(address, { address = it }, Modifier.fillMaxWidth(), placeholder = "PC address, e.g. 192.168.1.20 or my-pc.tail1234.ts.net", leading = "wifi",
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next))
+                            Field(code, { code = it.uppercase() }, Modifier.fillMaxWidth(), placeholder = "Code, e.g. ABCD-EFGH", leading = "shield",
+                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, autoCorrectEnabled = false, imeAction = ImeAction.Go),
+                                keyboardActions = KeyboardActions(onGo = { if (address.isNotBlank() && code.isNotBlank()) typed() }))
+                            Key("Pair", typed, kind = KeyKind.Primary, enabled = address.isNotBlank() && code.isNotBlank())
                         }
                     }
                     waiting?.let { w ->
@@ -240,13 +247,17 @@ fun PcScreen(nav: Nav) {
                                     T(r.url, style = Relay.type.mono, color = c.ink3, maxLines = 1)
                                 }
                                 if (pc.routes.size > 1) IconKey("close", {
+                                    val at = pc.routes.indexOf(r)
                                     scope.launch { nav.relay.pc.update { p -> p.copy(routes = p.routes - r) }; nav.relay.hub.link.restart() }
-                                }, size = 14.dp)
+                                    nav.shell.toast("Removed ${r.url}", undo = {
+                                        nav.relay.pc.update { p -> if (r in p.routes) p else p.copy(routes = p.routes.toMutableList().apply { add(at.coerceIn(0, size), r) }) }
+                                        nav.relay.hub.link.restart()
+                                    })
+                                }, size = 14.dp, label = "Remove this route")
                             }
                         }
                         Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Field(extra, { extra = it }, Modifier.weight(1f), placeholder = "Add Tailscale or other address", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-                            Key("Add", {
+                            val add: () -> Unit = {
                                 PairLink.address(extra)?.let { url ->
                                     scope.launch {
                                         nav.relay.pc.update { p -> p.copy(routes = p.routes + Route(url, Route.Kind.of(url))) }
@@ -254,7 +265,11 @@ fun PcScreen(nav: Nav) {
                                     }
                                     extra = ""
                                 } ?: nav.shell.toast("That is not an address")
-                            }, enabled = extra.isNotBlank(), compact = true)
+                            }
+                            Field(extra, { extra = it }, Modifier.weight(1f), placeholder = "Add Tailscale or other address",
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
+                                keyboardActions = KeyboardActions(onDone = { if (extra.isNotBlank()) add() }))
+                            Key("Add", add, enabled = extra.isNotBlank(), compact = true)
                         }
                         if (pc.routes.any { it.kind == Route.Kind.Rendezvous } && pc.routes.any { it.kind != Route.Kind.Rendezvous }) {
                             Segmented(
@@ -268,15 +283,18 @@ fun PcScreen(nav: Nav) {
                     }
 
                     Slab(Modifier.fillMaxWidth()) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            Modifier.switchRow(s.prefs.stayConnected) { on ->
+                                nav.shell.update { it.copy(stayConnected = on) }
+                                if (on) LinkService.start(context) else LinkService.stop(context)
+                            },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
                             Column(Modifier.weight(1f)) {
                                 T("Stay connected", style = Relay.type.uiMedium, color = c.ink)
                                 T("Keeps the link open in the background so agents that need you can say so. Shows an ongoing notification.", style = Relay.type.caption, color = c.ink3)
                             }
-                            Toggle(s.prefs.stayConnected, { on ->
-                                nav.shell.update { it.copy(stayConnected = on) }
-                                if (on) LinkService.start(context) else LinkService.stop(context)
-                            })
+                            Toggle(s.prefs.stayConnected, null)
                         }
                     }
 
@@ -301,7 +319,7 @@ fun PcScreen(nav: Nav) {
                         if (confirmForget) {
                             Gap(10.dp)
                             T(
-                                if (s.outbox.isEmpty()) "Forget the PC and this phone's copy of its data?" else "Forget the PC? ${s.outbox.size} changes not yet sent will be lost.",
+                                if (s.outbox.isEmpty()) "Forget the PC and this phone's copy of its data?" else "Forget the PC? ${plural(s.outbox.size, "change")} not yet sent will be lost.",
                                 style = Relay.type.ui, color = c.heldText,
                             )
                             Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
