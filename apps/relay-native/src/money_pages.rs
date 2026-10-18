@@ -1836,6 +1836,7 @@ fn transactions(ui: &Rc<Ui>, page: &Page, list: &Value, offset: i64, query: &str
         head.context.set_text(&tx_context(entries.len(), query, income, spent, &filtered));
         head.period.set_text(&name);
         head.next.set_sensitive(offset < 0);
+        head.next.set_tooltip_text(Some(if offset < 0 { "Next period" } else { "This is the current period" }));
     }
     let previous = TX_DRAWN.with(|d| d.borrow_mut().take());
     if entries.is_empty() {
@@ -1845,17 +1846,24 @@ fn transactions(ui: &Rc<Ui>, page: &Page, list: &Value, offset: i64, query: &str
             (true, false) => format!("Nothing in {name} for {filtered}."),
             (false, _) => format!("Nothing in {name} matches \u{201c}{query}\u{201d}."),
         };
+        let hint = if query.is_empty() { "Add an entry with the Entry key or Ctrl E" } else { "The search looks in this period's notes, categories and accounts" };
         let rows = card(&page.body, "Entries", None);
-        rows.append(&icon_row(&tile("list"), &text, "Add an entry with the Entry key or Ctrl E", "", ""));
-        if !filtered.is_empty() {
+        rows.append(&icon_row(&tile("list"), &text, hint, "", ""));
+        if !filtered.is_empty() || !query.is_empty() {
             let clear_key = button("Show every entry", "money-secondary");
             clear_key.set_widget_name("money-filter-clear");
             clear_key.set_halign(gtk::Align::Start);
             clear_key.add_css_class("tally-save");
             let weak = Rc::downgrade(ui);
+            // The filters and the search go; the period stays.
             clear_key.connect_clicked(move |_| {
                 if let Some(ui) = weak.upgrade() {
                     super::set_filters(None, None);
+                    super::set_query("");
+                    if let Some(head) = TX_HEAD.with(|h| h.borrow().clone()) {
+                        // Its delayed search-changed finds the query already empty, as in `show_entries`.
+                        head.search.set_text("");
+                    }
                     ui.refresh_page();
                 }
             });
