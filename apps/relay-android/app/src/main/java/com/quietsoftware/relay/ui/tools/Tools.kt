@@ -25,6 +25,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -83,6 +85,9 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 private val numberKeys = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next)
+
+/** Commands, paths, branches and globs: typed as they are, with no capital or correction. */
+private val codeKeys = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false)
 
 @Serializable
 private data class SkillRow(
@@ -238,10 +243,11 @@ fun ProjectSettingsScreen(projectId: Long, nav: Nav) {
 @Composable
 private fun ProjectFields(projectId: Long, p: Project, nav: Nav) {
     val c = Relay.colors
-    var name by remember(p.name) { mutableStateOf(p.name) }
-    var branch by remember(p.baseBranch) { mutableStateOf(p.baseBranch) }
-    var buildCmd by remember(p.buildCmd) { mutableStateOf(p.buildCmd.orEmpty()) }
-    var runCmd by remember(p.runCmd) { mutableStateOf(p.runCmd.orEmpty()) }
+    // Saveable, so an edit is still here after Devices, Merge tests or Guardrails and back.
+    var name by rememberSaveable(p.name) { mutableStateOf(p.name) }
+    var branch by rememberSaveable(p.baseBranch) { mutableStateOf(p.baseBranch) }
+    var buildCmd by rememberSaveable(p.buildCmd) { mutableStateOf(p.buildCmd.orEmpty()) }
+    var runCmd by rememberSaveable(p.runCmd) { mutableStateOf(p.runCmd.orEmpty()) }
     val nameText = name.trim()
     val branchText = branch.trim()
     // An empty command goes back to Relay's default, which the PC stores as null.
@@ -266,15 +272,15 @@ private fun ProjectFields(projectId: Long, p: Project, nav: Nav) {
         }
         Gap(14.dp)
         FieldBlock("Base branch", "The branch new agent worktrees start from and integration merges into.") {
-            Field(branch, { branch = it }, Modifier.fillMaxWidth(), placeholder = "main", style = Relay.type.mono)
+            Field(branch, { branch = it }, Modifier.fillMaxWidth(), placeholder = "main", style = Relay.type.mono, keyboardOptions = codeKeys)
         }
         Gap(14.dp)
         FieldBlock("Build command", "Run by an integration build. Empty uses Relay's default.") {
-            Field(buildCmd, { buildCmd = it }, Modifier.fillMaxWidth(), placeholder = "Automatic", style = Relay.type.mono)
+            Field(buildCmd, { buildCmd = it }, Modifier.fillMaxWidth(), placeholder = "Automatic", style = Relay.type.mono, keyboardOptions = codeKeys)
         }
         Gap(14.dp)
         FieldBlock("Run command", "Run for Run on device. Empty uses Gradle's install and launch.") {
-            Field(runCmd, { runCmd = it }, Modifier.fillMaxWidth(), placeholder = "Automatic", style = Relay.type.mono)
+            Field(runCmd, { runCmd = it }, Modifier.fillMaxWidth(), placeholder = "Automatic", style = Relay.type.mono, keyboardOptions = codeKeys)
         }
         Gap(12.dp)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End), verticalAlignment = Alignment.CenterVertically) {
@@ -317,6 +323,8 @@ private fun SkillsCard(projectId: Long, nav: Nav, online: Boolean) {
     val skills = (live.result as? JsonObject)?.arr("skills")?.mapNotNull { it.decodeAs<SkillRow>() }.orEmpty()
     // A switch shows what was just set until the PC's list says so; a new list drops it.
     val overrides = remember(live.result) { mutableStateMapOf<Long, Boolean>() }
+    // While its call is out, a switch shows where it is going and takes no second tap.
+    val sending = remember { mutableStateMapOf<Long, Boolean>() }
     SectionLabel("Skills")
     Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
         when {
@@ -327,13 +335,14 @@ private fun SkillsCard(projectId: Long, nav: Nav, online: Boolean) {
                 SwitchLine(
                     title = skill.name,
                     hint = skill.description.ifBlank { null },
-                    checked = overrides[skill.id] ?: skill.enabledIn.contains(projectId),
-                    enabled = online,
+                    checked = sending[skill.id] ?: overrides[skill.id] ?: skill.enabledIn.contains(projectId),
+                    enabled = online && skill.id !in sending,
                 ) { on ->
+                    sending[skill.id] = on
                     nav.shell.act(
                         "skill.enable",
                         buildJsonObject { put("skill_id", skill.id); put("project_id", projectId); put("enabled", on) },
-                    ) { overrides[skill.id] = on }
+                    ) { overrides[skill.id] = on }.invokeOnCompletion { sending.remove(skill.id) }
                 }
             }
         }
@@ -347,6 +356,7 @@ private fun PluginsCard(projectId: Long, nav: Nav, online: Boolean) {
     val live by flow.collectAsStateWithLifecycle(initialValue = Live())
     val plugins = (live.result as? JsonObject)?.arr("plugins")?.mapNotNull { it.decodeAs<PluginRow>() }.orEmpty()
     val overrides = remember(live.result) { mutableStateMapOf<String, Boolean>() }
+    val sending = remember { mutableStateMapOf<String, Boolean>() }
     SectionLabel("Plugins")
     Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
         when {
@@ -357,13 +367,14 @@ private fun PluginsCard(projectId: Long, nav: Nav, online: Boolean) {
                 SwitchLine(
                     title = listOf(plugin.name, plugin.version).filter { it.isNotBlank() }.joinToString(" "),
                     hint = plugin.summary.ifBlank { null },
-                    checked = overrides[plugin.id] ?: plugin.enabledIn.contains(projectId),
-                    enabled = online,
+                    checked = sending[plugin.id] ?: overrides[plugin.id] ?: plugin.enabledIn.contains(projectId),
+                    enabled = online && plugin.id !in sending,
                 ) { on ->
+                    sending[plugin.id] = on
                     nav.shell.act(
                         "plugin.enable",
                         buildJsonObject { put("plugin_id", plugin.id); put("project_id", projectId); put("enabled", on) },
-                    ) { overrides[plugin.id] = on }
+                    ) { overrides[plugin.id] = on }.invokeOnCompletion { sending.remove(plugin.id) }
                 }
             }
         }
@@ -394,10 +405,11 @@ private fun GuardrailForm(projectId: Long, config: JsonObject, nav: Nav, online:
     val lines0 = config.o("caps")?.l("lines") ?: 0L
     val paths0 = config.strings("protected_paths")
     val commands0 = config.strings("denied_commands")
-    var files by remember(config) { mutableStateOf(files0.toString()) }
-    var lines by remember(config) { mutableStateOf(lines0.toString()) }
-    var paths by remember(config) { mutableStateOf(paths0.joinToString("\n")) }
-    var commands by remember(config) { mutableStateOf(commands0.joinToString("\n")) }
+    // Saveable, so an edit is still here after another page and back; a new config from the PC resets them.
+    var files by rememberSaveable(config) { mutableStateOf(files0.toString()) }
+    var lines by rememberSaveable(config) { mutableStateOf(lines0.toString()) }
+    var paths by rememberSaveable(config) { mutableStateOf(paths0.joinToString("\n")) }
+    var commands by rememberSaveable(config) { mutableStateOf(commands0.joinToString("\n")) }
     var resetAsk by remember { mutableStateOf(false) }
     val filesN = files.trim().toLongOrNull()?.takeIf { it >= 0 }
     val linesN = lines.trim().toLongOrNull()?.takeIf { it >= 0 }
@@ -439,6 +451,7 @@ private fun GuardrailForm(projectId: Long, config: JsonObject, nav: Nav, online:
             maxLines = 8,
             style = Relay.type.mono,
             placeholder = ".github/**",
+            keyboardOptions = codeKeys,
         )
     }
     Gap(14.dp)
@@ -452,6 +465,7 @@ private fun GuardrailForm(projectId: Long, config: JsonObject, nav: Nav, online:
             maxLines = 8,
             style = Relay.type.mono,
             placeholder = "git push --force",
+            keyboardOptions = codeKeys,
         )
     }
     problem?.let {
@@ -695,7 +709,7 @@ fun DevicesScreen(projectId: Long, nav: Nav) {
                     }
                     Gap(14.dp)
                     FieldBlock("Gradle variant", "Empty uses the project's default.") {
-                        Field(variant, { variant = it }, Modifier.fillMaxWidth(), placeholder = "debug", style = Relay.type.mono)
+                        Field(variant, { variant = it }, Modifier.fillMaxWidth(), placeholder = "debug", style = Relay.type.mono, keyboardOptions = codeKeys)
                     }
                     Gap(14.dp)
                     ToolKey(
@@ -1120,7 +1134,7 @@ private fun NewWorkspace(nav: Nav, online: Boolean, onCreated: (String) -> Unit)
         )
         Gap(12.dp)
         FieldBlock("Folder on the PC") {
-            Field(path, { typed = it }, Modifier.fillMaxWidth(), placeholder = "/home/you/code", style = Relay.type.mono)
+            Field(path, { typed = it }, Modifier.fillMaxWidth(), placeholder = "/home/you/code", style = Relay.type.mono, keyboardOptions = codeKeys)
         }
         Gap(12.dp)
         FieldBlock("Name (optional)") {
@@ -1322,7 +1336,7 @@ private fun FromGitHub(nav: Nav, workspace: Workspace, online: Boolean) {
     Gap(12.dp)
     Slab(Modifier.fillMaxWidth()) {
         FieldBlock("Folder name (optional)", "Created inside ${workspace.path}.") {
-            Field(dest, { dest = it }, Modifier.fillMaxWidth(), placeholder = "The repository's name", style = Relay.type.mono)
+            Field(dest, { dest = it }, Modifier.fillMaxWidth(), placeholder = "The repository's name", style = Relay.type.mono, keyboardOptions = codeKeys)
         }
         Gap(12.dp)
         FieldBlock("Or clone a URL") {
@@ -1332,7 +1346,7 @@ private fun FromGitHub(nav: Nav, workspace: Workspace, online: Boolean) {
                 Modifier.fillMaxWidth(),
                 placeholder = "https://github.com/owner/repo.git",
                 style = Relay.type.mono,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false),
             )
         }
         if (cloning != null) {
