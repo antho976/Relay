@@ -335,6 +335,7 @@ pub(super) fn titled(value: &str) -> String {
     chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
+
 fn spacer() -> gtk::Box {
     let space = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     space.set_hexpand(true);
@@ -2995,10 +2996,17 @@ impl Board {
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 5);
         top.add_css_class("card-top");
         top.append(&status_icon(column, 12));
-        let reference = label(&if project.is_empty() { format!("#{id}") } else { format!("{project} #{id}") }, "card-id");
-        reference.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        top.append(&reference);
-        if let Some(badge) = state_badge(text(task, "state")) {
+        // `Project #id` as GitHub's cards say it, the name shortened to fit; the number always
+        // whole. Beside a state badge there is no room for the name (the board's crumb says it),
+        // and it was cut to a lone "…" that hid the number too.
+        let badge = state_badge(text(task, "state"));
+        if !project.is_empty() && badge.is_none() {
+            let name = label(project, "card-id");
+            name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            top.append(&name);
+        }
+        top.append(&label(&format!("#{id}"), "card-id"));
+        if let Some(badge) = badge {
             top.append(&badge);
         }
         top.append(&spacer());
