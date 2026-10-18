@@ -402,10 +402,11 @@ pub fn modules(ui: &Rc<Ui>, body: &gtk::Box, modules: &[Value]) {
     progress.add_css_class("stat-tile");
     progress.add_css_class("stat-progress");
     progress.set_hexpand(true);
+    let plural = |n: usize, one: &str, many: &str| if n == 1 { format!("1 {one}") } else { format!("{n} {many}") };
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     head.append(&label("Across every module", "stat-caption"));
     head.append(&spacer());
-    head.append(&label(&format!("{finished} of {tasks} tasks done"), "stat-note"));
+    head.append(&label(&format!("{finished} of {}", plural(tasks.max(0) as usize, "task done", "tasks done")), "stat-note"));
     progress.append(&head);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     let pct = if tasks > 0 { finished as f64 * 100. / tasks as f64 } else { 0. };
@@ -432,7 +433,6 @@ pub fn modules(ui: &Rc<Ui>, body: &gtk::Box, modules: &[Value]) {
     let tiles = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     tiles.set_homogeneous(true);
     tiles.set_hexpand(true);
-    let plural = |n: usize, one: &str, many: &str| if n == 1 { format!("1 {one}") } else { format!("{n} {many}") };
     for tile in [
         stat_tile("Modules", &modules.len().to_string(), &format!("{} in progress", live.len()), ""),
         stat_tile("In flight", &flight.to_string(), if flight > 0 { "Tasks being worked on" } else { "Nothing in flight" }, if flight > 0 { "stat-warm" } else { "" }),
@@ -822,7 +822,10 @@ fn copy_task(ui: &std::rc::Weak<Ui>, id: i64, clipboard: gdk::Clipboard) {
     let Some(ui) = ui.upgrade() else { return };
     glib::spawn_future_local(async move {
         match ui.call("task.get", json!({"task_id":id})).await {
-            Ok(task) => clipboard.set_text(&format!("{}\n\n{}\n\n#{id}", text(&task, "title"), text(&task, "body"))),
+            Ok(task) => {
+                clipboard.set_text(&format!("{}\n\n{}\n\n#{id}", text(&task, "title"), text(&task, "body")));
+                ui.show_info(&format!("Copied #{id}"));
+            }
             Err(error) => ui.show_error(&error.to_string()),
         }
     });
@@ -996,10 +999,11 @@ impl Board {
             .hexpand(true)
             .build();
         title.set_widget_name("board-quick-title");
-        let kind = gtk::DropDown::from_strings(&TYPES);
+        // Titled and most urgent first, as the New task page offers them.
+        let kind = gtk::DropDown::from_strings(&TYPES.map(titled).iter().map(String::as_str).collect::<Vec<_>>());
         kind.set_tooltip_text(Some("Type"));
-        let priority = gtk::DropDown::from_strings(&PRIORITIES);
-        priority.set_selected(PRIORITIES.iter().position(|p| *p == "medium").unwrap_or(0) as u32);
+        let priority = gtk::DropDown::from_strings(&URGENT_FIRST.map(titled).iter().map(String::as_str).collect::<Vec<_>>());
+        priority.set_selected(URGENT_FIRST.iter().position(|p| *p == "medium").unwrap_or(0) as u32);
         priority.set_tooltip_text(Some("Priority"));
         let create = button("Create", "primary");
         let more = button("More fields…", "quiet");
@@ -1134,7 +1138,7 @@ impl Board {
                     "type" => task_mark(value, 9).upcast(),
                     _ => label("", "").upcast(),
                 };
-                key.set_child(Some(&icon_text(&mark, value)));
+                key.set_child(Some(&icon_text(&mark, &titled(value))));
                 let drop = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
                 let weak = Rc::downgrade(&board);
                 drop.connect_drop(move |_, token, _, _| {
@@ -1257,11 +1261,12 @@ impl Board {
         board.quick.bar.add_controller(escape);
 
         let weak = Rc::downgrade(&board);
-        keys.connect_key_pressed(move |_, key, _, mods| {
+        keys.connect_key_pressed(move |_, key, keycode, mods| {
             let Some(board) = weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
-            board.key(key, mods)
+            // On a non-Latin layout a letter shortcut is the Latin key in the same place.
+            board.key(crate::shortcuts::latin(key, keycode), mods)
         });
         page.add_controller(keys);
         board
@@ -1315,13 +1320,16 @@ impl Board {
         let from = text(task, "column");
         if column == "done" {
             if from != "done" {
-                if let Some(ui) = self.ui() {
-                    ui.show_error(&format!(
-                        "Approved #{} into Done · Ctrl+Z moves it back; the linked commit stays",
-                        task["id"]
-                    ));
-                }
-                self.act("task.approve", json!({"task_id":task["id"]}));
+                let Some(ui) = self.ui() else { return };
+                let id = task["id"].clone();
+                // Said once it has happened, as news rather than an error.
+                glib::spawn_future_local(async move {
+                    match ui.call("task.approve", json!({"task_id":id})).await {
+                        Ok(_) => ui.show_info(&format!("Approved #{id} into Done · Ctrl+Z moves it back; the linked commit stays")),
+                        Err(error) => ui.show_error(&error.to_string()),
+                    }
+                    ui.refresh_page();
+                });
             }
             return;
         }
@@ -1410,7 +1418,11 @@ impl Board {
                     Some(row) => {
                         let what = format!("{} on #{}", text(row, "op"), row["payload"]["task_id"]);
                         match ui.call("audit.undo", json!({"audit_id":row["id"]})).await {
-                            Ok(_) => ui.show_error(&format!("Undid {what}")),
+                            // What was undone, as the task's timeline says it.
+                            Ok(_) => ui.show_info(&match (relay_board::activity_sentence(row), row["payload"]["task_id"].as_i64()) {
+                                (Some(sentence), Some(id)) => format!("Undid #{id}: {sentence}"),
+                                _ => format!("Undid {what}"),
+                            }),
                             // A row that cannot be undone must not block every older one.
                             Err(crate::client::Error::Bus(error))
                                 if matches!(error.code.as_str(), "audit.stale" | "audit.not_undoable") =>
@@ -1473,7 +1485,7 @@ impl Board {
             "title": title,
             "column": pick(&self.quick.column, OPEN_COLUMNS),
             "type": pick(&self.quick.kind, &TYPES),
-            "priority": pick(&self.quick.priority, &PRIORITIES),
+            "priority": pick(&self.quick.priority, &URGENT_FIRST),
             "module_id": scope(),
         });
         // The whole bar, Create included, waits for the reply: a second click would create twice.
@@ -2185,12 +2197,34 @@ impl Board {
                 head.set_visible(true);
             }
         });
-        let (shown, pane) = (head.downgrade(), editor.downgrade());
+        // Enter saves the name, Escape leaves it as it was.
+        let submit = save.downgrade();
+        rename.connect_activate(move |_| {
+            if let Some(save) = submit.upgrade() {
+                save.emit_clicked();
+            }
+        });
+        let escape = gtk::EventControllerKey::new();
+        let close = cancel.downgrade();
+        escape.connect_key_pressed(move |_, key, _, _| {
+            if key != gdk::Key::Escape {
+                return glib::Propagation::Proceed;
+            }
+            if let Some(cancel) = close.upgrade() {
+                cancel.emit_clicked();
+            }
+            glib::Propagation::Stop
+        });
+        rename.add_controller(escape);
+        let (shown, pane, field) = (head.downgrade(), editor.downgrade(), rename.downgrade());
         edit.connect_clicked(move |_| {
             if let (Some(head), Some(editor)) = (shown.upgrade(), pane.upgrade()) {
                 let open = !editor.is_visible();
                 editor.set_visible(open);
                 head.set_visible(!open);
+                if let Some(field) = field.upgrade().filter(|_| open) {
+                    field.grab_focus();
+                }
             }
         });
         self.banner.append(&edit);
@@ -2287,6 +2321,9 @@ impl Board {
         if outside.is_empty() {
             list.append(&label("Every open task is already in this module.", "issue-side-empty"));
         }
+        // Add waits for a ticked task.
+        let add = button("Add to module", "primary");
+        add.set_sensitive(false);
         for task in outside {
             let id = task["id"].as_i64().unwrap_or(0);
             let row = gtk::CheckButton::new();
@@ -2300,12 +2337,15 @@ impl Board {
                 content.append(&label(other, "module-card-meta"));
             }
             row.set_child(Some(&content));
-            let picked = picked.clone();
+            let (picked, key) = (picked.clone(), add.downgrade());
             row.connect_toggled(move |row| {
                 if row.is_active() {
                     picked.borrow_mut().insert(id);
                 } else {
                     picked.borrow_mut().remove(&id);
+                }
+                if let Some(key) = key.upgrade() {
+                    key.set_sensitive(!picked.borrow().is_empty());
                 }
             });
             list.append(&row);
@@ -2313,7 +2353,6 @@ impl Board {
         panel.body.append(&list);
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         actions.set_halign(gtk::Align::End);
-        let add = button("Add to module", "primary");
         actions.append(&add);
         panel.body.append(&actions);
         let (weak, p) = (Rc::downgrade(self), Rc::downgrade(&panel));
@@ -2889,11 +2928,17 @@ impl Board {
                 if !grouping.is_empty() {
                     let group = group_of(task, &grouping);
                     if previous.as_ref() != Some(&group) {
+                        // A priority or type heading is a field value, titled as its pill is; a
+                        // module's or an agent's name reads as it was written.
+                        let words = match grouping.as_str() {
+                            "priority" | "type" => titled(&group_title(&group)),
+                            _ => group_title(&group),
+                        };
                         let title = lane
                             .headings
                             .borrow_mut()
-                            .entry(group.clone())
-                            .or_insert_with(|| label(&group_title(&group), heading).upcast())
+                            .entry(format!("{grouping} {group}"))
+                            .or_insert_with(|| label(&words, heading).upcast())
                             .clone();
                         wanted.push(title);
                         previous = Some(group);
