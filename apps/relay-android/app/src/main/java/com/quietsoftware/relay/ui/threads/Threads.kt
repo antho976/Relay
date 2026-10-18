@@ -405,7 +405,14 @@ private fun doing(op: String): String = when (op) {
     "money.invest.summary" -> "Reading your investments…"
     "money.invest.list" -> "Reading investment activity…"
     "money.invest.add" -> "Recording investment activity…"
+    "thread.propose" -> "Asking you first…"
     "bus.schema" -> "Checking how a tool works…"
+    // Avex's and Arbiter's, as the desktop says them (threads_view.rs `doing`).
+    "gym.series" -> "Adding up training…"
+    "arbiter.backtest" -> "Running a backtest…"
+    "arbiter.propose" -> "Proposing a change…"
+    "arbiter.order.place" -> "Asking for an order…"
+    "arbiter.halt" -> "Halting Arbiter…"
     else -> if (op.startsWith("gym.")) "Reading your training…" else if (op.startsWith("arbiter.")) "Reading Arbiter…" else "Working…"
 }
 
