@@ -224,6 +224,7 @@ fun TerminalScreen(name: String, nav: Nav) {
                     )
                 }
             }
+            com.quietsoftware.relay.ui.shell.LiftToasts()
             KeyRow(feed, ready, scope, direct, ctrl, alt, onCtrl = { ctrl = !ctrl }, onAlt = { alt = !alt })
             if (direct) DirectBar(ready, s.online, onKeyboard = { input?.raise() }, onBox = { setDirect(false) }) else ChatComposer(
                 field,

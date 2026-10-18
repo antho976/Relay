@@ -315,6 +315,7 @@ fun ChatScreen(name: String, nav: Nav) {
                     else -> Empty("terminal", "Nothing said yet", if (s.online) null else "The PC is away, and this phone has not read this agent before.", action = openTerminal)
                 }
             }
+            com.quietsoftware.relay.ui.shell.LiftToasts()
             if (peek && ready) ScreenPanel(nav, name, screen) { peek = false }
             if (s.prefs.chatKeys) QuickKeys(chat, ready)
             val asked = commandAsked(text)

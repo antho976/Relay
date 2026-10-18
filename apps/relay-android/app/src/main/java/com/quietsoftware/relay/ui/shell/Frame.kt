@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,8 +24,10 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -35,6 +38,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -42,6 +48,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.quietsoftware.relay.core.link.LinkState
 import com.quietsoftware.relay.core.wire.Route
+import com.quietsoftware.relay.ui.LocalNav
+import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Fill
 import com.quietsoftware.relay.ui.kit.Glyph
@@ -192,23 +200,33 @@ fun linkLine(s: ShellState): String {
     }
 }
 
-/** One-line messages at the bottom, with Undo when there is one (money.rs's toast: 7 s). */
+/**
+ * One-line messages at the bottom, with Undo or another key when there is one (money.rs's toast:
+ * 7 s). They sit above the status bar, or above a screen's own message box ([LiftToasts]).
+ */
 @Composable
-fun BoxScope.ToastHost(model: ShellModel) {
+fun BoxScope.ToastHost(model: ShellModel, nav: Nav) {
     var toast by remember { mutableStateOf<ShellModel.Toast?>(null) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         model.toasts.collect {
             toast = it
-            // Its time, or less when Undo has put it away, so the next one is not kept waiting.
-            withTimeoutOrNull(if (it.undo != null) 7_000L else 4_000L) { snapshotFlow { toast }.first { shown -> shown !== it } }
+            // Its time, or less when its key has put it away, so the next one is not kept waiting.
+            withTimeoutOrNull(if (it.act != null) 7_000L else 4_000L) { snapshotFlow { toast }.first { shown -> shown !== it } }
             if (toast === it) toast = null
         }
     }
+    // Where this box ends, so a toast can be lifted from there to just above a screen's bar.
+    var bottom by remember { mutableFloatStateOf(0f) }
+    Box(Modifier.matchParentSize().onGloballyPositioned { bottom = it.positionInRoot().y + it.size.height })
+    val density = LocalDensity.current
+    val lift = model.toastFloors.values.minOrNull()?.let { floor -> with(density) { (bottom - floor).coerceAtLeast(0f).toDp() } }
     val c = Relay.colors
     AnimatedVisibility(
         visible = toast != null,
-        modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 44.dp, start = 16.dp, end = 16.dp),
+        modifier = Modifier.align(Alignment.BottomCenter)
+            .then(if (lift != null) Modifier.padding(bottom = lift + 8.dp) else Modifier.navigationBarsPadding().padding(bottom = 44.dp))
+            .padding(start = 16.dp, end = 16.dp),
         enter = fadeIn() + slideInVertically { it / 2 },
         exit = fadeOut() + slideOutVertically { it / 2 },
     ) {
@@ -221,13 +239,13 @@ fun BoxScope.ToastHost(model: ShellModel) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             T(t.text, Modifier.weight(1f, fill = false).padding(vertical = 6.dp), Relay.type.ui, c.ink)
-            t.undo?.let { undo ->
+            t.act?.let { act ->
                 Box(Modifier.width(8.dp))
-                T("Undo", Modifier.clip(Radii.key).clickable {
+                T(t.key, Modifier.clip(Radii.key).clickable {
                     scope.launch {
                         // An Undo that needs the PC can fail; say so rather than crash the app.
                         try {
-                            undo()
+                            act(nav)
                         } catch (e: BusException) {
                             model.toast(if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code })
                         }
@@ -237,6 +255,21 @@ fun BoxScope.ToastHost(model: ShellModel) {
             }
         }
     }
+}
+
+/**
+ * Keeps toasts above this screen's own bottom bar (a message box, its keys) while it shows: put
+ * it in the screen's column just above that bar, whose top it marks without taking any room.
+ */
+@Composable
+fun LiftToasts() {
+    val shell = LocalNav.current.shell
+    val mark = remember { Any() }
+    DisposableEffect(shell) { onDispose { shell.toastFloors.remove(mark) } }
+    Spacer(Modifier.fillMaxWidth().onGloballyPositioned {
+        val y = it.positionInRoot().y
+        if (shell.toastFloors[mark] != y) shell.toastFloors[mark] = y
+    })
 }
 
 @Composable

@@ -65,7 +65,7 @@ class MainActivity : ComponentActivity() {
                     Box(Modifier.fillMaxSize().background(Palette.of(s.prefs.palette).wall).imePadding()) {
                         AppNav(nav, start)
                         HoldTray(shell, show = tray, onOpen = { nav.inbox() })
-                        ToastHost(shell)
+                        ToastHost(shell, nav)
                     }
                 }
                 val open by opening.collectAsStateWithLifecycle()
