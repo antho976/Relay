@@ -45,12 +45,12 @@ class ActionReceiver : BroadcastReceiver() {
                         }
                         // The exact held request is read before it is answered, as on the PC: still
                         // open, and the one the notification showed (a hold id from another PC, or one
-                        // already answered, is not allowed or denied blind).
+                        // already answered, is not allowed or denied blind). Either way the
+                        // notification goes, since its keys can do nothing more.
                         val read = (relay.call("guardrail.hold.get", buildJsonObject { put("hold_id", hold) }) as? JsonObject)?.o("hold")
                         val same = read != null && read.s("state") == "open" &&
                             read.s("op") == intent.getStringExtra(EXTRA_OP) && read.s("created_at") == intent.getStringExtra(EXTRA_CREATED)
-                        if (!same) return@launch
-                        relay.call(if (intent.action == ACTION_ALLOW) "guardrail.confirm" else "guardrail.reject", payload)
+                        if (same) relay.call(if (intent.action == ACTION_ALLOW) "guardrail.confirm" else "guardrail.reject", payload)
                     }
                     ACTION_REPLY -> {
                         val text = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(KEY_REPLY)?.toString()?.trim().orEmpty()

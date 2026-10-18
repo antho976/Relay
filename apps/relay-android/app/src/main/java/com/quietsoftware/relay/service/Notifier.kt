@@ -42,13 +42,16 @@ class Notifier(private val context: Context, private val relay: Relay, private v
         channels()
         scope.launch {
             combine(relay.holds(), relay.notifications(), settings.prefs) { h, n, p -> Triple(h, n, p) }.collect { (holds, notes, prefs) ->
-                if (!prefs.notify) return@collect
-                post(holds, notes, quiet = foreground())
+                // With notifications off what comes is still recorded, so turning them on announces nothing old.
+                post(holds, notes, quiet = foreground() || !prefs.notify)
             }
         }
     }
 
-    /** Post what is new, or only record it as seen when the person is looking at the app. */
+    /**
+     * Post what is new, or only record it as seen when the person is looking at the app. A hold
+     * answered or gone takes its notification with it, whose keys could no longer do anything.
+     */
     suspend fun post(holds: List<Hold>, notes: List<Notification>, quiet: Boolean) {
         val state = context.notifyState.data.first()
         // The first look records what is already there instead of announcing all of it.
@@ -60,10 +63,12 @@ class Notifier(private val context: Context, private val relay: Relay, private v
             s[HOLDS] = holds.map { it.id.toString() }.toSet()
             s[LAST_NOTE] = maxOf(lastNote, notes.maxOfOrNull { it.id } ?: 0L)
         }
-        if (quiet || !allowed()) return
         val nm = NotificationManagerCompat.from(context)
+        val open = holds.map { it.id.toString() }.toSet()
+        for (gone in seenHolds.orEmpty() - open) gone.toLongOrNull()?.let { nm.cancel(holdId(it)) }
+        if (quiet || !allowed()) return
         for (h in freshHolds) {
-            val id = HOLD_BASE + (h.id % 10_000).toInt()
+            val id = holdId(h.id)
             // What Allow once would let through, as the hold card shows it, not only the op's name.
             val subject = (h.details as? JsonObject)?.let { d -> d.s("command") ?: d.s("path") ?: d.s("value") }?.let { reveal(it).first } ?: h.op
             val b = base(CH_ATTENTION)
@@ -129,6 +134,8 @@ class Notifier(private val context: Context, private val relay: Relay, private v
     }
 
     fun clear() = NotificationManagerCompat.from(context).cancelAll()
+
+    private fun holdId(hold: Long) = HOLD_BASE + (hold % 10_000).toInt()
 
     private fun base(channel: String) = NotificationCompat.Builder(context, channel)
         .setSmallIcon(R.drawable.ic_stat_relay)
