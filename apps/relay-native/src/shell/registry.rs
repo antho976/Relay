@@ -410,6 +410,11 @@ impl Ui {
         if agents.open > 0 {
             tip.push_str(&format!("\n{} open", plural(agents.open, "agent", "agents")));
         }
+        // A repository that moved reads as gone here too, not only in its ⋯ menu (Relink…).
+        if !std::path::Path::new(text(project, "path")).exists() {
+            title.add_css_class("missing");
+            tip.push_str("\nRepository not found at this path. Relink it from the ⋯ menu.");
+        }
         b.set_tooltip_text(Some(&tip));
         if id == active {
             b.add_css_class("selected");
