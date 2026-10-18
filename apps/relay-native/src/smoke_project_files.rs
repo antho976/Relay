@@ -372,6 +372,9 @@ async fn image_preview(ui: &Rc<Ui>) -> Result<(), String> {
     view.buffer().insert_at_cursor("keep this draft");
     click(ui, "project-file:preview.PNG")?;
     require(view.buffer().is_modified() && view.is_mapped(), "Image click preserves unsaved text")?;
+    // Discard asks first: the first click arms it, the second throws the draft away.
+    click(ui, "project-discard")?;
+    require(view.buffer().is_modified(), "Discard asks before dropping a draft")?;
     click(ui, "project-discard")?;
     wait_for(|| !ui.editor.is_dirty(), "Discard fixture draft").await?;
     println!("IMAGE_PREVIEW_OK=large_png,fit,agents_roundtrip,invalid_image,source_return,dirty_draft");

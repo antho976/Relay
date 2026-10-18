@@ -356,12 +356,16 @@ fn caption(decoded: &Decoded, size: u64, path: &str) -> String {
         .and_then(|ext| ext.to_str())
         .unwrap_or("")
         .to_ascii_uppercase();
-    let size = if size >= 1048576 {
+    format!("{} × {} · {} · {format}", decoded.original.0, decoded.original.1, file_size(size))
+}
+
+/// A file's size in MiB from one MiB up, else in whole KiB (never 0).
+fn file_size(size: u64) -> String {
+    if size >= 1048576 {
         format!("{:.1} MiB", size as f64 / 1048576.)
     } else {
         format!("{:.0} KiB", (size as f64 / 1024.).max(1.))
-    };
-    format!("{} × {} · {size} · {format}", decoded.original.0, decoded.original.1)
+    }
 }
 
 /// Fill a hover card from a thumbnail, or its error.
@@ -601,10 +605,10 @@ impl Editor {
                     e.image.picture.set_visible(true);
                     e.image.message.set_visible(false);
                     e.position.set_text(&format!(
-                        "{} × {} px · {:.1} MiB · Image preview",
+                        "{} × {} px · {} · Image preview",
                         original.0,
                         original.1,
-                        size as f64 / 1048576.
+                        file_size(size)
                     ));
                 }
                 Err(error) => {

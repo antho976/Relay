@@ -237,6 +237,7 @@ impl Editor {
                         key.set_widget_name(&format!("scope-branch-{name}"));
                         key.set_sensitive(!current);
                         key.set_tooltip_text(Some(&match &holder {
+                            _ if current => String::from("The branch this checkout is on"),
                             Some((path, _)) if path.is_empty() => format!("{name} is checked out in the primary checkout; open it"),
                             Some((path, _)) => format!("{name} is checked out in {path}; open that checkout"),
                             None => format!("Switch this checkout to {name}"),
@@ -280,6 +281,18 @@ impl Editor {
             let query = search.text().to_lowercase();
             for (row, title) in &searchable {
                 row.set_visible(title.contains(&query));
+            }
+        });
+        // Enter takes the first match, as the Git panel's branch picker does.
+        let rows = list.downgrade();
+        search.connect_activate(move |search| {
+            if search.text().trim().is_empty() {
+                return;
+            }
+            // The filter runs a moment after typing; bring it up to date first.
+            search.emit_by_name::<()>("search-changed", &[]);
+            if let Some(key) = rows.upgrade().and_then(|list| first_choice(list.upcast_ref())) {
+                key.emit_clicked();
             }
         });
         let scroll = scrolled(&list);
@@ -369,6 +382,28 @@ impl Editor {
         row.add_controller(source);
     }
 }
+/// The first shown key under `parent` that can be pressed, in the order the list reads.
+fn first_choice(parent: &gtk::Widget) -> Option<gtk::Button> {
+    let mut child = parent.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        if !widget.is_visible() {
+            continue;
+        }
+        match widget.downcast_ref::<gtk::Button>() {
+            Some(key) if key.is_sensitive() => return Some(key.clone()),
+            Some(_) => {}
+            None if widget.is::<gtk::Box>() => {
+                if let Some(key) = first_choice(&widget) {
+                    return Some(key);
+                }
+            }
+            None => {}
+        }
+    }
+    None
+}
+
 fn button_row(title: &str, icon: &str) -> gtk::Button {
     let row = button("", "quiet");
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);

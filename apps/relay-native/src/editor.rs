@@ -375,6 +375,9 @@ impl Editor {
         files_button.set_widget_name("project-files");
         views.append(&files_button);
         let edit_button = crate::app::icon_button("edit", "Edit file");
+        // Only a diff has a file to open for editing.
+        edit_button.set_visible(false);
+        diff_switch.bind_property("visible", &edit_button, "visible").sync_create().build();
         tools.append(&edit_button);
         let git_button = button("Git", "quiet");
         git_button.set_widget_name("project-git");
@@ -483,6 +486,8 @@ impl Editor {
         let weak = Rc::downgrade(&editor);
         reload_key.connect_clicked(move |_| {
             if let Some(e) = weak.upgrade() {
+                // The bar already asked, so Discard runs without asking again.
+                e.buffer.set_modified(false);
                 e.discard.emit_clicked();
             }
         });
@@ -832,7 +837,9 @@ impl Editor {
             });
             let weak = Rc::downgrade(ui);
             let editor = self.clone();
-            self.discard.connect_clicked(move |_| {
+            let buffer = self.buffer.clone();
+            // `set_text` cannot be undone, so unsaved edits are asked about first.
+            crate::app::confirm_inline_if(&self.discard, "Discard edits?", move || buffer.is_modified(), move |_| {
                 if let Some(ui) = weak.upgrade() {
                     if editor.busy.get() {
                         return;
@@ -1765,6 +1772,21 @@ impl Editor {
         }
         let e = self.clone();
         self.find.connect_activate(move |_| e.find_match(false));
+        // Shift+Enter steps back, as in Notes.
+        let keys = gtk::EventControllerKey::new();
+        let e = Rc::downgrade(self);
+        keys.connect_key_pressed(move |_, key, _, mods| {
+            if matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter)
+                && mods.contains(gtk::gdk::ModifierType::SHIFT_MASK)
+            {
+                if let Some(e) = e.upgrade() {
+                    e.find_match(true);
+                }
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        self.find.add_controller(keys);
         let replace = button("Replace", "quiet");
         let e = self.clone();
         replace.connect_clicked(move |_| {
@@ -1785,7 +1807,7 @@ impl Editor {
             e.find_match(false);
         });
         self.find_bar.append(&replace);
-        let all = button("All", "quiet");
+        let all = button("Replace all", "quiet");
         let e = self.clone();
         all.connect_clicked(move |_| {
             if !e.view.is_editable() || e.find.text().is_empty() {
@@ -1938,10 +1960,10 @@ impl Editor {
             _ => "Move file to Relay trash",
         };
         let dialog = crate::panel::Panel::new(ui, title, 480);
-        let caption = if op == "file.delete" {
-            "Move to trash"
-        } else {
-            "Apply"
+        let caption = match op {
+            "file.create" => "Create",
+            "file.rename" => "Rename",
+            _ => "Move to trash",
         };
         let entry = gtk::Entry::new();
         entry.set_widget_name("project-file-path");
@@ -1962,6 +1984,7 @@ impl Editor {
             };
             if !directory.is_empty() {
                 entry.set_text(&format!("{directory}/"));
+                entry.set_position(-1);
             }
         }
         let folder = gtk::CheckButton::with_label("Create a folder");
@@ -1977,12 +2000,14 @@ impl Editor {
             dialog.body.append(&copy);
         } else {
             if op == "file.rename" {
-                entry.set_text(
-                    std::path::Path::new(&path)
-                        .file_name()
-                        .and_then(|v| v.to_str())
-                        .unwrap_or(""),
-                );
+                let name = std::path::Path::new(&path)
+                    .file_name()
+                    .and_then(|v| v.to_str())
+                    .unwrap_or("");
+                entry.set_text(name);
+                // The name is selected without its extension, so typing replaces just that.
+                let stem = name.rfind('.').filter(|&at| at > 0).map_or(name, |at| &name[..at]);
+                entry.select_region(0, stem.chars().count() as i32);
             }
             dialog.body.append(&entry);
             if op == "file.create" {

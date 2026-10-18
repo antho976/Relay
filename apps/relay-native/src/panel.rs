@@ -367,7 +367,21 @@ impl Panel {
         });
         self.compact(true, 280);
         self.present();
-        cancel.grab_focus();
+        // A dialog that asks for a name starts in its field, keeping the caret or selection
+        // its caller set, and Enter there accepts it; a plain yes or no starts on Cancel.
+        let entry = std::iter::successors(self.body.first_child(), |w| w.next_sibling())
+            .find_map(|w| w.downcast::<gtk::Entry>().ok());
+        if let Some(entry) = entry {
+            let accept = accept.downgrade();
+            entry.connect_activate(move |_| {
+                if let Some(accept) = accept.upgrade() {
+                    accept.emit_clicked();
+                }
+            });
+            entry.grab_focus_without_selecting();
+        } else {
+            cancel.grab_focus();
+        }
         let accepted = recv.recv().await.unwrap_or(false);
         self.close();
         accepted
