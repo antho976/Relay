@@ -32,11 +32,46 @@ type Action = Box<dyn Fn(&Rc<Board>)>;
 /// What a View-menu pill does when toggled: on or off.
 type Toggle = Box<dyn Fn(&Rc<Board>, bool)>;
 
+/// Where the board's view (list or board, the grouping, the hidden columns) is kept between
+/// runs, as Notes keeps its window in `native.notes.window`.
+const VIEW_KEY: &str = "native.board";
+
 thread_local! {
     static BOARD: RefCell<Option<Rc<Board>>> = const { RefCell::new(None) };
     /// The module the board is narrowed to: a module is a bundle of tasks, shown on the same
     /// board with the same create, timeline and done.
     static SCOPE: Cell<Option<i64>> = const { Cell::new(None) };
+    /// The view as last read from or written to [`VIEW_KEY`]; `None` until it has been read,
+    /// so a board drawn before then never writes its defaults over a saved view.
+    static SAVED_VIEW: RefCell<Option<Value>> = const { RefCell::new(None) };
+    static VIEW_TIMER: RefCell<Option<glib::SourceId>> = const { RefCell::new(None) };
+}
+
+/// Reads the saved view once a run, before the first board is mounted (`pages::refresh`).
+pub async fn load_view(ui: &Rc<Ui>) {
+    if SAVED_VIEW.with(|saved| saved.borrow().is_some()) {
+        return;
+    }
+    // A failed read leaves the view unread: the defaults show and nothing is written.
+    if let Ok(saved) = ui.call("settings.get", json!({"path": VIEW_KEY})).await {
+        let saved = &saved["value"];
+        let group = saved["group"].as_str().filter(|g| GROUPS.iter().any(|(key, _)| key == g)).unwrap_or("");
+        let hidden: BTreeSet<String> = saved["hidden"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|column| COLUMNS.contains(column))
+            .map(str::to_string)
+            .collect();
+        let view = view_of(saved["list"].as_bool().unwrap_or(false), group, &hidden);
+        SAVED_VIEW.with(|slot| *slot.borrow_mut() = Some(view));
+    }
+}
+
+/// The view in the shape [`VIEW_KEY`] keeps it.
+fn view_of(list: bool, group: &str, hidden: &BTreeSet<String>) -> Value {
+    json!({"list": list, "group": group, "hidden": hidden})
 }
 /// Opens the board narrowed to one module.
 pub fn open_module(ui: &Rc<Ui>, module: i64) {
@@ -843,6 +878,13 @@ pub fn show(ui: &Rc<Ui>, page: &gtk::Box, project: i64, tasks: Vec<Value>) {
                 board.views[old.list.get() as usize].set_active(true);
                 *board.hidden.borrow_mut() = old.hidden.borrow().clone();
                 *board.group.borrow_mut() = old.group.borrow().clone();
+            } else if let Some(saved) = SAVED_VIEW.with(|saved| saved.borrow().clone()) {
+                // The first board of a run takes up the view the last run left (`load_view`).
+                let list = saved["list"].as_bool().unwrap_or(false);
+                board.list.set(list);
+                board.views[list as usize].set_active(true);
+                *board.hidden.borrow_mut() = rows(&saved, "hidden").iter().filter_map(|c| c.as_str().map(str::to_string)).collect();
+                *board.group.borrow_mut() = text(&saved, "group").to_string();
             }
             BOARD.with(|slot| *slot.borrow_mut() = Some(board.clone()));
             board
@@ -1780,11 +1822,43 @@ impl Board {
         }
     }
 
+    /// Every change to the view, the grouping or the hidden columns redraws the board, which
+    /// writes it to [`VIEW_KEY`] a moment after the last one, once the saved view was read.
+    fn keep_view(&self) {
+        let view = view_of(self.list.get(), &self.group.borrow(), &self.hidden.borrow());
+        let changed = SAVED_VIEW.with(|saved| {
+            let mut saved = saved.borrow_mut();
+            match saved.as_ref() {
+                Some(old) if *old != view => {
+                    *saved = Some(view);
+                    true
+                }
+                _ => false,
+            }
+        });
+        if !changed {
+            return;
+        }
+        if let Some(timer) = VIEW_TIMER.with(|timer| timer.borrow_mut().take()) {
+            timer.remove();
+        }
+        let ui = self.ui.clone();
+        let timer = glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+            VIEW_TIMER.with(|timer| timer.borrow_mut().take());
+            let (Some(ui), Some(value)) = (ui.upgrade(), SAVED_VIEW.with(|saved| saved.borrow().clone())) else { return };
+            glib::spawn_future_local(async move {
+                let _ = ui.call("settings.set", json!({"path": VIEW_KEY, "value": value})).await;
+            });
+        });
+        VIEW_TIMER.with(|slot| *slot.borrow_mut() = Some(timer));
+    }
+
     /// Redraws the board from `tasks`. Only what changed is touched: the lanes stay while the
     /// view, the hidden columns and the empty board do, each card is rebuilt only when what it
     /// shows changed ([`card_key`]) and is otherwise moved into place, and the banner, stats and
     /// chips are redrawn only when they read differently.
     fn render(self: &Rc<Self>) {
+        self.keep_view();
         let focus_inside = self
             .page
             .root()

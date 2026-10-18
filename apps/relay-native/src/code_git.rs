@@ -21,7 +21,16 @@ thread_local! {
     /// Source Control sections the person folded; kept across refreshes, as VS Code does.
     static FOLDED: RefCell<std::collections::HashSet<&'static str>> =
         RefCell::new(["merge"].into_iter().collect());
+    /// The panel's view as last read from or written to [`VIEW_KEY`]; `None` until it has been
+    /// read, so nothing is written over a saved view before it is known.
+    static SAVED_VIEW: RefCell<Option<Value>> = const { RefCell::new(None) };
+    static VIEW_TIMER: RefCell<Option<glib::SourceId>> = const { RefCell::new(None) };
 }
+/// Where the Git panel's view (the Graph key, where the history split sits and which sections
+/// are folded) is kept between runs, as Notes keeps its window in `native.notes.window`.
+const VIEW_KEY: &str = "native.code";
+/// Every Source Control section, so a fold read back names one of them.
+const SECTIONS: [&str; 6] = ["conflicts", "staged", "changes", "remote", "history", "merge"];
 fn folded(id: &'static str) -> bool {
     FOLDED.with(|folded| folded.borrow().contains(id))
 }
@@ -312,6 +321,72 @@ fn restore_scrolls(root: &gtk::Widget, saved: Vec<f64>) {
 }
 
 impl Editor {
+    /// The panel's view in the shape [`VIEW_KEY`] keeps it.
+    fn git_view(&self) -> Value {
+        let mut folded: Vec<&str> = FOLDED.with(|folded| folded.borrow().iter().copied().collect());
+        folded.sort_unstable();
+        json!({"graph": self.git_graph.get(), "history_split": self.git_split_position.get(), "folded": folded})
+    }
+    /// Takes up the view the last run left, once a run, before the panel is first drawn.
+    async fn load_git_view(&self, ui: &Rc<Ui>) {
+        if SAVED_VIEW.with(|saved| saved.borrow().is_some()) {
+            return;
+        }
+        // A failed read leaves the view unread: the defaults show and nothing is written.
+        let Ok(saved) = ui.call("settings.get", json!({"path": VIEW_KEY})).await else { return };
+        let saved = &saved["value"];
+        if let Some(graph) = saved["graph"].as_bool() {
+            self.git_graph.set(graph);
+        }
+        if let Some(split) = saved["history_split"].as_i64().and_then(|at| i32::try_from(at).ok()).filter(|at| *at > 0) {
+            self.git_split_position.set(split);
+        }
+        if let Some(folded) = saved["folded"].as_array() {
+            let ids = SECTIONS.into_iter().filter(|id| folded.iter().any(|f| f.as_str() == Some(*id))).collect();
+            FOLDED.with(|slot| *slot.borrow_mut() = ids);
+        }
+        SAVED_VIEW.with(|slot| *slot.borrow_mut() = Some(self.git_view()));
+    }
+    /// Writes the view a moment after it last changed (a dragged split changes it on every
+    /// frame), once the saved one has been read.
+    fn keep_git_view(&self, ui: &Rc<Ui>) {
+        let view = self.git_view();
+        let changed = SAVED_VIEW.with(|saved| {
+            let mut saved = saved.borrow_mut();
+            match saved.as_ref() {
+                Some(old) if *old != view => {
+                    *saved = Some(view);
+                    true
+                }
+                _ => false,
+            }
+        });
+        if !changed {
+            return;
+        }
+        if let Some(timer) = VIEW_TIMER.with(|timer| timer.borrow_mut().take()) {
+            timer.remove();
+        }
+        let weak = Rc::downgrade(ui);
+        let timer = glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+            VIEW_TIMER.with(|timer| timer.borrow_mut().take());
+            let (Some(ui), Some(value)) = (weak.upgrade(), SAVED_VIEW.with(|saved| saved.borrow().clone())) else { return };
+            glib::spawn_future_local(async move {
+                let _ = ui.call("settings.set", json!({"path": VIEW_KEY, "value": value})).await;
+            });
+        });
+        VIEW_TIMER.with(|slot| *slot.borrow_mut() = Some(timer));
+    }
+    /// Folding `section` is part of the view [`VIEW_KEY`] keeps.
+    fn keeps_fold(self: &Rc<Self>, ui: &Rc<Ui>, section: &Section) {
+        let (ed, weak) = (Rc::downgrade(self), Rc::downgrade(ui));
+        section.toggle.connect_clicked(move |_| {
+            if let (Some(ed), Some(ui)) = (ed.upgrade(), weak.upgrade()) {
+                ed.keep_git_view(&ui);
+            }
+        });
+    }
+
     pub(super) fn refresh_git(self: &Rc<Self>, ui: &Rc<Ui>) {
         if ui.project.get() == 0 {
             return;
@@ -362,6 +437,7 @@ impl Editor {
             }
             // Pull requests come on their own: the panel draws without waiting for GitHub.
             e.request_prs(&ui, project);
+            e.load_git_view(&ui).await;
             let results = tokio::join!(
                 ui.call("git.branches", payload.clone()),
                 ui.call("git.log", e.payload(&ui, json!({"limit":30}))),
@@ -482,10 +558,11 @@ impl Editor {
             } else {
                 (free - 280).max(120)
             });
-            let split_position = Rc::downgrade(&e);
+            let (split_position, weak) = (Rc::downgrade(&e), Rc::downgrade(&ui));
             panes.connect_position_notify(move |panes| {
-                if let Some(ed) = split_position.upgrade() {
+                if let (Some(ed), Some(ui)) = (split_position.upgrade(), weak.upgrade()) {
                     ed.git_split_position.set(panes.position());
+                    ed.keep_git_view(&ui);
                 }
             });
             let upper = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -717,6 +794,7 @@ impl Editor {
                     continue;
                 }
                 let group_section = section(id, title, Some(group.len()));
+                e.keeps_fold(&ui, &group_section);
                 if id == "changes" {
                     group_section.toggle.set_tooltip_text(Some(&change_summary(group)));
                 }
@@ -757,6 +835,7 @@ impl Editor {
 
             // Remote: push and the pull request, one compact row each.
             let remote = section("remote", "REMOTE", None);
+            e.keeps_fold(&ui, &remote);
             let can_push = !detached && (upstream.is_none() || (ahead.is_some_and(|n| n > 0) && behind == Some(0)));
             let push_state = match (&upstream, ahead, behind) {
                 _ if detached => String::from("Check out a branch to push or open a pull request"),
@@ -815,14 +894,16 @@ impl Editor {
             let history = gtk::Box::new(gtk::Orientation::Vertical, 0);
             history.add_css_class("code-history-pane");
             let history_section = section("history", "HISTORY", None);
+            e.keeps_fold(&ui, &history_section);
             history_section.root.add_css_class("scm-history");
             let graph_key = gtk::ToggleButton::with_label("Graph");
             graph_key.add_css_class("code-graph-toggle");
             graph_key.set_active(e.git_graph.get());
-            let graph_state = Rc::downgrade(&e);
+            let (graph_state, weak) = (Rc::downgrade(&e), Rc::downgrade(&ui));
             graph_key.connect_toggled(move |key| {
-                if let Some(ed) = graph_state.upgrade() {
+                if let (Some(ed), Some(ui)) = (graph_state.upgrade(), weak.upgrade()) {
                     ed.git_graph.set(key.is_active());
+                    ed.keep_git_view(&ui);
                 }
             });
             history_section.actions.append(&graph_key);
@@ -897,6 +978,7 @@ impl Editor {
                 .cloned()
                 .collect();
             let merge_section = section("merge", "MERGE TEST", Some(live.len()));
+            e.keeps_fold(&ui, &merge_section);
             let merge = merge_section.body.clone();
             upper.append(&merge_section.root);
             let hint = label(

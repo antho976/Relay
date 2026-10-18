@@ -81,7 +81,11 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
         _ => json!({"project_id":project}),
     };
     // The board labels cards with each row's `module_name`, which task.list joins in itself
-    // (completed modules included), so the board needs no module.list of its own.
+    // (completed modules included), so the board needs no module.list of its own. Its view as
+    // the last run left it is read first, once a run.
+    if name == "board" {
+        board_view::load_view(ui).await;
+    }
     let result = ui.call(op, payload).await;
     if ui.project.get() != project || *ui.page.borrow() != name {
         return;
