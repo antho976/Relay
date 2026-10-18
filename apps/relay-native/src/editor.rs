@@ -56,6 +56,11 @@ pub struct Editor {
     git_split_position: Cell<i32>,
     git_graph: Cell<bool>,
     git_merge_picks: RefCell<std::collections::HashSet<String>>,
+    /// Commits the History section lists: `HISTORY_PAGE`, raised by its "Show more".
+    git_history: Cell<u32>,
+    /// The commit message and new-branch fields typed for each project and checkout, kept for
+    /// the session when another is shown (`refresh_git`).
+    git_drafts: RefCell<std::collections::HashMap<(i64, String), [String; 3]>>,
     tree_load_pending: Cell<bool>,
     /// A `load_tree` arrived while one was in flight: run once more when it answers.
     tree_load_again: Cell<bool>,
@@ -110,6 +115,9 @@ pub struct Editor {
     /// Where the next `read_file` puts the caret: 1-based line, 1-based byte column, and the
     /// length in characters to select (a search hit).
     goto: Cell<Option<(u32, u32, usize)>>,
+    /// The next `read_file` says nothing when the file is not there: a branch switch reopening
+    /// the file it showed, which the other branch may not have.
+    quiet_missing: Cell<bool>,
     /// The trash entry the explorer's Restore key brings back.
     undo_trash: Cell<i64>,
     /// Shown when the open document changed on disk while it has unsaved edits.
@@ -431,6 +439,8 @@ impl Editor {
             git_split_position: Cell::new(0),
             git_graph: Cell::new(true),
             git_merge_picks: RefCell::default(),
+            git_history: Cell::new(code_git::HISTORY_PAGE),
+            git_drafts: RefCell::default(),
             tree_load_pending: Cell::new(false),
             tree_load_again: Cell::new(false),
             diff: Cell::new(false),
@@ -465,6 +475,7 @@ impl Editor {
             tree_badges: RefCell::default(),
             status_requests: Cell::new(0),
             goto: Cell::new(None),
+            quiet_missing: Cell::new(false),
             undo_trash: Cell::new(0),
             conflict_bar,
             conflict_label,
@@ -699,9 +710,7 @@ impl Editor {
         self.expanded.borrow_mut().clear();
         self.tree_limits.borrow_mut().clear();
         self.show_agents();
-        self.commit_message.buffer().set_text("");
-        self.branch_name.set_text("");
-        self.branch_start.set_text("");
+        // The commit message and branch fields stay with their checkout (`refresh_git`).
         self.worktree.borrow_mut().clear();
         self.worktrees.borrow_mut().clear();
         self.scope_label.set_text("Select a project");
@@ -1036,6 +1045,7 @@ impl Editor {
     }
     fn read_file(self: &Rc<Self>, ui: &Rc<Ui>, path: String, discard: bool) {
         let goto = self.goto.take();
+        let quiet = self.quiet_missing.take();
         if let Some(refusal) = self.replace_refusal(
             (!discard).then_some("Save or discard this file's changes before opening another file."),
         ) {
@@ -1106,6 +1116,7 @@ impl Editor {
                         e.view.scroll_to_mark(&e.buffer.get_insert(), 0.0, false, 0.0, 0.0);
                     }
                 }
+                Err(crate::client::Error::Bus(bus)) if quiet && bus.code == "file.not_found" => {}
                 Err(err) => ui.show_error(&readable(&err)),
             }
         });
@@ -1116,10 +1127,12 @@ impl Editor {
     /// Save, then run `then` once the file is written; it is dropped when the save is not.
     fn save_then(self: &Rc<Self>, ui: &Rc<Ui>, then: Option<AfterSave>) {
         let project = self.project.get();
+        // A branch switch locks the text (`git_action`); staging or a push leaves it to be
+        // edited and saved.
         if project != ui.project.get()
             || !self.buffer.is_modified()
             || self.busy.get()
-            || self.git_busy.get()
+            || !self.view.is_editable()
         {
             return;
         }

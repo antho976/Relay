@@ -127,9 +127,6 @@ impl Editor {
         }
         let agents = self.agents_visible();
         self.clear_document();
-        self.commit_message.buffer().set_text("");
-        self.branch_name.set_text("");
-        self.branch_start.set_text("");
         self.selected_path.borrow_mut().clear();
         self.expanded.borrow_mut().clear();
         *self.worktree.borrow_mut() = path.into();

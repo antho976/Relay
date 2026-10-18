@@ -130,6 +130,9 @@ fn sync_counts(ahead: Option<i64>, behind: Option<i64>) -> Option<gtk::Box> {
 
 /// Rows drawn per change group or commit; the rest is one "more files" line.
 const CHANGE_ROWS: usize = 500;
+/// Commits History lists at first, and each "Show more" adds; `git.log` gives at most 500.
+pub(super) const HISTORY_PAGE: u32 = 30;
+const HISTORY_MOST: u32 = 500;
 const UNRESOLVED: &str = "Resolve the merge conflicts and mark them resolved before committing";
 
 fn more_files(total: usize) -> Option<gtk::Label> {
@@ -247,6 +250,8 @@ impl PrRow {
                 String::from("Lookup incomplete")
             } else if ready {
                 String::from("Pushed and ready for review")
+            } else if self.merged == Some(true) {
+                String::from("Nothing to review: every commit is already on the base branch")
             } else {
                 String::from("Push the branch first")
             }
@@ -261,6 +266,64 @@ impl PrRow {
             self.key.remove_css_class("primary");
         }
         *self.url.borrow_mut() = pull_request.as_ref().and_then(|pr| pr["url"].as_str()).map(str::to_owned);
+    }
+}
+
+/// Where the keyboard is among the change rows under `git`: the row's group ("staged" or
+/// "worktree"), its path, its place in the group, and whether the focus is on its stage key
+/// rather than the row. A rebuild puts it back with `refocus_change`.
+type ChangeFocus = (String, String, usize, bool);
+fn focused_change(git: &gtk::Box) -> Option<ChangeFocus> {
+    let focus = git.root()?.focus()?;
+    if !focus.is_ancestor(git) {
+        return None;
+    }
+    // A row is the open key, named git-change:{group}:{path}, then its stage key (`change_row`).
+    let row = std::iter::successors(Some(focus.clone()), |w| w.parent()).find(|w| w.has_css_class("scm-row"))?;
+    let open = row.first_child()?;
+    let name = open.widget_name();
+    let (group, path) = name.strip_prefix("git-change:")?.split_once(':')?;
+    let index = change_keys(git.upcast_ref(), group).iter().position(|key| *key == open)?;
+    Some((group.to_owned(), path.to_owned(), index, focus != open))
+}
+/// The open keys of a group's rows under `root`, in the order they read.
+fn change_keys(root: &gtk::Widget, group: &str) -> Vec<gtk::Widget> {
+    fn walk(widget: &gtk::Widget, prefix: &str, found: &mut Vec<gtk::Widget>) {
+        if widget.widget_name().starts_with(prefix) {
+            found.push(widget.clone());
+            return;
+        }
+        let mut child = widget.first_child();
+        while let Some(next) = child {
+            walk(&next, prefix, found);
+            child = next.next_sibling();
+        }
+    }
+    let mut found = Vec::new();
+    walk(root, &format!("git-change:{group}:"), &mut found);
+    found
+}
+/// After a rebuild, the keyboard goes back to the same row, or, when staging or unstaging took
+/// it out of its group, the one now in its place (else the group's last, else the same file
+/// in the other group), so a person can stage one file after another from the keys.
+fn refocus_change(git: &gtk::Box, (group, path, index, on_key): ChangeFocus) {
+    let keys = change_keys(git.upcast_ref(), &group);
+    let same = |key: &&gtk::Widget| {
+        key.widget_name().strip_prefix("git-change:").and_then(|rest| rest.split_once(':')).is_some_and(|(_, p)| p == path)
+    };
+    let open = keys
+        .iter()
+        .find(same)
+        .or_else(|| keys.get(index))
+        .or_else(|| keys.last())
+        .cloned()
+        .or_else(|| {
+            let other = if group == "staged" { "worktree" } else { "staged" };
+            change_keys(git.upcast_ref(), other).iter().find(same).cloned()
+        });
+    let target = open.and_then(|open| if on_key { open.next_sibling() } else { Some(open) });
+    if let Some(target) = target.filter(|target| target.is_mapped()) {
+        target.grab_focus();
     }
 }
 
@@ -389,7 +452,23 @@ impl Editor {
         if *self.git_scope.borrow() != scope {
             clear(&self.git);
             self.git_revision.set(self.git_revision.get() + 1);
-            *self.git_scope.borrow_mut() = scope;
+            // The message and branch name being typed belong to the checkout they were typed
+            // for: kept for the session, and that checkout's come back.
+            let fields = [commit_text(&self.commit_message), self.branch_name.text().into(), self.branch_start.text().into()];
+            let old = std::mem::replace(&mut *self.git_scope.borrow_mut(), scope.clone());
+            let [message, name, start] = {
+                let mut drafts = self.git_drafts.borrow_mut();
+                if fields.iter().any(|field| !field.is_empty()) {
+                    drafts.insert(old, fields);
+                } else {
+                    drafts.remove(&old);
+                }
+                drafts.remove(&scope).unwrap_or_default()
+            };
+            self.commit_message.buffer().set_text(&message);
+            self.branch_name.set_text(&name);
+            self.branch_start.set_text(&start);
+            self.git_history.set(HISTORY_PAGE);
             *self.tree_badges.borrow_mut() = Default::default();
         }
         // A status is on its way either way: this one, or the rerun queued behind one.
@@ -432,7 +511,7 @@ impl Editor {
             e.load_git_view(&ui).await;
             let results = tokio::join!(
                 ui.call("git.branches", payload.clone()),
-                ui.call("git.log", e.payload(&ui, json!({"limit":30}))),
+                ui.call("git.log", e.payload(&ui, json!({"limit":e.git_history.get()}))),
                 ui.call("integration.list", json!({"project_id":project}))
             );
             if !e.matches(&ui, project, &worktree) || revision != e.git_revision.get() {
@@ -460,6 +539,7 @@ impl Editor {
             }
             e.git_signature.set(signature);
             let typing = e.commit_message.has_focus();
+            let focused = focused_change(&e.git);
             let scrolls = scroll_positions(e.git.upcast_ref());
             clear(&e.git);
             // git.status names a detached head "HEAD"; it has no branch to publish or open a PR for.
@@ -559,7 +639,10 @@ impl Editor {
             });
             let upper = gtk::Box::new(gtk::Orientation::Vertical, 0);
             upper.add_css_class("code-git-upper");
-            panes.set_start_child(Some(&scrolled(&upper)));
+            let upper_scroll = scrolled(&upper);
+            // Rows cut their names to the panel's width; nothing scrolls sideways.
+            upper_scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
+            panes.set_start_child(Some(&upper_scroll));
             e.git.append(&panes);
 
             let conflicts: Vec<Value> = files.iter().filter(|f| is_conflict(f)).cloned().collect();
@@ -583,6 +666,9 @@ impl Editor {
                             let message = commit_text(&editor.commit_message).trim().to_string();
                             if editor.git.has_css_class("has-conflicts") {
                                 ui.show_error(UNRESOLVED);
+                            } else if !editor.git.has_css_class("has-changes") {
+                                // As the Commit key says it.
+                                ui.show_error("No changes to commit.");
                             } else if !message.is_empty() {
                                 // Like VS Code's smart commit: staged changes if any, else all.
                                 let all = !editor.git.has_css_class("has-staged");
@@ -608,6 +694,11 @@ impl Editor {
                 e.git.remove_css_class("has-staged");
             } else {
                 e.git.add_css_class("has-staged");
+            }
+            if files.is_empty() {
+                e.git.remove_css_class("has-changes");
+            } else {
+                e.git.add_css_class("has-changes");
             }
             // `all` stages with `git add -A`, which would record the conflict markers as resolved;
             // git itself refuses a commit while the index is unmerged. Resolve first.
@@ -667,8 +758,10 @@ impl Editor {
             commit.set_sensitive(!files.is_empty() && !resolving);
             commit.set_tooltip_text(Some(if resolving {
                 UNRESOLVED
+            } else if files.is_empty() {
+                "No changes to commit"
             } else if smart_all {
-                "Nothing is staged, so every change is committed"
+                "Nothing is staged, so every change is committed (Ctrl+Enter)"
             } else {
                 "Commit the staged changes (Ctrl+Enter)"
             }));
@@ -749,7 +842,14 @@ impl Editor {
                             if ed.matches(&ui, project, &worktree)
                                 && commit_text(&field) == original =>
                         {
-                            field.buffer().set_text(text(&v, "message"))
+                            // One undo step, so Ctrl+Z brings back what was typed; set_text
+                            // cannot be undone.
+                            let buffer = field.buffer();
+                            let (mut start, mut end) = buffer.bounds();
+                            buffer.begin_user_action();
+                            buffer.delete(&mut start, &mut end);
+                            buffer.insert(&mut start, text(&v, "message"));
+                            buffer.end_user_action();
                         }
                         Ok(_) => {}
                         Err(err) => ui.show_error(&readable(&err)),
@@ -865,6 +965,21 @@ impl Editor {
             push.add_css_class("small-key");
             push.set_valign(gtk::Align::Center);
             push.set_sensitive(can_push);
+            // Each state says what it means, and what to do when Relay cannot do it.
+            push.set_tooltip_text(Some(&if detached {
+                String::from("Check out a branch to push it")
+            } else if can_push {
+                match (&upstream, ahead.filter(|n| *n > 0)) {
+                    (Some(up), Some(ahead)) => format!("Push {ahead} commit{} to {up}", if ahead == 1 { "" } else { "s" }),
+                    _ => String::from("Publish this branch to the remote"),
+                }
+            } else if behind.is_some_and(|n| n > 0) {
+                String::from("The remote has commits this branch lacks. Pull them in a terminal (git pull), then push.")
+            } else if ahead.is_none() || behind.is_none() {
+                String::from("Fetch to compare with the remote")
+            } else {
+                String::from("Nothing to push")
+            }));
             let ed = e.clone();
             let weak = Rc::downgrade(&ui);
             push.connect_clicked(move |_| {
@@ -956,7 +1071,15 @@ impl Editor {
                 if let Some(ui) = weak.upgrade() {
                     if let Some(url) = url.borrow().as_deref() {
                         let uri = gtk::UriLauncher::new(url);
-                        uri.launch(Some(&ui.window), gtk::gio::Cancellable::NONE, |_| {});
+                        let shown = ui.clone();
+                        uri.launch(Some(&ui.window), gtk::gio::Cancellable::NONE, move |result| {
+                            match result {
+                                Err(error) if !error.matches(gtk::DialogError::Dismissed) => {
+                                    shown.show_error(&format!("Could not open the pull request: {}", error.message()))
+                                }
+                                _ => {}
+                            }
+                        });
                     } else {
                         ed.git_action(&ui, "git.pr.open", json!({}), None);
                     }
@@ -985,8 +1108,13 @@ impl Editor {
                 let pick = gtk::CheckButton::new();
                 pick.add_css_class("code-merge-pick");
                 let copy = gtk::Box::new(gtk::Orientation::Vertical, 2);
-                copy.append(&label(&name, "body"));
-                copy.append(&label(text(session, "branch"), "mono"));
+                // A long agent or branch name is cut in the middle, not pushed past the panel.
+                for (words, class) in [(name.as_str(), "body"), (text(session, "branch"), "mono")] {
+                    let line = label(words, class);
+                    line.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+                    line.set_xalign(0.);
+                    copy.append(&line);
+                }
                 pick.set_child(Some(&copy));
                 merge.append(&pick);
                 picks.push((name, pick));
@@ -1045,7 +1173,7 @@ impl Editor {
                     .map(|(n, _)| n.clone())
                     .collect();
                 if selected.len() < 2 {
-                    ui.show_error("Select at least two agents to test together.");
+                    ui.show_error("Select at least 2 branches to test together.");
                     return;
                 }
                 key.set_sensitive(false);
@@ -1133,8 +1261,10 @@ impl Editor {
             match results.1 {
                 Ok(v) => {
                     let commits = rows(&v, "commits");
+                    // A full page is the limit asked for, not the whole history.
+                    let more = commits.len() as u32 >= e.git_history.get();
                     if let Some(face) = history_section.toggle.child().and_downcast::<gtk::Box>() {
-                        let count = label(&commits.len().to_string(), "scm-count");
+                        let count = label(&format!("{}{}", commits.len(), if more { "+" } else { "" }), "scm-count");
                         count.set_valign(gtk::Align::Center);
                         face.append(&count);
                     }
@@ -1173,10 +1303,12 @@ impl Editor {
                         copy.append(&meta);
                         row.append(&copy);
                         b.set_child(Some(&row));
+                        // "3 h ago", as the commit's own panel says it.
+                        let at = text(&commit, "at");
                         b.set_tooltip_text(Some(&format!(
                             "{}\n{}\n{}",
                             text(&commit, "author"),
-                            text(&commit, "at"),
+                            crate::relative::ago(at, crate::relative::Form::Long).unwrap_or_else(|| at.to_string()),
                             sha
                         )));
                         let ed = e.clone();
@@ -1187,6 +1319,20 @@ impl Editor {
                             }
                         });
                         history_box.append(&b);
+                    }
+                    if more && e.git_history.get() < HISTORY_MOST {
+                        let next = button(&format!("Show {HISTORY_PAGE} more"), "quiet");
+                        next.add_css_class("code-history-more");
+                        next.set_widget_name("git-history-more");
+                        let (ed, weak) = (Rc::downgrade(&e), Rc::downgrade(&ui));
+                        next.connect_clicked(move |next| {
+                            if let (Some(ed), Some(ui)) = (ed.upgrade(), weak.upgrade()) {
+                                next.set_sensitive(false);
+                                ed.git_history.set((ed.git_history.get() + HISTORY_PAGE).min(HISTORY_MOST));
+                                ed.refresh_git(&ui);
+                            }
+                        });
+                        history_box.append(&next);
                     }
                     for graph in &graphs {
                         graph.set_visible(graph_key.is_active());
@@ -1202,6 +1348,8 @@ impl Editor {
             restore_scrolls(e.git.upcast_ref(), scrolls);
             if typing {
                 e.commit_message.grab_focus();
+            } else if let Some(focused) = focused {
+                refocus_change(&e.git, focused);
             }
         });
     }
@@ -1637,8 +1785,19 @@ impl Editor {
         if self.git_busy.get() {
             return;
         }
-        if self.is_occupied() {
-            ui.show_error("Save or discard your editor changes before changing Git state.");
+        // Only a branch switch rewrites the files under the editor: staging, committing and
+        // the remote leave them alone, so unsaved edits hold back only that.
+        let rewrites = matches!(op, "git.branch.create" | "git.branch.switch");
+        if rewrites && self.is_occupied() {
+            ui.show_error(if self.buffer.is_modified() && !self.busy.get() {
+                "Save or discard your editor changes before switching branches."
+            } else {
+                "Wait for the file to finish opening or saving."
+            });
+            return;
+        }
+        if self.writing.get() {
+            ui.show_error("Wait for the save or file change to finish.");
             return;
         }
         let retry = extra.clone();
@@ -1653,9 +1812,14 @@ impl Editor {
         let commit_snapshot = (op == "git.commit").then(|| commit_text(&self.commit_message));
         let e = self.clone();
         let ui = ui.clone();
+        // The panel goes insensitive while the action runs, which takes the keyboard focus
+        // off whatever key had it.
+        let focus = self.git.root().and_then(|root| root.focus()).filter(|focus| focus.is_ancestor(&self.git));
         self.git_busy.set(true);
         self.git.set_sensitive(false);
-        self.view.set_editable(false);
+        if rewrites {
+            self.view.set_editable(false);
+        }
         glib::spawn_future_local(async move {
             let result=async {
                 if matches!(op,"git.push"|"git.pr.open"|"git.branch.delete"){
@@ -1670,13 +1834,20 @@ impl Editor {
             }.await;
             e.git_busy.set(false);
             e.git.set_sensitive(true);
+            // It comes back to that key (a rebuild then moves it to the same row or the next,
+            // `refocus_change`), unless it went somewhere else meanwhile.
+            if let Some(focus) = focus.filter(|focus| focus.is_mapped() && focus.is_ancestor(&e.git)) {
+                if e.git.root().and_then(|root| root.focus()).is_none() {
+                    focus.grab_focus();
+                }
+            }
             if !e.matches(&ui, project, &worktree) {
                 return;
             }
             // A file opened meanwhile owns the document: leave it alone, but still report the
             // outcome (RA-453).
             let document = revision == e.revision.get();
-            if document {
+            if document && rewrites {
                 e.set_busy(false);
             }
             match result {
@@ -1712,9 +1883,25 @@ impl Editor {
                             None => String::from("Fetched"),
                         });
                     }
-                    if matches!(op, "git.branch.create" | "git.branch.switch") {
+                    if rewrites {
                         if document {
+                            // The file shown is shown again from the new branch, where its caret
+                            // was; one the branch does not have closes without a word.
+                            let reopen = (!e.diff.get() && !e.image_mode.get() && !e.path.borrow().is_empty())
+                                .then(|| (e.path.borrow().clone(), e.caret()));
+                            let (agents, design) = (e.agents_visible(), e.design_visible());
                             e.clear_document();
+                            if let Some((path, caret)) = reopen {
+                                e.goto.set(Some(caret));
+                                e.quiet_missing.set(true);
+                                e.open(&ui, path);
+                                // Loading shows the source; the view that was up stays (RA-215).
+                                if agents {
+                                    e.show_agents();
+                                } else if design {
+                                    e.show_design();
+                                }
+                            }
                         }
                         e.load_tree(&ui);
                     }
@@ -1864,8 +2051,11 @@ impl Editor {
         let language = sourceview5::LanguageManager::default().guess_language(Some(&path), None);
         self.buffer.set_language(language.as_ref());
         self.before.set_language(language.as_ref());
+        // The line of the first change, where the caret goes.
+        let first;
         if self.diff_inline.get() {
             let lines = inline_diff(&unified, new);
+            first = lines.iter().position(|(mark, _)| !matches!(mark, Mark::Same));
             let body = lines.iter().map(|(_, line)| *line).collect::<Vec<_>>().join("\n");
             self.buffer.set_text(&body);
             self.before.set_text("");
@@ -1882,6 +2072,9 @@ impl Editor {
             }
             self.caption.set_text(&format!("{path} · inline diff"));
         } else {
+            // Lines before the first change are the same on both sides, so whichever side it
+            // starts on, it starts at the same line on the other.
+            first = added.first().copied().into_iter().chain(removed.first().copied()).min();
             self.before.set_text(old);
             self.buffer.set_text(new);
             self.before_scroll.set_visible(true);
@@ -1897,7 +2090,26 @@ impl Editor {
             self.caption.set_text(&format!("{path} · HEAD ↔ working tree"));
         }
         self.buffer.set_modified(false);
-        self.buffer.place_cursor(&self.buffer.start_iter());
+        // A change past the last line (lines added at the end) is at the end.
+        let line = |buffer: &sourceview5::Buffer| match first {
+            Some(line) => buffer.iter_at_line(line as i32).unwrap_or_else(|| buffer.end_iter()),
+            None => buffer.start_iter(),
+        };
+        self.buffer.place_cursor(&line(&self.buffer));
+        // Scrolled once the views have their new size, as `reveal` does; HEAD's side with it.
+        let mut views = vec![(self.view.clone(), self.buffer.get_insert())];
+        if self.before_scroll.is_visible() {
+            if let Some(before) = self.before_scroll.child().and_downcast::<sourceview5::View>() {
+                self.before.place_cursor(&line(&self.before));
+                views.push((before, self.before.get_insert()));
+            }
+        }
+        glib::idle_add_local_once(move || {
+            for (view, mark) in views {
+                view.scroll_to_mark(&mark, 0.1, true, 0.0, 0.3);
+            }
+        });
+        // After the caret moved, whose position line this replaces.
         self.position.set_text(&if unified.is_empty() {
             String::from("No changes against HEAD · read only")
         } else {
