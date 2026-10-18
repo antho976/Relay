@@ -416,8 +416,8 @@ private fun GuardrailForm(projectId: Long, config: JsonObject, nav: Nav, online:
     val pathList = splitLines(paths)
     val commandList = splitLines(commands)
     val problem = when {
-        filesN == null -> "Maximum changed files must be a whole number, 0 or more."
-        linesN == null -> "Maximum changed lines must be a whole number, 0 or more."
+        filesN == null -> "Files per commit must be a whole number, 0 or more."
+        linesN == null -> "Lines per commit must be a whole number, 0 or more."
         else -> null
     }
     // Only what the person changed goes in, so a project's override stays as small as they meant it.
@@ -434,11 +434,13 @@ private fun GuardrailForm(projectId: Long, config: JsonObject, nav: Nav, online:
 
     T("Values for this project. Saving here changes this project only.", style = Relay.type.caption, color = c.ink3)
     Gap(10.dp)
-    FieldBlock("Changed files and lines per task", "The most a task may change before a guardrail holds it.") {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Field(files, { files = it }, Modifier.weight(1f), placeholder = "Files", keyboardOptions = numberKeys)
-            Field(lines, { lines = it }, Modifier.weight(1f), placeholder = "Lines", keyboardOptions = numberKeys)
-        }
+    // The desktop's words: an agent's commit past either cap is refused, not held (guardrail.rs).
+    FieldBlock("Files per commit", "A commit that changes more files is refused.") {
+        Field(files, { files = it }, Modifier.fillMaxWidth(), placeholder = "Files", keyboardOptions = numberKeys)
+    }
+    Gap(14.dp)
+    FieldBlock("Lines per commit", "Added plus removed lines, across the whole commit.") {
+        Field(lines, { lines = it }, Modifier.fillMaxWidth(), placeholder = "Lines", keyboardOptions = numberKeys)
     }
     Gap(14.dp)
     FieldBlock("Protected paths", "One glob per line, e.g. .github/**") {
