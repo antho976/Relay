@@ -222,7 +222,7 @@ fn load(body: &gtk::Box, legend: &gtk::Box, spec: &ChartSpec) {
             Ok(series) => draw(&body, &legend, kind, &series),
             Err(e) => {
                 clear(&body);
-                let note = label(&format!("This chart could not be read: {e}"), "threads-error");
+                let note = label(&format!("This chart could not be read: {}", super::pages::unavailable(&e)), "threads-error");
                 note.set_wrap(true);
                 body.append(&note);
             }

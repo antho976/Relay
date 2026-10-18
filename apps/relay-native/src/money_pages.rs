@@ -231,12 +231,14 @@ pub(super) fn chooser(choices: &[Choice], current: Option<i64>, pick: Rc<dyn Fn(
     block
 }
 
-/// What a failed read says on the page. An engine without the ledger yet says so plainly.
+/// What a failed read or change says on the page: the engine's own sentence, never its code
+/// ("Invalid money.invalid: …"). An engine without the ledger yet says so plainly.
 pub fn unavailable(error: &Error) -> String {
     match error {
         Error::Bus(e) if matches!(e.code.as_str(), "bus.unknown_op" | "bus.not_implemented") => {
             format!("This engine has no money ledger yet ({}). Update Relay's engine to use Money.", e.message)
         }
+        Error::Bus(e) => e.message.clone(),
         e => e.to_string(),
     }
 }
@@ -924,7 +926,7 @@ fn recategorize(ui: &Rc<Ui>, tx: &Value, id: i64, name: String) {
                     let back = back.clone();
                     glib::spawn_future_local(async move {
                         if let Err(e) = ui.call("money.tx.update", back).await {
-                            ui.show_error(&e.to_string());
+                            ui.show_error(&unavailable(&e));
                         }
                         ui.refresh_page();
                     });
@@ -932,7 +934,7 @@ fn recategorize(ui: &Rc<Ui>, tx: &Value, id: i64, name: String) {
                 super::toast(&ui, &format!("Moved {} to {name}", entry_name(&tx)), Some(undo));
                 ui.refresh_page();
             }
-            Err(e) => ui.show_error(&e.to_string()),
+            Err(e) => ui.show_error(&unavailable(&e)),
         }
     });
 }
@@ -2284,7 +2286,7 @@ fn budget_field(ui: &Rc<Ui>, category: Option<i64>, name: &str, amount: i64) -> 
             }
             glib::spawn_future_local(async move {
                 if let Err(e) = ui.call("money.budget.set", payload).await {
-                    ui.show_error(&e.to_string());
+                    ui.show_error(&unavailable(&e));
                 }
                 ui.refresh_page();
             });
@@ -2402,7 +2404,7 @@ fn data(ui: &Rc<Ui>, page: &Page, summary: Option<&Value>, lists: Option<&Value>
         glib::spawn_future_local(async move {
             match ui.call("money.reset", json!({})).await {
                 Ok(_) => super::toast(&ui, "Erased. The ledger on this PC is empty.", None),
-                Err(e) => ui.show_error(&e.to_string()),
+                Err(e) => ui.show_error(&unavailable(&e)),
             }
             ui.refresh_page();
         });
@@ -2469,7 +2471,7 @@ fn ledger_settings(ui: &Rc<Ui>, column: &gtk::Box, summary: &Value) {
                     super::remember_currency(&v);
                     super::toast(&ui, "Saved. Every amount and period reads with the new settings.", None);
                 }
-                Err(e) => ui.show_error(&e.to_string()),
+                Err(e) => ui.show_error(&unavailable(&e)),
             }
             key.set_sensitive(true);
             ui.refresh_page();
@@ -2484,7 +2486,7 @@ fn load_sample(ui: &Rc<Ui>, key: &gtk::Button) {
     glib::spawn_future_local(async move {
         match ui.call("money.sample", json!({})).await {
             Ok(v) => super::toast(&ui, &format!("Loaded a sample household: {}.", plural(n(&v, "transactions").max(0) as usize, "entry").replace("entrys", "entries")), None),
-            Err(e) => ui.show_error(&e.to_string()),
+            Err(e) => ui.show_error(&unavailable(&e)),
         }
         key.set_sensitive(true);
         ui.refresh_page();
@@ -2532,7 +2534,7 @@ fn import(ui: &Rc<Ui>, empty: bool) {
                 ),
                 None,
             ),
-            Err(e) => ui.show_error(&e.to_string()),
+            Err(e) => ui.show_error(&unavailable(&e)),
         }
         ui.refresh_page();
     });
@@ -2555,7 +2557,7 @@ fn export(ui: &Rc<Ui>) {
                 ),
                 None,
             ),
-            Err(e) => ui.show_error(&e.to_string()),
+            Err(e) => ui.show_error(&unavailable(&e)),
         }
     });
 }

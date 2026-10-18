@@ -185,7 +185,7 @@ pub(super) fn head(ui: &Rc<Ui>, page: &Page) {
             match ui.call("money.fx.fetch", json!({})).await {
                 Ok(v) if v["started"] == false => super::toast(&ui, "The rate is already on its way.", None),
                 Ok(_) => super::toast(&ui, "Fetching the day's US dollar rate from the Bank of Canada…", None),
-                Err(e) => ui.show_error(&e.to_string()),
+                Err(e) => ui.show_error(&refusal(&e)),
             }
             key.set_sensitive(true);
         });
@@ -722,7 +722,7 @@ fn room_field(ui: &Rc<Ui>, registration: &str, year: i64, room: Option<i64>, nam
             let payload = json!({"registration":registration,"year":year,"amount":value});
             glib::spawn_future_local(async move {
                 if let Err(e) = ui.call("money.invest.room", payload).await {
-                    ui.show_error(&e.to_string());
+                    ui.show_error(&refusal(&e));
                 }
                 ui.refresh_page();
             });

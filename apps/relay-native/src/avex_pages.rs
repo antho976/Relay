@@ -136,11 +136,14 @@ fn signed_weight(d: f64, unit: &str) -> String {
     }
 }
 
+/// What a failed call says on the page: the engine's own sentence, never its code. An engine
+/// without Avex says so plainly.
 pub(super) fn said(e: &Error) -> String {
     match e {
         Error::Bus(b) if matches!(b.code.as_str(), "bus.unknown_op" | "bus.not_implemented") => {
             String::from("This engine does not read Avex yet. Update Relay's engine to see your training here.")
         }
+        Error::Bus(b) => b.message.clone(),
         e => e.to_string(),
     }
 }
@@ -906,7 +909,7 @@ fn copy_menu(ui: &Rc<Ui>, s: &Value) -> gtk::MenuButton {
         glib::spawn_future_local(async move {
             match ui.call("gym.reset", json!({})).await {
                 Ok(_) => toast(&ui, "Forgotten. Import an export to bring it back.", None),
-                Err(e) => ui.show_error(&e.to_string()),
+                Err(e) => ui.show_error(&said(&e)),
             }
             ui.refresh_page();
         });

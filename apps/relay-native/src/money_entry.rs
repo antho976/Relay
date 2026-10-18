@@ -314,7 +314,7 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, lists: &Value, tx: Option<Value>) {
             glib::spawn_future_local(async move {
                 match ui.call("money.tx.delete", json!({"id":id})).await {
                     Ok(_) => added_text.set_text(&format!("Took back {said}")),
-                    Err(e) => ui.show_error(&e.to_string()),
+                    Err(e) => ui.show_error(&super::pages::unavailable(&e)),
                 }
                 ui.refresh_page();
             });
@@ -513,7 +513,7 @@ fn undo_save(ui: &Rc<Ui>, saved: &Value, before: Option<&Value>) -> super::Actio
         let payload = payload.clone();
         glib::spawn_future_local(async move {
             if let Err(e) = ui.call(op, payload).await {
-                ui.show_error(&e.to_string());
+                ui.show_error(&super::pages::unavailable(&e));
             }
             ui.refresh_page();
         });
@@ -695,7 +695,7 @@ pub fn account_of(ui: &Rc<Ui>, kind: Option<&str>) {
                         ui.refresh_page();
                     }
                     Err(e) => {
-                        problem.set_text(&e.to_string());
+                        problem.set_text(&super::pages::unavailable(&e));
                         problem.set_visible(true);
                         save.set_sensitive(true);
                     }
@@ -781,7 +781,7 @@ pub fn value(ui: &Rc<Ui>, account: &Value) {
                         ui.refresh_page();
                     }
                     Err(e) => {
-                        problem.set_text(&e.to_string());
+                        problem.set_text(&super::pages::unavailable(&e));
                         problem.set_visible(true);
                         save.set_sensitive(true);
                     }
