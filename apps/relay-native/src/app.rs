@@ -316,6 +316,7 @@ pub struct Ui {
     status_project: gtk::Label,
     status_branch: gtk::Label,
     pub(crate) sidebar: gtk::Box,
+    sidebar_width: SidebarWidth,
     settings_sidebar: Cell<bool>,
     /// The title bar's slot for the Settings page's search field, shown on Settings only.
     pub(crate) settings_tools: gtk::Box,
@@ -693,6 +694,20 @@ fn notice_bar() -> (gtk::Label, gtk::Box) {
 const SIDEBAR_WIDTH: i32 = 248;
 const SIDEBAR_MIN: i32 = 200;
 const SIDEBAR_MAX: i32 = 420;
+/// The setting that keeps the sidebar's width from one run to the next.
+const SIDEBAR_KEY: &str = "native.sidebar.width";
+
+/// The sidebar's split, the width the person dragged it to (`chosen`), and what of that is
+/// kept in [`SIDEBAR_KEY`].
+struct SidebarWidth {
+    split: gtk::Paned,
+    chosen: Rc<Cell<i32>>,
+    /// The width last read from or written to the setting: `None` until it was read, and
+    /// nothing is written before then.
+    saved: Cell<Option<i32>>,
+    /// Counts moves of the divider, so only the one a drag comes to rest on is written.
+    moves: Cell<u64>,
+}
 
 /// Keeps the title bar's brand block as wide as the sidebar under it, so the Dev | Threads
 /// pill after it starts over the page however the sidebar is dragged, and follows the brand
@@ -1060,9 +1075,14 @@ impl Ui {
         // The width the person chose, which a window too narrow for it squeezes and a wider one
         // gives back; GtkPaned alone kept the squeezed width (a window opened small, or made
         // narrower and wide again, left the sidebar at its 220px minimum for good).
-        let chosen = Rc::new(Cell::new(SIDEBAR_WIDTH));
+        let sidebar_width = SidebarWidth {
+            split: split.clone(),
+            chosen: Rc::new(Cell::new(SIDEBAR_WIDTH)),
+            saved: Cell::new(None),
+            moves: Cell::new(0),
+        };
         split.connect_position_notify({
-            let chosen = chosen.clone();
+            let chosen = sidebar_width.chosen.clone();
             move |split| {
                 if split.position() > SIDEBAR_MAX {
                     split.set_position(SIDEBAR_MAX);
@@ -1071,16 +1091,19 @@ impl Ui {
                 }
             }
         });
-        split.connect_max_position_notify(move |split| {
-            let want = chosen.get().min(split.max_position());
-            if split.position() < want {
-                // Not during the allocation that changed the room.
-                let split = split.downgrade();
-                glib::idle_add_local_once(move || {
-                    if let Some(split) = split.upgrade() {
-                        split.set_position(want);
-                    }
-                });
+        split.connect_max_position_notify({
+            let chosen = sidebar_width.chosen.clone();
+            move |split| {
+                let want = chosen.get().min(split.max_position());
+                if split.position() < want {
+                    // Not during the allocation that changed the room.
+                    let split = split.downgrade();
+                    glib::idle_add_local_once(move || {
+                        if let Some(split) = split.upgrade() {
+                            split.set_position(want);
+                        }
+                    });
+                }
             }
         });
         body.append(&split);
@@ -1147,6 +1170,7 @@ impl Ui {
             status_project: bar.status_project.clone(),
             status_branch: bar.status_branch.clone(),
             sidebar: side.root.clone(),
+            sidebar_width,
             settings_sidebar: Cell::new(true),
             settings_tools: top.settings_tools.clone(),
             focus_tabs: wall.focus_tabs,
@@ -1218,6 +1242,7 @@ impl Ui {
         ui.show_shortcuts();
         ui.wire_keys(&top, &bar, &wall.empty_launch, &side.add_project, &sheet.scrim);
         ui.wire_window();
+        ui.remember_sidebar_width();
         let mut dev_only: Vec<gtk::Widget> = vec![side.nav.clone().upcast(), top.layouts_key.clone().upcast(), top.launch_key.clone().upcast()];
         dev_only.extend(side.workspaces.iter().cloned());
         crate::money::install(&ui, &side.money_nav, &top.money_add, dev_only);
@@ -1636,6 +1661,7 @@ impl Ui {
                     crate::wallpaper_rotation::refresh(&ui);
                     ui.watch_drift();
                     ui.load_keybindings();
+                    ui.restore_sidebar_width();
                     crate::money::startup(&ui);
                     if *ui.page.borrow() == "devices" {
                         // Its own future, as navigate() does: awaited here, more than 64 events

@@ -328,6 +328,61 @@ impl Ui {
             ui.layout_saving.set(false);
         });
     }
+    /// The sidebar width kept from an earlier run, read once connected. It comes back unless
+    /// the divider was moved before the read answered; then that width is written instead.
+    pub(super) fn restore_sidebar_width(self: &Rc<Self>) {
+        if self.sidebar_width.saved.get().is_some() {
+            return;
+        }
+        let ui = self.clone();
+        glib::spawn_future_local(async move {
+            // Unread, nothing is written over it, and the next connection reads again.
+            let Ok(v) = ui.call("settings.get", json!({"path": SIDEBAR_KEY})).await else { return };
+            let width = &ui.sidebar_width;
+            if width.saved.get().is_some() {
+                return;
+            }
+            let stored = v["value"].as_i64().map(|w| w.clamp(SIDEBAR_MIN.into(), SIDEBAR_MAX.into()) as i32);
+            if let Some(stored) = stored.filter(|_| width.chosen.get() == SIDEBAR_WIDTH) {
+                width.chosen.set(stored);
+                width.split.set_position(stored);
+            }
+            width.saved.set(Some(stored.unwrap_or(SIDEBAR_WIDTH)));
+            ui.sidebar_moved();
+        });
+    }
+    pub(super) fn remember_sidebar_width(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        self.sidebar_width.split.connect_position_notify(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                ui.sidebar_moved();
+            }
+        });
+    }
+    /// Every move of the divider, a window squeezing it included. Only a newly chosen width is
+    /// written, once the divider has rested for half a second: a drag writes once, where it ends.
+    fn sidebar_moved(self: &Rc<Self>) {
+        let width = &self.sidebar_width;
+        if width.saved.get().is_none_or(|saved| saved == width.chosen.get()) {
+            return;
+        }
+        let moves = width.moves.get().wrapping_add(1);
+        width.moves.set(moves);
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let width = &ui.sidebar_width;
+            let chosen = width.chosen.get();
+            if width.moves.get() != moves || width.saved.replace(Some(chosen)) == Some(chosen) {
+                return;
+            }
+            glib::spawn_future_local(async move {
+                if let Err(e) = ui.call("settings.set", json!({"path": SIDEBAR_KEY, "value": chosen})).await {
+                    ui.show_error(&format!("Could not remember the sidebar width: {e}"));
+                }
+            });
+        });
+    }
     fn layout_state(&self) -> Value {
         // "agents" is both the agent wall and Files and Git; keep which one was showing.
         let page = match self.page.borrow().as_str() {

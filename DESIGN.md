@@ -180,7 +180,8 @@ Relay-2's syntax colours over Adwaita-dark), installed as `relay-matte`,
 
 ## Layout
 
-The sidebar requests 248px. The top bar has a 52px minimum height, the status
+The sidebar requests 248px; dragged between 200 and 420px, it keeps that width
+across runs. The top bar has a 52px minimum height, the status
 line 30px and toolbars 38px; native theme metrics can increase these minimums.
 Task and module details occupy the content page. The command palette is centered
 inside the app and window presets open below the title bar. Only Notes and the
