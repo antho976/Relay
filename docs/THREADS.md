@@ -145,9 +145,18 @@ An agent asks for a chart by writing a fenced block with the language `chart` an
 ```
 
 - `type` is `bar` (periods side by side), `line` (with `"cumulative": true` for pace) or `donut`
-  (where the money went). `query` is a `money.series` payload; `data`
-  (`{"labels", "series": [{"name", "values"}]}`, minor units) is accepted instead, for numbers that
-  are not the ledger's, and is drawn as written.
+  (where the money went). `query` is a `money.series` payload (`gym` a `gym.series` one, below).
+- `data` takes the place of `query` for numbers that are not the ledger's or Avex's: a projection
+  into the coming months, a plan, a what-if, or figures the person gave. It is drawn as written and
+  never redraws: `{"labels": [...], "series": [{"name", "values": [...], "projected"?: true}],
+  "unit"?: "kg"}`, one value per label. Without `unit`, values are amounts in the ledger's currency
+  as plain decimal numbers (`1234.56`, not minor units); with it (`"kg"`, `"%"`, `"km"`, `""` for a
+  count) they are figures in that unit. A series with `projected` true is the projected part, and
+  is drawn as one. The prompt allows a projection the person asks for as the one place the agent
+  works figures out itself, from figures a tool gave and at a rate it says, and tells it to say
+  so in words; figures a `query` or `gym` chart can draw are never copied into `data`. A thread
+  on a model on this PC is told the same in a sentence of `LOCAL_PROMPT` (not yet measured on the
+  bench).
 - `money.series` (`crates/relay-money/src/series.rs`): `measure` spending, income or net; `by`
   category (the largest seven and Other, in their category colours), week, day or period; `periods`
   how many budget periods end at `period_offset`; `category` by name. A period still running says
