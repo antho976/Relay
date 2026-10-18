@@ -17,6 +17,16 @@ thread_local! {
 }
 
 pub fn open(ui: &Rc<Ui>, _project: i64, id: i64) {
+    open_doc(ui, id, None);
+}
+
+/// The design on a board, popped out into a window: the same document, so its undo history
+/// comes along.
+pub fn pop_out(ui: &Rc<Ui>, doc: Rc<Doc>) {
+    open_doc(ui, doc.id, Some(doc));
+}
+
+fn open_doc(ui: &Rc<Ui>, id: i64, doc: Option<Rc<Doc>>) {
     let existing = WINDOWS.with(|w| w.borrow().iter().find(|(d, _)| *d == id).map(|(_, w)| w.clone()));
     if let Some(window) = existing {
         window.present();
@@ -28,7 +38,10 @@ pub fn open(ui: &Rc<Ui>, _project: i64, id: i64) {
     OPENING.with(|o| o.borrow_mut().push(id));
     let ui = ui.clone();
     glib::spawn_future_local(async move {
-        let opened = Doc::open(&ui, id).await;
+        let opened = match doc {
+            Some(doc) => Ok(doc),
+            None => Doc::open(&ui, id).await,
+        };
         OPENING.with(|o| o.borrow_mut().retain(|d| *d != id));
         let doc = match opened {
             Ok(doc) => doc,

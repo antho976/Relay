@@ -603,7 +603,7 @@ impl Board {
             if let Some(b) = weak.upgrade() {
                 if let Some(ui) = b.ui.upgrade() {
                     b.end_edit(true);
-                    super::window::open(&ui, b.doc.design.borrow().project_id, b.doc.id);
+                    super::window::pop_out(&ui, b.doc.clone());
                     if let Some(back) = b.back.borrow().clone() {
                         back();
                     }
@@ -835,9 +835,10 @@ impl Board {
 
     // ------------------------------------------------------------------ edits
 
-    /// Send `ops` as one undoable step.
+    /// Send `ops` as one undoable step; undoing it selects again what is selected now.
     pub(super) fn commit(&self, ops: Vec<NodeOp>) -> bool {
-        self.doc.commit(ops)
+        let selection = self.selection.borrow().clone();
+        self.doc.commit(ops, selection)
     }
 
     /// Set the same fields on every selected node.
@@ -892,6 +893,19 @@ impl Board {
                 self.keep_page();
             }
             Change::Design => self.design_changed(),
+            // What an undo or redo touched is selected again, where it is still on this page
+            // (and not under a drag or typing begun since).
+            Change::Selected(ids) => {
+                if !matches!(*self.gesture.borrow(), Gesture::Idle) || self.edit.borrow().is_some() {
+                    return;
+                }
+                let ids: Vec<String> = {
+                    let scene = self.doc.scene.borrow();
+                    let page = self.page.borrow();
+                    ids.iter().filter(|id| scene.page_of(id) == Some(page.as_str())).cloned().collect()
+                };
+                self.select(ids);
+            }
             Change::Saving(on) => {
                 // A refused edit is not saved until the next one is.
                 let unsaved = !*on && self.doc.unsaved();
@@ -2248,7 +2262,7 @@ impl Board {
         add("delete-design", super::delete_design);
         add("pop-out", |b| {
             if let Some(ui) = b.ui.upgrade() {
-                super::window::open(&ui, b.doc.design.borrow().project_id, b.doc.id);
+                super::window::pop_out(&ui, b.doc.clone());
                 if let Some(back) = b.back.borrow().clone() {
                     back();
                 }
@@ -2340,12 +2354,12 @@ impl Board {
 
     pub(super) fn undo(&self) {
         self.end_edit(true);
-        self.doc.undo();
+        self.doc.undo(self.selection.borrow().clone());
     }
 
     pub(super) fn redo(&self) {
         self.end_edit(true);
-        self.doc.redo();
+        self.doc.redo(self.selection.borrow().clone());
     }
 
     pub(super) fn delete_selection(&self) {
