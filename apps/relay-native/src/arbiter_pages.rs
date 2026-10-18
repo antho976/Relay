@@ -371,6 +371,12 @@ fn banner(parent: &gtk::Box, words: &str, action: Option<(&str, Action)>) {
     parent.append(&bar);
 }
 
+/// The kill switch's bar, from summary `s`, with Restart.
+fn halted_banner(ui: &Rc<Ui>, parent: &gtk::Box, s: &Value) {
+    let reason = s["halt_reason"].as_str().unwrap_or("the kill switch is on");
+    banner(parent, &format!("Arbiter is halted: {reason}. No strategy places an order until you restart."), Some(("Restart", restart_action(ui, None))));
+}
+
 /// A padded block inside a card, for what is not a row.
 fn block(rows: &gtk::Box) -> gtk::Box {
     let b = gtk::Box::new(gtk::Orientation::Vertical, 8);
@@ -622,6 +628,21 @@ pub(super) fn halt_all(ui: &Rc<Ui>) {
     });
 }
 
+/// The kill switch's key, from summary `s`: off while everything is already halted, saying so.
+fn halt_key(ui: &Rc<Ui>, s: &Value) -> gtk::Button {
+    let halt = button("Halt all", "money-destructive");
+    let halted = s["halted"] == true;
+    halt.set_sensitive(!halted);
+    halt.set_tooltip_text(Some(if halted { "Already halted. Restart from the banner to run again" } else { "Cancel every open order and stop every strategy until you restart" }));
+    let weak = Rc::downgrade(ui);
+    halt.connect_clicked(move |_| {
+        if let Some(ui) = weak.upgrade() {
+            halt_all(&ui);
+        }
+    });
+    halt
+}
+
 /// Lift a halt: one strategy's, or the kill switch's.
 fn restart_action(ui: &Rc<Ui>, strategy: Option<i64>) -> Action {
     let weak = Rc::downgrade(ui);
@@ -825,22 +846,13 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value) {
             editor(&ui, None);
         }
     });
-    let halt = button("Halt all", "money-destructive");
+    let halt = halt_key(ui, s);
     halt.set_widget_name("arbiter-halt-all");
-    halt.set_tooltip_text(Some("Cancel every open order and stop every strategy until you restart"));
-    halt.set_sensitive(s["halted"] != true);
-    let weak = Rc::downgrade(ui);
-    halt.connect_clicked(move |_| {
-        if let Some(ui) = weak.upgrade() {
-            halt_all(&ui);
-        }
-    });
     heading(&page.head, &title_label("Arbiter"), Some(connection_line(&s["connection"]).upcast_ref()), &[new_key.upcast_ref(), halt.upcast_ref()]);
     wipe(&page.body);
     let body = &page.body;
     if s["halted"] == true {
-        let reason = s["halt_reason"].as_str().unwrap_or("the kill switch is on");
-        banner(body, &format!("Arbiter is halted: {reason}. No strategy places an order until you restart."), Some(("Restart", restart_action(ui, None))));
+        halted_banner(ui, body, s);
     }
     if let Some(problem) = s["runner_error"].as_str().filter(|p| !p.is_empty()) {
         let l = label(&format!("The last pass went wrong: {problem}"), "money-problem");
@@ -1740,20 +1752,33 @@ fn strategy_page(ui: &Rc<Ui>, page: &Page, d: &Value) {
         let running = state == "running";
         let go = button(if running { "Stop" } else { "Start" }, if running { "" } else { "primary" });
         go.set_widget_name("arbiter-run");
-        go.set_tooltip_text(Some(if running { "Stop placing orders; what it holds is kept" } else { "Run the rule from its next bar" }));
         let weak = Rc::downgrade(ui);
-        go.connect_clicked(move |key| {
+        let run = move |key: &gtk::Button| {
             if let Some(ui) = weak.upgrade() {
                 set_strategy(&ui, key, json!({"id": id, "running": !running}));
             }
-        });
+        };
+        if running {
+            go.set_tooltip_text(Some("Stop placing orders; what it holds is kept"));
+            go.connect_clicked(run);
+        } else if venue == "live" {
+            // Starting is what places real orders: a second click says so first.
+            go.set_tooltip_text(Some("Run the rule from its next bar, with real money on Coinbase"));
+            confirm_inline(&go, "Start with real money", run);
+        } else {
+            go.set_tooltip_text(Some("Run the rule from its next bar"));
+            go.connect_clicked(run);
+        }
         keys.push(go.upcast());
     }
     let backtest = button("Backtest", "");
     backtest.set_widget_name("arbiter-backtest");
     let run = backtest_action(ui, id, version);
     backtest.connect_clicked(move |_| run());
-    backtest.set_sensitive(!STATE.with(|s| s.backtesting.borrow().contains(&id)));
+    if STATE.with(|s| s.backtesting.borrow().contains(&id)) {
+        backtest.set_sensitive(false);
+        backtest.set_tooltip_text(Some("Backtesting…"));
+    }
     keys.push(backtest.upcast());
     let edit = button("Edit", "");
     edit.set_widget_name("arbiter-edit");
@@ -1795,6 +1820,10 @@ fn strategy_page(ui: &Rc<Ui>, page: &Page, d: &Value) {
 
     wipe(&page.body);
     let body = &page.body;
+    // The kill switch holds every strategy, whatever its own state says.
+    if let Some(s) = cached().filter(|s| s["halted"] == true) {
+        halted_banner(ui, body, &s);
+    }
     if state == "halted" {
         let reason = r["halt_reason"].as_str().unwrap_or("a limit was reached");
         banner(body, &format!("Halted: {reason}. It places no order until you restart it."), Some(("Restart", restart_action(ui, Some(id)))));
@@ -1926,6 +1955,19 @@ fn more_menu(ui: &Rc<Ui>, d: &Value) -> gtk::MenuButton {
     list.append(&flatten);
     let delete = button("Delete strategy", "money-destructive");
     delete.set_widget_name("arbiter-delete");
+    // What the engine would refuse, said on the key instead.
+    let open = rows(d, "orders").iter().any(|o| matches!(text(o, "status"), "pending" | "open"));
+    let blocked = if text(r, "state") == "running" {
+        Some("Stop it first")
+    } else if held > 0.0 {
+        Some("Sell what it holds first")
+    } else if open {
+        Some("Halt it first: an order is open")
+    } else {
+        None
+    };
+    delete.set_sensitive(blocked.is_none());
+    delete.set_tooltip_text(blocked);
     let (weak, pop) = (Rc::downgrade(ui), popover.downgrade());
     confirm_inline(&delete, "Delete for good", move |_| {
         if let Some(p) = pop.upgrade() {
@@ -2218,8 +2260,13 @@ fn go_live(ui: &Rc<Ui>, d: &Value) {
         };
         let panel = Panel::new(&ui, &format!("Take {name} live?"), 480);
         panel.add_css_class("money-sheet");
+        let when = match text(r, "state") {
+            "running" => String::from("From its next bar"),
+            "halted" => String::from("Once you restart it"),
+            _ => String::from("Once you start it"),
+        };
         let about = label(
-            &format!("From its next bar, {name} places real orders on Coinbase with real money, within the limits below. Its paper record so far:"),
+            &format!("{when}, {name} places real orders on Coinbase with real money, within the limits below. Its paper record so far:"),
             "money-muted",
         );
         about.set_wrap(true);
@@ -2268,6 +2315,28 @@ fn go_live(ui: &Rc<Ui>, d: &Value) {
             list.append(&row);
         }
         panel.body.append(&list);
+        // The engine refuses a strategy that trades real money on its own with no limit per
+        // order: say so here, with nothing to press but Close.
+        if opt_num(&limits["max_order"]).is_none() && text(r, "mode") != "ask" {
+            let l = label("Give it a limit per order first, under Limits on its page, or let every order ask.", "money-problem");
+            l.set_wrap(true);
+            panel.body.append(&l);
+            let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            actions.set_halign(gtk::Align::End);
+            let close = button("Close", "primary");
+            let sheet = Rc::downgrade(&panel);
+            close.connect_clicked(move |_| {
+                if let Some(sheet) = sheet.upgrade() {
+                    sheet.close();
+                }
+            });
+            actions.append(&close);
+            panel.body.append(&actions);
+            panel.compact(true, 280);
+            panel.present();
+            close.grab_focus();
+            return;
+        }
         if !missing.is_empty() {
             let l = label(&format!("Without a limit on {}, nothing but its rule bounds what it spends.", missing.join(", ")), "arbiter-warning");
             l.set_wrap(true);
@@ -3020,9 +3089,7 @@ pub(super) fn panel_draw(ui: &Rc<Ui>, body: &gtk::Box, tab: &str, v: &Value) {
 /// waits, and prices; Open Arbiter and the kill switch at its foot.
 fn panel_overview(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
     let home = home_currency();
-    if s["halted"] == true {
-        banner(body, &format!("Halted: {}", s["halt_reason"].as_str().unwrap_or("the kill switch is on")), Some(("Restart", restart_action(ui, None))));
-    }
+    panel_halted(ui, body, s);
     let live = s["live"].is_object();
     let account = if live { &s["live"] } else { &s["paper"] };
     let head = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -3116,15 +3183,7 @@ fn panel_overview(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
     let gap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     gap.set_hexpand(true);
     foot.append(&gap);
-    let halt = button("Halt all", "money-destructive");
-    halt.set_sensitive(s["halted"] != true);
-    let weak = Rc::downgrade(ui);
-    halt.connect_clicked(move |_| {
-        if let Some(ui) = weak.upgrade() {
-            halt_all(&ui);
-        }
-    });
-    foot.append(&halt);
+    foot.append(&halt_key(ui, s));
     body.append(&foot);
 }
 
@@ -3164,8 +3223,16 @@ fn panel_strategy_row(ui: &Rc<Ui>, r: &Value) -> gtk::Button {
     key
 }
 
+/// The panel's bar for the kill switch, with Restart, above either summary tab.
+fn panel_halted(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
+    if s["halted"] == true {
+        banner(body, &format!("Halted: {}", s["halt_reason"].as_str().unwrap_or("the kill switch is on")), Some(("Restart", restart_action(ui, None))));
+    }
+}
+
 /// The panel's Strategies: each with its pill, its rule in sentences and its record.
 fn panel_strategies(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
+    panel_halted(ui, body, s);
     let strategies = rows(s, "strategies");
     if strategies.is_empty() {
         let l = label("No strategies yet. Ask for one in this thread, or start from a template.", "money-muted");
