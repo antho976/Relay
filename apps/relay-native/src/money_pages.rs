@@ -1448,7 +1448,7 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str) {
         "money-invest" => {
             let (summary, activity, lists) = tokio::join!(
                 ui.call("money.invest.summary", json!({})),
-                ui.call("money.invest.list", json!({"limit":8})),
+                ui.call("money.invest.list", json!({"limit":super::invest::activity_limit()})),
                 ui.call("money.lists", json!({}))
             );
             if *ui.page.borrow() != name {

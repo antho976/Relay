@@ -131,9 +131,18 @@ thread_local! {
     static HEAD: RefCell<Option<(gtk::Label, gtk::Button)>> = const { RefCell::new(None) };
     /// Whether Holdings shows past its largest [`HOLDINGS_SHOWN`].
     static ALL_HOLDINGS: Cell<bool> = const { Cell::new(false) };
+    /// Whether Activity shows past its newest [`ACTIVITY_SHOWN`].
+    static ALL_ACTIVITY: Cell<bool> = const { Cell::new(false) };
 }
 
 const HOLDINGS_SHOWN: usize = 15;
+const ACTIVITY_SHOWN: usize = 8;
+
+/// How many lines the page reads for Activity (`money.invest.list`): one past those it shows,
+/// so it knows there are more, or the engine's most once the person asked for them.
+pub(super) fn activity_limit() -> usize {
+    if ALL_ACTIVITY.with(|a| a.get()) { 200 } else { ACTIVITY_SHOWN + 1 }
+}
 
 /// Builds the page's head: the title with its keys (Update rates, Ask about this, Import…), and
 /// the context line under it. Ask about this is the page's one way to ask; only Needs a look adds
@@ -449,8 +458,25 @@ pub(super) fn draw(ui: &Rc<Ui>, page: &Page, p: &Value, activity: Option<&Value>
             list.append(&icon_row(&tile("list"), "No activity yet", "Buys, sells, contributions and dividends come in with an activities export", "", ""));
         }
         Some(items) => {
-            for item in &items {
+            // Older lines too, on asking: a line imported into the wrong account may be one.
+            let all = ALL_ACTIVITY.with(|a| a.get());
+            for item in items.iter().take(if all { items.len() } else { ACTIVITY_SHOWN }) {
                 list.append(&activity_row(ui, item));
+            }
+            if items.len() > ACTIVITY_SHOWN {
+                let caption = if all { format!("Show the newest {ACTIVITY_SHOWN}") } else { String::from("Show more") };
+                let more = button(&caption, "money-text-action");
+                more.set_widget_name("money-invest-activity-more");
+                more.set_halign(gtk::Align::Start);
+                more.add_css_class("tally-save");
+                let weak = Rc::downgrade(ui);
+                more.connect_clicked(move |_| {
+                    ALL_ACTIVITY.with(|a| a.set(!a.get()));
+                    if let Some(ui) = weak.upgrade() {
+                        ui.refresh_page();
+                    }
+                });
+                list.append(&more);
             }
         }
     }
@@ -952,7 +978,8 @@ fn activity_row(ui: &Rc<Ui>, a: &Value) -> gtk::Box {
     trash.add_css_class("money-row-delete");
     trash.set_valign(gtk::Align::Center);
     let weak = Rc::downgrade(ui);
-    let (id, what) = (a["id"].clone(), format!("{} deleted · {}", title.trim(), human_date(text(a, "date"))));
+    // Said as an entry's delete is: "Deleted Bought 10 XEQT · Thu 8 Oct".
+    let (id, what) = (a["id"].clone(), format!("Deleted {} · {}", title.trim(), human_date(text(a, "date"))));
     trash.connect_clicked(move |_| {
         if let Some(ui) = weak.upgrade() {
             delete_activity(&ui, id.clone(), what.clone());
