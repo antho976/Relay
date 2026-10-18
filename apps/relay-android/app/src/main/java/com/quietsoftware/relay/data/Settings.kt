@@ -1,6 +1,7 @@
 package com.quietsoftware.relay.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
@@ -28,37 +29,32 @@ data class Prefs(
     /** The person's first name, for the start screen's greeting. */
     val name: String = "",
     val lastProject: Long = 0,
+    /** The agent conversation's row of extra keys (arrows, Tab, Space, ^C) shown over its message box. */
+    val chatKeys: Boolean = false,
+    /** The terminal takes the keyboard key by key (vim, a shell, a TUI's menus) instead of a message box. */
+    val terminalDirect: Boolean = false,
 )
 
 class Settings(private val context: Context) {
-    val prefs: Flow<Prefs> = context.settingsStore.data.map { p ->
-        Prefs(
-            stayConnected = p[STAY] ?: true,
-            notify = p[NOTIFY] ?: true,
-            keepScreenOn = p[SCREEN] ?: true,
-            fitTerminal = p[FIT] ?: true,
-            palette = p[PALETTE] ?: "matte",
-            terminalFont = p[FONT] ?: 11f,
-            space = p[SPACE] ?: "dev",
-            name = p[NAME] ?: "",
-            lastProject = p[PROJECT]?.toLongOrNull() ?: 0,
-        )
-    }
+    val prefs: Flow<Prefs> = context.settingsStore.data.map(::read)
+
+    private fun read(p: Preferences) = Prefs(
+        stayConnected = p[STAY] ?: true,
+        notify = p[NOTIFY] ?: true,
+        keepScreenOn = p[SCREEN] ?: true,
+        fitTerminal = p[FIT] ?: true,
+        palette = p[PALETTE] ?: "matte",
+        terminalFont = p[FONT] ?: 11f,
+        space = p[SPACE] ?: "dev",
+        name = p[NAME] ?: "",
+        lastProject = p[PROJECT]?.toLongOrNull() ?: 0,
+        chatKeys = p[CHAT_KEYS] ?: false,
+        terminalDirect = p[DIRECT] ?: false,
+    )
 
     suspend fun update(change: (Prefs) -> Prefs) {
         context.settingsStore.edit { p ->
-            val cur = Prefs(
-                stayConnected = p[STAY] ?: true,
-                notify = p[NOTIFY] ?: true,
-                keepScreenOn = p[SCREEN] ?: true,
-                fitTerminal = p[FIT] ?: true,
-                palette = p[PALETTE] ?: "matte",
-                terminalFont = p[FONT] ?: 11f,
-                space = p[SPACE] ?: "dev",
-                name = p[NAME] ?: "",
-                lastProject = p[PROJECT]?.toLongOrNull() ?: 0,
-            )
-            val next = change(cur)
+            val next = change(read(p))
             p[STAY] = next.stayConnected
             p[NOTIFY] = next.notify
             p[SCREEN] = next.keepScreenOn
@@ -68,6 +64,8 @@ class Settings(private val context: Context) {
             p[SPACE] = next.space
             p[NAME] = next.name
             p[PROJECT] = next.lastProject.toString()
+            p[CHAT_KEYS] = next.chatKeys
+            p[DIRECT] = next.terminalDirect
         }
     }
 
@@ -81,5 +79,7 @@ class Settings(private val context: Context) {
         val SPACE = stringPreferencesKey("space")
         val NAME = stringPreferencesKey("name")
         val PROJECT = stringPreferencesKey("last_project")
+        val CHAT_KEYS = booleanPreferencesKey("chat_keys")
+        val DIRECT = booleanPreferencesKey("terminal_direct")
     }
 }

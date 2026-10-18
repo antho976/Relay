@@ -37,6 +37,10 @@ button.threads-suggestion:hover { background: @wash; border-color: @line_emphasi
 .threads-h3 { font-size: 14px; font-weight: 600; line-height: 19px; color: @ink; }
 .threads-marker { font-size: 14px; line-height: 22px; color: @faint; min-width: 14px; }
 .threads-code { padding: 10px 12px; border-radius: 10px; background: @raised; border: 1px solid @edge; font-family: "Geist Mono", monospace; font-size: 12px; line-height: 18px; color: @secondary; }
+.threads-code-block button.threads-code-copy { margin: 4px; opacity: 0; transition: opacity 120ms ease-out; }
+.threads-code-block:hover button.threads-code-copy, .threads-code-block button.threads-code-copy:focus-visible { opacity: 1; }
+/* A quoted line: set in from a rule, quieter than the reply around it. */
+label.threads-quote { padding: 2px 0 2px 14px; border-left: 2px solid @line_emphasis; color: @secondary; }
 .threads-table { padding: 10px 14px; border: 1px solid @edge; border-radius: 14px; background: @slab; }
 .threads-table-head { font-size: 12px; font-weight: 600; color: @faint; }
 .threads-table-rule { background: @line_subtle; min-height: 1px; }

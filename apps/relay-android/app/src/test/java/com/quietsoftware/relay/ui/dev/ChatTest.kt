@@ -121,4 +121,92 @@ class ChatTest {
         assertTrue(options.isEmpty())
         assertEquals(listOf("working…", "Overwrite the file? (y/n)"), question)
     }
+
+    @Test
+    fun theModeIsReadOffClaudeCodesFooterOnly() {
+        val prompt = "╭────────╮\n│ >      │\n╰────────╯\n"
+        assertEquals("Accept edits", modeOf("⏺ Done.\n\n$prompt  ⏵⏵ accept edits on (shift+tab to cycle)\n"))
+        assertEquals("Plan", modeOf("$prompt  ⏸ plan mode on (shift+tab to cycle)"))
+        assertEquals("Default", modeOf("$prompt  ? for shortcuts"))
+        // Words in the conversation above the prompt are not the footer.
+        assertEquals(null, modeOf("I turned plan mode on for you\n\nmore\nlines\nhere\n$prompt"))
+    }
+
+    @Test
+    fun aFinishedTurnEndsWithACopyOfItsWordsAndOneStillRunningDoesNot() {
+        val log = listOf(
+            msg("u1", "user", """{"text":"why"}"""),
+            msg("a1", "assistant", """{"blocks":[{"type":"text","text":"Because."},{"type":"tool_use","id":"t1","name":"Read","summary":"a.rs"}]}"""),
+            answer("1"),
+            msg("a2", "assistant", """{"blocks":[{"type":"text","text":"And so."}]}"""),
+            msg("u2", "user", """{"text":"and then"}"""),
+            msg("a3", "assistant", """{"blocks":[{"type":"text","text":"Then this."}]}"""),
+        )
+        val done = chatPieces(log, emptyList(), working = false, today = today)
+        val copies = done.filterIsInstance<ChatPiece.Copy>()
+        assertEquals(listOf("Because.\n\nAnd so.", "Then this."), copies.map { it.text })
+        // The copy closes its turn, before the person's next message.
+        assertTrue(done[done.indexOf(copies[0]) + 1] is ChatPiece.User)
+        val running = chatPieces(log, emptyList(), working = true, today = today)
+        assertEquals(1, running.count { it is ChatPiece.Copy })
+        assertTrue(running.last() is ChatPiece.Reply)
+    }
+
+    @Test
+    fun aTurnsTimeReadsAsClaudeCodeCountsIt() {
+        assertEquals("42s", took(42_000))
+        assertEquals("3m 12s", took(192_000))
+        assertEquals("1h 4m", took(3_840_000))
+        assertEquals(null, took(-5))
+        assertEquals(null, took(13 * 3_600_000L))
+    }
+
+    @Test
+    fun aSlashAndOneWordAsksForACommandNamesFirst() {
+        assertEquals("", commandAsked("/"))
+        assertEquals("com", commandAsked("/com"))
+        assertEquals(null, commandAsked("/compact keep the plan"))
+        assertEquals(null, commandAsked("fix /tmp"))
+        val all = listOf("compact" to "Summarise the conversation", "context" to "What fills it", "clear" to "Start over with nothing in context")
+        assertEquals(listOf("compact", "context", "clear"), matchCommands(all, "c").map { it.first })
+        // A name holding the word beats a description that does.
+        assertEquals(listOf("context", "clear"), matchCommands(all, "context").map { it.first })
+    }
+
+    @Test
+    fun picturesGoAsPathsAndComeBackAsPills() {
+        val path = "/w/brisk-otter/.relay/attachments/phone-0123456789abcdef.jpg"
+        val sent = withAttachments("  what is wrong here?  ", listOf(path))
+        assertEquals("what is wrong here?\n\n$path", sent)
+        assertEquals("what is wrong here?" to listOf("phone-0123456789abcdef.jpg"), splitAttached(sent))
+        // A picture alone, and a message that only mentions the folder.
+        assertEquals(path, withAttachments("", listOf(path)))
+        assertEquals("" to listOf("phone-0123456789abcdef.jpg"), splitAttached(path))
+        assertEquals("see .relay/attachments/ for them" to emptyList<String>(), splitAttached("see .relay/attachments/ for them"))
+    }
+
+    @Test
+    fun theWorkingRowNamesAStepOnlyWhenItIsFoldedOutOfSight() {
+        val alone = chatPieces(listOf(msg("u", "user", """{"text":"go"}"""), tool("1", "Bash", "cargo test")), emptyList(), working = true, today = today)
+        assertEquals("Working…", doingNow(alone))
+        val folded = chatPieces(
+            listOf(msg("u", "user", """{"text":"go"}"""), tool("1", "Read", "a.rs"), answer("1"), tool("2", "Read", "b.rs"), answer("2"), tool("3", "Bash", "cargo test")),
+            emptyList(), working = true, today = today,
+        )
+        assertEquals("Running cargo test…", doingNow(folded))
+    }
+
+    @Test
+    fun whatWasSaidJoinsWhatIsTyped() {
+        assertEquals("run the tests", joinSaid("", "run the tests"))
+        assertEquals("first fix it then run the tests", joinSaid("first fix it  ", "then run the tests"))
+    }
+
+    @Test
+    fun theLatestPlanIsReadFromEitherProvidersSteps() {
+        val first = msg("a1", "assistant", """{"blocks":[{"type":"tool_use","id":"t1","name":"TodoWrite","summary":"0 of 2 done","detail":"[ ] read\n[ ] fix"}]}""")
+        val later = msg("a2", "assistant", """{"blocks":[{"type":"text","text":"On it."},{"type":"tool_use","id":"t2","name":"update_plan","summary":"1 of 3 done","detail":"[x] read\n[~] fix\n[ ] test"}]}""")
+        assertEquals(null, latestPlan(listOf(msg("u", "user", """{"text":"go"}"""))))
+        assertEquals(listOf(PlanStep("read", 'x'), PlanStep("fix", '~'), PlanStep("test", ' ')), latestPlan(listOf(first, answer("1"), later)))
+    }
 }

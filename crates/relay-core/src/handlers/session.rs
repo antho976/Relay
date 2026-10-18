@@ -266,6 +266,69 @@ fn owns(
     Ok(())
 }
 
+/// Where `session.upload` puts pictures, from a session's checkout: inside `.relay/`, which
+/// Relay keeps out of git in every checkout it manages.
+const ATTACHMENTS: &str = ".relay/attachments";
+
+/// Pictures larger than this are refused; the phone sends a photo shrunk well under it, and a
+/// door takes at most 8 MiB in one message.
+const UPLOAD_MAX: usize = 4 << 20;
+
+fn decode_upload(encoded: &str) -> Result<Vec<u8>, BusError> {
+    use base64::Engine as _;
+    let too_big = || BusError::invalid("session.upload", format!("the picture is over {} MiB", UPLOAD_MAX >> 20))
+        .with_hint("send it smaller");
+    if encoded.len() > UPLOAD_MAX.div_ceil(3) * 4 + 4 {
+        return Err(too_big());
+    }
+    let compact: String = encoded.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    let bytes = base64::engine::general_purpose::STANDARD.decode(compact.as_bytes())
+        .map_err(|_| BusError::invalid("session.upload", "bytes_b64 is not base64"))?;
+    if bytes.len() > UPLOAD_MAX {
+        return Err(too_big());
+    }
+    Ok(bytes)
+}
+
+/// `.relay/attachments` in `worktree`, made if missing. The agent owns its checkout, so either
+/// folder may be a link it planted: a link is refused rather than written through.
+fn attachments_dir(worktree: &Path) -> Result<PathBuf, BusError> {
+    let mut dir = worktree.to_path_buf();
+    for part in ATTACHMENTS.split('/') {
+        dir.push(part);
+        match fs::symlink_metadata(&dir) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => return Err(BusError::conflict("session.upload_path", format!("{} is not a folder", dir.display()))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => match fs::create_dir(&dir) {
+                Ok(()) => {}
+                // Another upload made it first: fine, if it is a real folder.
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && fs::symlink_metadata(&dir).is_ok_and(|meta| meta.is_dir()) => {}
+                Err(error) => return Err(crate::engine::internal(error)),
+            },
+            Err(error) => return Err(crate::engine::internal(error)),
+        }
+    }
+    Ok(dir)
+}
+
+/// Write `bytes` as `name` in `dir` unless it is there already (a name is its content's hash),
+/// through a temporary file renamed into place, so the agent never reads half a picture.
+fn store_upload(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), BusError> {
+    use std::io::Write as _;
+    let path = dir.join(name);
+    let present = || fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file());
+    if present() {
+        return Ok(());
+    }
+    let mut tmp = tempfile::NamedTempFile::new_in(dir).bus()?;
+    tmp.write_all(bytes).bus()?;
+    match tmp.persist_noclobber(&path) {
+        Ok(_) => Ok(()),
+        Err(_) if present() => Ok(()),
+        Err(error) => Err(crate::engine::internal(error.error)),
+    }
+}
+
 /// [`assert_own`] with PAIR reads allowed, for a handler with no transaction: one short read
 /// for the target row and the actor's own.
 fn read_own_or_pair(ctx: &crate::engine::Unlocked, session: &str) -> Result<Row_, BusError> {
@@ -2276,6 +2339,37 @@ pub fn register(e: &mut Engine) {
         let limit = p.limit.unwrap_or(200).clamp(1, 1000) as usize;
         crate::transcript::read(s.provider, &path, worktree, p.after, limit)
             .map_err(|e| BusError::unavailable("session.transcript_unreadable", format!("{}: {e}", path.display())))
+    });
+
+    // A picture from the phone for the agent: decoded and written with the store lock released;
+    // the transaction only names the project.
+    e.register_staged::<Upload, _>(|ctx, p| {
+        let row = read_own_or_pair(ctx, &p.session)?;
+        let bytes = decode_upload(&p.bytes_b64)?;
+        let picture = crate::handlers::design::picture::sniff(&bytes)
+            .filter(|picture| picture.ext != "svg")
+            .ok_or_else(|| BusError::invalid("session.upload", "not a PNG, JPEG, GIF or WebP picture whose size can be read"))?;
+        let s = &row.session;
+        let worktree = Path::new(&s.worktree);
+        if s.worktree.is_empty() || !worktree.is_dir() {
+            return Err(BusError::conflict("session.upload_no_checkout", format!("session {} has no checkout to put a picture in", s.name)));
+        }
+        let digest = {
+            use sha2::Digest;
+            crate::hex(&sha2::Sha256::digest(&bytes))
+        };
+        let name = format!("phone-{}.{}", &digest[..16], picture.ext);
+        let dir = attachments_dir(worktree)?;
+        store_upload(&dir, &name, &bytes)?;
+        Ok((row, UploadOut {
+            path: format!("{ATTACHMENTS}/{name}"),
+            absolute: dir.join(&name).display().to_string(),
+            w: picture.w,
+            h: picture.h,
+        }))
+    }, |ctx: &mut Ctx, _p, (row, out): (Row_, UploadOut)| {
+        ctx.set_project(row.session.project_id);
+        Ok(out)
     });
 
     // Linked repositories (crate::linked). The clone is network work and the status scans are

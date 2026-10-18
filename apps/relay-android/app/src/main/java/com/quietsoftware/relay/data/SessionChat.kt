@@ -57,6 +57,8 @@ class SessionChat(private val relay: Relay, val name: String, private val scope:
     private val _error = MutableStateFlow<BusException?>(null)
     val error: StateFlow<BusException?> = _error
 
+    /** For each message being sent, the person's messages the log already held when it went. */
+    private val before = java.util.concurrent.ConcurrentHashMap<String, Set<String>>()
     private var cursor: Long? = null
     private var at = 0L
     private var job: Job? = null
@@ -114,9 +116,21 @@ class SessionChat(private val relay: Relay, val name: String, private val scope:
         _messages.value = merged.takeLast(KEEP)
         // A sent message the log now has, or one long overdue, stops waiting.
         val now = System.currentTimeMillis()
-        val said = merged.filter { it.role == "user" }.map { it.text.trim() }.toSet()
-        _sending.update { list -> list.filter { it.text.trim() !in said && now - (Instant.parse(it.createdAt).toEpochMilli()) < SENDING_MS } }
+        val users = merged.filter { it.role == "user" }
+        _sending.update { list ->
+            list.filter { mine ->
+                // Only a message logged since this one was sent can be it: a picture alone has no words to tell it by.
+                val known = before[mine.id].orEmpty()
+                val said = users.any { it.id !in known && gist(it.text) == gist(mine.text) }
+                !said && now - Instant.parse(mine.createdAt).toEpochMilli() < SENDING_MS
+            }
+        }
+        before.keys.retainAll(_sending.value.mapTo(HashSet()) { it.id })
     }
+
+    /** A message as typed, whichever way its provider logged the pictures it named (a path, or `[Image #1]`). */
+    private fun gist(text: String): String =
+        text.lines().filterNot { ATTACHED_LINE in it }.joinToString("\n").replace(IMAGE_TAG, "").trim()
 
     /** Keep the conversation for when the PC is away: the newest part, as the first read's answer. */
     fun save() {
@@ -149,6 +163,7 @@ class SessionChat(private val relay: Relay, val name: String, private val scope:
     suspend fun send(text: String): Boolean {
         val s = relay.hub.session.value ?: return false
         val mine = ThreadMessage("tmp:${UUID.randomUUID()}", role = "user", body = buildJsonObject { put("text", text) }, createdAt = Instant.now().toString())
+        before[mine.id] = _messages.value.filter { it.role == "user" }.mapTo(HashSet()) { it.id }
         _sending.update { it + mine }
         sendLock.withLock {
             try {
@@ -166,6 +181,17 @@ class SessionChat(private val relay: Relay, val name: String, private val scope:
 
     private fun input(data: String) = buildJsonObject { put("session", name); put("data", data) }
 
+    /** A picture for the agent, into its checkout (`session.upload`): the absolute path a message names, or null when the PC would not take it. */
+    suspend fun upload(picture: ByteArray): String? = try {
+        val payload = buildJsonObject {
+            put("session", name)
+            put("bytes_b64", android.util.Base64.encodeToString(picture, android.util.Base64.NO_WRAP))
+        }
+        ((relay.call("session.upload", payload) as? JsonObject)?.get("absolute") as? JsonPrimitive)?.content
+    } catch (e: BusException) {
+        null
+    }
+
     companion object {
         const val OP = "session.transcript"
         const val LIMIT = 300
@@ -176,5 +202,7 @@ class SessionChat(private val relay: Relay, val name: String, private val scope:
         private const val SENDING_MS = 60_000L
         private const val PASTE_START = "\u001b[200~"
         private const val PASTE_END = "\u001b[201~"
+        private const val ATTACHED_LINE = ".relay/attachments/"
+        private val IMAGE_TAG = Regex("""\[Image #\d+]""")
     }
 }

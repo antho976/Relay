@@ -56,6 +56,7 @@ import com.quietsoftware.relay.data.Relay as RelayData
 import com.quietsoftware.relay.ui.LocalNav
 import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.kit.Dot
+import com.quietsoftware.relay.ui.kit.Empty
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.Key
 import com.quietsoftware.relay.ui.kit.KeyKind
@@ -118,6 +119,8 @@ private fun Reading(live: RelayData.Live, missing: String, content: @Composable 
             if (!live.fresh) StaleNote(live.at)
             content(r)
         }
+        // The PC away is a state, not a failure: said quietly, as an empty page, where red read as an error.
+        live.error?.code == "link.down" -> Empty("cloud", "Not on this phone yet", "The PC is out of reach. This shows here once it has been read with the PC in reach.")
         live.error != null -> T(said(live.error, missing), Modifier.padding(vertical = 12.dp), Relay.type.ui, c.heldText)
         else -> Quiet("Reading the PC…")
     }

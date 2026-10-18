@@ -71,12 +71,15 @@ class MainActivity : ComponentActivity() {
                     when {
                         i.data?.scheme == "relay" -> nav.pair(i.dataString)
                         i.action == Intent.ACTION_SEND -> i.getStringExtra(Intent.EXTRA_TEXT)?.let(nav::share)
-                        else -> when (i.getStringExtra(EXTRA_OPEN)) {
+                        else -> when (val open = i.getStringExtra(EXTRA_OPEN)) {
+                            // An agent's notification opens its conversation.
+                            null -> Unit
                             "inbox" -> nav.inbox()
                             "new-task" -> nav.newTask(project)
                             "new-agent" -> nav.launch(project)
                             "new-thread" -> nav.space("threads")
                             "search" -> nav.search()
+                            else -> open.removePrefix(OPEN_CHAT).takeIf { open.startsWith(OPEN_CHAT) && it.isNotEmpty() }?.let(nav::chat)
                         }
                     }
                 }
@@ -91,5 +94,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_OPEN = "open"
+        /** `EXTRA_OPEN` for an agent's conversation: this, then the session's name. */
+        const val OPEN_CHAT = "chat:"
     }
 }

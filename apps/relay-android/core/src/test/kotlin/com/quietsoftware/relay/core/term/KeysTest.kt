@@ -80,4 +80,14 @@ class KeysTest {
         t.feed("$CSI?2026h")
         assertTrue("a new frame starts a new count", t.synchronizedOutput)
     }
+
+    @Test fun `typed keys send Enter for a line break and apply a sticky modifier to the first only`() {
+        assertEquals("ls\r", Keys.typed("ls\n"))
+        assertEquals("a\rb", Keys.typed("a\r\nb"))
+        assertEquals("\u0003", Keys.typed("c", ctrl = true))
+        assertEquals("\u0003c", Keys.typed("cc", ctrl = true))
+        assertEquals("\u001bb", Keys.typed("b", alt = true))
+        assertEquals("\u001b\u0018", Keys.typed("x", ctrl = true, alt = true))
+        assertEquals("", Keys.typed("", ctrl = true))
+    }
 }

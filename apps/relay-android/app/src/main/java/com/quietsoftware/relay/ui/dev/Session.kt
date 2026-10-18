@@ -153,16 +153,18 @@ private fun StateCard(session: Session, project: String?) {
     }
 }
 
-/** Terminal first, then the lifecycle keys for its state, as the PC's agent menu orders them. */
+/** Terminal first, then the lifecycle keys for its state, as the PC's agent menu orders them; wrapped, so none is cut off. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Actions(session: Session, nav: Nav, life: Lifecycle, online: Boolean) {
     if (session.pending) {
         T(slateHint(session, online), Modifier.padding(vertical = 12.dp), Relay.type.caption, Relay.colors.ink3)
         return
     }
-    Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 12.dp),
+    FlowRow(
+        Modifier.fillMaxWidth().padding(vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (session.state != "closed") {
             Key("Conversation", { nav.chat(session.name) }, kind = KeyKind.Primary, glyph = "notes")
@@ -199,7 +201,7 @@ private fun Details(session: Session, closedAt: String?, nav: Nav) {
         session.worktree.takeIf { it.isNotBlank() }?.let { Fact("Worktree", it, mono = true) },
         session.taskId?.let { id -> Fact("Task", "#$id") { nav.task(id.toString()) } },
         session.pairWith?.takeIf { it.isNotBlank() }?.let { p -> Fact("Paired with", p) { nav.session(p) } },
-        Fact("Model", session.model?.takeIf { it.isNotBlank() } ?: "Provider default"),
+        Fact("Model", modelName(session.model.orEmpty())),
         Fact("Effort", session.effort?.takeIf { it.isNotBlank() } ?: "Provider default"),
         session.pid?.let { Fact("Process", "pid $it") },
         session.exitCode?.let { Fact("Exit code", it.toString()) },
@@ -326,14 +328,12 @@ private fun Settings(session: Session, nav: Nav) {
     }
     SectionLabel("Settings")
     Slab(Modifier.fillMaxWidth(), padding = PaddingValues(14.dp)) {
-        Eyebrow("Model")
-        Field(
-            form.model,
-            { if (!spawned) edit(form.copy(model = it)) },
-            Modifier.fillMaxWidth().padding(top = 6.dp).alpha(if (spawned) .6f else 1f).focusProperties { canFocus = !spawned },
-            placeholder = "Provider default, or a model ID",
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
-        )
+        Eyebrow("Model", Modifier.padding(bottom = 6.dp))
+        if (spawned) {
+            T(modelName(form.model), style = Relay.type.ui, color = c.ink2)
+        } else {
+            Models(session.provider, form.model, owner = session.name) { edit(form.copy(model = it)) }
+        }
         Eyebrow("Reasoning effort", Modifier.padding(top = 14.dp))
         FlowRow(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             for (e in effortsFor(session.provider)) {

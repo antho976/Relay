@@ -9,6 +9,9 @@ object Keys {
     const val CTRL_C = "\u0003"
     const val CTRL_D = "\u0004"
     const val BACKSPACE = "\u007f"
+    const val DELETE = "\u001b[3~"
+    const val PAGE_UP = "\u001b[5~"
+    const val PAGE_DOWN = "\u001b[6~"
 
     private const val PASTE_START = "\u001b[200~"
     private const val PASTE_END = "\u001b[201~"
@@ -36,6 +39,18 @@ object Keys {
         '_' -> "\u001f"
         '?' -> "\u007f"
         else -> c.toString()
+    }
+
+    /**
+     * What the keyboard typed, as the terminal should receive it: a line break is Enter (CR), and
+     * a held Ctrl or Alt applies to the first character only, as a sticky modifier does (Alt is
+     * `ESC` before it). The rest goes as typed.
+     */
+    fun typed(text: String, ctrl: Boolean = false, alt: Boolean = false): String {
+        if (text.isEmpty()) return ""
+        val body = text.replace("\r\n", "\r").replace('\n', '\r')
+        val first = body[0].let { if (ctrl) ctrl(it) else it.toString() }
+        return (if (alt) ESC else "") + first + body.substring(1)
     }
 
     /**

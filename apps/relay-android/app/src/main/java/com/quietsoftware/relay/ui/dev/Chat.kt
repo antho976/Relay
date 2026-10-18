@@ -1,14 +1,24 @@
 package com.quietsoftware.relay.ui.dev
 
+import android.content.Intent
+import android.speech.RecognizerIntent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -17,11 +27,12 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -32,9 +43,13 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -42,17 +57,32 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -60,6 +90,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quietsoftware.relay.core.model.ThreadMessage
 import com.quietsoftware.relay.core.term.Keys
 import com.quietsoftware.relay.data.SessionChat
+import com.quietsoftware.relay.data.Relay as RelayData
 import com.quietsoftware.relay.data.TerminalFeed
 import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.code.ADD_TEXT
@@ -68,7 +99,7 @@ import com.quietsoftware.relay.ui.code.DEL_TEXT
 import com.quietsoftware.relay.ui.code.DEL_WASH
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Empty
-import com.quietsoftware.relay.ui.kit.Field
+import com.quietsoftware.relay.ui.kit.epoch
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.IconKey
 import com.quietsoftware.relay.ui.kit.Key
@@ -89,12 +120,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.time.LocalDate
 
 /**
@@ -128,7 +162,34 @@ fun ChatScreen(name: String, nav: Nav) {
     var menu by remember { mutableStateOf(false) }
     var mailing by remember { mutableStateOf(false) }
     var peek by rememberSaveable(name) { mutableStateOf(false) }
-    var text by rememberSaveable(name) { mutableStateOf("") }
+    // A value, not a string: a picked command puts the cursor after itself.
+    var field by rememberSaveable(name, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
+    val text = field.text
+    fun type(next: String) {
+        field = TextFieldValue(next, TextRange(next.length))
+    }
+    // Pictures for the next message: each sent to the agent's checkout as soon as it is picked.
+    val context = LocalContext.current
+    val attached = remember(name) { mutableStateListOf<Attachment>() }
+    fun update(id: Long, change: (Attachment) -> Attachment) {
+        val i = attached.indexOfFirst { it.id == id }
+        if (i >= 0) attached[i] = change(attached[i])
+    }
+    // Dictation through the phone's own recognizer: what was said joins what is typed.
+    val dictate = rememberDictation { said -> type(joinSaid(field.text, said)) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_PICTURES)) { uris ->
+        for (uri in uris.take(MAX_PICTURES - attached.size)) {
+            val id = System.nanoTime()
+            attached += Attachment(id, null)
+            scope.launch {
+                val shrunk = withContext(Dispatchers.IO) { shrink(context, uri) }
+                if (shrunk == null) return@launch update(id) { it.copy(failed = true) }
+                update(id) { it.copy(thumb = shrunk.second) }
+                val path = chat.upload(shrunk.first)
+                update(id) { if (path != null) it.copy(path = path) else it.copy(failed = true) }
+            }
+        }
+    }
 
     val ready = session?.attachable == true && s.online
     val working = session?.state == "running" || session?.state == "spawning"
@@ -146,22 +207,37 @@ fun ChatScreen(name: String, nav: Nav) {
     val unread by remember(screen) { derivedStateOf { screen.value == null } }
     val asking = ready && (onScreen || askTool || (held && unread))
     val doing = remember(pieces, working, asking) { if (working && !asking) doingNow(pieces) else null }
+    val mode by remember(screen) { derivedStateOf { screen.value?.let(::modeOf) } }
+    // When the turn the agent is working on began: the person's last message.
+    val since = remember(messages, sending) { epoch((sending.lastOrNull() ?: messages.lastOrNull { it.role == "user" })?.createdAt).takeIf { it > 0 } }
 
     KeepScreenOn(s.prefs.keepScreenOn)
 
     fun send() {
         val typed = text.trim()
-        if (typed.isEmpty()) {
+        if (attached.any { it.sending }) {
+            nav.shell.toast("A picture is still on its way to the PC")
+            return
+        }
+        if (attached.any { it.failed }) {
+            nav.shell.toast("A picture did not reach the PC: take it out, or pick it again")
+            return
+        }
+        val pictures = attached.toList()
+        val paths = pictures.mapNotNull { it.path }
+        if (typed.isEmpty() && paths.isEmpty()) {
             // Empty: Esc stops an agent mid-turn; otherwise (a menu up, a prompt) it is the Enter it waits for.
             val stop = working && !asking
             chat.key(if (stop) Keys.ESC else Keys.ENTER)
             if (stop) nav.shell.toast("Asked ${session?.provider ?: "the agent"} to stop")
             return
         }
-        text = ""
+        type("")
+        attached.clear()
         scope.launch {
-            if (!chat.send(typed)) {
-                if (text.isEmpty()) text = typed
+            if (!chat.send(withAttachments(typed, paths))) {
+                if (field.text.isEmpty()) type(typed)
+                if (attached.isEmpty()) attached.addAll(pictures)
                 nav.shell.toast("Not sent: the PC did not take it")
             }
         }
@@ -174,6 +250,9 @@ fun ChatScreen(name: String, nav: Nav) {
                 IconKey("terminal", { nav.console(name) }, size = 18.dp, tint = c.ink2)
             }
             Banner(status, session, s.online, life)
+            // The agent's plan, pinned: what it is on, and how far along, while there is any left.
+            val plan = remember(messages) { latestPlan(messages) }
+            if (plan != null && (working || plan.any { it.state != 'x' })) PlanStrip(name, plan)
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 // The agent's screen here before the terminal: it answers what the conversation cannot show yet.
                 val openTerminal = @Composable {
@@ -181,7 +260,7 @@ fun ChatScreen(name: String, nav: Nav) {
                     else Key("Open the terminal", { nav.console(name) }, glyph = "terminal", compact = true)
                 }
                 when {
-                    pieces.isNotEmpty() || asking -> Conversation(pieces, doing, asking, screen, chat, s.online)
+                    pieces.isNotEmpty() || asking -> Conversation(pieces, doing, since, asking, screen, chat, s.online)
                     error != null && status != TerminalFeed.Status.Saved -> Empty(
                         "terminal", "Can't read the conversation",
                         said(error!!.error, "The PC's Relay is older than this app: update it to see agents as a conversation. The terminal works meanwhile."),
@@ -197,10 +276,12 @@ fun ChatScreen(name: String, nav: Nav) {
                 }
             }
             if (peek && ready) ScreenPanel(screen) { peek = false }
-            QuickKeys(chat, ready)
+            if (s.prefs.chatKeys) QuickKeys(chat, ready)
+            val asked = commandAsked(text)
+            if (asked != null && ready) Commands(nav, session?.provider, session?.projectId, asked) { type("/$it ") }
             ChatComposer(
-                text,
-                { text = it },
+                field,
+                { field = it },
                 ready,
                 working && !asking,
                 placeholder = when {
@@ -211,7 +292,23 @@ fun ChatScreen(name: String, nav: Nav) {
                 },
                 focus,
                 ::send,
-            )
+                pictures = attached.isNotEmpty(),
+                above = { AttachmentStrip(attached) { id -> attached.removeAll { it.id == id } } },
+            ) {
+                Chip("", "Attach a photo or a screenshot", ready && attached.size < MAX_PICTURES, glyph = "file-image") {
+                    picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }
+                if (dictate != null) Chip("", "Dictate a message", ready, icon = { MicGlyph(15.dp, c.ink2) }, onClick = dictate)
+                Chip("/", "The agent's commands", ready) {
+                    if (text.isBlank()) type("/")
+                    focus.requestFocus()
+                }
+                Chip(mode ?: "Mode", "Shift Tab: the agent's next mode", ready, glyph = "shield") { chat.key(Keys.SHIFT_TAB) }
+                Chip("Esc", "Escape", ready) { chat.key(Keys.ESC) }
+                Chip("Keys", if (s.prefs.chatKeys) "Hide the extra keys" else "Show the extra keys", true, trailing = if (s.prefs.chatKeys) "chevron-down" else "chevron-up") {
+                    nav.shell.update { it.copy(chatKeys = !it.chatKeys) }
+                }
+            }
         }
     }
 
@@ -273,6 +370,8 @@ internal sealed interface ChatPiece {
     data class Steps(override val key: String, val calls: List<Call>) : ChatPiece
     data class Note(override val key: String, val text: String) : ChatPiece
     data class Error(override val key: String, val text: String) : ChatPiece
+    /** The end of a finished turn: a quiet Copy key for the agent's words in it. */
+    data class Copy(override val key: String, val text: String) : ChatPiece
 }
 
 private fun JsonObject.str(key: String) = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content.orEmpty()
@@ -287,11 +386,18 @@ internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessa
     val lastUser = messages.indexOfLast { it.role == "user" }
     val out = ArrayList<ChatPiece>()
     val steps = ArrayList<Call>()
+    // The agent's words since the person last spoke: copied together at the end of the turn.
+    val said = ArrayList<String>()
+    var turn = ""
     var lastDay: LocalDate? = null
     fun flush() {
         if (steps.size >= 3) out += ChatPiece.Steps("g:" + steps.first().key, steps.toList())
         else steps.forEach { out += ChatPiece.Tool(it.key, it) }
         steps.clear()
+    }
+    fun endTurn() {
+        if (said.isNotEmpty()) out += ChatPiece.Copy("c:$turn", said.joinToString("\n\n"))
+        said.clear()
     }
     fun day(m: ThreadMessage) {
         val d = dayOf(m.createdAt) ?: return
@@ -305,10 +411,15 @@ internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessa
     }
     messages.forEachIndexed { index, m ->
         if (m.role == "tool") return@forEachIndexed
+        // The turn before ends (its Copy key) ahead of the day the next one starts on.
+        if (m.role == "user") {
+            flush()
+            endTurn()
+        }
         day(m)
         when (m.role) {
             "user" -> {
-                flush()
+                turn = m.id
                 out += ChatPiece.User("m:${m.id}", m.text, sending = false)
             }
             "assistant" -> ((m.body as? JsonObject)?.get("blocks") as? JsonArray).orEmpty().forEachIndexed { i, blk ->
@@ -317,6 +428,7 @@ internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessa
                     "text" -> o.str("text").takeIf { it.isNotBlank() }?.let {
                         flush()
                         out += ChatPiece.Reply("m:${m.id}:$i", it.trim())
+                        said += it.trim()
                     }
                     "thinking" -> o.str("text").takeIf { it.isNotBlank() }?.let {
                         flush()
@@ -351,25 +463,48 @@ internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessa
         }
     }
     flush()
+    if (!working || sending.isNotEmpty()) endTurn()
     for (m in sending) out += ChatPiece.User("m:${m.id}", m.text, sending = true)
     return out
 }
 
+/** A step of the agent's plan: its words, and `x` done, `~` under way or ` ` to do. */
+internal data class PlanStep(val text: String, val state: Char)
+
+private val PLAN_LINE = Regex("""^\[([x~ ])] (.*)$""")
+
+/** The agent's latest plan (Claude Code's to-do list, Codex's plan), from its log; null while it has none. */
+internal fun latestPlan(messages: List<ThreadMessage>): List<PlanStep>? {
+    for (m in messages.asReversed()) {
+        if (m.role != "assistant") continue
+        val blocks = (m.body as? JsonObject)?.get("blocks") as? JsonArray ?: continue
+        for (b in blocks.asReversed()) {
+            val o = b as? JsonObject ?: continue
+            if (o.str("type") != "tool_use" || o.str("name") !in PLAN_TOOLS) continue
+            return o.str("detail").lines().mapNotNull { line ->
+                PLAN_LINE.matchEntire(line.trimEnd())?.let { PlanStep(it.groupValues[2], it.groupValues[1][0]) }
+            }.takeIf { it.isNotEmpty() }
+        }
+    }
+    return null
+}
+
+private val PLAN_TOOLS = setOf("TodoWrite", "update_plan")
+
 /** The agent's last step is a question or a plan still waiting on the person. */
 internal fun waitsOnAsk(pieces: List<ChatPiece>): Boolean =
-    (pieces.lastOrNull { it !is ChatPiece.User } as? ChatPiece.Tool)?.call?.let { isAsk(it.name) && it.step == Step.Running } == true
+    (pieces.lastOrNull { it !is ChatPiece.User && it !is ChatPiece.Copy } as? ChatPiece.Tool)?.call?.let { isAsk(it.name) && it.step == Step.Running } == true
 
 /** An edit's size: the lines it put in and took out. */
 internal fun diffCounts(lines: List<String>): Pair<Int, Int> =
     lines.count { it.startsWith("+") && !it.startsWith("+++") } to lines.count { it.startsWith("-") && !it.startsWith("---") }
 
-/** What the working row says: the step running now, in words. */
-private fun doingNow(pieces: List<ChatPiece>): String {
-    val call = when (val last = pieces.lastOrNull()) {
-        is ChatPiece.Tool -> last.call
-        is ChatPiece.Steps -> last.calls.last()
-        else -> null
-    }?.takeIf { it.step == Step.Running } ?: return "Working…"
+/**
+ * What the working row says: the step running now, in words, when it is folded out of sight in a
+ * group of steps; a step on a line of its own already says so there.
+ */
+internal fun doingNow(pieces: List<ChatPiece>): String {
+    val call = (pieces.lastOrNull() as? ChatPiece.Steps)?.calls?.last()?.takeIf { it.step == Step.Running } ?: return "Working…"
     return "${verb(call.name).doing}${call.summary.takeIf { it.isNotBlank() }?.let { " $it" }.orEmpty()}…"
 }
 
@@ -416,18 +551,43 @@ private fun transcriptText(messages: List<ThreadMessage>): String = messages.map
 // ---- Drawing it ----
 
 @Composable
-private fun Conversation(pieces: List<ChatPiece>, doing: String?, asking: Boolean, screen: State<String?>, chat: SessionChat, online: Boolean) {
+private fun Conversation(pieces: List<ChatPiece>, doing: String?, since: Long?, asking: Boolean, screen: State<String?>, chat: SessionChat, online: Boolean) {
+    val c = Relay.colors
     val state = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     // Newest at the bottom, and kept in view as it grows while the person reads the end.
     val shown = remember(pieces) { pieces.asReversed() }
     LaunchedEffect(pieces.size, doing, asking) { if (state.firstVisibleItemIndex <= 1) state.animateScrollToItem(0) }
-    LazyColumn(Modifier.fillMaxSize(), state = state, reverseLayout = true, horizontalAlignment = Alignment.CenterHorizontally) {
-        val cell = Modifier.widthIn(max = 720.dp).fillMaxWidth().padding(horizontal = 16.dp)
-        item(key = "end") { Box(Modifier.height(12.dp)) }
-        if (asking) item(key = "ask") { AskCard(chat, screen, online, cell.padding(top = 14.dp)) }
-        if (doing != null) item(key = "doing") { WorkingRow(doing, cell.padding(top = 12.dp)) }
-        items(shown, key = { it.key }) { p -> PieceView(p, cell, online) }
-        item(key = "start") { Box(Modifier.height(8.dp)) }
+    // Scrolled up to read: a key back to the newest, counting what arrived meanwhile.
+    val away by remember { derivedStateOf { state.firstVisibleItemIndex > 2 } }
+    var seen by remember { mutableIntStateOf(0) }
+    LaunchedEffect(away) { if (away) seen = pieces.size }
+    val fresh = if (away) (pieces.size - seen).coerceAtLeast(0) else 0
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize(), state = state, reverseLayout = true, horizontalAlignment = Alignment.CenterHorizontally) {
+            val cell = Modifier.widthIn(max = 720.dp).fillMaxWidth().padding(horizontal = 16.dp)
+            item(key = "end") { Box(Modifier.height(12.dp)) }
+            if (asking) item(key = "ask") { AskCard(chat, screen, online, cell.padding(top = 14.dp)) }
+            if (doing != null) item(key = "doing") { WorkingRow(doing, since, cell.padding(top = 12.dp)) }
+            items(shown, key = { it.key }, contentType = { it::class }) { p -> PieceView(p, cell, online) }
+            item(key = "start") { Box(Modifier.height(8.dp)) }
+        }
+        AnimatedVisibility(away, Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp), enter = fadeIn(), exit = fadeOut()) {
+            Row(
+                Modifier.heightIn(min = TOUCH).clip(Radii.pill).clickable(onClickLabel = "Go to the newest", role = Role.Button) { scope.launch { state.animateScrollToItem(0) } },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    Modifier.height(36.dp).shadow(10.dp, Radii.pill).clip(Radii.pill).background(c.slab).border(1.dp, c.strong, Radii.pill)
+                        .padding(horizontal = if (fresh > 0) 14.dp else 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Glyph("arrow-down", 16.dp, c.ink2)
+                    if (fresh > 0) T(if (fresh == 1) "1 new" else "$fresh new", style = Relay.type.caption, color = c.ink2, weight = FontWeight.Medium)
+                }
+            }
+        }
     }
 }
 
@@ -452,6 +612,79 @@ private fun PieceView(p: ChatPiece, cell: Modifier, online: Boolean) {
             Glyph("close", 13.dp, c.heldText, Modifier.padding(top = 4.dp))
             SelectionContainer { T(p.text, style = Relay.type.ui.copy(fontSize = 13.5.sp, lineHeight = 20.sp), color = c.heldText) }
         }
+        is ChatPiece.Copy -> Box(cell) { CopyKey(p.text) }
+    }
+}
+
+/** A finished turn's Copy key: the agent's words in it, as Markdown. */
+@Composable
+private fun CopyKey(text: String) {
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    var copied by remember { mutableStateOf(false) }
+    Box(
+        Modifier.size(TOUCH).clip(Radii.icon).clickable(onClickLabel = "Copy the reply", role = Role.Button) {
+            scope.launch {
+                clipboard.copy(text)
+                copied = true
+                delay(1400)
+                copied = false
+            }
+        },
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Glyph(if (copied) "check" else "copy", 15.dp, Relay.colors.inkDim)
+    }
+}
+
+/**
+ * The agent's plan under the header: one line with how far along it is and the step under way,
+ * opening to every step, done ones ticked and quiet.
+ */
+@Composable
+private fun PlanStrip(name: String, plan: List<PlanStep>) {
+    val c = Relay.colors
+    var open by rememberSaveable(name) { mutableStateOf(false) }
+    val done = plan.count { it.state == 'x' }
+    val now = plan.firstOrNull { it.state == '~' } ?: plan.firstOrNull { it.state != 'x' }
+    Column(Modifier.fillMaxWidth().background(c.slab)) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 40.dp).clickable(onClickLabel = if (open) "Fold the plan" else "Show the whole plan") { open = !open }
+                .padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Glyph("check", 13.dp, if (done == plan.size) c.live else c.ink3)
+            T("Plan", style = Relay.type.caption, color = c.ink2, weight = FontWeight.Medium)
+            T("$done of ${plan.size}", style = Relay.type.mono.copy(fontSize = 11.sp), color = c.ink3)
+            T(now?.text.orEmpty(), Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 1)
+            Glyph(if (open) "chevron-up" else "chevron-down", 12.dp, c.inkDim)
+        }
+        AnimatedVisibility(open) {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState()).padding(start = 14.dp, end = 14.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                for (step in plan) {
+                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Box(Modifier.padding(top = 3.dp).size(13.dp), contentAlignment = Alignment.Center) {
+                            when (step.state) {
+                                'x' -> Glyph("check", 12.dp, c.live)
+                                '~' -> Dot(c.waiting, 7.dp)
+                                else -> Box(Modifier.size(9.dp).border(1.dp, c.inkDim, CircleShape))
+                            }
+                        }
+                        T(
+                            step.text,
+                            Modifier.weight(1f),
+                            Relay.type.caption.copy(textDecoration = if (step.state == 'x') TextDecoration.LineThrough else null),
+                            if (step.state == 'x') c.ink3 else c.ink2,
+                        )
+                    }
+                }
+            }
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(c.edge))
     }
 }
 
@@ -459,11 +692,15 @@ private fun PieceView(p: ChatPiece, cell: Modifier, online: Boolean) {
 @Composable
 private fun UserBubble(text: String, sending: Boolean, online: Boolean, modifier: Modifier) {
     val c = Relay.colors
+    val (words, pictures) = remember(text) { splitAttached(text) }
     Column(modifier, horizontalAlignment = Alignment.End) {
-        Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
+        if (pictures.isNotEmpty()) Row(Modifier.padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (p in pictures) AttachedPill(p)
+        }
+        if (words.isNotEmpty()) Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
             SelectionContainer {
                 Box(Modifier.clip(Radii.card).background(c.wash).padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    T(text, style = Relay.type.body, color = c.ink)
+                    T(words, style = Relay.type.body, color = c.ink)
                 }
             }
         }
@@ -474,13 +711,36 @@ private fun UserBubble(text: String, sending: Boolean, online: Boolean, modifier
     }
 }
 
+/** The working row: the lamp, the step running now, and how long the turn has run, as Claude Code counts it. */
 @Composable
-private fun WorkingRow(text: String, modifier: Modifier) {
+private fun WorkingRow(text: String, since: Long?, modifier: Modifier) {
+    val c = Relay.colors
+    val now by produceState(System.currentTimeMillis(), since) {
+        while (since != null) {
+            delay(1_000)
+            value = System.currentTimeMillis()
+        }
+    }
+    val took = since?.let { took(now - it) }
     Row(modifier.heightIn(min = 24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
         WorkingLamp()
-        T(text, Modifier.weight(1f), Relay.type.caption, Relay.colors.ink3, maxLines = 1)
+        T(text, Modifier.weight(1f, fill = false), Relay.type.caption, c.ink3, maxLines = 1)
+        if (took != null) T(took, style = Relay.type.mono.copy(fontSize = 11.sp), color = c.inkDim, maxLines = 1)
     }
 }
+
+/** "42s", "3m 12s", "1h 4m": a turn's time so far; nothing for one that cannot be this turn's. */
+internal fun took(ms: Long): String? {
+    if (ms < 0 || ms > TURN_MAX_MS) return null
+    val s = ms / 1000
+    return when {
+        s < 60 -> "${s}s"
+        s < 3600 -> "${s / 60}m ${s % 60}s"
+        else -> "${s / 3600}h ${s % 3600 / 60}m"
+    }
+}
+
+private const val TURN_MAX_MS = 12 * 3_600_000L
 
 @Composable
 private fun StepMark(step: Step, glyph: String) {
@@ -514,7 +774,8 @@ private fun ToolLine(call: Call, startOpen: Boolean = false) {
             horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
             StepMark(call.step, v.glyph)
-            T(v.did, style = Relay.type.caption, color = if (call.step == Step.Failed) c.heldText else c.ink3, maxLines = 1)
+            // Running, it says what the agent is doing; after, what it did.
+            T(if (call.step == Step.Running) v.doing else v.did, style = Relay.type.caption, color = if (call.step == Step.Failed) c.heldText else c.ink3, maxLines = 1)
             if (call.summary.isNotBlank()) T(call.summary, Modifier.weight(1f), Relay.type.mono, c.ink2, maxLines = 1) else Box(Modifier.weight(1f))
             if (more) Glyph(if (open) "chevron-up" else "chevron-down", 12.dp, c.inkDim)
         }
@@ -593,7 +854,7 @@ private fun EditView(call: Call) {
     Column(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
         Row(Modifier.fillMaxWidth().heightIn(min = 30.dp).padding(end = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             StepMark(call.step, v.glyph)
-            T(v.did, style = Relay.type.caption, color = if (call.step == Step.Failed) c.heldText else c.ink3, maxLines = 1)
+            T(if (call.step == Step.Running) v.doing else v.did, style = Relay.type.caption, color = if (call.step == Step.Failed) c.heldText else c.ink3, maxLines = 1)
             T(call.summary, Modifier.weight(1f), Relay.type.mono, c.ink2, maxLines = 1)
             if (added > 0) T("+$added", style = Relay.type.mono.copy(fontSize = 11.sp), color = ADD_TEXT, maxLines = 1)
             if (removed > 0) T("−$removed", style = Relay.type.mono.copy(fontSize = 11.sp), color = DEL_TEXT, maxLines = 1)
@@ -650,7 +911,9 @@ private fun StepsView(g: ChatPiece.Steps) {
             horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
             StepMark(step, "check")
-            T(stepsLine(g.calls), Modifier.weight(1f, fill = false), Relay.type.caption, if (step == Step.Failed) c.heldText else c.ink3, maxLines = 2)
+            T(stepsLine(g.calls), Modifier.weight(1f, fill = false), Relay.type.caption, c.ink3, maxLines = 2)
+            val failed = g.calls.count { it.step == Step.Failed }
+            if (failed > 0) T("· $failed failed", style = Relay.type.caption, color = c.heldText, maxLines = 1)
             Glyph(if (open) "chevron-up" else "chevron-down", 12.dp, c.inkDim)
         }
         AnimatedVisibility(open) {
@@ -802,10 +1065,8 @@ private const val ARROW_DOWN = "\u001b[B"
 private const val ARROW_RIGHT = "\u001b[C"
 private const val ARROW_LEFT = "\u001b[D"
 
-/** The keys an agent CLI still asks for in a conversation: stop, the mode switch, a menu's arrows and ticks. */
+/** The keys an agent CLI still asks for in a conversation besides Esc and the mode switch, which the message box holds: a menu's arrows and ticks. */
 private val CHAT_KEYS = listOf(
-    ChatKey("Esc", "Escape", Keys.ESC),
-    ChatKey("⇧Tab", "Shift Tab: switch mode", Keys.SHIFT_TAB),
     ChatKey("↑", "Up", ARROW_UP),
     ChatKey("↓", "Down", ARROW_DOWN),
     ChatKey("←", "Left: the question before", ARROW_LEFT),
@@ -837,36 +1098,258 @@ private fun QuickKeys(chat: SessionChat, enabled: Boolean) {
     }
 }
 
-/** The message box: up to six lines; the round key sends, or with nothing typed stops a working agent. */
+/**
+ * The message box, as a thread's (threads.css `.threads-composer`): raised, an edge that lights
+ * when focused, up to six lines, and under them the agent's own keys as chips and the round key,
+ * which sends, or with nothing typed stops a working agent or gives a waiting one its Enter.
+ */
 @Composable
-private fun ChatComposer(text: String, onText: (String) -> Unit, enabled: Boolean, working: Boolean, placeholder: String, focus: FocusRequester, onSend: () -> Unit) {
+private fun ChatComposer(
+    field: TextFieldValue,
+    onText: (TextFieldValue) -> Unit,
+    enabled: Boolean,
+    working: Boolean,
+    placeholder: String,
+    focus: FocusRequester,
+    onSend: () -> Unit,
+    pictures: Boolean = false,
+    above: @Composable () -> Unit = {},
+    chips: @Composable RowScope.() -> Unit,
+) {
     val c = Relay.colors
-    Row(
-        Modifier.fillMaxWidth().background(c.wall).navigationBarsPadding().padding(start = 10.dp, end = 8.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Field(
-            text,
-            onText,
-            Modifier.weight(1f).alpha(if (enabled) 1f else .6f).focusRequester(focus).focusProperties { canFocus = enabled },
-            placeholder = placeholder,
-            singleLine = false,
-            maxLines = 6,
-            style = Relay.type.body,
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-        )
-        val stop = working && text.isBlank()
-        Box(
-            Modifier.size(44.dp).alpha(if (enabled) 1f else .4f).clip(CircleShape).background(c.ink)
-                .clickable(enabled = enabled, onClickLabel = if (stop) "Stop" else if (text.isBlank()) "Enter" else "Send", role = Role.Button, onClick = onSend),
-            contentAlignment = Alignment.Center,
+    val source = remember { MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
+    val haptic = LocalHapticFeedback.current
+    val text = field.text
+    Column(Modifier.fillMaxWidth().background(c.wall).navigationBarsPadding().padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 8.dp)) {
+        Column(
+            Modifier.fillMaxWidth().clip(Radii.card).background(c.raised)
+                .border(1.dp, if (focused) c.lineFocus else c.strong, Radii.card)
+                .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 4.dp),
         ) {
-            when {
-                stop -> Glyph("stop", 16.dp, c.wall)
-                text.isBlank() -> ReturnGlyph(18.dp, c.wall)
-                else -> Glyph("arrow-up", 18.dp, c.wall)
+            if (pictures) above()
+            BasicTextField(
+                value = field,
+                onValueChange = onText,
+                modifier = Modifier.fillMaxWidth().padding(end = 8.dp).heightIn(min = 24.dp).alpha(if (enabled) 1f else .6f)
+                    .focusRequester(focus).focusProperties { canFocus = enabled },
+                textStyle = Relay.type.body.copy(color = c.ink),
+                cursorBrush = SolidColor(c.ink),
+                minLines = 1,
+                maxLines = 6,
+                interactionSource = source,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                decorationBox = { inner ->
+                    Box {
+                        if (text.isEmpty()) T(placeholder, style = Relay.type.body, color = c.ink3, maxLines = 1)
+                        inner()
+                    }
+                },
+            )
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), content = chips)
+                val empty = text.isBlank() && !pictures
+                val stop = working && empty
+                Box(
+                    Modifier.size(TOUCH).clip(Radii.key)
+                        .clickable(enabled = enabled, onClickLabel = if (stop) "Stop" else if (empty) "Enter" else "Send", role = Role.Button) {
+                            if (!empty) haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                            onSend()
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(Modifier.size(34.dp).clip(Radii.key).background(if (enabled) c.ink else c.track), contentAlignment = Alignment.Center) {
+                        val tint = if (enabled) c.wall else c.ink3
+                        when {
+                            stop -> Glyph("stop", 15.dp, tint)
+                            empty -> ReturnGlyph(17.dp, tint)
+                            else -> Glyph("arrow-up", 16.dp, tint)
+                        }
+                    }
+                }
             }
         }
+    }
+}
+
+/** A key of the agent's under the message box, drawn as a thread's chips are: a pill in a full-size target. */
+@Composable
+private fun Chip(label: String, spoken: String, enabled: Boolean, glyph: String? = null, trailing: String? = null, icon: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
+    val c = Relay.colors
+    val haptic = LocalHapticFeedback.current
+    Box(
+        Modifier.heightIn(min = TOUCH).clickable(enabled = enabled, onClickLabel = spoken, role = Role.Button) {
+            haptic.performHapticFeedback(HapticFeedbackType.KeyboardTap)
+            onClick()
+        },
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            Modifier.alpha(if (enabled) 1f else .45f).heightIn(min = 30.dp).clip(Radii.pill).background(c.slab).border(1.dp, c.strong, Radii.pill)
+                .padding(start = if (glyph != null || icon != null) 8.dp else 10.dp, end = if (trailing != null || label.isEmpty()) 8.dp else 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            glyph?.let { Glyph(it, if (label.isEmpty()) 15.dp else 13.dp, if (label.isEmpty()) c.ink2 else c.ink3) }
+            icon?.invoke()
+            if (label.isNotEmpty()) T(label, style = Relay.type.caption, color = c.ink2, maxLines = 1, weight = FontWeight.Medium)
+            trailing?.let { Glyph(it, 11.dp, c.ink3) }
+        }
+    }
+}
+
+/**
+ * The phone's speech recognizer as a key's action, what was said handed to [onSaid]; null on a
+ * phone without one, so the key is not shown.
+ */
+@Composable
+internal fun rememberDictation(onSaid: (String) -> Unit): (() -> Unit)? {
+    val context = LocalContext.current
+    val can = remember { Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).resolveActivity(context.packageManager) != null }
+    val said by rememberUpdatedState(onSaid)
+    val speech = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let(said)
+    }
+    if (!can) return null
+    return { speech.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)) }
+}
+
+/** What was typed, then what was said after a space. */
+internal fun joinSaid(typed: String, said: String): String = typed.trimEnd().let { if (it.isEmpty()) said else "$it $said" }
+
+/** A microphone on the glyphs' 16-unit grid: its capsule, the cradle under it, the stand. */
+@Composable
+internal fun MicGlyph(size: Dp, tint: Color) {
+    Box(
+        Modifier.size(size).drawWithCache {
+            val u = this.size.minDimension / 16f
+            val stroke = Stroke(width = 1.3f * u, cap = StrokeCap.Round, join = StrokeJoin.Round)
+            val capsule = Path().apply { addRoundRect(RoundRect(5.75f * u, 1.75f * u, 10.25f * u, 9.75f * u, 2.25f * u, 2.25f * u)) }
+            val cradle = Path().apply {
+                moveTo(3.5f * u, 7.5f * u)
+                cubicTo(3.5f * u, 13f * u, 12.5f * u, 13f * u, 12.5f * u, 7.5f * u)
+                moveTo(8f * u, 11.6f * u)
+                lineTo(8f * u, 14.25f * u)
+            }
+            onDrawBehind {
+                drawPath(capsule, tint, style = stroke)
+                drawPath(cradle, tint, style = stroke)
+            }
+        },
+    )
+}
+
+/**
+ * Claude Code's permission mode, as its footer says it ("⏵⏵ accept edits on (shift+tab to
+ * cycle)"); null when the footer names none, which for Claude Code is its default.
+ */
+internal fun modeOf(screen: String): String? {
+    val foot = screen.lines().filter { it.isNotBlank() }.takeLast(MODE_TAIL).joinToString("\n").lowercase()
+    return when {
+        "plan mode on" in foot -> "Plan"
+        "bypass permissions on" in foot -> "Bypass"
+        "auto mode on" in foot -> "Auto"
+        "accept edits on" in foot -> "Accept edits"
+        "shift+tab to cycle" in foot || "? for shortcuts" in foot -> "Default"
+        else -> null
+    }
+}
+
+private const val MODE_TAIL = 4
+
+/** Pictures one message may carry. */
+private const val MAX_PICTURES = 4
+
+// ---- The agent's commands ----
+
+/** Claude Code's slash commands a phone is likely to want, in words. */
+private val CLAUDE_COMMANDS = listOf(
+    "compact" to "Summarise the conversation to free its context",
+    "clear" to "Start over with an empty conversation",
+    "context" to "What fills the context window",
+    "model" to "Choose the model",
+    "review" to "Review a pull request",
+    "init" to "Write a CLAUDE.md for this project",
+    "memory" to "Edit what it remembers",
+    "rewind" to "Go back to an earlier point",
+    "resume" to "Pick up an earlier conversation",
+    "usage" to "Plan limits and what is left",
+    "cost" to "What this conversation has cost",
+    "status" to "Version, model and account",
+    "permissions" to "What it may do without asking",
+    "agents" to "Its subagents",
+    "mcp" to "MCP servers",
+    "todos" to "Its to-do list",
+    "export" to "Save the conversation to a file",
+    "help" to "Every command",
+)
+
+/** Codex's. */
+private val CODEX_COMMANDS = listOf(
+    "model" to "Choose the model and its effort",
+    "approvals" to "What it may do without asking",
+    "review" to "Review the changes",
+    "diff" to "Show what changed",
+    "compact" to "Summarise the conversation to free its context",
+    "new" to "Start a new conversation",
+    "init" to "Write an AGENTS.md for this project",
+    "mention" to "Mention a file",
+    "status" to "Model, approvals and token use",
+    "mcp" to "MCP tools",
+)
+
+/** What the person is typing after a leading slash, while it is still one word; null otherwise. */
+internal fun commandAsked(text: String): String? =
+    text.takeIf { it.startsWith("/") }?.drop(1)?.takeIf { rest -> rest.none { it.isWhitespace() } }
+
+/** [all] matching [asked]: names that start with it first, then names and words that hold it. */
+internal fun matchCommands(all: List<Pair<String, String>>, asked: String): List<Pair<String, String>> {
+    val q = asked.lowercase()
+    if (q.isEmpty()) return all
+    val starts = all.filter { it.first.lowercase().startsWith(q) }
+    val holds = all.filter { it !in starts && (q in it.first.lowercase() || q in it.second.lowercase()) }
+    return starts + holds
+}
+
+/**
+ * The agent's commands over the message box while the person types `/` and a word: its
+ * provider's own and, for Claude Code, the project's skills, narrowed as they type. A tap puts
+ * the command in the box to send, with room for what follows it.
+ */
+@Composable
+private fun Commands(nav: Nav, provider: String?, projectId: Long?, asked: String, onPick: (String) -> Unit) {
+    val c = Relay.colors
+    val claude = provider != "codex"
+    val payload = remember(projectId) { buildJsonObject { projectId?.let { put("project_id", it) }; put("enabled", true); put("summary", true) } }
+    val live by remember(payload, claude) { if (claude) nav.relay.live("skill.list", payload) else flowOf(RelayData.Live()) }.collectAsStateWithLifecycle(RelayData.Live())
+    val skills = remember(live.result) {
+        (live.result as? JsonObject)?.get("skills").let { it as? JsonArray }.orEmpty()
+            .mapNotNull { (it as? JsonObject)?.let { o -> o.str("name").takeIf(String::isNotBlank)?.let { n -> n to o.str("description").lineSequence().first() } } }
+    }
+    val own = remember(asked, claude) { matchCommands(if (claude) CLAUDE_COMMANDS else CODEX_COMMANDS, asked) }
+    val theirs = remember(asked, skills) { matchCommands(skills, asked) }
+    if (own.isEmpty() && theirs.isEmpty()) return
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 10.dp).padding(top = 6.dp).heightIn(max = 280.dp)
+            .clip(Radii.card).background(c.raised).border(1.dp, c.strong, Radii.card).verticalScroll(rememberScrollState()).padding(vertical = 6.dp),
+    ) {
+        for ((cmd, about) in own) CommandRow(cmd, about) { onPick(cmd) }
+        if (theirs.isNotEmpty()) {
+            T("Skills", Modifier.padding(start = 14.dp, top = 10.dp, bottom = 2.dp), Relay.type.caption, c.ink3)
+            for ((cmd, about) in theirs) CommandRow(cmd, about) { onPick(cmd) }
+        }
+    }
+}
+
+@Composable
+private fun CommandRow(cmd: String, about: String, onClick: () -> Unit) {
+    val c = Relay.colors
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = TOUCH).clickable(onClickLabel = "Use /$cmd", role = Role.Button, onClick = onClick).padding(horizontal = 14.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        T("/$cmd", style = Relay.type.mono, color = c.ink, maxLines = 1)
+        if (about.isNotBlank()) T(about, Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 1)
     }
 }

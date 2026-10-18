@@ -30,13 +30,13 @@ pub async fn run(ui: &Rc<Ui>) -> Result<(), String> {
     // leaves its own note active), and that may take the tab from Plan. Open it again, as a
     // person would from the library, so the checks below look at Plan.
     crate::pages::open_note(ui, note);
+    // A titlebar of its own (hidden, as the main window's) keeps GTK's resize edges; the
+    // WindowHandle that drags the window lives in the wallpaper backdrop under it.
     require(
         owner.window.is_decorated()
             && owner.window.is_resizable()
-            && owner
-                .window
-                .titlebar()
-                .is_some_and(|bar| bar.is::<gtk::WindowHandle>()),
+            && owner.window.titlebar().is_some()
+            && find(owner.window.upcast_ref(), &|w| w.is::<gtk::WindowHandle>()).is_some(),
         "Notes must retain native resize edges around its custom titlebar",
     )?;
     wait_for(

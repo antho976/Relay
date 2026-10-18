@@ -82,6 +82,7 @@ internal fun Composer(
     modifier: Modifier = Modifier,
     canSend: Boolean = true,
     canPick: Boolean = true,
+    onDictate: (() -> Unit)? = null,
 ) {
     val c = Relay.colors
     val source = remember { MutableInteractionSource() }
@@ -116,6 +117,12 @@ internal fun Composer(
                     Picker("sliders", effortChip(effort), EFFORTS, effort, onEffort, canPick)
                     if (wide) T("Edits with Undo", Modifier.padding(start = 4.dp), Relay.type.caption, c.ink3, maxLines = 1)
                     Box(Modifier.weight(1f))
+                    if (onDictate != null && !working) {
+                        Box(
+                            Modifier.size(TOUCH).clip(Radii.key).clickable(onClickLabel = "Dictate", role = Role.Button, onClick = onDictate),
+                            contentAlignment = Alignment.Center,
+                        ) { com.quietsoftware.relay.ui.dev.MicGlyph(18.dp, c.ink3) }
+                    }
                     SendKey(working, enabled = working || (canSend && value.isNotBlank()), onClick = { if (working) onStop() else onSend() })
                 }
             }

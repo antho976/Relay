@@ -151,9 +151,33 @@ private fun NoteRow(note: Note, pending: Boolean, divider: Boolean, onClick: () 
 
 /** The body on one line, without the line the title already shows. */
 private fun preview(note: Note): String {
-    val lines = note.body.lines().map { it.trim().trimStart('#', ' ') }.filter { it.isNotEmpty() }
+    val lines = plainLines(note.body)
     return (if (note.title.isNullOrBlank()) lines.drop(1) else lines).joinToString(" ").take(200)
 }
+
+/**
+ * Markdown's lines as a preview reads them: the words, without the marks that only mean
+ * something drawn (a fence, a table's rule and pipes, list bullets, heading hashes, emphasis).
+ */
+internal fun plainLines(body: String): List<String> = body.lines().mapNotNull { raw ->
+    val line = raw.trim()
+    when {
+        line.startsWith("```") -> null
+        TABLE_RULE.matches(line) -> null
+        else -> line.trimStart('#', '>', ' ')
+            .replace(LIST_MARK, "")
+            .replace(LINK, "$1")
+            .replace(EMPHASIS, "")
+            .let { if (it.startsWith("|")) it.trim('|').split('|').joinToString(" · ") { cell -> cell.trim() } else it }
+            .trim()
+            .takeIf { it.isNotEmpty() }
+    }
+}
+
+private val TABLE_RULE = Regex("""^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$""")
+private val LIST_MARK = Regex("""^([-*+]|\d+[.)])\s+(\[[ xX]]\s+)?""")
+private val LINK = Regex("""\[([^\]]*)]\([^)]*\)""")
+private val EMPHASIS = Regex("""\*\*|__|`""")
 
 /** Unsaved text, and what it started from (null for a new note). */
 private data class Draft(val title: String, val body: String, val base: Note?) {

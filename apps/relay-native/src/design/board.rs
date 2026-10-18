@@ -194,6 +194,9 @@ pub enum Gesture {
     Erase { hits: Vec<(String, Option<f64>)> },
 }
 
+/// The inspector's width, beside the canvas's right edge.
+const INSPECTOR_W: f64 = 256.0;
+
 pub struct Board {
     pub root: gtk::Box,
     pub(super) ui: Weak<Ui>,
@@ -245,6 +248,8 @@ pub struct Board {
     pub(super) context_at: Cell<(i32, i32)>,
     pub(super) inspector: gtk::Box,
     pub(super) inspector_scroll: gtk::ScrolledWindow,
+    /// The tools along the top left, which the inspector keeps clear of.
+    dock: gtk::Box,
     pub(super) inspector_key: gtk::ToggleButton,
     pub(super) layers: RefCell<Option<Rc<super::layers::Layers>>>,
     pub(super) layers_panel: gtk::Revealer,
@@ -373,7 +378,7 @@ impl Board {
         inspector_scroll.set_valign(gtk::Align::Start);
         inspector_scroll.set_margin_end(12);
         inspector_scroll.set_margin_top(12);
-        inspector_scroll.set_size_request(256, -1);
+        inspector_scroll.set_size_request(INSPECTOR_W as i32, -1);
         inspector_scroll.set_visible(false);
         overlay.add_overlay(&inspector_scroll);
 
@@ -476,6 +481,7 @@ impl Board {
             context_at: Cell::new((0, 0)),
             inspector,
             inspector_scroll,
+            dock: dock.clone(),
             inspector_key,
             layers: RefCell::default(),
             layers_panel,
@@ -945,7 +951,17 @@ impl Board {
             if let Some(b) = weak.upgrade() {
                 let cam = b.cam.get();
                 b.zoom_label.set_text(&format!("{}%", (cam.zoom * 100.0).round()));
-                let max_inspector = (b.size.get().1 - 76.0).max(120.0) as i32;
+                // Too narrow for the tools and the inspector side by side, the inspector sits
+                // under the tools instead of over the last of them (a 1024px window hid the pen's
+                // options, icons and pictures).
+                let (w, h) = b.size.get();
+                let (_, dock) = b.dock.preferred_size();
+                let beside = 12.0 + f64::from(dock.width()) + 12.0 + INSPECTOR_W + 12.0 <= w;
+                let top = if beside { 12 } else { 12 + dock.height() + 10 };
+                if b.inspector_scroll.margin_top() != top {
+                    b.inspector_scroll.set_margin_top(top);
+                }
+                let max_inspector = (h - 64.0 - f64::from(top)).max(120.0) as i32;
                 if b.inspector_scroll.max_content_height() != max_inspector {
                     b.inspector_scroll.set_max_content_height(max_inspector);
                 }
@@ -1935,8 +1951,20 @@ impl Board {
         };
         let s = self.screen(&b);
         let (cw, ch) = self.size.get();
+        // Between the layers panel and the inspector when they show and the bar fits there; it
+        // sat over their own controls otherwise. Too narrow for both, it keeps clear of what it can.
+        let inspector = self.inspector_scroll.is_visible().then(|| f64::from(self.inspector_scroll.width().max(INSPECTOR_W as i32)) + 12.0);
+        let layers = self.layers_panel.reveals_child().then(|| f64::from(self.layers_panel.width()) + 12.0);
+        let mut right = cw - 8.0;
+        if let Some(iw) = inspector.filter(|iw| cw - iw - 8.0 - w as f64 >= 8.0) {
+            right = cw - iw - 8.0;
+        }
+        let mut left = 8.0;
+        if let Some(lw) = layers.filter(|lw| right - w as f64 >= lw + 8.0) {
+            left = lw + 8.0;
+        }
         let mut x = (s.cx() - w as f64 / 2.0).round();
-        x = x.clamp(8.0, (cw - w as f64 - 8.0).max(8.0));
+        x = x.clamp(left, (right - w as f64).max(left));
         let above = s.y - h as f64 - 12.0;
         let mut y = if above > 56.0 { above } else { s.bottom() + 36.0 };
         y = y.clamp(56.0, (ch - h as f64 - 56.0).max(56.0));

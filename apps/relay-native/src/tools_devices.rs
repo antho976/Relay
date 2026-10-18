@@ -24,10 +24,24 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
     if ui.page_projects.borrow().get("devices") != Some(&project) {
         ui.page_projects.borrow_mut().remove("devices");
         clear(page);
-        page.append(&label("Device control", "title"));
+        // The title with its refresh key at the end of the line, as the other pages' headers:
+        // alone in the middle of the page it read as a stray link.
+        let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let title = label("Device control", "title");
+        title.set_hexpand(true);
+        title.set_xalign(0.0);
+        head.append(&title);
+        let reload = button("", "quiet");
+        let caption = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        caption.append(&crate::icons::image("refresh", 13));
+        caption.append(&label("Refresh", ""));
+        reload.set_child(Some(&caption));
+        reload.set_tooltip_text(Some("Read the devices and checkouts again"));
+        reload.update_property(&[gtk::accessible::Property::Label("Refresh devices and checkouts")]);
+        reload.set_valign(gtk::Align::Center);
+        head.append(&reload);
+        page.append(&head);
         page.append(&paragraph("Run Android builds from the selected checkout. A release build needs no connected device."));
-        let reload = button("Refresh devices and checkouts", "quiet");
-        page.append(&reload);
         let weak = Rc::downgrade(ui);
         reload.connect_clicked(move |_| {
             if let Some(ui) = weak.upgrade() {

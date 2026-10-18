@@ -18,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -29,6 +30,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -62,6 +65,7 @@ import com.quietsoftware.relay.ui.shell.Page
 import com.quietsoftware.relay.ui.shell.PageBar
 import com.quietsoftware.relay.ui.theme.Palette
 import com.quietsoftware.relay.ui.theme.Relay
+import com.quietsoftware.relay.ui.threads.MODELS
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
@@ -102,6 +106,9 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
     var error by remember { mutableStateOf<String?>(null) }
     var pickingProject by remember { mutableStateOf(false) }
     var pickingTask by remember { mutableStateOf(false) }
+    val promptFocus = remember { FocusRequester() }
+    // A new agent with nothing written yet: the keyboard is up for its first message.
+    LaunchedEffect(Unit) { if (prompt.isNullOrEmpty() && taskId == null) runCatching { promptFocus.requestFocus() } }
 
     val providerAnswer by remember { nav.relay.live("provider.list") }.collectAsStateWithLifecycle(RelayData.Live())
     val providers = remember(providerAnswer.result) { providersOf(providerAnswer.result) }
@@ -219,22 +226,12 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    Label("Project")
                     ProjectRow(project, project?.let { crumb(it, s.workspaces) }) { pickingProject = true }
 
-                    Label("Session type")
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Choice("Solo", "Its own worktree and branch.", !group, Modifier.weight(1f)) { group = false }
-                        Choice("Review group", "Builders and a reviewer share one branch.", group, Modifier.weight(1f)) {
-                            group = true
-                            member = 0
-                        }
-                    }
                     if (group) {
-                        Label("Builders")
+                        Label("Review group")
                         Segmented(listOf(1 to "1 builder", 2 to "2 builders"), builders, { builders = it }, Modifier.fillMaxWidth(), fill = true)
-                        Label("Configure")
-                        Segmented(members.map { it to (if (it == 2) "Reviewer" else "Builder ${it + 1}") }, index, { member = it }, Modifier.fillMaxWidth(), fill = true)
+                        Segmented(members.map { it to (if (it == 2) "Reviewer" else "Builder ${it + 1}") }, index, { member = it }, Modifier.fillMaxWidth().padding(top = 8.dp), fill = true)
                         T(
                             members.joinToString("  ·  ") { i -> "${if (i == 2) "Reviewer" else "Builder ${i + 1}"}: ${providerName(providerOf(profiles[i]))}, ${profiles[i].effortFor(providerOf(profiles[i]))}" },
                             Modifier.padding(start = 4.dp, top = 6.dp),
@@ -243,51 +240,62 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                         )
                     }
 
-                    Label("Provider")
-                    if (!providerAnswer.fresh && providerAnswer.result != null) StaleNote(providerAnswer.at)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        for (name in listOf("claude", "codex")) {
-                            val info = providers?.firstOrNull { it.provider == name }
-                            ProviderCard(name, info, known = providers != null, selected = providerOf(profile) == name, Modifier.weight(1f)) {
-                                patch(profile.copy(provider = name))
-                            }
-                        }
-                    }
-
-                    if (!group) {
-                        Label("Role")
-                        Segmented(listOf("builder" to "Builder", "reviewer" to "Reviewer", "docs" to "Docs"), role, { role = it }, Modifier.fillMaxWidth(), fill = true)
-                    }
-
-                    Label("Model")
-                    Field(
-                        profile.model,
-                        { patch(profile.copy(model = it)) },
-                        Modifier.fillMaxWidth(),
-                        placeholder = "Provider default, or a model ID",
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
-                    )
-
-                    Label("Reasoning effort")
-                    Efforts(effortsFor(providerOf(profile)), profile.effortFor(providerOf(profile))) { patch(profile.copy(effort = it)) }
-
-                    Label(if (group) "Instructions" else "First message")
+                    // What it should do comes first, as a new conversation starts: the rest has defaults.
                     Field(
                         profile.prompt,
                         { patch(profile.copy(prompt = it)) },
-                        Modifier.fillMaxWidth(),
-                        placeholder = "What it should do first (optional)",
+                        Modifier.fillMaxWidth().padding(top = 14.dp).focusRequester(promptFocus),
+                        placeholder = if (group) "Instructions for ${label(index).lowercase()} (optional)" else "What should it work on?",
                         singleLine = false,
-                        minLines = 3,
-                        maxLines = 10,
+                        minLines = 4,
+                        maxLines = 12,
+                        style = Relay.type.body,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     )
+
+                    Label("Provider")
+                    if (!providerAnswer.fresh && providerAnswer.result != null) StaleNote(providerAnswer.at)
+                    val chosen = providerOf(profile)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        for (name in listOf("claude", "codex")) {
+                            val info = providers?.firstOrNull { it.provider == name }
+                            val usable = providers == null || info?.installed == true
+                            Pill(
+                                providerName(name),
+                                Modifier.heightIn(min = 36.dp).alpha(if (usable) 1f else .45f),
+                                selected = chosen == name,
+                                glyph = name,
+                                onClick = if (usable) ({ patch(profile.copy(provider = name)) }) else null,
+                            )
+                        }
+                    }
+                    T(account(providers, chosen), Modifier.padding(start = 4.dp, top = 6.dp), Relay.type.caption, c.ink3, maxLines = 2)
+
+                    Label("Model")
+                    Models(chosen, profile.model, owner = index) { patch(profile.copy(model = it)) }
+
+                    Label("Reasoning effort")
+                    Efforts(effortsFor(chosen), profile.effortFor(chosen)) { patch(profile.copy(effort = it)) }
 
                     if (leads) {
                         Label(if (group) "The group's task" else "Task")
                         StagedTask(task, open) { pickingTask = true }
                     }
 
-                    Options(profile, leads, worktree, { worktree = it }) { patch(it) }
+                    More(
+                        group = group,
+                        onGroup = {
+                            group = it
+                            member = 0
+                        },
+                        role = role,
+                        onRole = { role = it },
+                        profile = profile,
+                        leads = leads,
+                        worktree = worktree,
+                        onWorktree = { worktree = it },
+                        onProfile = { patch(it) },
+                    )
 
                     T(
                         if (group) {
@@ -439,31 +447,40 @@ private fun Choice(title: String, detail: String, selected: Boolean, modifier: M
     }
 }
 
-/** A provider card (launch.rs): its mark, its name, the account line, the version; not installed cannot be chosen. */
+/** The chosen provider's account and version, as the PC's provider cards say them. */
+private fun account(providers: List<ProviderInfo>?, name: String): String {
+    val info = providers?.firstOrNull { it.provider == name }
+    return when {
+        providers == null -> "Checked when the PC is in reach"
+        info == null || !info.installed -> "${providerName(name)} is not installed on the PC"
+        else -> listOfNotNull(info.signedInAs?.let { "Signed in as $it" } ?: "Not signed in", info.version).joinToString(" · ")
+    }
+}
+
+/** A model id as the pickers name it: Claude's by name, the provider's default, or the id itself. */
+internal fun modelName(id: String): String =
+    if (id.isBlank()) "Provider default" else MODELS.firstOrNull { it.first == id }?.second ?: id
+
+/** The provider's default, Claude's models by name, or any model id. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ProviderCard(name: String, info: ProviderInfo?, known: Boolean, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    val c = Relay.colors
-    val usable = !known || info?.installed == true
-    Slab(
-        modifier.heightIn(min = 88.dp).alpha(if (usable) 1f else .5f),
-        padding = PaddingValues(12.dp),
-        color = if (selected) c.wash else c.slab,
-        edge = if (selected) c.lineFocus else c.edge,
-        onClick = if (usable) onClick else null,
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Glyph(name, 20.dp, c.ink)
-            T(providerName(name), Modifier.weight(1f), Relay.type.uiMedium, c.ink, maxLines = 1)
-            if (selected) Glyph("check", 15.dp, c.ink)
-        }
-        val account = when {
-            !known -> "Checked when the PC is in reach"
-            info == null || !info.installed -> "Not installed"
-            info.signedInAs != null -> "Signed in as ${info.signedInAs}"
-            else -> "Not signed in"
-        }
-        T(account, Modifier.padding(top = 6.dp), Relay.type.caption, if (known && info?.installed != true) c.heldText else c.ink3, maxLines = 2)
-        info?.version?.let { T(it, style = Relay.type.mono, color = c.ink3, maxLines = 1) }
+internal fun Models(provider: String, model: String, owner: Any, onModel: (String) -> Unit) {
+    val named = if (provider == "claude") MODELS.filter { it.first.isNotEmpty() } else emptyList()
+    // Per agent: a review group's members each keep their own choice.
+    var other by rememberSaveable(provider, owner) { mutableStateOf(model.isNotEmpty() && named.none { it.first == model }) }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Pill("Default", Modifier.heightIn(min = 36.dp), selected = model.isEmpty() && !other, onClick = { other = false; onModel("") })
+        for ((id, name) in named) Pill(name, Modifier.heightIn(min = 36.dp), selected = model == id && !other, onClick = { other = false; onModel(id) })
+        Pill("Other", Modifier.heightIn(min = 36.dp), selected = other, onClick = { other = true })
+    }
+    if (other) {
+        Field(
+            model,
+            onModel,
+            Modifier.fillMaxWidth().padding(top = 8.dp),
+            placeholder = "A model id",
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
+        )
     }
 }
 
@@ -497,21 +514,50 @@ private fun StagedTask(taskId: Long?, open: List<Task>, onPick: () -> Unit) {
     }
 }
 
-/** The PC's "Worktree and permissions" expander. */
+/** What most launches leave as it is: solo or a review group, the role, the worktree and the permissions. */
 @Composable
-private fun Options(profile: Profile, leads: Boolean, worktree: String, onWorktree: (String) -> Unit, onProfile: (Profile) -> Unit) {
+private fun More(
+    group: Boolean,
+    onGroup: (Boolean) -> Unit,
+    role: String,
+    onRole: (String) -> Unit,
+    profile: Profile,
+    leads: Boolean,
+    worktree: String,
+    onWorktree: (String) -> Unit,
+    onProfile: (Profile) -> Unit,
+) {
     val c = Relay.colors
     var open by rememberSaveable { mutableStateOf(false) }
     Slab(Modifier.fillMaxWidth().padding(top = 18.dp), padding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)) {
         ListRow(onClick = { open = !open }) {
             Glyph("sliders", 16.dp, c.ink2)
-            T("Worktree and permissions", Modifier.weight(1f), Relay.type.uiMedium, c.ink)
+            Column(Modifier.weight(1f)) {
+                T("More options", style = Relay.type.uiMedium, color = c.ink)
+                if (!open) {
+                    T(
+                        listOfNotNull(if (group) "Review group" else "Solo", if (!group) role.replaceFirstChar(Char::uppercase) else null, worktree.trim().ifEmpty { null }).joinToString(" · "),
+                        style = Relay.type.caption,
+                        color = c.ink3,
+                        maxLines = 1,
+                    )
+                }
+            }
             Glyph(if (open) "chevron-up" else "chevron-down", 13.dp, c.ink3)
         }
         if (open) {
             Column(Modifier.padding(start = 10.dp, end = 10.dp, bottom = 8.dp)) {
+                Eyebrow("Session type", Modifier.padding(top = 4.dp, bottom = 6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Choice("Solo", "Its own worktree and branch.", !group, Modifier.weight(1f)) { onGroup(false) }
+                    Choice("Review group", "Builders and a reviewer share one branch.", group, Modifier.weight(1f)) { onGroup(true) }
+                }
+                if (!group) {
+                    Eyebrow("Role", Modifier.padding(top = 14.dp, bottom = 6.dp))
+                    Segmented(listOf("builder" to "Builder", "reviewer" to "Reviewer", "docs" to "Docs"), role, onRole, Modifier.fillMaxWidth(), fill = true)
+                }
                 if (leads) {
-                    Eyebrow("Worktree", Modifier.padding(top = 4.dp, bottom = 6.dp))
+                    Eyebrow("Worktree", Modifier.padding(top = 14.dp, bottom = 6.dp))
                     Field(
                         worktree,
                         onWorktree,
@@ -519,8 +565,8 @@ private fun Options(profile: Profile, leads: Boolean, worktree: String, onWorktr
                         placeholder = "Project default — or new, primary, or a path",
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
                     )
-                    Hairline(Modifier.padding(top = 10.dp))
                 }
+                Hairline(Modifier.padding(top = 10.dp))
                 SwitchRow("Allow agent bus writes", "Let the agent create tasks, notes and mail.", profile.writes, { onProfile(profile.copy(writes = it)) })
                 SwitchRow("Allow UI control", "Let the agent drive the desktop's panes and pages.", profile.ui, { onProfile(profile.copy(ui = it)) })
             }

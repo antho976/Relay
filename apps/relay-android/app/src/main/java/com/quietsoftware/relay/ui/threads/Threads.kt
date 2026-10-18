@@ -191,9 +191,11 @@ private fun NewThread(nav: Nav) {
                     )
                 }
                 Box(Modifier.height(22.dp))
+                val dictate = com.quietsoftware.relay.ui.dev.rememberDictation { said -> draft = com.quietsoftware.relay.ui.dev.joinSaid(draft, said) }
                 Composer(
                     value = draft,
                     onValue = { draft = it },
+                    onDictate = dictate,
                     model = m,
                     effort = e,
                     onModel = { model = it },
@@ -202,9 +204,11 @@ private fun NewThread(nav: Nav) {
                     onSend = { start(draft) },
                     onStop = {},
                 )
-                if (!s.online) Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                    Dot(c.waiting, 6.dp)
-                    T("  The PC is out of reach. A new thread waits on this phone and starts when it is back.", style = Relay.type.caption.copy(textAlign = TextAlign.Center), color = c.ink3)
+                // The dot beside the words, read left to right: centred over two lines, the dot
+                // was left alone at the edge.
+                if (!s.online) Row(Modifier.fillMaxWidth().padding(top = 12.dp, start = 4.dp, end = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+                    Dot(c.waiting, 6.dp, Modifier.padding(top = 6.dp))
+                    T("The PC is out of reach. A new thread waits on this phone and starts when it is back.", Modifier.weight(1f), style = Relay.type.caption, color = c.ink3)
                 }
                 Box(Modifier.height(20.dp))
                 val perRow = if (one) 1 else 2
@@ -772,9 +776,11 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
             }
         }
         BoxWithConstraints(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(top = 4.dp, bottom = 8.dp), contentAlignment = Alignment.TopCenter) {
+            val dictate = com.quietsoftware.relay.ui.dev.rememberDictation { said -> draft = com.quietsoftware.relay.ui.dev.joinSaid(draft, said) }
             Composer(
                 value = draft,
                 onValue = { draft = it },
+                onDictate = dictate,
                 model = thread?.model.orEmpty(),
                 effort = thread?.effort.orEmpty(),
                 onModel = { choose(it, null) },

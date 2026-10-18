@@ -246,6 +246,9 @@ fn set_tip(widget: &impl IsA<gtk::Widget>, s: &str) {
     }
 }
 
+/// A meter's width in a resource row.
+const METER_W: i32 = 56;
+
 fn resource_row(item: &RowData) -> ResourceRow {
     let root = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     root.add_css_class("resource-row");
@@ -260,15 +263,16 @@ fn resource_row(item: &RowData) -> ResourceRow {
         title.append(&note);
     }
     root.append(&title);
-    let bar = gtk::ProgressBar::new();
-    bar.set_valign(gtk::Align::Center);
-    bar.add_css_class("resource-meter");
-    bar.set_size_request(56, -1);
-    root.append(&bar);
     let value = label("", "resource-value");
     value.set_size_request(58, -1);
     value.set_xalign(1.);
     root.append(&value);
+    // Beside the size it measures: next to the CPU figure, a session's memory bar read as its CPU.
+    let bar = gtk::ProgressBar::new();
+    bar.set_valign(gtk::Align::Center);
+    bar.add_css_class("resource-meter");
+    bar.set_size_request(METER_W, -1);
+    root.append(&bar);
     let size = label("", "resource-size");
     size.set_size_request(60, -1);
     size.set_xalign(1.);
@@ -287,6 +291,10 @@ fn list_head(value: &str, size: &str) -> gtk::Box {
     value.set_size_request(58, -1);
     value.set_xalign(1.);
     head.append(&value);
+    // Over the meters, which have no caption of their own.
+    let meters = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    meters.set_size_request(METER_W, -1);
+    head.append(&meters);
     let size = label(size, "resource-head-label");
     size.set_size_request(60, -1);
     size.set_xalign(1.);
@@ -477,7 +485,8 @@ fn render_resources(
 
     // A parked session has no process: it is counted, not listed.
     let (live, parked): (Vec<_>, Vec<_>) = panes.iter().partition(|p| p["pid"].as_i64().is_some());
-    let max_rss = live.iter().map(|p| num(p, "rss_mb")).fold(1., f64::max);
+    // Each session's share of what they use together: six alike are six sixths, not six full bars.
+    let total_rss = live.iter().map(|p| num(p, "rss_mb")).sum::<f64>().max(1.);
     let sessions = live
         .iter()
         .map(|p| {
@@ -487,7 +496,7 @@ fn render_resources(
                 name: name.to_owned(),
                 note: String::new(),
                 tip: format!("{name} · pid {}", p["pid"]),
-                fraction: num(p, "rss_mb") / max_rss,
+                fraction: num(p, "rss_mb") / total_rss,
                 value: format!("{:.1}%", num(p, "cpu_pct")),
                 size: num(p, "rss_mb"),
             }
@@ -501,7 +510,7 @@ fn render_resources(
     view.tabs[0].set_label(&format!("Sessions  {}", live.len()));
     view.sessions.sync(sessions, ("CPU", "Memory"), footnote, "No agent is running.");
 
-    let max_disk = trees.iter().map(|t| num(t, "disk_mb")).fold(1., f64::max);
+    let total_disk = trees.iter().map(|t| num(t, "disk_mb")).sum::<f64>().max(1.);
     let worktrees = trees
         .iter()
         .map(|t| {
@@ -515,7 +524,7 @@ fn render_resources(
                     Some(mb) => format!("{path}\n{} of it is build output", amount(mb)),
                     None => path.to_owned(),
                 },
-                fraction: num(t, "disk_mb") / max_disk,
+                fraction: num(t, "disk_mb") / total_disk,
                 value: build.map(amount).unwrap_or_else(|| "–".into()),
                 size: num(t, "disk_mb"),
             }

@@ -335,6 +335,7 @@ pub(super) fn titled(value: &str) -> String {
     chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
+
 fn spacer() -> gtk::Box {
     let space = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     space.set_hexpand(true);
@@ -360,7 +361,11 @@ pub fn modules(ui: &Rc<Ui>, body: &gtk::Box, modules: &[Value]) {
         let mark = crate::icons::image("modules", 28);
         mark.add_css_class("modules-empty-mark");
         empty.append(&mark);
-        empty.append(&label("No modules yet", "modules-empty-title"));
+        // Centred as the mark and the key are: the title sat at the left edge, and the hint's
+        // centred lines inside a left-aligned label read as a stray indent.
+        let title = label("No modules yet", "modules-empty-title");
+        title.set_xalign(0.5);
+        empty.append(&title);
         let hint = label(
             "A module bundles tasks into one release. It gets its own board with progress and patch notes, and its tasks still show on the main board.",
             "modules-empty-hint",
@@ -368,6 +373,7 @@ pub fn modules(ui: &Rc<Ui>, body: &gtk::Box, modules: &[Value]) {
         hint.set_wrap(true);
         hint.set_max_width_chars(52);
         hint.set_justify(gtk::Justification::Center);
+        hint.set_xalign(0.5);
         empty.append(&hint);
         let add = button("", "primary");
         add.set_halign(gtk::Align::Center);
@@ -602,6 +608,9 @@ pub(super) fn flow_bar(counts: &[(&'static str, usize)], height: i32) -> gtk::Dr
 }
 
 /// A number with its caption over it and a quiet line under it, as the stats band shows them.
+/// Narrower than this, the board shows its progress alone, without the five stat tiles.
+const STATS_NARROW: i32 = 980;
+
 pub(super) fn stat_tile(caption: &str, value: &str, note: &str, class: &str) -> gtk::Box {
     let tile = gtk::Box::new(gtk::Orientation::Vertical, 3);
     tile.add_css_class("stat-tile");
@@ -964,6 +973,11 @@ impl Board {
         let stats = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         stats.add_css_class("board-stats");
         stats.set_visible(false);
+        // As wide as the page and no taller: its resize says when the page crosses STATS_NARROW.
+        let width_probe = gtk::DrawingArea::new();
+        width_probe.set_hexpand(true);
+        width_probe.set_content_height(0);
+        page.append(&width_probe);
         page.append(&stats);
 
         // Active filters and the grouping, as removable chips; hidden while there are none.
@@ -1089,6 +1103,23 @@ impl Board {
             bodies_loading: Cell::new(false),
             bodies_missed: RefCell::new(BTreeSet::new()),
             peek_loading: Cell::new(None),
+        });
+
+        // The stat tiles are drawn for the page's width: the first render runs before the page
+        // has one, and drew five tiles a 1024px window squeezed to "I…". Crossing the line
+        // draws them again.
+        let weak = Rc::downgrade(&board);
+        let narrow = Cell::new(None);
+        width_probe.connect_resize(move |_, w, _| {
+            let now = w < STATS_NARROW;
+            if narrow.replace(Some(now)) != Some(now) {
+                let weak = weak.clone();
+                glib::idle_add_local_once(move || {
+                    if let Some(board) = weak.upgrade() {
+                        board.render();
+                    }
+                });
+            }
         });
 
         for (field, values) in [
@@ -2329,7 +2360,7 @@ impl Board {
             .filter(|t| text(t, "column") == "done" && within_days(text(t, "updated_at"), 7))
             .count();
         // Narrow, the lanes need the height more than the numbers: the progress card stays.
-        let narrow = (1..980).contains(&self.page.width());
+        let narrow = (1..STATS_NARROW).contains(&self.page.width());
         let key = format!("{counts:?} {left} {urgent} {running} {blocked} {shipped} {narrow} {:?}", scope().is_some());
         if !self.redraw("stats", key) {
             return;
@@ -2995,10 +3026,17 @@ impl Board {
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 5);
         top.add_css_class("card-top");
         top.append(&status_icon(column, 12));
-        let reference = label(&if project.is_empty() { format!("#{id}") } else { format!("{project} #{id}") }, "card-id");
-        reference.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        top.append(&reference);
-        if let Some(badge) = state_badge(text(task, "state")) {
+        // `Project #id` as GitHub's cards say it, the name shortened to fit; the number always
+        // whole. Beside a state badge there is no room for the name (the board's crumb says it),
+        // and it was cut to a lone "…" that hid the number too.
+        let badge = state_badge(text(task, "state"));
+        if !project.is_empty() && badge.is_none() {
+            let name = label(project, "card-id");
+            name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            top.append(&name);
+        }
+        top.append(&label(&format!("#{id}"), "card-id"));
+        if let Some(badge) = badge {
             top.append(&badge);
         }
         top.append(&spacer());

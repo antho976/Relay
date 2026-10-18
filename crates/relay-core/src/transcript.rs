@@ -321,8 +321,7 @@ fn claude_detail(name: &str, input: &Value) -> Option<String> {
             text
         }).collect::<Vec<_>>().join("\n\n")),
         "TodoWrite" => Some(input.get("todos")?.as_array()?.iter().map(|todo| {
-            let mark = match todo.get("status").and_then(Value::as_str) { Some("completed") => "[x]", Some("in_progress") => "[~]", _ => "[ ]" };
-            format!("{mark} {}", todo.get("content").and_then(Value::as_str).unwrap_or_default())
+            format!("{} {}", plan_mark(todo.get("status").and_then(Value::as_str)), todo.get("content").and_then(Value::as_str).unwrap_or_default())
         }).collect::<Vec<_>>().join("\n")),
         _ => None,
     }
@@ -403,9 +402,34 @@ fn codex_record(record: &Value, at: u64, out: &mut Vec<TranscriptMessage>) {
     }
 }
 
+/// A plan step's mark, as the phone reads a plan: `[x]` done, `[~]` under way, `[ ]` to do.
+fn plan_mark(status: Option<&str>) -> &'static str {
+    match status {
+        Some("completed") => "[x]",
+        Some("in_progress") => "[~]",
+        _ => "[ ]",
+    }
+}
+
+/// Codex's plan (`update_plan {plan: [{step, status}]}`), each step with its mark: read as Claude
+/// Code's to-do list is, so both draw the same plan.
+fn codex_plan(payload: &Value) -> Option<Vec<String>> {
+    if payload.get("name").and_then(Value::as_str) != Some("update_plan") {
+        return None;
+    }
+    let arguments: Value = serde_json::from_str(payload.get("arguments")?.as_str()?).ok()?;
+    Some(arguments.get("plan")?.as_array()?.iter().map(|step| {
+        format!("{} {}", plan_mark(step.get("status").and_then(Value::as_str)), step.get("step").and_then(Value::as_str).unwrap_or_default())
+    }).collect())
+}
+
 /// One line saying what a call was about, and whether it was a patch (named `apply_patch` then,
 /// whatever tool carried it).
 fn codex_summary(payload: &Value) -> (String, bool) {
+    if let Some(plan) = codex_plan(payload) {
+        let done = plan.iter().filter(|step| step.starts_with("[x]")).count();
+        return (format!("{done} of {} done", plan.len()), false);
+    }
     let command = |value: &Value| match value {
         Value::Array(parts) => Some(parts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")),
         Value::String(text) => Some(text.clone()),
@@ -434,8 +458,11 @@ fn codex_summary(payload: &Value) -> (String, bool) {
     (line_of(input), false)
 }
 
-/// What a Codex call did in full: the patch it applied, or the whole command it ran.
+/// What a Codex call did in full: the patch it applied, the whole command it ran, or its plan.
 fn codex_detail(payload: &Value) -> Option<String> {
+    if let Some(plan) = codex_plan(payload) {
+        return Some(plan.join("\n"));
+    }
     let command = |value: &Value| match value {
         Value::Array(parts) => Some(parts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")),
         Value::String(text) => Some(text.clone()),
@@ -540,6 +567,10 @@ mod tests {
         assert_eq!(detail("MultiEdit", json!({"edits": [{"old_string": "a", "new_string": "b"}, {"old_string": "c", "new_string": ""}]})).unwrap(), "-a\n+b\n@@\n-c");
         assert_eq!(detail("AskUserQuestion", json!({"questions": [{"question": "Which?", "options": [{"label": "A", "description": "first"}, {"label": "B"}]}]})).unwrap(), "Which?\n1. A — first\n2. B");
         assert_eq!(detail("TodoWrite", json!({"todos": [{"content": "x", "status": "completed"}, {"content": "y", "status": "pending"}]})).unwrap(), "[x] x\n[ ] y");
+        // Codex's plan reads as the same list.
+        let plan = json!({"type": "function_call", "name": "update_plan", "arguments": "{\"plan\":[{\"step\":\"read\",\"status\":\"completed\"},{\"step\":\"fix\",\"status\":\"in_progress\"},{\"step\":\"test\",\"status\":\"pending\"}]}"});
+        assert_eq!(codex_detail(&plan).unwrap(), "[x] read\n[~] fix\n[ ] test");
+        assert_eq!(codex_summary(&plan).0, "1 of 3 done");
         let long = (0..2000).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
         let cut = cut_lines(&long, 100);
         assert!(cut.starts_with("line 0\nline 1\n") && cut.ends_with("more lines"), "{cut}");

@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 326,
+  "op_count": 327,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -2185,6 +2185,24 @@
       },
       "result": {
         "$ref": "#/$defs/SessionTranscriptOut"
+      }
+    },
+    "session.upload": {
+      "summary": "A picture for the agent, into its checkout's .relay/attachments (out of git); returns the path to name in a message",
+      "kind": "mutation",
+      "audit": "agent_only",
+      "undo": "none",
+      "scope": "session",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 3,
+      "payload": {
+        "$ref": "#/$defs/SessionUploadIn"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionUploadOut"
       }
     },
     "session.restorable": {
@@ -12036,6 +12054,53 @@
         "role",
         "body",
         "created_at"
+      ]
+    },
+    "SessionUploadIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "bytes_b64": {
+          "type": "string",
+          "description": "A PNG, JPEG, GIF or WebP picture, base64 (at most 4 MiB decoded): a photo or a\nscreenshot from the phone for the agent to look at."
+        }
+      },
+      "required": [
+        "session",
+        "bytes_b64"
+      ]
+    },
+    "SessionUploadOut": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Where it was written, from the session's checkout: `.relay/attachments/<name>`, which\ngit never sees. A message naming this path shows the agent the picture."
+        },
+        "absolute": {
+          "type": "string",
+          "description": "The same, absolute."
+        },
+        "w": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Its size in px."
+        },
+        "h": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "path",
+        "absolute",
+        "w",
+        "h"
       ]
     },
     "SessionRestorableIn": {

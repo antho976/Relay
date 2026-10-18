@@ -314,10 +314,21 @@ window.notes-window { padding: 0; margin: 0; border: 0; box-shadow: none; backgr
 .task-metadata flowboxchild { padding: 0; }
 
 /* The title bar's palette key, drawn as the search field it stands for. */
-button.command-search { min-width: 300px; min-height: 34px; padding: 0 6px 0 12px; margin-right: 10px; border: 1px solid @strong; border-radius: 10px; background: @raised; color: @faint; font-weight: 400; }
+button.command-search { min-width: 120px; min-height: 34px; padding: 0 6px 0 12px; margin-right: 10px; border: 1px solid @strong; border-radius: 10px; background: @raised; color: @faint; font-weight: 400; }
 button.command-search:hover { border-color: @line_emphasis; background: @raised; color: @secondary; }
 button.command-search image { color: @faint; }
 .command-search-text { font-size: 13px; }
+/* The command palette: sections, an icon and a shortcut per row, the highlight Enter runs. */
+list.palette-list { background: transparent; margin-top: 6px; }
+list.palette-list > row { padding: 0; border-radius: 8px; background: transparent; }
+list.palette-list > row:hover { background: alpha(@wash, 0.6); }
+list.palette-list > row:selected { background: @wash; }
+.palette-row { min-height: 34px; padding: 0 10px; }
+.palette-row image { color: @faint; }
+.palette-text { color: @ink; }
+.palette-hint { color: @faint; font-size: 12px; }
+.palette-section { padding: 12px 10px 4px; color: @faint; font-size: 11px; font-weight: 600; }
+.palette-none { padding: 12px 10px; color: @faint; }
 /* A chord, as a keycap. */
 .keycap { padding: 2px 6px; border: 1px solid @line_emphasis; border-radius: 6px; color: @faint; font-family: 'Geist Mono', monospace; font-size: 11px; }
 

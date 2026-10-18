@@ -286,4 +286,18 @@ class ScreenBufferTest {
         t.feed("é!")
         assertEquals("é!", t.plainText())
     }
+
+    @Test fun `lines leaving a full scrollback are counted, and a clear is told apart`() {
+        val t = Terminal(10, 2, scrollbackLimit = 3)
+        t.feed((1..4).joinToString("") { "l$it\r\n" })
+        // Four lines up, two rows: l1..l3 went to scrollback, none dropped yet.
+        assertEquals(0L, t.dropped)
+        t.feed("l5\r\nl6\r\n")
+        assertEquals(2L, t.dropped)
+        // What was row 2 before the two dropped is row 0 now.
+        assertEquals("l3", t.textBetween(0, 0, 0, 9))
+        val cleared = t.cleared
+        t.feed("\u001b[3J")
+        assertEquals(cleared + 1, t.cleared)
+    }
 }

@@ -50,6 +50,7 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
@@ -57,6 +58,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quietsoftware.relay.core.Hub
 import com.quietsoftware.relay.core.model.Session
@@ -72,7 +74,9 @@ import com.quietsoftware.relay.ui.kit.KeyKind
 import com.quietsoftware.relay.ui.kit.LampDot
 import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.T
+import com.quietsoftware.relay.ui.kit.TOUCH
 import com.quietsoftware.relay.ui.shell.Page
+import com.quietsoftware.relay.ui.term.DirectInput
 import com.quietsoftware.relay.ui.term.MAX_SP
 import com.quietsoftware.relay.ui.term.MIN_SP
 import com.quietsoftware.relay.ui.term.TerminalView
@@ -102,6 +106,7 @@ fun TerminalScreen(name: String, nav: Nav) {
     val life = rememberLifecycle(nav) { nav.back() }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboard.current
+    val uris = LocalUriHandler.current
     val focus = remember { FocusRequester() }
     val hold = remember { Hold() }
 
@@ -114,6 +119,11 @@ fun TerminalScreen(name: String, nav: Nav) {
     var menu by remember { mutableStateOf(false) }
     var mailing by remember { mutableStateOf(false) }
     var text by rememberSaveable(name) { mutableStateOf("") }
+    // Typing straight to the terminal, with Ctrl and Alt held for the next key.
+    val direct = s.prefs.terminalDirect
+    var ctrl by remember { mutableStateOf(false) }
+    var alt by remember { mutableStateOf(false) }
+    var input by remember { mutableStateOf<DirectInput?>(null) }
 
     val live = status == TerminalFeed.Status.Live
     val ready = session?.attachable == true && s.online
@@ -149,6 +159,15 @@ fun TerminalScreen(name: String, nav: Nav) {
         }
     }
 
+    fun setDirect(on: Boolean) {
+        if (!on) input?.lower()
+        ctrl = false
+        alt = false
+        nav.shell.update { it.copy(terminalDirect = on) }
+    }
+    // Opened in direct mode, or switched to it: the keyboard comes up for the terminal.
+    LaunchedEffect(direct, input, ready) { if (direct && ready) input?.raise() }
+
     fun zoom(step: Float) {
         if (fit) font = (font + step).coerceIn(MIN_SP, MAX_SP) else pcFont = (hold.shown + step).coerceIn(MIN_SP, MAX_SP)
     }
@@ -175,12 +194,36 @@ fun TerminalScreen(name: String, nav: Nav) {
                         onFontSp = { if (fitting) font = it else pcFont = it },
                         onFit = { cols, rows -> if (fitting) phone = cols to rows },
                         modifier = if (wide) Modifier.width(with(density) { needPx.toDp() }).fillMaxHeight() else Modifier.fillMaxSize(),
-                        onTap = { if (ready) focus.requestFocus() },
+                        onTap = { if (ready) if (direct) input?.raise() else focus.requestFocus() },
+                        onCopy = { picked ->
+                            scope.launch {
+                                clipboard.copy(picked)
+                                nav.shell.toast("Copied")
+                            }
+                        },
+                        onLink = { url -> runCatching { uris.openUri(url) }.onFailure { nav.shell.toast("No app here opens $url") } },
+                    )
+                }
+                if (direct && ready) {
+                    AndroidView(
+                        factory = { ctx ->
+                            DirectInput(ctx, feed.terminal, feed.lock, onText = {}, onKey = {}).also { input = it }
+                        },
+                        modifier = Modifier.size(1.dp),
+                        update = { v ->
+                            v.onText = { typed ->
+                                feed.key(Keys.typed(typed, ctrl, alt))
+                                ctrl = false
+                                alt = false
+                            }
+                            v.onKey = { seq -> feed.key(seq) }
+                        },
+                        onRelease = { input = null },
                     )
                 }
             }
-            KeyRow(feed, ready, scope)
-            Composer(
+            KeyRow(feed, ready, scope, direct, ctrl, alt, onCtrl = { ctrl = !ctrl }, onAlt = { alt = !alt })
+            if (direct) DirectBar(ready, onKeyboard = { input?.raise() }, onBox = { setDirect(false) }) else Composer(
                 text,
                 { text = it },
                 ready,
@@ -191,6 +234,7 @@ fun TerminalScreen(name: String, nav: Nav) {
                     else -> "Type to the agent"
                 },
                 focus,
+                onDirect = { setDirect(true) },
             ) {
                 val typed = text
                 if (typed.isEmpty()) {
@@ -360,42 +404,84 @@ private val TERM_KEYS = listOf(
     TermKey("^D", "Control D") { f, _ -> f.key(Keys.CTRL_D) },
 )
 
+/** Keys a full keyboard has for a pager or an editor, offered while typing directly. */
+private val PAGE_KEYS = listOf(
+    TermKey("PgUp", "Page up") { f, _ -> f.key(Keys.PAGE_UP) },
+    TermKey("PgDn", "Page down") { f, _ -> f.key(Keys.PAGE_DOWN) },
+    TermKey("Home", "Home") { f, _ -> f.key(synchronized(f.lock) { Keys.home(f.terminal) }) },
+    TermKey("End", "End") { f, _ -> f.key(synchronized(f.lock) { Keys.end(f.terminal) }) },
+)
+
+/**
+ * The keys a phone keyboard lacks. Typing directly, Ctrl and Alt lead the row: tapped, they hold
+ * for the next key typed (Ctrl then c is ^C), lit while they do; the page keys join the end.
+ */
 @Composable
-private fun KeyRow(feed: TerminalFeed, enabled: Boolean, scope: CoroutineScope) {
+private fun KeyRow(feed: TerminalFeed, enabled: Boolean, scope: CoroutineScope, direct: Boolean, ctrl: Boolean, alt: Boolean, onCtrl: () -> Unit, onAlt: () -> Unit) {
     val c = Relay.colors
     val face = remember { TextStyle(fontFamily = Fonts.FiraMono, fontSize = 14.sp) }
+    @Composable
+    fun Cap(label: String, spoken: String, lit: Boolean = false, onClick: () -> Unit) {
+        Box(
+            Modifier
+                .height(40.dp)
+                .widthIn(min = 44.dp)
+                .alpha(if (enabled) 1f else .4f)
+                .clip(Radii.keycap)
+                .background(if (lit) c.ink else c.slab)
+                .border(1.dp, if (lit) c.ink else c.strong, Radii.keycap)
+                .clickable(enabled = enabled, onClickLabel = spoken, role = Role.Button, onClick = onClick)
+                .padding(horizontal = 10.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            T(label, style = face, color = if (lit) c.wall else c.ink, maxLines = 1)
+        }
+    }
     Row(
         Modifier.fillMaxWidth().background(c.wall).horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        for (k in TERM_KEYS) {
-            Box(
-                Modifier
-                    .height(40.dp)
-                    .widthIn(min = 44.dp)
-                    .alpha(if (enabled) 1f else .4f)
-                    .clip(Radii.keycap)
-                    .background(c.slab)
-                    .border(1.dp, c.strong, Radii.keycap)
-                    .clickable(enabled = enabled, onClickLabel = k.spoken, role = Role.Button) { k.send(feed, scope) }
-                    .padding(horizontal = 10.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                T(k.label, style = face, color = c.ink, maxLines = 1)
-            }
+        if (direct) {
+            Cap("Ctrl", if (ctrl) "Control, held for the next key" else "Control for the next key", ctrl, onCtrl)
+            Cap("Alt", if (alt) "Alt, held for the next key" else "Alt for the next key", alt, onAlt)
         }
+        for (k in TERM_KEYS) Cap(k.label, k.spoken) { k.send(feed, scope) }
+        if (direct) for (k in PAGE_KEYS) Cap(k.label, k.spoken) { k.send(feed, scope) }
+    }
+}
+
+/** In place of the message box while typing directly: what is happening, the keyboard, and the way back. */
+@Composable
+private fun DirectBar(enabled: Boolean, onKeyboard: () -> Unit, onBox: () -> Unit) {
+    val c = Relay.colors
+    Row(
+        Modifier.fillMaxWidth().background(c.wall).navigationBarsPadding().padding(start = 14.dp, end = 8.dp, bottom = 8.dp).heightIn(min = 44.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        KeyboardGlyph(16.dp, c.ink3)
+        T(if (enabled) "Keys go straight to the terminal" else "Needs the agent running", Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 2)
+        Key("Keyboard", onKeyboard, kind = KeyKind.Plain, enabled = enabled, compact = true)
+        Key("Message box", onBox, kind = KeyKind.Quiet, compact = true)
     }
 }
 
 /** Up to four lines and one round key: with text it sends and submits; empty, it is Enter. */
 @Composable
-private fun Composer(text: String, onText: (String) -> Unit, enabled: Boolean, placeholder: String, focus: FocusRequester, onSend: () -> Unit) {
+private fun Composer(text: String, onText: (String) -> Unit, enabled: Boolean, placeholder: String, focus: FocusRequester, onDirect: () -> Unit, onSend: () -> Unit) {
     val c = Relay.colors
     Row(
-        Modifier.fillMaxWidth().background(c.wall).navigationBarsPadding().padding(start = 10.dp, end = 8.dp, bottom = 8.dp),
+        Modifier.fillMaxWidth().background(c.wall).navigationBarsPadding().padding(start = 2.dp, end = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+        Box(
+            Modifier.size(TOUCH).alpha(if (enabled) 1f else .4f).clip(Radii.icon)
+                .clickable(enabled = enabled, onClickLabel = "Type straight to the terminal", role = Role.Button, onClick = onDirect),
+            contentAlignment = Alignment.Center,
+        ) {
+            KeyboardGlyph(20.dp, c.ink2)
+        }
         Field(
             text,
             onText,
@@ -417,6 +503,32 @@ private fun Composer(text: String, onText: (String) -> Unit, enabled: Boolean, p
             if (text.isEmpty()) ReturnGlyph(18.dp, c.wall) else Glyph("arrow-up", 18.dp, c.wall)
         }
     }
+}
+
+/** A keyboard on the glyphs' 16-unit grid: its case, two rows of keys and the space bar. */
+@Composable
+internal fun KeyboardGlyph(size: Dp, tint: Color) {
+    Box(
+        Modifier.size(size).drawWithCache {
+            val u = this.size.minDimension / 16f
+            val stroke = Stroke(width = 1.3f * u, cap = StrokeCap.Round, join = StrokeJoin.Round)
+            val case = Path().apply {
+                addRoundRect(androidx.compose.ui.geometry.RoundRect(1.5f * u, 3.5f * u, 14.5f * u, 12.5f * u, 1.6f * u, 1.6f * u))
+            }
+            val keys = Path().apply {
+                for (row in listOf(6.2f, 8.2f)) for (x in listOf(4.25f, 6.75f, 9.25f, 11.75f)) {
+                    moveTo(x * u, row * u)
+                    lineTo(x * u + 0.01f, row * u)
+                }
+                moveTo(5.5f * u, 10.4f * u)
+                lineTo(10.5f * u, 10.4f * u)
+            }
+            onDrawBehind {
+                drawPath(case, tint, style = stroke)
+                drawPath(keys, tint, style = stroke)
+            }
+        },
+    )
 }
 
 /** ⏎ on the glyphs' 16-unit grid: down from the top right, then left to an arrowhead. */
