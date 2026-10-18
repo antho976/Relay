@@ -1,4 +1,6 @@
 /target/
+# The API-key proxy is its own workspace (crates/relay-key-proxy/Cargo.toml).
+/crates/relay-key-proxy/target/
 /.relay/
 /.impeccable/review/
 *.swp

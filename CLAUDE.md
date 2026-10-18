@@ -13,13 +13,17 @@ caught before it is merged rather than in use.
 **Do not run `cargo test --workspace` in a headless environment.** The workspace
 includes `relay-native`, and building it stops at `pango-sys` long before any
 test runs. Plain `cargo test` uses the default members, which are exactly the
-ten headless crates (`relay-bus`, `relay-core`, `relay-cli`, `relay-remote`,
+nine headless crates (`relay-bus`, `relay-core`, `relay-cli`, `relay-remote`,
 `relay-money` for Tally's money rules, `relay-arbiter` for Arbiter's trading rules, `relay-gym`
-for Avex's training history, `relay-key-proxy` for the API-key proxy (`docs/KEY-PROXY.md`), and the
+for Avex's training history, and the
 native client's GTK-free logic:
 `relay-board` for the board, `relay-client` for the Git panel's diff/graph/status
 helpers and the device mirror's decoder gate and input payloads).
 The full list in `README.md` is for a developer machine with GTK.
+
+`crates/relay-key-proxy`, the API-key proxy (`docs/KEY-PROXY.md`), is its own workspace with its
+own `Cargo.lock`, so root can build it alone: check it with
+`cargo test --locked --manifest-path crates/relay-key-proxy/Cargo.toml` (and the same for clippy).
 
 ## The phone app: `apps/relay-android`
 

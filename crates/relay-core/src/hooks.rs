@@ -814,7 +814,7 @@ fn claude_statusline_script() -> &'static str {
      tmp=\"$out.$$\"; { printf '%s\\n' \"$input\" > \"$tmp\" && mv -f \"$tmp\" \"$out\"; } 2>/dev/null || rm -f \"$tmp\"; exit 0"
 }
 
-/// Where `relay key-proxy` listens (docs/KEY-PROXY.md). It holds the Anthropic API key as its own
+/// Where `relay-key-proxy` listens (docs/KEY-PROXY.md). It holds the Anthropic API key as its own
 /// system user, out of reach of everything that runs as the person; a `use_api_key` session's
 /// Claude sends its requests there.
 pub const KEY_PROXY_PORT: u16 = 7445;

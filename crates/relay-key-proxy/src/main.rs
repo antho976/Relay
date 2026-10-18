@@ -12,8 +12,8 @@
 //! token swapped for the key. Anything else is answered here and goes nowhere. The token lets a
 //! program running as the person spend through the proxy; it never lets one see the key.
 //!
-//! Deliberately small, with six direct dependencies, so root can build it from a clean clone and
-//! read what it runs (scripts/key-proxy/install.sh).
+//! Deliberately small, its own workspace with six direct dependencies and no proc macros, so root
+//! can build this folder alone and read what it runs (scripts/key-proxy/install.sh).
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -691,7 +691,8 @@ mod tests {
             "PrivateTmp=yes", "PrivateDevices=yes", "ProtectKernelTunables=yes", "ProtectKernelModules=yes",
             "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX", "RestrictNamespaces=yes", "RestrictSUIDSGID=yes",
             "MemoryDenyWriteExecute=yes", "SystemCallArchitectures=native", "SystemCallFilter=@system-service",
-            "LimitCORE=0", "UMask=0077", "SocketBindDeny=any",
+            "LimitCORE=0", "UMask=0077", "SocketBindDeny=any", "IPAddressDeny=any",
+            "IPAddressAllow=localhost 160.79.104.0/23 2607:6bc0::/48",
         ] {
             assert!(lines.contains(&line), "the unit lost {line:?}");
         }

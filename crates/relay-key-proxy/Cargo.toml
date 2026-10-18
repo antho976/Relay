@@ -1,17 +1,19 @@
 [package]
 name = "relay-key-proxy"
 description = "Holds the Anthropic API key for Relay's API-key sessions, as its own system user (docs/KEY-PROXY.md)."
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-publish.workspace = true
-rust-version.workspace = true
+version = "4.0.0-dev"
+edition = "2021"
+license = "UNLICENSED"
+publish = false
+rust-version = "1.99"
 
-# Kept small: root builds this from a clean clone (scripts/key-proxy/install.sh), and the installer
-# shows the whole dependency tree before it does.
+# Its own workspace, with its own Cargo.lock: root builds this folder alone, copied out of a clean
+# clone, so nothing else in the repository can reach the build (scripts/key-proxy/install.sh).
+[workspace]
+
 [dependencies]
-tokio.workspace = true
-# prctl(PR_SET_DUMPABLE); already in the tree through tokio.
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "io-util", "sync", "time"] }
+# prctl(PR_SET_DUMPABLE); in the tree through tokio already.
 libc = "0.2"
 # HTTPS to api.anthropic.com with the roots built in, so a certificate added to the system store
 # cannot read the key in flight. One crypto provider.
@@ -19,3 +21,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 tokio-rustls = { version = "0.26", default-features = false }
 webpki-roots = "1"
 httparse = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros"] }
+
+[profile.release]
+codegen-units = 1
+panic = "abort"

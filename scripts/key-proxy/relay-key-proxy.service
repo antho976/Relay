@@ -38,6 +38,10 @@ ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# Out to Anthropic's published API ranges only (and loopback, for the resolver and its callers):
+# a build that tried to send the key anywhere else could not connect.
+IPAddressDeny=any
+IPAddressAllow=localhost 160.79.104.0/23 2607:6bc0::/48
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
