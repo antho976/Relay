@@ -776,7 +776,7 @@ impl Ui {
         // Permissions: a switch takes effect when flipped, and flips back if the engine refuses.
         body.append(&section("PERMISSIONS"));
         for (caption, hint, field) in [
-            ("Agent bus writes", "Change tasks, notes and settings through Relay", "bus_writes"),
+            ("Agent bus writes", "Let it write files, stage and commit through Relay, with guardrails checked as it goes", "bus_writes"),
             ("UI control", "Drive the Relay window", "allow_ui"),
         ] {
             let line = gtk::Box::new(gtk::Orientation::Horizontal, 10);

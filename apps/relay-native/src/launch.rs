@@ -355,7 +355,7 @@ impl Profile {
         options.append(&place);
         let mut switches = Vec::new();
         for (caption, hint, on) in [
-            ("Agent bus writes", "Let it change tasks, notes and settings through Relay.", true),
+            ("Agent bus writes", "Let it write files, stage and commit through Relay, with guardrails checked as it goes.", true),
             ("UI control", "Let it drive the Relay window.", false),
         ] {
             let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
