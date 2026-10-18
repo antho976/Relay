@@ -284,10 +284,12 @@ fn tally_tabs(showing: &'static str) -> gtk::Box {
     row
 }
 
-/// A toast on the Money page showing now: `text`, and an Undo key when `undo` is given.
+/// A toast on the Money page showing now: `text`, and an Undo key when `undo` is given. Another
+/// page (Threads has no toast of its own) shows `text` in the window's good news banner, with no
+/// Undo.
 pub(crate) fn toast(ui: &Ui, text: &str, undo: Option<Action>) {
     let Some(page) = page(&ui.page.borrow()) else {
-        ui.show_error(text);
+        ui.show_info(text);
         return;
     };
     page.toast_text.set_text(text);

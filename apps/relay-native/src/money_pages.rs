@@ -848,11 +848,6 @@ pub fn delete(ui: &Rc<Ui>, tx: Value) {
     glib::spawn_future_local(async move {
         match ui.call("money.tx.delete", json!({"id":tx["id"]})).await {
             Ok(_) => {
-                let what = match text(&tx, "category") {
-                    "" if text(&tx, "type") == "TRANSFER" => String::from("Transfer"),
-                    "" => String::from("Entry"),
-                    name => name.to_string(),
-                };
                 let weak = Rc::downgrade(&ui);
                 let id = tx["id"].clone();
                 let undo: Action = Rc::new(move || {
@@ -860,15 +855,17 @@ pub fn delete(ui: &Rc<Ui>, tx: Value) {
                     let id = id.clone();
                     glib::spawn_future_local(async move {
                         if let Err(e) = ui.call("money.tx.restore", json!({"id":id})).await {
-                            ui.show_error(&e.to_string());
+                            ui.show_error(&unavailable(&e));
                         }
                         ui.refresh_page();
                     });
                 });
-                super::toast(&ui, &format!("{what} {} deleted", formatter().format(n(&tx, "amount"))), Some(undo));
+                // Said as a save is: "Deleted Burger night −$14.98".
+                let said = super::entry::signed(text(&tx, "type"), n(&tx, "amount"));
+                super::toast(&ui, &format!("Deleted {} {said}", entry_name(&tx)), Some(undo));
                 ui.refresh_page();
             }
-            Err(e) => ui.show_error(&e.to_string()),
+            Err(e) => ui.show_error(&unavailable(&e)),
         }
     });
 }

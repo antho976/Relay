@@ -87,20 +87,12 @@ fn chosen(dropdown: &gtk::DropDown, items: &[(i64, String)]) -> Option<i64> {
 }
 
 /// "−$14.98", "+$2,150.00" or "$50.00": an entry's amount signed by its kind.
-fn signed(kind: &str, amount: i64) -> String {
+pub(super) fn signed(kind: &str, amount: i64) -> String {
     let fmt = formatter();
     match kind {
         "EXPENSE" => format!("−{}", fmt.format(amount)),
         "INCOME" => format!("+{}", fmt.format(amount)),
         _ => fmt.format(amount),
-    }
-}
-
-/// A toast on the Money page showing, when one is: the Threads page has no toast of its own, and
-/// its panel shows the change anyway.
-fn tell(ui: &Ui, text: &str, undo: Option<super::Action>) {
-    if super::page(&ui.page.borrow()).is_some() {
-        super::toast(ui, text, undo);
     }
 }
 
@@ -344,7 +336,11 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, lists: &Value, tx: Option<Value>) {
         let weak = Rc::downgrade(ui);
         let sheet = Rc::downgrade(panel);
         let gone = t.clone();
-        delete.connect_clicked(move |_| {
+        // A Tally page's toast offers Undo, so it deletes at once; elsewhere (the Threads panel)
+        // nothing would, so it asks first.
+        let asking = Rc::downgrade(ui);
+        let needed = move || asking.upgrade().is_some_and(|ui| super::page(&ui.page.borrow()).is_none());
+        crate::app::confirm_inline_if(&delete, "Delete this entry?", needed, move |_| {
             if let (Some(ui), Some(sheet)) = (weak.upgrade(), sheet.upgrade()) {
                 sheet.close();
                 super::pages::delete(&ui, gone.clone());
@@ -455,11 +451,12 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, lists: &Value, tx: Option<Value>) {
                         if let Some(sheet) = sheet.upgrade() {
                             sheet.close();
                         }
+                        // On the Threads page the banner says it, without the Undo a page's toast has.
                         let undo = undo_save(&ui, &saved, before.as_ref());
-                        tell(&ui, &format!("{} {said}", if before.is_some() { "Saved" } else { "Added" }), Some(undo));
+                        super::toast(&ui, &format!("{} {said}", if before.is_some() { "Saved" } else { "Added" }), Some(undo));
                     }
                     Err(e) => {
-                        problem.set_text(&e.to_string());
+                        problem.set_text(&super::pages::unavailable(&e));
                         problem.set_visible(true);
                         save.set_sensitive(true);
                         another.set_sensitive(true);
