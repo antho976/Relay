@@ -356,6 +356,8 @@ impl Board {
             key = widget.next_sibling();
             widget.set_valign(gtk::Align::Center);
         }
+        // The inspector key, Undo and the rest leave the canvas its shortcuts.
+        keep_canvas_focus(top.upcast_ref());
         root.append(&top);
 
         let canvas = Canvas::new();
@@ -545,6 +547,7 @@ impl Board {
             b.child_position(widget)
         });
 
+        board.release_on_press(&board.inspector_scroll);
         board.build_dock(&dock);
         board.build_zoom_menu(&zoom_menu);
         board.install_actions();
@@ -751,6 +754,7 @@ impl Board {
             return;
         }
         self.end_edit(true);
+        self.release_fields();
         let old = self.page.replace(page.to_string());
         self.cams.borrow_mut().insert(old, self.cam.get());
         self.selection.borrow_mut().clear();
@@ -777,6 +781,7 @@ impl Board {
         if *self.selection.borrow() == ids {
             return;
         }
+        self.release_fields();
         *self.selection.borrow_mut() = ids;
         self.selection_changed();
     }
@@ -1460,12 +1465,7 @@ impl Board {
             false
         });
         // Nor while one of its fields has the keyboard (a size being typed or stepped).
-        let typing = self.context.borrow().as_ref().is_some_and(|bar| {
-            self.root
-                .root()
-                .and_then(|r| gtk::prelude::GtkWindowExt::focus(r.downcast_ref::<gtk::Window>()?))
-                .is_some_and(|f| f.is_ancestor(bar))
-        });
+        let typing = self.context.borrow().as_ref().is_some_and(|bar| self.busy_in(bar));
         if !picking && !typing && self.edit.borrow().is_none() && matches!(*self.gesture.borrow(), Gesture::Idle) {
             self.rebuild_context();
         }
@@ -1475,6 +1475,59 @@ impl Board {
         }
         self.page_label.set_text(&self.page_name(&self.page.borrow()));
         self.overlay.queue_allocate();
+    }
+
+    /// The widget with the keyboard in the board's window.
+    pub(super) fn focus_widget(&self) -> Option<gtk::Widget> {
+        self.root.root().and_then(|r| gtk::prelude::GtkWindowExt::focus(r.downcast_ref::<gtk::Window>()?))
+    }
+
+    /// Something in `panel` is being typed or picked: a field on screen has the keyboard, or
+    /// one of the panel's popovers is open. Rebuilding the panel then would take it away.
+    pub(super) fn busy_in(&self, panel: &impl IsA<gtk::Widget>) -> bool {
+        self.focus_widget().is_some_and(|f| {
+            f.is_ancestor(panel) && f.is_mapped() && (f.is::<gtk::Text>() || f.ancestor(gtk::Popover::static_type()).is_some())
+        })
+    }
+
+    /// The keyboard in `panel` goes back to the canvas: what was typed in a field there is
+    /// sent (to the layers it was typed for, before the selection changes), and the panel
+    /// can be rebuilt without taking the focused widget with it, which would leave GTK to
+    /// hand the keyboard to whatever comes next in the window.
+    pub(super) fn release(&self, panel: &impl IsA<gtk::Widget>) {
+        if self.focus_widget().is_some_and(|f| f.is_ancestor(panel)) {
+            self.canvas.grab_focus();
+        }
+    }
+
+    /// `release` the inspector and the toolbar.
+    pub(super) fn release_fields(&self) {
+        self.release(&self.inspector_scroll);
+        let bar = self.context.borrow().clone();
+        if let Some(bar) = bar {
+            self.release(&bar);
+        }
+    }
+
+    /// A press in `panel` that is not in one of its fields takes the keyboard from a field
+    /// there, so the panel shows what the key pressed does (it is not rebuilt while a field
+    /// has the keyboard, and its keys take none).
+    pub(super) fn release_on_press(self: &Rc<Self>, panel: &impl IsA<gtk::Widget>) {
+        let press = gtk::GestureClick::new();
+        press.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(self);
+        press.connect_pressed(move |g, _, x, y| {
+            let (Some(b), Some(panel)) = (weak.upgrade(), g.widget()) else {
+                return;
+            };
+            let in_field = panel
+                .pick(x, y, gtk::PickFlags::DEFAULT)
+                .is_some_and(|w| w.is::<gtk::Text>() || w.ancestor(gtk::Entry::static_type()).is_some());
+            if !in_field {
+                b.release(&panel);
+            }
+        });
+        panel.as_ref().add_controller(press);
     }
 
     pub(super) fn set_tool(&self, tool: Tool) {
@@ -2527,11 +2580,12 @@ pub const FRAME_PRESETS: [(&str, u32, u32); 8] = [
 const FLASH_US: i64 = 1_600_000;
 
 /// Keys over the canvas take no keyboard focus when clicked, so the canvas keeps its shortcuts
-/// (V, Delete, Ctrl+Z…) right after one is used, as in other design tools.
+/// (V, Delete, Ctrl+Z…) right after one is used, as in other design tools. A check button is
+/// no button in GTK 4, so it is named too.
 pub fn keep_canvas_focus(root: &gtk::Widget) {
     let mut stack = vec![root.clone()];
     while let Some(w) = stack.pop() {
-        if w.is::<gtk::Button>() || w.is::<gtk::MenuButton>() {
+        if w.is::<gtk::Button>() || w.is::<gtk::MenuButton>() || w.is::<gtk::CheckButton>() {
             w.set_focus_on_click(false);
         }
         let mut child = w.first_child();

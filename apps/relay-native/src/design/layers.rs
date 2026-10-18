@@ -74,6 +74,9 @@ impl Layers {
             let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
                 return;
             };
+            // A row picks a layer; the keyboard stays with the canvas.
+            item.set_focusable(false);
+            item.set_activatable(false);
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             row.add_css_class("design-layer");
             let indent = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -111,6 +114,7 @@ impl Layers {
                 }
             });
             row.add_controller(motion);
+            super::board::keep_canvas_focus(row.upcast_ref());
             item.set_child(Some(&row));
         });
         let weak = Rc::downgrade(&layers);
@@ -120,6 +124,7 @@ impl Layers {
             };
             layers.bind(item);
         });
+        super::board::keep_canvas_focus(layers.root.upcast_ref());
         layers.pages_changed();
         layers
     }
@@ -251,7 +256,18 @@ impl Layers {
                 } else {
                     sel.push(row.id.clone());
                 }
+                // The canvas keeps its shortcuts (Delete, arrows, V…) after a row is picked:
+                // now, and once the list has handled the click, should it have taken the keyboard.
+                b.canvas.grab_focus();
                 b.select(sel);
+                let weak = Rc::downgrade(&b);
+                glib::idle_add_local_once(move || {
+                    if let Some(b) = weak.upgrade() {
+                        if b.focus_widget().is_some_and(|f| f.is_ancestor(&b.layers_panel)) {
+                            b.canvas.grab_focus();
+                        }
+                    }
+                });
             });
             widget.add_controller(click);
         }

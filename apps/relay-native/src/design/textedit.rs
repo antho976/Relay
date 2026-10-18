@@ -225,6 +225,8 @@ impl Board {
         let Some(edit) = self.edit.borrow_mut().take() else {
             return;
         };
+        // Ended by a click elsewhere (another view, a field), the keyboard stays where it went.
+        let had_keyboard = edit.view.is_focus();
         *self.painter.editing.borrow_mut() = None;
         let buffer = edit.view.buffer();
         let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
@@ -266,7 +268,9 @@ impl Board {
             }
         }
         self.invalidate();
-        self.canvas.grab_focus();
+        if had_keyboard {
+            self.canvas.grab_focus();
+        }
         self.rebuild_context();
     }
 }

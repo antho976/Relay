@@ -41,6 +41,7 @@ const WEIGHTS: [(u16, &str); 9] = [
 
 impl Board {
     pub(super) fn rebuild_inspector(&self) {
+        self.release(&self.inspector_scroll);
         let body = &self.inspector;
         while let Some(child) = body.first_child() {
             body.remove(&child);
@@ -669,19 +670,18 @@ impl Board {
             row.append(&key);
         }
         sec.append(&row);
+        // Its keys leave the keyboard where it was, so the panel follows what they do (Column
+        // shows its gap, Drop its offsets) and the canvas keeps its shortcuts.
+        super::board::keep_canvas_focus(body.upcast_ref());
     }
 
-    /// The inspector shows the scene as it is now, unless the person is typing in it.
+    /// The inspector shows the scene as it is now, unless a field of it is being typed in or
+    /// one of its popovers is open.
     pub(super) fn refresh_inspector_values(&self) {
         if !matches!(*self.gesture.borrow(), super::board::Gesture::Idle) {
             return;
         }
-        let focused = self
-            .root
-            .root()
-            .and_then(|r| gtk::prelude::GtkWindowExt::focus(r.downcast_ref::<gtk::Window>()?))
-            .is_some_and(|f| f.is_ancestor(&self.inspector));
-        if !focused {
+        if !self.busy_in(&self.inspector_scroll) {
             self.rebuild_inspector();
         }
     }
