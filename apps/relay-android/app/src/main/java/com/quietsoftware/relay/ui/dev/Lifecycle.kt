@@ -191,10 +191,15 @@ internal class Lifecycle(private val nav: Nav) {
     /** Each agent in turn, as the PC would; [stopAfterCurrent] ends it after the one running. */
     fun resumeAll(names: List<String>) {
         if (busy != null || progress != null || names.isEmpty() || !reachable()) return
+        val one = names.singleOrNull()
         asking = Ask(
-            if (names.size == 1) "Resume one agent?" else "Resume all ${names.size} agents?",
-            "Each agent starts its CLI again and picks up its conversation, which uses provider quota. They are resumed one after another; tap the row to stop after the current one.",
-            "Resume all",
+            if (one != null) "Resume $one?" else "Resume all ${names.size} agents?",
+            if (one != null) {
+                "It starts its CLI again and picks up its conversation, which uses provider quota."
+            } else {
+                "Each agent starts its CLI again and picks up its conversation, which uses provider quota. They are resumed one after another; tap the row to stop after the current one."
+            },
+            if (one != null) "Resume" else "Resume all",
             danger = false,
         ) {
             halt = false
@@ -285,7 +290,7 @@ internal fun LifecycleSheets(life: Lifecycle) {
     life.closing?.let { s ->
         var removeWorktree by rememberSaveable(s.name) { mutableStateOf(false) }
         var purgeBuild by rememberSaveable(s.name) { mutableStateOf(false) }
-        DevSheet({ life.closing = null }, "Close ${s.name}?", "Stops its process and takes it off the wall. The branch is always kept.") { close ->
+        DevSheet({ life.closing = null }, "Close ${s.name}?", "Stops its process and takes it off the wall. Its branch is kept unless its work is already merged.") { close ->
             Column(Modifier.padding(horizontal = 6.dp)) {
                 if (s.worktree.isNotBlank()) T(s.worktree, Modifier.padding(bottom = 4.dp), Relay.type.mono, c.ink3, maxLines = 2)
                 SwitchRow("Remove worktree", "Delete the checkout after closing. Refused while a paired session still uses it.", removeWorktree, { removeWorktree = it })

@@ -173,7 +173,7 @@ private fun Actions(session: Session, nav: Nav, life: Lifecycle, online: Boolean
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             for (act in actsFor(session.state)) {
                 Key(
-                    act.label,
+                    if (act == Act.Start) "Start session" else act.label,
                     { life.run(act, session) },
                     Modifier.alpha(if (online) 1f else .5f),
                     kind = if (act.danger) KeyKind.Danger else KeyKind.Plain,
