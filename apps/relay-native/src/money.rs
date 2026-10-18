@@ -761,7 +761,7 @@ pub fn show_start(ui: &Rc<Ui>) {
                 crate::start::recent(&dev_rows, &dev_projects(&d), "No projects yet");
             }
             Err(e) => {
-                crate::start::reading(&dev_line, &e.to_string(), Lamp::Idle);
+                crate::start::reading(&dev_line, &pages::unavailable(&e), Lamp::Idle);
                 crate::start::recent(&dev_rows, &[], "");
             }
         }

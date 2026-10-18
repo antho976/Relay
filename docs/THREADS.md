@@ -295,12 +295,12 @@ Not yet: ticking rows to approve part of a batch, an amber dot on the thread's s
 
 Easier to do things, each figure said once, one way to ask per page.
 
-- **Overview** leads with Left to spend, large (amber ahead of pace, red over), and one line on
-  how it got there: spent of budget, a day's allowance, against last month. Income sits beside it;
-  Spent and Net worth left the strip (the line says the first, the Accounts card totals the
-  second). Budgets beside Recent, then Accounts, Upcoming bills (three, and how many more) and
-  Goals side by side: about 1,090 pixels, from 1,582. An account opens this period's Entries
-  filtered to it; an investment account opens Investments.
+- **Overview** leads with Left to spend, large (amber ahead of pace; spent past the budget, Over
+  budget and by how much, in red), and one line on how it got there: spent of budget, a day's
+  allowance, against last month. Income sits beside it; Spent and Net worth left the strip (the
+  line says the first, the Accounts card totals the second). Budgets beside Recent, then Accounts,
+  Upcoming bills (three, and how many more) and Goals side by side: about 1,090 pixels, from 1,582.
+  An account opens this period's Entries filtered to it; an investment account opens Investments.
 - **Entries** says its figures in the context line ("27 entries · in $2,150 · out $2,425 · net
   −$275") instead of a strip. A row's badge opens the category list and moves the entry; its menu
   (right click, the Menu key) holds Edit, Change category, Ask about this entry and Delete.

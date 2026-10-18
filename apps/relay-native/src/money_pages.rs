@@ -1398,7 +1398,7 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str) {
             }
             match result {
                 Ok(s) => home(ui, &page, &s),
-                Err(e) => failed(ui, &page, "Home", &e),
+                Err(e) => failed(ui, &page, "Overview", &e),
             }
         }
         "money-transactions" => {
@@ -1540,7 +1540,12 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value) {
             text(lines, "margin").to_string(),
             text(lines, "versus_last").to_string(),
         ]);
-        figure_cell(&cells, "card", "Left to spend", &fmt.format_whole(remaining), &how, class)
+        // Spent past the budget, it says how far over, as a budget row does: never "−$50" left.
+        if remaining < 0 {
+            figure_cell(&cells, "card", "Over budget", &fmt.format_whole(-remaining), &how, class)
+        } else {
+            figure_cell(&cells, "card", "Left to spend", &fmt.format_whole(remaining), &how, class)
+        }
     } else {
         let how = joined(&[text(lines, "versus_last").to_string(), String::from("Set a monthly budget in Plan to see what is left")]);
         figure_cell(&cells, "spend", "Spent", &fmt.format_whole(spent), &how, None)
