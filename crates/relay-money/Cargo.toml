@@ -1,6 +1,6 @@
 [package]
 name = "relay-money"
-description = "Tally's money rules for the engine: amounts in minor units, budget periods, pace, recurrence, bank statements, investments and Wealthsimple files, and the backup file. A port of apps/tally/core, held to the same tests."
+description = "Tally's money rules for the engine: amounts in minor units, budget periods, pace, recurrence, bank statements, investments and Wealthsimple files, and the backup file. A port of Tally's core/ (antho976/Tally), held to the same tests."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

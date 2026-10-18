@@ -1635,8 +1635,9 @@ mod tests {
         assert_eq!(l.post_due(date(2026, 10, 7)).unwrap(), 0);
     }
 
-    // Twins of Tally's `RecurringPosterTest` (apps/tally/app) for what the PC's poster shares
-    // with it: reminders moving on, a capped catch-up resumed, transfer bills' references.
+    // Twins of Tally's `RecurringPosterTest` (antho976/Tally, app/src/test/java/com/tally/app/data/)
+    // for what the PC's poster shares with it: reminders moving on, a capped catch-up resumed,
+    // transfer bills' references.
 
     /// Rent as `RecurringPosterTest.bill()` writes it: monthly from Jan 31, next due on the anchor.
     fn rent(id: i64, account: i64, category: i64) -> RecurringDto {

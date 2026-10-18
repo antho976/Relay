@@ -881,7 +881,7 @@ while True:
     let _ = std::process::Command::new("kill").arg(pid.trim()).status();
 }
 
-/// Tally's sync, as the phone runs it (apps/tally `PcSync`): pair, prove, send the whole ledger
+/// Tally's sync, as the phone runs it (antho976/Tally `RelaySync`): pair, prove, send the whole ledger
 /// with `replace` the first time, then trade changes by cursor. Everything else in the money
 /// namespace stays behind the door.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

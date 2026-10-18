@@ -134,7 +134,6 @@ private fun StateCard(session: Session, project: String?) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             LampDot(session.lamp, 7.dp)
             T(session.stateLabel, style = Relay.type.plateState.copy(letterSpacing = 0.1.em), color = if (held) c.heldText else c.ink)
-            T("${session.provider} · ${session.role}", Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 1)
         }
         val line = listOfNotNull(
             project,
@@ -153,7 +152,10 @@ private fun StateCard(session: Session, project: String?) {
     }
 }
 
-/** Terminal first, then the lifecycle keys for its state, as the PC's agent menu orders them; wrapped, so none is cut off. */
+/**
+ * Where to look at the agent, side by side and the width of the page; under them the lifecycle
+ * keys for its state, as the PC's agent menu orders them, wrapped so none is cut off.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Actions(session: Session, nav: Nav, life: Lifecycle, online: Boolean) {
@@ -161,24 +163,25 @@ private fun Actions(session: Session, nav: Nav, life: Lifecycle, online: Boolean
         T(slateHint(session, online), Modifier.padding(vertical = 12.dp), Relay.type.caption, Relay.colors.ink3)
         return
     }
-    FlowRow(
-        Modifier.fillMaxWidth().padding(vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (session.state != "closed") {
-            Key("Conversation", { nav.chat(session.name) }, kind = KeyKind.Primary, glyph = "notes")
-            Key("Terminal", { nav.console(session.name) }, glyph = "terminal")
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Key("Conversation", { nav.chat(session.name) }, Modifier.weight(1f), kind = KeyKind.Primary, glyph = "notes")
+                Key("Terminal", { nav.console(session.name) }, Modifier.weight(1f), glyph = "terminal")
+            }
         }
-        for (act in actsFor(session.state)) {
-            Key(
-                act.label,
-                { life.run(act, session) },
-                Modifier.alpha(if (online) 1f else .5f),
-                kind = if (act.danger) KeyKind.Danger else KeyKind.Plain,
-                glyph = act.glyph,
-                enabled = life.busy == null,
-            )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (act in actsFor(session.state)) {
+                Key(
+                    act.label,
+                    { life.run(act, session) },
+                    Modifier.alpha(if (online) 1f else .5f),
+                    kind = if (act.danger) KeyKind.Danger else KeyKind.Plain,
+                    glyph = act.glyph,
+                    enabled = life.busy == null,
+                    compact = true,
+                )
+            }
         }
     }
 }

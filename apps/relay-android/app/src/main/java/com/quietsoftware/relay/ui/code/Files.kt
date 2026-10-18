@@ -265,6 +265,7 @@ fun FilesScreen(projectId: Long, worktree: String?, nav: Nav) {
                     primary = current != null && current.path == primary?.path,
                     onClick = { sheet = FilesSheet.Worktrees },
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    online = online,
                 )
                 if (searching) {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -304,6 +305,8 @@ fun FilesScreen(projectId: Long, worktree: String?, nav: Nav) {
                 } else {
                     LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 24.dp)) {
                         if (root?.result != null && !root.fresh) item { StaleNote(root.at) }
+                        val unread = root?.result == null && root?.error?.code == "link.down"
+                        if (unread) item { NotReadYet() }
                         if (rows.isEmpty() && root?.result != null) {
                             item {
                                 Empty("folder", "Nothing here", "This worktree has no files yet.", action = {
@@ -311,7 +314,7 @@ fun FilesScreen(projectId: Long, worktree: String?, nav: Nav) {
                                 })
                             }
                         }
-                        items(rows, key = { r ->
+                        items(if (unread) emptyList() else rows, key = { r ->
                             when (r) {
                                 is TreeRow.Item -> "e:" + r.entry.path
                                 is TreeRow.Note -> "n:" + r.key

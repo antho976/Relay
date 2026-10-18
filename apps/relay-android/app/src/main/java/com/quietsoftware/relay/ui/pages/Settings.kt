@@ -9,8 +9,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -261,7 +263,11 @@ private fun SettingRow(
     }
 }
 
-/** A palette as a card: a swatch of its ground and slab, its name and what it is for. */
+/**
+ * A palette as a card: the app in miniature in its colours (the ground, a card with two lines of
+ * ink, a terminal pane), its name and what it is for. The three differ in their grounds and
+ * panes more than anything, so the swatch shows both.
+ */
 @Composable
 private fun PaletteCard(label: String, hint: String, selected: Boolean, palette: Palette, onClick: () -> Unit) {
     val c = Relay.colors
@@ -272,15 +278,30 @@ private fun PaletteCard(label: String, hint: String, selected: Boolean, palette:
         onClick = onClick,
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Box(
+            Row(
                 Modifier
-                    .size(34.dp)
+                    .size(width = 56.dp, height = 40.dp)
                     .clip(Radii.key)
                     .background(palette.wall)
                     .border(1.dp, palette.strong, Radii.key)
-                    .padding(7.dp),
+                    .padding(5.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Box(Modifier.fillMaxSize().clip(Radii.keycap).background(palette.slab))
+                Column(
+                    Modifier.weight(1f).fillMaxHeight().clip(Radii.keycap).background(palette.slab).padding(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Box(Modifier.fillMaxWidth().height(3.dp).clip(Radii.pill).background(palette.ink))
+                    Box(Modifier.fillMaxWidth(.6f).height(3.dp).clip(Radii.pill).background(palette.ink3))
+                }
+                Column(
+                    Modifier.weight(1f).fillMaxHeight().clip(Radii.keycap).background(palette.screen).padding(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Box(Modifier.fillMaxWidth(.8f).height(2.dp).background(palette.ink2))
+                    Box(Modifier.fillMaxWidth(.5f).height(2.dp).background(palette.ink3))
+                    Box(Modifier.fillMaxWidth(.7f).height(2.dp).background(palette.ink3))
+                }
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {

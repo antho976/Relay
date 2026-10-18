@@ -24,6 +24,7 @@ import com.quietsoftware.relay.core.wire.arr
 import com.quietsoftware.relay.core.model.decodeAs
 import com.quietsoftware.relay.data.Relay.Live
 import com.quietsoftware.relay.ui.Nav
+import com.quietsoftware.relay.ui.code.NotReadYet
 import com.quietsoftware.relay.ui.kit.Empty
 import com.quietsoftware.relay.ui.kit.Gap
 import com.quietsoftware.relay.ui.kit.Hairline
@@ -166,6 +167,7 @@ private fun ExtensionBody(
             item { T(intro, style = Relay.type.caption, color = c.ink3) }
             if (!live.fresh && live.result != null) item { StaleNote(live.at) }
             when {
+                live.result == null && live.error?.code == "link.down" -> item { NotReadYet() }
                 live.result == null && live.error != null -> item { Empty(emptyGlyph, "The PC has not answered", live.error?.message) }
                 live.result == null -> item { T("Loading…", style = Relay.type.caption, color = c.ink3) }
                 count == 0 -> item { Empty(emptyGlyph, emptyTitle, emptyBody) }

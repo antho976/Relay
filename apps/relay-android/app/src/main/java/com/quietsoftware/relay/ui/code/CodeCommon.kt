@@ -36,6 +36,7 @@ import com.quietsoftware.relay.core.wire.BusException
 import com.quietsoftware.relay.data.Relay.Live
 import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.kit.Dot
+import com.quietsoftware.relay.ui.kit.Empty
 import com.quietsoftware.relay.ui.kit.Field
 import com.quietsoftware.relay.ui.kit.Gap
 import com.quietsoftware.relay.ui.kit.Glyph
@@ -208,14 +209,14 @@ fun primaryOf(list: List<Worktree>, projectPath: String?): Worktree? {
 
 /** The worktree a screen works in: the primary checkout, or an agent's own worktree. */
 @Composable
-fun WorktreeKey(current: Worktree?, primary: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun WorktreeKey(current: Worktree?, primary: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, online: Boolean = true) {
     val c = Relay.colors
     ListRow(modifier = modifier, onClick = onClick, padding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
         Glyph("branch", 16.dp, c.ink2)
         Column(Modifier.weight(1f)) {
             T(current?.branch?.ifBlank { "detached HEAD" } ?: "No worktree", style = Relay.type.uiMedium, color = c.ink, maxLines = 1)
             val where = when {
-                current == null -> "Reading worktrees"
+                current == null -> if (online) "Reading worktrees" else "Listed once the PC is in reach"
                 primary -> "primary checkout"
                 current.session != null -> "agent · ${current.session}"
                 else -> "worktree"
@@ -319,9 +320,16 @@ fun ColumnScope.CodeBody(content: @Composable ColumnScope.() -> Unit) {
 
 /** A line in the body that says what the screen is waiting for, or why it has nothing. */
 @Composable
-fun LiveWait(live: Live, reading: String = "Reading…") {
+fun LiveWait(live: Live, reading: String = "Reading…", page: Boolean = false) {
     val c = Relay.colors
+    if (live.result != null) return
+    // A whole page never read and the PC away: said as Tally and Arbiter say it, not as a footnote.
+    if (page && live.error?.code == "link.down") return NotReadYet()
     val text = live.error?.let { refusal(it) } ?: reading
-    if (live.result == null) T(text, Modifier.padding(horizontal = 16.dp, vertical = 12.dp), Relay.type.caption, c.ink3)
+    T(text, Modifier.padding(horizontal = 16.dp, vertical = 12.dp), Relay.type.caption, c.ink3)
 }
+
+/** A page this phone has never read, with the PC out of reach. */
+@Composable
+fun NotReadYet() = Empty("cloud", "Not on this phone yet", "The PC is out of reach. This shows here once it has been read with the PC in reach.")
 

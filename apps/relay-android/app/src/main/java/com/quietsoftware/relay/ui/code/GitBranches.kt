@@ -52,7 +52,7 @@ fun ColumnScope.BranchesTab(nav: Nav, projectId: Long, wt: String?, refresh: Int
     var sheet by remember { mutableStateOf<BranchSheet?>(null) }
     LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 24.dp)) {
         if (data == null) {
-            item { LiveWait(live) }
+            item { LiveWait(live, page = true) }
         } else {
             if (!live.fresh) item { StaleNote(live.at) }
             item {

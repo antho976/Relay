@@ -6,16 +6,21 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -26,7 +31,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -56,6 +63,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
@@ -70,10 +78,13 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.TextRange
@@ -109,6 +120,7 @@ import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.TOUCH
 import com.quietsoftware.relay.ui.shell.Page
+import com.quietsoftware.relay.ui.term.TerminalView
 import com.quietsoftware.relay.ui.theme.Fonts
 import com.quietsoftware.relay.ui.theme.Relay
 import com.quietsoftware.relay.ui.threads.Spinner
@@ -243,6 +255,10 @@ fun ChatScreen(name: String, nav: Nav) {
         }
     }
 
+    fun resend(again: String) {
+        scope.launch { if (!chat.send(again)) nav.shell.toast("Not sent: the PC did not take it") }
+    }
+
     Page {
         Column(Modifier.fillMaxSize()) {
             Header(session, name, onBack = nav::back, onDetails = { nav.session(name) }, onMenu = { menu = true }) {
@@ -260,7 +276,14 @@ fun ChatScreen(name: String, nav: Nav) {
                     else Key("Open the terminal", { nav.console(name) }, glyph = "terminal", compact = true)
                 }
                 when {
-                    pieces.isNotEmpty() || asking -> Conversation(pieces, doing, since, asking, screen, chat, s.online)
+                    pieces.isNotEmpty() || asking -> Conversation(
+                        pieces, doing, since, asking, screen, chat, s.online,
+                        onEdit = { words ->
+                            type(joinDraft(field.text, words))
+                            focus.requestFocus()
+                        },
+                        onResend = if (ready) ::resend else null,
+                    )
                     error != null && status != TerminalFeed.Status.Saved -> Empty(
                         "terminal", "Can't read the conversation",
                         said(error!!.error, "The PC's Relay is older than this app: update it to see agents as a conversation. The terminal works meanwhile."),
@@ -275,7 +298,7 @@ fun ChatScreen(name: String, nav: Nav) {
                     else -> Empty("terminal", "Nothing said yet", if (s.online) null else "The PC is away, and this phone has not read this agent before.", action = openTerminal)
                 }
             }
-            if (peek && ready) ScreenPanel(screen) { peek = false }
+            if (peek && ready) ScreenPanel(nav, name, screen) { peek = false }
             if (s.prefs.chatKeys) QuickKeys(chat, ready)
             val asked = commandAsked(text)
             if (asked != null && ready) Commands(nav, session?.provider, session?.projectId, asked) { type("/$it ") }
@@ -551,7 +574,17 @@ private fun transcriptText(messages: List<ThreadMessage>): String = messages.map
 // ---- Drawing it ----
 
 @Composable
-private fun Conversation(pieces: List<ChatPiece>, doing: String?, since: Long?, asking: Boolean, screen: State<String?>, chat: SessionChat, online: Boolean) {
+private fun Conversation(
+    pieces: List<ChatPiece>,
+    doing: String?,
+    since: Long?,
+    asking: Boolean,
+    screen: State<String?>,
+    chat: SessionChat,
+    online: Boolean,
+    onEdit: (String) -> Unit,
+    onResend: ((String) -> Unit)?,
+) {
     val c = Relay.colors
     val state = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -563,13 +596,27 @@ private fun Conversation(pieces: List<ChatPiece>, doing: String?, since: Long?, 
     var seen by remember { mutableIntStateOf(0) }
     LaunchedEffect(away) { if (away) seen = pieces.size }
     val fresh = if (away) (pieces.size - seen).coerceAtLeast(0) else 0
+    // The one message of the person's showing its keys, if any.
+    var opened by remember { mutableStateOf<String?>(null) }
     Box(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize(), state = state, reverseLayout = true, horizontalAlignment = Alignment.CenterHorizontally) {
             val cell = Modifier.widthIn(max = 720.dp).fillMaxWidth().padding(horizontal = 16.dp)
             item(key = "end") { Box(Modifier.height(12.dp)) }
             if (asking) item(key = "ask") { AskCard(chat, screen, online, cell.padding(top = 14.dp)) }
             if (doing != null) item(key = "doing") { WorkingRow(doing, since, cell.padding(top = 12.dp)) }
-            items(shown, key = { it.key }, contentType = { it::class }) { p -> PieceView(p, cell, online) }
+            items(shown, key = { it.key }, contentType = { it::class }) { p ->
+                if (p is ChatPiece.User) UserBubble(
+                    p.text,
+                    p.sending,
+                    online,
+                    cell.padding(top = 18.dp),
+                    open = opened == p.key,
+                    onOpen = { opened = if (opened == p.key) null else p.key },
+                    onEdit = { opened = null; onEdit(it) },
+                    onResend = onResend?.takeIf { !p.sending }?.let { r -> { again -> opened = null; r(again) } },
+                )
+                else PieceView(p, cell, online)
+            }
             item(key = "start") { Box(Modifier.height(8.dp)) }
         }
         AnimatedVisibility(away, Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp), enter = fadeIn(), exit = fadeOut()) {
@@ -688,25 +735,75 @@ private fun PlanStrip(name: String, plan: List<PlanStep>) {
     }
 }
 
-/** The person's message: a bubble on the right, as a thread draws it. */
+/**
+ * The person's message: a bubble on the right, as a thread draws it. A tap or a long press shows
+ * its keys under it: Copy, Edit (back into the message box) and Send again.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun UserBubble(text: String, sending: Boolean, online: Boolean, modifier: Modifier) {
+private fun UserBubble(
+    text: String,
+    sending: Boolean,
+    online: Boolean,
+    modifier: Modifier,
+    open: Boolean = false,
+    onOpen: (() -> Unit)? = null,
+    onEdit: ((String) -> Unit)? = null,
+    onResend: ((String) -> Unit)? = null,
+) {
     val c = Relay.colors
     val (words, pictures) = remember(text) { splitAttached(text) }
+    val touch = Modifier.messageTouch(open, LocalHapticFeedback.current, onOpen)
     Column(modifier, horizontalAlignment = Alignment.End) {
-        if (pictures.isNotEmpty()) Row(Modifier.padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (pictures.isNotEmpty()) Row(Modifier.padding(bottom = 6.dp).clip(Radii.pill).then(if (words.isEmpty()) touch else Modifier), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             for (p in pictures) AttachedPill(p)
         }
         if (words.isNotEmpty()) Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
-            SelectionContainer {
-                Box(Modifier.clip(Radii.card).background(c.wash).padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    T(words, style = Relay.type.body, color = c.ink)
-                }
+            Box(
+                Modifier.clip(Radii.card).background(c.wash).then(if (open) Modifier.border(1.dp, c.strong, Radii.card) else Modifier).then(touch)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+            ) {
+                T(words, style = Relay.type.body, color = c.ink)
             }
         }
         if (sending) Row(Modifier.padding(top = 5.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Dot(c.waiting, 5.dp)
             T(if (online) "Sent to the terminal" else "Waiting for the PC", style = Relay.type.caption.copy(fontSize = 11.5.sp), color = c.ink3)
+        }
+        MessageKeys(open, words, onClose = { onOpen?.invoke() }, onEdit = onEdit, onResend = onResend?.let { again -> { again(text) } })
+    }
+}
+
+/** A tap or a long press on a message of the person's: [onOpen] shows its keys, or a tap hides them. */
+@OptIn(ExperimentalFoundationApi::class)
+internal fun Modifier.messageTouch(open: Boolean, haptic: HapticFeedback, onOpen: (() -> Unit)?): Modifier {
+    if (onOpen == null) return this
+    return combinedClickable(
+        onClickLabel = if (open) "Hide this message's keys" else "Show this message's keys",
+        onLongClick = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            if (!open) onOpen()
+        },
+        onClick = onOpen,
+    )
+}
+
+/** The keys under a message of the person's, while it is [open]: Copy and Edit for its [words], and Send again. */
+@Composable
+internal fun MessageKeys(open: Boolean, words: String, onClose: () -> Unit, onEdit: ((String) -> Unit)?, onResend: (() -> Unit)?) {
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    AnimatedVisibility(open, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (words.isNotEmpty()) {
+                Chip("Copy", "Copy this message", open, glyph = "copy") {
+                    scope.launch { clipboard.copy(words) }
+                    onClose()
+                }
+                onEdit?.let { edit -> Chip("Edit", "Edit it in the message box", open, glyph = "edit") { edit(words) } }
+            }
+            // Off while the keys fold away, so a quick second tap never sends it twice.
+            onResend?.let { again -> Chip("Send again", "Send this message again", open, glyph = "refresh", onClick = again) }
         }
     }
 }
@@ -1029,31 +1126,66 @@ private fun WatchScreen(nav: Nav, name: String, into: MutableState<String?>) {
 
 private const val SCREEN_READS_PER_S = 8
 
-/** The agent's screen under the conversation, as plain text, the newest line in view: for what no card reads. */
+/**
+ * The agent's screen under the conversation, drawn as its terminal is: the PC's colours and
+ * columns, at a size that reads (the PC's width fitted when it can be, panned sideways when not,
+ * a pinch to change it), the newest line in view. A drag scrolls back, a long press copies, a tap
+ * on an address opens it. A fresh TUI leaves its bottom rows blank; they are drawn under the edge.
+ */
 @Composable
-private fun ScreenPanel(screen: State<String?>, onClose: () -> Unit) {
+internal fun ScreenPanel(nav: Nav, name: String, screen: State<String?>, onClose: () -> Unit) {
     val c = Relay.colors
-    val text = screen.value
-    val vs = rememberScrollState()
-    // Kept on the newest line unless the person scrolled up to read.
-    var follow by remember { mutableStateOf(true) }
-    LaunchedEffect(vs.isScrollInProgress) { if (!vs.isScrollInProgress) follow = vs.value >= vs.maxValue - 8 }
-    LaunchedEffect(text, vs.maxValue) { if (follow) vs.scrollTo(vs.maxValue) }
+    val feed = rememberFeed(nav.relay, name)
+    val reading = screen.value == null
+    val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboard.current
+    val uris = LocalUriHandler.current
+    val density = LocalDensity.current
+    val ratio = rememberMonoRatio()
+    val shape by produceState(0 to 0, feed) {
+        feed.version.collect {
+            value = synchronized(feed.lock) { (feed.pcSize?.first ?: feed.terminal.cols) to blankBelow(feed.terminal) }
+            delay(1_000L / SCREEN_READS_PER_S)
+        }
+    }
+    var pinched by remember { mutableStateOf<Float?>(null) }
     Column(Modifier.fillMaxWidth().background(c.screen)) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.edge))
         Row(Modifier.fillMaxWidth().padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Dot(if (text == null) c.waiting else c.live, 5.dp)
-            T(if (text == null) "Reading the agent's screen…" else "The agent's screen", Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 1)
+            Dot(if (reading) c.waiting else c.live, 5.dp)
+            T(if (reading) "Reading the agent's screen…" else "The agent's screen", Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 1)
             IconKey("close", onClose, size = 14.dp, tint = c.ink3)
         }
-        Box(
-            Modifier.fillMaxWidth().heightIn(max = 240.dp).verticalScroll(vs).horizontalScroll(rememberScrollState())
-                .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
-        ) {
-            T(text.orEmpty(), style = TextStyle(fontFamily = Fonts.FiraMono, fontSize = 10.5.sp, lineHeight = 13.sp), color = c.termFg)
+        BoxWithConstraints(Modifier.fillMaxWidth().height(SCREEN_PANEL_H).clipToBounds()) {
+            val widthPx = constraints.maxWidth.toFloat()
+            val (cols, blank) = shape
+            val sp = pinched ?: fitSp(widthPx, cols, ratio, density).takeIf { it > 0f }?.coerceIn(SCREEN_MIN_SP, SCREEN_SP) ?: SCREEN_SP
+            val needPx = if (cols <= 0) 0f else cols * ratio * with(density) { sp.sp.toPx() } + with(density) { 12.dp.toPx() } + 2f
+            val extra = with(density) { (blank * cellHeightPx(sp, density)).toDp() }
+            Box(Modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {
+                TerminalView(
+                    feed,
+                    sp,
+                    onFontSp = { pinched = it },
+                    onFit = { _, _ -> },
+                    modifier = Modifier.width(with(density) { maxOf(widthPx, needPx).toDp() }).wrapContentHeight(Alignment.Top, unbounded = true).height(SCREEN_PANEL_H + extra),
+                    onCopy = { picked ->
+                        scope.launch {
+                            clipboard.copy(picked)
+                            nav.shell.toast("Copied")
+                        }
+                    },
+                    onLink = { url -> runCatching { uris.openUri(url) }.onFailure { nav.shell.toast("No app here opens $url") } },
+                    hiddenBelow = extra,
+                )
+            }
         }
     }
 }
+
+private val SCREEN_PANEL_H = 240.dp
+private const val SCREEN_SP = 10.5f
+private const val SCREEN_MIN_SP = 8f
 
 // ---- Keys and composer ----
 
@@ -1102,9 +1234,10 @@ private fun QuickKeys(chat: SessionChat, enabled: Boolean) {
  * The message box, as a thread's (threads.css `.threads-composer`): raised, an edge that lights
  * when focused, up to six lines, and under them the agent's own keys as chips and the round key,
  * which sends, or with nothing typed stops a working agent or gives a waiting one its Enter.
+ * The terminal's message box is this one too, with fewer lines and no autocorrect.
  */
 @Composable
-private fun ChatComposer(
+internal fun ChatComposer(
     field: TextFieldValue,
     onText: (TextFieldValue) -> Unit,
     enabled: Boolean,
@@ -1113,6 +1246,10 @@ private fun ChatComposer(
     focus: FocusRequester,
     onSend: () -> Unit,
     pictures: Boolean = false,
+    lines: Int = 6,
+    keyboard: KeyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+    // A terminal sends spaces as typed: only no text at all is its Enter.
+    blankIsEmpty: Boolean = true,
     above: @Composable () -> Unit = {},
     chips: @Composable RowScope.() -> Unit,
 ) {
@@ -1136,9 +1273,9 @@ private fun ChatComposer(
                 textStyle = Relay.type.body.copy(color = c.ink),
                 cursorBrush = SolidColor(c.ink),
                 minLines = 1,
-                maxLines = 6,
+                maxLines = lines,
                 interactionSource = source,
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                keyboardOptions = keyboard,
                 decorationBox = { inner ->
                     Box {
                         if (text.isEmpty()) T(placeholder, style = Relay.type.body, color = c.ink3, maxLines = 1)
@@ -1148,7 +1285,7 @@ private fun ChatComposer(
             )
             Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), content = chips)
-                val empty = text.isBlank() && !pictures
+                val empty = (if (blankIsEmpty) text.isBlank() else text.isEmpty()) && !pictures
                 val stop = working && empty
                 Box(
                     Modifier.size(TOUCH).clip(Radii.key)
@@ -1174,7 +1311,7 @@ private fun ChatComposer(
 
 /** A key of the agent's under the message box, drawn as a thread's chips are: a pill in a full-size target. */
 @Composable
-private fun Chip(label: String, spoken: String, enabled: Boolean, glyph: String? = null, trailing: String? = null, icon: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
+internal fun Chip(label: String, spoken: String, enabled: Boolean, glyph: String? = null, trailing: String? = null, icon: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
     val c = Relay.colors
     val haptic = LocalHapticFeedback.current
     Box(
@@ -1213,6 +1350,9 @@ internal fun rememberDictation(onSaid: (String) -> Unit): (() -> Unit)? {
     if (!can) return null
     return { speech.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)) }
 }
+
+/** A message brought back to edit: in place of an empty box, or after what is being written, never over it. */
+internal fun joinDraft(draft: String, words: String): String = draft.trimEnd().let { if (it.isEmpty()) words else "$it\n\n$words" }
 
 /** What was typed, then what was said after a space. */
 internal fun joinSaid(typed: String, said: String): String = typed.trimEnd().let { if (it.isEmpty()) said else "$it $said" }

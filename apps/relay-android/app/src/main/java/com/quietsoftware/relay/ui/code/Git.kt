@@ -93,6 +93,7 @@ fun GitScreen(projectId: Long, worktree: String?, session: String?, nav: Nav) {
                     primary = current != null && current.path == primary?.path,
                     onClick = { picking = true },
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    online = online,
                 )
             }
             Segmented(

@@ -41,7 +41,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.res.ResourcesCompat
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quietsoftware.relay.R
 import com.quietsoftware.relay.core.model.Session
 import com.quietsoftware.relay.core.sync.Optimistic
@@ -57,6 +56,8 @@ import com.quietsoftware.relay.ui.theme.Fonts
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -210,7 +211,7 @@ internal fun cellHeightPx(sp: Float, density: Density): Float = ceil(with(densit
 private data class MiniShape(val cols: Int = 0, val blank: Int = 0)
 
 /** Screen rows under the last one with text or the cursor: a fresh TUI draws at the top. */
-private fun blankBelow(t: Terminal): Int {
+internal fun blankBelow(t: Terminal): Int {
     var last = t.rows - 1
     while (last > t.cursorRow) {
         val line = t.row(last)
@@ -272,15 +273,16 @@ private const val MINI_POLL_MS = 250L
 
 /**
  * The last [n] lines of what the phone saved for [name] (TerminalFeed's own cache), as plain
- * text: the PTY's bytes are run through a terminal so escape sequences never show.
+ * text: the PTY's bytes are run through a terminal so escape sequences never show. Null until
+ * the phone has looked, so a slate never says nothing is saved while it is still reading.
  */
 @Composable
-internal fun rememberSavedLines(relay: RelayData, name: String, n: Int): List<String> {
+internal fun rememberSavedLines(relay: RelayData, name: String, n: Int): List<String>? {
     val payload = remember(name) { buildJsonObject { put("session", name); put("lines", TerminalFeed.SAVED_LINES) } }
-    val answer by remember(name) { relay.cached("session.scrollback", payload) }.collectAsStateWithLifecycle(null)
-    val text = (answer?.result as? JsonObject)?.s("text")
-    val lines by produceState(emptyList<String>(), text, n) {
-        value = withContext(Dispatchers.Default) { lastLines(text, n) }
+    val lines by produceState<List<String>?>(null, name, n) {
+        relay.cached("session.scrollback", payload).map { (it?.result as? JsonObject)?.s("text") }.distinctUntilChanged().collect { text ->
+            value = withContext(Dispatchers.Default) { lastLines(text, n) }
+        }
     }
     return lines
 }

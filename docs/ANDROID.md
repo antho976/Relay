@@ -2,7 +2,8 @@
 
 `apps/relay-android` is Relay's phone app: native Android (Kotlin, Jetpack Compose, Room on
 SQLite), no web view, no on-device model. It replaced the Expo app that lived in
-`apps/relay-mobile`. Tally (`apps/tally`) is a separate app and is not part of it.
+`apps/relay-mobile`. Tally is a separate app in its own repository (antho976/Tally) and is not part
+of it.
 
 It looks like the desktop app made for a phone: the same warm near-black chrome, Geist and Sora,
 the r mark, the Dev | Threads switch, the sidebar (a drawer here), the status bar, the

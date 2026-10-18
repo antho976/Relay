@@ -1,13 +1,17 @@
 package com.quietsoftware.relay.ui
 
 import android.content.Context
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.navigation.compose.rememberNavController
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -146,21 +150,31 @@ class ScreensTest {
         shell = ShellModel(relay, settings)
     }
 
-    private fun shoot(name: String, route: String) {
+    private fun shoot(name: String, route: String) = shoot(name) { nav ->
+        Box(Modifier.fillMaxSize()) {
+            AppNav(nav, route)
+            HoldTray(shell, onOpen = {})
+        }
+    }
+
+    private fun shoot(name: String, content: @Composable (Nav) -> Unit) {
         compose.mainClock.autoAdvance = false
         compose.setContent {
             val controller = rememberNavController()
             val nav = remember { Nav(controller, shell) }
             RelayTheme(Palette.Matte) {
-                CompositionLocalProvider(LocalNav provides nav) {
-                    Box(Modifier.fillMaxSize()) {
-                        AppNav(nav, route)
-                        HoldTray(shell, onOpen = {})
-                    }
-                }
+                CompositionLocalProvider(LocalNav provides nav) { content(nav) }
             }
         }
         compose.mainClock.advanceTimeBy(2_500)
+        compose.onRoot().captureRoboImage("src/test/screenshots/$name.png", OPTIONS)
+    }
+
+    /** [route] after a tap on the text [tap]. */
+    private fun shootAfterTap(name: String, route: String, tap: String) {
+        shoot("$name-before", route)
+        compose.onNodeWithText(tap, substring = true).performClick()
+        compose.mainClock.advanceTimeBy(1_000)
         compose.onRoot().captureRoboImage("src/test/screenshots/$name.png", OPTIONS)
     }
 
@@ -178,11 +192,33 @@ class ScreensTest {
     @Test fun outbox() = shoot("outbox", "outbox")
     @Test fun terminal() = shoot("terminal", "terminal/brisk-otter")
     @Test fun chat() = shoot("chat", "chat/brisk-otter")
+    /** A message of the person's in a thread, tapped: Send again goes through the outbox, so it shows with the PC away. */
+    @Test fun threadMessageKeys() = shootAfterTap("thread-message-keys", "thread/301", "How much did I spend")
+    /** A message of the person's, tapped: its Copy, Edit and Send again keys. */
+    @Test fun chatMessageKeys() = shootAfterTap("chat-message-keys", "chat/brisk-otter", "The board drops a card")
+    /** The chat's view of the agent's screen, which shows only with the PC in reach: here over what the phone saved. */
+    @Test fun screenPanel() = shoot("screen-panel") { nav ->
+        val shown = remember { androidx.compose.runtime.mutableStateOf<String?>("") }
+        Box(Modifier.fillMaxSize().background(com.quietsoftware.relay.ui.theme.Relay.colors.wall), contentAlignment = androidx.compose.ui.Alignment.BottomCenter) { com.quietsoftware.relay.ui.dev.ScreenPanel(nav, "brisk-otter", shown) {} }
+    }
     @Test fun session() = shoot("session", "session/brisk-otter")
     @Test fun launch() = shoot("launch", "launch?project=1")
     @Test fun tally() = shoot("tally", "tally")
     @Test fun pc() = shoot("pc", "pc")
     @Test fun projectSettings() = shoot("project-settings", "project-settings/1")
+    @Test fun files() = shoot("files", "files/1")
+    @Test fun git() = shoot("git", "git/1")
+    @Test fun mailbox() = shoot("mailbox", "mailbox/1")
+    @Test fun modules() = shoot("modules", "modules/1")
+    @Test fun guardrails() = shoot("guardrails", "guardrails?project=1")
+    @Test fun devices() = shoot("devices", "devices/1")
+    @Test fun skills() = shoot("skills", "skills")
+    @Test fun plugins() = shoot("plugins", "plugins")
+    @Test fun newTask() = shoot("task-edit", "task-edit?project=1")
+    @Test fun arbiter() = shoot("arbiter", "arbiter")
+    @Test fun avex() = shoot("avex", "avex")
+    @Test fun pcTools() = shoot("pc-tools", "pc-tools")
+    @Test fun addProject() = shoot("add-project", "add-project")
     @Test fun share() = shoot("share", "share?text=Crash%20in%20the%20login%20flow%0Asteps%20to%20reproduce")
 
     private companion object {

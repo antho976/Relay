@@ -66,11 +66,11 @@ interface SidebarNav {
  * tree, or Threads' keys and thread list; the PC and the person at the foot.
  */
 @Composable
-fun Sidebar(s: ShellState, route: String?, nav: SidebarNav) {
+fun Sidebar(s: ShellState, route: String?, nav: SidebarNav, space: String = s.prefs.space) {
     val c = Relay.colors
     Column(Modifier.fillMaxHeight().width(300.dp).background(c.wall).statusBarsPadding().navigationBarsPadding()) {
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp)) {
-            if (s.prefs.space == "threads") threads(s, route, nav) else dev(s, route, nav)
+            if (space == "threads") threads(s, route, nav) else dev(s, route, nav)
         }
         Hairline(Modifier.padding(horizontal = 10.dp), c.edge)
         Column(Modifier.padding(10.dp)) {

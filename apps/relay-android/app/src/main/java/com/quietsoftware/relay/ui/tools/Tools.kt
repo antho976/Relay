@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
@@ -260,6 +261,10 @@ private fun ProjectFields(projectId: Long, p: Project, nav: Nav) {
             Field(name, { name = it }, Modifier.fillMaxWidth(), placeholder = "Project name")
         }
         Gap(14.dp)
+        FieldBlock("Folder", "Where it lives on the PC; it moves only from there.") {
+            SelectionContainer { T(p.path, style = Relay.type.mono, color = c.ink2, maxLines = 2) }
+        }
+        Gap(14.dp)
         FieldBlock("Base branch", "The branch new agent worktrees start from and integration merges into.") {
             Field(branch, { branch = it }, Modifier.fillMaxWidth(), placeholder = "main", style = Relay.type.mono)
         }
@@ -271,8 +276,6 @@ private fun ProjectFields(projectId: Long, p: Project, nav: Nav) {
         FieldBlock("Run command", "Run for Run on device. Empty uses Gradle's install and launch.") {
             Field(runCmd, { runCmd = it }, Modifier.fillMaxWidth(), placeholder = "Automatic", style = Relay.type.mono)
         }
-        Gap(10.dp)
-        T(p.path, style = Relay.type.mono, color = c.ink3, maxLines = 2)
         Gap(12.dp)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End), verticalAlignment = Alignment.CenterVertically) {
             if (changes.isNotEmpty()) {

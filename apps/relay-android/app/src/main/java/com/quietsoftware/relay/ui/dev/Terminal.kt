@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -54,7 +53,9 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -118,7 +119,8 @@ fun TerminalScreen(name: String, nav: Nav) {
     var phone by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var menu by remember { mutableStateOf(false) }
     var mailing by remember { mutableStateOf(false) }
-    var text by rememberSaveable(name) { mutableStateOf("") }
+    var field by rememberSaveable(name, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
+    val dictate = rememberDictation { said -> joinSaid(field.text, said).let { field = TextFieldValue(it, TextRange(it.length)) } }
     // Typing straight to the terminal, with Ctrl and Alt held for the next key.
     val direct = s.prefs.terminalDirect
     var ctrl by remember { mutableStateOf(false) }
@@ -223,10 +225,11 @@ fun TerminalScreen(name: String, nav: Nav) {
                 }
             }
             KeyRow(feed, ready, scope, direct, ctrl, alt, onCtrl = { ctrl = !ctrl }, onAlt = { alt = !alt })
-            if (direct) DirectBar(ready, onKeyboard = { input?.raise() }, onBox = { setDirect(false) }) else Composer(
-                text,
-                { text = it },
+            if (direct) DirectBar(ready, onKeyboard = { input?.raise() }, onBox = { setDirect(false) }) else ChatComposer(
+                field,
+                { field = it },
                 ready,
+                working = false,
                 placeholder = when {
                     session == null -> "This agent is closed"
                     !s.online -> "Needs the PC to type to the agent"
@@ -234,20 +237,26 @@ fun TerminalScreen(name: String, nav: Nav) {
                     else -> "Type to the agent"
                 },
                 focus,
-                onDirect = { setDirect(true) },
-            ) {
-                val typed = text
-                if (typed.isEmpty()) {
-                    feed.key(Keys.ENTER)
-                } else {
-                    text = ""
-                    scope.launch {
-                        if (!feed.submit(typed)) {
-                            if (text.isEmpty()) text = typed
-                            nav.shell.toast("Not sent: the PC did not take it")
+                onSend = {
+                    val typed = field.text
+                    if (typed.isEmpty()) {
+                        feed.key(Keys.ENTER)
+                    } else {
+                        field = TextFieldValue()
+                        scope.launch {
+                            if (!feed.submit(typed)) {
+                                if (field.text.isEmpty()) field = TextFieldValue(typed, TextRange(typed.length))
+                                nav.shell.toast("Not sent: the PC did not take it")
+                            }
                         }
                     }
-                }
+                },
+                lines = 4,
+                keyboard = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
+                blankIsEmpty = false,
+            ) {
+                Chip("Type direct", "Type straight to the terminal", ready, icon = { KeyboardGlyph(15.dp, c.ink2) }) { setDirect(true) }
+                if (dictate != null) Chip("", "Dictate", ready, icon = { MicGlyph(15.dp, c.ink2) }, onClick = dictate)
             }
         }
     }
@@ -463,45 +472,6 @@ private fun DirectBar(enabled: Boolean, onKeyboard: () -> Unit, onBox: () -> Uni
         T(if (enabled) "Keys go straight to the terminal" else "Needs the agent running", Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 2)
         Key("Keyboard", onKeyboard, kind = KeyKind.Plain, enabled = enabled, compact = true)
         Key("Message box", onBox, kind = KeyKind.Quiet, compact = true)
-    }
-}
-
-/** Up to four lines and one round key: with text it sends and submits; empty, it is Enter. */
-@Composable
-private fun Composer(text: String, onText: (String) -> Unit, enabled: Boolean, placeholder: String, focus: FocusRequester, onDirect: () -> Unit, onSend: () -> Unit) {
-    val c = Relay.colors
-    Row(
-        Modifier.fillMaxWidth().background(c.wall).navigationBarsPadding().padding(start = 2.dp, end = 8.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Box(
-            Modifier.size(TOUCH).alpha(if (enabled) 1f else .4f).clip(Radii.icon)
-                .clickable(enabled = enabled, onClickLabel = "Type straight to the terminal", role = Role.Button, onClick = onDirect),
-            contentAlignment = Alignment.Center,
-        ) {
-            KeyboardGlyph(20.dp, c.ink2)
-        }
-        Field(
-            text,
-            onText,
-            Modifier.weight(1f).alpha(if (enabled) 1f else .6f).focusRequester(focus).focusProperties { canFocus = enabled },
-            placeholder = placeholder,
-            singleLine = false,
-            maxLines = 4,
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
-        )
-        Box(
-            Modifier
-                .size(44.dp)
-                .alpha(if (enabled) 1f else .4f)
-                .clip(CircleShape)
-                .background(c.ink)
-                .clickable(enabled = enabled, onClickLabel = if (text.isEmpty()) "Enter" else "Send", role = Role.Button, onClick = onSend),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (text.isEmpty()) ReturnGlyph(18.dp, c.wall) else Glyph("arrow-up", 18.dp, c.wall)
-        }
     }
 }
 
