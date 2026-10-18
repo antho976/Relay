@@ -959,7 +959,7 @@ fn keyboard(stack: &gtk::Stack, form: &Form, data: &Value) {
     let fixed = section(&page, "Built in", None::<&gtk::Widget>);
     let fixed = card(&fixed);
     for (title, keys) in [
-        ("Close the session sheet", &["Esc"][..]),
+        ("Close a sheet or panel", &["Esc"][..]),
         ("Copy in a terminal", &["Ctrl", "Shift", "C"][..]),
         ("Paste in a terminal", &["Ctrl", "Shift", "V"][..]),
     ] {

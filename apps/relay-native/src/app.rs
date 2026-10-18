@@ -825,11 +825,11 @@ fn wall() -> Wall {
     let empty_glyph = crate::icons::image_with_stroke("grid", 28, 1.0);
     empty_glyph.add_css_class("empty-glyph");
     empty.append(&empty_glyph);
-    let empty_title = label("No sessions", "title");
+    let empty_title = label("No agents", "title");
     empty_title.set_halign(gtk::Align::Center);
     empty.append(&empty_title);
     let empty_description = label(
-        "Launch a solo agent in its own worktree, or a builder–reviewer pair on one branch. Each session lands here as a tile.",
+        "Launch a solo agent in its own worktree, or a review group on one branch. Each agent lands here as a tile.",
         "empty-description",
     );
     empty_description.set_wrap(true);
@@ -839,7 +839,7 @@ fn wall() -> Wall {
     let empty_launch = button("", "primary");
     let empty_action = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     empty_action.append(&crate::icons::image_with_stroke("plus", 14, 2.0));
-    empty_action.append(&label("Session", ""));
+    empty_action.append(&label("New agent", ""));
     empty_launch.set_child(Some(&empty_action));
     empty_launch.set_halign(gtk::Align::Center);
     empty.append(&empty_launch);
@@ -895,7 +895,7 @@ fn pages(content: &gtk::Stack) -> BTreeMap<String, gtk::Box> {
     pages
 }
 
-/// The New session sheet over `body`, and the scrim that closes it.
+/// The New agents sheet over `body`, and the scrim that closes it.
 struct LaunchSheet {
     overlay: gtk::Overlay,
     launch: gtk::Revealer,
@@ -922,7 +922,7 @@ fn launch_sheet(body: &gtk::Box) -> LaunchSheet {
     // Clicked, never a Tab stop: Space on it would close the sheet.
     scrim.set_focusable(false);
     scrim.set_visible(false);
-    scrim.update_property(&[gtk::accessible::Property::Label("Close new session")]);
+    scrim.update_property(&[gtk::accessible::Property::Label("Close New agents")]);
     overlay.add_overlay(&scrim);
     overlay.add_overlay(&launch);
     let weak_body = body.downgrade();
@@ -2102,10 +2102,12 @@ impl Ui {
             .borrow()
             .iter()
             .find(|p| p["id"].as_i64() == Some(self.project.get()))
-            .map(|p| text(p, "name").to_string())
-            .unwrap_or_else(|| "No project".into());
-        self.status_project.set_text(&name);
-        self.empty_title.set_text(&format!("No sessions in {name}"));
+            .map(|p| text(p, "name").to_string());
+        self.status_project.set_text(name.as_deref().unwrap_or("No project"));
+        self.empty_title.set_text(&match &name {
+            Some(name) => format!("No agents in {name}"),
+            None => String::from("No project yet"),
+        });
         self.status_branch.set_text(
             self.projects
                 .borrow()
