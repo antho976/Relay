@@ -20,6 +20,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -75,7 +77,9 @@ fun InboxScreen(nav: Nav) {
         val session = payload?.s("session")
         when {
             op == "task.get" && taskId != null -> nav.task(taskId.toString())
-            (op == "session.get" || op == "session.brief") && session != null -> nav.terminal(session)
+            // A hold is answered beside its agent, as the PC's notice opens its tile (notification_center.rs `route`).
+            (op == "session.get" || op == "session.brief" || op == "guardrail.confirm") && session != null -> nav.terminal(session)
+            op == "guardrail.confirm" -> nav.guardrails(n.projectId)
             n.category == "agent_done" || n.category == "agent_blocked" -> nav.board(n.projectId)
         }
     }
@@ -163,11 +167,13 @@ private fun NotificationRow(n: Notification, project: String?, onClick: () -> Un
         "agent_done" -> c.live
         else -> c.ink3
     }
-    val meta = listOfNotNull(project?.takeIf { it.isNotBlank() }, categoryLabel(n.category)).joinToString(" · ").uppercase()
+    // What kind, then where, as the PC's: a long project name is cut, not the kind.
+    val meta = listOfNotNull(categoryLabel(n.category), project?.takeIf { it.isNotBlank() }).joinToString(" · ").uppercase()
     Row(
         Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
+            .semantics { stateDescription = if (n.read) "Read" else "Unread" }
             .padding(horizontal = 4.dp, vertical = 12.dp),
         verticalAlignment = Alignment.Top,
     ) {
@@ -191,12 +197,17 @@ private fun NotificationRow(n: Notification, project: String?, onClick: () -> Un
     }
 }
 
+/**
+ * A kind as the PC's notification settings name it (tools_settings.rs), so a row reads like the
+ * switch that silences it; but a refusal is filed as "guardrail" too, so that is only Guardrail,
+ * and a row of the PC's "Everything else" reads System.
+ */
 private fun categoryLabel(category: String) = when (category) {
     "agent_done" -> "Agent finished"
-    "agent_blocked" -> "Agent blocked"
+    "agent_blocked" -> "Agent needs you"
     "guardrail" -> "Guardrail"
-    "integration" -> "Integration"
-    "provider" -> "Provider"
+    "integration" -> "Integrations"
+    "provider" -> "Providers"
     "disk" -> "Disk"
     "system" -> "System"
     else -> category.replace('_', ' ')

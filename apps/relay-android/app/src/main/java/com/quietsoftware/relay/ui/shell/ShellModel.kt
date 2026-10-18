@@ -37,6 +37,7 @@ data class ShellState(
     val projects: List<Project> = emptyList(),
     val sessions: List<Session> = emptyList(),
     val holds: List<Hold> = emptyList(),
+    /** Unread notifications besides the holds' own, so a hold counts once beside them. */
     val unread: Int = 0,
     val outbox: List<OutboxEntry> = emptyList(),
     val threads: List<Thread> = emptyList(),
@@ -53,7 +54,10 @@ data class ShellState(
 @HiltViewModel
 class ShellModel @Inject constructor(val relay: Relay, private val settings: Settings) : ViewModel() {
     private val pcFlow = combine(relay.state, relay.profile, relay.lastSeen) { link, pc, seen -> Triple(link, pc, seen) }
-    private val dataFlow = combine(relay.workspaces(), relay.projects(), relay.sessions(), relay.holds(), relay.notifications()) { w, p, s, h, n -> Data(w, p, s, h, n.count { !it.read }) }
+    // Not the guardrail notices: the PC files one with each hold, which [holds] counts already.
+    private val dataFlow = combine(relay.workspaces(), relay.projects(), relay.sessions(), relay.holds(), relay.notifications()) { w, p, s, h, n ->
+        Data(w, p, s, h, n.count { !it.read && it.category != "guardrail" })
+    }
 
     private data class Data(val w: List<Workspace>, val p: List<Project>, val s: List<Session>, val h: List<Hold>, val unread: Int)
 

@@ -128,7 +128,7 @@ private fun ProjectRow(p: Project, s: ShellState, nav: SidebarNav) {
     val mine = s.sessions.filter { it.projectId == p.num }
     val lamp = when {
         mine.any { it.state == "blocked" } -> Lamp.Held
-        mine.any { it.state == "running" } -> Lamp.Live
+        mine.any { it.state == "running" || it.state == "spawning" } -> Lamp.Live
         else -> Lamp.Off
     }
     val live = s.liveIn(p.num)

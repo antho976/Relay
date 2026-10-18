@@ -75,7 +75,8 @@ fun SpaceFrame(nav: Nav, content: @Composable () -> Unit) {
                 onSpace = { nav.space(it) },
                 onSidebar = { scope.launch { drawer.open() } },
                 bell = s.holds.size + s.unread,
-                bellRed = s.holds.isNotEmpty(),
+                // Held red while anything waits on the person, a blocked agent too, as the PC's bell.
+                bellRed = s.needsYou > 0,
                 onBell = { nav.inbox() },
                 onSearch = { nav.search() },
             )
