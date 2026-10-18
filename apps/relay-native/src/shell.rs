@@ -38,6 +38,7 @@ impl Ui {
                 return;
             }
             self.launch.set_reveal_child(false);
+            self.forget_launch();
             self.project.set(project);
             // Switch the visible wall synchronously. The registry already contains
             // all projects' sessions; a slow refresh must never leave the old CLI here.

@@ -295,6 +295,8 @@ chosen), a name and provider facts. Settings sit in a caption column: provider t
 segmented role and effort (lit with track, like the view switch), the model field, then one folded
 line for instructions, worktree and permissions that summarizes them. Tasks are single rows; a
 ticked row's badge shows its place in the queue, since the first becomes the agent's current task.
+Closed without launching, the sheet comes back as it was left, its tasks read again; a launch, a
+project switch, a reconnect or opening it from a task starts a fresh one.
 
 ### Navigation
 Sidebar navigation (36px rows) selects with the selected fill and ink. Project rows have a 34px

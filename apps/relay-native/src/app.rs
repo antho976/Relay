@@ -1603,6 +1603,7 @@ impl Ui {
         self.restored_project.set(0);
         // A launch form built for the old connection would no longer submit (RA-470).
         self.launch.set_reveal_child(false);
+        self.forget_launch();
         self.layout();
         self.show_error("Connecting to the Relay engine…");
         let ui = self.clone();
