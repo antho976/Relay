@@ -290,6 +290,10 @@ pub(super) fn draw(ui: &Rc<Ui>, page: &Page, p: &Value, activity: Option<&Value>
     // Accounts valued by hand are outside the engine's portfolio; the strip counts them, and says so.
     let hand: i64 = accounts.iter().filter(|a| by_hand(a)).filter_map(&balance).sum();
     let year = room.first().map(|r| n(r, "year")).unwrap_or_else(|| glib::DateTime::now_local().map(|now| i64::from(now.year())).unwrap_or(0));
+    // In RRSP season the RRSP row is last year's: rows of two years leave the year out of the
+    // captions, and each row says its own.
+    let one_year = room.iter().all(|r| n(r, "year") == year);
+    let dated = |caption: &str| if one_year { format!("{caption} · {year}") } else { caption.to_string() };
 
     // The strip: value, gain, income and room, then where the money sits.
     let (strip_box, cells) = strip(&page.body);
@@ -321,7 +325,7 @@ pub(super) fn draw(ui: &Rc<Ui>, page: &Page, p: &Value, activity: Option<&Value>
             (fmt.format_whole(left), format!("over in {}", join_and(&over)), Some("money-over"))
         }
     };
-    cell(&cells, "plan", &format!("Room left · {year}"), &figure, &line, class);
+    cell(&cells, "plan", &dated("Room left"), &figure, &line, class);
     let allocation = rows(p, "allocation");
     if value > 0 && !allocation.is_empty() {
         let block = gtk::Box::new(gtk::Orientation::Vertical, 10);
@@ -379,12 +383,12 @@ pub(super) fn draw(ui: &Rc<Ui>, page: &Page, p: &Value, activity: Option<&Value>
     for account in &accounts {
         list.append(&account_row(ui, account, balance(account)));
     }
-    let list = card(&pair[1], &format!("Contribution room · {year}"), None);
+    let list = card(&pair[1], &dated("Contribution room"), None);
     if room.is_empty() {
         list.append(&icon_row(&tile("plan"), "No TFSA, RRSP or FHSA yet", "Give an investment account its registration to follow its room", "", ""));
     }
     for r in &room {
-        list.append(&room_row(ui, r));
+        list.append(&room_row(ui, r, !one_year));
     }
     if let Some(rrsp) = room.iter().find(|r| text(r, "registration") == "RRSP") {
         if let Some(deadline) = rrsp["deadline"].as_str() {
@@ -639,10 +643,10 @@ fn account_row(ui: &Rc<Ui>, a: &Value, balance: Option<i64>) -> gtk::Box {
     row_key(&inner, &format!("Record what {} is worth", text(a, "name")), run)
 }
 
-/// A registration's room this year: its badge and name over what went in of the room, the room
-/// field (the CRA figure), a meter of the room used in its hue (red over it: no pace tick, room
-/// has no pace), and what being over costs.
-fn room_row(ui: &Rc<Ui>, r: &Value) -> gtk::Box {
+/// A registration's room this year: its badge and name (with its year, when `dated`) over what
+/// went in of the room, the room field (the CRA figure), a meter of the room used in its hue (red
+/// over it: no pace tick, room has no pace), and what being over costs.
+fn room_row(ui: &Rc<Ui>, r: &Value, dated: bool) -> gtk::Box {
     let fmt = formatter();
     let registration = text(r, "registration");
     let name = registration_label(registration);
@@ -658,7 +662,7 @@ fn room_row(ui: &Rc<Ui>, r: &Value) -> gtk::Box {
     let words = gtk::Box::new(gtk::Orientation::Vertical, 1);
     words.set_hexpand(true);
     words.set_valign(gtk::Align::Center);
-    words.append(&label(name, "money-row-title"));
+    words.append(&label(&if dated { format!("{name} · {year}") } else { name.to_string() }, "money-row-title"));
     let reading = match room {
         Some(room) if over > 0 => format!("{} put in · room {}", fmt.format_whole(contributed), fmt.format_whole(room)),
         Some(room) => format!("{} of {} · {} left", fmt.format_whole(contributed), fmt.format_whole(room), fmt.format_whole(n(r, "left"))),
