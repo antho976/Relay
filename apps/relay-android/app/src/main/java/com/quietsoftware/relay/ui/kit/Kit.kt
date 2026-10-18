@@ -1,6 +1,7 @@
 package com.quietsoftware.relay.ui.kit
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -31,6 +32,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -311,7 +313,20 @@ fun Hairline(modifier: Modifier = Modifier, color: Color = Relay.colors.lineSubt
 
 // ---- State ----
 
-/** A session lamp (DESIGN.md "Lamps"): a filled dot, or an outline when off. */
+/** True while the PC is out of reach: lamps show what was last known, so they dim. */
+val LocalStaleLamps = compositionLocalOf { false }
+
+/**
+ * How bright a lamp is drawn: full while the PC is in reach, dimmed to its last known state
+ * while it is not, eased so a quick first connection does not blink.
+ */
+@Composable
+fun lampAlpha(): Float = animateFloatAsState(if (LocalStaleLamps.current) STALE_LAMP else 1f, tween(LAMP_FADE_MS), label = "lamp").value
+
+private const val STALE_LAMP = .4f
+private const val LAMP_FADE_MS = 400
+
+/** A session lamp (DESIGN.md "Lamps"): a filled dot, or an outline when off; dimmed while the PC is away. */
 @Composable
 fun LampDot(lamp: Lamp, size: Dp = 7.dp, modifier: Modifier = Modifier) {
     val c = Relay.colors
@@ -320,7 +335,7 @@ fun LampDot(lamp: Lamp, size: Dp = 7.dp, modifier: Modifier = Modifier) {
         Lamp.Held -> c.held
         Lamp.Waiting -> c.waiting
         Lamp.Off -> null
-    }
+    }?.let { it.copy(alpha = it.alpha * lampAlpha()) }
     Box(
         modifier.size(size).clip(CircleShape)
             .then(if (fill != null) Modifier.background(fill) else Modifier.border(1.dp, c.ink3, CircleShape)),
