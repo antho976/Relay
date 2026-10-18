@@ -53,7 +53,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.quietsoftware.relay.core.model.decodeAs
 import com.quietsoftware.relay.core.wire.BusException
 import com.quietsoftware.relay.data.Relay.Live
@@ -501,6 +503,16 @@ private sealed interface FileSheet {
 }
 
 /**
+ * An edit under way, kept with the file's page rather than its screen, so a notification or
+ * another page and back finds it as it was. Not saved state: a draft can be a whole MiB.
+ */
+private class FileDraft : ViewModel() {
+    val editing = mutableStateOf(false)
+    val base = mutableStateOf("")
+    val draft = mutableStateOf("")
+}
+
+/**
  * One file: read with `file.read` (1 MiB at most), shown with line numbers and light colour, or
  * edited in full and saved with the hash of the text read, so an edit made on the PC since is
  * refused rather than overwritten. Images are drawn; anything binary says so.
@@ -513,9 +525,10 @@ fun FileScreen(projectId: Long, path: String, worktree: String?, nav: Nav) {
     var current by rememberSaveable(path) { mutableStateOf(path) }
     var trashed by rememberSaveable { mutableStateOf<Long?>(null) }
     var reloads by remember { mutableIntStateOf(0) }
-    var editing by remember { mutableStateOf(false) }
-    var base by remember { mutableStateOf("") }
-    var draft by remember { mutableStateOf("") }
+    val held = viewModel { FileDraft() }
+    var editing by held.editing
+    var base by held.base
+    var draft by held.draft
     var saving by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf<FileSheet?>(null) }
     val payload = if (trashed != null || current.isEmpty()) {
