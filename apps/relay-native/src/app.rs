@@ -2278,7 +2278,7 @@ impl Ui {
                 .paste_text(&format!("native-paste-check-{name}\n"));
         }
     }
-    /// Every live pane is on screen and shows `marker`. A parked, exited or interrupted
+    /// Every live pane is on screen and shows `marker`. A parked, exited, stopped or not started
     /// session's pane shows its slate over a detached terminal, so it is not read.
     pub fn terminal_contents_contain(&self, marker: &str) -> bool {
         use vte4::prelude::TerminalExt;

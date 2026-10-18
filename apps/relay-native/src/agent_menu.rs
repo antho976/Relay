@@ -654,13 +654,11 @@ impl Ui {
         title.set_xalign(0.0);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         head.append(&title);
-        let chip = label(&state.replace('_', " ").to_uppercase(), "agent-menu-state");
+        // The strip's word and lamp, so the menu never calls an agent something its pane does not.
+        let (word, lamp) = crate::terminal::state_word(&state);
+        let chip = label(&word, "agent-menu-state");
         chip.set_valign(gtk::Align::Center);
-        chip.add_css_class(match state.as_str() {
-            "running" | "spawning" | "idle" => "live",
-            "blocked" => "held",
-            _ => "off",
-        });
+        chip.add_css_class(lamp);
         head.append(&chip);
         body.append(&head);
         let meta = label(&format!("{} · {}", text(session, "provider"), text(session, "role")), "agent-menu-meta");

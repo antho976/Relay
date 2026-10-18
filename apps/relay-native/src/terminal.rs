@@ -213,6 +213,27 @@ impl ModeTracker {
     }
 }
 
+/// What a session's state reads as wherever it is shown (the strip, the slate, the agent menu),
+/// in the phone's words (`Session.stateLabel`), and the lamp class beside it: lit for a live or
+/// held agent, never for an idle one.
+pub fn state_word(state: &str) -> (String, &'static str) {
+    let word = match state {
+        "running" => "LIVE".into(),
+        "spawning" => "STARTING".into(),
+        "blocked" => "NEEDS YOU".into(),
+        "restorable" => "STOPPED".into(),
+        "created" => "NOT STARTED".into(),
+        _ => state.replace('_', " ").to_uppercase(),
+    };
+    let lamp = match state {
+        "running" | "spawning" => "live",
+        "blocked" => "held",
+        "restorable" => "waiting",
+        _ => "off",
+    };
+    (word, lamp)
+}
+
 pub struct Pane {
     pub root: gtk::Box,
     pub terminal: vte4::Terminal,
@@ -622,11 +643,7 @@ impl Pane {
         let tip: Vec<&str> = ["branch", "worktree", "intent"].iter().map(|key| text(session, key).trim()).filter(|part| !part.is_empty()).collect();
         self.header.set_tooltip_text((!tip.is_empty()).then(|| tip.join("\n")).as_deref());
         let state = text(session, "state");
-        let state_label = match state {
-            "running" => String::from("LIVE"),
-            "blocked" => String::from("NEEDS YOU"),
-            _ => state.to_uppercase(),
-        };
+        let (state_label, lamp) = state_word(state);
         self.state.set_text(&state_label);
         let live = matches!(state, "spawning" | "running" | "idle" | "blocked");
         self.slate.set_visible(!live);
@@ -636,7 +653,9 @@ impl Pane {
         self.slate_hint.set_text(match state {
             "parked" => "Process released. Scrollback and worktree kept; wake respawns with provider resume.",
             "restorable" => "The previous process ended. Resume restores scrollback and the worktree.",
-            "created" => "The launch was interrupted before the provider started.",
+            // Never started: a launch still on its way (the phone queues the start behind the
+            // create), one cut short, or a start that failed. The row cannot tell them apart.
+            "created" => "Not started yet. Start launches the provider in its worktree.",
             "exited" => "The process exited. Resume starts it again where it left off.",
             _ => "No signal from this session.",
         });
@@ -644,18 +663,12 @@ impl Pane {
             self.root.remove_css_class(class);
             self.lamp.remove_css_class(class);
         }
-        let class = match state {
-            "running" | "spawning" => "live",
-            "blocked" => "held",
-            "restorable" => "waiting",
-            _ => "off",
-        };
-        self.root.add_css_class(class);
-        self.lamp.add_css_class(class);
+        self.root.add_css_class(lamp);
+        self.lamp.add_css_class(lamp);
     }
 
     /// A launch in flight: the pane is on the wall before its provider exists, and says which
-    /// step it is on instead of reading as an interrupted launch.
+    /// step it is on instead of reading as not started.
     pub fn show_progress(&self, step: &str) {
         self.state.set_text("STARTING");
         self.slate.set_visible(true);
@@ -949,5 +962,20 @@ mod tests {
         assert_eq!(fresh.modes, t.modes);
         assert!(t.scan(b"\x1bc"));
         assert_eq!(t.modes, Modes::default());
+    }
+
+    #[test]
+    fn states_read_as_the_phone_says_them_and_idle_is_not_lit() {
+        for (state, word, lamp) in [
+            ("running", "LIVE", "live"),
+            ("spawning", "STARTING", "live"),
+            ("idle", "IDLE", "off"),
+            ("blocked", "NEEDS YOU", "held"),
+            ("restorable", "STOPPED", "waiting"),
+            ("created", "NOT STARTED", "off"),
+            ("parked", "PARKED", "off"),
+        ] {
+            assert_eq!(state_word(state), (String::from(word), lamp), "{state}");
+        }
     }
 }

@@ -1683,16 +1683,14 @@ impl Ui {
     }
 }
 
-/// A focus tab's lamp shows its session's state.
+/// A focus tab's lamp shows its session's state, as the pane's strip does.
 fn tab_lamp(lamp: &impl IsA<gtk::Widget>, state: &str) {
     for class in ["live", "held", "waiting"] {
         lamp.remove_css_class(class);
     }
-    match state {
-        "running" | "spawning" => lamp.add_css_class("live"),
-        "blocked" => lamp.add_css_class("held"),
-        "restorable" => lamp.add_css_class("waiting"),
-        _ => (),
+    match crate::terminal::state_word(state).1 {
+        "off" => (),
+        class => lamp.add_css_class(class),
     }
 }
 
