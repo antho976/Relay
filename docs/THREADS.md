@@ -304,7 +304,8 @@ Easier to do things, each figure said once, one way to ask per page.
 - **Entries** says its figures in the context line ("27 entries · in $2,150 · out $2,425 · net
   −$275") instead of a strip. A row's badge opens the category list and moves the entry; its menu
   (right click, the Menu key) holds Edit, Change category, Ask about this entry and Delete.
-  Delete deletes the focused row, Enter edits, Ctrl F finds. Each change has Undo on the toast.
+  Delete deletes the focused row, Enter edits, Ctrl F finds. Each change has Undo on the toast,
+  and on every Tally page Ctrl Z presses it while it shows (a field keeps Ctrl Z for its text).
 - **Plan** takes the monthly budget in its strip, beside what categories hold of it. Beside each
   budget field: last month's spending and the average of the last three months, or as many as the
   ledger reaches (one `money.series` read per category, kept until `money.changed`). Categories

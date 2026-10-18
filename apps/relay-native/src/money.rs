@@ -295,13 +295,17 @@ fn tally_tabs(showing: &'static str) -> gtk::Box {
 
 /// A toast on the page showing now, a Money page or Threads: `text`, and an Undo key when
 /// `undo` is given. A page with no toast shows `text` in the window's good news banner, with no
-/// Undo.
+/// Undo. On a Tally page, where Ctrl Z presses the Undo key ([`install`]), the toast says so.
 pub(crate) fn toast(ui: &Ui, text: &str, undo: Option<Action>) {
     let Some(toast) = STATE.with(|s| s.toasts.borrow().get(ui.page.borrow().as_str()).cloned()) else {
         ui.show_info(text);
         return;
     };
-    toast.text.set_text(text);
+    if undo.is_some() && tally_page(ui.page.borrow().as_str()) {
+        toast.text.set_text(&format!("{text} · Ctrl Z"));
+    } else {
+        toast.text.set_text(text);
+    }
     toast.undo_key.set_visible(undo.is_some());
     *toast.undo.borrow_mut() = undo;
     toast.revealer.set_can_target(true);
@@ -316,6 +320,23 @@ pub(crate) fn toast(ui: &Ui, text: &str, undo: Option<Action>) {
             toast.undo.borrow_mut().take();
         }
     });
+}
+
+/// Whether `name` is one of Tally's own pages ([`PAGES`]).
+fn tally_page(name: &str) -> bool {
+    PAGES.iter().any(|(page, _, _)| *page == name)
+}
+
+/// Whether the focus is in a field or a menu, which keep their keys: Ctrl Z there undoes typing.
+fn typing(ui: &Ui) -> bool {
+    let mut at = GtkWindowExt::focus(&ui.window);
+    while let Some(widget) = at {
+        if widget.is::<gtk::Editable>() || widget.is::<gtk::TextView>() || widget.is::<gtk::Popover>() {
+            return true;
+        }
+        at = widget.parent();
+    }
+    false
 }
 
 /// Wires the switcher, Money's sidebar keys and its add key. `nav` is Money's sidebar box,
@@ -431,6 +452,27 @@ pub fn install(ui: &Rc<Ui>, nav: &gtk::Box, add: &gtk::Button, dev_only: Vec<gtk
             return glib::Propagation::Proceed;
         }
         add_entry(&ui);
+        glib::Propagation::Stop
+    });
+    ui.window.add_controller(keys);
+    // Ctrl Z on a Tally page presses its toast's Undo while that shows, as a click does: Delete on
+    // a focused row deletes, and the keyboard takes it back. A field keeps the key for its text;
+    // a sheet open, or the start screen, keeps it too.
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak = Rc::downgrade(ui);
+    keys.connect_key_pressed(move |_, key, keycode, mods| {
+        use gtk::gdk::ModifierType;
+        let Some(ui) = weak.upgrade() else { return glib::Propagation::Proceed };
+        let mods = mods & (ModifierType::CONTROL_MASK | ModifierType::SHIFT_MASK | ModifierType::ALT_MASK | ModifierType::META_MASK);
+        if mods != ModifierType::CONTROL_MASK || crate::shortcuts::latin(key, keycode).to_lower() != gtk::gdk::Key::z {
+            return glib::Propagation::Proceed;
+        }
+        let showing = ui.page.borrow().clone();
+        let open = tally_page(&showing) && ui.panels.borrow().is_empty() && STATE.with(|s| s.start.borrow().is_none()) && !typing(&ui);
+        let toast = STATE.with(|s| s.toasts.borrow().get(showing.as_str()).cloned()).filter(|t| open && t.undo.borrow().is_some());
+        let Some(toast) = toast else { return glib::Propagation::Proceed };
+        toast.undo_key.emit_clicked();
         glib::Propagation::Stop
     });
     ui.window.add_controller(keys);
