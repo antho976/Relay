@@ -1,5 +1,6 @@
 package com.quietsoftware.relay.ui.dev
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -106,6 +107,7 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
     var error by remember { mutableStateOf<String?>(null) }
     var pickingProject by remember { mutableStateOf(false) }
     var pickingTask by remember { mutableStateOf(false) }
+    var leaving by remember { mutableStateOf(false) }
     val promptFocus = remember { FocusRequester() }
     // A new agent with nothing written yet: the keyboard is up for its first message.
     LaunchedEffect(Unit) { if (prompt.isNullOrEmpty() && taskId == null) runCatching { promptFocus.requestFocus() } }
@@ -125,6 +127,8 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
     fun providerOf(p: Profile) = p.provider ?: fallback
     fun patch(next: Profile) {
         profiles = profiles.toMutableList().also { it[index] = next }
+        // The error was about the form as it was before this change.
+        error = null
     }
     fun label(i: Int) = if (group) (if (i == 2) "Reviewer" else "Builder ${i + 1}") else "the agent"
 
@@ -214,9 +218,13 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
         }
     }
 
+    // What was written for an agent is not dropped by Back without asking.
+    val written = !busy && profiles.any { it.prompt.isNotBlank() }
+    BackHandler(enabled = written) { leaving = true }
+
     Page {
         Column(Modifier.fillMaxSize()) {
-            PageBar("New agent", nav::back, subtitle = project?.let { crumb(it, s.workspaces) })
+            PageBar("New agent", { if (written) leaving = true else nav.back() }, subtitle = project?.let { crumb(it, s.workspaces) })
             if (s.projects.isEmpty()) {
                 Empty("folder", "No projects yet", "Add a project on the PC first.")
                 return@Column
@@ -265,7 +273,7 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                                 Modifier.heightIn(min = 36.dp).alpha(if (usable) 1f else .45f),
                                 selected = chosen == name,
                                 glyph = name,
-                                onClick = if (usable) ({ patch(profile.copy(provider = name)) }) else null,
+                                onClick = if (usable) ({ patch(profile.copy(provider = name)) }) else ({ nav.shell.toast("${providerName(name)} is not installed on the PC") }),
                             )
                         }
                     }
@@ -317,7 +325,7 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                     else -> null
                 },
                 error != null,
-                if (group) "Launch group" else "Start",
+                if (group) "Launch review group" else "Launch agent",
                 enabled = project != null && !busy,
                 onStart = ::launch,
             )
@@ -332,6 +340,9 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
     }
     if (pickingTask) {
         TaskSheet(open, task, onPick = { task = it }, onDismiss = { pickingTask = false })
+    }
+    if (leaving) {
+        AskSheet("Discard this agent?", "What you wrote for it is not kept.", "Discard", danger = true, onConfirm = { nav.back() }, onDismiss = { leaving = false })
     }
 }
 
@@ -372,7 +383,12 @@ private fun providersOf(result: JsonElement?): List<ProviderInfo>? {
     }
 }
 
-private fun providerName(p: String) = if (p == "codex") "Codex" else "Claude Code"
+/** A provider as a sentence names it: "Claude Code", "Codex", or its id. */
+internal fun providerName(p: String) = when (p) {
+    "claude" -> "Claude Code"
+    "codex" -> "Codex"
+    else -> p
+}
 
 /** A create's session name: the PC's answer, or a reference the outbox fills in once it has one. */
 private fun refOf(c: Hub.Change): JsonElement = when (c) {
