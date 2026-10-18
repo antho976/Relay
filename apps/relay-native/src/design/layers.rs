@@ -95,6 +95,22 @@ impl Layers {
             let lock = gtk::Button::new();
             lock.add_css_class("design-layer-key");
             row.append(&lock);
+            // The keys take room only under the pointer or while on (hidden, locked); invisible,
+            // they still held ~50px a name could use ("Weekly usage …" in a 248px panel).
+            let motion = gtk::EventControllerMotion::new();
+            let (r, e, l) = (row.downgrade(), eye.downgrade(), lock.downgrade());
+            motion.connect_enter(move |_, _, _| {
+                if let (Some(r), Some(e), Some(l)) = (r.upgrade(), e.upgrade(), l.upgrade()) {
+                    show_keys(&r, &e, &l, true);
+                }
+            });
+            let (r, e, l) = (row.downgrade(), eye.downgrade(), lock.downgrade());
+            motion.connect_leave(move |_| {
+                if let (Some(r), Some(e), Some(l)) = (r.upgrade(), e.upgrade(), l.upgrade()) {
+                    show_keys(&r, &e, &l, false);
+                }
+            });
+            row.add_controller(motion);
             item.set_child(Some(&row));
         });
         let weak = Rc::downgrade(&layers);
@@ -164,6 +180,7 @@ impl Layers {
         } else {
             lock.remove_css_class("on");
         }
+        show_keys(&widget, &eye, &lock, widget.state_flags().contains(gtk::StateFlags::PRELIGHT));
         // Handlers are bound once per row widget and read the row they show now.
         if widget.widget_name() != "bound" {
             widget.set_widget_name("bound");
@@ -297,6 +314,12 @@ impl Layers {
         }
         self.refresh();
     }
+}
+
+/// A layer row's eye and lock: shown under the pointer, and otherwise only while they are on.
+fn show_keys(row: &gtk::Box, eye: &gtk::Button, lock: &gtk::Button, hover: bool) {
+    eye.set_visible(hover || row.has_css_class("hidden"));
+    lock.set_visible(hover || lock.has_css_class("on"));
 }
 
 /// One page's row: click to open, double click to rename, its menu to delete.
