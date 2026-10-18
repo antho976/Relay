@@ -2,6 +2,7 @@ package com.quietsoftware.relay.ui.term
 
 import android.graphics.Paint
 import android.graphics.Typeface
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.AnimationState
 import androidx.compose.animation.core.animateDecay
 import androidx.compose.animation.rememberSplineBasedDecay
@@ -129,6 +130,8 @@ fun TerminalView(
     // Cells from where a long press began to where the finger is: rows as the buffer counts them.
     var selection by remember { mutableStateOf<Selection?>(null) }
     var selecting by remember { mutableStateOf(false) }
+    // Back puts a selection away before it leaves the screen.
+    BackHandler(enabled = selection != null) { selection = null }
 
     BoxWithConstraints(modifier) {
         val padX = with(density) { 6.dp.toPx() }

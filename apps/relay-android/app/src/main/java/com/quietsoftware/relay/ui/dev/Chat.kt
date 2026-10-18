@@ -1,7 +1,9 @@
 package com.quietsoftware.relay.ui.dev
 
 import android.content.Intent
+import android.os.SystemClock
 import android.speech.RecognizerIntent
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -51,6 +53,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.produceState
@@ -103,6 +106,7 @@ import com.quietsoftware.relay.core.term.Keys
 import com.quietsoftware.relay.data.SessionChat
 import com.quietsoftware.relay.data.Relay as RelayData
 import com.quietsoftware.relay.data.TerminalFeed
+import com.quietsoftware.relay.ui.LocalNav
 import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.code.ADD_TEXT
 import com.quietsoftware.relay.ui.code.ADD_WASH
@@ -190,7 +194,9 @@ fun ChatScreen(name: String, nav: Nav) {
     // Dictation through the phone's own recognizer: what was said joins what is typed.
     val dictate = rememberDictation { said -> type(joinSaid(field.text, said)) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_PICTURES)) { uris ->
-        for (uri in uris.take(MAX_PICTURES - attached.size)) {
+        val room = (MAX_PICTURES - attached.size).coerceAtLeast(0)
+        if (uris.size > room) nav.shell.toast("Up to $MAX_PICTURES pictures in one message")
+        for (uri in uris.take(room)) {
             val id = System.nanoTime()
             attached += Attachment(id, null)
             scope.launch {
@@ -224,7 +230,11 @@ fun ChatScreen(name: String, nav: Nav) {
     val since = remember(messages, sending) { epoch((sending.lastOrNull() ?: messages.lastOrNull { it.role == "user" })?.createdAt).takeIf { it > 0 } }
 
     KeepScreenOn(s.prefs.keepScreenOn)
+    // Back puts the agent's screen away before it leaves the conversation.
+    BackHandler(enabled = peek && ready) { peek = false }
 
+    // When the last message went: the key turns to Stop under the finger that sent it.
+    var sentAt by remember { mutableLongStateOf(0L) }
     fun send() {
         val typed = text.trim()
         if (attached.any { it.sending }) {
@@ -240,10 +250,13 @@ fun ChatScreen(name: String, nav: Nav) {
         if (typed.isEmpty() && paths.isEmpty()) {
             // Empty: Esc stops an agent mid-turn; otherwise (a menu up, a prompt) it is the Enter it waits for.
             val stop = working && !asking
+            // A second tap on Send just after a message is that tap again, not a stop.
+            if (stop && SystemClock.uptimeMillis() - sentAt < STOP_AFTER_SEND_MS) return
             chat.key(if (stop) Keys.ESC else Keys.ENTER)
-            if (stop) nav.shell.toast("Asked ${session?.provider ?: "the agent"} to stop")
+            if (stop) nav.shell.toast("Asked ${session?.provider?.let(::providerName) ?: "the agent"} to stop")
             return
         }
+        sentAt = SystemClock.uptimeMillis()
         type("")
         attached.clear()
         scope.launch {
@@ -291,7 +304,7 @@ fun ChatScreen(name: String, nav: Nav) {
                     )
                     found == false -> Empty(
                         "terminal", "Nothing said yet",
-                        "The conversation shows here once ${session?.provider ?: "the agent"} starts. Its screen shows everything meanwhile.",
+                        "The conversation shows here once ${session?.provider?.let(::providerName) ?: "the agent"} starts. Its screen shows everything meanwhile.",
                         action = openTerminal,
                     )
                     status == TerminalFeed.Status.Connecting && s.online -> Empty("terminal", "Reading the conversation")
@@ -342,7 +355,7 @@ fun ChatScreen(name: String, nav: Nav) {
             SheetRow("Open the terminal", "terminal", { close { nav.console(name) } })
             session?.let { ss ->
                 SheetRow("Changes", "commit", { close { nav.git(ss.projectId, ss.worktree.ifBlank { null }, name) } })
-                if (ss.state != "closed" && !ss.pending) SheetRow("Mail the agent", "send", { close { mailing = true } })
+                if (ss.state != "closed" && !ss.pending) SheetRow("Mail the agent", "mail", { close { mailing = true } })
             }
             SheetRow("Copy the conversation", "copy", {
                 close {
@@ -794,13 +807,17 @@ internal fun Modifier.messageTouch(open: Boolean, haptic: HapticFeedback, onOpen
 /** The keys under a message of the person's, while it is [open]: Copy and Edit for its [words], and Send again. */
 @Composable
 internal fun MessageKeys(open: Boolean, words: String, onClose: () -> Unit, onEdit: ((String) -> Unit)?, onResend: (() -> Unit)?) {
+    val nav = LocalNav.current
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     AnimatedVisibility(open, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             if (words.isNotEmpty()) {
                 Chip("Copy", "Copy this message", open, glyph = "copy") {
-                    scope.launch { clipboard.copy(words) }
+                    scope.launch {
+                        clipboard.copy(words)
+                        nav.shell.toast("Copied")
+                    }
                     onClose()
                 }
                 onEdit?.let { edit -> Chip("Edit", "Edit it in the message box", open, glyph = "edit") { edit(words) } }
@@ -1091,16 +1108,17 @@ private fun AskCard(chat: SessionChat, screen: State<String?>, online: Boolean, 
                 }
             }
         }
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Full-size keys, set apart: these answer permission prompts.
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             if (options.isEmpty()) {
-                Key("Yes", { chat.key("y") }, enabled = online, compact = true)
-                Key("No", { chat.key("n") }, enabled = online, compact = true)
+                Key("Yes", { chat.key("y") }, enabled = online)
+                Key("No", { chat.key("n") }, enabled = online)
             } else {
-                Key("↑", { chat.key(ARROW_UP) }, enabled = online, compact = true)
-                Key("↓", { chat.key(ARROW_DOWN) }, enabled = online, compact = true)
+                Key("↑", { chat.key(ARROW_UP) }, enabled = online)
+                Key("↓", { chat.key(ARROW_DOWN) }, enabled = online)
             }
-            Key("Enter", { chat.key(Keys.ENTER) }, enabled = online, compact = true)
-            Key("Esc", { chat.key(Keys.ESC) }, kind = KeyKind.Quiet, enabled = online, compact = true)
+            Key("Enter", { chat.key(Keys.ENTER) }, enabled = online)
+            Key("Esc", { chat.key(Keys.ESC) }, kind = KeyKind.Quiet, enabled = online)
         }
     }
 }
@@ -1223,7 +1241,7 @@ private fun QuickKeys(chat: SessionChat, enabled: Boolean) {
     ) {
         for (k in CHAT_KEYS) {
             Box(
-                Modifier.height(32.dp).widthIn(min = 40.dp).alpha(if (enabled) 1f else .4f).clip(Radii.keycap).background(c.slab).border(1.dp, c.edge, Radii.keycap)
+                Modifier.height(40.dp).widthIn(min = 44.dp).alpha(if (enabled) 1f else .4f).clip(Radii.keycap).background(c.slab).border(1.dp, c.edge, Radii.keycap)
                     .clickable(enabled = enabled, onClickLabel = k.spoken, role = Role.Button) { chat.key(k.data) }.padding(horizontal = 9.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -1402,6 +1420,9 @@ private const val MODE_TAIL = 4
 
 /** Pictures one message may carry. */
 private const val MAX_PICTURES = 4
+
+/** How long after a message the empty box's key will not stop the agent. */
+private const val STOP_AFTER_SEND_MS = 1_000L
 
 // ---- The agent's commands ----
 
