@@ -86,9 +86,12 @@ internal class Lifecycle(private val nav: Nav) {
 
     var onClosed: (String) -> Unit = {}
 
+    /** "Resume all" was asked to stop after the agent it is resuming. */
+    var halt by mutableStateOf(false)
+        private set
+
     /** Whether the screen that holds this is still shown: an answer arriving later must not navigate from another. */
     internal var shown = false
-    private var halt = false
 
     class Ask(val title: String, val body: String, val confirm: String, val danger: Boolean, val run: () -> Unit)
 

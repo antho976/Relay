@@ -72,6 +72,7 @@ import com.quietsoftware.relay.ui.kit.switchRow
 import com.quietsoftware.relay.ui.shell.Page
 import com.quietsoftware.relay.ui.shell.PageBar
 import com.quietsoftware.relay.ui.theme.Relay
+import com.quietsoftware.relay.ui.threads.Spinner
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -103,7 +104,7 @@ fun SessionScreen(name: String, nav: Nav) {
                 }
             }
             if (session == null) {
-                if (got.loading) Empty("terminal", "Reading $name") else Empty("terminal", "No such agent", got.error?.let(::refusal) ?: "It may have been closed on the PC.")
+                if (got.loading) Empty("terminal", "Reading $name", action = { Spinner(16.dp) }) else Empty("terminal", "No such agent", got.error?.let(::refusal) ?: "It may have been closed on the PC.")
                 return@Column
             }
             Column(
@@ -303,7 +304,10 @@ private fun ColumnScope.Brief(nav: Nav, name: String) {
                 }
             }
             brief.error != null -> T(refusal(brief.error!!), Modifier.padding(8.dp), Relay.type.caption, c.heldText)
-            else -> T("Reading the brief…", Modifier.padding(8.dp), Relay.type.caption, c.ink3)
+            else -> Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Spinner(11.dp)
+                T("Reading the brief…", style = Relay.type.caption, color = c.ink3)
+            }
         }
     }
 }

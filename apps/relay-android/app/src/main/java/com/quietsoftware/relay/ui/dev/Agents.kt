@@ -363,7 +363,9 @@ private fun StoppedFold(list: List<Stopped>, online: Boolean, life: Lifecycle, n
         ListRow(onClick = { if (progress != null) life.stopAfterCurrent() else open = !open }) {
             Glyph("pause", 16.dp, c.ink3)
             T(
-                progress?.let { (done, total) -> "Resuming ${minOf(done + 1, total)} of $total · tap to stop after this one" }
+                progress?.let { (done, total) ->
+                    if (life.halt) "Stopping after ${life.busy ?: "this one"}…" else "Resuming ${minOf(done + 1, total)} of $total · tap to stop after this one"
+                }
                     ?: if (list.size == 1) "1 stopped agent" else "${list.size} stopped agents",
                 Modifier.weight(1f),
                 Relay.type.ui,

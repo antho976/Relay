@@ -311,7 +311,7 @@ fun ChatScreen(name: String, nav: Nav) {
                         "The conversation shows here once ${session?.provider?.let(::providerName) ?: "the agent"} starts. Its screen shows everything meanwhile.",
                         action = openTerminal,
                     )
-                    status == TerminalFeed.Status.Connecting && s.online -> Empty("terminal", "Reading the conversation")
+                    status == TerminalFeed.Status.Connecting && s.online -> Empty("terminal", "Reading the conversation", action = { Spinner(16.dp) })
                     else -> Empty("terminal", "Nothing said yet", if (s.online) null else "The PC is away, and this phone has not read this agent before.", action = openTerminal)
                 }
             }
@@ -1095,8 +1095,10 @@ private fun AskCard(chat: SessionChat, screen: State<String?>, online: Boolean, 
             Dot(c.held, 6.dp)
             T("Waiting for you", style = Relay.type.ui, color = c.heldText, weight = androidx.compose.ui.text.font.FontWeight.Medium)
         }
-        if (text == null) T("Reading the agent's screen…", style = Relay.type.caption, color = c.ink3)
-        else if (question.isNotEmpty()) T(question.joinToString("\n"), style = Relay.type.mono.copy(fontSize = 11.5.sp, lineHeight = 16.sp), color = c.ink2)
+        if (text == null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Spinner(11.dp)
+            T("Reading the agent's screen…", style = Relay.type.caption, color = c.ink3)
+        } else if (question.isNotEmpty()) T(question.joinToString("\n"), style = Relay.type.mono.copy(fontSize = 11.5.sp, lineHeight = 16.sp), color = c.ink2)
         if (options.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 for ((n, label) in options) {
@@ -1180,7 +1182,7 @@ internal fun ScreenPanel(nav: Nav, name: String, screen: State<String?>, onClose
     Column(Modifier.fillMaxWidth().background(c.screen)) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.edge))
         Row(Modifier.fillMaxWidth().padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Dot(if (reading) c.waiting else c.live, 5.dp)
+            Box(Modifier.size(10.dp), contentAlignment = Alignment.Center) { if (reading) Spinner(10.dp) else Dot(c.live, 5.dp) }
             T(if (reading) "Reading the agent's screen…" else "The agent's screen", Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 1)
             IconKey("close", onClose, size = 14.dp, tint = c.ink3, label = "Hide the agent's screen")
         }

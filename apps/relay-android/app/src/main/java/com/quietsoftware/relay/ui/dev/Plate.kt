@@ -51,6 +51,7 @@ import com.quietsoftware.relay.data.TerminalFeed
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.LampDot
 import com.quietsoftware.relay.ui.kit.T
+import com.quietsoftware.relay.ui.kit.TOUCH
 import com.quietsoftware.relay.ui.term.TerminalView
 import com.quietsoftware.relay.ui.theme.Fonts
 import com.quietsoftware.relay.ui.theme.Relay
@@ -166,13 +167,16 @@ internal fun Branch(s: Session, modifier: Modifier = Modifier, size: Float = 11f
     }
 }
 
-/** A strip key (terminal.rs: 22px, radius 2): a glyph, dimmed when the PC is away. */
+/**
+ * A strip key (terminal.rs: 22px, radius 2): a glyph, dimmed when the PC is away. The face is the
+ * PC's; the target around it is a finger's, since Park ends a working agent's process at one tap.
+ */
 @Composable
 internal fun StripKey(act: Act, onClick: () -> Unit, dim: Boolean = false) {
     val c = Relay.colors
     Box(
         Modifier
-            .size(width = 34.dp, height = 26.dp)
+            .size(width = TOUCH, height = 36.dp)
             .alpha(if (dim) .4f else 1f)
             .clip(SQUARE)
             .clickable(role = Role.Button, onClickLabel = act.label, onClick = onClick),
