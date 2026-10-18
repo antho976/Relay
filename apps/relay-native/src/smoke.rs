@@ -903,7 +903,28 @@ pub fn install(ui: &Rc<Ui>) {
                     glib::timeout_future(Duration::from_millis(200)).await;
                     search.emit_activate();
                     wait_for(|| *ui.page.borrow() == "board", "Board opened from the palette").await?;
-                    println!("Command palette run verified: typed, Enter, Board");
+                    // Typed, the project's tasks come up by name, read once the palette opened.
+                    click(&ui.window, "command-palette")?;
+                    glib::timeout_future(Duration::from_millis(300)).await;
+                    let panel = util::named(&ui.window, "app-panel").ok_or("no palette panel")?;
+                    let search = util::find(&panel, &|w| w.is::<gtk::SearchEntry>())
+                        .and_downcast::<gtk::SearchEntry>()
+                        .ok_or("no search in the palette")?;
+                    let list = util::find(&panel, &|w| w.is::<gtk::ListBox>()).and_downcast::<gtk::ListBox>().ok_or("no list in the palette")?;
+                    search.set_text("native");
+                    let task_row = || {
+                        let mut i = 0;
+                        while let Some(row) = list.row_at_index(i) {
+                            let task = util::find(row.upcast_ref(), &|w| w.downcast_ref::<gtk::Label>().is_some_and(|l| l.text().starts_with('#'))).is_some();
+                            if row.is_child_visible() && task {
+                                return true;
+                            }
+                            i += 1;
+                        }
+                        false
+                    };
+                    wait_for(task_row, "A task found by name in the palette").await?;
+                    println!("Command palette run verified: typed, Enter, Board; tasks by name");
                     Ok(())
                 });
                 return;
