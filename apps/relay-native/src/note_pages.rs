@@ -997,6 +997,7 @@ fn shell(ui: &Rc<Ui>) -> Rc<Shell> {
     let dismiss = gtk::Button::new();
     dismiss.set_child(Some(&glyph("close", 12)));
     dismiss.add_css_class("notes-notice-close");
+    dismiss.set_tooltip_text(Some("Dismiss"));
     let hide = banner.downgrade();
     dismiss.connect_clicked(move |_| {
         if let Some(banner) = hide.upgrade() {

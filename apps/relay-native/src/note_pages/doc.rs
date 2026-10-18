@@ -890,19 +890,19 @@ impl Doc {
             let selected = self.buffer.text(&start, &end, false);
             let (lines, words, chars) = tx::stats(&selected);
             self.counts.set_text(&format!(
-                "{} selected · {} words · {} lines",
+                "{} selected · {} · {}",
                 tx::thousands(chars),
-                tx::thousands(words),
-                tx::thousands(lines)
+                tx::counted(words, "word", "words"),
+                tx::counted(lines, "line", "lines")
             ));
         } else {
             let body = self.body();
             let (lines, words, chars) = tx::stats(&body);
             self.counts.set_text(&format!(
-                "{} lines · {} words · {} characters",
-                tx::thousands(lines),
-                tx::thousands(words),
-                tx::thousands(chars)
+                "{} · {} · {}",
+                tx::counted(lines, "line", "lines"),
+                tx::counted(words, "word", "words"),
+                tx::counted(chars, "character", "characters")
             ));
             self.eol.set_text(if body.contains("\r\n") { "CRLF" } else { "LF" });
         }
@@ -1369,15 +1369,7 @@ fn task_chip(ui: &Rc<Ui>, task: &Value) -> gtk::Button {
     title.set_ellipsize(gtk::pango::EllipsizeMode::End);
     title.set_max_width_chars(36);
     content.append(&title);
-    let place = match column {
-        "backlog" => "Backlog",
-        "ready" => "Ready",
-        "active" => "In progress",
-        "in_review" => "In review",
-        "done" => "Done",
-        other => other,
-    };
-    content.append(&label(place, "notes-task-column"));
+    content.append(&label(relay_board::column_title(column), "notes-task-column"));
     let chip = gtk::Button::new();
     chip.add_css_class("notes-task-chip");
     if column == "done" {
