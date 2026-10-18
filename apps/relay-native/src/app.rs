@@ -944,9 +944,14 @@ fn status_bar() -> (StatusBar, status::UsageState) {
     status_branch.set_max_width_chars(18);
     bottom.append(&status_project);
     bottom.append(&gtk::Separator::new(gtk::Orientation::Vertical));
-    bottom.append(&crate::icons::image("branch", 11));
-    bottom.append(&status_branch);
-    bottom.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+    // The branch, when there is a project to have one: no bare branch mark beside "No project".
+    let branch_cell = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    branch_cell.append(&crate::icons::image("branch", 11));
+    branch_cell.append(&status_branch);
+    branch_cell.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+    branch_cell.set_visible(false);
+    bottom.append(&branch_cell);
+    status_branch.connect_label_notify(move |l| branch_cell.set_visible(!l.label().is_empty()));
     bottom.append(&label("linux · local", "status-platform"));
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
