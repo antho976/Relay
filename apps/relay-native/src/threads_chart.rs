@@ -8,6 +8,12 @@
 //! Colour is the data's: the newest period in Relay's signal, the ones before it in a fixed
 //! palette, and categories in their own hue.
 //!
+//! A chart with `data` instead of a question carries Claude's own numbers, for what the ledger does
+//! not hold (a plan, a projection): `{"labels", "series": [{"name", "values", "projected"?}],
+//! "unit"?}`. Without `unit` the values are amounts in the currency as decimals (1234.56 or
+//! "1234.56"); with one they are figures in it ("kg", "%", "km", "" for a count). A projected series
+//! draws dashed or lighter, and the card says the numbers are the reply's and do not redraw.
+//!
 //! A chart with `gym` instead of `query` asks `gym.series` (Avex's training history, docs/GYM.md):
 //! its values are weights, counts or minutes, shown in the unit the reading names, and a lift's
 //! line starts its axis near its lowest value so progress shows. It reads again on every
@@ -23,7 +29,7 @@ use gtk::prelude::*;
 use gtk4 as gtk;
 use relay_client::thread_view::{ticks, ChartKind, ChartSpec};
 use relay_money::money::{Locale, MoneyFormatter};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::cell::{Cell, RefCell};
 use std::f64::consts::{FRAC_PI_2, PI};
 use std::rc::Rc;
@@ -35,6 +41,11 @@ const PAD_T: f64 = 10.0;
 const PAD_B: f64 = 8.0;
 /// Room on the left for the axis labels.
 const AXIS_W: i32 = 56;
+
+/// The foot of a chart drawn from the numbers in its reply.
+const WRITTEN: &str = "Claude's numbers from this reply, not Tally's: it does not redraw";
+/// How strongly a projected series' bars and legend dot are drawn beside a known one's.
+const PROJECTED_ALPHA: f64 = 0.42;
 
 /// A chart drawn from a question: its body, its legend, the question, and whether the ledger moved
 /// while it was out of view.
@@ -70,13 +81,18 @@ fn hue(color: Option<i64>, index: usize) -> &'static str {
 }
 
 fn dot(hex: &str) -> gtk::DrawingArea {
+    dot_alpha(hex, 1.0)
+}
+
+/// A legend's dot, lighter for a projected series.
+fn dot_alpha(hex: &str, alpha: f64) -> gtk::DrawingArea {
     let (r, g, b) = rgb(hex);
     let area = gtk::DrawingArea::new();
     area.set_content_width(9);
     area.set_content_height(9);
     area.set_valign(gtk::Align::Center);
     area.set_draw_func(move |_, cr, w, h| {
-        cr.set_source_rgb(r, g, b);
+        cr.set_source_rgba(r, g, b, alpha);
         cr.arc(f64::from(w) / 2.0, f64::from(h) / 2.0, 4.0, 0.0, 2.0 * PI);
         let _ = cr.fill();
     });
@@ -116,7 +132,11 @@ pub fn card(spec: ChartSpec) -> gtk::Box {
         foot.append(&label("Live from Tally, redraws when the ledger changes", "threads-chart-note"));
         LIVE.with(|l| l.borrow_mut().push((body.downgrade(), legend.downgrade(), spec.clone(), Rc::default())));
     } else {
-        foot.append(&label("Numbers as written in the reply", "threads-chart-note"));
+        let note = label(WRITTEN, "threads-chart-note");
+        note.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        note.set_hexpand(true);
+        note.set_tooltip_text(Some(WRITTEN));
+        foot.append(&note);
     }
     card.append(&foot);
     load(&body, &legend, &spec);
@@ -187,11 +207,8 @@ fn in_view(body: &gtk::Box, viewport: Option<&gtk::Widget>) -> bool {
 
 fn load(body: &gtk::Box, legend: &gtk::Box, spec: &ChartSpec) {
     if let Some(data) = &spec.data {
-        let mut data = data.clone();
-        if data["currency"].is_null() {
-            data["currency"] = json!(super::formatter().currency);
-        }
-        draw(body, legend, spec.kind, &data);
+        let currency = data["currency"].as_str().filter(|c| !c.is_empty()).map_or_else(|| super::formatter().currency, str::to_string);
+        draw_data(body, legend, spec.kind, read_written(data, &currency));
         return;
     }
     if let Some(query) = spec.gym.clone() {
@@ -230,18 +247,28 @@ fn load(body: &gtk::Box, legend: &gtk::Box, spec: &ChartSpec) {
     });
 }
 
+/// Each series' name and values, `None` where it has none.
+type Series = Vec<(String, Vec<Option<i64>>)>;
+
 struct Data {
     labels: Vec<String>,
     colors: Vec<Option<i64>>,
-    series: Vec<(String, Vec<i64>)>,
+    /// Each series' name and values; a value the reading or the reply does not give is `None`,
+    /// left out rather than drawn at zero.
+    series: Series,
+    /// Which series are projected: dashed on a line, lighter as bars, named so in the legend.
+    projected: Vec<bool>,
     /// How many labels each series has reached (the period still running), else all of them.
     known: Vec<usize>,
     fmt: Fmt,
     /// The value axis starts at zero; a lift's line starts near its lowest value instead.
     from_zero: bool,
+    /// What the card says when there is nothing to draw.
+    empty: &'static str,
 }
 
-/// How a chart's values read: money in minor units, or a training figure in tenths of its unit.
+/// How a chart's values read: money in minor units, or a figure (training, or a unit the reply
+/// names) in tenths of its unit.
 #[derive(Clone)]
 enum Fmt {
     Money(MoneyFormatter),
@@ -261,6 +288,7 @@ impl Fmt {
         let n = if whole || tenths % 10 == 0 { super::avex::group(v.round() as i64) } else { format!("{v:.1}") };
         match unit {
             "" => n,
+            "%" => format!("{n}%"),
             "sessions" | "sets" | "minutes" if !whole => format!("{n} {unit}"),
             "sessions" | "sets" | "minutes" => n,
             unit => format!("{n} {unit}"),
@@ -285,36 +313,109 @@ impl Fmt {
 /// A `gym.series` reading as a chart's numbers, in tenths of its unit. A lift's best has nothing
 /// to read in a week it was not done: such points are left out rather than drawn at zero.
 fn read_gym(v: &Value, kind: ChartKind) -> Data {
-    let labels: Vec<String> = v["labels"].as_array().into_iter().flatten().map(|l| l.as_str().unwrap_or("").to_string()).collect();
-    let lines: Vec<(String, Vec<Option<f64>>)> = v["series"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|s| (s["name"].as_str().unwrap_or("").to_string(), (0..labels.len()).map(|i| s["values"][i].as_f64()).collect()))
-        .collect();
-    let keep: Vec<usize> = (0..labels.len()).filter(|i| lines.iter().any(|(_, values)| values[*i].is_some())).collect();
-    let series = lines.into_iter().map(|(name, values)| (name, keep.iter().map(|i| (values[*i].unwrap_or(0.0) * 10.0).round() as i64).collect())).collect();
-    let labels: Vec<String> = keep.iter().map(|i| labels[*i].clone()).collect();
+    let (labels, series) = gaps_closed(&v["labels"], &v["series"], |value| value.as_f64().map(|x| (x * 10.0).round() as i64));
     let measure = v["measure"].as_str().unwrap_or("");
     Data {
-        known: vec![labels.len(); 1],
+        known: vec![labels.len(); series.len()],
+        projected: vec![false; series.len()],
         colors: vec![None; labels.len()],
         labels,
         series,
         fmt: Fmt::Unit(v["unit"].as_str().unwrap_or("").to_string()),
         from_zero: !(kind == ChartKind::Line && matches!(measure, "e1rm" | "top_weight")),
+        empty: "Nothing to draw yet: no workouts match.",
     }
 }
 
+/// A label as written: a string, or a number ("2027").
+fn label_text(label: &Value) -> String {
+    match label {
+        Value::String(s) => s.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+/// Labels and each series' values read with `value`, keeping only the labels at least one series
+/// gives a value for. A value that does not read stays `None`: left out, never drawn as zero.
+fn gaps_closed(labels: &Value, series: &Value, value: impl Fn(&Value) -> Option<i64>) -> (Vec<String>, Series) {
+    let labels: Vec<String> = labels.as_array().into_iter().flatten().map(label_text).collect();
+    let lines: Series = series
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|s| (s["name"].as_str().unwrap_or("").to_string(), (0..labels.len()).map(|i| value(&s["values"][i])).collect()))
+        .collect();
+    let keep: Vec<usize> = (0..labels.len()).filter(|i| lines.iter().any(|(_, values)| values[*i].is_some())).collect();
+    let series = lines.into_iter().map(|(name, values)| (name, keep.iter().map(|i| values[*i]).collect())).collect();
+    (keep.iter().map(|i| labels[*i].clone()).collect(), series)
+}
+
+/// A decimal as an agent writes one in a reply: a number, or a string of digits with at most one
+/// point and a sign ("1234.56", "-20", "+3.5"), scaled to `places` decimals. Anything else
+/// ("$5", "12 kg", "n/a", null) is no value.
+fn written_value(value: &Value, places: u32) -> Option<i64> {
+    let x = match value {
+        Value::Number(n) => n.as_f64()?,
+        Value::String(s) => {
+            let t = s.trim().replace('\u{2212}', "-");
+            let digits = t.strip_prefix(['-', '+']).unwrap_or(&t);
+            let plain = digits.chars().any(|c| c.is_ascii_digit())
+                && digits.chars().all(|c| c.is_ascii_digit() || c == '.')
+                && digits.matches('.').count() <= 1;
+            if !plain {
+                return None;
+            }
+            t.parse::<f64>().ok()?
+        }
+        _ => return None,
+    };
+    let scaled = (x * 10_f64.powi(places as i32)).round();
+    (scaled.is_finite() && scaled.abs() < 9.0e15).then_some(scaled as i64)
+}
+
+/// A chart's own numbers, from its reply (`data`): amounts in `currency` as decimals, converted to
+/// its minor units, or with a `unit`, figures in tenths of it as a training chart's are.
+fn read_written(v: &Value, currency: &str) -> Data {
+    let fmt = match v["unit"].as_str() {
+        Some(unit) => Fmt::Unit(unit.trim().to_string()),
+        None => Fmt::Money(MoneyFormatter::new(currency, Locale::from_env())),
+    };
+    let places = fmt.fraction_digits();
+    let (labels, series) = gaps_closed(&v["labels"], &v["series"], |value| written_value(value, places));
+    let projected = v["series"].as_array().into_iter().flatten().map(|s| s["projected"] == true).collect();
+    Data {
+        known: vec![labels.len(); series.len()],
+        projected,
+        colors: vec![None; labels.len()],
+        labels,
+        series,
+        fmt,
+        from_zero: true,
+        empty: "Nothing to draw: the reply gave no numbers.",
+    }
+}
+
+/// A series' name in the legend and its tooltip: "… (projected)" when it is.
+fn legend_name(name: &str, projected: bool) -> String {
+    match (name.trim(), projected) {
+        ("", true) => String::from("Projected"),
+        (name, true) if name.to_lowercase().contains("project") => name.to_string(),
+        (name, true) => format!("{name} (projected)"),
+        (name, false) => name.to_string(),
+    }
+}
+
+/// A `money.series` reading: every period has a figure, and one with nothing spent reads as zero.
 fn read(v: &Value) -> Data {
     let labels: Vec<String> = v["labels"].as_array().into_iter().flatten().map(|l| l.as_str().unwrap_or("").to_string()).collect();
     let colors = (0..labels.len()).map(|i| v["label_colors"][i].as_i64()).collect();
-    let series = v["series"]
+    let series: Series = v["series"]
         .as_array()
         .into_iter()
         .flatten()
         .map(|s| {
-            let values = (0..labels.len()).map(|i| s["values"][i].as_i64().unwrap_or(0)).collect();
+            let values = (0..labels.len()).map(|i| Some(s["values"][i].as_i64().unwrap_or(0))).collect();
             (s["name"].as_str().unwrap_or("").to_string(), values)
         })
         .collect();
@@ -325,7 +426,16 @@ fn read(v: &Value) -> Data {
         .map(|s| s["known"].as_u64().map_or(labels.len(), |k| (k as usize).min(labels.len())))
         .collect();
     let currency = v["currency"].as_str().filter(|c| !c.is_empty()).unwrap_or("CAD");
-    Data { labels, colors, series, known, fmt: Fmt::Money(MoneyFormatter::new(currency, Locale::from_env())), from_zero: true }
+    Data {
+        projected: vec![false; series.len()],
+        labels,
+        colors,
+        series,
+        known,
+        fmt: Fmt::Money(MoneyFormatter::new(currency, Locale::from_env())),
+        from_zero: true,
+        empty: "Nothing to draw yet: no entries match.",
+    }
 }
 
 fn draw(body: &gtk::Box, legend: &gtk::Box, kind: ChartKind, v: &Value) {
@@ -335,21 +445,20 @@ fn draw(body: &gtk::Box, legend: &gtk::Box, kind: ChartKind, v: &Value) {
 fn draw_data(body: &gtk::Box, legend: &gtk::Box, kind: ChartKind, data: Data) {
     clear(body);
     clear(legend);
-    if data.labels.is_empty() || data.series.iter().all(|(_, values)| values.iter().all(|x| *x == 0)) {
-        // Only Avex's charts count in a unit: what they count is workouts, not entries.
-        let what = if matches!(data.fmt, Fmt::Unit(_)) { "workouts" } else { "entries" };
-        body.append(&label(&format!("Nothing to draw yet: no {what} match."), "threads-chart-note"));
+    if data.labels.is_empty() || data.series.iter().all(|(_, values)| values.iter().all(|x| x.unwrap_or(0) == 0)) {
+        body.append(&label(data.empty, "threads-chart-note"));
         return;
     }
     match kind {
         ChartKind::Donut => donut(body, &data),
         _ => {
             let count = data.series.len();
-            if count > 1 || kind == ChartKind::Line {
+            if count > 1 || kind == ChartKind::Line || data.projected.contains(&true) {
                 for (i, (name, _)) in data.series.iter().enumerate() {
+                    let projected = data.projected.get(i).copied().unwrap_or(false);
                     let item = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-                    item.append(&dot(series_color(i, count)));
-                    item.append(&label(name, "threads-chart-legend"));
+                    item.append(&dot_alpha(series_color(i, count), if projected { PROJECTED_ALPHA } else { 1.0 }));
+                    item.append(&label(&legend_name(name, projected), "threads-chart-legend"));
                     legend.append(&item);
                 }
             }
@@ -360,11 +469,11 @@ fn draw_data(body: &gtk::Box, legend: &gtk::Box, kind: ChartKind, data: Data) {
 
 /// Bars or lines over a value axis, labels under each group.
 fn plot(body: &gtk::Box, data: &Data, kind: ChartKind) {
-    let all = data.series.iter().flat_map(|(_, v)| v.iter().copied());
+    let all = data.series.iter().flat_map(|(_, v)| v.iter().flatten().copied());
     let (lo, hi) = all.fold((0_i64, 0_i64), |(lo, hi), x| (lo.min(x), hi.max(x)));
     let digits = data.fmt.fraction_digits();
     // A line that need not start at zero starts a step under its lowest value.
-    let least = data.series.iter().flat_map(|(_, v)| v.iter().copied()).min().unwrap_or(0);
+    let least = data.series.iter().flat_map(|(_, v)| v.iter().flatten().copied()).min().unwrap_or(0);
     let base = if data.from_zero || least <= 0 {
         0
     } else {
@@ -397,6 +506,7 @@ fn plot(body: &gtk::Box, data: &Data, kind: ChartKind) {
     let count = data.series.len();
     let series = data.series.clone();
     let known = data.known.clone();
+    let projected = data.projected.clone();
     area.set_draw_func(move |_, cr, width, height| {
         let (w, h) = (f64::from(width), f64::from(height));
         let left = f64::from(AXIS_W);
@@ -417,18 +527,33 @@ fn plot(body: &gtk::Box, data: &Data, kind: ChartKind) {
             ChartKind::Line => {
                 for (i, (_, values)) in series.iter().enumerate() {
                     // A period still running stops at today: the days after it have not happened.
-                    let values = &values[..known[i].max(1).min(values.len())];
+                    let values = &values[..known.get(i).copied().unwrap_or(values.len()).max(1).min(values.len())];
                     let (r, g, b) = rgb(series_color(i, count));
                     cr.set_source_rgb(r, g, b);
                     cr.set_line_width(2.5);
                     cr.set_line_join(gtk::cairo::LineJoin::Round);
+                    // A projection is dashed, so it never reads as what happened.
+                    if projected.get(i).copied().unwrap_or(false) {
+                        cr.set_dash(&[6.0, 4.0], 0.0);
+                    }
+                    // A missing point breaks the line; the next point starts it again.
+                    let mut drawing = false;
                     for (j, v) in values.iter().enumerate() {
+                        let Some(v) = v else {
+                            drawing = false;
+                            continue;
+                        };
                         let (x, y) = (left + (j as f64 + 0.5) * gw, y_of(*v, h));
-                        if j == 0 { cr.move_to(x, y) } else { cr.line_to(x, y) }
+                        if drawing { cr.line_to(x, y) } else { cr.move_to(x, y) }
+                        drawing = true;
                     }
                     let _ = cr.stroke();
-                    if groups <= 16 {
-                        for (j, v) in values.iter().enumerate() {
+                    cr.set_dash(&[], 0.0);
+                    for (j, v) in values.iter().enumerate() {
+                        let Some(v) = v else { continue };
+                        // A point alone between gaps has no line to show it: it keeps its dot.
+                        let alone = (j == 0 || values[j - 1].is_none()) && values.get(j + 1).is_none_or(Option::is_none);
+                        if groups <= 16 || alone {
                             cr.arc(left + (j as f64 + 0.5) * gw, y_of(*v, h), 3.0, 0.0, 2.0 * PI);
                             let _ = cr.fill();
                         }
@@ -441,12 +566,13 @@ fn plot(body: &gtk::Box, data: &Data, kind: ChartKind) {
                 for j in 0..groups {
                     let x0 = left + j as f64 * gw + (gw - inner) / 2.0;
                     for (i, (_, values)) in series.iter().enumerate() {
-                        let v = values[j];
+                        let v = values[j].unwrap_or(0);
                         if v == 0 {
                             continue;
                         }
                         let (r, g, b) = rgb(series_color(i, count));
-                        cr.set_source_rgb(r, g, b);
+                        // A projected bar is lighter than one that happened.
+                        cr.set_source_rgba(r, g, b, if projected.get(i).copied().unwrap_or(false) { PROJECTED_ALPHA } else { 1.0 });
                         let x = x0 + i as f64 * (bw + 3.0);
                         let (y1, y2) = (y_of(v, h).min(zero), y_of(v, h).max(zero));
                         let rad = (bw / 2.0).min(3.0).min(y2 - y1);
@@ -473,7 +599,7 @@ fn plot(body: &gtk::Box, data: &Data, kind: ChartKind) {
     });
     // Hovering a group says its numbers.
     area.set_has_tooltip(true);
-    let (labels, series, fmt) = (data.labels.clone(), data.series.clone(), data.fmt.clone());
+    let (labels, series, fmt, projected) = (data.labels.clone(), data.series.clone(), data.fmt.clone(), data.projected.clone());
     area.connect_query_tooltip(move |area, x, _, _, tooltip| {
         let left = f64::from(AXIS_W);
         let gw = (f64::from(area.width()) - left - 4.0).max(10.0) / labels.len() as f64;
@@ -483,9 +609,12 @@ fn plot(body: &gtk::Box, data: &Data, kind: ChartKind) {
         }
         let j = j as usize;
         let mut lines = vec![labels[j].clone()];
-        for (name, values) in series.iter().rev() {
+        for (i, (name, values)) in series.iter().enumerate().rev() {
+            // A series with nothing here says nothing, not zero.
+            let Some(value) = values[j] else { continue };
+            let name = legend_name(name, projected.get(i).copied().unwrap_or(false));
             let name = if name.is_empty() { String::new() } else { format!("{name}  ") };
-            lines.push(format!("{name}{}", fmt.format(values[j])));
+            lines.push(format!("{name}{}", fmt.format(value)));
         }
         tooltip.set_text(Some(&lines.join("\n")));
         true
@@ -516,8 +645,7 @@ fn donut(body: &gtk::Box, data: &Data) {
         .iter()
         .zip(values)
         .enumerate()
-        .filter(|(_, (_, v))| **v > 0)
-        .map(|(i, (l, v))| (l.clone(), *v, hue(data.colors[i], i)))
+        .filter_map(|(i, (l, v))| v.filter(|v| *v > 0).map(|v| (l.clone(), v, hue(data.colors[i], i))))
         .collect();
     let total: i64 = parts.iter().map(|(_, v, _)| v).sum();
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 24);
@@ -912,6 +1040,93 @@ fn draw_price(body: &gtk::Box, legend: &gtk::Box, v: &Value, cutoff: Option<i64>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn written_amounts_are_decimals_in_the_currency() {
+        let data = read_written(&json!({"labels": ["Nov", "Dec", "Jan"], "series": [{"name": "Savings", "values": [1234.56, "1500.5", "-20"]}]}), "CAD");
+        assert_eq!(data.labels, ["Nov", "Dec", "Jan"]);
+        assert_eq!(data.series[0].1, [Some(123_456), Some(150_050), Some(-2_000)]);
+        assert!(matches!(data.fmt, Fmt::Money(_)));
+        // A currency without cents counts whole units; a typographic minus and a plus read too.
+        let yen = read_written(&json!({"labels": [2027, 2028], "series": [{"name": "", "values": ["1500", "\u{2212}12"]}]}), "JPY");
+        assert_eq!(yen.labels, ["2027", "2028"]);
+        assert_eq!(yen.series[0].1, [Some(1_500), Some(-12)]);
+        assert_eq!(written_value(&json!("+3.5"), 2), Some(350));
+        assert_eq!(written_value(&json!(0.1), 2), Some(10));
+    }
+
+    #[test]
+    fn written_garbage_is_left_out_not_drawn_as_zero() {
+        for garbage in [json!("$5"), json!("12 kg"), json!("n/a"), json!(null), json!(""), json!("."), json!("1.2.3"), json!(true), json!([1])] {
+            assert_eq!(written_value(&garbage, 2), None, "{garbage}");
+        }
+        // A label no series reaches goes; one series missing a point keeps a gap there.
+        let data = read_written(
+            &json!({"labels": ["a", "b", "c", "d"], "series": [
+                {"name": "Spent", "values": [10, "ten", null, "4"]},
+                {"name": "Saved", "values": [null, null, null, 2]},
+            ]}),
+            "CAD",
+        );
+        assert_eq!(data.labels, ["a", "d"]);
+        assert_eq!(data.series[0].1, [Some(1_000), Some(400)]);
+        assert_eq!(data.series[1].1, [None, Some(200)]);
+        assert_eq!(data.known, [2, 2]);
+        // Nothing that reads at all: nothing to draw, said as the reply's.
+        let none = read_written(&json!({"labels": ["a"], "series": [{"name": "x", "values": ["?"]}]}), "CAD");
+        assert!(none.labels.is_empty());
+        assert_eq!(none.empty, "Nothing to draw: the reply gave no numbers.");
+    }
+
+    #[test]
+    fn a_written_unit_counts_in_tenths_of_it() {
+        let kg = read_written(&json!({"labels": ["Now", "June"], "unit": "kg", "series": [{"name": "Weight", "values": [80.5, "78"]}]}), "CAD");
+        assert_eq!(kg.series[0].1, [Some(805), Some(780)]);
+        assert_eq!(kg.fmt.format(805), "80.5 kg");
+        assert_eq!(kg.fmt.format_whole(780), "78 kg");
+        let share = read_written(&json!({"labels": ["Rent"], "unit": "%", "series": [{"name": "", "values": [12.5]}]}), "CAD");
+        assert_eq!(share.fmt.format(125), "12.5%");
+        // An empty unit is a plain count.
+        let count = read_written(&json!({"labels": ["Q1"], "unit": "", "series": [{"name": "", "values": ["3"]}]}), "CAD");
+        assert_eq!(count.series[0].1, [Some(30)]);
+        assert_eq!(count.fmt.format(30), "3");
+    }
+
+    #[test]
+    fn a_projected_series_is_marked_and_named_so() {
+        let data = read_written(
+            &json!({"labels": ["Oct", "Nov", "Dec"], "series": [
+                {"name": "Balance", "values": [100, 120, null]},
+                {"name": "Balance", "values": [null, "120", "150.25"], "projected": true},
+            ]}),
+            "CAD",
+        );
+        assert_eq!(data.projected, [false, true]);
+        assert_eq!(data.series[1].1, [None, Some(12_000), Some(15_025)]);
+        assert_eq!(legend_name("Balance", true), "Balance (projected)");
+        assert_eq!(legend_name("Projected savings", true), "Projected savings");
+        assert_eq!(legend_name("", true), "Projected");
+        assert_eq!(legend_name("Balance", false), "Balance");
+        // Only a literal true projects.
+        let loose = read_written(&json!({"labels": ["a"], "series": [{"name": "x", "values": [1], "projected": "yes"}]}), "CAD");
+        assert_eq!(loose.projected, [false]);
+    }
+
+    #[test]
+    fn a_training_chart_leaves_a_missing_week_out_of_every_series() {
+        let data = read_gym(
+            &json!({"labels": ["W1", "W2", "W3"], "unit": "lb", "measure": "volume", "series": [
+                {"name": "Bench", "values": [100.0, null, 110.0]},
+                {"name": "Squat", "values": [null, null, 200.0]},
+            ]}),
+            ChartKind::Line,
+        );
+        assert_eq!(data.labels, ["W1", "W3"]);
+        assert_eq!(data.series[1].1, [None, Some(2_000)]);
+        // Each series has its own reach, so a second line is drawn, not indexed past the first.
+        assert_eq!(data.known.len(), 2);
+    }
 
     #[test]
     fn a_price_block_keeps_its_question_and_memory_line() {

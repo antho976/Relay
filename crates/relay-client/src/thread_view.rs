@@ -303,7 +303,8 @@ pub struct ChartSpec {
     pub query: Option<serde_json::Value>,
     /// A `gym.series` payload: Avex's training history instead of the ledger.
     pub gym: Option<serde_json::Value>,
-    /// `{"labels", "series": [{"name", "values"}]}`, minor units, when there is no query.
+    /// `{"labels", "series": [{"name", "values", "projected"?}], "unit"?}` when there is no query:
+    /// Claude's own numbers, amounts as decimals in the currency, or figures in `unit`.
     pub data: Option<serde_json::Value>,
 }
 
