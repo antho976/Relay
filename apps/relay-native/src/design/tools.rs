@@ -1291,8 +1291,13 @@ fn create_shape(b: &Rc<Board>, tool: Tool, parent: String, a: (f64, f64), end: (
             n.star = star;
         }
         if kind == NodeKind::Frame {
-            let count = b.doc.scene.borrow().children(&parent).iter().filter(|c| b.doc.scene.borrow().node(c).is_some_and(|n| n.kind == NodeKind::Frame)).count();
-            n.name = Some(format!("Frame {}", count + 1));
+            let scene = b.doc.scene.borrow();
+            let taken: Vec<String> = scene
+                .children(&parent)
+                .iter()
+                .filter_map(|c| scene.node(c).filter(|n| n.kind == NodeKind::Frame).and_then(|n| n.name.clone()))
+                .collect();
+            n.name = Some(super::board::free_name("Frame", &taken));
         }
     }
     let id = n.id.clone();

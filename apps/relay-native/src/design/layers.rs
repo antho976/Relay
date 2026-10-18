@@ -574,7 +574,8 @@ pub fn rename_node(b: &Rc<Board>, id: &str, anchor: Option<&gtk::Widget>) {
         }
     }
     let entry = gtk::Entry::new();
-    entry.set_text(&if n.kind == NodeKind::Page { b.page_name(id) } else { display_name(&n) });
+    let shown = if n.kind == NodeKind::Page { b.page_name(id) } else { display_name(&n) };
+    entry.set_text(&shown);
     entry.set_width_chars(24);
     pop.set_child(Some(&entry));
     let weak = Rc::downgrade(b);
@@ -588,6 +589,11 @@ pub fn rename_node(b: &Rc<Board>, id: &str, anchor: Option<&gtk::Widget>) {
             return;
         };
         let text = e.text().trim().to_string();
+        // Unchanged, the shown name is not written: a text keeps following its words, and a
+        // page keeps its place's name.
+        if text == shown.trim() {
+            return;
+        }
         let mut set = Map::new();
         set.insert("name".into(), if text.is_empty() { Value::Null } else { json!(text) });
         b.commit(vec![NodeOp::Update { id: id.clone(), set }]);

@@ -2559,12 +2559,12 @@ impl Board {
     }
 
     pub(super) fn add_page(&self) {
-        let mut scene = self.doc.scene.borrow_mut();
-        let id = scene.fresh_id(NodeKind::Page);
+        let pages = self.doc.scene.borrow().pages().to_vec();
+        let taken: Vec<String> = pages.iter().map(|p| self.page_name(p)).collect();
+        let id = self.doc.scene.borrow_mut().fresh_id(NodeKind::Page);
         let mut page = Node::new(NodeKind::Page);
         page.id = id.clone();
-        page.name = Some(format!("Page {}", scene.pages().len() + 1));
-        drop(scene);
+        page.name = Some(free_name("Page", &taken));
         if self.commit(vec![NodeOp::Add { node: page, index: None }]) {
             self.set_page(&id);
         }
@@ -2759,6 +2759,12 @@ pub fn kind_glyph(kind: NodeKind) -> &'static str {
         NodeKind::Polygon => "triangle",
         NodeKind::Icon => "icon",
     }
+}
+
+/// `base` with the first number no name in `taken` has: "Page 1" again once Page 1 is gone,
+/// not a second "Page 2".
+pub fn free_name(base: &str, taken: &[String]) -> String {
+    (1..).map(|n| format!("{base} {n}")).find(|name| !taken.contains(name)).unwrap_or_default()
 }
 
 /// A node's name as the layers and the breadcrumb show it.
