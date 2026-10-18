@@ -1,8 +1,10 @@
 package com.quietsoftware.relay.ui
 
 import android.content.Context
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -146,18 +148,20 @@ class ScreensTest {
         shell = ShellModel(relay, settings)
     }
 
-    private fun shoot(name: String, route: String) {
+    private fun shoot(name: String, route: String) = shoot(name) { nav ->
+        Box(Modifier.fillMaxSize()) {
+            AppNav(nav, route)
+            HoldTray(shell, onOpen = {})
+        }
+    }
+
+    private fun shoot(name: String, content: @Composable (Nav) -> Unit) {
         compose.mainClock.autoAdvance = false
         compose.setContent {
             val controller = rememberNavController()
             val nav = remember { Nav(controller, shell) }
             RelayTheme(Palette.Matte) {
-                CompositionLocalProvider(LocalNav provides nav) {
-                    Box(Modifier.fillMaxSize()) {
-                        AppNav(nav, route)
-                        HoldTray(shell, onOpen = {})
-                    }
-                }
+                CompositionLocalProvider(LocalNav provides nav) { content(nav) }
             }
         }
         compose.mainClock.advanceTimeBy(2_500)
@@ -178,6 +182,11 @@ class ScreensTest {
     @Test fun outbox() = shoot("outbox", "outbox")
     @Test fun terminal() = shoot("terminal", "terminal/brisk-otter")
     @Test fun chat() = shoot("chat", "chat/brisk-otter")
+    /** The chat's view of the agent's screen, which shows only with the PC in reach: here over what the phone saved. */
+    @Test fun screenPanel() = shoot("screen-panel") { nav ->
+        val shown = remember { androidx.compose.runtime.mutableStateOf<String?>("") }
+        Box(Modifier.fillMaxSize().background(com.quietsoftware.relay.ui.theme.Relay.colors.wall), contentAlignment = androidx.compose.ui.Alignment.BottomCenter) { com.quietsoftware.relay.ui.dev.ScreenPanel(nav, "brisk-otter", shown) {} }
+    }
     @Test fun session() = shoot("session", "session/brisk-otter")
     @Test fun launch() = shoot("launch", "launch?project=1")
     @Test fun tally() = shoot("tally", "tally")

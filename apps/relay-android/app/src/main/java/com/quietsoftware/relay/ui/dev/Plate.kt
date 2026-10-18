@@ -211,7 +211,7 @@ internal fun cellHeightPx(sp: Float, density: Density): Float = ceil(with(densit
 private data class MiniShape(val cols: Int = 0, val blank: Int = 0)
 
 /** Screen rows under the last one with text or the cursor: a fresh TUI draws at the top. */
-private fun blankBelow(t: Terminal): Int {
+internal fun blankBelow(t: Terminal): Int {
     var last = t.rows - 1
     while (last > t.cursorRow) {
         val line = t.row(last)

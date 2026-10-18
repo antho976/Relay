@@ -16,6 +16,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -26,7 +27,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -56,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
@@ -73,7 +77,9 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.TextRange
@@ -109,6 +115,7 @@ import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.TOUCH
 import com.quietsoftware.relay.ui.shell.Page
+import com.quietsoftware.relay.ui.term.TerminalView
 import com.quietsoftware.relay.ui.theme.Fonts
 import com.quietsoftware.relay.ui.theme.Relay
 import com.quietsoftware.relay.ui.threads.Spinner
@@ -275,7 +282,7 @@ fun ChatScreen(name: String, nav: Nav) {
                     else -> Empty("terminal", "Nothing said yet", if (s.online) null else "The PC is away, and this phone has not read this agent before.", action = openTerminal)
                 }
             }
-            if (peek && ready) ScreenPanel(screen) { peek = false }
+            if (peek && ready) ScreenPanel(nav, name, screen) { peek = false }
             if (s.prefs.chatKeys) QuickKeys(chat, ready)
             val asked = commandAsked(text)
             if (asked != null && ready) Commands(nav, session?.provider, session?.projectId, asked) { type("/$it ") }
@@ -1029,31 +1036,65 @@ private fun WatchScreen(nav: Nav, name: String, into: MutableState<String?>) {
 
 private const val SCREEN_READS_PER_S = 8
 
-/** The agent's screen under the conversation, as plain text, the newest line in view: for what no card reads. */
+/**
+ * The agent's screen under the conversation, drawn as its terminal is: the PC's colours and
+ * columns, at a size that reads (the PC's width fitted when it can be, panned sideways when not,
+ * a pinch to change it), the newest line in view. A drag scrolls back, a long press copies, a tap
+ * on an address opens it. A fresh TUI leaves its bottom rows blank; they are drawn under the edge.
+ */
 @Composable
-private fun ScreenPanel(screen: State<String?>, onClose: () -> Unit) {
+internal fun ScreenPanel(nav: Nav, name: String, screen: State<String?>, onClose: () -> Unit) {
     val c = Relay.colors
-    val text = screen.value
-    val vs = rememberScrollState()
-    // Kept on the newest line unless the person scrolled up to read.
-    var follow by remember { mutableStateOf(true) }
-    LaunchedEffect(vs.isScrollInProgress) { if (!vs.isScrollInProgress) follow = vs.value >= vs.maxValue - 8 }
-    LaunchedEffect(text, vs.maxValue) { if (follow) vs.scrollTo(vs.maxValue) }
+    val feed = rememberFeed(nav.relay, name)
+    val reading = screen.value == null
+    val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboard.current
+    val uris = LocalUriHandler.current
+    val density = LocalDensity.current
+    val ratio = rememberMonoRatio()
+    val shape by produceState(0 to 0, feed) {
+        feed.version.collect {
+            value = synchronized(feed.lock) { (feed.pcSize?.first ?: feed.terminal.cols) to blankBelow(feed.terminal) }
+            delay(1_000L / SCREEN_READS_PER_S)
+        }
+    }
+    var pinched by remember { mutableStateOf<Float?>(null) }
     Column(Modifier.fillMaxWidth().background(c.screen)) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.edge))
         Row(Modifier.fillMaxWidth().padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Dot(if (text == null) c.waiting else c.live, 5.dp)
-            T(if (text == null) "Reading the agent's screen…" else "The agent's screen", Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 1)
+            Dot(if (reading) c.waiting else c.live, 5.dp)
+            T(if (reading) "Reading the agent's screen…" else "The agent's screen", Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 1)
             IconKey("close", onClose, size = 14.dp, tint = c.ink3)
         }
-        Box(
-            Modifier.fillMaxWidth().heightIn(max = 240.dp).verticalScroll(vs).horizontalScroll(rememberScrollState())
-                .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
-        ) {
-            T(text.orEmpty(), style = TextStyle(fontFamily = Fonts.FiraMono, fontSize = 10.5.sp, lineHeight = 13.sp), color = c.termFg)
+        BoxWithConstraints(Modifier.fillMaxWidth().height(SCREEN_PANEL_H).clipToBounds()) {
+            val widthPx = constraints.maxWidth.toFloat()
+            val (cols, blank) = shape
+            val sp = pinched ?: fitSp(widthPx, cols, ratio, density).takeIf { it > 0f }?.coerceIn(SCREEN_MIN_SP, SCREEN_SP) ?: SCREEN_SP
+            val needPx = if (cols <= 0) 0f else cols * ratio * with(density) { sp.sp.toPx() } + with(density) { 12.dp.toPx() } + 2f
+            val extra = with(density) { (blank * cellHeightPx(sp, density)).toDp() }
+            Box(Modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {
+                TerminalView(
+                    feed,
+                    sp,
+                    onFontSp = { pinched = it },
+                    onFit = { _, _ -> },
+                    modifier = Modifier.width(with(density) { maxOf(widthPx, needPx).toDp() }).wrapContentHeight(Alignment.Top, unbounded = true).height(SCREEN_PANEL_H + extra),
+                    onCopy = { picked ->
+                        scope.launch {
+                            clipboard.copy(picked)
+                            nav.shell.toast("Copied")
+                        }
+                    },
+                    onLink = { url -> runCatching { uris.openUri(url) }.onFailure { nav.shell.toast("No app here opens $url") } },
+                )
+            }
         }
     }
 }
+
+private val SCREEN_PANEL_H = 240.dp
+private const val SCREEN_SP = 10.5f
+private const val SCREEN_MIN_SP = 8f
 
 // ---- Keys and composer ----
 
