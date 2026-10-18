@@ -1620,7 +1620,7 @@ pub(super) fn import(ui: &Rc<Ui>) {
                 &format!(
                     "Imported {} from Avex, exported {}.",
                     plural(v["sessions"].as_u64().unwrap_or(0) as usize, "workout"),
-                    text(&v, "exported_at").get(..10).map_or_else(|| text(&v, "exported_at").to_string(), human_date)
+                    text(&v, "exported_at").get(..10).map_or_else(|| text(&v, "exported_at").to_string(), day_words)
                 ),
                 None,
             ),

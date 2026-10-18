@@ -81,8 +81,8 @@ fn percent(bps: i64, signed: bool) -> String {
     }
 }
 
-/// A legend's share in whole percent: "52%", or "<1%" for a sliver.
-fn share(bps: i64) -> String {
+/// A legend's share in whole percent: "52%", or "<1%" for a sliver. The Tally panel's too.
+pub(super) fn share(bps: i64) -> String {
     if bps > 0 && bps < 50 { String::from("<1%") } else { format!("{}%", (bps + 50) / 100) }
 }
 
@@ -118,7 +118,7 @@ fn days_since(day: &str) -> Option<i64> {
 }
 
 /// "today", "yesterday" or "Fri 8 May", to follow "as of".
-fn as_of(day: &str) -> String {
+pub(super) fn as_of(day: &str) -> String {
     match human_date(day) {
         said if said == "Today" || said == "Yesterday" => said.to_lowercase(),
         said => said,

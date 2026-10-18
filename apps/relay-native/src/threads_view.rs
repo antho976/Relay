@@ -67,6 +67,8 @@ const EFFORTS: [(&str, &str); 6] = [
 const PANEL_TABS: [(&str, &str); 3] = [("overview", "Overview"), ("entries", "Entries"), ("invest", "Invest")];
 /// How many budgets Overview shows before "Show all".
 const BUDGETS_SHOWN: usize = 5;
+/// How many of the period's entries, newest first, the Entries view reads.
+const ENTRIES_SHOWN: u32 = 60;
 
 /// The panel's sources, as the switch above it names them: (key, caption, what it means).
 /// Choosing one shows its panel, and a new thread's greeting and questions follow it; the agent
@@ -1303,10 +1305,15 @@ fn month_line(s: &Value) -> String {
     // A period that does not start on the 1st has a range for a name: it reads as "this period".
     let when = if name.contains(" to ") { String::from("This period") } else { name };
     if s["pace"]["budget"].as_i64().unwrap_or(0) > 0 {
-        format!("{when} so far: {spent} spent, {} left. Ask anything, or tell it what to change.", fmt.format_whole(left))
+        format!("{when} so far: {spent} spent, {}. Ask anything, or tell it what to change.", left_or_over(&fmt, left))
     } else {
         format!("{when} so far: {spent} spent. Ask anything, or tell it what to change.")
     }
+}
+
+/// "$475 left", or "$50 over" once it is spent past: never "−$50 left".
+fn left_or_over(fmt: &MoneyFormatter, left: i64) -> String {
+    if left < 0 { format!("{} over", fmt.format_whole(-left)) } else { format!("{} left", fmt.format_whole(left)) }
 }
 
 /// The questions a new thread offers, from what the ledger shows: the budget furthest ahead of its
@@ -2880,7 +2887,7 @@ fn imported(result: &Value) -> (String, String) {
     let title = if what.is_empty() { String::from("Nothing new in this file") } else { format!("Imported {}", what.join(", ")) };
     let mut about = Vec::new();
     if let Some(day) = result["as_of"].as_str().filter(|d| !d.is_empty()) {
-        about.push(format!("As of {}", human_date(day.get(..10).unwrap_or(day))));
+        about.push(format!("As of {}", super::invest::as_of(day.get(..10).unwrap_or(day))));
     }
     let created = count(result, "accounts_created");
     if created > 0 {
@@ -3510,7 +3517,7 @@ pub fn refresh_panel(ui: &Rc<Ui>) {
         // The Invest view also reads the balances: an account valued by hand is Tally's balance.
         let mut lists = None;
         let read = match tab {
-            "entries" => ui.call("money.tx.list", json!({"limit": 60})).await,
+            "entries" => ui.call("money.tx.list", json!({"limit": ENTRIES_SHOWN})).await,
             "invest" => {
                 let (summary, listed) = tokio::join!(ui.call("money.invest.summary", json!({})), ui.call("money.lists", json!({})));
                 lists = listed.ok();
@@ -3628,7 +3635,7 @@ fn panel_overview(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
     head.append(&when);
     if budget > 0 {
         let left = pace["remaining"].as_i64().unwrap_or(0);
-        let figure = label(&format!("{} left", fmt.format_whole(left)), "threads-panel-figure");
+        let figure = label(&left_or_over(&fmt, left), "threads-panel-figure");
         if left < 0 {
             figure.add_css_class("money-over");
         }
@@ -3765,14 +3772,14 @@ fn budget_row(ui: &Rc<Ui>, b: &Value, pace: Option<f64>) -> gtk::Button {
     name.set_ellipsize(gtk::pango::EllipsizeMode::End);
     line.append(&name);
     let left = budget - spent;
-    let rest = label(&if left < 0 { format!("{} over", fmt.format_whole(-left)) } else { format!("{} left", fmt.format_whole(left)) }, "threads-panel-figures");
+    let rest = label(&left_or_over(&fmt, left), "threads-panel-figures");
     if let Some(class) = tone_class(status) {
         rest.add_css_class(class);
     }
     line.append(&rest);
     right.append(&line);
     let bar = meter_in(spent as f64 / budget.max(1) as f64, pace, tone(status, b["color"].as_i64()), 4);
-    bar.set_tooltip_text(Some(&format!("{} of {}", fmt.format(spent), fmt.format_whole(budget))));
+    bar.set_tooltip_text(Some(&format!("{} of {}", fmt.format_whole(spent), fmt.format_whole(budget))));
     right.append(&bar);
     row.append(&right);
     let key = gtk::Button::new();
@@ -3993,17 +4000,34 @@ fn entry_row(ui: &Rc<Ui>, tx: &Value, dated: bool) -> gtk::Button {
     key
 }
 
+/// The Entries view: the period's newest [`ENTRIES_SHOWN`] entries by day, in, out and net over
+/// them, and the key to the Entries page for the rest.
 fn panel_entries(ui: &Rc<Ui>, body: &gtk::Box, page: &Value) {
     let rows: Vec<&Value> = page["transactions"].as_array().into_iter().flatten().collect();
     let fmt = super::formatter();
     let (income, spent) = (page["income"].as_i64().unwrap_or(0), page["spent"].as_i64().unwrap_or(0));
     let head = gtk::Box::new(gtk::Orientation::Vertical, 4);
     head.add_css_class("threads-summary");
-    head.append(&label(&super::pages::period_name(&page["period"]), "threads-panel-eyebrow"));
-    head.append(&label(&format!("Out {} · In {}", fmt.format_whole(spent), fmt.format_whole(income)), "threads-panel-figures"));
+    // A full read is only the newest of the period, and its figures count only those.
+    let mut when = super::pages::period_name(&page["period"]);
+    if rows.len() >= ENTRIES_SHOWN as usize {
+        when.push_str(&format!(" · latest {ENTRIES_SHOWN}"));
+    }
+    head.append(&label(&when, "threads-panel-eyebrow"));
+    let total = super::pages::signed_whole(&fmt, income - spent);
+    head.append(&label(&format!("In {} · Out {} · Net {total}", fmt.format_whole(income), fmt.format_whole(spent)), "threads-panel-figures"));
     body.append(&head);
+    let open = button("Open Entries", "quiet");
+    open.set_halign(gtk::Align::Start);
+    let weak = Rc::downgrade(ui);
+    open.connect_clicked(move |_| {
+        if let Some(ui) = weak.upgrade() {
+            super::pages::show_entries(&ui, None, None);
+        }
+    });
     if rows.is_empty() {
-        body.append(&label("No entries this month.", "money-muted"));
+        body.append(&label("No entries this period.", "money-muted"));
+        body.append(&open);
         return;
     }
     let mut start = 0;
@@ -4024,6 +4048,7 @@ fn panel_entries(ui: &Rc<Ui>, body: &gtk::Box, page: &Value) {
         }
         start = end;
     }
+    body.append(&open);
 }
 
 /// A registration's hue and name, as the Investments page draws them (`money_invest.rs`): the hue
@@ -4044,11 +4069,6 @@ fn percent(bps: i64) -> String {
         _ => "",
     };
     format!("{sign}{:.1}%", bps.unsigned_abs() as f64 / 100.0)
-}
-
-/// "52%": a share in basis points, whole.
-fn share(bps: i64) -> String {
-    format!("{:.0}%", bps as f64 / 100.0)
 }
 
 /// Up is money in's green, down the over red; a sign says it too.
@@ -4123,7 +4143,7 @@ fn panel_invest(ui: &Rc<Ui>, body: &gtk::Box, p: &Value, lists: Option<&Value>) 
     let when = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     when.append(&crate::money::pages_glyph("chart", 13));
     // The newest report's date: a portfolio is only as fresh as its last file.
-    let as_of = p["as_of"].as_str().filter(|d| !d.is_empty()).map(|d| format!("As of {}", human_date(d.get(..10).unwrap_or(d))));
+    let as_of = p["as_of"].as_str().filter(|d| !d.is_empty()).map(|d| format!("As of {}", super::invest::as_of(d.get(..10).unwrap_or(d))));
     when.append(&label(&as_of.unwrap_or_else(|| String::from("No report imported yet")), "threads-panel-eyebrow"));
     head.append(&when);
     let balances = lists.map(|l| crate::app::rows(l, "accounts")).unwrap_or_default();
@@ -4150,7 +4170,7 @@ fn panel_invest(ui: &Rc<Ui>, body: &gtk::Box, p: &Value, lists: Option<&Value>) 
         .map(|a| {
             let registration = a["registration"].as_str();
             let bps = a["share_bps"].as_i64().unwrap_or(0);
-            (registration_hue(registration), bps as f64 / 10_000.0, format!("{} {}", registration_name(registration), share(bps)))
+            (registration_hue(registration), bps as f64 / 10_000.0, format!("{} {}", registration_name(registration), super::invest::share(bps)))
         })
         .collect();
     if !parts.is_empty() {
@@ -4260,7 +4280,7 @@ fn panel_invest(ui: &Rc<Ui>, body: &gtk::Box, p: &Value, lists: Option<&Value>) 
             if h["no_price"] == true {
                 detail.push(String::from("no price yet"));
             } else {
-                detail.push(format!("{} of the total", share(h["weight_bps"].as_i64().unwrap_or(0))));
+                detail.push(format!("{} of the total", super::invest::share(h["weight_bps"].as_i64().unwrap_or(0))));
             }
             let change = h["gain_bps"].as_i64().map(|bps| (percent(bps), gain_class(bps)));
             let value = fmt.format_whole(h["value"].as_i64().unwrap_or(0));
