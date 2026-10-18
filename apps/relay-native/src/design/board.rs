@@ -6,6 +6,7 @@ use super::canvas::Canvas;
 use super::doc::{Change, Doc};
 use super::glyphs;
 use super::paint::{self, fill_of, grect, rgba, Painter, CANVAS};
+use super::widgets::tip;
 use crate::app::{label, Ui};
 use gtk::prelude::*;
 use gtk::{gdk, gio, graphene, gsk, pango};
@@ -126,6 +127,14 @@ impl Tool {
             Tool::Vector => "B",
         }
     }
+
+    /// Its key's tooltip: "Arrow (Shift+L)", or the caption alone when it has no key.
+    pub fn tip(self) -> String {
+        match self.key() {
+            "" => self.caption().to_string(),
+            key => format!("{} ({})", self.caption(), key.replace(' ', "+")),
+        }
+    }
 }
 
 /// A resize handle, by the edges it moves.
@@ -197,6 +206,11 @@ pub enum Gesture {
 /// The inspector's width, beside the canvas's right edge.
 const INSPECTOR_W: f64 = 256.0;
 
+/// What the inspector key does now: hide it while it is on, show it while it is off.
+fn inspector_tip(on: bool) -> &'static str {
+    if on { "Hide the inspector (Ctrl+.)" } else { "Show the inspector (Ctrl+.)" }
+}
+
 pub struct Board {
     pub root: gtk::Box,
     pub(super) ui: Weak<Ui>,
@@ -233,12 +247,19 @@ pub struct Board {
     pub(super) title: gtk::Label,
     pub(super) terminal: gtk::MenuButton,
     pub(super) terminal_label: gtk::Label,
+    /// The terminal's state beside its name, as the gallery's chips show it.
+    terminal_lamp: gtk::Box,
+    lamp_state: RefCell<String>,
     pub(super) status: gtk::Label,
+    /// Counts what the status said, so a timer ages only the word it was set for.
+    status_serial: Cell<u64>,
     /// Undo the last change an agent made, shown once one arrives.
     agent_undo: gtk::Button,
     /// Whose change that Undo reverts.
     agent_last: RefCell<Option<String>>,
     pub(super) ask: gtk::Button,
+    /// What was typed to Ask and not sent, for the next time it opens.
+    pub(super) ask_draft: RefCell<String>,
     pub(super) zoom_label: gtk::Label,
     pub(super) tool_keys: RefCell<Vec<(Tool, gtk::ToggleButton)>>,
     pub(super) shape_key: gtk::ToggleButton,
@@ -308,9 +329,16 @@ impl Board {
         title_key.set_tooltip_text(Some("Rename, duplicate, export or delete this design"));
         top.append(&title_key);
         let terminal_label = label("", "");
+        let terminal_lamp = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        terminal_lamp.add_css_class("design-lamp");
+        terminal_lamp.set_valign(gtk::Align::Center);
+        terminal_lamp.set_visible(false);
+        let terminal_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        terminal_row.append(&terminal_lamp);
+        terminal_row.append(&terminal_label);
         let terminal = gtk::MenuButton::new();
         terminal.add_css_class("design-terminal");
-        terminal.set_child(Some(&terminal_label));
+        terminal.set_child(Some(&terminal_row));
         terminal.set_valign(gtk::Align::Center);
         top.append(&terminal);
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -319,7 +347,8 @@ impl Board {
         let status = label("Saved", "design-status");
         status.set_width_chars(22);
         status.set_xalign(1.0);
-        status.set_ellipsize(pango::EllipsizeMode::Start);
+        // Cut at its end, so "kevin edited it just now" keeps the name.
+        status.set_ellipsize(pango::EllipsizeMode::End);
         top.append(&status);
         let agent_undo = gtk::Button::with_label("Undo");
         agent_undo.add_css_class("design-agent-undo");
@@ -332,7 +361,7 @@ impl Board {
         ask_row.append(&glyphs::image("spark", 14));
         ask_row.append(&label("Ask agent", ""));
         ask.set_child(Some(&ask_row));
-        ask.set_tooltip_text(Some("Ask the terminal's agent to change the selection or this page"));
+        ask.set_tooltip_text(Some("Ask the terminal's agent to change the selection or this page (Ctrl+Enter)"));
         ask.set_widget_name("design-ask");
         top.append(&ask);
         let pop_out = crate::app::icon_button("window", "Open in a new window");
@@ -343,14 +372,18 @@ impl Board {
         inspector_key.add_css_class("quiet");
         inspector_key.add_css_class("icon-key");
         inspector_key.set_child(Some(&crate::icons::image("sidebar", 16)));
-        inspector_key.set_tooltip_text(Some("Show the inspector (Ctrl+.)"));
-        inspector_key.set_active(true);
+        // As it was left on the last design opened.
+        let inspector_on = INSPECTOR_ON.with(Cell::get);
+        tip(&inspector_key, inspector_tip(inspector_on));
+        inspector_key.set_active(inspector_on);
         top.append(&inspector_key);
         let mut key = top.first_child();
         while let Some(widget) = key {
             key = widget.next_sibling();
             widget.set_valign(gtk::Align::Center);
         }
+        // The inspector key, Undo and the rest leave the canvas its shortcuts.
+        keep_canvas_focus(top.upcast_ref());
         root.append(&top);
 
         let canvas = Canvas::new();
@@ -476,10 +509,14 @@ impl Board {
             title,
             terminal,
             terminal_label,
+            terminal_lamp,
+            lamp_state: RefCell::default(),
             status,
+            status_serial: Cell::new(0),
             agent_undo,
             agent_last: RefCell::default(),
             ask,
+            ask_draft: RefCell::default(),
             zoom_label,
             tool_keys: RefCell::default(),
             shape_key,
@@ -540,6 +577,7 @@ impl Board {
             b.child_position(widget)
         });
 
+        board.hand_back(&board.inspector_scroll);
         board.build_dock(&dock);
         board.build_zoom_menu(&zoom_menu);
         board.install_actions();
@@ -565,7 +603,7 @@ impl Board {
             if let Some(b) = weak.upgrade() {
                 if let Some(ui) = b.ui.upgrade() {
                     b.end_edit(true);
-                    super::window::open(&ui, b.doc.design.borrow().project_id, b.doc.id);
+                    super::window::pop_out(&ui, b.doc.clone());
                     if let Some(back) = b.back.borrow().clone() {
                         back();
                     }
@@ -585,7 +623,9 @@ impl Board {
             }
         });
         let weak = Rc::downgrade(&board);
-        board.inspector_key.connect_toggled(move |_| {
+        board.inspector_key.connect_toggled(move |key| {
+            tip(key, inspector_tip(key.is_active()));
+            INSPECTOR_ON.with(|on| on.set(key.is_active()));
             if let Some(b) = weak.upgrade() {
                 b.refresh_chrome();
             }
@@ -745,6 +785,7 @@ impl Board {
             return;
         }
         self.end_edit(true);
+        self.release_fields();
         let old = self.page.replace(page.to_string());
         self.cams.borrow_mut().insert(old, self.cam.get());
         self.selection.borrow_mut().clear();
@@ -771,6 +812,7 @@ impl Board {
         if *self.selection.borrow() == ids {
             return;
         }
+        self.release_fields();
         *self.selection.borrow_mut() = ids;
         self.selection_changed();
     }
@@ -793,9 +835,10 @@ impl Board {
 
     // ------------------------------------------------------------------ edits
 
-    /// Send `ops` as one undoable step.
+    /// Send `ops` as one undoable step; undoing it selects again what is selected now.
     pub(super) fn commit(&self, ops: Vec<NodeOp>) -> bool {
-        self.doc.commit(ops)
+        let selection = self.selection.borrow().clone();
+        self.doc.commit(ops, selection)
     }
 
     /// Set the same fields on every selected node.
@@ -834,8 +877,14 @@ impl Board {
                 self.prune_selection();
                 self.invalidate();
                 if by != "user" && !changed.is_empty() {
-                    self.status.set_text(&format!("{by} edited it just now"));
-                    self.status.add_css_class("design-status-agent");
+                    // "Just now" for a minute; then who it was.
+                    let serial = self.set_status(&format!("{by} edited it just now"), Some("design-status-agent"));
+                    let (weak, who) = (self.me.clone(), by.clone());
+                    glib::timeout_add_local_once(std::time::Duration::from_secs(60), move || {
+                        if let Some(b) = weak.upgrade().filter(|b| b.status_serial.get() == serial) {
+                            b.set_status(&format!("Last edited by {who}"), None);
+                        }
+                    });
                     self.start_flash(changed.clone());
                     *self.agent_last.borrow_mut() = Some(by.clone());
                     self.agent_undo.set_tooltip_text(Some(&format!("Undo {by}'s last change to this design")));
@@ -844,9 +893,24 @@ impl Board {
                 self.keep_page();
             }
             Change::Design => self.design_changed(),
+            // What an undo or redo touched is selected again, where it is still on this page
+            // (and not under a drag or typing begun since).
+            Change::Selected(ids) => {
+                if !matches!(*self.gesture.borrow(), Gesture::Idle) || self.edit.borrow().is_some() {
+                    return;
+                }
+                let ids: Vec<String> = {
+                    let scene = self.doc.scene.borrow();
+                    let page = self.page.borrow();
+                    ids.iter().filter(|id| scene.page_of(id) == Some(page.as_str())).cloned().collect()
+                };
+                self.select(ids);
+            }
             Change::Saving(on) => {
-                self.status.remove_css_class("design-status-agent");
-                self.status.set_text(if *on { "Saving…" } else { "Saved" });
+                // A refused edit is not saved until the next one is.
+                let unsaved = !*on && self.doc.unsaved();
+                let text = if *on { "Saving…" } else if unsaved { "Not saved" } else { "Saved" };
+                self.set_status(text, unsaved.then_some("design-status-unsaved"));
                 self.refresh_actions();
             }
             Change::Error(e) => self.toast(e),
@@ -885,6 +949,10 @@ impl Board {
     fn design_changed(&self) {
         let design = self.doc.design.borrow().clone();
         self.title.set_text(&design.title);
+        // The whole title, which the key cuts short past 48 characters.
+        if let Some(key) = self.title.ancestor(gtk::MenuButton::static_type()) {
+            key.set_tooltip_text(Some(&format!("{} — rename, duplicate, export or delete it", design.title)));
+        }
         if let Some(window) = self.root.root().and_downcast::<gtk::Window>().filter(|_| self.windowed) {
             window.set_title(Some(&format!("{} — Relay Design", design.title)));
         }
@@ -893,9 +961,11 @@ impl Board {
                 self.terminal_label.set_text(s);
                 self.terminal.remove_css_class("unlinked");
                 self.terminal.set_tooltip_text(Some(&format!("This design belongs to {s}'s terminal")));
+                self.refresh_lamp();
             }
             None => {
-                self.terminal_label.set_text("No terminal");
+                self.terminal_lamp.set_visible(false);
+                self.terminal_label.set_text("Project only");
                 self.terminal.add_css_class("unlinked");
                 self.terminal.set_tooltip_text(Some("Tie this design to a terminal so its agent can be asked about it"));
             }
@@ -910,6 +980,50 @@ impl Board {
         if let Some(layers) = self.layers.borrow().as_ref() {
             layers.pages_changed();
         }
+    }
+
+    /// What the top bar says of saving and of who changed the design last; `class` marks an
+    /// agent's change or a refused edit. Returns the word's serial, for a timer that ages it.
+    fn set_status(&self, text: &str, class: Option<&str>) -> u64 {
+        for c in ["design-status-agent", "design-status-unsaved"] {
+            self.status.remove_css_class(c);
+        }
+        if let Some(c) = class {
+            self.status.add_css_class(c);
+        }
+        self.status.set_text(text);
+        let serial = self.status_serial.get() + 1;
+        self.status_serial.set(serial);
+        serial
+    }
+
+    /// Light the terminal key's lamp for `state` (running, idle, closed…).
+    pub(super) fn set_lamp(&self, state: &str) {
+        let old = self.lamp_state.replace(state.to_string());
+        if !old.is_empty() {
+            self.terminal_lamp.remove_css_class(&old);
+        }
+        self.terminal_lamp.add_css_class(state);
+        self.terminal_lamp.set_visible(self.doc.session().is_some());
+    }
+
+    /// Read the design's terminal's state for its lamp.
+    fn refresh_lamp(&self) {
+        let (Some(ui), Some(session)) = (self.ui.upgrade(), self.doc.session()) else {
+            return;
+        };
+        let project = self.doc.design.borrow().project_id;
+        let weak = self.me.clone();
+        glib::spawn_future_local(async move {
+            let Ok(listed) = ui.call("session.list", json!({"project_id": project})).await else {
+                return;
+            };
+            let Some(b) = weak.upgrade().filter(|b| b.doc.session().as_deref() == Some(session.as_str())) else {
+                return;
+            };
+            let rows = crate::app::rows(&listed, "sessions");
+            b.set_lamp(rows.iter().find(|s| crate::app::text(s, "name") == session).map_or("closed", |s| crate::app::text(s, "state")));
+        });
     }
 
     pub fn toast(&self, text: &str) {
@@ -1454,12 +1568,7 @@ impl Board {
             false
         });
         // Nor while one of its fields has the keyboard (a size being typed or stepped).
-        let typing = self.context.borrow().as_ref().is_some_and(|bar| {
-            self.root
-                .root()
-                .and_then(|r| gtk::prelude::GtkWindowExt::focus(r.downcast_ref::<gtk::Window>()?))
-                .is_some_and(|f| f.is_ancestor(bar))
-        });
+        let typing = self.context.borrow().as_ref().is_some_and(|bar| self.busy_in(bar));
         if !picking && !typing && self.edit.borrow().is_none() && matches!(*self.gesture.borrow(), Gesture::Idle) {
             self.rebuild_context();
         }
@@ -1467,8 +1576,78 @@ impl Board {
         if let Some(layers) = self.layers.borrow().as_ref() {
             layers.refresh();
         }
-        self.page_label.set_text(&self.page_name(&self.page.borrow()));
+        let page = self.page_name(&self.page.borrow());
+        self.page_label.set_text(&page);
+        // The whole name, which the key cuts short.
+        if let Some(key) = self.page_label.ancestor(gtk::MenuButton::static_type()) {
+            key.set_tooltip_text(Some(&format!("Pages: {page}")));
+        }
         self.overlay.queue_allocate();
+    }
+
+    /// The widget with the keyboard in the board's window.
+    pub(super) fn focus_widget(&self) -> Option<gtk::Widget> {
+        self.root.root().and_then(|r| gtk::prelude::GtkWindowExt::focus(r.downcast_ref::<gtk::Window>()?))
+    }
+
+    /// Something in `panel` is being typed or picked: a field on screen has the keyboard, or
+    /// one of the panel's popovers is open. Rebuilding the panel then would take it away.
+    pub(super) fn busy_in(&self, panel: &impl IsA<gtk::Widget>) -> bool {
+        self.focus_widget().is_some_and(|f| {
+            f.is_ancestor(panel) && f.is_mapped() && (f.is::<gtk::Text>() || f.ancestor(gtk::Popover::static_type()).is_some())
+        })
+    }
+
+    /// The keyboard in `panel` goes back to the canvas: what was typed in a field there is
+    /// sent (to the layers it was typed for, before the selection changes), and the panel
+    /// can be rebuilt without taking the focused widget with it, which would leave GTK to
+    /// hand the keyboard to whatever comes next in the window.
+    pub(super) fn release(&self, panel: &impl IsA<gtk::Widget>) {
+        if self.focus_widget().is_some_and(|f| f.is_ancestor(panel)) {
+            self.canvas.grab_focus();
+        }
+    }
+
+    /// `release` the inspector and the toolbar.
+    pub(super) fn release_fields(&self) {
+        self.release(&self.inspector_scroll);
+        let bar = self.context.borrow().clone();
+        if let Some(bar) = bar {
+            self.release(&bar);
+        }
+    }
+
+    /// The keyboard goes back from `panel` to the canvas on Esc (a field has put back what it
+    /// showed by then), and on a press that is not in one of its fields, so the panel shows
+    /// what the key pressed does (it is not rebuilt while a field has the keyboard, and its
+    /// keys take none).
+    pub(super) fn hand_back(self: &Rc<Self>, panel: &impl IsA<gtk::Widget>) {
+        let keys = gtk::EventControllerKey::new();
+        let weak = Rc::downgrade(self);
+        keys.connect_key_pressed(move |_, key, _, _| {
+            let Some(b) = weak.upgrade().filter(|_| key == gdk::Key::Escape) else {
+                return glib::Propagation::Proceed;
+            };
+            b.canvas.grab_focus();
+            b.schedule_chrome();
+            glib::Propagation::Stop
+        });
+        panel.as_ref().add_controller(keys);
+        let press = gtk::GestureClick::new();
+        press.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(self);
+        press.connect_pressed(move |g, _, x, y| {
+            let (Some(b), Some(panel)) = (weak.upgrade(), g.widget()) else {
+                return;
+            };
+            let in_field = panel
+                .pick(x, y, gtk::PickFlags::DEFAULT)
+                .is_some_and(|w| w.is::<gtk::Text>() || w.ancestor(gtk::Entry::static_type()).is_some());
+            if !in_field {
+                b.release(&panel);
+            }
+        });
+        panel.as_ref().add_controller(press);
     }
 
     pub(super) fn set_tool(&self, tool: Tool) {
@@ -1485,11 +1664,11 @@ impl Board {
         self.pen_key.set_active(pens);
         if shapes {
             self.shape_key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
-            self.shape_key.set_tooltip_text(Some(&format!("{} ({})", tool.caption(), tool.key())));
+            tip(&self.shape_key, &tool.tip());
         }
         if pens {
             self.pen_key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
-            self.pen_key.set_tooltip_text(Some(&format!("{} ({})", tool.caption(), tool.key())));
+            tip(&self.pen_key, &tool.tip());
         }
         if tool != Tool::Select {
             self.end_edit(true);
@@ -1501,11 +1680,12 @@ impl Board {
         let layers_key = gtk::ToggleButton::new();
         layers_key.add_css_class("design-tool");
         layers_key.set_child(Some(&glyphs::image("layers", 16)));
-        layers_key.set_tooltip_text(Some("Pages and layers (Alt+1)"));
+        tip(&layers_key, "Pages and layers (Alt+1)");
         layers_key.set_widget_name("design-layers-key");
         dock.append(&layers_key);
         let weak = Rc::downgrade(self);
         layers_key.connect_toggled(move |key| {
+            LAYERS_ON.with(|on| on.set(key.is_active()));
             if let Some(b) = weak.upgrade() {
                 b.layers_panel.set_reveal_child(key.is_active());
                 if let Some(l) = b.layers.borrow().as_ref() {
@@ -1520,6 +1700,10 @@ impl Board {
             }
         });
         self.layers_panel.set_can_target(false);
+        // Open again if it was open on the last design.
+        if LAYERS_ON.with(Cell::get) {
+            layers_key.set_active(true);
+        }
         let page_key = gtk::MenuButton::new();
         page_key.add_css_class("design-page-key");
         let page_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
@@ -1550,7 +1734,7 @@ impl Board {
         // Shapes share a key; its menu picks which.
         self.shape_key.add_css_class("design-tool");
         self.shape_key.set_child(Some(&glyphs::image("rect", 16)));
-        self.shape_key.set_tooltip_text(Some("Rectangle (R)"));
+        tip(&self.shape_key, &Tool::Rect.tip());
         let weak = Rc::downgrade(self);
         self.shape_key.connect_clicked(move |key| {
             if let Some(b) = weak.upgrade() {
@@ -1573,7 +1757,7 @@ impl Board {
         }
         self.pen_key.add_css_class("design-tool");
         self.pen_key.set_child(Some(&glyphs::image("pen", 16)));
-        self.pen_key.set_tooltip_text(Some("Pen (P)"));
+        tip(&self.pen_key, &Tool::Pen.tip());
         let weak = Rc::downgrade(self);
         self.pen_key.connect_clicked(move |key| {
             if let Some(b) = weak.upgrade() {
@@ -1590,7 +1774,7 @@ impl Board {
         let icon_key = gtk::MenuButton::new();
         icon_key.add_css_class("design-tool");
         icon_key.set_child(Some(&glyphs::image("icon", 16)));
-        icon_key.set_tooltip_text(Some("Place an icon (K)"));
+        tip(&icon_key, "Place an icon (K)");
         icon_key.set_widget_name("design-icon-key");
         let picker = gtk::Popover::new();
         picker.add_css_class("design-menu");
@@ -1606,7 +1790,7 @@ impl Board {
         let image_key = gtk::Button::new();
         image_key.add_css_class("design-tool");
         image_key.set_child(Some(&glyphs::image("image", 16)));
-        image_key.set_tooltip_text(Some("Place an image (Shift+Ctrl+K)"));
+        tip(&image_key, "Place an image (Ctrl+Shift+K)");
         let weak = Rc::downgrade(self);
         image_key.connect_clicked(move |_| {
             if let Some(b) = weak.upgrade() {
@@ -1624,7 +1808,7 @@ impl Board {
         let menu = gtk::MenuButton::new();
         menu.add_css_class("design-tool-more");
         menu.set_child(Some(&crate::icons::image("chevron-down", 10)));
-        menu.set_tooltip_text(Some("Frame sizes"));
+        tip(&menu, "Frame sizes");
         let pop = gtk::Popover::new();
         pop.add_css_class("design-menu");
         let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -1685,7 +1869,7 @@ impl Board {
         let key = gtk::ToggleButton::new();
         key.add_css_class("design-tool");
         key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
-        key.set_tooltip_text(Some(&format!("{} ({})", tool.caption(), tool.key())));
+        key.set_tooltip_text(Some(&tool.tip()));
         key.set_widget_name(&format!("design-tool-{}", tool.glyph()));
         key.update_property(&[gtk::accessible::Property::Label(tool.caption())]);
         let weak = Rc::downgrade(self);
@@ -1703,7 +1887,7 @@ impl Board {
         let menu = gtk::MenuButton::new();
         menu.add_css_class("design-tool-more");
         menu.set_child(Some(&crate::icons::image("chevron-down", 10)));
-        menu.set_tooltip_text(Some("More tools"));
+        tip(&menu, "More tools");
         let pop = gtk::Popover::new();
         pop.add_css_class("design-menu");
         let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -1762,15 +1946,15 @@ impl Board {
     fn build_zoom_menu(self: &Rc<Self>, key: &gtk::MenuButton) {
         let menu = gio::Menu::new();
         let section = gio::Menu::new();
-        section.append(Some("Zoom in"), Some("design.zoom-in"));
-        section.append(Some("Zoom out"), Some("design.zoom-out"));
+        section.append_item(&menu_item("Zoom in", "zoom-in", Some("<Control>equal")));
+        section.append_item(&menu_item("Zoom out", "zoom-out", Some("<Control>minus")));
         menu.append_section(None, &section);
         let section = gio::Menu::new();
-        section.append(Some("Zoom to fit"), Some("design.zoom-fit"));
-        section.append(Some("Zoom to selection"), Some("design.zoom-selection"));
-        section.append(Some("Zoom to 50%"), Some("design.zoom-50"));
-        section.append(Some("Zoom to 100%"), Some("design.zoom-100"));
-        section.append(Some("Zoom to 200%"), Some("design.zoom-200"));
+        section.append_item(&menu_item("Zoom to fit", "zoom-fit", Some("<Shift>1")));
+        section.append_item(&menu_item("Zoom to selection", "zoom-selection", Some("<Shift>2")));
+        section.append_item(&menu_item("Zoom to 50%", "zoom-50", None));
+        section.append_item(&menu_item("Zoom to 100%", "zoom-100", Some("<Shift>0")));
+        section.append_item(&menu_item("Zoom to 200%", "zoom-200", None));
         menu.append_section(None, &section);
         key.set_menu_model(Some(&menu));
     }
@@ -1785,7 +1969,7 @@ impl Board {
         }
         menu.append_section(None, &section);
         let section = gio::Menu::new();
-        section.append(Some("Export page as PNG…"), Some("design.export-page"));
+        section.append(Some("Export page as PNG (2×)…"), Some("design.export-page"));
         section.append(Some("Export page as SVG…"), Some("design.export-page-svg"));
         section.append(Some("Export page as PDF…"), Some("design.export-page-pdf"));
         menu.append_section(None, &section);
@@ -1822,6 +2006,9 @@ impl Board {
                 };
                 let current = b.doc.session();
                 let rows = sessions.map(|v| crate::app::rows(&v, "sessions")).unwrap_or_default();
+                if let Some(c) = &current {
+                    b.set_lamp(rows.iter().find(|s| crate::app::text(s, "name") == c).map_or("closed", |s| crate::app::text(s, "state")));
+                }
                 let mut names: Vec<(String, String)> = rows
                     .iter()
                     .map(|s| (crate::app::text(s, "name").to_string(), crate::app::text(s, "state").to_string()))
@@ -1859,8 +2046,16 @@ impl Board {
                     });
                     list.append(&row);
                 }
-                let none = gtk::Button::with_label("The project only");
+                let none = gtk::Button::new();
                 none.add_css_class("design-menu-row");
+                let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                let caption = label("Project only", "");
+                caption.set_hexpand(true);
+                content.append(&caption);
+                if current.is_none() {
+                    content.append(&crate::icons::image("check", 14));
+                }
+                none.set_child(Some(&content));
                 let weak = Rc::downgrade(&b);
                 let pp = pop.downgrade();
                 none.connect_clicked(move |_| {
@@ -1913,20 +2108,23 @@ impl Board {
         grid.set_column_spacing(24);
         grid.set_row_spacing(4);
         grid.add_css_class("design-shortcuts");
-        let groups: [(&str, &[(&str, &str)]); 4] = [
-            ("Tools", &[("V", "Move"), ("H or Space", "Hand"), ("F", "Frame"), ("R / O", "Rectangle / ellipse"), ("Shift R / Shift S", "Triangle / star"), ("K", "Icon"), ("E", "Eraser"), ("L / Shift L", "Line / arrow"), ("T", "Text"), ("S", "Sticky note"), ("P / Shift P", "Pen / highlighter"), ("B", "Vector pen: click points, close on the first")]),
-            ("Selection", &[("Click", "Select what is under the pointer"), ("Esc", "Select the parent"), ("Enter", "Edit text, or select inside"), ("Shift click", "Add or remove"), ("Ctrl A", "Select all"), ("Alt drag", "Duplicate while moving")]),
-            ("Edit", &[("Ctrl Z / Ctrl Shift Z", "Undo / redo"), ("Ctrl D", "Duplicate"), ("Ctrl G / Ctrl Shift G", "Group / ungroup"), ("Ctrl Alt G", "Frame selection"), ("Ctrl ] / Ctrl [", "Forward / backward"), ("Shift H / Shift V", "Flip across / up and down"), ("Ctrl Alt C / V", "Copy / paste style"), ("Arrows", "Nudge 1 px (Shift: 10)")]),
-            ("View", &[("Ctrl scroll / pinch", "Zoom at the pointer"), ("Shift 1", "Zoom to fit"), ("Shift 2", "Zoom to selection"), ("Shift 0", "Zoom to 100%"), ("Alt 1", "Pages and layers"), ("Ctrl .", "Inspector")]),
-        ];
-        for (col, (heading, rows)) in groups.iter().enumerate() {
-            let x = (col % 2) as i32 * 2;
-            let y0 = (col / 2) as i32 * 13;
-            let h = label(heading, "design-menu-heading");
-            grid.attach(&h, x, y0, 2, 1);
-            for (i, (keys, what)) in rows.iter().enumerate() {
-                grid.attach(&label(keys, "design-keycap"), x, y0 + 1 + i as i32, 1, 1);
-                grid.attach(&label(what, "dim"), x + 1, y0 + 1 + i as i32, 1, 1);
+        type Group<'a> = (&'a str, &'a [(&'a str, &'a str)]);
+        let tools: Group = ("Tools", &[("V", "Move"), ("H or Space", "Hand"), ("F", "Frame"), ("R / O", "Rectangle / ellipse"), ("Shift R / Shift S", "Triangle / star"), ("K", "Icon"), ("E", "Eraser"), ("L / Shift L", "Line / arrow"), ("T", "Text"), ("S", "Sticky note"), ("P / Shift P", "Pen / highlighter"), ("B", "Vector pen: click points, close on the first")]);
+        let text: Group = ("Text", &[("Esc or Ctrl Enter", "Finish typing"), ("Ctrl B / I / U", "Bold / italic / underline")]);
+        let view: Group = ("View", &[("Ctrl scroll / pinch", "Zoom at the pointer"), ("Ctrl − / Ctrl =", "Zoom out / in"), ("Shift 1", "Zoom to fit"), ("Shift 2", "Zoom to selection"), ("Shift 0 or Ctrl 0", "Zoom to 100%"), ("Alt 1", "Pages and layers"), ("Ctrl .", "Inspector")]);
+        let selection: Group = ("Selection", &[("Click", "Select what is under the pointer"), ("Esc", "Select the parent"), ("Enter", "Edit text, or select inside"), ("Tab / Shift Tab", "Next / previous layer"), ("Shift click", "Add or remove"), ("Ctrl A", "Select all"), ("Alt drag", "Duplicate while moving")]);
+        let edit: Group = ("Edit", &[("Ctrl Z / Ctrl Shift Z", "Undo / redo"), ("Ctrl C / X / V", "Copy / cut / paste"), ("Ctrl D", "Duplicate"), ("Delete / Backspace", "Delete"), ("Ctrl G / Ctrl Shift G", "Group / ungroup"), ("Ctrl Alt G", "Frame selection"), ("Ctrl ] / Ctrl [", "Forward / backward"), ("Shift H / Shift V", "Flip horizontally / vertically"), ("Ctrl Alt C / V", "Copy / paste style"), ("Alt A / D / W / S", "Align left / right / top / bottom"), ("Alt H / Alt V", "Align centres / middles"), ("Ctrl Shift L / H", "Lock / hide"), ("Ctrl Shift K", "Place an image"), ("Ctrl Enter", "Ask the agent"), ("Arrows", "Nudge 1 px (Shift: 10)")]);
+        // Two columns, each group under the last, so a longer group never runs into the next.
+        for (col, groups) in [[tools, text, view].as_slice(), &[selection, edit]].iter().enumerate() {
+            let x = col as i32 * 2;
+            let mut y = 0;
+            for (heading, rows) in groups.iter() {
+                grid.attach(&label(heading, "design-menu-heading"), x, y, 2, 1);
+                for (i, (keys, what)) in rows.iter().enumerate() {
+                    grid.attach(&label(keys, "design-keycap"), x, y + 1 + i as i32, 1, 1);
+                    grid.attach(&label(what, "dim"), x + 1, y + 1 + i as i32, 1, 1);
+                }
+                y += 1 + rows.len() as i32;
             }
         }
         pop.set_child(Some(&grid));
@@ -2019,10 +2217,7 @@ impl Board {
         };
         add("undo", |b| b.undo());
         add("redo", |b| b.redo());
-        add("cut", |b| {
-            b.copy();
-            b.delete_selection();
-        });
+        add("cut", |b| b.cut());
         add("copy", |b| b.copy());
         add("paste", |b| b.paste());
         add("duplicate", |b| b.duplicate());
@@ -2067,7 +2262,7 @@ impl Board {
         add("delete-design", super::delete_design);
         add("pop-out", |b| {
             if let Some(ui) = b.ui.upgrade() {
-                super::window::open(&ui, b.doc.design.borrow().project_id, b.doc.id);
+                super::window::pop_out(&ui, b.doc.clone());
                 if let Some(back) = b.back.borrow().clone() {
                     back();
                 }
@@ -2149,8 +2344,7 @@ impl Board {
             };
             match undone {
                 Ok(_) => {
-                    b.status.remove_css_class("design-status-agent");
-                    b.status.set_text(&format!("Undid {agent}'s change"));
+                    b.set_status(&format!("Undid {agent}'s change"), None);
                     b.agent_undo.set_visible(more);
                 }
                 Err(e) => b.toast(&format!("Could not undo {agent}'s change: {e}")),
@@ -2160,12 +2354,12 @@ impl Board {
 
     pub(super) fn undo(&self) {
         self.end_edit(true);
-        self.doc.undo();
+        self.doc.undo(self.selection.borrow().clone());
     }
 
     pub(super) fn redo(&self) {
         self.end_edit(true);
-        self.doc.redo();
+        self.doc.redo(self.selection.borrow().clone());
     }
 
     pub(super) fn delete_selection(&self) {
@@ -2224,9 +2418,24 @@ impl Board {
     }
 
     pub(super) fn copy(&self) {
+        if let Some(count) = self.copy_quietly() {
+            self.toast(&format!("Copied {count} {}", if count == 1 { "layer" } else { "layers" }));
+        }
+    }
+
+    /// Copy the selection and take it away.
+    pub(super) fn cut(&self) {
+        if let Some(count) = self.copy_quietly() {
+            self.delete_selection();
+            self.toast(&format!("Cut {count} {}", if count == 1 { "layer" } else { "layers" }));
+        }
+    }
+
+    /// Put the selection on the clipboard; how many layers that was.
+    fn copy_quietly(&self) -> Option<usize> {
         let nodes = edit::gather(&self.doc.scene.borrow(), &self.selection.borrow());
         if nodes.is_empty() {
-            return;
+            return None;
         }
         let texts: Vec<String> = nodes.iter().filter_map(|n| n.text.clone()).collect();
         let bytes = serde_json::to_vec(&json!({"relay_design": 1, "nodes": nodes})).unwrap_or_default();
@@ -2239,9 +2448,9 @@ impl Board {
         let union = gdk::ContentProvider::new_union(&providers);
         if let Err(e) = self.canvas.clipboard().set_content(Some(&union)) {
             self.toast(&e.to_string());
+            return None;
         }
-        let count = self.selected().len();
-        self.toast(&format!("Copied {count} {}", if count == 1 { "layer" } else { "layers" }));
+        Some(self.selected().len())
     }
 
     pub(super) fn paste(&self) {
@@ -2417,6 +2626,16 @@ impl Board {
         }
     }
 
+    /// What Lock and Hide do to the selection now, as `toggle_flag` turns them: Unlock when
+    /// all of it is locked, Show when all of it is hidden.
+    pub(super) fn flag_captions(&self) -> (&'static str, &'static str) {
+        let ids = self.selected();
+        let scene = self.doc.scene.borrow();
+        let nodes: Vec<&Node> = ids.iter().filter_map(|id| scene.node(id)).collect();
+        let all = |f: fn(&Node) -> bool| !nodes.is_empty() && nodes.iter().all(|n| f(n));
+        (if all(Node::is_locked) { "Unlock" } else { "Lock" }, if all(Node::is_hidden) { "Show" } else { "Hide" })
+    }
+
     pub(super) fn select_all(&self) {
         let scene = self.doc.scene.borrow();
         let scope = self
@@ -2437,12 +2656,12 @@ impl Board {
     }
 
     pub(super) fn add_page(&self) {
-        let mut scene = self.doc.scene.borrow_mut();
-        let id = scene.fresh_id(NodeKind::Page);
+        let pages = self.doc.scene.borrow().pages().to_vec();
+        let taken: Vec<String> = pages.iter().map(|p| self.page_name(p)).collect();
+        let id = self.doc.scene.borrow_mut().fresh_id(NodeKind::Page);
         let mut page = Node::new(NodeKind::Page);
         page.id = id.clone();
-        page.name = Some(format!("Page {}", scene.pages().len() + 1));
-        drop(scene);
+        page.name = Some(free_name("Page", &taken));
         if self.commit(vec![NodeOp::Add { node: page, index: None }]) {
             self.set_page(&id);
         }
@@ -2495,6 +2714,10 @@ impl Board {
 thread_local! {
     /// The nodes last copied in this process, for a paste whose clipboard is our own.
     static CLIP: RefCell<Vec<Node>> = const { RefCell::new(Vec::new()) };
+    /// Whether the inspector and the pages and layers panel show, kept for the session from
+    /// one design (and window) to the next.
+    static INSPECTOR_ON: Cell<bool> = const { Cell::new(true) };
+    static LAYERS_ON: Cell<bool> = const { Cell::new(false) };
 }
 
 /// `RELAY_DESIGN_TRACE` set: print how long layout, content rebuilds and draws take.
@@ -2521,11 +2744,12 @@ pub const FRAME_PRESETS: [(&str, u32, u32); 8] = [
 const FLASH_US: i64 = 1_600_000;
 
 /// Keys over the canvas take no keyboard focus when clicked, so the canvas keeps its shortcuts
-/// (V, Delete, Ctrl+Z…) right after one is used, as in other design tools.
+/// (V, Delete, Ctrl+Z…) right after one is used, as in other design tools. A check button is
+/// no button in GTK 4, so it is named too.
 pub fn keep_canvas_focus(root: &gtk::Widget) {
     let mut stack = vec![root.clone()];
     while let Some(w) = stack.pop() {
-        if w.is::<gtk::Button>() || w.is::<gtk::MenuButton>() {
+        if w.is::<gtk::Button>() || w.is::<gtk::MenuButton>() || w.is::<gtk::CheckButton>() {
             w.set_focus_on_click(false);
         }
         let mut child = w.first_child();
@@ -2638,22 +2862,42 @@ pub fn kind_glyph(kind: NodeKind) -> &'static str {
     }
 }
 
+/// `base` with the first number no name in `taken` has: "Page 1" again once Page 1 is gone,
+/// not a second "Page 2".
+pub fn free_name(base: &str, taken: &[String]) -> String {
+    (1..).map(|n| format!("{base} {n}")).find(|name| !taken.contains(name)).unwrap_or_default()
+}
+
 /// A node's name as the layers and the breadcrumb show it.
 pub fn display_name(n: &Node) -> String {
     if let Some(name) = n.name.as_deref().filter(|s| !s.is_empty()) {
         return name.to_string();
     }
     if let Some(text) = n.text.as_deref().filter(|t| !t.trim().is_empty()) {
-        let line: String = text.lines().next().unwrap_or("").chars().take(40).collect();
+        let first = text.lines().next().unwrap_or("");
+        let mut line: String = first.chars().take(40).collect();
+        if line.len() < first.len() {
+            line.push('…');
+        }
         return line;
     }
     kind_caption(n.kind).to_string()
 }
 
+/// A menu entry for `design.{action}` that shows its shortcut (`<Control>c`), as the notes'
+/// menus do. Only shown: the board's own keys run it.
+pub(super) fn menu_item(caption: &str, action: &str, accel: Option<&str>) -> gio::MenuItem {
+    let item = gio::MenuItem::new(Some(caption), Some(&format!("design.{action}")));
+    if let Some(accel) = accel {
+        item.set_attribute_value("accel", Some(&accel.to_variant()));
+    }
+    item
+}
+
 /// "Export selection as" PNG, SVG or PDF, for the menus that offer it.
 pub(super) fn export_menu() -> gio::Menu {
     let section = gio::Menu::new();
-    section.append(Some("Export selection as PNG…"), Some("design.export"));
+    section.append(Some("Export selection as PNG (2×)…"), Some("design.export"));
     section.append(Some("Export selection as SVG…"), Some("design.export-svg"));
     section.append(Some("Export selection as PDF…"), Some("design.export-pdf"));
     section

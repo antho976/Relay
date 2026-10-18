@@ -33,6 +33,8 @@ import com.quietsoftware.relay.ui.kit.StaleNote
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.Toggle
 import com.quietsoftware.relay.ui.kit.column
+import com.quietsoftware.relay.ui.kit.plural
+import com.quietsoftware.relay.ui.kit.switchRow
 import com.quietsoftware.relay.ui.shell.SpaceFrame
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.serialization.SerialName
@@ -73,15 +75,16 @@ fun SkillsScreen(nav: Nav) {
     val skills = (live.result as? JsonObject)?.arr("skills")?.mapNotNull { it.decodeAs<SkillRow>() }.orEmpty()
     // The switch shows what was just set until the PC's list says so; a new list drops it.
     val overrides = remember(live.result) { mutableStateMapOf<String, Boolean>() }
-    val hint = if (pid == null) "Open a project to switch them on for it." else "Switch them on for this project."
+    val hint = if (pid == null) "Open a project to switch them for it." else "The switches here are for ${s.project?.name ?: "this project"}."
     SpaceFrame(nav) {
         ExtensionBody(
             title = "Skills",
-            intro = "Instruction files agents load when a task calls for one. $hint",
+            // The PC's own intro (tools_skills.rs), then which project the switches are for.
+            intro = "Reusable agent instructions, written into every checkout and provider home as real skill folders. A new skill is on everywhere; switch it off where it does not belong. $hint",
             live = live,
             count = skills.size,
             emptyGlyph = "skills",
-            emptyTitle = "No skills yet",
+            emptyTitle = "No skills installed",
             emptyBody = "A skill is a Markdown file of instructions agents load when a task calls for it.",
         ) {
             skills.forEachIndexed { index, skill ->
@@ -112,22 +115,23 @@ fun PluginsScreen(nav: Nav) {
     val live by flow.collectAsStateWithLifecycle(initialValue = Live())
     val plugins = (live.result as? JsonObject)?.arr("plugins")?.mapNotNull { it.decodeAs<PluginRow>() }.orEmpty()
     val overrides = remember(live.result) { mutableStateMapOf<String, Boolean>() }
-    val hint = if (pid == null) "Open a project to switch them on for it." else "Switch them on for this project."
+    val hint = if (pid == null) "Open a project to switch them for it." else "The switches here are for ${s.project?.name ?: "this project"}."
     SpaceFrame(nav) {
         ExtensionBody(
             title = "Plugins",
-            intro = "Bundles of skills, instructions and tools that come with Relay. $hint",
+            // The PC's own intro (tools_plugins.rs), then which project the switches are for.
+            intro = "Whole toolkits for a project's agents: skill folders, standing rules in every brief, and MCP tools. Switch one on per project. $hint",
             live = live,
             count = plugins.size,
             emptyGlyph = "plugins",
-            emptyTitle = "No plugins",
+            emptyTitle = "No plugins found",
             emptyBody = "Relay has no bundled plugins on this PC.",
         ) {
             plugins.forEachIndexed { index, plugin ->
                 if (index > 0) Hairline()
                 ExtensionSwitch(
                     title = listOf(plugin.name, plugin.version).filter { it.isNotBlank() }.joinToString(" "),
-                    detail = listOf(plugin.summary, "${plugin.skills.size} skills · ${plugin.mcpServers.size} MCP servers").filter { it.isNotBlank() }.joinToString("\n"),
+                    detail = listOf(plugin.summary, "${plural(plugin.skills.size, "skill")} · ${plural(plugin.mcpServers.size, "MCP server")}").filter { it.isNotBlank() }.joinToString("\n"),
                     checked = overrides[plugin.id] ?: (pid != null && plugin.enabledIn.contains(pid)),
                     enabled = pid != null && s.online,
                 ) { on ->
@@ -183,12 +187,13 @@ private fun ExtensionBody(
 @Composable
 private fun ExtensionSwitch(title: String, detail: String, checked: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
     val c = Relay.colors
-    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+    // The whole row is the switch: its words take the tap too.
+    Row(Modifier.fillMaxWidth().switchRow(checked, enabled, onChange).padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             T(title, style = Relay.type.body, color = c.ink, weight = FontWeight.Medium, maxLines = 2)
             if (detail.isNotBlank()) T(detail, style = Relay.type.caption, color = c.ink3, maxLines = 3)
         }
         Spacer(Modifier.width(12.dp))
-        Toggle(checked, onChange, enabled = enabled)
+        Toggle(checked, null, enabled = enabled)
     }
 }

@@ -175,18 +175,18 @@ checkbutton.notes-check > check:checked { border-color: @live; background: @live
 .notes-image:hover { border-color: @strong; }
 .notes-image picture { border-radius: 5px; }
 
-/* ---- find / replace bar ---- */
+/* ---- find / replace bar: Notes' and Code's (find_bar.rs); .notes-find places Notes' ---- */
 .notes-find { padding: 6px 8px 6px 12px; background: @console; border-top: 1px solid @edge; }
-entry.notes-find-entry { min-height: 28px; background: @wall; font-size: 12px; }
-entry.notes-find-entry.error { border-color: alpha(@held, 0.7); }
-.notes-find-count { margin: 0 6px; color: @secondary; font-size: 11px; font-feature-settings: "tnum"; }
-button.notes-find-key { min-width: 28px; min-height: 28px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: @secondary; }
-button.notes-find-key:hover { background: @wash; color: @ink; }
-button.notes-find-option { min-width: 30px; min-height: 28px; padding: 0 6px; border: 1px solid transparent; border-radius: 3px; background: transparent; color: @secondary; font-family: 'Geist Mono', monospace; font-size: 11px; }
-button.notes-find-option:hover { background: @wash; color: @ink; }
-button.notes-find-option:checked { background: alpha(@ink, 0.10); border-color: @strong; color: @ink; }
-button.notes-find-word label { text-decoration-line: underline; }
-button.notes-find-button { min-height: 28px; padding: 0 12px; font-size: 12px; }
+entry.find-entry { min-height: 28px; background: @wall; font-size: 12px; }
+entry.find-entry.error { border-color: alpha(@held, 0.7); }
+.find-count { margin: 0 6px; color: @secondary; font-size: 11px; font-feature-settings: "tnum"; }
+button.find-key { min-width: 28px; min-height: 28px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: @secondary; }
+button.find-key:hover { background: @wash; color: @ink; }
+button.find-option { min-width: 30px; min-height: 28px; padding: 0 6px; border: 1px solid transparent; border-radius: 3px; background: transparent; color: @secondary; font-family: 'Geist Mono', monospace; font-size: 11px; }
+button.find-option:hover { background: @wash; color: @ink; }
+button.find-option:checked { background: alpha(@ink, 0.10); border-color: @strong; color: @ink; }
+button.find-word label { text-decoration-line: underline; }
+button.find-button { min-height: 28px; padding: 0 12px; font-size: 12px; }
 
 /* ---- status bar ---- */
 .notes-status { min-height: 24px; padding: 0 4px 0 12px; background: @console; border-top: 1px solid @edge; color: @secondary; font-size: 11px; }

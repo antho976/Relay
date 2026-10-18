@@ -13,6 +13,7 @@ mod text;
 
 use super::task_pages::{buffer_text, Draft};
 use super::*;
+use crate::editor::readable;
 use doc::Doc;
 use glyphs::{glyph, tool_glyph};
 use std::cell::{Cell, OnceCell};
@@ -189,7 +190,10 @@ thread_local! {
     static PREFS: Cell<Prefs> = Cell::new(Prefs::default());
     static SESSION: RefCell<serde_json::Map<String, Value>> = RefCell::new(serde_json::Map::new());
     static RESTORED: RefCell<BTreeSet<i64>> = const { RefCell::new(BTreeSet::new()) };
-    static LAST_QUERY: RefCell<String> = const { RefCell::new(String::new()) };
+    /// The last search a note's find bar ran, its options with it, which every note's bar
+    /// starts from.
+    static LAST_QUERY: RefCell<crate::editor::find_bar::Memory> =
+        const { RefCell::new(crate::editor::find_bar::Memory::new()) };
     static FONT: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
     static TASKS_TIMER: RefCell<Option<glib::SourceId>> = const { RefCell::new(None) };
     static SCHEME: OnceCell<Option<sourceview5::StyleScheme>> = const { OnceCell::new() };
@@ -300,7 +304,7 @@ fn with_full(ui: &Rc<Ui>, id: i64, then: impl FnOnce(&Rc<Ui>, Value) + 'static) 
     glib::spawn_future_local(async move {
         match fetch_full(&ui, id).await {
             Ok(note) => then(&ui, note),
-            Err(error) => shell_error(&ui, &format!("Could not read the note: {error}")),
+            Err(error) => shell_error(&ui, &format!("Could not read the note: {}", readable(&error))),
         }
     });
 }
@@ -506,9 +510,18 @@ pub fn discard_note(ui: &Rc<Ui>, id: i64) {
     }
 }
 
-/// Some open note is saving or has unsaved changes: the main window stays open for it.
-pub fn unsaved_notes() -> bool {
-    docs().iter().any(|doc| doc.draft.busy.get() || doc.dirty())
+/// Why the main window stays open for Notes, if it does: some open note is saving or has
+/// unsaved changes. Autosave saves what it can first, and a note still unsaved comes forward
+/// in Notes, named in the answer.
+pub fn unsaved_notes(ui: &Rc<Ui>) -> Option<String> {
+    flush(ui);
+    let doc = docs().into_iter().find(|doc| doc.draft.busy.get() || doc.dirty())?;
+    let name = doc.name();
+    if doc.draft.busy.get() {
+        return Some(format!("Notes is saving “{name}”. Close again once it is saved."));
+    }
+    reveal(ui, doc.id);
+    Some(format!("“{name}” has unsaved changes in Notes. Save or discard them, then close again."))
 }
 
 /// The editor of note `id` while its tab is open.
@@ -540,14 +553,6 @@ fn persist(ui: &Rc<Ui>) {
     if let Some(owner) = owner(ui) {
         owner.persist(ui);
     }
-}
-
-pub(super) fn last_query() -> String {
-    LAST_QUERY.with(|q| q.borrow().clone())
-}
-
-pub(super) fn remember_query(value: &str) {
-    LAST_QUERY.with(|q| value.clone_into(&mut q.borrow_mut()));
 }
 
 pub(super) fn project_name(ui: &Rc<Ui>, project: i64) -> String {
@@ -997,6 +1002,7 @@ fn shell(ui: &Rc<Ui>) -> Rc<Shell> {
     let dismiss = gtk::Button::new();
     dismiss.set_child(Some(&glyph("close", 12)));
     dismiss.add_css_class("notes-notice-close");
+    dismiss.set_tooltip_text(Some("Dismiss"));
     let hide = banner.downgrade();
     dismiss.connect_clicked(move |_| {
         if let Some(banner) = hide.upgrade() {
@@ -1769,13 +1775,31 @@ pub(super) fn open_doc(ui: &Rc<Ui>, note: Value, position: Option<u32>) -> Rc<Do
     let (weak_ui, weak) = (Rc::downgrade(ui), Rc::downgrade(&doc));
     *doc.draft.on_close.borrow_mut() = Some(Box::new(move || {
         let Some(ui) = weak_ui.upgrade() else { return };
+        let mut typing = false;
+        let mut fresh = false;
         if let Some(doc) = weak.upgrade() {
             doc.stop_timers();
+            fresh = doc.fresh.get() && !doc.deleted.get();
+            // The keyboard was in this note: the next one's text takes it, where removing the
+            // page put it in the next note's title, all of it selected, for the next key to
+            // replace.
+            typing = window_of(&ui)
+                .and_then(|window| gtk::prelude::GtkWindowExt::focus(&window))
+                .is_some_and(|focus| focus.is_ancestor(&doc.draft.layout));
             if let Some(page) = ui.note_tabs.page_num(&doc.draft.layout) {
                 ui.note_tabs.remove_page(Some(page));
             }
         }
         DOCS.with(|docs| docs.borrow_mut().remove(&id));
+        // New note made it at once; closed untouched, it is not kept as an "Untitled" note.
+        if fresh {
+            let ui = ui.clone();
+            glib::spawn_future_local(async move {
+                if ui.call("notes.delete", json!({"note_id":id})).await.is_ok() {
+                    refresh_notes(&ui);
+                }
+            });
+        }
         if let Some(shell) = shell_if_built() {
             for row in shell.rows.borrow().iter() {
                 if row.note["id"].as_i64() == Some(id) {
@@ -1784,6 +1808,11 @@ pub(super) fn open_doc(ui: &Rc<Ui>, note: Value, position: Option<u32>) -> Rc<Do
             }
         }
         tabs_changed(&ui);
+        if typing {
+            if let Some(doc) = current_doc(&ui) {
+                doc.view.grab_focus();
+            }
+        }
     }));
     DOCS.with(|docs| docs.borrow_mut().insert(id, doc.clone()));
     tabs.set_current_page(Some(page));
@@ -1838,6 +1867,7 @@ pub(super) fn new_note(ui: &Rc<Ui>, title: Option<String>, body: String) {
         shell_error(ui, &format!("Could not create a note: {message}"));
         return;
     }
+    let empty = title.is_none() && body.is_empty();
     let mut payload = json!({"project_id":project,"body":body,"pinned":false});
     if let Some(title) = title {
         payload["title"] = json!(title);
@@ -1846,10 +1876,12 @@ pub(super) fn new_note(ui: &Rc<Ui>, title: Option<String>, body: String) {
     glib::spawn_future_local(async move {
         match ui.call("notes.create", payload).await {
             Ok(note) => {
-                open_doc(&ui, note, None).view.grab_focus();
+                let doc = open_doc(&ui, note, None);
+                doc.fresh.set(empty);
+                doc.view.grab_focus();
                 refresh_notes(&ui);
             }
-            Err(error) => shell_error(&ui, &format!("Could not create a note: {error}")),
+            Err(error) => shell_error(&ui, &format!("Could not create a note: {}", readable(&error))),
         }
     });
 }
@@ -1890,6 +1922,23 @@ pub(super) fn cycle_tab(ui: &Rc<Ui>, direction: i32) {
     let at = visible.iter().position(|i| Some(*i) == tabs.current_page()).unwrap_or(0) as i32;
     let next = (at + direction).rem_euclid(visible.len() as i32) as usize;
     tabs.set_current_page(Some(visible[next]));
+    // The notebook hands a page it has not focused before to its first field, the title,
+    // selecting it all for the next key to replace: the text takes the keyboard instead.
+    if let Some(doc) = current_doc(ui) {
+        doc.view.grab_focus();
+    }
+}
+
+/// The note of the library row the keyboard is on, if it is on one.
+pub(super) fn focused_row(ui: &Rc<Ui>) -> Option<i64> {
+    let shell = shell_if_built()?;
+    let focus = window_of(ui).and_then(|window| gtk::prelude::GtkWindowExt::focus(&window))?;
+    let row = std::iter::successors(Some(focus), |w| w.parent()).find_map(|w| w.downcast::<gtk::ListBoxRow>().ok())?;
+    if row.parent().as_ref() != Some(shell.list.upcast_ref::<gtk::Widget>()) {
+        return None;
+    }
+    let id = shell.rows.borrow().get(row.index() as usize).map(|r| note_id(&r.note));
+    id
 }
 
 fn listed(id: i64) -> Option<Value> {
@@ -1939,7 +1988,7 @@ pub(super) fn pin_id(ui: &Rc<Ui>, id: i64) {
     glib::spawn_future_local(async move {
         match ui.call("notes.pin", json!({"note_id":id,"pinned":pinned})).await {
             Ok(_) => refresh_notes(&ui),
-            Err(error) => shell_error(&ui, &error.to_string()),
+            Err(error) => shell_error(&ui, &format!("Could not {}: {}", if pinned { "pin" } else { "unpin" }, readable(&error))),
         }
     });
 }
@@ -2005,13 +2054,14 @@ pub(super) fn confirm_delete(ui: &Rc<Ui>, id: i64, name: String) {
         match ui.call("notes.delete", json!({"note_id":id})).await {
             Ok(_) => {
                 if let Some(doc) = doc_by_id(id) {
+                    doc.fresh.set(false);
                     doc::discard_close(&ui, &doc);
                 }
                 refresh_notes(&ui);
             }
             Err(error) => match doc_by_id(id) {
-                Some(doc) => doc.show_notice(&ui, &format!("Not deleted: {error}"), Vec::new()),
-                None => shell_error(&ui, &format!("Not deleted: {error}")),
+                Some(doc) => doc.show_notice(&ui, &format!("Not deleted: {}", readable(&error)), Vec::new()),
+                None => shell_error(&ui, &format!("Not deleted: {}", readable(&error))),
             },
         }
     });

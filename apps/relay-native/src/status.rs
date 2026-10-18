@@ -29,7 +29,7 @@ impl Ui {
             .filter(|s| text(s, "state") == "parked")
             .count();
         for (count, caption, color) in [
-            (blocked, "needs you", (0.898, 0.22, 0.18)),
+            (blocked, if blocked == 1 { "needs you" } else { "need you" }, (0.898, 0.22, 0.18)),
             (
                 live,
                 "live",

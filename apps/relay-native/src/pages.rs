@@ -81,7 +81,11 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
         _ => json!({"project_id":project}),
     };
     // The board labels cards with each row's `module_name`, which task.list joins in itself
-    // (completed modules included), so the board needs no module.list of its own.
+    // (completed modules included), so the board needs no module.list of its own. Its view as
+    // the last run left it is read first, once a run.
+    if name == "board" {
+        board_view::load_view(ui).await;
+    }
     let result = ui.call(op, payload).await;
     if ui.project.get() != project || *ui.page.borrow() != name {
         return;
@@ -155,42 +159,64 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
         guardrail_pages::page(ui, &body, project, data).await;
         return;
     }
+    // The mailbox keeps the rows it has, so a new message leaves a selection in another alone.
+    if name == "mailbox" {
+        mailbox(ui, &body, &data, older);
+        return;
+    }
     clear(&body);
     // Modules draws its own empty state (`board_view::modules`).
-    if data.is_empty() && name != "modules" {
-        body.append(&paragraph(match name {
-            "mailbox" => "No messages in this project.",
-            _ => "No modules yet. A module bundles tasks into one release: choose New module to start one.",
-        }));
+    if name == "modules" {
+        board_view::modules(ui, &body, &data);
     }
-    match name {
-        "mailbox" => {
-            let widest = MAILBOX_LIMIT.with(|limit| limit.get()) >= MAILBOX_PAGE_MAX;
-            if older && !widest {
-                let more = button("Show older messages", "secondary");
-                let weak = Rc::downgrade(ui);
-                more.connect_clicked(move |_| {
-                    MAILBOX_LIMIT.with(|limit| limit.set((limit.get() + MAILBOX_PAGE).min(MAILBOX_PAGE_MAX)));
-                    if let Some(ui) = weak.upgrade() {
-                        ui.refresh_page();
-                    }
-                });
-                body.append(&more);
-            } else if older {
-                body.append(&label(&format!("Showing the newest {MAILBOX_PAGE_MAX} messages."), "dim"));
+}
+
+/// The mailbox's rows, newest first, reconciled by message id as the Guardrails page keeps its
+/// cards: a row already shown stays put (and its selection with it), a new message gets a row
+/// in its place and a message gone from the page takes its row with it.
+fn mailbox(ui: &Rc<Ui>, body: &gtk::Box, data: &[Value], older: bool) {
+    let listed: std::collections::HashSet<i64> = data.iter().filter_map(|m| m["id"].as_i64()).collect();
+    let mut shown = std::collections::HashMap::new();
+    let mut child = body.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        match widget.widget_name().strip_prefix("mail-").and_then(|id| id.parse::<i64>().ok()) {
+            Some(id) if listed.contains(&id) => {
+                shown.insert(id, widget);
             }
-            for message in data {
+            // A message no longer on the page, the empty line, Show older and its limit.
+            _ => body.remove(&widget),
+        }
+    }
+    if data.is_empty() {
+        body.append(&paragraph("No messages in this project."));
+    }
+    // Newest first, as the phone lists them; the engine answers oldest first.
+    let mut previous: Option<gtk::Widget> = None;
+    for message in data.iter().rev() {
+        // "5 min ago", the moment itself on hover: it showed the engine's nanoseconds.
+        let sent = text(message, "sent_at");
+        let ago = crate::relative::ago(sent, crate::relative::Form::Long).unwrap_or_else(|| sent.to_string());
+        let row = match message["id"].as_i64().and_then(|id| shown.remove(&id)) {
+            Some(row) => {
+                // A kept row's message cannot change; only how long ago it was sent does.
+                if let Some(when) = row.last_child().and_downcast::<gtk::Label>() {
+                    when.set_label(&ago);
+                }
+                if row.prev_sibling() != previous {
+                    body.reorder_child_after(&row, previous.as_ref());
+                }
+                row
+            }
+            None => {
                 let row = gtk::Box::new(gtk::Orientation::Vertical, 6);
                 row.add_css_class("record");
-                let to = match text(&message, "to") {
-                    "*" => "everyone",
-                    to => to,
-                };
+                row.set_widget_name(&format!("mail-{}", message["id"]));
                 row.append(&label(
                     &format!(
                         "{} → {}{}",
-                        text(&message, "from"),
-                        to,
+                        who(text(message, "from")),
+                        who(text(message, "to")),
                         if message["priority"].as_bool() == Some(true) {
                             " · PRIORITY"
                         } else {
@@ -199,19 +225,53 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
                     ),
                     "dim",
                 ));
-                row.append(&paragraph(text(&message, "text")));
-                // "5 min ago", the moment itself on hover: it showed the engine's nanoseconds.
-                let sent = text(&message, "sent_at");
-                let when = label(&crate::relative::ago(sent, crate::relative::Form::Long).unwrap_or_else(|| sent.to_string()), "dim");
+                row.append(&paragraph(text(message, "text")));
+                let when = label(&ago, "dim");
                 when.set_tooltip_text(Some(sent));
                 row.append(&when);
-                body.append(&row);
+                body.insert_child_after(&row, previous.as_ref());
+                row.upcast()
             }
-        }
-        "modules" => board_view::modules(ui, &body, &data),
-        _ => {}
+        };
+        previous = Some(row);
+    }
+    // Older messages sit below the oldest one shown.
+    let widest = MAILBOX_LIMIT.with(|limit| limit.get()) >= MAILBOX_PAGE_MAX;
+    if older && !widest {
+        let more = button("Show older messages", "secondary");
+        let weak = Rc::downgrade(ui);
+        more.connect_clicked(move |_| {
+            MAILBOX_LIMIT.with(|limit| limit.set((limit.get() + MAILBOX_PAGE).min(MAILBOX_PAGE_MAX)));
+            if let Some(ui) = weak.upgrade() {
+                ui.refresh_page();
+            }
+        });
+        body.append(&more);
+    } else if older {
+        body.append(&label(&format!("Showing the newest {MAILBOX_PAGE_MAX} messages."), "dim"));
     }
 }
+/// A mail address as the page shows it: your own messages are "You", a broadcast "everyone".
+fn who(name: &str) -> &str {
+    match name {
+        "user" => "You",
+        "*" => "everyone",
+        name => name,
+    }
+}
+
+/// What `mailbox.send`'s `delivery` means for the person who sent it to `recipients` agents;
+/// an error when nobody got it.
+fn delivery(value: &str, recipients: usize) -> Result<&'static str, &'static str> {
+    match value {
+        "session_parked" if recipients > 1 => Ok("Sent · the agents are parked and read it when they wake"),
+        "session_parked" => Ok("Sent · the agent is parked and reads it when it wakes"),
+        "not_running" => Ok("Sent · no recipient is running yet"),
+        "no_recipients" => Err("No agent to deliver to"),
+        _ => Ok("Sent"),
+    }
+}
+
 pub fn workspace_picker(ui: &Rc<Ui>, project: i64, destination: &str) -> gtk::MenuButton {
     let picker = gtk::MenuButton::new();
     picker.add_css_class("workspace-picker");
@@ -386,24 +446,33 @@ fn mail_composer(ui: &Rc<Ui>, page: &gtk::Box, project: i64) {
     let popover = gtk::Popover::new();
     popover.set_child(Some(&choices));
     pick.set_popover(Some(&popover));
-    let mut names = vec![(String::from("*"), String::from("Everyone"))];
-    names.extend(
-        ui.sessions
-            .borrow()
-            .iter()
-            .filter(|s| s["project_id"].as_i64() == Some(project) && text(s, "state") != "closed")
-            .map(|s| (text(s, "name").to_string(), format!("{} · {} {}", text(s, "name"), text(s, "provider"), text(s, "role")))),
-    );
-    for (name, caption) in names {
-        let choice = button(&caption, "nav");
-        choice.set_halign(gtk::Align::Fill);
-        let (to, popover) = (to.clone(), popover.clone());
-        choice.connect_clicked(move |_| {
-            to.set_text(&name);
-            popover.popdown();
-        });
-        choices.append(&choice);
-    }
+    // Listed as the popup opens, so an agent started since the page was built is there too.
+    let weak = Rc::downgrade(ui);
+    let (entry, shown) = (to.clone(), popover.downgrade());
+    pick.set_create_popup_func(move |_| {
+        let Some(ui) = weak.upgrade() else { return };
+        clear(&choices);
+        let mut names = vec![(String::from("*"), String::from("Everyone"))];
+        names.extend(
+            ui.sessions
+                .borrow()
+                .iter()
+                .filter(|s| s["project_id"].as_i64() == Some(project) && text(s, "state") != "closed")
+                .map(|s| (text(s, "name").to_string(), format!("{} · {} {}", text(s, "name"), text(s, "provider"), text(s, "role")))),
+        );
+        for (name, caption) in names {
+            let choice = button(&caption, "nav");
+            choice.set_halign(gtk::Align::Fill);
+            let (to, popover) = (entry.clone(), shown.clone());
+            choice.connect_clicked(move |_| {
+                to.set_text(&name);
+                if let Some(popover) = popover.upgrade() {
+                    popover.popdown();
+                }
+            });
+            choices.append(&choice);
+        }
+    });
     to_row.append(&pick);
     field("To", &to_row, &form);
     field("Message", &message, &form);
@@ -453,8 +522,13 @@ fn mail_composer(ui: &Rc<Ui>, page: &gtk::Box, project: i64) {
                         && priority_control.is_active() == priority
                     {
                         buffer.set_text("");
+                        // As on the phone: the next message is ordinary unless asked again.
+                        priority_control.set_active(false);
                     }
-                    ui.show_info(&format!("Message: {}", crate::app::text(&v, "delivery")));
+                    match delivery(crate::app::text(&v, "delivery"), rows(&v, "recipients").len()) {
+                        Ok(info) => ui.show_info(info),
+                        Err(error) => ui.show_error(error),
+                    }
                     ui.refresh_page();
                 }
                 Err(e) => ui.show_error(&e.to_string()),

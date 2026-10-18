@@ -41,6 +41,7 @@ import com.quietsoftware.relay.ui.kit.RelayMark
 import com.quietsoftware.relay.ui.kit.Slab
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.column
+import com.quietsoftware.relay.ui.kit.plural
 import com.quietsoftware.relay.ui.shell.Page
 import com.quietsoftware.relay.ui.shell.PageBar
 import com.quietsoftware.relay.ui.theme.Relay
@@ -109,7 +110,8 @@ private fun ConnectScreen(nav: Nav) {
                         step = Step.Pairing(target.host)
                         nav.relay.pair(target)
                             .onSuccess {
-                                LinkService.start(context)
+                                // The background link only when the person keeps it (Stay connected).
+                                if (nav.shell.state.value.prefs.stayConnected) LinkService.start(context)
                                 nav.start()
                             }
                             .onFailure { e ->
@@ -138,6 +140,13 @@ private fun ConnectScreen(nav: Nav) {
         }
     }
 
+    // Stops asking and comes back to the key; the request left on the server runs out on its own.
+    fun cancel() {
+        job?.cancel()
+        job = null
+        step = Step.Idle
+    }
+
     Page {
         Column(Modifier.fillMaxSize()) {
             if (paired.pc != null) PageBar("Pair a PC", nav::back) else Gap(0.dp)
@@ -162,7 +171,7 @@ private fun ConnectScreen(nav: Nav) {
                         val unsent = paired.outbox.size
                         T(
                             "Pairing a different PC replaces ${pc.name.ifBlank { "this one" }}: this phone's copy of its data" +
-                                (if (unsent > 0) " and $unsent changes not yet sent" else "") + " will be dropped.",
+                                (if (unsent > 0) " and ${plural(unsent, "change")} not yet sent" else "") + " will be dropped.",
                             style = Relay.type.caption,
                             color = if (unsent > 0) c.heldText else c.ink3,
                         )
@@ -193,6 +202,10 @@ private fun ConnectScreen(nav: Nav) {
                             T(s.text, style = Relay.type.ui, color = c.heldText)
                             Key("Ask again", { step = Step.Idle; connect() }, Modifier.fillMaxWidth(), kind = KeyKind.Primary, glyph = "refresh")
                         }
+                    }
+                    // While it waits on the server, Discord or the PC; pairing itself ends on its own.
+                    if (step is Step.Reaching || step is Step.Waiting || step is Step.WaitingPc) {
+                        Key("Cancel", ::cancel, Modifier.fillMaxWidth(), kind = KeyKind.Quiet)
                     }
                     T("Through ${SERVER.removePrefix("https://")}", Modifier.padding(top = 8.dp), Relay.type.caption, c.ink3)
                     Gap(24.dp)

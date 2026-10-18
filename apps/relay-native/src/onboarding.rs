@@ -5,8 +5,12 @@ struct Setup {
     panel: std::rc::Weak<crate::panel::Panel>,
     body: gtk::Box,
     workspace: RefCell<Value>,
+    /// Relay has no project yet: the sheet is the first run, which ends in "Open Relay".
+    first: bool,
     busy: Cell<bool>,
     message: gtk::Label,
+    /// What the last scan of the workspace directory had to say, shown on the Local tab.
+    scan_note: RefCell<String>,
     repos: RefCell<Vec<Value>>,
     choices: gtk::ComboBoxText,
     search: gtk::SearchEntry,
@@ -63,8 +67,10 @@ pub fn open(ui: &Rc<Ui>, workspace: Option<Value>) {
         panel: Rc::downgrade(&panel),
         body,
         workspace: RefCell::new(Value::Null),
+        first,
         busy: Cell::new(false),
         message: label("", "dim"),
+        scan_note: RefCell::default(),
         repos: RefCell::default(),
         choices: gtk::ComboBoxText::new(),
         search: gtk::SearchEntry::new(),
@@ -178,6 +184,13 @@ impl Setup {
                     setup.discover(&choices);
                 }
             });
+            // Enter in the directory scans it, as Scan does.
+            let scan = scan.downgrade();
+            self.workspace_path.connect_activate(move |_| {
+                if let Some(scan) = scan.upgrade().filter(|scan| scan.is_sensitive()) {
+                    scan.emit_clicked();
+                }
+            });
         }
         let tabs = gtk::Stack::new();
         tabs.set_widget_name("setup-source");
@@ -269,7 +282,7 @@ impl Setup {
             if gh {
                 setup.load_github();
             } else {
-                setup.message.set_text("");
+                setup.message.set_text(&setup.scan_note.borrow());
             }
         });
         let weak = Rc::downgrade(self);
@@ -336,6 +349,7 @@ impl Setup {
         let generation = self.discovery_generation.get().wrapping_add(1);
         self.discovery_generation.set(generation);
         // An earlier scan's error describes a directory that is no longer the one shown.
+        self.scan_note.borrow_mut().clear();
         if !self.github.get() {
             self.message.set_text("");
         }
@@ -358,8 +372,9 @@ impl Setup {
             if current != path || setup.discovery_generation.get() != generation {
                 return;
             }
-            match result {
+            let note = match result {
                 Ok(v) => {
+                    let mut listed = 0;
                     for repo in rows(&v, "repositories").into_iter().filter(|r| {
                         !setup
                             .ui
@@ -369,11 +384,23 @@ impl Setup {
                             .any(|p| p["path"] == r["path"])
                     }) {
                         found.append(Some(text(&repo, "path")), text(&repo, "name"));
+                        listed += 1;
                     }
                     found.set_active(Some(0));
+                    // An empty picker and an Add key that stays off would say nothing.
+                    if listed == 0 {
+                        let place = if path.is_empty() { String::from("this directory") } else { path.clone() };
+                        format!("No Git repositories found in {place} that are not already in Relay. Choose another folder, or clone one from GitHub.")
+                    } else {
+                        String::new()
+                    }
                 }
-                Err(e) => setup.message.set_text(&e.to_string()),
+                Err(e) => e.to_string(),
+            };
+            if !setup.github.get() {
+                setup.message.set_text(&note);
             }
+            *setup.scan_note.borrow_mut() = note;
         });
     }
 
@@ -382,7 +409,7 @@ impl Setup {
             .set_label(if self.created_project.borrow().is_some() {
                 "Retry import"
             } else if self.workspace.borrow()["id"].is_null() {
-                "Open Relay"
+                if self.first { "Open Relay" } else { "Add workspace" }
             } else {
                 "Add project"
             });
@@ -443,7 +470,8 @@ impl Setup {
                 setup.connect.set_label("Refresh repositories");
                 let repos=setup.ui.call("github.repo.list",json!({})).await?;
                 *setup.repos.borrow_mut()=rows(&repos,"repositories"); setup.filter_repos();
-                setup.message.set_text(&format!("Connected as {} · {} repositories",text(&status,"login"),setup.repos.borrow().len())); Ok(())
+                let count = setup.repos.borrow().len();
+                setup.message.set_text(&format!("Connected as {} · {count} {}",text(&status,"login"),if count == 1 {"repository"} else {"repositories"})); Ok(())
             }.await;
             if let Err(e) = result {
                 setup.message.set_text(&e.to_string());

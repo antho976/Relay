@@ -1109,11 +1109,14 @@ pub fn doing(s: &StrategyRec, p: &Position, open: usize) -> String {
         return if parts.is_empty() { "Holding".into() } else { format!("Holding: sells at {}", parts.join(" or ")) };
     }
     match &s.rule.entry {
-        Entry::Schedule { .. } => rules::next_scheduled(&s.rule.entry, now())
-            .map(|t| format!("Next buy {}", jiff::Timestamp::from_second(t).map(|t| t.strftime("%a %d %b %H:%M UTC").to_string()).unwrap_or_default()))
-            .unwrap_or_else(|| "Waiting for its schedule".into()),
+        Entry::Schedule { .. } => rules::next_scheduled(&s.rule.entry, now()).map(next_buy).unwrap_or_else(|| "Waiting for its schedule".into()),
         Entry::Signal { when } => format!("Waiting for {}", rules::condition(when)),
     }
+}
+
+/// "Next buy Mon 5 Oct 09:00 UTC", for a scheduled buy at Unix second `t`.
+fn next_buy(t: i64) -> String {
+    format!("Next buy {}", jiff::Timestamp::from_second(t).map(|t| t.strftime("%a %-d %b %H:%M UTC").to_string()).unwrap_or_default())
 }
 
 #[cfg(test)]
@@ -1255,6 +1258,12 @@ mod tests {
         assert_eq!(book.expire_proposals(now()).unwrap(), 1);
         assert_eq!(book.proposal(id).unwrap().0.status, "expired");
         assert!(book.resolve_proposal(id, "approved", None).is_err());
+    }
+
+    #[test]
+    fn the_next_buy_reads_its_day_without_a_leading_zero() {
+        // 2026-10-05 09:00 UTC, a Monday.
+        assert_eq!(next_buy(1_791_190_800), "Next buy Mon 5 Oct 09:00 UTC");
     }
 
     #[test]

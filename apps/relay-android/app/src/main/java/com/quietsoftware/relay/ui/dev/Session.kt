@@ -68,9 +68,11 @@ import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.Toggle
 import com.quietsoftware.relay.ui.kit.ago
 import com.quietsoftware.relay.ui.kit.epoch
+import com.quietsoftware.relay.ui.kit.switchRow
 import com.quietsoftware.relay.ui.shell.Page
 import com.quietsoftware.relay.ui.shell.PageBar
 import com.quietsoftware.relay.ui.theme.Relay
+import com.quietsoftware.relay.ui.threads.Spinner
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -92,17 +94,17 @@ fun SessionScreen(name: String, nav: Nav) {
     val got by remember(name) { nav.relay.live("session.get", named(name)) }.collectAsStateWithLifecycle(RelayData.Live())
     val full = got.result as? JsonObject
     val session = row ?: full?.decodeAs<Session>()
-    val life = rememberLifecycle(nav) { nav.back() }
+    val life = rememberLifecycle(nav) { nav.leaveAgent(it) }
 
     Page {
         Column(Modifier.fillMaxSize()) {
             PageBar(name, nav::back, subtitle = session?.let { "${it.provider} · ${it.role}" }) {
                 if (session != null && session.state != "closed" && !session.pending) {
-                    IconKey("notes", { nav.chat(name) }, size = 18.dp, tint = Relay.colors.ink2)
+                    IconKey("notes", { nav.chat(name) }, size = 18.dp, tint = Relay.colors.ink2, label = "Conversation")
                 }
             }
             if (session == null) {
-                if (got.loading) Empty("terminal", "Reading $name") else Empty("terminal", "No such agent", got.error?.let(::refusal) ?: "It may have been closed on the PC.")
+                if (got.loading) Empty("terminal", "Reading $name", action = { Spinner(16.dp) }) else Empty("terminal", "No such agent", got.error?.let(::refusal) ?: "It may have been closed on the PC.")
                 return@Column
             }
             Column(
@@ -173,7 +175,7 @@ private fun Actions(session: Session, nav: Nav, life: Lifecycle, online: Boolean
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             for (act in actsFor(session.state)) {
                 Key(
-                    act.label,
+                    if (act == Act.Start) "Start session" else act.label,
                     { life.run(act, session) },
                     Modifier.alpha(if (online) 1f else .5f),
                     kind = if (act.danger) KeyKind.Danger else KeyKind.Plain,
@@ -302,7 +304,10 @@ private fun ColumnScope.Brief(nav: Nav, name: String) {
                 }
             }
             brief.error != null -> T(refusal(brief.error!!), Modifier.padding(8.dp), Relay.type.caption, c.heldText)
-            else -> T("Reading the brief…", Modifier.padding(8.dp), Relay.type.caption, c.ink3)
+            else -> Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Spinner(11.dp)
+                T("Reading the brief…", style = Relay.type.caption, color = c.ink3)
+            }
         }
     }
 }
@@ -337,7 +342,7 @@ private fun Settings(session: Session, nav: Nav) {
         } else {
             Models(session.provider, form.model, owner = session.name) { edit(form.copy(model = it)) }
         }
-        Eyebrow("Reasoning effort", Modifier.padding(top = 14.dp))
+        Eyebrow("Effort", Modifier.padding(top = 14.dp))
         FlowRow(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             for (e in effortsFor(session.provider)) {
                 Pill(e, Modifier.heightIn(min = 36.dp), selected = form.effort == e, onClick = if (spawned) null else ({ edit(form.copy(effort = e)) }))
@@ -346,8 +351,8 @@ private fun Settings(session: Session, nav: Nav) {
         if (spawned) T("Model and effort are fixed once the agent has started.", Modifier.padding(top = 8.dp), Relay.type.caption, c.ink3)
         Box(Modifier.padding(top = 10.dp)) {
             Column {
-                SwitchRow("Allow agent bus writes", "Let the agent create tasks, notes and mail.", form.writes, { edit(form.copy(writes = it)) })
-                SwitchRow("Allow UI control", "Let the agent drive the desktop's panes and pages.", form.ui, { edit(form.copy(ui = it)) })
+                SwitchRow("Agent bus writes", "Let it write files, stage and commit through Relay, with guardrails checked as it goes.", form.writes, { edit(form.copy(writes = it)) })
+                SwitchRow("UI control", "Let it drive the Relay window.", form.ui, { edit(form.copy(ui = it)) })
             }
         }
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
@@ -424,8 +429,11 @@ private fun MailComposer(session: Session, nav: Nav) {
     Column(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 24.dp)) {
         Field(body, { body = it }, Modifier.fillMaxWidth(), placeholder = "Write to ${session.name}", singleLine = false, minLines = 2, maxLines = 6)
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Toggle(priority, { priority = it })
-            T("Priority: read at its next step", Modifier.weight(1f).padding(start = 10.dp), Relay.type.caption, c.ink2)
+            // The switch and its words are one target; Send stays a key of its own.
+            Row(Modifier.weight(1f).heightIn(min = 44.dp).clip(Radii.key).switchRow(priority) { priority = it }, verticalAlignment = Alignment.CenterVertically) {
+                Toggle(priority, null)
+                T("Priority: ask this agent to read it at the next safe point", Modifier.weight(1f).padding(start = 10.dp), Relay.type.caption, c.ink2)
+            }
             Key(
                 "Send",
                 {

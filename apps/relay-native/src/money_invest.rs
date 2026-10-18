@@ -81,8 +81,8 @@ fn percent(bps: i64, signed: bool) -> String {
     }
 }
 
-/// A legend's share in whole percent: "52%", or "<1%" for a sliver.
-fn share(bps: i64) -> String {
+/// A legend's share in whole percent: "52%", or "<1%" for a sliver. The Tally panel's too.
+pub(super) fn share(bps: i64) -> String {
     if bps > 0 && bps < 50 { String::from("<1%") } else { format!("{}%", (bps + 50) / 100) }
 }
 
@@ -118,7 +118,7 @@ fn days_since(day: &str) -> Option<i64> {
 }
 
 /// "today", "yesterday" or "Fri 8 May", to follow "as of".
-fn as_of(day: &str) -> String {
+pub(super) fn as_of(day: &str) -> String {
     match human_date(day) {
         said if said == "Today" || said == "Yesterday" => said.to_lowercase(),
         said => said,
@@ -131,9 +131,18 @@ thread_local! {
     static HEAD: RefCell<Option<(gtk::Label, gtk::Button)>> = const { RefCell::new(None) };
     /// Whether Holdings shows past its largest [`HOLDINGS_SHOWN`].
     static ALL_HOLDINGS: Cell<bool> = const { Cell::new(false) };
+    /// Whether Activity shows past its newest [`ACTIVITY_SHOWN`].
+    static ALL_ACTIVITY: Cell<bool> = const { Cell::new(false) };
 }
 
 const HOLDINGS_SHOWN: usize = 15;
+const ACTIVITY_SHOWN: usize = 8;
+
+/// How many lines the page reads for Activity (`money.invest.list`): one past those it shows,
+/// so it knows there are more, or the engine's most once the person asked for them.
+pub(super) fn activity_limit() -> usize {
+    if ALL_ACTIVITY.with(|a| a.get()) { 200 } else { ACTIVITY_SHOWN + 1 }
+}
 
 /// Builds the page's head: the title with its keys (Update rates, Ask about this, Import…), and
 /// the context line under it. Ask about this is the page's one way to ask; only Needs a look adds
@@ -185,7 +194,7 @@ pub(super) fn head(ui: &Rc<Ui>, page: &Page) {
             match ui.call("money.fx.fetch", json!({})).await {
                 Ok(v) if v["started"] == false => super::toast(&ui, "The rate is already on its way.", None),
                 Ok(_) => super::toast(&ui, "Fetching the day's US dollar rate from the Bank of Canada…", None),
-                Err(e) => ui.show_error(&e.to_string()),
+                Err(e) => ui.show_error(&refusal(&e)),
             }
             key.set_sensitive(true);
         });
@@ -281,6 +290,10 @@ pub(super) fn draw(ui: &Rc<Ui>, page: &Page, p: &Value, activity: Option<&Value>
     // Accounts valued by hand are outside the engine's portfolio; the strip counts them, and says so.
     let hand: i64 = accounts.iter().filter(|a| by_hand(a)).filter_map(&balance).sum();
     let year = room.first().map(|r| n(r, "year")).unwrap_or_else(|| glib::DateTime::now_local().map(|now| i64::from(now.year())).unwrap_or(0));
+    // In RRSP season the RRSP row is last year's: rows of two years leave the year out of the
+    // captions, and each row says its own.
+    let one_year = room.iter().all(|r| n(r, "year") == year);
+    let dated = |caption: &str| if one_year { format!("{caption} · {year}") } else { caption.to_string() };
 
     // The strip: value, gain, income and room, then where the money sits.
     let (strip_box, cells) = strip(&page.body);
@@ -312,7 +325,7 @@ pub(super) fn draw(ui: &Rc<Ui>, page: &Page, p: &Value, activity: Option<&Value>
             (fmt.format_whole(left), format!("over in {}", join_and(&over)), Some("money-over"))
         }
     };
-    cell(&cells, "plan", &format!("Room left · {year}"), &figure, &line, class);
+    cell(&cells, "plan", &dated("Room left"), &figure, &line, class);
     let allocation = rows(p, "allocation");
     if value > 0 && !allocation.is_empty() {
         let block = gtk::Box::new(gtk::Orientation::Vertical, 10);
@@ -370,12 +383,12 @@ pub(super) fn draw(ui: &Rc<Ui>, page: &Page, p: &Value, activity: Option<&Value>
     for account in &accounts {
         list.append(&account_row(ui, account, balance(account)));
     }
-    let list = card(&pair[1], &format!("Contribution room · {year}"), None);
+    let list = card(&pair[1], &dated("Contribution room"), None);
     if room.is_empty() {
         list.append(&icon_row(&tile("plan"), "No TFSA, RRSP or FHSA yet", "Give an investment account its registration to follow its room", "", ""));
     }
     for r in &room {
-        list.append(&room_row(ui, r));
+        list.append(&room_row(ui, r, !one_year));
     }
     if let Some(rrsp) = room.iter().find(|r| text(r, "registration") == "RRSP") {
         if let Some(deadline) = rrsp["deadline"].as_str() {
@@ -449,8 +462,25 @@ pub(super) fn draw(ui: &Rc<Ui>, page: &Page, p: &Value, activity: Option<&Value>
             list.append(&icon_row(&tile("list"), "No activity yet", "Buys, sells, contributions and dividends come in with an activities export", "", ""));
         }
         Some(items) => {
-            for item in &items {
+            // Older lines too, on asking: a line imported into the wrong account may be one.
+            let all = ALL_ACTIVITY.with(|a| a.get());
+            for item in items.iter().take(if all { items.len() } else { ACTIVITY_SHOWN }) {
                 list.append(&activity_row(ui, item));
+            }
+            if items.len() > ACTIVITY_SHOWN {
+                let caption = if all { format!("Show the newest {ACTIVITY_SHOWN}") } else { String::from("Show more") };
+                let more = button(&caption, "money-text-action");
+                more.set_widget_name("money-invest-activity-more");
+                more.set_halign(gtk::Align::Start);
+                more.add_css_class("tally-save");
+                let weak = Rc::downgrade(ui);
+                more.connect_clicked(move |_| {
+                    ALL_ACTIVITY.with(|a| a.set(!a.get()));
+                    if let Some(ui) = weak.upgrade() {
+                        ui.refresh_page();
+                    }
+                });
+                list.append(&more);
             }
         }
     }
@@ -545,7 +575,8 @@ fn return_line(a: &Value) -> Option<String> {
 }
 
 /// An account: its registration's badge, its name over where it is held and what it holds (and
-/// its return), and its value over its gain. A key: it records a value, as its statement shows.
+/// its return), and its value over its gain. A key: it records a value, as its statement shows;
+/// for an account its holdings fill, the value Overview and net worth count (the sheet says so).
 /// An account valued by hand ([`by_hand`]) shows `balance`, Tally's balance for it.
 fn account_row(ui: &Rc<Ui>, a: &Value, balance: Option<i64>) -> gtk::Box {
     let fmt = formatter();
@@ -610,13 +641,14 @@ fn account_row(ui: &Rc<Ui>, a: &Value, balance: Option<i64>) -> gtk::Box {
             super::record_value(&ui, &account);
         }
     });
-    row_key(&inner, &format!("Record what {} is worth", text(a, "name")), run)
+    let tooltip = if by_hand { format!("Record what {} is worth", text(a, "name")) } else { format!("Record what {} is worth for Overview and net worth", text(a, "name")) };
+    row_key(&inner, &tooltip, run)
 }
 
-/// A registration's room this year: its badge and name over what went in of the room, the room
-/// field (the CRA figure), a meter of the room used in its hue (red over it: no pace tick, room
-/// has no pace), and what being over costs.
-fn room_row(ui: &Rc<Ui>, r: &Value) -> gtk::Box {
+/// A registration's room this year: its badge and name (with its year, when `dated`) over what
+/// went in of the room, the room field (the CRA figure), a meter of the room used in its hue (red
+/// over it: no pace tick, room has no pace), and what being over costs.
+fn room_row(ui: &Rc<Ui>, r: &Value, dated: bool) -> gtk::Box {
     let fmt = formatter();
     let registration = text(r, "registration");
     let name = registration_label(registration);
@@ -632,7 +664,7 @@ fn room_row(ui: &Rc<Ui>, r: &Value) -> gtk::Box {
     let words = gtk::Box::new(gtk::Orientation::Vertical, 1);
     words.set_hexpand(true);
     words.set_valign(gtk::Align::Center);
-    words.append(&label(name, "money-row-title"));
+    words.append(&label(&if dated { format!("{name} · {year}") } else { name.to_string() }, "money-row-title"));
     let reading = match room {
         Some(room) if over > 0 => format!("{} put in · room {}", fmt.format_whole(contributed), fmt.format_whole(room)),
         Some(room) => format!("{} of {} · {} left", fmt.format_whole(contributed), fmt.format_whole(room), fmt.format_whole(n(r, "left"))),
@@ -722,7 +754,7 @@ fn room_field(ui: &Rc<Ui>, registration: &str, year: i64, room: Option<i64>, nam
             let payload = json!({"registration":registration,"year":year,"amount":value});
             glib::spawn_future_local(async move {
                 if let Err(e) = ui.call("money.invest.room", payload).await {
-                    ui.show_error(&e.to_string());
+                    ui.show_error(&refusal(&e));
                 }
                 ui.refresh_page();
             });
@@ -952,7 +984,8 @@ fn activity_row(ui: &Rc<Ui>, a: &Value) -> gtk::Box {
     trash.add_css_class("money-row-delete");
     trash.set_valign(gtk::Align::Center);
     let weak = Rc::downgrade(ui);
-    let (id, what) = (a["id"].clone(), format!("{} deleted · {}", title.trim(), human_date(text(a, "date"))));
+    // Said as an entry's delete is: "Deleted Bought 10 XEQT · Thu 8 Oct".
+    let (id, what) = (a["id"].clone(), format!("Deleted “{}” · {}", title.trim(), human_date(text(a, "date"))));
     trash.connect_clicked(move |_| {
         if let Some(ui) = weak.upgrade() {
             delete_activity(&ui, id.clone(), what.clone());

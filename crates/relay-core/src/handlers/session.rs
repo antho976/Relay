@@ -270,26 +270,6 @@ fn owns(
 /// Relay keeps out of git in every checkout it manages.
 const ATTACHMENTS: &str = ".relay/attachments";
 
-/// Pictures larger than this are refused; the phone sends a photo shrunk well under it, and a
-/// door takes at most 8 MiB in one message.
-const UPLOAD_MAX: usize = 4 << 20;
-
-fn decode_upload(encoded: &str) -> Result<Vec<u8>, BusError> {
-    use base64::Engine as _;
-    let too_big = || BusError::invalid("session.upload", format!("the picture is over {} MiB", UPLOAD_MAX >> 20))
-        .with_hint("send it smaller");
-    if encoded.len() > UPLOAD_MAX.div_ceil(3) * 4 + 4 {
-        return Err(too_big());
-    }
-    let compact: String = encoded.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-    let bytes = base64::engine::general_purpose::STANDARD.decode(compact.as_bytes())
-        .map_err(|_| BusError::invalid("session.upload", "bytes_b64 is not base64"))?;
-    if bytes.len() > UPLOAD_MAX {
-        return Err(too_big());
-    }
-    Ok(bytes)
-}
-
 /// `.relay/attachments` in `worktree`, made if missing. The agent owns its checkout, so either
 /// folder may be a link it planted: a link is refused rather than written through.
 fn attachments_dir(worktree: &Path) -> Result<PathBuf, BusError> {
@@ -2345,9 +2325,8 @@ pub fn register(e: &mut Engine) {
     // the transaction only names the project.
     e.register_staged::<Upload, _>(|ctx, p| {
         let row = read_own_or_pair(ctx, &p.session)?;
-        let bytes = decode_upload(&p.bytes_b64)?;
-        let picture = crate::handlers::design::picture::sniff(&bytes)
-            .filter(|picture| picture.ext != "svg")
+        let bytes = crate::picture::decode_upload(&p.bytes_b64, "session.upload")?;
+        let picture = crate::picture::raster(&bytes)
             .ok_or_else(|| BusError::invalid("session.upload", "not a PNG, JPEG, GIF or WebP picture whose size can be read"))?;
         let s = &row.session;
         let worktree = Path::new(&s.worktree);

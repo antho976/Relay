@@ -87,7 +87,7 @@ impl Editor {
             !worktrees.is_empty() && !worktrees.iter().any(|w| text(w, "path") == current)
         };
         if removed && !self.is_dirty() {
-            ui.show_error(&format!("The checkout {current} was removed; showing the primary checkout."));
+            ui.show_info(&format!("The checkout {current} was removed; showing the primary checkout."));
             self.select_checkout(ui, "");
             return;
         }
@@ -118,15 +118,15 @@ impl Editor {
         if self.worktree.borrow().as_str() == path {
             return;
         }
-        if self.is_dirty() {
-            ui.show_error("Save or discard your changes before switching checkouts.");
+        // Unsaved edits are asked about first, a save or Git action waited for (`after_unsaved`);
+        // a file still loading is no reason to wait.
+        if self.writing.get() || self.git_busy.get() || (self.buffer.is_modified() && !self.busy.get()) {
+            let path = path.to_owned();
+            self.after_unsaved(ui, move |e, ui| e.select_checkout(ui, &path));
             return;
         }
         let agents = self.agents_visible();
         self.clear_document();
-        self.commit_message.buffer().set_text("");
-        self.branch_name.set_text("");
-        self.branch_start.set_text("");
         self.selected_path.borrow_mut().clear();
         self.expanded.borrow_mut().clear();
         *self.worktree.borrow_mut() = path.into();
@@ -237,6 +237,7 @@ impl Editor {
                         key.set_widget_name(&format!("scope-branch-{name}"));
                         key.set_sensitive(!current);
                         key.set_tooltip_text(Some(&match &holder {
+                            _ if current => String::from("The branch this checkout is on"),
                             Some((path, _)) if path.is_empty() => format!("{name} is checked out in the primary checkout; open it"),
                             Some((path, _)) => format!("{name} is checked out in {path}; open that checkout"),
                             None => format!("Switch this checkout to {name}"),
@@ -273,13 +274,25 @@ impl Editor {
                         branch_list.append(&key);
                     }
                 }
-                Err(error) => branch_list.append(&label(&error.to_string(), "dim")),
+                Err(error) => branch_list.append(&label(&readable(&error), "dim")),
             }
         });
         search.connect_search_changed(move |search| {
             let query = search.text().to_lowercase();
             for (row, title) in &searchable {
                 row.set_visible(title.contains(&query));
+            }
+        });
+        // Enter takes the first match, as the Git panel's branch picker does.
+        let rows = list.downgrade();
+        search.connect_activate(move |search| {
+            if search.text().trim().is_empty() {
+                return;
+            }
+            // The filter runs a moment after typing; bring it up to date first.
+            search.emit_by_name::<()>("search-changed", &[]);
+            if let Some(key) = rows.upgrade().and_then(|list| first_choice(list.upcast_ref())) {
+                key.emit_clicked();
             }
         });
         let scroll = scrolled(&list);
@@ -369,6 +382,28 @@ impl Editor {
         row.add_controller(source);
     }
 }
+/// The first shown key under `parent` that can be pressed, in the order the list reads.
+fn first_choice(parent: &gtk::Widget) -> Option<gtk::Button> {
+    let mut child = parent.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        if !widget.is_visible() {
+            continue;
+        }
+        match widget.downcast_ref::<gtk::Button>() {
+            Some(key) if key.is_sensitive() => return Some(key.clone()),
+            Some(_) => {}
+            None if widget.is::<gtk::Box>() => {
+                if let Some(key) = first_choice(&widget) {
+                    return Some(key);
+                }
+            }
+            None => {}
+        }
+    }
+    None
+}
+
 fn button_row(title: &str, icon: &str) -> gtk::Button {
     let row = button("", "quiet");
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);

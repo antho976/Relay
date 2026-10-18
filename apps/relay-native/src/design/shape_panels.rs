@@ -78,7 +78,7 @@ pub fn icon(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
     let weak = Rc::downgrade(b);
     // Automatic shows the colour it is drawn in, not an empty key.
     let shown = n.stroke.clone().unwrap_or_else(|| super::paint::text_color(&b.doc.scene.borrow(), n));
-    let colour = color_key(b, Some(&shown), "Icon colour", true, move |c| {
+    let colour = color_key(b, Some(&shown), "Icon colour", Some("Automatic"), move |c| {
         if let Some(b) = weak.upgrade() {
             b.set_selected(set(&[("stroke", json!(c))]));
         }
@@ -285,7 +285,9 @@ pub fn fill(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
         let fill = super::paint::fill_of(n);
         let weak = Rc::downgrade(b);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        row.append(&color_key(b, fill.as_deref(), "Fill", true, move |c| {
+        // A line or path fills with nothing until given a colour; a shape with its own.
+        let clear = if matches!(n.kind, NodeKind::Line | NodeKind::Path) { "None" } else { "Automatic" };
+        row.append(&color_key(b, fill.as_deref(), "Fill", Some(clear), move |c| {
             if let Some(b) = weak.upgrade() {
                 b.set_selected(set(&[("fill", json!(c))]));
             }
@@ -316,7 +318,7 @@ pub fn fill(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let w = write.clone();
         let v = value.clone();
-        row.append(&color_key(b, Some(&stop.color), "Stop colour", false, move |c| {
+        row.append(&color_key(b, Some(&stop.color), "Stop colour", None, move |c| {
             if let Some(c) = c {
                 let mut v = v.clone();
                 v["stops"][i]["color"] = json!(c);

@@ -20,6 +20,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -55,13 +57,15 @@ import kotlinx.serialization.json.put
 @Composable
 fun InboxScreen(nav: Nav) {
     val s by nav.shell.state.collectAsStateWithLifecycle()
-    val notifications by remember { nav.relay.notifications() }.collectAsStateWithLifecycle(initialValue = emptyList())
-    val tasks by remember { nav.relay.allTasks() }.collectAsStateWithLifecycle(initialValue = emptyList())
+    // Null until the phone's copy answers, so "You're all caught up" never shows before what is there.
+    val notified by remember { nav.relay.notifications() }.collectAsStateWithLifecycle(initialValue = null)
+    val listed by remember { nav.relay.allTasks() }.collectAsStateWithLifecycle(initialValue = null)
     val projects by remember { nav.relay.projects() }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val notifications = notified.orEmpty()
 
     val names = projects.associate { it.num to it.name }
-    val review = tasks.filter { it.column == "in_review" }
-    val reviewProject = review.map { it.projectId }.distinct().singleOrNull() ?: s.project?.num
+    // By project, so each row opens the board its tasks are on.
+    val review = listed.orEmpty().filter { it.column == "in_review" }.groupBy { it.projectId }
     val unread = notifications.count { !it.read }
 
     fun open(n: Notification) {
@@ -73,7 +77,9 @@ fun InboxScreen(nav: Nav) {
         val session = payload?.s("session")
         when {
             op == "task.get" && taskId != null -> nav.task(taskId.toString())
-            (op == "session.get" || op == "session.brief") && session != null -> nav.terminal(session)
+            // A hold is answered beside its agent, as the PC's notice opens its tile (notification_center.rs `route`).
+            (op == "session.get" || op == "session.brief" || op == "guardrail.confirm") && session != null -> nav.terminal(session)
+            op == "guardrail.confirm" -> nav.guardrails(n.projectId)
             n.category == "agent_done" || n.category == "agent_blocked" -> nav.board(n.projectId)
         }
     }
@@ -96,26 +102,29 @@ fun InboxScreen(nav: Nav) {
                             onLater = null,
                             onOpen = { nav.guardrails(hold.projectId) },
                             modifier = Modifier.padding(bottom = 8.dp),
+                            openLabel = "Open Guardrails",
                         )
                     }
                 }
 
                 if (review.isNotEmpty()) {
                     item { SectionLabel("In review") }
-                    item {
+                    itemsIndexed(review.entries.toList(), key = { _, e -> "review:${e.key}" }) { index, (project, waiting) ->
+                        // With tasks in several projects, each row names whose board it opens.
+                        val board = names[project]?.takeIf { review.size > 1 && it.isNotBlank() }?.let { "the $it board" } ?: "the board"
                         Slab(
-                            Modifier.fillMaxWidth(),
+                            Modifier.fillMaxWidth().padding(top = if (index > 0) 8.dp else 0.dp),
                             padding = PaddingValues(14.dp),
-                            onClick = { nav.board(reviewProject) },
+                            onClick = { nav.board(project) },
                         ) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                     T(
-                                        if (review.size == 1) "1 task waits for review" else "${review.size} tasks wait for review",
+                                        if (waiting.size == 1) "1 task waits for review" else "${waiting.size} tasks wait for review",
                                         style = Relay.type.uiMedium,
                                         color = Relay.colors.ink,
                                     )
-                                    T("Open the board to look and approve.", style = Relay.type.caption, color = Relay.colors.ink3)
+                                    T("Open $board to look and approve.", style = Relay.type.caption, color = Relay.colors.ink3)
                                 }
                                 Glyph("chevron-right", 16.dp, Relay.colors.ink3)
                             }
@@ -142,7 +151,7 @@ fun InboxScreen(nav: Nav) {
                     }
                 }
 
-                if (s.loaded && s.holds.isEmpty() && review.isEmpty() && notifications.isEmpty()) {
+                if (s.loaded && notified != null && listed != null && s.holds.isEmpty() && review.isEmpty() && notifications.isEmpty()) {
                     item { Empty("inbox", "You're all caught up", "Finished, blocked and held agents report here.") }
                 }
             }
@@ -158,11 +167,13 @@ private fun NotificationRow(n: Notification, project: String?, onClick: () -> Un
         "agent_done" -> c.live
         else -> c.ink3
     }
-    val meta = listOfNotNull(project?.takeIf { it.isNotBlank() }, categoryLabel(n.category)).joinToString(" · ").uppercase()
+    // What kind, then where, as the PC's: a long project name is cut, not the kind.
+    val meta = listOfNotNull(categoryLabel(n.category), project?.takeIf { it.isNotBlank() }).joinToString(" · ").uppercase()
     Row(
         Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
+            .semantics { stateDescription = if (n.read) "Read" else "Unread" }
             .padding(horizontal = 4.dp, vertical = 12.dp),
         verticalAlignment = Alignment.Top,
     ) {
@@ -186,12 +197,17 @@ private fun NotificationRow(n: Notification, project: String?, onClick: () -> Un
     }
 }
 
+/**
+ * A kind as the PC's notification settings name it (tools_settings.rs), so a row reads like the
+ * switch that silences it; but a refusal is filed as "guardrail" too, so that is only Guardrail,
+ * and a row of the PC's "Everything else" reads System.
+ */
 private fun categoryLabel(category: String) = when (category) {
     "agent_done" -> "Agent finished"
-    "agent_blocked" -> "Agent blocked"
+    "agent_blocked" -> "Agent needs you"
     "guardrail" -> "Guardrail"
-    "integration" -> "Integration"
-    "provider" -> "Provider"
+    "integration" -> "Integrations"
+    "provider" -> "Providers"
     "disk" -> "Disk"
     "system" -> "System"
     else -> category.replace('_', ' ')

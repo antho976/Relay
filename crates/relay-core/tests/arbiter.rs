@@ -27,6 +27,8 @@ struct Fake {
     rest: Mutex<bool>,
     /// The exchange refuses every sell.
     refuse_sells: Mutex<bool>,
+    /// Resting orders cancelled, by exchange id: they read back as cancelled.
+    cancelled: Mutex<Vec<String>>,
 }
 
 impl Fake {
@@ -102,6 +104,9 @@ impl Account for Fake {
     }
     fn order(&self, id: &str) -> Result<ExchangeOrder> {
         let p = Decimal::try_from(*self.price.lock().unwrap()).unwrap();
+        if self.cancelled.lock().unwrap().iter().any(|c| c == id) {
+            return Ok(ExchangeOrder { order_id: id.into(), client_order_id: id.trim_start_matches("x-").into(), status: OrderStatus::Cancelled, filled_size: Decimal::ZERO, average_filled_price: Decimal::ZERO, total_fees: Decimal::ZERO, reason: None });
+        }
         if *self.rest.lock().unwrap() {
             return Ok(ExchangeOrder { order_id: id.into(), client_order_id: id.trim_start_matches("x-").into(), status: OrderStatus::Open, filled_size: Decimal::ZERO, average_filled_price: Decimal::ZERO, total_fees: Decimal::ZERO, reason: None });
         }
@@ -114,7 +119,11 @@ impl Account for Fake {
         let p = Decimal::try_from(*self.price.lock().unwrap()).unwrap();
         Ok(vec![ExchangeFill { trade_id: format!("t-{id}"), order_id: id.into(), price: p, size: Decimal::new(5, 1), fee: Decimal::new(3, 1), at: Fake::now() }])
     }
-    fn cancel(&self, _: &[String]) -> Result<()> {
+    fn cancel(&self, ids: &[String]) -> Result<()> {
+        // Only a resting order can be cancelled; one that filled stays filled.
+        if *self.rest.lock().unwrap() {
+            self.cancelled.lock().unwrap().extend(ids.iter().cloned());
+        }
         Ok(())
     }
 }
@@ -360,4 +369,59 @@ fn a_fill_that_races_the_kill_switch_is_still_booked() {
     let d = ok(&engine, "arbiter.strategy.get", json!({"id": id}));
     assert_eq!(d["row"]["held_base"], "0.5", "{d:#}");
     assert_eq!(d["orders"][0]["status"], "filled");
+}
+
+#[test]
+fn the_key_is_kept_while_a_live_order_is_open() {
+    let (engine, fake) = setup();
+    connect(&engine);
+    *fake.rest.lock().unwrap() = true;
+    let id = ok(&engine, "arbiter.strategy.save", json!({"draft": draft("Agent", "20")}))["row"]["id"].as_i64().unwrap();
+    ok(&engine, "arbiter.strategy.set", json!({"id": id, "mode": "agent", "venue": "live"}));
+    ok(&engine, "arbiter.order.place", json!({"strategy_id": id, "side": "buy", "quote": "20", "why": "dip"}));
+    // Without the key the order could never be read back or cancelled.
+    assert_eq!(code(call(&engine, "arbiter.key.remove", json!({}))), "arbiter.order_open");
+    assert_eq!(ok(&engine, "arbiter.summary", json!({}))["connection"]["state"], "ok");
+    // Halting cancels it on the exchange; then the key may go.
+    ok(&engine, "arbiter.halt", json!({"reason": "testing"}));
+    assert_eq!(ok(&engine, "arbiter.strategy.get", json!({"id": id}))["orders"][0]["status"], "cancelled");
+    assert_eq!(ok(&engine, "arbiter.key.remove", json!({}))["state"], "none");
+}
+
+#[test]
+fn a_restart_waits_while_todays_loss_is_past_the_daily_limit() {
+    let (engine, fake) = setup();
+    let global = |loss: &str| json!({"global": {"daily_loss": loss, "price_band_pct": "2", "slippage_pct": "0.1", "approval_minutes": 10}});
+    ok(&engine, "arbiter.limits.set", global("1"));
+    let id = ok(&engine, "arbiter.strategy.save", json!({"draft": draft("Dip", "50")}))["row"]["id"].as_i64().unwrap();
+    ok(&engine, "arbiter.strategy.set", json!({"id": id, "running": true}));
+    pass(&engine);
+    // The stop sells at a loss of about 5, past Arbiter's daily limit of 1: everything halts.
+    fake.set(90.0);
+    pass(&engine);
+    assert_eq!(ok(&engine, "arbiter.summary", json!({}))["halted"], true);
+    // Restarted, the next pass would only halt it again.
+    assert_eq!(code(call(&engine, "arbiter.restart", json!({}))), "arbiter.daily_loss");
+    assert_eq!(ok(&engine, "arbiter.summary", json!({}))["halted"], true);
+    ok(&engine, "arbiter.limits.set", global("100"));
+    ok(&engine, "arbiter.restart", json!({}));
+    assert_eq!(ok(&engine, "arbiter.summary", json!({}))["halted"], false);
+}
+
+#[test]
+fn a_strategy_past_its_own_daily_loss_waits_to_restart() {
+    let (engine, fake) = setup();
+    let mut d = draft("Dip", "50");
+    d["limits"]["daily_loss"] = json!("1");
+    let id = ok(&engine, "arbiter.strategy.save", json!({"draft": d}))["row"]["id"].as_i64().unwrap();
+    ok(&engine, "arbiter.strategy.set", json!({"id": id, "running": true}));
+    pass(&engine);
+    // Down 3%, short of the stop: the open loss of about 1.8 is past its limit of 1.
+    fake.set(97.0);
+    pass(&engine);
+    assert_eq!(ok(&engine, "arbiter.strategy.get", json!({"id": id}))["row"]["state"], "halted");
+    assert_eq!(code(call(&engine, "arbiter.restart", json!({"strategy_id": id}))), "arbiter.daily_loss");
+    ok(&engine, "arbiter.limits.set", json!({"strategy_id": id, "limits": {"max_order": "50", "max_position": "200", "daily_loss": "40"}}));
+    ok(&engine, "arbiter.restart", json!({"strategy_id": id}));
+    assert_eq!(ok(&engine, "arbiter.strategy.get", json!({"id": id}))["row"]["state"], "running");
 }

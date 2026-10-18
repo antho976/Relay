@@ -408,6 +408,17 @@ impl Editor {
         });
     }
 
+    /// Workspace and Project are off, and say why, while there is no workspace or project.
+    fn sync_toggles(&self, ui: &Ui) {
+        for (toggle, none, why) in [
+            (&self.toggles[1], ui.workspaces.borrow().is_empty(), "Add a workspace first"),
+            (&self.toggles[2], ui.projects.borrow().is_empty(), "Add a project first"),
+        ] {
+            toggle.set_sensitive(!none);
+            toggle.set_tooltip_text(none.then_some(why));
+        }
+    }
+
     fn set_scope(self: &Rc<Self>, scope: Scope) {
         if self.scope.get() == scope {
             return;
@@ -520,7 +531,8 @@ fn build(ui: &Rc<Ui>, scope: Scope) -> (gtk::Box, Weak<Editor>) {
                 }
                 Kind::Percent => {
                     let spin = gtk::SpinButton::with_range(0., 100., 0.5);
-                    spin.set_digits(2);
+                    // As fine as its step: "50.5", not "50.50".
+                    spin.set_digits(1);
                     Input::Spin(spin)
                 }
                 Kind::Toggle => Input::Switch(gtk::Switch::new()),
@@ -642,6 +654,12 @@ fn build(ui: &Rc<Ui>, scope: Scope) -> (gtk::Box, Weak<Editor>) {
             }
             let Some(ui) = editor.ui.upgrade() else { return };
             editor.set_scope(default_target(&ui, index));
+            // With no workspace or project to edit the form stays on Global: light that.
+            if editor.scope.get().index() != index {
+                editor.filling.set(true);
+                editor.toggles[editor.scope.get().index()].set_active(true);
+                editor.filling.set(false);
+            }
         });
     }
     let weak = Rc::downgrade(&editor);
@@ -677,6 +695,17 @@ fn build(ui: &Rc<Ui>, scope: Scope) -> (gtk::Box, Weak<Editor>) {
     editor.toggles[scope.index()].set_active(true);
     editor.filling.set(false);
     editor.fill_targets(ui);
+    editor.sync_toggles(ui);
+    // Settings keeps the editor for the connection: a workspace or project added since counts
+    // the next time it shows.
+    let weak = Rc::downgrade(&editor);
+    root.connect_map(move |_| {
+        if let Some(editor) = weak.upgrade() {
+            if let Some(ui) = editor.ui.upgrade() {
+                editor.sync_toggles(&ui);
+            }
+        }
+    });
     editor.load("");
     // The root owns the editor through this handler; its children only hold weak references,
     // so dropping the widget drops everything.
@@ -693,7 +722,15 @@ fn open(ui: &Rc<Ui>, scope: Scope) {
     let Some(panel) = crate::panel::Panel::toggle(ui, "Guardrails", 640) else { return };
     let (root, editor) = build(ui, scope);
     panel.body.append(&root);
-    panel.set_guard(move || editor.upgrade().is_none_or(|editor| editor.dirty() == 0));
+    panel.set_guard(move || {
+        let Some(editor) = editor.upgrade() else { return true };
+        if editor.dirty() == 0 {
+            return true;
+        }
+        // Escape or Back with edits pending says why the panel stays.
+        editor.status.set_text("Save or discard your changes before closing.");
+        false
+    });
     panel.present();
 }
 

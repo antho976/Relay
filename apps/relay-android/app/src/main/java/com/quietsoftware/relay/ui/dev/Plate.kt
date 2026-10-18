@@ -51,6 +51,7 @@ import com.quietsoftware.relay.data.TerminalFeed
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.LampDot
 import com.quietsoftware.relay.ui.kit.T
+import com.quietsoftware.relay.ui.kit.TOUCH
 import com.quietsoftware.relay.ui.term.TerminalView
 import com.quietsoftware.relay.ui.theme.Fonts
 import com.quietsoftware.relay.ui.theme.Relay
@@ -90,14 +91,17 @@ internal val Session.pending: Boolean get() = Optimistic.isTemp(name)
 
 internal fun Session.shownName(): String = if (pending) "New agent" else name
 
-/** What a slate says under the state word (terminal.rs `slate_hint`), shortened for a phone. */
+/**
+ * What a slate says under the state word (terminal.rs `slate_hint`), shortened for a phone. The
+ * slate and the banner show the word with it, so the hint does not say it again.
+ */
 internal fun slateHint(s: Session, online: Boolean): String = when {
     s.pending -> if (online) "The PC is preparing its worktree." else "Starts when the PC is back."
-    s.state == "parked" -> "Parked — wake to continue. Scrollback and worktree are kept."
+    s.state == "parked" -> "Wake to continue. Scrollback and worktree are kept."
     s.state == "restorable" -> "The process ended. Resume restores its conversation and worktree."
-    s.state == "exited" -> "The process exited. Resume to start it again."
-    s.state == "created" -> "Not started yet. Start launches the provider in its worktree."
-    s.state == "closed" -> "Closed."
+    s.state == "exited" -> "Resume to start it again."
+    s.state == "created" -> "Start launches the provider in its worktree."
+    s.state == "closed" -> "Taken off the wall."
     s.attachable -> if (online) "Open it to watch it live." else "The PC is away: its last screen, as this phone saved it."
     else -> "No signal from this session."
 }
@@ -163,13 +167,16 @@ internal fun Branch(s: Session, modifier: Modifier = Modifier, size: Float = 11f
     }
 }
 
-/** A strip key (terminal.rs: 22px, radius 2): a glyph, dimmed when the PC is away. */
+/**
+ * A strip key (terminal.rs: 22px, radius 2): a glyph, dimmed when the PC is away. The face is the
+ * PC's; the target around it is a finger's, since Park ends a working agent's process at one tap.
+ */
 @Composable
 internal fun StripKey(act: Act, onClick: () -> Unit, dim: Boolean = false) {
     val c = Relay.colors
     Box(
         Modifier
-            .size(width = 34.dp, height = 26.dp)
+            .size(width = TOUCH, height = 36.dp)
             .alpha(if (dim) .4f else 1f)
             .clip(SQUARE)
             .clickable(role = Role.Button, onClickLabel = act.label, onClick = onClick),

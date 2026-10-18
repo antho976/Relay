@@ -30,6 +30,8 @@ pub(crate) struct Spec {
     /// Singular and plural, lower case.
     pub noun: (&'static str, &'static str),
     pub placeholder: &'static str,
+    /// The filter keys. Past "All" each names a state ("On", "Off", "Suggested"), as the
+    /// sentence for an empty filter reads it.
     pub filters: &'static [&'static str],
     pub list_op: &'static str,
     pub list_payload: fn() -> Value,
@@ -428,6 +430,14 @@ fn build(ui: &Rc<Ui>, spec: &'static Spec) -> Rc<Market> {
             }
         }
     });
+    // Escape clears the search; Enter goes to the result the detail shows, the first match.
+    market.search.connect_stop_search(|search| search.set_text(""));
+    let weak = Rc::downgrade(&market);
+    market.search.connect_activate(move |_| {
+        if let Some(row) = weak.upgrade().and_then(|market| market.list.selected_row()) {
+            row.grab_focus();
+        }
+    });
     for (index, (key, _)) in market.filter_keys.iter().enumerate() {
         let weak = Rc::downgrade(&market);
         key.connect_toggled(move |key| {
@@ -504,11 +514,25 @@ impl Market {
 
     /// Opens the banner (the skill installer) and moves focus into it.
     pub(crate) fn reveal_banner(&self) {
-        match self.banner_key.borrow().as_ref() {
-            Some(key) => key.set_active(true),
-            None => self.banner.set_visible(true),
+        let key = self.banner_key.borrow().clone();
+        match key {
+            // Its own handler opens the banner and focuses it: focusing again would move on.
+            Some(key) if !key.is_active() => key.set_active(true),
+            _ => {
+                self.banner.set_visible(true);
+                self.banner.child_focus(gtk::DirectionType::TabForward);
+            }
         }
-        self.banner.child_focus(gtk::DirectionType::TabForward);
+    }
+
+    /// Selects `id`: now when it is listed, else on the repaint that brings it (a skill just
+    /// installed, whose event may arrive before or after the install's answer).
+    pub(crate) fn select(&self, id: String) {
+        let row = self.rows.borrow().iter().find(|(_, listed)| *listed == id).map(|(row, _)| row.clone());
+        *self.selected.borrow_mut() = Some(id);
+        if let Some(row) = row {
+            self.list.select_row(Some(&row));
+        }
     }
 
     /// Patches an item's projects from the engine's answer and repaints.
@@ -521,6 +545,8 @@ impl Market {
                 item["enabled_in"] = enabled_in.clone();
             }
         }
+        // An earlier switch's refusal is no longer news once one goes through.
+        self.notice.set_visible(false);
         self.render(ui);
     }
 
@@ -640,7 +666,10 @@ impl Market {
             .set_visible_child_name(if data.is_empty() { "empty" } else { "catalog" });
         let visible = if shown.is_empty() {
             self.nomatch_text.set_text(&if words.is_empty() {
-                format!("Nothing passes the {} filter for {project}.", spec.filters[filter])
+                // "No skills are off in Relay.", "No plugins are suggested for Relay."
+                let state = spec.filters[filter].to_lowercase();
+                let place = if state == "suggested" { "for" } else { "in" };
+                format!("No {} are {state} {place} {project}.", spec.noun.1)
             } else {
                 format!("Nothing matches \u{201c}{}\u{201d}.", self.search.text())
             });

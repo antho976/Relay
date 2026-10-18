@@ -210,6 +210,9 @@ internal fun pct(v: Double): String {
 /** Basis points as a percentage: 1234 reads "+12.3%". */
 internal fun bps(v: Long): String = pct(v / 100.0)
 
+/** A share in basis points, in whole percent: "52%", or "<1%" for a sliver (money_invest.rs `share`). */
+internal fun share(bps: Long): String = if (bps in 1..49) "<1%" else "${(bps + 50) / 100}%"
+
 // ---- Dates ----
 
 /** The local day of a `YYYY-MM-DD` date or an RFC 3339 time. */
@@ -234,6 +237,15 @@ internal fun humanDay(day: LocalDate, today: LocalDate = LocalDate.now()): Strin
 }
 
 internal fun humanDate(value: String?): String = dayOf(value)?.let { humanDay(it) } ?: value.orEmpty()
+
+/** [humanDate] inside a sentence: "today", "yesterday", "Tue 7 Oct" (money_invest.rs `as_of`). */
+internal fun inlineDate(value: String?): String = humanDate(value).let { if (it == "Today" || it == "Yesterday") it.lowercase() else it }
+
+/** "Thu 8 Oct", never "Today": a week's name (avex_pages.rs `day_words`). */
+internal fun dayWords(value: String?): String {
+    val day = dayOf(value) ?: return value.orEmpty()
+    return day.format(if (day.year == LocalDate.now().year) SAME_YEAR else OTHER_YEAR)
+}
 
 /** "October", or "15 Oct to 14 Nov" for a period that does not start on the 1st. */
 internal fun periodName(period: JsonObject?): String {

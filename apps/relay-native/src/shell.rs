@@ -11,6 +11,9 @@ thread_local! {
     static BELL_LOADING: Cell<bool> = const { Cell::new(false) };
 }
 
+/// The window presets sheet's list before any preset is saved.
+const EMPTY_PRESETS: &str = "No saved presets yet.";
+
 impl Ui {
     /// Open `project` on `page`: an explicit destination, which the project's saved layout
     /// does not override.
@@ -35,6 +38,7 @@ impl Ui {
                 return;
             }
             self.launch.set_reveal_child(false);
+            self.forget_launch();
             self.project.set(project);
             // Switch the visible wall synchronously. The registry already contains
             // all projects' sessions; a slow refresh must never leave the old CLI here.
@@ -285,7 +289,10 @@ impl Ui {
         self.update_attachments();
     }
     pub(super) fn set_mode(self: &Rc<Self>, mode: &str) {
-        *self.mode.borrow_mut() = mode.into();
+        let previous = self.mode.replace(mode.into());
+        if mode == "focus" && previous != "focus" {
+            *self.wall_mode.borrow_mut() = previous;
+        }
         self.layout();
         self.save_layout();
     }
@@ -319,6 +326,61 @@ impl Ui {
                 }
             }
             ui.layout_saving.set(false);
+        });
+    }
+    /// The sidebar width kept from an earlier run, read once connected. It comes back unless
+    /// the divider was moved before the read answered; then that width is written instead.
+    pub(super) fn restore_sidebar_width(self: &Rc<Self>) {
+        if self.sidebar_width.saved.get().is_some() {
+            return;
+        }
+        let ui = self.clone();
+        glib::spawn_future_local(async move {
+            // Unread, nothing is written over it, and the next connection reads again.
+            let Ok(v) = ui.call("settings.get", json!({"path": SIDEBAR_KEY})).await else { return };
+            let width = &ui.sidebar_width;
+            if width.saved.get().is_some() {
+                return;
+            }
+            let stored = v["value"].as_i64().map(|w| w.clamp(SIDEBAR_MIN.into(), SIDEBAR_MAX.into()) as i32);
+            if let Some(stored) = stored.filter(|_| width.chosen.get() == SIDEBAR_WIDTH) {
+                width.chosen.set(stored);
+                width.split.set_position(stored);
+            }
+            width.saved.set(Some(stored.unwrap_or(SIDEBAR_WIDTH)));
+            ui.sidebar_moved();
+        });
+    }
+    pub(super) fn remember_sidebar_width(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        self.sidebar_width.split.connect_position_notify(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                ui.sidebar_moved();
+            }
+        });
+    }
+    /// Every move of the divider, a window squeezing it included. Only a newly chosen width is
+    /// written, once the divider has rested for half a second: a drag writes once, where it ends.
+    fn sidebar_moved(self: &Rc<Self>) {
+        let width = &self.sidebar_width;
+        if width.saved.get().is_none_or(|saved| saved == width.chosen.get()) {
+            return;
+        }
+        let moves = width.moves.get().wrapping_add(1);
+        width.moves.set(moves);
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let width = &ui.sidebar_width;
+            let chosen = width.chosen.get();
+            if width.moves.get() != moves || width.saved.replace(Some(chosen)) == Some(chosen) {
+                return;
+            }
+            glib::spawn_future_local(async move {
+                if let Err(e) = ui.call("settings.set", json!({"path": SIDEBAR_KEY, "value": chosen})).await {
+                    ui.show_error(&format!("Could not remember the sidebar width: {e}"));
+                }
+            });
         });
     }
     fn layout_state(&self) -> Value {
@@ -385,6 +447,9 @@ impl Ui {
             .filter(|s| matches!(*s, "grid" | "focus" | "review" | "mosaic"))
         {
             *self.mode.borrow_mut() = mode.into();
+            if mode != "focus" {
+                *self.wall_mode.borrow_mut() = mode.into();
+            }
         }
         if let Some(n) = state["columns"].as_i64() {
             self.columns.set(n.clamp(1, 3) as i32);
@@ -607,32 +672,51 @@ impl Ui {
             .build();
         body.append(&name);
         let save = button("Save current", "primary");
+        // Off until there is a name to save it under; Enter in the name saves.
+        save.set_sensitive(false);
         body.append(&save);
+        let saving = Rc::new(Cell::new(false));
+        let (key, busy) = (save.downgrade(), saving.clone());
+        name.connect_changed(move |name| {
+            if let Some(key) = key.upgrade() {
+                key.set_sensitive(!busy.get() && !name.text().trim().is_empty());
+            }
+        });
+        let key = save.downgrade();
+        name.connect_activate(move |_| {
+            if let Some(key) = key.upgrade().filter(|key| key.is_sensitive()) {
+                key.emit_clicked();
+            }
+        });
         let weak = Rc::downgrade(self);
         let win = window.clone();
         let project = self.project.get();
         save.connect_clicked(move |key| {
             if let Some(ui) = weak.upgrade() {
-                let name = name.text().trim().to_string();
-                if name.is_empty() {
+                let name = name.clone();
+                let typed = name.text().trim().to_string();
+                if typed.is_empty() {
                     return;
                 }
                 let state = ui.layout_state();
                 let win = win.clone();
                 let key = key.clone();
+                let saving = saving.clone();
+                saving.set(true);
                 key.set_sensitive(false);
                 glib::spawn_future_local(async move {
                     match ui
                         .call(
                             "ui.layout.save",
-                            json!({"project_id":project,"name":name,"state":state}),
+                            json!({"project_id":project,"name":typed,"state":state}),
                         )
                         .await
                     {
                         Ok(_) => win.close(),
                         Err(e) => ui.show_error(&e.to_string()),
                     }
-                    key.set_sensitive(true);
+                    saving.set(false);
+                    key.set_sensitive(!name.text().trim().is_empty());
                 });
             }
         });
@@ -643,10 +727,18 @@ impl Ui {
                 .await
             {
                 Ok(v) => {
-                    for name in rows(&v, "layouts").iter().filter_map(Value::as_str) {
+                    let names = rows(&v, "layouts");
+                    if names.is_empty() {
+                        saved.append(&label(EMPTY_PRESETS, "dim"));
+                    }
+                    for name in names.iter().filter_map(Value::as_str) {
                         let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
                         let apply = button(name, "quiet");
                         apply.set_hexpand(true);
+                        if let Some(text) = apply.child().and_downcast::<gtk::Label>() {
+                            text.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                        }
+                        apply.set_tooltip_text(Some(name));
                         row.append(&apply);
                         let delete = icon_button("edit-delete-symbolic", "Delete preset");
                         row.append(&delete);
@@ -673,6 +765,9 @@ impl Ui {
                                         if let Some(row) = row.upgrade() {
                                             if let Some(list) = row.parent().and_downcast::<gtk::Box>() {
                                                 list.remove(&row);
+                                                if list.first_child().is_none() {
+                                                    list.append(&label(EMPTY_PRESETS, "dim"));
+                                                }
                                             }
                                         }
                                         ui.refresh();
@@ -701,13 +796,15 @@ impl Ui {
         let drop_target = gtk::DropTarget::new(String::static_type(), gtk::gdk::DragAction::MOVE);
         let weak = Rc::downgrade(self);
         let target = pane.name().to_string();
-        drop_target.connect_drop(move |_, v, _, y| {
+        drop_target.connect_drop(move |target_drop, v, _, y| {
             let Ok(name) = v.get::<String>() else {
                 return false;
             };
             let Some(ui) = weak.upgrade() else {
                 return false;
             };
+            // Dropped on the lower half of the pane: after it.
+            let after = target_drop.widget().is_some_and(|w| y > f64::from(w.height()) / 2.0);
             let mut order = ui.ordered.borrow_mut();
             let Some(from) = order.iter().position(|n| *n == name) else {
                 return false;
@@ -719,7 +816,7 @@ impl Ui {
             let Some(to) = order.iter().position(|n| *n == target) else {
                 return false;
             };
-            order.insert(to + usize::from(y > 100.0), name);
+            order.insert(to + usize::from(after), name);
             drop(order);
             ui.layout();
             ui.save_layout();
@@ -851,6 +948,10 @@ impl Ui {
                 } else {
                     unread.to_string()
                 });
+                // The badge is drawn, not read: the key's own name says the count.
+                let name = if unread > 0 { format!("Notifications · {unread} unread") } else { String::from("Notifications") };
+                ui.notifications_key.set_tooltip_text(Some(&name));
+                ui.notifications_key.update_property(&[gtk::accessible::Property::Label(&name)]);
                 if count(&blocked) + count(&guardrail) > 0 {
                     ui.notification_count.add_css_class("held");
                 } else {
@@ -1171,18 +1272,11 @@ impl Ui {
         }
         let palette = Rc::new(Palette { list: list.clone(), none, query: RefCell::default(), entries: RefCell::default() });
 
-        let bindings = self.keybindings.borrow().clone();
-        // The chord an action is bound to now, as the shortcut handler reads it.
-        let chord = |action: &str| {
-            crate::shortcuts::DEFAULTS
-                .iter()
-                .find(|(a, _, _)| *a == action)
-                .map(|(a, _, fallback)| (bindings[*a].as_str().unwrap_or(fallback).to_string(), "keycap"))
-        };
+        let chord = |action: &str| self.chord(action).map(|chord| (chord, "keycap"));
         for (page, name, icon, action) in [
             ("agents", "Agents", "terminal", Some("agents")),
             ("design", "Design", "design", None),
-            ("code", "Code", "code", Some("code")),
+            ("code", "Files and Git", "code", Some("code")),
             ("board", "Board", "columns", Some("board")),
             ("modules", "Modules", "modules", None),
             ("notes", "Notes", "notes", None),
@@ -1201,10 +1295,13 @@ impl Ui {
         if project != 0 {
             palette.add("Actions", "plus", "New task", None, false, Box::new(move |ui| crate::pages::new_task(ui, project, "backlog")));
         }
-        palette.add("Actions", "sidebar", "Toggle the sidebar", chord("sidebar"), false, Box::new(|ui| {
-            ui.sidebar.set_visible(!ui.sidebar.is_visible());
-            ui.save_layout();
-        }));
+        // Settings has its own category list in the sidebar's place.
+        if self.page.borrow().as_str() != "settings" {
+            palette.add("Actions", "sidebar", "Toggle the sidebar", chord("sidebar"), false, Box::new(|ui| {
+                ui.sidebar.set_visible(!ui.sidebar.is_visible());
+                ui.save_layout();
+            }));
+        }
         for (key, caption) in crate::money::palette_entries() {
             let (icon, hint) = match key {
                 "space" => ("refresh", chord("space")),
@@ -1267,6 +1364,13 @@ impl Ui {
         search.connect_activate(move |_| {
             if let Some(row) = p.list.selected_row().filter(|r| r.is_child_visible()) {
                 run(&row);
+            }
+        });
+        // The search takes Escape as stop-search, so the window never sees it to close the panel.
+        let close = Rc::downgrade(&window);
+        search.connect_stop_search(move |_| {
+            if let Some(window) = close.upgrade() {
+                window.close();
             }
         });
         // Up and Down move the highlight while the typing stays in the search.
@@ -1352,9 +1456,13 @@ impl Ui {
             let Some(ui) = weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
-            if !ui.panels.borrow().is_empty() {
+            // A modal panel keeps every key. A utility panel (Skills, Resources, Usage limits)
+            // keeps only Escape, which closes it (wire_window); the shortcuts still work.
+            let panels = ui.panels.borrow();
+            if panels.iter().any(|panel| panel.is_modal()) || (!panels.is_empty() && key == gtk::gdk::Key::Escape) {
                 return glib::Propagation::Proceed;
             }
+            drop(panels);
             // Capture runs before the focused terminal sees the key.
             let in_terminal = GtkWindowExt::focus(&ui.window).is_some_and(|w| {
                 w.is::<vte4::Terminal>() || w.ancestor(vte4::Terminal::static_type()).is_some()
@@ -1381,6 +1489,8 @@ impl Ui {
                     // Rebuilding an open sheet would discard what is being typed into it.
                     "new_session" if ui.launch.reveals_child() => {}
                     "new_session" => ui.show_launch(None),
+                    // Settings has its own category list in the sidebar's place.
+                    "sidebar" if ui.page.borrow().as_str() == "settings" => {}
                     "sidebar" => {
                         ui.sidebar.set_visible(!ui.sidebar.is_visible());
                         ui.save_layout();
@@ -1403,12 +1513,49 @@ impl Ui {
             let generation = ui.generation.get();
             match ui.call("settings.get", json!({"path":"keybindings"})).await {
                 Ok(v) if generation == ui.generation.get() => {
-                    *ui.keybindings.borrow_mut() = v["value"].clone()
+                    *ui.keybindings.borrow_mut() = v["value"].clone();
+                    ui.show_shortcuts();
                 }
                 Err(e) => ui.show_error(&e.to_string()),
                 _ => {}
             }
         });
+    }
+    /// The chord `action` is bound to now, as the shortcut handler reads it; none when it is
+    /// turned off in Settings.
+    pub(crate) fn chord(&self, action: &str) -> Option<String> {
+        let bindings = self.keybindings.borrow();
+        crate::shortcuts::DEFAULTS
+            .iter()
+            .find(|(a, _, _)| *a == action)
+            .map(|(a, _, fallback)| bindings[*a].as_str().unwrap_or(fallback).trim().to_string())
+            .filter(|chord| !chord.is_empty())
+    }
+    /// `caption`, with the chord of `action` after it when it has one. A Ctrl+letter chord is
+    /// the focused terminal's (`shortcuts::terminal_owns`), and the tip says so.
+    pub(super) fn shortcut_tip(&self, caption: &str, action: &str) -> String {
+        match self.chord(action) {
+            Some(chord) if crate::shortcuts::terminal_owns(&chord) => {
+                format!("{caption} · {chord} (not while a terminal has focus)")
+            }
+            Some(chord) => format!("{caption} · {chord}"),
+            None => caption.to_string(),
+        }
+    }
+    /// The keys that name their shortcut follow a rebinding: the palette key's keycap, and the
+    /// tooltips of it, New agent, the sidebar key and Settings.
+    pub(super) fn show_shortcuts(&self) {
+        let hints = &self.shortcut_hints;
+        hints.palette.set_tooltip_text(Some(&self.shortcut_tip("Command palette", "palette")));
+        let keycap = self.chord("palette").map(|chord| chord.split('+').map(str::trim).collect::<Vec<_>>().join(" "));
+        hints.keycap.set_visible(keycap.is_some());
+        hints.keycap.set_text(keycap.as_deref().unwrap_or(""));
+        hints.launch.set_tooltip_text(Some(&self.shortcut_tip("New agent", "new_session")));
+        hints.settings.set_tooltip_text(Some(&self.shortcut_tip("Settings", "settings")));
+        // On Settings the sidebar key is its back key.
+        if self.page.borrow().as_str() != "settings" {
+            hints.sidebar.set_tooltip_text(Some(&self.shortcut_tip("Toggle sidebar", "sidebar")));
+        }
     }
     pub(crate) fn load_appearance(self: &Rc<Self>) {
         /// What the last reload applied. Each runs 150 ms after any appearance or font-size
@@ -1592,16 +1739,14 @@ impl Ui {
     }
 }
 
-/// A focus tab's lamp shows its session's state.
+/// A focus tab's lamp shows its session's state, as the pane's strip does.
 fn tab_lamp(lamp: &impl IsA<gtk::Widget>, state: &str) {
     for class in ["live", "held", "waiting"] {
         lamp.remove_css_class(class);
     }
-    match state {
-        "running" | "spawning" => lamp.add_css_class("live"),
-        "blocked" => lamp.add_css_class("held"),
-        "restorable" => lamp.add_css_class("waiting"),
-        _ => (),
+    match crate::terminal::state_word(state).1 {
+        "off" => (),
+        class => lamp.add_css_class(class),
     }
 }
 

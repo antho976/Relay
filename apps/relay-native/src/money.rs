@@ -27,6 +27,8 @@ pub(crate) mod threads;
 mod chart;
 #[path = "threads_ask.rs"]
 mod ask;
+#[path = "threads_pictures.rs"]
+mod pictures;
 #[path = "arbiter_pages.rs"]
 mod arbiter;
 #[path = "avex_pages.rs"]
@@ -45,15 +47,20 @@ pub const PAGES: [(&str, &str, &str); 5] = [
 pub(crate) type Action = Rc<dyn Fn()>;
 
 /// One Money page: a header built once (search and period keys keep their focus) and a body
-/// rebuilt on every read, under an overlay that carries the page's Undo toast.
+/// rebuilt on every read, under an overlay that carries the page's Undo toast ([`Toast`]).
 pub(crate) struct Page {
     pub head: gtk::Box,
     pub body: gtk::Box,
-    toast: gtk::Revealer,
-    toast_text: gtk::Label,
-    toast_undo: gtk::Button,
+}
+
+/// A page's toast at its foot: what was just done, and Undo when it can be undone. Each Money
+/// page has one, the Threads page too, for what its panel's sheets save and delete.
+struct Toast {
+    revealer: gtk::Revealer,
+    text: gtk::Label,
+    undo_key: gtk::Button,
     undo: Rc<RefCell<Option<Action>>>,
-    toast_serial: Rc<Cell<u64>>,
+    serial: Cell<u64>,
 }
 
 #[derive(Default)]
@@ -66,6 +73,7 @@ struct State {
     dev_only: RefCell<Vec<gtk::Widget>>,
     money_only: RefCell<Vec<gtk::Widget>>,
     pages: RefCell<BTreeMap<&'static str, Rc<Page>>>,
+    toasts: RefCell<BTreeMap<&'static str, Rc<Toast>>>,
     start: RefCell<Option<gtk::Widget>>,
     period_offset: Cell<i64>,
     query: RefCell<String>,
@@ -91,6 +99,11 @@ pub fn active() -> bool {
 
 pub(crate) fn page(name: &str) -> Option<Rc<Page>> {
     STATE.with(|s| s.pages.borrow().get(name).cloned())
+}
+
+/// Whether page `name` has a toast, so a change made on it can offer Undo there ([`toast`]).
+pub(crate) fn has_toast(name: &str) -> bool {
+    STATE.with(|s| s.toasts.borrow().contains_key(name))
 }
 
 /// Formats amounts in the ledger's currency, as the last read reported it.
@@ -222,43 +235,41 @@ pub fn add_pages(content: &gtk::Stack) {
         let root = gtk::Overlay::new();
         root.add_css_class("money-root");
         root.set_child(Some(&frame));
-        let toast = gtk::Revealer::new();
-        toast.set_transition_type(gtk::RevealerTransitionType::SlideUp);
-        toast.set_transition_duration(160);
-        toast.set_halign(gtk::Align::Center);
-        toast.set_valign(gtk::Align::End);
-        toast.set_margin_bottom(24);
-        let bar = gtk::Box::new(gtk::Orientation::Horizontal, 16);
-        bar.add_css_class("money-toast");
-        let toast_text = label("", "");
-        bar.append(&toast_text);
-        let toast_undo = button("Undo", "money-text-action");
-        toast_undo.set_widget_name("money-undo");
-        bar.append(&toast_undo);
-        toast.set_child(Some(&bar));
-        toast.set_can_target(false);
-        root.add_overlay(&toast);
+        add_toast(&root, name, 24);
         content.add_named(&root, Some(name));
-        let page = Rc::new(Page {
-            head,
-            body,
-            toast,
-            toast_text,
-            toast_undo,
-            undo: Rc::default(),
-            toast_serial: Rc::default(),
-        });
-        let undo = page.undo.clone();
-        let revealer = page.toast.clone();
-        page.toast_undo.connect_clicked(move |_| {
-            revealer.set_reveal_child(false);
-            revealer.set_can_target(false);
-            if let Some(run) = undo.borrow_mut().take() {
-                run();
-            }
-        });
-        STATE.with(|s| s.pages.borrow_mut().insert(name, page));
+        STATE.with(|s| s.pages.borrow_mut().insert(name, Rc::new(Page { head, body })));
     }
+}
+
+/// Page `name`'s toast, over the foot of `over`, `margin` pixels up: [`toast`] shows it.
+fn add_toast(over: &gtk::Overlay, name: &'static str, margin: i32) {
+    let revealer = gtk::Revealer::new();
+    revealer.set_transition_type(gtk::RevealerTransitionType::SlideUp);
+    revealer.set_transition_duration(160);
+    revealer.set_halign(gtk::Align::Center);
+    revealer.set_valign(gtk::Align::End);
+    revealer.set_margin_bottom(margin);
+    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+    bar.add_css_class("money-toast");
+    let text = label("", "");
+    bar.append(&text);
+    let undo_key = button("Undo", "money-text-action");
+    undo_key.set_widget_name("money-undo");
+    bar.append(&undo_key);
+    revealer.set_child(Some(&bar));
+    revealer.set_can_target(false);
+    over.add_overlay(&revealer);
+    let toast = Rc::new(Toast { revealer, text, undo_key, undo: Rc::default(), serial: Cell::default() });
+    let undo = toast.undo.clone();
+    let revealer = toast.revealer.clone();
+    toast.undo_key.connect_clicked(move |_| {
+        revealer.set_reveal_child(false);
+        revealer.set_can_target(false);
+        if let Some(run) = undo.borrow_mut().take() {
+            run();
+        }
+    });
+    STATE.with(|s| s.toasts.borrow_mut().insert(name, toast));
 }
 
 /// Tally's views as Dev's segmented control, above each Tally page.
@@ -284,27 +295,50 @@ fn tally_tabs(showing: &'static str) -> gtk::Box {
     row
 }
 
-/// A toast on the Money page showing now: `text`, and an Undo key when `undo` is given.
+/// A toast on the page showing now, a Money page or Threads: `text`, and an Undo key when
+/// `undo` is given. A page with no toast shows `text` in the window's good news banner, with no
+/// Undo. On a Tally page, where Ctrl Z presses the Undo key ([`install`]), the toast says so.
 pub(crate) fn toast(ui: &Ui, text: &str, undo: Option<Action>) {
-    let Some(page) = page(&ui.page.borrow()) else {
-        ui.show_error(text);
+    let Some(toast) = STATE.with(|s| s.toasts.borrow().get(ui.page.borrow().as_str()).cloned()) else {
+        ui.show_info(text);
         return;
     };
-    page.toast_text.set_text(text);
-    page.toast_undo.set_visible(undo.is_some());
-    *page.undo.borrow_mut() = undo;
-    page.toast.set_can_target(true);
-    page.toast.set_reveal_child(true);
-    let serial = page.toast_serial.get().wrapping_add(1);
-    page.toast_serial.set(serial);
-    let weak = Rc::downgrade(&page);
+    if undo.is_some() && tally_page(ui.page.borrow().as_str()) {
+        toast.text.set_text(&format!("{text} · Ctrl Z"));
+    } else {
+        toast.text.set_text(text);
+    }
+    toast.undo_key.set_visible(undo.is_some());
+    *toast.undo.borrow_mut() = undo;
+    toast.revealer.set_can_target(true);
+    toast.revealer.set_reveal_child(true);
+    let serial = toast.serial.get().wrapping_add(1);
+    toast.serial.set(serial);
+    let weak = Rc::downgrade(&toast);
     glib::timeout_add_local_once(std::time::Duration::from_secs(7), move || {
-        if let Some(page) = weak.upgrade().filter(|p| p.toast_serial.get() == serial) {
-            page.toast.set_reveal_child(false);
-            page.toast.set_can_target(false);
-            page.undo.borrow_mut().take();
+        if let Some(toast) = weak.upgrade().filter(|t| t.serial.get() == serial) {
+            toast.revealer.set_reveal_child(false);
+            toast.revealer.set_can_target(false);
+            toast.undo.borrow_mut().take();
         }
     });
+}
+
+/// Whether `name` is one of Tally's own pages ([`PAGES`]).
+fn tally_page(name: &str) -> bool {
+    PAGES.iter().any(|(page, _, _)| *page == name)
+}
+
+/// Whether the focus is in a field or a menu, which keep their keys: Ctrl Z there undoes typing.
+fn typing(ui: &Ui) -> bool {
+    let mut at = GtkWindowExt::focus(&ui.window);
+    while let Some(widget) = at {
+        if widget.is::<gtk::Editable>() || widget.is::<gtk::TextView>() || widget.is::<gtk::Popover>() {
+            return true;
+        }
+        at = widget.parent();
+    }
+    false
 }
 
 /// Wires the switcher, Money's sidebar keys and its add key. `nav` is Money's sidebar box,
@@ -420,6 +454,27 @@ pub fn install(ui: &Rc<Ui>, nav: &gtk::Box, add: &gtk::Button, dev_only: Vec<gtk
             return glib::Propagation::Proceed;
         }
         add_entry(&ui);
+        glib::Propagation::Stop
+    });
+    ui.window.add_controller(keys);
+    // Ctrl Z on a Tally page presses its toast's Undo while that shows, as a click does: Delete on
+    // a focused row deletes, and the keyboard takes it back. A field keeps the key for its text;
+    // a sheet open, or the start screen, keeps it too.
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak = Rc::downgrade(ui);
+    keys.connect_key_pressed(move |_, key, keycode, mods| {
+        use gtk::gdk::ModifierType;
+        let Some(ui) = weak.upgrade() else { return glib::Propagation::Proceed };
+        let mods = mods & (ModifierType::CONTROL_MASK | ModifierType::SHIFT_MASK | ModifierType::ALT_MASK | ModifierType::META_MASK);
+        if mods != ModifierType::CONTROL_MASK || crate::shortcuts::latin(key, keycode).to_lower() != gtk::gdk::Key::z {
+            return glib::Propagation::Proceed;
+        }
+        let showing = ui.page.borrow().clone();
+        let open = tally_page(&showing) && ui.panels.borrow().is_empty() && STATE.with(|s| s.start.borrow().is_none()) && !typing(&ui);
+        let toast = STATE.with(|s| s.toasts.borrow().get(showing.as_str()).cloned()).filter(|t| open && t.undo.borrow().is_some());
+        let Some(toast) = toast else { return glib::Propagation::Proceed };
+        toast.undo_key.emit_clicked();
         glib::Propagation::Stop
     });
     ui.window.add_controller(keys);
@@ -639,8 +694,9 @@ pub fn run_palette(ui: &Rc<Ui>, key: &str) {
     }
 }
 
-/// After the first connection: read the remembered space, then greet. Display smoke runs
-/// (RELAY_NATIVE_SCREENSHOT) start in Dev with no greeting, as they always have.
+/// After the first connection: read the remembered space and the Threads page as it was left,
+/// then greet. Display smoke runs (RELAY_NATIVE_SCREENSHOT) start in Dev with no greeting and
+/// the Threads page's defaults, as they always have.
 pub fn startup(ui: &Rc<Ui>) {
     if STATE.with(|s| s.started.replace(true)) {
         return;
@@ -650,6 +706,7 @@ pub fn startup(ui: &Rc<Ui>) {
     if std::env::var_os("RELAY_NATIVE_SCREENSHOT").is_some() {
         return;
     }
+    threads::restore(ui);
     let ui = ui.clone();
     glib::spawn_future_local(async move {
         let money = match ui.call("settings.get", json!({"path":"native.space"})).await {
@@ -748,7 +805,7 @@ pub fn show_start(ui: &Rc<Ui>) {
                 crate::start::recent(&dev_rows, &dev_projects(&d), "No projects yet");
             }
             Err(e) => {
-                crate::start::reading(&dev_line, &e.to_string(), Lamp::Idle);
+                crate::start::reading(&dev_line, &pages::unavailable(&e), Lamp::Idle);
                 crate::start::recent(&dev_rows, &[], "");
             }
         }

@@ -38,6 +38,11 @@ pub fn picker(b: &Rc<Board>, pop: &gtk::Popover, target: Option<String>) -> gtk:
     scroll.set_propagate_natural_height(true);
     scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
     body.append(&scroll);
+    let nothing = crate::app::label("No icon matches", "dim");
+    nothing.set_halign(gtk::Align::Center);
+    nothing.set_margin_top(12);
+    nothing.set_visible(false);
+    body.append(&nothing);
     let mut keys = Vec::new();
     for name in ICONS {
         let key = gtk::Button::new();
@@ -58,12 +63,30 @@ pub fn picker(b: &Rc<Board>, pop: &gtk::Popover, target: Option<String>) -> gtk:
         grid.insert(&key, -1);
         keys.push((name.to_string(), key));
     }
+    let keys = Rc::new(keys);
+    let k = keys.clone();
     search.connect_search_changed(move |s| {
         let q = s.text().to_lowercase();
-        for (name, key) in &keys {
+        let mut any = false;
+        for (name, key) in k.iter() {
             if let Some(cell) = key.parent() {
                 cell.set_visible(name.contains(&q));
+                any |= name.contains(&q);
             }
+        }
+        nothing.set_visible(!any);
+    });
+    // Enter takes the first icon showing.
+    search.connect_activate(move |_| {
+        if let Some((_, key)) = keys.iter().find(|(_, key)| key.parent().is_some_and(|c| c.is_visible())) {
+            key.emit_clicked();
+        }
+    });
+    // Typing searches as soon as the picker opens.
+    let s = search.downgrade();
+    glib::idle_add_local_once(move || {
+        if let Some(s) = s.upgrade() {
+            s.grab_focus();
         }
     });
     body.set_size_request(320, -1);

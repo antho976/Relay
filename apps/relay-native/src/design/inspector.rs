@@ -5,7 +5,7 @@
 
 use super::board::{display_name, kind_caption, kind_glyph, Board};
 use super::glyphs;
-use super::widgets::{color_key, number, segmented};
+use super::widgets::{color_key, number, number_step, segmented, tip};
 use crate::app::label;
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -41,6 +41,7 @@ const WEIGHTS: [(u16, &str); 9] = [
 
 impl Board {
     pub(super) fn rebuild_inspector(&self) {
+        self.release(&self.inspector_scroll);
         let body = &self.inspector;
         while let Some(child) = body.first_child() {
             body.remove(&child);
@@ -73,28 +74,52 @@ impl Board {
             name.set_hexpand(true);
             name.add_css_class("design-name");
             name.set_tooltip_text(Some(&format!("{} name", kind_caption(first.kind))));
+            // Enter or leaving the field names the layer; Esc puts back the name it had.
+            let shown = Rc::new(std::cell::RefCell::new(display_name(&first).trim().to_string()));
             let weak = Rc::downgrade(&b);
-            let original = display_name(&first);
-            name.connect_activate(move |e| {
+            let s = shown.clone();
+            let rename = Rc::new(move |e: &gtk::Entry| {
                 let text = e.text().trim().to_string();
-                if let Some(b) = weak.upgrade() {
-                    if text != original {
-                        b.set_selected(set(&[("name", if text.is_empty() { Value::Null } else { json!(text) })]));
-                    }
+                if let Some(b) = weak.upgrade().filter(|_| *s.borrow() != text) {
+                    *s.borrow_mut() = text.clone();
+                    b.set_selected(set(&[("name", if text.is_empty() { Value::Null } else { json!(text) })]));
                 }
             });
+            let r = rename.clone();
+            name.connect_activate(move |e| r(e));
+            let focus = gtk::EventControllerFocus::new();
+            let (r, e) = (rename.clone(), name.downgrade());
+            focus.connect_leave(move |_| {
+                if let Some(e) = e.upgrade() {
+                    r(&e);
+                }
+            });
+            name.add_controller(focus);
+            let keys = gtk::EventControllerKey::new();
+            let (s, e) = (shown.clone(), name.downgrade());
+            keys.connect_key_pressed(move |_, key, _, _| {
+                if let (gtk::gdk::Key::Escape, Some(e)) = (key, e.upgrade()) {
+                    e.set_text(&s.borrow());
+                }
+                glib::Propagation::Proceed
+            });
+            name.add_controller(keys);
             head.append(&name);
         } else {
             let l = label(&format!("{} layers", nodes.len()), "design-inspector-title");
             l.set_hexpand(true);
             head.append(&l);
         }
-        for (flag, on_glyph, off_glyph, tip) in [("locked", "lock", "unlock", "Lock (Ctrl+Shift+L)"), ("hidden", "eye-off", "eye", "Hide (Ctrl+Shift+H)")] {
+        // Each says what a press does now: Unlock while locked, Show while hidden.
+        for (flag, on_glyph, off_glyph, on_tip, off_tip) in [
+            ("locked", "lock", "unlock", "Unlock (Ctrl+Shift+L)", "Lock (Ctrl+Shift+L)"),
+            ("hidden", "eye-off", "eye", "Show (Ctrl+Shift+H)", "Hide (Ctrl+Shift+H)"),
+        ] {
             let on = nodes.iter().all(|n| if flag == "locked" { n.is_locked() } else { n.is_hidden() });
             let key = gtk::ToggleButton::new();
             key.add_css_class("design-context-key");
             key.set_child(Some(&glyphs::image(if on { on_glyph } else { off_glyph }, 14)));
-            key.set_tooltip_text(Some(tip));
+            tip(&key, if on { on_tip } else { off_tip });
             key.set_active(on);
             let weak = Rc::downgrade(&b);
             key.connect_toggled(move |_| {
@@ -167,11 +192,11 @@ impl Board {
             rotate.set_hexpand(true);
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             row.append(&rotate);
-            for (horizontal, glyph, tip) in [(true, "flip-h", "Flip horizontally (Shift+H)"), (false, "flip-v", "Flip vertically (Shift+V)")] {
+            for (horizontal, glyph, caption) in [(true, "flip-h", "Flip horizontally (Shift+H)"), (false, "flip-v", "Flip vertically (Shift+V)")] {
                 let key = gtk::Button::new();
                 key.add_css_class("design-icon-field");
                 key.set_child(Some(&glyphs::image(glyph, 16)));
-                key.set_tooltip_text(Some(tip));
+                tip(&key, caption);
                 let weak = Rc::downgrade(&b);
                 key.connect_clicked(move |_| {
                     if let Some(b) = weak.upgrade() {
@@ -386,21 +411,24 @@ impl Board {
             let weak = Rc::downgrade(&b);
             let weak2 = Rc::downgrade(&b);
             sec.append(&pair(
-                number("@line-height", same(nodes.iter().map(|n| bits(n.line_height.unwrap_or(1.3)))).map(f64::from_bits), "Line height, times the size", move |v| {
+                number_step("@line-height", same(nodes.iter().map(|n| bits(n.line_height.unwrap_or(1.3)))).map(f64::from_bits), 0.1, "Line height, times the size", move |v| {
                     if let Some(b) = weak.upgrade() {
                         b.set_selected(set(&[("line_height", json!(v.clamp(0.5, 4.0)))]));
                     }
                 }),
-                number("@letter-spacing", same(nodes.iter().map(|n| bits(n.letter_spacing.unwrap_or(0.0)))).map(f64::from_bits), "Letter spacing, px", move |v| {
+                number_step("@letter-spacing", same(nodes.iter().map(|n| bits(n.letter_spacing.unwrap_or(0.0)))).map(f64::from_bits), 0.1, "Letter spacing, px", move |v| {
                     if let Some(b) = weak2.upgrade() {
                         b.set_selected(set(&[("letter_spacing", if v == 0.0 { Value::Null } else { json!(v) })]));
                     }
                 }),
             ));
             let weak = Rc::downgrade(&b);
+            // A shape's label is centred until told otherwise; a text starts at the left.
+            let shape = |n: &Node| super::textedit::is_shape(n.kind);
+            let shapes = nodes.iter().any(shape);
             let align = segmented(
                 &[("left", "text-left", "Align left"), ("center", "text-center", "Centre"), ("right", "text-right", "Align right")],
-                Some(match same(nodes.iter().map(|n| n.align.unwrap_or(TextAlign::Left))) {
+                Some(match same(nodes.iter().map(|n| n.align.unwrap_or(if shape(n) { TextAlign::Center } else { TextAlign::Left }))) {
                     Some(TextAlign::Center) => "center",
                     Some(TextAlign::Right) => "right",
                     Some(TextAlign::Left) => "left",
@@ -408,7 +436,7 @@ impl Board {
                 }),
                 move |v| {
                     if let Some(b) = weak.upgrade() {
-                        b.set_selected(set(&[("align", if v == "left" { Value::Null } else { json!(v) })]));
+                        b.set_selected(set(&[("align", if v == "left" && !shapes { Value::Null } else { json!(v) })]));
                     }
                 },
             );
@@ -432,7 +460,7 @@ impl Board {
             sec.append(&case);
             let color = same(nodes.iter().map(|n| n.color.clone())).flatten();
             let weak = Rc::downgrade(&b);
-            sec.append(&labelled("Colour", color_key(&b, color.as_deref(), "Text colour", true, move |c| {
+            sec.append(&labelled("Colour", color_key(&b, color.as_deref(), "Text colour", Some("Automatic"), move |c| {
                 if let Some(b) = weak.upgrade() {
                     b.set_selected(set(&[("color", json!(c))]));
                 }
@@ -465,15 +493,22 @@ impl Board {
             if single {
                 super::shape_panels::fill(&b, &sec, &first);
             } else {
-                let fill = same(nodes.iter().map(super::paint::fill_of)).flatten();
+                let fill = same(nodes.iter().map(super::paint::fill_of));
                 let weak = Rc::downgrade(&b);
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-                row.append(&color_key(&b, fill.as_deref(), "Fill", true, move |c| {
+                // Lines and paths fill with nothing until given a colour.
+                let clear = if nodes.iter().all(free_line) { "None" } else { "Automatic" };
+                row.append(&color_key(&b, fill.clone().flatten().as_deref(), "Fill", Some(clear), move |c| {
                     if let Some(b) = weak.upgrade() {
                         b.set_selected(set(&[("fill", json!(c)), ("gradient", Value::Null)]));
                     }
                 }));
-                row.append(&label(fill.as_deref().unwrap_or("Mixed"), "design-hex-caption"));
+                let caption = match &fill {
+                    Some(Some(c)) => c.as_str(),
+                    Some(None) => "None",
+                    None => "Mixed",
+                };
+                row.append(&label(caption, "design-hex-caption"));
                 sec.append(&row);
             }
         }
@@ -483,7 +518,7 @@ impl Board {
             let stroke = same(nodes.iter().map(|n| n.stroke.clone())).flatten();
             let weak = Rc::downgrade(&b);
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            row.append(&color_key(&b, stroke.as_deref(), "Colour", !lines, move |c| {
+            row.append(&color_key(&b, stroke.as_deref(), "Colour", (!lines).then_some("None"), move |c| {
                 if let Some(b) = weak.upgrade() {
                     b.set_selected(set(&[("stroke", json!(c))]));
                 }
@@ -600,7 +635,7 @@ impl Board {
                 sec.append(&pair(field("Blur", s.blur, "Blur", "blur"), field("Spread", s.spread, "Spread", "spread")));
                 let weak = Rc::downgrade(&b);
                 let s2 = s.clone();
-                sec.append(&labelled("Colour", color_key(&b, Some(&s.color), "Shadow colour", false, move |c| {
+                sec.append(&labelled("Colour", color_key(&b, Some(&s.color), "Shadow colour", None, move |c| {
                     if let (Some(b), Some(c)) = (weak.upgrade(), c) {
                         let mut v = serde_json::to_value(&s2).unwrap_or_default();
                         v["color"] = json!(c);
@@ -652,8 +687,8 @@ impl Board {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         row.set_homogeneous(true);
         for (format, caption, tip) in [
-            (super::export::Format::Png(1.0), "PNG", "A picture at 1×"),
-            (super::export::Format::Png(2.0), "2×", "A picture at 2×, for sharp screens"),
+            (super::export::Format::Png(1.0), "PNG 1×", "A picture at 1×"),
+            (super::export::Format::Png(2.0), "PNG 2×", "A picture at 2×, for sharp screens"),
             (super::export::Format::Svg, "SVG", "Vector, for the web and other design tools"),
             (super::export::Format::Pdf, "PDF", "Vector, to print or share"),
         ] {
@@ -669,19 +704,18 @@ impl Board {
             row.append(&key);
         }
         sec.append(&row);
+        // Its keys leave the keyboard where it was, so the panel follows what they do (Column
+        // shows its gap, Drop its offsets) and the canvas keeps its shortcuts.
+        super::board::keep_canvas_focus(body.upcast_ref());
     }
 
-    /// The inspector shows the scene as it is now, unless the person is typing in it.
+    /// The inspector shows the scene as it is now, unless a field of it is being typed in or
+    /// one of its popovers is open.
     pub(super) fn refresh_inspector_values(&self) {
         if !matches!(*self.gesture.borrow(), super::board::Gesture::Idle) {
             return;
         }
-        let focused = self
-            .root
-            .root()
-            .and_then(|r| gtk::prelude::GtkWindowExt::focus(r.downcast_ref::<gtk::Window>()?))
-            .is_some_and(|f| f.is_ancestor(&self.inspector));
-        if !focused {
+        if !self.busy_in(&self.inspector_scroll) {
             self.rebuild_inspector();
         }
     }

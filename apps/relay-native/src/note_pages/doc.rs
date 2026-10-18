@@ -3,15 +3,8 @@
 use super::glyphs::glyph;
 use super::text::{self as tx, Enter, Inline, Prefix};
 use super::*;
+use crate::editor::find_bar::FindBar;
 use sourceview5::prelude::*;
-
-pub struct Find {
-    pub bar: gtk::Grid,
-    pub query: gtk::Entry,
-    replacement: gtk::Entry,
-    count: gtk::Label,
-    replace_row: gtk::Box,
-}
 
 pub struct Doc {
     pub id: i64,
@@ -22,8 +15,8 @@ pub struct Doc {
     pub pin: gtk::ToggleButton,
     pub view: sourceview5::View,
     pub buffer: sourceview5::Buffer,
-    search: sourceview5::SearchContext,
-    pub find: Find,
+    /// The find and replace bar, which Code's editor shares.
+    pub find: Rc<FindBar>,
     notice: gtk::Box,
     notice_text: gtk::Label,
     notice_actions: gtk::Box,
@@ -49,8 +42,6 @@ pub struct Doc {
     /// as new note files the text under the project shown.
     pub orphan: Cell<bool>,
     seen_remote: RefCell<String>,
-    /// A result ("Replaced 3") the find count shows until the next search.
-    find_note: RefCell<Option<String>>,
     syncing: Cell<bool>,
     last_dirty: Cell<bool>,
     autosave_timer: RefCell<Option<glib::SourceId>>,
@@ -65,6 +56,11 @@ pub struct Doc {
     tasks: gtk::Box,
     /// Bumped by every `load_tasks`, so a slow answer never overwrites a newer one.
     tasks_generation: Cell<u64>,
+    /// The tab was asked to close while a save ran: it closes once that save lands.
+    close_pending: Cell<bool>,
+    /// Made empty by New note (which creates it at once) and stored as made since: closing
+    /// its tab deletes it, so an untouched Ctrl+N leaves no "Untitled" note behind.
+    pub fresh: Cell<bool>,
 }
 
 /// The largest body this client sends. Replies and `notes.changed` events carry the whole
@@ -99,24 +95,6 @@ fn status_separator() -> gtk::Separator {
     let line = gtk::Separator::new(gtk::Orientation::Vertical);
     line.add_css_class("notes-status-sep");
     line
-}
-
-fn small_key(icon: &str, tip: &str) -> gtk::Button {
-    let key = gtk::Button::new();
-    key.set_child(Some(&glyph(icon, 14)));
-    key.add_css_class("notes-find-key");
-    key.set_focus_on_click(false);
-    key.set_tooltip_text(Some(tip));
-    key.update_property(&[gtk::accessible::Property::Label(tip)]);
-    key
-}
-
-fn option_key(caption: &str, tip: &str) -> gtk::ToggleButton {
-    let key = gtk::ToggleButton::with_label(caption);
-    key.add_css_class("notes-find-option");
-    key.set_focus_on_click(false);
-    key.set_tooltip_text(Some(tip));
-    key
 }
 
 pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
@@ -199,52 +177,10 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
     scroll.add_css_class("notes-scroll");
     form.append(&scroll);
 
-    let settings = sourceview5::SearchSettings::new();
-    settings.set_wrap_around(true);
-    let search = sourceview5::SearchContext::new(&buffer, Some(&settings));
-    search.set_highlight(false);
-    let bar = gtk::Grid::new();
-    bar.add_css_class("notes-find");
-    bar.set_column_spacing(4);
-    bar.set_row_spacing(5);
-    bar.set_visible(false);
-    let query = gtk::Entry::builder().placeholder_text("Find").hexpand(true).build();
-    query.add_css_class("notes-find-entry");
-    query.set_widget_name("notes-find-entry");
-    let count = label("", "notes-find-count");
-    count.set_width_chars(11);
-    count.set_widget_name("notes-find-count");
-    count.set_xalign(1.);
-    let previous = small_key("chevron-up", "Previous match (Shift+F3)");
-    let next = small_key("chevron-down", "Next match (F3)");
-    let case = option_key("Aa", "Match case");
-    let word = option_key("W", "Whole words only");
-    word.add_css_class("notes-find-word");
-    let regex = option_key(".*", "Regular expression");
-    let find_close = small_key("close", "Close (Esc)");
-    bar.attach(&query, 0, 0, 1, 1);
-    bar.attach(&count, 1, 0, 1, 1);
-    bar.attach(&previous, 2, 0, 1, 1);
-    bar.attach(&next, 3, 0, 1, 1);
-    bar.attach(&case, 4, 0, 1, 1);
-    bar.attach(&word, 5, 0, 1, 1);
-    bar.attach(&regex, 6, 0, 1, 1);
-    bar.attach(&find_close, 7, 0, 1, 1);
-    let replacement = gtk::Entry::builder()
-        .placeholder_text("Replace with")
-        .hexpand(true)
-        .build();
-    replacement.add_css_class("notes-find-entry");
-    let replace_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    let replace_one = button("Replace", "notes-find-button");
-    let replace_all = button("Replace all", "notes-find-button");
-    replace_one.set_focus_on_click(false);
-    replace_all.set_focus_on_click(false);
-    replace_row.append(&replace_one);
-    replace_row.append(&replace_all);
-    bar.attach(&replacement, 0, 1, 1, 1);
-    bar.attach(&replace_row, 1, 1, 7, 1);
-    form.append(&bar);
+    // Every note's bar starts from the last query any of them searched for.
+    let find = FindBar::new(&view, &buffer, "notes", "Find", &super::LAST_QUERY);
+    find.bar.add_css_class("notes-find");
+    form.append(&find.bar);
 
     let status = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     status.add_css_class("notes-status");
@@ -370,8 +306,7 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
         pin,
         view,
         buffer,
-        search,
-        find: Find { bar, query, replacement, count, replace_row },
+        find,
         notice,
         notice_text,
         notice_actions,
@@ -393,7 +328,6 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
         conflict: Cell::new(false),
         orphan: Cell::new(false),
         seen_remote: RefCell::new(String::new()),
-        find_note: RefCell::new(None),
         syncing: Cell::new(false),
         last_dirty: Cell::new(false),
         autosave_timer: RefCell::new(None),
@@ -404,6 +338,8 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
         last_task: Cell::new(0),
         tasks,
         tasks_generation: Cell::new(0),
+        close_pending: Cell::new(false),
+        fresh: Cell::new(false),
     });
     let weak_ui = Rc::downgrade(ui);
     let weak = Rc::downgrade(&doc);
@@ -452,12 +388,7 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
         doc.view.grab_focus();
     });
     doc.title.connect_activate(move |_| focus_body());
-    let cursor = with(|_, doc| {
-        doc.update_position();
-        if doc.find.bar.is_visible() {
-            doc.update_count();
-        }
-    });
+    let cursor = with(|_, doc| doc.update_position());
     doc.buffer.connect_cursor_position_notify(move |_| cursor());
     let moved = with(|_, doc| super::inline::cursor_moved(doc));
     doc.buffer.connect_cursor_position_notify(move |_| moved());
@@ -465,6 +396,14 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
     doc.buffer.connect_has_selection_notify(move |_| selection());
     let pinned = with(pin_changed);
     doc.pin.connect_toggled(move |_| pinned());
+    // The key and File › Pin to top say whether the note is pinned, whoever pinned it.
+    let pin_shown = with(|ui, doc| {
+        doc.show_pin();
+        if super::current_doc(ui).is_some_and(|current| Rc::ptr_eq(&current, doc)) {
+            super::menu::sync(Some(doc));
+        }
+    });
+    doc.pin.connect_toggled(move |_| pin_shown());
     let close = with(request_close);
     tab_close.connect_clicked(move |_| close());
     let middle = gtk::GestureClick::new();
@@ -476,58 +415,15 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
     });
     doc.tab.add_controller(middle);
 
-    let incremental = with(|_, doc| doc.find_incremental());
-    doc.find.query.connect_changed(move |_| incremental());
-    let forward = with(|_, doc| doc.find_step(false));
-    doc.find.query.connect_activate(move |_| forward());
-    let keys = gtk::EventControllerKey::new();
-    let backward = with(|_, doc| doc.find_step(true));
-    keys.connect_key_pressed(move |_, key, _, mods| {
-        if matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter)
-            && mods.contains(gtk::gdk::ModifierType::SHIFT_MASK)
-        {
-            backward();
-            return glib::Propagation::Stop;
-        }
-        glib::Propagation::Proceed
-    });
-    doc.find.query.add_controller(keys);
-    let step = with(|_, doc| doc.find_step(true));
-    previous.connect_clicked(move |_| step());
-    let step = with(|_, doc| doc.find_step(false));
-    next.connect_clicked(move |_| step());
-    let shut = with(|_, doc| doc.close_find());
-    find_close.connect_clicked(move |_| shut());
-    for (key, apply) in [
-        (&case, (|s: &sourceview5::SearchSettings, on| s.set_case_sensitive(on)) as fn(&sourceview5::SearchSettings, bool)),
-        (&word, |s, on| s.set_at_word_boundaries(on)),
-        (&regex, |s, on| s.set_regex_enabled(on)),
-    ] {
-        let again = with(|_, doc| doc.find_incremental());
-        let settings = settings.clone();
-        key.connect_toggled(move |key| {
-            apply(&settings, key.is_active());
-            again();
-        });
-    }
-    let one = with(|_, doc| doc.replace_one());
-    replace_one.connect_clicked(move |_| one());
-    let one = with(|_, doc| doc.replace_one());
-    doc.find.replacement.connect_activate(move |_| one());
-    let all = with(|_, doc| doc.replace_all());
-    replace_all.connect_clicked(move |_| all());
-    let count = with(|_, doc| doc.update_count());
-    doc.search.connect_occurrences_count_notify(move |_| count());
-    let count = with(|_, doc| doc.update_count());
-    doc.search.connect_regex_error_notify(move |_| count());
-
     let opened = with(|_, doc| {
         doc.goto_entry.set_text("");
-        doc.goto_entry.remove_css_class("error");
-        doc.goto_hint.set_text(&format!("Line 1–{}, column optional", doc.buffer.line_count()));
+        doc.goto_hint_reset();
         doc.goto_entry.grab_focus();
     });
     goto.connect_show(move |_| opened());
+    // A refused entry is marked until it is typed over.
+    let typed = with(|_, doc| doc.goto_hint_reset());
+    goto_entry.connect_changed(move |_| typed());
     let jump = with(|_, doc| doc.goto_from_entry());
     goto_entry.connect_activate(move |_| jump());
     let jump = with(|_, doc| doc.goto_from_entry());
@@ -573,6 +469,7 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
     doc.view.add_controller(wheel);
 
     doc.apply_prefs(&prefs);
+    doc.show_pin();
     super::inline::schedule(&doc);
     doc.update_meta();
     doc.update_position();
@@ -606,6 +503,8 @@ impl Doc {
     }
 
     pub fn set_base(&self, note: Value) {
+        // Saved or changed elsewhere: no longer the empty note New note made.
+        self.fresh.set(false);
         *self.stored_title.borrow_mut() = note["title"].clone();
         *self.draft.base.borrow_mut() = note;
         self.sync_pin();
@@ -635,6 +534,14 @@ impl Doc {
             self.pin.set_active(pinned);
             self.syncing.set(false);
         }
+    }
+
+    fn show_pin(&self) {
+        self.pin.set_tooltip_text(Some(if self.pin.is_active() {
+            "Unpin this note"
+        } else {
+            "Pin this note to the top of the library"
+        }));
     }
 
     pub fn update_meta(&self) {
@@ -890,19 +797,19 @@ impl Doc {
             let selected = self.buffer.text(&start, &end, false);
             let (lines, words, chars) = tx::stats(&selected);
             self.counts.set_text(&format!(
-                "{} selected · {} words · {} lines",
+                "{} selected · {} · {}",
                 tx::thousands(chars),
-                tx::thousands(words),
-                tx::thousands(lines)
+                tx::counted(words, "word", "words"),
+                tx::counted(lines, "line", "lines")
             ));
         } else {
             let body = self.body();
             let (lines, words, chars) = tx::stats(&body);
             self.counts.set_text(&format!(
-                "{} lines · {} words · {} characters",
-                tx::thousands(lines),
-                tx::thousands(words),
-                tx::thousands(chars)
+                "{} · {} · {}",
+                tx::counted(lines, "line", "lines"),
+                tx::counted(words, "word", "words"),
+                tx::counted(chars, "character", "characters")
             ));
             self.eol.set_text(if body.contains("\r\n") { "CRLF" } else { "LF" });
         }
@@ -935,159 +842,39 @@ impl Doc {
                 }
                 self.goto(line, column);
             }
-            None => entry.add_css_class("error"),
+            None => {
+                entry.add_css_class("error");
+                self.goto_hint.set_text("Type a line number, or line:column");
+            }
         }
     }
 
-    // ---- find and replace ---------------------------------------------------------
+    /// The go-to field's hint as it opens: the lines there are to go to.
+    fn goto_hint_reset(&self) {
+        self.goto_entry.remove_css_class("error");
+        self.goto_hint.set_text(&match self.buffer.line_count() {
+            1 => String::from("Line 1, column optional"),
+            lines => format!("Line 1–{lines}, column optional"),
+        });
+    }
+
+    // ---- find and replace (`crate::editor::find_bar`, shared with Code) -------------
 
     pub fn open_find(&self, replace: bool) {
-        let query = &self.find.query;
-        if let Some((start, end)) = self.buffer.selection_bounds() {
-            let selected = self.buffer.text(&start, &end, false);
-            if !selected.contains('\n') && selected.chars().count() <= 200 {
-                query.set_text(&selected);
-            }
-        } else if query.text().is_empty() {
-            query.set_text(&super::last_query());
-        }
-        self.find.replacement.set_visible(replace);
-        self.find.replace_row.set_visible(replace);
-        self.find.bar.set_visible(true);
-        self.search.set_highlight(true);
-        self.sync_query();
-        if replace && !query.text().is_empty() {
-            self.find.replacement.grab_focus();
-        } else {
-            query.grab_focus();
-            query.select_region(0, -1);
-        }
-        self.update_count();
+        self.find.open(replace);
     }
 
     pub fn close_find(&self) {
-        self.find.bar.set_visible(false);
-        self.search.set_highlight(false);
-        self.view.grab_focus();
+        self.find.close();
     }
 
     pub fn find_visible(&self) -> bool {
-        self.find.bar.is_visible()
+        self.find.visible()
     }
 
-    fn sync_query(&self) {
-        self.find_note.borrow_mut().take();
-        let value = self.find.query.text();
-        let settings = self.search.settings();
-        if value.is_empty() {
-            settings.set_search_text(None);
-        } else {
-            settings.set_search_text(Some(&value));
-            super::remember_query(&value);
-        }
-    }
-
-    fn find_incremental(&self) {
-        self.sync_query();
-        if !self.find.query.text().is_empty() {
-            let from = self
-                .buffer
-                .selection_bounds()
-                .map(|(start, _)| start)
-                .unwrap_or_else(|| self.buffer.iter_at_mark(&self.buffer.get_insert()));
-            self.select_match(self.search.forward(&from));
-        }
-        self.update_count();
-    }
-
-    /// F3 / Shift+F3 and the bar's arrows. Works with the bar closed, using the last query.
+    /// F3 / Shift+F3. Works with the bar closed, using the last query.
     pub fn find_step(&self, backward: bool) {
-        // Taken first: filling in the last query selects its first match (find_incremental),
-        // and stepping on from that selection would skip it.
-        let (start, end) = self.buffer.selection_bounds().unwrap_or_else(|| {
-            let at = self.buffer.iter_at_mark(&self.buffer.get_insert());
-            (at, at)
-        });
-        if self.find.query.text().is_empty() {
-            self.find.query.set_text(&super::last_query());
-        }
-        self.sync_query();
-        if self.find.query.text().is_empty() {
-            self.open_find(false);
-            return;
-        }
-        let found = if backward { self.search.backward(&start) } else { self.search.forward(&end) };
-        self.select_match(found);
-        self.update_count();
-    }
-
-    fn select_match(&self, found: Option<(gtk::TextIter, gtk::TextIter, bool)>) {
-        let Some((start, end, _)) = found else {
-            return;
-        };
-        self.buffer.select_range(&start, &end);
-        self.view.scroll_to_mark(&self.buffer.get_insert(), 0.15, false, 0.0, 0.0);
-    }
-
-    fn update_count(&self) {
-        let query = &self.find.query;
-        let count = &self.find.count;
-        if let Some(note) = self.find_note.borrow().as_deref() {
-            count.set_text(note);
-            return;
-        }
-        query.remove_css_class("error");
-        if query.text().is_empty() {
-            count.set_text("");
-            return;
-        }
-        if self.search.regex_error().is_some() {
-            count.set_text("Invalid pattern");
-            query.add_css_class("error");
-            return;
-        }
-        let total = self.search.occurrences_count();
-        if total < 0 {
-            count.set_text("…");
-        } else if total == 0 {
-            count.set_text("No results");
-            query.add_css_class("error");
-        } else {
-            let current = self
-                .buffer
-                .selection_bounds()
-                .map(|(start, end)| self.search.occurrence_position(&start, &end))
-                .unwrap_or(0);
-            count.set_text(&if current > 0 {
-                format!("{current} of {total}")
-            } else {
-                format!("{total} found")
-            });
-        }
-    }
-
-    fn replace_one(&self) {
-        self.sync_query();
-        if let Some((mut start, mut end)) = self.buffer.selection_bounds() {
-            if self.search.occurrence_position(&start, &end) > 0 {
-                if let Err(error) = self.search.replace(&mut start, &mut end, &self.find.replacement.text()) {
-                    self.find.count.set_text(&error.to_string());
-                    return;
-                }
-                self.buffer.place_cursor(&end);
-            }
-        }
-        self.find_step(false);
-    }
-
-    fn replace_all(&self) {
-        self.sync_query();
-        let note = match crate::editor::replace_all(&self.search, &self.find.replacement.text()) {
-            Ok(count) => format!("Replaced {count}"),
-            Err(error) => error.to_string(),
-        };
-        *self.find_note.borrow_mut() = Some(note);
-        self.update_count();
+        self.find.step(backward);
     }
 
     // ---- Markdown editing ---------------------------------------------------------
@@ -1304,7 +1091,7 @@ pub fn to_task(ui: &Rc<Ui>, doc: &Rc<Doc>) {
                 doc.notice.add_css_class("info");
                 load_tasks(&ui, &doc);
             }
-            Err(error) => doc.show_notice(&ui, &format!("Could not create a task: {error}"), Vec::new()),
+            Err(error) => doc.show_notice(&ui, &format!("Could not create a task: {}", readable(&error)), Vec::new()),
         }
     });
 }
@@ -1369,15 +1156,7 @@ fn task_chip(ui: &Rc<Ui>, task: &Value) -> gtk::Button {
     title.set_ellipsize(gtk::pango::EllipsizeMode::End);
     title.set_max_width_chars(36);
     content.append(&title);
-    let place = match column {
-        "backlog" => "Backlog",
-        "ready" => "Ready",
-        "active" => "In progress",
-        "in_review" => "In review",
-        "done" => "Done",
-        other => other,
-    };
-    content.append(&label(place, "notes-task-column"));
+    content.append(&label(relay_board::column_title(column), "notes-task-column"));
     let chip = gtk::Button::new();
     chip.add_css_class("notes-task-chip");
     if column == "done" {
@@ -1401,6 +1180,7 @@ fn pin_changed(ui: &Rc<Ui>, doc: &Rc<Doc>) {
     if doc.syncing.get() {
         return;
     }
+    doc.fresh.set(false);
     let pinned = doc.pin.is_active();
     let (ui, doc) = (ui.clone(), doc.clone());
     glib::spawn_future_local(async move {
@@ -1414,7 +1194,7 @@ fn pin_changed(ui: &Rc<Ui>, doc: &Rc<Doc>) {
             }
             Err(error) => {
                 doc.sync_pin();
-                doc.show_notice(&ui, &error.to_string(), Vec::new());
+                doc.show_notice(&ui, &format!("Could not {}: {}", if pinned { "pin" } else { "unpin" }, readable(&error)), Vec::new());
             }
         }
         doc.update_meta();
@@ -1468,6 +1248,9 @@ pub fn save(ui: &Rc<Ui>, doc: &Rc<Doc>, then: AfterSave) {
     glib::spawn_future_local(async move {
         let result = ui.call("notes.update", payload).await;
         doc.draft.busy.set(false);
+        // A close asked for meanwhile waits for this save: done once it lands, and dropped
+        // with the notice when it does not.
+        let close = doc.close_pending.take();
         match result {
             Ok(note) => {
                 let forced = !next["title"].is_null() && note["title"] != next["title"];
@@ -1484,6 +1267,9 @@ pub fn save(ui: &Rc<Ui>, doc: &Rc<Doc>, then: AfterSave) {
                 }
                 if let Some(then) = then {
                     then(&ui, &doc);
+                }
+                if close && ui.note_tabs.page_num(&doc.draft.layout).is_some() {
+                    close_saved(&ui, &doc);
                 }
             }
             Err(error) if bus_code(&error) == "notes.edit_conflict" => {
@@ -1503,7 +1289,7 @@ pub fn save(ui: &Rc<Ui>, doc: &Rc<Doc>, then: AfterSave) {
             }
             Err(error) => doc.show_notice(
                 &ui,
-                &format!("Not saved: {error}"),
+                &format!("Not saved: {}", readable(&error)),
                 vec![("Try again", |ui, doc| save(ui, doc, None))],
             ),
         }
@@ -1562,6 +1348,7 @@ pub fn save_as(ui: &Rc<Ui>, doc: &Rc<Doc>) {
         match result {
             Ok(note) => {
                 let position = ui.note_tabs.page_num(&doc.draft.layout);
+                let close = doc.close_pending.take();
                 // The editor stayed open during the round trip: keep what was typed meanwhile
                 // (over the stored copy, so it shows as modified) and the cursor with it.
                 let current = (doc.draft.snapshot)();
@@ -1579,9 +1366,14 @@ pub fn save_as(ui: &Rc<Ui>, doc: &Rc<Doc>) {
                 fresh.buffer.place_cursor(&fresh.buffer.iter_at_offset(cursor.min(fresh.buffer.char_count())));
                 fresh.view.grab_focus();
                 super::refresh_notes(&ui);
+                // Closed while it was saved: the copy's tab closes in its place.
+                if close {
+                    request_close(&ui, &fresh);
+                }
             }
             Err(error) => {
-                doc.show_notice(&ui, &format!("Could not save a copy: {error}"), Vec::new());
+                doc.close_pending.set(false);
+                doc.show_notice(&ui, &format!("Could not save a copy: {}", readable(&error)), Vec::new());
                 doc.refresh_state(&ui);
             }
         }
@@ -1615,7 +1407,7 @@ pub fn reload(ui: &Rc<Ui>, doc: &Rc<Doc>, ask: bool) {
                 deleted_notice(&ui, &doc);
                 doc.refresh_state(&ui);
             }
-            Err(error) => doc.show_notice(&ui, &error.to_string(), Vec::new()),
+            Err(error) => doc.show_notice(&ui, &format!("Could not reload: {}", readable(&error)), Vec::new()),
         }
     });
 }
@@ -1656,7 +1448,10 @@ fn close_saved(ui: &Rc<Ui>, doc: &Rc<Doc>) {
 
 /// Ctrl+W, the tab's close button and middle-click.
 pub fn request_close(ui: &Rc<Ui>, doc: &Rc<Doc>) {
+    // Common with autosave on: the tab closes once the save in flight lands.
     if doc.draft.busy.get() {
+        doc.close_pending.set(true);
+        doc.flash("Closing once saved");
         return;
     }
     if !doc.dirty() {

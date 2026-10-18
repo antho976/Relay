@@ -101,11 +101,35 @@ Shift-Tab for the mode, arrows, Enter, `/`, Ctrl-C) covers the rest, and the ter
 one tap away in the header for whatever a conversation cannot show. The conversation is kept on
 the phone, so it opens with the PC away.
 
+## Threads on the phone
+
+A thread's message box takes pictures as the agent chat's does (`ui/dev/Attach.kt` serves both):
+up to four photos or screenshots, each shrunk to 2048 px and sent to the PC as soon as it is
+picked (`thread.upload`), so the message names them by id (`images`), with or without words.
+Picking needs the PC; a message naming pictures already sent may wait in the outbox like any
+other, and its bubble shows them meanwhile (`Optimistic` carries `images` into the shown body).
+The key is offered only on a Claude model: a thread on one of the PC's own models says pictures
+need a Claude model, and a message the PC refuses for it (`thread.images_unsupported`) says so
+under its bubble. A message's pictures are read once with `thread.image` and kept in the app's
+cache (the op cache keeps at most 600,000 characters of an answer), so they show with the PC
+away; a tap opens one full screen.
+
+A chart block may carry the reply's own numbers instead of a question (`data`), for what the
+ledger does not hold, such as what is to come: amounts as decimals (numbers or strings) in the
+ledger's currency, or figures in a `unit` ("kg", "%", "" for a count). A point missing or not a
+number is left out rather than drawn as 0; a `projected` series is dashed on a line and lighter
+as bars, and its key says "(projected)". The card's foot says they are Claude's numbers, not
+Tally's, and that it does not redraw (`ui/threads/Charts.kt`, `readWritten`).
+
 ## On the phone itself
 
 - **Notifications** say when an agent is held by a guardrail, blocked, or done. A held command's
-  notification has **Deny** and **Allow once** (Android 12 and up asks for the phone's unlock
-  first); a blocked agent's has **Reply**, which sends it priority mail it reads at its next step.
+  notification has **Deny** and **Allow once**, and an agent's request for an exception has **Deny**
+  and **Approve once**, which lifts the rule for one use whatever the agent asked for (Android 12
+  and up asks for the phone's unlock first); in the app the card offers **Approve once** and
+  **Approve for this session**, the agent's ask first, as the desktop does. A blocked agent's
+  notification has **Reply**, which sends it priority mail it reads at its next step. A key that
+  cannot reach the PC says so on its notification.
 - **Share to Relay**: text from any app becomes a task, a note, a new thread, or mail to an agent.
 - **Shortcuts** on the launcher icon: New agent, New task, New thread, Inbox.
 - **Search** finds pages, projects, agents, tasks, notes and threads in the phone's copy, with or
@@ -122,7 +146,7 @@ phone with a key in Android's keystore; the pairing and the replica are excluded
 and device transfers. Wake-on-LAN targets, like the PC's name and Relay's version, are sent in the welcome, only to a
 phone the door has admitted; the greeting before it names nothing.
 
-This app adds to `PHONE_OPS`: an agent's conversation (`session.transcript`) and a picture for it (`session.upload`), the Threads space (`thread.*`), the ledger's reads for the Tally
+This app adds to `PHONE_OPS`: an agent's conversation (`session.transcript`) and a picture for it (`session.upload`), the Threads space (`thread.*`, with a message's pictures, `thread.upload` and `thread.image`), the ledger's reads for the Tally
 panel and the Undo of an entry a thread added (`money.summary/lists/series/tx.list/invest.*`,
 `money.tx.delete/restore`, `money.invest.delete/restore`), Arbiter's reads, a proposal's answer and
 its halt and restart keys, and Avex's reads. A phone still cannot add, import, reset or replace

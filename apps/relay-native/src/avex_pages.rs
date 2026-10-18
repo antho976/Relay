@@ -14,6 +14,7 @@ use super::pages::{card, card_asking, cell, columns, date, glyph_image, human_da
 use super::{message, page, toast, Action, Page};
 use crate::app::{button, clear, confirm_inline, label, rows, text, Ui};
 use crate::client::Error;
+use crate::panel::Panel;
 use gtk::prelude::*;
 use gtk4 as gtk;
 use serde_json::{json, Value};
@@ -136,11 +137,14 @@ fn signed_weight(d: f64, unit: &str) -> String {
     }
 }
 
+/// What a failed call says on the page: the engine's own sentence, never its code. An engine
+/// without Avex says so plainly.
 pub(super) fn said(e: &Error) -> String {
     match e {
         Error::Bus(b) if matches!(b.code.as_str(), "bus.unknown_op" | "bus.not_implemented") => {
             String::from("This engine does not read Avex yet. Update Relay's engine to see your training here.")
         }
+        Error::Bus(b) => b.message.clone(),
         e => e.to_string(),
     }
 }
@@ -860,8 +864,12 @@ fn copy_menu(ui: &Rc<Ui>, s: &Value) -> gtk::MenuButton {
     let untracked = t["untracked"].as_i64().unwrap_or(0);
     let counted = t["sessions"].as_i64().unwrap_or(0);
     let cardio = t["cardio"].as_i64().unwrap_or(0);
+    // An export that names no version says only when it was made.
+    let version = text(i, "app_version").trim();
+    let exported = [exported_at_words(text(i, "exported_at")), if version.is_empty() { String::new() } else { format!("Avex {version}") }];
+    let exported = exported.into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join(" · ");
     let mut lines = vec![
-        ("Exported", format!("{} · Avex {}", exported_at_words(text(i, "exported_at")), text(i, "app_version"))),
+        ("Exported", exported),
         ("Imported", crate::relative::ago(text(i, "imported_at"), crate::relative::Form::Long).unwrap_or_default()),
         ("File", text(i, "file").to_string()),
         (
@@ -906,7 +914,7 @@ fn copy_menu(ui: &Rc<Ui>, s: &Value) -> gtk::MenuButton {
         glib::spawn_future_local(async move {
             match ui.call("gym.reset", json!({})).await {
                 Ok(_) => toast(&ui, "Forgotten. Import an export to bring it back.", None),
-                Err(e) => ui.show_error(&e.to_string()),
+                Err(e) => ui.show_error(&said(&e)),
             }
             ui.refresh_page();
         });
@@ -949,10 +957,14 @@ fn cardio_row(c: &Value) -> gtk::Box {
         let km = format!("{km:.2}");
         detail.push(format!("{} km", km.trim_end_matches('0').trim_end_matches('.')));
     }
-    for part in [text(c, "effort"), text(c, "note")] {
-        if !part.is_empty() {
-            detail.push(part.to_lowercase().replace('_', " "));
-        }
+    // Avex's effort is a key ("very_hard"); the note is the person's own words, kept as typed.
+    let effort = text(c, "effort");
+    if !effort.is_empty() {
+        detail.push(effort.to_lowercase().replace('_', " "));
+    }
+    let note = text(c, "note").trim();
+    if !note.is_empty() {
+        detail.push(note.to_string());
     }
     let m = c["minutes"].as_i64().unwrap_or(0);
     let figure = if rest || m <= 0 { String::new() } else { minutes(m) };
@@ -1524,7 +1536,7 @@ fn lift_page(ui: &Rc<Ui>, page: &Page, d: &Value, age: Option<&Age>) {
     heading(
         &page.head,
         &name,
-        &format!("{} · {} sets · last {}", plural(row["sessions"].as_i64().unwrap_or(0).max(0) as usize, "workout"), row["sets"].as_i64().unwrap_or(0), human_date(text(row, "last_day"))),
+        &format!("{} · {} · last {}", plural(row["sessions"].as_i64().unwrap_or(0).max(0) as usize, "workout"), plural(row["sets"].as_i64().unwrap_or(0).max(0) as usize, "set"), human_date(text(row, "last_day"))),
         &[],
     );
     back_key(ui, &page.head, "Lifts", "avex-lifts");
@@ -1576,7 +1588,7 @@ fn lift_page(ui: &Rc<Ui>, page: &Page, d: &Value, age: Option<&Age>) {
     }
     let rows = card(body, "Every workout", None);
     for p in &history {
-        let mut detail = vec![format!("{} sets", p["sets"].as_i64().unwrap_or(0))];
+        let mut detail = vec![plural(p["sets"].as_i64().unwrap_or(0).max(0) as usize, "set")];
         // Sets without weight move none.
         if num(&p["volume"]).is_some_and(|v| v > 0.0) {
             detail.push(volume(&p["volume"], &unit));
@@ -1594,6 +1606,23 @@ fn lift_page(ui: &Rc<Ui>, page: &Page, d: &Value, age: Option<&Age>) {
     }
 }
 
+/// When Avex says it wrote `file` ("2026-10-08 21:14"), read from its first kilobytes, where
+/// Avex puts it; `None` when it does not say so there.
+async fn exported_at_of(file: &gtk::gio::File) -> Option<String> {
+    let stream = file.read_future(glib::Priority::DEFAULT).await.ok()?;
+    let head = stream.read_bytes_future(4096, glib::Priority::DEFAULT).await.ok()?;
+    exported_at_in(&String::from_utf8_lossy(&head))
+}
+
+/// The `exportedAt` of an export's opening text, when it starts with a date.
+fn exported_at_in(head: &str) -> Option<String> {
+    const KEY: &str = "\"exportedAt\"";
+    let rest = &head[head.find(KEY)? + KEY.len()..];
+    let value = rest.trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+    let value = &value[..value.find('"')?];
+    value.get(..10).and_then(date).map(|_| value.to_string())
+}
+
 /// Choose Avex's export and import it, replacing what is here.
 pub(super) fn import(ui: &Rc<Ui>) {
     let ui = ui.clone();
@@ -1609,6 +1638,28 @@ pub(super) fn import(ui: &Rc<Ui>) {
             ui.show_error("That file is not on this PC's disk. Copy it here first.");
             return;
         };
+        // An import replaces the copy whole, so an export older than the one here would take
+        // the PC back to that day: ask first.
+        if let (Some(theirs), Ok(s)) = (exported_at_of(&file).await, ui.call("gym.summary", json!({})).await) {
+            let ours = text(&s["imported"], "exported_at");
+            if ours.get(..10).and_then(date).is_some() && theirs.as_str() < ours {
+                let panel = Panel::new(&ui, "Import an older export?", 440);
+                panel.add_css_class("money-sheet");
+                let about = label(
+                    &format!(
+                        "This file was exported {}, before the copy here ({}). Importing it replaces the copy whole: workouts logged since it was made leave the PC until you import a newer one.",
+                        exported_at_words(&theirs),
+                        exported_at_words(ours)
+                    ),
+                    "money-muted",
+                );
+                about.set_wrap(true);
+                panel.body.append(&about);
+                if !panel.response("Import the older one").await {
+                    return;
+                }
+            }
+        }
         match ui.call("gym.import", json!({"path": path.to_string_lossy()})).await {
             // The set count is left out: it counts warm-ups and untracked workouts, which the
             // pages leave out, so it would disagree with them.
@@ -1617,7 +1668,7 @@ pub(super) fn import(ui: &Rc<Ui>) {
                 &format!(
                     "Imported {} from Avex, exported {}.",
                     plural(v["sessions"].as_u64().unwrap_or(0) as usize, "workout"),
-                    text(&v, "exported_at").get(..10).map_or_else(|| text(&v, "exported_at").to_string(), human_date)
+                    text(&v, "exported_at").get(..10).map_or_else(|| text(&v, "exported_at").to_string(), day_words)
                 ),
                 None,
             ),
@@ -1761,7 +1812,7 @@ fn panel_overview(ui: &Rc<Ui>, body: &gtk::Box, s: &Value, age: Option<&Age>) {
     let recent = panel_block(body, "Recent", Some(("All workouts", go(ui, "avex-workouts"))));
     for w in rows(s, "recent").iter().take(4) {
         let lifts: Vec<&str> = w["lifts"].as_array().into_iter().flatten().filter_map(Value::as_str).take(3).collect();
-        let detail = format!("{} · {}", human_date(text(w, "day")), lifts.join(", "));
+        let detail = if lifts.is_empty() { human_date(text(w, "day")) } else { format!("{} · {}", human_date(text(w, "day")), lifts.join(", ")) };
         let question = format!("About {} on {}: ", text(w, "title"), day_words(text(w, "day")));
         recent.append(&panel_row(ui, text(w, "title"), &detail, &volume(&w["volume"], &unit), "", question));
     }
@@ -1786,5 +1837,18 @@ fn panel_overview(ui: &Rc<Ui>, body: &gtk::Box, s: &Value, age: Option<&Age>) {
             let question = format!("About my {} record on {}: ", text(r, "lift"), day_words(text(r, "day")));
             list.append(&panel_row(ui, text(r, "lift"), &human_date(text(r, "day")), &set_words(&r["weight"], &r["reps"], &unit), "money-in", question));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_exports_date_is_read_from_its_opening_lines() {
+        let head = "{\n  \"exportVersion\": 1,\n  \"exportedAt\": \"2026-10-08 21:14\",\n  \"appVersion\": \"1.4.2\",";
+        assert_eq!(exported_at_in(head).as_deref(), Some("2026-10-08 21:14"));
+        assert_eq!(exported_at_in("{\"exportedAt\": \"soon\"}"), None);
+        assert_eq!(exported_at_in("{\"sessions\": ["), None);
     }
 }

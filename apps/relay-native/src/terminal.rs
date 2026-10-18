@@ -213,6 +213,27 @@ impl ModeTracker {
     }
 }
 
+/// What a session's state reads as wherever it is shown (the strip, the slate, the agent menu),
+/// in the phone's words (`Session.stateLabel`), and the lamp class beside it: lit for a live or
+/// held agent, never for an idle one.
+pub fn state_word(state: &str) -> (String, &'static str) {
+    let word = match state {
+        "running" => "LIVE".into(),
+        "spawning" => "STARTING".into(),
+        "blocked" => "NEEDS YOU".into(),
+        "restorable" => "STOPPED".into(),
+        "created" => "NOT STARTED".into(),
+        _ => state.replace('_', " ").to_uppercase(),
+    };
+    let lamp = match state {
+        "running" | "spawning" => "live",
+        "blocked" => "held",
+        "restorable" => "waiting",
+        _ => "off",
+    };
+    (word, lamp)
+}
+
 pub struct Pane {
     pub root: gtk::Box,
     pub terminal: vte4::Terminal,
@@ -408,8 +429,10 @@ impl Pane {
             pace: RefCell::default(),
         });
 
-        // Keystrokes are queued, never dropped: they do not depend on the output attachment,
-        // so typing while the pane (re)attaches still reaches the PTY.
+        // Keystrokes are queued while a write is in flight and do not depend on the output
+        // attachment, so typing while the pane (re)attaches still reaches the PTY. What cannot be
+        // written (no engine to connect to, a refused write) is said under the terminal and not
+        // sent later.
         let (tx, rx) = async_channel::unbounded::<String>();
         pane.terminal.connect_commit(move |_, text, _| {
             let _ = tx.try_send(text.into());
@@ -419,6 +442,9 @@ impl Pane {
             // Input has its own connection, opened on the first keystroke: on the attachment's,
             // each reply waited behind the PTY frames queued ahead of it.
             let mut connection: Option<(Client, async_channel::Receiver<Notice>)> = None;
+            // The error this loop last put under the terminal, cleared by the next write that
+            // goes through, unless something else has been said there since.
+            let mut shown: Option<String> = None;
             while let Ok(mut data) = rx.recv().await {
                 // What was typed while the last write was in flight goes as one write, in order.
                 while let Ok(more) = rx.try_recv() {
@@ -436,17 +462,28 @@ impl Pane {
                     match Client::connect(&p.rt, p.path.clone()).await {
                         Ok(opened) => connection = Some(opened),
                         Err(e) => {
-                            p.status.set_text(&e.to_string());
+                            let error = e.to_string();
+                            p.status.set_text(&error);
+                            shown = Some(error);
                             continue;
                         }
                     }
                 }
                 let Some((client, _)) = connection.as_ref() else { continue };
-                if let Err(e) = client
+                match client
                     .request(&p.rt, "session.input", json!({"session":p.name,"data":data}))
                     .await
                 {
-                    p.status.set_text(&e.to_string());
+                    Ok(_) => {
+                        if shown.take().is_some_and(|error| p.status.text().as_str() == error) {
+                            p.status.set_text("");
+                        }
+                    }
+                    Err(e) => {
+                        let error = e.to_string();
+                        p.status.set_text(&error);
+                        shown = Some(error);
+                    }
                 }
             }
         }));
@@ -603,18 +640,10 @@ impl Pane {
             cr.rectangle(0.0, 0.0, width as f64, height as f64);
             let _ = cr.fill();
         });
-        self.header.set_tooltip_text(Some(&format!(
-            "{}\n{}\n{}",
-            text(session, "branch"),
-            text(session, "worktree"),
-            text(session, "intent")
-        )));
+        let tip: Vec<&str> = ["branch", "worktree", "intent"].iter().map(|key| text(session, key).trim()).filter(|part| !part.is_empty()).collect();
+        self.header.set_tooltip_text((!tip.is_empty()).then(|| tip.join("\n")).as_deref());
         let state = text(session, "state");
-        let state_label = match state {
-            "running" => String::from("LIVE"),
-            "blocked" => String::from("NEEDS YOU"),
-            _ => state.to_uppercase(),
-        };
+        let (state_label, lamp) = state_word(state);
         self.state.set_text(&state_label);
         let live = matches!(state, "spawning" | "running" | "idle" | "blocked");
         self.slate.set_visible(!live);
@@ -624,25 +653,23 @@ impl Pane {
         self.slate_hint.set_text(match state {
             "parked" => "Process released. Scrollback and worktree kept; wake respawns with provider resume.",
             "restorable" => "The previous process ended. Resume restores scrollback and the worktree.",
-            "created" => "The launch was interrupted before the provider started.",
+            // Never started: a launch still on its way (the phone queues the start behind the
+            // create), one cut short, or a start that failed. The row cannot tell them apart.
+            // The state word above already says what happened; the hint says what to do.
+            "created" => "Start launches the provider in its worktree.",
+            "exited" => "Resume starts it again where it left off.",
             _ => "No signal from this session.",
         });
         for class in ["live", "held", "waiting", "off", "starting"] {
             self.root.remove_css_class(class);
             self.lamp.remove_css_class(class);
         }
-        let class = match state {
-            "running" | "spawning" => "live",
-            "blocked" => "held",
-            "restorable" => "waiting",
-            _ => "off",
-        };
-        self.root.add_css_class(class);
-        self.lamp.add_css_class(class);
+        self.root.add_css_class(lamp);
+        self.lamp.add_css_class(lamp);
     }
 
     /// A launch in flight: the pane is on the wall before its provider exists, and says which
-    /// step it is on instead of reading as an interrupted launch.
+    /// step it is on instead of reading as not started.
     pub fn show_progress(&self, step: &str) {
         self.state.set_text("STARTING");
         self.slate.set_visible(true);
@@ -693,9 +720,15 @@ impl Pane {
                         p.active.set(false);
                         break;
                     }
-                    // A timeout or a dropped connection passes; keep trying while shown.
+                    // A timeout or a dropped connection passes; keep trying while shown. Their
+                    // own words ask for a reconnect or a refresh, which the retry does itself.
                     Err(e) => {
-                        p.status.set_text(&format!("{e} Retrying in {backoff} s."));
+                        let what = match e {
+                            Error::Disconnected => String::from("Connection to the engine closed."),
+                            Error::Timeout => String::from("The engine did not answer in time."),
+                            e => e.to_string(),
+                        };
+                        p.status.set_text(&format!("{what} Retrying in {backoff} s."));
                         glib::timeout_future(Duration::from_secs(backoff)).await;
                         backoff = (backoff * 2).min(30);
                     }
@@ -930,5 +963,20 @@ mod tests {
         assert_eq!(fresh.modes, t.modes);
         assert!(t.scan(b"\x1bc"));
         assert_eq!(t.modes, Modes::default());
+    }
+
+    #[test]
+    fn states_read_as_the_phone_says_them_and_idle_is_not_lit() {
+        for (state, word, lamp) in [
+            ("running", "LIVE", "live"),
+            ("spawning", "STARTING", "live"),
+            ("idle", "IDLE", "off"),
+            ("blocked", "NEEDS YOU", "held"),
+            ("restorable", "STOPPED", "waiting"),
+            ("created", "NOT STARTED", "off"),
+            ("parked", "PARKED", "off"),
+        ] {
+            assert_eq!(state_word(state), (String::from(word), lamp), "{state}");
+        }
     }
 }

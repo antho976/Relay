@@ -60,6 +60,13 @@ pub fn sync(doc: Option<&Rc<Doc>>) {
     if let (Some(action), Some(doc)) = (lookup("save"), doc) {
         action.set_enabled(doc.dirty() || doc.deleted.get());
     }
+    // File › Pin to top carries a check mark while the note is pinned.
+    if let Some(action) = lookup("pin") {
+        let pinned = doc.is_some_and(|doc| doc.pin.is_active());
+        if action.state().and_then(|s| s.get::<bool>()) != Some(pinned) {
+            action.set_state(&pinned.to_variant());
+        }
+    }
 }
 
 /// Push restored preferences into the toggle actions' check marks.
@@ -88,6 +95,13 @@ fn item(caption: &str, action: &str, accel: Option<&str>) -> gio::MenuItem {
 fn targeted(caption: &str, action: &str, target: glib::Variant) -> gio::MenuItem {
     let item = gio::MenuItem::new(Some(caption), None);
     item.set_action_and_target_value(Some(&format!("notes.{action}")), Some(&target));
+    item
+}
+
+/// `targeted`, showing the key that does it on a focused row.
+fn targeted_key(caption: &str, action: &str, target: glib::Variant, accel: &str) -> gio::MenuItem {
+    let item = targeted(caption, action, target);
+    item.set_attribute_value("accel", Some(&accel.to_variant()));
     item
 }
 
@@ -131,7 +145,7 @@ fn format_menu() -> gio::Menu {
             item("Bold", "bold", Some("<Control>b")),
             item("Italic", "italic", Some("<Control>i")),
             item("Inline code", "code", None),
-            item("Link…", "link", Some("<Control>k")),
+            item("Link", "link", Some("<Control>k")),
         ]),
         headings_menu(),
         section(&[
@@ -155,7 +169,7 @@ fn model() -> gio::Menu {
             ]),
             section(&[
                 item("Save", "save", Some("<Control>s")),
-                item("Save as new note…", "save-as", Some("<Control><Shift>s")),
+                item("Save as new note", "save-as", Some("<Control><Shift>s")),
                 item("Reload", "reload", None),
             ]),
             section(&[
@@ -280,7 +294,6 @@ pub fn install(ui: &Rc<Ui>, window: &gtk::Window) -> gtk::PopoverMenuBar {
             d.title.select_region(0, -1);
         })
     });
-    add("pin", |ui| with_doc(ui, |_, d| super::toggle_pin(d)));
     add("duplicate", |ui| with_doc(ui, |ui, d| super::new_note(ui, super::text::copy_title(&d.title.text()), d.body())));
     add("delete", |ui| with_doc(ui, |ui, d| super::confirm_delete(ui, d.id, d.name())));
     add("close-tab", |ui| with_doc(ui, doc::request_close));
@@ -352,6 +365,15 @@ pub fn install(ui: &Rc<Ui>, window: &gtk::Window) -> gtk::PopoverMenuBar {
         });
         group.add_action(&action);
     }
+    // Stateful, so the menu shows a check mark on a pinned note; `sync` keeps it with the note.
+    let pin = gio::SimpleAction::new_stateful("pin", None, &false.to_variant());
+    let target = weak.clone();
+    pin.connect_activate(move |_, _| {
+        if let Some(ui) = target.upgrade() {
+            with_doc(&ui, |_, d| super::toggle_pin(d));
+        }
+    });
+    group.add_action(&pin);
     let sidebar = gio::SimpleAction::new_stateful("sidebar", None, &true.to_variant());
     let target = weak.clone();
     sidebar.connect_activate(move |action, _| {
@@ -422,7 +444,7 @@ pub fn row_menu(id: i64, pinned: bool) -> gio::Menu {
     menu(&[
         section(&[
             targeted("Open", "row-open", target.clone()),
-            targeted("Rename…", "row-rename", target.clone()),
+            targeted_key("Rename…", "row-rename", target.clone(), "F2"),
         ]),
         section(&[
             targeted(if pinned { "Unpin" } else { "Pin to top" }, "row-pin", target.clone()),
@@ -430,7 +452,7 @@ pub fn row_menu(id: i64, pinned: bool) -> gio::Menu {
             targeted("Copy note text", "row-copy", target.clone()),
             targeted("Create task from note", "row-task", target.clone()),
         ]),
-        section(&[targeted("Delete…", "row-delete", target)]),
+        section(&[targeted_key("Delete…", "row-delete", target, "Delete")]),
     ])
 }
 
@@ -440,7 +462,7 @@ pub fn text_menu() -> gio::Menu {
         item("Bold", "bold", Some("<Control>b")),
         item("Italic", "italic", Some("<Control>i")),
         item("Inline code", "code", None),
-        item("Link…", "link", Some("<Control>k")),
+        item("Link", "link", Some("<Control>k")),
     ]);
     let lines = section(&[
         item("Checklist", "checklist", None),
@@ -475,6 +497,13 @@ fn shortcut(ui: &Rc<Ui>, key: Key, mods: ModifierType) -> glib::Propagation {
     let mods = mods & mask;
     let ctrl = ModifierType::CONTROL_MASK;
     let shift = ModifierType::SHIFT_MASK;
+    // On a library row, F2 and Delete are that note's, as its menu says, not the open tab's.
+    if mods.is_empty() && matches!(key, Key::F2 | Key::Delete | Key::KP_Delete) {
+        if let (Some(id), Some(group)) = (super::focused_row(ui), group()) {
+            group.activate_action(if key == Key::F2 { "row-rename" } else { "row-delete" }, Some(&id.to_variant()));
+            return glib::Propagation::Stop;
+        }
+    }
     let doc = super::current_doc(ui);
     let in_body = doc.as_ref().is_some_and(|d| d.view.has_focus());
     let body = |name: &'static str| if in_body { name } else { "" };

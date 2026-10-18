@@ -2,6 +2,7 @@
 //! off per project. The page is a searchable catalog beside a detail pane (`tools_market.rs`).
 use super::market::{self, Market, Spec};
 use super::paragraph;
+use super::plugins::explain_error;
 use crate::app::{button, field, label, rows, text, Ui};
 use crate::client::Error;
 use gtk::prelude::*;
@@ -21,7 +22,7 @@ static SPEC: Spec = Spec {
     icon: "skills",
     noun: ("skill", "skills"),
     placeholder: "Search skills by name, description or source",
-    filters: &["All", "Enabled", "Disabled"],
+    filters: &["All", "On", "Off"],
     list_op: "skill.list",
     // Bodies are cut to their opening, which holds the description; the detail and the
     // editor fetch the whole body with skill.get.
@@ -180,10 +181,20 @@ fn detail(ui: &Rc<Ui>, market: &Rc<Market>, skill: &Value, parent: &gtk::Box) {
         update.set_tooltip_text(Some("Download the current version of this skill from the repository's default branch. A skill installed from another branch is replaced by the default branch's copy; reinstall it from its branch URL instead."));
         let weak = Rc::downgrade(ui);
         let payload = json!({"url": skill["source_url"], "subdir": skill["source_path"]});
+        let name = text(skill, "name").to_string();
+        // Called directly, not through Ui::mutate, so a success says so.
         update.connect_clicked(move |key| {
-            if let Some(ui) = weak.upgrade() {
-                ui.mutate("skill.install", payload.clone(), key);
-            }
+            let Some(ui) = weak.upgrade() else { return };
+            key.set_sensitive(false);
+            let (key, payload, name) = (key.clone(), payload.clone(), name.clone());
+            glib::spawn_future_local(async move {
+                match ui.call("skill.install", payload).await {
+                    Ok(_) => ui.show_info(&format!("Updated {name} from GitHub")),
+                    Err(error) => ui.show_error(&explain_error("skill.install", &error)),
+                }
+                key.set_sensitive(true);
+                ui.refresh_page();
+            });
         });
         bar.append(&update);
     } else {
@@ -200,7 +211,7 @@ fn detail(ui: &Rc<Ui>, market: &Rc<Market>, skill: &Value, parent: &gtk::Box) {
                 key.set_sensitive(true);
                 match result {
                     Ok(skill) => edit(&ui, Some(skill)),
-                    Err(error) => ui.show_error(&error.to_string()),
+                    Err(error) => ui.show_error(&explain_error("skill.get", &error)),
                 }
             });
         });
@@ -231,7 +242,11 @@ fn detail(ui: &Rc<Ui>, market: &Rc<Market>, skill: &Value, parent: &gtk::Box) {
     if let Some(revision) = skill["revision"].as_str() {
         facts.push(("Revision", revision.chars().take(8).collect(), true));
     }
-    let date = |key: &str| text(skill, key).chars().take(10).collect::<String>();
+    // "3 h ago", "Oct 4", as times read everywhere else.
+    let date = |key: &str| {
+        crate::relative::ago(text(skill, key), crate::relative::Form::Long)
+            .unwrap_or_else(|| text(skill, key).chars().take(10).collect())
+    };
     facts.push(("Installed", date("created_at"), false));
     facts.push(("Updated", date("updated_at"), false));
     parent.append(&market::facts(&facts));
@@ -306,10 +321,7 @@ fn setup(ui: &Rc<Ui>, market: &Rc<Market>) {
     let install = gtk::ToggleButton::with_label("Install from GitHub");
     install.add_css_class("primary");
     install.add_css_class("ext-install");
-    let banner = market.banner.clone();
-    install.connect_toggled(move |key| banner.set_visible(key.is_active()));
     market.actions.append(&install);
-    *market.banner_key.borrow_mut() = Some(install);
     let head = gtk::Box::new(gtk::Orientation::Vertical, 3);
     head.append(&label("Install from GitHub", "ext-banner-title"));
     let copy = label(
@@ -319,10 +331,21 @@ fn setup(ui: &Rc<Ui>, market: &Rc<Market>) {
     copy.set_wrap(true);
     head.append(&copy);
     market.banner.append(&head);
-    install_form(ui, &market.banner);
+    let source = install_form(ui, market);
+    // Opened, the banner takes the typing: its repository field.
+    let banner = market.banner.clone();
+    install.connect_toggled(move |key| {
+        banner.set_visible(key.is_active());
+        if key.is_active() {
+            source.grab_focus();
+        }
+    });
+    *market.banner_key.borrow_mut() = Some(install);
 }
 
-fn install_form(ui: &Rc<Ui>, page: &gtk::Box) {
+/// The installer's fields and keys, in the banner. Returns the repository field.
+fn install_form(ui: &Rc<Ui>, market: &Rc<Market>) -> gtk::Entry {
+    let page = &market.banner;
     let source = gtk::Entry::builder()
         .placeholder_text("https://github.com/owner/repository")
         .hexpand(true)
@@ -355,9 +378,19 @@ fn install_form(ui: &Rc<Ui>, page: &gtk::Box) {
     let feedback = paragraph("");
     feedback.set_visible(false);
     page.append(&feedback);
+    // Enter in either field installs.
+    for input in [&source, &subdir] {
+        let key = install.downgrade();
+        input.connect_activate(move |_| {
+            if let Some(key) = key.upgrade().filter(|key| key.is_sensitive()) {
+                key.emit_clicked();
+            }
+        });
+    }
     let conflict = Rc::new(RefCell::new(None::<(i64, String, String)>));
     for (key, replacing) in [(install.clone(), false), (replace.clone(), true)] {
         let weak = Rc::downgrade(ui);
+        let shown = Rc::downgrade(market);
         let source = source.clone();
         let subdir = subdir.clone();
         let install = install.clone();
@@ -377,16 +410,21 @@ fn install_form(ui: &Rc<Ui>, page: &gtk::Box) {
                 payload["replace_skill_id"]=json!(id);
             }
             install.set_sensitive(false);replace.set_sensitive(false);
-            let (source,subdir,install,replace,feedback,conflict)=(source.clone(),subdir.clone(),install.clone(),replace.clone(),feedback.clone(),conflict.clone());
+            // A clone can take a while: say it started.
+            feedback.set_text("Installing from GitHub…");
+            let (source,subdir,install,replace,feedback,conflict,shown)=(source.clone(),subdir.clone(),install.clone(),replace.clone(),feedback.clone(),conflict.clone(),shown.clone());
             glib::spawn_future_local(async move{
                 match ui.call("skill.install",payload).await {
                     Ok(result)=>{
-                        feedback.set_text(&format!("Installed {} skills.",rows(&result,"skills").len()));replace.set_visible(false);conflict.borrow_mut().take();
+                        let installed=rows(&result,"skills");
+                        feedback.set_text(&format!("Installed {} skill{}.",installed.len(),if installed.len()==1{""}else{"s"}));replace.set_visible(false);conflict.borrow_mut().take();
                         if source.text().trim()==url && subdir.text().trim()==dir{source.set_text("");subdir.set_text("");}
+                        // The catalog shows what came in.
+                        if let (Some(market),Some(first))=(shown.upgrade(),installed.first()){market.select(first["id"].to_string());}
                         ui.refresh_page();
                     }
                     Err(error)=>{
-                        feedback.set_text(&error.to_string());replace.set_visible(false);conflict.borrow_mut().take();
+                        feedback.set_text(&explain_error("skill.install",&error));replace.set_visible(false);conflict.borrow_mut().take();
                         if let Error::Bus(error)=error {
                             if error.code=="skill.name_exists" {
                                 if let Some(details)=error.details {
@@ -405,6 +443,7 @@ fn install_form(ui: &Rc<Ui>, page: &gtk::Box) {
             });
         });
     }
+    source
 }
 
 fn edit(ui: &Rc<Ui>, skill: Option<Value>) {
@@ -422,6 +461,7 @@ fn edit(ui: &Rc<Ui>, skill: Option<Value>) {
         .text(skill.as_ref().map(|v| text(v, "name")).unwrap_or(""))
         .build();
     field("Name", &name, &page);
+    let focus_name = name.clone();
     let body = gtk::TextView::new();
     body.set_monospace(true);
     body.set_wrap_mode(gtk::WrapMode::WordChar);
@@ -509,7 +549,7 @@ fn edit(ui: &Rc<Ui>, skill: Option<Value>) {
                     }
                     ui.refresh_page();
                 }
-                Err(error) => status.set_text(&error.to_string()),
+                Err(error) => status.set_text(&explain_error(op, &error)),
             }
             busy.set(false);
             key.set_sensitive(true);
@@ -518,5 +558,22 @@ fn edit(ui: &Rc<Ui>, skill: Option<Value>) {
             body.set_editable(true);
         });
     });
+    // Ctrl+Enter saves from either field, as the task form's does. Capture: the instructions
+    // would otherwise take it as a new line.
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let key = save.downgrade();
+    keys.connect_key_pressed(move |_, pressed, _, mods| {
+        if matches!(pressed, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter) && mods.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
+            if let Some(save) = key.upgrade().filter(|save| save.is_sensitive()) {
+                save.emit_clicked();
+            }
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+    page.add_controller(keys);
     window.present();
+    // An edit keeps the name as it is rather than selecting it to be typed over.
+    focus_name.grab_focus_without_selecting();
 }

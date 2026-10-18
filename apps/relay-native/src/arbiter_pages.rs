@@ -8,9 +8,9 @@
 //! the engine's decimals see what was written. Colour keeps one meaning on every surface: green is
 //! a live strategy or money in, amber is paper (and Dev's waiting), red is a loss, a refusal or a
 //! halt.
-use super::pages::{card, columns, glyph_image, icon_row, meter_in, setting_row, tile, Tone};
+use super::pages::{card, columns, glyph_image, icon_row, meter_in, plural, setting_row, tile, Tone};
 use super::{message, page, toast, Action, Page};
-use crate::app::{button, clear, confirm_inline, label, rows, text, Ui};
+use crate::app::{button, clear, confirm_inline, confirm_inline_if, label, rows, text, Ui};
 use crate::client::Error;
 use crate::panel::Panel;
 use gtk::prelude::*;
@@ -134,6 +134,11 @@ fn pct(v: f64) -> String {
     } else {
         format!("−{s}")
     }
+}
+
+/// A drawdown, a fall: "−4.2%", and "0.0%" when there was none to speak of.
+fn drawdown(x: f64) -> String {
+    if x.abs() < 0.05 { String::from("0.0%") } else { format!("−{:.1}%", x.abs()) }
 }
 
 /// A price in its quote currency, with the decimals a price under 1 needs.
@@ -369,6 +374,12 @@ fn banner(parent: &gtk::Box, words: &str, action: Option<(&str, Action)>) {
         bar.append(&key);
     }
     parent.append(&bar);
+}
+
+/// The kill switch's bar, from summary `s`, with Restart.
+fn halted_banner(ui: &Rc<Ui>, parent: &gtk::Box, s: &Value) {
+    let reason = s["halt_reason"].as_str().unwrap_or("the kill switch is on");
+    banner(parent, &format!("Arbiter is halted: {reason}. No strategy places an order until you restart."), Some(("Restart", restart_action(ui, None))));
 }
 
 /// A padded block inside a card, for what is not a row.
@@ -622,6 +633,21 @@ pub(super) fn halt_all(ui: &Rc<Ui>) {
     });
 }
 
+/// The kill switch's key, from summary `s`: off while everything is already halted, saying so.
+fn halt_key(ui: &Rc<Ui>, s: &Value) -> gtk::Button {
+    let halt = button("Halt all", "money-destructive");
+    let halted = s["halted"] == true;
+    halt.set_sensitive(!halted);
+    halt.set_tooltip_text(Some(if halted { "Already halted. Restart from the banner to run again" } else { "Cancel every open order and stop every strategy until you restart" }));
+    let weak = Rc::downgrade(ui);
+    halt.connect_clicked(move |_| {
+        if let Some(ui) = weak.upgrade() {
+            halt_all(&ui);
+        }
+    });
+    halt
+}
+
 /// Lift a halt: one strategy's, or the kill switch's.
 fn restart_action(ui: &Rc<Ui>, strategy: Option<i64>) -> Action {
     let weak = Rc::downgrade(ui);
@@ -825,22 +851,13 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value) {
             editor(&ui, None);
         }
     });
-    let halt = button("Halt all", "money-destructive");
+    let halt = halt_key(ui, s);
     halt.set_widget_name("arbiter-halt-all");
-    halt.set_tooltip_text(Some("Cancel every open order and stop every strategy until you restart"));
-    halt.set_sensitive(s["halted"] != true);
-    let weak = Rc::downgrade(ui);
-    halt.connect_clicked(move |_| {
-        if let Some(ui) = weak.upgrade() {
-            halt_all(&ui);
-        }
-    });
     heading(&page.head, &title_label("Arbiter"), Some(connection_line(&s["connection"]).upcast_ref()), &[new_key.upcast_ref(), halt.upcast_ref()]);
     wipe(&page.body);
     let body = &page.body;
     if s["halted"] == true {
-        let reason = s["halt_reason"].as_str().unwrap_or("the kill switch is on");
-        banner(body, &format!("Arbiter is halted: {reason}. No strategy places an order until you restart."), Some(("Restart", restart_action(ui, None))));
+        halted_banner(ui, body, s);
     }
     if let Some(problem) = s["runner_error"].as_str().filter(|p| !p.is_empty()) {
         let l = label(&format!("The last pass went wrong: {problem}"), "money-problem");
@@ -879,7 +896,7 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value) {
     let (left, right) = split(body, 360);
     portfolio(&left, s);
     strategies(ui, &left, s);
-    limits_today(&right, s);
+    limits_today(ui, &right, s);
     waiting(ui, &right, s);
     recent_fills(&right, s);
     let open = rows(s, "open_orders");
@@ -1065,8 +1082,14 @@ fn limit_meter(l: &Value, currency: &str) -> gtk::Box {
     b
 }
 
-fn limits_today(parent: &gtk::Box, s: &Value) {
-    let list = card(parent, "Limits today", None);
+fn limits_today(ui: &Rc<Ui>, parent: &gtk::Box, s: &Value) {
+    let weak = Rc::downgrade(ui);
+    let settings: Action = Rc::new(move || {
+        if let Some(ui) = weak.upgrade() {
+            ui.navigate("arbiter-settings");
+        }
+    });
+    let list = card(parent, "Limits today", Some(("Settings", settings)));
     let limits = rows(s, "limits");
     if limits.is_empty() {
         quiet_row(&list, "No limits across strategies yet. Set them in Settings.");
@@ -1108,11 +1131,16 @@ fn proposal_row(ui: &Rc<Ui>, p: &Value) -> gtk::Box {
     let keys = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     keys.set_margin_top(4);
     let review = button("Review", "money-text-action");
-    let approve = button("Approve", "primary");
+    let approve = button(approve_caption(p), "primary");
     approve.add_css_class("arbiter-small");
     let dismiss = button("Dismiss", "quiet");
     dismiss.add_css_class("arbiter-small");
     keys.append(&review);
+    if let Some(words) = expires_words(p) {
+        let l = label(&words, "money-row-detail");
+        l.set_valign(gtk::Align::Center);
+        keys.append(&l);
+    }
     let gap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     gap.set_hexpand(true);
     keys.append(&gap);
@@ -1342,13 +1370,18 @@ fn settings_page(ui: &Rc<Ui>, page: &Page, st: &Value, s: Option<&Value>) {
     );
     wipe(&page.body);
     let pair = columns(&page.body, 2);
-    coinbase_card(ui, &pair[0], s.map_or(&Value::Null, |s| &s["connection"]));
-    paper_card(ui, &pair[0], st);
+    // An open order holds the key (it is how the order is read back and cancelled) and paper's
+    // history: the engine refuses both until a halt cancels it.
+    let open = s.map(|s| rows(s, "open_orders")).unwrap_or_default();
+    let (live_open, paper_open) = (open.iter().any(|o| text(o, "venue") == "live"), open.iter().any(|o| text(o, "venue") != "live"));
+    coinbase_card(ui, &pair[0], s.map_or(&Value::Null, |s| &s["connection"]), live_open);
+    paper_card(ui, &pair[0], st, paper_open);
     global_limits(ui, &pair[1], st);
     restore(&page.body, typing);
 }
 
-fn coinbase_card(ui: &Rc<Ui>, column: &gtk::Box, c: &Value) {
+/// The key and what Coinbase says of it; `open` while a live order is open, which Remove waits for.
+fn coinbase_card(ui: &Rc<Ui>, column: &gtk::Box, c: &Value, open: bool) {
     let list = card(column, "Coinbase", None);
     let state = text(c, "state");
     match state {
@@ -1390,6 +1423,10 @@ fn coinbase_card(ui: &Rc<Ui>, column: &gtk::Box, c: &Value) {
             setting_row(&list, "card", "Replace the key", "Check a new key and keep it instead of this one.", &replace);
             let remove = button("Remove…", "money-destructive");
             remove.set_widget_name("arbiter-key-remove");
+            if open {
+                remove.set_sensitive(false);
+                remove.set_tooltip_text(Some("A live order is open: halt first, which cancels it"));
+            }
             let weak = Rc::downgrade(ui);
             confirm_inline(&remove, "Remove the key", move |key| {
                 let Some(ui) = weak.upgrade() else { return };
@@ -1456,7 +1493,19 @@ fn field_entry(name: &str, value: &str, width: i32) -> gtk::Entry {
     gtk::prelude::EntryExt::set_alignment(&e, 1.0);
     e.set_placeholder_text(Some("None"));
     e.set_text(value);
+    // A field a save refused is marked until it is typed in again.
+    e.connect_changed(|e| e.remove_css_class("error"));
     e
+}
+
+/// Enter in `entry` presses `key`, as a click does; not again while its save is on its way.
+fn enter_presses(entry: &gtk::Entry, key: &gtk::Button) {
+    let key = key.downgrade();
+    entry.connect_activate(move |_| {
+        if let Some(key) = key.upgrade().filter(|k| k.is_sensitive()) {
+            key.emit_clicked();
+        }
+    });
 }
 
 /// A value as a field shows it: a decimal string as written, a number, or nothing.
@@ -1468,7 +1517,8 @@ fn shown_value(v: &Value) -> String {
     }
 }
 
-fn paper_card(ui: &Rc<Ui>, column: &gtk::Box, st: &Value) {
+/// The paper account; `open` while a paper order is open, which Start over must wait for.
+fn paper_card(ui: &Rc<Ui>, column: &gtk::Box, st: &Value, open: bool) {
     let list = card(column, "Paper account", None);
     let home = field_entry("arbiter-home-currency", text(st, "home"), 8);
     home.set_max_length(5);
@@ -1484,15 +1534,19 @@ fn paper_card(ui: &Rc<Ui>, column: &gtk::Box, st: &Value) {
     save.set_halign(gtk::Align::End);
     save.add_css_class("tally-save");
     list.append(&save);
+    enter_presses(&home, &save);
+    enter_presses(&cash, &save);
     let weak = Rc::downgrade(ui);
     save.connect_clicked(move |key| {
         let Some(ui) = weak.upgrade() else { return };
         let code = home.text().trim().to_uppercase();
         if !(3..=5).contains(&code.len()) || !code.chars().all(|c| c.is_ascii_alphanumeric()) {
+            home.add_css_class("error");
             toast(&ui, "A currency is a code such as CAD or USDC.", None);
             return;
         }
         let Some(start) = decimal(&cash.text()) else {
+            cash.add_css_class("error");
             toast(&ui, "Type what paper starts with, like 1000.", None);
             return;
         };
@@ -1509,6 +1563,10 @@ fn paper_card(ui: &Rc<Ui>, column: &gtk::Box, st: &Value) {
     });
     let reset = button("Start over…", "money-destructive");
     reset.set_widget_name("arbiter-paper-reset");
+    if open {
+        reset.set_sensitive(false);
+        reset.set_tooltip_text(Some("A paper order is open: halt first"));
+    }
     let weak = Rc::downgrade(ui);
     confirm_inline(&reset, "Erase paper history", move |key| {
         let Some(ui) = weak.upgrade() else { return };
@@ -1581,6 +1639,9 @@ fn global_limits(ui: &Rc<Ui>, column: &gtk::Box, st: &Value) {
     save.set_halign(gtk::Align::End);
     save.add_css_class("tally-save");
     list.append(&save);
+    for e in &fields {
+        enter_presses(e, &save);
+    }
     let weak = Rc::downgrade(ui);
     save.connect_clicked(move |key| {
         let Some(ui) = weak.upgrade() else { return };
@@ -1589,6 +1650,7 @@ fn global_limits(ui: &Rc<Ui>, column: &gtk::Box, st: &Value) {
             let typed = entry.text().trim().to_string();
             if typed.is_empty() {
                 if *required {
+                    entry.add_css_class("error");
                     toast(&ui, &format!("{caption} needs a value."), None);
                     return;
                 }
@@ -1600,6 +1662,7 @@ fn global_limits(ui: &Rc<Ui>, column: &gtk::Box, st: &Value) {
                 _ => decimal(&typed).map(Value::from),
             };
             let Some(value) = value else {
+                entry.add_css_class("error");
                 toast(&ui, &format!("{caption}: type a number above zero, or leave it empty for no limit."), None);
                 return;
             };
@@ -1726,20 +1789,33 @@ fn strategy_page(ui: &Rc<Ui>, page: &Page, d: &Value) {
         let running = state == "running";
         let go = button(if running { "Stop" } else { "Start" }, if running { "" } else { "primary" });
         go.set_widget_name("arbiter-run");
-        go.set_tooltip_text(Some(if running { "Stop placing orders; what it holds is kept" } else { "Run the rule from its next bar" }));
         let weak = Rc::downgrade(ui);
-        go.connect_clicked(move |key| {
+        let run = move |key: &gtk::Button| {
             if let Some(ui) = weak.upgrade() {
                 set_strategy(&ui, key, json!({"id": id, "running": !running}));
             }
-        });
+        };
+        if running {
+            go.set_tooltip_text(Some("Stop placing orders; what it holds is kept"));
+            go.connect_clicked(run);
+        } else if venue == "live" {
+            // Starting is what places real orders: a second click says so first.
+            go.set_tooltip_text(Some("Run the rule from its next bar, with real money on Coinbase"));
+            confirm_inline(&go, "Start with real money", run);
+        } else {
+            go.set_tooltip_text(Some("Run the rule from its next bar"));
+            go.connect_clicked(run);
+        }
         keys.push(go.upcast());
     }
     let backtest = button("Backtest", "");
     backtest.set_widget_name("arbiter-backtest");
     let run = backtest_action(ui, id, version);
     backtest.connect_clicked(move |_| run());
-    backtest.set_sensitive(!STATE.with(|s| s.backtesting.borrow().contains(&id)));
+    if STATE.with(|s| s.backtesting.borrow().contains(&id)) {
+        backtest.set_sensitive(false);
+        backtest.set_tooltip_text(Some("Backtesting…"));
+    }
     keys.push(backtest.upcast());
     let edit = button("Edit", "");
     edit.set_widget_name("arbiter-edit");
@@ -1781,6 +1857,10 @@ fn strategy_page(ui: &Rc<Ui>, page: &Page, d: &Value) {
 
     wipe(&page.body);
     let body = &page.body;
+    // The kill switch holds every strategy, whatever its own state says.
+    if let Some(s) = cached().filter(|s| s["halted"] == true) {
+        halted_banner(ui, body, &s);
+    }
     if state == "halted" {
         let reason = r["halt_reason"].as_str().unwrap_or("a limit was reached");
         banner(body, &format!("Halted: {reason}. It places no order until you restart it."), Some(("Restart", restart_action(ui, Some(id)))));
@@ -1912,6 +1992,19 @@ fn more_menu(ui: &Rc<Ui>, d: &Value) -> gtk::MenuButton {
     list.append(&flatten);
     let delete = button("Delete strategy", "money-destructive");
     delete.set_widget_name("arbiter-delete");
+    // What the engine would refuse, said on the key instead.
+    let open = rows(d, "orders").iter().any(|o| matches!(text(o, "status"), "pending" | "open"));
+    let blocked = if text(r, "state") == "running" {
+        Some("Stop it first")
+    } else if held > 0.0 {
+        Some("Sell what it holds first")
+    } else if open {
+        Some("Halt it first: an order is open")
+    } else {
+        None
+    };
+    delete.set_sensitive(blocked.is_none());
+    delete.set_tooltip_text(blocked);
     let (weak, pop) = (Rc::downgrade(ui), popover.downgrade());
     confirm_inline(&delete, "Delete for good", move |_| {
         if let Some(p) = pop.upgrade() {
@@ -2147,8 +2240,8 @@ fn results_table(report: Option<&Value>, paper: &Value, live: &Value) -> gtk::Gr
             ret(whole["buy_hold_pct"].as_f64()),
         ]),
         ("Worst drawdown", [
-            (tuned["max_drawdown_pct"].as_f64().map_or_else(dash, |x| format!("−{x:.1}%")), None),
-            (judged["max_drawdown_pct"].as_f64().map_or_else(dash, |x| format!("−{x:.1}%")), None),
+            (tuned["max_drawdown_pct"].as_f64().map_or_else(dash, drawdown), None),
+            (judged["max_drawdown_pct"].as_f64().map_or_else(dash, drawdown), None),
             (dash(), None),
             (dash(), None),
             (dash(), None),
@@ -2204,8 +2297,13 @@ fn go_live(ui: &Rc<Ui>, d: &Value) {
         };
         let panel = Panel::new(&ui, &format!("Take {name} live?"), 480);
         panel.add_css_class("money-sheet");
+        let when = match text(r, "state") {
+            "running" => String::from("From its next bar"),
+            "halted" => String::from("Once you restart it"),
+            _ => String::from("Once you start it"),
+        };
         let about = label(
-            &format!("From its next bar, {name} places real orders on Coinbase with real money, within the limits below. Its paper record so far:"),
+            &format!("{when}, {name} places real orders on Coinbase with real money, within the limits below. Its paper record so far:"),
             "money-muted",
         );
         about.set_wrap(true);
@@ -2254,6 +2352,28 @@ fn go_live(ui: &Rc<Ui>, d: &Value) {
             list.append(&row);
         }
         panel.body.append(&list);
+        // The engine refuses a strategy that trades real money on its own with no limit per
+        // order: say so here, with nothing to press but Close.
+        if opt_num(&limits["max_order"]).is_none() && text(r, "mode") != "ask" {
+            let l = label("Give it a limit per order first, under Limits on its page, or let every order ask.", "money-problem");
+            l.set_wrap(true);
+            panel.body.append(&l);
+            let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            actions.set_halign(gtk::Align::End);
+            let close = button("Close", "primary");
+            let sheet = Rc::downgrade(&panel);
+            close.connect_clicked(move |_| {
+                if let Some(sheet) = sheet.upgrade() {
+                    sheet.close();
+                }
+            });
+            actions.append(&close);
+            panel.body.append(&actions);
+            panel.compact(true, 280);
+            panel.present();
+            close.grab_focus();
+            return;
+        }
         if !missing.is_empty() {
             let l = label(&format!("Without a limit on {}, nothing but its rule bounds what it spends.", missing.join(", ")), "arbiter-warning");
             l.set_wrap(true);
@@ -2707,6 +2827,11 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, products: Vec<Value>, detail: Option<Val
     problem.set_wrap(true);
     problem.set_visible(false);
     body.append(&problem);
+    if text(&row, "venue") == "live" && text(&row, "state") == "running" {
+        let l = label("Saving changes what it trades with real money from its next bar.", "arbiter-warning");
+        l.set_wrap(true);
+        body.append(&l);
+    }
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     actions.add_css_class("money-sheet-actions");
     let cancel = button("Cancel", "quiet");
@@ -2717,23 +2842,70 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, products: Vec<Value>, detail: Option<Val
     actions.append(&cancel);
     actions.append(&save);
     body.append(&actions);
-    let sheet = Rc::downgrade(panel);
-    cancel.connect_clicked(move |_| {
-        if let Some(sheet) = sheet.upgrade() {
-            sheet.close();
-        }
-    });
+    // Enter in a field saves, as the key does.
+    for e in [&name, &amount, &take_profit, &stop_loss, &trailing, &max_bars] {
+        enter_presses(e, &save);
+    }
+    for f in limit_entries.iter() {
+        enter_presses(&f.entry, &save);
+    }
     if id.is_none() {
         if let Some(first) = template_keys.borrow().first() {
             first.emit_clicked();
         }
     }
 
+    // What the form says, field by field: the draft is unsaved while it differs from how the
+    // sheet opened, and Escape, the scrim or × then leave it open.
+    let snapshot = {
+        let (name, product, bars, params, kept_when, amount, limit) = (name.clone(), product.clone(), bars.clone(), params.clone(), kept_when.clone(), amount.clone(), limit.clone());
+        let (exits, limit_entries) = ([take_profit.clone(), stop_loss.clone(), trailing.clone(), max_bars.clone()], limit_entries.clone());
+        move || {
+            let crossing = matches!(&*params.borrow(), Params::Cross { exit, .. } if exit.is_active());
+            json!([
+                name.text().to_string(), product.selected(), bars.selected(), entry_json(&params.borrow()), crossing, kept_when.borrow().clone(),
+                amount.text().to_string(), limit.is_active(),
+                exits.iter().map(|e| e.text().to_string()).collect::<Vec<_>>(),
+                limit_entries.iter().map(|f| f.entry.text().to_string()).collect::<Vec<_>>(),
+            ])
+        }
+    };
+    let opened = snapshot();
+    let changed = Rc::new(move || snapshot() != opened);
+    let permit = Rc::new(Cell::new(false));
+    let (shown, allowed, unsaved) = (problem.downgrade(), permit.clone(), changed.clone());
+    panel.set_guard(move || {
+        if allowed.get() || !unsaved() {
+            return true;
+        }
+        if let Some(problem) = shown.upgrade() {
+            problem.set_text(if id.is_some() { "Save a new version, or Cancel to discard the changes." } else { "Save it on paper, or Cancel to discard it." });
+            problem.set_visible(true);
+        }
+        false
+    });
+    let (sheet, allowed, unsaved) = (Rc::downgrade(panel), permit.clone(), changed.clone());
+    confirm_inline_if(&cancel, if id.is_some() { "Discard changes" } else { "Discard draft" }, move || unsaved(), move |_| {
+        allowed.set(true);
+        if let Some(sheet) = sheet.upgrade() {
+            sheet.close();
+        }
+    });
+
     let weak = Rc::downgrade(ui);
     let sheet = Rc::downgrade(panel);
     let first = name.clone();
     save.connect_clicked(move |key| {
         let Some(ui) = weak.upgrade() else { return };
+        // Saved unchanged, a strategy would only gain a version that changes nothing.
+        if id.is_some() && !changed() {
+            permit.set(true);
+            if let Some(sheet) = sheet.upgrade() {
+                sheet.close();
+            }
+            toast(&ui, "Nothing changed, so no new version.", None);
+            return;
+        }
         let refuse = |words: &str| {
             problem.set_text(words);
             problem.set_visible(true);
@@ -2801,10 +2973,11 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, products: Vec<Value>, detail: Option<Val
         }
         problem.set_visible(false);
         key.set_sensitive(false);
-        let (key, problem, sheet) = (key.clone(), problem.clone(), sheet.clone());
+        let (key, problem, sheet, permit) = (key.clone(), problem.clone(), sheet.clone(), permit.clone());
         glib::spawn_future_local(async move {
             match ui.call("arbiter.strategy.save", payload).await {
                 Ok(d) => {
+                    permit.set(true);
                     if let Some(sheet) = sheet.upgrade() {
                         sheet.close();
                     }
@@ -2892,8 +3065,34 @@ pub(super) fn connect(ui: &Rc<Ui>) {
     actions.append(&cancel);
     actions.append(&save);
     body.append(&actions);
+    // Enter in the name goes on to the key itself, which takes Enter as a new line.
+    let next = secret.downgrade();
+    key_name.connect_activate(move |_| {
+        if let Some(secret) = next.upgrade() {
+            secret.grab_focus();
+        }
+    });
+    // What was pasted and not yet checked is not thrown away by Escape, the scrim or ×.
+    let saved = Rc::new(Cell::new(false));
+    let unsaved = {
+        let (name, buffer, saved) = (key_name.downgrade(), secret.buffer(), saved.clone());
+        Rc::new(move || !saved.get() && (name.upgrade().is_some_and(|n| !n.text().trim().is_empty()) || buffer.char_count() > 0))
+    };
+    let permit = Rc::new(Cell::new(false));
+    let (shown, allowed, pending) = (problem.downgrade(), permit.clone(), unsaved.clone());
+    panel.set_guard(move || {
+        if allowed.get() || !pending() {
+            return true;
+        }
+        if let Some(problem) = shown.upgrade() {
+            problem.set_text("Check and save the key, or Cancel to discard it.");
+            problem.set_visible(true);
+        }
+        false
+    });
     let sheet = Rc::downgrade(&panel);
-    cancel.connect_clicked(move |_| {
+    confirm_inline_if(&cancel, "Discard draft", move || unsaved(), move |_| {
+        permit.set(true);
         if let Some(sheet) = sheet.upgrade() {
             sheet.close();
         }
@@ -2913,10 +3112,11 @@ pub(super) fn connect(ui: &Rc<Ui>) {
         problem.set_visible(false);
         key.set_sensitive(false);
         key.set_label("Checking with Coinbase…");
-        let (key, problem, results, cancel, secret, key_name) = (key.clone(), problem.clone(), results.clone(), cancel.clone(), secret.clone(), key_name.clone());
+        let (key, problem, results, cancel, secret, key_name, saved) = (key.clone(), problem.clone(), results.clone(), cancel.clone(), secret.clone(), key_name.clone(), saved.clone());
         glib::spawn_future_local(async move {
             match ui.call("arbiter.key.set", json!({"key_name": name, "private_key": pem})).await {
                 Ok(c) => {
+                    saved.set(true);
                     // The key is in the keyring now; it need not stay in a text field.
                     secret.buffer().set_text("");
                     secret.set_sensitive(false);
@@ -3006,9 +3206,7 @@ pub(super) fn panel_draw(ui: &Rc<Ui>, body: &gtk::Box, tab: &str, v: &Value) {
 /// waits, and prices; Open Arbiter and the kill switch at its foot.
 fn panel_overview(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
     let home = home_currency();
-    if s["halted"] == true {
-        banner(body, &format!("Halted: {}", s["halt_reason"].as_str().unwrap_or("the kill switch is on")), Some(("Restart", restart_action(ui, None))));
-    }
+    panel_halted(ui, body, s);
     let live = s["live"].is_object();
     let account = if live { &s["live"] } else { &s["paper"] };
     let head = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -3102,15 +3300,7 @@ fn panel_overview(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
     let gap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     gap.set_hexpand(true);
     foot.append(&gap);
-    let halt = button("Halt all", "money-destructive");
-    halt.set_sensitive(s["halted"] != true);
-    let weak = Rc::downgrade(ui);
-    halt.connect_clicked(move |_| {
-        if let Some(ui) = weak.upgrade() {
-            halt_all(&ui);
-        }
-    });
-    foot.append(&halt);
+    foot.append(&halt_key(ui, s));
     body.append(&foot);
 }
 
@@ -3150,8 +3340,16 @@ fn panel_strategy_row(ui: &Rc<Ui>, r: &Value) -> gtk::Button {
     key
 }
 
+/// The panel's bar for the kill switch, with Restart, above either summary tab.
+fn panel_halted(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
+    if s["halted"] == true {
+        banner(body, &format!("Halted: {}", s["halt_reason"].as_str().unwrap_or("the kill switch is on")), Some(("Restart", restart_action(ui, None))));
+    }
+}
+
 /// The panel's Strategies: each with its pill, its rule in sentences and its record.
 fn panel_strategies(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
+    panel_halted(ui, body, s);
     let strategies = rows(s, "strategies");
     if strategies.is_empty() {
         let l = label("No strategies yet. Ask for one in this thread, or start from a template.", "money-muted");
@@ -3187,7 +3385,7 @@ fn panel_strategies(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
         let currency = text(r, "currency");
         let pnl = num(&r["pnl_realized"]) + num(&r["pnl_open"]);
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let f = label(&format!("{} · {} trades", money_signed(pnl, currency), r["trades"].as_u64().unwrap_or(0)), "threads-panel-figures");
+        let f = label(&format!("{} · {}", money_signed(pnl, currency), plural(r["trades"].as_u64().unwrap_or(0) as usize, "trade")), "threads-panel-figures");
         add_tone(&f, pnl);
         f.set_hexpand(true);
         line.append(&f);
@@ -3362,6 +3560,17 @@ fn proposal_detail(p: &Value, pending: bool) -> String {
     }
 }
 
+/// The approve key's caption: an order says it is one.
+fn approve_caption(p: &Value) -> &'static str {
+    if text(p, "kind") == "order" { "Approve order" } else { "Approve" }
+}
+
+/// "expires in 8 min", while a card still waits for its answer.
+fn expires_words(p: &Value) -> Option<String> {
+    let left = p["expires_at"].as_str().and_then(minutes_until).filter(|m| *m >= 0)?;
+    Some(if left < 1 { String::from("expires in under a minute") } else { format!("expires in {left} min") })
+}
+
 /// What approving does, under the keys.
 fn proposal_footnote(p: &Value) -> String {
     match text(p, "kind") {
@@ -3439,13 +3648,13 @@ fn fill_card(slot: &gtk::Box, p: &Value) {
     }
     if pending {
         let keys = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let approve = button(if text(p, "kind") == "order" { "Approve order" } else { "Approve" }, "primary");
+        let approve = button(approve_caption(p), "primary");
         approve.set_widget_name(&format!("arbiter-approve-{}", p["id"]));
         let dismiss = button("Dismiss", "quiet");
         keys.append(&approve);
         keys.append(&dismiss);
-        if let Some(left) = p["expires_at"].as_str().and_then(minutes_until).filter(|m| *m >= 0) {
-            let l = label(&if left < 1 { String::from("expires in under a minute") } else { format!("expires in {left} min") }, "threads-card-detail");
+        if let Some(words) = expires_words(p) {
+            let l = label(&words, "threads-card-detail");
             l.set_valign(gtk::Align::Center);
             keys.append(&l);
         }
@@ -3549,6 +3758,8 @@ mod tests {
         assert_eq!(pct(4.24), "+4.2%");
         assert_eq!(pct(-3.0), "−3.0%");
         assert_eq!(pct(0.01), "0.0%");
+        assert_eq!(drawdown(4.24), "−4.2%");
+        assert_eq!(drawdown(0.04), "0.0%");
         assert_eq!(pair("ETH-CAD"), ("ETH", "CAD"));
     }
 

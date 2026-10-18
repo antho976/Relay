@@ -86,9 +86,12 @@ internal class Lifecycle(private val nav: Nav) {
 
     var onClosed: (String) -> Unit = {}
 
+    /** "Resume all" was asked to stop after the agent it is resuming. */
+    var halt by mutableStateOf(false)
+        private set
+
     /** Whether the screen that holds this is still shown: an answer arriving later must not navigate from another. */
     internal var shown = false
-    private var halt = false
 
     class Ask(val title: String, val body: String, val confirm: String, val danger: Boolean, val run: () -> Unit)
 
@@ -191,10 +194,15 @@ internal class Lifecycle(private val nav: Nav) {
     /** Each agent in turn, as the PC would; [stopAfterCurrent] ends it after the one running. */
     fun resumeAll(names: List<String>) {
         if (busy != null || progress != null || names.isEmpty() || !reachable()) return
+        val one = names.singleOrNull()
         asking = Ask(
-            if (names.size == 1) "Resume one agent?" else "Resume all ${names.size} agents?",
-            "Each agent starts its CLI again and picks up its conversation, which uses provider quota. They are resumed one after another; tap the row to stop after the current one.",
-            "Resume all",
+            if (one != null) "Resume $one?" else "Resume all ${names.size} agents?",
+            if (one != null) {
+                "It starts its CLI again and picks up its conversation, which uses provider quota."
+            } else {
+                "Each agent starts its CLI again and picks up its conversation, which uses provider quota. They are resumed one after another; tap the row to stop after the current one."
+            },
+            if (one != null) "Resume" else "Resume all",
             danger = false,
         ) {
             halt = false
@@ -271,6 +279,21 @@ internal fun rememberLifecycle(nav: Nav, onClosed: (String) -> Unit = {}): Lifec
     return life
 }
 
+/**
+ * After an agent is closed: its pages (conversation, terminal, details) come off the back stack
+ * together, so Back never lands on one of them; with nothing under them, the wall.
+ */
+internal fun Nav.leaveAgent(name: String) {
+    while (true) {
+        val top = controller.currentBackStackEntry ?: return
+        val route = top.destination.route ?: return
+        if (route !in AGENT_PAGES || top.arguments?.getString("name") != name) return
+        back()
+    }
+}
+
+private val AGENT_PAGES = setOf("chat/{name}", "terminal/{name}", "session/{name}")
+
 /** The sheets [Lifecycle] opens: Start, Close and its questions. */
 @Composable
 internal fun LifecycleSheets(life: Lifecycle) {
@@ -285,11 +308,15 @@ internal fun LifecycleSheets(life: Lifecycle) {
     life.closing?.let { s ->
         var removeWorktree by rememberSaveable(s.name) { mutableStateOf(false) }
         var purgeBuild by rememberSaveable(s.name) { mutableStateOf(false) }
-        DevSheet({ life.closing = null }, "Close ${s.name}?", "Stops its process and takes it off the wall. The branch is always kept.") { close ->
+        DevSheet({ life.closing = null }, "Close ${s.name}?", "Stops its process and takes it off the wall. Its branch is kept unless its work is already merged.") { close ->
             Column(Modifier.padding(horizontal = 6.dp)) {
                 if (s.worktree.isNotBlank()) T(s.worktree, Modifier.padding(bottom = 4.dp), Relay.type.mono, c.ink3, maxLines = 2)
-                SwitchRow("Remove worktree", "Delete the checkout after closing. Refused while a paired session still uses it.", removeWorktree, { removeWorktree = it })
-                SwitchRow("Purge build output", "Free the disk its build directories use.", purgeBuild, { purgeBuild = it })
+                // session.close purges build output only from a worktree it removes: Purge waits on Remove, as on the PC.
+                SwitchRow("Also remove the worktree", "Delete the checkout after closing. Refused while a paired session still uses it.", removeWorktree, {
+                    removeWorktree = it
+                    if (!it) purgeBuild = false
+                })
+                SwitchRow("Purge build output", "Free the disk its build directories use.", purgeBuild, { purgeBuild = it }, enabled = removeWorktree)
             }
             SheetKeys("Close session", { close { life.close(s.name, removeWorktree, purgeBuild) } }, { close {} }, KeyKind.Danger)
         }

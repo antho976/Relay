@@ -2,6 +2,8 @@ package com.quietsoftware.relay.ui.pages
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -39,8 +41,10 @@ import kotlinx.serialization.json.put
 /**
  * Text shared to Relay from another app (a link, an error message, a thought): made into a task,
  * a note, a thread, or mail to an agent. Everything but typing into a terminal waits in the
- * outbox when the PC is away.
+ * outbox when the PC is away. What it made opens in its place, so back does not return here to
+ * make it twice.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ShareScreen(text: String, nav: Nav) {
     val c = Relay.colors
@@ -68,24 +72,22 @@ fun ShareScreen(text: String, nav: Nav) {
                 Column(Modifier.column().fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Field(body, { body = it }, Modifier.fillMaxWidth().heightIn(min = 120.dp), singleLine = false, maxLines = 10, style = Relay.type.body)
                     Eyebrow("Project")
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        s.projects.chunked(3).forEach { row ->
-                            androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                row.forEach { p -> Pill(p.name, selected = p.num == projectId, onClick = { picked = p.num }) }
-                            }
-                        }
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        s.projects.forEach { p -> Pill(p.name, selected = p.num == projectId, onClick = { picked = p.num }) }
                     }
                     Slab(Modifier.fillMaxWidth(), padding = androidx.compose.foundation.layout.PaddingValues(vertical = 4.dp)) {
                         ListRow(onClick = {
                             val p = projectId ?: return@ListRow
-                            nav.shell.change("task.create", buildJsonObject { put("project_id", p); put("title", title); if (rest.isNotEmpty()) put("body", rest) }, "New task") { ch -> made(ch)?.let(nav::task) }
+                            nav.shell.change("task.create", buildJsonObject { put("project_id", p); put("title", title); if (rest.isNotEmpty()) put("body", rest) }, "New task") { ch -> made(ch)?.let { id -> nav.instead { task(id) } } }
                         }) {
                             Glyph("board", 17.dp)
                             T("New task", Modifier.weight(1f), Relay.type.uiMedium, c.ink)
                         }
                         ListRow(onClick = {
                             val p = projectId ?: return@ListRow
-                            nav.shell.change("notes.create", buildJsonObject { put("project_id", p); put("body", body) }, "New note") { nav.notes(p) }
+                            nav.shell.change("notes.create", buildJsonObject { put("project_id", p); put("body", body) }, "New note") { ch ->
+                                nav.instead { made(ch)?.let { id -> note(id) } ?: notes(p) }
+                            }
                         }) {
                             Glyph("brief", 17.dp)
                             T("New note", Modifier.weight(1f), Relay.type.uiMedium, c.ink)
@@ -93,7 +95,7 @@ fun ShareScreen(text: String, nav: Nav) {
                         ListRow(onClick = {
                             nav.shell.change("thread.create", buildJsonObject { put("text", body) }, "New thread") { ch ->
                                 nav.shell.pickSpace("threads")
-                                made(ch)?.let(nav::thread)
+                                made(ch)?.let { id -> nav.instead { thread(id) } }
                             }
                         }) {
                             Glyph("threads", 17.dp)
@@ -106,7 +108,7 @@ fun ShareScreen(text: String, nav: Nav) {
                         Slab(Modifier.fillMaxWidth(), padding = androidx.compose.foundation.layout.PaddingValues(vertical = 4.dp)) {
                             live.forEach { a ->
                                 ListRow(onClick = {
-                                    nav.shell.change("mailbox.send", buildJsonObject { put("project_id", a.projectId); put("to", a.name); put("text", body); put("priority", true) }, "Mail ${a.name}") { nav.terminal(a.name) }
+                                    nav.shell.change("mailbox.send", buildJsonObject { put("project_id", a.projectId); put("to", a.name); put("text", body); put("priority", true) }, "Mail ${a.name}") { nav.instead { terminal(a.name) } }
                                 }) {
                                     LampDot(a.lamp)
                                     T(a.name, Modifier.weight(1f), Relay.type.uiMedium, c.ink)

@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -97,6 +98,8 @@ fun ModulesScreen(projectId: Long, nav: Nav) {
             PageBar("Modules", nav::back, subtitle = project?.name) {
                 Key("New module", { sheet = "new" }, Modifier.padding(end = 8.dp), kind = KeyKind.Primary, glyph = "plus", compact = true)
             }
+            // The board's own switch, Modules lit: Board goes back to the board this came from.
+            Segmented(BOARD_VIEWS, "modules", { if (it == "board") nav.back() }, Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             val list = modules
             when {
                 list == null -> Unit
@@ -166,7 +169,7 @@ fun ModulesScreen(projectId: Long, nav: Nav) {
             if (m.completedAt == null) {
                 MenuRow("Complete", "check", { close { undoable(nav, "module.complete", buildJsonObject { put("module_id", m.idJson()) }, "Complete ${m.name}", "Completed ${m.name}") { nav.relay.change("module.reopen", buildJsonObject { put("module_id", m.idJson()) }, "Reopen ${m.name}") } } })
             } else {
-                MenuRow("Reopen", "undo", { close { nav.shell.change("module.reopen", buildJsonObject { put("module_id", m.idJson()) }, "Reopen ${m.name}") } })
+                MenuRow("Reopen", "undo", { close { undoable(nav, "module.reopen", buildJsonObject { put("module_id", m.idJson()) }, "Reopen ${m.name}", "Reopened ${m.name}") { nav.relay.change("module.complete", buildJsonObject { put("module_id", m.idJson()) }, "Complete ${m.name}") } } })
             }
             MenuRow("Rename or reprioritise", "edit", { close { sheet = "edit:" + m.id } })
             MenuRow("Delete", "trash", {
@@ -228,7 +231,7 @@ private fun ModuleCard(
                         T("done", style = tiny, color = Color.White, weight = FontWeight.SemiBold)
                     }
                 }
-                IconKey("more", onMenu, size = 16.dp)
+                IconKey("more", onMenu, size = 16.dp, label = "Module actions")
             }
             Row(Modifier.padding(end = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PriorityPill(m.priority)
@@ -266,11 +269,12 @@ private fun ModuleSheet(module: Module?, onDismiss: () -> Unit, onSave: (name: S
     var priority by rememberSaveable { mutableStateOf(module?.priority ?: "medium") }
     BoardSheet(onDismiss, title = if (module == null) "New module" else "Edit ${module.name}") { close ->
         val save = { if (name.isNotBlank()) close { onSave(name.trim(), priority) } }
+        val focus = rememberSheetFocus()
         Column(Modifier.padding(horizontal = 6.dp)) {
             Eyebrow("Name")
             Gap(6.dp)
             Field(
-                name, { name = it }, Modifier.fillMaxWidth(),
+                name, { name = it }, Modifier.fillMaxWidth().focusRequester(focus),
                 placeholder = "A release outcome, as \"Offline board\"",
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { save() }),

@@ -24,6 +24,8 @@ import com.quietsoftware.relay.core.model.Hold
 import com.quietsoftware.relay.core.model.Notification
 import com.quietsoftware.relay.data.Relay
 import com.quietsoftware.relay.data.Settings
+import com.quietsoftware.relay.ui.shell.effective
+import com.quietsoftware.relay.ui.shell.policyTitle
 import com.quietsoftware.relay.ui.shell.reveal
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
@@ -42,13 +44,16 @@ class Notifier(private val context: Context, private val relay: Relay, private v
         channels()
         scope.launch {
             combine(relay.holds(), relay.notifications(), settings.prefs) { h, n, p -> Triple(h, n, p) }.collect { (holds, notes, prefs) ->
-                if (!prefs.notify) return@collect
-                post(holds, notes, quiet = foreground())
+                // With notifications off what comes is still recorded, so turning them on announces nothing old.
+                post(holds, notes, quiet = foreground() || !prefs.notify)
             }
         }
     }
 
-    /** Post what is new, or only record it as seen when the person is looking at the app. */
+    /**
+     * Post what is new, or only record it as seen when the person is looking at the app. A hold
+     * answered or gone takes its notification with it, whose keys could no longer do anything.
+     */
     suspend fun post(holds: List<Hold>, notes: List<Notification>, quiet: Boolean) {
         val state = context.notifyState.data.first()
         // The first look records what is already there instead of announcing all of it.
@@ -60,16 +65,20 @@ class Notifier(private val context: Context, private val relay: Relay, private v
             s[HOLDS] = holds.map { it.id.toString() }.toSet()
             s[LAST_NOTE] = maxOf(lastNote, notes.maxOfOrNull { it.id } ?: 0L)
         }
-        if (quiet || !allowed()) return
         val nm = NotificationManagerCompat.from(context)
+        val open = holds.map { it.id.toString() }.toSet()
+        for (gone in seenHolds.orEmpty() - open) gone.toLongOrNull()?.let { nm.cancel(holdId(it)) }
+        if (quiet || !allowed()) return
         for (h in freshHolds) {
-            val id = HOLD_BASE + (h.id % 10_000).toInt()
-            // What Allow once would let through, as the hold card shows it, not only the op's name.
-            val subject = (h.details as? JsonObject)?.let { d -> d.s("command") ?: d.s("path") ?: d.s("value") }?.let { reveal(it).first } ?: h.op
+            val id = holdId(h.id)
+            // What Allow once would let through, as the hold card shows it, not only the op's name,
+            // under what stopped it in words, as the card's head says it.
+            val (policy, details) = effective(h.policy, h.details as? JsonObject)
+            val subject = details?.let { d -> d.s("command") ?: d.s("path") ?: d.s("value") }?.let { reveal(it).first } ?: h.op
             val b = base(CH_ATTENTION)
                 .setContentTitle("${h.session ?: "An agent"} needs permission")
-                .setContentText("Held by ${h.policy.ifBlank { "a guardrail" }}: $subject")
-                .setStyle(NotificationCompat.BigTextStyle().bigText("Held by ${h.policy.ifBlank { "a guardrail" }}: $subject"))
+                .setContentText("${policyTitle(policy)}: $subject")
+                .setStyle(NotificationCompat.BigTextStyle().bigText("${policyTitle(policy)}: $subject"))
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setContentIntent(open("inbox"))
                 .addAction(
@@ -80,9 +89,10 @@ class Notifier(private val context: Context, private val relay: Relay, private v
                     }).build(),
                 )
             // Allowing from a notification needs the phone unlocked, which only Android 12 can require.
+            // An exception request is approved from here for one use only (ActionReceiver).
             if (Build.VERSION.SDK_INT >= 31) {
                 b.addAction(
-                    NotificationCompat.Action.Builder(0, "Allow once", action(ActionReceiver.ACTION_ALLOW, id) {
+                    NotificationCompat.Action.Builder(0, if (h.op == "guardrail.request") "Approve once" else "Allow once", action(ActionReceiver.ACTION_ALLOW, id) {
                         putExtra(ActionReceiver.EXTRA_HOLD, h.id)
                         putExtra(ActionReceiver.EXTRA_OP, h.op)
                         putExtra(ActionReceiver.EXTRA_CREATED, h.createdAt)
@@ -130,6 +140,8 @@ class Notifier(private val context: Context, private val relay: Relay, private v
 
     fun clear() = NotificationManagerCompat.from(context).cancelAll()
 
+    private fun holdId(hold: Long) = HOLD_BASE + (hold % 10_000).toInt()
+
     private fun base(channel: String) = NotificationCompat.Builder(context, channel)
         .setSmallIcon(R.drawable.ic_stat_relay)
         .setAutoCancel(true)
@@ -174,7 +186,8 @@ class Notifier(private val context: Context, private val relay: Relay, private v
         const val LINK_ID = 1
         private const val HOLD_BASE = 10_000
         private const val NOTE_BASE = 20_000
-        private val LOUD = setOf("agent_done", "agent_blocked", "guardrail")
+        // Not "guardrail": the PC files one with every hold, which is announced as itself above.
+        private val LOUD = setOf("agent_done", "agent_blocked")
         private val HOLDS = stringSetPreferencesKey("holds")
         private val LAST_NOTE = longPreferencesKey("last_note")
     }

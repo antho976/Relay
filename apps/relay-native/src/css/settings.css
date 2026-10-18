@@ -133,6 +133,8 @@ button.settings-thumb.active { border: 2px solid @ink; }
 .settings-thumb-missing { color: @faint; font-size: 12px; }
 button.settings-thumb-remove { min-width: 24px; min-height: 24px; margin: 7px; padding: 0; border: 0; border-radius: 999px; background: alpha(black, 0.6); color: @ink; }
 button.settings-thumb-remove:hover { background: alpha(black, 0.8); }
+/* Armed by its first click it reads "Remove?" in the shared confirm red (sessions.css). */
+button.settings-thumb-remove.confirm-armed { padding: 0 9px; background: @held; font-size: 12px; }
 .settings-thumb-name { padding: 0 2px; color: @secondary; font-size: 13px; }
 button.settings-thumb-add { padding: 0; border: 1px dashed @line_focus; border-radius: 11px; background: transparent; color: @secondary; font-size: 13px; font-weight: 400; }
 button.settings-thumb-add:hover { border-color: @faint; background: alpha(@ink, 0.03); color: @ink; }

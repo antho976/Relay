@@ -180,7 +180,8 @@ Relay-2's syntax colours over Adwaita-dark), installed as `relay-matte`,
 
 ## Layout
 
-The sidebar requests 248px. The top bar has a 52px minimum height, the status
+The sidebar requests 248px; dragged between 200 and 420px, it keeps that width
+across runs. The top bar has a 52px minimum height, the status
 line 30px and toolbars 38px; native theme metrics can increase these minimums.
 Task and module details occupy the content page. The command palette is centered
 inside the app and window presets open below the title bar. Only Notes and the
@@ -208,7 +209,7 @@ than the person made it: their scrollers keep their content's width to themselve
 measured width places the content. On the Threads page the conversation, its message box and a new
 thread's greeting share one centered column of at most 720px between 28px gutters (16px under a
 640px conversation); under 640 and 420px the message box's "Edits with Undo" line and its effort
-picker step aside in turn, and under 600px the starter questions stack in one column. The Tally panel opens at 340px (300px at the least) and steps aside on a page narrower than
+picker step aside in turn, and under 600px the starter questions stack in one column. The Tally panel opens at 340px the first time, then at the width it was left at (300px at the least), and steps aside on a page narrower than
 1000px; once the person shows or hides it with its key, that choice holds whatever the width.
 Tally's pages center their content in at most 1200px: under a 980px page their side-by-side cards
 stack, under 900px a table's less needed columns (Holdings' price and weight) hide, and under 760px
@@ -295,6 +296,8 @@ chosen), a name and provider facts. Settings sit in a caption column: provider t
 segmented role and effort (lit with track, like the view switch), the model field, then one folded
 line for instructions, worktree and permissions that summarizes them. Tasks are single rows; a
 ticked row's badge shows its place in the queue, since the first becomes the agent's current task.
+Closed without launching, the sheet comes back as it was left, its tasks read again; a launch, a
+project switch, a reconnect or opening it from a task starts a fresh one.
 
 ### Navigation
 Sidebar navigation (36px rows) selects with the selected fill and ink. Project rows have a 34px

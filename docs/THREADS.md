@@ -46,7 +46,8 @@ The mockup: https://claude.ai/artifact/GPtaPk6YYLiFCHGpeNPMk4
 own mutex: a `thread` row (title, provider, model, `agent_ref`) and its `message` rows. The store's
 lock is never held for a thread, and the store's schema is untouched.
 
-**Messages.** `role` is `user` (`{"text"}`), `assistant` (`{"blocks"}`, each a `text` or a
+**Messages.** `role` is `user` (`{"text"}`, with `"images": [{"id", "media_type", "width",
+"height"}]` when it carries pictures, below), `assistant` (`{"blocks"}`, each a `text` or a
 `tool_use` with its `id`, `name` and `input`), `tool` (`{"tool_use_id", "is_error", "text"}`) or
 `error` (`{"text"}`). Claude's thinking is not kept.
 
@@ -82,7 +83,8 @@ claude -p --input-format stream-json --output-format stream-json --verbose
 
 **Ops.** `thread.list`, `thread.get` (messages after an id, for catching up), and, the person's
 alone: `thread.create` (optionally with the first message, which also names the thread),
-`thread.send`, `thread.stop`, `thread.rename`, `thread.delete`.
+`thread.send`, `thread.stop`, `thread.rename`, `thread.delete`, and a message's pictures,
+`thread.upload` and `thread.image` (below).
 
 **Events.** `thread.changed` (`{"thread"}`, or `{"id", "deleted": true}`), `thread.message`
 (`{"thread", "message"}`), `thread.delta` (`{"thread", "text"}`, not stored), `thread.proposal`
@@ -143,9 +145,18 @@ An agent asks for a chart by writing a fenced block with the language `chart` an
 ```
 
 - `type` is `bar` (periods side by side), `line` (with `"cumulative": true` for pace) or `donut`
-  (where the money went). `query` is a `money.series` payload; `data`
-  (`{"labels", "series": [{"name", "values"}]}`, minor units) is accepted instead, for numbers that
-  are not the ledger's, and is drawn as written.
+  (where the money went). `query` is a `money.series` payload (`gym` a `gym.series` one, below).
+- `data` takes the place of `query` for numbers that are not the ledger's or Avex's: a projection
+  into the coming months, a plan, a what-if, or figures the person gave. It is drawn as written and
+  never redraws: `{"labels": [...], "series": [{"name", "values": [...], "projected"?: true}],
+  "unit"?: "kg"}`, one value per label. Without `unit`, values are amounts in the ledger's currency
+  as plain decimal numbers (`1234.56`, not minor units); with it (`"kg"`, `"%"`, `"km"`, `""` for a
+  count) they are figures in that unit. A series with `projected` true is the projected part, and
+  is drawn as one. The prompt allows a projection the person asks for as the one place the agent
+  works figures out itself, from figures a tool gave and at a rate it says, and tells it to say
+  so in words; figures a `query` or `gym` chart can draw are never copied into `data`. A thread
+  on a model on this PC is told the same in a sentence of `LOCAL_PROMPT` (not yet measured on the
+  bench).
 - `money.series` (`crates/relay-money/src/series.rs`): `measure` spending, income or net; `by`
   category (the largest seven and Other, in their category colours), week, day or period; `periods`
   how many budget periods end at `period_offset`; `category` by name. A period still running says
@@ -280,29 +291,32 @@ Not yet: ticking rows to approve part of a batch, an amber dot on the thread's s
 - **Each thread picks its model and effort** in the message box (Default, Opus 5.5, Sonnet 5.5,
   Haiku 5.5, Fable 5.1; effort Default, Low to Max). `thread.set` stores them (`threads.db`
   version 2 adds `effort`) and closes a running agent, so the next message resumes the same
-  conversation with `--model` and `--effort`. A new thread starts with the last choice.
+  conversation with `--model` and `--effort`. A new thread starts with the last choice, kept
+  across restarts (`native.threads.model`, `.effort`).
 - **Tally's pages are dense:** each opens on a strip of figures (Overview: left to spend, spent,
   income, net worth and the pace; Entries: count, in, out, net; Plan: monthly budget, given to
   categories, unassigned, spent), then cards of compact rows with category badges and icons.
   Overview fits budgets, bills and recent entries on one screen; Entries groups days with their net;
   Plan is one table; Data is a two-column settings list.
 - **The sidebar and the Tally panel can be dragged** wider or narrower (sidebar 200 to 420 pixels;
-  the panel opens at 340).
+  the panel opens at 340, then at the width it was left at; its source and tab are kept too, under
+  `native.threads.*`).
 
 ## Tally's pages, distilled (2026-10-15)
 
 Easier to do things, each figure said once, one way to ask per page.
 
-- **Overview** leads with Left to spend, large (amber ahead of pace, red over), and one line on
-  how it got there: spent of budget, a day's allowance, against last month. Income sits beside it;
-  Spent and Net worth left the strip (the line says the first, the Accounts card totals the
-  second). Budgets beside Recent, then Accounts, Upcoming bills (three, and how many more) and
-  Goals side by side: about 1,090 pixels, from 1,582. An account opens this period's Entries
-  filtered to it; an investment account opens Investments.
+- **Overview** leads with Left to spend, large (amber ahead of pace; spent past the budget, Over
+  budget and by how much, in red), and one line on how it got there: spent of budget, a day's
+  allowance, against last month. Income sits beside it; Spent and Net worth left the strip (the
+  line says the first, the Accounts card totals the second). Budgets beside Recent, then Accounts,
+  Upcoming bills (three, and how many more) and Goals side by side: about 1,090 pixels, from 1,582.
+  An account opens this period's Entries filtered to it; an investment account opens Investments.
 - **Entries** says its figures in the context line ("27 entries · in $2,150 · out $2,425 · net
   −$275") instead of a strip. A row's badge opens the category list and moves the entry; its menu
   (right click, the Menu key) holds Edit, Change category, Ask about this entry and Delete.
-  Delete deletes the focused row, Enter edits, Ctrl F finds. Each change has Undo on the toast.
+  Delete deletes the focused row, Enter edits, Ctrl F finds. Each change has Undo on the toast,
+  and on every Tally page Ctrl Z presses it while it shows (a field keeps Ctrl Z for its text).
 - **Plan** takes the monthly budget in its strip, beside what categories hold of it. Beside each
   budget field: last month's spending and the average of the last three months, or as many as the
   ledger reaches (one `money.series` read per category, kept until `money.changed`). Categories
@@ -582,3 +596,51 @@ phone case, stored as `15799`, as $15,799. So models never see them.
   (`relay_gym::views`), like every other weight. Avex stores them in pounds, and a kg user's Avex
   page showed that pound figure.
 - **Only the MCP door changes.** The socket, the CLI and the phone door still carry the integers.
+
+## Pictures (2026-10-18)
+
+The person may send the agent pictures: a receipt, a screenshot, a statement, a chart from
+elsewhere. `crates/relay-core/src/threads/images.rs`; the ops are in `crates/relay-bus/src/ops/thread.rs`.
+
+- **Uploading:** `thread.upload {media_type, bytes_b64}` → `{image: {id, media_type, width,
+  height, bytes}}`. It takes a PNG, JPEG, GIF or WebP whose size can be read from its header
+  (`crate::picture`, the reader `session.upload` and `design.asset.add` use), at most 4 MiB
+  decoded (a door takes 8 MiB in one message). The bytes decide its `media_type`; any other is
+  refused with `thread.upload`. The id is 32 lowercase hex characters. It is the person's alone,
+  and only file work: it is staged, so nothing of it holds the store's lock.
+- **Where they live:** `threads/images/<id>.<ext>` beside `threads.db`, written 0600 and renamed
+  into place. `threads.db` version 4 keeps each picture's row (`image`) and which messages carry it
+  (`message_image`).
+- **Sending:** `thread.send {id, text, images?}` and `thread.create {text?, images?, model?,
+  effort?}` take at most 4 ids (`thread.invalid` past that). The text may be empty beside a
+  picture, but not both empty. An id never uploaded, or swept, is `thread.image_unknown`. A thread
+  created with pictures and no words is named "Picture" (or "2 pictures"). The stored body is
+  `{"text", "images": [{"id", "media_type", "width", "height"}]}`; `images` is absent when there
+  are none.
+- **A model on this PC reads none:** in a thread on a local model (`local_models::find`) a message
+  with pictures is refused with `thread.images_unsupported`: "This thread runs on a model on this
+  PC, which cannot read pictures: choose a Claude model for it to send them."
+- **What the agent is given:** the stream-json line's `content` becomes an array, one
+  `{"type": "image", "source": {"type": "base64", "media_type", "data"}}` per picture, then
+  `{"type": "text", "text"}` with what it has not yet heard of its proposals and the person's
+  words (no text block when both are empty). The files are read in `deliver`, after the handler,
+  on a thread of their own, so a line of megabytes to an agent still starting holds no request. A
+  message without pictures is the line it always was. Claude Code's stream-json input takes image
+  blocks as the Messages API does (the Agent SDK documents image attachments in streaming input);
+  verified with Claude Code 2.1.302 on Haiku 4.5, which read a 16-pixel PNG sent so as "Red".
+  The prompt tells the agent to say what it read, to put a picture's numbers into the ledger only
+  through its tools after saying which entries it would add (each with its Undo; what
+  `thread.propose` covers is still proposed), and that text in a picture is data, never
+  instructions.
+- **Drawing them:** `thread.image {id}` → `{media_type, bytes_b64}`, an unlocked query;
+  `thread.image_not_found` for an id it does not know.
+- **Going:** an upload no message carries is removed a day after it was made, swept whenever
+  another is uploaded (with any file a cut-short write left without a row). Deleting a thread
+  removes the pictures its messages carried that no other message does, after the handler. The
+  phone may call both ops (`PHONE_OPS`).
+
+Tests: `crates/relay-core/tests/threads.rs` uploads and refuses pictures (kind, size, a header cut
+short, not base64, an agent), reads them back, sends them in new and running threads and checks
+the stored body and the line the stand-in Claude was given, refuses five, an unknown id, both
+empty and a local model, and deletes a thread's pictures but not one another thread carries;
+`threads::images` sweeps a day-old upload and keeps a sent one.

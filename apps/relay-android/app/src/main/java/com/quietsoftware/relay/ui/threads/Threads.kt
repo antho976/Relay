@@ -2,12 +2,15 @@ package com.quietsoftware.relay.ui.threads
 
 import android.content.ClipData
 import android.os.SystemClock
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -30,34 +33,49 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
@@ -73,6 +91,7 @@ import com.quietsoftware.relay.core.sync.Fetch
 import com.quietsoftware.relay.core.sync.Optimistic
 import com.quietsoftware.relay.core.sync.OutboxEntry
 import com.quietsoftware.relay.core.sync.Refs
+import com.quietsoftware.relay.core.wire.BusError
 import com.quietsoftware.relay.core.wire.Wire
 import com.quietsoftware.relay.core.wire.arr
 import com.quietsoftware.relay.core.wire.b
@@ -81,12 +100,13 @@ import com.quietsoftware.relay.core.wire.o
 import com.quietsoftware.relay.core.wire.s
 import com.quietsoftware.relay.data.Relay as RelayData
 import com.quietsoftware.relay.ui.Nav
+import com.quietsoftware.relay.ui.dev.Attachment
 import com.quietsoftware.relay.ui.dev.MessageKeys
 import com.quietsoftware.relay.ui.dev.joinDraft
 import com.quietsoftware.relay.ui.dev.messageTouch
+import com.quietsoftware.relay.ui.dev.rememberPicturePicker
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Empty
-import com.quietsoftware.relay.ui.kit.Field
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.IconKey
 import com.quietsoftware.relay.ui.kit.Key
@@ -110,6 +130,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -123,13 +144,117 @@ private val SUGGESTIONS = listOf(
     "Where did my money go this week?" to "Spending by category",
     "Am I on pace this month?" to "Each budget against the day of the month",
     "What bills are coming up?" to "Due dates and whether you can cover them",
-    "Which entries have no category?" to "It suggests one for each, you approve",
+    "Any duplicates or odd entries this month?" to "Entries that look doubled or out of place",
 )
 
 /** How often a streaming reply redraws: about 30 a second. */
 private const val FRAME = 33L
 
+/** A stop this soon after a message is the same tap again, landing on the key it turned into (the agent chat's). */
+private const val STOP_AFTER_SEND_MS = 1_000L
+
+/** The key [Drafts] keeps a new thread's words under. */
+private const val NEW = "new"
+
 private fun gutter(width: Dp) = if (width < 600.dp) 16.dp else 24.dp
+
+/**
+ * Each thread's unsent words and pictures while the app runs, by thread id, a new thread's under
+ * [NEW] (threads_view.rs `drafts`): Back, a new thread or another thread keep them for when that
+ * one shows again. Sending empties them; deleting the thread drops them.
+ *
+ * Used from the main thread only.
+ */
+private object Drafts {
+    private val held = HashMap<String, String>()
+    private val boxes = HashMap<String, SnapshotStateList<Attachment<JsonObject>>>()
+
+    operator fun get(id: String): String = held[id].orEmpty()
+
+    operator fun set(id: String, text: String) {
+        if (text.isBlank()) held.remove(id) else held[id] = text
+    }
+
+    /** The words of [to], taking those written under [from] first: a thread made here has the PC's id now. */
+    fun follow(from: String, to: String): String {
+        if (from != to) held.remove(from)?.let { if (to !in held) held[to] = it }
+        return get(to)
+    }
+
+    /**
+     * The pictures in [to]'s message box, those picked under [from] moved to it first, as
+     * [follow] moves the words. Each is the image `thread.upload` answered once it is on the PC.
+     */
+    fun pictures(from: String, to: String): SnapshotStateList<Attachment<JsonObject>> {
+        if (from != to) boxes.remove(from)?.let { if (to !in boxes) boxes[to] = it }
+        return boxes.getOrPut(to) { mutableStateListOf() }
+    }
+
+    /** A deleted thread's words and pictures go with it. */
+    fun drop(id: String) {
+        held.remove(id)
+        boxes.remove(id)
+    }
+}
+
+/** A `thread.send`: the words, and the pictures by the ids the PC gave them; text may be empty with pictures. */
+private fun message(thread: JsonElement, text: String, images: List<JsonElement>) = buildJsonObject {
+    put("id", thread)
+    put("text", text)
+    if (images.isNotEmpty()) put("images", JsonArray(images))
+}
+
+/**
+ * Whether a message box's pictures may go now, and what it says when not: one still on its way,
+ * one the PC did not take, or a model that cannot read them.
+ */
+private fun picturesWait(pictures: List<Attachment<JsonObject>>, model: String?): String? = when {
+    pictures.any { it.sending } -> "A picture is still on its way to the PC"
+    pictures.any { it.failed } -> "A picture did not reach the PC: take it out, or pick it again"
+    pictures.isNotEmpty() && !seesPictures(model) -> "$PICTURES_NEED_CLAUDE: take them out, or pick one"
+    else -> null
+}
+
+/** The ids of the pictures on the PC, for a message's `images`. */
+private fun imageIds(pictures: List<Attachment<JsonObject>>): List<JsonElement> = pictures.mapNotNull { it.sent?.get("id") }
+
+/**
+ * Why the PC would not take a message, in words: its own sentence, and plainly for pictures a
+ * model on the PC cannot read (`thread.images_unsupported`).
+ */
+private fun refusal(e: BusError?): String = when (e?.code) {
+    "thread.images_unsupported" -> "pictures need a Claude model, and this thread's is on the PC. Pick a Claude model, or send it without them"
+    else -> e?.message?.ifBlank { null } ?: "the PC refused it"
+}
+
+/**
+ * Why a thread cannot answer, from `provider.list` (threads_view.rs `check_claude`), and whether
+ * it keeps the message from going: without Claude Code nothing answers; a signed-out reading is
+ * only as fresh as the last refresh on the PC, so it warns and still lets the person try. Null
+ * when Claude Code is ready, or the list was never read.
+ */
+private fun claudeNote(providers: JsonElement?): Pair<String, Boolean>? {
+    val list = (providers as? JsonObject)?.arr("providers") ?: return null
+    val claude = list.firstOrNull { (it as? JsonObject)?.s("provider") == "claude" } as? JsonObject
+    return when {
+        claude == null || claude.b("installed") != true -> "Threads need Claude Code on this PC. Install it, then refresh it in Settings." to true
+        claude.s("version") != null && claude.s("signed_in_as") == null -> "Claude Code is not signed in on this PC. Sign in, then refresh it in Settings." to false
+        else -> null
+    }
+}
+
+/**
+ * A quiet note by the message box. The dot sits beside the words, read left to right: centred
+ * over two lines, it was left alone at the edge.
+ */
+@Composable
+private fun NoteRow(text: String, modifier: Modifier) {
+    val c = Relay.colors
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+        Dot(c.waiting, 6.dp, Modifier.padding(top = 6.dp))
+        T(text, Modifier.weight(1f), style = Relay.type.caption, color = c.ink3)
+    }
+}
 
 // ---- A new thread ----
 
@@ -149,7 +274,16 @@ private fun NewThread(nav: Nav) {
     val s by nav.shell.state.collectAsStateWithLifecycle()
     val summary by remember { nav.relay.live("money.summary") }.collectAsStateWithLifecycle(RelayData.Live())
     val invest by remember { nav.relay.live("money.invest.summary") }.collectAsStateWithLifecycle(RelayData.Live())
-    var draft by rememberSaveable { mutableStateOf("") }
+    val providers by remember { nav.relay.live("provider.list") }.collectAsStateWithLifecycle(RelayData.Live())
+    val claude = remember(providers.result) { claudeNote(providers.result) }
+    val blocked = claude?.second == true
+    // What was written here waits for the next new thread, after Back or another thread too.
+    var draft by rememberSaveable { mutableStateOf(Drafts[NEW]) }
+    SideEffect { Drafts[NEW] = draft }
+    // Its pictures too, each on the PC as soon as it is picked.
+    val app = LocalContext.current.applicationContext
+    val attached = remember { Drafts.pictures(NEW, NEW) }
+    val pickPictures = rememberPicturePicker(attached) { jpeg -> ThreadPictures.upload(app, nav, jpeg) }
     // A new thread starts with the last choice: the newest thread's model and effort.
     val last = s.threads.firstOrNull()
     var model by rememberSaveable { mutableStateOf<String?>(null) }
@@ -160,15 +294,23 @@ private fun NewThread(nav: Nav) {
     val month = remember(summary.result, c) { (summary.result as? JsonObject)?.let { monthLine(it, c) } }
     val asks = remember(summary.result, invest.result) { suggestions(summary.result as? JsonObject, invest.result as? JsonObject) }
 
-    fun start(text: String) {
+    // The message box sends its pictures with its words; a starter question sends only its own.
+    fun start(text: String, withPictures: Boolean = false) {
         val t = text.trim()
-        if (t.isEmpty()) return
+        if (blocked) return
+        val pictures = if (withPictures) attached.toList() else emptyList()
+        picturesWait(pictures, m)?.let { return nav.shell.toast(it) }
+        val images = imageIds(pictures)
+        if (t.isEmpty() && images.isEmpty()) return
         val payload = buildJsonObject {
             put("text", t)
+            if (images.isNotEmpty()) put("images", JsonArray(images))
             if (m.isNotEmpty()) put("model", m)
             if (e.isNotEmpty()) put("effort", e)
         }
-        draft = ""
+        // A starter question leaves what was typed in the box: only the words sent go.
+        if (t == draft.trim()) draft = ""
+        if (withPictures) attached.clear()
         nav.shell.change("thread.create", payload, "New thread") { change ->
             when (change) {
                 is Hub.Change.Queued -> nav.thread(Optimistic.tempId(change.entry.id))
@@ -205,20 +347,21 @@ private fun NewThread(nav: Nav) {
                     onModel = { model = it },
                     onEffort = { effort = it },
                     working = false,
-                    onSend = { start(draft) },
+                    onSend = { start(draft, withPictures = true) },
                     onStop = {},
+                    canSend = !blocked,
+                    pictures = attached,
+                    onPick = pickPictures,
+                    onUnpick = { id -> attached.removeAll { it.id == id } },
+                    online = s.online,
                 )
-                // The dot beside the words, read left to right: centred over two lines, the dot
-                // was left alone at the edge.
-                if (!s.online) Row(Modifier.fillMaxWidth().padding(top = 12.dp, start = 4.dp, end = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
-                    Dot(c.waiting, 6.dp, Modifier.padding(top = 6.dp))
-                    T("The PC is out of reach. A new thread waits on this phone and starts when it is back.", Modifier.weight(1f), style = Relay.type.caption, color = c.ink3)
-                }
+                if (!s.online) NoteRow("The PC is out of reach. A new thread waits on this phone and starts when it is back.", Modifier.padding(top = 12.dp, start = 4.dp, end = 4.dp))
+                claude?.let { (why, _) -> NoteRow(why, Modifier.padding(top = 12.dp, start = 4.dp, end = 4.dp)) }
                 Box(Modifier.height(20.dp))
                 val perRow = if (one) 1 else 2
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     for (chunk in asks.chunked(perRow)) Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        for ((ask, about) in chunk) Starter(ask, about, Modifier.weight(1f).fillMaxHeight()) { start(ask) }
+                        for ((ask, about) in chunk) Starter(ask, about, Modifier.weight(1f).fillMaxHeight(), enabled = !blocked) { start(ask) }
                         if (chunk.size < perRow) Box(Modifier.weight(1f))
                     }
                 }
@@ -228,10 +371,10 @@ private fun NewThread(nav: Nav) {
 }
 
 @Composable
-private fun Starter(ask: String, about: String, modifier: Modifier, onClick: () -> Unit) {
+private fun Starter(ask: String, about: String, modifier: Modifier, enabled: Boolean, onClick: () -> Unit) {
     val c = Relay.colors
     Column(
-        modifier.clip(Radii.card).background(c.slab).border(1.dp, c.edge, Radii.card).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp),
+        modifier.alpha(if (enabled) 1f else .4f).clip(Radii.card).background(c.slab).border(1.dp, c.edge, Radii.card).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         T(ask, style = Relay.type.ui, color = c.ink, weight = FontWeight.Medium)
@@ -312,7 +455,8 @@ private fun suggestions(summary: JsonObject?, invest: JsonObject?): List<Pair<St
     }
     when {
         invest == null -> Unit
-        invest.b("empty") == true && invest.s("currency") == "CAD" -> out += "Connect my Wealthsimple accounts" to "A guided import from the files Wealthsimple gives you"
+        // The desktop offers "Connect my Wealthsimple accounts" here: it ends in choosing the
+        // files to import, which the phone cannot do.
         invest.b("empty") == true -> Unit
         else -> out += "How are my investments doing?" to "Value, gain and the room left this year"
     }
@@ -339,7 +483,7 @@ private sealed interface Piece {
     val key: String
 
     data class Day(override val key: String, val label: String) : Piece
-    data class User(override val key: String, val text: String, val queued: Boolean) : Piece
+    data class User(override val key: String, val text: String, val queued: Boolean, val pictures: List<Picture> = emptyList()) : Piece
     data class Reply(override val key: String, val text: String) : Piece
     data class Tool(override val key: String, val call: ToolCall) : Piece
     /** Three or more reads in a row, folded under the first: "Read the budget and 2 more". */
@@ -366,6 +510,7 @@ private fun toolCaption(name: String, op: String): String = when (op) {
     "money.invest.summary" -> "Read your investments"
     "money.invest.list" -> "Listed investment activity"
     "money.invest.add" -> "Recorded an investment activity"
+    "thread.propose" -> "Asked you first"
     "gym.summary" -> "Read your training"
     "gym.sessions" -> "Listed workouts"
     "gym.session.get" -> "Read a workout"
@@ -390,7 +535,7 @@ private fun toolCaption(name: String, op: String): String = when (op) {
     else -> "Used $op"
 }
 
-/** What the working row says while a tool runs. */
+/** What a tool's line says while it runs. */
 private fun doing(op: String): String = when (op) {
     "money.summary" -> "Reading the budget…"
     "money.lists" -> "Reading accounts and categories…"
@@ -402,12 +547,22 @@ private fun doing(op: String): String = when (op) {
     "money.invest.summary" -> "Reading your investments…"
     "money.invest.list" -> "Reading investment activity…"
     "money.invest.add" -> "Recording investment activity…"
+    "thread.propose" -> "Asking you first…"
     "bus.schema" -> "Checking how a tool works…"
+    // Avex's and Arbiter's, as the desktop says them (threads_view.rs `doing`).
+    "gym.series" -> "Adding up training…"
+    "arbiter.backtest" -> "Running a backtest…"
+    "arbiter.propose" -> "Proposing a change…"
+    "arbiter.order.place" -> "Asking for an order…"
+    "arbiter.halt" -> "Halting Arbiter…"
     else -> if (op.startsWith("gym.")) "Reading your training…" else if (op.startsWith("arbiter.")) "Reading Arbiter…" else "Working…"
 }
 
 /** A tool's answer as a card: an entry or an activity the agent wrote, or Arbiter's proposal or order. */
 private fun cardOf(op: String, writes: Boolean, answer: String?): CardData? {
+    // What the agent asked first is a card on the PC (threads_ask.rs), read with ops the phone
+    // does not have: its answer's id is a proposal's, never an entry's.
+    if (op == "thread.propose") return null
     val v = answer?.let { runCatching { Wire.json.parseToJsonElement(it) as? JsonObject }.getOrNull() } ?: return null
     if (op.startsWith("arbiter.")) return when {
         op == "arbiter.propose" && v.l("id") != null -> CardData.Proposal(v)
@@ -467,7 +622,7 @@ private fun pieces(messages: List<ThreadMessage>, working: Boolean, today: Local
         when (m.role) {
             "user" -> {
                 endTurn(true)
-                out += Piece.User("m:${m.id}", m.text, Optimistic.isTemp(m.id))
+                out += Piece.User("m:${m.id}", m.text, Optimistic.isTemp(m.id), picturesOf(m.body as? JsonObject))
             }
             "assistant" -> ((m.body as? JsonObject)?.arr("blocks") ?: emptyList()).forEachIndexed { i, blk ->
                 val o = blk as? JsonObject ?: return@forEachIndexed
@@ -485,7 +640,8 @@ private fun pieces(messages: List<ThreadMessage>, working: Boolean, today: Local
                     "tool_use" -> {
                         val name = o.str("name")
                         val op = toolOp(name)
-                        val writes = op in WRITES
+                        // Asking first stands alone, as a change does: it is what the agent did instead of one.
+                        val writes = op in WRITES || op == "thread.propose"
                         val id = o.s("id")
                         val answer = id?.let { answers[it] }
                         val step = when {
@@ -611,8 +767,11 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
             stopped = null
             return@LaunchedEffect
         }
-        // The turn ended: what a stop cut short stays, said so; the rest gives way to the stored reply.
-        val cut = stopping && buffer.isNotBlank()
+        // The turn ended: what a stop cut short stays, said so, as does a stop before any words;
+        // the rest gives way to the stored reply.
+        val lastUser = messages.indexOfLast { it.role == "user" }
+        val replied = messages.drop(lastUser + 1).any { it.role == "assistant" && written(it).isNotBlank() }
+        val cut = stopping && (buffer.isNotBlank() || !replied)
         stopping = false
         if (cut) stopped = buffer.toString() else delay(600)
         buffer.setLength(0)
@@ -627,6 +786,12 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     val queuedFirst = if (temp) create?.payload?.s("text") ?: thread?.preview else null
     LaunchedEffect(queuedFirst) { if (queuedFirst != null) first = queuedFirst }
     val firstText = (queuedFirst ?: first)?.takeIf { temp || rows.none { r -> r is Piece.User } }
+    // Its pictures, by the ids the create names, kept the same way.
+    var firstPictures by remember(opened) { mutableStateOf<List<Picture>>(emptyList()) }
+    val queuedPictures = if (temp) create?.payload?.let { picturesOf(it) } else null
+    LaunchedEffect(queuedPictures) { if (queuedPictures != null) firstPictures = queuedPictures }
+    // A message the PC refused stays in the outbox: its bubble says why, in place of "Sending…".
+    val refusedSends = remember(s.outbox) { s.outbox.filter { it.op == "thread.send" && it.parked }.associate { "m:" + Optimistic.tempId(it.id) to refusal(it.error) } }
     val anyProposal = rows.any { it is Piece.Tool && it.call.card is CardData.Proposal }
     val proposals by remember(anyProposal) {
         if (anyProposal) nav.relay.live("arbiter.proposal.list", buildJsonObject { put("limit", 200) }) else flowOf(RelayData.Live())
@@ -634,17 +799,29 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     val current = remember(proposals.result) {
         (proposals.result as? JsonObject)?.objs("proposals")?.mapNotNull { p -> p.l("id")?.let { it to p } }?.toMap().orEmpty()
     }
-    val running = rows.lastOrNull { p -> p is Piece.Tool && p.call.step == Step.Running || p is Piece.Reads && p.calls.any { x -> x.step == Step.Running } }
-    val doingText = when (running) {
-        is Piece.Tool -> doing(running.call.op)
-        is Piece.Reads -> doing(running.calls.last { it.step == Step.Running }.op)
-        else -> if (thread?.live == true || hasStream) "Working…" else "Starting Claude…"
-    }
+    // A tool line turning says what the agent does; the working row shows only while none does
+    // (threads_view.rs `set_working`).
+    val running = rows.any { p -> p is Piece.Tool && p.call.step == Step.Running || p is Piece.Reads && p.calls.any { x -> x.step == Step.Running } }
+    val doingText = if (thread?.live == true || hasStream) "Working…" else "Starting Claude…"
+    val showWorking = working && !running
 
-    var draft by rememberSaveable(opened) { mutableStateOf("") }
+    val providers by remember { nav.relay.live("provider.list") }.collectAsStateWithLifecycle(RelayData.Live())
+    val claude = remember(providers.result) { claudeNote(providers.result) }
+    val blocked = claude?.second == true
+
+    // What is written here outlives the screen, and follows a thread made on this phone to its PC id.
+    var draft by rememberSaveable(tid) { mutableStateOf(Drafts.follow(opened, tid)) }
+    SideEffect { Drafts[tid] = draft }
+    // Its pictures as well, each on the PC as soon as it is picked; this phone keeps a copy.
+    val app = LocalContext.current.applicationContext
+    val attached = remember(tid) { Drafts.pictures(opened, tid) }
+    val pickPictures = rememberPicturePicker(attached) { jpeg -> ThreadPictures.upload(app, nav, jpeg) }
+    // When the last message went: the send key turns to Stop under the finger that sent it.
+    var sentAt by remember { mutableLongStateOf(0L) }
     val focus = remember { FocusRequester() }
-    // The one message of the person's showing its keys, if any.
+    // The one message of the person's showing its keys, if any; Back puts them away first.
     var keysOn by remember(tid) { mutableStateOf<String?>(null) }
+    BackHandler(enabled = keysOn != null) { keysOn = null }
     var menu by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
@@ -658,24 +835,40 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     LaunchedEffect(list) { androidx.compose.runtime.snapshotFlow { list.canScrollForward }.collect { if (!it) follow = true } }
 
     val target: JsonElement? = num?.let { JsonPrimitive(it) } ?: entryId?.let { Refs.ref(it) }
+    // The words and the pictures go together; a picture still going holds the message, as in the
+    // agent chat. Pictures already on the PC may wait in the outbox with it.
     fun send() {
         val text = draft.trim()
         val t = target ?: return
-        if (text.isEmpty() || working) return
-        nav.shell.change("thread.send", buildJsonObject { put("id", t); put("text", text) }, "Message")
+        if (working || blocked) return
+        picturesWait(attached, thread?.model)?.let { return nav.shell.toast(it) }
+        val images = imageIds(attached)
+        if (text.isEmpty() && images.isEmpty()) return
+        nav.shell.change("thread.send", message(t, text, images), "Message")
+        sentAt = SystemClock.uptimeMillis()
         draft = ""
+        attached.clear()
         stopped = null
         follow = true
     }
-    // Again as a new message: through the outbox, so it waits for the PC like any other.
-    fun resend(text: String) {
+    // Again as a new message, with the pictures it had: through the outbox, so it waits for the
+    // PC like any other.
+    fun resend(text: String, pictures: List<Picture>) {
         val t = target ?: return
         if (working) {
             nav.shell.toast("Claude is still answering: stop it first, or wait")
             return
         }
+        if (blocked) {
+            nav.shell.toast(claude?.first.orEmpty())
+            return
+        }
+        if (pictures.isNotEmpty() && !seesPictures(thread?.model)) {
+            nav.shell.toast("$PICTURES_NEED_CLAUDE: pick one to send these again")
+            return
+        }
         keysOn = null
-        nav.shell.change("thread.send", buildJsonObject { put("id", t); put("text", text) }, "Message")
+        nav.shell.change("thread.send", message(t, text, pictures.map { it.id }), "Message")
         stopped = null
         follow = true
     }
@@ -691,6 +884,8 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     )
     fun stop() {
         val n = num ?: return
+        // A second tap on Send just after a message is that tap again, not a stop.
+        if (SystemClock.uptimeMillis() - sentAt < STOP_AFTER_SEND_MS) return
         stopping = true
         nav.shell.act("thread.stop", buildJsonObject { put("id", n) })
     }
@@ -701,6 +896,27 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
             put("model", model ?: thread?.model.orEmpty())
             put("effort", effort ?: thread?.effort.orEmpty())
         }, "Model and effort")
+    }
+    // Try again (threads_view.rs `retry_key`): under the newest failed or stopped reply, until the
+    // next message, sending the person's newest message once more.
+    val lastUser = rows.lastOrNull { it is Piece.User } as? Piece.User
+    val lastWords = lastUser?.text ?: firstText
+    val lastPictures = lastUser?.pictures ?: firstPictures
+    val retryAt = if (stopped != null) "stopped" else rows.lastOrNull { it is Piece.Error || it is Piece.User }?.takeIf { it is Piece.Error }?.key
+    val retry: (() -> Unit)? = lastWords?.takeIf { target != null && !createFailed && (it.isNotBlank() || lastPictures.isNotEmpty()) }?.let { words -> { resend(words, lastPictures) } }
+
+    // Nothing to show yet: no message, nothing streaming or waiting. Reading one the PC has
+    // messages for says so for about ten seconds, then that it could not be read.
+    val blank = loaded != null && found != null && rows.isEmpty() && firstText == null && !temp && !working && stopped == null && !hasStream
+    val reading = blank && s.online && !thread?.preview.isNullOrBlank()
+    var tries by remember(tid) { mutableIntStateOf(0) }
+    var slow by remember(tid) { mutableStateOf(false) }
+    LaunchedEffect(reading, tries) {
+        slow = false
+        if (reading) {
+            delay(10_000)
+            slow = true
+        }
     }
 
     val subtitle = when {
@@ -713,7 +929,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     val tail = listOfNotNull(
         stopped?.let { "stopped" },
         "stream".takeIf { hasStream },
-        "working".takeIf { working },
+        "working".takeIf { showWorking },
         "waiting".takeIf { temp },
     )
     val count = extra + rows.size + tail.size
@@ -737,7 +953,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     Column(Modifier.fillMaxSize()) {
         PageBar(thread?.title?.ifBlank { null } ?: if (temp) "New thread" else "Thread", nav::back, subtitle) {
             Box {
-                IconKey("more", { menu = true }, tint = c.ink2, enabled = thread != null || create != null)
+                IconKey("more", { menu = true }, tint = c.ink2, enabled = thread != null || create != null, label = "Thread actions")
                 Choices(
                     open = menu,
                     onDismiss = { menu = false },
@@ -761,10 +977,17 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                 found != null && thread == null && create == null -> Empty("threads", "This thread was not started", "Its first message was dropped before the PC had it.") {
                     Key("New thread", { nav.newThread() }, glyph = "plus")
                 }
-                found != null && rows.isEmpty() && firstText == null && !temp && !working && stopped == null && !hasStream -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                // Only once the phone's copy was read: before, every thread looked empty for a moment.
+                blank -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     when {
                         !s.online -> Empty("threads", "Not on this phone yet", "Its messages arrive when the PC is back.")
                         thread?.preview.isNullOrBlank() -> Empty("threads", "No messages yet", "Ask something below.")
+                        slow -> Empty("threads", "Could not read this conversation", "The PC did not send its messages.") {
+                            Key("Try again", {
+                                tries++
+                                num?.let { nav.relay.hub.syncer.schedule(setOf(Fetch.Thread(it))) }
+                            }, glyph = "refresh")
+                        }
                         else -> T("Reading the conversation…", style = Relay.type.caption, color = c.ink3)
                     }
                 }
@@ -774,28 +997,32 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                     contentPadding = PaddingValues(top = 8.dp, bottom = 20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    if (firstText != null) item("first") { UserBubble(firstText, queued = false, online = s.online, modifier = cell.padding(top = 12.dp)) }
-                    items(rows, key = { it.key }, contentType = { it::class }) { p -> PieceView(p, cell, s.online, money, current, keys) }
+                    if (firstText != null) item("first") { UserBubble(firstText, queued = false, online = s.online, modifier = cell.padding(top = 12.dp), pictures = firstPictures) }
+                    items(rows, key = { it.key }, contentType = { it::class }) { p -> PieceView(p, cell, s.online, money, current, keys, retry.takeIf { p.key == retryAt }, !working, refusedSends[p.key]) }
                     stopped?.let { text ->
                         item("stopped") {
                             Column(cell.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Markdown(text)
-                                T("Stopped", style = Relay.type.caption, color = c.ink3)
+                                if (text.isNotBlank()) Markdown(text)
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    T("Stopped", style = Relay.type.caption, color = c.ink3)
+                                    retry?.let { RetryKey(!working, it) }
+                                }
                             }
                         }
                     }
                     if (hasStream) item("stream") { Markdown(streamed, cell.padding(top = 12.dp)) }
-                    if (working) item("working") { WorkingRow(doingText, cell.padding(top = 12.dp)) }
+                    if (showWorking) item("working") { WorkingRow(doingText, cell.padding(top = 12.dp)) }
                     if (temp) item("waiting") { Waiting(create, s.online, cell.padding(top = 14.dp)) { nav.outbox() } }
                 }
             }
             if (jump) {
                 Box(
                     Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp).size(TOUCH).clip(CircleShape)
-                        .clickable {
+                        .clickable(role = Role.Button) {
                             follow = true
                             scope.launch { list.toEnd(count) }
-                        },
+                        }
+                        .semantics { contentDescription = "Go to the newest" },
                     contentAlignment = Alignment.Center,
                 ) {
                     Box(Modifier.size(36.dp).shadow(10.dp, CircleShape).clip(CircleShape).background(c.slab).border(1.dp, c.strong, CircleShape), contentAlignment = Alignment.Center) {
@@ -806,22 +1033,29 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
         }
         BoxWithConstraints(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(top = 4.dp, bottom = 8.dp), contentAlignment = Alignment.TopCenter) {
             val dictate = com.quietsoftware.relay.ui.dev.rememberDictation { said -> draft = com.quietsoftware.relay.ui.dev.joinSaid(draft, said) }
-            Composer(
-                value = draft,
-                onValue = { draft = it },
-                onDictate = dictate,
-                model = thread?.model.orEmpty(),
-                effort = thread?.effort.orEmpty(),
-                onModel = { choose(it, null) },
-                onEffort = { choose(null, it) },
-                working = working,
-                onSend = ::send,
-                onStop = ::stop,
-                modifier = Modifier.column().fillMaxWidth().padding(horizontal = gutter(maxWidth)),
-                canSend = target != null && !createFailed,
-                canPick = !working && target != null,
-                focus = focus,
-            )
+            Column(Modifier.column().fillMaxWidth().padding(horizontal = gutter(maxWidth))) {
+                claude?.let { (why, _) -> NoteRow(why, Modifier.padding(start = 4.dp, end = 4.dp, bottom = 8.dp)) }
+                Composer(
+                    value = draft,
+                    onValue = { draft = it },
+                    onDictate = dictate,
+                    model = thread?.model.orEmpty(),
+                    effort = thread?.effort.orEmpty(),
+                    onModel = { choose(it, null) },
+                    onEffort = { choose(null, it) },
+                    working = working,
+                    onSend = ::send,
+                    onStop = ::stop,
+                    canSend = target != null && !createFailed && !blocked,
+                    canPick = !working && target != null,
+                    focus = focus,
+                    hint = "Ask about your money, or tell it what to change",
+                    pictures = attached,
+                    onPick = pickPictures,
+                    onUnpick = { id -> attached.removeAll { it.id == id } },
+                    online = s.online,
+                )
+            }
         }
     }
 
@@ -834,6 +1068,9 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
         action = "Delete",
         onDismiss = { deleting = false },
     ) {
+        // Its unsent words and pictures go with it.
+        draft = ""
+        Drafts.drop(tid)
         if (temp && entryId != null) {
             val drop = s.outbox.filter { it.id == entryId || entryId in Refs.of(it.payload) }.map(OutboxEntry::id)
             scope.launch { drop.forEach { nav.relay.discard(it) } }
@@ -845,7 +1082,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
 }
 
 /** What a message of the person's offers under it, and which one shows its keys. */
-private class BubbleKeys(val opened: String?, val toggle: ((String) -> Unit)?, val edit: ((String) -> Unit)?, val resend: ((String) -> Unit)?) {
+private class BubbleKeys(val opened: String?, val toggle: ((String) -> Unit)?, val edit: ((String) -> Unit)?, val resend: ((String, List<Picture>) -> Unit)?) {
     companion object {
         val None = BubbleKeys(null, null, null, null)
     }
@@ -859,8 +1096,22 @@ private suspend fun LazyListState.toEnd(count: Int) {
     scrollBy(100_000f)
 }
 
+/** Try again, after a reply that failed or was stopped; off while the agent works. */
 @Composable
-private fun PieceView(p: Piece, cell: Modifier, online: Boolean, money: Money, proposals: Map<Long, JsonObject>, keys: BubbleKeys = BubbleKeys.None) {
+private fun RetryKey(enabled: Boolean, onClick: () -> Unit) = Key("Try again", onClick, kind = KeyKind.Quiet, glyph = "refresh", enabled = enabled)
+
+@Composable
+private fun PieceView(
+    p: Piece,
+    cell: Modifier,
+    online: Boolean,
+    money: Money,
+    proposals: Map<Long, JsonObject>,
+    keys: BubbleKeys = BubbleKeys.None,
+    retry: (() -> Unit)? = null,
+    idle: Boolean = true,
+    refused: String? = null,
+) {
     val c = Relay.colors
     when (p) {
         is Piece.Day -> T(p.label, cell.padding(top = 18.dp, bottom = 2.dp), Relay.type.caption.copy(textAlign = TextAlign.Center), c.ink3)
@@ -872,22 +1123,28 @@ private fun PieceView(p: Piece, cell: Modifier, online: Boolean, money: Money, p
             open = keys.opened == p.key,
             onOpen = keys.toggle?.let { t -> { t(p.key) } },
             onEdit = keys.edit,
-            onResend = keys.resend?.takeIf { !p.queued },
+            onResend = keys.resend?.takeIf { !p.queued }?.let { again -> { again(p.text, p.pictures) } },
+            pictures = p.pictures,
+            refused = refused,
         )
         is Piece.Reply -> Markdown(p.text, cell.padding(top = 12.dp))
         is Piece.Tool -> Box(cell.padding(top = if (p.call.card != null) 10.dp else 2.dp)) { ToolView(p.call, money, proposals) }
         is Piece.Reads -> Box(cell.padding(top = 2.dp)) { ReadsView(p, money, proposals) }
-        is Piece.Error -> Row(cell.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Glyph("close", 13.dp, c.heldText, Modifier.padding(top = 4.dp))
-            SelectionContainer { T(p.text, style = Relay.type.ui.copy(fontSize = 13.5.sp, lineHeight = 20.sp), color = c.heldText) }
+        is Piece.Error -> Column(cell.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Glyph("close", 13.dp, c.heldText, Modifier.padding(top = 4.dp))
+                SelectionContainer { T(p.text, style = Relay.type.ui.copy(fontSize = 13.5.sp, lineHeight = 20.sp), color = c.heldText) }
+            }
+            retry?.let { RetryKey(idle, it) }
         }
         is Piece.Copy -> Box(cell) { CopyKey(p.text) }
     }
 }
 
 /**
- * The person's message: a bubble on the right, at most about six sevenths of the column. A tap or
- * a long press shows its keys under it (the agent chat's): Copy, Edit and Send again.
+ * The person's message: its pictures, then a bubble on the right, at most about six sevenths of
+ * the column. A tap or a long press on the words shows their keys under them (the agent chat's):
+ * Copy, Edit and Send again; a tap on a picture opens it. One the PC [refused] says why under it.
  */
 @Composable
 private fun UserBubble(
@@ -898,11 +1155,16 @@ private fun UserBubble(
     open: Boolean = false,
     onOpen: (() -> Unit)? = null,
     onEdit: ((String) -> Unit)? = null,
-    onResend: ((String) -> Unit)? = null,
+    onResend: (() -> Unit)? = null,
+    pictures: List<Picture> = emptyList(),
+    refused: String? = null,
 ) {
     val c = Relay.colors
     Column(modifier, horizontalAlignment = Alignment.End) {
-        Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
+        if (pictures.isNotEmpty()) Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
+            SentPictures(pictures, Modifier.padding(bottom = if (text.isNotBlank()) 6.dp else 0.dp))
+        }
+        if (text.isNotBlank() || pictures.isEmpty()) Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
             Box(
                 Modifier.clip(Radii.card).background(c.wash).then(if (open) Modifier.border(1.dp, c.strong, Radii.card) else Modifier)
                     .messageTouch(open, LocalHapticFeedback.current, onOpen).padding(horizontal = 14.dp, vertical = 10.dp),
@@ -910,8 +1172,11 @@ private fun UserBubble(
                 T(text, style = Relay.type.body, color = c.ink)
             }
         }
-        MessageKeys(open, text, onClose = { onOpen?.invoke() }, onEdit = onEdit, onResend = onResend?.let { again -> { again(text) } })
-        if (queued) Row(Modifier.padding(top = 5.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        MessageKeys(open, text, onClose = { onOpen?.invoke() }, onEdit = onEdit, onResend = onResend)
+        if (refused != null) Row(Modifier.padding(top = 5.dp, end = 4.dp).fillMaxWidth(.86f), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End)) {
+            Dot(c.held, 5.dp, Modifier.padding(top = 6.dp))
+            T("Not sent: $refused", Modifier.weight(1f, fill = false), Relay.type.caption.copy(fontSize = 11.5.sp, textAlign = TextAlign.End), c.heldText)
+        } else if (queued) Row(Modifier.padding(top = 5.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Dot(c.waiting, 5.dp)
             T(if (online) "Sending…" else "Waiting for the PC", style = Relay.type.caption.copy(fontSize = 11.5.sp), color = c.ink3)
         }
@@ -936,14 +1201,14 @@ private fun Waiting(create: OutboxEntry?, online: Boolean, modifier: Modifier, o
             Dot(if (create?.parked == true) c.held else c.waiting, 6.dp)
             T(
                 when {
-                    create?.parked == true -> "Not started: ${create.error?.message?.ifBlank { null } ?: "the PC refused it"}"
+                    create?.parked == true -> "Not started: ${refusal(create.error)}"
                     online -> "Sending to the PC…"
                     else -> "Waiting for the PC · its agent answers once the PC is back"
                 },
                 Modifier.weight(1f), Relay.type.caption, if (create?.parked == true) c.heldText else c.ink3,
             )
         }
-        if (create?.parked == true) Key("Open the outbox", onOutbox, glyph = "outbox", compact = true)
+        if (create?.parked == true) Key("Open the outbox", onOutbox, glyph = "outbox")
     }
 }
 
@@ -973,12 +1238,22 @@ private fun ToolView(t: ToolCall, money: Money, proposals: Map<Long, JsonObject>
         null -> Column {
             Row(Modifier.heightIn(min = 26.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 StepMark(t.step, t.writes)
-                T(toolCaption(t.name, t.op), style = Relay.type.caption, color = if (t.step == Step.Failed) c.heldText else c.ink3, maxLines = 1)
+                // While it runs the line says what the agent is doing, and is the only working line
+                // (threads_view.rs `draw_tool`): the working row under it said the same again.
+                val now = doing(t.op)
+                T(if (t.step == Step.Running && now != "Working…") now else toolCaption(t.name, t.op), style = Relay.type.caption, color = if (t.step == Step.Failed) c.heldText else c.ink3, maxLines = 1)
             }
             if (t.step == Step.Failed) {
-                val text = t.answer.orEmpty().trim()
-                if (t.op == "arbiter.order.place" || t.op == "arbiter.propose") RefusalLine(refusalWords(text))
+                // The engine's own sentence, never the JSON Relay's MCP server wraps it in.
+                val text = refusalWords(t.answer.orEmpty())
+                if (t.op == "arbiter.order.place" || t.op == "arbiter.propose") RefusalLine(text)
                 else T(text.ifEmpty { "It was refused." }, Modifier.padding(start = 21.dp, bottom = 2.dp), Relay.type.caption, c.ink3, maxLines = 2)
+            } else if (t.step == Step.Done && t.op == "thread.propose") {
+                // The PC draws what it asked as a card to approve; the phone cannot read it yet.
+                T(
+                    "It waits for your answer: open this thread in Relay on the PC to see what would change, and approve or decline it there.",
+                    Modifier.padding(start = 21.dp, bottom = 2.dp), Relay.type.caption, c.ink3,
+                )
             }
         }
     }
@@ -996,7 +1271,8 @@ private fun ReadsView(g: Piece.Reads, money: Money, proposals: Map<Long, JsonObj
     }
     Column {
         Row(
-            Modifier.heightIn(min = TOUCH).clip(Radii.icon).clickable { open = !open }.padding(end = 8.dp),
+            Modifier.heightIn(min = TOUCH).clip(Radii.icon).clickable(role = Role.Button) { open = !open }
+                .semantics { stateDescription = if (open) "Expanded" else "Collapsed" }.padding(end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
@@ -1018,14 +1294,14 @@ private fun CopyKey(text: String) {
     val scope = rememberCoroutineScope()
     var copied by remember { mutableStateOf(false) }
     Box(
-        Modifier.size(TOUCH).clip(Radii.icon).clickable {
+        Modifier.size(TOUCH).clip(Radii.icon).clickable(role = Role.Button) {
             scope.launch {
                 clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("reply", text)))
                 copied = true
                 delay(1400)
                 copied = false
             }
-        },
+        }.semantics { contentDescription = if (copied) "Copied" else "Copy reply" },
         contentAlignment = Alignment.CenterStart,
     ) {
         Glyph(if (copied) "check" else "copy", 15.dp, c.inkDim)
@@ -1044,26 +1320,47 @@ private fun DialogCard(content: @Composable () -> Unit) {
 @Composable
 private fun RenameDialog(current: String, onDismiss: () -> Unit, onRename: (String) -> Unit) {
     val c = Relay.colors
-    var name by rememberSaveable { mutableStateOf(current) }
+    // The name opens selected, so typing replaces it (threads_view.rs).
+    var name by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue(current, TextRange(0, current.length))) }
     val focus = remember { FocusRequester() }
+    val source = remember { MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
     LaunchedEffect(Unit) { focus.requestFocus() }
     Dialog(onDismissRequest = onDismiss) {
         DialogCard {
             T("Rename thread", style = Relay.type.title, color = c.ink)
+            val typed = name.text.trim()
             fun done() {
-                if (name.isBlank()) return
-                onRename(name.trim())
+                if (typed.isEmpty()) return
+                // Done on the name as it was closes, as Cancel does: there is nothing to rename.
+                if (typed != current) onRename(typed)
                 onDismiss()
             }
-            Field(
-                name, { name = it }, Modifier.fillMaxWidth().focusRequester(focus),
-                placeholder = "Thread name",
+            // Field's look; Field takes only the text, and this needs its selection.
+            BasicTextField(
+                value = name,
+                onValueChange = { name = it },
+                modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                textStyle = Relay.type.ui.copy(color = c.ink),
+                singleLine = true,
+                cursorBrush = SolidColor(c.ink),
+                interactionSource = source,
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
                 keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { done() }),
+                decorationBox = { inner ->
+                    Box(
+                        Modifier.heightIn(min = 42.dp).clip(Radii.key).background(c.raised)
+                            .border(1.dp, if (focused) c.lineFocus else c.strong, Radii.key).padding(horizontal = 12.dp, vertical = 9.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        if (name.text.isEmpty()) T("Thread name", style = Relay.type.ui, color = c.ink3, maxLines = 1)
+                        inner()
+                    }
+                },
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
                 Key("Cancel", onDismiss, kind = KeyKind.Quiet)
-                Key("Rename", { done() }, kind = KeyKind.Primary, enabled = name.isNotBlank() && name.trim() != current)
+                Key("Rename", { done() }, kind = KeyKind.Primary, enabled = typed.isNotEmpty() && typed != current)
             }
         }
     }

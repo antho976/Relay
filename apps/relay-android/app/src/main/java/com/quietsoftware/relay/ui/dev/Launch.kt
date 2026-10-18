@@ -1,5 +1,6 @@
 package com.quietsoftware.relay.ui.dev
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -104,8 +105,17 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
     var busy by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    // A create the PC refused waits in the outbox until it is tried again or dropped there: another
+    // launch from this form meanwhile would be a second agent, so the key stays off until then.
+    var refused by rememberSaveable { mutableStateOf<String?>(null) }
+    var refusedWhy by rememberSaveable { mutableStateOf("") }
+    val outbox by remember(refused) { if (refused != null) nav.relay.outbox() else flowOf(emptyList()) }.collectAsStateWithLifecycle<List<OutboxEntry>?>(null)
+    // Held until the outbox has answered, then for as long as it holds the entry.
+    val held = refused?.let { id -> outbox?.any { it.id == id } ?: true } == true
     var pickingProject by remember { mutableStateOf(false) }
     var pickingTask by remember { mutableStateOf(false) }
+    var leaving by remember { mutableStateOf(false) }
+    val scroll = rememberScrollState()
     val promptFocus = remember { FocusRequester() }
     // A new agent with nothing written yet: the keyboard is up for its first message.
     LaunchedEffect(Unit) { if (prompt.isNullOrEmpty() && taskId == null) runCatching { promptFocus.requestFocus() } }
@@ -125,12 +135,14 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
     fun providerOf(p: Profile) = p.provider ?: fallback
     fun patch(next: Profile) {
         profiles = profiles.toMutableList().also { it[index] = next }
+        // The error was about the form as it was before this change.
+        error = null
     }
     fun label(i: Int) = if (group) (if (i == 2) "Reviewer" else "Builder ${i + 1}") else "the agent"
 
     fun launch() {
         val id = pid ?: return
-        if (busy) return
+        if (busy || held) return
         // Allocation order (launch.rs): builder 1, the reviewer, builder 2, each pairing with the one before.
         val order = if (group) (if (builders == 2) listOf(0, 2, 1) else listOf(0, 2)) else listOf(0)
         for (i in order) {
@@ -204,7 +216,8 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                 is Settled.Refused -> {
                     busy = false
                     note = null
-                    error = "Not created: ${done.why}. The outbox holds it until you decide."
+                    refusedWhy = done.why
+                    refused = done.entry
                 }
                 Settled.Waiting -> {
                     nav.shell.toast("New agent · starting when the PC has made it")
@@ -214,15 +227,19 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
         }
     }
 
+    // What was written for an agent is not dropped by Back without asking; a refused one the outbox keeps.
+    val written = !busy && !held && profiles.any { it.prompt.isNotBlank() }
+    BackHandler(enabled = written) { leaving = true }
+
     Page {
         Column(Modifier.fillMaxSize()) {
-            PageBar("New agent", nav::back, subtitle = project?.let { crumb(it, s.workspaces) })
+            PageBar("New agent", { if (written) leaving = true else nav.back() }, subtitle = project?.let { crumb(it, s.workspaces) })
             if (s.projects.isEmpty()) {
                 Empty("folder", "No projects yet", "Add a project on the PC first.")
                 return@Column
             }
             Column(
-                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+                Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -265,7 +282,7 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                                 Modifier.heightIn(min = 36.dp).alpha(if (usable) 1f else .45f),
                                 selected = chosen == name,
                                 glyph = name,
-                                onClick = if (usable) ({ patch(profile.copy(provider = name)) }) else null,
+                                onClick = if (usable) ({ patch(profile.copy(provider = name)) }) else ({ nav.shell.toast("${providerName(name)} is not installed on the PC") }),
                             )
                         }
                     }
@@ -274,7 +291,7 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                     Label("Model")
                     Models(chosen, profile.model, owner = index) { patch(profile.copy(model = it)) }
 
-                    Label("Reasoning effort")
+                    Label("Effort")
                     Efforts(effortsFor(chosen), profile.effortFor(chosen)) { patch(profile.copy(effort = it)) }
 
                     if (leads) {
@@ -285,6 +302,8 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                     More(
                         group = group,
                         onGroup = {
+                            // A review group's builders and reviewer are set at the top of the form: brought into view.
+                            if (it && !group) scope.launch { scroll.animateScrollTo(0) }
                             group = it
                             member = 0
                         },
@@ -311,14 +330,15 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
             }
             Footer(
                 when {
+                    held -> "Not created: $refusedWhy. The outbox holds it until you try it again or drop it there."
                     error != null -> error!!
                     note != null -> note!!
                     !s.online -> "The PC is away · starts when it is back"
                     else -> null
                 },
-                error != null,
-                if (group) "Launch group" else "Start",
-                enabled = project != null && !busy,
+                held || error != null,
+                if (group) "Launch review group" else "Launch agent",
+                enabled = project != null && !busy && !held,
                 onStart = ::launch,
             )
         }
@@ -332,6 +352,9 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
     }
     if (pickingTask) {
         TaskSheet(open, task, onPick = { task = it }, onDismiss = { pickingTask = false })
+    }
+    if (leaving) {
+        AskSheet("Discard this agent?", "What you wrote for it is not kept.", "Discard", danger = true, onConfirm = { nav.back() }, onDismiss = { leaving = false })
     }
 }
 
@@ -372,7 +395,12 @@ private fun providersOf(result: JsonElement?): List<ProviderInfo>? {
     }
 }
 
-private fun providerName(p: String) = if (p == "codex") "Codex" else "Claude Code"
+/** A provider as a sentence names it: "Claude Code", "Codex", or its id. */
+internal fun providerName(p: String) = when (p) {
+    "claude" -> "Claude Code"
+    "codex" -> "Codex"
+    else -> p
+}
 
 /** A create's session name: the PC's answer, or a reference the outbox fills in once it has one. */
 private fun refOf(c: Hub.Change): JsonElement = when (c) {
@@ -382,7 +410,8 @@ private fun refOf(c: Hub.Change): JsonElement = when (c) {
 
 private sealed interface Settled {
     data class Made(val name: String) : Settled
-    data class Refused(val why: String) : Settled
+    /** [entry]: the outbox entry that holds the create meanwhile. */
+    data class Refused(val why: String, val entry: String) : Settled
     data object Waiting : Settled
 }
 
@@ -403,7 +432,7 @@ private suspend fun settled(nav: Nav, change: Hub.Change): Settled {
     }
     return when {
         end?.state == OutboxEntry.State.Done -> (end.result as? JsonObject)?.s("name")?.let { Settled.Made(it) } ?: Settled.Waiting
-        end?.parked == true -> Settled.Refused(end.error?.let(::refusal) ?: "the PC refused it")
+        end?.parked == true -> Settled.Refused(end.error?.let(::refusal) ?: "the PC refused it", end.id)
         else -> Settled.Waiting
     }
 }
@@ -567,8 +596,8 @@ private fun More(
                     )
                 }
                 Hairline(Modifier.padding(top = 10.dp))
-                SwitchRow("Allow agent bus writes", "Let the agent create tasks, notes and mail.", profile.writes, { onProfile(profile.copy(writes = it)) })
-                SwitchRow("Allow UI control", "Let the agent drive the desktop's panes and pages.", profile.ui, { onProfile(profile.copy(ui = it)) })
+                SwitchRow("Agent bus writes", "Let it write files, stage and commit through Relay, with guardrails checked as it goes.", profile.writes, { onProfile(profile.copy(writes = it)) })
+                SwitchRow("UI control", "Let it drive the Relay window.", profile.ui, { onProfile(profile.copy(ui = it)) })
             }
         }
     }

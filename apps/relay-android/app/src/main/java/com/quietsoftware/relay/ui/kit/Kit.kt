@@ -3,10 +3,12 @@ package com.quietsoftware.relay.ui.kit
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -26,6 +28,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -43,7 +48,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.VisualTransformation
@@ -146,7 +155,10 @@ fun Key(
     }
 }
 
-/** An icon key: transparent, ink-3, a 44dp target around a 7dp-rounded face. */
+/**
+ * An icon key: transparent, ink-3, a 44dp target around a 7dp-rounded face. [label] is what a
+ * screen reader says for it; without one it says what the glyph shows ("Back", "More").
+ */
 @Composable
 fun IconKey(
     glyph: String,
@@ -159,15 +171,18 @@ fun IconKey(
     onLongClick: (() -> Unit)? = null,
     badge: Int = 0,
     badgeColor: Color = Relay.colors.ink,
+    label: String? = null,
 ) {
     val c = Relay.colors
+    val spoken = label ?: spokenGlyph(glyph)
     Box(
         modifier
             .size(TOUCH)
             .alpha(if (enabled) 1f else .4f)
             .clip(Radii.icon)
             .background(if (selected) c.wash else Color.Transparent)
-            .combinedClickable(enabled = enabled, role = Role.Button, onLongClick = onLongClick, onClick = onClick),
+            .combinedClickable(enabled = enabled, role = Role.Button, onLongClick = onLongClick, onClick = onClick)
+            .semantics { contentDescription = spoken },
         contentAlignment = Alignment.Center,
     ) {
         Glyph(glyph, size, if (selected) c.ink else tint)
@@ -175,6 +190,19 @@ fun IconKey(
             Box(Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 4.dp)) { CountBadge(badge, badgeColor) }
         }
     }
+}
+
+/** What an icon key with no label of its own is called: what its glyph shows. */
+internal fun spokenGlyph(glyph: String): String = when (glyph) {
+    "arrow-left" -> "Back"
+    "sidebar" -> "Menu"
+    "bell" -> "Inbox"
+    "trash" -> "Delete"
+    "plus" -> "Add"
+    "minus" -> "Remove"
+    "file-plus" -> "New file"
+    "focus" -> "Show"
+    else -> glyph.replace('-', ' ').replaceFirstChar { it.uppercase() }
 }
 
 /** A count on an ink pill, as the bell's (theme.css): Geist Mono, "99+" at most. */
@@ -345,7 +373,10 @@ fun LampDot(lamp: Lamp, size: Dp = 7.dp, modifier: Modifier = Modifier) {
 @Composable
 fun Dot(color: Color, size: Dp = 6.dp, modifier: Modifier = Modifier) = Box(modifier.size(size).clip(CircleShape).background(color))
 
-/** A small pill: a filter chip, a label, a state badge. */
+/**
+ * A small pill: a filter chip, a label, a state badge. One that takes a tap is [PILL_TOUCH]
+ * tall to the finger with its face as small as before, and the press is drawn on the face alone.
+ */
 @Composable
 fun Pill(
     text: String,
@@ -359,13 +390,17 @@ fun Pill(
     onClick: (() -> Unit)? = null,
 ) {
     val c = Relay.colors
+    val press = remember { MutableInteractionSource() }
+    val pressLook = LocalIndication.current
     Row(
         modifier
+            .then(if (onClick != null) Modifier.clickable(interactionSource = press, indication = null, onClick = onClick).touchHeight(PILL_TOUCH) else Modifier)
             .heightIn(min = 28.dp)
             .clip(Radii.pill)
             .background(if (selected) c.ink else fill)
             .border(1.dp, if (selected) Color.Transparent else edge, Radii.pill)
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.indication(press, pressLook) else Modifier)
+            .then(if (selected) Modifier.semantics { this.selected = true } else Modifier)
             .padding(horizontal = 10.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -376,6 +411,16 @@ fun Pill(
     }
 }
 
+/** How tall a pill that takes a tap is to the finger. */
+private val PILL_TOUCH = 40.dp
+
+/** At least [min] tall, with what follows centred in it at its own height (a caller's taller face stays). */
+private fun Modifier.touchHeight(min: Dp) = layout { measurable, constraints ->
+    val face = measurable.measure(constraints)
+    val height = maxOf(face.height, min.roundToPx()).coerceAtMost(constraints.maxHeight)
+    layout(face.width, height) { face.place(0, (height - face.height) / 2) }
+}
+
 /**
  * The view switch (DESIGN.md "Navigation"): slab, 12dp outside, 9dp tabs; the showing one lit
  * with track and ink.
@@ -384,7 +429,7 @@ fun Pill(
 fun <T> Segmented(options: List<Pair<T, String>>, selected: T, onSelect: (T) -> Unit, modifier: Modifier = Modifier, fill: Boolean = false) {
     val c = Relay.colors
     Row(
-        modifier.clip(Radii.popover).background(c.slab).border(1.dp, c.edge, Radii.popover).padding(3.dp),
+        modifier.clip(Radii.popover).background(c.slab).border(1.dp, c.edge, Radii.popover).padding(3.dp).selectableGroup(),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         for ((value, label) in options) {
@@ -394,7 +439,7 @@ fun <T> Segmented(options: List<Pair<T, String>>, selected: T, onSelect: (T) -> 
                     .heightIn(min = 34.dp)
                     .clip(Radii.tab)
                     .background(if (on) c.track else Color.Transparent)
-                    .clickable { onSelect(value) }
+                    .selectable(selected = on, role = Role.Tab) { onSelect(value) }
                     .padding(horizontal = 12.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -404,9 +449,12 @@ fun <T> Segmented(options: List<Pair<T, String>>, selected: T, onSelect: (T) -> 
     }
 }
 
-/** A switch (settings.css): 40×24, ink when on. */
+/**
+ * A switch (settings.css): 40×24, ink when on. A row that is all one switch puts [switchRow] on
+ * itself and passes no [onChange] here, so its words take the tap too and it is read as one switch.
+ */
 @Composable
-fun Toggle(checked: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+fun Toggle(checked: Boolean, onChange: ((Boolean) -> Unit)?, modifier: Modifier = Modifier, enabled: Boolean = true) {
     val c = Relay.colors
     val x by animateFloatAsState(if (checked) 1f else 0f, label = "toggle")
     Box(
@@ -415,7 +463,7 @@ fun Toggle(checked: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = M
             .size(width = 44.dp, height = 26.dp)
             .clip(Radii.pill)
             .background(if (checked) c.ink else c.track)
-            .clickable(enabled = enabled, role = Role.Switch) { onChange(!checked) }
+            .then(if (onChange != null) Modifier.toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChange) else Modifier)
             .padding(3.dp),
     ) {
         Box(
@@ -466,14 +514,26 @@ fun StaleNote(at: Long, modifier: Modifier = Modifier) {
     }
 }
 
-/** "now", "5m ago", "3h ago", "2d ago". */
+/** A whole row that is one switch: the tap anywhere on it, and one "on"/"off" for a screen reader. */
+fun Modifier.switchRow(checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit): Modifier =
+    toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChange)
+
+/** "1 task", "3 tasks". */
+fun plural(n: Long, word: String): String = if (n == 1L) "1 $word" else "$n ${word}s"
+
+fun plural(n: Int, word: String): String = plural(n.toLong(), word)
+
+/** "just now", "5m ago", "3h ago", "2d ago", "3w ago", then "on Mar 1": the desktop's (relative.rs `CompactAgo`). */
 fun ago(epochMs: Long, now: Long = System.currentTimeMillis()): String {
-    val s = (now - epochMs) / 1000
+    val s = maxOf(0L, (now - epochMs) / 1000)
     return when {
-        s < 45 -> "just now"
+        s < 60 -> "just now"
         s < 3600 -> "${s / 60}m ago"
-        s < 86400 -> "${s / 3600}h ago"
-        else -> "${s / 86400}d ago"
+        s < 86_400 -> "${s / 3600}h ago"
+        s < 7 * 86_400 -> "${s / 86_400}d ago"
+        s < 35 * 86_400 -> "${s / (7 * 86_400)}w ago"
+        else -> "on " + java.time.Instant.ofEpochMilli(epochMs).atZone(java.time.ZoneId.systemDefault())
+            .format(java.time.format.DateTimeFormatter.ofPattern("MMM d", java.util.Locale.ENGLISH))
     }
 }
 

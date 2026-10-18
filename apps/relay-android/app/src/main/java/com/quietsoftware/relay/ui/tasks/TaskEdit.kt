@@ -1,5 +1,6 @@
 package com.quietsoftware.relay.ui.tasks
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -53,6 +54,7 @@ import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.Segmented
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.column
+import com.quietsoftware.relay.ui.pages.Ask
 import com.quietsoftware.relay.ui.shell.Page
 import com.quietsoftware.relay.ui.shell.PageBar
 import com.quietsoftware.relay.ui.theme.Relay
@@ -128,6 +130,20 @@ fun TaskEditScreen(id: String?, projectId: Long?, parentId: Long?, column: Strin
         }
     }
 
+    // What Back would throw away: a field changed from the task, or anything put into a new one.
+    val dirty = if (editing) {
+        orig != null && (title.trim() != orig.title || body != orig.body || type != orig.type || priority != orig.priority || size != orig.size.orEmpty() || moduleId != orig.moduleId)
+    } else {
+        title.isNotBlank() || body.isNotBlank() || chosen.isNotEmpty()
+    }
+    val canSave = title.isNotBlank() && pid != null && (!editing || orig != null)
+    var leaving by remember { mutableStateOf(false) }
+
+    fun leave() {
+        if (dirty) leaving = true else nav.back()
+    }
+    BackHandler(enabled = dirty) { leaving = true }
+
     fun save() {
         val name = title.trim()
         if (name.isEmpty() || pid == null) return
@@ -186,10 +202,21 @@ fun TaskEditScreen(id: String?, projectId: Long?, parentId: Long?, column: Strin
         typed = ""
     }
 
+    if (leaving) {
+        Ask(
+            title = "Keep your changes?",
+            body = if (editing) "This task has changes that are not saved." else "This task is not created yet.",
+            onDismiss = { leaving = false },
+        ) {
+            Key("Discard", { leaving = false; nav.back() }, kind = KeyKind.Plain, compact = true)
+            Key(if (editing) "Save" else "Create", { leaving = false; save() }, kind = KeyKind.Primary, compact = true, enabled = canSave)
+        }
+    }
+
     Page {
         Column(Modifier.fillMaxSize().imePadding()) {
-            PageBar(if (editing) "Edit ${task?.named() ?: "task"}" else if (parent != null) "New sub-task" else "New task", nav::back, subtitle = shell.projects.firstOrNull { it.num == pid }?.name) {
-                Key(if (editing) "Save" else "Create", ::save, Modifier.padding(end = 8.dp), kind = KeyKind.Primary, compact = true, enabled = title.isNotBlank() && pid != null && (!editing || orig != null))
+            PageBar(if (editing) "Edit ${task?.named() ?: "task"}" else if (parent != null) "New sub-task" else "New task", ::leave, subtitle = shell.projects.firstOrNull { it.num == pid }?.name) {
+                Key(if (editing) "Save" else "Create", ::save, Modifier.padding(end = 8.dp), kind = KeyKind.Primary, compact = true, enabled = canSave)
             }
             when {
                 editing && orig == null -> {
@@ -210,7 +237,8 @@ fun TaskEditScreen(id: String?, projectId: Long?, parentId: Long?, column: Strin
                     LaunchedEffect(Unit) { if (!editing) runCatching { focus.requestFocus() } }
                     Eyebrow("Title")
                     Gap(6.dp)
-                    Field(title, { title = it }, Modifier.fillMaxWidth().focusRequester(focus), placeholder = "What needs doing", singleLine = false, maxLines = 4, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
+                    // One line, as the PC's title: it wraps here, and a line break becomes a space.
+                    Field(title, { title = it.replace('\n', ' ') }, Modifier.fillMaxWidth().focusRequester(focus), placeholder = "What needs doing", singleLine = false, maxLines = 4, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Next))
 
                     Row(Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Eyebrow("Description", Modifier.weight(1f))

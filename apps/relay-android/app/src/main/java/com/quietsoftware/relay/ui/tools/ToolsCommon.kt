@@ -23,6 +23,7 @@ import com.quietsoftware.relay.ui.kit.KeyKind
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.TOUCH
 import com.quietsoftware.relay.ui.kit.Toggle
+import com.quietsoftware.relay.ui.kit.switchRow
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -143,12 +144,12 @@ internal fun FieldBlock(label: String, hint: String? = null, field: @Composable 
     }
 }
 
-/** A setting on one line: its name and what it does, and a switch at the end. */
+/** A setting on one line: its name and what it does, and a switch at the end; the whole line takes the tap. */
 @Composable
 internal fun SwitchLine(title: String, hint: String?, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
     val c = Relay.colors
     Row(
-        Modifier.fillMaxWidth().heightIn(min = TOUCH).padding(vertical = 8.dp),
+        Modifier.fillMaxWidth().heightIn(min = TOUCH).switchRow(checked, enabled, onChange).padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -156,6 +157,6 @@ internal fun SwitchLine(title: String, hint: String?, checked: Boolean, enabled:
             hint?.let { T(it, style = Relay.type.caption, color = c.ink3) }
         }
         Spacer(Modifier.width(12.dp))
-        Toggle(checked, onChange, enabled = enabled)
+        Toggle(checked, null, enabled = enabled)
     }
 }

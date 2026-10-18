@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -22,6 +23,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -35,6 +37,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -61,6 +67,9 @@ import kotlinx.coroutines.launch
 
 /** Until the person picks, the board opens on the first column with work in it, review first. */
 private val OPEN_ORDER = listOf("in_review", "active", "ready", "backlog")
+
+/** The board's view switch. Modules shows it too, so it is one switch both ways. */
+internal val BOARD_VIEWS = listOf("board" to "Board", "modules" to "Modules")
 
 /**
  * The project board (board_view.rs) on a phone: one column at a time, swiped or picked from the
@@ -103,6 +112,7 @@ private fun Board(projectId: Long?, nav: Nav) {
 
     val sessions = remember(shell.sessions) { shell.sessions.associateBy { it.name } }
     val pending = remember(shell.outbox) { pendingTasks(shell.outbox) }
+    val refused = remember(shell.outbox) { refusedTasks(shell.outbox) }
     val needle = search.trim().lowercase().removePrefix("#")
     val filtered = remember(all, needle, type, priority, label, module) {
         all.filter { t ->
@@ -113,8 +123,8 @@ private fun Board(projectId: Long?, nav: Nav) {
                 (module == null || t.moduleId == module)
         }
     }
-    val cards = remember(filtered, all, sessions, pending) {
-        val info = cardInfos(all, sessions, pending).associateBy { it.task.id }
+    val cards = remember(filtered, all, sessions, pending, refused) {
+        val info = cardInfos(all, sessions, pending, refused).associateBy { it.task.id }
         filtered.mapNotNull { info[it.id] }.groupBy { it.task.column }
     }
     val labels = remember(all) { all.flatMap { it.labels }.distinct().sortedBy { it.lowercase() } }
@@ -133,7 +143,9 @@ private fun Board(projectId: Long?, nav: Nav) {
         }
     }
     val shown = Task.COLUMNS[pager.currentPage]
-    val newTask = { nav.newTask(pid, column = shown.takeIf { it == "backlog" || it == "ready" || it == "in_review" }) }
+    // A new task starts in the column showing; Done is reached by approval, so it starts in Backlog there.
+    val newTask = { nav.newTask(pid, column = shown.takeIf { it != "done" }) }
+    val focus = LocalFocusManager.current
 
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).column().align(Alignment.CenterHorizontally)) {
@@ -151,7 +163,7 @@ private fun Board(projectId: Long?, nav: Nav) {
                 Key("New task", newTask, kind = KeyKind.Primary, glyph = "plus", compact = true)
             }
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Segmented(listOf("board" to "Board", "modules" to "Modules"), "board", { if (it == "modules") nav.modules(pid) })
+                Segmented(BOARD_VIEWS, "board", { if (it == "modules") nav.modules(pid) })
                 Box(Modifier.weight(1f))
                 if (shell.projects.size > 1) {
                     Pill(project?.name ?: "Project", Modifier.widthIn(max = 180.dp), glyph = "folder", onClick = { picker = "project" })
@@ -165,14 +177,15 @@ private fun Board(projectId: Long?, nav: Nav) {
                 placeholder = "Search title, description or #id",
                 leading = "search",
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                // The board filters as it is typed; the keyboard's search key puts the keyboard away.
+                keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() }),
             ) {
-                if (search.isNotEmpty()) Glyph("close", 16.dp, c.ink3, Modifier.clip(Radii.icon).clickable { search = "" })
-                Box(Modifier.clip(Radii.icon).clickable { showFilters = !showFilters }.padding(horizontal = 2.dp)) {
-                    Glyph("sliders", 16.dp, if (showFilters || active > 0) c.ink else c.ink3)
-                }
+                if (search.isNotEmpty()) FieldKey("close", "Clear the search", c.ink3) { search = "" }
+                FieldKey("sliders", if (showFilters) "Hide the filters" else "Filters", if (showFilters || active > 0) c.ink else c.ink3) { showFilters = !showFilters }
             }
             if (showFilters || active > 0) {
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                // The pills' own touch room adds 6dp, so their faces stay 8dp under the field.
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 2.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Pill(type?.let { "Type: ${titled(it)}" } ?: "Type", selected = type != null, glyph = "chevron-down", onClick = { picker = "type" })
                     Pill(priority?.let { "Priority: ${titled(it)}" } ?: "Priority", selected = priority != null, glyph = "chevron-down", onClick = { picker = "priority" })
                     if (labels.isNotEmpty() || label != null) Pill(label?.let { "Label: $it" } ?: "Label", selected = label != null, glyph = "chevron-down", onClick = { picker = "label" })
@@ -251,6 +264,17 @@ private fun Board(projectId: Long?, nav: Nav) {
                 MenuRow(m.name, "modules", { close { module = n } }, detail = if (m.completedAt != null) "done" else null, selected = module == n)
             }
         }
+    }
+}
+
+/** A key inside the search field: its glyph in a 32dp target, named for a screen reader. */
+@Composable
+private fun FieldKey(glyph: String, label: String, tint: Color, onClick: () -> Unit) {
+    Box(
+        Modifier.size(32.dp).clip(Radii.icon).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        Glyph(glyph, 16.dp, tint)
     }
 }
 

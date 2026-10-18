@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.quietsoftware.relay.core.model.decodeAs
+import com.quietsoftware.relay.core.wire.BusException
 import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.kit.Fill
 import com.quietsoftware.relay.ui.kit.Glyph
@@ -29,12 +30,14 @@ import com.quietsoftware.relay.ui.kit.ListRow
 import com.quietsoftware.relay.ui.kit.StaleNote
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.theme.Relay
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 private sealed interface BranchSheet {
     class Actions(val branch: Branch) : BranchSheet
     class Switch(val branch: Branch) : BranchSheet
+    class Carry(val name: String, val message: String) : BranchSheet
     class Delete(val branch: Branch) : BranchSheet
     class Create(val from: String?) : BranchSheet
 }
@@ -50,6 +53,23 @@ fun ColumnScope.BranchesTab(nav: Nav, projectId: Long, wt: String?, refresh: Int
     val live = rememberLive(nav, "git.branches", codePayload(projectId, wt), key = refresh)
     val data = live.result?.decodeAs<Branches>()
     var sheet by remember { mutableStateOf<BranchSheet?>(null) }
+
+    // Uncommitted changes refuse a switch; asked, they come along as `git switch` brings them (code_git.rs).
+    fun switchTo(name: String, carry: Boolean) {
+        scope.launch {
+            try {
+                nav.relay.call("git.branch.switch", codePayload(projectId, wt) {
+                    put("name", name)
+                    if (carry) put("carry_changes", true)
+                })
+                onChanged()
+                nav.shell.toast("On $name")
+            } catch (e: BusException) {
+                if (e.error.code == "git.checkout_dirty" && !carry) sheet = BranchSheet.Carry(name, e.error.message) else nav.shell.toast(refusal(e.error))
+            }
+        }
+    }
+
     LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 24.dp)) {
         if (data == null) {
             item { LiveWait(live, page = true) }
@@ -77,7 +97,8 @@ fun ColumnScope.BranchesTab(nav: Nav, projectId: Long, wt: String?, refresh: Int
                     add(SheetAction("Switch to ${s.branch.name}", "branch", enabled = online) { sheet = BranchSheet.Switch(s.branch) })
                 }
                 add(SheetAction("New branch from ${s.branch.name}", "commit", enabled = online) { sheet = BranchSheet.Create(s.branch.name) })
-                if (!s.branch.current) {
+                // Only a merged branch no session holds can go (code_git.rs); the engine refuses the rest.
+                if (!s.branch.current && s.branch.merged && s.branch.session == null) {
                     add(SheetAction("Delete ${s.branch.name}", "trash", danger = true, enabled = online) { sheet = BranchSheet.Delete(s.branch) })
                 }
             },
@@ -85,16 +106,16 @@ fun ColumnScope.BranchesTab(nav: Nav, projectId: Long, wt: String?, refresh: Int
         )
         is BranchSheet.Switch -> ConfirmSheet(
             title = "Switch to ${s.branch.name}?",
-            body = "The checkout must be clean and no live session may own it; the engine refuses otherwise.",
+            body = "No live session may own this checkout.",
             confirm = "Switch",
-            onConfirm = {
-                scope.write(nav, "git.branch.switch", codePayload(projectId, wt) { put("name", s.branch.name) }) { r ->
-                    if (r != null) {
-                        onChanged()
-                        nav.shell.toast("On ${s.branch.name}")
-                    }
-                }
-            },
+            onConfirm = { switchTo(s.branch.name, carry = false) },
+            onDismiss = { sheet = null },
+        )
+        is BranchSheet.Carry -> ConfirmSheet(
+            title = "Uncommitted changes",
+            body = "${s.message}\n\nBringing them along works like git switch: they stay uncommitted on the other branch, and git refuses if that branch changes the same files. Nothing is discarded.",
+            confirm = "Bring changes to ${s.name}",
+            onConfirm = { switchTo(s.name, carry = true) },
             onDismiss = { sheet = null },
         )
         is BranchSheet.Delete -> ConfirmSheet(

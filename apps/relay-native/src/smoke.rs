@@ -458,7 +458,7 @@ async fn verify_confirmations(ui: Rc<Ui>) -> Result<(), String> {
 
 /// Decides two held writes from their cards on the Guardrails page, as a person would
 /// (RA-719): Allow once stays disabled until the exact action has been reviewed, then
-/// confirms the hold; Reject… closes the other without running it.
+/// confirms the hold; Deny… closes the other without running it.
 async fn verify_guardrail_decisions(ui: Rc<Ui>) -> Result<(), String> {
     let project = ui.project.get();
     let call = |op: &'static str, payload: serde_json::Value| {
@@ -541,12 +541,12 @@ async fn verify_guardrail_decisions(ui: Rc<Ui>) -> Result<(), String> {
     let (path, id) = &holds[1];
     wait_for(|| card(path).is_some(), "Second held write shown").await?;
     let reject_card = card(path).unwrap();
-    util::press(&key(&reject_card, "Reject…")?, "Reject…")?;
+    util::press(&key(&reject_card, "Deny…")?, "Deny…")?;
     let send = key(&reject_card, "Send denial")?;
     wait_for(|| send.is_mapped(), "Denial form shown").await?;
     util::press(&send, "Send denial")?;
     resolved(*id, "rejected").await?;
-    println!("Guardrail decisions verified: review before Allow once, Allow confirms, Reject closes");
+    println!("Guardrail decisions verified: review before Allow once, Allow confirms, Deny closes");
     verify_exception_requests(&ui, &session).await
 }
 

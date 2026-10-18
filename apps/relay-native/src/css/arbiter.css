@@ -4,8 +4,10 @@
    waiting), red a loss, a refusal or a halt. Backgrounds stay see-through: only the window's
    page stack paints @wall. */
 
-/* Pills and lamps: what a strategy is doing, at a glance. */
-.arbiter-pill { padding: 1px 8px; border-radius: 999px; border: 1px solid @edge; background: @wash; color: @secondary; font-size: 11px; font-weight: 600; }
+/* Pills and lamps: what a strategy is doing, at a glance. A neutral pill is glass on a page
+   (DESIGN.md, The Glass Rule) and @wash over a sheet's solid ground; the tones below win in both. */
+.arbiter-pill { padding: 1px 8px; border-radius: 999px; border: 1px solid @glass_edge; background: @glass_card; color: @secondary; font-size: 11px; font-weight: 600; }
+.money-sheet .arbiter-pill { border-color: @edge; background: @wash; }
 .arbiter-pill.arbiter-live { color: @live; background: alpha(@live, 0.12); border-color: alpha(@live, 0.35); }
 .arbiter-pill.arbiter-paper { color: @waiting; background: alpha(@waiting, 0.12); border-color: alpha(@waiting, 0.35); }
 .arbiter-pill.arbiter-halted { color: #f0786f; background: alpha(@held, 0.14); border-color: alpha(@held, 0.4); }
@@ -53,7 +55,9 @@ button.arbiter-template.selected { border-color: @line_focus; background: @wash;
 .arbiter-sheet-limits { border: 1px solid @edge; border-radius: 12px; background: @slab; padding: 4px 0; }
 .arbiter-sheet-limits > .tally-row { padding: 6px 12px; }
 .arbiter-steps { padding: 4px 0 6px; }
-.arbiter-step-number { min-width: 22px; min-height: 22px; border-radius: 11px; background: @wash; border: 1px solid @edge; color: @secondary; font-family: "Geist Mono", monospace; font-size: 11px; }
+/* A step's number: glass where it sits on a page (Avex's steps and set rows), @wash in this sheet. */
+.arbiter-step-number { min-width: 22px; min-height: 22px; border-radius: 11px; background: @glass_card; border: 1px solid @glass_edge; color: @secondary; font-family: "Geist Mono", monospace; font-size: 11px; }
+.money-sheet .arbiter-step-number { background: @wash; border-color: @edge; }
 .arbiter-step { font-size: 13px; color: @ink; }
 entry.arbiter-mono { font-family: "Geist Mono", monospace; font-size: 12px; }
 .arbiter-secret-frame { border: 1px solid @strong; border-radius: 10px; background: @raised; }

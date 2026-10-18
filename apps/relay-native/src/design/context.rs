@@ -40,6 +40,10 @@ fn same<T: PartialEq + Clone>(values: impl IntoIterator<Item = T>) -> Option<T> 
 
 impl Board {
     pub(super) fn rebuild_context(&self) {
+        let old = self.context.borrow().clone();
+        if let Some(old) = old {
+            self.release(&old);
+        }
         if let Some(old) = self.context.borrow_mut().take() {
             self.overlay.remove_overlay(&old);
         }
@@ -70,7 +74,7 @@ impl Board {
                 name.set_ellipsize(gtk::pango::EllipsizeMode::End);
                 row.append(&name);
                 up.set_child(Some(&row));
-                up.set_tooltip_text(Some(&format!("Select {} (Esc)", display_name(parent))));
+                super::widgets::tip(&up, &format!("Select {} (Esc)", display_name(parent)));
                 let pid = parent.id.clone();
                 let weak = Rc::downgrade(&b);
                 up.connect_clicked(move |_| {
@@ -92,7 +96,7 @@ impl Board {
                 same(nodes.iter().map(|n| n.stroke.clone().unwrap_or_else(|| super::paint::text_color(&scene, n))))
             };
             let weak = Rc::downgrade(&b);
-            bar.append(&color_key(&b, colour.as_deref(), "Icon colour", true, move |c| {
+            bar.append(&color_key(&b, colour.as_deref(), "Icon colour", Some("Automatic"), move |c| {
                 if let Some(b) = weak.upgrade() {
                     b.set_selected(set(&[("stroke", json!(c))]));
                 }
@@ -101,7 +105,7 @@ impl Board {
                 let swap = gtk::MenuButton::new();
                 swap.add_css_class("design-context-key");
                 swap.set_child(Some(&super::icons::image(one.icon.as_deref().unwrap_or(""), 16)));
-                swap.set_tooltip_text(Some("Another icon"));
+                super::widgets::tip(&swap, "Another icon");
                 let pop = gtk::Popover::new();
                 pop.add_css_class("design-menu");
                 swap.set_popover(Some(&pop));
@@ -125,7 +129,7 @@ impl Board {
             if closed {
                 let fill = same(nodes.iter().map(super::paint::fill_of)).flatten();
                 let weak = Rc::downgrade(&b);
-                bar.append(&color_key(&b, fill.as_deref(), "Fill", true, move |c| {
+                bar.append(&color_key(&b, fill.as_deref(), "Fill", Some("None"), move |c| {
                     if let Some(b) = weak.upgrade() {
                         b.set_selected(set(&[("fill", json!(c)), ("gradient", Value::Null)]));
                     }
@@ -133,7 +137,7 @@ impl Board {
             }
             let stroke = same(nodes.iter().map(|n| n.stroke.clone())).flatten();
             let weak = Rc::downgrade(&b);
-            bar.append(&color_key(&b, stroke.as_deref(), "Stroke colour", false, move |c| {
+            bar.append(&color_key(&b, stroke.as_deref(), "Stroke colour", None, move |c| {
                 if let Some(b) = weak.upgrade() {
                     b.set_selected(set(&[("stroke", json!(c))]));
                 }
@@ -157,7 +161,7 @@ impl Board {
                 let key = gtk::Button::new();
                 key.add_css_class("design-context-key");
                 key.set_child(Some(&glyphs::image(glyph, 16)));
-                key.set_tooltip_text(Some(tip));
+                super::widgets::tip(&key, tip);
                 let weak = Rc::downgrade(&b);
                 key.connect_clicked(move |_| {
                     if let Some(b) = weak.upgrade() {
@@ -169,7 +173,7 @@ impl Board {
                 let arrow = gtk::ToggleButton::new();
                 arrow.add_css_class("design-context-key");
                 arrow.set_child(Some(&glyphs::image("arrow", 16)));
-                arrow.set_tooltip_text(Some("Arrowhead"));
+                super::widgets::tip(&arrow, "Arrowhead");
                 arrow.set_active(on);
                 let weak = Rc::downgrade(&b);
                 arrow.connect_toggled(move |k| {
@@ -185,14 +189,14 @@ impl Board {
             if fillable {
                 let fill = same(nodes.iter().map(super::paint::fill_of)).flatten();
                 let weak = Rc::downgrade(&b);
-                bar.append(&color_key(&b, fill.as_deref(), "Fill", true, move |c| {
+                bar.append(&color_key(&b, fill.as_deref(), "Fill", Some("Automatic"), move |c| {
                     if let Some(b) = weak.upgrade() {
                         b.set_selected(set(&[("fill", json!(c))]));
                     }
                 }));
                 let stroke = same(nodes.iter().map(|n| n.stroke.clone())).flatten();
                 let weak = Rc::downgrade(&b);
-                let key = color_key(&b, stroke.as_deref(), "Border", true, move |c| {
+                let key = color_key(&b, stroke.as_deref(), "Border", Some("None"), move |c| {
                     if let Some(b) = weak.upgrade() {
                         b.set_selected(set(&[("stroke", json!(c))]));
                     }
@@ -221,7 +225,7 @@ impl Board {
                         Layout::Row => ("row", "Auto layout: row — remove", "none"),
                     };
                     key.set_child(Some(&glyphs::image(glyph, 16)));
-                    key.set_tooltip_text(Some(tip));
+                    super::widgets::tip(&key, tip);
                     let weak = Rc::downgrade(&b);
                     key.connect_clicked(move |_| {
                         if let Some(b) = weak.upgrade() {
@@ -251,13 +255,13 @@ impl Board {
             let group = gtk::Button::new();
             group.add_css_class("design-context-key");
             group.set_child(Some(&glyphs::image("group", 16)));
-            group.set_tooltip_text(Some("Group (Ctrl+G)"));
+            super::widgets::tip(&group, "Group (Ctrl+G)");
             group.set_action_name(Some("design.group"));
             bar.append(&group);
             let frame = gtk::Button::new();
             frame.add_css_class("design-context-key");
             frame.set_child(Some(&glyphs::image("frame", 16)));
-            frame.set_tooltip_text(Some("Frame selection (Ctrl+Alt+G)"));
+            super::widgets::tip(&frame, "Frame selection (Ctrl+Alt+G)");
             frame.set_action_name(Some("design.frame"));
             bar.append(&frame);
         }
@@ -270,7 +274,7 @@ impl Board {
         row.append(&glyphs::image("spark", 14));
         row.append(&label("Ask", "design-context-word"));
         ask.set_child(Some(&row));
-        ask.set_tooltip_text(Some("Ask the terminal's agent to change this (Ctrl+Enter)"));
+        super::widgets::tip(&ask, "Ask the terminal's agent to change this (Ctrl+Enter)");
         let weak = Rc::downgrade(&b);
         ask.connect_clicked(move |key| {
             if let Some(b) = weak.upgrade() {
@@ -281,34 +285,38 @@ impl Board {
         let more = gtk::MenuButton::new();
         more.add_css_class("design-context-key");
         more.set_child(Some(&crate::icons::image("more", 16)));
-        more.set_tooltip_text(Some("More"));
+        super::widgets::tip(&more, "More");
         let menu = gtk::gio::Menu::new();
-        let section = gtk::gio::Menu::new();
-        section.append(Some("Duplicate"), Some("design.duplicate"));
-        section.append(Some("Copy"), Some("design.copy"));
-        section.append(Some("Delete"), Some("design.delete"));
-        menu.append_section(None, &section);
-        let section = gtk::gio::Menu::new();
-        section.append(Some("Bring to front"), Some("design.front"));
-        section.append(Some("Send to back"), Some("design.back"));
-        section.append(Some("Group"), Some("design.group"));
-        section.append(Some("Ungroup"), Some("design.ungroup"));
-        menu.append_section(None, &section);
-        let section = gtk::gio::Menu::new();
-        section.append(Some("Flip horizontally"), Some("design.flip-h"));
-        section.append(Some("Flip vertically"), Some("design.flip-v"));
-        section.append(Some("Copy style"), Some("design.copy-style"));
-        section.append(Some("Paste style"), Some("design.paste-style"));
-        menu.append_section(None, &section);
-        let section = gtk::gio::Menu::new();
-        section.append(Some("Lock"), Some("design.lock"));
-        section.append(Some("Hide"), Some("design.hide"));
-        menu.append_section(None, &section);
+        let item = super::board::menu_item;
+        let (lock, hide) = self.flag_captions();
+        for items in [
+            [item("Duplicate", "duplicate", Some("<Control>d")), item("Copy", "copy", Some("<Control>c")), item("Delete", "delete", Some("Delete"))].as_slice(),
+            &[
+                item("Bring to front", "front", Some("<Control><Shift>bracketright")),
+                item("Send to back", "back", Some("<Control><Shift>bracketleft")),
+                item("Group", "group", Some("<Control>g")),
+                item("Ungroup", "ungroup", Some("<Control><Shift>g")),
+            ],
+            &[
+                item("Flip horizontally", "flip-h", Some("<Shift>h")),
+                item("Flip vertically", "flip-v", Some("<Shift>v")),
+                item("Copy style", "copy-style", Some("<Control><Alt>c")),
+                item("Paste style", "paste-style", Some("<Control><Alt>v")),
+            ],
+            &[item(lock, "lock", Some("<Control><Shift>l")), item(hide, "hide", Some("<Control><Shift>h"))],
+        ] {
+            let section = gtk::gio::Menu::new();
+            for i in items {
+                section.append_item(i);
+            }
+            menu.append_section(None, &section);
+        }
         menu.append_section(None, &super::board::export_menu());
         more.set_menu_model(Some(&menu));
         bar.append(&more);
 
         super::board::keep_canvas_focus(bar.upcast_ref());
+        b.hand_back(&bar);
         self.overlay.add_overlay(&bar);
         *self.context.borrow_mut() = Some(bar.upcast());
         // Built with its words and measured as such on the next layout; a rebuild of a compact
@@ -353,7 +361,7 @@ impl Board {
         let key = gtk::Button::new();
         key.add_css_class("design-context-key");
         key.set_child(Some(&glyphs::image(glyph, 16)));
-        key.set_tooltip_text(Some(tip));
+        super::widgets::tip(&key, tip);
         let weak = Rc::downgrade(b);
         key.connect_clicked(move |_| {
             if let Some(b) = weak.upgrade() {
@@ -382,7 +390,7 @@ impl Board {
         row.append(&label(current, "design-context-word"));
         row.append(&crate::icons::image("chevron-down", 10));
         style.set_child(Some(&row));
-        style.set_tooltip_text(Some(&format!("Text style: {current}")));
+        super::widgets::tip(&style, &format!("Text style: {current}"));
         let pop = gtk::Popover::new();
         pop.add_css_class("design-menu");
         let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -431,7 +439,7 @@ impl Board {
         }));
         let color = same(nodes.iter().map(|n| n.color.clone())).flatten();
         let weak = Rc::downgrade(b);
-        bar.append(&color_key(b, color.as_deref(), "Text colour", true, move |c| {
+        bar.append(&color_key(b, color.as_deref(), "Text colour", Some("Automatic"), move |c| {
             if let Some(b) = weak.upgrade() {
                 b.set_selected(set(&[("color", json!(c))]));
             }
@@ -440,7 +448,7 @@ impl Board {
             let paper = same(nodes.iter().map(|n| n.fill.clone().unwrap_or_else(|| STICKY_FILL.into())));
             let key = gtk::MenuButton::new();
             key.add_css_class("design-color-key");
-            key.set_tooltip_text(Some("Paper"));
+            super::widgets::tip(&key, "Paper");
             let dot = super::board::swatch_button(paper.as_deref(), "Paper");
             dot.set_can_target(false);
             key.set_child(Some(&dot));
@@ -476,7 +484,7 @@ impl Board {
             let key = gtk::ToggleButton::with_label(glyph);
             key.add_css_class("design-context-key");
             key.add_css_class(&format!("design-emphasis-{field}"));
-            key.set_tooltip_text(Some(tip));
+            super::widgets::tip(&key, tip);
             key.set_active(on);
             let weak = Rc::downgrade(b);
             key.connect_toggled(move |k| {
@@ -500,7 +508,7 @@ impl Board {
         let key = gtk::Button::new();
         key.add_css_class("design-context-key");
         key.set_child(Some(&glyphs::image(glyph, 16)));
-        key.set_tooltip_text(Some(tip));
+        super::widgets::tip(&key, tip);
         let weak = Rc::downgrade(b);
         key.connect_clicked(move |_| {
             if let Some(b) = weak.upgrade() {

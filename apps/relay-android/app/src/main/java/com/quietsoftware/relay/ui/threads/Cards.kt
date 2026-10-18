@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import com.quietsoftware.relay.core.wire.BusException
 import com.quietsoftware.relay.core.wire.Wire
 import com.quietsoftware.relay.core.wire.l
+import com.quietsoftware.relay.core.wire.o
 import com.quietsoftware.relay.core.wire.s
 import com.quietsoftware.relay.ui.LocalNav
 import com.quietsoftware.relay.ui.Nav
@@ -35,6 +37,7 @@ import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.theme.Palette
 import com.quietsoftware.relay.ui.theme.Relay
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -93,7 +96,6 @@ private fun UndoKey(id: Long, ops: Pair<String, String>, undone: Boolean, onUndo
         },
         kind = KeyKind.Quiet,
         enabled = !busy,
-        compact = true,
     )
 }
 
@@ -125,11 +127,15 @@ internal fun EntryCard(tx: JsonObject, op: String, money: Money) {
         "money.tx.restore" -> "Restored"
         else -> "Changed"
     }
-    val detail = listOfNotNull(
+    // An edit answers with the entry as it was: the card says what it changed, before → after.
+    val was = tx.o("previous")?.takeIf { op == "money.tx.update" }
+    val detail = was?.let { changes(it, tx) }?.takeIf { it.isNotEmpty() }?.joinToString(" · ") ?: listOfNotNull(
         tx.s("category")?.takeIf { !transfer },
         tx.s("date")?.let(::humanDate),
         tx.s("account")?.takeIf { !transfer },
     ).joinToString(" · ")
+    val moved = was != null && (was.minor("amount", money.digits) != tx.minor("amount", money.digits) || was.s("type") != tx.s("type"))
+    val amount = if (moved && was != null) "${txAmount(was, money)} → ${txAmount(tx, money)}" else txAmount(tx, money)
     CardFrame {
         Row(Modifier.weight(1f).alpha(if (undone) .6f else 1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             if (transfer) HueBadge("", c.ink3, 30.dp, glyph = "refresh") else HueBadge(tx.s("category") ?: what, hue(tx.l("color")), 30.dp)
@@ -137,9 +143,48 @@ internal fun EntryCard(tx: JsonObject, op: String, money: Money) {
                 T(if (undone) "Removed: $what" else "$verb $kind: $what", style = Relay.type.ui.copy(fontSize = 13.5.sp), color = c.ink, maxLines = 1, weight = FontWeight.SemiBold)
                 if (detail.isNotEmpty()) T(detail, style = Relay.type.caption, color = c.ink3, maxLines = 1)
             }
-            T(txAmount(tx, money), style = Relay.type.mono.copy(fontSize = 13.sp, fontFeatureSettings = "tnum"), color = if (kind == "income") c.live else c.ink)
+            T(amount, style = Relay.type.mono.copy(fontSize = 13.sp, fontFeatureSettings = "tnum"), color = if (kind == "income") c.live else c.ink)
         }
         if (op == "money.tx.add" && id != null) UndoKey(id, "money.tx.delete" to "money.tx.restore", undone) { undone = it }
+    }
+}
+
+/**
+ * What an edit changed, before → after (threads_view.rs `changes`): the category, the day, the
+ * account and the note. What it left alone is not said, nor the amount, which the figure shows.
+ */
+private fun changes(was: JsonObject, now: JsonObject): List<String> {
+    val out = ArrayList<String>()
+    if (was.s("category") != now.s("category")) out += "${was.s("category") ?: "No category"} → ${now.s("category") ?: "No category"}"
+    if (was.s("date") != now.s("date")) out += "${humanDate(was.s("date"))} → ${humanDate(now.s("date"))}"
+    if (was.s("account") != now.s("account") || was.s("to_account") != now.s("to_account")) out += "${was.str("account")} → ${now.str("account")}"
+    if (was.s("note") != now.s("note")) out += "“${was.str("note")}” → “${now.str("note")}”"
+    return out
+}
+
+/**
+ * An agent's ```` ```import ```` block (threads_view.rs `import_card`), asking for a Wealthsimple
+ * file: on the PC a card to choose it and import it; the phone cannot import, so it says where to.
+ * Null when it is not one Relay acts on (relay_client::thread_view::import_spec), so it shows as code.
+ */
+internal fun importCard(text: String): (@Composable () -> Unit)? {
+    val v = runCatching { Wire.json.parseToJsonElement(text.trim()) as? JsonObject }.getOrNull() ?: return null
+    val source = v.s("source")?.trim()?.lowercase()
+    val expects = v.s("expects")?.trim()?.lowercase()
+    if (source != "wealthsimple" || expects !in setOf("holdings", "activities", "statement")) return null
+    val title = v.s("title")?.trim()?.takeIf { it.isNotEmpty() } ?: "Your Wealthsimple file"
+    return { ImportCard(title) }
+}
+
+@Composable
+private fun ImportCard(title: String) {
+    val c = Relay.colors
+    CardFrame {
+        HueBadge("", c.ink3, 30.dp, glyph = "download")
+        Column(Modifier.weight(1f).padding(end = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            T(title, style = Relay.type.ui.copy(fontSize = 13.5.sp), color = c.ink, weight = FontWeight.SemiBold)
+            T("Choose the CSV in this thread on the PC; the phone cannot import it.", style = Relay.type.caption, color = c.ink3)
+        }
     }
 }
 
@@ -359,6 +404,16 @@ internal fun ProposalCard(p: JsonObject, now: JsonObject? = null) {
     val shown = answered ?: now ?: p
     val status = shown.str("status")
     val pending = status == "pending"
+    // The time left counts down while it waits, and Approve goes off once it is up.
+    var clock by remember { mutableStateOf(Instant.now()) }
+    LaunchedEffect(pending) {
+        while (pending) {
+            delay(30_000)
+            clock = Instant.now()
+        }
+    }
+    val left = secondsUntil(shown.s("expires_at"), clock)
+    val expired = left != null && left < 0
     Column(
         Modifier.fillMaxWidth().clip(Radii.card).background(c.slab).border(1.dp, if (pending) c.waiting.copy(alpha = .45f) else c.edge, Radii.card).padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -394,14 +449,30 @@ internal fun ProposalCard(p: JsonObject, now: JsonObject? = null) {
                         busy = false
                     }
                 }
-                Key(if (shown.s("kind") == "order") "Approve order" else "Approve", { resolve(true) }, kind = KeyKind.Primary, enabled = !busy, compact = true)
-                Key("Dismiss", { resolve(false) }, kind = KeyKind.Quiet, enabled = !busy, compact = true)
-                minutesUntil(shown.s("expires_at"))?.takeIf { it >= 0 }?.let { left ->
-                    T(if (left < 1) "expires in under a minute" else "expires in $left min", style = Relay.type.caption, color = c.ink3, maxLines = 1)
+                Key(if (shown.s("kind") == "order") "Approve order" else "Approve", { resolve(true) }, kind = KeyKind.Primary, enabled = !busy && !expired)
+                Key("Dismiss", { resolve(false) }, kind = KeyKind.Quiet, enabled = !busy)
+            }
+            // Under the keys: beside them, it was cut to "expires in…" on a phone.
+            left?.let { secs ->
+                val words = when {
+                    secs < 0 -> "Expired before an answer."
+                    secs < 60 -> "Expires in under a minute."
+                    else -> "Expires in ${secs / 60} min."
                 }
+                T(words, style = Relay.type.caption, color = c.ink3)
             }
             T(proposalFootnote(shown), style = Relay.type.caption, color = c.ink3)
             problem?.let { T(it, style = Relay.type.caption, color = c.heldText) }
+        } else {
+            // What came of it, as the desktop's card says (arbiter_pages.rs `fill_card`).
+            val outcome = shown.s("outcome")?.takeIf { it.isNotBlank() }
+            val (words, tone) = when (status) {
+                "approved" -> (outcome?.let { "Approved. $it" } ?: "Approved.") to c.ink3
+                "failed" -> "Could not be done: ${outcome ?: "no reason given"}" to c.heldText
+                "expired" -> "Expired before an answer." to c.ink3
+                else -> "Dismissed." to c.ink3
+            }
+            T(words, style = Relay.type.caption, color = tone)
         }
     }
 }
@@ -409,8 +480,9 @@ internal fun ProposalCard(p: JsonObject, now: JsonObject? = null) {
 private fun JsonObject.arrStrings(key: String): List<String> =
     (this[key] as? kotlinx.serialization.json.JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content } ?: emptyList()
 
-private fun minutesUntil(ts: String?): Long? =
-    ts?.let { runCatching { Duration.between(Instant.now(), Instant.parse(it)).toMinutes() }.getOrNull() }
+/** Seconds from [now] to an RFC 3339 time; below zero once it has passed. */
+private fun secondsUntil(ts: String?, now: Instant): Long? =
+    ts?.let { runCatching { Duration.between(now, Instant.parse(it)).seconds }.getOrNull() }
 
 /** Palette's registration hues for investments (money_invest.rs `registration_hue`). */
 internal fun registrationHue(r: String?): Color = Palette.HUES[when (r) {

@@ -160,7 +160,7 @@ const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
 /// An image's declared width and height, read from its header before any decoder runs.
 /// `None` is an SVG. Content that is none of the previewed formats is refused, so it cannot
 /// reach whatever other decoder is installed.
-fn header_size(bytes: &[u8]) -> Result<Option<(u64, u64)>, String> {
+pub(crate) fn header_size(bytes: &[u8]) -> Result<Option<(u64, u64)>, String> {
     let size = if bytes.starts_with(PNG) {
         png_size(bytes)
     } else if bytes.starts_with(&[0xff, 0xd8]) {
@@ -356,12 +356,16 @@ fn caption(decoded: &Decoded, size: u64, path: &str) -> String {
         .and_then(|ext| ext.to_str())
         .unwrap_or("")
         .to_ascii_uppercase();
-    let size = if size >= 1048576 {
+    format!("{} × {} · {} · {format}", decoded.original.0, decoded.original.1, file_size(size))
+}
+
+/// A file's size in MiB from one MiB up, else in whole KiB (never 0).
+fn file_size(size: u64) -> String {
+    if size >= 1048576 {
         format!("{:.1} MiB", size as f64 / 1048576.)
     } else {
         format!("{:.0} KiB", (size as f64 / 1024.).max(1.))
-    };
-    format!("{} × {} · {size} · {format}", decoded.original.0, decoded.original.1)
+    }
 }
 
 /// Fill a hover card from a thumbnail, or its error.
@@ -519,7 +523,7 @@ impl Editor {
                                 Err(error) => Err(error.to_string()),
                             }
                         }
-                        Err(error) => Err(error.to_string()),
+                        Err(error) => Err(readable(&error)),
                     };
                     let (thumb, keep) = match decoded {
                         Ok((Ok(decoded), size)) => (Thumb {
@@ -564,14 +568,14 @@ impl Editor {
         self.project.set(project);
         self.image.loading(&path);
         self.position.set_text("Image preview");
-        self.find_bar.set_visible(false);
+        self.find.hide();
         self.set_busy(true);
         let e = self.clone();
         let ui = ui.clone();
         glib::spawn_future_local(async move {
             let result = crate::client::Client::image_read(&ui.rt, ui.path.clone(),
                 json!({"project_id":project,"worktree":optional_scope(&worktree),"path":path,"max_bytes":MAX_BYTES}))
-                .await.map_err(|err| err.to_string());
+                .await.map_err(|err| readable(&err));
             if e.revision.get() != revision || !e.matches(&ui, project, &worktree) {
                 return;
             }
@@ -601,10 +605,10 @@ impl Editor {
                     e.image.picture.set_visible(true);
                     e.image.message.set_visible(false);
                     e.position.set_text(&format!(
-                        "{} × {} px · {:.1} MiB · Image preview",
+                        "{} × {} px · {} · Image preview",
                         original.0,
                         original.1,
-                        size as f64 / 1048576.
+                        file_size(size)
                     ));
                 }
                 Err(error) => {

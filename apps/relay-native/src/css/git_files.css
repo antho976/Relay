@@ -60,6 +60,10 @@
 }
 .explorer-actions button.explorer-key:hover { background: @wash; color: @ink; }
 .code-search { margin: 6px 8px 4px; min-height: 26px; font-size: 12px; }
+/* The open file's find bar: Notes' (find_bar.rs, notes.css) on a clear toolbar, so its fields
+   keep the raised fill of every field here rather than Notes' @wall. */
+.code-find { padding-top: 5px; padding-bottom: 5px; }
+.code-find entry.find-entry { background: @raised; }
 .file-tree { padding: 2px 0 10px; }
 button.tree-row {
   min-height: 22px; padding: 0 8px 0 4px; border: 0; border-radius: 0;
@@ -238,6 +242,7 @@ button.code-commit:hover { background: alpha(@ink, 0.045); }
 .code-commit-subject { font-size: 12.5px; color: @ink; }
 .code-commit-sha { font-family: 'Geist Mono', monospace; font-size: 10.5px; color: @git_sha; }
 .code-commit-author { font-size: 11px; color: @faint; }
+button.code-history-more { margin: 4px 8px 8px; font-size: 12px; }
 
 /* ---- Diff view ---- */
 .diff-switch button {

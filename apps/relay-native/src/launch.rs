@@ -148,6 +148,11 @@ fn tasks_phrase(n: usize) -> String {
     if n == 1 { "1 task".into() } else { format!("{n} tasks") }
 }
 
+/// What the task rows built from `tasks` show, to tell whether a newer read changes any.
+fn shown(tasks: &[Value]) -> Vec<(Option<i64>, &str, &str, &str)> {
+    tasks.iter().filter(|t| text(t, "column") != "done").map(|t| (t["id"].as_i64(), text(t, "title"), text(t, "body"), text(t, "column"))).collect()
+}
+
 /// The order an agent takes its tasks in: the one the sheet was opened from, then the others
 /// in the order they were ticked. `active` is every selected id in card (board-column) order;
 /// one with no recorded tick keeps that order at the end.
@@ -355,7 +360,7 @@ impl Profile {
         options.append(&place);
         let mut switches = Vec::new();
         for (caption, hint, on) in [
-            ("Agent bus writes", "Let it change tasks, notes and settings through Relay.", true),
+            ("Agent bus writes", "Let it write files, stage and commit through Relay, with guardrails checked as it goes.", true),
             ("UI control", "Let it drive the Relay window.", false),
         ] {
             let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
@@ -565,6 +570,35 @@ impl Profile {
             return;
         }
         self.preselect.set(preselect);
+        self.add_rows(tasks, preselect.as_slice());
+        let weak = Rc::downgrade(self);
+        let filter: Rc<dyn Fn()> = Rc::new(move || {
+            if let Some(p) = weak.upgrade() {
+                p.filter();
+            }
+        });
+        let f = filter.clone();
+        self.task_search.connect_search_changed(move |_| f());
+        self.task_filter.connect_changed(move |_| filter());
+        self.filter();
+    }
+
+    /// The rows again from a newer read of the open tasks, for a draft opened again: a task
+    /// still open keeps its tick and its place in the queue, one added since appears unticked.
+    fn refill_tasks(self: &Rc<Self>, tasks: &[Value]) {
+        if !self.filled.get() {
+            return;
+        }
+        let ticked = self.selected_tasks();
+        for row in self.tasks.take() {
+            self.task_box.remove(&row.key);
+        }
+        self.add_rows(tasks, &ticked);
+        self.filter();
+    }
+
+    /// A row per open task, those in `ticked` ticked, with the empty line after them.
+    fn add_rows(self: &Rc<Self>, tasks: &[Value], ticked: &[i64]) {
         for row in tasks.iter().filter(|t| text(t, "column") != "done") {
             let id = row["id"].as_i64().unwrap_or(0);
             let key = gtk::ToggleButton::new();
@@ -599,7 +633,7 @@ impl Profile {
             key.set_child(Some(&line));
             key.set_tooltip_text(Some(text(row, "title")));
             key.update_property(&[gtk::accessible::Property::Label(text(row, "title"))]);
-            key.set_active(preselect == Some(id));
+            key.set_active(ticked.contains(&id));
             let weak = Rc::downgrade(self);
             key.connect_toggled(move |key| {
                 if let Some(p) = weak.upgrade() {
@@ -622,16 +656,6 @@ impl Profile {
         // The empty line goes last, under whatever rows the filter leaves.
         self.task_box.reorder_child_after(&self.task_empty, self.task_box.last_child().as_ref());
         self.renumber();
-        let weak = Rc::downgrade(self);
-        let filter: Rc<dyn Fn()> = Rc::new(move || {
-            if let Some(p) = weak.upgrade() {
-                p.filter();
-            }
-        });
-        let f = filter.clone();
-        self.task_search.connect_search_changed(move |_| f());
-        self.task_filter.connect_changed(move |_| filter());
-        self.filter();
     }
 
     /// Show the rows the search and the column keys leave, and say so when none are left.
@@ -664,8 +688,9 @@ struct Member {
     remove: gtk::Button,
 }
 
-/// The sheet while it is open. Its widgets' handlers hold it weakly; the one strong reference
-/// is `SHEET`, dropped when the sheet hides.
+/// The sheet while it is open, and after it is closed unlaunched, until it opens again. Its
+/// widgets' handlers hold it weakly; the one strong reference is `SHEET`, dropped by a launch,
+/// a project switch or a reconnect, or replaced by a fresh form.
 struct Sheet {
     form: gtk::Box,
     profiles: Vec<Rc<Profile>>,
@@ -830,6 +855,14 @@ impl Sheet {
         self.status.set_text(&line);
     }
 
+    /// The keyboard starts on the chosen mode key, inside the sheet, so Ctrl+Enter launches and
+    /// Enter or Space on the title bar's key cannot close it unseen.
+    fn focus_start(&self) {
+        if let Some(key) = self.mode.keys.get(self.mode.selected() as usize) {
+            key.grab_focus();
+        }
+    }
+
     /// Show `slot`'s settings, building its task rows the first time.
     fn show(&self, slot: usize) {
         self.current.set(slot);
@@ -894,16 +927,38 @@ impl Ui {
         }
         // Already open (Ctrl+N again): keep what the user has filled in.
         if self.launch.reveals_child() {
-            self.launch_box.child_focus(gtk::DirectionType::TabForward);
+            match SHEET.with(|s| s.borrow().clone()) {
+                Some(sheet) => sheet.focus_start(),
+                None => {
+                    self.launch_box.child_focus(gtk::DirectionType::TabForward);
+                }
+            }
             return;
         }
         if !self.dismiss_panels() {
             return;
         }
-        clear(&self.launch_box);
+        // What had the keyboard gets it back when the sheet hides, as a panel's opener does.
+        let opener = gtk::prelude::GtkWindowExt::focus(&self.window);
+        let project = self.project.get();
+        let generation = self.generation.get();
+        // A draft closed unlaunched comes back as it was left, for the same project and engine
+        // connection. Opening for a task starts from that task instead.
+        let kept = SHEET.with(|s| s.borrow().clone()).filter(|sheet| {
+            task.is_none()
+                && sheet.project == project
+                && sheet.generation == generation
+                && sheet.failure.borrow().is_none()
+                && sheet.open_tasks.borrow().is_some()
+                && self.launch_box.first_child().as_ref() == Some(sheet.form.upcast_ref())
+        });
+        if kept.is_none() {
+            clear(&self.launch_box);
+        }
         self.launch.set_reveal_child(true);
-        // The form holds a row per open task for every agent shown; once the sheet has
-        // finished hiding, however it was closed, nothing keeps it.
+        // Closed, the form stays for the next opening. Launched (launch_crew lets go of SHEET
+        // first), it goes once the sheet has finished hiding, with its row per open task for
+        // every agent shown.
         let hidden: Rc<Cell<Option<glib::SignalHandlerId>>> = Rc::default();
         let id = {
             let hidden = hidden.clone();
@@ -912,24 +967,32 @@ impl Ui {
                 if launch.is_child_revealed() || launch.reveals_child() {
                     return;
                 }
-                if let Some(launch_box) = launch_box.upgrade() {
-                    clear(&launch_box);
+                if SHEET.with(|s| s.borrow().is_none()) {
+                    if let Some(launch_box) = launch_box.upgrade() {
+                        clear(&launch_box);
+                    }
                 }
-                SHEET.with(|s| s.borrow_mut().take());
+                if let Some(opener) = opener.as_ref().filter(|w| w.is_sensitive() && w.is_mapped()) {
+                    opener.grab_focus();
+                }
                 if let Some(id) = hidden.take() {
                     launch.disconnect(id);
                 }
             })
         };
         hidden.set(Some(id));
-        let project = self.project.get();
-        let generation = self.generation.get();
+        if let Some(sheet) = kept {
+            sheet.focus_start();
+            self.reread_launch_tasks(&sheet);
+            return;
+        }
         let sheet = self.launch_sheet(project, generation);
         SHEET.with(|s| *s.borrow_mut() = Some(sheet.clone()));
         self.launch_box.append(&sheet.form);
         sheet.profiles[0].reset();
         sheet.rail_members[0].key.set_active(true);
         sheet.render();
+        sheet.focus_start();
 
         let ui = self.clone();
         let weak = Rc::downgrade(&sheet);
@@ -1006,6 +1069,33 @@ impl Ui {
             sheet.start.set_sensitive(true);
             sheet.render();
         });
+    }
+
+    /// A kept draft's open tasks, read again: the board may have moved on while it was away.
+    /// Unread, the list it had stands; unchanged, its rows stay as they are.
+    fn reread_launch_tasks(self: &Rc<Self>, sheet: &Rc<Sheet>) {
+        let (ui, weak, project, generation) = (self.clone(), Rc::downgrade(sheet), sheet.project, sheet.generation);
+        glib::spawn_future_local(async move {
+            let Ok(v) = ui.call("task.list", json!({"project_id": project})).await else { return };
+            let Some(sheet) = weak.upgrade().filter(|sheet| launch_is_current(&ui, project, generation, &sheet.form)) else { return };
+            let tasks = rows(&v, "tasks");
+            if sheet.open_tasks.borrow().as_deref().is_some_and(|before| shown(before) == shown(&tasks)) {
+                return;
+            }
+            for profile in &sheet.profiles {
+                profile.refill_tasks(&tasks);
+            }
+            *sheet.open_tasks.borrow_mut() = Some(tasks);
+            sheet.render();
+        });
+    }
+
+    /// A draft belongs to the project and engine connection it was written for: switching
+    /// projects or reconnecting lets it go.
+    pub(super) fn forget_launch(&self) {
+        if SHEET.with(|s| s.borrow_mut().take()).is_some() && !self.launch.reveals_child() {
+            clear(&self.launch_box);
+        }
     }
 
     /// Build the sheet's widgets for `project`.
@@ -1292,6 +1382,8 @@ impl Ui {
         let key = key.clone();
         ui.launch_box.set_sensitive(false);
         let clicked = std::time::Instant::now();
+        // Launched, the draft is spent: the sheet hides without keeping it.
+        SHEET.with(|s| s.borrow_mut().take());
         ui.launch.set_reveal_child(false);
         ui.open_project(project, "agents");
         let payloads: Vec<Value> = crew.iter().map(|(payload, _, _)| payload.clone()).collect();

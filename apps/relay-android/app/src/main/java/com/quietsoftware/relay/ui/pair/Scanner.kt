@@ -1,7 +1,12 @@
 package com.quietsoftware.relay.ui.pair
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.SystemClock
+import android.provider.Settings
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -30,6 +35,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
@@ -45,17 +52,30 @@ import java.util.concurrent.Executors
 
 /**
  * The camera, looking for the `relay://pair` QR that `relay remote pair` prints. Frames are
- * decoded on the phone by ZXing; nothing leaves it. [onCode] gets each distinct text found.
+ * decoded on the phone by ZXing; nothing leaves it. [onCode] gets each text found, once while it
+ * stays in view: a code out of view for a moment (as after a failed pairing) is read again.
  */
 @Composable
 fun QrScanner(onCode: (String) -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    var granted by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
+    val activity = LocalActivity.current
+    fun allowed() = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    var granted by remember { mutableStateOf(allowed()) }
+    // Refused for good, Android no longer asks: the key opens the app's settings instead.
+    var refused by remember { mutableStateOf(false) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        granted = ok
+        refused = !ok && activity?.shouldShowRequestPermissionRationale(Manifest.permission.CAMERA) == false
+    }
     LaunchedEffect(Unit) { if (!granted) ask.launch(Manifest.permission.CAMERA) }
+    // Allowed in the app's settings meanwhile: the camera comes on when the page is back.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { if (!granted && allowed()) granted = true }
     if (!granted) {
         Box(modifier.background(Relay.colors.screen), contentAlignment = Alignment.Center) {
-            Key("Allow the camera", { ask.launch(Manifest.permission.CAMERA) }, kind = KeyKind.Plain, glyph = "qr")
+            Key("Allow the camera", {
+                if (refused) runCatching { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))) }
+                else ask.launch(Manifest.permission.CAMERA)
+            }, kind = KeyKind.Plain, glyph = "qr")
         }
         return
     }
@@ -71,13 +91,18 @@ fun QrScanner(onCode: (String) -> Unit, modifier: Modifier = Modifier) {
             val reader = QRCodeReader()
             val hints = mapOf(DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE), DecodeHintType.TRY_HARDER to true)
             var last: String? = null
+            var seen = 0L
             val analysis = ImageAnalysis.Builder().setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build()
             analysis.setAnalyzer(executor) { image ->
                 val text = decode(image, reader, hints)
                 image.close()
-                if (text != null && text != last) {
+                if (text != null) {
+                    val now = SystemClock.elapsedRealtime()
+                    // Once while it stays in view, so a refused code is not tried over and over;
+                    // pointed at again after a moment away, it is read again.
+                    if (text != last || now - seen > AGAIN_MS) view.post { latest(text) }
                     last = text
-                    view.post { latest(text) }
+                    seen = now
                 }
             }
             runCatching {
@@ -95,6 +120,9 @@ fun QrScanner(onCode: (String) -> Unit, modifier: Modifier = Modifier) {
         T("Point at the code relay remote pair printed", Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp), Relay.type.caption, Relay.colors.ink2)
     }
 }
+
+/** How long a code is out of view before the scanner reads it as new. */
+private const val AGAIN_MS = 1_500L
 
 /** The luma plane is all a QR reader needs; rows are copied when the plane is padded. */
 private fun decode(image: ImageProxy, reader: QRCodeReader, hints: Map<DecodeHintType, Any>): String? {

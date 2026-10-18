@@ -2,6 +2,7 @@
 //! control saves itself a moment after it changes (`Autosave`); the guardrail editor, which
 //! edits one of three layers at a time, keeps its own Save.
 use super::current;
+use super::plugins::explain_error;
 use crate::app::{clear, label, rows, text, Ui};
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -101,6 +102,8 @@ struct Autosave {
     timer: RefCell<Option<glib::SourceId>>,
     saving: Cell<bool>,
     again: Cell<bool>,
+    /// Saves that failed since the last one that went through: each waits longer to try again.
+    failures: Cell<u32>,
     /// Bumped by every caption change, so a stale "Saved" timer does not clear a newer one.
     shown: Cell<u64>,
 }
@@ -172,6 +175,10 @@ impl Autosave {
         let wallpapers = self.wallpapers.borrow().clone();
         let writes = self.changes(&now, &wallpapers);
         if writes.is_empty() {
+            // A failed save's edits were undone: nothing is waiting any more.
+            if self.failures.replace(0) > 0 {
+                self.caption(IDLE);
+            }
             return;
         }
         self.saving.set(true);
@@ -181,17 +188,30 @@ impl Autosave {
             let mut error = None;
             for (op, payload) in writes {
                 if let Err(e) = ui.call(op, payload).await {
-                    error = Some(e.to_string());
+                    error = Some(e);
                     break;
                 }
             }
             save.saving.set(false);
             match error {
                 Some(error) => {
-                    save.caption("Not saved");
-                    ui.show_error(&format!("Settings not saved: {error}"));
+                    // An engine away or busy takes them once it is back: tried again in 2 s, then
+                    // twice as long each time, up to half a minute, saying why only the first
+                    // time. A value it refused waits for the next edit.
+                    let refused = matches!(&error, crate::client::Error::Bus(b) if b.kind != relay_bus::ErrorKind::Unavailable);
+                    let failures = save.failures.replace(save.failures.get() + 1);
+                    if refused || failures == 0 {
+                        ui.show_error(&format!("Settings not saved: {error}"));
+                    }
+                    if refused {
+                        save.caption("Not saved");
+                    } else {
+                        save.caption("Not saved · trying again");
+                        save.schedule((2000u64 << failures.min(4)).min(30_000));
+                    }
                 }
                 None => {
+                    save.failures.set(0);
                     *save.saved_wallpapers.borrow_mut() = wallpapers;
                     *save.baseline.borrow_mut() = Some(now);
                     save.caption("All changes saved");
@@ -251,10 +271,51 @@ struct Mounted {
     autosave: Rc<Autosave>,
     providers: glib::WeakRef<gtk::Box>,
     detected: RefCell<Value>,
+    /// The category keys, for [`open_on`].
+    nav: glib::WeakRef<gtk::Box>,
 }
 
 thread_local! {
     static MOUNTED: RefCell<Option<Rc<Mounted>>> = const { RefCell::new(None) };
+    /// The category the page shows next, when a key elsewhere asked for one ([`open_on`]).
+    static OPEN_ON: Cell<Option<&'static str>> = const { Cell::new(None) };
+}
+
+/// Shows Settings on its `name` category: Threads' notice about Claude Code opens Agents.
+pub(crate) fn open_on(ui: &Rc<Ui>, name: &'static str) {
+    OPEN_ON.with(|o| o.set(Some(name)));
+    ui.navigate("settings");
+    // A panel that would not close kept the window where it was: no later visit opens there.
+    if ui.page.borrow().as_str() != "settings" {
+        OPEN_ON.with(|o| o.set(None));
+    }
+}
+
+/// The category whose key is lit in the category list.
+fn shown_category(nav: &gtk::Box) -> Option<String> {
+    let mut key = nav.first_child();
+    while let Some(widget) = key {
+        if widget.downcast_ref::<gtk::ToggleButton>().is_some_and(|toggle| toggle.is_active()) {
+            return widget.widget_name().strip_prefix("settings-category-").map(str::to_string);
+        }
+        key = widget.next_sibling();
+    }
+    None
+}
+
+/// Lights `name`'s key in the category list, which shows its page.
+fn show_category(nav: &gtk::Box, name: &str) {
+    let wanted = format!("settings-category-{name}");
+    let mut key = nav.first_child();
+    while let Some(widget) = key {
+        if widget.widget_name().as_str() == wanted {
+            if let Some(toggle) = widget.downcast_ref::<gtk::ToggleButton>() {
+                toggle.set_active(true);
+            }
+            return;
+        }
+        key = widget.next_sibling();
+    }
 }
 
 impl Mounted {
@@ -285,6 +346,9 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
         // Keep the form, and any edits in it, across project switches and a reconnect; only
         // re-read the providers, which change behind the page (an install, an update).
         ui.page_projects.borrow_mut().insert("settings".into(), generation as i64);
+        if let (Some(name), Some(nav)) = (OPEN_ON.with(Cell::take), mounted.nav.upgrade()) {
+            show_category(&nav, name);
+        }
         if let Some(draft) = ui.wallpaper_draft.borrow().as_ref() {
             if draft.stale.replace(false) {
                 if let Some(gallery) = draft.gallery.upgrade() {
@@ -319,6 +383,9 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
     // select a wallpaper or replace an explicitly empty/custom library here.
     wallpapers.borrow_mut()["wallpapers"] =
         crate::wallpaper_rotation::library_or_defaults(&data["appearance.wallpapers"]);
+    // A rebuild (a reconnect) opens where the page was: its category and its search.
+    let was_open = MOUNTED.with(|m| m.borrow().as_ref().and_then(|m| m.nav.upgrade())).and_then(|nav| shown_category(&nav));
+    let was_searched = ui.settings_tools.first_child().and_downcast::<gtk::SearchEntry>().map(|search| search.text());
     let page = &ui.pages["settings"];
     clear(page);
     page.add_css_class("settings-page");
@@ -337,6 +404,7 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
         timer: RefCell::new(None),
         saving: Cell::new(false),
         again: Cell::new(false),
+        failures: Cell::new(0),
         shown: Cell::new(0),
     });
     let form = Form { fields: fields.clone(), autosave: autosave.clone() };
@@ -347,6 +415,7 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
         autosave: autosave.clone(),
         providers: providers.downgrade(),
         detected: RefCell::new(data["detected"].clone()),
+        nav: nav.downgrade(),
     });
     MOUNTED.with(|m| *m.borrow_mut() = Some(mounted.clone()));
     appearance(ui, &stack, &form, &data, &wallpapers, &saved_wallpapers);
@@ -358,6 +427,14 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
     maintenance(ui, &stack);
     let search = search_field(ui);
     wire_search(&search, &shell, &nav, &stack);
+    // Appearance shows first unless a key elsewhere asked for another, or the page is built
+    // again over one; its page exists only now.
+    if let Some(name) = OPEN_ON.with(Cell::take).map(str::to_string).or(was_open) {
+        show_category(&nav, &name);
+    }
+    if let Some(query) = was_searched.filter(|query| !query.is_empty()) {
+        search.set_text(&query);
+    }
     // Taken from the built controls, so a value a range clamped counts as unchanged.
     *autosave.baseline.borrow_mut() = Some(fields.borrow().snapshot());
 }
@@ -422,6 +499,7 @@ fn search_field(ui: &Ui) -> gtk::SearchEntry {
     search.set_placeholder_text(Some("Search settings"));
     search.set_size_request(260, -1);
     search.set_valign(gtk::Align::Center);
+    search.connect_stop_search(|search| search.set_text(""));
     clear(&ui.settings_tools);
     ui.settings_tools.append(&search);
     search
@@ -502,6 +580,7 @@ fn appearance(
         dim: Cell::new(data["appearance.wallpaper_dim"].as_f64().unwrap_or(0.28)),
         contrast: Cell::new(data["appearance.content_contrast"].as_f64().unwrap_or(0.)),
         stage: RefCell::default(),
+        rotate: RefCell::default(),
     });
 
     let theme = section(&page, "Theme", None::<&gtk::Widget>);
@@ -615,6 +694,7 @@ fn appearance(
         1.,
         1440.,
         1.,
+        ("Sooner", "Later"),
     );
     let interval = minutes.adjustment.clone();
     form.setting(
@@ -627,6 +707,9 @@ fn appearance(
     controls.append(&label("min", "settings-unit"));
     let enabled = toggle("setting:appearance.wallpaper_rotation.enabled", rotation["enabled"] == true);
     enabled.set_margin_start(6);
+    // It never turns with fewer than two images: off, with why, until the library has them.
+    *look.rotate.borrow_mut() = enabled.downgrade();
+    look.sync_rotate(&wallpapers.borrow());
     form.setting("appearance.wallpaper_rotation.enabled", reader(&enabled, |input| Some(json!(input.is_active()))));
     let changed = form.changed(120);
     enabled.connect_active_notify(move |_| changed());
@@ -667,6 +750,7 @@ fn notifications(ui: &Rc<Ui>, stack: &gtk::Stack, form: &Form, data: &Value) {
     play.add_css_class("settings-square");
     play.set_child(Some(&crate::icons::from_geometry(PLAY, 12, 1.5)));
     play.set_tooltip_text(Some("Play the alert"));
+    play.update_property(&[gtk::accessible::Property::Label("Play the alert")]);
     play.set_widget_name("notify:preview");
     play.set_sensitive(picker.selected() != 0);
     let alert = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -741,7 +825,9 @@ fn agents(ui: &Rc<Ui>, stack: &gtk::Stack, form: &Form, data: &Value, providers:
         let Some(ui) = weak.upgrade() else {
             return;
         };
+        // It says what it is doing, then that the rows are current, for a moment.
         key.set_sensitive(false);
+        key.set_label("Refreshing…");
         let key = key.clone();
         let shown = shown.clone();
         glib::spawn_future_local(async move {
@@ -750,8 +836,18 @@ fn agents(ui: &Rc<Ui>, stack: &gtk::Stack, form: &Form, data: &Value, providers:
                     if let Some(mounted) = shown.upgrade() {
                         mounted.show_providers(&detected);
                     }
+                    key.set_label("Up to date");
+                    let key = key.downgrade();
+                    glib::timeout_add_local_once(Duration::from_millis(1400), move || {
+                        if let Some(key) = key.upgrade().filter(|key| key.label().as_deref() == Some("Up to date")) {
+                            key.set_label("Refresh");
+                        }
+                    });
                 }
-                Err(error) => ui.show_error(&error.to_string()),
+                Err(error) => {
+                    key.set_label("Refresh");
+                    ui.show_error(&explain_error("provider.refresh", &error));
+                }
             }
             key.set_sensitive(true);
         });
@@ -765,9 +861,9 @@ fn agents(ui: &Rc<Ui>, stack: &gtk::Stack, form: &Form, data: &Value, providers:
         update.add_css_class("settings-button");
         update.set_widget_name(&format!("provider-update-{provider}"));
         let weak = Rc::downgrade(ui);
-        update.connect_clicked(move |_| {
+        update.connect_clicked(move |key| {
             if let Some(ui) = weak.upgrade() {
-                crate::provider_updates::update(&ui, provider);
+                crate::provider_updates::update(&ui, provider, key);
             }
         });
         controls.append(&update);
@@ -784,12 +880,14 @@ fn agents(ui: &Rc<Ui>, stack: &gtk::Stack, form: &Form, data: &Value, providers:
     for (provider, name) in [("claude", "Claude"), ("codex", "Codex")] {
         let path = format!("providers.{provider}.path");
         let input = path_entry(form, &path, data["providers"][provider]["path"].as_str().unwrap_or(""));
-        row(&paths, &format!("{name} executable"), "", Some(&input));
+        // A running agent keeps the binary it started with.
+        row(&paths, &format!("{name} executable"), "Used by agents started from now on.", Some(&input));
     }
+    reprobe_saved_paths(ui, &page, form, data, mounted);
 
     let terminal = section(&page, "Terminal", None::<&gtk::Widget>);
     let terminal = card(&terminal);
-    let size = stepper("setting:terminal.font_size", data["terminal.font_size"].as_f64().unwrap_or(9.75).clamp(8., 24.), 8., 24., 0.25);
+    let size = stepper("setting:terminal.font_size", data["terminal.font_size"].as_f64().unwrap_or(9.75).clamp(8., 24.), 8., 24., 0.25, ("Smaller text", "Larger text"));
     let points = size.adjustment.clone();
     form.setting("terminal.font_size", reader(&size.root, move |_| Some(json!(points.value()))));
     let changed = form.changed(500);
@@ -798,6 +896,42 @@ fn agents(ui: &Rc<Ui>, stack: &gtk::Stack, form: &Form, data: &Value, providers:
     controls.append(&size.root);
     controls.append(&label("pt", "settings-unit"));
     row(&terminal, "Font size", "The text size in every agent terminal.", Some(&controls));
+}
+
+/// Probes the providers again once a new executable path is saved, so Installed shows that
+/// binary's version and sign-in. A hidden caption hears each save end, as the headers' do.
+fn reprobe_saved_paths(ui: &Rc<Ui>, page: &gtk::Box, form: &Form, data: &Value, mounted: &Rc<Mounted>) {
+    const PATHS: [&str; 2] = ["providers.claude.path", "providers.codex.path"];
+    let heard = label("", "");
+    heard.set_visible(false);
+    page.append(&heard);
+    form.autosave.captions.borrow_mut().push(heard.downgrade());
+    let probed = RefCell::new(PATHS.map(|path| at(data, path).clone()));
+    let (weak, save, shown) = (Rc::downgrade(ui), Rc::downgrade(&form.autosave), Rc::downgrade(mounted));
+    heard.connect_label_notify(move |_| {
+        let (Some(ui), Some(save)) = (weak.upgrade(), save.upgrade()) else { return };
+        if save.pending() {
+            return;
+        }
+        let Some(saved) = save.baseline.borrow().as_ref().map(|b| PATHS.map(|path| b.settings.get(path).cloned().unwrap_or_default())) else {
+            return;
+        };
+        if *probed.borrow() == saved {
+            return;
+        }
+        *probed.borrow_mut() = saved;
+        let shown = shown.clone();
+        glib::spawn_future_local(async move {
+            if let (Ok(detected), Some(mounted)) = (ui.call("provider.refresh", json!({})).await, shown.upgrade()) {
+                mounted.show_providers(&detected);
+            }
+        });
+    });
+}
+
+/// `path` ("providers.claude.path") in the page's loaded settings.
+fn at<'a>(data: &'a Value, path: &str) -> &'a Value {
+    path.split('.').fold(data, |value, part| &value[part])
 }
 
 /// One row per provider from a `provider.list` / `provider.refresh` answer.
@@ -922,7 +1056,7 @@ fn keyboard(stack: &gtk::Stack, form: &Form, data: &Value) {
     let fixed = section(&page, "Built in", None::<&gtk::Widget>);
     let fixed = card(&fixed);
     for (title, keys) in [
-        ("Close the session sheet", &["Esc"][..]),
+        ("Close a sheet or panel", &["Esc"][..]),
         ("Copy in a terminal", &["Ctrl", "Shift", "C"][..]),
         ("Paste in a terminal", &["Ctrl", "Shift", "V"][..]),
     ] {
@@ -967,7 +1101,7 @@ fn maintenance(ui: &Rc<Ui>, stack: &gtk::Stack) {
                         list_backups(&ui, &list, &count);
                     }
                 }
-                Err(error) => status.set_text(&error.to_string()),
+                Err(error) => status.set_text(&explain_error("app.backup.now", &error)),
             }
             key.set_sensitive(true);
         });
@@ -990,7 +1124,7 @@ fn list_backups(ui: &Rc<Ui>, card: &gtk::Box, count: &gtk::Label) {
         let mut backups = match result {
             Ok(value) => rows(&value, "backups"),
             Err(error) => {
-                row(&card, "Cannot list backups", &error.to_string(), None::<&gtk::Widget>);
+                row(&card, "Cannot list backups", &explain_error("app.backup.list", &error), None::<&gtk::Widget>);
                 return;
             }
         };
@@ -1011,7 +1145,7 @@ fn list_backups(ui: &Rc<Ui>, card: &gtk::Box, count: &gtk::Label) {
                 first.make_ascii_uppercase();
             }
             if !text(&backup, "reason").is_empty() {
-                title = format!("{title} · {}", text(&backup, "reason"));
+                title = format!("{title} · {}", backup_reason(text(&backup, "reason")));
             }
             let bytes = label(&size(backup["bytes"].as_u64().unwrap_or(0)), "settings-value");
             let (_, hint) = row(&card, &title, text(&backup, "path"), Some(&bytes));
@@ -1021,6 +1155,17 @@ fn list_backups(ui: &Rc<Ui>, card: &gtk::Box, count: &gtk::Label) {
             hint.set_selectable(true);
         }
     });
+}
+
+/// Why a copy was taken, from the engine's reason slug ("project-remove").
+fn backup_reason(reason: &str) -> String {
+    match reason {
+        "manual" => "Backed up from Settings".into(),
+        "upgrade" => "Before an upgrade".into(),
+        "project-remove" => "Before removing a project".into(),
+        "workspace-remove" => "Before removing a workspace".into(),
+        other => other.replace('-', " "),
+    }
 }
 
 fn size(bytes: u64) -> String {
@@ -1054,6 +1199,13 @@ fn wire_search(search: &gtk::SearchEntry, shell: &gtk::Box, nav: &gtk::Box, stac
             .unwrap_or_default();
         keys.push((name, key, text));
     }
+    // Enter goes into the category showing, to its first control.
+    let weak_stack = stack.downgrade();
+    search.connect_activate(move |_| {
+        if let Some(page) = weak_stack.upgrade().filter(|stack| stack.is_visible()).and_then(|stack| stack.visible_child()) {
+            page.child_focus(gtk::DirectionType::TabForward);
+        }
+    });
     let weak_stack = stack.downgrade();
     search.connect_search_changed(move |search| {
         let Some(stack) = weak_stack.upgrade() else {
@@ -1151,7 +1303,7 @@ const CATEGORIES: [Category; 7] = [
         title: "Keyboard",
         icon: r##"<rect x="1.75" y="4" width="12.5" height="8" rx="1.75" /><path d="M4.5 6.75h.01M7 6.75h.01M9.5 6.75h.01M12 6.75h.01M5.5 9.5h5" />"##,
         nav: "Global shortcuts",
-        lede: "Shortcuts that work anywhere in Relay.",
+        lede: "Shortcuts across Relay. A focused terminal keeps Ctrl with a letter, which its program reads.",
     },
     Category {
         name: "maintenance",
@@ -1297,21 +1449,24 @@ struct Stepper {
     adjustment: gtk::Adjustment,
 }
 
-fn stepper(name: &str, value: f64, min: f64, max: f64, step: f64) -> Stepper {
+/// `keys` names the − and + keys for what they do here ("Smaller text", "Larger text").
+fn stepper(name: &str, value: f64, min: f64, max: f64, step: f64, keys: (&str, &str)) -> Stepper {
     let adjustment = gtk::Adjustment::new(value, min, max, step, step * 4., 0.);
     let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     root.add_css_class("settings-stepper");
     root.set_widget_name(name);
     let less = gtk::Button::new();
     less.set_child(Some(&crate::icons::image("minus", 12)));
-    less.set_tooltip_text(Some("Less"));
+    less.set_tooltip_text(Some(keys.0));
+    less.update_property(&[gtk::accessible::Property::Label(keys.0)]);
     let shown = gtk::Entry::new();
     shown.set_width_chars(if step < 1. { 5 } else { 4 });
     shown.set_max_width_chars(6);
     EntryExt::set_alignment(&shown, 0.5);
     let more = gtk::Button::new();
     more.set_child(Some(&crate::icons::image("plus", 12)));
-    more.set_tooltip_text(Some("More"));
+    more.set_tooltip_text(Some(keys.1));
+    more.update_property(&[gtk::accessible::Property::Label(keys.1)]);
     let number = |value: f64| {
         let text = format!("{value:.2}");
         text.trim_end_matches('0').trim_end_matches('.').to_string()
@@ -1392,12 +1547,24 @@ struct Look {
     dim: Cell<f64>,
     contrast: Cell<f64>,
     stage: RefCell<glib::WeakRef<gtk::DrawingArea>>,
+    /// "Rotate wallpapers", which follows how many images the library has.
+    rotate: RefCell<glib::WeakRef<gtk::Switch>>,
 }
 
 impl Look {
     fn redraw(&self) {
         if let Some(stage) = self.stage.borrow().upgrade() {
             stage.queue_draw();
+        }
+    }
+
+    /// Rotation shuffles distinct images (`wallpaper_rotation`): with fewer than two in the
+    /// staged library it would never run, so its switch is off and says why.
+    fn sync_rotate(&self, state: &Value) {
+        if let Some(switch) = self.rotate.borrow().upgrade() {
+            let enough = crate::wallpaper_rotation::images(&state["wallpapers"]).len() >= 2;
+            switch.set_sensitive(enough);
+            switch.set_tooltip_text((!enough).then_some("Add a second wallpaper first"));
         }
     }
 
@@ -1489,6 +1656,7 @@ fn draw_stage(cr: &gtk::cairo::Context, look: &Look, w: f64, h: f64) {
 fn render_wallpapers(ui: &Rc<Ui>, block: &gtk::Box, state: &Rc<RefCell<Value>>, look: &Rc<Look>) {
     // Native selection follows the canonical image. Legacy wallpaper_id/preview are unused.
     clear(block);
+    look.sync_rotate(&state.borrow());
     let library = state.borrow()["wallpapers"]
         .as_array()
         .cloned()
@@ -1587,6 +1755,19 @@ fn render_wallpapers(ui: &Rc<Ui>, block: &gtk::Box, state: &Rc<RefCell<Value>>, 
             picture.set_content_fit(gtk::ContentFit::Contain);
             picture.set_can_shrink(true);
             window.set_child(Some(&picture));
+            // Escape closes it.
+            let keys = gtk::EventControllerKey::new();
+            let shown = window.downgrade();
+            keys.connect_key_pressed(move |_, key, _, _| {
+                if key != gtk::gdk::Key::Escape {
+                    return glib::Propagation::Proceed;
+                }
+                if let Some(window) = shown.upgrade() {
+                    window.close();
+                }
+                glib::Propagation::Stop
+            });
+            window.add_controller(keys);
             window.present();
         });
         stage.add_overlay(&open);
@@ -1652,13 +1833,15 @@ fn render_wallpapers(ui: &Rc<Ui>, block: &gtk::Box, state: &Rc<RefCell<Value>>, 
             remove.add_css_class("settings-thumb-remove");
             remove.set_child(Some(&crate::icons::image_with_stroke("close", 10, 2.)));
             remove.set_tooltip_text(Some("Remove from the library"));
+            remove.update_property(&[gtk::accessible::Property::Label("Remove from the library")]);
             remove.set_widget_name(&format!("settings-wallpaper-remove-{index}"));
             remove.set_halign(gtk::Align::End);
             remove.set_valign(gtk::Align::Start);
             let weak = Rc::downgrade(ui);
             let target = block.downgrade();
             let (staged, shown) = (state.clone(), look.clone());
-            remove.connect_clicked(move |_| {
+            // A removed image is gone for good once saved: it asks first.
+            crate::app::confirm_inline(&remove, "Remove?", move |_| {
                 let (Some(ui), Some(block)) = (weak.upgrade(), target.upgrade()) else {
                     return;
                 };
@@ -1706,7 +1889,15 @@ fn render_wallpapers(ui: &Rc<Ui>, block: &gtk::Box, state: &Rc<RefCell<Value>>, 
         let (staged, shown) = (staged.clone(), shown.clone());
         glib::spawn_future_local(async move {
             let result = async {
-                let dialog = gtk::FileDialog::builder().title("Choose wallpaper").build();
+                // The two formats a wallpaper can be (DESIGN.md).
+                let pictures = gtk::FileFilter::new();
+                pictures.set_name(Some("Pictures (PNG, JPEG)"));
+                for mime in ["image/png", "image/jpeg"] {
+                    pictures.add_mime_type(mime);
+                }
+                let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+                filters.append(&pictures);
+                let dialog = gtk::FileDialog::builder().title("Choose wallpaper").filters(&filters).build();
                 // Closing the chooser is not an error.
                 let file = match dialog.open_future(Some(&ui.window)).await {
                     Ok(file) => file,

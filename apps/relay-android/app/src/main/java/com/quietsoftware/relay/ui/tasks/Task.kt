@@ -10,9 +10,11 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -31,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -42,6 +45,7 @@ import com.quietsoftware.relay.core.model.Lamp
 import com.quietsoftware.relay.core.model.Task
 import com.quietsoftware.relay.core.sync.Kind
 import com.quietsoftware.relay.core.sync.Optimistic
+import com.quietsoftware.relay.core.sync.OutboxEntry
 import com.quietsoftware.relay.core.wire.arr
 import com.quietsoftware.relay.core.wire.b
 import com.quietsoftware.relay.core.wire.l
@@ -103,20 +107,22 @@ fun TaskScreen(id: String, nav: Nav) {
     val shell by nav.shell.state.collectAsStateWithLifecycle()
     val project = task?.let { t -> shell.projects.firstOrNull { it.num == t.projectId } }
     val all by remember(task?.projectId) { task?.let { nav.relay.tasks(it.projectId) } ?: flowOf(emptyList()) }.collectAsStateWithLifecycle(emptyList<Task>())
+    // An edit the PC refused waits in the outbox for the person: the page says so instead of "saved".
+    val refused = task?.let { t -> refusedEdit(shell.outbox, t.id) }
     var sheet by remember { mutableStateOf<String?>(null) }
 
     Page {
         Column(Modifier.fillMaxSize().imePadding()) {
             PageBar(task?.ref?.let { if (it == "new") "New task" else it } ?: "Task", nav::back, subtitle = project?.name) {
                 if (task != null) {
-                    IconKey("edit", { nav.editTask(task.id) })
+                    IconKey("edit", { nav.editTask(task.id) }, label = "Edit task")
                     IconKey("more", { sheet = "more" })
                 }
             }
             when {
                 found == null -> Unit
                 task == null -> if (!Optimistic.isTemp(shown) || lost) Gone(shown, nav)
-                else -> TaskBody(task, all, pending || Optimistic.isTemp(task.id), nav, Modifier.weight(1f)) { sheet = it }
+                else -> TaskBody(task, all, pending || Optimistic.isTemp(task.id), refused, nav, Modifier.weight(1f)) { sheet = it }
             }
         }
     }
@@ -133,7 +139,7 @@ fun TaskScreen(id: String, nav: Nav) {
             "more" -> BoardSheet({ sheet = null }, title = task.headline()) { close ->
                 task.num?.let { n -> MenuRow("New agent on it", "play", { close { nav.launch(task.projectId, n) } }, detail = "the launch sheet") }
                 MenuRow("Mailbox", "mail", { close { nav.mailbox(task.projectId, task.sessions.lastOrNull()) } })
-                MenuRow("Board", "board", { close { nav.board(task.projectId) } })
+                MenuRow("Board", "board", { close { nav.boardOf(task.projectId) } })
                 MenuRow("Delete", "trash", { close { ops.delete(task); nav.back() } }, danger = true)
             }
         }
@@ -155,7 +161,7 @@ private fun Gone(id: String, nav: Nav) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TaskBody(task: Task, all: List<Task>, pending: Boolean, nav: Nav, modifier: Modifier, open: (String) -> Unit) {
+private fun TaskBody(task: Task, all: List<Task>, pending: Boolean, refused: OutboxEntry?, nav: Nav, modifier: Modifier, open: (String) -> Unit) {
     val c = Relay.colors
     val ops = remember(nav) { TaskOps(nav) }
     val shell by nav.shell.state.collectAsStateWithLifecycle()
@@ -194,7 +200,21 @@ private fun TaskBody(task: Task, all: List<Task>, pending: Boolean, nav: Nav, mo
                         FieldPill("Parent: #$p ${byNum[p]?.title.orEmpty()}".trim(), onClick = { nav.task(p.toString()) }) { Glyph("chevron-left", 11.dp, c.ink2) }
                     }
                     if (task.rollup.total > 0) Rollup(task.rollup.done, task.rollup.total)
-                    if (pending) {
+                    if (refused != null) {
+                        Column(
+                            Modifier.fillMaxWidth().clip(Radii.board).background(c.held.copy(alpha = .08f)).border(1.dp, c.held.copy(alpha = .35f), Radii.board).padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Dot(c.held, 7.dp)
+                                Column(Modifier.weight(1f)) {
+                                    T(parkedWhy(refused), style = Relay.type.caption, color = c.heldText)
+                                    T(refused.label, style = Relay.type.caption, color = c.ink3, maxLines = 2)
+                                }
+                            }
+                            Key("Open the outbox", nav::outbox, glyph = "outbox", compact = true)
+                        }
+                    } else if (pending) {
                         Row(
                             Modifier.fillMaxWidth().clip(Radii.board).background(c.waiting.copy(alpha = .08f)).border(1.dp, c.waiting.copy(alpha = .35f), Radii.board).padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -302,7 +322,8 @@ private fun TaskBody(task: Task, all: List<Task>, pending: Boolean, nav: Nav, mo
                 items(entries, key = { it.key }) { e -> ActivityRow(e) }
             }
         }
-        Actions(task, ops, open) { ops.delete(task); nav.back() }
+        // While the keyboard is up the page is for typing; the keys come back when it goes down.
+        if (!WindowInsets.isImeVisible) Actions(task, ops, open) { ops.delete(task); nav.back() }
     }
 }
 
@@ -321,7 +342,7 @@ private fun Relation(text: String, other: Task?, tone: Color, onOpen: () -> Unit
             other?.let { T(it.title, style = Relay.type.caption, color = c.ink3, maxLines = 1) }
         }
         other?.let { StatusRing(it.column, 12.dp) }
-        if (onRemove != null) IconKey("close", onRemove, size = 15.dp)
+        if (onRemove != null) IconKey("close", onRemove, size = 15.dp, label = "Remove relation")
     }
 }
 
@@ -377,7 +398,8 @@ private fun Ask(task: Task, num: Long, nav: Nav) {
     }
     Heading("Ask the agent")
     if (names.size > 1) {
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        // The pills' own touch room adds 6dp, so their faces stay 8dp above the field.
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 2.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             for (n in names) Pill(n, selected = n == recipient, onClick = { to = n })
         }
     }
@@ -406,7 +428,7 @@ private fun Actions(task: Task, ops: TaskOps, open: (String) -> Unit, onDelete: 
             Key("Move", { open("move") }, Modifier.weight(1f), glyph = "columns", compact = true)
             if (task.column != "done") Key("Dispatch", { open("dispatch") }, Modifier.weight(1f), glyph = "play", compact = true, enabled = task.num != null)
             if (task.column == "in_review") Key("Approve", { ops.approve(task) }, Modifier.weight(1f), kind = KeyKind.Primary, glyph = "check", compact = true)
-            IconKey("trash", onDelete, tint = c.heldText)
+            IconKey("trash", onDelete, tint = c.heldText, label = "Delete task")
         }
     }
 }
@@ -420,7 +442,12 @@ private fun removeLabel(nav: Nav, task: Task, label: String) {
 }
 
 private fun unrelate(nav: Nav, task: Task, relation: String, other: Long) {
-    nav.shell.change("task.unrelate", buildJsonObject { put("task_id", task.idJson()); put("relation", relation); put("other_id", other) }, "Unrelate ${task.named()} from #$other")
+    nav.shell.change("task.unrelate", buildJsonObject { put("task_id", task.idJson()); put("relation", relation); put("other_id", other) }, "Unrelate ${task.named()} from #$other") {
+        nav.shell.toast(if (relation == "blocked_by") "No longer blocked by #$other" else "No longer a duplicate of #$other", undo = {
+            nav.relay.change("task.relate", buildJsonObject { put("task_id", task.idJson()); put("relation", relation); put("other_id", other) },
+                if (relation == "blocked_by") "Mark ${task.named()} blocked by #$other" else "Mark ${task.named()} a duplicate of #$other")
+        })
+    }
 }
 
 /** Add a label: one the project already uses, or a new one typed. */
@@ -432,6 +459,7 @@ private fun LabelSheet(task: Task, nav: Nav, onDismiss: () -> Unit) {
     val needle = typed.trim().lowercase()
     val offered = known.map { it.name }.filter { it !in task.labels && it.lowercase().contains(needle) }.take(24)
     BoardSheet(onDismiss, title = "Label ${task.named()}") { close ->
+        val focus = rememberSheetFocus()
         fun add(name: String) {
             val label = name.trim()
             if (label.isEmpty()) return
@@ -439,7 +467,7 @@ private fun LabelSheet(task: Task, nav: Nav, onDismiss: () -> Unit) {
         }
         Row(Modifier.padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Field(
-                typed, { typed = it }, Modifier.weight(1f),
+                typed, { typed = it }, Modifier.weight(1f).focusRequester(focus),
                 placeholder = "A label",
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { add(typed) }),

@@ -14,7 +14,7 @@
 //! Asking first: what the agent may not change alone it proposes (`thread.propose`, one
 //! [`Action`] each), and the person approves or declines it on a card (`thread.proposal.*`).
 use crate::ops::money::{AccountAddIn, AccountUpdateIn, BudgetSetIn, IdIn as MoneyIdIn, TxUpdateIn};
-use crate::registry::{Actors, OpMeta, Scope};
+use crate::registry::{Actors, Audit, OpMeta, Scope};
 use crate::types::Id;
 use crate::{op, Empty};
 use relay_money::views::{AccountView, ActivityView, Tx};
@@ -42,9 +42,11 @@ result!(#[schemars(rename = "ThreadMessage")] MessageView {
     pub thread_id: Id,
     /// `user`, `assistant` (text and tool calls), `tool` (a tool's answer) or `error`.
     pub role: String,
-    /// `{"text"}` for `user` and `error`; `{"blocks": [...]}` for `assistant`, each block
-    /// `{"type":"text","text"}` or `{"type":"tool_use","id","name","input"}`;
-    /// `{"tool_use_id","is_error","text"}` for `tool`.
+    /// `{"text"}` for `user` and `error`; a `user` message with pictures is
+    /// `{"text", "images": [{"id","media_type","width","height"}]}` (`text` may then be empty;
+    /// `images` is absent when there are none), each drawn from `thread.image {id}`;
+    /// `{"blocks": [...]}` for `assistant`, each block `{"type":"text","text"}` or
+    /// `{"type":"tool_use","id","name","input"}`; `{"tool_use_id","is_error","text"}` for `tool`.
     pub body: Value,
     pub created_at: String,
 });
@@ -63,6 +65,9 @@ op!(Get, "thread.get", GetIn => GetOut, OpMeta::query(Scope::Global, 5, "One thr
 payload!(#[schemars(rename = "ThreadCreateIn")] CreateIn {
     /// The first message; the thread is named after it and the agent starts on it.
     pub text: Option<String>,
+    /// Pictures for the first message, by the ids `thread.upload` gave, at most 4; with them
+    /// `text` may be empty or absent, and the thread is named "Picture" (or "2 pictures").
+    pub images: Option<Vec<String>>,
     /// A model for this thread's agent; the provider's default when absent.
     pub model: Option<String>,
     /// How hard it thinks: `low`, `medium`, `high`, `xhigh` or `max`; the default when absent.
@@ -71,10 +76,52 @@ payload!(#[schemars(rename = "ThreadCreateIn")] CreateIn {
 op!(Create, "thread.create", CreateIn => ThreadView,
     OpMeta::mutation(Scope::Global, 5, "Start a thread, optionally with its first message").actors(Actors::UserOnly).emits(&["thread.changed", "thread.message"]));
 
-payload!(#[schemars(rename = "ThreadSendIn")] SendIn { pub id: Id, pub text: String });
+payload!(#[schemars(rename = "ThreadSendIn")] SendIn {
+    pub id: Id,
+    /// May be empty when the message carries pictures.
+    pub text: String,
+    /// Pictures, by the ids `thread.upload` gave, at most 4. Refused with
+    /// `thread.images_unsupported` in a thread on a model on this PC, which cannot read them.
+    pub images: Option<Vec<String>>,
+});
 op!(Send, "thread.send", SendIn => MessageView,
     OpMeta::mutation(Scope::Global, 5, "Send a message in a thread; the agent answers in thread.delta and thread.message events")
         .actors(Actors::UserOnly).emits(&["thread.changed", "thread.message", "thread.delta"]));
+
+payload!(#[schemars(rename = "ThreadUploadIn")] UploadIn {
+    /// `image/png`, `image/jpeg`, `image/gif` or `image/webp`. The bytes decide: a picture is
+    /// stored as what it is.
+    pub media_type: String,
+    /// The picture, base64: at most 4 MiB decoded.
+    pub bytes_b64: String,
+});
+result!(#[schemars(rename = "ThreadImage")] ImageView {
+    /// 32 lowercase hex characters: what a message's `images` names it by.
+    pub id: String,
+    /// `image/png`, `image/jpeg`, `image/gif` or `image/webp`, read from its bytes.
+    pub media_type: String,
+    /// Its size in px.
+    pub width: u32,
+    pub height: u32,
+    /// Its length in bytes.
+    pub bytes: u64,
+});
+result!(#[schemars(rename = "ThreadUploadOut")] UploadOut { pub image: ImageView });
+op!(Upload, "thread.upload", UploadIn => UploadOut,
+    OpMeta::mutation(Scope::Global, 5, "A picture for a thread's next message: PNG, JPEG, GIF or WebP, at most 4 MiB. Send its id in thread.send's or thread.create's images; one never sent is removed after a day")
+        .audit(Audit::AgentOnly).actors(Actors::UserOnly));
+
+payload!(#[schemars(rename = "ThreadImageIn")] ImageIn {
+    /// The id in a message's `images`.
+    pub id: String,
+});
+result!(#[schemars(rename = "ThreadImageOut")] ImageOut {
+    pub media_type: String,
+    /// The picture, base64.
+    pub bytes_b64: String,
+});
+op!(Image, "thread.image", ImageIn => ImageOut,
+    OpMeta::query(Scope::Global, 5, "A picture a message in a thread carries, to draw it").actors(Actors::UserOnly));
 
 payload!(#[schemars(rename = "ThreadIdIn")] IdIn { pub id: Id });
 op!(Stop, "thread.stop", IdIn => Empty,
@@ -96,7 +143,7 @@ op!(Rename, "thread.rename", RenameIn => ThreadView,
     OpMeta::mutation(Scope::Global, 5, "Rename a thread").actors(Actors::UserOnly).emits(&["thread.changed"]));
 
 op!(Delete, "thread.delete", IdIn => Empty,
-    OpMeta::mutation(Scope::Global, 5, "Delete a thread and its messages, stopping its agent").actors(Actors::UserOnly).emits(&["thread.changed"]));
+    OpMeta::mutation(Scope::Global, 5, "Delete a thread and its messages, stopping its agent; its pictures go too, unless a message of another thread carries one").actors(Actors::UserOnly).emits(&["thread.changed"]));
 
 result!(#[schemars(rename = "ThreadLocalModel")] LocalModel {
     /// The model id a thread stores and the picker sends.
@@ -281,4 +328,4 @@ op!(ProposalUndo, "thread.proposal.undo", IdIn => ProposalView,
     OpMeta::mutation(Scope::Global, 5, "Put an approved proposal back: entries and activities restored, budgets and accounts as they were, all or none")
         .actors(Actors::UserOnly).emits(&["thread.proposal", "money.changed"]));
 
-entries!(List, Get, Create, Send, Stop, Set, Rename, Delete, Models, Pick, Propose, ProposalList, ProposalGet, ProposalResolve, ProposalUndo);
+entries!(List, Get, Create, Send, Upload, Image, Stop, Set, Rename, Delete, Models, Pick, Propose, ProposalList, ProposalGet, ProposalResolve, ProposalUndo);

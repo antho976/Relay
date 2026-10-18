@@ -371,7 +371,21 @@ async fn image_preview(ui: &Rc<Ui>) -> Result<(), String> {
     wait_for(|| view.is_mapped() && view.is_editable(), "Text editor after image").await?;
     view.buffer().insert_at_cursor("keep this draft");
     click(ui, "project-file:preview.PNG")?;
+    // Opening another file asks first (Save / Don't Save / Cancel); closing the question is
+    // Cancel, which keeps the draft.
+    let asked = || {
+        gtk::Window::list_toplevels()
+            .into_iter()
+            .filter_map(|window| window.downcast::<gtk::Window>().ok())
+            .find(|window| window.is_visible() && window.transient_for().is_some_and(|parent| parent == *ui.window.upcast_ref::<gtk::Window>()))
+    };
+    wait_for(|| asked().is_some(), "Unsaved draft asks before another file opens").await?;
+    asked().ok_or("Unsaved-changes question")?.close();
+    wait_for(|| asked().is_none(), "Cancel closes the question").await?;
     require(view.buffer().is_modified() && view.is_mapped(), "Image click preserves unsaved text")?;
+    // Discard asks first: the first click arms it, the second throws the draft away.
+    click(ui, "project-discard")?;
+    require(view.buffer().is_modified(), "Discard asks before dropping a draft")?;
     click(ui, "project-discard")?;
     wait_for(|| !ui.editor.is_dirty(), "Discard fixture draft").await?;
     println!("IMAGE_PREVIEW_OK=large_png,fit,agents_roundtrip,invalid_image,source_return,dirty_draft");

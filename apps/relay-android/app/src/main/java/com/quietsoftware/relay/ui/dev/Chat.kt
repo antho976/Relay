@@ -1,9 +1,10 @@
 package com.quietsoftware.relay.ui.dev
 
 import android.content.Intent
+import android.os.SystemClock
 import android.speech.RecognizerIntent
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -22,12 +23,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -44,15 +48,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -103,6 +107,7 @@ import com.quietsoftware.relay.core.term.Keys
 import com.quietsoftware.relay.data.SessionChat
 import com.quietsoftware.relay.data.Relay as RelayData
 import com.quietsoftware.relay.data.TerminalFeed
+import com.quietsoftware.relay.ui.LocalNav
 import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.code.ADD_TEXT
 import com.quietsoftware.relay.ui.code.ADD_WASH
@@ -157,51 +162,35 @@ fun ChatScreen(name: String, nav: Nav) {
     val c = Relay.colors
     val s by nav.shell.state.collectAsStateWithLifecycle()
     val session by remember(name) { nav.relay.session(name) }.collectAsStateWithLifecycle(null)
-    val chat = remember(name) { SessionChat(nav.relay, name, Feeds.scope) }
-    DisposableEffect(chat) {
-        chat.start()
-        onDispose { chat.stop() }
-    }
+    // Kept a while after this screen closes: back here, the conversation shows as it was left.
+    val chat = rememberChat(nav.relay, name)
     val messages by chat.messages.collectAsStateWithLifecycle()
     val sending by chat.sending.collectAsStateWithLifecycle()
     val status by chat.status.collectAsStateWithLifecycle()
     val found by chat.found.collectAsStateWithLifecycle()
     val error by chat.error.collectAsStateWithLifecycle()
-    val life = rememberLifecycle(nav) { nav.back() }
+    val life = rememberLifecycle(nav) { nav.leaveAgent(it) }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboard.current
     val focus = remember { FocusRequester() }
     var menu by remember { mutableStateOf(false) }
     var mailing by remember { mutableStateOf(false) }
     var peek by rememberSaveable(name) { mutableStateOf(false) }
+    // What is being written to this agent outlives the screen: away and back, it is still here.
+    val draft = remember(name) { ChatDrafts.of(name) }
     // A value, not a string: a picked command puts the cursor after itself.
-    var field by rememberSaveable(name, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
+    var field by rememberSaveable(name, stateSaver = TextFieldValue.Saver) { mutableStateOf(draft.text) }
+    SideEffect { draft.text = field }
     val text = field.text
     fun type(next: String) {
         field = TextFieldValue(next, TextRange(next.length))
     }
-    // Pictures for the next message: each sent to the agent's checkout as soon as it is picked.
-    val context = LocalContext.current
-    val attached = remember(name) { mutableStateListOf<Attachment>() }
-    fun update(id: Long, change: (Attachment) -> Attachment) {
-        val i = attached.indexOfFirst { it.id == id }
-        if (i >= 0) attached[i] = change(attached[i])
-    }
+    // Pictures for the next message: each sent to the agent's checkout as soon as it is picked,
+    // and arriving all the same when the person opens the terminal meanwhile.
+    val attached = draft.attached
     // Dictation through the phone's own recognizer: what was said joins what is typed.
     val dictate = rememberDictation { said -> type(joinSaid(field.text, said)) }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_PICTURES)) { uris ->
-        for (uri in uris.take(MAX_PICTURES - attached.size)) {
-            val id = System.nanoTime()
-            attached += Attachment(id, null)
-            scope.launch {
-                val shrunk = withContext(Dispatchers.IO) { shrink(context, uri) }
-                if (shrunk == null) return@launch update(id) { it.copy(failed = true) }
-                update(id) { it.copy(thumb = shrunk.second) }
-                val path = chat.upload(shrunk.first)
-                update(id) { if (path != null) it.copy(path = path) else it.copy(failed = true) }
-            }
-        }
-    }
+    val pickPictures = rememberPicturePicker(attached) { picture -> chat.upload(picture) }
 
     val ready = session?.attachable == true && s.online
     val working = session?.state == "running" || session?.state == "spawning"
@@ -224,7 +213,11 @@ fun ChatScreen(name: String, nav: Nav) {
     val since = remember(messages, sending) { epoch((sending.lastOrNull() ?: messages.lastOrNull { it.role == "user" })?.createdAt).takeIf { it > 0 } }
 
     KeepScreenOn(s.prefs.keepScreenOn)
+    // Back puts the agent's screen away before it leaves the conversation.
+    BackHandler(enabled = peek && ready) { peek = false }
 
+    // When the last message went: the key turns to Stop under the finger that sent it.
+    var sentAt by remember { mutableLongStateOf(0L) }
     fun send() {
         val typed = text.trim()
         if (attached.any { it.sending }) {
@@ -236,14 +229,17 @@ fun ChatScreen(name: String, nav: Nav) {
             return
         }
         val pictures = attached.toList()
-        val paths = pictures.mapNotNull { it.path }
+        val paths = pictures.mapNotNull { it.sent }
         if (typed.isEmpty() && paths.isEmpty()) {
             // Empty: Esc stops an agent mid-turn; otherwise (a menu up, a prompt) it is the Enter it waits for.
             val stop = working && !asking
+            // A second tap on Send just after a message is that tap again, not a stop.
+            if (stop && SystemClock.uptimeMillis() - sentAt < STOP_AFTER_SEND_MS) return
             chat.key(if (stop) Keys.ESC else Keys.ENTER)
-            if (stop) nav.shell.toast("Asked ${session?.provider ?: "the agent"} to stop")
+            if (stop) nav.shell.toast("Asked ${session?.provider?.let(::providerName) ?: "the agent"} to stop")
             return
         }
+        sentAt = SystemClock.uptimeMillis()
         type("")
         attached.clear()
         scope.launch {
@@ -262,7 +258,7 @@ fun ChatScreen(name: String, nav: Nav) {
     Page {
         Column(Modifier.fillMaxSize()) {
             Header(session, name, onBack = nav::back, onDetails = { nav.session(name) }, onMenu = { menu = true }) {
-                if (ready) IconKey("focus", { peek = !peek }, size = 18.dp, tint = if (peek) c.ink else c.ink2)
+                if (ready) IconKey("focus", { peek = !peek }, size = 18.dp, tint = c.ink2, selected = peek, label = if (peek) "Hide the agent's screen" else "Show the agent's screen")
                 IconKey("terminal", { nav.console(name) }, size = 18.dp, tint = c.ink2)
             }
             Banner(status, session, s.online, life)
@@ -291,13 +287,14 @@ fun ChatScreen(name: String, nav: Nav) {
                     )
                     found == false -> Empty(
                         "terminal", "Nothing said yet",
-                        "The conversation shows here once ${session?.provider ?: "the agent"} starts. Its screen shows everything meanwhile.",
+                        "The conversation shows here once ${session?.provider?.let(::providerName) ?: "the agent"} starts. Its screen shows everything meanwhile.",
                         action = openTerminal,
                     )
-                    status == TerminalFeed.Status.Connecting -> Empty("terminal", "Reading the conversation")
+                    status == TerminalFeed.Status.Connecting && s.online -> Empty("terminal", "Reading the conversation", action = { Spinner(16.dp) })
                     else -> Empty("terminal", "Nothing said yet", if (s.online) null else "The PC is away, and this phone has not read this agent before.", action = openTerminal)
                 }
             }
+            com.quietsoftware.relay.ui.shell.LiftToasts()
             if (peek && ready) ScreenPanel(nav, name, screen) { peek = false }
             if (s.prefs.chatKeys) QuickKeys(chat, ready)
             val asked = commandAsked(text)
@@ -318,9 +315,7 @@ fun ChatScreen(name: String, nav: Nav) {
                 pictures = attached.isNotEmpty(),
                 above = { AttachmentStrip(attached) { id -> attached.removeAll { it.id == id } } },
             ) {
-                Chip("", "Attach a photo or a screenshot", ready && attached.size < MAX_PICTURES, glyph = "file-image") {
-                    picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                }
+                Chip("", "Attach a photo or a screenshot", ready && attached.size < MAX_PICTURES, glyph = "file-image", onClick = pickPictures)
                 if (dictate != null) Chip("", "Dictate a message", ready, icon = { MicGlyph(15.dp, c.ink2) }, onClick = dictate)
                 Chip("/", "The agent's commands", ready) {
                     if (text.isBlank()) type("/")
@@ -342,7 +337,7 @@ fun ChatScreen(name: String, nav: Nav) {
             SheetRow("Open the terminal", "terminal", { close { nav.console(name) } })
             session?.let { ss ->
                 SheetRow("Changes", "commit", { close { nav.git(ss.projectId, ss.worktree.ifBlank { null }, name) } })
-                if (ss.state != "closed" && !ss.pending) SheetRow("Mail the agent", "send", { close { mailing = true } })
+                if (ss.state != "closed" && !ss.pending) SheetRow("Mail the agent", "mail", { close { mailing = true } })
             }
             SheetRow("Copy the conversation", "copy", {
                 close {
@@ -590,9 +585,12 @@ private fun Conversation(
     val scope = rememberCoroutineScope()
     // Newest at the bottom, and kept in view as it grows while the person reads the end.
     val shown = remember(pieces) { pieces.asReversed() }
-    LaunchedEffect(pieces.size, doing, asking) { if (state.firstVisibleItemIndex <= 1) state.animateScrollToItem(0) }
+    // What the person just sent always comes into view: it is the last piece until the log has it.
+    LaunchedEffect(pieces.size, doing, asking) {
+        if (state.firstVisibleItemIndex <= 1 || (pieces.lastOrNull() as? ChatPiece.User)?.sending == true) state.animateScrollToItem(0)
+    }
     // Scrolled up to read: a key back to the newest, counting what arrived meanwhile.
-    val away by remember { derivedStateOf { state.firstVisibleItemIndex > 2 } }
+    val away by remember { derivedStateOf { state.firstVisibleItemIndex > 1 } }
     var seen by remember { mutableIntStateOf(0) }
     LaunchedEffect(away) { if (away) seen = pieces.size }
     val fresh = if (away) (pieces.size - seen).coerceAtLeast(0) else 0
@@ -791,13 +789,17 @@ internal fun Modifier.messageTouch(open: Boolean, haptic: HapticFeedback, onOpen
 /** The keys under a message of the person's, while it is [open]: Copy and Edit for its [words], and Send again. */
 @Composable
 internal fun MessageKeys(open: Boolean, words: String, onClose: () -> Unit, onEdit: ((String) -> Unit)?, onResend: (() -> Unit)?) {
+    val nav = LocalNav.current
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     AnimatedVisibility(open, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             if (words.isNotEmpty()) {
                 Chip("Copy", "Copy this message", open, glyph = "copy") {
-                    scope.launch { clipboard.copy(words) }
+                    scope.launch {
+                        clipboard.copy(words)
+                        nav.shell.toast("Copied")
+                    }
                     onClose()
                 }
                 onEdit?.let { edit -> Chip("Edit", "Edit it in the message box", open, glyph = "edit") { edit(words) } }
@@ -1071,8 +1073,10 @@ private fun AskCard(chat: SessionChat, screen: State<String?>, online: Boolean, 
             Dot(c.held, 6.dp)
             T("Waiting for you", style = Relay.type.ui, color = c.heldText, weight = androidx.compose.ui.text.font.FontWeight.Medium)
         }
-        if (text == null) T("Reading the agent's screen…", style = Relay.type.caption, color = c.ink3)
-        else if (question.isNotEmpty()) T(question.joinToString("\n"), style = Relay.type.mono.copy(fontSize = 11.5.sp, lineHeight = 16.sp), color = c.ink2)
+        if (text == null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Spinner(11.dp)
+            T("Reading the agent's screen…", style = Relay.type.caption, color = c.ink3)
+        } else if (question.isNotEmpty()) T(question.joinToString("\n"), style = Relay.type.mono.copy(fontSize = 11.5.sp, lineHeight = 16.sp), color = c.ink2)
         if (options.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 for ((n, label) in options) {
@@ -1088,16 +1092,17 @@ private fun AskCard(chat: SessionChat, screen: State<String?>, online: Boolean, 
                 }
             }
         }
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Full-size keys, set apart: these answer permission prompts.
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             if (options.isEmpty()) {
-                Key("Yes", { chat.key("y") }, enabled = online, compact = true)
-                Key("No", { chat.key("n") }, enabled = online, compact = true)
+                Key("Yes", { chat.key("y") }, enabled = online)
+                Key("No", { chat.key("n") }, enabled = online)
             } else {
-                Key("↑", { chat.key(ARROW_UP) }, enabled = online, compact = true)
-                Key("↓", { chat.key(ARROW_DOWN) }, enabled = online, compact = true)
+                Key("↑", { chat.key(ARROW_UP) }, enabled = online)
+                Key("↓", { chat.key(ARROW_DOWN) }, enabled = online)
             }
-            Key("Enter", { chat.key(Keys.ENTER) }, enabled = online, compact = true)
-            Key("Esc", { chat.key(Keys.ESC) }, kind = KeyKind.Quiet, enabled = online, compact = true)
+            Key("Enter", { chat.key(Keys.ENTER) }, enabled = online)
+            Key("Esc", { chat.key(Keys.ESC) }, kind = KeyKind.Quiet, enabled = online)
         }
     }
 }
@@ -1132,11 +1137,14 @@ private const val SCREEN_READS_PER_S = 8
  * a pinch to change it), the newest line in view. A drag scrolls back, a long press copies, a tap
  * on an address opens it. A fresh TUI leaves its bottom rows blank; they are drawn under the edge.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ScreenPanel(nav: Nav, name: String, screen: State<String?>, onClose: () -> Unit) {
     val c = Relay.colors
     val feed = rememberFeed(nav.relay, name)
     val reading = screen.value == null
+    // With the keyboard up the panel is shorter, so the conversation keeps some room over the message box.
+    val tall = if (WindowInsets.isImeVisible) SCREEN_PANEL_IME_H else SCREEN_PANEL_H
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboard.current
     val uris = LocalUriHandler.current
@@ -1152,11 +1160,11 @@ internal fun ScreenPanel(nav: Nav, name: String, screen: State<String?>, onClose
     Column(Modifier.fillMaxWidth().background(c.screen)) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.edge))
         Row(Modifier.fillMaxWidth().padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Dot(if (reading) c.waiting else c.live, 5.dp)
+            Box(Modifier.size(10.dp), contentAlignment = Alignment.Center) { if (reading) Spinner(10.dp) else Dot(c.live, 5.dp) }
             T(if (reading) "Reading the agent's screen…" else "The agent's screen", Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 1)
-            IconKey("close", onClose, size = 14.dp, tint = c.ink3)
+            IconKey("close", onClose, size = 14.dp, tint = c.ink3, label = "Hide the agent's screen")
         }
-        BoxWithConstraints(Modifier.fillMaxWidth().height(SCREEN_PANEL_H).clipToBounds()) {
+        BoxWithConstraints(Modifier.fillMaxWidth().height(tall).clipToBounds()) {
             val widthPx = constraints.maxWidth.toFloat()
             val (cols, blank) = shape
             val sp = pinched ?: fitSp(widthPx, cols, ratio, density).takeIf { it > 0f }?.coerceIn(SCREEN_MIN_SP, SCREEN_SP) ?: SCREEN_SP
@@ -1168,7 +1176,7 @@ internal fun ScreenPanel(nav: Nav, name: String, screen: State<String?>, onClose
                     sp,
                     onFontSp = { pinched = it },
                     onFit = { _, _ -> },
-                    modifier = Modifier.width(with(density) { maxOf(widthPx, needPx).toDp() }).wrapContentHeight(Alignment.Top, unbounded = true).height(SCREEN_PANEL_H + extra),
+                    modifier = Modifier.width(with(density) { maxOf(widthPx, needPx).toDp() }).wrapContentHeight(Alignment.Top, unbounded = true).height(tall + extra),
                     onCopy = { picked ->
                         scope.launch {
                             clipboard.copy(picked)
@@ -1184,6 +1192,7 @@ internal fun ScreenPanel(nav: Nav, name: String, screen: State<String?>, onClose
 }
 
 private val SCREEN_PANEL_H = 240.dp
+private val SCREEN_PANEL_IME_H = 120.dp
 private const val SCREEN_SP = 10.5f
 private const val SCREEN_MIN_SP = 8f
 
@@ -1220,7 +1229,7 @@ private fun QuickKeys(chat: SessionChat, enabled: Boolean) {
     ) {
         for (k in CHAT_KEYS) {
             Box(
-                Modifier.height(32.dp).widthIn(min = 40.dp).alpha(if (enabled) 1f else .4f).clip(Radii.keycap).background(c.slab).border(1.dp, c.edge, Radii.keycap)
+                Modifier.height(40.dp).widthIn(min = 44.dp).alpha(if (enabled) 1f else .4f).clip(Radii.keycap).background(c.slab).border(1.dp, c.edge, Radii.keycap)
                     .clickable(enabled = enabled, onClickLabel = k.spoken, role = Role.Button) { chat.key(k.data) }.padding(horizontal = 9.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -1309,15 +1318,22 @@ internal fun ChatComposer(
     }
 }
 
-/** A key of the agent's under the message box, drawn as a thread's chips are: a pill in a full-size target. */
+/**
+ * A key of the agent's under the message box, drawn as a thread's chips are: a pill in a
+ * full-size target. Off, a tap does nothing, or says why when it has [whyOff].
+ */
 @Composable
-internal fun Chip(label: String, spoken: String, enabled: Boolean, glyph: String? = null, trailing: String? = null, icon: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
+internal fun Chip(label: String, spoken: String, enabled: Boolean, glyph: String? = null, trailing: String? = null, icon: (@Composable () -> Unit)? = null, whyOff: (() -> Unit)? = null, onClick: () -> Unit) {
     val c = Relay.colors
     val haptic = LocalHapticFeedback.current
     Box(
-        Modifier.heightIn(min = TOUCH).clickable(enabled = enabled, onClickLabel = spoken, role = Role.Button) {
-            haptic.performHapticFeedback(HapticFeedbackType.KeyboardTap)
-            onClick()
+        Modifier.heightIn(min = TOUCH).clickable(enabled = enabled || whyOff != null, onClickLabel = spoken, role = Role.Button) {
+            if (enabled) {
+                haptic.performHapticFeedback(HapticFeedbackType.KeyboardTap)
+                onClick()
+            } else {
+                whyOff?.invoke()
+            }
         },
         contentAlignment = Alignment.Center,
     ) {
@@ -1397,8 +1413,8 @@ internal fun modeOf(screen: String): String? {
 
 private const val MODE_TAIL = 4
 
-/** Pictures one message may carry. */
-private const val MAX_PICTURES = 4
+/** How long after a message the empty box's key will not stop the agent. */
+private const val STOP_AFTER_SEND_MS = 1_000L
 
 // ---- The agent's commands ----
 

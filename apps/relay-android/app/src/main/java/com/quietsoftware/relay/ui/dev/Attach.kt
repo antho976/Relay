@@ -4,6 +4,9 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -17,52 +20,104 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import com.quietsoftware.relay.ui.LocalNav
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.theme.Relay
 import com.quietsoftware.relay.ui.threads.Spinner
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import kotlin.math.roundToInt
 
 /**
- * A photo or screenshot on its way to the agent: picked, shrunk, sent to its checkout
- * (`session.upload`) at once, so the message only has to name it. [path] is where the PC put it;
- * null while it goes, or for good when [failed].
+ * A photo or screenshot in a message box, on its way to the PC: picked, shrunk and sent at once,
+ * so the message only has to name it. The agent chat and a thread's message box share it. [sent]
+ * is what the PC made of it: the path in the agent's checkout (`session.upload`), or a thread's
+ * image (`thread.upload`); null while it goes, or for good when [failed].
  */
-internal data class Attachment(val id: Long, val thumb: ImageBitmap?, val path: String? = null, val failed: Boolean = false) {
-    val sending: Boolean get() = path == null && !failed
+internal data class Attachment<T>(val id: Long, val thumb: ImageBitmap?, val sent: T? = null, val failed: Boolean = false) {
+    val sending: Boolean get() = sent == null && !failed
 }
+
+/** Pictures one message may carry, to an agent or in a thread. */
+internal const val MAX_PICTURES = 4
 
 /** The longer side a photo is sent at: enough to read a screenshot's text, small enough for a phone's link. */
 private const val MAX_SIDE = 2048
 private const val THUMB_SIDE = 160
 
+/**
+ * Decodes a picture upright and at most [side] on its longer side, in memory a [Bitmap] can be
+ * compressed or scaled from, which a hardware bitmap cannot be.
+ */
+internal fun atMost(side: Int) = ImageDecoder.OnHeaderDecodedListener { decoder, info, _ ->
+    val w = info.size.width
+    val h = info.size.height
+    val scale = minOf(1f, side.toFloat() / maxOf(w, h, 1))
+    if (scale < 1f) decoder.setTargetSize((w * scale).roundToInt().coerceAtLeast(1), (h * scale).roundToInt().coerceAtLeast(1))
+    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+}
+
 /** A picked picture, upright and at most [MAX_SIDE] on its longer side, as JPEG, with a thumbnail; null when it cannot be read. */
 internal fun shrink(context: Context, uri: Uri): Pair<ByteArray, ImageBitmap>? = runCatching {
-    val source = ImageDecoder.createSource(context.contentResolver, uri)
-    val bitmap = ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
-        val w = info.size.width
-        val h = info.size.height
-        val scale = minOf(1f, MAX_SIDE.toFloat() / maxOf(w, h, 1))
-        if (scale < 1f) decoder.setTargetSize((w * scale).roundToInt().coerceAtLeast(1), (h * scale).roundToInt().coerceAtLeast(1))
-        // Compressed below, which a hardware bitmap cannot be.
-        decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
-    }
+    val bitmap = ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri), atMost(MAX_SIDE))
     val out = ByteArrayOutputStream()
     bitmap.compress(Bitmap.CompressFormat.JPEG, 88, out)
     val t = THUMB_SIDE.toFloat() / maxOf(bitmap.width, bitmap.height)
     val thumb = Bitmap.createScaledBitmap(bitmap, (bitmap.width * t).roundToInt().coerceAtLeast(1), (bitmap.height * t).roundToInt().coerceAtLeast(1), true)
     out.toByteArray() to thumb.asImageBitmap()
 }.getOrNull()
+
+/**
+ * The photo picker of a message box. What is picked joins [into], at most [MAX_PICTURES] in all;
+ * each picture is shrunk off the main thread and handed to [upload] at once, which answers what
+ * the PC made of it, or null when it would not take it. It runs past the screen ([Feeds.scope]),
+ * so a picture still going when the person leaves arrives all the same.
+ */
+@Composable
+internal fun <T : Any> rememberPicturePicker(into: SnapshotStateList<Attachment<T>>, upload: suspend (ByteArray) -> T?): () -> Unit {
+    val nav = LocalNav.current
+    val app = LocalContext.current.applicationContext
+    val send by rememberUpdatedState(upload)
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_PICTURES)) { uris ->
+        val list = into
+        val room = (MAX_PICTURES - list.size).coerceAtLeast(0)
+        if (uris.size > room) nav.shell.toast("Up to $MAX_PICTURES pictures in one message")
+        for (uri in uris.take(room)) {
+            val id = System.nanoTime()
+            list.add(Attachment(id, null))
+            Feeds.scope.launch {
+                val shrunk = withContext(Dispatchers.IO) { shrink(app, uri) }
+                if (shrunk == null) return@launch list.change(id) { it.copy(failed = true) }
+                list.change(id) { it.copy(thumb = shrunk.second) }
+                val answer = send(shrunk.first)
+                list.change(id) { if (answer != null) it.copy(sent = answer) else it.copy(failed = true) }
+            }
+        }
+    }
+    return { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+}
+
+/** The picture [id] as [edit] makes it; nothing when it was taken out meanwhile. */
+private fun <T> SnapshotStateList<Attachment<T>>.change(id: Long, edit: (Attachment<T>) -> Attachment<T>) {
+    val i = indexOfFirst { it.id == id }
+    if (i >= 0) this[i] = edit(this[i])
+}
 
 /** The message as sent: what was typed, then each picture's path on a line of its own, which both CLIs read as the picture. */
 internal fun withAttachments(text: String, paths: List<String>): String =
@@ -83,7 +138,7 @@ internal fun splitAttached(text: String): Pair<String, List<String>> {
 
 /** The pictures waiting in the message box: thumbnails, a spinner while each goes, a key to take one out. */
 @Composable
-internal fun AttachmentStrip(items: List<Attachment>, onRemove: (Long) -> Unit) {
+internal fun AttachmentStrip(items: List<Attachment<*>>, onRemove: (Long) -> Unit) {
     val c = Relay.colors
     Row(Modifier.horizontalScroll(rememberScrollState()).padding(end = 8.dp, bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         for (a in items) {

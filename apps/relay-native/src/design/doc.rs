@@ -20,10 +20,15 @@ type Listener = Rc<dyn Fn(&Change)>;
 const HISTORY: usize = 200;
 
 enum Pending {
-    Edit(Vec<NodeOp>),
-    Undo,
-    Redo,
+    /// An edit, and the selection it was made on.
+    Edit(Vec<NodeOp>, Vec<String>),
+    /// An undo or a redo, and the selection when it was asked for.
+    Undo(Vec<String>),
+    Redo(Vec<String>),
 }
+
+/// An undo (or redo) step: the edits that make it, and the selection to put back with it.
+type Step = (Vec<NodeOp>, Vec<String>);
 
 /// What a listener hears.
 #[derive(Debug, Clone)]
@@ -35,6 +40,8 @@ pub enum Change {
     Reloaded { changed: HashSet<String>, by: String },
     /// The design row changed: title, terminal, deleted.
     Design,
+    /// An undo or redo put back these layers' selection, as it was when the step was made.
+    Selected(Vec<String>),
     /// Saving state: in flight or settled.
     Saving(bool),
     Error(String),
@@ -57,8 +64,10 @@ pub struct Doc {
     /// A gesture or text edit is under way: a re-read would pull the scene from under it.
     hold: Cell<bool>,
     reading: Cell<bool>,
-    undo: RefCell<Vec<Vec<NodeOp>>>,
-    redo: RefCell<Vec<Vec<NodeOp>>>,
+    /// The engine refused the last edit sent, and none has been saved since.
+    refused: Cell<bool>,
+    undo: RefCell<Vec<Step>>,
+    redo: RefCell<Vec<Step>>,
     listeners: RefCell<Vec<Listener>>,
 }
 
@@ -86,6 +95,7 @@ impl Doc {
             seen: Cell::new(0),
             hold: Cell::new(false),
             reading: Cell::new(false),
+            refused: Cell::new(false),
             undo: RefCell::default(),
             redo: RefCell::default(),
             listeners: RefCell::default(),
@@ -115,8 +125,14 @@ impl Doc {
         self.sending.get() || !self.queue.borrow().is_empty()
     }
 
-    /// Run `ops` on the scene now and send them. One call is one undo step.
-    pub fn commit(self: &Rc<Self>, ops: Vec<NodeOp>) -> bool {
+    /// The engine refused an edit and nothing has been saved since.
+    pub fn unsaved(&self) -> bool {
+        self.refused.get()
+    }
+
+    /// Run `ops` on the scene now and send them. One call is one undo step, which puts
+    /// `selection` back when it is undone.
+    pub fn commit(self: &Rc<Self>, ops: Vec<NodeOp>, selection: Vec<String>) -> bool {
         if ops.is_empty() {
             return true;
         }
@@ -125,19 +141,20 @@ impl Doc {
             return false;
         }
         self.redo.borrow_mut().clear();
-        self.queue.borrow_mut().push_back(Pending::Edit(ops));
+        self.queue.borrow_mut().push_back(Pending::Edit(ops, selection));
         self.tell(Change::Scene);
         self.pump();
         true
     }
 
-    pub fn undo(self: &Rc<Self>) {
-        self.queue.borrow_mut().push_back(Pending::Undo);
+    /// Undo the last step; `selection` is what its redo puts back.
+    pub fn undo(self: &Rc<Self>, selection: Vec<String>) {
+        self.queue.borrow_mut().push_back(Pending::Undo(selection));
         self.pump();
     }
 
-    pub fn redo(self: &Rc<Self>) {
-        self.queue.borrow_mut().push_back(Pending::Redo);
+    pub fn redo(self: &Rc<Self>, selection: Vec<String>) {
+        self.queue.borrow_mut().push_back(Pending::Redo(selection));
         self.pump();
     }
 
@@ -190,20 +207,22 @@ impl Doc {
                 let Some(next) = doc.queue.borrow_mut().pop_front() else {
                     break;
                 };
-                let (ops, undoing) = match next {
-                    Pending::Edit(ops) => (ops, None),
-                    Pending::Undo => match doc.undo.borrow_mut().pop() {
-                        Some(ops) => (ops, Some(true)),
+                // `keep` goes with the step that undoes this one; `back` is put back after it.
+                let (ops, undoing, keep, back) = match next {
+                    Pending::Edit(ops, selection) => (ops, None, selection, None),
+                    Pending::Undo(now) => match doc.undo.borrow_mut().pop() {
+                        Some((ops, then)) => (ops, Some(true), now, Some(then)),
                         None => continue,
                     },
-                    Pending::Redo => match doc.redo.borrow_mut().pop() {
-                        Some(ops) => (ops, Some(false)),
+                    Pending::Redo(now) => match doc.redo.borrow_mut().pop() {
+                        Some((ops, then)) => (ops, Some(false), now, Some(then)),
                         None => continue,
                     },
                 };
                 let payload = json!({"design_id": doc.id, "ops": ops, "lenient": undoing.is_some()});
                 match ui.call("design.apply", payload).await.map_err(|e| e.to_string()).and_then(decode::<ApplyOut>) {
                     Ok(out) => {
+                        doc.refused.set(false);
                         if out.prev_rev != doc.rev.get() {
                             doc.stale.set(true);
                         }
@@ -230,7 +249,7 @@ impl Doc {
                             _ => &doc.undo,
                         };
                         let mut stack = target.borrow_mut();
-                        stack.push(out.inverse);
+                        stack.push((out.inverse, keep));
                         if stack.len() > HISTORY {
                             stack.remove(0);
                         }
@@ -240,6 +259,9 @@ impl Doc {
                         if undoing.is_some() {
                             doc.tell(Change::Scene);
                         }
+                        if let Some(selection) = back {
+                            doc.tell(Change::Selected(selection));
+                        }
                         if row_changed {
                             doc.tell(Change::Design);
                         }
@@ -248,7 +270,8 @@ impl Doc {
                         // Our scene ran ahead with edits the engine refused: take its copy.
                         doc.queue.borrow_mut().clear();
                         doc.stale.set(true);
-                        doc.tell(Change::Error(error));
+                        doc.refused.set(true);
+                        doc.tell(Change::Error(format!("Not saved: {error}")));
                     }
                 }
             }

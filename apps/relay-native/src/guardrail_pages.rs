@@ -372,7 +372,7 @@ pub fn hold_row(ui: &Rc<Ui>, hold: Value) -> gtk::Box {
     let allow = button("Allow once", "primary");
     allow.set_sensitive(false);
     allow.set_tooltip_text(Some("Review the exact action first"));
-    let reject = button("Reject…", "");
+    let reject = button("Deny…", "");
     keys.append(&allow);
     keys.append(&reject);
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -499,6 +499,20 @@ fn denial_form(ui: &Rc<Ui>, card: &gtk::Box, keys: &gtk::Box, id: Value, placeho
     };
     let send_key = send.clone();
     reason.connect_activate(move |_| send_key.emit_clicked());
+    // Escape here takes the denial back, as Cancel does; it goes no further, to a panel the
+    // prompt happens to sit over.
+    let escape = gtk::EventControllerKey::new();
+    let cancel_key = cancel.downgrade();
+    escape.connect_key_pressed(move |_, key, _, _| {
+        if key != gtk::gdk::Key::Escape {
+            return glib::Propagation::Proceed;
+        }
+        if let Some(cancel) = cancel_key.upgrade() {
+            cancel.emit_clicked();
+        }
+        glib::Propagation::Stop
+    });
+    reason.add_controller(escape);
     send.connect_clicked(submit);
     let keys = keys.downgrade();
     let form = form.downgrade();
@@ -1044,7 +1058,7 @@ pub async fn page(ui: &Rc<Ui>, body: &gtk::Box, project: i64, holds: Vec<Value>)
     if let Ok(overlaps) = overlaps {
         let overlaps = rows(&overlaps, "overlaps");
         if !overlaps.is_empty() {
-            body.append(&label("Shared file activity", "title"));
+            section(body, "SHARED FILE ACTIVITY", "Files that more than one agent is changing.");
         }
         for overlap in overlaps {
             let flag = hidden_flag();

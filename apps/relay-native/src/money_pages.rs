@@ -1,7 +1,7 @@
 //! Money's pages: Home, Transactions, Plan and Data, drawn after Tally's screens. Investments
 //! has its own module (`money_invest.rs`) built from the parts here.
 use super::{formatter, message, page, remember_currency, Action, Page};
-use crate::app::{button, clear, confirm_inline, label, rows, text, Ui};
+use crate::app::{button, clear, label, rows, text, Ui};
 use crate::client::Error;
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -231,12 +231,14 @@ pub(super) fn chooser(choices: &[Choice], current: Option<i64>, pick: Rc<dyn Fn(
     block
 }
 
-/// What a failed read says on the page. An engine without the ledger yet says so plainly.
+/// What a failed read or change says on the page: the engine's own sentence, never its code
+/// ("Invalid money.invalid: …"). An engine without the ledger yet says so plainly.
 pub fn unavailable(error: &Error) -> String {
     match error {
         Error::Bus(e) if matches!(e.code.as_str(), "bus.unknown_op" | "bus.not_implemented") => {
             format!("This engine has no money ledger yet ({}). Update Relay's engine to use Money.", e.message)
         }
+        Error::Bus(e) => e.message.clone(),
         e => e.to_string(),
     }
 }
@@ -846,11 +848,6 @@ pub fn delete(ui: &Rc<Ui>, tx: Value) {
     glib::spawn_future_local(async move {
         match ui.call("money.tx.delete", json!({"id":tx["id"]})).await {
             Ok(_) => {
-                let what = match text(&tx, "category") {
-                    "" if text(&tx, "type") == "TRANSFER" => String::from("Transfer"),
-                    "" => String::from("Entry"),
-                    name => name.to_string(),
-                };
                 let weak = Rc::downgrade(&ui);
                 let id = tx["id"].clone();
                 let undo: Action = Rc::new(move || {
@@ -858,15 +855,17 @@ pub fn delete(ui: &Rc<Ui>, tx: Value) {
                     let id = id.clone();
                     glib::spawn_future_local(async move {
                         if let Err(e) = ui.call("money.tx.restore", json!({"id":id})).await {
-                            ui.show_error(&e.to_string());
+                            ui.show_error(&unavailable(&e));
                         }
                         ui.refresh_page();
                     });
                 });
-                super::toast(&ui, &format!("{what} {} deleted", formatter().format(n(&tx, "amount"))), Some(undo));
+                // Said as a save is: "Deleted Burger night −$14.98".
+                let said = super::entry::signed(text(&tx, "type"), n(&tx, "amount"));
+                super::toast(&ui, &format!("Deleted {} {said}", entry_name(&tx)), Some(undo));
                 ui.refresh_page();
             }
-            Err(e) => ui.show_error(&e.to_string()),
+            Err(e) => ui.show_error(&unavailable(&e)),
         }
     });
 }
@@ -924,7 +923,7 @@ fn recategorize(ui: &Rc<Ui>, tx: &Value, id: i64, name: String) {
                     let back = back.clone();
                     glib::spawn_future_local(async move {
                         if let Err(e) = ui.call("money.tx.update", back).await {
-                            ui.show_error(&e.to_string());
+                            ui.show_error(&unavailable(&e));
                         }
                         ui.refresh_page();
                     });
@@ -932,7 +931,7 @@ fn recategorize(ui: &Rc<Ui>, tx: &Value, id: i64, name: String) {
                 super::toast(&ui, &format!("Moved {} to {name}", entry_name(&tx)), Some(undo));
                 ui.refresh_page();
             }
-            Err(e) => ui.show_error(&e.to_string()),
+            Err(e) => ui.show_error(&unavailable(&e)),
         }
     });
 }
@@ -1399,7 +1398,7 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str) {
             }
             match result {
                 Ok(s) => home(ui, &page, &s),
-                Err(e) => failed(ui, &page, "Home", &e),
+                Err(e) => failed(ui, &page, "Overview", &e),
             }
         }
         "money-transactions" => {
@@ -1449,7 +1448,7 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str) {
         "money-invest" => {
             let (summary, activity, lists) = tokio::join!(
                 ui.call("money.invest.summary", json!({})),
-                ui.call("money.invest.list", json!({"limit":8})),
+                ui.call("money.invest.list", json!({"limit":super::invest::activity_limit()})),
                 ui.call("money.lists", json!({}))
             );
             if *ui.page.borrow() != name {
@@ -1541,7 +1540,12 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value) {
             text(lines, "margin").to_string(),
             text(lines, "versus_last").to_string(),
         ]);
-        figure_cell(&cells, "card", "Left to spend", &fmt.format_whole(remaining), &how, class)
+        // Spent past the budget, it says how far over, as a budget row does: never "−$50" left.
+        if remaining < 0 {
+            figure_cell(&cells, "card", "Over budget", &fmt.format_whole(-remaining), &how, class)
+        } else {
+            figure_cell(&cells, "card", "Left to spend", &fmt.format_whole(remaining), &how, class)
+        }
     } else {
         let how = joined(&[text(lines, "versus_last").to_string(), String::from("Set a monthly budget in Plan to see what is left")]);
         figure_cell(&cells, "spend", "Spent", &fmt.format_whole(spent), &how, None)
@@ -1748,7 +1752,7 @@ fn empty_state(ui: &Rc<Ui>, body: &gtk::Box) {
     let weak = Rc::downgrade(ui);
     import_key.connect_clicked(move |_| {
         if let Some(ui) = weak.upgrade() {
-            import(&ui, true);
+            import(&ui, true, false);
         }
     });
     let weak = Rc::downgrade(ui);
@@ -1832,6 +1836,7 @@ fn transactions(ui: &Rc<Ui>, page: &Page, list: &Value, offset: i64, query: &str
         head.context.set_text(&tx_context(entries.len(), query, income, spent, &filtered));
         head.period.set_text(&name);
         head.next.set_sensitive(offset < 0);
+        head.next.set_tooltip_text(Some(if offset < 0 { "Next period" } else { "This is the current period" }));
     }
     let previous = TX_DRAWN.with(|d| d.borrow_mut().take());
     if entries.is_empty() {
@@ -1841,17 +1846,24 @@ fn transactions(ui: &Rc<Ui>, page: &Page, list: &Value, offset: i64, query: &str
             (true, false) => format!("Nothing in {name} for {filtered}."),
             (false, _) => format!("Nothing in {name} matches \u{201c}{query}\u{201d}."),
         };
+        let hint = if query.is_empty() { "Add an entry with the Entry key or Ctrl E" } else { "The search looks in this period's notes, categories and accounts" };
         let rows = card(&page.body, "Entries", None);
-        rows.append(&icon_row(&tile("list"), &text, "Add an entry with the Entry key or Ctrl E", "", ""));
-        if !filtered.is_empty() {
+        rows.append(&icon_row(&tile("list"), &text, hint, "", ""));
+        if !filtered.is_empty() || !query.is_empty() {
             let clear_key = button("Show every entry", "money-secondary");
             clear_key.set_widget_name("money-filter-clear");
             clear_key.set_halign(gtk::Align::Start);
             clear_key.add_css_class("tally-save");
             let weak = Rc::downgrade(ui);
+            // The filters and the search go; the period stays.
             clear_key.connect_clicked(move |_| {
                 if let Some(ui) = weak.upgrade() {
                     super::set_filters(None, None);
+                    super::set_query("");
+                    if let Some(head) = TX_HEAD.with(|h| h.borrow().clone()) {
+                        // Its delayed search-changed finds the query already empty, as in `show_entries`.
+                        head.search.set_text("");
+                    }
                     ui.refresh_page();
                 }
             });
@@ -2284,7 +2296,7 @@ fn budget_field(ui: &Rc<Ui>, category: Option<i64>, name: &str, amount: i64) -> 
             }
             glib::spawn_future_local(async move {
                 if let Err(e) = ui.call("money.budget.set", payload).await {
-                    ui.show_error(&e.to_string());
+                    ui.show_error(&unavailable(&e));
                 }
                 ui.refresh_page();
             });
@@ -2330,6 +2342,8 @@ fn data(ui: &Rc<Ui>, page: &Page, summary: Option<&Value>, lists: Option<&Value>
     title(&page.head, "Data", "Your ledger lives on this PC, in money.db beside Relay's store. Nothing here leaves it.");
     clear(&page.body);
     let empty = summary.is_none_or(|s| s["empty"] == true);
+    // A phone that syncs takes an erase or a restore whole on its next sync (MONEY.md, Generation).
+    let syncs = lists.is_some_and(|l| !rows(l, "devices").is_empty());
     let pair = columns(&page.body, 2);
     if let Some(lists) = lists {
         phones(&pair[0], lists);
@@ -2337,10 +2351,14 @@ fn data(ui: &Rc<Ui>, page: &Page, summary: Option<&Value>, lists: Option<&Value>
     let backups = card(&pair[0], "Backups", None);
     let import_key = button("Import…", "");
     import_key.set_widget_name("money-import");
-    setting_row(&backups, "download", "Import a Tally backup", "The .json from Tally's Settings, Backup. Replaces everything here.", &import_key);
+    let replaces = if syncs { "Replaces everything here, and on the phone when it next syncs." } else { "Replaces everything here." };
+    setting_row(&backups, "download", "Import a Tally backup", &format!("The .json from Tally's Settings, Backup. {replaces}"), &import_key);
     let export_key = button("Export…", "");
     export_key.set_widget_name("money-export");
     export_key.set_sensitive(!empty);
+    if empty {
+        export_key.set_tooltip_text(Some("Nothing to export yet"));
+    }
     setting_row(&backups, "upload", "Export a backup", "The same file, to keep or to restore on the phone.", &export_key);
 
     let ledger = card(&pair[1], "Ledger", None);
@@ -2360,7 +2378,15 @@ fn data(ui: &Rc<Ui>, page: &Page, summary: Option<&Value>, lists: Option<&Value>
     let erase = button("Erase…", "money-destructive");
     erase.set_widget_name("money-reset");
     erase.set_sensitive(!empty);
-    setting_row(&ledger, "trash", "Erase everything", "Every entry, account, budget, bill and goal on this PC. The phone keeps its own.", &erase);
+    if empty {
+        erase.set_tooltip_text(Some("The ledger is already empty"));
+    }
+    let erases = if syncs {
+        "Every entry, account, budget, bill and goal on this PC, and on the phone the next time it syncs. Export a backup first."
+    } else {
+        "Every entry, account, budget, bill and goal on this PC."
+    };
+    setting_row(&ledger, "trash", "Erase everything", erases, &erase);
     if let Some(summary) = summary {
         ledger_settings(ui, &pair[1], summary);
     }
@@ -2374,7 +2400,7 @@ fn data(ui: &Rc<Ui>, page: &Page, summary: Option<&Value>, lists: Option<&Value>
     let weak = Rc::downgrade(ui);
     import_key.connect_clicked(move |_| {
         if let Some(ui) = weak.upgrade() {
-            import(&ui, empty);
+            import(&ui, empty, syncs);
         }
     });
     let weak = Rc::downgrade(ui);
@@ -2396,16 +2422,36 @@ fn data(ui: &Rc<Ui>, page: &Page, summary: Option<&Value>, lists: Option<&Value>
         }
     });
     let weak = Rc::downgrade(ui);
-    confirm_inline(&erase, "Erase all of it", move |key| {
-        let Some(ui) = weak.upgrade() else { return };
+    erase.connect_clicked(move |key| {
+        if let Some(ui) = weak.upgrade() {
+            erase_all(&ui, key, syncs);
+        }
+    });
+}
+
+/// Erases the ledger after a yes on a sheet that says what goes, as a restore asks first: a phone
+/// that syncs loses it too, and nothing is kept unless a backup was exported.
+fn erase_all(ui: &Rc<Ui>, key: &gtk::Button, syncs: bool) {
+    let (ui, key) = (ui.clone(), key.clone());
+    glib::spawn_future_local(async move {
+        let panel = crate::panel::Panel::new(&ui, "Erase everything?", 440);
+        panel.add_css_class("money-sheet");
+        let phone = if syncs { ", and on the phone the next time it syncs" } else { "" };
+        let about = label(
+            &format!("This erases every entry, account, budget, bill and goal on this PC{phone}. Export a backup first if you might want them back."),
+            "money-muted",
+        );
+        about.set_wrap(true);
+        panel.body.append(&about);
+        if !panel.response("Erase everything").await {
+            return;
+        }
         key.set_sensitive(false);
-        glib::spawn_future_local(async move {
-            match ui.call("money.reset", json!({})).await {
-                Ok(_) => super::toast(&ui, "Erased. The ledger on this PC is empty.", None),
-                Err(e) => ui.show_error(&e.to_string()),
-            }
-            ui.refresh_page();
-        });
+        match ui.call("money.reset", json!({})).await {
+            Ok(_) => super::toast(&ui, "Erased. The ledger on this PC is empty.", None),
+            Err(e) => ui.show_error(&unavailable(&e)),
+        }
+        ui.refresh_page();
     });
 }
 
@@ -2452,6 +2498,19 @@ fn ledger_settings(ui: &Rc<Ui>, column: &gtk::Box, summary: &Value) {
     save.set_halign(gtk::Align::End);
     save.add_css_class("tally-save");
     list.append(&save);
+    // Enter in either field saves, as the key does; not again while a save is on its way.
+    let key = save.clone();
+    currency.connect_activate(move |_| {
+        if key.is_sensitive() {
+            key.emit_clicked();
+        }
+    });
+    let key = save.clone();
+    start.connect_activate(move |_| {
+        if key.is_sensitive() {
+            key.emit_clicked();
+        }
+    });
     let weak = Rc::downgrade(ui);
     save.connect_clicked(move |key| {
         let Some(ui) = weak.upgrade() else { return };
@@ -2469,7 +2528,7 @@ fn ledger_settings(ui: &Rc<Ui>, column: &gtk::Box, summary: &Value) {
                     super::remember_currency(&v);
                     super::toast(&ui, "Saved. Every amount and period reads with the new settings.", None);
                 }
-                Err(e) => ui.show_error(&e.to_string()),
+                Err(e) => ui.show_error(&unavailable(&e)),
             }
             key.set_sensitive(true);
             ui.refresh_page();
@@ -2484,15 +2543,16 @@ fn load_sample(ui: &Rc<Ui>, key: &gtk::Button) {
     glib::spawn_future_local(async move {
         match ui.call("money.sample", json!({})).await {
             Ok(v) => super::toast(&ui, &format!("Loaded a sample household: {}.", plural(n(&v, "transactions").max(0) as usize, "entry").replace("entrys", "entries")), None),
-            Err(e) => ui.show_error(&e.to_string()),
+            Err(e) => ui.show_error(&unavailable(&e)),
         }
         key.set_sensitive(true);
         ui.refresh_page();
     });
 }
 
-/// Choose a Tally backup and restore it; over a ledger with anything in it, only after a yes.
-fn import(ui: &Rc<Ui>, empty: bool) {
+/// Choose a Tally backup and restore it; over a ledger with anything in it, only after a yes,
+/// which says so when a phone that `syncs` will take it too.
+fn import(ui: &Rc<Ui>, empty: bool, syncs: bool) {
     let ui = ui.clone();
     glib::spawn_future_local(async move {
         let filter = gtk::FileFilter::new();
@@ -2509,9 +2569,10 @@ fn import(ui: &Rc<Ui>, empty: bool) {
         if !empty {
             let panel = crate::panel::Panel::new(&ui, "Replace everything?", 440);
             panel.add_css_class("money-sheet");
+            let phone = if syncs { " A phone that syncs with this PC takes it too on its next sync." } else { "" };
             let about = label(
                 &format!(
-                    "{} replaces every entry, account, budget, bill and goal on this PC. Export a backup first if you might want them back.",
+                    "{} replaces every entry, account, budget, bill and goal on this PC. Export a backup first if you might want them back.{phone}",
                     path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
                 ),
                 "money-muted",
@@ -2532,7 +2593,7 @@ fn import(ui: &Rc<Ui>, empty: bool) {
                 ),
                 None,
             ),
-            Err(e) => ui.show_error(&e.to_string()),
+            Err(e) => ui.show_error(&unavailable(&e)),
         }
         ui.refresh_page();
     });
@@ -2555,7 +2616,7 @@ fn export(ui: &Rc<Ui>) {
                 ),
                 None,
             ),
-            Err(e) => ui.show_error(&e.to_string()),
+            Err(e) => ui.show_error(&unavailable(&e)),
         }
     });
 }

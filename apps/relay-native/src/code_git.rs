@@ -21,7 +21,16 @@ thread_local! {
     /// Source Control sections the person folded; kept across refreshes, as VS Code does.
     static FOLDED: RefCell<std::collections::HashSet<&'static str>> =
         RefCell::new(["merge"].into_iter().collect());
+    /// The panel's view as last read from or written to [`VIEW_KEY`]; `None` until it has been
+    /// read, so nothing is written over a saved view before it is known.
+    static SAVED_VIEW: RefCell<Option<Value>> = const { RefCell::new(None) };
+    static VIEW_TIMER: RefCell<Option<glib::SourceId>> = const { RefCell::new(None) };
 }
+/// Where the Git panel's view (the Graph key, where the history split sits and which sections
+/// are folded) is kept between runs, as Notes keeps its window in `native.notes.window`.
+const VIEW_KEY: &str = "native.code";
+/// Every Source Control section, so a fold read back names one of them.
+const SECTIONS: [&str; 6] = ["conflicts", "staged", "changes", "remote", "history", "merge"];
 fn folded(id: &'static str) -> bool {
     FOLDED.with(|folded| folded.borrow().contains(id))
 }
@@ -121,6 +130,9 @@ fn sync_counts(ahead: Option<i64>, behind: Option<i64>) -> Option<gtk::Box> {
 
 /// Rows drawn per change group or commit; the rest is one "more files" line.
 const CHANGE_ROWS: usize = 500;
+/// Commits History lists at first, and each "Show more" adds; `git.log` gives at most 500.
+pub(super) const HISTORY_PAGE: u32 = 30;
+const HISTORY_MOST: u32 = 500;
 const UNRESOLVED: &str = "Resolve the merge conflicts and mark them resolved before committing";
 
 fn more_files(total: usize) -> Option<gtk::Label> {
@@ -134,14 +146,6 @@ fn more_files(total: usize) -> Option<gtk::Label> {
     more.set_margin_top(4);
     more.set_margin_bottom(4);
     Some(more)
-}
-
-/// The bus message alone; the kind and code are for programs, not people.
-fn readable(err: &Error) -> String {
-    match err {
-        Error::Bus(bus) => bus.message.clone(),
-        other => other.to_string(),
-    }
 }
 
 /// What the Git panel draws, hashed: a refresh that fetched the same thing leaves it alone.
@@ -246,6 +250,8 @@ impl PrRow {
                 String::from("Lookup incomplete")
             } else if ready {
                 String::from("Pushed and ready for review")
+            } else if self.merged == Some(true) {
+                String::from("Nothing to review: every commit is already on the base branch")
             } else {
                 String::from("Push the branch first")
             }
@@ -260,6 +266,64 @@ impl PrRow {
             self.key.remove_css_class("primary");
         }
         *self.url.borrow_mut() = pull_request.as_ref().and_then(|pr| pr["url"].as_str()).map(str::to_owned);
+    }
+}
+
+/// Where the keyboard is among the change rows under `git`: the row's group ("staged" or
+/// "worktree"), its path, its place in the group, and whether the focus is on its stage key
+/// rather than the row. A rebuild puts it back with `refocus_change`.
+type ChangeFocus = (String, String, usize, bool);
+fn focused_change(git: &gtk::Box) -> Option<ChangeFocus> {
+    let focus = git.root()?.focus()?;
+    if !focus.is_ancestor(git) {
+        return None;
+    }
+    // A row is the open key, named git-change:{group}:{path}, then its stage key (`change_row`).
+    let row = std::iter::successors(Some(focus.clone()), |w| w.parent()).find(|w| w.has_css_class("scm-row"))?;
+    let open = row.first_child()?;
+    let name = open.widget_name();
+    let (group, path) = name.strip_prefix("git-change:")?.split_once(':')?;
+    let index = change_keys(git.upcast_ref(), group).iter().position(|key| *key == open)?;
+    Some((group.to_owned(), path.to_owned(), index, focus != open))
+}
+/// The open keys of a group's rows under `root`, in the order they read.
+fn change_keys(root: &gtk::Widget, group: &str) -> Vec<gtk::Widget> {
+    fn walk(widget: &gtk::Widget, prefix: &str, found: &mut Vec<gtk::Widget>) {
+        if widget.widget_name().starts_with(prefix) {
+            found.push(widget.clone());
+            return;
+        }
+        let mut child = widget.first_child();
+        while let Some(next) = child {
+            walk(&next, prefix, found);
+            child = next.next_sibling();
+        }
+    }
+    let mut found = Vec::new();
+    walk(root, &format!("git-change:{group}:"), &mut found);
+    found
+}
+/// After a rebuild, the keyboard goes back to the same row, or, when staging or unstaging took
+/// it out of its group, the one now in its place (else the group's last, else the same file
+/// in the other group), so a person can stage one file after another from the keys.
+fn refocus_change(git: &gtk::Box, (group, path, index, on_key): ChangeFocus) {
+    let keys = change_keys(git.upcast_ref(), &group);
+    let same = |key: &&gtk::Widget| {
+        key.widget_name().strip_prefix("git-change:").and_then(|rest| rest.split_once(':')).is_some_and(|(_, p)| p == path)
+    };
+    let open = keys
+        .iter()
+        .find(same)
+        .or_else(|| keys.get(index))
+        .or_else(|| keys.last())
+        .cloned()
+        .or_else(|| {
+            let other = if group == "staged" { "worktree" } else { "staged" };
+            change_keys(git.upcast_ref(), other).iter().find(same).cloned()
+        });
+    let target = open.and_then(|open| if on_key { open.next_sibling() } else { Some(open) });
+    if let Some(target) = target.filter(|target| target.is_mapped()) {
+        target.grab_focus();
     }
 }
 
@@ -312,6 +376,72 @@ fn restore_scrolls(root: &gtk::Widget, saved: Vec<f64>) {
 }
 
 impl Editor {
+    /// The panel's view in the shape [`VIEW_KEY`] keeps it.
+    fn git_view(&self) -> Value {
+        let mut folded: Vec<&str> = FOLDED.with(|folded| folded.borrow().iter().copied().collect());
+        folded.sort_unstable();
+        json!({"graph": self.git_graph.get(), "history_split": self.git_split_position.get(), "folded": folded})
+    }
+    /// Takes up the view the last run left, once a run, before the panel is first drawn.
+    async fn load_git_view(&self, ui: &Rc<Ui>) {
+        if SAVED_VIEW.with(|saved| saved.borrow().is_some()) {
+            return;
+        }
+        // A failed read leaves the view unread: the defaults show and nothing is written.
+        let Ok(saved) = ui.call("settings.get", json!({"path": VIEW_KEY})).await else { return };
+        let saved = &saved["value"];
+        if let Some(graph) = saved["graph"].as_bool() {
+            self.git_graph.set(graph);
+        }
+        if let Some(split) = saved["history_split"].as_i64().and_then(|at| i32::try_from(at).ok()).filter(|at| *at > 0) {
+            self.git_split_position.set(split);
+        }
+        if let Some(folded) = saved["folded"].as_array() {
+            let ids = SECTIONS.into_iter().filter(|id| folded.iter().any(|f| f.as_str() == Some(*id))).collect();
+            FOLDED.with(|slot| *slot.borrow_mut() = ids);
+        }
+        SAVED_VIEW.with(|slot| *slot.borrow_mut() = Some(self.git_view()));
+    }
+    /// Writes the view a moment after it last changed (a dragged split changes it on every
+    /// frame), once the saved one has been read.
+    fn keep_git_view(&self, ui: &Rc<Ui>) {
+        let view = self.git_view();
+        let changed = SAVED_VIEW.with(|saved| {
+            let mut saved = saved.borrow_mut();
+            match saved.as_ref() {
+                Some(old) if *old != view => {
+                    *saved = Some(view);
+                    true
+                }
+                _ => false,
+            }
+        });
+        if !changed {
+            return;
+        }
+        if let Some(timer) = VIEW_TIMER.with(|timer| timer.borrow_mut().take()) {
+            timer.remove();
+        }
+        let weak = Rc::downgrade(ui);
+        let timer = glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+            VIEW_TIMER.with(|timer| timer.borrow_mut().take());
+            let (Some(ui), Some(value)) = (weak.upgrade(), SAVED_VIEW.with(|saved| saved.borrow().clone())) else { return };
+            glib::spawn_future_local(async move {
+                let _ = ui.call("settings.set", json!({"path": VIEW_KEY, "value": value})).await;
+            });
+        });
+        VIEW_TIMER.with(|slot| *slot.borrow_mut() = Some(timer));
+    }
+    /// Folding `section` is part of the view [`VIEW_KEY`] keeps.
+    fn keeps_fold(self: &Rc<Self>, ui: &Rc<Ui>, section: &Section) {
+        let (ed, weak) = (Rc::downgrade(self), Rc::downgrade(ui));
+        section.toggle.connect_clicked(move |_| {
+            if let (Some(ed), Some(ui)) = (ed.upgrade(), weak.upgrade()) {
+                ed.keep_git_view(&ui);
+            }
+        });
+    }
+
     pub(super) fn refresh_git(self: &Rc<Self>, ui: &Rc<Ui>) {
         if ui.project.get() == 0 {
             return;
@@ -322,7 +452,23 @@ impl Editor {
         if *self.git_scope.borrow() != scope {
             clear(&self.git);
             self.git_revision.set(self.git_revision.get() + 1);
-            *self.git_scope.borrow_mut() = scope;
+            // The message and branch name being typed belong to the checkout they were typed
+            // for: kept for the session, and that checkout's come back.
+            let fields = [commit_text(&self.commit_message), self.branch_name.text().into(), self.branch_start.text().into()];
+            let old = std::mem::replace(&mut *self.git_scope.borrow_mut(), scope.clone());
+            let [message, name, start] = {
+                let mut drafts = self.git_drafts.borrow_mut();
+                if fields.iter().any(|field| !field.is_empty()) {
+                    drafts.insert(old, fields);
+                } else {
+                    drafts.remove(&old);
+                }
+                drafts.remove(&scope).unwrap_or_default()
+            };
+            self.commit_message.buffer().set_text(&message);
+            self.branch_name.set_text(&name);
+            self.branch_start.set_text(&start);
+            self.git_history.set(HISTORY_PAGE);
             *self.tree_badges.borrow_mut() = Default::default();
         }
         // A status is on its way either way: this one, or the rerun queued behind one.
@@ -347,7 +493,7 @@ impl Editor {
             let status = match result {
                 Ok(v) => v,
                 Err(err) => {
-                    ui.show_error(&err.to_string());
+                    ui.show_error(&readable(&err));
                     return;
                 }
             };
@@ -362,9 +508,10 @@ impl Editor {
             }
             // Pull requests come on their own: the panel draws without waiting for GitHub.
             e.request_prs(&ui, project);
+            e.load_git_view(&ui).await;
             let results = tokio::join!(
                 ui.call("git.branches", payload.clone()),
-                ui.call("git.log", e.payload(&ui, json!({"limit":30}))),
+                ui.call("git.log", e.payload(&ui, json!({"limit":e.git_history.get()}))),
                 ui.call("integration.list", json!({"project_id":project}))
             );
             if !e.matches(&ui, project, &worktree) || revision != e.git_revision.get() {
@@ -392,6 +539,7 @@ impl Editor {
             }
             e.git_signature.set(signature);
             let typing = e.commit_message.has_focus();
+            let focused = focused_change(&e.git);
             let scrolls = scroll_positions(e.git.upcast_ref());
             clear(&e.git);
             // git.status names a detached head "HEAD"; it has no branch to publish or open a PR for.
@@ -482,15 +630,19 @@ impl Editor {
             } else {
                 (free - 280).max(120)
             });
-            let split_position = Rc::downgrade(&e);
+            let (split_position, weak) = (Rc::downgrade(&e), Rc::downgrade(&ui));
             panes.connect_position_notify(move |panes| {
-                if let Some(ed) = split_position.upgrade() {
+                if let (Some(ed), Some(ui)) = (split_position.upgrade(), weak.upgrade()) {
                     ed.git_split_position.set(panes.position());
+                    ed.keep_git_view(&ui);
                 }
             });
             let upper = gtk::Box::new(gtk::Orientation::Vertical, 0);
             upper.add_css_class("code-git-upper");
-            panes.set_start_child(Some(&scrolled(&upper)));
+            let upper_scroll = scrolled(&upper);
+            // Rows cut their names to the panel's width; nothing scrolls sideways.
+            upper_scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
+            panes.set_start_child(Some(&upper_scroll));
             e.git.append(&panes);
 
             let conflicts: Vec<Value> = files.iter().filter(|f| is_conflict(f)).cloned().collect();
@@ -514,6 +666,9 @@ impl Editor {
                             let message = commit_text(&editor.commit_message).trim().to_string();
                             if editor.git.has_css_class("has-conflicts") {
                                 ui.show_error(UNRESOLVED);
+                            } else if !editor.git.has_css_class("has-changes") {
+                                // As the Commit key says it.
+                                ui.show_error("No changes to commit.");
                             } else if !message.is_empty() {
                                 // Like VS Code's smart commit: staged changes if any, else all.
                                 let all = !editor.git.has_css_class("has-staged");
@@ -523,6 +678,10 @@ impl Editor {
                                     json!({"message":message,"all":all}),
                                     None,
                                 );
+                            } else {
+                                // As the Commit key says it.
+                                ui.show_error("Enter a commit message first.");
+                                editor.commit_message.grab_focus();
                             }
                         }
                         return glib::Propagation::Stop;
@@ -535,6 +694,11 @@ impl Editor {
                 e.git.remove_css_class("has-staged");
             } else {
                 e.git.add_css_class("has-staged");
+            }
+            if files.is_empty() {
+                e.git.remove_css_class("has-changes");
+            } else {
+                e.git.add_css_class("has-changes");
             }
             // `all` stages with `git add -A`, which would record the conflict markers as resolved;
             // git itself refuses a commit while the index is unmerged. Resolve first.
@@ -594,10 +758,12 @@ impl Editor {
             commit.set_sensitive(!files.is_empty() && !resolving);
             commit.set_tooltip_text(Some(if resolving {
                 UNRESOLVED
+            } else if files.is_empty() {
+                "No changes to commit"
             } else if smart_all {
-                "Nothing is staged, so every change is committed"
+                "Nothing is staged, so every change is committed (Ctrl+Enter)"
             } else {
-                "Commit the staged changes · Ctrl Enter"
+                "Commit the staged changes (Ctrl+Enter)"
             }));
             let commit_more = gtk::MenuButton::new();
             commit_more.add_css_class("scm-commit-more");
@@ -676,10 +842,17 @@ impl Editor {
                             if ed.matches(&ui, project, &worktree)
                                 && commit_text(&field) == original =>
                         {
-                            field.buffer().set_text(text(&v, "message"))
+                            // One undo step, so Ctrl+Z brings back what was typed; set_text
+                            // cannot be undone.
+                            let buffer = field.buffer();
+                            let (mut start, mut end) = buffer.bounds();
+                            buffer.begin_user_action();
+                            buffer.delete(&mut start, &mut end);
+                            buffer.insert(&mut start, text(&v, "message"));
+                            buffer.end_user_action();
                         }
                         Ok(_) => {}
-                        Err(err) => ui.show_error(&err.to_string()),
+                        Err(err) => ui.show_error(&readable(&err)),
                     }
                 });
             });
@@ -713,6 +886,7 @@ impl Editor {
                     continue;
                 }
                 let group_section = section(id, title, Some(group.len()));
+                e.keeps_fold(&ui, &group_section);
                 if id == "changes" {
                     group_section.toggle.set_tooltip_text(Some(&change_summary(group)));
                 }
@@ -753,6 +927,7 @@ impl Editor {
 
             // Remote: push and the pull request, one compact row each.
             let remote = section("remote", "REMOTE", None);
+            e.keeps_fold(&ui, &remote);
             let can_push = !detached && (upstream.is_none() || (ahead.is_some_and(|n| n > 0) && behind == Some(0)));
             let push_state = match (&upstream, ahead, behind) {
                 _ if detached => String::from("Check out a branch to push or open a pull request"),
@@ -790,6 +965,21 @@ impl Editor {
             push.add_css_class("small-key");
             push.set_valign(gtk::Align::Center);
             push.set_sensitive(can_push);
+            // Each state says what it means, and what to do when Relay cannot do it.
+            push.set_tooltip_text(Some(&if detached {
+                String::from("Check out a branch to push it")
+            } else if can_push {
+                match (&upstream, ahead.filter(|n| *n > 0)) {
+                    (Some(up), Some(ahead)) => format!("Push {ahead} commit{} to {up}", if ahead == 1 { "" } else { "s" }),
+                    _ => String::from("Publish this branch to the remote"),
+                }
+            } else if behind.is_some_and(|n| n > 0) {
+                String::from("The remote has commits this branch lacks. Pull them in a terminal (git pull), then push.")
+            } else if ahead.is_none() || behind.is_none() {
+                String::from("Fetch to compare with the remote")
+            } else {
+                String::from("Nothing to push")
+            }));
             let ed = e.clone();
             let weak = Rc::downgrade(&ui);
             push.connect_clicked(move |_| {
@@ -811,14 +1001,16 @@ impl Editor {
             let history = gtk::Box::new(gtk::Orientation::Vertical, 0);
             history.add_css_class("code-history-pane");
             let history_section = section("history", "HISTORY", None);
+            e.keeps_fold(&ui, &history_section);
             history_section.root.add_css_class("scm-history");
             let graph_key = gtk::ToggleButton::with_label("Graph");
             graph_key.add_css_class("code-graph-toggle");
             graph_key.set_active(e.git_graph.get());
-            let graph_state = Rc::downgrade(&e);
+            let (graph_state, weak) = (Rc::downgrade(&e), Rc::downgrade(&ui));
             graph_key.connect_toggled(move |key| {
-                if let Some(ed) = graph_state.upgrade() {
+                if let (Some(ed), Some(ui)) = (graph_state.upgrade(), weak.upgrade()) {
                     ed.git_graph.set(key.is_active());
+                    ed.keep_git_view(&ui);
                 }
             });
             history_section.actions.append(&graph_key);
@@ -879,7 +1071,15 @@ impl Editor {
                 if let Some(ui) = weak.upgrade() {
                     if let Some(url) = url.borrow().as_deref() {
                         let uri = gtk::UriLauncher::new(url);
-                        uri.launch(Some(&ui.window), gtk::gio::Cancellable::NONE, |_| {});
+                        let shown = ui.clone();
+                        uri.launch(Some(&ui.window), gtk::gio::Cancellable::NONE, move |result| {
+                            match result {
+                                Err(error) if !error.matches(gtk::DialogError::Dismissed) => {
+                                    shown.show_error(&format!("Could not open the pull request: {}", error.message()))
+                                }
+                                _ => {}
+                            }
+                        });
                     } else {
                         ed.git_action(&ui, "git.pr.open", json!({}), None);
                     }
@@ -893,6 +1093,7 @@ impl Editor {
                 .cloned()
                 .collect();
             let merge_section = section("merge", "MERGE TEST", Some(live.len()));
+            e.keeps_fold(&ui, &merge_section);
             let merge = merge_section.body.clone();
             upper.append(&merge_section.root);
             let hint = label(
@@ -907,8 +1108,13 @@ impl Editor {
                 let pick = gtk::CheckButton::new();
                 pick.add_css_class("code-merge-pick");
                 let copy = gtk::Box::new(gtk::Orientation::Vertical, 2);
-                copy.append(&label(&name, "body"));
-                copy.append(&label(text(session, "branch"), "mono"));
+                // A long agent or branch name is cut in the middle, not pushed past the panel.
+                for (words, class) in [(name.as_str(), "body"), (text(session, "branch"), "mono")] {
+                    let line = label(words, class);
+                    line.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+                    line.set_xalign(0.);
+                    copy.append(&line);
+                }
                 pick.set_child(Some(&copy));
                 merge.append(&pick);
                 picks.push((name, pick));
@@ -967,7 +1173,7 @@ impl Editor {
                     .map(|(n, _)| n.clone())
                     .collect();
                 if selected.len() < 2 {
-                    ui.show_error("Select at least two agents to test together.");
+                    ui.show_error("Select at least 2 branches to test together.");
                     return;
                 }
                 key.set_sensitive(false);
@@ -981,7 +1187,7 @@ impl Editor {
                         )
                         .await
                     {
-                        ui.show_error(&e.to_string());
+                        ui.show_error(&readable(&e));
                     }
                     key.set_sensitive(true);
                     if ui.project.get() == project {
@@ -1022,14 +1228,15 @@ impl Editor {
                             discard.set_valign(gtk::Align::Center);
                             let weak = Rc::downgrade(&ui);
                             let ed = e.clone();
-                            discard.connect_clicked(move |key| {
+                            // It throws away a checkout and a branch: asked once in place.
+                            crate::app::confirm_inline(&discard, "Discard it?", move |key| {
                                 let Some(ui) = weak.upgrade() else { return };
                                 key.set_sensitive(false);
                                 let key = key.clone();
                                 let ed = ed.clone();
                                 glib::spawn_future_local(async move {
                                     if let Err(err) = ui.call("integration.discard", json!({"integration_id":id})).await {
-                                        ui.show_error(&err.to_string());
+                                        ui.show_error(&readable(&err));
                                         key.set_sensitive(true);
                                     }
                                     if ui.project.get() == project {
@@ -1042,7 +1249,7 @@ impl Editor {
                         merge.append(&line);
                     }
                 }
-                Err(err) => merge.append(&label(&err.to_string(), "code-git-hint")),
+                Err(err) => merge.append(&label(&readable(&err), "code-git-hint")),
             }
             match results.0 {
                 Ok(v) => e.render_branch_picker(&ui, &branches_box, &branch_popup, &v),
@@ -1054,8 +1261,10 @@ impl Editor {
             match results.1 {
                 Ok(v) => {
                     let commits = rows(&v, "commits");
+                    // A full page is the limit asked for, not the whole history.
+                    let more = commits.len() as u32 >= e.git_history.get();
                     if let Some(face) = history_section.toggle.child().and_downcast::<gtk::Box>() {
-                        let count = label(&commits.len().to_string(), "scm-count");
+                        let count = label(&format!("{}{}", commits.len(), if more { "+" } else { "" }), "scm-count");
                         count.set_valign(gtk::Align::Center);
                         face.append(&count);
                     }
@@ -1094,10 +1303,12 @@ impl Editor {
                         copy.append(&meta);
                         row.append(&copy);
                         b.set_child(Some(&row));
+                        // "3 h ago", as the commit's own panel says it.
+                        let at = text(&commit, "at");
                         b.set_tooltip_text(Some(&format!(
                             "{}\n{}\n{}",
                             text(&commit, "author"),
-                            text(&commit, "at"),
+                            crate::relative::ago(at, crate::relative::Form::Long).unwrap_or_else(|| at.to_string()),
                             sha
                         )));
                         let ed = e.clone();
@@ -1109,6 +1320,20 @@ impl Editor {
                         });
                         history_box.append(&b);
                     }
+                    if more && e.git_history.get() < HISTORY_MOST {
+                        let next = button(&format!("Show {HISTORY_PAGE} more"), "quiet");
+                        next.add_css_class("code-history-more");
+                        next.set_widget_name("git-history-more");
+                        let (ed, weak) = (Rc::downgrade(&e), Rc::downgrade(&ui));
+                        next.connect_clicked(move |next| {
+                            if let (Some(ed), Some(ui)) = (ed.upgrade(), weak.upgrade()) {
+                                next.set_sensitive(false);
+                                ed.git_history.set((ed.git_history.get() + HISTORY_PAGE).min(HISTORY_MOST));
+                                ed.refresh_git(&ui);
+                            }
+                        });
+                        history_box.append(&next);
+                    }
                     for graph in &graphs {
                         graph.set_visible(graph_key.is_active());
                     }
@@ -1118,11 +1343,13 @@ impl Editor {
                         }
                     });
                 }
-                Err(err) => history_box.append(&label(&err.to_string(), "code-git-hint")),
+                Err(err) => history_box.append(&label(&readable(&err), "code-git-hint")),
             }
             restore_scrolls(e.git.upcast_ref(), scrolls);
             if typing {
                 e.commit_message.grab_focus();
+            } else if let Some(focused) = focused {
+                refocus_change(&e.git, focused);
             }
         });
     }
@@ -1222,12 +1449,15 @@ impl Editor {
         };
         open.connect_clicked(move |_| {
             if let Some(ui) = weak.upgrade() {
-                // open_diff refuses a dirty buffer and shows an image instead; keep its message.
-                let text_diff = !ed.is_occupied() && !super::image_preview::is_image(&diff_path);
-                ed.open_diff(&ui, diff_path.clone());
-                if let Some(caveat) = caveat.as_deref().filter(|_| text_diff) {
-                    ui.show_error(caveat);
-                }
+                let (path, caveat) = (diff_path.clone(), caveat.clone());
+                ed.after_unsaved(&ui, move |ed, ui| {
+                    // open_diff says why it refused, and shows an image instead: keep its message.
+                    if ed.open_diff(ui, path) {
+                        if let Some(caveat) = caveat {
+                            ui.show_info(&caveat);
+                        }
+                    }
+                });
             }
         });
         self.bind_image_hover(ui, &open, &path, format!("{code}:{}", self.git_revision.get()), None);
@@ -1555,8 +1785,19 @@ impl Editor {
         if self.git_busy.get() {
             return;
         }
-        if self.is_occupied() {
-            ui.show_error("Save or discard your editor changes before changing Git state.");
+        // Only a branch switch rewrites the files under the editor: staging, committing and
+        // the remote leave them alone, so unsaved edits hold back only that.
+        let rewrites = matches!(op, "git.branch.create" | "git.branch.switch");
+        if rewrites && self.is_occupied() {
+            ui.show_error(if self.buffer.is_modified() && !self.busy.get() {
+                "Save or discard your editor changes before switching branches."
+            } else {
+                "Wait for the file to finish opening or saving."
+            });
+            return;
+        }
+        if self.writing.get() {
+            ui.show_error("Wait for the save or file change to finish.");
             return;
         }
         let retry = extra.clone();
@@ -1571,26 +1812,42 @@ impl Editor {
         let commit_snapshot = (op == "git.commit").then(|| commit_text(&self.commit_message));
         let e = self.clone();
         let ui = ui.clone();
+        // The panel goes insensitive while the action runs, which takes the keyboard focus
+        // off whatever key had it.
+        let focus = self.git.root().and_then(|root| root.focus()).filter(|focus| focus.is_ancestor(&self.git));
         self.git_busy.set(true);
         self.git.set_sensitive(false);
-        self.view.set_editable(false);
+        if rewrites {
+            self.view.set_editable(false);
+        }
         glib::spawn_future_local(async move {
             let result=async {
                 if matches!(op,"git.push"|"git.pr.open"|"git.branch.delete"){
-                    let explanation=match op{"git.push"=>"Push this worktree's branch to its remote?","git.pr.open"=>"Publish a pull request for this worktree?",_=>"Delete this merged local branch? The engine refuses protected, checked-out and session-owned branches."};
-                    if !confirm(&ui,op,&format!("{explanation}\n{}",serde_json::to_string_pretty(&payload).unwrap_or_default())).await {return Ok(None);}
+                    let (title,copy,accept)=match op{
+                        "git.push"=>("Push branch",String::from("Push this worktree's branch to its remote?"),"Push"),
+                        "git.pr.open"=>("Open pull request",String::from("Publish a pull request for this worktree?"),"Open pull request"),
+                        _=>("Delete branch",format!("Delete the merged local branch {}? The engine refuses protected, checked-out and session-owned branches.",text(&payload,"name")),"Delete branch"),
+                    };
+                    if !ask(&ui,title,&copy,accept).await {return Ok(None);}
                 }
                 guarded(&ui,op,payload).await
             }.await;
             e.git_busy.set(false);
             e.git.set_sensitive(true);
+            // It comes back to that key (a rebuild then moves it to the same row or the next,
+            // `refocus_change`), unless it went somewhere else meanwhile.
+            if let Some(focus) = focus.filter(|focus| focus.is_mapped() && focus.is_ancestor(&e.git)) {
+                if e.git.root().and_then(|root| root.focus()).is_none() {
+                    focus.grab_focus();
+                }
+            }
             if !e.matches(&ui, project, &worktree) {
                 return;
             }
             // A file opened meanwhile owns the document: leave it alone, but still report the
             // outcome (RA-453).
             let document = revision == e.revision.get();
-            if document {
+            if document && rewrites {
                 e.set_busy(false);
             }
             match result {
@@ -1616,10 +1873,35 @@ impl Editor {
                             text(&v, "branch"),
                             text(&retry, "name")
                         ));
+                    } else if op == "git.push" {
+                        ui.show_info("Pushed");
+                    } else if op == "git.fetch" {
+                        // The counts are the primary checkout's branch, so only it shows them.
+                        ui.show_info(&match v["behind"].as_i64().filter(|_| worktree.is_empty()) {
+                            Some(0) => String::from("Fetched · up to date"),
+                            Some(behind) => format!("Fetched · {behind} to pull"),
+                            None => String::from("Fetched"),
+                        });
                     }
-                    if matches!(op, "git.branch.create" | "git.branch.switch") {
+                    if rewrites {
                         if document {
+                            // The file shown is shown again from the new branch, where its caret
+                            // was; one the branch does not have closes without a word.
+                            let reopen = (!e.diff.get() && !e.image_mode.get() && !e.path.borrow().is_empty())
+                                .then(|| (e.path.borrow().clone(), e.caret()));
+                            let (agents, design) = (e.agents_visible(), e.design_visible());
                             e.clear_document();
+                            if let Some((path, caret)) = reopen {
+                                e.goto.set(Some(caret));
+                                e.quiet_missing.set(true);
+                                e.open(&ui, path);
+                                // Loading shows the source; the view that was up stays (RA-215).
+                                if agents {
+                                    e.show_agents();
+                                } else if design {
+                                    e.show_design();
+                                }
+                            }
                         }
                         e.load_tree(&ui);
                     }
@@ -1657,8 +1939,7 @@ impl Editor {
                         );
                     }
                 }
-                Err(err) if op.starts_with("git.branch.") => ui.show_error(&readable(&err)),
-                Err(err) => ui.show_error(&err.to_string()),
+                Err(err) => ui.show_error(&readable(&err)),
             }
         });
     }
@@ -1693,7 +1974,7 @@ impl Editor {
                     "These files still contain conflict markers (<<<<<<< … >>>>>>>). Marking them resolved stages the markers, and the next commit records them.\n\n{}",
                     marked.join("\n")
                 );
-                if !confirm(&ui, "Mark as resolved with conflict markers?", &copy).await
+                if !confirm(&ui, "Mark as resolved with conflict markers?", &copy, "Mark as resolved").await
                     || !e.matches(&ui, project, &worktree)
                 {
                     return;
@@ -1702,15 +1983,17 @@ impl Editor {
             e.git_action(&ui, "git.stage", json!({"paths":paths}), None);
         });
     }
-    fn open_diff(self: &Rc<Self>, ui: &Rc<Ui>, path: String) {
-        if self.is_occupied() {
-            ui.show_error("Save or discard your edits before opening a diff.");
-            return;
+    /// Show `path`'s changes against HEAD; false when it was refused, or is a picture, which
+    /// shows instead.
+    fn open_diff(self: &Rc<Self>, ui: &Rc<Ui>, path: String) -> bool {
+        if let Some(refusal) = self.replace_refusal(Some("Save or discard your edits before opening a diff.")) {
+            ui.show_error(refusal);
+            return false;
         }
         // An image's diff is bytes; show the picture instead.
         if super::image_preview::is_image(&path) {
             self.open_image(ui, path);
-            return;
+            return false;
         }
         self.revision.set(self.revision.get() + 1);
         let revision = self.revision.get();
@@ -1746,9 +2029,10 @@ impl Editor {
                     e.rerender_diff();
                     e.set_busy(false);
                 }
-                Err(err) => ui.show_error(&err.to_string()),
+                Err(err) => ui.show_error(&readable(&err)),
             }
         });
+        true
     }
     /// Draw the open diff split or inline, with removed lines red and added lines green
     /// over the file's own syntax colours.
@@ -1767,8 +2051,11 @@ impl Editor {
         let language = sourceview5::LanguageManager::default().guess_language(Some(&path), None);
         self.buffer.set_language(language.as_ref());
         self.before.set_language(language.as_ref());
+        // The line of the first change, where the caret goes.
+        let first;
         if self.diff_inline.get() {
             let lines = inline_diff(&unified, new);
+            first = lines.iter().position(|(mark, _)| !matches!(mark, Mark::Same));
             let body = lines.iter().map(|(_, line)| *line).collect::<Vec<_>>().join("\n");
             self.buffer.set_text(&body);
             self.before.set_text("");
@@ -1785,6 +2072,9 @@ impl Editor {
             }
             self.caption.set_text(&format!("{path} · inline diff"));
         } else {
+            // Lines before the first change are the same on both sides, so whichever side it
+            // starts on, it starts at the same line on the other.
+            first = added.first().copied().into_iter().chain(removed.first().copied()).min();
             self.before.set_text(old);
             self.buffer.set_text(new);
             self.before_scroll.set_visible(true);
@@ -1800,7 +2090,26 @@ impl Editor {
             self.caption.set_text(&format!("{path} · HEAD ↔ working tree"));
         }
         self.buffer.set_modified(false);
-        self.buffer.place_cursor(&self.buffer.start_iter());
+        // A change past the last line (lines added at the end) is at the end.
+        let line = |buffer: &sourceview5::Buffer| match first {
+            Some(line) => buffer.iter_at_line(line as i32).unwrap_or_else(|| buffer.end_iter()),
+            None => buffer.start_iter(),
+        };
+        self.buffer.place_cursor(&line(&self.buffer));
+        // Scrolled once the views have their new size, as `reveal` does; HEAD's side with it.
+        let mut views = vec![(self.view.clone(), self.buffer.get_insert())];
+        if self.before_scroll.is_visible() {
+            if let Some(before) = self.before_scroll.child().and_downcast::<sourceview5::View>() {
+                self.before.place_cursor(&line(&self.before));
+                views.push((before, self.before.get_insert()));
+            }
+        }
+        glib::idle_add_local_once(move || {
+            for (view, mark) in views {
+                view.scroll_to_mark(&mark, 0.1, true, 0.0, 0.3);
+            }
+        });
+        // After the caret moved, whose position line this replaces.
         self.position.set_text(&if unified.is_empty() {
             String::from("No changes against HEAD · read only")
         } else {
@@ -1915,7 +2224,7 @@ impl Editor {
                     dialog.present();
                 }
                 Ok(_) => {}
-                Err(err) => ui.show_error(&err.to_string()),
+                Err(err) => ui.show_error(&readable(&err)),
             }
         });
     }
@@ -2011,7 +2320,9 @@ fn tag_line(buffer: &sourceview5::Buffer, tag: &gtk::TextTag, line: usize) {
     }
 }
 
-async fn confirm(ui: &Ui, title: &str, copy: &str) -> bool {
+/// A yes or no over `copy` shown as code (a held request, a list of paths); `accept` names
+/// what yes does.
+async fn confirm(ui: &Ui, title: &str, copy: &str, accept: &str) -> bool {
     let dialog = crate::panel::Panel::new(ui, title, 620);
     let view = gtk::TextView::new();
     view.set_editable(false);
@@ -2019,7 +2330,17 @@ async fn confirm(ui: &Ui, title: &str, copy: &str) -> bool {
     view.set_wrap_mode(gtk::WrapMode::WordChar);
     view.buffer().set_text(copy);
     dialog.body.append(&scrolled(&view));
-    dialog.response("Continue").await
+    dialog.response(accept).await
+}
+
+/// A yes or no in plain words; `accept` names what yes does.
+async fn ask(ui: &Ui, title: &str, copy: &str, accept: &str) -> bool {
+    let dialog = crate::panel::Panel::new(ui, title, 480);
+    let words = label(copy, "body");
+    words.set_wrap(true);
+    words.set_xalign(0.0);
+    dialog.body.append(&words);
+    dialog.response(accept).await
 }
 
 pub(super) async fn guarded(ui: &Ui, op: &str, payload: Value) -> Result<Option<Value>, Error> {
@@ -2049,7 +2370,7 @@ pub(super) async fn guarded(ui: &Ui, op: &str, payload: Value) -> Result<Option<
                 request.push('…');
             }
             let copy = format!("{}\n\n{}", err.message, request);
-            if !confirm(ui, "Allow this held action once?", &copy).await {
+            if !confirm(ui, "Allow this held action once?", &copy, "Allow once").await {
                 return Ok(None);
             }
             let result = ui

@@ -1,10 +1,12 @@
 package com.quietsoftware.relay.ui.code
 
+import android.content.ClipData
 import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -15,18 +17,22 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -37,10 +43,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.quietsoftware.relay.ui.LocalNav
 import com.quietsoftware.relay.ui.kit.Empty
 import com.quietsoftware.relay.ui.theme.Fonts
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Geist Mono at the desktop editor's 12.5, with a line of air. */
@@ -138,10 +146,12 @@ private fun isWordChar(c: Char) = c.isLetterOrDigit() || c == '_'
 
 /**
  * A text file, with line numbers that stay on the left while the lines scroll sideways. The
- * text is laid out in a lazy column of fixed width, so a long file costs what it shows.
+ * text is laid out in a lazy column of fixed width, so a long file costs what it shows. With
+ * [mark] (a search hit's line) it opens a few lines above that line, and the line is marked.
+ * Holding a line copies it.
  */
 @Composable
-fun CodeView(text: String, fileName: String, modifier: Modifier = Modifier) {
+fun CodeView(text: String, fileName: String, modifier: Modifier = Modifier, mark: Int? = null) {
     val c = Relay.colors
     // Nothing past MAX_COLUMNS can be scrolled to, so a minified file's one huge line is not laid out whole.
     val lines = remember(text) { text.removeSuffix("\n").split('\n').map { it.replace("\t", "    ").trimEnd('\r').take(MAX_COLUMNS + 3) } }
@@ -153,10 +163,22 @@ fun CodeView(text: String, fileName: String, modifier: Modifier = Modifier) {
     val gutter: Dp = with(density) { (cell * (digits + 2)).toDp() }
     val contentWidth: Dp = with(density) { (cell * (longest + 3)).toDp() } + gutter
     val hs = rememberScrollState()
+    val list = rememberLazyListState(initialFirstVisibleItemIndex = mark?.let { (it - 1 - MARK_ABOVE).coerceIn(0, lines.lastIndex) } ?: 0)
+    val nav = LocalNav.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    // The line as the file has it, tabs and all and however long, not as it is drawn.
+    fun copy(i: Int) {
+        val line = text.removeSuffix("\n").split('\n')[i].trimEnd('\r')
+        scope.launch {
+            clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("line", line)))
+            nav.shell.toast("Copied line ${i + 1}")
+        }
+    }
     Box(modifier.fillMaxWidth().background(c.screen).horizontalScroll(hs)) {
-        LazyColumn(Modifier.width(contentWidth).fillMaxHeight(), contentPadding = PaddingValues(vertical = 8.dp)) {
+        LazyColumn(Modifier.width(contentWidth).fillMaxHeight(), state = list, contentPadding = PaddingValues(vertical = 8.dp)) {
             items(lines.size) { i ->
-                CodeLine(i + 1, lines[i], lang, gutter, hs)
+                CodeLine(i + 1, lines[i], lang, gutter, hs, marked = i + 1 == mark, onCopy = { copy(i) })
             }
         }
     }
@@ -164,13 +186,24 @@ fun CodeView(text: String, fileName: String, modifier: Modifier = Modifier) {
 
 private const val MAX_COLUMNS = 2000
 
+/** How many lines show above a marked line when the file opens at it. */
+private const val MARK_ABOVE = 4
+
 private const val IMAGE_MAX_SIDE = 4096
 
 @Composable
-private fun CodeLine(number: Int, text: String, lang: Lang, gutter: Dp, hs: ScrollState) {
+private fun CodeLine(number: Int, text: String, lang: Lang, gutter: Dp, hs: ScrollState, marked: Boolean, onCopy: () -> Unit) {
     val c = Relay.colors
     val shown = remember(text, lang) { highlight(text, lang) }
-    Box(Modifier.fillMaxWidth()) {
+    // A marked line is washed from edge to edge, gutter too, and its number is in ink.
+    val ground = if (marked) c.wash else c.screen
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .then(if (marked) Modifier.background(ground) else Modifier)
+            // A long press copies the line; a tap does nothing, and shows nothing.
+            .combinedClickable(interactionSource = null, indication = null, onLongClickLabel = "Copy line", onLongClick = onCopy, onClick = {}),
+    ) {
         BasicText(
             text = shown,
             modifier = Modifier.padding(start = gutter + 8.dp, end = 16.dp),
@@ -178,10 +211,10 @@ private fun CodeLine(number: Int, text: String, lang: Lang, gutter: Dp, hs: Scro
             softWrap = false,
         )
         Box(
-            Modifier.matchParentSize().width(gutter).offset { IntOffset(hs.value, 0) }.background(c.screen).padding(end = 8.dp),
+            Modifier.matchParentSize().width(gutter).offset { IntOffset(hs.value, 0) }.background(ground).padding(end = 8.dp),
             contentAlignment = Alignment.CenterEnd,
         ) {
-            BasicText(number.toString(), style = codeTextStyle.copy(color = c.ink3))
+            BasicText(number.toString(), style = codeTextStyle.copy(color = if (marked) c.ink else c.ink3))
         }
     }
 }

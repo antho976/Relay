@@ -135,7 +135,8 @@ private fun Wall(nav: Nav) {
                     }
                     if (plates.isEmpty()) {
                         item(key = "empty", span = { GridItemSpan(maxLineSpan) }, contentType = "empty") {
-                            Empty("grid", "No agents in ${project.name}", "Launch a solo agent in its own worktree, or a builder–reviewer pair on one branch.") {
+                            // The stopped ones fold in below: none is running, but the project has agents.
+                            Empty("grid", if (stopped.isEmpty()) "No agents in ${project.name}" else "No agents running in ${project.name}", "Launch a solo agent in its own worktree, or a review group on one branch.") {
                                 Key("New agent", { nav.launch(pid) }, kind = KeyKind.Primary, glyph = "plus")
                             }
                         }
@@ -285,7 +286,7 @@ private fun Attention(s: ShellState, plates: List<Session>, tasks: List<Task>, n
 /**
  * One agent as the PC draws it: the identity strip, then its screen in miniature when it is live
  * and streaming, or a slate saying where it stands over the last text the phone saved. Tap opens
- * the terminal, a long press the session's details.
+ * its conversation, a long press the session's details.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -297,7 +298,7 @@ private fun Plate(session: Session, nav: Nav, online: Boolean, streaming: Boolea
             .fillMaxWidth()
             .background(c.screen)
             .combinedClickable(
-                onClickLabel = "Open terminal",
+                onClickLabel = "Open conversation",
                 onLongClickLabel = "Session details",
                 onLongClick = { if (!pending) nav.session(session.name) },
                 onClick = { if (pending) nav.shell.toast(slateHint(session, online)) else nav.terminal(session.name) },
@@ -362,7 +363,9 @@ private fun StoppedFold(list: List<Stopped>, online: Boolean, life: Lifecycle, n
         ListRow(onClick = { if (progress != null) life.stopAfterCurrent() else open = !open }) {
             Glyph("pause", 16.dp, c.ink3)
             T(
-                progress?.let { (done, total) -> "Resuming ${minOf(done + 1, total)} of $total · tap to stop after this one" }
+                progress?.let { (done, total) ->
+                    if (life.halt) "Stopping after ${life.busy ?: "this one"}…" else "Resuming ${minOf(done + 1, total)} of $total · tap to stop after this one"
+                }
                     ?: if (list.size == 1) "1 stopped agent" else "${list.size} stopped agents",
                 Modifier.weight(1f),
                 Relay.type.ui,
@@ -372,7 +375,11 @@ private fun StoppedFold(list: List<Stopped>, online: Boolean, life: Lifecycle, n
             if (progress == null) {
                 Key(
                     if (list.size == 1) "Resume" else "Resume all",
-                    { life.resumeAll(list.map { it.name }) },
+                    {
+                        // One agent resumes as its row's key does, without a question; several are asked about.
+                        val one = list.singleOrNull()
+                        if (one != null) life.resume(one) { nav.terminal(one.name) } else life.resumeAll(list.map { it.name })
+                    },
                     Modifier.alpha(if (online) 1f else .5f),
                     kind = KeyKind.Quiet,
                     enabled = life.busy == null,
@@ -405,8 +412,8 @@ private fun StoppedRow(st: Stopped, online: Boolean, life: Lifecycle, nav: Nav) 
                 weight = if (st.dirty) FontWeight.Medium else null,
             )
         }
-        IconKey("resume", { life.resume(st) { nav.terminal(st.name) } }, dim, size = 16.dp, tint = c.ink2, enabled = free)
-        IconKey("refresh", { life.startFresh(st) { nav.terminal(st.name) } }, dim, size = 16.dp, enabled = free)
-        IconKey("trash", { life.discard(st) }, dim, size = 16.dp, tint = c.heldText, enabled = free)
+        IconKey("resume", { life.resume(st) { nav.terminal(st.name) } }, dim, size = 16.dp, tint = c.ink2, enabled = free, label = "Resume ${st.name}")
+        IconKey("refresh", { life.startFresh(st) { nav.terminal(st.name) } }, dim, size = 16.dp, enabled = free, label = "Start ${st.name} fresh")
+        IconKey("trash", { life.discard(st) }, dim, size = 16.dp, tint = c.heldText, enabled = free, label = "Discard ${st.name}")
     }
 }

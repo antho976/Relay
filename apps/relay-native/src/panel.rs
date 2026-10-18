@@ -272,6 +272,11 @@ impl Panel {
         self.frame.add_css_class(name);
     }
 
+    /// Blocks what is under it; a `top`, `bottom` or `beside` utility panel does not.
+    pub fn is_modal(&self) -> bool {
+        self.modal.get()
+    }
+
     pub fn set_guard(&self, guard: impl Fn() -> bool + 'static) {
         *self.guard.borrow_mut() = Some(Box::new(guard));
     }
@@ -303,7 +308,26 @@ impl Panel {
             self.host.add_overlay(&self.layer);
             panels.borrow_mut().push(self.clone());
         }
-        self.frame.child_focus(gtk::DirectionType::TabForward);
+        if !self.modal.get() {
+            self.frame.child_focus(gtk::DirectionType::TabForward);
+        } else if !self.focus_body() {
+            // A modal panel opens on its first control; with none in its body yet (still
+            // loading), on the heading's close key, from the top as Tab wraps.
+            self.frame.grab_focus();
+            self.frame.child_focus(gtk::DirectionType::TabForward);
+        }
+    }
+
+    /// Focus the body's first control. A selectable paragraph is passed over: focusing it
+    /// selects all of its text.
+    fn focus_body(&self) -> bool {
+        while self.body.child_focus(gtk::DirectionType::TabForward) {
+            match self.frame.root().and_then(|root| root.focus()).and_downcast::<gtk::Label>() {
+                Some(text) => text.select_region(0, 0),
+                None => return true,
+            }
+        }
+        false
     }
 
     pub fn close(&self) {
@@ -366,8 +390,28 @@ impl Panel {
             let _ = send.try_send(false);
         });
         self.compact(true, 280);
+        // A dialog that asks for a name starts in its field, keeping the caret or selection
+        // its caller set, and Enter there accepts it; a plain yes or no starts on Cancel.
+        let entry = std::iter::successors(self.body.first_child(), |w| w.next_sibling())
+            .find_map(|w| w.downcast::<gtk::Entry>().ok());
+        // Read before present(), whose Tab into the field selects all of it.
+        let (selection, caret) = entry.as_ref().map_or((None, 0), |e| (e.selection_bounds(), e.position()));
         self.present();
-        cancel.grab_focus();
+        if let Some(entry) = entry {
+            let accept = accept.downgrade();
+            entry.connect_activate(move |_| {
+                if let Some(accept) = accept.upgrade() {
+                    accept.emit_clicked();
+                }
+            });
+            entry.grab_focus_without_selecting();
+            match selection {
+                Some((start, end)) => entry.select_region(start, end),
+                None => entry.set_position(caret),
+            }
+        } else {
+            cancel.grab_focus();
+        }
         let accepted = recv.recv().await.unwrap_or(false);
         self.close();
         accepted

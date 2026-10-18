@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use task_pages::{COLUMNS, COLUMN_TITLES, OPEN_COLUMNS, PRIORITIES, SIZES, TYPES};
 // The board's pure logic lives in relay-board, which builds without GTK so CI tests it.
-use relay_board::{drop_index, group_of, group_title, task_matches, zone, Filters, Nudge, Zone, URGENT_FIRST};
+use relay_board::{drop_index, group_of, group_title, open_blockers, task_matches, zone, Filters, Nudge, Zone, URGENT_FIRST};
 
 const GROUPS: [(&str, &str); 7] = [
     ("", "None"),
@@ -32,11 +32,46 @@ type Action = Box<dyn Fn(&Rc<Board>)>;
 /// What a View-menu pill does when toggled: on or off.
 type Toggle = Box<dyn Fn(&Rc<Board>, bool)>;
 
+/// Where the board's view (list or board, the grouping, the hidden columns) is kept between
+/// runs, as Notes keeps its window in `native.notes.window`.
+const VIEW_KEY: &str = "native.board";
+
 thread_local! {
     static BOARD: RefCell<Option<Rc<Board>>> = const { RefCell::new(None) };
     /// The module the board is narrowed to: a module is a bundle of tasks, shown on the same
     /// board with the same create, timeline and done.
     static SCOPE: Cell<Option<i64>> = const { Cell::new(None) };
+    /// The view as last read from or written to [`VIEW_KEY`]; `None` until it has been read,
+    /// so a board drawn before then never writes its defaults over a saved view.
+    static SAVED_VIEW: RefCell<Option<Value>> = const { RefCell::new(None) };
+    static VIEW_TIMER: RefCell<Option<glib::SourceId>> = const { RefCell::new(None) };
+}
+
+/// Reads the saved view once a run, before the first board is mounted (`pages::refresh`).
+pub async fn load_view(ui: &Rc<Ui>) {
+    if SAVED_VIEW.with(|saved| saved.borrow().is_some()) {
+        return;
+    }
+    // A failed read leaves the view unread: the defaults show and nothing is written.
+    if let Ok(saved) = ui.call("settings.get", json!({"path": VIEW_KEY})).await {
+        let saved = &saved["value"];
+        let group = saved["group"].as_str().filter(|g| GROUPS.iter().any(|(key, _)| key == g)).unwrap_or("");
+        let hidden: BTreeSet<String> = saved["hidden"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|column| COLUMNS.contains(column))
+            .map(str::to_string)
+            .collect();
+        let view = view_of(saved["list"].as_bool().unwrap_or(false), group, &hidden);
+        SAVED_VIEW.with(|slot| *slot.borrow_mut() = Some(view));
+    }
+}
+
+/// The view in the shape [`VIEW_KEY`] keeps it.
+fn view_of(list: bool, group: &str, hidden: &BTreeSet<String>) -> Value {
+    json!({"list": list, "group": group, "hidden": hidden})
 }
 /// Opens the board narrowed to one module.
 pub fn open_module(ui: &Rc<Ui>, module: i64) {
@@ -61,15 +96,6 @@ fn current() -> Option<Rc<Board>> {
 /// Every task by id, built once per render: a card's links are looked up, not scanned for.
 fn by_id(tasks: &[Value]) -> BTreeMap<i64, &Value> {
     tasks.iter().filter_map(|t| Some((t["id"].as_i64()?, t))).collect()
-}
-
-/// The tasks blocking `task` that are not done yet, looked up in [`by_id`]'s index.
-fn open_blockers<'a>(task: &Value, all: &BTreeMap<i64, &'a Value>) -> Vec<&'a Value> {
-    rows(task, "blocked_by")
-        .iter()
-        .filter_map(|other| other.as_i64().and_then(|other| all.get(&other)).copied())
-        .filter(|t| text(t, "column") != "done")
-        .collect()
 }
 
 /// The line under a lane's name, as GitHub's project columns carry one.
@@ -402,10 +428,11 @@ pub fn modules(ui: &Rc<Ui>, body: &gtk::Box, modules: &[Value]) {
     progress.add_css_class("stat-tile");
     progress.add_css_class("stat-progress");
     progress.set_hexpand(true);
+    let plural = |n: usize, one: &str, many: &str| if n == 1 { format!("1 {one}") } else { format!("{n} {many}") };
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     head.append(&label("Across every module", "stat-caption"));
     head.append(&spacer());
-    head.append(&label(&format!("{finished} of {tasks} tasks done"), "stat-note"));
+    head.append(&label(&format!("{finished} of {}", plural(tasks.max(0) as usize, "task done", "tasks done")), "stat-note"));
     progress.append(&head);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     let pct = if tasks > 0 { finished as f64 * 100. / tasks as f64 } else { 0. };
@@ -432,7 +459,6 @@ pub fn modules(ui: &Rc<Ui>, body: &gtk::Box, modules: &[Value]) {
     let tiles = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     tiles.set_homogeneous(true);
     tiles.set_hexpand(true);
-    let plural = |n: usize, one: &str, many: &str| if n == 1 { format!("1 {one}") } else { format!("{n} {many}") };
     for tile in [
         stat_tile("Modules", &modules.len().to_string(), &format!("{} in progress", live.len()), ""),
         stat_tile("In flight", &flight.to_string(), if flight > 0 { "Tasks being worked on" } else { "Nothing in flight" }, if flight > 0 { "stat-warm" } else { "" }),
@@ -822,7 +848,10 @@ fn copy_task(ui: &std::rc::Weak<Ui>, id: i64, clipboard: gdk::Clipboard) {
     let Some(ui) = ui.upgrade() else { return };
     glib::spawn_future_local(async move {
         match ui.call("task.get", json!({"task_id":id})).await {
-            Ok(task) => clipboard.set_text(&format!("{}\n\n{}\n\n#{id}", text(&task, "title"), text(&task, "body"))),
+            Ok(task) => {
+                clipboard.set_text(&format!("{}\n\n{}\n\n#{id}", text(&task, "title"), text(&task, "body")));
+                ui.show_info(&format!("Copied #{id}"));
+            }
             Err(error) => ui.show_error(&error.to_string()),
         }
     });
@@ -849,6 +878,13 @@ pub fn show(ui: &Rc<Ui>, page: &gtk::Box, project: i64, tasks: Vec<Value>) {
                 board.views[old.list.get() as usize].set_active(true);
                 *board.hidden.borrow_mut() = old.hidden.borrow().clone();
                 *board.group.borrow_mut() = old.group.borrow().clone();
+            } else if let Some(saved) = SAVED_VIEW.with(|saved| saved.borrow().clone()) {
+                // The first board of a run takes up the view the last run left (`load_view`).
+                let list = saved["list"].as_bool().unwrap_or(false);
+                board.list.set(list);
+                board.views[list as usize].set_active(true);
+                *board.hidden.borrow_mut() = rows(&saved, "hidden").iter().filter_map(|c| c.as_str().map(str::to_string)).collect();
+                *board.group.borrow_mut() = text(&saved, "group").to_string();
             }
             BOARD.with(|slot| *slot.borrow_mut() = Some(board.clone()));
             board
@@ -861,9 +897,17 @@ pub fn show(ui: &Rc<Ui>, page: &gtk::Box, project: i64, tasks: Vec<Value>) {
         .iter()
         .filter_map(|t| t["id"].as_i64().map(|id| (id, t["title"].clone())))
         .collect();
+    // `is:blocked` finds what the Blocked tile counts, which takes the other tasks to know.
+    let blocked: BTreeSet<i64> = {
+        let all = by_id(&tasks);
+        tasks.iter().filter(|t| relay_board::is_blocked(t, &all)).filter_map(|t| t["id"].as_i64()).collect()
+    };
     for task in &mut tasks {
         if let Some(title) = task["parent_id"].as_i64().and_then(|id| titles.get(&id)) {
             task["_parent_title"] = title.clone();
+        }
+        if task["id"].as_i64().is_some_and(|id| blocked.contains(&id)) {
+            task["_blocked"] = true.into();
         }
     }
     // Most events that refresh the page change no task: leave the board, and any open menu,
@@ -905,6 +949,14 @@ impl Board {
             .build();
         query.set_widget_name("board-query");
         query.add_css_class("board-search");
+        // The board's keys (`Board::key`), which nothing else names.
+        query.set_tooltip_text(Some(
+            "Search (/)\n\
+             On a card: H J K L or the arrows move between cards, Enter opens, Space peeks, \
+             . or Menu opens its menu, [ and ] move it a column, Shift+J/K move it up or down, \
+             P changes its priority\n\
+             G changes the grouping, V the view and F opens the filters; C quick-creates, N opens New task",
+        ));
         search.append(&query);
         let wipe = crate::app::icon_button("close", "Clear the search (Esc)");
         wipe.add_css_class("board-search-clear");
@@ -996,10 +1048,11 @@ impl Board {
             .hexpand(true)
             .build();
         title.set_widget_name("board-quick-title");
-        let kind = gtk::DropDown::from_strings(&TYPES);
+        // Titled and most urgent first, as the New task page offers them.
+        let kind = gtk::DropDown::from_strings(&TYPES.map(titled).iter().map(String::as_str).collect::<Vec<_>>());
         kind.set_tooltip_text(Some("Type"));
-        let priority = gtk::DropDown::from_strings(&PRIORITIES);
-        priority.set_selected(PRIORITIES.iter().position(|p| *p == "medium").unwrap_or(0) as u32);
+        let priority = gtk::DropDown::from_strings(&URGENT_FIRST.map(titled).iter().map(String::as_str).collect::<Vec<_>>());
+        priority.set_selected(URGENT_FIRST.iter().position(|p| *p == "medium").unwrap_or(0) as u32);
         priority.set_tooltip_text(Some("Priority"));
         let create = button("Create", "primary");
         let more = button("More fields…", "quiet");
@@ -1134,7 +1187,7 @@ impl Board {
                     "type" => task_mark(value, 9).upcast(),
                     _ => label("", "").upcast(),
                 };
-                key.set_child(Some(&icon_text(&mark, value)));
+                key.set_child(Some(&icon_text(&mark, &titled(value))));
                 let drop = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
                 let weak = Rc::downgrade(&board);
                 drop.connect_drop(move |_, token, _, _| {
@@ -1257,11 +1310,12 @@ impl Board {
         board.quick.bar.add_controller(escape);
 
         let weak = Rc::downgrade(&board);
-        keys.connect_key_pressed(move |_, key, _, mods| {
+        keys.connect_key_pressed(move |_, key, keycode, mods| {
             let Some(board) = weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
-            board.key(key, mods)
+            // On a non-Latin layout a letter shortcut is the Latin key in the same place.
+            board.key(crate::shortcuts::latin(key, keycode), mods)
         });
         page.add_controller(keys);
         board
@@ -1315,13 +1369,16 @@ impl Board {
         let from = text(task, "column");
         if column == "done" {
             if from != "done" {
-                if let Some(ui) = self.ui() {
-                    ui.show_error(&format!(
-                        "Approved #{} into Done · Ctrl+Z moves it back; the linked commit stays",
-                        task["id"]
-                    ));
-                }
-                self.act("task.approve", json!({"task_id":task["id"]}));
+                let Some(ui) = self.ui() else { return };
+                let id = task["id"].clone();
+                // Said once it has happened, as news rather than an error.
+                glib::spawn_future_local(async move {
+                    match ui.call("task.approve", json!({"task_id":id})).await {
+                        Ok(_) => ui.show_info(&format!("Approved #{id} into Done · Ctrl+Z moves it back; the linked commit stays")),
+                        Err(error) => ui.show_error(&error.to_string()),
+                    }
+                    ui.refresh_page();
+                });
             }
             return;
         }
@@ -1410,7 +1467,11 @@ impl Board {
                     Some(row) => {
                         let what = format!("{} on #{}", text(row, "op"), row["payload"]["task_id"]);
                         match ui.call("audit.undo", json!({"audit_id":row["id"]})).await {
-                            Ok(_) => ui.show_error(&format!("Undid {what}")),
+                            // What was undone, as the task's timeline says it.
+                            Ok(_) => ui.show_info(&match (relay_board::activity_sentence(row), row["payload"]["task_id"].as_i64()) {
+                                (Some(sentence), Some(id)) => format!("Undid #{id}: {sentence}"),
+                                _ => format!("Undid {what}"),
+                            }),
                             // A row that cannot be undone must not block every older one.
                             Err(crate::client::Error::Bus(error))
                                 if matches!(error.code.as_str(), "audit.stale" | "audit.not_undoable") =>
@@ -1473,7 +1534,7 @@ impl Board {
             "title": title,
             "column": pick(&self.quick.column, OPEN_COLUMNS),
             "type": pick(&self.quick.kind, &TYPES),
-            "priority": pick(&self.quick.priority, &PRIORITIES),
+            "priority": pick(&self.quick.priority, &URGENT_FIRST),
             "module_id": scope(),
         });
         // The whole bar, Create included, waits for the reply: a second click would create twice.
@@ -1761,11 +1822,43 @@ impl Board {
         }
     }
 
+    /// Every change to the view, the grouping or the hidden columns redraws the board, which
+    /// writes it to [`VIEW_KEY`] a moment after the last one, once the saved view was read.
+    fn keep_view(&self) {
+        let view = view_of(self.list.get(), &self.group.borrow(), &self.hidden.borrow());
+        let changed = SAVED_VIEW.with(|saved| {
+            let mut saved = saved.borrow_mut();
+            match saved.as_ref() {
+                Some(old) if *old != view => {
+                    *saved = Some(view);
+                    true
+                }
+                _ => false,
+            }
+        });
+        if !changed {
+            return;
+        }
+        if let Some(timer) = VIEW_TIMER.with(|timer| timer.borrow_mut().take()) {
+            timer.remove();
+        }
+        let ui = self.ui.clone();
+        let timer = glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+            VIEW_TIMER.with(|timer| timer.borrow_mut().take());
+            let (Some(ui), Some(value)) = (ui.upgrade(), SAVED_VIEW.with(|saved| saved.borrow().clone())) else { return };
+            glib::spawn_future_local(async move {
+                let _ = ui.call("settings.set", json!({"path": VIEW_KEY, "value": value})).await;
+            });
+        });
+        VIEW_TIMER.with(|slot| *slot.borrow_mut() = Some(timer));
+    }
+
     /// Redraws the board from `tasks`. Only what changed is touched: the lanes stay while the
     /// view, the hidden columns and the empty board do, each card is rebuilt only when what it
     /// shows changed ([`card_key`]) and is otherwise moved into place, and the banner, stats and
     /// chips are redrawn only when they read differently.
     fn render(self: &Rc<Self>) {
+        self.keep_view();
         let focus_inside = self
             .page
             .root()
@@ -2185,12 +2278,34 @@ impl Board {
                 head.set_visible(true);
             }
         });
-        let (shown, pane) = (head.downgrade(), editor.downgrade());
+        // Enter saves the name, Escape leaves it as it was.
+        let submit = save.downgrade();
+        rename.connect_activate(move |_| {
+            if let Some(save) = submit.upgrade() {
+                save.emit_clicked();
+            }
+        });
+        let escape = gtk::EventControllerKey::new();
+        let close = cancel.downgrade();
+        escape.connect_key_pressed(move |_, key, _, _| {
+            if key != gdk::Key::Escape {
+                return glib::Propagation::Proceed;
+            }
+            if let Some(cancel) = close.upgrade() {
+                cancel.emit_clicked();
+            }
+            glib::Propagation::Stop
+        });
+        rename.add_controller(escape);
+        let (shown, pane, field) = (head.downgrade(), editor.downgrade(), rename.downgrade());
         edit.connect_clicked(move |_| {
             if let (Some(head), Some(editor)) = (shown.upgrade(), pane.upgrade()) {
                 let open = !editor.is_visible();
                 editor.set_visible(open);
                 head.set_visible(!open);
+                if let Some(field) = field.upgrade().filter(|_| open) {
+                    field.grab_focus();
+                }
             }
         });
         self.banner.append(&edit);
@@ -2287,6 +2402,9 @@ impl Board {
         if outside.is_empty() {
             list.append(&label("Every open task is already in this module.", "issue-side-empty"));
         }
+        // Add waits for a ticked task.
+        let add = button("Add to module", "primary");
+        add.set_sensitive(false);
         for task in outside {
             let id = task["id"].as_i64().unwrap_or(0);
             let row = gtk::CheckButton::new();
@@ -2300,12 +2418,15 @@ impl Board {
                 content.append(&label(other, "module-card-meta"));
             }
             row.set_child(Some(&content));
-            let picked = picked.clone();
+            let (picked, key) = (picked.clone(), add.downgrade());
             row.connect_toggled(move |row| {
                 if row.is_active() {
                     picked.borrow_mut().insert(id);
                 } else {
                     picked.borrow_mut().remove(&id);
+                }
+                if let Some(key) = key.upgrade() {
+                    key.set_sensitive(!picked.borrow().is_empty());
                 }
             });
             list.append(&row);
@@ -2313,7 +2434,6 @@ impl Board {
         panel.body.append(&list);
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         actions.set_halign(gtk::Align::End);
-        let add = button("Add to module", "primary");
         actions.append(&add);
         panel.body.append(&actions);
         let (weak, p) = (Rc::downgrade(self), Rc::downgrade(&panel));
@@ -2354,7 +2474,7 @@ impl Board {
         let running = tasks.iter().filter(|t| text(t, "state") == "running").count();
         let review = in_column("in_review");
         let all = by_id(everything);
-        let blocked = open.iter().filter(|t| !open_blockers(t, &all).is_empty()).count();
+        let blocked = open.iter().filter(|t| relay_board::is_blocked(t, &all)).count();
         let shipped = tasks
             .iter()
             .filter(|t| text(t, "column") == "done" && within_days(text(t, "updated_at"), 7))
@@ -2610,7 +2730,17 @@ impl Board {
             if items.is_empty() {
                 return;
             }
-            menu.append(&label(title, "view-menu-caption"));
+            let caption = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            caption.append(&label(title, "view-menu-caption"));
+            // G steps through the groupings from the board, without opening this menu.
+            if title == "Group by" {
+                caption.append(&spacer());
+                let cap = label("G", "board-kbd");
+                cap.set_valign(gtk::Align::End);
+                cap.set_margin_bottom(2);
+                caption.append(&cap);
+            }
+            menu.append(&caption);
             menu.append(&wrapped(items, 38));
         };
         let hidden = self.hidden.borrow().clone();
@@ -2889,11 +3019,17 @@ impl Board {
                 if !grouping.is_empty() {
                     let group = group_of(task, &grouping);
                     if previous.as_ref() != Some(&group) {
+                        // A priority or type heading is a field value, titled as its pill is; a
+                        // module's or an agent's name reads as it was written.
+                        let words = match grouping.as_str() {
+                            "priority" | "type" => titled(&group_title(&group)),
+                            _ => group_title(&group),
+                        };
                         let title = lane
                             .headings
                             .borrow_mut()
-                            .entry(group.clone())
-                            .or_insert_with(|| label(&group_title(&group), heading).upcast())
+                            .entry(format!("{grouping} {group}"))
+                            .or_insert_with(|| label(&words, heading).upcast())
                             .clone();
                         wanted.push(title);
                         previous = Some(group);
@@ -3476,8 +3612,20 @@ impl Board {
         peek.connect_clicked(run(Box::new(move |board| board.toggle_peek(id))));
         menu.append(&peek);
 
-        let section = |title: &str| label(title, "board-menu-caption");
-        menu.append(&section("MOVE TO"));
+        // A caption with the key that does the same from a focused card, as Open and Peek show theirs.
+        let section = |title: &str, key: &str| {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            row.append(&label(title, "board-menu-caption"));
+            row.append(&spacer());
+            if !key.is_empty() {
+                let cap = label(key, "board-kbd");
+                cap.set_valign(gtk::Align::End);
+                cap.set_margin_end(6);
+                row.append(&cap);
+            }
+            row
+        };
+        menu.append(&section("MOVE TO", "[ ]"));
         let columns = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         columns.set_homogeneous(true);
         for (column, title) in COLUMN_TITLES {
@@ -3500,7 +3648,7 @@ impl Board {
             columns.append(&key);
         }
         menu.append(&columns);
-        menu.append(&section("PRIORITY"));
+        menu.append(&section("PRIORITY", "P"));
         let priorities = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         priorities.set_homogeneous(true);
         for priority in URGENT_FIRST {
@@ -3515,7 +3663,7 @@ impl Board {
             priorities.append(&key);
         }
         menu.append(&priorities);
-        menu.append(&section("TYPE"));
+        menu.append(&section("TYPE", ""));
         let kinds = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         kinds.set_homogeneous(true);
         for kind in TYPES {

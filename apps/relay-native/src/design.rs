@@ -96,6 +96,7 @@ fn shown(ui: &Rc<Ui>) {
     if view.gallery.project.get() != project {
         view.gallery.project.set(project);
         *view.gallery.filter.borrow_mut() = Filter::All;
+        view.gallery.reset();
         close_board(&view);
     }
     view.gallery.refresh();
@@ -167,8 +168,12 @@ pub fn create(ui: &Weak<Ui>, project: i64, session: Option<String>) {
         return;
     };
     glib::spawn_future_local(async move {
-        let count = view().map(|v| v.gallery_count()).unwrap_or(0);
-        let title = if count == 0 { "Untitled design".to_string() } else { format!("Untitled design {}", count + 1) };
+        // The first name no design has: "Untitled design", then "Untitled design 2" and on.
+        let taken = view().map(|v| v.gallery.titles()).unwrap_or_default();
+        let title = (1..)
+            .map(|n| if n == 1 { "Untitled design".to_string() } else { format!("Untitled design {n}") })
+            .find(|t| !taken.contains(t))
+            .unwrap_or_default();
         match ui.call("design.create", json!({"project_id": project, "title": title, "session": session})).await {
             Ok(v) => {
                 if let Some(id) = v["design"]["id"].as_i64() {
@@ -183,12 +188,6 @@ pub fn create(ui: &Weak<Ui>, project: i64, session: Option<String>) {
             Err(e) => ui.show_error(&format!("Could not start a design: {e}")),
         }
     });
-}
-
-impl View {
-    fn gallery_count(&self) -> usize {
-        self.gallery.live_count()
-    }
 }
 
 pub(crate) fn register(b: &Rc<Board>) {
@@ -213,8 +212,20 @@ pub fn event(ui: &Rc<Ui>, ev: &str, payload: &Value) {
     if ev == "design.deleted" || payload["deleted_at"].is_string() {
         window::close(id);
         if let Some(view) = view() {
-            if view.board.borrow().as_ref().is_some_and(|b| b.doc.id == id) {
+            let open = view.board.borrow().as_ref().filter(|b| b.doc.id == id).map(|b| b.doc.title());
+            if let Some(title) = open {
                 close_board(&view);
+                // Deleted elsewhere (another window, an agent): say so, and offer it back while
+                // it is only in Deleted.
+                let gallery = Rc::downgrade(&view.gallery);
+                let restore: Option<Rc<dyn Fn()>> = (ev != "design.deleted").then(|| {
+                    Rc::new(move || {
+                        if let Some(g) = gallery.upgrade() {
+                            g.restore(id);
+                        }
+                    }) as Rc<dyn Fn()>
+                });
+                view.gallery.toast_with(&format!("“{title}” was deleted"), "Restore", restore);
             }
         }
     }
@@ -255,8 +266,10 @@ fn delete_design(b: &Board) {
     if b.windowed {
         if let Some(ui) = b.ui.upgrade() {
             glib::spawn_future_local(async move {
-                if let Err(e) = ui.call("design.delete", json!({"design_id": id})).await {
-                    ui.show_error(&e.to_string());
+                // The window closes as the design goes; the main window says where it went.
+                match ui.call("design.delete", json!({"design_id": id})).await {
+                    Ok(_) => ui.show_info(&format!("Moved “{title}” to Deleted designs")),
+                    Err(e) => ui.show_error(&e.to_string()),
                 }
             });
         }

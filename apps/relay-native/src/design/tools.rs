@@ -1291,8 +1291,13 @@ fn create_shape(b: &Rc<Board>, tool: Tool, parent: String, a: (f64, f64), end: (
             n.star = star;
         }
         if kind == NodeKind::Frame {
-            let count = b.doc.scene.borrow().children(&parent).iter().filter(|c| b.doc.scene.borrow().node(c).is_some_and(|n| n.kind == NodeKind::Frame)).count();
-            n.name = Some(format!("Frame {}", count + 1));
+            let scene = b.doc.scene.borrow();
+            let taken: Vec<String> = scene
+                .children(&parent)
+                .iter()
+                .filter_map(|c| scene.node(c).filter(|n| n.kind == NodeKind::Frame).and_then(|n| n.name.clone()))
+                .collect();
+            n.name = Some(super::board::free_name("Frame", &taken));
         }
     }
     let id = n.id.clone();
@@ -1496,44 +1501,51 @@ fn context_menu(b: &Rc<Board>, x: f64, y: f64) {
             b.select(vec![d.clone()]);
         }
     }
+    let item = super::board::menu_item;
+    let section = |items: &[gio::MenuItem]| {
+        let section = gio::Menu::new();
+        for i in items {
+            section.append_item(i);
+        }
+        section
+    };
     let menu = gio::Menu::new();
-    let section = gio::Menu::new();
-    section.append(Some("Cut"), Some("design.cut"));
-    section.append(Some("Copy"), Some("design.copy"));
-    section.append(Some("Paste"), Some("design.paste"));
-    section.append(Some("Duplicate"), Some("design.duplicate"));
-    section.append(Some("Delete"), Some("design.delete"));
-    menu.append_section(None, &section);
+    menu.append_section(None, &section(&[
+        item("Cut", "cut", Some("<Control>x")),
+        item("Copy", "copy", Some("<Control>c")),
+        item("Paste", "paste", Some("<Control>v")),
+        item("Duplicate", "duplicate", Some("<Control>d")),
+        item("Delete", "delete", Some("Delete")),
+    ]));
     if !b.selection.borrow().is_empty() {
-        let section = gio::Menu::new();
-        section.append(Some("Bring to front"), Some("design.front"));
-        section.append(Some("Bring forward"), Some("design.forward"));
-        section.append(Some("Send backward"), Some("design.backward"));
-        section.append(Some("Send to back"), Some("design.back"));
-        menu.append_section(None, &section);
-        let section = gio::Menu::new();
-        section.append(Some("Group"), Some("design.group"));
-        section.append(Some("Frame selection"), Some("design.frame"));
-        section.append(Some("Ungroup"), Some("design.ungroup"));
-        section.append(Some("Lock / unlock"), Some("design.lock"));
-        section.append(Some("Hide"), Some("design.hide"));
-        menu.append_section(None, &section);
-        let section = gio::Menu::new();
-        section.append(Some("Flip horizontally"), Some("design.flip-h"));
-        section.append(Some("Flip vertically"), Some("design.flip-v"));
-        section.append(Some("Copy style"), Some("design.copy-style"));
-        section.append(Some("Paste style"), Some("design.paste-style"));
-        menu.append_section(None, &section);
-        let section = gio::Menu::new();
-        section.append(Some("Ask the agent about this…"), Some("design.ask"));
-        menu.append_section(None, &section);
+        let (lock, hide) = b.flag_captions();
+        menu.append_section(None, &section(&[
+            item("Bring to front", "front", Some("<Control><Shift>bracketright")),
+            item("Bring forward", "forward", Some("<Control>bracketright")),
+            item("Send backward", "backward", Some("<Control>bracketleft")),
+            item("Send to back", "back", Some("<Control><Shift>bracketleft")),
+        ]));
+        menu.append_section(None, &section(&[
+            item("Group", "group", Some("<Control>g")),
+            item("Frame selection", "frame", Some("<Control><Alt>g")),
+            item("Ungroup", "ungroup", Some("<Control><Shift>g")),
+            item(lock, "lock", Some("<Control><Shift>l")),
+            item(hide, "hide", Some("<Control><Shift>h")),
+        ]));
+        menu.append_section(None, &section(&[
+            item("Flip horizontally", "flip-h", Some("<Shift>h")),
+            item("Flip vertically", "flip-v", Some("<Shift>v")),
+            item("Copy style", "copy-style", Some("<Control><Alt>c")),
+            item("Paste style", "paste-style", Some("<Control><Alt>v")),
+        ]));
+        menu.append_section(None, &section(&[item("Ask the agent about this…", "ask", Some("<Control>Return"))]));
         menu.append_section(None, &super::board::export_menu());
     } else {
-        let section = gio::Menu::new();
-        section.append(Some("Select all"), Some("design.select-all"));
-        section.append(Some("Zoom to fit"), Some("design.zoom-fit"));
-        section.append(Some("Add a page"), Some("design.add-page"));
-        menu.append_section(None, &section);
+        menu.append_section(None, &section(&[
+            item("Select all", "select-all", Some("<Control>a")),
+            item("Zoom to fit", "zoom-fit", Some("<Shift>1")),
+            item("Add a page", "add-page", None),
+        ]));
     }
     let pop = gtk::PopoverMenu::from_model(Some(&menu));
     pop.add_css_class("design-menu");
@@ -1581,10 +1593,7 @@ fn key_pressed(
             Key::z => b.undo(),
             Key::y => b.redo(),
             Key::c => b.copy(),
-            Key::x => {
-                b.copy();
-                b.delete_selection();
-            }
+            Key::x => b.cut(),
             Key::v => b.paste(),
             Key::d => b.duplicate(),
             Key::a => b.select_all(),

@@ -308,17 +308,22 @@ pub struct Ui {
     usage: status::UsageState,
     device_status: gtk::Label,
     pub(super) resource_status: gtk::Box,
+    /// The bell, whose tooltip and accessible name carry the unread count its badge shows.
+    notifications_key: gtk::Button,
     notification_count: gtk::Label,
     notification_revision: Cell<u64>,
     setup_checked: Cell<bool>,
     status_project: gtk::Label,
     status_branch: gtk::Label,
     pub(crate) sidebar: gtk::Box,
+    sidebar_width: SidebarWidth,
     settings_sidebar: Cell<bool>,
     /// The title bar's slot for the Settings page's search field, shown on Settings only.
     pub(crate) settings_tools: gtk::Box,
     focus_tabs: gtk::Box,
     mode: RefCell<String>,
+    /// The wall's mode before Focus took it, which "Back to the wall" returns to.
+    wall_mode: RefCell<String>,
     pub overlay: gtk::Overlay,
     /// What the start screen quiets while it shows: the title bar's keys and the status bar's
     /// contents. The bars themselves stay, wearing the start screen's ground.
@@ -346,6 +351,7 @@ pub struct Ui {
     font_size: Cell<f64>,
     pub(crate) palette: RefCell<String>,
     pub keybindings: RefCell<Value>,
+    shortcut_hints: ShortcutHints,
     pub sound_busy: Cell<bool>,
     projects_box: gtk::Box,
     wall: gtk::Grid,
@@ -460,6 +466,16 @@ pub fn run(rt: Handle) -> glib::ExitCode {
     app.run_with_args::<&str>(&[])
 }
 
+/// The keys whose tooltips name their shortcut, and the palette key's keycap: they follow a
+/// rebinding in Settings (`Ui::show_shortcuts`).
+struct ShortcutHints {
+    palette: gtk::Button,
+    keycap: gtk::Label,
+    launch: gtk::Button,
+    sidebar: gtk::Button,
+    settings: gtk::Button,
+}
+
 /// The title bar, and the keys on it that the rest of the window wires up.
 struct TopBar {
     handle: gtk::WindowHandle,
@@ -471,6 +487,7 @@ struct TopBar {
     settings_tools: gtk::Box,
     actions: gtk::Box,
     palette_key: gtk::Button,
+    palette_keycap: gtk::Label,
     layouts_key: gtk::Button,
     skills_key: gtk::Button,
     plugins_key: gtk::Button,
@@ -523,9 +540,10 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     let top_actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     top_actions.add_css_class("topbar-actions");
     top.append(&top_actions);
-    // The palette's key reads as a search field: what it does, and its chord as a keycap.
+    // The palette's key reads as a search field: what it does, and its chord as a keycap. Both
+    // follow the binding (`Ui::show_shortcuts`).
     let palette_key = button("", "command-search");
-    palette_key.set_tooltip_text(Some("Command palette · Ctrl K"));
+    palette_key.set_tooltip_text(Some("Command palette"));
     palette_key.set_widget_name("command-palette");
     let palette_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     palette_row.append(&crate::icons::image("search", 14));
@@ -535,7 +553,8 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     let palette_text = crate::fit_label::FitLabel::new("Search or run a command", "Search", "command-search-text");
     palette_text.set_hexpand(true);
     palette_row.append(&palette_text);
-    palette_row.append(&label("Ctrl K", "keycap"));
+    let palette_keycap = label("Ctrl K", "keycap");
+    palette_row.append(&palette_keycap);
     palette_key.set_child(Some(&palette_row));
     palette_key.set_valign(gtk::Align::Center);
     let layouts_key = icon_button("view-grid-symbolic", "Window presets");
@@ -627,6 +646,7 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
         settings_tools,
         actions: top_actions,
         palette_key,
+        palette_keycap,
         layouts_key,
         skills_key,
         plugins_key,
@@ -674,6 +694,20 @@ fn notice_bar() -> (gtk::Label, gtk::Box) {
 const SIDEBAR_WIDTH: i32 = 248;
 const SIDEBAR_MIN: i32 = 200;
 const SIDEBAR_MAX: i32 = 420;
+/// The setting that keeps the sidebar's width from one run to the next.
+const SIDEBAR_KEY: &str = "native.sidebar.width";
+
+/// The sidebar's split, the width the person dragged it to (`chosen`), and what of that is
+/// kept in [`SIDEBAR_KEY`].
+struct SidebarWidth {
+    split: gtk::Paned,
+    chosen: Rc<Cell<i32>>,
+    /// The width last read from or written to the setting: `None` until it was read, and
+    /// nothing is written before then.
+    saved: Cell<Option<i32>>,
+    /// Counts moves of the divider, so only the one a drag comes to rest on is written.
+    moves: Cell<u64>,
+}
 
 /// Keeps the title bar's brand block as wide as the sidebar under it, so the Dev | Threads
 /// pill after it starts over the page however the sidebar is dragged, and follows the brand
@@ -726,7 +760,7 @@ fn sidebar() -> Sidebar {
     let heading = label("Workspaces", "section-label");
     heading.set_hexpand(true);
     section.append(&heading);
-    let add_project = icon_button("plus", "Open repository");
+    let add_project = icon_button("plus", "Add workspace");
     section.append(&add_project);
     sidebar.append(&section);
     let projects_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -808,11 +842,11 @@ fn wall() -> Wall {
     let empty_glyph = crate::icons::image_with_stroke("grid", 28, 1.0);
     empty_glyph.add_css_class("empty-glyph");
     empty.append(&empty_glyph);
-    let empty_title = label("No sessions", "title");
+    let empty_title = label("No agents", "title");
     empty_title.set_halign(gtk::Align::Center);
     empty.append(&empty_title);
     let empty_description = label(
-        "Launch a solo agent in its own worktree, or a builder–reviewer pair on one branch. Each session lands here as a tile.",
+        "Launch a solo agent in its own worktree, or a review group on one branch. Each agent lands here as a tile.",
         "empty-description",
     );
     empty_description.set_wrap(true);
@@ -822,7 +856,7 @@ fn wall() -> Wall {
     let empty_launch = button("", "primary");
     let empty_action = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     empty_action.append(&crate::icons::image_with_stroke("plus", 14, 2.0));
-    empty_action.append(&label("Session", ""));
+    empty_action.append(&label("New agent", ""));
     empty_launch.set_child(Some(&empty_action));
     empty_launch.set_halign(gtk::Align::Center);
     empty.append(&empty_launch);
@@ -878,7 +912,7 @@ fn pages(content: &gtk::Stack) -> BTreeMap<String, gtk::Box> {
     pages
 }
 
-/// The New session sheet over `body`, and the scrim that closes it.
+/// The New agents sheet over `body`, and the scrim that closes it.
 struct LaunchSheet {
     overlay: gtk::Overlay,
     launch: gtk::Revealer,
@@ -902,8 +936,10 @@ fn launch_sheet(body: &gtk::Box) -> LaunchSheet {
     overlay.set_child(Some(body));
     let scrim = gtk::Button::new();
     scrim.add_css_class("launch-scrim");
+    // Clicked, never a Tab stop: Space on it would close the sheet.
+    scrim.set_focusable(false);
     scrim.set_visible(false);
-    scrim.update_property(&[gtk::accessible::Property::Label("Close new session")]);
+    scrim.update_property(&[gtk::accessible::Property::Label("Close New agents")]);
     overlay.add_overlay(&scrim);
     overlay.add_overlay(&launch);
     let weak_body = body.downgrade();
@@ -1039,9 +1075,14 @@ impl Ui {
         // The width the person chose, which a window too narrow for it squeezes and a wider one
         // gives back; GtkPaned alone kept the squeezed width (a window opened small, or made
         // narrower and wide again, left the sidebar at its 220px minimum for good).
-        let chosen = Rc::new(Cell::new(SIDEBAR_WIDTH));
+        let sidebar_width = SidebarWidth {
+            split: split.clone(),
+            chosen: Rc::new(Cell::new(SIDEBAR_WIDTH)),
+            saved: Cell::new(None),
+            moves: Cell::new(0),
+        };
         split.connect_position_notify({
-            let chosen = chosen.clone();
+            let chosen = sidebar_width.chosen.clone();
             move |split| {
                 if split.position() > SIDEBAR_MAX {
                     split.set_position(SIDEBAR_MAX);
@@ -1050,16 +1091,19 @@ impl Ui {
                 }
             }
         });
-        split.connect_max_position_notify(move |split| {
-            let want = chosen.get().min(split.max_position());
-            if split.position() < want {
-                // Not during the allocation that changed the room.
-                let split = split.downgrade();
-                glib::idle_add_local_once(move || {
-                    if let Some(split) = split.upgrade() {
-                        split.set_position(want);
-                    }
-                });
+        split.connect_max_position_notify({
+            let chosen = sidebar_width.chosen.clone();
+            move |split| {
+                let want = chosen.get().min(split.max_position());
+                if split.position() < want {
+                    // Not during the allocation that changed the room.
+                    let split = split.downgrade();
+                    glib::idle_add_local_once(move || {
+                        if let Some(split) = split.upgrade() {
+                            split.set_position(want);
+                        }
+                    });
+                }
             }
         });
         body.append(&split);
@@ -1119,16 +1163,19 @@ impl Ui {
             usage,
             device_status: bar.device_status.clone(),
             resource_status: bar.resource_status.clone(),
+            notifications_key: top.notifications_key.clone(),
             notification_count: top.notification_count.clone(),
             notification_revision: Cell::new(0),
             setup_checked: Cell::new(false),
             status_project: bar.status_project.clone(),
             status_branch: bar.status_branch.clone(),
             sidebar: side.root.clone(),
+            sidebar_width,
             settings_sidebar: Cell::new(true),
             settings_tools: top.settings_tools.clone(),
             focus_tabs: wall.focus_tabs,
             mode: RefCell::new("grid".into()),
+            wall_mode: RefCell::new("grid".into()),
             overlay: panel_host,
             start_chrome: [top.left.clone().upcast(), top.switcher.clone().upcast(), top.settings_tools.clone().upcast(), top.actions.clone().upcast()]
                 .into_iter()
@@ -1154,6 +1201,13 @@ impl Ui {
             font_size: Cell::new(9.75),
             palette: RefCell::new("matte".into()),
             keybindings: RefCell::new(json!({})),
+            shortcut_hints: ShortcutHints {
+                palette: top.palette_key.clone(),
+                keycap: top.palette_keycap.clone(),
+                launch: top.launch_key.clone(),
+                sidebar: top.sidebar_key.clone(),
+                settings: side.settings_key.clone(),
+            },
             sound_busy: Cell::new(false),
             projects_box: side.projects_box.clone(),
             wall: wall.wall,
@@ -1185,8 +1239,10 @@ impl Ui {
         });
         ui.wire_navigation(&side, &top);
         ui.wire_settings_return(&top, &bar.root);
+        ui.show_shortcuts();
         ui.wire_keys(&top, &bar, &wall.empty_launch, &side.add_project, &sheet.scrim);
         ui.wire_window();
+        ui.remember_sidebar_width();
         let mut dev_only: Vec<gtk::Widget> = vec![side.nav.clone().upcast(), top.layouts_key.clone().upcast(), top.launch_key.clone().upcast()];
         dev_only.extend(side.workspaces.iter().cloned());
         crate::money::install(&ui, &side.money_nav, &top.money_add, dev_only);
@@ -1275,10 +1331,10 @@ impl Ui {
                 if settings { "chevron-left" } else { "sidebar" },
                 14,
             )));
-            back_key.set_tooltip_text(Some(if settings {
-                "Back from settings"
+            back_key.set_tooltip_text(Some(&if settings {
+                String::from("Back from settings")
             } else {
-                "Toggle sidebar"
+                ui.shortcut_tip("Toggle sidebar", "sidebar")
             }));
             top_actions.set_visible(!settings);
             bottom.set_visible(!settings);
@@ -1300,8 +1356,8 @@ impl Ui {
         });
     }
 
-    /// The title bar's and status bar's remaining keys, the empty wall's launch key, Open
-    /// repository and the launch scrim.
+    /// The title bar's and status bar's remaining keys, the empty wall's launch key, Add
+    /// workspace and the launch scrim.
     fn wire_keys(
         self: &Rc<Self>,
         top: &TopBar,
@@ -1441,13 +1497,13 @@ impl Ui {
     }
     /// The main window's close: refused while a launch runs or any work is unsaved, otherwise
     /// every panel, note, mirror and pane is closed before the window goes.
-    fn close_request(&self) -> glib::Propagation {
+    fn close_request(self: &Rc<Self>) -> glib::Propagation {
         if self.launch_busy.get() {
             self.show_error("Wait for agent launch to finish before closing.");
             return glib::Propagation::Stop;
         }
-        if crate::pages::unsaved_notes() {
-            self.show_error("Save or discard note changes before closing.");
+        if let Some(refusal) = crate::pages::unsaved_notes(self) {
+            self.show_error(&refusal);
             return glib::Propagation::Stop;
         }
         if self.editor.is_dirty() {
@@ -1572,6 +1628,7 @@ impl Ui {
         self.restored_project.set(0);
         // A launch form built for the old connection would no longer submit (RA-470).
         self.launch.set_reveal_child(false);
+        self.forget_launch();
         self.layout();
         self.show_error("Connecting to the Relay engine…");
         let ui = self.clone();
@@ -1604,6 +1661,7 @@ impl Ui {
                     crate::wallpaper_rotation::refresh(&ui);
                     ui.watch_drift();
                     ui.load_keybindings();
+                    ui.restore_sidebar_width();
                     crate::money::startup(&ui);
                     if *ui.page.borrow() == "devices" {
                         // Its own future, as navigate() does: awaited here, more than 64 events
@@ -2074,10 +2132,12 @@ impl Ui {
             .borrow()
             .iter()
             .find(|p| p["id"].as_i64() == Some(self.project.get()))
-            .map(|p| text(p, "name").to_string())
-            .unwrap_or_else(|| "No project".into());
-        self.status_project.set_text(&name);
-        self.empty_title.set_text(&format!("No sessions in {name}"));
+            .map(|p| text(p, "name").to_string());
+        self.status_project.set_text(name.as_deref().unwrap_or("No project"));
+        self.empty_title.set_text(&match &name {
+            Some(name) => format!("No agents in {name}"),
+            None => String::from("No project yet"),
+        });
         self.status_branch.set_text(
             self.projects
                 .borrow()
@@ -2245,7 +2305,7 @@ impl Ui {
                 .paste_text(&format!("native-paste-check-{name}\n"));
         }
     }
-    /// Every live pane is on screen and shows `marker`. A parked, exited or interrupted
+    /// Every live pane is on screen and shows `marker`. A parked, exited, stopped or not started
     /// session's pane shows its slate over a detached terminal, so it is not read.
     pub fn terminal_contents_contain(&self, marker: &str) -> bool {
         use vte4::prelude::TerminalExt;

@@ -12,8 +12,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -38,10 +40,14 @@ import kotlinx.coroutines.launch
 /** Every change made on this phone that the PC has not applied yet, and what is holding each back. */
 @Composable
 fun OutboxScreen(nav: Nav) {
-    val entries by remember { nav.relay.outbox() }.collectAsStateWithLifecycle(initialValue = emptyList())
+    // Null until the phone's copy answers, so "Nothing waiting" never shows before what waits.
+    val entries by remember { nav.relay.outbox() }.collectAsStateWithLifecycle(initialValue = null)
+    val s by nav.shell.state.collectAsStateWithLifecycle()
     // The page's scope, not the row's: a row leaves composition as soon as its entry is dropped or
     // resent, which would cancel the retry between taking the old entry out and putting the new in.
     val scope = rememberCoroutineScope()
+    // The change Drop or Use the PC's is asking about: what the person wrote is not lost on one tap.
+    var dropping by remember { mutableStateOf<OutboxEntry?>(null) }
     SpaceFrame(nav) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
             LazyColumn(
@@ -57,17 +63,46 @@ fun OutboxScreen(nav: Nav) {
                         color = Relay.colors.ink3,
                     )
                 }
-                if (entries.isEmpty()) {
+                if (entries?.isEmpty() == true) {
                     item { Empty("outbox", "Nothing waiting", "Everything you changed is on the PC.") }
                 }
-                items(entries, key = { it.id }) { e -> OutboxRow(e, nav, scope) }
+                items(entries.orEmpty(), key = { it.id }) { e -> OutboxRow(e, nav, scope, away = !s.online, onDrop = { dropping = e }) }
             }
+        }
+    }
+
+    dropping?.let { e ->
+        val theirs = e.state == OutboxEntry.State.Conflict
+        Ask(
+            title = if (theirs) "Use the PC's version?" else "Drop this change?",
+            body = if (theirs) "“${e.label}” is not sent, and the PC keeps what it has." else "“${e.label}” is not sent to the PC, and what it held is not kept.",
+            onDismiss = { dropping = null },
+        ) {
+            Key("Cancel", { dropping = null }, kind = KeyKind.Quiet, compact = true)
+            Key(
+                if (theirs) "Use the PC's" else "Drop",
+                {
+                    dropping = null
+                    scope.launch {
+                        // A waiting change goes only while it has not left the phone, as the board's Undo has it.
+                        val still = nav.relay.hub.outbox.get(e.id) ?: return@launch
+                        val unsent = still.state == OutboxEntry.State.Pending && still.attempts == 0 && !nav.shell.state.value.online
+                        if (unsent || still.state == OutboxEntry.State.Failed || still.state == OutboxEntry.State.Conflict) {
+                            nav.relay.discard(still.id)
+                        } else {
+                            nav.shell.toast("“${e.label}” has gone to the PC already")
+                        }
+                    }
+                },
+                kind = KeyKind.Danger,
+                compact = true,
+            )
         }
     }
 }
 
 @Composable
-private fun OutboxRow(e: OutboxEntry, nav: Nav, scope: CoroutineScope) {
+private fun OutboxRow(e: OutboxEntry, nav: Nav, scope: CoroutineScope, away: Boolean, onDrop: () -> Unit) {
     val c = Relay.colors
     Slab(Modifier.fillMaxWidth(), padding = PaddingValues(14.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
@@ -92,7 +127,7 @@ private fun OutboxRow(e: OutboxEntry, nav: Nav, scope: CoroutineScope) {
                 Gap(10.dp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Key("Keep mine", { scope.launch { nav.relay.retry(e.id, overwrite = true) } }, kind = KeyKind.Primary, compact = true)
-                    Key("Use the PC's", { scope.launch { nav.relay.discard(e.id) } }, compact = true)
+                    Key("Use the PC's", onDrop, compact = true)
                 }
             }
             OutboxEntry.State.Failed -> {
@@ -100,10 +135,17 @@ private fun OutboxRow(e: OutboxEntry, nav: Nav, scope: CoroutineScope) {
                 Gap(10.dp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Key("Try again", { scope.launch { nav.relay.retry(e.id, overwrite = false) } }, compact = true)
-                    Key("Drop", { scope.launch { nav.relay.discard(e.id) } }, kind = KeyKind.Quiet, compact = true)
+                    Key("Drop", onDrop, kind = KeyKind.Quiet, compact = true)
                 }
             }
-            else -> Status(c.waiting, if (e.attempts > 0) "Sent, waiting for an answer" else "Waiting for the PC", c.ink2)
+            else -> {
+                Status(c.waiting, if (e.attempts > 0) "Sent, waiting for an answer" else "Waiting for the PC", c.ink2)
+                // Not sent yet, with the PC away: it can still be taken back, as the board's Undo does.
+                if (e.attempts == 0 && away) {
+                    Gap(10.dp)
+                    Key("Drop", onDrop, kind = KeyKind.Quiet, compact = true)
+                }
+            }
         }
     }
 }

@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 327,
+  "op_count": 329,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -5279,6 +5279,42 @@
         "$ref": "#/$defs/ThreadMessage"
       }
     },
+    "thread.upload": {
+      "summary": "A picture for a thread's next message: PNG, JPEG, GIF or WebP, at most 4 MiB. Send its id in thread.send's or thread.create's images; one never sent is removed after a day",
+      "kind": "mutation",
+      "audit": "agent_only",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 5,
+      "payload": {
+        "$ref": "#/$defs/ThreadUploadIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ThreadUploadOut"
+      }
+    },
+    "thread.image": {
+      "summary": "A picture a message in a thread carries, to draw it",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 5,
+      "payload": {
+        "$ref": "#/$defs/ThreadImageIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ThreadImageOut"
+      }
+    },
     "thread.stop": {
       "summary": "Stop the agent's reply in a thread; the next message resumes it",
       "kind": "mutation",
@@ -5340,7 +5376,7 @@
       }
     },
     "thread.delete": {
-      "summary": "Delete a thread and its messages, stopping its agent",
+      "summary": "Delete a thread and its messages, stopping its agent; its pictures go too, unless a message of another thread carries one",
       "kind": "mutation",
       "audit": "always",
       "undo": "none",
@@ -20368,7 +20404,7 @@
           "description": "`user`, `assistant` (text and tool calls), `tool` (a tool's answer) or `error`."
         },
         "body": {
-          "description": "`{\"text\"}` for `user` and `error`; `{\"blocks\": [...]}` for `assistant`, each block\n`{\"type\":\"text\",\"text\"}` or `{\"type\":\"tool_use\",\"id\",\"name\",\"input\"}`;\n`{\"tool_use_id\",\"is_error\",\"text\"}` for `tool`."
+          "description": "`{\"text\"}` for `user` and `error`; a `user` message with pictures is\n`{\"text\", \"images\": [{\"id\",\"media_type\",\"width\",\"height\"}]}` (`text` may then be empty;\n`images` is absent when there are none), each drawn from `thread.image {id}`;\n`{\"blocks\": [...]}` for `assistant`, each block `{\"type\":\"text\",\"text\"}` or\n`{\"type\":\"tool_use\",\"id\",\"name\",\"input\"}`; `{\"tool_use_id\",\"is_error\",\"text\"}` for `tool`."
         },
         "created_at": {
           "type": "string"
@@ -20392,6 +20428,16 @@
             "null"
           ],
           "description": "The first message; the thread is named after it and the agent starts on it."
+        },
+        "images": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Pictures for the first message, by the ids `thread.upload` gave, at most 4; with them\n`text` may be empty or absent, and the thread is named \"Picture\" (or \"2 pictures\")."
         },
         "model": {
           "type": [
@@ -20418,12 +20464,118 @@
           "format": "int64"
         },
         "text": {
-          "type": "string"
+          "type": "string",
+          "description": "May be empty when the message carries pictures."
+        },
+        "images": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Pictures, by the ids `thread.upload` gave, at most 4. Refused with\n`thread.images_unsupported` in a thread on a model on this PC, which cannot read them."
         }
       },
       "required": [
         "id",
         "text"
+      ]
+    },
+    "ThreadUploadIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "type": "string",
+          "description": "`image/png`, `image/jpeg`, `image/gif` or `image/webp`. The bytes decide: a picture is\nstored as what it is."
+        },
+        "bytes_b64": {
+          "type": "string",
+          "description": "The picture, base64: at most 4 MiB decoded."
+        }
+      },
+      "required": [
+        "media_type",
+        "bytes_b64"
+      ]
+    },
+    "ThreadUploadOut": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "$ref": "#/$defs/ThreadImage"
+        }
+      },
+      "required": [
+        "image"
+      ]
+    },
+    "ThreadImage": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "32 lowercase hex characters: what a message's `images` names it by."
+        },
+        "media_type": {
+          "type": "string",
+          "description": "`image/png`, `image/jpeg`, `image/gif` or `image/webp`, read from its bytes."
+        },
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Its size in px."
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Its length in bytes."
+        }
+      },
+      "required": [
+        "id",
+        "media_type",
+        "width",
+        "height",
+        "bytes"
+      ]
+    },
+    "ThreadImageIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The id in a message's `images`."
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "ThreadImageOut": {
+      "type": "object",
+      "properties": {
+        "media_type": {
+          "type": "string"
+        },
+        "bytes_b64": {
+          "type": "string",
+          "description": "The picture, base64."
+        }
+      },
+      "required": [
+        "media_type",
+        "bytes_b64"
       ]
     },
     "ThreadIdIn": {

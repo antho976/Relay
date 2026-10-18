@@ -529,7 +529,8 @@ fn image_menu(doc: &Rc<Doc>, shown: &Rc<Shown>, x: f64, y: f64) {
         "open",
         Box::new(move || {
             let window = weak.upgrade().and_then(|d| d.view.root()).and_downcast::<gtk::Window>();
-            gtk::FileLauncher::new(Some(&gio::File::for_path(&file))).launch(window.as_ref(), gio::Cancellable::NONE, |_| {});
+            let failed = launch_failed(&weak, "Could not open the image");
+            gtk::FileLauncher::new(Some(&gio::File::for_path(&file))).launch(window.as_ref(), gio::Cancellable::NONE, failed);
         }),
     );
     let (weak, file) = (Rc::downgrade(doc), path.clone());
@@ -537,8 +538,9 @@ fn image_menu(doc: &Rc<Doc>, shown: &Rc<Shown>, x: f64, y: f64) {
         "folder",
         Box::new(move || {
             let window = weak.upgrade().and_then(|d| d.view.root()).and_downcast::<gtk::Window>();
+            let failed = launch_failed(&weak, "Could not show the folder");
             gtk::FileLauncher::new(Some(&gio::File::for_path(&file)))
-                .open_containing_folder(window.as_ref(), gio::Cancellable::NONE, |_| {});
+                .open_containing_folder(window.as_ref(), gio::Cancellable::NONE, failed);
         }),
     );
     let (weak, slot) = (Rc::downgrade(doc), Rc::downgrade(shown));
@@ -667,6 +669,16 @@ fn insert_refs(doc: &Doc, paths: &[PathBuf]) {
     buffer.end_user_action();
     doc.view.grab_focus();
     doc.view.scroll_mark_onscreen(&buffer.get_insert());
+}
+
+/// What a launch that failed says in the note's status bar; one dismissed (an app chooser
+/// closed) says nothing.
+fn launch_failed(doc: &std::rc::Weak<Doc>, what: &'static str) -> impl FnOnce(Result<(), glib::Error>) + 'static {
+    let doc = doc.clone();
+    move |result| match (result, doc.upgrade()) {
+        (Err(error), Some(doc)) if !error.matches(gtk::DialogError::Dismissed) => doc.flash(&format!("{what}: {}", error.message())),
+        _ => {}
+    }
 }
 
 /// Keep a pasted or dropped picture as a PNG beside the note and reference it. Encoding a

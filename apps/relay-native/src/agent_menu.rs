@@ -515,7 +515,8 @@ impl Ui {
             if let Some(ui) = weak.upgrade() {
                 let already = ui.shown_alone(&n);
                 *ui.focused.borrow_mut() = Some(n.clone());
-                ui.set_mode(if already { "grid" } else { "focus" });
+                let back = ui.wall_mode.borrow().clone();
+                ui.set_mode(if already { back.as_str() } else { "focus" });
             }
         });
         with(|a| a.focus_keys.insert(name.clone(), zoom.downgrade()));
@@ -653,13 +654,11 @@ impl Ui {
         title.set_xalign(0.0);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         head.append(&title);
-        let chip = label(&state.replace('_', " ").to_uppercase(), "agent-menu-state");
+        // The strip's word and lamp, so the menu never calls an agent something its pane does not.
+        let (word, lamp) = crate::terminal::state_word(&state);
+        let chip = label(&word, "agent-menu-state");
         chip.set_valign(gtk::Align::Center);
-        chip.add_css_class(match state.as_str() {
-            "running" | "spawning" | "idle" => "live",
-            "blocked" => "held",
-            _ => "off",
-        });
+        chip.add_css_class(lamp);
         head.append(&chip);
         body.append(&head);
         let meta = label(&format!("{} · {}", text(session, "provider"), text(session, "role")), "agent-menu-meta");
@@ -692,13 +691,31 @@ impl Ui {
         let tools = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         tools.add_css_class("agent-menu-tools");
         tools.set_homogeneous(true);
-        for (icon, caption, tip, delta) in [
+        let moves = [
             ("arrow-up", "Earlier", "Move this agent one place earlier on the wall", -1),
             ("arrow-down", "Later", "Move this agent one place later on the wall", 1),
-        ] {
-            let key = tool_key(icon, caption, tip);
+        ]
+        .map(|(icon, caption, tip, delta)| (tool_key(icon, caption, tip), delta));
+        // Off at the wall's ends, where the move would do nothing; set again after each move.
+        let ends: Rc<dyn Fn()> = Rc::new({
+            let keys = moves.each_ref().map(|(key, delta)| (key.downgrade(), *delta));
+            let (weak, n) = (Rc::downgrade(self), name.clone());
+            move || {
+                let Some(ui) = weak.upgrade() else { return };
+                let order = ui.ordered.borrow();
+                let at = order.iter().position(|s| *s == n);
+                for (key, delta) in &keys {
+                    if let Some(key) = key.upgrade() {
+                        key.set_sensitive(at.is_some_and(|i| if *delta < 0 { i > 0 } else { i + 1 < order.len() }));
+                    }
+                }
+            }
+        });
+        ends();
+        for (key, delta) in moves {
             let weak = Rc::downgrade(self);
             let n = name.clone();
+            let ends = ends.clone();
             key.connect_clicked(move |_| {
                 if let Some(ui) = weak.upgrade() {
                     let mut order = ui.ordered.borrow_mut();
@@ -709,6 +726,7 @@ impl Ui {
                     drop(order);
                     ui.layout();
                     ui.save_layout();
+                    ends();
                 }
             });
             tools.append(&key);
@@ -726,7 +744,7 @@ impl Ui {
             glib::spawn_future_local(async move {
                 match ui.call("session.brief", json!({"session": n})).await {
                     Ok(v) => {
-                        let Some((window, sheet)) = ui.sheet("Launch brief", 760) else { return };
+                        let Some((window, sheet)) = ui.sheet(&format!("Launch brief · {n}"), 760) else { return };
                         let view = gtk::TextView::new();
                         view.set_editable(false);
                         view.set_monospace(true);
@@ -758,7 +776,7 @@ impl Ui {
         // Permissions: a switch takes effect when flipped, and flips back if the engine refuses.
         body.append(&section("PERMISSIONS"));
         for (caption, hint, field) in [
-            ("Agent bus writes", "Change tasks, notes and settings through Relay", "bus_writes"),
+            ("Agent bus writes", "Let it write files, stage and commit through Relay, with guardrails checked as it goes", "bus_writes"),
             ("UI control", "Drive the Relay window", "allow_ui"),
         ] {
             let line = gtk::Box::new(gtk::Orientation::Horizontal, 10);
@@ -843,12 +861,12 @@ impl Ui {
         // Session: pinned under the scrolling part.
         // An exited agent (it quit, crashed or lost its login) starts fresh the same way.
         if matches!(state.as_str(), "restorable" | "exited") {
-            let fresh = row_key("refresh", "Start fresh", "Start a new provider conversation in this same session and worktree; the saved context is cleared");
+            let fresh = row_key("refresh", "Clear context", "Start a new provider conversation in this same session and worktree; the saved context is cleared");
             let confirm = gtk::Revealer::new();
             let weak = Rc::downgrade(self);
             let n = name.clone();
             let p = popover.downgrade();
-            confirm_strip(&confirm, "Clear the saved provider conversation and start fresh here?", "Start fresh", None, move |_| {
+            confirm_strip(&confirm, "Clear the saved provider conversation and start fresh here?", "Clear context", None, move |_| {
                 if let Some(p) = p.upgrade() {
                     p.popdown();
                 }
@@ -953,6 +971,13 @@ impl Ui {
         for entry in [&model, &effort] {
             let dirty = dirty.clone();
             entry.connect_changed(move |_| dirty());
+            // Enter saves, once there is a change to save.
+            let key = save.downgrade();
+            entry.connect_activate(move |_| {
+                if let Some(key) = key.upgrade().filter(|key| key.is_sensitive()) {
+                    key.emit_clicked();
+                }
+            });
         }
         let weak = Rc::downgrade(self);
         let p = popover.downgrade();

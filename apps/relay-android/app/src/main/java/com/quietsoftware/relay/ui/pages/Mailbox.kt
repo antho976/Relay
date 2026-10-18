@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -25,6 +26,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quietsoftware.relay.core.model.Mail
@@ -35,11 +37,13 @@ import com.quietsoftware.relay.ui.kit.Gap
 import com.quietsoftware.relay.ui.kit.Key
 import com.quietsoftware.relay.ui.kit.KeyKind
 import com.quietsoftware.relay.ui.kit.Pill
+import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.Slab
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.Toggle
 import com.quietsoftware.relay.ui.kit.ago
 import com.quietsoftware.relay.ui.kit.epoch
+import com.quietsoftware.relay.ui.kit.switchRow
 import com.quietsoftware.relay.ui.shell.Page
 import com.quietsoftware.relay.ui.shell.PageBar
 import com.quietsoftware.relay.ui.theme.Relay
@@ -47,8 +51,9 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /**
- * A project's mail between the person and the agents, newest first, filtered to one session when
- * given, with a composer for one session or everyone. A message sent offline waits in the outbox.
+ * A project's mail, the person's and the agents' to each other, newest first, filtered to one
+ * session when given, with a composer for one session or everyone. A message sent offline waits
+ * in the outbox.
  */
 @Composable
 fun MailboxScreen(projectId: Long, session: String?, nav: Nav) {
@@ -68,7 +73,7 @@ fun MailboxScreen(projectId: Long, session: String?, nav: Nav) {
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 ) {
                     if (shown.isEmpty()) {
-                        item { Empty("mail", "No mail yet", "Messages between you and your agents appear here.") }
+                        item { Empty("mail", "No mail yet", "Messages to and from this project's agents appear here.") }
                     }
                     items(shown, key = { it.id }) { m ->
                         MailRow(m)
@@ -142,9 +147,11 @@ private fun Composer(projectId: Long, sessions: List<String>, session: String?, 
             )
             Gap(8.dp)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Toggle(priority, { priority = it })
-                Spacer(Modifier.width(10.dp))
-                T("Priority: read it at the next safe point", Modifier.weight(1f), Relay.type.caption, c.ink2)
+                // The switch and its words are one target; Send stays a key of its own.
+                Row(Modifier.weight(1f).heightIn(min = 44.dp).clip(Radii.key).switchRow(priority) { priority = it }, verticalAlignment = Alignment.CenterVertically) {
+                    Toggle(priority, null)
+                    T("Priority: ask this agent to read it at the next safe point", Modifier.weight(1f).padding(start = 10.dp), Relay.type.caption, c.ink2)
+                }
                 Key(
                     "Send",
                     {

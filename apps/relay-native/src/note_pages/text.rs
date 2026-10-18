@@ -234,6 +234,11 @@ pub fn thousands(n: usize) -> String {
     out
 }
 
+/// `n` of a thing with thousands separated, in the singular for one: "1 line", "2,048 lines".
+pub fn counted(n: usize, one: &str, many: &str) -> String {
+    format!("{} {}", thousands(n), if n == 1 { one } else { many })
+}
+
 fn plain(line: &str) -> &str {
     let mut line = line.trim();
     if let Some((_, text)) = heading(line) {
@@ -395,6 +400,13 @@ pub fn task_title(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counts_say_one_in_the_singular() {
+        assert_eq!(counted(1, "line", "lines"), "1 line");
+        assert_eq!(counted(0, "word", "words"), "0 words");
+        assert_eq!(counted(2048, "character", "characters"), "2,048 characters");
+    }
 
     #[test]
     fn lists_continue_and_end() {

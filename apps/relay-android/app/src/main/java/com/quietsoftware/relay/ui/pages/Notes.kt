@@ -52,6 +52,7 @@ import com.quietsoftware.relay.ui.shell.SpaceFrame
 import com.quietsoftware.relay.ui.theme.Relay
 import java.time.Instant
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.onEach
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -73,7 +74,9 @@ fun NotesScreen(projectId: Long?, nav: Nav) {
 private fun NotesList(pid: Long, nav: Nav) {
     val c = Relay.colors
     val s by nav.shell.state.collectAsStateWithLifecycle()
-    val notes by remember(pid) { nav.relay.notes(pid) }.collectAsStateWithLifecycle(initialValue = emptyList())
+    // Null until the phone's copy answers, so "No notes yet" never shows before the notes.
+    val listed by remember(pid) { nav.relay.notes(pid) }.collectAsStateWithLifecycle(initialValue = null)
+    val notes = listed.orEmpty()
     var query by rememberSaveable { mutableStateOf("") }
 
     // Notes with an edit or a create still on their way to the PC.
@@ -102,9 +105,9 @@ private fun NotesList(pid: Long, nav: Nav) {
                 Gap(4.dp)
             }
 
-            if (notes.isEmpty()) {
+            if (listed != null && notes.isEmpty()) {
                 item { Empty("notes", "No notes yet", "Notes are shared with the PC. Agents read only the tasks they are given.") }
-            } else if (shown.isEmpty()) {
+            } else if (notes.isNotEmpty() && shown.isEmpty()) {
                 item { Empty("search", "No note matches", query) }
             }
             if (pinned.isNotEmpty()) {
@@ -183,6 +186,10 @@ private val EMPHASIS = Regex("""\*\*|__|`""")
 private data class Draft(val title: String, val body: String, val base: Note?) {
     val changed: Boolean
         get() = base?.let { title.trim() != (it.title ?: "").trim() || body != it.body } ?: (title.isNotBlank() || body.isNotBlank())
+
+    /** What the note is called as it stands: its title, else its first line (doc.rs `name`). */
+    val name: String
+        get() = title.trim().ifEmpty { body.lineSequence().firstOrNull { it.isNotBlank() }?.trimStart('#', ' ')?.take(80) ?: "Untitled" }
 }
 
 /**
@@ -205,11 +212,15 @@ fun NoteScreen(id: String?, projectId: Long?, nav: Nav) {
     var created by remember { mutableStateOf<Note?>(null) }
     var draft by remember { mutableStateOf(if (id == null) Draft("", "", null) else null) }
     var leave by remember { mutableStateOf<(() -> Unit)?>(null) }
+    // Discard on a changed draft asks first, as the PC's editor does before it drops edits.
+    var discarding by remember { mutableStateOf(false) }
 
     // A note made on this phone keeps its temp id until the PC numbers it; follow it there.
     val current by remember(ref) { ref?.let { nav.relay.resolved(it) } ?: flowOf<String?>(null) }
         .collectAsStateWithLifecycle(initialValue = ref)
-    val stored by remember(current) { current?.let { nav.relay.note(it) } ?: flowOf<Note?>(null) }
+    // Until the phone's copy answers, the note is being read, not missing.
+    var loaded by remember(current) { mutableStateOf(current == null) }
+    val stored by remember(current) { (current?.let { nav.relay.note(it) } ?: flowOf<Note?>(null)).onEach { loaded = true } }
         .collectAsStateWithLifecycle(initialValue = null)
     // A note this screen made shows from its own copy once the PC has numbered it and the phone's
     // temporary row has gone.
@@ -290,14 +301,28 @@ fun NoteScreen(id: String?, projectId: Long?, nav: Nav) {
     val back: () -> Unit = { guard { nav.back() } }
     BackHandler(enabled = draft?.changed == true) { leave = { nav.back() } }
 
+    // The desktop's question (doc.rs `request_close`), with its three answers.
     leave?.let { then ->
         Ask(
-            title = "Keep your changes?",
-            body = "This note has changes that are not saved.",
+            title = "Save changes to “${draft?.name ?: "Untitled"}” before closing?",
+            body = "If you don't save, your changes will be lost.",
             onDismiss = { leave = null },
         ) {
-            Key("Discard", { draft = null; leave = null; then() }, kind = KeyKind.Plain, compact = true)
+            Key("Cancel", { leave = null }, kind = KeyKind.Quiet, compact = true)
+            Key("Don't Save", { draft = null; leave = null; then() }, kind = KeyKind.Plain, compact = true)
             Key("Save", { save(); leave = null; then() }, kind = KeyKind.Primary, compact = true)
+        }
+    }
+
+    // A new note's draft goes with the screen; an open note's, back to the note.
+    fun discard() {
+        if (note == null) nav.back() else draft = null
+    }
+
+    if (discarding) {
+        Ask(title = "Discard your changes?", body = "The draft is not saved.", onDismiss = { discarding = false }) {
+            Key("Cancel", { discarding = false }, kind = KeyKind.Quiet, compact = true)
+            Key("Discard", { discarding = false; discard() }, kind = KeyKind.Danger, compact = true)
         }
     }
 
@@ -310,7 +335,7 @@ fun NoteScreen(id: String?, projectId: Long?, nav: Nav) {
             ) {
                 val n = note
                 if (n != null && !editing) {
-                    IconKey("pin", { pin(n) }, selected = n.pinned)
+                    IconKey("pin", { pin(n) }, selected = n.pinned, label = if (n.pinned) "Unpin" else "Pin")
                     IconKey("trash", { remove(n) })
                 }
             }
@@ -337,14 +362,15 @@ fun NoteScreen(id: String?, projectId: Long?, nav: Nav) {
                         onChange = { draft = it },
                         onSave = { save() },
                         onDiscard = {
-                            if (n == null) {
-                                nav.back()
+                            if (d.changed) {
+                                discarding = true
                             } else {
-                                draft = null
+                                discard()
                             }
                         },
                     )
                     n != null -> NoteView(n)
+                    !loaded -> Unit
                     else -> Empty("file-text", "Note not found", "It may have been deleted on the PC.")
                 }
             }

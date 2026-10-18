@@ -24,6 +24,7 @@ pub mod local_models;
 pub mod mirror;
 pub mod paths;
 pub mod peer;
+pub mod picture;
 pub mod plugins;
 pub mod private;
 pub mod proc;

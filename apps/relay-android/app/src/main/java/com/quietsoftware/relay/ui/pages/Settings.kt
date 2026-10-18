@@ -1,5 +1,7 @@
 package com.quietsoftware.relay.ui.pages
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -31,6 +33,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.app.NotificationManagerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quietsoftware.relay.BuildConfig
 import com.quietsoftware.relay.core.wire.BusException
@@ -44,12 +49,14 @@ import com.quietsoftware.relay.ui.kit.Gap
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.Hairline
 import com.quietsoftware.relay.ui.kit.IconKey
+import com.quietsoftware.relay.ui.kit.Key
 import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.SectionLabel
 import com.quietsoftware.relay.ui.kit.Slab
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.TOUCH
 import com.quietsoftware.relay.ui.kit.Toggle
+import com.quietsoftware.relay.ui.kit.switchRow
 import com.quietsoftware.relay.ui.shell.Page
 import com.quietsoftware.relay.ui.shell.PageBar
 import com.quietsoftware.relay.ui.term.MAX_SP
@@ -63,15 +70,19 @@ import kotlinx.serialization.json.put
 
 private class PcCategory(val key: String, val label: String, val detail: String)
 
-/** The PC's notification categories (tools_settings.rs), in its order. */
-private val PC_CATEGORIES = listOf(
-    PcCategory("agent_done", "Agent finished", "An agent reports its work done."),
-    PcCategory("agent_blocked", "Agent blocked", "An agent waits on you."),
-    PcCategory("guardrail", "Guardrail holds", "An action waits for your Allow."),
-    PcCategory("integration", "Integration", "Merges and builds finish or fail."),
-    PcCategory("provider", "Providers", "Provider updates and sign-in problems."),
-    PcCategory("disk", "Disk", "Worktrees and builds use a lot of space."),
-    PcCategory("system", "System", "Crashes on a device and other engine news."),
+/** The PC's notification categories, in its words, groups and order (tools_settings.rs): the agents', then the system's. */
+private val PC_GROUPS = listOf(
+    listOf(
+        PcCategory("agent_blocked", "Agent needs you", "Blocked on a question or waiting for approval."),
+        PcCategory("agent_done", "Agent finished", "Once per terminal, and again after you type into it."),
+        PcCategory("guardrail", "Guardrail needs you", "An action held for approval, or an exception request. Refusals are filed quietly."),
+    ),
+    listOf(
+        PcCategory("provider", "Providers", "Claude or Codex limits, outages and sign-in issues."),
+        PcCategory("integration", "Integrations", "Git, GitHub and plugin events."),
+        PcCategory("disk", "Disk", "Low space and worktree cleanup."),
+        PcCategory("system", "Everything else", "Crashed app runs and other engine events."),
+    ),
 )
 
 /** The phone's own preferences. The PC's settings stay on the PC. */
@@ -87,6 +98,9 @@ fun SettingsScreen(nav: Nav) {
     val pcNotify by remember { nav.relay.live("notify.settings.get") }.collectAsStateWithLifecycle(initialValue = Live())
     val categories = (pcNotify.result as? JsonObject)?.o("categories")
     val overrides = remember(pcNotify.result) { mutableStateMapOf<String, Boolean>() }
+    // Android's own switch for Relay's notifications, read again each time the page comes back.
+    var allowed by remember { mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled()) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { allowed = NotificationManagerCompat.from(context).areNotificationsEnabled() }
 
     Page {
         Column(Modifier.fillMaxSize()) {
@@ -120,40 +134,50 @@ fun SettingsScreen(nav: Nav) {
 
                 SectionLabel("Connection")
                 Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
-                    SettingRow(
+                    SwitchRow(
                         "Stay connected",
                         "Keeps the link open in the background so agents that need you can say so. Shows an ongoing notification.",
-                    ) {
-                        Toggle(p.stayConnected, { on ->
-                            nav.shell.update { prefs -> prefs.copy(stayConnected = on) }
-                            if (on) LinkService.start(context) else LinkService.stop(context)
-                        })
+                        p.stayConnected,
+                    ) { on ->
+                        nav.shell.update { prefs -> prefs.copy(stayConnected = on) }
+                        if (on) LinkService.start(context) else LinkService.stop(context)
                     }
                     Hairline()
-                    SettingRow("Notifications", "Tell me when an agent is held, blocked or done while the app is not on screen.") {
-                        Toggle(p.notify, { on -> nav.shell.update { prefs -> prefs.copy(notify = on) } })
+                    SwitchRow("Notifications", "Tell me when an agent is held, blocked or done while the app is not on screen.", p.notify) { on ->
+                        nav.shell.update { prefs -> prefs.copy(notify = on) }
+                    }
+                    // On here shows nothing while Android has them off: say so, with the way to its switch.
+                    if (p.notify && !allowed) {
+                        Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            T("Android has notifications off for Relay, so none show.", Modifier.weight(1f), Relay.type.caption, c.heldText)
+                            Spacer(Modifier.width(12.dp))
+                            Key("Android settings", {
+                                runCatching {
+                                    context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
+                                }
+                            }, glyph = "external", compact = true)
+                        }
                     }
                 }
 
                 SectionLabel("Terminal")
                 Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
-                    SettingRow(
+                    SwitchRow(
                         "Fit the terminal to this phone",
                         "Borrow the PC's terminal at the phone's width while one is open.",
-                    ) {
-                        Toggle(p.fitTerminal, { on -> nav.shell.update { prefs -> prefs.copy(fitTerminal = on) } })
+                        p.fitTerminal,
+                    ) { on -> nav.shell.update { prefs -> prefs.copy(fitTerminal = on) } }
+                    Hairline()
+                    SwitchRow("Keep the screen on in a terminal", "The screen stays awake while a terminal is open.", p.keepScreenOn) { on ->
+                        nav.shell.update { prefs -> prefs.copy(keepScreenOn = on) }
                     }
                     Hairline()
-                    SettingRow("Keep the screen on in a terminal", "The screen stays awake while a terminal is open.") {
-                        Toggle(p.keepScreenOn, { on -> nav.shell.update { prefs -> prefs.copy(keepScreenOn = on) } })
+                    SwitchRow("Type straight to the terminal", "Each key goes as it is pressed, for vim, a shell or a menu, with Ctrl and Alt on the key row. Off, a message box sends a line at a time.", p.terminalDirect) { on ->
+                        nav.shell.update { prefs -> prefs.copy(terminalDirect = on) }
                     }
                     Hairline()
-                    SettingRow("Type straight to the terminal", "Each key goes as it is pressed, for vim, a shell or a menu, with Ctrl and Alt on the key row. Off, a message box sends a line at a time.") {
-                        Toggle(p.terminalDirect, { on -> nav.shell.update { prefs -> prefs.copy(terminalDirect = on) } })
-                    }
-                    Hairline()
-                    SettingRow("Extra keys in a conversation", "Arrows, Tab, Space, Enter and Ctrl-C over an agent's message box.") {
-                        Toggle(p.chatKeys, { on -> nav.shell.update { prefs -> prefs.copy(chatKeys = on) } })
+                    SwitchRow("Extra keys in a conversation", "Arrows, Tab, Space, Enter and Ctrl-C over an agent's message box.", p.chatKeys) { on ->
+                        nav.shell.update { prefs -> prefs.copy(chatKeys = on) }
                     }
                     Hairline()
                     SettingRow("Text size", "In a terminal, from ${MIN_SP.toInt()} to ${MAX_SP.toInt()} points; a pinch changes it too.") {
@@ -162,6 +186,7 @@ fun SettingsScreen(nav: Nav) {
                                 "minus",
                                 { nav.shell.update { prefs -> prefs.copy(terminalFont = (prefs.terminalFont - 1f).coerceIn(MIN_SP, MAX_SP)) } },
                                 enabled = p.terminalFont > MIN_SP,
+                                label = "Smaller terminal text",
                             )
                             T(
                                 "${p.terminalFont.toInt()} sp",
@@ -173,6 +198,7 @@ fun SettingsScreen(nav: Nav) {
                                 "plus",
                                 { nav.shell.update { prefs -> prefs.copy(terminalFont = (prefs.terminalFont + 1f).coerceIn(MIN_SP, MAX_SP)) } },
                                 enabled = p.terminalFont < MAX_SP,
+                                label = "Larger terminal text",
                             )
                         }
                     }
@@ -180,40 +206,46 @@ fun SettingsScreen(nav: Nav) {
 
                 SectionLabel("PC")
                 Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
-                    SettingRow("This PC", "Pairing and the link to your PC", onClick = { nav.pc() }) {
+                    SettingRow("Your PC", "Pairing and the link to your PC", onClick = { nav.pc() }) {
                         Glyph("chevron-right", 16.dp, c.ink3)
                     }
                 }
 
                 SectionLabel("Notifications on the PC")
-                Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
-                    when {
-                        pcNotify.result == null -> Row(Modifier.padding(vertical = 12.dp)) {
+                if (pcNotify.result == null) {
+                    Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
+                        Row(Modifier.padding(vertical = 12.dp)) {
                             T(pcNotify.error?.message ?: "Loading…", style = Relay.type.caption, color = c.ink3)
                         }
-                        else -> PC_CATEGORIES.forEachIndexed { index, category ->
-                            if (index > 0) Hairline()
-                            val on = overrides[category.key] ?: (categories?.b(category.key) ?: true)
-                            SettingRow(category.label, category.detail) {
-                                Toggle(
-                                    on,
-                                    { value ->
-                                        scope.launch {
-                                            try {
-                                                nav.relay.call(
-                                                    "notify.settings.set",
-                                                    buildJsonObject {
-                                                        put("patch", buildJsonObject { put("categories", buildJsonObject { put(category.key, value) }) })
-                                                    },
-                                                )
-                                                overrides[category.key] = value
-                                            } catch (e: BusException) {
-                                                nav.shell.toast(e.error.message.ifBlank { e.error.code })
-                                            }
+                    }
+                } else {
+                    PC_GROUPS.forEachIndexed { group, list ->
+                        // The agents' notices show on the PC whatever their switch says (tools_settings.rs "Always shown").
+                        if (group == 0) {
+                            T("Agents' notices always show on the PC; these switch their sound.", style = Relay.type.caption, color = c.ink3)
+                            Gap(6.dp)
+                        } else {
+                            Gap(10.dp)
+                        }
+                        Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
+                            list.forEachIndexed { index, category ->
+                                if (index > 0) Hairline()
+                                val on = overrides[category.key] ?: (categories?.b(category.key) ?: true)
+                                SwitchRow(category.label, category.detail, on, enabled = s.online) { value ->
+                                    scope.launch {
+                                        try {
+                                            nav.relay.call(
+                                                "notify.settings.set",
+                                                buildJsonObject {
+                                                    put("patch", buildJsonObject { put("categories", buildJsonObject { put(category.key, value) }) })
+                                                },
+                                            )
+                                            overrides[category.key] = value
+                                        } catch (e: BusException) {
+                                            nav.shell.toast(if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code })
                                         }
-                                    },
-                                    enabled = s.online,
-                                )
+                                    }
+                                }
                             }
                         }
                     }
@@ -243,6 +275,7 @@ private fun SettingRow(
     title: String,
     hint: String?,
     onClick: (() -> Unit)? = null,
+    tap: Modifier = Modifier,
     control: @Composable () -> Unit = {},
 ) {
     val c = Relay.colors
@@ -250,7 +283,7 @@ private fun SettingRow(
         Modifier
             .fillMaxWidth()
             .heightIn(min = TOUCH)
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else tap)
             .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -262,6 +295,11 @@ private fun SettingRow(
         control()
     }
 }
+
+/** A setting that is one switch: a tap anywhere on the row turns it, and it is read as one switch. */
+@Composable
+private fun SwitchRow(title: String, hint: String?, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) =
+    SettingRow(title, hint, tap = Modifier.switchRow(checked, enabled, onChange)) { Toggle(checked, null, enabled = enabled) }
 
 /**
  * A palette as a card: the app in miniature in its colours (the ground, a card with two lines of

@@ -5,10 +5,15 @@
 //! `thread.message` and `thread.delta`. The page is one stack page, `threads`, whose middle shows
 //! either a new thread (a greeting and the message box) or the open one.
 //!
+//! Pictures go with a message when the thread's model reads them: the message box's picture key,
+//! a paste or a drop adds one, and each thread's draft keeps its own. Preparing, sending and
+//! showing them is `threads_pictures.rs`'s.
+//!
 //! The page never holds the window open: its scrollers keep their content's width to themselves
 //! (`PolicyType::External`), and width probes size the conversation (`fit`) and put the panel away
 //! on a narrow page (`apply_panel`).
 use super::pages::{badge, badge_sized, human_date, meter_in, tile, tone, tone_class, Tone};
+use super::pictures::{self, Attached, Source, MAX_PICTURES};
 use crate::app::{button, clear, label, Ui};
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -67,6 +72,8 @@ const EFFORTS: [(&str, &str); 6] = [
 const PANEL_TABS: [(&str, &str); 3] = [("overview", "Overview"), ("entries", "Entries"), ("invest", "Invest")];
 /// How many budgets Overview shows before "Show all".
 const BUDGETS_SHOWN: usize = 5;
+/// How many of the period's entries, newest first, the Entries view reads.
+const ENTRIES_SHOWN: u32 = 60;
 
 /// The panel's sources, as the switch above it names them: (key, caption, what it means).
 /// Choosing one shows its panel, and a new thread's greeting and questions follow it; the agent
@@ -81,10 +88,23 @@ const SOURCES: [(&str, &str, &str); 3] = [
 const COLUMN_MAX: i32 = 720;
 /// Under this page width the Tally panel steps aside, unless the person opened it.
 const PANEL_FROM: i32 = 1000;
+/// The panel's width until the person drags it, and the least it takes ([`restore`]).
+const PANEL_WIDTH: i32 = 340;
+const PANEL_MIN: i32 = 300;
 /// What the working row says before the agent has started.
 const STARTING: &str = "Starting Claude…";
 /// What a new thread asks Claude when the person picks "Connect Wealthsimple".
 const CONNECT: &str = "Help me connect my Wealthsimple accounts";
+/// The model picker's tooltip, and what it and the effort picker say while a reply is written.
+const MODEL_ABOUT: &str = "The model this thread's agent runs on";
+const WAITS: &str = "Waits for this reply to finish";
+/// What Enter says while the agent is still answering, as the phone does.
+const STILL_ANSWERING: &str = "Claude is still answering: stop it first, or wait";
+/// What the message box says while a picture keeps it from sending.
+const STILL_GOING: &str = "A picture is still on its way: send once it is up";
+const REFUSED_PICTURE: &str = "A picture was not added: remove it to send";
+/// What a drop of files that are not pictures says.
+const ONLY_PICTURES: &str = "Only PNG, JPEG, GIF or WebP pictures go in a message";
 
 /// A chip that opens a list of choices: the key, the caption it shows, and each choice's check.
 struct Picker {
@@ -114,8 +134,15 @@ struct View {
     message_box: gtk::Box,
     notice: gtk::Box,
     notice_text: gtk::Label,
+    composer: gtk::Box,
     input: gtk::TextView,
     hint: gtk::Label,
+    /// The pictures going with the message: a chip each, above the words ([`set_pictures`]); the
+    /// key that adds one; and a quiet line on why one did not go in or the message waits.
+    chips: gtk::Box,
+    chips_scroll: gtk::ScrolledWindow,
+    picture_key: gtk::Button,
+    picture_note: gtk::Label,
     send: gtk::Button,
     limits: gtk::Label,
     model: Picker,
@@ -128,6 +155,8 @@ struct View {
     pending: gtk::Box,
     working: gtk::Box,
     working_text: gtk::Label,
+    /// The conversation and the panel, side by side: its position is the panel's width.
+    split: gtk::Paned,
     panel: gtk::Box,
     panel_key: gtk::ToggleButton,
     panel_body: gtk::Box,
@@ -187,6 +216,13 @@ struct Turn {
     copy: gtk::Button,
 }
 
+/// What a thread's message box held when the person left it: its words and its pictures.
+#[derive(Default)]
+struct Draft {
+    text: String,
+    pictures: Vec<Rc<Attached>>,
+}
+
 #[derive(Default)]
 struct State {
     view: RefCell<Option<Rc<View>>>,
@@ -213,9 +249,9 @@ struct State {
     /// Tool calls drawn in this thread, by id.
     tools: RefCell<HashMap<String, Tool>>,
     turn: RefCell<Option<Turn>>,
-    /// The newest message the person sent: its Edit key and its words, which Try again sends
-    /// again.
-    last_user: RefCell<Option<(gtk::Button, String)>>,
+    /// The newest message the person sent: its Edit key, its words and its pictures, which Try
+    /// again sends again.
+    last_user: RefCell<Option<(gtk::Button, String, Vec<Value>)>>,
     /// The Try again key under the last error or stopped reply, while nothing came after it.
     retry: RefCell<Option<gtk::Button>>,
     /// The run of reads the next read joins, while it is the last thing in its turn.
@@ -231,6 +267,13 @@ struct State {
     panel_serial: Cell<u64>,
     /// `None` until the person opens or closes the panel; until then it follows the page width.
     panel_pinned: Cell<Option<bool>>,
+    /// The panel's width as last dragged (0 for [`PANEL_WIDTH`]), and the write of a new one,
+    /// waiting for the drag to settle ([`keep_width`]).
+    panel_width: Cell<i32>,
+    width_due: RefCell<Option<glib::SourceId>>,
+    /// What the last run kept (`native.threads`) has been read: until then nothing is kept, so a
+    /// default never writes over it ([`restore`]).
+    restored: Cell<bool>,
     /// Overview shows every budget, not the first [`BUDGETS_SHOWN`].
     all_budgets: Cell<bool>,
     /// A budget's editor is open over the panel: a read waits for it to close ([`edit_budget`]),
@@ -254,6 +297,11 @@ struct State {
     /// What [`tell`] could not send while the agent was still answering in its thread: (thread,
     /// words), oldest first. Each goes when its thread's turn ends ([`tell_waiting`]).
     to_tell: RefCell<Vec<(i64, String)>>,
+    /// What the message box held in each thread left with words or pictures in it, `None` a new
+    /// thread's: they come back when that thread shows again ([`reset`]).
+    drafts: RefCell<HashMap<Option<i64>, Draft>>,
+    /// The pictures in the message box now, in order.
+    pictures: RefCell<Vec<Rc<Attached>>>,
     ui: RefCell<std::rc::Weak<Ui>>,
     /// The model and effort a new thread starts with: the last ones chosen.
     choice: RefCell<(String, String)>,
@@ -466,7 +514,13 @@ pub fn page() -> gtk::Box {
     jump.set_visible(false);
     reading.add_overlay(&jump);
     middle.add_named(&reading, Some("thread"));
-    conversation.append(&middle);
+    // The page's toast, as a Tally page's (`money::toast`): what a sheet saved or deleted, with
+    // Undo. It sits over the conversation's foot, never over the message box.
+    let foot = gtk::Overlay::new();
+    foot.set_vexpand(true);
+    foot.set_child(Some(&middle));
+    super::add_toast(&foot, PAGE, 12);
+    conversation.append(&foot);
 
     let pending = gtk::Box::new(gtk::Orientation::Vertical, 0);
     pending.append(&pending_label());
@@ -496,9 +550,28 @@ pub fn page() -> gtk::Box {
     hint.set_valign(gtk::Align::Start);
     hint.set_ellipsize(gtk::pango::EllipsizeMode::End);
     field.add_overlay(&hint);
+    // The pictures going with the message, above the words; they scroll sideways in a narrow box
+    // rather than hold the window wide.
+    let chips = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    chips.add_css_class("threads-chips");
+    let chips_scroll = gtk::ScrolledWindow::builder().child(&chips).propagate_natural_height(true).build();
+    chips_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
+    chips_scroll.set_visible(false);
+    composer.append(&chips_scroll);
     composer.append(&field);
+    let picture_note = label("", "threads-picture-note");
+    picture_note.set_wrap(true);
+    picture_note.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    picture_note.set_visible(false);
+    composer.append(&picture_note);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let model = picker("threads-model", "The model this thread's agent runs on", &MODELS, |value| choose(Some(value), None));
+    // Pictures, for a model that reads them ([`picture_key_shown`]).
+    let picture_key = crate::app::icon_button("file-image", "Add a picture");
+    picture_key.add_css_class("threads-picture-key");
+    picture_key.set_widget_name("threads-picture");
+    picture_key.set_valign(gtk::Align::Center);
+    row.append(&picture_key);
+    let model = picker("threads-model", MODEL_ABOUT, &MODELS, |value| choose(Some(value), None));
     row.append(&model.key);
     let effort = picker("threads-effort", "How hard the agent thinks before answering", &EFFORTS, |value| choose(None, Some(value)));
     row.append(&effort.key);
@@ -534,9 +607,10 @@ pub fn page() -> gtk::Box {
     notice.append(&notice_text);
     let settings_key = button("Open Settings", "quiet");
     settings_key.set_valign(gtk::Align::Center);
+    // On Agents, where Claude Code's row and its refresh key are.
     settings_key.connect_clicked(|_| {
         if let Some(ui) = the_ui() {
-            ui.navigate("settings");
+            crate::tools::settings::open_on(&ui, "agents");
         }
     });
     notice.append(&settings_key);
@@ -544,6 +618,10 @@ pub fn page() -> gtk::Box {
     let message_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
     message_box.append(&notice);
     message_box.append(&composer);
+    // Pictures dropped on the message box go with the message, before its text field would type
+    // their names; dropped anywhere else on the conversation, too.
+    composer.add_controller(picture_drop(true));
+    conversation.add_controller(picture_drop(false));
 
     // An open thread's message box sits under the conversation, as wide as its column; its
     // scroller keeps the pickers' width from holding the window open.
@@ -557,11 +635,12 @@ pub fn page() -> gtk::Box {
     body.set_resize_start_child(true);
     body.set_shrink_start_child(false);
 
-    // The panel: 340 pixels as it opens, 300 at the least. Its source, Tally, Arbiter or Avex,
-    // above that source's tabs: the one switch that says where the thread looks.
+    // The panel: 340 pixels as it first opens, then as wide as it was left; 300 at the least.
+    // Its source, Tally, Arbiter or Avex, above that source's tabs: the one switch that says
+    // where the thread looks.
     let side = gtk::Box::new(gtk::Orientation::Vertical, 18);
     side.add_css_class("threads-panel");
-    side.set_size_request(300, -1);
+    side.set_size_request(PANEL_MIN, -1);
     let source_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     source_row.add_css_class("threads-sources");
     let mut sources = Vec::new();
@@ -617,14 +696,16 @@ pub fn page() -> gtk::Box {
     body.set_end_child(Some(&side));
     body.set_resize_end_child(false);
     body.set_shrink_end_child(false);
-    // Place the split once the page has a width: the panel opens at 340.
+    // Place the split once the page has a width, the panel as wide as it was left; a drag is
+    // kept for the next run.
     body.add_tick_callback(|split, _| {
         if split.width() <= 0 {
             return glib::ControlFlow::Continue;
         }
-        split.set_position((split.width() - 340).max(0));
+        split.set_position((split.width() - panel_width()).max(0));
         glib::ControlFlow::Break
     });
+    body.connect_position_notify(|_| keep_width());
     let panel = side.clone();
     root.append(&body);
 
@@ -656,8 +737,9 @@ pub fn page() -> gtk::Box {
 
     let built = Rc::new(View {
         title, title_key, rename, middle, empty, empty_slot, empty_line, suggestions, dock, dock_slot, message_box,
-        notice, notice_text, input, hint, send: send_key, limits, model, effort, scroll, jump, column, pending,
-        working, working_text, panel, panel_key, panel_body, panel_tabs,
+        notice, notice_text, composer, input, hint, chips, chips_scroll, picture_key, picture_note, send: send_key,
+        limits, model, effort, scroll, jump, column, pending,
+        working, working_text, split: body.clone(), panel, panel_key, panel_body, panel_tabs,
         tally_tabs: tabs, arbiter_tabs, arbiter_panel_tabs, avex_tabs, avex_panel_tabs, sources,
     });
     STATE.with(|s| {
@@ -711,6 +793,9 @@ fn set_source(source: &'static str) {
     show_source(&v);
     if !v.panel_key.is_active() {
         v.panel_key.set_active(true);
+    }
+    if changed {
+        keep("source", json!(source));
     }
     let Some(ui) = the_ui() else { return };
     refresh_panel(&ui);
@@ -770,6 +855,17 @@ fn wire(v: &Rc<View>, delete: &gtk::Button) {
             update_send(&v);
         }
     });
+    // A picture on the clipboard, or picture files copied in a file manager, go with the message.
+    v.input.connect_paste_clipboard(|input| {
+        if paste_pictures(input) {
+            input.stop_signal_emission_by_name("paste-clipboard");
+        }
+    });
+    v.picture_key.connect_clicked(|_| {
+        if let Some(ui) = the_ui() {
+            choose_pictures(&ui);
+        }
+    });
     v.send.connect_clicked(|_| {
         if let Some(ui) = the_ui() {
             if STATE.with(|s| s.working.get()) {
@@ -821,6 +917,7 @@ fn wire(v: &Rc<View>, delete: &gtk::Button) {
             if STATE.with(|s| s.panel_tab.replace(key)) == key {
                 return;
             }
+            keep("panel_tab", json!(key));
             if let Some(v) = view() {
                 clear(&v.panel_body);
             }
@@ -829,10 +926,13 @@ fn wire(v: &Rc<View>, delete: &gtk::Button) {
             }
         });
     }
+    // The name shows selected, so typing replaces it.
     v.title_key.connect_notify_local(Some("active"), |key, _| {
         if key.is_active() {
             if let Some(v) = view() {
                 v.rename.set_text(&v.title.text());
+                v.rename.grab_focus();
+                v.rename.select_region(0, -1);
             }
         }
     });
@@ -892,6 +992,103 @@ fn apply_panel(v: &View) {
     }
 }
 
+/// The panel's width: as last dragged, else [`PANEL_WIDTH`].
+fn panel_width() -> i32 {
+    match STATE.with(|s| s.panel_width.get()) {
+        0 => PANEL_WIDTH,
+        width => width,
+    }
+}
+
+/// Keeps the panel's width once a drag of the split settles. A window resized moves the split
+/// too, but leaves the panel as wide as it was, so nothing new is kept.
+fn keep_width() {
+    if !STATE.with(|s| s.restored.get()) {
+        return;
+    }
+    if let Some(due) = STATE.with(|s| s.width_due.take()) {
+        due.remove();
+    }
+    let due = glib::timeout_add_local_once(std::time::Duration::from_millis(500), || {
+        // It has fired: forget it rather than remove it.
+        STATE.with(|s| s.width_due.take());
+        let Some(v) = view().filter(|v| v.panel.is_visible() && v.split.width() > 0) else { return };
+        let width = v.split.width() - v.split.position();
+        if width >= PANEL_MIN && width != panel_width() {
+            STATE.with(|s| s.panel_width.set(width));
+            keep("panel_width", json!(width));
+        }
+    });
+    STATE.with(|s| *s.width_due.borrow_mut() = Some(due));
+}
+
+/// Keeps `key` under `native.threads` for the next run ([`restore`]): nothing before the last
+/// run's are read. A write that fails is let go, as the notes window's are: it only remembers.
+fn keep(key: &str, value: Value) {
+    let Some(ui) = the_ui().filter(|_| STATE.with(|s| s.restored.get())) else { return };
+    let path = format!("native.threads.{key}");
+    glib::spawn_future_local(async move {
+        let _ = ui.call("settings.set", json!({"path": path, "value": value})).await;
+    });
+}
+
+/// What the last run left (`native.threads`): the panel's source, the Tally panel's tab and the
+/// panel's width, and the model and effort a new thread starts with. Read once, after the first
+/// connection (`money::startup`); from then on each is kept as it changes ([`keep`]).
+pub fn restore(ui: &Rc<Ui>) {
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        // Unread, the defaults stand, and what the person changes from here is still kept.
+        let kept = ui.call("settings.get", json!({"path": "native.threads"})).await.map(|v| v["value"].clone()).unwrap_or_default();
+        let source = SOURCES.iter().map(|(key, _, _)| *key).find(|key| kept["source"].as_str() == Some(*key));
+        let tab = PANEL_TABS.iter().map(|(key, _)| *key).find(|key| kept["panel_tab"].as_str() == Some(*key));
+        let source_moved = source.is_some_and(|key| STATE.with(|s| s.source.replace(key)) != key);
+        let tab_moved = tab.is_some_and(|key| STATE.with(|s| s.panel_tab.replace(key)) != key);
+        if let Some(width) = kept["panel_width"].as_i64() {
+            let width = width.clamp(i64::from(PANEL_MIN), 2000) as i32;
+            STATE.with(|s| s.panel_width.set(width));
+            // Placed already, it moves; otherwise the first frame places it so.
+            if let Some(v) = view().filter(|v| v.split.width() > 0) {
+                v.split.set_position((v.split.width() - width).max(0));
+            }
+        }
+        let model = kept["model"].as_str().filter(|m| m.len() <= 64).map(str::to_string);
+        let effort = kept["effort"].as_str().filter(|e| EFFORTS.iter().any(|(value, _)| value == e)).map(str::to_string);
+        if model.is_some() || effort.is_some() {
+            let (model, effort) = STATE.with(|s| {
+                let mut choice = s.choice.borrow_mut();
+                if let Some(m) = model {
+                    choice.0 = m;
+                }
+                if let Some(e) = effort {
+                    choice.1 = e;
+                }
+                choice.clone()
+            });
+            // A new thread shows them; an open one keeps showing its own.
+            if let Some(v) = view().filter(|_| current().is_none()) {
+                show_choice(&v, &model, &effort);
+            }
+        }
+        STATE.with(|s| s.restored.set(true));
+        if !(source_moved || tab_moved) {
+            return;
+        }
+        if let Some(v) = view() {
+            show_source(&v);
+            clear(&v.panel_body);
+        }
+        // Off the page, its next showing reads them.
+        if *ui.page.borrow() != PAGE {
+            return;
+        }
+        refresh_panel(&ui);
+        if source_moved && current().is_none() {
+            greet(&ui).await;
+        }
+    });
+}
+
 /// The message box goes where the middle is: centred on a new thread, at the foot of an open one.
 fn place_composer(v: &View, empty: bool) {
     let target = if empty { &v.empty_slot } else { &v.dock_slot };
@@ -924,11 +1121,247 @@ fn update_send(v: &View) {
     let buffer = v.input.buffer();
     v.hint.set_visible(buffer.char_count() == 0);
     let written = !buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).trim().is_empty();
+    let pictures = STATE.with(|s| !s.pictures.borrow().is_empty());
+    let held = pictures_hold();
     let working = STATE.with(|s| s.working.get());
     let missing = STATE.with(|s| s.claude_missing.get());
     let reachable = the_ui().is_none_or(|ui| ui.is_connected()) && !missing;
-    v.send.set_sensitive(working || (written && reachable));
+    // Pictures alone are a message; one still going up, or refused, keeps it back and says why.
+    v.send.set_sensitive(working || ((written || pictures) && reachable && held.is_none()));
+    if !working {
+        v.send.set_tooltip_text(Some(held.unwrap_or("Send · Enter")));
+    }
     v.suggestions.set_sensitive(!missing);
+}
+
+/// What keeps the message box's pictures from going: a model on this PC, which cannot read them,
+/// one still going up, or one refused. `None` when they may go, or there are none.
+fn pictures_hold() -> Option<&'static str> {
+    STATE.with(|s| {
+        let pictures = s.pictures.borrow();
+        if pictures.is_empty() {
+            None
+        } else if !pictures_allowed() {
+            Some(pictures::LOCAL_CANNOT)
+        } else if pictures.iter().any(|p| p.going()) {
+            Some(STILL_GOING)
+        } else if pictures.iter().any(|p| p.refused().is_some()) {
+            Some(REFUSED_PICTURE)
+        } else {
+            None
+        }
+    })
+}
+
+/// Whether the model showing reads pictures: Claude's do, a model on this PC does not.
+fn pictures_allowed() -> bool {
+    !is_local(&STATE.with(|s| s.shown_model.borrow().clone()))
+}
+
+/// The picture key shows while the model reads pictures. On a model on this PC it steps aside,
+/// and pictures already in the box say why they cannot go.
+fn picture_key_shown(v: &View) {
+    let allowed = pictures_allowed();
+    v.picture_key.set_visible(allowed);
+    let held = STATE.with(|s| !s.pictures.borrow().is_empty());
+    if !allowed && held {
+        note(v, pictures::LOCAL_CANNOT);
+    } else if allowed && v.picture_note.text() == pictures::LOCAL_CANNOT {
+        note(v, "");
+    }
+    update_send(v);
+}
+
+/// The message box's quiet line about its pictures; empty hides it.
+fn note(v: &View, text: &str) {
+    v.picture_note.set_text(text);
+    v.picture_note.set_visible(!text.is_empty());
+}
+
+/// Show `pictures` in the message box, in place of what it held.
+fn set_pictures(v: &View, pictures: Vec<Rc<Attached>>) {
+    clear(&v.chips);
+    for picture in &pictures {
+        v.chips.append(picture.widget());
+    }
+    v.chips_scroll.set_visible(!pictures.is_empty());
+    STATE.with(|s| *s.pictures.borrow_mut() = pictures);
+    update_send(v);
+}
+
+/// Add pictures to the message box, as many as it has room for, each going up at once.
+fn attach(sources: Vec<Source>) {
+    let (Some(v), Some(ui)) = (view(), the_ui()) else { return };
+    if sources.is_empty() {
+        return;
+    }
+    if !pictures_allowed() {
+        note(&v, pictures::LOCAL_CANNOT);
+        return;
+    }
+    let mut held = STATE.with(|s| s.pictures.borrow().clone());
+    let room = MAX_PICTURES.saturating_sub(held.len());
+    let left_out = sources.len().saturating_sub(room);
+    for source in sources.into_iter().take(room) {
+        held.push(Attached::add(&ui, source, picture_done, remove_picture));
+    }
+    set_pictures(&v, held);
+    let said = match (left_out, room) {
+        (0, _) => String::new(),
+        (_, 0) => format!("At most {MAX_PICTURES} pictures go in one message"),
+        (n, _) => format!("At most {MAX_PICTURES} pictures go in one message: {} left out", plural(n as i64, "picture")),
+    };
+    note(&v, &said);
+    v.input.grab_focus();
+}
+
+/// A picture went up, or was refused: the message box says so if it holds it. One in a draft put
+/// away shows how it went on its chip when its thread comes back.
+fn picture_done(picture: &Attached) {
+    let Some(v) = view() else { return };
+    if !STATE.with(|s| s.pictures.borrow().iter().any(|p| p.serial == picture.serial)) {
+        return;
+    }
+    if let Some(why) = picture.refused() {
+        note(&v, &format!("{} was not added: {why}", picture.name()));
+    } else if v.picture_note.text() == STILL_GOING && pictures_hold() != Some(STILL_GOING) {
+        note(&v, "");
+    }
+    update_send(&v);
+}
+
+/// A chip's remove key: the picture leaves the message box.
+fn remove_picture(serial: u64) {
+    let Some(v) = view() else { return };
+    let left: Vec<Rc<Attached>> = STATE.with(|s| s.pictures.borrow().iter().filter(|p| p.serial != serial).cloned().collect());
+    set_pictures(&v, left);
+    // What it said is done with; that a model on this PC cannot read the others still holds.
+    note(&v, if pictures_hold() == Some(pictures::LOCAL_CANNOT) { pictures::LOCAL_CANNOT } else { "" });
+    v.input.grab_focus();
+}
+
+/// The picture key: a chooser of PNG, JPEG, GIF and WebP pictures, several at once.
+fn choose_pictures(ui: &Rc<Ui>) {
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some("Pictures (PNG, JPEG, GIF, WebP)"));
+    for mime in pictures::MEDIA_TYPES {
+        filter.add_mime_type(mime);
+    }
+    for suffix in pictures::SUFFIXES {
+        filter.add_suffix(suffix);
+    }
+    let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+    filters.append(&filter);
+    let dialog = gtk::FileDialog::builder().title("Add pictures").modal(true).filters(&filters).default_filter(&filter).build();
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        // Closing the chooser is not an error.
+        let Ok(files) = dialog.open_multiple_future(Some(&ui.window)).await else { return };
+        let chosen = (0..files.n_items())
+            .filter_map(|i| files.item(i).and_downcast::<gtk::gio::File>())
+            .filter_map(|f| f.path())
+            .map(Source::Path)
+            .collect();
+        attach(chosen);
+    });
+}
+
+/// Ctrl+V in the message box with a picture on the clipboard, or picture files copied in a file
+/// manager: they go with the message instead of their names. Whether it took the paste; words, and
+/// anything Relay copied itself, paste as words.
+fn paste_pictures(input: &gtk::TextView) -> bool {
+    let clipboard = input.clipboard();
+    if clipboard.is_local() {
+        return false;
+    }
+    let formats = clipboard.formats();
+    let files = formats.contains_type(gtk::gdk::FileList::static_type()) || formats.contain_mime_type("text/uri-list");
+    let picture = formats.contains_type(gtk::gdk::Texture::static_type());
+    let words = formats.contains_type(glib::GString::static_type()) || formats.contain_mime_type("text/plain") || formats.contain_mime_type("text/plain;charset=utf-8");
+    if !files && !(picture && !words) {
+        return false;
+    }
+    let input = input.downgrade();
+    glib::spawn_future_local(async move {
+        if files {
+            if let Ok(value) = clipboard.read_value_future(gtk::gdk::FileList::static_type(), glib::Priority::DEFAULT).await {
+                let found: Vec<Source> = value
+                    .get::<gtk::gdk::FileList>()
+                    .map(|list| list.files().iter().filter_map(|f| f.path()).filter(|p| pictures::is_picture(p)).map(Source::Path).collect())
+                    .unwrap_or_default();
+                if !found.is_empty() {
+                    attach(found);
+                    return;
+                }
+            }
+        }
+        if picture {
+            if let Ok(Some(texture)) = clipboard.read_texture_future().await {
+                attach(vec![Source::Texture(texture)]);
+                return;
+            }
+        }
+        // No picture after all: the words paste as they would have.
+        if let Some(input) = input.upgrade() {
+            input.buffer().paste_clipboard(&clipboard, None, input.is_editable());
+        }
+    });
+    true
+}
+
+/// Pictures dropped on the conversation, or on the message box (`in_box`), whose text field would
+/// otherwise type their names: its target listens first. Anything else dropped on the box goes in
+/// as words, as the field would have put it; on the conversation it says what goes.
+fn picture_drop(in_box: bool) -> gtk::DropTarget {
+    let target = gtk::DropTarget::new(glib::Type::INVALID, gtk::gdk::DragAction::COPY);
+    // A picture dragged out of a browser also offers its address as a file: the picture first.
+    target.set_types(&[gtk::gdk::Texture::static_type(), gtk::gdk::FileList::static_type()]);
+    if in_box {
+        target.set_propagation_phase(gtk::PropagationPhase::Capture);
+    } else {
+        // The conversation's lights the message box while a drag is over it.
+        target.connect_enter(|_, _, _| {
+            if let Some(v) = view() {
+                v.composer.add_css_class("threads-dropping");
+            }
+            gtk::gdk::DragAction::COPY
+        });
+        target.connect_leave(|_| {
+            if let Some(v) = view() {
+                v.composer.remove_css_class("threads-dropping");
+            }
+        });
+    }
+    target.connect_drop(move |_, value, _, _| {
+        let Some(v) = view() else { return false };
+        v.composer.remove_css_class("threads-dropping");
+        if let Ok(texture) = value.get::<gtk::gdk::Texture>() {
+            attach(vec![Source::Texture(texture)]);
+            return true;
+        }
+        let Ok(list) = value.get::<gtk::gdk::FileList>() else { return false };
+        let files = list.files();
+        let (found, others): (Vec<PathBuf>, Vec<PathBuf>) = files.iter().filter_map(|f| f.path()).partition(|p| pictures::is_picture(p));
+        if found.is_empty() && in_box {
+            // A link, or a file that is not a picture: its address, as the text field takes one.
+            let words: Vec<String> = files.iter().map(|f| f.path().map_or_else(|| f.uri().to_string(), |p| p.to_string_lossy().to_string())).collect();
+            if words.is_empty() {
+                return false;
+            }
+            v.input.buffer().insert_at_cursor(&words.join(" "));
+            return true;
+        }
+        if found.is_empty() {
+            note(&v, ONLY_PICTURES);
+            return false;
+        }
+        attach(found.into_iter().map(Source::Path).collect());
+        if !others.is_empty() && v.picture_note.text().is_empty() {
+            note(&v, &format!("{ONLY_PICTURES}: {} left out", plural(others.len() as i64, "file")));
+        }
+        true
+    });
+    target
 }
 
 /// A chip that opens a list of `options` and runs `pick` with the one chosen. The current choice
@@ -1078,11 +1511,17 @@ fn show_choice(v: &View, model: &str, effort: &str) {
         }
     }
     effort_sensitive(v);
+    picture_key_shown(v);
 }
 
 /// A model or an effort picked: the thread showing takes it (`thread.set`), and new threads start
-/// with it.
+/// with it, in this run and the next.
 fn choose(model: Option<&str>, effort: Option<&str>) {
+    for (key, value) in [("model", model), ("effort", effort)] {
+        if let Some(value) = value {
+            keep(key, json!(value));
+        }
+    }
     let picked = model;
     let (model, effort) = STATE.with(|s| {
         let mut choice = s.choice.borrow_mut();
@@ -1128,13 +1567,22 @@ fn reshow_model(v: &View) {
         mark.set_opacity(if *choice == model { 1.0 } else { 0.0 });
     }
     effort_sensitive(v);
+    // The models on this PC came in: the one shown may be among them.
+    picture_key_shown(v);
 }
 
 /// The effort picker waits for a reply like the model picker, and a local model has no efforts.
 fn effort_sensitive(v: &View) {
     let local = is_local(&STATE.with(|s| s.shown_model.borrow().clone()));
-    v.effort.key.set_sensitive(!STATE.with(|s| s.working.get()) && !local);
-    v.effort.key.set_tooltip_text(Some(if local { "A model on this PC has no effort setting" } else { "How hard the agent thinks before answering" }));
+    let working = STATE.with(|s| s.working.get());
+    v.effort.key.set_sensitive(!working && !local);
+    v.effort.key.set_tooltip_text(Some(if local {
+        "A model on this PC has no effort setting"
+    } else if working {
+        WAITS
+    } else {
+        "How hard the agent thinks before answering"
+    }));
 }
 
 fn show_empty(v: &View) {
@@ -1147,10 +1595,28 @@ fn show_empty(v: &View) {
     set_working(v, false);
 }
 
-/// Forget the thread drawn: `id` shows next, or a new thread when `None`.
+/// Forget the thread drawn: `id` shows next, or a new thread when `None`. The message box keeps
+/// what was written, and the pictures added, for the thread they were meant for, and shows `id`'s
+/// own. A picture still going up goes on meanwhile.
 fn reset(id: Option<i64>) {
     if let Some(v) = view() {
         drop_pending(&v);
+        let buffer = v.input.buffer();
+        let written = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
+        let pictures = STATE.with(|s| std::mem::take(&mut *s.pictures.borrow_mut()));
+        let back = STATE.with(|s| {
+            let mut drafts = s.drafts.borrow_mut();
+            if written.trim().is_empty() && pictures.is_empty() {
+                drafts.remove(&s.current.get());
+            } else {
+                drafts.insert(s.current.get(), Draft { text: written, pictures });
+            }
+            drafts.remove(&id).unwrap_or_default()
+        });
+        buffer.set_text(&back.text);
+        buffer.place_cursor(&buffer.end_iter());
+        set_pictures(&v, back.pictures);
+        note(&v, "");
     }
     STATE.with(|s| {
         s.shown_serial.set(s.shown_serial.get() + 1);
@@ -1173,13 +1639,20 @@ fn reset(id: Option<i64>) {
 
 /// Start a new thread: the page shows the greeting until the first message is sent.
 pub fn new_thread(ui: &Rc<Ui>) {
+    start_thread(ui, true);
+}
+
+/// [`new_thread`]; with `show` false the window stays on the page it shows, its focus too.
+fn start_thread(ui: &Rc<Ui>, show: bool) {
     reset(None);
     if let Some(v) = view() {
         show_empty(&v);
         v.empty_line.set_text("");
-        v.input.grab_focus();
+        if show {
+            v.input.grab_focus();
+        }
     }
-    if *ui.page.borrow() != PAGE {
+    if show && *ui.page.borrow() != PAGE {
         ui.navigate(PAGE);
     }
     refresh_list(ui);
@@ -1209,18 +1682,12 @@ pub(crate) fn ask(ui: &Rc<Ui>, text: &str) {
 /// stays, the draft on a line after it. With no thread open the words wait in a new thread's
 /// message box, still not sent: a draft such as "About Legs A on Thu 8 Oct: " is unfinished.
 pub(crate) fn draft(ui: &Rc<Ui>, text: &str) {
-    let Some(v) = view().filter(|_| current().is_some()) else {
+    if current().is_none() {
         new_thread(ui);
-        if let Some(v) = view() {
-            let buffer = v.input.buffer();
-            buffer.set_text(text);
-            buffer.place_cursor(&buffer.end_iter());
-        }
-        return;
-    };
-    if *ui.page.borrow() != PAGE {
+    } else if *ui.page.borrow() != PAGE {
         ui.navigate(PAGE);
     }
+    let Some(v) = view() else { return };
     let buffer = v.input.buffer();
     let written = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
     if written.trim().is_empty() {
@@ -1269,10 +1736,15 @@ fn month_line(s: &Value) -> String {
     // A period that does not start on the 1st has a range for a name: it reads as "this period".
     let when = if name.contains(" to ") { String::from("This period") } else { name };
     if s["pace"]["budget"].as_i64().unwrap_or(0) > 0 {
-        format!("{when} so far: {spent} spent, {} left. Ask anything, or tell it what to change.", fmt.format_whole(left))
+        format!("{when} so far: {spent} spent, {}. Ask anything, or tell it what to change.", left_or_over(&fmt, left))
     } else {
         format!("{when} so far: {spent} spent. Ask anything, or tell it what to change.")
     }
+}
+
+/// "$475 left", or "$50 over" once it is spent past: never "−$50 left".
+fn left_or_over(fmt: &MoneyFormatter, left: i64) -> String {
+    if left < 0 { format!("{} over", fmt.format_whole(-left)) } else { format!("{} left", fmt.format_whole(left)) }
 }
 
 /// The questions a new thread offers, from what the ledger shows: the budget furthest ahead of its
@@ -1480,7 +1952,7 @@ fn check_claude(ui: &Rc<Ui>) {
         let why = if missing {
             "Threads need Claude Code on this PC. Install it, then refresh it in Settings."
         } else if signed_out {
-            "Claude Code isn't signed in on this PC. Sign in, then refresh it in Settings."
+            "Claude Code is not signed in on this PC. Sign in, then refresh it in Settings."
         } else {
             ""
         };
@@ -1505,7 +1977,7 @@ pub fn smoke_open(ui: &Rc<Ui>, newest: bool) {
         // scripts/threads-smoke.py thread-edit: the newest message's Edit key, pressed.
         if std::env::var("RELAY_SMOKE_THREAD_EDIT").as_deref() == Ok("1") {
             glib::timeout_future(std::time::Duration::from_millis(1500)).await;
-            if let Some(edit) = STATE.with(|s| s.last_user.borrow().as_ref().map(|(e, _)| e.clone())) {
+            if let Some(edit) = STATE.with(|s| s.last_user.borrow().as_ref().map(|(e, _, _)| e.clone())) {
                 edit.emit_clicked();
             }
         }
@@ -1692,10 +2164,11 @@ fn set_working(v: &View, working: bool) {
     v.send.set_child(Some(&crate::icons::image_with_stroke(icon, 15, 2.0)));
     v.send.set_tooltip_text(Some(tip));
     v.send.update_property(&[gtk::accessible::Property::Label(name)]);
-    // `thread.set` closes a running agent: the choice waits for the reply to end.
+    // `thread.set` closes a running agent: the choice waits for the reply to end, and says so.
     v.model.key.set_sensitive(!working);
+    v.model.key.set_tooltip_text(Some(if working { WAITS } else { MODEL_ABOUT }));
     STATE.with(|s| {
-        if let Some((edit, _)) = s.last_user.borrow().as_ref() {
+        if let Some((edit, _, _)) = s.last_user.borrow().as_ref() {
             edit.set_sensitive(!working);
         }
         if let Some(retry) = s.retry.borrow().as_ref() {
@@ -1794,22 +2267,24 @@ fn copy_key(tip: &'static str, words: impl Fn() -> String + 'static) -> gtk::But
     copy
 }
 
-/// Put the person's newest message back in the box, to change and send again.
-fn edit_last(words: &str) {
-    let Some(v) = view() else { return };
+/// Put the person's newest message back in the box, its pictures too, to change and send again.
+fn edit_last(words: &str, images: &[Value]) {
+    let (Some(v), Some(ui)) = (view(), the_ui()) else { return };
     if STATE.with(|s| s.working.get()) {
         return;
     }
     let buffer = v.input.buffer();
     buffer.set_text(words);
     buffer.place_cursor(&buffer.end_iter());
+    set_pictures(&v, images.iter().take(MAX_PICTURES).map(|image| Attached::again(&ui, image, remove_picture)).collect());
+    note(&v, "");
     v.input.grab_focus();
 }
 
 /// Try again, after a reply that failed or was stopped: sends the person's newest message once
 /// more. Hidden by the next message.
 fn retry_key(parent: &gtk::Box) {
-    let Some(words) = STATE.with(|s| s.last_user.borrow().as_ref().map(|(_, w)| w.clone())) else {
+    let Some((words, images)) = STATE.with(|s| s.last_user.borrow().as_ref().map(|(_, w, i)| (w.clone(), i.clone()))) else {
         return;
     };
     let key = gtk::Button::new();
@@ -1824,7 +2299,7 @@ fn retry_key(parent: &gtk::Box) {
     key.connect_clicked(move |_| {
         if let Some(ui) = the_ui() {
             if !STATE.with(|s| s.working.get()) {
-                send(&ui, &words);
+                send_with(&ui, &words, images.clone(), Vec::new());
             }
         }
     });
@@ -1884,11 +2359,12 @@ fn draw_message(v: &View, m: &Value) {
     match m["role"].as_str().unwrap_or("") {
         "user" => {
             let text = body["text"].as_str().unwrap_or("");
+            let images: Vec<Value> = body["images"].as_array().cloned().unwrap_or_default();
             STATE.with(|s| {
                 *s.turn.borrow_mut() = None;
                 *s.group.borrow_mut() = None;
                 // Only the newest message is edited, and only the newest failure retried.
-                if let Some((edit, _)) = s.last_user.borrow_mut().take() {
+                if let Some((edit, _, _)) = s.last_user.borrow_mut().take() {
                     edit.set_visible(false);
                 }
                 if let Some(retry) = s.retry.borrow_mut().take() {
@@ -1912,17 +2388,28 @@ fn draw_message(v: &View, m: &Value) {
             let keys = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             keys.add_css_class("threads-user-keys");
             keys.set_valign(gtk::Align::End);
-            let words = text.to_string();
-            keys.append(&copy_key("Copy this message", move || words.clone()));
+            if !text.is_empty() {
+                let words = text.to_string();
+                keys.append(&copy_key("Copy this message", move || words.clone()));
+            }
             let edit = crate::app::icon_button("edit", "Edit and send again");
             edit.set_child(Some(&crate::icons::image("edit", 16)));
-            let words = text.to_string();
-            edit.connect_clicked(move |_| edit_last(&words));
+            let (words, sent) = (text.to_string(), images.clone());
+            edit.connect_clicked(move |_| edit_last(&words, &sent));
             edit.set_sensitive(!STATE.with(|s| s.working.get()));
             keys.append(&edit);
             wrap.append(&keys);
-            wrap.append(&bubble);
-            STATE.with(|s| *s.last_user.borrow_mut() = Some((edit, text.to_string())));
+            // Its pictures above its words, both at the column's end.
+            let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
+            content.set_halign(gtk::Align::End);
+            if let Some(ui) = the_ui().filter(|_| !images.is_empty()) {
+                content.append(&pictures::in_message(&ui, &images));
+            }
+            if !text.is_empty() || images.is_empty() {
+                content.append(&bubble);
+            }
+            wrap.append(&content);
+            STATE.with(|s| *s.last_user.borrow_mut() = Some((edit, text.to_string(), images)));
             v.column.append(&wrap);
         }
         "assistant" => {
@@ -2190,6 +2677,15 @@ fn doing(name: &str) -> &'static str {
         Some("money.invest.add") => "Recording investment activity…",
         Some("thread.propose") => "Asking you first…",
         Some("bus.schema") => "Checking how a tool works…",
+        // Avex's and Arbiter's: what changes or adds up by name, every other read as the phone
+        // says it.
+        Some("gym.series") => "Adding up training…",
+        Some("arbiter.backtest") => "Running a backtest…",
+        Some("arbiter.propose") => "Proposing a change…",
+        Some("arbiter.order.place") => "Asking for an order…",
+        Some("arbiter.halt") => "Halting Arbiter…",
+        Some(op) if op.starts_with("gym.") => "Reading your training…",
+        Some(op) if op.starts_with("arbiter.") => "Reading Arbiter…",
         _ => "Working…",
     }
 }
@@ -2845,7 +3341,7 @@ fn imported(result: &Value) -> (String, String) {
     let title = if what.is_empty() { String::from("Nothing new in this file") } else { format!("Imported {}", what.join(", ")) };
     let mut about = Vec::new();
     if let Some(day) = result["as_of"].as_str().filter(|d| !d.is_empty()) {
-        about.push(format!("As of {}", human_date(day.get(..10).unwrap_or(day))));
+        about.push(format!("As of {}", super::invest::as_of(day.get(..10).unwrap_or(day))));
     }
     let created = count(result, "accounts_created");
     if created > 0 {
@@ -2942,28 +3438,66 @@ fn tell_waiting(ui: &Rc<Ui>, id: i64) {
 
 fn submit(ui: &Rc<Ui>) {
     let Some(v) = view() else { return };
-    if STATE.with(|s| s.working.get()) || !v.send.is_sensitive() {
-        return;
-    }
     let buffer = v.input.buffer();
     let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).trim().to_string();
-    if text.is_empty() {
+    let attached = STATE.with(|s| s.pictures.borrow().clone());
+    // Words written while the agent answers stay in the box, and Enter says why.
+    if STATE.with(|s| s.working.get()) {
+        if !text.is_empty() || !attached.is_empty() {
+            ui.show_info(STILL_ANSWERING);
+        }
+        return;
+    }
+    if text.is_empty() && attached.is_empty() {
+        return;
+    }
+    // A picture still going up, or refused, keeps the message back: the box says which.
+    if let Some(why) = pictures_hold() {
+        note(&v, why);
+        return;
+    }
+    if !v.send.is_sensitive() {
         return;
     }
     buffer.set_text("");
-    send(ui, &text);
+    let images = attached.iter().filter_map(|p| p.image()).collect();
+    set_pictures(&v, Vec::new());
+    note(&v, "");
+    send_with(ui, &text, images, attached);
 }
 
 /// Send `text`: in the thread showing, or as the first message of a new one.
 fn send(ui: &Rc<Ui>, text: &str) {
+    send_with(ui, text, Vec::new(), Vec::new());
+}
+
+/// Send `text` with `images` (the engine's, already up): in the thread showing, or as the first
+/// message of a new one. Refused, the words and the pictures (`attached`) go back where they were
+/// written.
+fn send_with(ui: &Rc<Ui>, text: &str, images: Vec<Value>, attached: Vec<Rc<Attached>>) {
     let ui = ui.clone();
     let text = text.to_string();
     glib::spawn_future_local(async move {
-        let result = match current() {
-            Some(id) => ui.call("thread.send", json!({"id": id, "text": text})).await.map(|_| id),
+        let ids: Vec<Value> = images.iter().map(|image| image["id"].clone()).collect();
+        let to = current();
+        let result = match to {
+            Some(id) => {
+                let mut payload = json!({"id": id, "text": text});
+                if !ids.is_empty() {
+                    payload["images"] = json!(ids);
+                }
+                ui.call("thread.send", payload).await.map(|_| id)
+            }
             None => {
                 let (model, effort) = STATE.with(|s| s.choice.borrow().clone());
-                let payload = json!({"text": text, "model": (!model.is_empty()).then_some(model), "effort": (!effort.is_empty()).then_some(effort)});
+                let mut payload = json!({"model": (!model.is_empty()).then_some(model), "effort": (!effort.is_empty()).then_some(effort)});
+                // Pictures alone start a thread too.
+                if !text.is_empty() {
+                    payload["text"] = json!(text);
+                }
+                if !ids.is_empty() {
+                    payload["images"] = json!(ids);
+                }
                 ui.call("thread.create", payload).await.map(|t| t["id"].as_i64().unwrap_or(0))
             }
         };
@@ -2971,12 +3505,41 @@ fn send(ui: &Rc<Ui>, text: &str) {
             Ok(id) if current() != Some(id) => open(&ui, id),
             Ok(_) => {}
             Err(e) => {
-                if let Some(v) = view() {
-                    v.input.buffer().set_text(&text);
+                let why = pictures::said(&e);
+                put_back(to, &text, attached);
+                if let Some(v) = view().filter(|_| current() == to && !ids.is_empty()) {
+                    note(&v, &why);
                 }
-                ui.show_error(&e.to_string());
+                ui.show_error(&why);
             }
         }
+    });
+}
+
+/// What a refused send gives back: into the message box when its thread shows, the words in place
+/// of what it holds; else into that thread's draft, to wait there.
+fn put_back(to: Option<i64>, text: &str, attached: Vec<Rc<Attached>>) {
+    let Some(v) = view() else { return };
+    if current() == to {
+        v.input.buffer().set_text(text);
+        if !attached.is_empty() {
+            let mut all = attached;
+            all.extend(STATE.with(|s| s.pictures.borrow().clone()));
+            all.truncate(MAX_PICTURES);
+            set_pictures(&v, all);
+        }
+        return;
+    }
+    STATE.with(|s| {
+        let mut drafts = s.drafts.borrow_mut();
+        let draft = drafts.entry(to).or_default();
+        if draft.text.trim().is_empty() {
+            draft.text = text.to_string();
+        }
+        let mut all = attached;
+        all.append(&mut draft.pictures);
+        all.truncate(MAX_PICTURES);
+        draft.pictures = all;
     });
 }
 
@@ -3037,13 +3600,20 @@ pub fn event(ui: &Rc<Ui>, ev: &str, payload: &Value) {
             }
             if thread == current() {
                 if payload["deleted"] == true {
-                    new_thread(ui);
+                    // Deleted elsewhere: a new thread takes its place, without taking the window
+                    // from the page it shows.
+                    let showing = *ui.page.borrow() == PAGE;
+                    start_thread(ui, showing);
                 } else {
                     header(&v, &payload["thread"]);
                     if payload["thread"]["working"] == true {
                         stick_to_bottom(&v, false);
                     }
                 }
+            }
+            // A deleted thread's draft goes with it; leaving the thread above had kept it.
+            if let Some(id) = thread.filter(|_| payload["deleted"] == true) {
+                STATE.with(|s| s.drafts.borrow_mut().remove(&Some(id)));
             }
             refresh_list_shown(ui);
         }
@@ -3464,7 +4034,7 @@ pub fn refresh_panel(ui: &Rc<Ui>) {
         // The Invest view also reads the balances: an account valued by hand is Tally's balance.
         let mut lists = None;
         let read = match tab {
-            "entries" => ui.call("money.tx.list", json!({"limit": 60})).await,
+            "entries" => ui.call("money.tx.list", json!({"limit": ENTRIES_SHOWN})).await,
             "invest" => {
                 let (summary, listed) = tokio::join!(ui.call("money.invest.summary", json!({})), ui.call("money.lists", json!({})));
                 lists = listed.ok();
@@ -3516,6 +4086,16 @@ fn block(body: &gtk::Box, name: &str, aside: &str) -> gtk::Box {
     block.append(&head);
     body.append(&block);
     block
+}
+
+/// A quiet key at the end of `block`'s head into the Tally page that has all of it, as the
+/// Overview page's cards and Avex's panel blocks have.
+fn block_link(block: &gtk::Box, caption: &str, run: impl Fn() + 'static) {
+    let Some(head) = block.first_child().and_downcast::<gtk::Box>() else { return };
+    let key = button(caption, "money-text-action");
+    key.add_css_class("threads-panel-link");
+    key.connect_clicked(move |_| run());
+    head.append(&key);
 }
 
 /// `row` as a key. The panel's rows act where the person is: an entry opens its editor, a budget
@@ -3582,7 +4162,7 @@ fn panel_overview(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
     head.append(&when);
     if budget > 0 {
         let left = pace["remaining"].as_i64().unwrap_or(0);
-        let figure = label(&format!("{} left", fmt.format_whole(left)), "threads-panel-figure");
+        let figure = label(&left_or_over(&fmt, left), "threads-panel-figure");
         if left < 0 {
             figure.add_css_class("money-over");
         }
@@ -3652,6 +4232,7 @@ fn panel_overview(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
 
     let recent: Vec<&Value> = s["recent"].as_array().into_iter().flatten().take(5).collect();
     let list = block(body, "Recent", "");
+    block_link(&list, "All entries", go(ui, "money-transactions"));
     if recent.is_empty() {
         list.append(&label("Nothing logged this period yet.", "money-muted"));
     }
@@ -3667,6 +4248,7 @@ fn panel_budgets(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
     let ahead = |b: &Value| b["spent"].as_i64().unwrap_or(0) as f64 / b["budget"].as_i64().unwrap_or(1).max(1) as f64;
     budgets.sort_by(|a, b| ahead(b).total_cmp(&ahead(a)));
     let list = block(body, "Budgets", "");
+    block_link(&list, "Plan", go(ui, "money-plan"));
     if budgets.is_empty() {
         let note = label("No budgets yet. Set them in Tally's Plan.", "money-muted");
         note.set_wrap(true);
@@ -3719,14 +4301,14 @@ fn budget_row(ui: &Rc<Ui>, b: &Value, pace: Option<f64>) -> gtk::Button {
     name.set_ellipsize(gtk::pango::EllipsizeMode::End);
     line.append(&name);
     let left = budget - spent;
-    let rest = label(&if left < 0 { format!("{} over", fmt.format_whole(-left)) } else { format!("{} left", fmt.format_whole(left)) }, "threads-panel-figures");
+    let rest = label(&left_or_over(&fmt, left), "threads-panel-figures");
     if let Some(class) = tone_class(status) {
         rest.add_css_class(class);
     }
     line.append(&rest);
     right.append(&line);
     let bar = meter_in(spent as f64 / budget.max(1) as f64, pace, tone(status, b["color"].as_i64()), 4);
-    bar.set_tooltip_text(Some(&format!("{} of {}", fmt.format(spent), fmt.format_whole(budget))));
+    bar.set_tooltip_text(Some(&format!("{} of {}", fmt.format_whole(spent), fmt.format_whole(budget))));
     right.append(&bar);
     row.append(&right);
     let key = gtk::Button::new();
@@ -3947,17 +4529,34 @@ fn entry_row(ui: &Rc<Ui>, tx: &Value, dated: bool) -> gtk::Button {
     key
 }
 
+/// The Entries view: the period's newest [`ENTRIES_SHOWN`] entries by day, in, out and net over
+/// them, and the key to the Entries page for the rest.
 fn panel_entries(ui: &Rc<Ui>, body: &gtk::Box, page: &Value) {
     let rows: Vec<&Value> = page["transactions"].as_array().into_iter().flatten().collect();
     let fmt = super::formatter();
     let (income, spent) = (page["income"].as_i64().unwrap_or(0), page["spent"].as_i64().unwrap_or(0));
     let head = gtk::Box::new(gtk::Orientation::Vertical, 4);
     head.add_css_class("threads-summary");
-    head.append(&label(&super::pages::period_name(&page["period"]), "threads-panel-eyebrow"));
-    head.append(&label(&format!("Out {} · In {}", fmt.format_whole(spent), fmt.format_whole(income)), "threads-panel-figures"));
+    // A full read is only the newest of the period, and its figures count only those.
+    let mut when = super::pages::period_name(&page["period"]);
+    if rows.len() >= ENTRIES_SHOWN as usize {
+        when.push_str(&format!(" · latest {ENTRIES_SHOWN}"));
+    }
+    head.append(&label(&when, "threads-panel-eyebrow"));
+    let total = super::pages::signed_whole(&fmt, income - spent);
+    head.append(&label(&format!("In {} · Out {} · Net {total}", fmt.format_whole(income), fmt.format_whole(spent)), "threads-panel-figures"));
     body.append(&head);
+    let open = button("Open Entries", "quiet");
+    open.set_halign(gtk::Align::Start);
+    let weak = Rc::downgrade(ui);
+    open.connect_clicked(move |_| {
+        if let Some(ui) = weak.upgrade() {
+            super::pages::show_entries(&ui, None, None);
+        }
+    });
     if rows.is_empty() {
-        body.append(&label("No entries this month.", "money-muted"));
+        body.append(&label("No entries this period.", "money-muted"));
+        body.append(&open);
         return;
     }
     let mut start = 0;
@@ -3978,6 +4577,7 @@ fn panel_entries(ui: &Rc<Ui>, body: &gtk::Box, page: &Value) {
         }
         start = end;
     }
+    body.append(&open);
 }
 
 /// A registration's hue and name, as the Investments page draws them (`money_invest.rs`): the hue
@@ -3998,11 +4598,6 @@ fn percent(bps: i64) -> String {
         _ => "",
     };
     format!("{sign}{:.1}%", bps.unsigned_abs() as f64 / 100.0)
-}
-
-/// "52%": a share in basis points, whole.
-fn share(bps: i64) -> String {
-    format!("{:.0}%", bps as f64 / 100.0)
 }
 
 /// Up is money in's green, down the over red; a sign says it too.
@@ -4077,7 +4672,7 @@ fn panel_invest(ui: &Rc<Ui>, body: &gtk::Box, p: &Value, lists: Option<&Value>) 
     let when = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     when.append(&crate::money::pages_glyph("chart", 13));
     // The newest report's date: a portfolio is only as fresh as its last file.
-    let as_of = p["as_of"].as_str().filter(|d| !d.is_empty()).map(|d| format!("As of {}", human_date(d.get(..10).unwrap_or(d))));
+    let as_of = p["as_of"].as_str().filter(|d| !d.is_empty()).map(|d| format!("As of {}", super::invest::as_of(d.get(..10).unwrap_or(d))));
     when.append(&label(&as_of.unwrap_or_else(|| String::from("No report imported yet")), "threads-panel-eyebrow"));
     head.append(&when);
     let balances = lists.map(|l| crate::app::rows(l, "accounts")).unwrap_or_default();
@@ -4104,7 +4699,7 @@ fn panel_invest(ui: &Rc<Ui>, body: &gtk::Box, p: &Value, lists: Option<&Value>) 
         .map(|a| {
             let registration = a["registration"].as_str();
             let bps = a["share_bps"].as_i64().unwrap_or(0);
-            (registration_hue(registration), bps as f64 / 10_000.0, format!("{} {}", registration_name(registration), share(bps)))
+            (registration_hue(registration), bps as f64 / 10_000.0, format!("{} {}", registration_name(registration), super::invest::share(bps)))
         })
         .collect();
     if !parts.is_empty() {
@@ -4162,13 +4757,19 @@ fn panel_invest(ui: &Rc<Ui>, body: &gtk::Box, p: &Value, lists: Option<&Value>) 
     // meters carry no tick.
     let room: Vec<&Value> = p["room"].as_array().into_iter().flatten().collect();
     if let Some(year) = room.first().and_then(|r| r["year"].as_i64()) {
-        let list = block(body, &format!("Room left in {year}"), "");
+        // Until about March the RRSP's room is last year's: rows of two years each say theirs.
+        let one_year = room.iter().all(|r| r["year"].as_i64() == Some(year));
+        let list = block(body, &if one_year { format!("Room left in {year}") } else { String::from("Room left") }, "");
         for r in room {
             let registration = r["registration"].as_str();
             let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
             row.add_css_class("threads-budget");
             let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            let name = label(registration_name(registration), "threads-panel-name");
+            let shown = match r["year"].as_i64() {
+                Some(own) if !one_year => format!("{} · {own}", registration_name(registration)),
+                _ => registration_name(registration).to_string(),
+            };
+            let name = label(&shown, "threads-panel-name");
             name.set_hexpand(true);
             line.append(&name);
             let over = r["over"].as_i64().unwrap_or(0);
@@ -4214,7 +4815,7 @@ fn panel_invest(ui: &Rc<Ui>, body: &gtk::Box, p: &Value, lists: Option<&Value>) 
             if h["no_price"] == true {
                 detail.push(String::from("no price yet"));
             } else {
-                detail.push(format!("{} of the total", share(h["weight_bps"].as_i64().unwrap_or(0))));
+                detail.push(format!("{} of the total", super::invest::share(h["weight_bps"].as_i64().unwrap_or(0))));
             }
             let change = h["gain_bps"].as_i64().map(|bps| (percent(bps), gain_class(bps)));
             let value = fmt.format_whole(h["value"].as_i64().unwrap_or(0));
