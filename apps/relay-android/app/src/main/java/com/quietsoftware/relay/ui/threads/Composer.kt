@@ -137,7 +137,7 @@ internal fun Composer(
                     SendKey(working, enabled = working || (canSend && value.isNotBlank()), onClick = { if (working) onStop() else onSend() })
                 }
             }
-            if (!wide) T("Edits with Undo · deleting asks you first", Modifier.fillMaxWidth().padding(top = 6.dp), Relay.type.caption.copy(fontSize = 11.5.sp, textAlign = TextAlign.Center), c.ink3, maxLines = 1)
+            if (!wide) T("Edits with Undo · asks first", Modifier.fillMaxWidth().padding(top = 6.dp), Relay.type.caption.copy(fontSize = 11.5.sp, textAlign = TextAlign.Center), c.ink3, maxLines = 1)
         }
     }
 }

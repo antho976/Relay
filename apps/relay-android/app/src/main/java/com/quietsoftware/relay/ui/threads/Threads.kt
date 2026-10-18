@@ -369,6 +369,7 @@ private fun toolCaption(name: String, op: String): String = when (op) {
     "money.invest.summary" -> "Read your investments"
     "money.invest.list" -> "Listed investment activity"
     "money.invest.add" -> "Recorded an investment activity"
+    "thread.propose" -> "Asked you first"
     "gym.summary" -> "Read your training"
     "gym.sessions" -> "Listed workouts"
     "gym.session.get" -> "Read a workout"
@@ -393,7 +394,7 @@ private fun toolCaption(name: String, op: String): String = when (op) {
     else -> "Used $op"
 }
 
-/** What the working row says while a tool runs. */
+/** What a tool's line says while it runs. */
 private fun doing(op: String): String = when (op) {
     "money.summary" -> "Reading the budget…"
     "money.lists" -> "Reading accounts and categories…"
@@ -418,6 +419,9 @@ private fun doing(op: String): String = when (op) {
 
 /** A tool's answer as a card: an entry or an activity the agent wrote, or Arbiter's proposal or order. */
 private fun cardOf(op: String, writes: Boolean, answer: String?): CardData? {
+    // What the agent asked first is a card on the PC (threads_ask.rs), read with ops the phone
+    // does not have: its answer's id is a proposal's, never an entry's.
+    if (op == "thread.propose") return null
     val v = answer?.let { runCatching { Wire.json.parseToJsonElement(it) as? JsonObject }.getOrNull() } ?: return null
     if (op.startsWith("arbiter.")) return when {
         op == "arbiter.propose" && v.l("id") != null -> CardData.Proposal(v)
@@ -495,7 +499,8 @@ private fun pieces(messages: List<ThreadMessage>, working: Boolean, today: Local
                     "tool_use" -> {
                         val name = o.str("name")
                         val op = toolOp(name)
-                        val writes = op in WRITES
+                        // Asking first stands alone, as a change does: it is what the agent did instead of one.
+                        val writes = op in WRITES || op == "thread.propose"
                         val id = o.s("id")
                         val answer = id?.let { answers[it] }
                         val step = when {
@@ -644,12 +649,11 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     val current = remember(proposals.result) {
         (proposals.result as? JsonObject)?.objs("proposals")?.mapNotNull { p -> p.l("id")?.let { it to p } }?.toMap().orEmpty()
     }
-    val running = rows.lastOrNull { p -> p is Piece.Tool && p.call.step == Step.Running || p is Piece.Reads && p.calls.any { x -> x.step == Step.Running } }
-    val doingText = when (running) {
-        is Piece.Tool -> doing(running.call.op)
-        is Piece.Reads -> doing(running.calls.last { it.step == Step.Running }.op)
-        else -> if (thread?.live == true || hasStream) "Working…" else "Starting Claude…"
-    }
+    // A tool line turning says what the agent does; the working row shows only while none does
+    // (threads_view.rs `set_working`).
+    val running = rows.any { p -> p is Piece.Tool && p.call.step == Step.Running || p is Piece.Reads && p.calls.any { x -> x.step == Step.Running } }
+    val doingText = if (thread?.live == true || hasStream) "Working…" else "Starting Claude…"
+    val showWorking = working && !running
 
     var draft by rememberSaveable(opened) { mutableStateOf("") }
     val focus = remember { FocusRequester() }
@@ -723,7 +727,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     val tail = listOfNotNull(
         stopped?.let { "stopped" },
         "stream".takeIf { hasStream },
-        "working".takeIf { working },
+        "working".takeIf { showWorking },
         "waiting".takeIf { temp },
     )
     val count = extra + rows.size + tail.size
@@ -795,7 +799,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                         }
                     }
                     if (hasStream) item("stream") { Markdown(streamed, cell.padding(top = 12.dp)) }
-                    if (working) item("working") { WorkingRow(doingText, cell.padding(top = 12.dp)) }
+                    if (showWorking) item("working") { WorkingRow(doingText, cell.padding(top = 12.dp)) }
                     if (temp) item("waiting") { Waiting(create, s.online, cell.padding(top = 14.dp)) { nav.outbox() } }
                 }
             }
@@ -984,12 +988,22 @@ private fun ToolView(t: ToolCall, money: Money, proposals: Map<Long, JsonObject>
         null -> Column {
             Row(Modifier.heightIn(min = 26.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 StepMark(t.step, t.writes)
-                T(toolCaption(t.name, t.op), style = Relay.type.caption, color = if (t.step == Step.Failed) c.heldText else c.ink3, maxLines = 1)
+                // While it runs the line says what the agent is doing, and is the only working line
+                // (threads_view.rs `draw_tool`): the working row under it said the same again.
+                val now = doing(t.op)
+                T(if (t.step == Step.Running && now != "Working…") now else toolCaption(t.name, t.op), style = Relay.type.caption, color = if (t.step == Step.Failed) c.heldText else c.ink3, maxLines = 1)
             }
             if (t.step == Step.Failed) {
-                val text = t.answer.orEmpty().trim()
-                if (t.op == "arbiter.order.place" || t.op == "arbiter.propose") RefusalLine(refusalWords(text))
+                // The engine's own sentence, never the JSON Relay's MCP server wraps it in.
+                val text = refusalWords(t.answer.orEmpty())
+                if (t.op == "arbiter.order.place" || t.op == "arbiter.propose") RefusalLine(text)
                 else T(text.ifEmpty { "It was refused." }, Modifier.padding(start = 21.dp, bottom = 2.dp), Relay.type.caption, c.ink3, maxLines = 2)
+            } else if (t.step == Step.Done && t.op == "thread.propose") {
+                // The PC draws what it asked as a card to approve; the phone cannot read it yet.
+                T(
+                    "It waits for your answer: open this thread in Relay on the PC to see what would change, and approve or decline it there.",
+                    Modifier.padding(start = 21.dp, bottom = 2.dp), Relay.type.caption, c.ink3,
+                )
             }
         }
     }
