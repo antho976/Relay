@@ -3586,6 +3586,16 @@ fn block(body: &gtk::Box, name: &str, aside: &str) -> gtk::Box {
     block
 }
 
+/// A quiet key at the end of `block`'s head into the Tally page that has all of it, as the
+/// Overview page's cards and Avex's panel blocks have.
+fn block_link(block: &gtk::Box, caption: &str, run: impl Fn() + 'static) {
+    let Some(head) = block.first_child().and_downcast::<gtk::Box>() else { return };
+    let key = button(caption, "money-text-action");
+    key.add_css_class("threads-panel-link");
+    key.connect_clicked(move |_| run());
+    head.append(&key);
+}
+
 /// `row` as a key. The panel's rows act where the person is: an entry opens its editor, a budget
 /// its own ([`edit_budget`]), the rest draft a question into the thread ([`asking`]).
 fn row_key(row: &gtk::Box, about: &str, run: impl Fn() + 'static) -> gtk::Button {
@@ -3720,6 +3730,7 @@ fn panel_overview(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
 
     let recent: Vec<&Value> = s["recent"].as_array().into_iter().flatten().take(5).collect();
     let list = block(body, "Recent", "");
+    block_link(&list, "All entries", go(ui, "money-transactions"));
     if recent.is_empty() {
         list.append(&label("Nothing logged this period yet.", "money-muted"));
     }
@@ -3735,6 +3746,7 @@ fn panel_budgets(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
     let ahead = |b: &Value| b["spent"].as_i64().unwrap_or(0) as f64 / b["budget"].as_i64().unwrap_or(1).max(1) as f64;
     budgets.sort_by(|a, b| ahead(b).total_cmp(&ahead(a)));
     let list = block(body, "Budgets", "");
+    block_link(&list, "Plan", go(ui, "money-plan"));
     if budgets.is_empty() {
         let note = label("No budgets yet. Set them in Tally's Plan.", "money-muted");
         note.set_wrap(true);

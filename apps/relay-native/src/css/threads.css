@@ -160,6 +160,10 @@ button.threads-row { min-height: 34px; }
 .threads-summary image { color: @faint; }
 .threads-block > box:first-child { margin-bottom: 6px; }
 .threads-panel-aside { font-family: "Geist Mono", monospace; font-size: 11px; color: @faint; }
+/* Budgets' Plan and Recent's All entries: quiet ways into Tally beside a block's caption, as
+   Avex's blocks have (avex.css, `avex-panel-link`). */
+button.money-text-action.threads-panel-link { min-height: 22px; padding: 0 4px; font-size: 11.5px; color: @faint; }
+button.money-text-action.threads-panel-link:hover { color: @ink; }
 .threads-budget { padding: 7px 0; }
 /* "Show all 9" under Overview's budgets: a quiet key aligned with the rows' text. */
 button.quiet.threads-more { min-height: 26px; padding: 0 8px; margin: 2px 0 0 -8px; font-size: 12px; font-weight: 500; color: @faint; }
