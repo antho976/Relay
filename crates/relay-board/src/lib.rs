@@ -365,22 +365,29 @@ fn inline(line: &str) -> String {
         }
         let mut text = escape(part);
         for (mark, tag) in [("**", "b"), ("*", "i")] {
-            let pieces: Vec<&str> = text.split(mark).collect();
-            if pieces.len() < 3 {
-                continue;
-            }
-            let mut joined = String::new();
-            let pairs = (pieces.len() - 1) / 2 * 2;
-            for (i, piece) in pieces.iter().enumerate() {
-                if i > 0 {
-                    joined.push_str(&if i > pairs { mark.to_string() } else if i % 2 == 1 { format!("<{tag}>") } else { format!("</{tag}>") });
-                }
-                joined.push_str(piece);
-            }
-            text = joined;
+            text = emphasis(&text, mark, tag);
         }
         out.push_str(&text);
     }
+    out
+}
+/// `text` with each `mark`…`mark` pair wrapped in `tag`. A mark opens only before a non-space
+/// and closes only after one (neither another `*`), so `2 * 3 * 4` stays as typed.
+fn emphasis(text: &str, mark: &str, tag: &str) -> String {
+    let word = |c: char| !c.is_whitespace() && c != '*';
+    let opens = |s: &str, at: usize| s[at + mark.len()..].chars().next().is_some_and(word);
+    let closes = |s: &str, at: usize| s[..at].chars().next_back().is_some_and(word);
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(open) = rest.match_indices(mark).map(|(at, _)| at).find(|&at| opens(rest, at)) {
+        let body = open + mark.len();
+        let close = rest[body..].match_indices(mark).map(|(at, _)| body + at).find(|&at| at > body && closes(rest, at));
+        let Some(close) = close else { break };
+        out.push_str(&rest[..open]);
+        out.push_str(&format!("<{tag}>{}</{tag}>", &rest[body..close]));
+        rest = &rest[close + mark.len()..];
+    }
+    out.push_str(rest);
     out
 }
 /// A task's Markdown as Pango markup, for a label: headings, lists, task boxes, quotes, fenced
@@ -403,9 +410,9 @@ pub fn markdown_markup(source: &str) -> String {
         lines.push(if (1..=6).contains(&heading) && trimmed[heading..].starts_with(' ') {
             let size = match heading { 1 => "x-large", 2 => "large", _ => "medium" };
             format!("<span size=\"{size}\" weight=\"bold\">{}</span>", inline(trimmed[heading..].trim()))
-        } else if let Some(rest) = ["- [ ] ", "* [ ] "].iter().find_map(|p| trimmed.strip_prefix(p)) {
+        } else if let Some(rest) = ["- [ ] ", "* [ ] ", "+ [ ] "].iter().find_map(|p| trimmed.strip_prefix(p)) {
             format!("{indent}☐  {}", inline(rest))
-        } else if let Some(rest) = ["- [x] ", "- [X] ", "* [x] "].iter().find_map(|p| trimmed.strip_prefix(p)) {
+        } else if let Some(rest) = ["- [x] ", "- [X] ", "* [x] ", "* [X] ", "+ [x] ", "+ [X] "].iter().find_map(|p| trimmed.strip_prefix(p)) {
             format!("{indent}☑  {}", inline(rest))
         } else if let Some(rest) = ["- ", "* ", "+ "].iter().find_map(|p| trimmed.strip_prefix(p)) {
             format!("{indent}•  {}", inline(rest))
@@ -658,6 +665,14 @@ mod tests {
         assert_eq!(markdown_markup("```\nlet a = 1 < 2;\n```"), "<tt>let a = 1 &lt; 2;</tt>");
         // An unpaired mark stays as typed.
         assert_eq!(markdown_markup("2 * 3 and `open"), "2 * 3 and `open");
+        // A mark beside a space is not emphasis, so arithmetic pairs nothing.
+        assert_eq!(markdown_markup("2 * 3 * 4"), "2 * 3 * 4");
+        assert_eq!(markdown_markup("a ** b ** c"), "a ** b ** c");
+        assert_eq!(markdown_markup("2 * 3 is *six*"), "2 * 3 is <i>six</i>");
+        assert_eq!(markdown_markup("**bold** and **more**"), "<b>bold</b> and <b>more</b>");
+        assert_eq!(markdown_markup("***both***"), "**<i>both</i>**");
+        // Every bullet takes a task box, ticked in either case.
+        assert_eq!(markdown_markup("* [X] done\n+ [ ] todo\n+ [x] also"), "☑  done\n☐  todo\n☑  also");
     }
 
     #[test]
