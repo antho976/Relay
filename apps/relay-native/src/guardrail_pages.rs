@@ -372,7 +372,7 @@ pub fn hold_row(ui: &Rc<Ui>, hold: Value) -> gtk::Box {
     let allow = button("Allow once", "primary");
     allow.set_sensitive(false);
     allow.set_tooltip_text(Some("Review the exact action first"));
-    let reject = button("Reject…", "");
+    let reject = button("Deny…", "");
     keys.append(&allow);
     keys.append(&reject);
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -1044,7 +1044,7 @@ pub async fn page(ui: &Rc<Ui>, body: &gtk::Box, project: i64, holds: Vec<Value>)
     if let Ok(overlaps) = overlaps {
         let overlaps = rows(&overlaps, "overlaps");
         if !overlaps.is_empty() {
-            body.append(&label("Shared file activity", "title"));
+            section(body, "SHARED FILE ACTIVITY", "Files that more than one agent is changing.");
         }
         for overlap in overlaps {
             let flag = hidden_flag();

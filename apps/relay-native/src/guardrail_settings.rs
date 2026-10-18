@@ -693,7 +693,15 @@ fn open(ui: &Rc<Ui>, scope: Scope) {
     let Some(panel) = crate::panel::Panel::toggle(ui, "Guardrails", 640) else { return };
     let (root, editor) = build(ui, scope);
     panel.body.append(&root);
-    panel.set_guard(move || editor.upgrade().is_none_or(|editor| editor.dirty() == 0));
+    panel.set_guard(move || {
+        let Some(editor) = editor.upgrade() else { return true };
+        if editor.dirty() == 0 {
+            return true;
+        }
+        // Escape or Back with edits pending says why the panel stays.
+        editor.status.set_text("Save or discard your changes before closing.");
+        false
+    });
     panel.present();
 }
 
