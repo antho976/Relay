@@ -3,15 +3,8 @@
 use super::glyphs::glyph;
 use super::text::{self as tx, Enter, Inline, Prefix};
 use super::*;
+use crate::editor::find_bar::FindBar;
 use sourceview5::prelude::*;
-
-pub struct Find {
-    pub bar: gtk::Grid,
-    pub query: gtk::Entry,
-    replacement: gtk::Entry,
-    count: gtk::Label,
-    replace_row: gtk::Box,
-}
 
 pub struct Doc {
     pub id: i64,
@@ -22,8 +15,8 @@ pub struct Doc {
     pub pin: gtk::ToggleButton,
     pub view: sourceview5::View,
     pub buffer: sourceview5::Buffer,
-    search: sourceview5::SearchContext,
-    pub find: Find,
+    /// The find and replace bar, which Code's editor shares.
+    pub find: Rc<FindBar>,
     notice: gtk::Box,
     notice_text: gtk::Label,
     notice_actions: gtk::Box,
@@ -49,8 +42,6 @@ pub struct Doc {
     /// as new note files the text under the project shown.
     pub orphan: Cell<bool>,
     seen_remote: RefCell<String>,
-    /// A result ("Replaced 3") the find count shows until the next search.
-    find_note: RefCell<Option<String>>,
     syncing: Cell<bool>,
     last_dirty: Cell<bool>,
     autosave_timer: RefCell<Option<glib::SourceId>>,
@@ -99,24 +90,6 @@ fn status_separator() -> gtk::Separator {
     let line = gtk::Separator::new(gtk::Orientation::Vertical);
     line.add_css_class("notes-status-sep");
     line
-}
-
-fn small_key(icon: &str, tip: &str) -> gtk::Button {
-    let key = gtk::Button::new();
-    key.set_child(Some(&glyph(icon, 14)));
-    key.add_css_class("notes-find-key");
-    key.set_focus_on_click(false);
-    key.set_tooltip_text(Some(tip));
-    key.update_property(&[gtk::accessible::Property::Label(tip)]);
-    key
-}
-
-fn option_key(caption: &str, tip: &str) -> gtk::ToggleButton {
-    let key = gtk::ToggleButton::with_label(caption);
-    key.add_css_class("notes-find-option");
-    key.set_focus_on_click(false);
-    key.set_tooltip_text(Some(tip));
-    key
 }
 
 pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
@@ -199,52 +172,10 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
     scroll.add_css_class("notes-scroll");
     form.append(&scroll);
 
-    let settings = sourceview5::SearchSettings::new();
-    settings.set_wrap_around(true);
-    let search = sourceview5::SearchContext::new(&buffer, Some(&settings));
-    search.set_highlight(false);
-    let bar = gtk::Grid::new();
-    bar.add_css_class("notes-find");
-    bar.set_column_spacing(4);
-    bar.set_row_spacing(5);
-    bar.set_visible(false);
-    let query = gtk::Entry::builder().placeholder_text("Find").hexpand(true).build();
-    query.add_css_class("notes-find-entry");
-    query.set_widget_name("notes-find-entry");
-    let count = label("", "notes-find-count");
-    count.set_width_chars(11);
-    count.set_widget_name("notes-find-count");
-    count.set_xalign(1.);
-    let previous = small_key("chevron-up", "Previous match (Shift+F3)");
-    let next = small_key("chevron-down", "Next match (F3)");
-    let case = option_key("Aa", "Match case");
-    let word = option_key("W", "Whole words only");
-    word.add_css_class("notes-find-word");
-    let regex = option_key(".*", "Regular expression");
-    let find_close = small_key("close", "Close (Esc)");
-    bar.attach(&query, 0, 0, 1, 1);
-    bar.attach(&count, 1, 0, 1, 1);
-    bar.attach(&previous, 2, 0, 1, 1);
-    bar.attach(&next, 3, 0, 1, 1);
-    bar.attach(&case, 4, 0, 1, 1);
-    bar.attach(&word, 5, 0, 1, 1);
-    bar.attach(&regex, 6, 0, 1, 1);
-    bar.attach(&find_close, 7, 0, 1, 1);
-    let replacement = gtk::Entry::builder()
-        .placeholder_text("Replace with")
-        .hexpand(true)
-        .build();
-    replacement.add_css_class("notes-find-entry");
-    let replace_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    let replace_one = button("Replace", "notes-find-button");
-    let replace_all = button("Replace all", "notes-find-button");
-    replace_one.set_focus_on_click(false);
-    replace_all.set_focus_on_click(false);
-    replace_row.append(&replace_one);
-    replace_row.append(&replace_all);
-    bar.attach(&replacement, 0, 1, 1, 1);
-    bar.attach(&replace_row, 1, 1, 7, 1);
-    form.append(&bar);
+    // Every note's bar starts from the last query any of them searched for.
+    let find = FindBar::new(&view, &buffer, "notes", "Find", &super::LAST_QUERY);
+    find.bar.add_css_class("notes-find");
+    form.append(&find.bar);
 
     let status = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     status.add_css_class("notes-status");
@@ -370,8 +301,7 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
         pin,
         view,
         buffer,
-        search,
-        find: Find { bar, query, replacement, count, replace_row },
+        find,
         notice,
         notice_text,
         notice_actions,
@@ -393,7 +323,6 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
         conflict: Cell::new(false),
         orphan: Cell::new(false),
         seen_remote: RefCell::new(String::new()),
-        find_note: RefCell::new(None),
         syncing: Cell::new(false),
         last_dirty: Cell::new(false),
         autosave_timer: RefCell::new(None),
@@ -452,12 +381,7 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
         doc.view.grab_focus();
     });
     doc.title.connect_activate(move |_| focus_body());
-    let cursor = with(|_, doc| {
-        doc.update_position();
-        if doc.find.bar.is_visible() {
-            doc.update_count();
-        }
-    });
+    let cursor = with(|_, doc| doc.update_position());
     doc.buffer.connect_cursor_position_notify(move |_| cursor());
     let moved = with(|_, doc| super::inline::cursor_moved(doc));
     doc.buffer.connect_cursor_position_notify(move |_| moved());
@@ -475,51 +399,6 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
         close();
     });
     doc.tab.add_controller(middle);
-
-    let incremental = with(|_, doc| doc.find_incremental());
-    doc.find.query.connect_changed(move |_| incremental());
-    let forward = with(|_, doc| doc.find_step(false));
-    doc.find.query.connect_activate(move |_| forward());
-    let keys = gtk::EventControllerKey::new();
-    let backward = with(|_, doc| doc.find_step(true));
-    keys.connect_key_pressed(move |_, key, _, mods| {
-        if matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter)
-            && mods.contains(gtk::gdk::ModifierType::SHIFT_MASK)
-        {
-            backward();
-            return glib::Propagation::Stop;
-        }
-        glib::Propagation::Proceed
-    });
-    doc.find.query.add_controller(keys);
-    let step = with(|_, doc| doc.find_step(true));
-    previous.connect_clicked(move |_| step());
-    let step = with(|_, doc| doc.find_step(false));
-    next.connect_clicked(move |_| step());
-    let shut = with(|_, doc| doc.close_find());
-    find_close.connect_clicked(move |_| shut());
-    for (key, apply) in [
-        (&case, (|s: &sourceview5::SearchSettings, on| s.set_case_sensitive(on)) as fn(&sourceview5::SearchSettings, bool)),
-        (&word, |s, on| s.set_at_word_boundaries(on)),
-        (&regex, |s, on| s.set_regex_enabled(on)),
-    ] {
-        let again = with(|_, doc| doc.find_incremental());
-        let settings = settings.clone();
-        key.connect_toggled(move |key| {
-            apply(&settings, key.is_active());
-            again();
-        });
-    }
-    let one = with(|_, doc| doc.replace_one());
-    replace_one.connect_clicked(move |_| one());
-    let one = with(|_, doc| doc.replace_one());
-    doc.find.replacement.connect_activate(move |_| one());
-    let all = with(|_, doc| doc.replace_all());
-    replace_all.connect_clicked(move |_| all());
-    let count = with(|_, doc| doc.update_count());
-    doc.search.connect_occurrences_count_notify(move |_| count());
-    let count = with(|_, doc| doc.update_count());
-    doc.search.connect_regex_error_notify(move |_| count());
 
     let opened = with(|_, doc| {
         doc.goto_entry.set_text("");
@@ -939,155 +818,23 @@ impl Doc {
         }
     }
 
-    // ---- find and replace ---------------------------------------------------------
+    // ---- find and replace (`crate::editor::find_bar`, shared with Code) -------------
 
     pub fn open_find(&self, replace: bool) {
-        let query = &self.find.query;
-        if let Some((start, end)) = self.buffer.selection_bounds() {
-            let selected = self.buffer.text(&start, &end, false);
-            if !selected.contains('\n') && selected.chars().count() <= 200 {
-                query.set_text(&selected);
-            }
-        } else if query.text().is_empty() {
-            query.set_text(&super::last_query());
-        }
-        self.find.replacement.set_visible(replace);
-        self.find.replace_row.set_visible(replace);
-        self.find.bar.set_visible(true);
-        self.search.set_highlight(true);
-        self.sync_query();
-        if replace && !query.text().is_empty() {
-            self.find.replacement.grab_focus();
-        } else {
-            query.grab_focus();
-            query.select_region(0, -1);
-        }
-        self.update_count();
+        self.find.open(replace);
     }
 
     pub fn close_find(&self) {
-        self.find.bar.set_visible(false);
-        self.search.set_highlight(false);
-        self.view.grab_focus();
+        self.find.close();
     }
 
     pub fn find_visible(&self) -> bool {
-        self.find.bar.is_visible()
+        self.find.visible()
     }
 
-    fn sync_query(&self) {
-        self.find_note.borrow_mut().take();
-        let value = self.find.query.text();
-        let settings = self.search.settings();
-        if value.is_empty() {
-            settings.set_search_text(None);
-        } else {
-            settings.set_search_text(Some(&value));
-            super::remember_query(&value);
-        }
-    }
-
-    fn find_incremental(&self) {
-        self.sync_query();
-        if !self.find.query.text().is_empty() {
-            let from = self
-                .buffer
-                .selection_bounds()
-                .map(|(start, _)| start)
-                .unwrap_or_else(|| self.buffer.iter_at_mark(&self.buffer.get_insert()));
-            self.select_match(self.search.forward(&from));
-        }
-        self.update_count();
-    }
-
-    /// F3 / Shift+F3 and the bar's arrows. Works with the bar closed, using the last query.
+    /// F3 / Shift+F3. Works with the bar closed, using the last query.
     pub fn find_step(&self, backward: bool) {
-        // Taken first: filling in the last query selects its first match (find_incremental),
-        // and stepping on from that selection would skip it.
-        let (start, end) = self.buffer.selection_bounds().unwrap_or_else(|| {
-            let at = self.buffer.iter_at_mark(&self.buffer.get_insert());
-            (at, at)
-        });
-        if self.find.query.text().is_empty() {
-            self.find.query.set_text(&super::last_query());
-        }
-        self.sync_query();
-        if self.find.query.text().is_empty() {
-            self.open_find(false);
-            return;
-        }
-        let found = if backward { self.search.backward(&start) } else { self.search.forward(&end) };
-        self.select_match(found);
-        self.update_count();
-    }
-
-    fn select_match(&self, found: Option<(gtk::TextIter, gtk::TextIter, bool)>) {
-        let Some((start, end, _)) = found else {
-            return;
-        };
-        self.buffer.select_range(&start, &end);
-        self.view.scroll_to_mark(&self.buffer.get_insert(), 0.15, false, 0.0, 0.0);
-    }
-
-    fn update_count(&self) {
-        let query = &self.find.query;
-        let count = &self.find.count;
-        if let Some(note) = self.find_note.borrow().as_deref() {
-            count.set_text(note);
-            return;
-        }
-        query.remove_css_class("error");
-        if query.text().is_empty() {
-            count.set_text("");
-            return;
-        }
-        if self.search.regex_error().is_some() {
-            count.set_text("Invalid pattern");
-            query.add_css_class("error");
-            return;
-        }
-        let total = self.search.occurrences_count();
-        if total < 0 {
-            count.set_text("…");
-        } else if total == 0 {
-            count.set_text("No results");
-            query.add_css_class("error");
-        } else {
-            let current = self
-                .buffer
-                .selection_bounds()
-                .map(|(start, end)| self.search.occurrence_position(&start, &end))
-                .unwrap_or(0);
-            count.set_text(&if current > 0 {
-                format!("{current} of {total}")
-            } else {
-                format!("{total} found")
-            });
-        }
-    }
-
-    fn replace_one(&self) {
-        self.sync_query();
-        if let Some((mut start, mut end)) = self.buffer.selection_bounds() {
-            if self.search.occurrence_position(&start, &end) > 0 {
-                if let Err(error) = self.search.replace(&mut start, &mut end, &self.find.replacement.text()) {
-                    self.find.count.set_text(&error.to_string());
-                    return;
-                }
-                self.buffer.place_cursor(&end);
-            }
-        }
-        self.find_step(false);
-    }
-
-    fn replace_all(&self) {
-        self.sync_query();
-        let note = match crate::editor::replace_all(&self.search, &self.find.replacement.text()) {
-            Ok(count) => format!("Replaced {count}"),
-            Err(error) => error.to_string(),
-        };
-        *self.find_note.borrow_mut() = Some(note);
-        self.update_count();
+        self.find.step(backward);
     }
 
     // ---- Markdown editing ---------------------------------------------------------

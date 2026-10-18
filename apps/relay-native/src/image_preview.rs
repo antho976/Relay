@@ -568,7 +568,7 @@ impl Editor {
         self.project.set(project);
         self.image.loading(&path);
         self.position.set_text("Image preview");
-        self.find_bar.set_visible(false);
+        self.find.hide();
         self.set_busy(true);
         let e = self.clone();
         let ui = ui.clone();

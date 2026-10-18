@@ -189,6 +189,7 @@ thread_local! {
     static PREFS: Cell<Prefs> = Cell::new(Prefs::default());
     static SESSION: RefCell<serde_json::Map<String, Value>> = RefCell::new(serde_json::Map::new());
     static RESTORED: RefCell<BTreeSet<i64>> = const { RefCell::new(BTreeSet::new()) };
+    /// The last query a note's find bar searched for, which every note's bar starts from.
     static LAST_QUERY: RefCell<String> = const { RefCell::new(String::new()) };
     static FONT: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
     static TASKS_TIMER: RefCell<Option<glib::SourceId>> = const { RefCell::new(None) };
@@ -540,14 +541,6 @@ fn persist(ui: &Rc<Ui>) {
     if let Some(owner) = owner(ui) {
         owner.persist(ui);
     }
-}
-
-pub(super) fn last_query() -> String {
-    LAST_QUERY.with(|q| q.borrow().clone())
-}
-
-pub(super) fn remember_query(value: &str) {
-    LAST_QUERY.with(|q| value.clone_into(&mut q.borrow_mut()));
 }
 
 pub(super) fn project_name(ui: &Rc<Ui>, project: i64) -> String {

@@ -60,6 +60,10 @@
 }
 .explorer-actions button.explorer-key:hover { background: @wash; color: @ink; }
 .code-search { margin: 6px 8px 4px; min-height: 26px; font-size: 12px; }
+/* The open file's find bar: Notes' (find_bar.rs, notes.css) on a clear toolbar, so its fields
+   keep the raised fill of every field here rather than Notes' @wall. */
+.code-find { padding-top: 5px; padding-bottom: 5px; }
+.code-find entry.find-entry { background: @raised; }
 .file-tree { padding: 2px 0 10px; }
 button.tree-row {
   min-height: 22px; padding: 0 8px 0 4px; border: 0; border-radius: 0;

@@ -7,6 +7,8 @@ mod code_git;
 mod project_files;
 #[path = "image_preview.rs"]
 mod image_preview;
+#[path = "find_bar.rs"]
+pub mod find_bar;
 use sourceview5::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -73,10 +75,8 @@ pub struct Editor {
     image: image_preview::Preview,
     image_mode: Cell<bool>,
     position: gtk::Label,
-    find_bar: gtk::Box,
-    find: gtk::Entry,
-    replacement: gtk::Entry,
-    search_context: sourceview5::SearchContext,
+    /// Notes' find and replace bar (`find_bar`), over the document.
+    find: Rc<find_bar::FindBar>,
     file_actions: gtk::Box,
     file_undo: gtk::Box,
     buffer: sourceview5::Buffer,
@@ -119,6 +119,10 @@ pub struct Editor {
 }
 /// Entries of one folder the explorer draws before a "Show more" row.
 const TREE_PAGE: usize = 500;
+thread_local! {
+    /// The last query Code's find bar searched for, which F3 takes up when the field is empty.
+    static FIND_QUERY: RefCell<String> = const { RefCell::new(String::new()) };
+}
 struct TreeLoadGuard(Rc<Editor>, Rc<Ui>);
 impl Drop for TreeLoadGuard {
     fn drop(&mut self) {
@@ -260,18 +264,10 @@ impl Editor {
         }
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         content.append(&tools);
-        let find_bar = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        find_bar.add_css_class("toolbar");
-        let find = gtk::Entry::new();
-        find.set_placeholder_text(Some("Find in file"));
-        find.set_hexpand(true);
-        let replacement = gtk::Entry::new();
-        replacement.set_placeholder_text(Some("Replace with"));
-        replacement.set_hexpand(true);
-        find_bar.append(&find);
-        find_bar.append(&replacement);
-        content.append(&find_bar);
-        find_bar.set_visible(false);
+        let find = find_bar::FindBar::new(&view, &buffer, "code", "Find in file", &FIND_QUERY);
+        find.bar.add_css_class("toolbar");
+        find.bar.add_css_class("code-find");
+        content.append(&find.bar);
         let conflict_bar = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         conflict_bar.add_css_class("toolbar");
         conflict_bar.set_widget_name("project-disk-conflict");
@@ -288,9 +284,6 @@ impl Editor {
         conflict_bar.append(&keep_key);
         conflict_bar.set_visible(false);
         content.append(&conflict_bar);
-        let search_settings = sourceview5::SearchSettings::new();
-        search_settings.set_wrap_around(true);
-        let search_context = sourceview5::SearchContext::new(&buffer, Some(&search_settings));
         let before = sourceview5::Buffer::new(None);
         before.set_style_scheme(buffer.style_scheme().as_ref());
         let before_view = sourceview5::View::with_buffer(&before);
@@ -369,7 +362,7 @@ impl Editor {
         workspace.set_shrink_end_child(false);
         workspace.set_end_child(Some(&git_panel));
         split.set_end_child(Some(&workspace));
-        let find_button = crate::app::icon_button("search", "Find in file");
+        let find_button = crate::app::icon_button("search", "Find in file (Ctrl+F) · replace (Ctrl+H)");
         tools.append(&find_button);
         let files_button = button("Files", "quiet");
         files_button.set_widget_name("project-files");
@@ -442,10 +435,7 @@ impl Editor {
             image,
             image_mode: Cell::new(false),
             position,
-            find_bar,
             find,
-            replacement,
-            search_context,
             file_actions,
             file_undo,
             buffer,
@@ -510,9 +500,10 @@ impl Editor {
         let weak = Rc::downgrade(&editor);
         find_button.connect_clicked(move |_| {
             if let Some(e) = weak.upgrade() {
-                e.find_bar.set_visible(!e.find_bar.is_visible());
-                if e.find_bar.is_visible() {
-                    e.find.grab_focus();
+                if e.find.visible() {
+                    e.find.close();
+                } else {
+                    e.find.open(false);
                 }
             }
         });
@@ -585,11 +576,10 @@ impl Editor {
                     editor.document_tools.set_visible(document && !editor.image_mode.get());
                     editor.position.set_visible(document);
                     if !document || editor.image_mode.get() {
-                        editor.find_bar.set_visible(false);
+                        editor.find.hide();
                     }
                 }
             });
-        editor.setup_find();
         editor
     }
     /// Unsaved edits, or a write or Git operation in flight. A file that is only loading is
@@ -1741,102 +1731,29 @@ impl Editor {
                     }
                     return glib::Propagation::Stop;
                 }
+                // Find, and Replace with its row, while a document shows (not an image, the
+                // agents or a design).
                 if key == gtk::gdk::Key::f || key == gtk::gdk::Key::h {
-                    if e.image_mode.get() { return glib::Propagation::Proceed; }
-                    e.find_bar.set_visible(true);
-                    e.find.grab_focus();
+                    if !e.document_tools.is_visible() { return glib::Propagation::Proceed; }
+                    e.find.open(key == gtk::gdk::Key::h);
                     return glib::Propagation::Stop;
                 }
             }
-            if key == gtk::gdk::Key::Escape && e.find_bar.is_visible() {
-                e.find_bar.set_visible(false);
-                e.view.grab_focus();
+            // F3 and Shift+F3 step through the matches with the bar open or closed, as in Notes.
+            if key == gtk::gdk::Key::F3
+                && !state.intersects(gtk::gdk::ModifierType::CONTROL_MASK | gtk::gdk::ModifierType::ALT_MASK)
+                && e.document_tools.is_visible()
+            {
+                e.find.step(state.contains(gtk::gdk::ModifierType::SHIFT_MASK));
+                return glib::Propagation::Stop;
+            }
+            if key == gtk::gdk::Key::Escape && e.find.visible() {
+                e.find.close();
                 return glib::Propagation::Stop;
             }
             glib::Propagation::Proceed
         });
         self.root.add_controller(keys);
-    }
-    fn setup_find(self: &Rc<Self>) {
-        let e = self.clone();
-        self.find.connect_changed(move |entry| {
-            e.search_context
-                .settings()
-                .set_search_text(Some(&entry.text()))
-        });
-        for (title, backwards) in [("Previous", true), ("Next", false)] {
-            let b = button(title, "quiet");
-            let e = self.clone();
-            b.connect_clicked(move |_| e.find_match(backwards));
-            self.find_bar.append(&b);
-        }
-        let e = self.clone();
-        self.find.connect_activate(move |_| e.find_match(false));
-        // Shift+Enter steps back, as in Notes.
-        let keys = gtk::EventControllerKey::new();
-        let e = Rc::downgrade(self);
-        keys.connect_key_pressed(move |_, key, _, mods| {
-            if matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter)
-                && mods.contains(gtk::gdk::ModifierType::SHIFT_MASK)
-            {
-                if let Some(e) = e.upgrade() {
-                    e.find_match(true);
-                }
-                return glib::Propagation::Stop;
-            }
-            glib::Propagation::Proceed
-        });
-        self.find.add_controller(keys);
-        let replace = button("Replace", "quiet");
-        let e = self.clone();
-        replace.connect_clicked(move |_| {
-            if !e.view.is_editable() {
-                return;
-            }
-            if let Some((mut start, mut end)) = e.buffer.selection_bounds() {
-                if e.search_context.occurrence_position(&start, &end) > 0 {
-                    if let Err(err) =
-                        e.search_context
-                            .replace(&mut start, &mut end, &e.replacement.text())
-                    {
-                        e.position.set_text(&err.to_string());
-                        return;
-                    }
-                }
-            }
-            e.find_match(false);
-        });
-        self.find_bar.append(&replace);
-        let all = button("Replace all", "quiet");
-        let e = self.clone();
-        all.connect_clicked(move |_| {
-            if !e.view.is_editable() || e.find.text().is_empty() {
-                return;
-            }
-            // Native search retains undo grouping and UTF-8 text positions.
-            match replace_all(&e.search_context, &e.replacement.text()) {
-                Ok(count) => e.position.set_text(&format!("Replaced {count}")),
-                Err(err) => e.position.set_text(&err.to_string()),
-            }
-        });
-        self.find_bar.append(&all);
-    }
-    fn find_match(&self, backwards: bool) {
-        let (start, end) = self.buffer.selection_bounds().unwrap_or_else(|| {
-            let iter = self.buffer.iter_at_offset(self.buffer.cursor_position());
-            (iter, iter)
-        });
-        let found = if backwards {
-            self.search_context.backward(&start)
-        } else {
-            self.search_context.forward(&end)
-        };
-        if let Some((start, mut end, _)) = found {
-            self.buffer.select_range(&start, &end);
-            self.view.scroll_to_iter(&mut end, 0.1, false, 0.0, 0.0);
-        } else {
-            self.position.set_text("No matches in this file");
-        }
     }
     fn run_search(self: &Rc<Self>, ui: &Rc<Ui>) {
         let query = self.search.text().to_string();
