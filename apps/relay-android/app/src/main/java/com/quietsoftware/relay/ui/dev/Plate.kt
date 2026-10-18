@@ -97,7 +97,7 @@ internal fun slateHint(s: Session, online: Boolean): String = when {
     s.state == "exited" -> "The process exited. Resume to start it again."
     s.state == "created" -> "Not started yet. Start launches the provider in its worktree."
     s.state == "closed" -> "Closed."
-    s.attachable -> "Open it to watch it live."
+    s.attachable -> if (online) "Open it to watch it live." else "The PC is away: its last screen, as this phone saved it."
     else -> "No signal from this session."
 }
 

@@ -107,13 +107,16 @@ private fun Wall(nav: Nav) {
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
                 val columns = if (maxWidth >= 720.dp) 2 else 1
                 val grid = rememberLazyGridState()
-                // The live plates in view get a stream, the first few of them; the rest show their saved text.
-                val streaming by remember(grid, plates) {
+                // The live plates in view get a stream, the first few of them; the rest show their
+                // saved text. With the PC away there is no stream: a slate says so, where a
+                // miniature of nothing saved was an empty black plate.
+                val online = s.online
+                val streaming by remember(grid, plates, online) {
                     derivedStateOf {
                         val byName = plates.associateBy { it.name }
                         grid.layoutInfo.visibleItemsInfo.asSequence()
                             .mapNotNull { (it.key as? String)?.removePrefix(PLATE_KEY)?.let(byName::get) }
-                            .filter { it.attachable && !it.pending }
+                            .filter { online && it.attachable && !it.pending }
                             .map { it.name }
                             .take(MAX_MINIATURES)
                             .toSet()
