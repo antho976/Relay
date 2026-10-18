@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,6 +34,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
@@ -176,15 +179,19 @@ private class Numbers(
     val cumulative: Boolean = false,
     /** Buys and sells on a price line: (label index, price, buy). */
     val marks: List<Triple<Int, Long, Boolean>> = emptyList(),
+    /** What a group is called in full, for the readout: a price bar's day and time under its hour. */
+    val names: List<String> = labels,
+    /** The labels are categories (`money.series` by category): bars read as rows. */
+    val categories: Boolean = false,
 )
 
-private fun readMoney(v: JsonObject, cumulative: Boolean): Numbers {
+private fun readMoney(v: JsonObject, cumulative: Boolean, categories: Boolean): Numbers {
     val labels = v.arr("labels").map { (it as? JsonPrimitive)?.content.orEmpty() }
     val colors = v.arr("label_colors").let { c -> labels.indices.map { i -> (c.getOrNull(i) as? JsonPrimitive)?.longOrNull } }
     val lines = v.arr("series").mapNotNull { it as? JsonObject }
     val series = lines.map { s -> s.str("name") to labels.indices.map { i -> (s.arr("values").getOrNull(i) as? JsonPrimitive)?.longOrNull ?: 0L } }
     val known = lines.map { s -> (s["known"] as? JsonPrimitive)?.longOrNull?.toInt()?.coerceAtMost(labels.size) ?: labels.size }
-    return Numbers(labels, colors, series, known, Fmt.Cash(Money.of(v)), cumulative = cumulative)
+    return Numbers(labels, colors, series, known, Fmt.Cash(Money.of(v)), cumulative = cumulative, categories = categories)
 }
 
 /** A `gym.series` reading in tenths of its unit. A lift's best has nothing to read in a week it was not done: such points are left out. */
@@ -209,14 +216,26 @@ private fun readPrice(v: JsonObject): Numbers {
     val quote = v.str("product").substringAfter('-', "")
     val closes = candles.map { ((it.d("close") ?: 0.0) * 100).roundToLong() }
     val starts = candles.map { it.l("start") ?: 0L }
-    val labels = starts.map { java.time.Instant.ofEpochSecond(it).atZone(java.time.ZoneId.systemDefault()).toLocalDate().let { d -> "${d.dayOfMonth} ${d.month.name.take(3).lowercase().replaceFirstChar { c -> c.uppercase() }}" } }
+    val times = starts.map { java.time.Instant.ofEpochSecond(it).atZone(java.time.ZoneId.systemDefault()) }
+    // Bars within three days are told apart by the hour, longer ones by the day (threads_chart.rs).
+    val hourly = (starts.lastOrNull() ?: 0L) - (starts.firstOrNull() ?: 0L) <= 3 * 86_400L
+    val labels = times.map { it.format(if (hourly) HOUR else DAY) }
     val marks = v.objs("markers").mapNotNull { m ->
         val at = m.l("at") ?: return@mapNotNull null
         val i = starts.indexOfLast { it <= at }.takeIf { it >= 0 } ?: return@mapNotNull null
         Triple(i, ((m.d("price") ?: 0.0) * 100).roundToLong(), m.s("side") == "buy")
     }
-    return Numbers(labels, labels.map { null }, listOf(v.str("product") to closes), listOf(labels.size), Fmt.Price(quote), fromZero = false, marks = marks)
+    return Numbers(labels, labels.map { null }, listOf(v.str("product") to closes), listOf(labels.size), Fmt.Price(quote), fromZero = false, marks = marks, names = times.map { it.format(WHEN) })
 }
+
+private val HOUR = java.time.format.DateTimeFormatter.ofPattern("HH:mm", java.util.Locale.ENGLISH)
+private val DAY = java.time.format.DateTimeFormatter.ofPattern("d MMM", java.util.Locale.ENGLISH)
+private val WHEN = java.time.format.DateTimeFormatter.ofPattern("EEE d MMM HH:mm", java.util.Locale.ENGLISH)
+
+private val MONTH_NAMES = listOf("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+
+/** "October 2026" as "Oct 2026": a month's name cut to three letters, for an axis with little room. */
+private fun shortMonths(label: String): String = MONTH_NAMES.fold(label) { s, m -> s.replace(m, m.take(3)) }
 
 private fun JsonObject.l(key: String): Long? = (this[key] as? JsonPrimitive)?.longOrNull
 
@@ -251,7 +270,8 @@ internal fun ChartCard(spec: ChartSpec) {
             r == null -> null
             spec.kind == ChartKind.Price -> readPrice(r)
             spec.gym != null -> readGym(r, spec.kind)
-            else -> readMoney(r, spec.query?.get("cumulative")?.let { (it as? JsonPrimitive)?.content == "true" } == true)
+            // By category unless it asks otherwise, as `money.series` reads it.
+            else -> readMoney(r, spec.query?.get("cumulative")?.let { (it as? JsonPrimitive)?.content == "true" } == true, (spec.query?.s("by") ?: "category") == "category")
         }
     }
     var picked by remember(data) { mutableStateOf<Int?>(null) }
@@ -261,6 +281,8 @@ internal fun ChartCard(spec: ChartSpec) {
     ) {
         T(spec.title.ifBlank { if (spec.kind == ChartKind.Price) spec.price?.s("product") ?: "Price" else "Chart" }, style = Relay.type.ui.copy(fontSize = 13.sp, lineHeight = 18.sp), color = c.ink, weight = FontWeight.SemiBold)
         when {
+            // The PC away is a state, not a failure: said quietly, where red read as an error.
+            data == null && live.error?.code == "link.down" -> T("Not on this phone yet: it draws once the PC is in reach.", style = Relay.type.caption, color = c.ink3)
             data == null && live.error != null -> T("This chart could not be read: ${said(live.error!!, "This engine cannot draw it yet.")}", style = Relay.type.caption, color = c.heldText)
             data == null -> T(
                 when {
@@ -270,8 +292,13 @@ internal fun ChartCard(spec: ChartSpec) {
                 },
                 style = Relay.type.caption, color = c.ink3,
             )
-            data.labels.isEmpty() || data.series.all { (_, v) -> v.all { it == 0L } } -> T("Nothing to draw yet: no entries match.", style = Relay.type.caption, color = c.ink3)
+            // Only Avex's charts count in a unit: what they count is workouts, not entries.
+            data.labels.isEmpty() || data.series.all { (_, v) -> v.all { it == 0L } } -> T("Nothing to draw yet: no ${if (data.fmt is Fmt.Unit) "workouts" else "entries"} match.", style = Relay.type.caption, color = c.ink3)
             spec.kind == ChartKind.Donut -> Donut(data)
+            spec.kind == ChartKind.Bar && data.categories && data.series.all { (_, v) -> v.all { it >= 0L } } -> {
+                Legend(data, spec.kind)
+                CategoryRows(data)
+            }
             else -> {
                 Legend(data, spec.kind)
                 Plot(data, spec.kind, picked) { picked = if (picked == it) null else it }
@@ -297,16 +324,19 @@ private fun Legend(data: Numbers, kind: ChartKind) {
     }
 }
 
-/** What a tapped group holds, newest series first. */
+/** What group [j] holds, newest series first: "Groceries $412.30 · Dining $96.00". */
+private fun Numbers.parts(j: Int, between: String = "  ·  "): String =
+    series.asReversed().filter { (_, v) -> j < v.size }.joinToString(between) { (name, v) ->
+        if (name.isBlank() || series.size == 1) fmt.format(v[j]) else "$name ${fmt.format(v[j])}"
+    }
+
+/** What a tapped group holds, under its name in full. */
 @Composable
 private fun Readout(data: Numbers, j: Int) {
     val c = Relay.colors
-    val parts = data.series.asReversed().filter { (_, v) -> j < v.size }.joinToString("  ·  ") { (name, v) ->
-        if (name.isBlank() || data.series.size == 1) data.fmt.format(v[j]) else "$name ${data.fmt.format(v[j])}"
-    }
     Row(Modifier.fillMaxWidth().clip(Radii.key).background(c.wash).padding(horizontal = 10.dp, vertical = 6.dp)) {
-        T(data.labels[j], style = Relay.type.caption, color = c.ink, weight = FontWeight.Medium, maxLines = 1)
-        T("  ·  $parts", Modifier.weight(1f), Relay.type.mono.copy(fontSize = 12.sp), c.ink2, maxLines = 2)
+        T(data.names[j], style = Relay.type.caption, color = c.ink, weight = FontWeight.Medium, maxLines = 1)
+        T("  ·  ${data.parts(j)}", Modifier.weight(1f), Relay.type.mono.copy(fontSize = 12.sp), c.ink2, maxLines = 2)
     }
 }
 
@@ -333,6 +363,11 @@ private fun Plot(data: Numbers, kind: ChartKind, picked: Int?, onPick: (Int) -> 
     val groups = data.labels.size
     val count = data.series.size
     val tickLabels = remember(data) { (-down..up).map { k -> base + k * step }.map { it to data.fmt.whole(it) } }
+    // A screen reader hears the newest group the chart has reached, as a tap on it reads.
+    val spoken = remember(data) {
+        val j = ((data.known.maxOrNull() ?: groups).coerceIn(1, groups)) - 1
+        "Latest: ${data.names[j]}, ${data.parts(j, ", ")}"
+    }
     Canvas(
         Modifier.fillMaxWidth().height(PLOT_H).pointerInput(data) {
             detectTapGestures { pos ->
@@ -341,7 +376,7 @@ private fun Plot(data: Numbers, kind: ChartKind, picked: Int?, onPick: (Int) -> 
                 val j = floor((pos.x - left) / gw).toInt()
                 if (j in 0 until groups) pick(j)
             }
-        },
+        }.semantics { contentDescription = spoken },
     ) {
         val padT = 10.dp.toPx()
         val padB = 8.dp.toPx()
@@ -409,12 +444,49 @@ private fun Plot(data: Numbers, kind: ChartKind, picked: Int?, onPick: (Int) -> 
             }
         }
     }
-    // The group labels, thinned to about six on a phone.
-    val every = max(1, ceil(groups / 6.0).toInt())
-    Row(Modifier.fillMaxWidth().padding(start = AXIS_W, end = 4.dp)) {
-        data.labels.forEachIndexed { j, name ->
-            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                if (j % every == 0) T(name, style = Relay.type.mono.copy(fontSize = 11.sp, textAlign = TextAlign.Center), color = c.ink2, maxLines = 1)
+    // The group labels, thinned to about five on a phone, each free to run past its slot, where a
+    // slot's width cut them to "Octo…"; on a narrow plot a month's name is three letters. The
+    // readout keeps the label in full.
+    val every = max(1, ceil(groups / 5.0).toInt())
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(start = AXIS_W, end = 4.dp)) {
+        val narrow = maxWidth < 480.dp
+        Row(Modifier.fillMaxWidth()) {
+            data.labels.forEachIndexed { j, name ->
+                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    if (j % every == 0) T(
+                        if (narrow) shortMonths(name) else name,
+                        Modifier.wrapContentWidth(unbounded = true),
+                        Relay.type.mono.copy(fontSize = 11.sp, textAlign = TextAlign.Center), c.ink2, maxLines = 1,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Bars by category as rows (name, bar, value), in the ledger's order, largest first: under a
+ * bar a category's name had a slot's width and read as "Gro…". More than one period is a bar
+ * each, newest on top in the legend's colours, and their values newest first.
+ */
+@Composable
+private fun CategoryRows(data: Numbers) {
+    val c = Relay.colors
+    val count = data.series.size
+    val hi = max(data.series.maxOf { (_, v) -> v.maxOrNull() ?: 0L }, 1L)
+    val shown = data.labels.indices.filter { i -> data.series.any { (_, v) -> v.getOrElse(i) { 0L } > 0 } }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (i in shown) {
+            val tint = data.colors[i]?.let { hue(it) } ?: PALETTE[i % PALETTE.size]
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Dot(tint, 8.dp)
+                T(data.labels[i], Modifier.weight(.42f), Relay.type.caption, c.ink2, maxLines = 1)
+                Column(Modifier.weight(.58f)) {
+                    for (k in data.series.indices.reversed()) {
+                        PaceMeter(data.series[k].second.getOrElse(i) { 0L }.toFloat() / hi, if (count == 1) tint else seriesColor(k, count))
+                    }
+                }
+                T(data.series.asReversed().joinToString(" · ") { (_, v) -> data.fmt.whole(v.getOrElse(i) { 0L }) }, style = Relay.type.mono.copy(fontSize = 12.sp), color = c.ink, maxLines = 1)
             }
         }
     }
@@ -457,7 +529,7 @@ private fun Donut(data: Numbers) {
                         Dot(color, 8.dp)
                         T(label, Modifier.weight(1f), Relay.type.caption, c.ink2, maxLines = 1)
                         T(data.fmt.whole(v), style = Relay.type.mono.copy(fontSize = 12.sp), color = c.ink)
-                        T("${Math.round(v * 100.0 / max(total, 1L))}%", Modifier.padding(start = 2.dp), Relay.type.mono.copy(fontSize = 11.5.sp, textAlign = TextAlign.End), c.ink3)
+                        T(share(v * 10_000 / max(total, 1L)), Modifier.padding(start = 2.dp), Relay.type.mono.copy(fontSize = 11.5.sp, textAlign = TextAlign.End), c.ink3)
                     }
                 }
             }
@@ -476,27 +548,32 @@ private fun Foot(spec: ChartSpec, live: RelayData.Live, data: Numbers?) {
     val note = when {
         !asked -> "Numbers as written in the reply"
         stale -> "Saved on this phone · ${ago(live.at)}"
-        spec.gym != null -> "From Avex's last export"
-        spec.price != null -> "Live from Arbiter"
+        spec.gym != null -> "From Avex's last export, redraws when a newer one comes in"
+        spec.price != null -> "Live from Arbiter, redraws when it trades"
         else -> "Live from Tally, redraws when the ledger changes"
     }
+    // The figure says what it is: the newest series' name, or "Total".
     val total = data?.takeIf { spec.kind != ChartKind.Donut && it.series.isNotEmpty() }?.let { d ->
         val i = d.series.lastIndex
         val values = d.series[i].second.take(d.known.getOrElse(i) { d.labels.size })
-        when {
+        val figure = when {
             values.isEmpty() -> null
             spec.kind == ChartKind.Price -> d.fmt.format(values.last())
             d.fmt is Fmt.Cash && d.cumulative -> d.fmt.whole(values.last())
             d.fmt is Fmt.Cash -> d.fmt.whole(values.sum())
             else -> null
         }
+        figure?.let { d.series[i].first.ifBlank { "Total" } to it }
     }
     Column {
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.lineSubtle))
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (asked) Dot(if (stale) c.waiting else c.live, 6.dp)
             T(note, Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 2)
-            total?.let { T(it, style = Relay.type.title.copy(fontSize = 18.sp, lineHeight = 22.sp, fontFeatureSettings = "tnum"), color = c.ink, maxLines = 1) }
+            total?.let { (name, figure) ->
+                T(name, style = Relay.type.caption, color = c.ink3, maxLines = 1)
+                T(figure, style = Relay.type.title.copy(fontSize = 18.sp, lineHeight = 22.sp, fontFeatureSettings = "tnum"), color = c.ink, maxLines = 1)
+            }
         }
     }
 }

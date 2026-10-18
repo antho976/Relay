@@ -210,6 +210,9 @@ internal fun pct(v: Double): String {
 /** Basis points as a percentage: 1234 reads "+12.3%". */
 internal fun bps(v: Long): String = pct(v / 100.0)
 
+/** A share in basis points, in whole percent: "52%", or "<1%" for a sliver (money_invest.rs `share`). */
+internal fun share(bps: Long): String = if (bps in 1..49) "<1%" else "${(bps + 50) / 100}%"
+
 // ---- Dates ----
 
 /** The local day of a `YYYY-MM-DD` date or an RFC 3339 time. */
