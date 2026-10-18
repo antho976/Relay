@@ -743,7 +743,7 @@ fn sidebar() -> Sidebar {
     let heading = label("Workspaces", "section-label");
     heading.set_hexpand(true);
     section.append(&heading);
-    let add_project = icon_button("plus", "Open repository");
+    let add_project = icon_button("plus", "Add workspace");
     section.append(&add_project);
     sidebar.append(&section);
     let projects_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -1328,8 +1328,8 @@ impl Ui {
         });
     }
 
-    /// The title bar's and status bar's remaining keys, the empty wall's launch key, Open
-    /// repository and the launch scrim.
+    /// The title bar's and status bar's remaining keys, the empty wall's launch key, Add
+    /// workspace and the launch scrim.
     fn wire_keys(
         self: &Rc<Self>,
         top: &TopBar,
