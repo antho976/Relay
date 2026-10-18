@@ -69,7 +69,7 @@ impl KotlinRandom {
         assert!(until > from, "Random range is empty: [{from}, {until}).");
         let n = until.wrapping_sub(from);
         if n > 0 || n == i32::MIN {
-            let rnd = if n & n.wrapping_neg() == n {
+            let rnd = if n.isolate_lowest_one() == n { // Kotlin's `n and -n == n`
                 self.next_bits(31 - n.leading_zeros())
             } else {
                 loop {

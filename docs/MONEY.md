@@ -7,9 +7,9 @@ AI-planned trades come later and are not designed anywhere yet.
 
 Decided with Antho on 2026-10-07:
 
-- **Two apps, one repository.** Tally stays its own Android app in `apps/tally` (Kotlin, Compose,
-  Room). `apps/relay-android` is the PC remote. Folding them into one phone app is a later idea,
-  not this plan.
+- **Two apps, two repositories.** Tally stays its own Android app in antho976/Tally (Kotlin,
+  Compose, Room). `apps/relay-android` is the phone's remote for the PC, in this one. Folding them
+  into one phone app is a later idea, not this plan.
 - **Both devices hold the whole ledger and work as one.** The phone is where nearly everything is
   logged; the PC is used rarely but must never be read-only. Either can add or change anything
   offline, and they catch each other up when they reach each other.
@@ -50,20 +50,20 @@ The first sync makes the PC's ledger the phone's; after that both sides merge.
 
 ## Steps
 
-1. **Tally in the repository** (done). `apps/tally`, squashed from
-   [antho976/Tally](https://github.com/antho976/Tally) at `cfae7c3`; its full history stays there.
-   Its workflows run from the root as `.github/workflows/tally-*.yml`, only for changes under
-   `apps/tally`; releases are `tally-v*` tags.
+1. **Tally in its own repository** (done). Tally 2 is
+   [antho976/Tally](https://github.com/antho976/Tally), with its own CI. Tally 1 had been squashed
+   in from it at `cfae7c3`, into a folder of this repository that was removed on 2026-10-13; its
+   history stays in git.
 2. **The money rules in Rust** (`crates/relay-money`). A module-for-module port of
-   `apps/tally/core` with its tests: amounts, periods, pace, recurrence, payees, CSV and bank
+   Tally's `core/` with its tests: amounts, periods, pace, recurrence, payees, CSV and bank
    statements, the backup file. A rule that changes on one side changes on the other in the same
-   commit; the shared tests are what prove they agree.
+   piece of work, a PR in each repository; the shared tests are what prove they agree.
 3. **A ledger that can sync.** On both sides: every row gets a permanent id (a UUID, not Room's
    1, 2, 3, which collide across devices), a change time, and deletes become tombstones. A change
    log records each edit. Tally needs a Room migration; the engine gets `store::MIGRATIONS` entries
    and `money.*` bus ops.
 4. **The desktop Money space.** The space switcher, the start screen, and Money pages that mirror
-   Tally's Home, Transactions, Plan and Insights, drawn with Tally's tokens (`apps/tally/DESIGN.md`)
+   Tally's Home, Transactions, Plan and Insights, drawn with Tally's tokens (its `DESIGN.md`)
    as Relay's second theme.
 5. **Sync.** Tally pairs with the PC the way Relay's phone app does (`crates/relay-remote`, LAN or
    Tailscale; no cloud) and exchanges changes since the last sync. Newest edit wins per row; for one

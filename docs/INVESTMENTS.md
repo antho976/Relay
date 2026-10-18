@@ -440,7 +440,8 @@ Worth and Accounts: the portfolio, the room meters (the pace meter re-read: the 
 even pace to use the room by its deadline stands today), holdings, allocation, income, accounts, and
 "Import a Wealthsimple file". The bank import routes a Wealthsimple investment statement here
 instead of reading it as income and expenses. Its design contract is
-`apps/tally/.impeccable/surfaces/invest.md`.
+`.impeccable/surfaces/invest.md` from Tally 1, which went with it and has no counterpart in Tally 2;
+the screen is `ui/invest/InvestScreens.kt` in antho976/Tally.
 
 ## Shared tests
 

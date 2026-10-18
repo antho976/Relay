@@ -6,7 +6,8 @@ name: Relay server image
 # the binary out of it (`COPY --from=ghcr.io/<owner>/relay-server:<tag>`).
 #
 # A `relay-server-v*` tag publishes that version and `latest`; running it by hand publishes the
-# commit's short sha.
+# commit's short sha. Either way the commit passes CI (ci.yml) first, so a tag on a red commit
+# publishes nothing.
 
 on:
   push:
@@ -15,14 +16,20 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   image:
+    needs: ci
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
