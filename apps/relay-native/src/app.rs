@@ -1482,10 +1482,21 @@ impl Ui {
     pub fn show_error(&self, message: &str) {
         self.show_notice(message, (6 + message.chars().count() / 20).min(20));
     }
+    /// `show_error` for good news (an approval, a commit, a push): the same banner, its rule not
+    /// the red of a refusal.
+    pub fn show_info(&self, message: &str) {
+        self.show_notice(message, (6 + message.chars().count() / 20).min(20));
+        if let Some(bar) = self.notice.parent() {
+            bar.add_css_class("info");
+        }
+    }
     /// `show_error` with its own reading time, in seconds.
     fn show_notice(&self, message: &str, seconds: usize) {
         self.notice.set_text(message);
         self.notice.set_visible(true);
+        if let Some(bar) = self.notice.parent() {
+            bar.remove_css_class("info");
+        }
         let serial = NOTICE_SERIAL.with(|s| {
             s.set(s.get().wrapping_add(1));
             s.get()

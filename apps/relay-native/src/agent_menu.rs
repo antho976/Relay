@@ -1302,7 +1302,7 @@ impl Ui {
                         "running" => {
                             installed = true;
                             phone_status(&name, &format!("Installed and launched on {model}. Logcat is attached; Stop ends it."), true, run);
-                            self.show_error(&format!("{name}: installed and launched on {model}"));
+                            self.show_info(&format!("{name}: installed and launched on {model}"));
                         }
                         "failed" => {
                             let detail = if last.is_empty() { String::from("see Devices for the full log") } else { last.clone() };

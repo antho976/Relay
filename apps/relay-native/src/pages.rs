@@ -454,7 +454,7 @@ fn mail_composer(ui: &Rc<Ui>, page: &gtk::Box, project: i64) {
                     {
                         buffer.set_text("");
                     }
-                    ui.show_error(&format!("Message: {}", crate::app::text(&v, "delivery")));
+                    ui.show_info(&format!("Message: {}", crate::app::text(&v, "delivery")));
                     ui.refresh_page();
                 }
                 Err(e) => ui.show_error(&e.to_string()),
