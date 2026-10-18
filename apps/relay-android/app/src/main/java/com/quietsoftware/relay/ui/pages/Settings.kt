@@ -70,15 +70,19 @@ import kotlinx.serialization.json.put
 
 private class PcCategory(val key: String, val label: String, val detail: String)
 
-/** The PC's notification categories (tools_settings.rs), in its order. */
-private val PC_CATEGORIES = listOf(
-    PcCategory("agent_done", "Agent finished", "An agent reports its work done."),
-    PcCategory("agent_blocked", "Agent blocked", "An agent waits on you."),
-    PcCategory("guardrail", "Guardrail holds", "An action waits for your Allow."),
-    PcCategory("integration", "Integration", "Merges and builds finish or fail."),
-    PcCategory("provider", "Providers", "Provider updates and sign-in problems."),
-    PcCategory("disk", "Disk", "Worktrees and builds use a lot of space."),
-    PcCategory("system", "System", "Crashes on a device and other engine news."),
+/** The PC's notification categories, in its words, groups and order (tools_settings.rs): the agents', then the system's. */
+private val PC_GROUPS = listOf(
+    listOf(
+        PcCategory("agent_blocked", "Agent needs you", "Blocked on a question or waiting for approval."),
+        PcCategory("agent_done", "Agent finished", "Once per terminal, and again after you type into it."),
+        PcCategory("guardrail", "Guardrail needs you", "An action held for approval, or an exception request. Refusals are filed quietly."),
+    ),
+    listOf(
+        PcCategory("provider", "Providers", "Claude or Codex limits, outages and sign-in issues."),
+        PcCategory("integration", "Integrations", "Git, GitHub and plugin events."),
+        PcCategory("disk", "Disk", "Low space and worktree cleanup."),
+        PcCategory("system", "Everything else", "Crashed app runs and other engine events."),
+    ),
 )
 
 /** The phone's own preferences. The PC's settings stay on the PC. */
@@ -208,26 +212,38 @@ fun SettingsScreen(nav: Nav) {
                 }
 
                 SectionLabel("Notifications on the PC")
-                Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
-                    when {
-                        pcNotify.result == null -> Row(Modifier.padding(vertical = 12.dp)) {
+                if (pcNotify.result == null) {
+                    Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
+                        Row(Modifier.padding(vertical = 12.dp)) {
                             T(pcNotify.error?.message ?: "Loading…", style = Relay.type.caption, color = c.ink3)
                         }
-                        else -> PC_CATEGORIES.forEachIndexed { index, category ->
-                            if (index > 0) Hairline()
-                            val on = overrides[category.key] ?: (categories?.b(category.key) ?: true)
-                            SwitchRow(category.label, category.detail, on, enabled = s.online) { value ->
-                                scope.launch {
-                                    try {
-                                        nav.relay.call(
-                                            "notify.settings.set",
-                                            buildJsonObject {
-                                                put("patch", buildJsonObject { put("categories", buildJsonObject { put(category.key, value) }) })
-                                            },
-                                        )
-                                        overrides[category.key] = value
-                                    } catch (e: BusException) {
-                                        nav.shell.toast(if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code })
+                    }
+                } else {
+                    PC_GROUPS.forEachIndexed { group, list ->
+                        // The agents' notices show on the PC whatever their switch says (tools_settings.rs "Always shown").
+                        if (group == 0) {
+                            T("Agents' notices always show on the PC; these switch their sound.", style = Relay.type.caption, color = c.ink3)
+                            Gap(6.dp)
+                        } else {
+                            Gap(10.dp)
+                        }
+                        Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
+                            list.forEachIndexed { index, category ->
+                                if (index > 0) Hairline()
+                                val on = overrides[category.key] ?: (categories?.b(category.key) ?: true)
+                                SwitchRow(category.label, category.detail, on, enabled = s.online) { value ->
+                                    scope.launch {
+                                        try {
+                                            nav.relay.call(
+                                                "notify.settings.set",
+                                                buildJsonObject {
+                                                    put("patch", buildJsonObject { put("categories", buildJsonObject { put(category.key, value) }) })
+                                                },
+                                            )
+                                            overrides[category.key] = value
+                                        } catch (e: BusException) {
+                                            nav.shell.toast(if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code })
+                                        }
                                     }
                                 }
                             }
