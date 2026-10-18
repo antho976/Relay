@@ -136,7 +136,7 @@ private fun Wall(nav: Nav) {
                     if (plates.isEmpty()) {
                         item(key = "empty", span = { GridItemSpan(maxLineSpan) }, contentType = "empty") {
                             // The stopped ones fold in below: none is running, but the project has agents.
-                            Empty("grid", if (stopped.isEmpty()) "No agents in ${project.name}" else "No agents running in ${project.name}", "Launch a solo agent in its own worktree, or a builder–reviewer pair on one branch.") {
+                            Empty("grid", if (stopped.isEmpty()) "No agents in ${project.name}" else "No agents running in ${project.name}", "Launch a solo agent in its own worktree, or a review group on one branch.") {
                                 Key("New agent", { nav.launch(pid) }, kind = KeyKind.Primary, glyph = "plus")
                             }
                         }

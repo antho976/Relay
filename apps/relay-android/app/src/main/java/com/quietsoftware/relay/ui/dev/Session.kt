@@ -342,7 +342,7 @@ private fun Settings(session: Session, nav: Nav) {
         } else {
             Models(session.provider, form.model, owner = session.name) { edit(form.copy(model = it)) }
         }
-        Eyebrow("Reasoning effort", Modifier.padding(top = 14.dp))
+        Eyebrow("Effort", Modifier.padding(top = 14.dp))
         FlowRow(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             for (e in effortsFor(session.provider)) {
                 Pill(e, Modifier.heightIn(min = 36.dp), selected = form.effort == e, onClick = if (spawned) null else ({ edit(form.copy(effort = e)) }))
@@ -351,8 +351,8 @@ private fun Settings(session: Session, nav: Nav) {
         if (spawned) T("Model and effort are fixed once the agent has started.", Modifier.padding(top = 8.dp), Relay.type.caption, c.ink3)
         Box(Modifier.padding(top = 10.dp)) {
             Column {
-                SwitchRow("Allow agent bus writes", "Let the agent create tasks, notes and mail.", form.writes, { edit(form.copy(writes = it)) })
-                SwitchRow("Allow UI control", "Let the agent drive the desktop's panes and pages.", form.ui, { edit(form.copy(ui = it)) })
+                SwitchRow("Agent bus writes", "Let it write files, stage and commit through Relay, with guardrails checked as it goes.", form.writes, { edit(form.copy(writes = it)) })
+                SwitchRow("UI control", "Let it drive the Relay window.", form.ui, { edit(form.copy(ui = it)) })
             }
         }
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
@@ -432,7 +432,7 @@ private fun MailComposer(session: Session, nav: Nav) {
             // The switch and its words are one target; Send stays a key of its own.
             Row(Modifier.weight(1f).heightIn(min = 44.dp).clip(Radii.key).switchRow(priority) { priority = it }, verticalAlignment = Alignment.CenterVertically) {
                 Toggle(priority, null)
-                T("Priority: read at its next step", Modifier.weight(1f).padding(start = 10.dp), Relay.type.caption, c.ink2)
+                T("Priority: ask this agent to read it at the next safe point", Modifier.weight(1f).padding(start = 10.dp), Relay.type.caption, c.ink2)
             }
             Key(
                 "Send",

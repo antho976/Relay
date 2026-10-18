@@ -291,7 +291,7 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                     Label("Model")
                     Models(chosen, profile.model, owner = index) { patch(profile.copy(model = it)) }
 
-                    Label("Reasoning effort")
+                    Label("Effort")
                     Efforts(effortsFor(chosen), profile.effortFor(chosen)) { patch(profile.copy(effort = it)) }
 
                     if (leads) {
@@ -596,8 +596,8 @@ private fun More(
                     )
                 }
                 Hairline(Modifier.padding(top = 10.dp))
-                SwitchRow("Allow agent bus writes", "Let the agent create tasks, notes and mail.", profile.writes, { onProfile(profile.copy(writes = it)) })
-                SwitchRow("Allow UI control", "Let the agent drive the desktop's panes and pages.", profile.ui, { onProfile(profile.copy(ui = it)) })
+                SwitchRow("Agent bus writes", "Let it write files, stage and commit through Relay, with guardrails checked as it goes.", profile.writes, { onProfile(profile.copy(writes = it)) })
+                SwitchRow("UI control", "Let it drive the Relay window.", profile.ui, { onProfile(profile.copy(ui = it)) })
             }
         }
     }

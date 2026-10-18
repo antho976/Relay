@@ -172,7 +172,7 @@ internal fun DispatchSheet(task: Task, nav: Nav, onDismiss: () -> Unit) {
                 Gap(6.dp)
                 Field(model, { model = it }, Modifier.fillMaxWidth(), placeholder = "Provider default, or a model id", style = Relay.type.mono, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false))
                 Gap(12.dp)
-                Eyebrow("Reasoning effort")
+                Eyebrow("Effort")
                 Gap(6.dp)
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     for (e in efforts) Pill(e, selected = e == shownEffort, onClick = { effort = e })
@@ -183,8 +183,8 @@ internal fun DispatchSheet(task: Task, nav: Nav, onDismiss: () -> Unit) {
                 Field(worktree, { worktree = it }, Modifier.fillMaxWidth(), placeholder = "new", style = Relay.type.mono, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false))
                 T("new, primary, or the path of a worktree on the PC", Modifier.padding(start = 4.dp, top = 4.dp), Relay.type.caption, c.ink3)
                 Gap(8.dp)
-                SwitchRow("Allow agent bus writes", null, busWrites) { busWrites = it }
-                SwitchRow("Allow UI control", null, allowUi) { allowUi = it }
+                SwitchRow("Agent bus writes", "Let it write files, stage and commit through Relay, with guardrails checked as it goes.", busWrites) { busWrites = it }
+                SwitchRow("UI control", "Let it drive the Relay window.", allowUi) { allowUi = it }
                 if (task.children.isNotEmpty()) SwitchRow("Sub-tasks too", "One new agent per open sub-task, with the same options", fanout) { fanout = it }
                 if (!providers.fresh) StaleNote(providers.at)
             }
