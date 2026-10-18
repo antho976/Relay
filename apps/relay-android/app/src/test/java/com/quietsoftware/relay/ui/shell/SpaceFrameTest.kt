@@ -9,7 +9,7 @@ class SpaceFrameTest {
     @Test
     fun aPageNamesItsSpace() {
         for (r in listOf("threads", "thread/42", "tally", "arbiter", "avex")) assertEquals(r, "threads", spaceOf(r))
-        for (r in listOf("agents", "board", "notes")) assertEquals(r, "dev", spaceOf(r))
+        for (r in listOf("agents", "board", "notes", "skills", "plugins")) assertEquals(r, "dev", spaceOf(r))
         for (r in listOf("inbox", "outbox", "search", "settings", "pc", null)) assertNull(r, spaceOf(r))
     }
 }

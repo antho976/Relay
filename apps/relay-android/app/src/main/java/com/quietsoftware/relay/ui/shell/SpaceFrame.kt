@@ -88,6 +88,6 @@ fun SpaceFrame(nav: Nav, content: @Composable () -> Unit) {
 internal fun spaceOf(route: String?): String? = when {
     route == null -> null
     route == "threads" || route.startsWith("thread/") || route == "tally" || route == "arbiter" || route == "avex" -> "threads"
-    route == "agents" || route == "board" || route == "notes" -> "dev"
+    route == "agents" || route == "board" || route == "notes" || route == "skills" || route == "plugins" -> "dev"
     else -> null
 }
