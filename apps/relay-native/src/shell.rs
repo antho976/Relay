@@ -11,6 +11,9 @@ thread_local! {
     static BELL_LOADING: Cell<bool> = const { Cell::new(false) };
 }
 
+/// The window presets sheet's list before any preset is saved.
+const EMPTY_PRESETS: &str = "No saved presets yet.";
+
 impl Ui {
     /// Open `project` on `page`: an explicit destination, which the project's saved layout
     /// does not override.
@@ -613,32 +616,51 @@ impl Ui {
             .build();
         body.append(&name);
         let save = button("Save current", "primary");
+        // Off until there is a name to save it under; Enter in the name saves.
+        save.set_sensitive(false);
         body.append(&save);
+        let saving = Rc::new(Cell::new(false));
+        let (key, busy) = (save.downgrade(), saving.clone());
+        name.connect_changed(move |name| {
+            if let Some(key) = key.upgrade() {
+                key.set_sensitive(!busy.get() && !name.text().trim().is_empty());
+            }
+        });
+        let key = save.downgrade();
+        name.connect_activate(move |_| {
+            if let Some(key) = key.upgrade().filter(|key| key.is_sensitive()) {
+                key.emit_clicked();
+            }
+        });
         let weak = Rc::downgrade(self);
         let win = window.clone();
         let project = self.project.get();
         save.connect_clicked(move |key| {
             if let Some(ui) = weak.upgrade() {
-                let name = name.text().trim().to_string();
-                if name.is_empty() {
+                let name = name.clone();
+                let typed = name.text().trim().to_string();
+                if typed.is_empty() {
                     return;
                 }
                 let state = ui.layout_state();
                 let win = win.clone();
                 let key = key.clone();
+                let saving = saving.clone();
+                saving.set(true);
                 key.set_sensitive(false);
                 glib::spawn_future_local(async move {
                     match ui
                         .call(
                             "ui.layout.save",
-                            json!({"project_id":project,"name":name,"state":state}),
+                            json!({"project_id":project,"name":typed,"state":state}),
                         )
                         .await
                     {
                         Ok(_) => win.close(),
                         Err(e) => ui.show_error(&e.to_string()),
                     }
-                    key.set_sensitive(true);
+                    saving.set(false);
+                    key.set_sensitive(!name.text().trim().is_empty());
                 });
             }
         });
@@ -649,10 +671,18 @@ impl Ui {
                 .await
             {
                 Ok(v) => {
-                    for name in rows(&v, "layouts").iter().filter_map(Value::as_str) {
+                    let names = rows(&v, "layouts");
+                    if names.is_empty() {
+                        saved.append(&label(EMPTY_PRESETS, "dim"));
+                    }
+                    for name in names.iter().filter_map(Value::as_str) {
                         let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
                         let apply = button(name, "quiet");
                         apply.set_hexpand(true);
+                        if let Some(text) = apply.child().and_downcast::<gtk::Label>() {
+                            text.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                        }
+                        apply.set_tooltip_text(Some(name));
                         row.append(&apply);
                         let delete = icon_button("edit-delete-symbolic", "Delete preset");
                         row.append(&delete);
@@ -679,6 +709,9 @@ impl Ui {
                                         if let Some(row) = row.upgrade() {
                                             if let Some(list) = row.parent().and_downcast::<gtk::Box>() {
                                                 list.remove(&row);
+                                                if list.first_child().is_none() {
+                                                    list.append(&label(EMPTY_PRESETS, "dim"));
+                                                }
                                             }
                                         }
                                         ui.refresh();
