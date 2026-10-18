@@ -22,12 +22,16 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -36,6 +40,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -61,6 +66,7 @@ import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.theme.Palette
 import com.quietsoftware.relay.ui.theme.Relay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -108,6 +114,20 @@ internal fun labelHue(name: String): Color {
 /** Ids of tasks with edits the PC has not taken yet, read off the open outbox. */
 internal fun pendingTasks(outbox: List<OutboxEntry>): Set<String> =
     outbox.mapNotNullTo(HashSet()) { e -> Optimistic.target(e.op, e.payload, e.id)?.takeIf { it.first == Kind.Task }?.second }
+
+/** Ids of tasks with an edit the PC refused, parked in the outbox until the person decides. */
+internal fun refusedTasks(outbox: List<OutboxEntry>): Set<String> = pendingTasks(outbox.filter { it.parked })
+
+/** The first edit of [taskId] the PC refused, if one is parked in the outbox. */
+internal fun refusedEdit(outbox: List<OutboxEntry>, taskId: String): OutboxEntry? =
+    outbox.firstOrNull { e -> e.parked && Optimistic.target(e.op, e.payload, e.id) == (Kind.Task to taskId) }
+
+/** Why a parked edit is not on the PC, in the outbox page's words. */
+internal fun parkedWhy(e: OutboxEntry): String = when (e.state) {
+    OutboxEntry.State.Held -> "Held by a guardrail on the PC"
+    OutboxEntry.State.Conflict -> "Changed on the PC too"
+    else -> "The PC refused: ${e.error?.message?.takeIf { it.isNotBlank() } ?: "no reason given"}"
+}
 
 /** The index a task holds in its column, which is what `task.move`'s `position` means. */
 internal fun indexIn(all: List<Task>, task: Task): Int? =
@@ -349,11 +369,11 @@ internal fun ColumnPill(column: String, onClick: (() -> Unit)? = null) {
     }
 }
 
-/** "Saved on this phone": a row the PC has not taken yet. */
+/** "Saved on this phone": a row the PC has not taken yet; in held red, one with an edit it did not apply. */
 @Composable
-internal fun WaitingMark(text: String = "saved on phone") {
+internal fun WaitingMark(text: String = "saved on phone", tone: Color = Relay.colors.waiting) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-        Dot(Relay.colors.waiting, 6.dp)
+        Dot(tone, 6.dp)
         T(text, style = tiny, color = Relay.colors.ink3, maxLines = 1)
     }
 }
@@ -369,9 +389,10 @@ internal data class CardInfo(
     val duplicate: String?,
     val agents: List<Pair<String, Lamp>>,
     val pending: Boolean,
+    val refused: Boolean = false,
 )
 
-internal fun cardInfos(tasks: List<Task>, sessions: Map<String, Session>, pending: Set<String>): List<CardInfo> {
+internal fun cardInfos(tasks: List<Task>, sessions: Map<String, Session>, pending: Set<String>, refused: Set<String> = emptySet()): List<CardInfo> {
     val byNum = HashMap<Long, Task>(tasks.size)
     for (t in tasks) t.num?.let { byNum[it] = t }
     return tasks.map { t ->
@@ -387,6 +408,7 @@ internal fun cardInfos(tasks: List<Task>, sessions: Map<String, Session>, pendin
             duplicate = t.duplicateOf?.let { d -> byNum[d]?.let { "Duplicate of #$d ${it.title}" } ?: "Duplicate of #$d" },
             agents = t.sessions.map { it to (sessions[it]?.lamp ?: Lamp.Off) },
             pending = Optimistic.isTemp(t.id) || t.id in pending,
+            refused = t.id in refused,
         )
     }
 }
@@ -418,7 +440,7 @@ internal fun TaskCard(info: CardInfo, onClick: () -> Unit, onLongClick: () -> Un
             T(t.num?.let { "#$it" } ?: "new", style = tiny, color = c.ink3, maxLines = 1)
             StateBadge(t.state)
             Box(Modifier.weight(1f))
-            if (info.pending) WaitingMark()
+            if (info.refused) WaitingMark("not applied", c.held) else if (info.pending) WaitingMark()
         }
         T(t.title.ifBlank { "Untitled" }, style = Relay.type.ui, color = if (done) c.ink2 else c.ink, maxLines = 3)
         info.parent?.let { p ->
@@ -515,6 +537,21 @@ internal fun BoardSheet(onDismiss: () -> Unit, title: String? = null, subtitle: 
             content(close)
         }
     }
+}
+
+/**
+ * The focus for a sheet's one field, called inside the sheet: it takes the keyboard once the
+ * sheet's window has focus, which comes a few frames after the sheet is shown.
+ */
+@Composable
+internal fun rememberSheetFocus(): FocusRequester {
+    val focus = remember { FocusRequester() }
+    val window = LocalWindowInfo.current
+    LaunchedEffect(Unit) {
+        snapshotFlow { window.isWindowFocused }.first { it }
+        runCatching { focus.requestFocus() }
+    }
+    return focus
 }
 
 /** One choice in a sheet's menu. */

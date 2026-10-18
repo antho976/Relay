@@ -70,6 +70,13 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
     fun session(name: String) = go("session/${Uri.encode(name)}")
     fun launch(projectId: Long? = null, taskId: Long? = null, prompt: String? = null) = go("launch" + q("project" to projectId, "task" to taskId, "prompt" to prompt))
     fun board(projectId: Long?) = go("board" + q("project" to projectId))
+
+    /** A project's board from a page opened on it: back to it when it is the screen below, rather than a second one. */
+    fun boardOf(projectId: Long) {
+        val below = controller.previousBackStackEntry
+        val shows = below?.arguments?.getString("project")?.toLongOrNull() ?: shell.state.value.project?.num
+        if (below?.destination?.route == "board?project={project}" && shows == projectId) controller.popBackStack() else board(projectId)
+    }
     fun task(id: String) = go("task/${Uri.encode(id)}")
     fun newTask(projectId: Long?, parentId: Long? = null, column: String? = null) = go("task-edit" + q("project" to projectId, "parent" to parentId, "column" to column))
     fun editTask(id: String) = go("task-edit" + q("id" to id))
