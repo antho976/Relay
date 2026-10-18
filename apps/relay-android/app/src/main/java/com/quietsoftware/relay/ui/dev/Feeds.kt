@@ -2,8 +2,11 @@ package com.quietsoftware.relay.ui.dev
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.text.input.TextFieldValue
 import com.quietsoftware.relay.data.Relay
+import com.quietsoftware.relay.data.SessionChat
 import com.quietsoftware.relay.data.TerminalFeed
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -98,4 +101,106 @@ internal fun rememberFeed(relay: Relay, name: String): TerminalFeed {
         onDispose { Feeds.release(feed) }
     }
     return feed
+}
+
+/**
+ * One [SessionChat] per agent, kept after its conversation closes: back from the terminal or the
+ * details, it shows as it was and reads on from where it stopped, rather than from nothing. It
+ * stops reading a moment after its last screen lets go, as a feed does; the newest few
+ * conversations nobody watches are kept, the rest let go.
+ *
+ * Used from the main thread only (composition, effects and [Feeds.scope]).
+ */
+internal object Chats {
+    private class Entry(val relay: Relay, val chat: SessionChat) {
+        var users = 0
+        var reading = false
+        var pausing: Job? = null
+    }
+
+    private val kept = LinkedHashMap<String, Entry>()
+
+    /** The conversation for [name]: the one kept, or a new one; nothing reads it until [hold]. */
+    fun of(relay: Relay, name: String): SessionChat {
+        kept[name]?.let { e -> if (e.relay === relay) return e.chat else drop(e) }
+        val e = Entry(relay, SessionChat(relay, name, Feeds.scope))
+        kept[name] = e
+        return e.chat
+    }
+
+    fun hold(relay: Relay, chat: SessionChat) {
+        val e = kept[chat.name]?.takeIf { it.chat === chat } ?: Entry(relay, chat).also { fresh ->
+            kept.put(chat.name, fresh)?.let(::drop)
+        }
+        e.pausing?.cancel()
+        e.pausing = null
+        e.users++
+        if (!e.reading) {
+            e.reading = true
+            chat.start()
+        }
+    }
+
+    fun release(chat: SessionChat) {
+        // One let go of while it was on screen: nothing keeps it now.
+        val e = kept[chat.name]?.takeIf { it.chat === chat } ?: return chat.stop()
+        e.users = (e.users - 1).coerceAtLeast(0)
+        if (e.users > 0) return
+        // To the end of the order: the cap lets go of the longest unwatched first.
+        kept.remove(chat.name)
+        kept[chat.name] = e
+        e.pausing?.cancel()
+        e.pausing = Feeds.scope.launch {
+            delay(GRACE_MS)
+            pause(e)
+        }
+        val idle = kept.values.filter { it.users == 0 }
+        if (idle.size > MAX_IDLE) idle.take(idle.size - MAX_IDLE).forEach(::drop)
+    }
+
+    /** Stops reading and saves what was read: once, so letting go of it later never writes it again. */
+    private fun pause(e: Entry) {
+        if (e.users > 0 || !e.reading) return
+        e.reading = false
+        e.chat.stop()
+    }
+
+    private fun drop(e: Entry) {
+        e.pausing?.cancel()
+        e.pausing = null
+        if (kept[e.chat.name] === e) kept.remove(e.chat.name)
+        pause(e)
+    }
+
+    private const val GRACE_MS = 2_500L
+    private const val MAX_IDLE = 3
+}
+
+/** The kept conversation for [name], read while this composable is on screen. */
+@Composable
+internal fun rememberChat(relay: Relay, name: String): SessionChat {
+    val chat = remember(name) { Chats.of(relay, name) }
+    DisposableEffect(chat) {
+        Chats.hold(relay, chat)
+        onDispose { Chats.release(chat) }
+    }
+    return chat
+}
+
+/**
+ * What is being written to each agent, kept while the app runs: the words, and the pictures
+ * already on their way to its checkout. Leaving the conversation for the terminal or the
+ * details, or backing out of it, finds them there when it opens again; sending clears them.
+ *
+ * Used from the main thread only.
+ */
+internal object ChatDrafts {
+    class Draft {
+        var text = TextFieldValue()
+        val attached = mutableStateListOf<Attachment>()
+    }
+
+    private val drafts = HashMap<String, Draft>()
+
+    fun of(name: String): Draft = drafts.getOrPut(name) { Draft() }
 }

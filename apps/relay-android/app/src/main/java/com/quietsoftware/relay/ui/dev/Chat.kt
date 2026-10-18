@@ -46,16 +46,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -161,11 +160,8 @@ fun ChatScreen(name: String, nav: Nav) {
     val c = Relay.colors
     val s by nav.shell.state.collectAsStateWithLifecycle()
     val session by remember(name) { nav.relay.session(name) }.collectAsStateWithLifecycle(null)
-    val chat = remember(name) { SessionChat(nav.relay, name, Feeds.scope) }
-    DisposableEffect(chat) {
-        chat.start()
-        onDispose { chat.stop() }
-    }
+    // Kept a while after this screen closes: back here, the conversation shows as it was left.
+    val chat = rememberChat(nav.relay, name)
     val messages by chat.messages.collectAsStateWithLifecycle()
     val sending by chat.sending.collectAsStateWithLifecycle()
     val status by chat.status.collectAsStateWithLifecycle()
@@ -178,15 +174,18 @@ fun ChatScreen(name: String, nav: Nav) {
     var menu by remember { mutableStateOf(false) }
     var mailing by remember { mutableStateOf(false) }
     var peek by rememberSaveable(name) { mutableStateOf(false) }
+    // What is being written to this agent outlives the screen: away and back, it is still here.
+    val draft = remember(name) { ChatDrafts.of(name) }
     // A value, not a string: a picked command puts the cursor after itself.
-    var field by rememberSaveable(name, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
+    var field by rememberSaveable(name, stateSaver = TextFieldValue.Saver) { mutableStateOf(draft.text) }
+    SideEffect { draft.text = field }
     val text = field.text
     fun type(next: String) {
         field = TextFieldValue(next, TextRange(next.length))
     }
     // Pictures for the next message: each sent to the agent's checkout as soon as it is picked.
     val context = LocalContext.current
-    val attached = remember(name) { mutableStateListOf<Attachment>() }
+    val attached = draft.attached
     fun update(id: Long, change: (Attachment) -> Attachment) {
         val i = attached.indexOfFirst { it.id == id }
         if (i >= 0) attached[i] = change(attached[i])
@@ -196,11 +195,13 @@ fun ChatScreen(name: String, nav: Nav) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_PICTURES)) { uris ->
         val room = (MAX_PICTURES - attached.size).coerceAtLeast(0)
         if (uris.size > room) nav.shell.toast("Up to $MAX_PICTURES pictures in one message")
+        val app = context.applicationContext
         for (uri in uris.take(room)) {
             val id = System.nanoTime()
             attached += Attachment(id, null)
-            scope.launch {
-                val shrunk = withContext(Dispatchers.IO) { shrink(context, uri) }
+            // Past this screen: a picture still going when the person opens the terminal arrives all the same.
+            Feeds.scope.launch {
+                val shrunk = withContext(Dispatchers.IO) { shrink(app, uri) }
                 if (shrunk == null) return@launch update(id) { it.copy(failed = true) }
                 update(id) { it.copy(thumb = shrunk.second) }
                 val path = chat.upload(shrunk.first)
