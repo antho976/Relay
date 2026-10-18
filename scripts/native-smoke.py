@@ -134,8 +134,10 @@ for line in sys.stdin:
         except RuntimeError as error:
             assert "held" in str(error), error
         assert len(call("guardrail.holds.list", {"project_id": project["id"]})["holds"]) == 1
-        # Money's pages read Tally's sample household from the disposable ledger.
+        # Money's pages read Tally's sample household from the disposable ledger, and Avex's the
+        # training history relay-gym tests with.
         assert call("money.sample", {})["transactions"] > 0
+        assert call("gym.import", {"path": str(ROOT / "crates/relay-gym/tests/avex_export.json")})["sessions"] > 0
         desktop_env = dict(os.environ, RELAY_NATIVE_SOCKET=str(path), RELAY_INSTANCE="test")
         for key in ("RELAY_SESSION", "RELAY_TOKEN", "RELAY_BRIEF"):
             desktop_env.pop(key, None)
@@ -183,7 +185,9 @@ for line in sys.stdin:
                                      *((name,"1440,900",name) for name in ("money-home","money-transactions","money-data","start")), ("money-plan","1024,768","money-plan"), ("money-entry","1024,768","money-entry"),
                                      ("agent-settings","1440,900","agent-settings"), ("agent-settings-compact","1024,768","agent-settings"),
                                      ("design", "1440,900", "design"),
-                                     *((frame,"1440,900","start") for frame in START_FRAMES)):
+                                     *((frame,"1440,900","start") for frame in START_FRAMES),
+                                     # Threads' other sources, only when named in RELAY_SMOKE_PAGES.
+                                     *(((name,"1440,900",name) for name in ("avex-home","avex-workouts","avex-lifts","arbiter-home","arbiter-orders","arbiter-settings")) if PAGES_ONLY else ())):
             if PAGES_ONLY and viewport not in PAGES_ONLY:
                 continue
             output = OUT / f"{viewport}.png"
