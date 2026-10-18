@@ -197,6 +197,11 @@ pub enum Gesture {
 /// The inspector's width, beside the canvas's right edge.
 const INSPECTOR_W: f64 = 256.0;
 
+/// What the inspector key does now: hide it while it is on, show it while it is off.
+fn inspector_tip(on: bool) -> &'static str {
+    if on { "Hide the inspector (Ctrl+.)" } else { "Show the inspector (Ctrl+.)" }
+}
+
 pub struct Board {
     pub root: gtk::Box,
     pub(super) ui: Weak<Ui>,
@@ -343,7 +348,7 @@ impl Board {
         inspector_key.add_css_class("quiet");
         inspector_key.add_css_class("icon-key");
         inspector_key.set_child(Some(&crate::icons::image("sidebar", 16)));
-        inspector_key.set_tooltip_text(Some("Show the inspector (Ctrl+.)"));
+        inspector_key.set_tooltip_text(Some(inspector_tip(true)));
         inspector_key.set_active(true);
         top.append(&inspector_key);
         let mut key = top.first_child();
@@ -585,7 +590,8 @@ impl Board {
             }
         });
         let weak = Rc::downgrade(&board);
-        board.inspector_key.connect_toggled(move |_| {
+        board.inspector_key.connect_toggled(move |key| {
+            key.set_tooltip_text(Some(inspector_tip(key.is_active())));
             if let Some(b) = weak.upgrade() {
                 b.refresh_chrome();
             }
