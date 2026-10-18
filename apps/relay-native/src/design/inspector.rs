@@ -5,7 +5,7 @@
 
 use super::board::{display_name, kind_caption, kind_glyph, Board};
 use super::glyphs;
-use super::widgets::{color_key, number, segmented};
+use super::widgets::{color_key, number, number_step, segmented};
 use crate::app::label;
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -74,16 +74,36 @@ impl Board {
             name.set_hexpand(true);
             name.add_css_class("design-name");
             name.set_tooltip_text(Some(&format!("{} name", kind_caption(first.kind))));
+            // Enter or leaving the field names the layer; Esc puts back the name it had.
+            let shown = Rc::new(std::cell::RefCell::new(display_name(&first)));
             let weak = Rc::downgrade(&b);
-            let original = display_name(&first);
-            name.connect_activate(move |e| {
+            let s = shown.clone();
+            let rename = Rc::new(move |e: &gtk::Entry| {
                 let text = e.text().trim().to_string();
-                if let Some(b) = weak.upgrade() {
-                    if text != original {
-                        b.set_selected(set(&[("name", if text.is_empty() { Value::Null } else { json!(text) })]));
-                    }
+                if let Some(b) = weak.upgrade().filter(|_| *s.borrow() != text) {
+                    *s.borrow_mut() = text.clone();
+                    b.set_selected(set(&[("name", if text.is_empty() { Value::Null } else { json!(text) })]));
                 }
             });
+            let r = rename.clone();
+            name.connect_activate(move |e| r(e));
+            let focus = gtk::EventControllerFocus::new();
+            let (r, e) = (rename.clone(), name.downgrade());
+            focus.connect_leave(move |_| {
+                if let Some(e) = e.upgrade() {
+                    r(&e);
+                }
+            });
+            name.add_controller(focus);
+            let keys = gtk::EventControllerKey::new();
+            let (s, e) = (shown.clone(), name.downgrade());
+            keys.connect_key_pressed(move |_, key, _, _| {
+                if let (gtk::gdk::Key::Escape, Some(e)) = (key, e.upgrade()) {
+                    e.set_text(&s.borrow());
+                }
+                glib::Propagation::Proceed
+            });
+            name.add_controller(keys);
             head.append(&name);
         } else {
             let l = label(&format!("{} layers", nodes.len()), "design-inspector-title");
@@ -387,12 +407,12 @@ impl Board {
             let weak = Rc::downgrade(&b);
             let weak2 = Rc::downgrade(&b);
             sec.append(&pair(
-                number("@line-height", same(nodes.iter().map(|n| bits(n.line_height.unwrap_or(1.3)))).map(f64::from_bits), "Line height, times the size", move |v| {
+                number_step("@line-height", same(nodes.iter().map(|n| bits(n.line_height.unwrap_or(1.3)))).map(f64::from_bits), 0.1, "Line height, times the size", move |v| {
                     if let Some(b) = weak.upgrade() {
                         b.set_selected(set(&[("line_height", json!(v.clamp(0.5, 4.0)))]));
                     }
                 }),
-                number("@letter-spacing", same(nodes.iter().map(|n| bits(n.letter_spacing.unwrap_or(0.0)))).map(f64::from_bits), "Letter spacing, px", move |v| {
+                number_step("@letter-spacing", same(nodes.iter().map(|n| bits(n.letter_spacing.unwrap_or(0.0)))).map(f64::from_bits), 0.1, "Letter spacing, px", move |v| {
                     if let Some(b) = weak2.upgrade() {
                         b.set_selected(set(&[("letter_spacing", if v == 0.0 { Value::Null } else { json!(v) })]));
                     }

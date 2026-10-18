@@ -58,7 +58,8 @@ the project's terminals draw and revise designs alongside you.
   corners (one radius or each its own), picture fit, drop or inner shadow, opacity, blend mode
   (multiply, screen, overlay and the rest), layer blur, text case, and export as PNG (1× or 2×),
   SVG or PDF. Number
-  fields take arithmetic (`120+16`), step with ↑/↓ (Shift: 10) and scrub by dragging their caption.
+  fields take arithmetic (`120+16`) and units (`45°`), step with ↑/↓ (Shift: ten steps; a line height
+  steps by 0.1), scrub by dragging their caption (Shift: finer), and Esc puts back what they showed.
 - **Pages and layers** (Alt+1): pages to add, rename, duplicate and delete, and the layer tree, top
   layer first, opened along the way to the selection, with hide and lock on each row.
 - **Text** is typed in place: double-click (or Enter, or the Text tool, or double-click on empty

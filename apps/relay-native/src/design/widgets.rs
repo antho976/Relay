@@ -8,6 +8,7 @@ use gtk::prelude::*;
 use gtk::gdk;
 use gtk4 as gtk;
 use relay_bus::design::parse_color;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -140,8 +141,24 @@ pub fn color_key(
 }
 
 /// A number field: type and press Enter, step with Up/Down (Shift: 10), or drag the caption
-/// sideways to scrub. `None` shows an empty field (mixed values). A caption `@name` is a glyph.
+/// sideways to scrub (Shift: finer). Esc puts back what it showed. `None` shows an empty field
+/// (mixed values). A caption `@name` is a glyph.
 pub fn number(caption: &str, value: Option<f64>, tooltip: &str, commit: impl Fn(f64) + 'static) -> gtk::Box {
+    number_step(caption, value, 1.0, tooltip, commit)
+}
+
+/// What a field shows for the value it last sent.
+fn shown(last: &Cell<Option<f64>>) -> String {
+    last.get().map(super::board::fmt).unwrap_or_default()
+}
+
+/// A value without the float noise of adding tenths (1.3 + 0.1 is not 1.4000000000000001).
+fn tidy(v: f64) -> f64 {
+    (v * 1e6).round() / 1e6
+}
+
+/// `number`, stepping by `step`: a line height's 0.1, not a whole 1.
+pub fn number_step(caption: &str, value: Option<f64>, step: f64, tooltip: &str, commit: impl Fn(f64) + 'static) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     row.add_css_class("design-number");
     row.set_tooltip_text(Some(tooltip));
@@ -163,7 +180,7 @@ pub fn number(caption: &str, value: Option<f64>, tooltip: &str, commit: impl Fn(
     row.append(&entry);
     // The value last sent (or shown): leaving the field sends only what was typed since,
     // not the field's rounded text of a value it never changed.
-    let last = Rc::new(std::cell::Cell::new(value));
+    let last = Rc::new(Cell::new(value));
     let commit: Rc<dyn Fn(f64)> = {
         let last = last.clone();
         Rc::new(move |v: f64| {
@@ -171,12 +188,35 @@ pub fn number(caption: &str, value: Option<f64>, tooltip: &str, commit: impl Fn(
             commit(v);
         })
     };
+    // What does not come to a number is marked until it is changed.
+    let r = row.downgrade();
+    entry.connect_changed(move |_| {
+        if let Some(r) = r.upgrade() {
+            r.remove_css_class("error");
+        }
+    });
     let c = commit.clone();
     let l = last.clone();
+    let r = row.downgrade();
     entry.connect_activate(move |e| {
-        let shown = l.get().map(super::board::fmt).unwrap_or_default();
-        if let Some(v) = eval(&e.text()).filter(|v| e.text() != shown && Some(*v) != l.get()) {
-            c(v);
+        let text = e.text();
+        if text == shown(&l) {
+            return;
+        }
+        match eval(&text) {
+            Some(v) => {
+                if Some(v) != l.get() {
+                    c(v);
+                }
+                // What it came to, not "120+16".
+                e.set_text(&super::board::fmt(v));
+            }
+            None if text.trim().is_empty() => e.set_text(&shown(&l)),
+            None => {
+                if let Some(r) = r.upgrade() {
+                    r.add_css_class("error");
+                }
+            }
         }
     });
     let keys = gtk::EventControllerKey::new();
@@ -184,20 +224,26 @@ pub fn number(caption: &str, value: Option<f64>, tooltip: &str, commit: impl Fn(
     let e = entry.downgrade();
     let l = last.clone();
     keys.connect_key_pressed(move |_, key, _, mods| {
-        let step = if mods.contains(gdk::ModifierType::SHIFT_MASK) { 10.0 } else { 1.0 };
+        let Some(e) = e.upgrade() else {
+            return glib::Propagation::Proceed;
+        };
         let dir = match key {
             gdk::Key::Up => 1.0,
             gdk::Key::Down => -1.0,
+            // Back to what it showed, so leaving sends nothing; the panel's own Esc then hands
+            // the keyboard back to the canvas.
+            gdk::Key::Escape => {
+                e.set_text(&shown(&l));
+                return glib::Propagation::Proceed;
+            }
             _ => return glib::Propagation::Proceed,
-        };
-        let Some(e) = e.upgrade() else {
-            return glib::Propagation::Proceed;
         };
         // Mixed values have no one value to step from.
         let Some(from) = eval(&e.text()).or(l.get()) else {
             return glib::Propagation::Stop;
         };
-        let v = from + dir * step;
+        let by = if mods.contains(gdk::ModifierType::SHIFT_MASK) { step * 10.0 } else { step };
+        let v = tidy(from + dir * by);
         e.set_text(&super::board::fmt(v));
         c(v);
         glib::Propagation::Stop
@@ -209,17 +255,24 @@ pub fn number(caption: &str, value: Option<f64>, tooltip: &str, commit: impl Fn(
     let l = last.clone();
     focus.connect_leave(move |_| {
         if let Some(e) = e.upgrade() {
-            let shown = l.get().map(super::board::fmt).unwrap_or_default();
+            let shown = shown(&l);
             if e.text() != shown {
-                if let Some(v) = eval(&e.text()).filter(|v| Some(*v) != l.get()) {
-                    c(v);
+                match eval(&e.text()) {
+                    Some(v) => {
+                        if Some(v) != l.get() {
+                            c(v);
+                        }
+                        e.set_text(&super::board::fmt(v));
+                    }
+                    // Not a number: nothing is sent, and the field shows its value again.
+                    None => e.set_text(&shown),
                 }
             }
         }
     });
     entry.add_controller(focus);
     let scrub = gtk::GestureDrag::new();
-    let start = Rc::new(std::cell::Cell::new(None::<f64>));
+    let start = Rc::new(Cell::new(None::<f64>));
     let s = start.clone();
     let e = entry.downgrade();
     scrub.connect_drag_begin(move |_, _, _| {
@@ -234,7 +287,9 @@ pub fn number(caption: &str, value: Option<f64>, tooltip: &str, commit: impl Fn(
         let Some(from) = s.get() else {
             return;
         };
-        let v = (from + (dx * if fine { 0.1 } else { 1.0 })).round();
+        // A step a pixel, on the field's steps; with Shift a tenth of one, on tenths.
+        let q = if fine { step / 10.0 } else { step };
+        let v = tidy(((from + dx * q) / q).round() * q);
         if let Some(e) = e.upgrade() {
             e.set_text(&super::board::fmt(v));
         }
@@ -252,9 +307,10 @@ pub fn number(caption: &str, value: Option<f64>, tooltip: &str, commit: impl Fn(
     row
 }
 
-/// A number, or simple arithmetic on one (`120+16`, `200/2`), as design tools accept.
+/// A number, or simple arithmetic on one (`120+16`, `200/2`), as design tools accept; a unit
+/// typed after it (`24px`, `50%`, `45°`) is let be.
 pub fn eval(text: &str) -> Option<f64> {
-    let t = text.trim().trim_end_matches("px").trim_end_matches('%').trim();
+    let t = text.trim().trim_end_matches("px").trim_end_matches('%').trim_end_matches('°').trim();
     if let Ok(v) = t.parse::<f64>() {
         return v.is_finite().then_some(v);
     }
@@ -312,6 +368,7 @@ mod tests {
         assert_eq!(eval("-8"), Some(-8.0));
         assert_eq!(eval("10-4"), Some(6.0));
         assert_eq!(eval("24px"), Some(24.0));
+        assert_eq!(eval("45°"), Some(45.0));
         assert_eq!(eval("1/0"), None);
         assert_eq!(eval("abc"), None);
     }

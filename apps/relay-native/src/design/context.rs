@@ -313,7 +313,7 @@ impl Board {
         bar.append(&more);
 
         super::board::keep_canvas_focus(bar.upcast_ref());
-        b.release_on_press(&bar);
+        b.hand_back(&bar);
         self.overlay.add_overlay(&bar);
         *self.context.borrow_mut() = Some(bar.upcast());
         // Built with its words and measured as such on the next layout; a rebuild of a compact

@@ -547,7 +547,7 @@ impl Board {
             b.child_position(widget)
         });
 
-        board.release_on_press(&board.inspector_scroll);
+        board.hand_back(&board.inspector_scroll);
         board.build_dock(&dock);
         board.build_zoom_menu(&zoom_menu);
         board.install_actions();
@@ -1509,10 +1509,22 @@ impl Board {
         }
     }
 
-    /// A press in `panel` that is not in one of its fields takes the keyboard from a field
-    /// there, so the panel shows what the key pressed does (it is not rebuilt while a field
-    /// has the keyboard, and its keys take none).
-    pub(super) fn release_on_press(self: &Rc<Self>, panel: &impl IsA<gtk::Widget>) {
+    /// The keyboard goes back from `panel` to the canvas on Esc (a field has put back what it
+    /// showed by then), and on a press that is not in one of its fields, so the panel shows
+    /// what the key pressed does (it is not rebuilt while a field has the keyboard, and its
+    /// keys take none).
+    pub(super) fn hand_back(self: &Rc<Self>, panel: &impl IsA<gtk::Widget>) {
+        let keys = gtk::EventControllerKey::new();
+        let weak = Rc::downgrade(self);
+        keys.connect_key_pressed(move |_, key, _, _| {
+            let Some(b) = weak.upgrade().filter(|_| key == gdk::Key::Escape) else {
+                return glib::Propagation::Proceed;
+            };
+            b.canvas.grab_focus();
+            b.schedule_chrome();
+            glib::Propagation::Stop
+        });
+        panel.as_ref().add_controller(keys);
         let press = gtk::GestureClick::new();
         press.set_propagation_phase(gtk::PropagationPhase::Capture);
         let weak = Rc::downgrade(self);
