@@ -36,8 +36,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -45,6 +47,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
@@ -132,7 +135,63 @@ private val SUGGESTIONS = listOf(
 /** How often a streaming reply redraws: about 30 a second. */
 private const val FRAME = 33L
 
+/** A stop this soon after a message is the same tap again, landing on the key it turned into (the agent chat's). */
+private const val STOP_AFTER_SEND_MS = 1_000L
+
+/** The key [Drafts] keeps a new thread's words under. */
+private const val NEW = "new"
+
 private fun gutter(width: Dp) = if (width < 600.dp) 16.dp else 24.dp
+
+/**
+ * Each thread's unsent words while the app runs, by thread id, a new thread's under [NEW]
+ * (threads_view.rs `drafts`): Back, a new thread or another thread keep them for when that one
+ * shows again. Sending empties them; deleting the thread drops them.
+ */
+private object Drafts {
+    private val held = HashMap<String, String>()
+
+    operator fun get(id: String): String = held[id].orEmpty()
+
+    operator fun set(id: String, text: String) {
+        if (text.isBlank()) held.remove(id) else held[id] = text
+    }
+
+    /** The words of [to], taking those written under [from] first: a thread made here has the PC's id now. */
+    fun follow(from: String, to: String): String {
+        if (from != to) held.remove(from)?.let { if (to !in held) held[to] = it }
+        return get(to)
+    }
+}
+
+/**
+ * Why a thread cannot answer, from `provider.list` (threads_view.rs `check_claude`), and whether
+ * it keeps the message from going: without Claude Code nothing answers; a signed-out reading is
+ * only as fresh as the last refresh on the PC, so it warns and still lets the person try. Null
+ * when Claude Code is ready, or the list was never read.
+ */
+private fun claudeNote(providers: JsonElement?): Pair<String, Boolean>? {
+    val list = (providers as? JsonObject)?.arr("providers") ?: return null
+    val claude = list.firstOrNull { (it as? JsonObject)?.s("provider") == "claude" } as? JsonObject
+    return when {
+        claude == null || claude.b("installed") != true -> "Threads need Claude Code on this PC. Install it, then refresh it in Settings." to true
+        claude.s("version") != null && claude.s("signed_in_as") == null -> "Claude Code is not signed in on this PC. Sign in, then refresh it in Settings." to false
+        else -> null
+    }
+}
+
+/**
+ * A quiet note by the message box. The dot sits beside the words, read left to right: centred
+ * over two lines, it was left alone at the edge.
+ */
+@Composable
+private fun NoteRow(text: String, modifier: Modifier) {
+    val c = Relay.colors
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+        Dot(c.waiting, 6.dp, Modifier.padding(top = 6.dp))
+        T(text, Modifier.weight(1f), style = Relay.type.caption, color = c.ink3)
+    }
+}
 
 // ---- A new thread ----
 
@@ -152,7 +211,12 @@ private fun NewThread(nav: Nav) {
     val s by nav.shell.state.collectAsStateWithLifecycle()
     val summary by remember { nav.relay.live("money.summary") }.collectAsStateWithLifecycle(RelayData.Live())
     val invest by remember { nav.relay.live("money.invest.summary") }.collectAsStateWithLifecycle(RelayData.Live())
-    var draft by rememberSaveable { mutableStateOf("") }
+    val providers by remember { nav.relay.live("provider.list") }.collectAsStateWithLifecycle(RelayData.Live())
+    val claude = remember(providers.result) { claudeNote(providers.result) }
+    val blocked = claude?.second == true
+    // What was written here waits for the next new thread, after Back or another thread too.
+    var draft by rememberSaveable { mutableStateOf(Drafts[NEW]) }
+    SideEffect { Drafts[NEW] = draft }
     // A new thread starts with the last choice: the newest thread's model and effort.
     val last = s.threads.firstOrNull()
     var model by rememberSaveable { mutableStateOf<String?>(null) }
@@ -165,13 +229,14 @@ private fun NewThread(nav: Nav) {
 
     fun start(text: String) {
         val t = text.trim()
-        if (t.isEmpty()) return
+        if (t.isEmpty() || blocked) return
         val payload = buildJsonObject {
             put("text", t)
             if (m.isNotEmpty()) put("model", m)
             if (e.isNotEmpty()) put("effort", e)
         }
-        draft = ""
+        // A starter question leaves what was typed in the box: only the words sent go.
+        if (t == draft.trim()) draft = ""
         nav.shell.change("thread.create", payload, "New thread") { change ->
             when (change) {
                 is Hub.Change.Queued -> nav.thread(Optimistic.tempId(change.entry.id))
@@ -210,18 +275,15 @@ private fun NewThread(nav: Nav) {
                     working = false,
                     onSend = { start(draft) },
                     onStop = {},
+                    canSend = !blocked,
                 )
-                // The dot beside the words, read left to right: centred over two lines, the dot
-                // was left alone at the edge.
-                if (!s.online) Row(Modifier.fillMaxWidth().padding(top = 12.dp, start = 4.dp, end = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
-                    Dot(c.waiting, 6.dp, Modifier.padding(top = 6.dp))
-                    T("The PC is out of reach. A new thread waits on this phone and starts when it is back.", Modifier.weight(1f), style = Relay.type.caption, color = c.ink3)
-                }
+                if (!s.online) NoteRow("The PC is out of reach. A new thread waits on this phone and starts when it is back.", Modifier.padding(top = 12.dp, start = 4.dp, end = 4.dp))
+                claude?.let { (why, _) -> NoteRow(why, Modifier.padding(top = 12.dp, start = 4.dp, end = 4.dp)) }
                 Box(Modifier.height(20.dp))
                 val perRow = if (one) 1 else 2
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     for (chunk in asks.chunked(perRow)) Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        for ((ask, about) in chunk) Starter(ask, about, Modifier.weight(1f).fillMaxHeight()) { start(ask) }
+                        for ((ask, about) in chunk) Starter(ask, about, Modifier.weight(1f).fillMaxHeight(), enabled = !blocked) { start(ask) }
                         if (chunk.size < perRow) Box(Modifier.weight(1f))
                     }
                 }
@@ -231,10 +293,10 @@ private fun NewThread(nav: Nav) {
 }
 
 @Composable
-private fun Starter(ask: String, about: String, modifier: Modifier, onClick: () -> Unit) {
+private fun Starter(ask: String, about: String, modifier: Modifier, enabled: Boolean, onClick: () -> Unit) {
     val c = Relay.colors
     Column(
-        modifier.clip(Radii.card).background(c.slab).border(1.dp, c.edge, Radii.card).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp),
+        modifier.alpha(if (enabled) 1f else .4f).clip(Radii.card).background(c.slab).border(1.dp, c.edge, Radii.card).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         T(ask, style = Relay.type.ui, color = c.ink, weight = FontWeight.Medium)
@@ -655,7 +717,15 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     val doingText = if (thread?.live == true || hasStream) "Working…" else "Starting Claude…"
     val showWorking = working && !running
 
-    var draft by rememberSaveable(opened) { mutableStateOf("") }
+    val providers by remember { nav.relay.live("provider.list") }.collectAsStateWithLifecycle(RelayData.Live())
+    val claude = remember(providers.result) { claudeNote(providers.result) }
+    val blocked = claude?.second == true
+
+    // What is written here outlives the screen, and follows a thread made on this phone to its PC id.
+    var draft by rememberSaveable(tid) { mutableStateOf(Drafts.follow(opened, tid)) }
+    SideEffect { Drafts[tid] = draft }
+    // When the last message went: the send key turns to Stop under the finger that sent it.
+    var sentAt by remember { mutableLongStateOf(0L) }
     val focus = remember { FocusRequester() }
     // The one message of the person's showing its keys, if any.
     var keysOn by remember(tid) { mutableStateOf<String?>(null) }
@@ -675,8 +745,9 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     fun send() {
         val text = draft.trim()
         val t = target ?: return
-        if (text.isEmpty() || working) return
+        if (text.isEmpty() || working || blocked) return
         nav.shell.change("thread.send", buildJsonObject { put("id", t); put("text", text) }, "Message")
+        sentAt = SystemClock.uptimeMillis()
         draft = ""
         stopped = null
         follow = true
@@ -686,6 +757,10 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
         val t = target ?: return
         if (working) {
             nav.shell.toast("Claude is still answering: stop it first, or wait")
+            return
+        }
+        if (blocked) {
+            nav.shell.toast(claude?.first.orEmpty())
             return
         }
         keysOn = null
@@ -705,6 +780,8 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     )
     fun stop() {
         val n = num ?: return
+        // A second tap on Send just after a message is that tap again, not a stop.
+        if (SystemClock.uptimeMillis() - sentAt < STOP_AFTER_SEND_MS) return
         stopping = true
         nav.shell.act("thread.stop", buildJsonObject { put("id", n) })
     }
@@ -821,22 +898,25 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
         }
         BoxWithConstraints(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(top = 4.dp, bottom = 8.dp), contentAlignment = Alignment.TopCenter) {
             val dictate = com.quietsoftware.relay.ui.dev.rememberDictation { said -> draft = com.quietsoftware.relay.ui.dev.joinSaid(draft, said) }
-            Composer(
-                value = draft,
-                onValue = { draft = it },
-                onDictate = dictate,
-                model = thread?.model.orEmpty(),
-                effort = thread?.effort.orEmpty(),
-                onModel = { choose(it, null) },
-                onEffort = { choose(null, it) },
-                working = working,
-                onSend = ::send,
-                onStop = ::stop,
-                modifier = Modifier.column().fillMaxWidth().padding(horizontal = gutter(maxWidth)),
-                canSend = target != null && !createFailed,
-                canPick = !working && target != null,
-                focus = focus,
-            )
+            Column(Modifier.column().fillMaxWidth().padding(horizontal = gutter(maxWidth))) {
+                claude?.let { (why, _) -> NoteRow(why, Modifier.padding(start = 4.dp, end = 4.dp, bottom = 8.dp)) }
+                Composer(
+                    value = draft,
+                    onValue = { draft = it },
+                    onDictate = dictate,
+                    model = thread?.model.orEmpty(),
+                    effort = thread?.effort.orEmpty(),
+                    onModel = { choose(it, null) },
+                    onEffort = { choose(null, it) },
+                    working = working,
+                    onSend = ::send,
+                    onStop = ::stop,
+                    canSend = target != null && !createFailed && !blocked,
+                    canPick = !working && target != null,
+                    focus = focus,
+                    hint = "Ask about your money, or tell it what to change",
+                )
+            }
         }
     }
 
@@ -849,6 +929,9 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
         action = "Delete",
         onDismiss = { deleting = false },
     ) {
+        // Its unsent words go with it.
+        draft = ""
+        Drafts[tid] = ""
         if (temp && entryId != null) {
             val drop = s.outbox.filter { it.id == entryId || entryId in Refs.of(it.payload) }.map(OutboxEntry::id)
             scope.launch { drop.forEach { nav.relay.discard(it) } }

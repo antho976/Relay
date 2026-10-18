@@ -38,6 +38,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.quietsoftware.relay.ui.LocalNav
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.T
@@ -65,12 +66,18 @@ internal val EFFORTS = listOf(
 
 private fun modelChip(id: String) = if (id.isEmpty()) "Default" else MODELS.firstOrNull { it.first == id }?.second ?: id.removePrefix("claude-")
 
-private fun effortChip(id: String) = if (id.isEmpty()) "Effort" else EFFORTS.firstOrNull { it.first == id }?.second?.removeSuffix(" effort") ?: id
+private fun effortName(id: String) = if (id.isEmpty()) "Default" else EFFORTS.firstOrNull { it.first == id }?.second?.removeSuffix(" effort") ?: id
+
+private fun effortChip(id: String) = if (id.isEmpty()) "Effort" else effortName(id)
+
+/** What the model and effort chips say while a reply is written (threads_view.rs `WAITS`). */
+private const val WAITS = "Waits for this reply to finish"
 
 /**
  * The message box (threads.css `.threads-composer`): raised, a strong edge that lights when
  * focused, the text growing to about six lines, and under it the model and effort chips, what
- * the agent may do, and the send key, which stops the reply while the agent works.
+ * the agent may do, and the send key, which stops the reply while the agent works. [hint] is the
+ * placeholder: an open question on a new thread, what the thread is about in an open one.
  */
 @Composable
 internal fun Composer(
@@ -88,6 +95,7 @@ internal fun Composer(
     canPick: Boolean = true,
     onDictate: (() -> Unit)? = null,
     focus: FocusRequester? = null,
+    hint: String = "What do you want to know?",
 ) {
     val c = Relay.colors
     val source = remember { MutableInteractionSource() }
@@ -118,19 +126,21 @@ internal fun Composer(
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     decorationBox = { inner ->
                         Box {
-                            if (value.isEmpty()) T("What do you want to know?", style = Relay.type.body, color = c.ink3, maxLines = 1)
+                            if (value.isEmpty()) T(hint, style = Relay.type.body, color = c.ink3, maxLines = 1)
                             inner()
                         }
                     },
                 )
                 Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Picker("claude", modelChip(model), MODELS, model, onModel, canPick)
-                    Picker("sliders", effortChip(effort), EFFORTS, effort, onEffort, canPick)
+                    // `thread.set` closes a running agent: a choice waits for the reply to end, and says so.
+                    Picker("claude", modelChip(model), "Model: ${modelChip(model)}", MODELS, model, onModel, canPick, waits = working)
+                    Picker("sliders", effortChip(effort), "Effort: ${effortName(effort)}", EFFORTS, effort, onEffort, canPick, waits = working)
                     if (wide) T("Edits with Undo", Modifier.padding(start = 4.dp), Relay.type.caption, c.ink3, maxLines = 1)
                     Box(Modifier.weight(1f))
                     if (onDictate != null && !working) {
                         Box(
-                            Modifier.size(TOUCH).clip(Radii.key).clickable(onClickLabel = "Dictate", role = Role.Button, onClick = onDictate),
+                            Modifier.size(TOUCH).clip(Radii.key).clickable(onClickLabel = "Dictate", role = Role.Button, onClick = onDictate)
+                                .semantics { contentDescription = "Dictate a message" },
                             contentAlignment = Alignment.Center,
                         ) { com.quietsoftware.relay.ui.dev.MicGlyph(18.dp, c.ink3) }
                     }
@@ -142,13 +152,18 @@ internal fun Composer(
     }
 }
 
-/** A chip that opens its list of choices above it. */
+/**
+ * A chip that opens its list of choices above it; [spoken] names it and its choice for a screen
+ * reader. Off while it [waits] for a reply, a tap says so instead of nothing.
+ */
 @Composable
-private fun Picker(glyph: String, caption: String, options: List<Pair<String, String>>, selected: String, onPick: (String) -> Unit, enabled: Boolean) {
+private fun Picker(glyph: String, caption: String, spoken: String, options: List<Pair<String, String>>, selected: String, onPick: (String) -> Unit, enabled: Boolean, waits: Boolean) {
     val c = Relay.colors
+    val nav = LocalNav.current
     var open by remember { mutableStateOf(false) }
     Box(
-        Modifier.heightIn(min = TOUCH).clickable(enabled = enabled, role = Role.Button) { open = true },
+        Modifier.heightIn(min = TOUCH).clickable(enabled = enabled || waits, role = Role.Button) { if (enabled) open = true else nav.shell.toast(WAITS) }
+            .semantics { contentDescription = spoken },
         contentAlignment = Alignment.Center,
     ) {
         Row(
