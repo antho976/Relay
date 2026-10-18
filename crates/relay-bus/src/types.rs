@@ -239,6 +239,12 @@ pub struct GuardrailConfig {
     /// agent's request that builds is held for confirmation; a merge-only request is not.
     #[serde(default)]
     pub agent_builds: bool,
+    /// Whether an agent's `git push` first runs the project's check — its `build_cmd`, else
+    /// the test command of the build tool at the checkout's root — and is refused when the
+    /// check fails. On by default. A person's own push never runs it, so pushing a branch does
+    /// not execute what that branch's code does.
+    #[serde(default = "default_true")]
+    pub check_on_push: bool,
 }
 
 impl GuardrailConfig {

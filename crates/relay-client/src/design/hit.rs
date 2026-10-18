@@ -64,7 +64,7 @@ fn descend(scene: &Scene, placed: &Placed, parent: &str, x: f64, y: f64, slop: f
         let turn = shapes::rotation(n);
         let (x, y) = if turn != 0.0 { shapes::rotate(x, y, rect.cx(), rect.cy(), -turn) } else { (x, y) };
         let clips = n.kind == NodeKind::Frame && n.clip != Some(false);
-        if n.kind.holds_children() && !(clips && !rect.contains(x, y)) {
+        if n.kind.holds_children() && (!clips || rect.contains(x, y)) {
             out.push(id.clone());
             if descend(scene, placed, id, x, y, slop, out) {
                 if n.is_locked() {

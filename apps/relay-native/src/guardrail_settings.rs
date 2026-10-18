@@ -70,6 +70,9 @@ const GROUPS: &[(&str, &[Spec])] = &[
         Spec { path: "denied_commands", title: "Denied commands", hint: "Commands agents may not run, matched word by word. One per line.", kind: Kind::List },
         Spec { path: "allowed_write_roots", title: "Extra write roots", hint: "Absolute directories outside the worktree agents may write to. One per line.", kind: Kind::List },
     ]),
+    ("Pushes", &[
+        Spec { path: "check_on_push", title: "Check an agent's push", hint: "Runs the project's build command, or its detected tests, first. A failing check refuses the push.", kind: Kind::Toggle },
+    ]),
 ];
 
 fn at<'a>(value: &'a Value, path: &str) -> &'a Value {
