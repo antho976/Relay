@@ -608,6 +608,9 @@ pub(super) fn flow_bar(counts: &[(&'static str, usize)], height: i32) -> gtk::Dr
 }
 
 /// A number with its caption over it and a quiet line under it, as the stats band shows them.
+/// Narrower than this, the board shows its progress alone, without the five stat tiles.
+const STATS_NARROW: i32 = 980;
+
 pub(super) fn stat_tile(caption: &str, value: &str, note: &str, class: &str) -> gtk::Box {
     let tile = gtk::Box::new(gtk::Orientation::Vertical, 3);
     tile.add_css_class("stat-tile");
@@ -970,6 +973,11 @@ impl Board {
         let stats = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         stats.add_css_class("board-stats");
         stats.set_visible(false);
+        // As wide as the page and no taller: its resize says when the page crosses STATS_NARROW.
+        let width_probe = gtk::DrawingArea::new();
+        width_probe.set_hexpand(true);
+        width_probe.set_content_height(0);
+        page.append(&width_probe);
         page.append(&stats);
 
         // Active filters and the grouping, as removable chips; hidden while there are none.
@@ -1095,6 +1103,23 @@ impl Board {
             bodies_loading: Cell::new(false),
             bodies_missed: RefCell::new(BTreeSet::new()),
             peek_loading: Cell::new(None),
+        });
+
+        // The stat tiles are drawn for the page's width: the first render runs before the page
+        // has one, and drew five tiles a 1024px window squeezed to "I…". Crossing the line
+        // draws them again.
+        let weak = Rc::downgrade(&board);
+        let narrow = Cell::new(None);
+        width_probe.connect_resize(move |_, w, _| {
+            let now = w < STATS_NARROW;
+            if narrow.replace(Some(now)) != Some(now) {
+                let weak = weak.clone();
+                glib::idle_add_local_once(move || {
+                    if let Some(board) = weak.upgrade() {
+                        board.render();
+                    }
+                });
+            }
         });
 
         for (field, values) in [
@@ -2335,7 +2360,7 @@ impl Board {
             .filter(|t| text(t, "column") == "done" && within_days(text(t, "updated_at"), 7))
             .count();
         // Narrow, the lanes need the height more than the numbers: the progress card stays.
-        let narrow = (1..980).contains(&self.page.width());
+        let narrow = (1..STATS_NARROW).contains(&self.page.width());
         let key = format!("{counts:?} {left} {urgent} {running} {blocked} {shipped} {narrow} {:?}", scope().is_some());
         if !self.redraw("stats", key) {
             return;
