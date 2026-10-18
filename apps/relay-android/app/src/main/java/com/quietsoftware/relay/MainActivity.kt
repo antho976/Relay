@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.quietsoftware.relay.ui.AppNav
 import com.quietsoftware.relay.ui.LocalNav
@@ -55,11 +56,15 @@ class MainActivity : ComponentActivity() {
             val controller = rememberNavController()
             val nav = remember(controller, shell) { Nav(controller, shell) }
             val start = remember { if (s.pc == null) "pair" else "start" }
+            val entry by controller.currentBackStackEntryAsState()
+            // The inbox and Guardrails list the holds themselves; the tray over them would repeat one.
+            val route = entry?.destination?.route
+            val tray = route != "inbox" && route?.startsWith("guardrails") != true
             RelayTheme(Palette.of(s.prefs.palette)) {
                 CompositionLocalProvider(LocalNav provides nav) {
                     Box(Modifier.fillMaxSize().background(Palette.of(s.prefs.palette).wall).imePadding()) {
                         AppNav(nav, start)
-                        HoldTray(shell, onOpen = { nav.inbox() })
+                        HoldTray(shell, show = tray, onOpen = { nav.inbox() })
                         ToastHost(shell)
                     }
                 }

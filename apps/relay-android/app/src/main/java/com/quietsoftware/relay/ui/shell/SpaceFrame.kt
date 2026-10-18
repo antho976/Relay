@@ -1,5 +1,6 @@
 package com.quietsoftware.relay.ui.shell
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -82,6 +83,8 @@ fun SpaceFrame(nav: Nav, content: @Composable () -> Unit) {
             StatusBar(s, onLink = { nav.pc() }, onOutbox = { nav.outbox() })
         }
     }
+    // Back closes an open sidebar first. Set after the page's own handlers, it is asked before them.
+    BackHandler(enabled = drawer.isOpen) { close() }
 }
 
 /** The space a page belongs to; null for a page both share (the inbox, search, settings). */

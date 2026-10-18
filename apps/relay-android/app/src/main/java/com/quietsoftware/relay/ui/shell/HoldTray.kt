@@ -57,15 +57,16 @@ import kotlinx.serialization.json.put
  * The guardrail prompt (guardrails.css), the one floating surface: an agent held by a guardrail
  * waits on the person, wherever they are in the app. The exact held request is read first
  * (`guardrail.hold.get`); Allow once wakes only after it is shown, and half a second later, so a
- * tap meant for something else cannot approve it.
+ * tap meant for something else cannot approve it. Over a page that lists the holds itself, [show]
+ * is false and the tray stays out of the way.
  */
 @Composable
-fun BoxScope.HoldTray(model: ShellModel, onOpen: () -> Unit) {
+fun BoxScope.HoldTray(model: ShellModel, show: Boolean = true, onOpen: () -> Unit) {
     val s by model.state.collectAsStateWithLifecycle()
     var dismissed by remember { mutableStateOf(setOf<Long>()) }
     val shown = s.holds.filter { it.id !in dismissed }
     AnimatedVisibility(
-        visible = shown.isNotEmpty() && s.online,
+        visible = show && shown.isNotEmpty() && s.online,
         modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(start = 12.dp, end = 12.dp, bottom = 44.dp),
         enter = fadeIn(tween(260)) + slideInVertically(tween(260)) { it / 3 },
         exit = fadeOut(tween(180)),

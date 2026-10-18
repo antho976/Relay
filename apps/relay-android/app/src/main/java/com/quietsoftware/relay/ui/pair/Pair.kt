@@ -309,7 +309,7 @@ fun PcScreen(nav: Nav) {
                                     scope.launch {
                                         LinkService.stop(context)
                                         nav.relay.forget()
-                                        nav.pair()
+                                        nav.pair(top = true)
                                     }
                                 }, kind = KeyKind.Danger)
                                 Key("Keep", { confirmForget = false }, kind = KeyKind.Quiet)

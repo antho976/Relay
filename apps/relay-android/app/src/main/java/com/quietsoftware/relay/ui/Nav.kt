@@ -15,10 +15,24 @@ import com.quietsoftware.relay.ui.shell.SidebarNav
 class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav {
     val relay: Relay get() = shell.relay
 
+    /** Set while [instead] runs: the page opened takes the place of the one showing. */
+    private var replacing = false
+
     private fun go(route: String, top: Boolean = false) {
+        val here = if (replacing) controller.currentBackStackEntry?.destination?.id else null
         controller.navigate(route) {
             launchSingleTop = true
-            if (top) popUpTo(0) { inclusive = true }
+            if (top) popUpTo(0) { inclusive = true } else if (here != null) popUpTo(here) { inclusive = true }
+        }
+    }
+
+    /** Opens what [page] opens in place of this page, so back does not come to it again (Share). */
+    fun instead(page: Nav.() -> Unit) {
+        replacing = true
+        try {
+            page()
+        } finally {
+            replacing = false
         }
     }
 
@@ -75,7 +89,8 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
     override fun addProject() = go("add-project")
     fun pcTools() = go("pc-tools")
     fun share(text: String) = go("share" + q("text" to text))
-    fun pair(link: String? = null) = go("pair" + q("link" to link))
+    /** Pairing; [top] clears what was behind it, as forgetting the PC does. */
+    fun pair(link: String? = null, top: Boolean = false) = go("pair" + q("link" to link), top)
 
     override fun board() = board(shell.state.value.project?.num)
     override fun notes() = notes(shell.state.value.project?.num)
