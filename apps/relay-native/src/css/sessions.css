@@ -73,7 +73,7 @@ button.notification-open:hover { background: @wash; }
 popover.agent-settings > contents { background: @slab; border: 1px solid @strong; border-radius: 2px; padding: 0; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45); }
 popover.agent-settings > arrow { background: @slab; border: 1px solid @strong; }
 .agent-menu { padding: 12px 10px 10px 10px; }
-/* Start fresh and Close, pinned under the part that scrolls. */
+/* Clear context and Close, pinned under the part that scrolls. */
 .agent-menu-foot { padding: 4px 10px 6px 10px; border-top: 1px solid @edge; }
 .agent-menu-tools { margin-top: 10px; }
 popover.agent-settings button.agent-menu-tool { background: transparent; border: 1px solid @edge; color: @ink; min-height: 30px; padding: 0 6px; border-radius: 2px; }

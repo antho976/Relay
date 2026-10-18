@@ -285,7 +285,10 @@ impl Ui {
         self.update_attachments();
     }
     pub(super) fn set_mode(self: &Rc<Self>, mode: &str) {
-        *self.mode.borrow_mut() = mode.into();
+        let previous = self.mode.replace(mode.into());
+        if mode == "focus" && previous != "focus" {
+            *self.wall_mode.borrow_mut() = previous;
+        }
         self.layout();
         self.save_layout();
     }
@@ -385,6 +388,9 @@ impl Ui {
             .filter(|s| matches!(*s, "grid" | "focus" | "review" | "mosaic"))
         {
             *self.mode.borrow_mut() = mode.into();
+            if mode != "focus" {
+                *self.wall_mode.borrow_mut() = mode.into();
+            }
         }
         if let Some(n) = state["columns"].as_i64() {
             self.columns.set(n.clamp(1, 3) as i32);
@@ -701,13 +707,15 @@ impl Ui {
         let drop_target = gtk::DropTarget::new(String::static_type(), gtk::gdk::DragAction::MOVE);
         let weak = Rc::downgrade(self);
         let target = pane.name().to_string();
-        drop_target.connect_drop(move |_, v, _, y| {
+        drop_target.connect_drop(move |target_drop, v, _, y| {
             let Ok(name) = v.get::<String>() else {
                 return false;
             };
             let Some(ui) = weak.upgrade() else {
                 return false;
             };
+            // Dropped on the lower half of the pane: after it.
+            let after = target_drop.widget().is_some_and(|w| y > f64::from(w.height()) / 2.0);
             let mut order = ui.ordered.borrow_mut();
             let Some(from) = order.iter().position(|n| *n == name) else {
                 return false;
@@ -719,7 +727,7 @@ impl Ui {
             let Some(to) = order.iter().position(|n| *n == target) else {
                 return false;
             };
-            order.insert(to + usize::from(y > 100.0), name);
+            order.insert(to + usize::from(after), name);
             drop(order);
             ui.layout();
             ui.save_layout();

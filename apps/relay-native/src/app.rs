@@ -319,6 +319,8 @@ pub struct Ui {
     pub(crate) settings_tools: gtk::Box,
     focus_tabs: gtk::Box,
     mode: RefCell<String>,
+    /// The wall's mode before Focus took it, which "Back to the wall" returns to.
+    wall_mode: RefCell<String>,
     pub overlay: gtk::Overlay,
     /// What the start screen quiets while it shows: the title bar's keys and the status bar's
     /// contents. The bars themselves stay, wearing the start screen's ground.
@@ -1146,6 +1148,7 @@ impl Ui {
             settings_tools: top.settings_tools.clone(),
             focus_tabs: wall.focus_tabs,
             mode: RefCell::new("grid".into()),
+            wall_mode: RefCell::new("grid".into()),
             overlay: panel_host,
             start_chrome: [top.left.clone().upcast(), top.switcher.clone().upcast(), top.settings_tools.clone().upcast(), top.actions.clone().upcast()]
                 .into_iter()
