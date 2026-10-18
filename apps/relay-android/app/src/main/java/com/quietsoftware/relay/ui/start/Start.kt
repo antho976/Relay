@@ -68,6 +68,7 @@ import com.quietsoftware.relay.ui.kit.Mark
 import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.RelayMark
 import com.quietsoftware.relay.ui.kit.T
+import com.quietsoftware.relay.ui.kit.plural
 import com.quietsoftware.relay.ui.theme.Fonts
 import com.quietsoftware.relay.ui.theme.Palette
 import com.quietsoftware.relay.ui.theme.Relay as Theme
@@ -173,9 +174,13 @@ fun StartScreen(nav: Nav) {
         }
     }
 
-    val devLine = (dashboard.result as? JsonObject)?.let(::devReading)
-        ?: s.sessions.count { it.state in setOf("running", "idle", "blocked") }.let { if (it == 0) null else "$it agents running" }
-    val moneyLine = (money.result as? JsonObject)?.let(::moneyReading)
+    val dash = dashboard.result as? JsonObject
+    // Until the dashboard is read, from this phone's copy: a blocked agent needs you, it is not running.
+    val running = dash?.arr("sessions_live")?.size ?: s.sessions.count { it.state in setOf("running", "idle", "spawning") }
+    val waiting = dash?.let(::waitingOnYou) ?: s.needsYou
+    val devLine = dash?.let(::devReading) ?: if (running == 0 && waiting == 0) null else agentsLine(running, waiting, 0)
+    val summary = money.result as? JsonObject
+    val moneyLine = summary?.let(::moneyReading)
     val first = s.prefs.name.trim().substringBefore(' ')
     val greeting = greetingFor(LocalTime.now().hour) + if (first.isNotEmpty()) ", $first" else ""
 
@@ -198,7 +203,8 @@ fun StartScreen(nav: Nav) {
                     title = "Dev",
                     description = "Agents, tasks and code across your projects",
                     line = devLine ?: if (s.online) "No agents running" else offlineLine(s.lastSeen),
-                    live = s.online && devLine != null,
+                    live = s.online && running > 0,
+                    attention = s.online && waiting > 0,
                     onClick = { nav.space("dev") },
                 )
                 SpaceCard(
@@ -206,15 +212,19 @@ fun StartScreen(nav: Nav) {
                     glyph = "threads",
                     title = "Threads",
                     description = "Talk it through with agents that know your data",
-                    line = moneyLine ?: "Start with your budget",
-                    live = s.online && moneyLine != null,
+                    // A budget never read is not an empty one: with the PC away it says so, as Dev does.
+                    line = moneyLine ?: when {
+                        !s.online -> offlineLine(s.lastSeen)
+                        else -> money.error?.takeIf { it.code != "link.down" }?.message?.ifBlank { null } ?: "Reading…"
+                    },
+                    live = s.online && summary != null && !emptyLedger(summary),
                     onClick = { nav.space("threads") },
                 )
                 T(
                     if (s.online) "Connected to ${s.pc?.name?.ifBlank { null } ?: "your PC"}" else "Your PC is out of reach. Everything here is the phone's copy; changes wait and go when it is back.",
-                    Modifier.padding(top = 18.dp, bottom = 32.dp).reveal(t, Mark.FOOT, 0.dp).clickable { nav.pc() },
+                    Modifier.reveal(t, Mark.FOOT, 0.dp).clickable { nav.pc() }.padding(top = 18.dp, bottom = 32.dp),
                     Theme.type.caption,
-                    Palette.START_DIM,
+                    Palette.START_TEXT2,
                 )
             }
         }
@@ -223,8 +233,12 @@ fun StartScreen(nav: Nav) {
 
 private val START_INK = Color(0xFFEDEEF0)
 
+/** The reading's lamp with nothing live, and with something waiting on you (start.css `.start-live`). */
+private val START_IDLE = Color(0xFF55585E)
+private val START_ATTENTION = Color(0xFFF0A828)
+
 @Composable
-private fun SpaceCard(modifier: Modifier, glyph: String, title: String, description: String, line: String, live: Boolean, onClick: () -> Unit) {
+private fun SpaceCard(modifier: Modifier, glyph: String, title: String, description: String, line: String, live: Boolean, attention: Boolean = false, onClick: () -> Unit) {
     Column(
         modifier.fillMaxWidth().padding(bottom = 12.dp).clip(Radii.card).background(Palette.START_CARD)
             .border(1.dp, Palette.START_EDGE, Radii.card).clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 18.dp),
@@ -237,8 +251,8 @@ private fun SpaceCard(modifier: Modifier, glyph: String, title: String, descript
         }
         T(description, style = Theme.type.caption.copy(fontSize = 13.5.sp), color = Palette.START_TEXT2)
         Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Dot(if (live) Palette.SIGNAL else Color(0xFF55585E), 6.dp)
-            T(line, style = Theme.type.mono, color = if (live) START_INK else Palette.START_TEXT2, maxLines = 1)
+            Dot(if (attention) START_ATTENTION else if (live) Palette.SIGNAL else START_IDLE, 6.dp)
+            T(line, style = Theme.type.mono, color = if (live || attention) START_INK else Palette.START_TEXT2, maxLines = 1)
         }
     }
 }
@@ -386,21 +400,25 @@ private fun greetingFor(hour: Int) = when (hour) {
 
 private fun offlineLine(lastSeen: Long) = if (lastSeen > 0) "PC away · last seen ${com.quietsoftware.relay.ui.kit.ago(lastSeen)}" else "PC away"
 
-/** "3 agents running · 2 in review" (money.rs `dev_reading`). */
-fun devReading(d: JsonObject): String {
-    val live = d.arr("sessions_live").size
-    val review = d.arr("in_review").size
-    val agents = when (live) {
-        0 -> "No agents running"
-        1 -> "1 agent running"
-        else -> "$live agents running"
-    }
-    return if (review == 0) agents else "$agents · $review in review"
-}
+/** "3 agents running · 2 need you · 1 in review" (money.rs `dev_reading`). */
+fun devReading(d: JsonObject): String = agentsLine(d.arr("sessions_live").size, waitingOnYou(d), d.arr("in_review").size)
+
+/** Held actions waiting for a decision, and agents stopped on a question (money.rs `waiting_on_you`). */
+fun waitingOnYou(d: JsonObject): Int =
+    d.arr("holds_open").size + d.arr("projects").sumOf { ((it as? JsonObject)?.l("blocked_sessions") ?: 0L).toInt() }
+
+private fun agentsLine(live: Int, waiting: Int, review: Int): String = buildList {
+    add(if (live == 0) "No agents running" else "${plural(live, "agent")} running")
+    if (waiting > 0) add(if (waiting == 1) "1 needs you" else "$waiting need you")
+    if (review > 0) add("$review in review")
+}.joinToString(" · ")
+
+/** A ledger with nothing in it yet: its reading invites a budget, and its lamp stays dark. */
+private fun emptyLedger(s: JsonObject) = (s["empty"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "true"
 
 /** "Budget · $412 left · on pace" (money.rs `money_reading`). */
 fun moneyReading(s: JsonObject): String {
-    if ((s["empty"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "true") return "Start with your budget"
+    if (emptyLedger(s)) return "Start with your budget"
     val pace = s.o("pace") ?: return "Budget"
     val status = pace.s("status").orEmpty()
     if (status !in setOf("ON_PACE", "UNDER_PACE", "OVER_PACE")) return s.o("lines")?.s("margin")?.let { "Budget · $it" } ?: "Budget"

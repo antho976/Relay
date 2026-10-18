@@ -7,15 +7,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quietsoftware.relay.core.model.Note
@@ -38,7 +42,7 @@ import com.quietsoftware.relay.ui.theme.Relay
 @Composable
 fun SearchScreen(nav: Nav) {
     val c = Relay.colors
-    var query by remember { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
     val s by nav.shell.state.collectAsStateWithLifecycle()
@@ -71,16 +75,33 @@ fun SearchScreen(nav: Nav) {
     ).filter { q.isEmpty() || it.first.lowercase().contains(q) }
 
     fun Task.matches() = q.isNotEmpty() && (title.lowercase().contains(q) || ref == q || ref == "#$q" || body.lowercase().contains(q))
-    val sessions = if (q.isEmpty()) emptyList() else s.sessions.filter { it.name.contains(q) || (it.intent ?: "").lowercase().contains(q) || it.branch.lowercase().contains(q) }
+    val sessions = if (q.isEmpty()) emptyList() else s.sessions.filter { it.name.lowercase().contains(q) || (it.intent ?: "").lowercase().contains(q) || it.branch.lowercase().contains(q) }
     val foundTasks = tasks.filter { it.matches() }.sortedByDescending { it.title.lowercase().contains(q) }.take(30)
     val foundNotes = if (q.isEmpty()) emptyList() else notes.filter { it.heading.lowercase().contains(q) || it.body.lowercase().contains(q) }.take(20)
     val threads = if (q.isEmpty()) emptyList() else s.threads.filter { it.title.lowercase().contains(q) || (it.preview ?: "").lowercase().contains(q) }.take(20)
     val projects = if (q.isEmpty()) emptyList() else s.projects.filter { it.name.lowercase().contains(q) }
 
+    /** Go on the keyboard opens what is listed first. */
+    fun openFirst() {
+        if (q.isEmpty()) return
+        when {
+            pages.isNotEmpty() -> pages.first().third()
+            projects.isNotEmpty() -> projects.first().num?.let(nav::project)
+            sessions.isNotEmpty() -> nav.terminal(sessions.first().name)
+            foundTasks.isNotEmpty() -> nav.task(foundTasks.first().id)
+            foundNotes.isNotEmpty() -> nav.note(foundNotes.first().id)
+            threads.isNotEmpty() -> nav.thread(threads.first().id)
+        }
+    }
+
     Page {
         Column(Modifier.fillMaxSize()) {
             PageBar("Search", nav::back)
-            Field(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 12.dp).focusRequester(focus), placeholder = "Search or go to…", leading = "search")
+            Field(
+                query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 12.dp).focusRequester(focus), placeholder = "Search or go to…", leading = "search",
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = { openFirst() }),
+            )
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) {
                 if (pages.isNotEmpty()) item { SectionLabel("Go to") }
                 items(pages, key = { "p" + it.first }) { (label, glyph, go) ->
