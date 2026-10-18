@@ -21,6 +21,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quietsoftware.relay.core.model.Hold
 import com.quietsoftware.relay.core.model.decodeAs
 import com.quietsoftware.relay.core.wire.arr
+import com.quietsoftware.relay.core.wire.s
 import com.quietsoftware.relay.data.Relay.Live
 import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.kit.Empty
@@ -38,6 +39,9 @@ import com.quietsoftware.relay.ui.kit.epoch
 import com.quietsoftware.relay.ui.shell.HoldCard
 import com.quietsoftware.relay.ui.shell.Page
 import com.quietsoftware.relay.ui.shell.PageBar
+import com.quietsoftware.relay.ui.shell.effective
+import com.quietsoftware.relay.ui.shell.policyTitle
+import com.quietsoftware.relay.ui.shell.reveal
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.serialization.SerialName
@@ -87,7 +91,9 @@ fun GuardrailsScreen(projectId: Long?, nav: Nav) {
         Column(Modifier.fillMaxSize()) {
             PageBar("Guardrails", nav::back, subtitle = projectName)
             ScrollBody {
-                SectionLabel(if (open.isEmpty()) "Waiting for you" else "Waiting for you · ${open.size}")
+                // Where this project's guardrail values are set (guardrail_pages.rs `page`).
+                if (pid != null) Key("Guardrail settings for this project", { nav.projectSettings(pid) }, kind = KeyKind.Quiet, compact = true)
+                SectionLabel(if (open.isEmpty()) "Waiting on you" else "Waiting on you · ${open.size}")
                 if (open.isEmpty()) {
                     Empty("shield", "Nothing waiting", "No agent in this project is waiting on a guardrail.")
                 } else {
@@ -174,11 +180,15 @@ fun GuardrailsScreen(projectId: Long?, nav: Nav) {
 @Composable
 private fun HistoryRow(h: Hold) {
     val c = Relay.colors
+    // What was held and what held it, in words, as the hold card says them; not the op's and policy's keys.
+    val (policy, details) = effective(h.policy, h.details as? JsonObject)
+    val subject = (details?.s("command") ?: details?.s("path") ?: details?.s("value"))?.let { reveal(it).first }
+        ?: h.op.takeIf { it.isNotBlank() && it != "guardrail.gate" && it != "guardrail.request" }
     Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            T(h.op, style = Relay.type.mono, color = c.ink, maxLines = 1)
+            T(subject ?: policyTitle(policy), style = if (subject != null) Relay.type.mono else Relay.type.uiMedium, color = c.ink, maxLines = 1)
             T(
-                listOf(h.session ?: h.actor, h.policy, ago(epoch(h.createdAt))).filter { it.isNotBlank() }.joinToString(" · "),
+                listOf(h.session ?: h.actor, if (subject != null) policyTitle(policy) else "", ago(epoch(h.createdAt))).filter { it.isNotBlank() }.joinToString(" · "),
                 style = Relay.type.caption,
                 color = c.ink3,
                 maxLines = 2,

@@ -98,6 +98,7 @@ fun InboxScreen(nav: Nav) {
                             onLater = null,
                             onOpen = { nav.guardrails(hold.projectId) },
                             modifier = Modifier.padding(bottom = 8.dp),
+                            openLabel = "Open Guardrails",
                         )
                     }
                 }

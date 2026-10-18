@@ -1,11 +1,16 @@
 package com.quietsoftware.relay.service
 
+import android.app.Notification
+import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.RemoteInput
+import com.quietsoftware.relay.R
 import com.quietsoftware.relay.core.link.LinkState
+import com.quietsoftware.relay.core.wire.BusException
 import com.quietsoftware.relay.data.Relay
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -24,7 +29,8 @@ import javax.inject.Inject
 /**
  * What a notification's keys do without opening the app: deny a held command, allow it once
  * (the system asks for the phone's unlock first, `setAuthenticationRequired`), or answer a
- * blocked agent with priority mail, which it reads at its next step.
+ * blocked agent with priority mail, which it reads at its next step. A hold's key that cannot
+ * reach the PC says so on its notification.
  */
 @AndroidEntryPoint
 class ActionReceiver : BroadcastReceiver() {
@@ -38,10 +44,17 @@ class ActionReceiver : BroadcastReceiver() {
                 when (intent.action) {
                     ACTION_DENY, ACTION_ALLOW -> {
                         val hold = intent.getLongExtra(EXTRA_HOLD, -1)
-                        if (hold < 0 || !online()) return@launch
+                        if (hold < 0) return@launch
+                        if (!online()) {
+                            unreachable(context, notification)
+                            return@launch
+                        }
                         val payload = buildJsonObject {
                             put("hold_id", hold)
                             if (intent.action == ACTION_DENY) put("reason", "Denied from the phone's notification")
+                            // An exception request is let through for one use from here, whatever the agent
+                            // asked for: the rest of a session is chosen in the app, where it says so.
+                            if (intent.action == ACTION_ALLOW && intent.getStringExtra(EXTRA_OP) == "guardrail.request") put("scope", "once")
                         }
                         // The exact held request is read before it is answered, as on the PC: still
                         // open, and the one the notification showed (a hold id from another PC, or one
@@ -67,11 +80,39 @@ class ActionReceiver : BroadcastReceiver() {
                     }
                 }
                 if (notification != 0) NotificationManagerCompat.from(context).cancel(notification)
+            } catch (e: BusException) {
+                // The PC went out of reach on the way: say so. Any other refusal, opening the app shows why.
+                if (e.error.transient) unreachable(context, notification)
             } catch (_: Exception) {
                 // The notification stays; opening the app shows why.
             } finally {
                 pending.finish()
             }
+        }
+    }
+
+    /**
+     * Notification [id] again, saying its key could not reach the PC; a tap still opens Relay where
+     * it did. Without the keys, which could only fail the same way.
+     */
+    private fun unreachable(context: Context, id: Int) {
+        if (id == 0) return
+        val shown = context.getSystemService(NotificationManager::class.java)?.activeNotifications?.firstOrNull { it.id == id }?.notification ?: return
+        val text = "Could not reach the PC. Open Relay to answer."
+        val again = NotificationCompat.Builder(context, shown.channelId ?: Notifier.CH_ATTENTION)
+            .setSmallIcon(R.drawable.ic_stat_relay)
+            .setColor(shown.color)
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
+            .setContentTitle(shown.extras.getCharSequence(Notification.EXTRA_TITLE))
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(shown.contentIntent)
+            .build()
+        try {
+            NotificationManagerCompat.from(context).notify(id, again)
+        } catch (_: SecurityException) {
+            // Notifications were taken back meanwhile.
         }
     }
 
