@@ -232,6 +232,10 @@ paned.sidebar-split > separator:hover { background-color: @line_focus; }
 .code-commit .dim { font-size: 10px; }
 
 .small-key { min-height: 22px; min-width: 22px; padding: 0; font-size: 11px; }
+/* A small key with words (Publish, Push 2, Open PR): room around them, and an edge on the quiet
+   ones so a disabled Open PR still reads as a key, not stray text. */
+button.small-key.text-button { min-height: 26px; padding: 0 10px; border-radius: 8px; }
+button.small-key.text-button.quiet { border-color: @edge; }
 .small-lamp { min-width: 4px; min-height: 4px; }
 .wall-split > separator { min-width: 6px; background: transparent; }
 .wall-split > separator:hover { background: @strong; }
