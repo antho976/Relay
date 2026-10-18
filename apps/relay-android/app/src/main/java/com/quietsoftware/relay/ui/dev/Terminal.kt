@@ -104,7 +104,7 @@ fun TerminalScreen(name: String, nav: Nav) {
     val session by remember(name) { nav.relay.session(name) }.collectAsStateWithLifecycle(null)
     val feed = rememberFeed(nav.relay, name)
     val status by feed.status.collectAsStateWithLifecycle()
-    val life = rememberLifecycle(nav) { nav.back() }
+    val life = rememberLifecycle(nav) { nav.leaveAgent(it) }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboard.current
     val uris = LocalUriHandler.current
@@ -225,7 +225,7 @@ fun TerminalScreen(name: String, nav: Nav) {
                 }
             }
             KeyRow(feed, ready, scope, direct, ctrl, alt, onCtrl = { ctrl = !ctrl }, onAlt = { alt = !alt })
-            if (direct) DirectBar(ready, onKeyboard = { input?.raise() }, onBox = { setDirect(false) }) else ChatComposer(
+            if (direct) DirectBar(ready, s.online, onKeyboard = { input?.raise() }, onBox = { setDirect(false) }) else ChatComposer(
                 field,
                 { field = it },
                 ready,
@@ -461,7 +461,7 @@ private fun KeyRow(feed: TerminalFeed, enabled: Boolean, scope: CoroutineScope, 
 
 /** In place of the message box while typing directly: what is happening, the keyboard, and the way back. */
 @Composable
-private fun DirectBar(enabled: Boolean, onKeyboard: () -> Unit, onBox: () -> Unit) {
+private fun DirectBar(enabled: Boolean, online: Boolean, onKeyboard: () -> Unit, onBox: () -> Unit) {
     val c = Relay.colors
     Row(
         Modifier.fillMaxWidth().background(c.wall).navigationBarsPadding().padding(start = 14.dp, end = 8.dp, bottom = 8.dp).heightIn(min = 44.dp),
@@ -469,7 +469,12 @@ private fun DirectBar(enabled: Boolean, onKeyboard: () -> Unit, onBox: () -> Uni
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         KeyboardGlyph(16.dp, c.ink3)
-        T(if (enabled) "Keys go straight to the terminal" else "Needs the agent running", Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 2)
+        val line = when {
+            enabled -> "Keys go straight to the terminal"
+            !online -> "Needs the PC"
+            else -> "Needs the agent running"
+        }
+        T(line, Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 2)
         Key("Keyboard", onKeyboard, kind = KeyKind.Plain, enabled = enabled, compact = true)
         Key("Message box", onBox, kind = KeyKind.Quiet, compact = true)
     }

@@ -171,7 +171,7 @@ fun ChatScreen(name: String, nav: Nav) {
     val status by chat.status.collectAsStateWithLifecycle()
     val found by chat.found.collectAsStateWithLifecycle()
     val error by chat.error.collectAsStateWithLifecycle()
-    val life = rememberLifecycle(nav) { nav.back() }
+    val life = rememberLifecycle(nav) { nav.leaveAgent(it) }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboard.current
     val focus = remember { FocusRequester() }

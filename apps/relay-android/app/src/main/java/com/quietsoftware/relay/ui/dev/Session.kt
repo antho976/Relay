@@ -93,7 +93,7 @@ fun SessionScreen(name: String, nav: Nav) {
     val got by remember(name) { nav.relay.live("session.get", named(name)) }.collectAsStateWithLifecycle(RelayData.Live())
     val full = got.result as? JsonObject
     val session = row ?: full?.decodeAs<Session>()
-    val life = rememberLifecycle(nav) { nav.back() }
+    val life = rememberLifecycle(nav) { nav.leaveAgent(it) }
 
     Page {
         Column(Modifier.fillMaxSize()) {

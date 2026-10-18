@@ -105,7 +105,16 @@ class TerminalFeed(private val relay: Relay, val name: String, private val scope
         borrowed = null
     }
 
+    /**
+     * Attach, and again a little later when the PC refuses for any reason but the agent not
+     * running (a timeout, a busy engine): a new link or a change of state cancels the wait.
+     */
     private suspend fun attach(session: BusSession) {
+        while (!attachOnce(session)) delay(ATTACH_RETRY_MS)
+    }
+
+    /** False when the attach was refused and is worth trying again. */
+    private suspend fun attachOnce(session: BusSession): Boolean {
         _status.value = Status.Connecting
         probeSize(session)
         borrowed?.let { (c, r) -> resizeOn(session, c, r, borrow = true) }
@@ -156,13 +165,13 @@ class TerminalFeed(private val relay: Relay, val name: String, private val scope
             _status.value = Status.Live
             session.ended.await()
         } catch (e: BusException) {
-            if (e.error.code == "session.not_spawned" || e.error.code == "session.exited") {
-                readScrollback(session)
-                _status.value = Status.Stopped
-            }
+            if (e.error.code != "session.not_spawned" && e.error.code != "session.exited") return false
+            readScrollback(session)
+            _status.value = Status.Stopped
         } finally {
             frames.cancel()
         }
+        return true
     }
 
     /**
@@ -322,5 +331,6 @@ class TerminalFeed(private val relay: Relay, val name: String, private val scope
         const val SAVED_LINES = 400
         /** Between a line and its Enter, so a TUI reads them as typing (TerminalInput.ts). */
         const val ENTER_DELAY_MS = 90L
+        private const val ATTACH_RETRY_MS = 2_000L
     }
 }

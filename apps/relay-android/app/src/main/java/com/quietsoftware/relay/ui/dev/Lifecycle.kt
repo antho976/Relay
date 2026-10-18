@@ -276,6 +276,21 @@ internal fun rememberLifecycle(nav: Nav, onClosed: (String) -> Unit = {}): Lifec
     return life
 }
 
+/**
+ * After an agent is closed: its pages (conversation, terminal, details) come off the back stack
+ * together, so Back never lands on one of them; with nothing under them, the wall.
+ */
+internal fun Nav.leaveAgent(name: String) {
+    while (true) {
+        val top = controller.currentBackStackEntry ?: return
+        val route = top.destination.route ?: return
+        if (route !in AGENT_PAGES || top.arguments?.getString("name") != name) return
+        back()
+    }
+}
+
+private val AGENT_PAGES = setOf("chat/{name}", "terminal/{name}", "session/{name}")
+
 /** The sheets [Lifecycle] opens: Start, Close and its questions. */
 @Composable
 internal fun LifecycleSheets(life: Lifecycle) {
