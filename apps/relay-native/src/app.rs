@@ -308,6 +308,8 @@ pub struct Ui {
     usage: status::UsageState,
     device_status: gtk::Label,
     pub(super) resource_status: gtk::Box,
+    /// The bell, whose tooltip and accessible name carry the unread count its badge shows.
+    notifications_key: gtk::Button,
     notification_count: gtk::Label,
     notification_revision: Cell<u64>,
     setup_checked: Cell<bool>,
@@ -1138,6 +1140,7 @@ impl Ui {
             usage,
             device_status: bar.device_status.clone(),
             resource_status: bar.resource_status.clone(),
+            notifications_key: top.notifications_key.clone(),
             notification_count: top.notification_count.clone(),
             notification_revision: Cell::new(0),
             setup_checked: Cell::new(false),

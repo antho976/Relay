@@ -892,6 +892,10 @@ impl Ui {
                 } else {
                     unread.to_string()
                 });
+                // The badge is drawn, not read: the key's own name says the count.
+                let name = if unread > 0 { format!("Notifications · {unread} unread") } else { String::from("Notifications") };
+                ui.notifications_key.set_tooltip_text(Some(&name));
+                ui.notifications_key.update_property(&[gtk::accessible::Property::Label(&name)]);
                 if count(&blocked) + count(&guardrail) > 0 {
                     ui.notification_count.add_css_class("held");
                 } else {
@@ -1471,9 +1475,13 @@ impl Ui {
             .map(|(a, _, fallback)| bindings[*a].as_str().unwrap_or(fallback).trim().to_string())
             .filter(|chord| !chord.is_empty())
     }
-    /// `caption`, with the chord of `action` after it when it has one.
+    /// `caption`, with the chord of `action` after it when it has one. A Ctrl+letter chord is
+    /// the focused terminal's (`shortcuts::terminal_owns`), and the tip says so.
     pub(super) fn shortcut_tip(&self, caption: &str, action: &str) -> String {
         match self.chord(action) {
+            Some(chord) if crate::shortcuts::terminal_owns(&chord) => {
+                format!("{caption} · {chord} (not while a terminal has focus)")
+            }
             Some(chord) => format!("{caption} · {chord}"),
             None => caption.to_string(),
         }
