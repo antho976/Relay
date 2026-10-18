@@ -89,7 +89,13 @@ pub fn icon(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
             b.set_selected(set(&[("stroke_width", json!(v.clamp(0.5, 6.0)))]));
         }
     });
-    sec.append(&pair(colour, weight));
+    // The key with its value beside it, as Fill has it, not a lone dot centred in its half.
+    let colour_cell = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    colour_cell.append(&colour);
+    let hex = label(if n.stroke.is_some() { &shown } else { "Automatic" }, "design-hex-caption");
+    hex.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    colour_cell.append(&hex);
+    sec.append(&pair(colour_cell, weight));
 }
 
 pub fn connector(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
