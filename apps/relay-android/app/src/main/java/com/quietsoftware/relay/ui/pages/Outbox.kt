@@ -38,7 +38,8 @@ import kotlinx.coroutines.launch
 /** Every change made on this phone that the PC has not applied yet, and what is holding each back. */
 @Composable
 fun OutboxScreen(nav: Nav) {
-    val entries by remember { nav.relay.outbox() }.collectAsStateWithLifecycle(initialValue = emptyList())
+    // Null until the phone's copy answers, so "Nothing waiting" never shows before what waits.
+    val entries by remember { nav.relay.outbox() }.collectAsStateWithLifecycle(initialValue = null)
     // The page's scope, not the row's: a row leaves composition as soon as its entry is dropped or
     // resent, which would cancel the retry between taking the old entry out and putting the new in.
     val scope = rememberCoroutineScope()
@@ -57,10 +58,10 @@ fun OutboxScreen(nav: Nav) {
                         color = Relay.colors.ink3,
                     )
                 }
-                if (entries.isEmpty()) {
+                if (entries?.isEmpty() == true) {
                     item { Empty("outbox", "Nothing waiting", "Everything you changed is on the PC.") }
                 }
-                items(entries, key = { it.id }) { e -> OutboxRow(e, nav, scope) }
+                items(entries.orEmpty(), key = { it.id }) { e -> OutboxRow(e, nav, scope) }
             }
         }
     }

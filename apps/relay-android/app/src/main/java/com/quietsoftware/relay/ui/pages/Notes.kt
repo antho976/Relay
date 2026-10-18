@@ -74,7 +74,9 @@ fun NotesScreen(projectId: Long?, nav: Nav) {
 private fun NotesList(pid: Long, nav: Nav) {
     val c = Relay.colors
     val s by nav.shell.state.collectAsStateWithLifecycle()
-    val notes by remember(pid) { nav.relay.notes(pid) }.collectAsStateWithLifecycle(initialValue = emptyList())
+    // Null until the phone's copy answers, so "No notes yet" never shows before the notes.
+    val listed by remember(pid) { nav.relay.notes(pid) }.collectAsStateWithLifecycle(initialValue = null)
+    val notes = listed.orEmpty()
     var query by rememberSaveable { mutableStateOf("") }
 
     // Notes with an edit or a create still on their way to the PC.
@@ -103,9 +105,9 @@ private fun NotesList(pid: Long, nav: Nav) {
                 Gap(4.dp)
             }
 
-            if (notes.isEmpty()) {
+            if (listed != null && notes.isEmpty()) {
                 item { Empty("notes", "No notes yet", "Notes are shared with the PC. Agents read only the tasks they are given.") }
-            } else if (shown.isEmpty()) {
+            } else if (notes.isNotEmpty() && shown.isEmpty()) {
                 item { Empty("search", "No note matches", query) }
             }
             if (pinned.isNotEmpty()) {

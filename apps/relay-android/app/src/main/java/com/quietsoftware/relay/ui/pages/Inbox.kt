@@ -55,13 +55,15 @@ import kotlinx.serialization.json.put
 @Composable
 fun InboxScreen(nav: Nav) {
     val s by nav.shell.state.collectAsStateWithLifecycle()
-    val notifications by remember { nav.relay.notifications() }.collectAsStateWithLifecycle(initialValue = emptyList())
-    val tasks by remember { nav.relay.allTasks() }.collectAsStateWithLifecycle(initialValue = emptyList())
+    // Null until the phone's copy answers, so "You're all caught up" never shows before what is there.
+    val notified by remember { nav.relay.notifications() }.collectAsStateWithLifecycle(initialValue = null)
+    val listed by remember { nav.relay.allTasks() }.collectAsStateWithLifecycle(initialValue = null)
     val projects by remember { nav.relay.projects() }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val notifications = notified.orEmpty()
 
     val names = projects.associate { it.num to it.name }
-    val review = tasks.filter { it.column == "in_review" }
-    val reviewProject = review.map { it.projectId }.distinct().singleOrNull() ?: s.project?.num
+    // By project, so each row opens the board its tasks are on.
+    val review = listed.orEmpty().filter { it.column == "in_review" }.groupBy { it.projectId }
     val unread = notifications.count { !it.read }
 
     fun open(n: Notification) {
@@ -102,20 +104,22 @@ fun InboxScreen(nav: Nav) {
 
                 if (review.isNotEmpty()) {
                     item { SectionLabel("In review") }
-                    item {
+                    itemsIndexed(review.entries.toList(), key = { _, e -> "review:${e.key}" }) { index, (project, waiting) ->
+                        // With tasks in several projects, each row names whose board it opens.
+                        val board = names[project]?.takeIf { review.size > 1 && it.isNotBlank() }?.let { "the $it board" } ?: "the board"
                         Slab(
-                            Modifier.fillMaxWidth(),
+                            Modifier.fillMaxWidth().padding(top = if (index > 0) 8.dp else 0.dp),
                             padding = PaddingValues(14.dp),
-                            onClick = { nav.board(reviewProject) },
+                            onClick = { nav.board(project) },
                         ) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                     T(
-                                        if (review.size == 1) "1 task waits for review" else "${review.size} tasks wait for review",
+                                        if (waiting.size == 1) "1 task waits for review" else "${waiting.size} tasks wait for review",
                                         style = Relay.type.uiMedium,
                                         color = Relay.colors.ink,
                                     )
-                                    T("Open the board to look and approve.", style = Relay.type.caption, color = Relay.colors.ink3)
+                                    T("Open $board to look and approve.", style = Relay.type.caption, color = Relay.colors.ink3)
                                 }
                                 Glyph("chevron-right", 16.dp, Relay.colors.ink3)
                             }
@@ -142,7 +146,7 @@ fun InboxScreen(nav: Nav) {
                     }
                 }
 
-                if (s.loaded && s.holds.isEmpty() && review.isEmpty() && notifications.isEmpty()) {
+                if (s.loaded && notified != null && listed != null && s.holds.isEmpty() && review.isEmpty() && notifications.isEmpty()) {
                     item { Empty("inbox", "You're all caught up", "Finished, blocked and held agents report here.") }
                 }
             }
