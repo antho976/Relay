@@ -140,6 +140,13 @@ private fun ConnectScreen(nav: Nav) {
         }
     }
 
+    // Stops asking and comes back to the key; the request left on the server runs out on its own.
+    fun cancel() {
+        job?.cancel()
+        job = null
+        step = Step.Idle
+    }
+
     Page {
         Column(Modifier.fillMaxSize()) {
             if (paired.pc != null) PageBar("Pair a PC", nav::back) else Gap(0.dp)
@@ -195,6 +202,10 @@ private fun ConnectScreen(nav: Nav) {
                             T(s.text, style = Relay.type.ui, color = c.heldText)
                             Key("Ask again", { step = Step.Idle; connect() }, Modifier.fillMaxWidth(), kind = KeyKind.Primary, glyph = "refresh")
                         }
+                    }
+                    // While it waits on the server, Discord or the PC; pairing itself ends on its own.
+                    if (step is Step.Reaching || step is Step.Waiting || step is Step.WaitingPc) {
+                        Key("Cancel", ::cancel, Modifier.fillMaxWidth(), kind = KeyKind.Quiet)
                     }
                     T("Through ${SERVER.removePrefix("https://")}", Modifier.padding(top = 8.dp), Relay.type.caption, c.ink3)
                     Gap(24.dp)
