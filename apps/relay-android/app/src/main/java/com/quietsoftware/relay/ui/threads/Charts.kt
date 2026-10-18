@@ -109,9 +109,10 @@ internal fun chartSpec(text: String): ChartSpec? {
     return ChartSpec(kind, title, query, gym, data)
 }
 
-/** The fence a thread's Markdown draws charts with. */
+/** The fence a thread's Markdown draws charts with, and an agent's ask for a file to import. */
 internal val ChartFence = Fence { lang, body ->
-    if (lang != "chart") null else chartSpec(body)?.let { spec -> { ChartCard(spec) } }
+    if (lang == "import") importCard(body)
+    else if (lang != "chart") null else chartSpec(body)?.let { spec -> { ChartCard(spec) } }
 }
 
 /** Series colours, newest first: Relay's lime, then blue, orange, violet, teal, gold. */

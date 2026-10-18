@@ -385,7 +385,8 @@ private fun suggestions(summary: JsonObject?, invest: JsonObject?): List<Pair<St
     }
     when {
         invest == null -> Unit
-        invest.b("empty") == true && invest.s("currency") == "CAD" -> out += "Connect my Wealthsimple accounts" to "A guided import from the files Wealthsimple gives you"
+        // The desktop offers "Connect my Wealthsimple accounts" here: it ends in choosing the
+        // files to import, which the phone cannot do.
         invest.b("empty") == true -> Unit
         else -> out += "How are my investments doing?" to "Value, gain and the room left this year"
     }
