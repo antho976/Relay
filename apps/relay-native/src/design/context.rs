@@ -119,6 +119,18 @@ impl Board {
             self.text_controls(&b, &bar, &nodes);
         } else if all(&[NodeKind::Line, NodeKind::Path]) {
             kind = "stroke";
+            // Closed, a free line is a shape of its own: it fills, and has no ends to route or
+            // put arrowheads on (routing it would open it and drop the fill).
+            let closed = nodes.iter().all(closed_shape);
+            if closed {
+                let fill = same(nodes.iter().map(super::paint::fill_of)).flatten();
+                let weak = Rc::downgrade(&b);
+                bar.append(&color_key(&b, fill.as_deref(), "Fill", true, move |c| {
+                    if let Some(b) = weak.upgrade() {
+                        b.set_selected(set(&[("fill", json!(c)), ("gradient", Value::Null)]));
+                    }
+                }));
+            }
             let stroke = same(nodes.iter().map(|n| n.stroke.clone())).flatten();
             let weak = Rc::downgrade(&b);
             bar.append(&color_key(&b, stroke.as_deref(), "Stroke colour", false, move |c| {
@@ -133,7 +145,7 @@ impl Board {
                     b.set_selected(set(&[("stroke_width", json!(v.clamp(0.5, 200.0)))]));
                 }
             }));
-            if all(&[NodeKind::Line]) {
+            if all(&[NodeKind::Line]) && !closed {
                 // Straight, elbow, curve: one key that steps through them.
                 let route = same(nodes.iter().map(|n| n.route.unwrap_or(relay_bus::design::Route::Straight)))
                     .unwrap_or(relay_bus::design::Route::Straight);
@@ -522,6 +534,11 @@ impl Board {
         drop(scene);
         self.commit(ops);
     }
+}
+
+/// A free line joined back to its start: no connector ends, no route.
+pub(super) fn closed_shape(n: &relay_bus::design::Node) -> bool {
+    n.closed == Some(true) && n.route.is_none() && n.from.is_none() && n.to.is_none()
 }
 
 fn sep() -> gtk::Separator {
