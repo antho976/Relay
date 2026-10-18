@@ -57,6 +57,10 @@ pub struct Gallery {
     count: gtk::Label,
     designs: RefCell<Vec<Design>>,
     sessions: RefCell<HashMap<String, String>>,
+    /// The project's designs have been read (since it was shown, or switched to).
+    listed: Cell<bool>,
+    /// Why they could not be read the last time.
+    error: RefCell<Option<String>>,
     loading: Cell<bool>,
     dirty: Cell<bool>,
     /// Open a design on the board.
@@ -198,6 +202,8 @@ impl Gallery {
             count,
             designs: RefCell::default(),
             sessions: RefCell::default(),
+            listed: Cell::new(false),
+            error: RefCell::default(),
             loading: Cell::new(false),
             dirty: Cell::new(false),
             open: RefCell::default(),
@@ -251,6 +257,20 @@ impl Gallery {
                 g.render();
             }
         });
+        // A card opens with a click, or Enter once it has the keyboard; a deleted one waits for
+        // its Restore.
+        let weak = Rc::downgrade(&gallery);
+        gallery.grid.connect_child_activated(move |_, child| {
+            let Some(g) = weak.upgrade() else {
+                return;
+            };
+            let id = child.child().and_then(|c| c.widget_name().strip_prefix("design-card-").and_then(|id| id.parse::<i64>().ok()));
+            let live = id.filter(|id| g.designs.borrow().iter().any(|d| d.id == *id && d.deleted_at.is_none()));
+            let open = g.open.borrow().clone();
+            if let (Some(id), Some(open)) = (live, open) {
+                open(id);
+            }
+        });
         let weak = Rc::downgrade(&gallery);
         gallery.toast_undo.connect_clicked(move |_| {
             if let Some(g) = weak.upgrade() {
@@ -284,8 +304,20 @@ impl Gallery {
         }
     }
 
-    pub fn live_count(&self) -> usize {
-        self.designs.borrow().iter().filter(|d| d.deleted_at.is_none()).count()
+    /// The titles of the designs not deleted, for naming a new one.
+    pub fn titles(&self) -> Vec<String> {
+        self.designs.borrow().iter().filter(|d| d.deleted_at.is_none()).map(|d| d.title.clone()).collect()
+    }
+
+    /// Another project: nothing of the last one shows (its cards, its search) while this
+    /// one's designs are read.
+    pub fn reset(&self) {
+        self.designs.borrow_mut().clear();
+        self.sessions.borrow_mut().clear();
+        self.error.borrow_mut().take();
+        self.listed.set(false);
+        self.search.set_text("");
+        self.render();
     }
 
     /// The first card shown, for the smoke capture.
@@ -315,13 +347,15 @@ impl Gallery {
                     g.dirty.set(true);
                     continue;
                 }
+                g.listed.set(true);
                 match listed {
                     Ok(v) => {
                         *g.designs.borrow_mut() = serde_json::from_value(v["designs"].clone()).unwrap_or_default();
+                        g.error.borrow_mut().take();
                     }
                     Err(e) => {
-                        g.empty_title.set_text("Designs could not be read");
-                        g.empty_body.set_text(&e.to_string());
+                        g.toast(&format!("Designs could not be read: {e}"), None);
+                        *g.error.borrow_mut() = Some(e.to_string());
                     }
                 }
                 if let Ok(v) = sessions {
@@ -421,9 +455,12 @@ impl Gallery {
         }
         let none = list.is_empty();
         self.grid.set_visible(!none);
-        self.empty.set_visible(none);
+        // Nothing read yet (a project just switched to): no "No designs yet" before the list.
+        self.empty.set_visible(none && self.listed.get());
         if none {
+            let error = self.error.borrow().clone();
             let (title, body) = match &current {
+                _ if error.is_some() => ("Designs could not be read", error.unwrap_or_default()),
                 Filter::Deleted => ("Nothing deleted", "Deleted designs wait here until you delete them for good.".to_string()),
                 Filter::Terminal(s) => (
                     "No designs from this terminal",
@@ -556,30 +593,11 @@ impl Gallery {
             row.append(&forever);
             card.append(&row);
         } else {
-            let click = gtk::GestureClick::new();
-            let weak = self.me.clone();
-            let id = d.id;
-            click.connect_released(move |g, _, x, y| {
-                // The ⋯ key is its own click.
-                if let Some(w) = g.widget() {
-                    if let Some(picked) = w.pick(x, y, gtk::PickFlags::DEFAULT) {
-                        if picked.ancestor(gtk::MenuButton::static_type()).is_some() {
-                            return;
-                        }
-                    }
-                }
-                if let Some(gal) = weak.upgrade() {
-                    if let Some(open) = gal.open.borrow().clone() {
-                        open(id);
-                    }
-                }
-            });
-            card.add_controller(click);
+            // Opened by the grid's activation (a click, or Enter); the ⋯ key keeps its click.
             card.set_cursor_from_name(Some("pointer"));
         }
         let child = gtk::FlowBoxChild::new();
         child.set_child(Some(&card));
-        child.set_focusable(false);
         child.upcast()
     }
 
@@ -809,8 +827,19 @@ impl Gallery {
         super::create(&self.ui, self.project.get(), session);
     }
 
+    /// Bring a deleted design back.
+    pub(super) fn restore(&self, id: i64) {
+        self.mutate("design.restore", id, None);
+    }
+
     pub fn toast(&self, text: &str, undo: Option<Rc<dyn Fn()>>) {
+        self.toast_with(text, "Undo", undo);
+    }
+
+    /// A toast whose key, `key`, runs `undo`.
+    pub fn toast_with(&self, text: &str, key: &str, undo: Option<Rc<dyn Fn()>>) {
         self.toast_label.set_text(text);
+        self.toast_undo.set_label(key);
         self.toast_undo.set_visible(undo.is_some());
         *self.undo.borrow_mut() = undo;
         self.toast.set_reveal_child(true);
