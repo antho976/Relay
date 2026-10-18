@@ -104,8 +104,12 @@ the phone, so it opens with the PC away.
 ## On the phone itself
 
 - **Notifications** say when an agent is held by a guardrail, blocked, or done. A held command's
-  notification has **Deny** and **Allow once** (Android 12 and up asks for the phone's unlock
-  first); a blocked agent's has **Reply**, which sends it priority mail it reads at its next step.
+  notification has **Deny** and **Allow once**, and an agent's request for an exception has **Deny**
+  and **Approve once**, which lifts the rule for one use whatever the agent asked for (Android 12
+  and up asks for the phone's unlock first); in the app the card offers **Approve once** and
+  **Approve for this session**, the agent's ask first, as the desktop does. A blocked agent's
+  notification has **Reply**, which sends it priority mail it reads at its next step. A key that
+  cannot reach the PC says so on its notification.
 - **Share to Relay**: text from any app becomes a task, a note, a new thread, or mail to an agent.
 - **Shortcuts** on the launcher icon: New agent, New task, New thread, Inbox.
 - **Search** finds pages, projects, agents, tasks, notes and threads in the phone's copy, with or
