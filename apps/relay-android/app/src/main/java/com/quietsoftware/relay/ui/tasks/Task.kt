@@ -398,7 +398,8 @@ private fun Ask(task: Task, num: Long, nav: Nav) {
     }
     Heading("Ask the agent")
     if (names.size > 1) {
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        // The pills' own touch room adds 6dp, so their faces stay 8dp above the field.
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 2.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             for (n in names) Pill(n, selected = n == recipient, onClick = { to = n })
         }
     }

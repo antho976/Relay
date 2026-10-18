@@ -184,7 +184,8 @@ private fun Board(projectId: Long?, nav: Nav) {
                 FieldKey("sliders", if (showFilters) "Hide the filters" else "Filters", if (showFilters || active > 0) c.ink else c.ink3) { showFilters = !showFilters }
             }
             if (showFilters || active > 0) {
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                // The pills' own touch room adds 6dp, so their faces stay 8dp under the field.
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 2.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Pill(type?.let { "Type: ${titled(it)}" } ?: "Type", selected = type != null, glyph = "chevron-down", onClick = { picker = "type" })
                     Pill(priority?.let { "Priority: ${titled(it)}" } ?: "Priority", selected = priority != null, glyph = "chevron-down", onClick = { picker = "priority" })
                     if (labels.isNotEmpty() || label != null) Pill(label?.let { "Label: $it" } ?: "Label", selected = label != null, glyph = "chevron-down", onClick = { picker = "label" })

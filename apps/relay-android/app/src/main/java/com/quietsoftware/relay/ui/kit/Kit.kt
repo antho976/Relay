@@ -3,10 +3,12 @@ package com.quietsoftware.relay.ui.kit
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -46,6 +48,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -370,7 +373,10 @@ fun LampDot(lamp: Lamp, size: Dp = 7.dp, modifier: Modifier = Modifier) {
 @Composable
 fun Dot(color: Color, size: Dp = 6.dp, modifier: Modifier = Modifier) = Box(modifier.size(size).clip(CircleShape).background(color))
 
-/** A small pill: a filter chip, a label, a state badge. */
+/**
+ * A small pill: a filter chip, a label, a state badge. One that takes a tap is [PILL_TOUCH]
+ * tall to the finger with its face as small as before, and the press is drawn on the face alone.
+ */
 @Composable
 fun Pill(
     text: String,
@@ -384,13 +390,16 @@ fun Pill(
     onClick: (() -> Unit)? = null,
 ) {
     val c = Relay.colors
+    val press = remember { MutableInteractionSource() }
+    val pressLook = LocalIndication.current
     Row(
         modifier
+            .then(if (onClick != null) Modifier.clickable(interactionSource = press, indication = null, onClick = onClick).touchHeight(PILL_TOUCH) else Modifier)
             .heightIn(min = 28.dp)
             .clip(Radii.pill)
             .background(if (selected) c.ink else fill)
             .border(1.dp, if (selected) Color.Transparent else edge, Radii.pill)
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.indication(press, pressLook) else Modifier)
             .then(if (selected) Modifier.semantics { this.selected = true } else Modifier)
             .padding(horizontal = 10.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -400,6 +409,16 @@ fun Pill(
         glyph?.let { Glyph(it, 13.dp, if (selected) c.wall else color) }
         T(text, style = Relay.type.caption, color = if (selected) c.wall else color, maxLines = 1, weight = FontWeight.Medium)
     }
+}
+
+/** How tall a pill that takes a tap is to the finger. */
+private val PILL_TOUCH = 40.dp
+
+/** At least [min] tall, with what follows centred in it at its own height (a caller's taller face stays). */
+private fun Modifier.touchHeight(min: Dp) = layout { measurable, constraints ->
+    val face = measurable.measure(constraints)
+    val height = maxOf(face.height, min.roundToPx()).coerceAtMost(constraints.maxHeight)
+    layout(face.width, height) { face.place(0, (height - face.height) / 2) }
 }
 
 /**
