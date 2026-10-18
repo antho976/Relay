@@ -2,6 +2,7 @@ mod app;
 mod client;
 mod design;
 mod editor;
+mod fit_label;
 mod fonts;
 mod icons;
 mod mirror;

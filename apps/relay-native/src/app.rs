@@ -529,13 +529,11 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     palette_key.set_widget_name("command-palette");
     let palette_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     palette_row.append(&crate::icons::image("search", 14));
-    let palette_text = label("Search or run a command", "command-search-text");
-    palette_text.set_hexpand(true);
-    palette_text.set_xalign(0.0);
     // Its natural width at full size; a narrower window shortens the words, not the bar's reach
-    // (at 300px it alone kept a 1024px window from fitting its window controls).
-    palette_text.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    palette_text.set_width_chars(6);
+    // (at 300px it alone kept a 1024px window from fitting its window controls), and to one
+    // word rather than "Search or r…".
+    let palette_text = crate::fit_label::FitLabel::new("Search or run a command", "Search", "command-search-text");
+    palette_text.set_hexpand(true);
     palette_row.append(&palette_text);
     palette_row.append(&label("Ctrl K", "keycap"));
     palette_key.set_child(Some(&palette_row));
