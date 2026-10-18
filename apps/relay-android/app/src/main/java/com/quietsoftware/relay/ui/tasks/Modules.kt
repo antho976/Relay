@@ -98,6 +98,8 @@ fun ModulesScreen(projectId: Long, nav: Nav) {
             PageBar("Modules", nav::back, subtitle = project?.name) {
                 Key("New module", { sheet = "new" }, Modifier.padding(end = 8.dp), kind = KeyKind.Primary, glyph = "plus", compact = true)
             }
+            // The board's own switch, Modules lit: Board goes back to the board this came from.
+            Segmented(BOARD_VIEWS, "modules", { if (it == "board") nav.back() }, Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             val list = modules
             when {
                 list == null -> Unit

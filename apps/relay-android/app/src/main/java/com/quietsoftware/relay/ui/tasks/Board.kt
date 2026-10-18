@@ -68,6 +68,9 @@ import kotlinx.coroutines.launch
 /** Until the person picks, the board opens on the first column with work in it, review first. */
 private val OPEN_ORDER = listOf("in_review", "active", "ready", "backlog")
 
+/** The board's view switch. Modules shows it too, so it is one switch both ways. */
+internal val BOARD_VIEWS = listOf("board" to "Board", "modules" to "Modules")
+
 /**
  * The project board (board_view.rs) on a phone: one column at a time, swiped or picked from the
  * column strip, with search and filters. Everything reads from the phone's copy and every edit
@@ -160,7 +163,7 @@ private fun Board(projectId: Long?, nav: Nav) {
                 Key("New task", newTask, kind = KeyKind.Primary, glyph = "plus", compact = true)
             }
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Segmented(listOf("board" to "Board", "modules" to "Modules"), "board", { if (it == "modules") nav.modules(pid) })
+                Segmented(BOARD_VIEWS, "board", { if (it == "modules") nav.modules(pid) })
                 Box(Modifier.weight(1f))
                 if (shell.projects.size > 1) {
                     Pill(project?.name ?: "Project", Modifier.widthIn(max = 180.dp), glyph = "folder", onClick = { picker = "project" })
