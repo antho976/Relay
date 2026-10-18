@@ -1342,13 +1342,18 @@ fn settings_page(ui: &Rc<Ui>, page: &Page, st: &Value, s: Option<&Value>) {
     );
     wipe(&page.body);
     let pair = columns(&page.body, 2);
-    coinbase_card(ui, &pair[0], s.map_or(&Value::Null, |s| &s["connection"]));
-    paper_card(ui, &pair[0], st);
+    // An open order holds the key (it is how the order is read back and cancelled) and paper's
+    // history: the engine refuses both until a halt cancels it.
+    let open = s.map(|s| rows(s, "open_orders")).unwrap_or_default();
+    let (live_open, paper_open) = (open.iter().any(|o| text(o, "venue") == "live"), open.iter().any(|o| text(o, "venue") != "live"));
+    coinbase_card(ui, &pair[0], s.map_or(&Value::Null, |s| &s["connection"]), live_open);
+    paper_card(ui, &pair[0], st, paper_open);
     global_limits(ui, &pair[1], st);
     restore(&page.body, typing);
 }
 
-fn coinbase_card(ui: &Rc<Ui>, column: &gtk::Box, c: &Value) {
+/// The key and what Coinbase says of it; `open` while a live order is open, which Remove waits for.
+fn coinbase_card(ui: &Rc<Ui>, column: &gtk::Box, c: &Value, open: bool) {
     let list = card(column, "Coinbase", None);
     let state = text(c, "state");
     match state {
@@ -1390,6 +1395,10 @@ fn coinbase_card(ui: &Rc<Ui>, column: &gtk::Box, c: &Value) {
             setting_row(&list, "card", "Replace the key", "Check a new key and keep it instead of this one.", &replace);
             let remove = button("Remove…", "money-destructive");
             remove.set_widget_name("arbiter-key-remove");
+            if open {
+                remove.set_sensitive(false);
+                remove.set_tooltip_text(Some("A live order is open: halt first, which cancels it"));
+            }
             let weak = Rc::downgrade(ui);
             confirm_inline(&remove, "Remove the key", move |key| {
                 let Some(ui) = weak.upgrade() else { return };
@@ -1468,7 +1477,8 @@ fn shown_value(v: &Value) -> String {
     }
 }
 
-fn paper_card(ui: &Rc<Ui>, column: &gtk::Box, st: &Value) {
+/// The paper account; `open` while a paper order is open, which Start over must wait for.
+fn paper_card(ui: &Rc<Ui>, column: &gtk::Box, st: &Value, open: bool) {
     let list = card(column, "Paper account", None);
     let home = field_entry("arbiter-home-currency", text(st, "home"), 8);
     home.set_max_length(5);
@@ -1509,6 +1519,10 @@ fn paper_card(ui: &Rc<Ui>, column: &gtk::Box, st: &Value) {
     });
     let reset = button("Start over…", "money-destructive");
     reset.set_widget_name("arbiter-paper-reset");
+    if open {
+        reset.set_sensitive(false);
+        reset.set_tooltip_text(Some("A paper order is open: halt first"));
+    }
     let weak = Rc::downgrade(ui);
     confirm_inline(&reset, "Erase paper history", move |key| {
         let Some(ui) = weak.upgrade() else { return };

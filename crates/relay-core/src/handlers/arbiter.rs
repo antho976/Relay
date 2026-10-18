@@ -283,6 +283,13 @@ pub fn register(e: &mut Engine) {
     e.register_staged::<KeyRemove, Connection>(
         |ctx, _| {
             let engine = ctx.engine();
+            // Without the key a live order can be neither read back nor cancelled: it would stay
+            // open for good, its fill never booked. The trade turn is held from the check until
+            // the key is gone, so no order is placed in between.
+            let _turn = engine.arbiter.trade.lock().unwrap_or_else(|p| p.into_inner());
+            if with_book(engine, |b| b.open_orders(None))?.iter().any(|o| o.venue == Venue::Live) {
+                return Err(BusError::refused("arbiter.order_open", "A live order is open: halt first, which cancels it"));
+            }
             desk::forget_key(engine)?;
             with_book(engine, |b| {
                 for s in b.strategies()?.into_iter().filter(|s| s.venue == Venue::Live && s.state == RunState::Running) {
@@ -403,13 +410,16 @@ pub fn register(e: &mut Engine) {
         },
     );
     e.register::<Restart>(|ctx, p| {
-        with_book(ctx.engine(), |b| match p.strategy_id {
-            Some(id) => {
-                if b.strategy(id)?.state != RunState::Halted {
-                    return Err(book::BookError::Invalid("It is not halted".into()));
-                }
-                b.set_state(id, RunState::Running, None)
+        let engine = ctx.engine();
+        if let Some(id) = p.strategy_id {
+            if with_book(engine, |b| b.strategy(id))?.state != RunState::Halted {
+                return Err(BusError::invalid("arbiter.invalid", "It is not halted"));
             }
+        }
+        // Past its daily loss limit still, it would be halted again on the runner's next pass.
+        desk::check_restart(engine, p.strategy_id)?;
+        with_book(engine, |b| match p.strategy_id {
+            Some(id) => b.set_state(id, RunState::Running, None),
             None => {
                 b.set_halted(None)?;
                 b.log(None, "restart", "Lifted the halt on everything.", None).map(|_| ())

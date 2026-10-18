@@ -855,22 +855,56 @@ fn fingerprint(engine: &Engine) -> (i64, i64, String) {
     .unwrap_or_default()
 }
 
-fn global_loss(engine: &Engine) -> Result<(), BusError> {
-    let g = with_book(engine, |b| b.global_limits())?;
-    let Some(limit) = g.daily_loss else { return Ok(()) };
+/// What every strategy together has lost today at the last prices: what Arbiter's daily loss
+/// limit weighs.
+fn loss_today_all(engine: &Engine) -> Result<Decimal, BusError> {
     let taker = fees(engine).taker;
-    let loss = with_book(engine, |b| {
+    with_book(engine, |b| {
         let mut pnl = Decimal::ZERO;
         for s in b.strategies()? {
             let p = b.position(s.id, s.venue)?;
             pnl += p.realized_today + p.open_pnl(last_price(engine, &s.product), taker).min(Decimal::ZERO);
         }
         Ok((-pnl).max(Decimal::ZERO))
-    })?;
-    if loss >= limit {
+    })
+}
+
+fn global_loss(engine: &Engine) -> Result<(), BusError> {
+    let g = with_book(engine, |b| b.global_limits())?;
+    let Some(limit) = g.daily_loss else { return Ok(()) };
+    if loss_today_all(engine)? >= limit {
         halt(engine, None, &format!("Arbiter's daily loss limit of {} reached", limit.normalize()))?;
     }
     Ok(())
+}
+
+/// Refuses to lift a halt the runner's next pass would only put back: today's loss still at or
+/// past the daily limit, Arbiter's (no `strategy`) or the strategy's own. No network: the last
+/// prices, as the meters read them.
+pub fn check_restart(engine: &Engine, strategy: Option<i64>) -> Result<(), BusError> {
+    let past = |limit: Decimal, currency: &str, own: bool| -> Result<(), BusError> {
+        let (whose, raise) = if own { ("its", "raise it under Limits on its page") } else { ("the", "raise it in Settings") };
+        Err(BusError::refused("arbiter.daily_loss", format!("Today's loss is still past {whose} daily limit of {} {currency}: {raise}, or restart tomorrow", limit.normalize())))
+    };
+    match strategy {
+        None => {
+            let (g, home) = with_book(engine, |b| Ok((b.global_limits()?, b.home()?)))?;
+            match g.daily_loss {
+                Some(limit) if loss_today_all(engine)? >= limit => past(limit, &home, false),
+                _ => Ok(()),
+            }
+        }
+        Some(id) => {
+            let s = with_book(engine, |b| b.strategy(id))?;
+            let Some(limit) = s.limits.daily_loss else { return Ok(()) };
+            let pos = with_book(engine, |b| b.position(s.id, s.venue))?;
+            // The runner weighs it at the bid: the last one read, else the last price.
+            let read = lock(&engine.arbiter.quotes).get(&s.product).filter(|q| book::now() - q.at <= 300).map(|q| q.bid);
+            let bid = read.or_else(|| last_price(engine, &s.product));
+            let loss = (-(pos.realized_today + pos.open_pnl(bid, fees(engine).taker).min(Decimal::ZERO))).max(Decimal::ZERO);
+            if loss >= limit { past(limit, s.product.split_once('-').map_or("", |(_, q)| q), true) } else { Ok(()) }
+        }
+    }
 }
 
 fn snapshot_paper(engine: &Engine, now: i64) -> Result<(), BusError> {

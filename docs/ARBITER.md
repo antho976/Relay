@@ -71,7 +71,8 @@ the exchange. It refuses rather than shrinks (a limit that resizes an order is n
   only what has filled;
 - a cooldown after a losing trade;
 - the **daily loss limit**, per strategy and Arbiter-wide: it halts the strategy, or everything,
-  until Antho restarts it. (A drawdown halt is not built yet.)
+  until Antho restarts it. A restart is refused while today's loss is still past the limit, which
+  would only halt it again. (A drawdown halt is not built yet.)
 
 **The kill switch** (sidebar, panel and command palette): cancel every open order and halt every
 strategy; flattening positions is a separate, confirmed step.
@@ -127,7 +128,8 @@ Tally's shape:
   - sends intents through the gate;
   - places and reconciles.
 - **The key** lives in the Secret Service through `secret-tool`, as the Android signing passwords do
-  (`handlers/device.rs`), with attributes `application Relay purpose coinbase`.
+  (`handlers/device.rs`), with attributes `application Relay purpose coinbase`. It cannot be
+  removed while a live order is open: without it the order could never be read back or cancelled.
 - **Threads:**
   - The `Tally` chip becomes a real source picker stored per thread.
   - `AGENT_OPS` gains Arbiter's read ops, `arbiter.backtest` and `arbiter.propose`. `arbiter.order.place`
