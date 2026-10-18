@@ -101,6 +101,8 @@ struct Autosave {
     timer: RefCell<Option<glib::SourceId>>,
     saving: Cell<bool>,
     again: Cell<bool>,
+    /// Saves that failed since the last one that went through: each waits longer to try again.
+    failures: Cell<u32>,
     /// Bumped by every caption change, so a stale "Saved" timer does not clear a newer one.
     shown: Cell<u64>,
 }
@@ -172,6 +174,10 @@ impl Autosave {
         let wallpapers = self.wallpapers.borrow().clone();
         let writes = self.changes(&now, &wallpapers);
         if writes.is_empty() {
+            // A failed save's edits were undone: nothing is waiting any more.
+            if self.failures.replace(0) > 0 {
+                self.caption(IDLE);
+            }
             return;
         }
         self.saving.set(true);
@@ -181,17 +187,30 @@ impl Autosave {
             let mut error = None;
             for (op, payload) in writes {
                 if let Err(e) = ui.call(op, payload).await {
-                    error = Some(e.to_string());
+                    error = Some(e);
                     break;
                 }
             }
             save.saving.set(false);
             match error {
                 Some(error) => {
-                    save.caption("Not saved");
-                    ui.show_error(&format!("Settings not saved: {error}"));
+                    // An engine away or busy takes them once it is back: tried again in 2 s, then
+                    // twice as long each time, up to half a minute, saying why only the first
+                    // time. A value it refused waits for the next edit.
+                    let refused = matches!(&error, crate::client::Error::Bus(b) if b.kind != relay_bus::ErrorKind::Unavailable);
+                    let failures = save.failures.replace(save.failures.get() + 1);
+                    if refused || failures == 0 {
+                        ui.show_error(&format!("Settings not saved: {error}"));
+                    }
+                    if refused {
+                        save.caption("Not saved");
+                    } else {
+                        save.caption("Not saved · trying again");
+                        save.schedule((2000u64 << failures.min(4)).min(30_000));
+                    }
                 }
                 None => {
+                    save.failures.set(0);
                     *save.saved_wallpapers.borrow_mut() = wallpapers;
                     *save.baseline.borrow_mut() = Some(now);
                     save.caption("All changes saved");
@@ -369,6 +388,7 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
         timer: RefCell::new(None),
         saving: Cell::new(false),
         again: Cell::new(false),
+        failures: Cell::new(0),
         shown: Cell::new(0),
     });
     let form = Form { fields: fields.clone(), autosave: autosave.clone() };
