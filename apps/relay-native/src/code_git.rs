@@ -523,6 +523,10 @@ impl Editor {
                                     json!({"message":message,"all":all}),
                                     None,
                                 );
+                            } else {
+                                // As the Commit key says it.
+                                ui.show_error("Enter a commit message first.");
+                                editor.commit_message.grab_focus();
                             }
                         }
                         return glib::Propagation::Stop;
@@ -597,7 +601,7 @@ impl Editor {
             } else if smart_all {
                 "Nothing is staged, so every change is committed"
             } else {
-                "Commit the staged changes · Ctrl Enter"
+                "Commit the staged changes (Ctrl+Enter)"
             }));
             let commit_more = gtk::MenuButton::new();
             commit_more.add_css_class("scm-commit-more");
@@ -1022,7 +1026,8 @@ impl Editor {
                             discard.set_valign(gtk::Align::Center);
                             let weak = Rc::downgrade(&ui);
                             let ed = e.clone();
-                            discard.connect_clicked(move |key| {
+                            // It throws away a checkout and a branch: asked once in place.
+                            crate::app::confirm_inline(&discard, "Discard it?", move |key| {
                                 let Some(ui) = weak.upgrade() else { return };
                                 key.set_sensitive(false);
                                 let key = key.clone();
@@ -1577,8 +1582,12 @@ impl Editor {
         glib::spawn_future_local(async move {
             let result=async {
                 if matches!(op,"git.push"|"git.pr.open"|"git.branch.delete"){
-                    let explanation=match op{"git.push"=>"Push this worktree's branch to its remote?","git.pr.open"=>"Publish a pull request for this worktree?",_=>"Delete this merged local branch? The engine refuses protected, checked-out and session-owned branches."};
-                    if !confirm(&ui,op,&format!("{explanation}\n{}",serde_json::to_string_pretty(&payload).unwrap_or_default())).await {return Ok(None);}
+                    let (title,copy,accept)=match op{
+                        "git.push"=>("Push branch",String::from("Push this worktree's branch to its remote?"),"Push"),
+                        "git.pr.open"=>("Open pull request",String::from("Publish a pull request for this worktree?"),"Open pull request"),
+                        _=>("Delete branch",format!("Delete the merged local branch {}? The engine refuses protected, checked-out and session-owned branches.",text(&payload,"name")),"Delete branch"),
+                    };
+                    if !ask(&ui,title,&copy,accept).await {return Ok(None);}
                 }
                 guarded(&ui,op,payload).await
             }.await;
@@ -1616,6 +1625,15 @@ impl Editor {
                             text(&v, "branch"),
                             text(&retry, "name")
                         ));
+                    } else if op == "git.push" {
+                        ui.show_info("Pushed");
+                    } else if op == "git.fetch" {
+                        // The counts are the primary checkout's branch, so only it shows them.
+                        ui.show_info(&match v["behind"].as_i64().filter(|_| worktree.is_empty()) {
+                            Some(0) => String::from("Fetched · up to date"),
+                            Some(behind) => format!("Fetched · {behind} to pull"),
+                            None => String::from("Fetched"),
+                        });
                     }
                     if matches!(op, "git.branch.create" | "git.branch.switch") {
                         if document {
@@ -1693,7 +1711,7 @@ impl Editor {
                     "These files still contain conflict markers (<<<<<<< … >>>>>>>). Marking them resolved stages the markers, and the next commit records them.\n\n{}",
                     marked.join("\n")
                 );
-                if !confirm(&ui, "Mark as resolved with conflict markers?", &copy).await
+                if !confirm(&ui, "Mark as resolved with conflict markers?", &copy, "Mark as resolved").await
                     || !e.matches(&ui, project, &worktree)
                 {
                     return;
@@ -2011,7 +2029,9 @@ fn tag_line(buffer: &sourceview5::Buffer, tag: &gtk::TextTag, line: usize) {
     }
 }
 
-async fn confirm(ui: &Ui, title: &str, copy: &str) -> bool {
+/// A yes or no over `copy` shown as code (a held request, a list of paths); `accept` names
+/// what yes does.
+async fn confirm(ui: &Ui, title: &str, copy: &str, accept: &str) -> bool {
     let dialog = crate::panel::Panel::new(ui, title, 620);
     let view = gtk::TextView::new();
     view.set_editable(false);
@@ -2019,7 +2039,17 @@ async fn confirm(ui: &Ui, title: &str, copy: &str) -> bool {
     view.set_wrap_mode(gtk::WrapMode::WordChar);
     view.buffer().set_text(copy);
     dialog.body.append(&scrolled(&view));
-    dialog.response("Continue").await
+    dialog.response(accept).await
+}
+
+/// A yes or no in plain words; `accept` names what yes does.
+async fn ask(ui: &Ui, title: &str, copy: &str, accept: &str) -> bool {
+    let dialog = crate::panel::Panel::new(ui, title, 480);
+    let words = label(copy, "body");
+    words.set_wrap(true);
+    words.set_xalign(0.0);
+    dialog.body.append(&words);
+    dialog.response(accept).await
 }
 
 pub(super) async fn guarded(ui: &Ui, op: &str, payload: Value) -> Result<Option<Value>, Error> {
@@ -2049,7 +2079,7 @@ pub(super) async fn guarded(ui: &Ui, op: &str, payload: Value) -> Result<Option<
                 request.push('…');
             }
             let copy = format!("{}\n\n{}", err.message, request);
-            if !confirm(ui, "Allow this held action once?", &copy).await {
+            if !confirm(ui, "Allow this held action once?", &copy, "Allow once").await {
                 return Ok(None);
             }
             let result = ui
