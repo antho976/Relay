@@ -191,9 +191,11 @@ private fun NewThread(nav: Nav) {
                     )
                 }
                 Box(Modifier.height(22.dp))
+                val dictate = com.quietsoftware.relay.ui.dev.rememberDictation { said -> draft = com.quietsoftware.relay.ui.dev.joinSaid(draft, said) }
                 Composer(
                     value = draft,
                     onValue = { draft = it },
+                    onDictate = dictate,
                     model = m,
                     effort = e,
                     onModel = { model = it },
@@ -772,9 +774,11 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
             }
         }
         BoxWithConstraints(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(top = 4.dp, bottom = 8.dp), contentAlignment = Alignment.TopCenter) {
+            val dictate = com.quietsoftware.relay.ui.dev.rememberDictation { said -> draft = com.quietsoftware.relay.ui.dev.joinSaid(draft, said) }
             Composer(
                 value = draft,
                 onValue = { draft = it },
+                onDictate = dictate,
                 model = thread?.model.orEmpty(),
                 effort = thread?.effort.orEmpty(),
                 onModel = { choose(it, null) },

@@ -48,6 +48,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -173,11 +174,7 @@ fun ChatScreen(name: String, nav: Nav) {
         if (i >= 0) attached[i] = change(attached[i])
     }
     // Dictation through the phone's own recognizer: what was said joins what is typed.
-    val canSpeak = remember { Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).resolveActivity(context.packageManager) != null }
-    val speech = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
-        val said = r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.trim()
-        if (!said.isNullOrEmpty()) type(field.text.trimEnd().let { if (it.isEmpty()) said else "$it $said" })
-    }
+    val dictate = rememberDictation { said -> type(joinSaid(field.text, said)) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_PICTURES)) { uris ->
         for (uri in uris.take(MAX_PICTURES - attached.size)) {
             val id = System.nanoTime()
@@ -296,9 +293,7 @@ fun ChatScreen(name: String, nav: Nav) {
                 Chip("", "Attach a photo or a screenshot", ready && attached.size < MAX_PICTURES, glyph = "file-image") {
                     picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                 }
-                if (canSpeak) Chip("", "Dictate a message", ready, icon = { MicGlyph(15.dp, c.ink2) }) {
-                    speech.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM))
-                }
+                if (dictate != null) Chip("", "Dictate a message", ready, icon = { MicGlyph(15.dp, c.ink2) }, onClick = dictate)
                 Chip("/", "The agent's commands", ready) {
                     if (text.isBlank()) type("/")
                     focus.requestFocus()
@@ -1124,9 +1119,28 @@ private fun Chip(label: String, spoken: String, enabled: Boolean, glyph: String?
     }
 }
 
+/**
+ * The phone's speech recognizer as a key's action, what was said handed to [onSaid]; null on a
+ * phone without one, so the key is not shown.
+ */
+@Composable
+internal fun rememberDictation(onSaid: (String) -> Unit): (() -> Unit)? {
+    val context = LocalContext.current
+    val can = remember { Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).resolveActivity(context.packageManager) != null }
+    val said by rememberUpdatedState(onSaid)
+    val speech = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let(said)
+    }
+    if (!can) return null
+    return { speech.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)) }
+}
+
+/** What was typed, then what was said after a space. */
+internal fun joinSaid(typed: String, said: String): String = typed.trimEnd().let { if (it.isEmpty()) said else "$it $said" }
+
 /** A microphone on the glyphs' 16-unit grid: its capsule, the cradle under it, the stand. */
 @Composable
-private fun MicGlyph(size: Dp, tint: Color) {
+internal fun MicGlyph(size: Dp, tint: Color) {
     Box(
         Modifier.size(size).drawWithCache {
             val u = this.size.minDimension / 16f

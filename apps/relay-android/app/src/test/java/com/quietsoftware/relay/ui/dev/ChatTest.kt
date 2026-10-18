@@ -195,4 +195,10 @@ class ChatTest {
         )
         assertEquals("Running cargo test…", doingNow(folded))
     }
+
+    @Test
+    fun whatWasSaidJoinsWhatIsTyped() {
+        assertEquals("run the tests", joinSaid("", "run the tests"))
+        assertEquals("first fix it then run the tests", joinSaid("first fix it  ", "then run the tests"))
+    }
 }
