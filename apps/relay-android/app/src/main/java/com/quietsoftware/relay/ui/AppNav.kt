@@ -12,6 +12,8 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.quietsoftware.relay.ui.code.DesignScreen
+import com.quietsoftware.relay.ui.code.DesignsScreen
 import com.quietsoftware.relay.ui.code.FileScreen
 import com.quietsoftware.relay.ui.code.FilesScreen
 import com.quietsoftware.relay.ui.code.GitScreen
@@ -29,10 +31,12 @@ import com.quietsoftware.relay.ui.pages.MailboxScreen
 import com.quietsoftware.relay.ui.pages.NoteScreen
 import com.quietsoftware.relay.ui.pages.NotesScreen
 import com.quietsoftware.relay.ui.pages.OutboxScreen
+import com.quietsoftware.relay.ui.pages.PluginScreen
 import com.quietsoftware.relay.ui.pages.PluginsScreen
 import com.quietsoftware.relay.ui.pages.SearchScreen
 import com.quietsoftware.relay.ui.pages.SettingsScreen
 import com.quietsoftware.relay.ui.pages.ShareScreen
+import com.quietsoftware.relay.ui.pages.SkillScreen
 import com.quietsoftware.relay.ui.pages.SkillsScreen
 import com.quietsoftware.relay.ui.start.StartScreen
 import com.quietsoftware.relay.ui.tasks.BoardScreen
@@ -40,6 +44,8 @@ import com.quietsoftware.relay.ui.tasks.ModulesScreen
 import com.quietsoftware.relay.ui.tasks.TaskEditScreen
 import com.quietsoftware.relay.ui.tasks.TaskScreen
 import com.quietsoftware.relay.ui.threads.ArbiterScreen
+import com.quietsoftware.relay.ui.threads.ArbiterStrategyScreen
+import com.quietsoftware.relay.ui.threads.AvexLiftScreen
 import com.quietsoftware.relay.ui.threads.AvexScreen
 import com.quietsoftware.relay.ui.threads.TallyScreen
 import com.quietsoftware.relay.ui.threads.ThreadScreen
@@ -94,6 +100,8 @@ private fun Destinations(nav: Nav, startRoute: String) {
         composable("share?text={text}", listOf(opt("text"))) { ShareScreen(it.str("text").orEmpty(), nav) }
         composable("skills") { SkillsScreen(nav) }
         composable("plugins") { PluginsScreen(nav) }
+        composable("skill/{id}") { SkillScreen(it.long("id") ?: 0, nav) }
+        composable("plugin/{id}") { PluginScreen(it.str("id").orEmpty(), nav) }
         composable("guardrails?project={project}", listOf(opt("project"))) { GuardrailsScreen(it.long("project"), nav) }
         composable("mailbox/{project}?session={session}", listOf(opt("session"))) { MailboxScreen(it.long("project") ?: 0, it.str("session"), nav) }
         composable("files/{project}?worktree={worktree}", listOf(opt("worktree"))) { FilesScreen(it.long("project") ?: 0, it.str("worktree"), nav) }
@@ -103,11 +111,15 @@ private fun Destinations(nav: Nav, startRoute: String) {
         composable("git/{project}?worktree={worktree}&session={session}", listOf(opt("worktree"), opt("session"))) {
             GitScreen(it.long("project") ?: 0, it.str("worktree"), it.str("session"), nav)
         }
+        composable("designs/{project}") { DesignsScreen(it.long("project") ?: 0, nav) }
+        composable("design/{id}") { DesignScreen(it.long("id") ?: 0, nav) }
         composable("threads") { ThreadsHome(nav) }
         composable("thread/{id}") { ThreadScreen(it.str("id").orEmpty(), nav) }
         composable("tally") { TallyScreen(nav) }
         composable("arbiter") { ArbiterScreen(nav) }
         composable("avex") { AvexScreen(nav) }
+        composable("avex-lift?name={name}", listOf(opt("name"))) { AvexLiftScreen(it.str("name").orEmpty(), nav) }
+        composable("arbiter-strategy/{id}") { ArbiterStrategyScreen(it.long("id") ?: 0, nav) }
         composable("pair?link={link}", listOf(opt("link"))) { PairEntry(it.str("link"), nav) }
         composable("pc") { PcScreen(nav) }
         composable("settings") { SettingsScreen(nav) }

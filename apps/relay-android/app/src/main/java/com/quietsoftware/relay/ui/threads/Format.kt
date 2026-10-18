@@ -392,7 +392,8 @@ internal fun StatePill(text: String, tone: Color?) {
 
 /**
  * A short list of choices under a key (the model and effort chips, a thread's menu): a slab
- * popover, a check by the chosen one.
+ * popover, a check by the chosen one. [groups] puts a small heading over the option it names
+ * ("On this PC" over the PC's own models).
  */
 @Composable
 internal fun <V> Choices(
@@ -405,6 +406,7 @@ internal fun <V> Choices(
     anchor: Dp = 30.dp,
     glyphs: Map<V, String> = emptyMap(),
     danger: Set<V> = emptySet(),
+    groups: Map<V, String> = emptyMap(),
 ) {
     if (!open) return
     val c = Relay.colors
@@ -421,6 +423,7 @@ internal fun <V> Choices(
         ) {
             for ((value, label) in options) {
                 val on = value == selected
+                groups[value]?.let { T(it, Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 4.dp), Relay.type.caption, c.ink3, maxLines = 1) }
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = TOUCH).clip(Radii.key).clickable { onPick(value); onDismiss() }.padding(horizontal = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,

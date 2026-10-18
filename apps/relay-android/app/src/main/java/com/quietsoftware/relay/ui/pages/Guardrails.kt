@@ -62,9 +62,22 @@ private data class OverlapRow(
     @SerialName("first_seen") val firstSeen: String = "",
 )
 
+/** An approved exception still in force (`guardrail.requests.list`, state `active`). */
+@Serializable
+private data class GrantRow(
+    val id: Long,
+    val session: String? = null,
+    val kind: String = "",
+    val value: String = "",
+    val scope: String? = null,
+    val uses: Long = 0,
+    @SerialName("resolved_at") val resolvedAt: String? = null,
+)
+
 /**
- * A project's guardrails: holds waiting for a decision, every earlier hold with how it ended, and
- * the files two sessions both changed or claimed, with a note to each of them.
+ * A project's guardrails: holds waiting for a decision, the exceptions approved and still in
+ * force, every earlier hold with how it ended, and the files two sessions both changed or
+ * claimed, with a note to each of them.
  */
 @Composable
 fun GuardrailsScreen(projectId: Long?, nav: Nav) {
@@ -77,6 +90,11 @@ fun GuardrailsScreen(projectId: Long?, nav: Nav) {
         nav.relay.live("guardrail.holds.list", buildJsonObject { if (pid != null) put("project_id", pid); put("open_only", false) })
     }
     val historyLive by history.collectAsStateWithLifecycle(initialValue = Live())
+    val grantsFlow = remember(pid) {
+        nav.relay.live("guardrail.requests.list", buildJsonObject { if (pid != null) put("project_id", pid); put("state", "active") })
+    }
+    val grantsLive by grantsFlow.collectAsStateWithLifecycle(initialValue = Live())
+    val grants = (grantsLive.result as? JsonObject)?.arr("requests")?.mapNotNull { it.decodeAs<GrantRow>() }.orEmpty()
     val overlapFlow = remember(pid) {
         if (pid == null) flowOf(Live()) else nav.relay.live("overlap.list", buildJsonObject { put("project_id", pid) })
     }
@@ -107,6 +125,21 @@ fun GuardrailsScreen(projectId: Long?, nav: Nav) {
                             modifier = Modifier.padding(bottom = 8.dp),
                         )
                     }
+                }
+
+                // Shown only while there are some, as on the desktop. Revoking one stays on the PC:
+                // a grant is a decision about the PC's own files and commands, taken at its keyboard.
+                if (grants.isNotEmpty()) {
+                    SectionLabel("Active exceptions · ${grants.size}")
+                    T("Approved exceptions still in force. Revoke one on the PC to put the rule back immediately.", style = Relay.type.caption, color = c.ink3)
+                    Gap(8.dp)
+                    Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
+                        grants.forEachIndexed { index, g ->
+                            if (index > 0) Hairline()
+                            GrantRowView(g)
+                        }
+                    }
+                    if (!grantsLive.fresh) StaleNote(grantsLive.at)
                 }
 
                 SectionLabel("History")
@@ -203,6 +236,37 @@ private fun HistoryRow(h: Hold) {
                 else -> c.ink3
             },
         )
+    }
+}
+
+/** One approved exception (guardrail_pages.rs `grant_row`): who may do what, for how long, how often used. */
+@Composable
+private fun GrantRowView(g: GrantRow) {
+    val c = Relay.colors
+    val verb = when (g.kind) {
+        "command" -> "run"
+        "path" -> "write to"
+        else -> "commit past the change caps"
+    }
+    val lasting = if (g.scope == "session") {
+        when (g.uses) {
+            0L -> "For this session · not used yet"
+            1L -> "For this session · used once"
+            else -> "For this session · used ${g.uses} times"
+        }
+    } else {
+        "Once · not used yet"
+    }
+    val approved = epoch(g.resolvedAt).takeIf { it > 0 }?.let { " · approved ${ago(it)}" }.orEmpty()
+    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            T("${g.session ?: "An agent"} may $verb", style = Relay.type.uiMedium, color = c.ink, maxLines = 2)
+            // An agent wrote the value: drawn with its hidden characters shown, as the hold card does.
+            if (g.value.isNotEmpty()) T(reveal(g.value).first, style = Relay.type.mono, color = c.ink2, maxLines = 3)
+            T(lasting + approved, style = Relay.type.caption, color = c.ink3, maxLines = 2)
+        }
+        Spacer(Modifier.width(10.dp))
+        T("Revoke on the PC", style = Relay.type.caption, color = c.ink3, maxLines = 1)
     }
 }
 

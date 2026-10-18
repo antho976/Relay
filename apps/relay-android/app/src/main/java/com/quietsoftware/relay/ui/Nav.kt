@@ -86,9 +86,15 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
     fun files(projectId: Long, worktree: String? = null) = go("files/$projectId" + q("worktree" to worktree))
     fun file(projectId: Long, path: String, worktree: String? = null, line: Int? = null) = go("file/$projectId" + q("path" to path, "worktree" to worktree, "line" to line))
     fun git(projectId: Long, worktree: String? = null, session: String? = null) = go("git/$projectId" + q("worktree" to worktree, "session" to session))
+    /** A project's design canvases, and one of them (read only). */
+    fun designs(projectId: Long) = go("designs/$projectId")
+    fun design(id: Long) = go("design/$id")
     fun mailbox(projectId: Long, session: String? = null) = go("mailbox/$projectId" + q("session" to session))
     fun modules(projectId: Long) = go("modules/$projectId")
     fun guardrails(projectId: Long?) = go("guardrails" + q("project" to projectId))
+    /** One skill or plugin, read only, from its list. */
+    fun skill(id: Long) = go("skill/$id")
+    fun plugin(id: String) = go("plugin/${Uri.encode(id)}")
     fun search() = go("search")
     override fun projectSettings(id: Long) = go("project-settings/$id")
     fun devices(projectId: Long) = go("devices/$projectId")
@@ -116,6 +122,10 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
     override fun tally() = go("tally")
     override fun arbiter() = go("arbiter")
     override fun avex() = go("avex")
+    /** One of Avex's lifts, by its name as Avex shows it. */
+    fun avexLift(name: String) = go("avex-lift" + q("name" to name))
+    /** One of Arbiter's strategies. */
+    fun arbiterStrategy(id: Long) = go("arbiter-strategy/$id")
 }
 
 val LocalNav = staticCompositionLocalOf<Nav> { error("No Nav") }

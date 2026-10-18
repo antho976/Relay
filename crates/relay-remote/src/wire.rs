@@ -139,16 +139,18 @@ pub const PHONE_OPS: &[&str] = &[
     "avd.boot", "avd.list",
     "bus.ping", "bus.subscribe", "bus.unsubscribe",
     "dashboard.get",
+    // A project's design canvases, to list and open (docs/DESIGN-CANVAS.md).
+    "design.get", "design.list",
     "device.build", "device.list", "device.run", "device.run.list", "device.run.stop",
-    "file.create", "file.delete", "file.read", "file.rename", "file.restore", "file.restore_head",
-    "file.search", "file.tree", "file.write",
+    "file.create", "file.delete", "file.move", "file.read", "file.rename", "file.restore",
+    "file.restore_head", "file.search", "file.trash.list", "file.tree", "file.write",
     "git.branch.clean_merged", "git.branch.create", "git.branch.delete", "git.branch.switch",
     "git.branches", "git.commit", "git.diff", "git.diff.file", "git.fetch", "git.log", "git.pr.list",
     "git.pr.open", "git.push", "git.show", "git.stage", "git.status", "git.suggest_message",
     "git.unstage",
     "github.connect", "github.repo.list", "github.status",
-    "guardrail.config.get", "guardrail.config.set", "guardrail.confirm", "guardrail.hold.get",
-    "guardrail.holds.list", "guardrail.reject",
+    "guardrail.config.get", "guardrail.config.layers", "guardrail.config.set", "guardrail.confirm",
+    "guardrail.hold.get", "guardrail.holds.list", "guardrail.reject", "guardrail.requests.list",
     // Avex's training history, read only.
     "gym.cardio", "gym.lift.get", "gym.lifts", "gym.series", "gym.session.get", "gym.sessions",
     "gym.summary",
@@ -157,10 +159,10 @@ pub const PHONE_OPS: &[&str] = &[
     "module.changelog.draft", "module.complete", "module.create", "module.delete", "module.get",
     "module.list", "module.reopen", "module.restore", "module.update",
     // Tally's sync (antho976/Tally), and for the Threads space on the phone (apps/relay-android)
-    // the ledger's reads and the Undo of an entry a thread added.
+    // the ledger's reads, and the Undo of an entry a thread added or changed (and its Redo).
     "money.invest.delete", "money.invest.list", "money.invest.restore", "money.invest.summary",
     "money.lists", "money.series", "money.summary", "money.sync", "money.tx.delete",
-    "money.tx.list", "money.tx.restore",
+    "money.tx.list", "money.tx.restore", "money.tx.update",
     "notes.append", "notes.create", "notes.delete", "notes.get", "notes.list", "notes.pin",
     "notes.restore", "notes.standing", "notes.update",
     "notify.ack", "notify.ack_all", "notify.list", "notify.settings.get", "notify.settings.set",
@@ -174,15 +176,20 @@ pub const PHONE_OPS: &[&str] = &[
     "session.scrollback", "session.spawn", "session.transcript", "session.update", "session.upload",
     "session.wake",
     "settings.get", "settings.reset",
-    "skill.create", "skill.delete", "skill.enable", "skill.install", "skill.list", "skill.update",
+    "skill.create", "skill.delete", "skill.enable", "skill.get", "skill.install", "skill.list",
+    "skill.update",
     "task.activity", "task.approve", "task.attach", "task.changelog.write", "task.children",
-    "task.create", "task.delete", "task.detach", "task.dispatch", "task.get", "task.label.add",
-    "task.label.list", "task.label.remove", "task.link_commit", "task.list", "task.move",
-    "task.parent.set", "task.relate", "task.restore", "task.unrelate", "task.update",
+    "task.comment", "task.create", "task.delete", "task.detach", "task.dispatch", "task.get",
+    "task.label.add", "task.label.list", "task.label.remove", "task.link_commit", "task.list",
+    "task.move", "task.parent.set", "task.relate", "task.restore", "task.unapprove", "task.unrelate",
+    "task.update",
     // The Threads space on the phone: the same conversations as the PC's, and their pictures
-    // (`thread.upload` writes one for a message to carry, `thread.image` reads one to draw).
-    "thread.create", "thread.delete", "thread.get", "thread.image", "thread.list", "thread.rename",
-    "thread.send", "thread.set", "thread.stop", "thread.upload",
+    // (`thread.upload` writes one for a message to carry, `thread.image` reads one to draw); the
+    // models on the PC; and the cards the agent asks on (`thread.proposal.*`).
+    "thread.create", "thread.delete", "thread.get", "thread.image", "thread.list", "thread.models",
+    "thread.pick", "thread.proposal.get", "thread.proposal.list", "thread.proposal.resolve",
+    "thread.proposal.undo", "thread.rename", "thread.send", "thread.set", "thread.stop",
+    "thread.upload",
     "ui.page.switch",
     "usage.get",
     "workspace.create", "workspace.discover", "workspace.list", "workspace.remove", "workspace.update",

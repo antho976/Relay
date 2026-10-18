@@ -76,6 +76,25 @@ push service either: notifications come from the link while **Stay connected** k
 the background (an ongoing notification), and otherwise from a catch-up every half hour
 (WorkManager) that reaches the PC, sends the outbox and reads what changed.
 
+## The server's copy
+
+A phone may also pair with the cloud copy on your server (`docs/CLOUD.md`): on the PC's page,
+**Your server's copy** takes a link from `relay --instance stable remote pair --via-only` run on
+the server; the personal build offers it through Discord right after the PC is paired (enroll
+kind `relay-cloud`) and takes a pasted link while the bot does not know that kind. It is a
+second, data-only host and never replaces the PC. Once the PC's link has been down for three
+seconds, the phone dials the copy and asks it only for the ledger's and the training history's
+reads (`Hub.CLOUD_READS`, the reads in `CLOUD_OPS`): their answers are cached as the PC's are and
+say "From your server's copy" instead of "Saved on this phone", and the copy's events mark them
+stale. Edits, acts, the outbox and the full resync go to the PC alone, and the copy's link stops
+as soon as the PC's is back. A door's welcome names the op list it opens (`ops`: `phone` on a PC,
+`cloud` on a cloud copy), so the app refuses a cloud copy where it expects a PC, and the other
+way round.
+
+`relay cloud connect` also points the PC's rendezvous at the server's (`wss://<server>/relay`)
+when none is set, so a phone paired through the server is handed a route through it too; the
+server must list the room it prints in `RELAY_RENDEZVOUS_ROOMS`. A rendezvous set before is kept.
+
 ## Agents as a conversation
 
 Tapping an agent opens it as a conversation, not a terminal: the person's messages as bubbles,
@@ -101,6 +120,19 @@ Shift-Tab for the mode, arrows, Enter, `/`, Ctrl-C) covers the rest, and the ter
 one tap away in the header for whatever a conversation cannot show. The conversation is kept on
 the phone, so it opens with the PC away.
 
+## The rest of Dev
+
+A task takes comments, and a done one has **Reopen** (`task.unapprove`, with the undo its
+approval stored); its attachments are listed but not opened, since no op reads their bytes. A
+note's checkboxes tick in place (`notes.update`, the old body as `expected`), **Create task** makes
+one in Backlog from the note, and the note's tasks show under its title. The Guardrails page lists
+the active exceptions (revoked on the PC) and its form says of each field whether it is set here or
+inherited (`guardrail.config.layers`). A plugin or a skill opens to a read-only page; Git's
+**Clean merged** names the branches it will delete before it does (`git.branch.clean_merged`, a dry
+run first); Files moves a file, lists what was trashed with **Restore**, and finds in a file; and
+Design lists a project's canvases and draws each page as an outline (text, pictures and the
+contents of auto-layout frames are drawn on the PC only).
+
 ## Threads on the phone
 
 A thread's message box takes pictures as the agent chat's does (`ui/dev/Attach.kt` serves both):
@@ -120,6 +152,25 @@ ledger's currency, or figures in a `unit` ("kg", "%", "" for a count). A point m
 number is left out rather than drawn as 0; a `projected` series is dashed on a line and lighter
 as bars, and its key says "(projected)". The card's foot says they are Claude's numbers, not
 Tally's, and that it does not redraw (`ui/threads/Charts.kt`, `readWritten`).
+
+A thread's agent asking first shows as the PC's card (`ui/threads/Proposals.kt`): its rows read
+from the ledger by `thread.proposal.list` (again on `thread.proposal` and `money.changed`), the act
+on its key and **Not now**, **Review again** when a row moved since, and once answered Done with
+**Undo**, Not done, Failed or Undone. A changed entry's card has Undo and Redo (`money.tx.update`
+with only the fields that changed); one that gave an entry its first category has none. The model
+picker lists the PC's own models under On this PC (`thread.models`); picking one loads it
+(`thread.pick`), and its chip says "· loading" until it answers. Such a model has no effort and no
+pictures. A new thread has a Tally | Arbiter | Avex switch: its line, its questions and the line
+under the message box follow it, Avex's questions read from `gym.summary`.
+
+Tally's panel has Overview, Entries (back and forward a period, a search, one account or
+category, 60 at a time), Plan (read only: each category's budget, last month's spending and the
+average of the last three months) and Invest, whose Activity deletes a line with Undo. Arbiter has
+Overview, Orders and a read-only Settings; a strategy opens its own page with its rule, its price
+and trades, its records, its limits, its decisions and its orders. Avex's Workouts shows cardio and
+rest days among the workouts by month; its Lifts are grouped moving up, holding and slipping, and a
+lift opens its own page. Each page has the desktop's Ask keys, and a bill, an entry, an account or
+a holding opens to the question it asks; asking starts a new thread with those words.
 
 ## On the phone itself
 
@@ -146,10 +197,14 @@ phone with a key in Android's keystore; the pairing and the replica are excluded
 and device transfers. Wake-on-LAN targets, like the PC's name and Relay's version, are sent in the welcome, only to a
 phone the door has admitted; the greeting before it names nothing.
 
-This app adds to `PHONE_OPS`: an agent's conversation (`session.transcript`) and a picture for it (`session.upload`), the Threads space (`thread.*`, with a message's pictures, `thread.upload` and `thread.image`), the ledger's reads for the Tally
-panel and the Undo of an entry a thread added (`money.summary/lists/series/tx.list/invest.*`,
-`money.tx.delete/restore`, `money.invest.delete/restore`), Arbiter's reads, a proposal's answer and
-its halt and restart keys, and Avex's reads. A phone still cannot add, import, reset or replace
+This app adds to `PHONE_OPS`: an agent's conversation (`session.transcript`) and a picture for it (`session.upload`), the Threads space (`thread.*`, with a message's pictures, `thread.upload` and `thread.image`, the PC's own models, `thread.models` and `thread.pick`, and the cards a thread's agent asks on, `thread.proposal.*`), the ledger's reads for the Tally
+panel and the Undo of an entry a thread added or changed, and its Redo (`money.summary/lists/series/tx.list/invest.*`,
+`money.tx.delete/restore/update`, `money.invest.delete/restore`, the last also for the Invest page's
+Activity), Arbiter's reads, a proposal's answer and its halt and restart keys, Avex's reads, a
+task's comments and Reopen (`task.comment`, `task.unapprove`), the guardrail form's layers and the
+active exceptions (`guardrail.config.layers`, `guardrail.requests.list`), a skill's page
+(`skill.get`), Files' Move and trash (`file.move`, `file.trash.list`) and the design gallery
+(`design.list`, `design.get`). A phone still cannot add, import, reset or replace
 the ledger except through Tally's sync.
 
 ## Building and installing

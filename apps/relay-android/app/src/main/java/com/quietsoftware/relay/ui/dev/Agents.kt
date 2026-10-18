@@ -198,13 +198,14 @@ private fun WorkspaceStrip(s: ShellState, project: Project?, onCrumb: () -> Unit
         val crumb: @Composable (Modifier) -> Unit = { m -> Crumb(s, project, onCrumb, m) }
         val views: @Composable (Modifier, Boolean) -> Unit = { m, fill ->
             Segmented(
-                listOf("agents" to "Agents", "files" to "Files", "git" to "Git"),
+                listOf("agents" to "Agents", "files" to "Files", "git" to "Git", "design" to "Design"),
                 "agents",
                 { v ->
                     val id = project?.num ?: return@Segmented
                     when (v) {
                         "files" -> nav.files(id)
                         "git" -> nav.git(id)
+                        "design" -> nav.designs(id)
                     }
                 },
                 m,

@@ -56,6 +56,10 @@ import com.quietsoftware.relay.core.sync.Optimistic
 import com.quietsoftware.relay.core.sync.OutboxEntry
 import com.quietsoftware.relay.core.sync.Refs
 import com.quietsoftware.relay.core.wire.BusException
+import com.quietsoftware.relay.core.wire.arr
+import com.quietsoftware.relay.core.wire.l
+import com.quietsoftware.relay.core.wire.o
+import com.quietsoftware.relay.core.wire.s
 import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Glyph
@@ -155,11 +159,43 @@ internal class TaskOps(private val nav: Nav) {
         }
     }
 
-    /** Approval is the person's alone; its Undo sends the task back to review. */
+    /**
+     * Approval is the person's alone. Its Undo is the approval's own inverse while the PC is in
+     * reach (column, slot and state back, the commit link it added dropped, as the desktop's
+     * Ctrl+Z); a move back to review is what the phone can queue without it.
+     */
     fun approve(task: Task) {
         val name = task.named()
         send("task.approve", buildJsonObject { put("task_id", task.idJson()) }, "Approve $name", "Approved $name") {
-            nav.relay.change("task.move", buildJsonObject { put("task_id", task.idJson()); put("column", "in_review") }, "Send $name back to review")
+            val undo = task.num?.let { n ->
+                try {
+                    approvalUndo(nav, n)
+                } catch (e: BusException) {
+                    null
+                }
+            }
+            if (undo != null) nav.relay.call("task.unapprove", undo)
+            else nav.relay.change("task.move", buildJsonObject { put("task_id", task.idJson()); put("column", "in_review") }, "Send $name back to review")
+        }
+    }
+
+    /**
+     * Reopen a done task (`task.unapprove`): back where its approval found it, or to In review
+     * when no approval of it is on record (moved to Done with a commit already linked). Needs the PC.
+     */
+    fun reopen(task: Task) {
+        val num = task.num ?: return
+        val name = task.named()
+        nav.shell.viewModelScope.launch {
+            val undo = try {
+                approvalUndo(nav, num)
+            } catch (e: BusException) {
+                nav.shell.toast(if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code })
+                return@launch
+            }
+            // The end of In review: the PC clamps a slot past the last to it.
+            val payload = undo ?: buildJsonObject { put("task_id", num); put("column", "in_review"); put("position", Int.MAX_VALUE); put("state", "none") }
+            nav.shell.act("task.unapprove", payload, done = "Reopened $name into ${Task.columnLabel(payload.s("column") ?: "in_review")}")
         }
     }
 
@@ -171,6 +207,19 @@ internal class TaskOps(private val nav: Nav) {
     }
 
     private fun send(op: String, payload: JsonObject, label: String, done: String, inverse: suspend () -> Unit) = undoable(nav, op, payload, label, done, inverse)
+}
+
+/**
+ * What undoes task [num]'s approval: the inverse the PC recorded with its newest one (the column,
+ * slot and state it left, and the commit link it made), read off the task's history. Null when
+ * that approval is not on record or was undone already. Throws with the PC out of reach.
+ */
+internal suspend fun approvalUndo(nav: Nav, num: Long): JsonObject? {
+    val got = nav.relay.call("task.activity", buildJsonObject { put("task_id", num); put("limit", 100) }) as? JsonObject ?: return null
+    // Newest first: the first approval is the one that put the task in Done.
+    val row = got.arr("history").firstNotNullOfOrNull { h -> (h as? JsonObject)?.takeIf { it.s("op") == "task.approve" && it.s("kind") == "ok" } } ?: return null
+    if (row.l("undone_by") != null) return null
+    return row.o("undo_op")?.takeIf { it.s("op") == "task.unapprove" }?.o("payload")
 }
 
 /**

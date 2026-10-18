@@ -1,5 +1,6 @@
 package com.quietsoftware.relay.ui.code
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -31,6 +32,7 @@ import com.quietsoftware.relay.ui.kit.StaleNote
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -40,11 +42,22 @@ private sealed interface BranchSheet {
     class Carry(val name: String, val message: String) : BranchSheet
     class Delete(val branch: Branch) : BranchSheet
     class Create(val from: String?) : BranchSheet
+    class Clean(val found: CleanOut) : BranchSheet
 }
+
+/** What `git.branch.clean_merged` deleted (or, on a dry run, would), and the merged ones it kept with why. */
+@Serializable
+private data class CleanOut(val deleted: List<String> = emptyList(), val failed: List<CleanFailed> = emptyList())
+
+@Serializable
+private data class CleanFailed(val branch: String = "", val reason: String = "")
+
+private fun branches(n: Int) = if (n == 1) "1 merged branch" else "$n merged branches"
 
 /**
  * The local branches of a worktree: the current one checked, its sync with the remote, which are
- * merged, and the session that owns each. Switch, branch from one, or delete a merged one.
+ * merged, and the session that owns each. Switch, branch from one, delete a merged one, or clean
+ * every closed session's merged branch at once (`git.branch.clean_merged`, named before it goes).
  * Desktop: code_git.rs branch popover.
  */
 @Composable
@@ -70,14 +83,40 @@ fun ColumnScope.BranchesTab(nav: Nav, projectId: Long, wt: String?, refresh: Int
         }
     }
 
+    // A dry run first, so the confirmation names what goes; then the run itself.
+    fun findMerged() {
+        scope.write(nav, "git.branch.clean_merged", buildJsonObject {
+            put("project_id", projectId)
+            put("dry_run", true)
+        }) { r ->
+            val found = r?.decodeAs<CleanOut>() ?: return@write
+            if (found.deleted.isEmpty()) {
+                nav.shell.toast(if (found.failed.isEmpty()) "No merged branches to clean" else "No merged branch can go now: ${found.failed.joinToString("; ") { "${it.branch}, ${it.reason}" }}")
+            } else {
+                sheet = BranchSheet.Clean(found)
+            }
+        }
+    }
+
+    fun clean() {
+        scope.write(nav, "git.branch.clean_merged", buildJsonObject { put("project_id", projectId) }) { r ->
+            val done = r?.decodeAs<CleanOut>() ?: return@write
+            onChanged()
+            nav.shell.toast(
+                "Deleted ${branches(done.deleted.size)}" + if (done.failed.isNotEmpty()) " · ${done.failed.size} kept" else "",
+            )
+        }
+    }
+
     LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 24.dp)) {
         if (data == null) {
             item { LiveWait(live, page = true) }
         } else {
             if (!live.fresh) item { StaleNote(live.at) }
             item {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Fill()
+                    Key("Clean merged", { findMerged() }, kind = KeyKind.Quiet, compact = true, enabled = online, glyph = "clear")
                     Key("New branch", { sheet = BranchSheet.Create(null) }, kind = KeyKind.Plain, compact = true, enabled = online, glyph = "branch")
                 }
             }
@@ -134,6 +173,21 @@ fun ColumnScope.BranchesTab(nav: Nav, projectId: Long, wt: String?, refresh: Int
                     }
                 }
             },
+            onDismiss = { sheet = null },
+        )
+        is BranchSheet.Clean -> ConfirmSheet(
+            title = "Delete ${branches(s.found.deleted.size)}?",
+            body = buildString {
+                append(s.found.deleted.joinToString("\n"))
+                append("\n\nEach is a closed session's branch whose work is merged, into the base branch or by a merged pull request; its worktree goes with it. Unmerged work is kept.")
+                if (s.found.failed.isNotEmpty()) {
+                    append("\n\nKept: ")
+                    append(s.found.failed.joinToString("; ") { "${it.branch}, ${it.reason}" })
+                }
+            },
+            confirm = "Delete",
+            danger = true,
+            onConfirm = { clean() },
             onDismiss = { sheet = null },
         )
         is BranchSheet.Create -> NameSheet(
