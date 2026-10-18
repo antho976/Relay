@@ -861,9 +861,9 @@ fn agents(ui: &Rc<Ui>, stack: &gtk::Stack, form: &Form, data: &Value, providers:
         update.add_css_class("settings-button");
         update.set_widget_name(&format!("provider-update-{provider}"));
         let weak = Rc::downgrade(ui);
-        update.connect_clicked(move |_| {
+        update.connect_clicked(move |key| {
             if let Some(ui) = weak.upgrade() {
-                crate::provider_updates::update(&ui, provider);
+                crate::provider_updates::update(&ui, provider, key);
             }
         });
         controls.append(&update);

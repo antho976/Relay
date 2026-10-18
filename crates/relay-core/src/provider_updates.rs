@@ -22,10 +22,19 @@ fn installation(provider: Provider, path: &Path, home: &Path) -> Option<&'static
     }
 }
 
+/// The provider as its notice and answer name it in a sentence, as the apps do.
+fn title(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Claude => "Claude Code",
+        Provider::Codex => "Codex",
+    }
+}
+
 pub(crate) fn register(engine: &mut Engine) {
     engine.register::<Update>(|ctx: &mut Ctx, payload| {
         let provider = payload.provider;
         let name = crate::sessions::provider_str(provider);
+        let title = title(provider);
         if payload.automatic == Some(true)
             && crate::handlers::settings::get(ctx.tx(), Some(&format!("providers.{name}.auto_update")))? != true
         {
@@ -67,7 +76,7 @@ pub(crate) fn register(engine: &mut Engine) {
                 let _ = engine.system_write("provider.update.finished", None, None, None, json!({"provider":name,"state":state}), |tx, now| {
                     if let Some(probes) = probes { let _ = crate::providers::record(tx, now, probes); }
                     tx.execute("INSERT INTO notifications(project_id,category,title,body,link,read,created_at) VALUES (NULL,'provider',?1,?2,NULL,0,?3)",
-                        params![format!("{name} update {state}"),message,now]).bus()?;
+                        params![format!("{title} update {state}"),message,now]).bus()?;
                     Ok(((), vec![
                         ("provider.update.changed".into(), json!({"provider":name,"state":state,"message":message})),
                         ("notify.new".into(), json!({"category":"provider"})),
@@ -76,7 +85,7 @@ pub(crate) fn register(engine: &mut Engine) {
                 engine.provider_updates.lock().unwrap().remove(name);
             });
         });
-        Ok(UpdateOut { started: true, method: method.unwrap().into(), message: format!("Updating {name} in the background. New sessions use the updated version.") })
+        Ok(UpdateOut { started: true, method: method.unwrap().into(), message: format!("Updating {title} in the background. New sessions use the updated version.") })
     });
 }
 
