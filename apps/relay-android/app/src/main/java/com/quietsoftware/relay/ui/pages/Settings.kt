@@ -1,5 +1,7 @@
 package com.quietsoftware.relay.ui.pages
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -31,6 +33,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.app.NotificationManagerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quietsoftware.relay.BuildConfig
 import com.quietsoftware.relay.core.wire.BusException
@@ -44,6 +49,7 @@ import com.quietsoftware.relay.ui.kit.Gap
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.Hairline
 import com.quietsoftware.relay.ui.kit.IconKey
+import com.quietsoftware.relay.ui.kit.Key
 import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.SectionLabel
 import com.quietsoftware.relay.ui.kit.Slab
@@ -88,6 +94,9 @@ fun SettingsScreen(nav: Nav) {
     val pcNotify by remember { nav.relay.live("notify.settings.get") }.collectAsStateWithLifecycle(initialValue = Live())
     val categories = (pcNotify.result as? JsonObject)?.o("categories")
     val overrides = remember(pcNotify.result) { mutableStateMapOf<String, Boolean>() }
+    // Android's own switch for Relay's notifications, read again each time the page comes back.
+    var allowed by remember { mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled()) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { allowed = NotificationManagerCompat.from(context).areNotificationsEnabled() }
 
     Page {
         Column(Modifier.fillMaxSize()) {
@@ -132,6 +141,18 @@ fun SettingsScreen(nav: Nav) {
                     Hairline()
                     SwitchRow("Notifications", "Tell me when an agent is held, blocked or done while the app is not on screen.", p.notify) { on ->
                         nav.shell.update { prefs -> prefs.copy(notify = on) }
+                    }
+                    // On here shows nothing while Android has them off: say so, with the way to its switch.
+                    if (p.notify && !allowed) {
+                        Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            T("Android has notifications off for Relay, so none show.", Modifier.weight(1f), Relay.type.caption, c.heldText)
+                            Spacer(Modifier.width(12.dp))
+                            Key("Android settings", {
+                                runCatching {
+                                    context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
+                                }
+                            }, glyph = "external", compact = true)
+                        }
                     }
                 }
 

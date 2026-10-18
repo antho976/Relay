@@ -2,6 +2,7 @@ package com.quietsoftware.relay
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -47,12 +48,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // A recreated activity (process death, a font or locale change) has acted on its intent already.
         if (savedInstanceState == null) opening.value = intent
-        if (Build.VERSION.SDK_INT >= 33) askNotify.launch(Manifest.permission.POST_NOTIFICATIONS)
         setContent {
             val shell: ShellModel = hiltViewModel()
             val s by shell.state.collectAsStateWithLifecycle()
             splash.setKeepOnScreenCondition { !s.loaded }
             if (!s.loaded) return@setContent
+            // Notifications are asked for once a PC is paired, not over the pairing screen.
+            val paired = s.pc != null
+            LaunchedEffect(paired) { if (paired) askNotifications() }
             val controller = rememberNavController()
             val nav = remember(controller, shell) { Nav(controller, shell) }
             val start = remember { if (s.pc == null) "pair" else "start" }
@@ -90,6 +93,17 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * Asks to post notifications unless Android allows them already or the person said no before:
+     * once refused, Android says to explain rather than ask, and the phone leaves it to Settings.
+     */
+    private fun askNotifications() {
+        if (Build.VERSION.SDK_INT < 33) return
+        val permission = Manifest.permission.POST_NOTIFICATIONS
+        if (checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED || shouldShowRequestPermissionRationale(permission)) return
+        askNotify.launch(permission)
     }
 
     override fun onNewIntent(intent: Intent) {
