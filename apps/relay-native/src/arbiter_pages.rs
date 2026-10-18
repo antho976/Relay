@@ -10,7 +10,7 @@
 //! halt.
 use super::pages::{card, columns, glyph_image, icon_row, meter_in, setting_row, tile, Tone};
 use super::{message, page, toast, Action, Page};
-use crate::app::{button, clear, confirm_inline, label, rows, text, Ui};
+use crate::app::{button, clear, confirm_inline, confirm_inline_if, label, rows, text, Ui};
 use crate::client::Error;
 use crate::panel::Panel;
 use gtk::prelude::*;
@@ -1477,7 +1477,19 @@ fn field_entry(name: &str, value: &str, width: i32) -> gtk::Entry {
     gtk::prelude::EntryExt::set_alignment(&e, 1.0);
     e.set_placeholder_text(Some("None"));
     e.set_text(value);
+    // A field a save refused is marked until it is typed in again.
+    e.connect_changed(|e| e.remove_css_class("error"));
     e
+}
+
+/// Enter in `entry` presses `key`, as a click does; not again while its save is on its way.
+fn enter_presses(entry: &gtk::Entry, key: &gtk::Button) {
+    let key = key.downgrade();
+    entry.connect_activate(move |_| {
+        if let Some(key) = key.upgrade().filter(|k| k.is_sensitive()) {
+            key.emit_clicked();
+        }
+    });
 }
 
 /// A value as a field shows it: a decimal string as written, a number, or nothing.
@@ -1506,15 +1518,19 @@ fn paper_card(ui: &Rc<Ui>, column: &gtk::Box, st: &Value, open: bool) {
     save.set_halign(gtk::Align::End);
     save.add_css_class("tally-save");
     list.append(&save);
+    enter_presses(&home, &save);
+    enter_presses(&cash, &save);
     let weak = Rc::downgrade(ui);
     save.connect_clicked(move |key| {
         let Some(ui) = weak.upgrade() else { return };
         let code = home.text().trim().to_uppercase();
         if !(3..=5).contains(&code.len()) || !code.chars().all(|c| c.is_ascii_alphanumeric()) {
+            home.add_css_class("error");
             toast(&ui, "A currency is a code such as CAD or USDC.", None);
             return;
         }
         let Some(start) = decimal(&cash.text()) else {
+            cash.add_css_class("error");
             toast(&ui, "Type what paper starts with, like 1000.", None);
             return;
         };
@@ -1607,6 +1623,9 @@ fn global_limits(ui: &Rc<Ui>, column: &gtk::Box, st: &Value) {
     save.set_halign(gtk::Align::End);
     save.add_css_class("tally-save");
     list.append(&save);
+    for e in &fields {
+        enter_presses(e, &save);
+    }
     let weak = Rc::downgrade(ui);
     save.connect_clicked(move |key| {
         let Some(ui) = weak.upgrade() else { return };
@@ -1615,6 +1634,7 @@ fn global_limits(ui: &Rc<Ui>, column: &gtk::Box, st: &Value) {
             let typed = entry.text().trim().to_string();
             if typed.is_empty() {
                 if *required {
+                    entry.add_css_class("error");
                     toast(&ui, &format!("{caption} needs a value."), None);
                     return;
                 }
@@ -1626,6 +1646,7 @@ fn global_limits(ui: &Rc<Ui>, column: &gtk::Box, st: &Value) {
                 _ => decimal(&typed).map(Value::from),
             };
             let Some(value) = value else {
+                entry.add_css_class("error");
                 toast(&ui, &format!("{caption}: type a number above zero, or leave it empty for no limit."), None);
                 return;
             };
@@ -2790,6 +2811,11 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, products: Vec<Value>, detail: Option<Val
     problem.set_wrap(true);
     problem.set_visible(false);
     body.append(&problem);
+    if text(&row, "venue") == "live" && text(&row, "state") == "running" {
+        let l = label("Saving changes what it trades with real money from its next bar.", "arbiter-warning");
+        l.set_wrap(true);
+        body.append(&l);
+    }
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     actions.add_css_class("money-sheet-actions");
     let cancel = button("Cancel", "quiet");
@@ -2800,23 +2826,70 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, products: Vec<Value>, detail: Option<Val
     actions.append(&cancel);
     actions.append(&save);
     body.append(&actions);
-    let sheet = Rc::downgrade(panel);
-    cancel.connect_clicked(move |_| {
-        if let Some(sheet) = sheet.upgrade() {
-            sheet.close();
-        }
-    });
+    // Enter in a field saves, as the key does.
+    for e in [&name, &amount, &take_profit, &stop_loss, &trailing, &max_bars] {
+        enter_presses(e, &save);
+    }
+    for f in limit_entries.iter() {
+        enter_presses(&f.entry, &save);
+    }
     if id.is_none() {
         if let Some(first) = template_keys.borrow().first() {
             first.emit_clicked();
         }
     }
 
+    // What the form says, field by field: the draft is unsaved while it differs from how the
+    // sheet opened, and Escape, the scrim or × then leave it open.
+    let snapshot = {
+        let (name, product, bars, params, kept_when, amount, limit) = (name.clone(), product.clone(), bars.clone(), params.clone(), kept_when.clone(), amount.clone(), limit.clone());
+        let (exits, limit_entries) = ([take_profit.clone(), stop_loss.clone(), trailing.clone(), max_bars.clone()], limit_entries.clone());
+        move || {
+            let crossing = matches!(&*params.borrow(), Params::Cross { exit, .. } if exit.is_active());
+            json!([
+                name.text().to_string(), product.selected(), bars.selected(), entry_json(&params.borrow()), crossing, kept_when.borrow().clone(),
+                amount.text().to_string(), limit.is_active(),
+                exits.iter().map(|e| e.text().to_string()).collect::<Vec<_>>(),
+                limit_entries.iter().map(|f| f.entry.text().to_string()).collect::<Vec<_>>(),
+            ])
+        }
+    };
+    let opened = snapshot();
+    let changed = Rc::new(move || snapshot() != opened);
+    let permit = Rc::new(Cell::new(false));
+    let (shown, allowed, unsaved) = (problem.downgrade(), permit.clone(), changed.clone());
+    panel.set_guard(move || {
+        if allowed.get() || !unsaved() {
+            return true;
+        }
+        if let Some(problem) = shown.upgrade() {
+            problem.set_text(if id.is_some() { "Save a new version, or Cancel to discard the changes." } else { "Save it on paper, or Cancel to discard it." });
+            problem.set_visible(true);
+        }
+        false
+    });
+    let (sheet, allowed, unsaved) = (Rc::downgrade(panel), permit.clone(), changed.clone());
+    confirm_inline_if(&cancel, if id.is_some() { "Discard changes" } else { "Discard draft" }, move || unsaved(), move |_| {
+        allowed.set(true);
+        if let Some(sheet) = sheet.upgrade() {
+            sheet.close();
+        }
+    });
+
     let weak = Rc::downgrade(ui);
     let sheet = Rc::downgrade(panel);
     let first = name.clone();
     save.connect_clicked(move |key| {
         let Some(ui) = weak.upgrade() else { return };
+        // Saved unchanged, a strategy would only gain a version that changes nothing.
+        if id.is_some() && !changed() {
+            permit.set(true);
+            if let Some(sheet) = sheet.upgrade() {
+                sheet.close();
+            }
+            toast(&ui, "Nothing changed, so no new version.", None);
+            return;
+        }
         let refuse = |words: &str| {
             problem.set_text(words);
             problem.set_visible(true);
@@ -2884,10 +2957,11 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, products: Vec<Value>, detail: Option<Val
         }
         problem.set_visible(false);
         key.set_sensitive(false);
-        let (key, problem, sheet) = (key.clone(), problem.clone(), sheet.clone());
+        let (key, problem, sheet, permit) = (key.clone(), problem.clone(), sheet.clone(), permit.clone());
         glib::spawn_future_local(async move {
             match ui.call("arbiter.strategy.save", payload).await {
                 Ok(d) => {
+                    permit.set(true);
                     if let Some(sheet) = sheet.upgrade() {
                         sheet.close();
                     }
@@ -2975,8 +3049,34 @@ pub(super) fn connect(ui: &Rc<Ui>) {
     actions.append(&cancel);
     actions.append(&save);
     body.append(&actions);
+    // Enter in the name goes on to the key itself, which takes Enter as a new line.
+    let next = secret.downgrade();
+    key_name.connect_activate(move |_| {
+        if let Some(secret) = next.upgrade() {
+            secret.grab_focus();
+        }
+    });
+    // What was pasted and not yet checked is not thrown away by Escape, the scrim or ×.
+    let saved = Rc::new(Cell::new(false));
+    let unsaved = {
+        let (name, buffer, saved) = (key_name.downgrade(), secret.buffer(), saved.clone());
+        Rc::new(move || !saved.get() && (name.upgrade().is_some_and(|n| !n.text().trim().is_empty()) || buffer.char_count() > 0))
+    };
+    let permit = Rc::new(Cell::new(false));
+    let (shown, allowed, pending) = (problem.downgrade(), permit.clone(), unsaved.clone());
+    panel.set_guard(move || {
+        if allowed.get() || !pending() {
+            return true;
+        }
+        if let Some(problem) = shown.upgrade() {
+            problem.set_text("Check and save the key, or Cancel to discard it.");
+            problem.set_visible(true);
+        }
+        false
+    });
     let sheet = Rc::downgrade(&panel);
-    cancel.connect_clicked(move |_| {
+    confirm_inline_if(&cancel, "Discard draft", move || unsaved(), move |_| {
+        permit.set(true);
         if let Some(sheet) = sheet.upgrade() {
             sheet.close();
         }
@@ -2996,10 +3096,11 @@ pub(super) fn connect(ui: &Rc<Ui>) {
         problem.set_visible(false);
         key.set_sensitive(false);
         key.set_label("Checking with Coinbase…");
-        let (key, problem, results, cancel, secret, key_name) = (key.clone(), problem.clone(), results.clone(), cancel.clone(), secret.clone(), key_name.clone());
+        let (key, problem, results, cancel, secret, key_name, saved) = (key.clone(), problem.clone(), results.clone(), cancel.clone(), secret.clone(), key_name.clone(), saved.clone());
         glib::spawn_future_local(async move {
             match ui.call("arbiter.key.set", json!({"key_name": name, "private_key": pem})).await {
                 Ok(c) => {
+                    saved.set(true);
                     // The key is in the keyring now; it need not stay in a text field.
                     secret.buffer().set_text("");
                     secret.set_sensitive(false);
