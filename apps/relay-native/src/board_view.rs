@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use task_pages::{COLUMNS, COLUMN_TITLES, OPEN_COLUMNS, PRIORITIES, SIZES, TYPES};
 // The board's pure logic lives in relay-board, which builds without GTK so CI tests it.
-use relay_board::{drop_index, group_of, group_title, task_matches, zone, Filters, Nudge, Zone, URGENT_FIRST};
+use relay_board::{drop_index, group_of, group_title, open_blockers, task_matches, zone, Filters, Nudge, Zone, URGENT_FIRST};
 
 const GROUPS: [(&str, &str); 7] = [
     ("", "None"),
@@ -61,15 +61,6 @@ fn current() -> Option<Rc<Board>> {
 /// Every task by id, built once per render: a card's links are looked up, not scanned for.
 fn by_id(tasks: &[Value]) -> BTreeMap<i64, &Value> {
     tasks.iter().filter_map(|t| Some((t["id"].as_i64()?, t))).collect()
-}
-
-/// The tasks blocking `task` that are not done yet, looked up in [`by_id`]'s index.
-fn open_blockers<'a>(task: &Value, all: &BTreeMap<i64, &'a Value>) -> Vec<&'a Value> {
-    rows(task, "blocked_by")
-        .iter()
-        .filter_map(|other| other.as_i64().and_then(|other| all.get(&other)).copied())
-        .filter(|t| text(t, "column") != "done")
-        .collect()
 }
 
 /// The line under a lane's name, as GitHub's project columns carry one.
@@ -864,9 +855,17 @@ pub fn show(ui: &Rc<Ui>, page: &gtk::Box, project: i64, tasks: Vec<Value>) {
         .iter()
         .filter_map(|t| t["id"].as_i64().map(|id| (id, t["title"].clone())))
         .collect();
+    // `is:blocked` finds what the Blocked tile counts, which takes the other tasks to know.
+    let blocked: BTreeSet<i64> = {
+        let all = by_id(&tasks);
+        tasks.iter().filter(|t| relay_board::is_blocked(t, &all)).filter_map(|t| t["id"].as_i64()).collect()
+    };
     for task in &mut tasks {
         if let Some(title) = task["parent_id"].as_i64().and_then(|id| titles.get(&id)) {
             task["_parent_title"] = title.clone();
+        }
+        if task["id"].as_i64().is_some_and(|id| blocked.contains(&id)) {
+            task["_blocked"] = true.into();
         }
     }
     // Most events that refresh the page change no task: leave the board, and any open menu,
@@ -2393,7 +2392,7 @@ impl Board {
         let running = tasks.iter().filter(|t| text(t, "state") == "running").count();
         let review = in_column("in_review");
         let all = by_id(everything);
-        let blocked = open.iter().filter(|t| !open_blockers(t, &all).is_empty()).count();
+        let blocked = open.iter().filter(|t| relay_board::is_blocked(t, &all)).count();
         let shipped = tasks
             .iter()
             .filter(|t| text(t, "column") == "done" && within_days(text(t, "updated_at"), 7))

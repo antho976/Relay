@@ -82,11 +82,29 @@ pub fn task_matches(task: &Value, filters: &Filters, query: &str) -> bool {
             })
     }) && (query.is_empty() || haystack(task).contains(query))
 }
+/// The tasks blocking `task` that are not done yet, looked up in `all` (every task by id).
+pub fn open_blockers<'a>(task: &Value, all: &BTreeMap<i64, &'a Value>) -> Vec<&'a Value> {
+    task["blocked_by"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|other| other.as_i64().and_then(|other| all.get(&other)).copied())
+        .filter(|t| text(t, "column") != "done")
+        .collect()
+}
+/// Blocked as the board's Blocked tile counts it and a card's "Blocked by #n" says it: open,
+/// with a blocker that is not done. The board marks such a task `_blocked` for `is:blocked`.
+pub fn is_blocked(task: &Value, all: &BTreeMap<i64, &Value>) -> bool {
+    text(task, "column") != "done" && !open_blockers(task, all).is_empty()
+}
+
 /// The search box's own language, as GitHub's "filter by keyword or by field": `key:value`
 /// terms narrow by a field (several values comma-separated, any one matching), every other
 /// word must appear in the task's [`haystack`]. Keys: `status`/`is`, `priority`, `size`,
-/// `type`, `label`, `module`, `agent`; `is:blocked` and `no:size`/`no:module`/`no:label`
-/// test for absence. Matching ignores case; an unknown key reads as a plain word.
+/// `type`, `label`, `module`, `agent` and `state` (the execution state, so `state:blocked` is an
+/// agent's report); `is:blocked` reads the `_blocked` mark of [`is_blocked`], and
+/// `no:size`/`no:module`/`no:label` test for absence. Matching ignores case; an unknown key reads
+/// as a plain word.
 pub fn query_matches(task: &Value, query: &str) -> bool {
     let hay = haystack(task);
     query.split_whitespace().all(|term| {
@@ -100,7 +118,8 @@ pub fn query_matches(task: &Value, query: &str) -> bool {
             task[name].as_array().is_some_and(|list| list.iter().filter_map(Value::as_str).any(|v| v.to_lowercase() == value))
         };
         values.iter().any(|value| match key {
-            "status" | "column" | "is" if *value == "blocked" => !text(task, "state").is_empty() && text(task, "state") == "blocked",
+            // What the Blocked tile counts, not an agent's report (that is `state:blocked`).
+            "status" | "column" | "is" if *value == "blocked" => task["_blocked"].as_bool() == Some(true),
             "status" | "column" | "is" => {
                 let column = field("column");
                 column == *value || column_title(&column).to_lowercase().replace(' ', "") == value.replace(['_', '-'], "")
@@ -109,6 +128,7 @@ pub fn query_matches(task: &Value, query: &str) -> bool {
             "priority" | "p" => field("priority") == *value,
             "size" => field("size") == *value,
             "type" => field("type") == *value,
+            "state" => field("state") == value.replace('-', "_"),
             "label" => listed("labels", value),
             "agent" | "session" => listed("sessions", value),
             "module" => text(task, "module_name").to_lowercase().contains(value),
@@ -688,5 +708,44 @@ mod tests {
         }
         // A stray colon is a word, not a field.
         assert!(!query_matches(&task, "nothing:"));
+    }
+
+    #[test]
+    fn is_blocked_finds_what_the_blocked_tile_counts() {
+        let tasks = [
+            json!({"id":1,"title":"Schema","column":"active","state":"running"}),
+            json!({"id":2,"title":"Shipped base","column":"done"}),
+            // Waits on #1, which is open: blocked, though no agent said so.
+            json!({"id":3,"title":"Migrate","column":"ready","state":"none","blocked_by":[1]}),
+            // Its only blocker is done.
+            json!({"id":4,"title":"Polish","column":"ready","blocked_by":[2]}),
+            // An agent reported itself blocked, but nothing blocks the task.
+            json!({"id":5,"title":"Stuck","column":"active","state":"blocked"}),
+            // Done tasks are not counted, open blocker or not.
+            json!({"id":6,"title":"Closed early","column":"done","blocked_by":[1]}),
+            // A blocker the list does not hold (deleted) blocks nothing.
+            json!({"id":7,"title":"Orphan","column":"backlog","blocked_by":[99]}),
+        ];
+        let all: BTreeMap<i64, &Value> = tasks.iter().map(|t| (t["id"].as_i64().unwrap(), t)).collect();
+        let tile: Vec<i64> = tasks.iter().filter(|t| is_blocked(t, &all)).map(|t| t["id"].as_i64().unwrap()).collect();
+        assert_eq!(tile, [3]);
+        assert_eq!(ids(&open_blockers(&tasks[2], &all)), [1]);
+        // The board marks what the tile counts, and the search reads the mark.
+        let marked: Vec<Value> = tasks
+            .iter()
+            .map(|t| {
+                let mut t = t.clone();
+                if is_blocked(&t, &all) {
+                    t["_blocked"] = true.into();
+                }
+                t
+            })
+            .collect();
+        let found = |query: &str| marked.iter().filter(|t| query_matches(t, query)).map(|t| t["id"].as_i64().unwrap()).collect::<Vec<_>>();
+        assert_eq!(found("is:blocked"), tile);
+        assert_eq!(found("status:blocked"), tile);
+        // The agent's report is still searchable, by its own name.
+        assert_eq!(found("state:blocked"), [5]);
+        assert_eq!(found("state:running"), [1]);
     }
 }
