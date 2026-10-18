@@ -907,6 +907,14 @@ impl Board {
             .build();
         query.set_widget_name("board-query");
         query.add_css_class("board-search");
+        // The board's keys (`Board::key`), which nothing else names.
+        query.set_tooltip_text(Some(
+            "Search (/)\n\
+             On a card: H J K L or the arrows move between cards, Enter opens, Space peeks, \
+             . or Menu opens its menu, [ and ] move it a column, Shift+J/K move it up or down, \
+             P changes its priority\n\
+             G changes the grouping, V the view and F opens the filters; C quick-creates, N opens New task",
+        ));
         search.append(&query);
         let wipe = crate::app::icon_button("close", "Clear the search (Esc)");
         wipe.add_css_class("board-search-clear");
@@ -2648,7 +2656,17 @@ impl Board {
             if items.is_empty() {
                 return;
             }
-            menu.append(&label(title, "view-menu-caption"));
+            let caption = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            caption.append(&label(title, "view-menu-caption"));
+            // G steps through the groupings from the board, without opening this menu.
+            if title == "Group by" {
+                caption.append(&spacer());
+                let cap = label("G", "board-kbd");
+                cap.set_valign(gtk::Align::End);
+                cap.set_margin_bottom(2);
+                caption.append(&cap);
+            }
+            menu.append(&caption);
             menu.append(&wrapped(items, 38));
         };
         let hidden = self.hidden.borrow().clone();
@@ -3520,8 +3538,20 @@ impl Board {
         peek.connect_clicked(run(Box::new(move |board| board.toggle_peek(id))));
         menu.append(&peek);
 
-        let section = |title: &str| label(title, "board-menu-caption");
-        menu.append(&section("MOVE TO"));
+        // A caption with the key that does the same from a focused card, as Open and Peek show theirs.
+        let section = |title: &str, key: &str| {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            row.append(&label(title, "board-menu-caption"));
+            row.append(&spacer());
+            if !key.is_empty() {
+                let cap = label(key, "board-kbd");
+                cap.set_valign(gtk::Align::End);
+                cap.set_margin_end(6);
+                row.append(&cap);
+            }
+            row
+        };
+        menu.append(&section("MOVE TO", "[ ]"));
         let columns = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         columns.set_homogeneous(true);
         for (column, title) in COLUMN_TITLES {
@@ -3544,7 +3574,7 @@ impl Board {
             columns.append(&key);
         }
         menu.append(&columns);
-        menu.append(&section("PRIORITY"));
+        menu.append(&section("PRIORITY", "P"));
         let priorities = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         priorities.set_homogeneous(true);
         for priority in URGENT_FIRST {
@@ -3559,7 +3589,7 @@ impl Board {
             priorities.append(&key);
         }
         menu.append(&priorities);
-        menu.append(&section("TYPE"));
+        menu.append(&section("TYPE", ""));
         let kinds = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         kinds.set_homogeneous(true);
         for kind in TYPES {
