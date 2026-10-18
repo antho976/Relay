@@ -179,7 +179,7 @@ for line in sys.stdin:
         # RELAY_SMOKE_PAGES=start,start-frame-45 captures only those pages and stops there, for a
         # quick look at one screen; the checks after the captures need every page.
         PAGES_ONLY = [p for p in os.environ.get("RELAY_SMOKE_PAGES", "").split(",") if p]
-        for viewport, size, page in (("desktop", "1440,900", "agents"), ("compact", "1024,768", "agents"), ("launch-preview", "1024,768", "launch-preview"), ("palette", "1024,768", "palette"), ("layouts", "1024,768", "layouts"), ("usage", "1440,900", "usage"), ("board", "1440,900", "board"), ("board-compact", "1024,768", "board"), ("mailbox", "1024,768", "mailbox"), ("guardrails", "1024,768", "guardrails"), ("code", "1440,900", "code"), ("resources", "1440,900", "resources"), *((name,"1440,900",name) for name in ("notes","modules","settings","skills","plugins","project-skills","project-plugins","notifications","devices","launch")),
+        for viewport, size, page in (("desktop", "1440,900", "agents"), ("compact", "1024,768", "agents"), ("launch-preview", "1024,768", "launch-preview"), ("palette", "1024,768", "palette"), ("palette-run", "1024,768", "palette-run"), ("layouts", "1024,768", "layouts"), ("usage", "1440,900", "usage"), ("board", "1440,900", "board"), ("board-compact", "1024,768", "board"), ("mailbox", "1024,768", "mailbox"), ("guardrails", "1024,768", "guardrails"), ("code", "1440,900", "code"), ("resources", "1440,900", "resources"), *((name,"1440,900",name) for name in ("notes","modules","settings","skills","plugins","project-skills","project-plugins","notifications","devices","launch")),
                                      *((name,"1440,900",name) for name in ("money-home","money-transactions","money-data","start")), ("money-plan","1024,768","money-plan"), ("money-entry","1024,768","money-entry"),
                                      ("agent-settings","1440,900","agent-settings"), ("agent-settings-compact","1024,768","agent-settings"),
                                      ("design", "1440,900", "design"),
@@ -226,6 +226,8 @@ for line in sys.stdin:
                 assert "Settings save verified across categories" in contents, contents
             if page == "start":
                 assert "Start screen dismiss verified" in contents, contents
+            if page == "palette-run":
+                assert "Command palette run verified" in contents, contents
             saved_layout = call("settings.get", {"path": f"native.layout.current.{project['id']}"})["value"]
             assert saved_layout["agent_layout"] == "grid", saved_layout
             assert "stylesheet:" not in contents and "gtk_widget_add_css_class:" not in contents, contents

@@ -1088,78 +1088,205 @@ impl Ui {
             }
         });
     }
+    /// Ctrl K: every page, the actions worth a key, Threads' own, and each agent to focus, in
+    /// sections. Typing narrows them; the arrows move the highlight, Enter runs it, and each row
+    /// shows its shortcut where it has one.
     pub(super) fn command_palette(self: &Rc<Self>) {
         let Some((window, body)) = self.sheet("Command palette", 560) else {
             return;
         };
         window.compact(true, 400);
         let search = gtk::SearchEntry::new();
+        search.set_placeholder_text(Some("Go to a page, run an action, or focus an agent"));
         body.append(&search);
-        let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let list = gtk::ListBox::new();
+        list.add_css_class("palette-list");
+        list.set_selection_mode(gtk::SelectionMode::Browse);
         body.append(&list);
-        let mut entries = Vec::new();
-        for (page, name) in [
-            ("agents", "Agents"),
-            ("design", "Design"),
-            ("code", "Code"),
-            ("board", "Board"),
-            ("modules", "Modules"),
-            ("notes", "Notes"),
-            ("skills", "Skills"),
-            ("plugins", "Plugins"),
-            ("settings", "Settings"),
-            ("mailbox", "Mailbox"),
-            ("guardrails", "Guardrails"),
-            ("devices", "Devices"),
-            ("notifications", "Notifications"),
-        ] {
-            let b = button(name, "nav");
-            list.append(&b);
-            entries.push((name.to_lowercase(), b.clone()));
-            let weak = Rc::downgrade(self);
-            let w = window.clone();
-            b.connect_clicked(move |_| {
-                if let Some(ui) = weak.upgrade() {
-                    ui.navigate(page);
-                    w.close();
-                }
-            });
+        let none = label("Nothing matches.", "palette-none");
+        none.set_xalign(0.0);
+        none.set_visible(false);
+        body.append(&none);
+
+        type Run = Box<dyn Fn(&Rc<Ui>)>;
+        struct Entry {
+            section: &'static str,
+            words: String,
+            run: Run,
         }
+        let bindings = self.keybindings.borrow().clone();
+        // The chord an action is bound to now, as the shortcut handler reads it.
+        let chord = |action: &str| {
+            crate::shortcuts::DEFAULTS
+                .iter()
+                .find(|(a, _, _)| *a == action)
+                .map(|(a, _, fallback)| bindings[*a].as_str().unwrap_or(fallback).to_string())
+        };
+        let mut entries: Vec<Entry> = Vec::new();
+        let mut add = |section: &'static str, icon: &str, caption: &str, hint: Option<(String, &str)>, run: Run| {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+            row.add_css_class("palette-row");
+            row.append(&crate::icons::image(icon, 15));
+            let words = label(caption, "palette-text");
+            words.set_hexpand(true);
+            words.set_xalign(0.0);
+            words.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            row.append(&words);
+            if let Some((text, class)) = &hint {
+                let hint = label(text, class);
+                hint.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                hint.set_valign(gtk::Align::Center);
+                row.append(&hint);
+            }
+            list.append(&row);
+            let extra = hint.map(|(text, _)| text.to_lowercase()).unwrap_or_default();
+            entries.push(Entry { section, words: format!("{} {extra}", caption.to_lowercase()), run });
+        };
+        for (page, name, icon, action) in [
+            ("agents", "Agents", "terminal", Some("agents")),
+            ("design", "Design", "design", None),
+            ("code", "Code", "code", Some("code")),
+            ("board", "Board", "columns", Some("board")),
+            ("modules", "Modules", "modules", None),
+            ("notes", "Notes", "notes", None),
+            ("skills", "Skills", "skills", None),
+            ("plugins", "Plugins", "plugins", None),
+            ("settings", "Settings", "gear", Some("settings")),
+            ("mailbox", "Mailbox", "send", None),
+            ("guardrails", "Guardrails", "shield", None),
+            ("devices", "Devices", "device", None),
+            ("notifications", "Notifications", "bell", None),
+        ] {
+            add("Go to", icon, name, action.and_then(&chord).map(|c| (c, "keycap")), Box::new(move |ui| ui.navigate(page)));
+        }
+        add("Actions", "plus", "New agent", chord("new_session").map(|c| (c, "keycap")), Box::new(|ui| ui.show_launch(None)));
+        if self.project.get() != 0 {
+            add("Actions", "plus", "New task", None, Box::new(|ui| crate::pages::new_task(ui, ui.project.get(), "backlog")));
+        }
+        add("Actions", "sidebar", "Toggle the sidebar", chord("sidebar").map(|c| (c, "keycap")), Box::new(|ui| {
+            ui.sidebar.set_visible(!ui.sidebar.is_visible());
+            ui.save_layout();
+        }));
         for (key, caption) in crate::money::palette_entries() {
-            let b = button(&caption, "nav");
-            list.append(&b);
-            entries.push((caption.to_lowercase(), b.clone()));
-            let weak = Rc::downgrade(self);
-            let w = window.clone();
-            b.connect_clicked(move |_| {
-                if let Some(ui) = weak.upgrade() {
-                    w.close();
-                    crate::money::run_palette(&ui, key);
-                }
-            });
+            let (icon, hint) = match key {
+                "space" => ("refresh", chord("space").map(|c| (c, "keycap"))),
+                "thread" | "add" => ("plus", None),
+                "start" => ("dashboard", None),
+                "arbiter-halt" => ("stop", None),
+                _ if caption.starts_with("Arbiter") => ("graph", None),
+                _ if caption.starts_with("Avex") => ("history", None),
+                _ => ("dashboard", None),
+            };
+            add("Threads", icon, &caption, hint, Box::new(move |ui| crate::money::run_palette(ui, key)));
         }
         for s in self.sessions.borrow().iter() {
             let name = text(s, "name").to_string();
-            let b = button(&format!("Focus {name}"), "nav");
-            list.append(&b);
-            entries.push((name.to_lowercase(), b.clone()));
-            let weak = Rc::downgrade(self);
-            let w = window.clone();
-            b.connect_clicked(move |_| {
+            let what = format!("{} · {}", text(s, "provider"), text(s, "role"));
+            add("Agents", "terminal", &format!("Focus {name}"), Some((what, "palette-hint")), Box::new(move |ui| {
+                *ui.focused.borrow_mut() = Some(name.clone());
+                ui.set_mode("focus");
+                ui.navigate("agents");
+            }));
+        }
+        let entries = Rc::new(entries);
+
+        let query: Rc<RefCell<String>> = Rc::default();
+        let (q, e) = (query.clone(), entries.clone());
+        list.set_filter_func(move |row| {
+            let q = q.borrow();
+            usize::try_from(row.index()).ok().and_then(|i| e.get(i)).is_some_and(|entry| q.split_whitespace().all(|w| entry.words.contains(w)))
+        });
+        let e = entries.clone();
+        list.set_header_func(move |row, before| {
+            let section = |r: &gtk::ListBoxRow| usize::try_from(r.index()).ok().and_then(|i| e.get(i)).map(|entry| entry.section);
+            let here = section(row);
+            if here.is_some() && before.and_then(section) != here {
+                let head = label(here.unwrap_or_default(), "palette-section");
+                head.set_xalign(0.0);
+                row.set_header(Some(&head));
+            } else {
+                row.set_header(None::<&gtk::Widget>);
+            }
+        });
+        let visible = |list: &gtk::ListBox| -> Vec<gtk::ListBoxRow> {
+            let mut rows = Vec::new();
+            let mut i = 0;
+            while let Some(row) = list.row_at_index(i) {
+                if row.is_child_visible() {
+                    rows.push(row);
+                }
+                i += 1;
+            }
+            rows
+        };
+        let run = {
+            let (entries, window, weak) = (entries.clone(), window.clone(), Rc::downgrade(self));
+            move |row: &gtk::ListBoxRow| {
+                let Some(entry) = usize::try_from(row.index()).ok().and_then(|i| entries.get(i)) else { return };
                 if let Some(ui) = weak.upgrade() {
-                    *ui.focused.borrow_mut() = Some(name.clone());
-                    ui.set_mode("focus");
-                    ui.navigate("agents");
-                    w.close();
+                    window.close();
+                    (entry.run)(&ui);
+                }
+            }
+        };
+        let activate = run.clone();
+        list.connect_row_activated(move |_, row| activate(row));
+        {
+            let (list, none) = (list.clone(), none.clone());
+            search.connect_search_changed(move |s| {
+                *query.borrow_mut() = s.text().to_lowercase();
+                list.invalidate_filter();
+                list.invalidate_headers();
+                let rows = visible(&list);
+                none.set_visible(rows.is_empty());
+                list.select_row(rows.first());
+            });
+        }
+        {
+            let list = list.clone();
+            search.connect_activate(move |_| {
+                if let Some(row) = list.selected_row().filter(|r| r.is_child_visible()) {
+                    run(&row);
                 }
             });
         }
-        search.connect_search_changed(move |s| {
-            let q = s.text().to_lowercase();
-            for (name, b) in &entries {
-                b.set_visible(name.contains(&q));
-            }
-        });
+        // Up and Down move the highlight while the typing stays in the search.
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        {
+            let list = list.clone();
+            keys.connect_key_pressed(move |_, key, _, _| {
+                let step: i32 = match key {
+                    gtk::gdk::Key::Down => 1,
+                    gtk::gdk::Key::Up => -1,
+                    _ => return glib::Propagation::Proceed,
+                };
+                let rows = visible(&list);
+                let at = list.selected_row().and_then(|s| rows.iter().position(|r| *r == s));
+                let next = match at {
+                    Some(i) => (i as i32 + step).clamp(0, rows.len() as i32 - 1) as usize,
+                    None => 0,
+                };
+                if let Some(row) = rows.get(next) {
+                    list.select_row(Some(row));
+                    // Keep it in view without taking the typing away from the search.
+                    if let Some(scroll) = row.ancestor(gtk::ScrolledWindow::static_type()).and_downcast::<gtk::ScrolledWindow>() {
+                        if let Some(bounds) = row.compute_bounds(&scroll) {
+                            let adj = scroll.vadjustment();
+                            let (top, bottom) = (f64::from(bounds.y()), f64::from(bounds.y() + bounds.height()));
+                            if top < 0.0 {
+                                adj.set_value(adj.value() + top);
+                            } else if bottom > adj.page_size() {
+                                adj.set_value(adj.value() + bottom - adj.page_size());
+                            }
+                        }
+                    }
+                }
+                glib::Propagation::Stop
+            });
+        }
+        search.add_controller(keys);
+        list.select_row(list.row_at_index(0).as_ref());
         window.present();
         search.grab_focus();
     }

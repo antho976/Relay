@@ -889,6 +889,25 @@ pub fn install(ui: &Rc<Ui>) {
                 return;
             }
 
+            // The palette as it is used: typed into, Enter runs the highlighted match.
+            if page == "palette-run" {
+                let ui = navigate.clone();
+                track("palette run", async move {
+                    click(&ui.window, "command-palette")?;
+                    glib::timeout_future(Duration::from_millis(300)).await;
+                    let panel = util::named(&ui.window, "app-panel").ok_or("no palette panel")?;
+                    let search = util::find(&panel, &|w| w.is::<gtk::SearchEntry>())
+                        .and_downcast::<gtk::SearchEntry>()
+                        .ok_or("no search in the palette")?;
+                    search.set_text("boa");
+                    glib::timeout_future(Duration::from_millis(200)).await;
+                    search.emit_activate();
+                    wait_for(|| *ui.page.borrow() == "board", "Board opened from the palette").await?;
+                    println!("Command palette run verified: typed, Enter, Board");
+                    Ok(())
+                });
+                return;
+            }
             if matches!(page.as_str(), "palette" | "layouts" | "usage") {
                 let control = match page.as_str() {
                     "palette" => "command-palette",
