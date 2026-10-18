@@ -47,10 +47,10 @@ through a rendezvous server you host ([docs/MOBILE.md](docs/MOBILE.md)). The pho
 a copy of the PC's data so it works with the PC away, and can start the engine through
 `relay remote serve --start-engine` when the desktop app is closed ([docs/ANDROID.md](docs/ANDROID.md)).
 
-`apps/tally` is Tally, the budget and spending tracker for Android (Kotlin, Compose, Room),
-brought in from its own repository and built by the `tally-*` workflows. Its money rules are
-ported to `crates/relay-money` for the engine, held to the same tests, so the phone and the PC can
-each keep the whole ledger. The plan is [docs/MONEY.md](docs/MONEY.md).
+Tally, the budget and spending tracker for Android (Kotlin, Compose, Room), lives in its own
+repository, [antho976/Tally](https://github.com/antho976/Tally), and is not part of this one. Its
+money rules are ported to `crates/relay-money` for the engine, held to the same tests, so the phone
+and the PC can each keep the whole ledger. The plan is [docs/MONEY.md](docs/MONEY.md).
 
 Arbiter sits beside Tally in the Threads space: rule-based crypto trading and AI trading research
 on your own Coinbase account, on paper or live, every order through one risk gate. Its rules,

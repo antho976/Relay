@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-/// Tally's twelve category hues (apps/tally/DESIGN.md `hue-*`), by stored colour index.
+/// Tally's twelve category hues (antho976/Tally, `ui/theme/Color.kt`), by stored colour index.
 pub const HUES: [&str; 12] = [
     "#7FB27A", "#4FA9A0", "#6A9FD8", "#8C87D9", "#C27BC0", "#D9768E", "#E08A5F", "#D9A441", "#A3A84E", "#C2A585",
     "#8D99A6", "#B8664F",

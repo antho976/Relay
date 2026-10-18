@@ -43,15 +43,15 @@ authority for its data: the app reads a replica and sends edits through an outbo
 (`core/sync`), so an op it may queue offline needs a rule in `Optimistic` for how the row looks
 until the PC answers.
 
-## Tally: `apps/tally` and `crates/relay-money`
+## Tally 2 (antho976/Tally) and `crates/relay-money`
 
-Tally is the budget tracker for Android (Kotlin, Compose, Room, Gradle), its own app with its own
-CI (`.github/workflows/tally-*.yml`, run only for changes under `apps/tally`). An agent session has
-no Android SDK, so a change there is written, not built, and the summary must say so.
+Tally, the budget tracker for Android (Kotlin, Compose, Room, Gradle), lives in its own repository,
+`antho976/Tally`, with its own CI. It is not in this tree.
 
-`crates/relay-money` is a port of `apps/tally/core` with the same tests. The phone and the PC each
-hold the whole ledger (`docs/MONEY.md`), so **a money rule changed on one side is changed on the
-other in the same commit**, tests included. Stored enum names are the Kotlin constant names.
+`crates/relay-money` is a port of that repository's `core/` with the same tests. The phone and the
+PC each hold the whole ledger (`docs/MONEY.md`), so **a money rule changed on one side is changed on
+the other in the same piece of work**: a PR in each repository, cross-linked, tests included.
+Stored enum names are the Kotlin constant names.
 
 ## The native client cannot be built everywhere
 
