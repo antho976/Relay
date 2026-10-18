@@ -1102,9 +1102,10 @@ private fun QuickKeys(chat: SessionChat, enabled: Boolean) {
  * The message box, as a thread's (threads.css `.threads-composer`): raised, an edge that lights
  * when focused, up to six lines, and under them the agent's own keys as chips and the round key,
  * which sends, or with nothing typed stops a working agent or gives a waiting one its Enter.
+ * The terminal's message box is this one too, with fewer lines and no autocorrect.
  */
 @Composable
-private fun ChatComposer(
+internal fun ChatComposer(
     field: TextFieldValue,
     onText: (TextFieldValue) -> Unit,
     enabled: Boolean,
@@ -1113,6 +1114,8 @@ private fun ChatComposer(
     focus: FocusRequester,
     onSend: () -> Unit,
     pictures: Boolean = false,
+    lines: Int = 6,
+    keyboard: KeyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
     above: @Composable () -> Unit = {},
     chips: @Composable RowScope.() -> Unit,
 ) {
@@ -1136,9 +1139,9 @@ private fun ChatComposer(
                 textStyle = Relay.type.body.copy(color = c.ink),
                 cursorBrush = SolidColor(c.ink),
                 minLines = 1,
-                maxLines = 6,
+                maxLines = lines,
                 interactionSource = source,
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                keyboardOptions = keyboard,
                 decorationBox = { inner ->
                     Box {
                         if (text.isEmpty()) T(placeholder, style = Relay.type.body, color = c.ink3, maxLines = 1)
@@ -1174,7 +1177,7 @@ private fun ChatComposer(
 
 /** A key of the agent's under the message box, drawn as a thread's chips are: a pill in a full-size target. */
 @Composable
-private fun Chip(label: String, spoken: String, enabled: Boolean, glyph: String? = null, trailing: String? = null, icon: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
+internal fun Chip(label: String, spoken: String, enabled: Boolean, glyph: String? = null, trailing: String? = null, icon: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
     val c = Relay.colors
     val haptic = LocalHapticFeedback.current
     Box(
