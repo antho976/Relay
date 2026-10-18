@@ -26,6 +26,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -53,6 +54,8 @@ import com.quietsoftware.relay.core.wire.o
 import com.quietsoftware.relay.core.wire.s
 import com.quietsoftware.relay.data.Relay as Data
 import com.quietsoftware.relay.ui.Nav
+import com.quietsoftware.relay.ui.code.fileGlyph
+import com.quietsoftware.relay.ui.code.sizeText
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Empty
 import com.quietsoftware.relay.ui.kit.Field
@@ -170,7 +173,9 @@ private fun TaskBody(task: Task, all: List<Task>, pending: Boolean, refused: Out
     val children = remember(all, num) { if (num == null) emptyList() else all.filter { it.parentId == num } }
     val canNest = num != null && task.depth + 1 < DEPTH_MAX
     val sessions = remember(shell.sessions) { shell.sessions.associateBy { it.name } }
-    val activity by remember(num) {
+    // A comment changes no task, so no event re-reads the activity: posting one counts here.
+    var posted by remember(num) { mutableIntStateOf(0) }
+    val activity by remember(num, posted) {
         num?.let { n -> nav.relay.live("task.activity", buildJsonObject { put("task_id", n); put("limit", 30) }) } ?: flowOf(Data.Live())
     }.collectAsStateWithLifecycle(Data.Live())
     val entries = remember(activity.result) { entries(activity.result) }
@@ -234,6 +239,12 @@ private fun TaskBody(task: Task, all: List<Task>, pending: Boolean, refused: Out
                 Heading("Description") { TextKey("Edit", { nav.editTask(task.id) }, glyph = "edit") }
                 if (task.body.isBlank()) T("No description.", style = Relay.type.ui, color = c.ink3)
                 else Markdown(task.body)
+            }
+
+            // Listed only: no op reads an attachment's bytes, so it opens on the PC.
+            if (task.attachments.isNotEmpty()) {
+                section("attachments-head") { Heading("Attachments", count = task.attachments.size) }
+                items(task.attachments, key = { "file:" + it.id }) { a -> AttachmentRow(a) }
             }
 
             section("labels") {
@@ -308,6 +319,7 @@ private fun TaskBody(task: Task, all: List<Task>, pending: Boolean, refused: Out
             }
 
             if (num != null) {
+                section("comment") { Comment(num, nav) { posted++ } }
                 section("activity-head") {
                     Heading("Activity") { if (!activity.fresh && activity.result != null) StaleNote(activity.at) }
                     when {
@@ -414,7 +426,50 @@ private fun Ask(task: Task, num: Long, nav: Nav) {
     }
 }
 
-/** The page's own keys, always in reach: Move, Dispatch, Approve, Delete. */
+/**
+ * "Add a comment" (task_pages.rs `post_comment`): Markdown on the task's own timeline, GitHub-issue
+ * style, for the people and agents who read the task. It needs the PC; the draft stays until it lands.
+ */
+@Composable
+private fun Comment(num: Long, nav: Nav, onPosted: () -> Unit) {
+    var text by rememberSaveable(num) { mutableStateOf("") }
+    var posting by remember { mutableStateOf(false) }
+    Heading("Add a comment")
+    Field(
+        text, { text = it }, Modifier.fillMaxWidth(),
+        placeholder = "Use Markdown to format your comment",
+        singleLine = false, minLines = 2, maxLines = 8,
+        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+    )
+    Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+        Key("Comment", {
+            val body = text.trim()
+            if (body.isNotEmpty()) {
+                posting = true
+                nav.shell.act("task.comment", buildJsonObject { put("task_id", num); put("body", body) }, done = "Commented on #$num") {
+                    text = ""
+                    onPosted()
+                }.invokeOnCompletion { posting = false }
+            }
+        }, kind = KeyKind.Primary, glyph = "send", compact = true, enabled = text.isNotBlank() && !posting)
+    }
+}
+
+/** An attachment by name, type and size, as the description card's tray names it. */
+@Composable
+private fun AttachmentRow(a: Task.Attachment) {
+    val c = Relay.colors
+    val (glyph, tint) = fileGlyph(a.name)
+    Row(Modifier.column().fillMaxWidth().padding(vertical = 8.dp, horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Glyph(glyph, 16.dp, tint)
+        Column(Modifier.weight(1f)) {
+            T(a.name.ifBlank { "attachment" }, style = Relay.type.ui, color = c.ink, maxLines = 1)
+            T(listOf(a.mime, sizeText(a.bytes)).filter { it.isNotBlank() }.joinToString(" · "), style = Relay.type.caption, color = c.ink3, maxLines = 1)
+        }
+    }
+}
+
+/** The page's own keys, always in reach: Move, Dispatch, Approve or Reopen, Delete. */
 @Composable
 private fun Actions(task: Task, ops: TaskOps, open: (String) -> Unit, onDelete: () -> Unit) {
     val c = Relay.colors
@@ -428,6 +483,7 @@ private fun Actions(task: Task, ops: TaskOps, open: (String) -> Unit, onDelete: 
             Key("Move", { open("move") }, Modifier.weight(1f), glyph = "columns", compact = true)
             if (task.column != "done") Key("Dispatch", { open("dispatch") }, Modifier.weight(1f), glyph = "play", compact = true, enabled = task.num != null)
             if (task.column == "in_review") Key("Approve", { ops.approve(task) }, Modifier.weight(1f), kind = KeyKind.Primary, glyph = "check", compact = true)
+            if (task.column == "done") Key("Reopen", { ops.reopen(task) }, Modifier.weight(1f), glyph = "undo", compact = true, enabled = task.num != null)
             IconKey("trash", onDelete, tint = c.heldText, label = "Delete task")
         }
     }
@@ -554,6 +610,7 @@ private fun describe(row: JsonObject): String {
         }
         "update" -> p?.keys?.mapNotNull { FIELDS[it] }?.takeIf { it.isNotEmpty() }?.let { "edited the ${it.joinToString(", ")}" } ?: "edited it"
         "approve" -> "approved it"
+        "unapprove" -> p?.s("column")?.let { "reopened it into ${Task.columnLabel(it)}" } ?: "reopened it"
         "delete" -> "deleted it"
         "restore" -> "restored it"
         "dispatch" -> (p?.s("session") ?: row.o("result_summary")?.o("session")?.s("name"))?.let { "dispatched it to $it" } ?: "dispatched it"

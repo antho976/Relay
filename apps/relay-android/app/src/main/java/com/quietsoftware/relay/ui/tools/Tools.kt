@@ -21,12 +21,15 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,6 +44,7 @@ import com.quietsoftware.relay.core.model.Project
 import com.quietsoftware.relay.core.model.Workspace
 import com.quietsoftware.relay.core.model.decodeAs
 import com.quietsoftware.relay.core.wire.arr
+import com.quietsoftware.relay.core.wire.asStr
 import com.quietsoftware.relay.core.wire.b
 import com.quietsoftware.relay.core.wire.l
 import com.quietsoftware.relay.core.wire.o
@@ -49,6 +53,7 @@ import com.quietsoftware.relay.data.Relay.Live
 import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Empty
+import com.quietsoftware.relay.ui.kit.Eyebrow
 import com.quietsoftware.relay.ui.kit.Field
 import com.quietsoftware.relay.ui.kit.Gap
 import com.quietsoftware.relay.ui.kit.Glyph
@@ -79,12 +84,17 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 private val numberKeys = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next)
+
+/** A share like 33.5. */
+private val decimalKeys = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next)
 
 /** Commands, paths, branches and globs: typed as they are, with no capital or correction. */
 private val codeKeys = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false)
@@ -384,91 +394,209 @@ private fun PluginsCard(projectId: Long, nav: Nav, online: Boolean) {
 
 @Composable
 private fun GuardrailValues(projectId: Long, nav: Nav, online: Boolean) {
-    val flow = remember(projectId) { nav.relay.live("guardrail.config.get", byProject(projectId)) }
-    val live by flow.collectAsStateWithLifecycle(initialValue = Live())
-    val config = live.result as? JsonObject
+    // Read again after a whole reset, whose event is a settings one, not a guardrail one.
+    var reread by remember { mutableIntStateOf(0) }
+    // The layers say, field by field, whether a value is set here or follows the layer above.
+    val layersFlow = remember(projectId, reread) { nav.relay.live("guardrail.config.layers", byProject(projectId)) }
+    val layers by layersFlow.collectAsStateWithLifecycle(initialValue = Live())
+    // An engine older than the layers still answers with the values in force.
+    val older = layers.result == null && layers.error != null && layers.error?.code != "link.down"
+    val plainFlow = remember(projectId, older, reread) { if (older) nav.relay.live("guardrail.config.get", byProject(projectId)) else flowOf(Live()) }
+    val plain by plainFlow.collectAsStateWithLifecycle(initialValue = Live())
+    val layered = layers.result as? JsonObject
+    val config = layered?.o("effective") ?: plain.result as? JsonObject
     SectionLabel("Guardrail values")
     Slab(Modifier.fillMaxWidth()) {
         if (config == null) {
-            Hint(live.error?.message ?: "Loading…")
+            Hint((layers.error ?: plain.error)?.message ?: "Loading…")
         } else {
-            GuardrailForm(projectId, config, nav, online)
+            GuardrailForm(projectId, config, layered, nav, online) { reread++ }
         }
     }
-    if (!live.fresh && config != null) StaleNote(live.at)
+    val shown = if (layered != null) layers else plain
+    if (!shown.fresh && config != null) StaleNote(shown.at)
 }
 
+private enum class GuardKind { Count, Percent, Toggle, List }
+
+/** One field of the form: where it is in the config, the desktop's words for it, and its least value. */
+private class GuardField(val path: String, val title: String, val hint: String, val kind: GuardKind, val min: Long = 0)
+
+/** The desktop's form (guardrail_settings.rs `GROUPS`), group by group. */
+private val GUARD_GROUPS = listOf(
+    "Commit size" to listOf(
+        GuardField("caps.files", "Files per commit", "A commit that changes more files is refused.", GuardKind.Count, min = 1),
+        GuardField("caps.lines", "Lines per commit", "Added plus removed lines, across the whole commit.", GuardKind.Count, min = 1),
+    ),
+    "Large rewrites" to listOf(
+        GuardField("destructive_write.min_removed_lines", "Removed lines", "A write that removes more lines than this is held for you.", GuardKind.Count),
+        GuardField("destructive_write.min_removed_pct", "Removed share of a file (%)", "Or removes more than this share of an existing file.", GuardKind.Percent),
+        GuardField("destructive_write.min_file_lines", "Ignore the share rule below (lines)", "One line of a two-line file is 50%; short files are judged by lines only.", GuardKind.Count),
+        GuardField("destructive_write.allow_if_recoverable", "Allow rewrites git can restore", "Committed, unmodified or ignored files can always come back.", GuardKind.Toggle),
+    ),
+    "Paths and commands" to listOf(
+        GuardField("protected_paths", "Protected paths", "Worktree-relative paths or globs agents may not write. One per line.", GuardKind.List),
+        GuardField("denied_commands", "Denied commands", "Commands agents may not run, matched word by word. One per line.", GuardKind.List),
+        GuardField("allowed_write_roots", "Extra write roots", "Absolute directories outside the worktree agents may write to. One per line.", GuardKind.List),
+    ),
+    "Pushes" to listOf(
+        GuardField("check_on_push", "Check an agent's push", "Runs the project's build command, or its detected tests, first. A failing check refuses the push.", GuardKind.Toggle),
+    ),
+)
+
+private val GUARD_FIELDS = GUARD_GROUPS.flatMap { it.second }
+
+/** The form's texts by field path, kept across a trip to another page and back. */
+private val GUARD_SAVER = listSaver<SnapshotStateMap<String, String>, String>(
+    save = { m -> m.flatMap { listOf(it.key, it.value) } },
+    restore = { l -> mutableStateMapOf<String, String>().apply { l.chunked(2).forEach { (k, v) -> put(k, v) } } },
+)
+
+/** The value at a dotted [path] (`caps.files`) of a config. */
+private fun JsonObject.at(path: String): JsonElement? = path.split('.').fold<String, JsonElement?>(this) { v, part -> (v as? JsonObject)?.get(part) }
+
+/** A config value as its field edits it: a number, `true`/`false`, or one entry per line. */
+private fun fieldText(f: GuardField, v: JsonElement?): String = when (f.kind) {
+    GuardKind.List -> (v as? JsonArray)?.mapNotNull { it.asStr() }.orEmpty().joinToString("\n")
+    GuardKind.Toggle -> ((v as? JsonPrimitive)?.booleanOrNull == true).toString()
+    else -> v?.number()?.let { if (it % 1.0 == 0.0) it.toLong().toString() else it.toString() }.orEmpty()
+}
+
+/** What a field's text means as a config value; null while it is not one. */
+private fun fieldValue(f: GuardField, text: String): JsonElement? = when (f.kind) {
+    GuardKind.Count -> text.trim().toLongOrNull()?.takeIf { it >= f.min }?.let { JsonPrimitive(it) }
+    GuardKind.Percent -> text.trim().toDoubleOrNull()?.takeIf { it in 0.0..100.0 }?.let { JsonPrimitive(it) }
+    GuardKind.Toggle -> JsonPrimitive(text == "true")
+    GuardKind.List -> JsonArray(splitLines(text).map { JsonPrimitive(it) })
+}
+
+/** The same value: 50 and 50.0 are one share. */
+private fun sameValue(a: JsonElement?, b: JsonElement?): Boolean {
+    val x = a?.number()
+    val y = b?.number()
+    return if (x != null && y != null) kotlin.math.abs(x - y) < 1e-9 else a == b
+}
+
+/** A value as a caption says it (guardrail_settings.rs `shown`): "none", "1 entry (…)", "on", "50". */
+private fun shownValue(v: JsonElement?): String = when {
+    v is JsonArray && v.isEmpty() -> "none"
+    v is JsonArray && v.size == 1 -> "1 entry (${v[0].asStr().orEmpty()})"
+    v is JsonArray -> "${v.size} entries"
+    v is JsonPrimitive && v.booleanOrNull != null -> if (v.booleanOrNull == true) "on" else "off"
+    else -> v?.number()?.let { if (it % 1.0 == 0.0) "%.0f".format(it) else "%.1f".format(it) } ?: v?.toString().orEmpty()
+}
+
+/** Where an inherited value was set, in the caption's words. */
+private fun layerName(layer: String) = when (layer) {
+    "global" -> "Global"
+    "workspace" -> "the workspace"
+    "project" -> "this project"
+    else -> "Relay's default"
+}
+
+/**
+ * The project's guardrail values (guardrail_settings.rs, at the project's level): every field
+ * says whether it is set here or inherited, and from where. Only the fields changed are saved,
+ * so an untouched one keeps following its parent; Reset on one set here makes it follow again.
+ */
 @Composable
-private fun GuardrailForm(projectId: Long, config: JsonObject, nav: Nav, online: Boolean) {
+private fun GuardrailForm(projectId: Long, config: JsonObject, layers: JsonObject?, nav: Nav, online: Boolean, onReset: () -> Unit) {
     val c = Relay.colors
-    val files0 = config.o("caps")?.l("files") ?: 0L
-    val lines0 = config.o("caps")?.l("lines") ?: 0L
-    val paths0 = config.strings("protected_paths")
-    val commands0 = config.strings("denied_commands")
-    // Saveable, so an edit is still here after another page and back; a new config from the PC resets them.
-    var files by rememberSaveable(config) { mutableStateOf(files0.toString()) }
-    var lines by rememberSaveable(config) { mutableStateOf(lines0.toString()) }
-    var paths by rememberSaveable(config) { mutableStateOf(paths0.joinToString("\n")) }
-    var commands by rememberSaveable(config) { mutableStateOf(commands0.joinToString("\n")) }
+    val inherited = layers?.o("inherited")
+    val sources = layers?.o("sources")
+    val basis: JsonObject = layers ?: config
+    // Saveable, so an edit is still here after another page and back; new values from the PC reset them.
+    val edits = rememberSaveable(basis, saver = GUARD_SAVER) {
+        mutableStateMapOf<String, String>().apply { GUARD_FIELDS.forEach { put(it.path, fieldText(it, config.at(it.path))) } }
+    }
+    // Fields whose Reset was pressed: saving sends null for them, and they follow the layer above again.
+    val cleared = remember(basis) { mutableStateListOf<String>() }
     var resetAsk by remember { mutableStateOf(false) }
-    val filesN = files.trim().toLongOrNull()?.takeIf { it >= 0 }
-    val linesN = lines.trim().toLongOrNull()?.takeIf { it >= 0 }
-    val pathList = splitLines(paths)
-    val commandList = splitLines(commands)
-    val problem = when {
-        filesN == null -> "Files per commit must be a whole number, 0 or more."
-        linesN == null -> "Lines per commit must be a whole number, 0 or more."
-        else -> null
+
+    fun valueOf(f: GuardField) = fieldValue(f, edits[f.path] ?: fieldText(f, config.at(f.path)))
+    fun changed(f: GuardField) = valueOf(f)?.let { !sameValue(it, config.at(f.path)) } ?: true
+    fun here(f: GuardField) = sources?.s(f.path) == "project"
+    fun edit(f: GuardField, text: String) {
+        edits[f.path] = text
+        // Typed over a reset: it is this project's own value again.
+        if (f.path in cleared && !sameValue(fieldValue(f, text), inherited?.at(f.path))) cleared.remove(f.path)
+    }
+    fun reset(f: GuardField) {
+        // Set here: back to the inherited value, saved as following it. Merely edited: back to what is saved.
+        edits[f.path] = fieldText(f, if (here(f)) inherited?.at(f.path) else config.at(f.path))
+        if (here(f) && f.path !in cleared) cleared.add(f.path)
+    }
+    fun caption(f: GuardField): String? {
+        if (layers == null) return null
+        val source = sources?.s(f.path) ?: "default"
+        val before = shownValue(inherited?.at(f.path))
+        return when {
+            f.path in cleared -> "Will follow the inherited value ($before) once saved"
+            changed(f) -> "Changed · not saved"
+            source == "project" -> "Set here · would otherwise be $before"
+            else -> "Inherited from ${layerName(source)}"
+        }
+    }
+
+    val bad = GUARD_FIELDS.firstOrNull { valueOf(it) == null }
+    val problem = bad?.let { f ->
+        if (f.kind == GuardKind.Percent) "${f.title} must be a number from 0 to 100." else "${f.title} must be a whole number, ${f.min} or more."
     }
     // Only what the person changed goes in, so a project's override stays as small as they meant it.
-    val caps = buildJsonObject {
-        if (filesN != null && filesN != files0) put("files", filesN)
-        if (linesN != null && linesN != lines0) put("lines", linesN)
-    }
     val patch = buildJsonObject {
-        if (caps.isNotEmpty()) put("caps", caps)
-        if (pathList != paths0) put("protected_paths", JsonArray(pathList.map { JsonPrimitive(it) }))
-        if (commandList != commands0) put("denied_commands", JsonArray(commandList.map { JsonPrimitive(it) }))
+        val groups = LinkedHashMap<String, MutableMap<String, JsonElement>>()
+        for (f in GUARD_FIELDS) {
+            val value = if (f.path in cleared) JsonNull else valueOf(f)?.takeIf { changed(f) } ?: continue
+            val dot = f.path.indexOf('.')
+            if (dot < 0) put(f.path, value) else groups.getOrPut(f.path.substring(0, dot)) { LinkedHashMap() }[f.path.substring(dot + 1)] = value
+        }
+        groups.forEach { (group, values) -> put(group, JsonObject(values)) }
     }
     val dirty = patch.isNotEmpty() && problem == null
 
-    T("Values for this project. Saving here changes this project only.", style = Relay.type.caption, color = c.ink3)
-    Gap(10.dp)
-    // The desktop's words: an agent's commit past either cap is refused, not held (guardrail.rs).
-    FieldBlock("Files per commit", "A commit that changes more files is refused.") {
-        Field(files, { files = it }, Modifier.fillMaxWidth(), placeholder = "Files", keyboardOptions = numberKeys)
-    }
-    Gap(14.dp)
-    FieldBlock("Lines per commit", "Added plus removed lines, across the whole commit.") {
-        Field(lines, { lines = it }, Modifier.fillMaxWidth(), placeholder = "Lines", keyboardOptions = numberKeys)
-    }
-    Gap(14.dp)
-    FieldBlock("Protected paths", "One glob per line, e.g. .github/**") {
-        Field(
-            paths,
-            { paths = it },
-            Modifier.fillMaxWidth(),
-            singleLine = false,
-            minLines = 3,
-            maxLines = 8,
-            style = Relay.type.mono,
-            placeholder = ".github/**",
-            keyboardOptions = codeKeys,
-        )
-    }
-    Gap(14.dp)
-    FieldBlock("Denied commands", "One command per line, e.g. git push --force") {
-        Field(
-            commands,
-            { commands = it },
-            Modifier.fillMaxWidth(),
-            singleLine = false,
-            minLines = 3,
-            maxLines = 8,
-            style = Relay.type.mono,
-            placeholder = "git push --force",
-            keyboardOptions = codeKeys,
-        )
+    T("Applies to this project only. Unset fields follow its workspace, then Global.", style = Relay.type.caption, color = c.ink3)
+    for ((group, fields) in GUARD_GROUPS) {
+        Gap(16.dp)
+        Eyebrow(group)
+        for (f in fields) {
+            Gap(10.dp)
+            val text = edits[f.path] ?: fieldText(f, config.at(f.path))
+            when (f.kind) {
+                GuardKind.Toggle -> SwitchLine(f.title, f.hint, text == "true") { on -> edit(f, on.toString()) }
+                GuardKind.List -> FieldBlock(f.title, f.hint) {
+                    Field(
+                        text,
+                        { edit(f, it) },
+                        Modifier.fillMaxWidth(),
+                        singleLine = false,
+                        minLines = 3,
+                        maxLines = 8,
+                        style = Relay.type.mono,
+                        keyboardOptions = codeKeys,
+                    )
+                }
+                else -> FieldBlock(f.title, f.hint) {
+                    Field(text, { edit(f, it) }, Modifier.fillMaxWidth(), keyboardOptions = if (f.kind == GuardKind.Percent) decimalKeys else numberKeys)
+                }
+            }
+            val said = caption(f)
+            val canReset = layers != null && (here(f) || changed(f)) && f.path !in cleared
+            if (said != null || canReset) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    T(
+                        said.orEmpty(),
+                        Modifier.weight(1f),
+                        Relay.type.caption,
+                        when {
+                            f.path in cleared || changed(f) -> c.waiting
+                            here(f) -> c.ink2
+                            else -> c.ink3
+                        },
+                    )
+                    if (canReset) ToolKey("Reset", { reset(f) }, kind = KeyKind.Quiet)
+                }
+            }
+        }
     }
     problem?.let {
         Gap(8.dp)
@@ -486,7 +614,7 @@ private fun GuardrailForm(projectId: Long, config: JsonObject, nav: Nav, online:
                 nav.shell.act(
                     "guardrail.config.set",
                     buildJsonObject { put("project_id", projectId); put("patch", patch) },
-                    done = "Guardrails saved",
+                    done = "Saved for this project.",
                 )
             },
             kind = KeyKind.Primary,
@@ -508,7 +636,7 @@ private fun GuardrailForm(projectId: Long, config: JsonObject, nav: Nav, online:
                         "settings.reset",
                         buildJsonObject { put("path", "guardrails.projects.$projectId") },
                         done = "Guardrails reset",
-                    )
+                    ) { onReset() }
                 },
                 kind = KeyKind.Danger,
             )

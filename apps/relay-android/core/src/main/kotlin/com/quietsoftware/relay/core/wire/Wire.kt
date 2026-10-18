@@ -29,6 +29,12 @@ object Wire {
     const val V = 1
     const val DEFAULT_PORT = 7420
 
+    /** The op list a PC's door opens (`OpProfile` in wire.rs), as its welcome names it. */
+    const val OPS_PC = "phone"
+
+    /** The op list a cloud copy's door opens: the ledger and the training history, nothing else (docs/CLOUD.md). */
+    const val OPS_CLOUD = "cloud"
+
     val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
@@ -103,6 +109,7 @@ object Wire {
             ok = ok, device = o.str("device"), token = o.str("token"), error = o.str("error"),
             host = o.str("host"), hostId = o.str("host_id"), version = o.str("version"),
             wake = o["wake"]?.let { w -> runCatching { w.jsonArray.mapNotNull { WakeTarget.from(it) } }.getOrNull() },
+            ops = o.str("ops"),
         )
     }
 
@@ -157,10 +164,12 @@ data class Greeting(
     val engine: String? = null,
     /** The PC's network cards, for Wake-on-LAN from this phone when the PC is asleep. */
     val wake: List<WakeTarget> = emptyList(),
+    /** Which ops the door opens ([Wire.OPS_PC] or [Wire.OPS_CLOUD]), once the welcome said; null from an older door. */
+    val ops: String? = null,
 ) {
     /** A door this new names the PC in the welcome, not the greeting; an older one in the greeting. */
     fun admittedBy(w: Welcome): Greeting =
-        copy(host = w.host ?: host, hostId = w.hostId ?: hostId, version = w.version ?: version, wake = w.wake ?: wake)
+        copy(host = w.host ?: host, hostId = w.hostId ?: hostId, version = w.version ?: version, wake = w.wake ?: wake, ops = w.ops ?: ops)
 }
 
 data class WakeTarget(val mac: String, val broadcast: String?) {
@@ -182,6 +191,8 @@ data class Welcome(
     val hostId: String? = null,
     val version: String? = null,
     val wake: List<WakeTarget>? = null,
+    /** The door's op list, in an admitted device's welcome: a PC's or a cloud copy's. */
+    val ops: String? = null,
 )
 
 sealed interface Incoming {

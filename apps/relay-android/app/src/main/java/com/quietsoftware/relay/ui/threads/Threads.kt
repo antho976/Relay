@@ -114,6 +114,7 @@ import com.quietsoftware.relay.ui.kit.KeyKind
 import com.quietsoftware.relay.ui.kit.LocalFence
 import com.quietsoftware.relay.ui.kit.Markdown
 import com.quietsoftware.relay.ui.kit.Radii
+import com.quietsoftware.relay.ui.kit.Segmented
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.TOUCH
 import com.quietsoftware.relay.ui.kit.column
@@ -206,12 +207,12 @@ private fun message(thread: JsonElement, text: String, images: List<JsonElement>
 
 /**
  * Whether a message box's pictures may go now, and what it says when not: one still on its way,
- * one the PC did not take, or a model that cannot read them.
+ * one the PC did not take, or a model that cannot read them (one of the PC's own, [local]).
  */
-private fun picturesWait(pictures: List<Attachment<JsonObject>>, model: String?): String? = when {
+private fun picturesWait(pictures: List<Attachment<JsonObject>>, model: String?, local: LocalModels): String? = when {
     pictures.any { it.sending } -> "A picture is still on its way to the PC"
     pictures.any { it.failed } -> "A picture did not reach the PC: take it out, or pick it again"
-    pictures.isNotEmpty() && !seesPictures(model) -> "$PICTURES_NEED_CLAUDE: take them out, or pick one"
+    pictures.isNotEmpty() && !local.readsPictures(model) -> if (local.has(model)) LOCAL_CANNOT_READ else "$PICTURES_NEED_CLAUDE: take them out, or pick one"
     else -> null
 }
 
@@ -290,16 +291,26 @@ private fun NewThread(nav: Nav) {
     var effort by rememberSaveable { mutableStateOf<String?>(null) }
     val m = model ?: last?.model.orEmpty()
     val e = effort ?: last?.effort.orEmpty()
+    val local = rememberLocalModels()
     val hello = remember(s.prefs.name) { greeting(s.prefs.name) }
-    val month = remember(summary.result, c) { (summary.result as? JsonObject)?.let { monthLine(it, c) } }
-    val asks = remember(summary.result, invest.result) { suggestions(summary.result as? JsonObject, invest.result as? JsonObject) }
+    // The line and the questions follow the source showing: Avex's are read from its export;
+    // Arbiter's new thread keeps Tally's (docs/THREADS.md, "One source switch").
+    val source = ThreadSource.key
+    val avex = source == "avex"
+    val gym by remember(avex) { if (avex) nav.relay.live("gym.summary") else flowOf(RelayData.Live()) }.collectAsStateWithLifecycle(RelayData.Live())
+    val month = remember(avex, summary.result, gym.result, c) {
+        if (avex) (gym.result as? JsonObject)?.let { AnnotatedString(avexLine(it)) } else (summary.result as? JsonObject)?.let { monthLine(it, c) }
+    }
+    val asks = remember(avex, summary.result, invest.result, gym.result) {
+        if (avex) avexSuggestions(gym.result as? JsonObject) else suggestions(summary.result as? JsonObject, invest.result as? JsonObject)
+    }
 
     // The message box sends its pictures with its words; a starter question sends only its own.
     fun start(text: String, withPictures: Boolean = false) {
         val t = text.trim()
         if (blocked) return
         val pictures = if (withPictures) attached.toList() else emptyList()
-        picturesWait(pictures, m)?.let { return nav.shell.toast(it) }
+        picturesWait(pictures, m, local)?.let { return nav.shell.toast(it) }
         val images = imageIds(pictures)
         if (t.isEmpty() && images.isEmpty()) return
         val payload = buildJsonObject {
@@ -328,6 +339,10 @@ private fun NewThread(nav: Nav) {
                 Modifier.heightIn(min = tall).column().fillMaxWidth().padding(horizontal = side, vertical = 24.dp),
                 verticalArrangement = Arrangement.Center,
             ) {
+                // What the new thread is about: its line, its questions and what the agent may do follow.
+                Box(Modifier.fillMaxWidth().padding(bottom = 18.dp), contentAlignment = Alignment.Center) {
+                    Segmented(THREAD_SOURCES, source, { ThreadSource.key = it })
+                }
                 T(hello, Modifier.fillMaxWidth(), Relay.type.heading.copy(fontSize = 24.sp, lineHeight = 30.sp, letterSpacing = (-0.02).em, textAlign = TextAlign.Center), c.ink)
                 month?.let {
                     androidx.compose.foundation.text.BasicText(
@@ -344,7 +359,10 @@ private fun NewThread(nav: Nav) {
                     onDictate = dictate,
                     model = m,
                     effort = e,
-                    onModel = { model = it },
+                    onModel = {
+                        model = it
+                        nav.pickModel(it, local)
+                    },
                     onEffort = { effort = it },
                     working = false,
                     onSend = { start(draft, withPictures = true) },
@@ -354,6 +372,8 @@ private fun NewThread(nav: Nav) {
                     onPick = pickPictures,
                     onUnpick = { id -> attached.removeAll { it.id == id } },
                     online = s.online,
+                    local = local,
+                    limits = sourceLimits(source),
                 )
                 if (!s.online) NoteRow("The PC is out of reach. A new thread waits on this phone and starts when it is back.", Modifier.padding(top = 12.dp, start = 4.dp, end = 4.dp))
                 claude?.let { (why, _) -> NoteRow(why, Modifier.padding(top = 12.dp, start = 4.dp, end = 4.dp)) }
@@ -475,6 +495,15 @@ private sealed interface CardData {
     data class Proposal(val p: JsonObject) : CardData
     data class Order(val o: JsonObject) : CardData
     data class Refused(val message: String) : CardData
+    /** What the agent asked first (`thread.propose`): only the proposal's id; the PC says the rest. */
+    data class Asked(val id: Long) : CardData
+}
+
+/** The thread's proposals as the PC last read them, for the cards of what the agent asked first. */
+private class AskedReading(val byId: Map<Long, JsonObject>, val live: RelayData.Live, val reread: () -> Unit) {
+    companion object {
+        val None = AskedReading(emptyMap(), RelayData.Live()) {}
+    }
 }
 
 private data class ToolCall(val key: String, val name: String, val op: String, val writes: Boolean, val step: Step, val answer: String?, val card: CardData?)
@@ -558,12 +587,15 @@ private fun doing(op: String): String = when (op) {
     else -> if (op.startsWith("gym.")) "Reading your training…" else if (op.startsWith("arbiter.")) "Reading Arbiter…" else "Working…"
 }
 
-/** A tool's answer as a card: an entry or an activity the agent wrote, or Arbiter's proposal or order. */
-private fun cardOf(op: String, writes: Boolean, answer: String?): CardData? {
-    // What the agent asked first is a card on the PC (threads_ask.rs), read with ops the phone
-    // does not have: its answer's id is a proposal's, never an entry's.
-    if (op == "thread.propose") return null
+/**
+ * A tool's answer as a card: an entry or an activity the agent wrote, Arbiter's proposal or order,
+ * or what the agent asked first.
+ */
+private fun cardOf(op: String, answer: String?): CardData? {
     val v = answer?.let { runCatching { Wire.json.parseToJsonElement(it) as? JsonObject }.getOrNull() } ?: return null
+    // Its answer's id is a proposal's, never an entry's. The card takes only that, and reads the
+    // rest from the PC (threads_ask.rs), so it shows the ledger, not the agent's account of it.
+    if (op == "thread.propose") return v.l("id")?.let { CardData.Asked(it) }
     if (op.startsWith("arbiter.")) return when {
         op == "arbiter.propose" && v.l("id") != null -> CardData.Proposal(v)
         op == "arbiter.order.place" -> when (v.s("outcome")) {
@@ -575,7 +607,8 @@ private fun cardOf(op: String, writes: Boolean, answer: String?): CardData? {
         v.o("proposal") != null -> CardData.Proposal(v.o("proposal")!!)
         else -> null
     }
-    if (!writes || v.l("id") == null) return null
+    // Only the ledger's writes answer with an entry; a command's output that reads as JSON is not one.
+    if (op !in WRITES || v.l("id") == null) return null
     return if (op == "money.invest.add") CardData.Activity(v) else CardData.Entry(v, op)
 }
 
@@ -650,7 +683,7 @@ private fun pieces(messages: List<ThreadMessage>, working: Boolean, today: Local
                             working && index > lastUser -> Step.Running
                             else -> Step.Cut
                         }
-                        val card = if (step == Step.Done) cardOf(op, writes, answer?.second) else null
+                        val card = if (step == Step.Done) cardOf(op, answer?.second) else null
                         val call = ToolCall("t:${id ?: "${m.id}:$i"}", name, op, writes, step, answer?.second, card)
                         if (writes || card != null) {
                             flushReads()
@@ -799,6 +832,19 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     val current = remember(proposals.result) {
         (proposals.result as? JsonObject)?.objs("proposals")?.mapNotNull { p -> p.l("id")?.let { it to p } }?.toMap().orEmpty()
     }
+    // What the agent asked first, as the PC reads it: on opening, on `thread.proposal`, and when
+    // the ledger its rows show moves. A card whose answer the PC refused reads them again.
+    val anyAsked = rows.any { it is Piece.Tool && it.call.card is CardData.Asked }
+    var rereads by remember(tid) { mutableIntStateOf(0) }
+    val askedLive by remember(anyAsked, num, rereads) {
+        if (anyAsked && num != null) nav.relay.liveAlso("thread.proposal.list", buildJsonObject { put("thread_id", num) }, setOf("money"))
+        else flowOf(RelayData.Live())
+    }.collectAsStateWithLifecycle(RelayData.Live())
+    val asked = remember(askedLive) {
+        val byId = (askedLive.result as? JsonObject)?.objs("proposals")?.mapNotNull { p -> p.l("id")?.let { it to p } }?.toMap().orEmpty()
+        AskedReading(byId, askedLive) { rereads++ }
+    }
+    val local = rememberLocalModels()
     // A tool line turning says what the agent does; the working row shows only while none does
     // (threads_view.rs `set_working`).
     val running = rows.any { p -> p is Piece.Tool && p.call.step == Step.Running || p is Piece.Reads && p.calls.any { x -> x.step == Step.Running } }
@@ -841,7 +887,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
         val text = draft.trim()
         val t = target ?: return
         if (working || blocked) return
-        picturesWait(attached, thread?.model)?.let { return nav.shell.toast(it) }
+        picturesWait(attached, thread?.model, local)?.let { return nav.shell.toast(it) }
         val images = imageIds(attached)
         if (text.isEmpty() && images.isEmpty()) return
         nav.shell.change("thread.send", message(t, text, images), "Message")
@@ -863,7 +909,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
             nav.shell.toast(claude?.first.orEmpty())
             return
         }
-        if (pictures.isNotEmpty() && !seesPictures(thread?.model)) {
+        if (pictures.isNotEmpty() && !local.readsPictures(thread?.model)) {
             nav.shell.toast("$PICTURES_NEED_CLAUDE: pick one to send these again")
             return
         }
@@ -896,6 +942,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
             put("model", model ?: thread?.model.orEmpty())
             put("effort", effort ?: thread?.effort.orEmpty())
         }, "Model and effort")
+        model?.let { nav.pickModel(it, local) }
     }
     // Try again (threads_view.rs `retry_key`): under the newest failed or stopped reply, until the
     // next message, sending the person's newest message once more.
@@ -998,7 +1045,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     if (firstText != null) item("first") { UserBubble(firstText, queued = false, online = s.online, modifier = cell.padding(top = 12.dp), pictures = firstPictures) }
-                    items(rows, key = { it.key }, contentType = { it::class }) { p -> PieceView(p, cell, s.online, money, current, keys, retry.takeIf { p.key == retryAt }, !working, refusedSends[p.key]) }
+                    items(rows, key = { it.key }, contentType = { it::class }) { p -> PieceView(p, cell, s.online, money, current, keys, retry.takeIf { p.key == retryAt }, !working, refusedSends[p.key], asked) }
                     stopped?.let { text ->
                         item("stopped") {
                             Column(cell.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1049,11 +1096,13 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                     canSend = target != null && !createFailed && !blocked,
                     canPick = !working && target != null,
                     focus = focus,
-                    hint = "Ask about your money, or tell it what to change",
+                    hint = sourceHint(ThreadSource.key),
                     pictures = attached,
                     onPick = pickPictures,
                     onUnpick = { id -> attached.removeAll { it.id == id } },
                     online = s.online,
+                    local = local,
+                    limits = sourceLimits(ThreadSource.key),
                 )
             }
         }
@@ -1111,6 +1160,7 @@ private fun PieceView(
     retry: (() -> Unit)? = null,
     idle: Boolean = true,
     refused: String? = null,
+    asked: AskedReading = AskedReading.None,
 ) {
     val c = Relay.colors
     when (p) {
@@ -1128,8 +1178,8 @@ private fun PieceView(
             refused = refused,
         )
         is Piece.Reply -> Markdown(p.text, cell.padding(top = 12.dp))
-        is Piece.Tool -> Box(cell.padding(top = if (p.call.card != null) 10.dp else 2.dp)) { ToolView(p.call, money, proposals) }
-        is Piece.Reads -> Box(cell.padding(top = 2.dp)) { ReadsView(p, money, proposals) }
+        is Piece.Tool -> Box(cell.padding(top = if (p.call.card != null) 10.dp else 2.dp)) { ToolView(p.call, money, proposals, asked) }
+        is Piece.Reads -> Box(cell.padding(top = 2.dp)) { ReadsView(p, money, proposals, asked) }
         is Piece.Error -> Column(cell.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Glyph("close", 13.dp, c.heldText, Modifier.padding(top = 4.dp))
@@ -1227,7 +1277,7 @@ private fun StepMark(step: Step, writes: Boolean) {
 
 /** A tool call: a quiet line saying what it did, its refusal under it, or the card its answer became. */
 @Composable
-private fun ToolView(t: ToolCall, money: Money, proposals: Map<Long, JsonObject>) {
+private fun ToolView(t: ToolCall, money: Money, proposals: Map<Long, JsonObject>, asked: AskedReading) {
     val c = Relay.colors
     when (val card = t.card) {
         is CardData.Entry -> EntryCard(card.tx, card.op, money)
@@ -1235,6 +1285,7 @@ private fun ToolView(t: ToolCall, money: Money, proposals: Map<Long, JsonObject>
         is CardData.Proposal -> ProposalCard(card.p, card.p.l("id")?.let { proposals[it] })
         is CardData.Order -> Column(Modifier.fillMaxWidth().clip(Radii.card).background(c.slab).border(1.dp, c.edge, Radii.card).padding(horizontal = 14.dp)) { OrderLine(card.o, divider = false) }
         is CardData.Refused -> RefusalLine(card.message)
+        is CardData.Asked -> AskedCard(card.id, asked.byId[card.id], asked.live, asked.reread)
         null -> Column {
             Row(Modifier.heightIn(min = 26.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 StepMark(t.step, t.writes)
@@ -1248,12 +1299,6 @@ private fun ToolView(t: ToolCall, money: Money, proposals: Map<Long, JsonObject>
                 val text = refusalWords(t.answer.orEmpty())
                 if (t.op == "arbiter.order.place" || t.op == "arbiter.propose") RefusalLine(text)
                 else T(text.ifEmpty { "It was refused." }, Modifier.padding(start = 21.dp, bottom = 2.dp), Relay.type.caption, c.ink3, maxLines = 2)
-            } else if (t.step == Step.Done && t.op == "thread.propose") {
-                // The PC draws what it asked as a card to approve; the phone cannot read it yet.
-                T(
-                    "It waits for your answer: open this thread in Relay on the PC to see what would change, and approve or decline it there.",
-                    Modifier.padding(start = 21.dp, bottom = 2.dp), Relay.type.caption, c.ink3,
-                )
             }
         }
     }
@@ -1261,7 +1306,7 @@ private fun ToolView(t: ToolCall, money: Money, proposals: Map<Long, JsonObject>
 
 /** Reads in a row: from three, one line naming the first, opening to show them all. */
 @Composable
-private fun ReadsView(g: Piece.Reads, money: Money, proposals: Map<Long, JsonObject>) {
+private fun ReadsView(g: Piece.Reads, money: Money, proposals: Map<Long, JsonObject>, asked: AskedReading) {
     val c = Relay.colors
     var open by rememberSaveable(g.key) { mutableStateOf(false) }
     val step = when {
@@ -1281,7 +1326,7 @@ private fun ReadsView(g: Piece.Reads, money: Money, proposals: Map<Long, JsonObj
             Glyph(if (open) "chevron-up" else "chevron-down", 12.dp, c.inkDim)
         }
         AnimatedVisibility(open) {
-            Column(Modifier.padding(start = 2.dp, bottom = 4.dp)) { for (t in g.calls) ToolView(t, money, proposals) }
+            Column(Modifier.padding(start = 2.dp, bottom = 4.dp)) { for (t in g.calls) ToolView(t, money, proposals, asked) }
         }
     }
 }

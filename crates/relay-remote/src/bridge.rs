@@ -255,10 +255,12 @@ pub fn greeting(ctx: &Ctx, challenge: &str, engine_up: bool) -> Greeting {
     }
 }
 
-/// An admitted phone's welcome, with who it reached: the PC's name and id, the Relay version, and
-/// the network cards it can wake from the same network.
+/// An admitted phone's welcome, with who it reached: the PC's name and id, the Relay version, the
+/// network cards it can wake from the same network, and which ops this door opens (a PC's or a
+/// cloud copy's), so the phone never takes one for the other.
 pub fn welcome_for(ctx: &Ctx, registry: &Registry, welcome: Welcome) -> Welcome {
-    welcome.with_host(&registry.host_name, &registry.host_id, &ctx.version, crate::wake::targets())
+    let welcome = welcome.with_host(&registry.host_name, &registry.host_id, &ctx.version, crate::wake::targets());
+    Welcome { ops: Some(ctx.ops.as_str().into()), ..welcome }
 }
 
 /// How long a door that started the engine waits for its socket to answer.

@@ -1,5 +1,6 @@
 package com.quietsoftware.relay.ui.pages
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -27,14 +29,15 @@ import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.code.NotReadYet
 import com.quietsoftware.relay.ui.kit.Empty
 import com.quietsoftware.relay.ui.kit.Gap
+import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.Hairline
 import com.quietsoftware.relay.ui.kit.Slab
 import com.quietsoftware.relay.ui.kit.StaleNote
 import com.quietsoftware.relay.ui.kit.T
+import com.quietsoftware.relay.ui.kit.TOUCH
 import com.quietsoftware.relay.ui.kit.Toggle
 import com.quietsoftware.relay.ui.kit.column
 import com.quietsoftware.relay.ui.kit.plural
-import com.quietsoftware.relay.ui.kit.switchRow
 import com.quietsoftware.relay.ui.shell.SpaceFrame
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.serialization.SerialName
@@ -95,6 +98,7 @@ fun SkillsScreen(nav: Nav) {
                     detail = skill.description.ifBlank { skill.sourceUrl.orEmpty() },
                     checked = overrides[key] ?: (pid != null && skill.enabledIn.contains(pid)),
                     enabled = pid != null && s.online,
+                    onOpen = { nav.skill(skill.id) },
                 ) { on ->
                     if (pid != null) {
                         nav.shell.act("skill.enable", buildJsonObject { put("skill_id", skill.id); put("project_id", pid); put("enabled", on) }) {
@@ -134,6 +138,7 @@ fun PluginsScreen(nav: Nav) {
                     detail = listOf(plugin.summary, "${plural(plugin.skills.size, "skill")} · ${plural(plugin.mcpServers.size, "MCP server")}").filter { it.isNotBlank() }.joinToString("\n"),
                     checked = overrides[plugin.id] ?: (pid != null && plugin.enabledIn.contains(pid)),
                     enabled = pid != null && s.online,
+                    onOpen = { nav.plugin(plugin.id) },
                 ) { on ->
                     if (pid != null) {
                         nav.shell.act("plugin.enable", buildJsonObject { put("plugin_id", plugin.id); put("project_id", pid); put("enabled", on) }) {
@@ -184,16 +189,23 @@ private fun ExtensionBody(
     }
 }
 
+/** A row of the list: its words open what it is (as the desktop's cards do), its switch turns it on for the project. */
 @Composable
-private fun ExtensionSwitch(title: String, detail: String, checked: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+private fun ExtensionSwitch(title: String, detail: String, checked: Boolean, enabled: Boolean, onOpen: () -> Unit, onChange: (Boolean) -> Unit) {
     val c = Relay.colors
-    // The whole row is the switch: its words take the tap too.
-    Row(Modifier.fillMaxWidth().switchRow(checked, enabled, onChange).padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            T(title, style = Relay.type.body, color = c.ink, weight = FontWeight.Medium, maxLines = 2)
-            if (detail.isNotBlank()) T(detail, style = Relay.type.caption, color = c.ink3, maxLines = 3)
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.weight(1f).heightIn(min = TOUCH).clickable(onClick = onOpen).padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                T(title, style = Relay.type.body, color = c.ink, weight = FontWeight.Medium, maxLines = 2)
+                if (detail.isNotBlank()) T(detail, style = Relay.type.caption, color = c.ink3, maxLines = 3)
+            }
+            Spacer(Modifier.width(6.dp))
+            Glyph("chevron-right", 14.dp, c.ink3)
         }
         Spacer(Modifier.width(12.dp))
-        Toggle(checked, null, enabled = enabled)
+        Toggle(checked, onChange, enabled = enabled)
     }
 }

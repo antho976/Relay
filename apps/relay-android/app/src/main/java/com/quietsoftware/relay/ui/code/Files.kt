@@ -176,14 +176,17 @@ private sealed interface FilesSheet {
     class Menu(val entry: TreeEntry) : FilesSheet
     class Create(val into: String, val kind: String) : FilesSheet
     class Rename(val entry: TreeEntry) : FilesSheet
+    class Move(val entry: TreeEntry) : FilesSheet
+    data object Trashed : FilesSheet
     class Trash(val entry: TreeEntry) : FilesSheet
     class Revert(val entry: TreeEntry) : FilesSheet
 }
 
 /**
  * A worktree's files: a tree that reads one folder at a time with git badges, content search,
- * and the operations the desktop has (new file or folder, rename, trash with Undo, revert to
- * HEAD). Reads work with the PC away; changes need it. Desktop: editor.rs, project_files.rs.
+ * and the operations the desktop has (new file or folder, rename, move into a folder, trash with
+ * Undo, Recently trashed with Restore, revert to HEAD). Reads work with the PC away; changes need
+ * it. Desktop: editor.rs, project_files.rs.
  */
 @Composable
 fun FilesScreen(projectId: Long, worktree: String?, nav: Nav) {
@@ -249,6 +252,17 @@ fun FilesScreen(projectId: Long, worktree: String?, nav: Nav) {
         }
     }
 
+    fun move(entry: TreeEntry, into: String) {
+        scope.write(nav, "file.move", codePayload(projectId, wt) {
+            put("path", entry.path)
+            put("into", into)
+        }) { r ->
+            if (r == null) return@write
+            if (into.isNotEmpty()) tree.expand(into)
+            nav.shell.toast("Moved ${entry.name} to ${into.ifEmpty { "the worktree root" }}")
+        }
+    }
+
     fun create(into: String, kind: String, name: String) {
         val path = if (into.isEmpty()) name else "$into/$name"
         scope.write(nav, "file.create", codePayload(projectId, wt) {
@@ -277,6 +291,7 @@ fun FilesScreen(projectId: Long, worktree: String?, nav: Nav) {
                 subtitle = listOfNotNull(project?.name?.ifBlank { null }, current?.branch?.ifBlank { null }).joinToString(" · ").ifBlank { null },
                 actions = {
                     IconKey("search", { searching = !searching }, selected = searching, label = if (searching) "Hide the search" else "Search")
+                    IconKey("trash", { sheet = FilesSheet.Trashed }, label = "Recently trashed")
                     IconKey("file-plus", { sheet = FilesSheet.NewIn("") }, enabled = online, label = "New file or folder")
                 },
             )
@@ -388,6 +403,7 @@ fun FilesScreen(projectId: Long, worktree: String?, nav: Nav) {
                     add(SheetAction("Open", "file") { openFile(e.path) })
                 }
                 add(SheetAction("Rename", "edit", enabled = online) { sheet = FilesSheet.Rename(e) })
+                add(SheetAction("Move", "folder", enabled = online) { sheet = FilesSheet.Move(e) })
                 if (!isDir && (e.badge == "M" || e.badge == "D")) {
                     add(SheetAction("Revert to HEAD", "undo", danger = true, enabled = online) { sheet = FilesSheet.Revert(e) })
                 }
@@ -413,6 +429,15 @@ fun FilesScreen(projectId: Long, worktree: String?, nav: Nav) {
                 sheet = null
                 rename(s.entry, name)
             },
+            onDismiss = { sheet = null },
+        )
+        is FilesSheet.Move -> MoveSheet(nav, projectId, wt, s.entry, onMove = { into -> move(s.entry, into) }, onDismiss = { sheet = null })
+        FilesSheet.Trashed -> TrashSheet(
+            nav,
+            projectId,
+            project?.path,
+            online,
+            onRestore = { e -> scope.launch { restoreFromTrash(nav, projectId, e.id, e.originalPath.substringAfterLast('/')) } },
             onDismiss = { sheet = null },
         )
         is FilesSheet.Trash -> ConfirmSheet(
@@ -498,6 +523,7 @@ private sealed interface FileSheet {
     data object Discard : FileSheet
     data object Conflict : FileSheet
     data object Rename : FileSheet
+    data object Move : FileSheet
     data object Revert : FileSheet
     data object Trash : FileSheet
 }
@@ -516,7 +542,7 @@ private class FileDraft : ViewModel() {
  * One file: read with `file.read` (1 MiB at most), shown with line numbers and light colour, or
  * edited in full and saved with the hash of the text read, so an edit made on the PC since is
  * refused rather than overwritten. Images are drawn; anything binary says so. A search hit
- * opens at its [line], marked.
+ * opens at its [line], marked. Find (find_bar.rs) washes every match and steps through them.
  */
 @Composable
 fun FileScreen(projectId: Long, path: String, worktree: String?, line: Int?, nav: Nav) {
@@ -532,6 +558,11 @@ fun FileScreen(projectId: Long, path: String, worktree: String?, line: Int?, nav
     var draft by held.draft
     var saving by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf<FileSheet?>(null) }
+    var finding by rememberSaveable { mutableStateOf(false) }
+    var findText by rememberSaveable { mutableStateOf("") }
+    var matchCase by rememberSaveable { mutableStateOf(false) }
+    var findRegex by rememberSaveable { mutableStateOf(false) }
+    var step by rememberSaveable { mutableIntStateOf(0) }
     val payload = if (trashed != null || current.isEmpty()) {
         null
     } else {
@@ -547,6 +578,10 @@ fun FileScreen(projectId: Long, path: String, worktree: String?, line: Int?, nav
     val folder = current.substringBeforeLast('/', "")
     val editable = text != null && data?.truncated == false
     val dirty = editing && draft != base
+    val findable = finding && !editing && text != null
+    val shownLines = remember(text, findable) { if (findable && text != null) displayLines(text) else emptyList() }
+    val matches = remember(shownLines, findText, matchCase, findRegex) { findIn(shownLines, findText, matchCase, findRegex) }
+    val at = if (matches.isNullOrEmpty()) 0 else step.mod(matches.size)
 
     fun requestClose() {
         if (dirty) sheet = FileSheet.Discard else editing = false
@@ -613,6 +648,20 @@ fun FileScreen(projectId: Long, path: String, worktree: String?, line: Int?, nav
         }
     }
 
+    fun move(into: String) {
+        scope.write(nav, "file.move", codePayload(projectId, worktree) {
+            put("path", current)
+            put("into", into)
+        }) { r ->
+            val to = r?.decodeAs<TreeEntry>()?.path
+            if (!to.isNullOrEmpty()) {
+                current = to
+                reloads++
+                nav.shell.toast("Moved $name to ${into.ifEmpty { "the worktree root" }}")
+            }
+        }
+    }
+
     fun undoTrash(id: Long) {
         scope.launch {
             try {
@@ -641,6 +690,7 @@ fun FileScreen(projectId: Long, path: String, worktree: String?, line: Int?, nav
                         Key("Save", { save(false) }, kind = KeyKind.Primary, compact = true, enabled = dirty && online && !saving)
                         IconKey("close", { requestClose() }, tint = c.ink2, label = if (dirty) "Discard edits" else "Stop editing")
                     } else if (trashed == null) {
+                        if (text != null) IconKey("search", { finding = !finding }, selected = finding, label = if (finding) "Close the find bar" else "Find in file")
                         if (editable) IconKey("edit", { startEdit() }, enabled = online, label = "Edit file")
                         IconKey("more", { sheet = FileSheet.Menu }, label = "File actions")
                     }
@@ -648,6 +698,21 @@ fun FileScreen(projectId: Long, path: String, worktree: String?, line: Int?, nav
             )
             val gone = trashed
             val body = text
+            if (findable) {
+                FindBar(
+                    query = findText,
+                    onQuery = { findText = it; step = 0 },
+                    count = findCount(findText, matches, at),
+                    matchCase = matchCase,
+                    onCase = { matchCase = !matchCase; step = 0 },
+                    regex = findRegex,
+                    onRegex = { findRegex = !findRegex; step = 0 },
+                    canStep = !matches.isNullOrEmpty(),
+                    onPrevious = { step = at - 1 },
+                    onNext = { step = at + 1 },
+                    onClose = { finding = false },
+                )
+            }
             if (gone == null && live.result != null && !live.fresh) StaleNote(live.at)
             when {
                 gone != null -> Empty("trash", "Moved to the trash", current, action = {
@@ -673,7 +738,7 @@ fun FileScreen(projectId: Long, path: String, worktree: String?, line: Int?, nav
                     }
                 }
                 editing -> EditArea(draft, onChange = { draft = it })
-                else -> CodeView(body, name, Modifier.weight(1f), mark = line)
+                else -> CodeView(body, name, Modifier.weight(1f), mark = line, find = if (findable && !matches.isNullOrEmpty()) FindHits(matches, at) else null)
             }
         }
     }
@@ -685,6 +750,7 @@ fun FileScreen(projectId: Long, path: String, worktree: String?, line: Int?, nav
             subtitle = current,
             actions = listOf(
                 SheetAction("Rename", "edit", enabled = online) { sheet = FileSheet.Rename },
+                SheetAction("Move", "folder", enabled = online) { sheet = FileSheet.Move },
                 SheetAction("Revert to HEAD", "undo", danger = true, enabled = online) { sheet = FileSheet.Revert },
                 SheetAction("Move to trash", "trash", danger = true, enabled = online) { sheet = FileSheet.Trash },
             ),
@@ -714,6 +780,14 @@ fun FileScreen(projectId: Long, path: String, worktree: String?, line: Int?, nav
                 sheet = null
                 rename(newName)
             },
+            onDismiss = { sheet = null },
+        )
+        FileSheet.Move -> MoveSheet(
+            nav,
+            projectId,
+            worktree,
+            TreeEntry(path = current, name = name),
+            onMove = { into -> move(into) },
             onDismiss = { sheet = null },
         )
         FileSheet.Revert -> ConfirmSheet(

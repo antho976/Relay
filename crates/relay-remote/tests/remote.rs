@@ -1121,6 +1121,42 @@ async fn a_greeting_names_nobody_until_the_phone_is_in() {
     assert_eq!(welcome.host_id.as_deref(), Some(registry.host_id.as_str()));
 }
 
+/// The phone pairs with a PC and with a cloud copy, and must not take one for the other: an
+/// admitted device's welcome says which ops the door opens, on pairing and on every connection.
+/// A refused one is not told.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_welcome_says_whether_the_door_is_a_pcs_or_a_cloud_copys() {
+    for (ops, said) in [(relay_remote::wire::OpProfile::Phone, "phone"), (relay_remote::wire::OpProfile::Cloud, "cloud")] {
+        let h = harness_with(ops).await;
+        let door = DirectServer::bind(h.ctx.clone(), "127.0.0.1:0".parse::<SocketAddr>().unwrap()).await.unwrap();
+        let url = format!("ws://{}", door.local_addr);
+        // A door with nobody paired answers only once a pairing window is open.
+        let code = pair_code(&h.ctx);
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(url.as_str()).await.unwrap();
+        let _ = recv_text(&mut ws).await;
+        send(&mut ws, json!({"v":1,"pair":code,"device_name":"Test Phone"}).to_string()).await;
+        let paired: Welcome = serde_json::from_str(&recv_text(&mut ws).await).unwrap();
+        assert!(paired.ok, "{paired:?}");
+        assert_eq!(paired.ops.as_deref(), Some(said), "{paired:?}");
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(url.as_str()).await.unwrap();
+        let greeting = recv_json(&mut ws).await;
+        assert!(greeting.get("ops").is_none(), "the greeting says nothing before a proof: {greeting}");
+        let challenge = greeting["challenge"].as_str().unwrap().to_string();
+        let (device, token) = (paired.device.unwrap(), paired.token.unwrap());
+        send(&mut ws, json!({"v":1,"device":device,"proof":wire::proof(&challenge, &token)}).to_string()).await;
+        let welcome: Welcome = serde_json::from_str(&recv_text(&mut ws).await).unwrap();
+        assert_eq!((welcome.ok, welcome.ops.as_deref()), (true, Some(said)), "{welcome:?}");
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(url.as_str()).await.unwrap();
+        let _ = recv_text(&mut ws).await;
+        send(&mut ws, json!({"v":1,"device":device,"proof":"00"}).to_string()).await;
+        let denied = recv_json(&mut ws).await;
+        assert!(denied["ok"] == false && denied.get("ops").is_none(), "{denied}");
+    }
+}
+
 /// Whether a host for `secret` stays in the room: a refused one is upgraded, then closed at once.
 async fn hosts(addr: SocketAddr, secret: &str) -> Option<Ws> {
     let mut ws = raw_host(addr, secret).await;

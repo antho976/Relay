@@ -40,6 +40,7 @@ import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -136,17 +137,61 @@ internal fun EntryCard(tx: JsonObject, op: String, money: Money) {
     ).joinToString(" · ")
     val moved = was != null && (was.minor("amount", money.digits) != tx.minor("amount", money.digits) || was.s("type") != tx.s("type"))
     val amount = if (moved && was != null) "${txAmount(was, money)} → ${txAmount(tx, money)}" else txAmount(tx, money)
+    // An edit that gave the entry its first category has no Undo: the ledger cannot take a
+    // category away (Tally's entry sheet can).
+    val firstCategory = was != null && was.l("category_id") == null && tx.l("category_id") != null
     CardFrame {
         Row(Modifier.weight(1f).alpha(if (undone) .6f else 1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             if (transfer) HueBadge("", c.ink3, 30.dp, glyph = "refresh") else HueBadge(tx.s("category") ?: what, hue(tx.l("color")), 30.dp)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                T(if (undone) "Removed: $what" else "$verb $kind: $what", style = Relay.type.ui.copy(fontSize = 13.5.sp), color = c.ink, maxLines = 1, weight = FontWeight.SemiBold)
+                T(if (undone) (if (was != null) "Put back: $what" else "Removed: $what") else "$verb $kind: $what", style = Relay.type.ui.copy(fontSize = 13.5.sp), color = c.ink, maxLines = 1, weight = FontWeight.SemiBold)
                 if (detail.isNotEmpty()) T(detail, style = Relay.type.caption, color = c.ink3, maxLines = 1)
             }
             T(amount, style = Relay.type.mono.copy(fontSize = 13.sp, fontFeatureSettings = "tnum"), color = if (kind == "income") c.live else c.ink)
         }
         if (op == "money.tx.add" && id != null) UndoKey(id, "money.tx.delete" to "money.tx.restore", undone) { undone = it }
+        if (was != null && id != null && !firstCategory) EditUndoKey(id, was, tx, money.digits, undone) { undone = it }
     }
+}
+
+/**
+ * Undo on the card of an edit the agent made: the entry goes back as it was (`previous`), and
+ * Redo makes the edit again (threads_view.rs `edit_undo`). Each sends only what differs between
+ * the two, so what the person changed on the entry since is left as they left it.
+ */
+@Composable
+private fun EditUndoKey(id: Long, was: JsonObject, now: JsonObject, digits: Int, undone: Boolean, onUndone: (Boolean) -> Unit) {
+    val nav = LocalNav.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    Key(
+        if (undone) "Redo" else "Undo",
+        onClick = {
+            busy = true
+            scope.launch {
+                val undoing = !undone
+                val payload = if (undoing) txPatch(id, now, was, digits) else txPatch(id, was, now, digits)
+                if (nav.attempt("money.tx.update", payload) != null) onUndone(undoing)
+                busy = false
+            }
+        },
+        kind = KeyKind.Quiet,
+        enabled = !busy,
+    )
+}
+
+/**
+ * The `money.tx.update` that turns entry [from] into [to]: only the fields that differ. A field
+ * [to] has empty (no category, no second account) is left out, as the ledger keeps what is absent.
+ */
+private fun txPatch(id: Long, from: JsonObject, to: JsonObject, digits: Int): JsonObject = buildJsonObject {
+    put("id", id)
+    for (key in listOf("type", "date", "account_id", "to_account_id", "category_id", "note")) {
+        val v = to[key]
+        if (v != null && v !is JsonNull && v != from[key]) put(key, v)
+    }
+    val amount = to.minor("amount", digits)
+    if (amount != null && amount != from.minor("amount", digits)) put("amount", amount)
 }
 
 /**

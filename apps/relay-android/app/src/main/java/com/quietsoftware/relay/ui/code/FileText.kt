@@ -21,16 +21,20 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalDensity
@@ -145,16 +149,23 @@ fun highlight(line: String, lang: Lang): AnnotatedString {
 private fun isWordChar(c: Char) = c.isLetterOrDigit() || c == '_'
 
 /**
+ * A file's lines as CodeView draws them: tabs as four spaces, and nothing past MAX_COLUMNS, so a
+ * minified file's one huge line is not laid out whole. Find matches on these.
+ */
+fun displayLines(text: String): List<String> =
+    text.removeSuffix("\n").split('\n').map { it.replace("\t", "    ").trimEnd('\r').take(MAX_COLUMNS + 3) }
+
+/**
  * A text file, with line numbers that stay on the left while the lines scroll sideways. The
  * text is laid out in a lazy column of fixed width, so a long file costs what it shows. With
  * [mark] (a search hit's line) it opens a few lines above that line, and the line is marked.
- * Holding a line copies it.
+ * With [find], its matches are washed and the current one brought into view. Holding a line
+ * copies it.
  */
 @Composable
-fun CodeView(text: String, fileName: String, modifier: Modifier = Modifier, mark: Int? = null) {
+fun CodeView(text: String, fileName: String, modifier: Modifier = Modifier, mark: Int? = null, find: FindHits? = null) {
     val c = Relay.colors
-    // Nothing past MAX_COLUMNS can be scrolled to, so a minified file's one huge line is not laid out whole.
-    val lines = remember(text) { text.removeSuffix("\n").split('\n').map { it.replace("\t", "    ").trimEnd('\r').take(MAX_COLUMNS + 3) } }
+    val lines = remember(text) { displayLines(text) }
     val lang = remember(fileName) { languageOf(fileName) }
     val cell = monoCellPx(codeTextStyle)
     val density = LocalDensity.current
@@ -164,6 +175,21 @@ fun CodeView(text: String, fileName: String, modifier: Modifier = Modifier, mark
     val contentWidth: Dp = with(density) { (cell * (longest + 3)).toDp() } + gutter
     val hs = rememberScrollState()
     val list = rememberLazyListState(initialFirstVisibleItemIndex = mark?.let { (it - 1 - MARK_ABOVE).coerceIn(0, lines.lastIndex) } ?: 0)
+    val byLine = remember(find?.matches) { find?.matches?.groupBy { it.line }.orEmpty() }
+    val target = find?.let { it.matches.getOrNull(it.current) }
+    var shownWidth by remember { mutableIntStateOf(0) }
+    // The current match in view: its line a few below the top when it is off screen, and its
+    // columns scrolled to when they are off to the side.
+    LaunchedEffect(target) {
+        val t = target ?: return@LaunchedEffect
+        val first = list.firstVisibleItemIndex
+        val seen = list.layoutInfo.visibleItemsInfo.size
+        if (t.line < first || t.line >= first + seen - 1) list.scrollToItem((t.line - MARK_ABOVE).coerceAtLeast(0))
+        val lead = with(density) { gutter.toPx() + 8.dp.toPx() }
+        val left = lead + t.start * cell
+        val right = lead + t.end * cell
+        if (left < hs.value + lead || right > hs.value + shownWidth) hs.scrollTo((left - lead - cell * 4).toInt().coerceAtLeast(0))
+    }
     val nav = LocalNav.current
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
@@ -175,10 +201,10 @@ fun CodeView(text: String, fileName: String, modifier: Modifier = Modifier, mark
             nav.shell.toast("Copied line ${i + 1}")
         }
     }
-    Box(modifier.fillMaxWidth().background(c.screen).horizontalScroll(hs)) {
+    Box(modifier.fillMaxWidth().background(c.screen).onSizeChanged { shownWidth = it.width }.horizontalScroll(hs)) {
         LazyColumn(Modifier.width(contentWidth).fillMaxHeight(), state = list, contentPadding = PaddingValues(vertical = 8.dp)) {
             items(lines.size) { i ->
-                CodeLine(i + 1, lines[i], lang, gutter, hs, marked = i + 1 == mark, onCopy = { copy(i) })
+                CodeLine(i + 1, lines[i], lang, gutter, hs, marked = i + 1 == mark, hits = byLine[i], current = target?.takeIf { it.line == i }, onCopy = { copy(i) })
             }
         }
     }
@@ -192,9 +218,25 @@ private const val MARK_ABOVE = 4
 private const val IMAGE_MAX_SIDE = 4096
 
 @Composable
-private fun CodeLine(number: Int, text: String, lang: Lang, gutter: Dp, hs: ScrollState, marked: Boolean, onCopy: () -> Unit) {
+private fun CodeLine(number: Int, text: String, lang: Lang, gutter: Dp, hs: ScrollState, marked: Boolean, hits: List<Match>?, current: Match?, onCopy: () -> Unit) {
     val c = Relay.colors
-    val shown = remember(text, lang) { highlight(text, lang) }
+    val coloured = remember(text, lang) { highlight(text, lang) }
+    // Find's matches washed in amber, the current one stronger (find_bar.rs over GtkSourceView's search).
+    val hit = c.waiting.copy(alpha = .28f)
+    val now = c.waiting.copy(alpha = .62f)
+    val shown = remember(coloured, hits, current, hit, now) {
+        if (hits.isNullOrEmpty()) {
+            coloured
+        } else {
+            buildAnnotatedString {
+                append(coloured)
+                for (m in hits) {
+                    val end = m.end.coerceAtMost(text.length)
+                    if (m.start < end) addStyle(SpanStyle(background = if (m == current) now else hit), m.start, end)
+                }
+            }
+        }
+    }
     // A marked line is washed from edge to edge, gutter too, and its number is in ink.
     val ground = if (marked) c.wash else c.screen
     Box(

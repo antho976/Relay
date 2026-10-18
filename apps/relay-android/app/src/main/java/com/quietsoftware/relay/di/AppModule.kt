@@ -5,6 +5,7 @@ import androidx.room.Room
 import com.quietsoftware.relay.data.Relay
 import com.quietsoftware.relay.data.Settings
 import com.quietsoftware.relay.data.db.RelayDb
+import com.quietsoftware.relay.data.link.CloudStore
 import com.quietsoftware.relay.data.link.PcStore
 import dagger.Module
 import dagger.Provides
@@ -41,10 +42,14 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun cloudStore(@ApplicationContext context: Context): CloudStore = CloudStore(context)
+
+    @Provides
+    @Singleton
     fun settings(@ApplicationContext context: Context): Settings = Settings(context)
 
     @Provides
     @Singleton
-    fun relay(@ApplicationContext context: Context, db: RelayDb, pc: PcStore, @AppScope scope: CoroutineScope): Relay =
-        Relay(context, db, pc, scope)
+    fun relay(@ApplicationContext context: Context, db: RelayDb, pc: PcStore, cloud: CloudStore, @AppScope scope: CoroutineScope): Relay =
+        Relay(context, db, pc, scope, cloud)
 }

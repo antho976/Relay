@@ -24,7 +24,8 @@ import java.util.concurrent.TimeUnit
  */
 const val SERVER = "https://antho-s-bot-8dve.onrender.com"
 
-class ConnectFailure(message: String) : Exception(message)
+/** [unsupported]: the server does not know what was asked for (a bot older than the request's kind). */
+class ConnectFailure(message: String, val unsupported: Boolean = false) : Exception(message)
 
 /** A request the owner has not answered yet, and the secret that collects its link. */
 data class Asked(val id: String, val code: String, val notified: Boolean, val expiresAt: Long, val verifier: String)
@@ -77,11 +78,14 @@ class ServerConnect(
         return o.bool("pc") == true
     }
 
-    /** Asks the owner to let this phone pair with the PC. */
-    suspend fun ask(deviceName: String): Asked {
+    /**
+     * Asks the owner to let this phone pair: with the PC ([KIND_PC]), or with the cloud copy beside
+     * the bot ([KIND_CLOUD], a kind the bot must know: antho976/antho-s-bot).
+     */
+    suspend fun ask(deviceName: String, kind: String = KIND_PC): Asked {
         val verifier = newVerifier()
         val body = buildJsonObject {
-            put("kind", "relay")
+            put("kind", kind)
             put("device", deviceName)
             put("challenge", challengeOf(verifier))
         }
@@ -98,12 +102,16 @@ class ServerConnect(
             val id = answer.str("id") ?: throw ConnectFailure("Your server's answer did not read")
             return Asked(id, answer.str("code").orEmpty(), answer.bool("notified") == true, answer.long("expiresAt") ?: 0, verifier)
         }
+        val error = answer?.str("error")
+        // A refusal the bot has no word for, of a request it read: it does not know this kind yet.
+        if (status in 400..499 && status != 429 && error !in KNOWN_ERRORS) throw ConnectFailure("Your server does not offer this yet ($status)", unsupported = true)
         throw ConnectFailure(
-            when (answer?.str("error")) {
+            when (error) {
                 "no_pc" -> "No PC is connected to your server yet. On the PC, run: relay cloud connect ${server.removePrefix("https://")}"
                 "busy" -> "Your server has requests waiting already. Answer those, then try again."
                 "slow_down" -> "Something on your network keeps asking. Wait a minute and try again."
                 "off" -> "Your server does not take requests to connect: it is turned off there."
+                "cloud_off" -> "Your server's copy is not running there."
                 else -> "Your server could not take the request ($status)"
             },
         )
@@ -126,6 +134,14 @@ class ServerConnect(
 
     companion object {
         private val JSON = "application/json".toMediaType()
+
+        /** The Relay app asking for the PC: the PC opens the window and asks on its own screen. */
+        const val KIND_PC = "relay"
+
+        /** The Relay app asking for the cloud copy beside the bot, which answers Tally's and Avex's reads. */
+        const val KIND_CLOUD = "relay-cloud"
+
+        private val KNOWN_ERRORS = setOf("no_pc", "busy", "slow_down", "off", "cloud_off")
 
         fun readReply(o: JsonObject, status: Int): Reply = when (o.str("status")) {
             "waiting" -> Reply.Waiting
