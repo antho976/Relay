@@ -87,6 +87,8 @@ button.nav image { color: @faint; }
 button.nav:hover image, button.nav.selected image { color: @ink; }
 button.nav.selected { background: @wash; color: @ink; }
 .title { font-size: 15px; font-weight: 600; }
+.page-title { font-size: 22px; font-weight: 600; color: @ink; letter-spacing: -0.02em; }
+.page-lede { font-size: 13px; color: @faint; }
 .dim { color: @secondary; font-size: 12px; }
 .toolbar { min-height: 38px; padding: 0 12px; background: @console; border-bottom: 1px solid @edge; }
 .statusbar { background: @console; color: @faint; min-height: 30px; padding: 0 16px; border-top: 1px solid @edge; font-family: 'Geist Mono', monospace; font-size: 11.5px; }

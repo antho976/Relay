@@ -129,20 +129,20 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
             page.append(&head);
         }
         if name != "modules" {
-        page.append(&label(
-            match name {
-                "mailbox" => "Mailbox",
-                "modules" => "Modules",
-                _ => "Guardrails",
-            },
-            "title",
-        ));
-        match name {
-            "mailbox" => mail_composer(ui, page, project),
-            "modules" => {}
-            _ => page.append(&paragraph(
-                "Answer agents that need an exception, decide which held actions may proceed, and see the exceptions still in force.",
-            )),
+        // A page's title and the line under it, as Tally's, Skills' and Settings' pages have them.
+        let heading = label(if name == "mailbox" { "Mailbox" } else { "Guardrails" }, "page-title");
+        heading.set_xalign(0.0);
+        page.append(&heading);
+        let lede = paragraph(if name == "mailbox" {
+            "Write to one agent in this project, or to every one with *. Messages between agents show here too."
+        } else {
+            "Answer agents that need an exception, decide which held actions may proceed, and see the exceptions still in force."
+        });
+        lede.remove_css_class("body");
+        lede.add_css_class("page-lede");
+        page.append(&lede);
+        if name == "mailbox" {
+            mail_composer(ui, page, project);
         }
         }
         let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
