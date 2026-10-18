@@ -90,7 +90,9 @@ as one bracketed paste. With nothing typed, the send key stops a working agent (
 message box, chips hold the agent's own keys: a photo or screenshot (shrunk to 2048 px, sent to
 the agent's checkout with `session.upload` as soon as it is picked, and named in the message by
 its path, which both CLIs read as the picture), `/` for its slash commands and the project's
-skills, its permission mode as Claude Code's footer says it (a tap cycles it, Shift-Tab), and Esc. When the
+skills, its permission mode as Claude Code's footer says it (a tap cycles it, Shift-Tab), and Esc.
+Its plan (Claude Code's to-do list, Codex's `update_plan`) is pinned under the header while any
+of it is left: how far along it is and the step under way, opening to every step. When the
 agent is held at a question in its terminal (a permission, a menu), the screen streams the
 terminal while the question shows, reads the question off it, and offers a key per numbered
 answer, and Esc. A row of keys (Esc,

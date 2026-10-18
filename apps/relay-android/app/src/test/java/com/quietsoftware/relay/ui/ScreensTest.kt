@@ -131,6 +131,8 @@ class ScreensTest {
                 {"id":"6","role":"tool","body":{"tool_use_id":"t3","is_error":true,"text":"BoardTest > dropOnDone FAILED"},"created_at":"2026-10-09T20:58:40Z"},
                 {"id":"7","role":"assistant","body":{"blocks":[{"type":"text","text":"Found it: `onDrop` moved the card to the column it **came from**. The fix reads the target column instead."},{"type":"tool_use","id":"t4","name":"Edit","summary":"ui/tasks/Board.kt","detail":"@@ -212 +212 @@\n-    move(card, card.column)\n+    move(card, target.column)"}]},"created_at":"2026-10-09T20:59:00Z"},
                 {"id":"8","role":"tool","body":{"tool_use_id":"t4","is_error":false,"text":"ok"},"created_at":"2026-10-09T20:59:01Z"},
+                {"id":"8b","role":"assistant","body":{"blocks":[{"type":"tool_use","id":"t5","name":"TodoWrite","summary":"2 of 4 done","detail":"[x] Find the drop handler\n[x] Move the card to the target column\n[~] Run the board tests\n[ ] Update the changelog"}]},"created_at":"2026-10-09T20:59:05Z"},
+                {"id":"8c","role":"tool","body":{"tool_use_id":"t5","is_error":false,"text":"ok"},"created_at":"2026-10-09T20:59:06Z"},
                 {"id":"9","role":"assistant","body":{"blocks":[{"type":"text","text":"Fixed. Dropping on **Done** now lands there:\n\n```kotlin\nmove(card, target.column)\n```\n\nThe board tests pass."}]},"created_at":"2026-10-09T20:59:30Z"}
             ]}"""
             relay.hub.store.putQuery(

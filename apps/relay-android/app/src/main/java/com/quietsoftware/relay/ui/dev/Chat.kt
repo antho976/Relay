@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -81,6 +82,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -248,6 +250,9 @@ fun ChatScreen(name: String, nav: Nav) {
                 IconKey("terminal", { nav.console(name) }, size = 18.dp, tint = c.ink2)
             }
             Banner(status, session, s.online, life)
+            // The agent's plan, pinned: what it is on, and how far along, while there is any left.
+            val plan = remember(messages) { latestPlan(messages) }
+            if (plan != null && (working || plan.any { it.state != 'x' })) PlanStrip(name, plan)
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 // The agent's screen here before the terminal: it answers what the conversation cannot show yet.
                 val openTerminal = @Composable {
@@ -463,6 +468,29 @@ internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessa
     return out
 }
 
+/** A step of the agent's plan: its words, and `x` done, `~` under way or ` ` to do. */
+internal data class PlanStep(val text: String, val state: Char)
+
+private val PLAN_LINE = Regex("""^\[([x~ ])] (.*)$""")
+
+/** The agent's latest plan (Claude Code's to-do list, Codex's plan), from its log; null while it has none. */
+internal fun latestPlan(messages: List<ThreadMessage>): List<PlanStep>? {
+    for (m in messages.asReversed()) {
+        if (m.role != "assistant") continue
+        val blocks = (m.body as? JsonObject)?.get("blocks") as? JsonArray ?: continue
+        for (b in blocks.asReversed()) {
+            val o = b as? JsonObject ?: continue
+            if (o.str("type") != "tool_use" || o.str("name") !in PLAN_TOOLS) continue
+            return o.str("detail").lines().mapNotNull { line ->
+                PLAN_LINE.matchEntire(line.trimEnd())?.let { PlanStep(it.groupValues[2], it.groupValues[1][0]) }
+            }.takeIf { it.isNotEmpty() }
+        }
+    }
+    return null
+}
+
+private val PLAN_TOOLS = setOf("TodoWrite", "update_plan")
+
 /** The agent's last step is a question or a plan still waiting on the person. */
 internal fun waitsOnAsk(pieces: List<ChatPiece>): Boolean =
     (pieces.lastOrNull { it !is ChatPiece.User && it !is ChatPiece.Copy } as? ChatPiece.Tool)?.call?.let { isAsk(it.name) && it.step == Step.Running } == true
@@ -606,6 +634,57 @@ private fun CopyKey(text: String) {
         contentAlignment = Alignment.CenterStart,
     ) {
         Glyph(if (copied) "check" else "copy", 15.dp, Relay.colors.inkDim)
+    }
+}
+
+/**
+ * The agent's plan under the header: one line with how far along it is and the step under way,
+ * opening to every step, done ones ticked and quiet.
+ */
+@Composable
+private fun PlanStrip(name: String, plan: List<PlanStep>) {
+    val c = Relay.colors
+    var open by rememberSaveable(name) { mutableStateOf(false) }
+    val done = plan.count { it.state == 'x' }
+    val now = plan.firstOrNull { it.state == '~' } ?: plan.firstOrNull { it.state != 'x' }
+    Column(Modifier.fillMaxWidth().background(c.slab)) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 40.dp).clickable(onClickLabel = if (open) "Fold the plan" else "Show the whole plan") { open = !open }
+                .padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Glyph("check", 13.dp, if (done == plan.size) c.live else c.ink3)
+            T("Plan", style = Relay.type.caption, color = c.ink2, weight = FontWeight.Medium)
+            T("$done of ${plan.size}", style = Relay.type.mono.copy(fontSize = 11.sp), color = c.ink3)
+            T(now?.text.orEmpty(), Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 1)
+            Glyph(if (open) "chevron-up" else "chevron-down", 12.dp, c.inkDim)
+        }
+        AnimatedVisibility(open) {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState()).padding(start = 14.dp, end = 14.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                for (step in plan) {
+                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Box(Modifier.padding(top = 3.dp).size(13.dp), contentAlignment = Alignment.Center) {
+                            when (step.state) {
+                                'x' -> Glyph("check", 12.dp, c.live)
+                                '~' -> Dot(c.waiting, 7.dp)
+                                else -> Box(Modifier.size(9.dp).border(1.dp, c.inkDim, CircleShape))
+                            }
+                        }
+                        T(
+                            step.text,
+                            Modifier.weight(1f),
+                            Relay.type.caption.copy(textDecoration = if (step.state == 'x') TextDecoration.LineThrough else null),
+                            if (step.state == 'x') c.ink3 else c.ink2,
+                        )
+                    }
+                }
+            }
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(c.edge))
     }
 }
 

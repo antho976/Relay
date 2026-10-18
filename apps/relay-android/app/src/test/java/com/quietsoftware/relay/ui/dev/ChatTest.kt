@@ -201,4 +201,12 @@ class ChatTest {
         assertEquals("run the tests", joinSaid("", "run the tests"))
         assertEquals("first fix it then run the tests", joinSaid("first fix it  ", "then run the tests"))
     }
+
+    @Test
+    fun theLatestPlanIsReadFromEitherProvidersSteps() {
+        val first = msg("a1", "assistant", """{"blocks":[{"type":"tool_use","id":"t1","name":"TodoWrite","summary":"0 of 2 done","detail":"[ ] read\n[ ] fix"}]}""")
+        val later = msg("a2", "assistant", """{"blocks":[{"type":"text","text":"On it."},{"type":"tool_use","id":"t2","name":"update_plan","summary":"1 of 3 done","detail":"[x] read\n[~] fix\n[ ] test"}]}""")
+        assertEquals(null, latestPlan(listOf(msg("u", "user", """{"text":"go"}"""))))
+        assertEquals(listOf(PlanStep("read", 'x'), PlanStep("fix", '~'), PlanStep("test", ' ')), latestPlan(listOf(first, answer("1"), later)))
+    }
 }
