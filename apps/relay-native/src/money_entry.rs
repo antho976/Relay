@@ -712,17 +712,21 @@ pub fn account_of(ui: &Rc<Ui>, kind: Option<&str>) {
 }
 
 /// The record a value sheet: what an investment account is worth on a day (`money.value.set`).
-/// Tally reads an investment account as its newest value, plus the transfers after it.
+/// Tally reads an investment account as its newest value, plus the transfers after it. An account
+/// its holdings fill (`account` is Investments' reading of it) is valued from them there whatever
+/// is recorded, so the sheet says what the value changes: Overview and net worth.
 pub fn value(ui: &Rc<Ui>, account: &Value) {
     let Some(panel) = Panel::toggle(ui, "Record a value", 460) else { return };
     panel.add_css_class("money-sheet");
     let body = &panel.body;
     let fmt = formatter();
     let name = text(account, "name").to_string();
-    let about = label(
-        &format!("What {name} is worth on a day, from its statement or app. Tally counts from the newest value, and transfers after it add to it."),
-        "money-muted",
-    );
+    let about = if super::invest::by_hand(account) {
+        format!("What {name} is worth on a day, from its statement or app. Tally counts from the newest value, and transfers after it add to it.")
+    } else {
+        format!("Investments values {name} from its holdings, whatever you record here. What you record is what Overview and net worth count for it, until a newer value: each holdings report records one.")
+    };
+    let about = label(&about, "money-muted");
     about.set_wrap(true);
     body.append(&about);
     let amount_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);

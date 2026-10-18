@@ -575,7 +575,8 @@ fn return_line(a: &Value) -> Option<String> {
 }
 
 /// An account: its registration's badge, its name over where it is held and what it holds (and
-/// its return), and its value over its gain. A key: it records a value, as its statement shows.
+/// its return), and its value over its gain. A key: it records a value, as its statement shows;
+/// for an account its holdings fill, the value Overview and net worth count (the sheet says so).
 /// An account valued by hand ([`by_hand`]) shows `balance`, Tally's balance for it.
 fn account_row(ui: &Rc<Ui>, a: &Value, balance: Option<i64>) -> gtk::Box {
     let fmt = formatter();
@@ -640,7 +641,8 @@ fn account_row(ui: &Rc<Ui>, a: &Value, balance: Option<i64>) -> gtk::Box {
             super::record_value(&ui, &account);
         }
     });
-    row_key(&inner, &format!("Record what {} is worth", text(a, "name")), run)
+    let tooltip = if by_hand { format!("Record what {} is worth", text(a, "name")) } else { format!("Record what {} is worth for Overview and net worth", text(a, "name")) };
+    row_key(&inner, &tooltip, run)
 }
 
 /// A registration's room this year: its badge and name (with its year, when `dated`) over what
