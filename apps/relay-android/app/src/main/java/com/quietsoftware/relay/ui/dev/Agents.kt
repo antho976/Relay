@@ -286,7 +286,7 @@ private fun Attention(s: ShellState, plates: List<Session>, tasks: List<Task>, n
 /**
  * One agent as the PC draws it: the identity strip, then its screen in miniature when it is live
  * and streaming, or a slate saying where it stands over the last text the phone saved. Tap opens
- * the terminal, a long press the session's details.
+ * its conversation, a long press the session's details.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -298,7 +298,7 @@ private fun Plate(session: Session, nav: Nav, online: Boolean, streaming: Boolea
             .fillMaxWidth()
             .background(c.screen)
             .combinedClickable(
-                onClickLabel = "Open terminal",
+                onClickLabel = "Open conversation",
                 onLongClickLabel = "Session details",
                 onLongClick = { if (!pending) nav.session(session.name) },
                 onClick = { if (pending) nav.shell.toast(slateHint(session, online)) else nav.terminal(session.name) },
@@ -406,8 +406,8 @@ private fun StoppedRow(st: Stopped, online: Boolean, life: Lifecycle, nav: Nav) 
                 weight = if (st.dirty) FontWeight.Medium else null,
             )
         }
-        IconKey("resume", { life.resume(st) { nav.terminal(st.name) } }, dim, size = 16.dp, tint = c.ink2, enabled = free)
-        IconKey("refresh", { life.startFresh(st) { nav.terminal(st.name) } }, dim, size = 16.dp, enabled = free)
-        IconKey("trash", { life.discard(st) }, dim, size = 16.dp, tint = c.heldText, enabled = free)
+        IconKey("resume", { life.resume(st) { nav.terminal(st.name) } }, dim, size = 16.dp, tint = c.ink2, enabled = free, label = "Resume ${st.name}")
+        IconKey("refresh", { life.startFresh(st) { nav.terminal(st.name) } }, dim, size = 16.dp, enabled = free, label = "Start ${st.name} fresh")
+        IconKey("trash", { life.discard(st) }, dim, size = 16.dp, tint = c.heldText, enabled = free, label = "Discard ${st.name}")
     }
 }

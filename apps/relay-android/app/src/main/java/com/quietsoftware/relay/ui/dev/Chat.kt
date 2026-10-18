@@ -275,7 +275,7 @@ fun ChatScreen(name: String, nav: Nav) {
     Page {
         Column(Modifier.fillMaxSize()) {
             Header(session, name, onBack = nav::back, onDetails = { nav.session(name) }, onMenu = { menu = true }) {
-                if (ready) IconKey("focus", { peek = !peek }, size = 18.dp, tint = if (peek) c.ink else c.ink2)
+                if (ready) IconKey("focus", { peek = !peek }, size = 18.dp, tint = c.ink2, selected = peek, label = if (peek) "Hide the agent's screen" else "Show the agent's screen")
                 IconKey("terminal", { nav.console(name) }, size = 18.dp, tint = c.ink2)
             }
             Banner(status, session, s.online, life)
@@ -1175,7 +1175,7 @@ internal fun ScreenPanel(nav: Nav, name: String, screen: State<String?>, onClose
         Row(Modifier.fillMaxWidth().padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Dot(if (reading) c.waiting else c.live, 5.dp)
             T(if (reading) "Reading the agent's screen…" else "The agent's screen", Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 1)
-            IconKey("close", onClose, size = 14.dp, tint = c.ink3)
+            IconKey("close", onClose, size = 14.dp, tint = c.ink3, label = "Hide the agent's screen")
         }
         BoxWithConstraints(Modifier.fillMaxWidth().height(SCREEN_PANEL_H).clipToBounds()) {
             val widthPx = constraints.maxWidth.toFloat()

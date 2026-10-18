@@ -177,7 +177,7 @@ fun TerminalScreen(name: String, nav: Nav) {
     Page {
         Column(Modifier.fillMaxSize()) {
             Header(session, name, onBack = nav::back, onDetails = { nav.session(name) }, onMenu = { menu = true }) {
-                IconKey("notes", { nav.chat(name) }, size = 18.dp, tint = c.ink2)
+                IconKey("notes", { nav.chat(name) }, size = 18.dp, tint = c.ink2, label = "Conversation")
             }
             Banner(status, session, s.online, life)
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().background(c.screen)) {

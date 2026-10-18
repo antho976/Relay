@@ -68,6 +68,7 @@ import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.Toggle
 import com.quietsoftware.relay.ui.kit.ago
 import com.quietsoftware.relay.ui.kit.epoch
+import com.quietsoftware.relay.ui.kit.switchRow
 import com.quietsoftware.relay.ui.shell.Page
 import com.quietsoftware.relay.ui.shell.PageBar
 import com.quietsoftware.relay.ui.theme.Relay
@@ -98,7 +99,7 @@ fun SessionScreen(name: String, nav: Nav) {
         Column(Modifier.fillMaxSize()) {
             PageBar(name, nav::back, subtitle = session?.let { "${it.provider} · ${it.role}" }) {
                 if (session != null && session.state != "closed" && !session.pending) {
-                    IconKey("notes", { nav.chat(name) }, size = 18.dp, tint = Relay.colors.ink2)
+                    IconKey("notes", { nav.chat(name) }, size = 18.dp, tint = Relay.colors.ink2, label = "Conversation")
                 }
             }
             if (session == null) {
@@ -424,8 +425,11 @@ private fun MailComposer(session: Session, nav: Nav) {
     Column(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 24.dp)) {
         Field(body, { body = it }, Modifier.fillMaxWidth(), placeholder = "Write to ${session.name}", singleLine = false, minLines = 2, maxLines = 6)
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Toggle(priority, { priority = it })
-            T("Priority: read at its next step", Modifier.weight(1f).padding(start = 10.dp), Relay.type.caption, c.ink2)
+            // The switch and its words are one target; Send stays a key of its own.
+            Row(Modifier.weight(1f).heightIn(min = 44.dp).clip(Radii.key).switchRow(priority) { priority = it }, verticalAlignment = Alignment.CenterVertically) {
+                Toggle(priority, null)
+                T("Priority: read at its next step", Modifier.weight(1f).padding(start = 10.dp), Relay.type.caption, c.ink2)
+            }
             Key(
                 "Send",
                 {
