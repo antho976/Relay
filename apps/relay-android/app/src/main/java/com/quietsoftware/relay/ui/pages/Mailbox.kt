@@ -106,6 +106,8 @@ private fun MailRow(m: Mail) {
 private fun Composer(projectId: Long, sessions: List<String>, session: String?, nav: Nav) {
     val c = Relay.colors
     var to by rememberSaveable { mutableStateOf(session ?: "*") }
+    // A name typed in: an agent not among the open ones (a closed session, a peer on another branch).
+    var other by rememberSaveable { mutableStateOf(session != null && session !in sessions) }
     var body by rememberSaveable { mutableStateOf("") }
     var priority by rememberSaveable { mutableStateOf(false) }
     val ready = to.trim().isNotEmpty() && body.trim().isNotEmpty()
@@ -120,12 +122,15 @@ private fun Composer(projectId: Long, sessions: List<String>, session: String?, 
     ) {
         Slab(Modifier.widthIn(max = 720.dp).fillMaxWidth(), padding = PaddingValues(12.dp)) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Pill("Everyone", selected = to == "*", onClick = { to = "*" })
-                sessions.forEach { name -> Pill(name, selected = to == name, onClick = { to = name }) }
+                Pill("Everyone", selected = !other && to == "*", onClick = { other = false; to = "*" })
+                sessions.forEach { name -> Pill(name, selected = !other && to == name, onClick = { other = false; to = name }) }
+                Pill("Other…", selected = other, onClick = { if (!other) { other = true; to = "" } })
             }
             Gap(8.dp)
-            Field(to, { to = it }, Modifier.fillMaxWidth(), placeholder = "To: a session name, or * for everyone")
-            Gap(8.dp)
+            if (other) {
+                Field(to, { to = it }, Modifier.fillMaxWidth(), placeholder = "To: an agent's name", style = Relay.type.mono)
+                Gap(8.dp)
+            }
             Field(
                 body,
                 { body = it },
@@ -153,7 +158,7 @@ private fun Composer(projectId: Long, sessions: List<String>, session: String?, 
                                 put("text", text)
                                 put("priority", priority)
                             },
-                            "Message to $recipient",
+                            "Message to ${who(recipient)}",
                         ) { body = ""; priority = false }
                     },
                     kind = KeyKind.Primary,
