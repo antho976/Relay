@@ -1194,7 +1194,7 @@ impl Ui {
             ("devices", "Devices", "device", None),
             ("notifications", "Notifications", "bell", None),
         ] {
-            palette.add("Go to", icon, name, action.and_then(&chord), false, Box::new(move |ui| ui.navigate(page)));
+            palette.add("Go to", icon, name, action.and_then(chord), false, Box::new(move |ui| ui.navigate(page)));
         }
         let project = self.project.get();
         palette.add("Actions", "plus", "New agent", chord("new_session"), false, Box::new(|ui| ui.show_launch(None)));
