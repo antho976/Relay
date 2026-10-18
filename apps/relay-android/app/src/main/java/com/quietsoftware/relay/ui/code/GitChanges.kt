@@ -237,16 +237,19 @@ private fun PublishCard(
     val ahead = st.ahead ?: 0
     val behind = st.behind ?: 0
     val canPush = st.branch.isNotEmpty() && online && (upstream == null || (ahead > 0 && behind == 0))
+    // The desktop's words (code_git.rs): what the key would do, else why it does nothing.
     val pushLabel = when {
-        upstream == null -> "Publish branch"
-        ahead > 0 -> "Push $ahead"
-        else -> "Push"
+        upstream == null -> "Publish"
+        ahead > 0 && behind == 0 -> "Push $ahead"
+        behind > 0 -> "Pull first"
+        st.ahead == null || st.behind == null -> "Push"
+        else -> "Synced"
     }
     val pushDetail = when {
-        upstream == null -> "Not on the remote yet"
-        st.ahead == null || st.behind == null -> "$upstream · status unknown, fetch to refresh"
+        upstream == null -> "This branch is not on a remote yet"
+        st.ahead == null || st.behind == null -> "$upstream · fetch to compare"
         ahead == 0 && behind == 0 -> "Up to date with $upstream"
-        else -> "$ahead ahead · $behind behind $upstream"
+        else -> "$ahead to push · $behind to pull · $upstream"
     }
     val prDetail = pr?.let { "#${it.number} · ${if (it.draft && it.state == "open") "draft" else it.state} · ${it.title}" }
         ?: when {

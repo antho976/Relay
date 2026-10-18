@@ -69,10 +69,15 @@ fun GitScreen(projectId: Long, worktree: String?, session: String?, nav: Nav) {
         scope.write(nav, "git.fetch", buildJsonObject { put("project_id", projectId) }) { r ->
             fetching = false
             if (r == null) return@write
-            val out = r.decodeAs<FetchOut>()
-            val ahead = out?.ahead
-            val behind = out?.behind
-            nav.shell.toast(if (ahead == null || behind == null) "Fetched" else "Fetched · $ahead ahead · $behind behind")
+            // The counts are the primary checkout's branch, so only it shows them (code_git.rs).
+            val behind = r.decodeAs<FetchOut>()?.behind?.takeIf { wt == null || wt == primary?.path }
+            nav.shell.toast(
+                when (behind) {
+                    null -> "Fetched"
+                    0 -> "Fetched · up to date"
+                    else -> "Fetched · $behind to pull"
+                },
+            )
             refresh++
         }
     }
