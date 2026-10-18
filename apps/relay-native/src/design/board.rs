@@ -247,6 +247,9 @@ pub struct Board {
     pub(super) title: gtk::Label,
     pub(super) terminal: gtk::MenuButton,
     pub(super) terminal_label: gtk::Label,
+    /// The terminal's state beside its name, as the gallery's chips show it.
+    terminal_lamp: gtk::Box,
+    lamp_state: RefCell<String>,
     pub(super) status: gtk::Label,
     /// Counts what the status said, so a timer ages only the word it was set for.
     status_serial: Cell<u64>,
@@ -255,6 +258,8 @@ pub struct Board {
     /// Whose change that Undo reverts.
     agent_last: RefCell<Option<String>>,
     pub(super) ask: gtk::Button,
+    /// What was typed to Ask and not sent, for the next time it opens.
+    pub(super) ask_draft: RefCell<String>,
     pub(super) zoom_label: gtk::Label,
     pub(super) tool_keys: RefCell<Vec<(Tool, gtk::ToggleButton)>>,
     pub(super) shape_key: gtk::ToggleButton,
@@ -324,9 +329,16 @@ impl Board {
         title_key.set_tooltip_text(Some("Rename, duplicate, export or delete this design"));
         top.append(&title_key);
         let terminal_label = label("", "");
+        let terminal_lamp = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        terminal_lamp.add_css_class("design-lamp");
+        terminal_lamp.set_valign(gtk::Align::Center);
+        terminal_lamp.set_visible(false);
+        let terminal_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        terminal_row.append(&terminal_lamp);
+        terminal_row.append(&terminal_label);
         let terminal = gtk::MenuButton::new();
         terminal.add_css_class("design-terminal");
-        terminal.set_child(Some(&terminal_label));
+        terminal.set_child(Some(&terminal_row));
         terminal.set_valign(gtk::Align::Center);
         top.append(&terminal);
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -495,11 +507,14 @@ impl Board {
             title,
             terminal,
             terminal_label,
+            terminal_lamp,
+            lamp_state: RefCell::default(),
             status,
             status_serial: Cell::new(0),
             agent_undo,
             agent_last: RefCell::default(),
             ask,
+            ask_draft: RefCell::default(),
             zoom_label,
             tool_keys: RefCell::default(),
             shape_key,
@@ -929,8 +944,10 @@ impl Board {
                 self.terminal_label.set_text(s);
                 self.terminal.remove_css_class("unlinked");
                 self.terminal.set_tooltip_text(Some(&format!("This design belongs to {s}'s terminal")));
+                self.refresh_lamp();
             }
             None => {
+                self.terminal_lamp.set_visible(false);
                 self.terminal_label.set_text("Project only");
                 self.terminal.add_css_class("unlinked");
                 self.terminal.set_tooltip_text(Some("Tie this design to a terminal so its agent can be asked about it"));
@@ -961,6 +978,35 @@ impl Board {
         let serial = self.status_serial.get() + 1;
         self.status_serial.set(serial);
         serial
+    }
+
+    /// Light the terminal key's lamp for `state` (running, idle, closed…).
+    pub(super) fn set_lamp(&self, state: &str) {
+        let old = self.lamp_state.replace(state.to_string());
+        if !old.is_empty() {
+            self.terminal_lamp.remove_css_class(&old);
+        }
+        self.terminal_lamp.add_css_class(state);
+        self.terminal_lamp.set_visible(self.doc.session().is_some());
+    }
+
+    /// Read the design's terminal's state for its lamp.
+    fn refresh_lamp(&self) {
+        let (Some(ui), Some(session)) = (self.ui.upgrade(), self.doc.session()) else {
+            return;
+        };
+        let project = self.doc.design.borrow().project_id;
+        let weak = self.me.clone();
+        glib::spawn_future_local(async move {
+            let Ok(listed) = ui.call("session.list", json!({"project_id": project})).await else {
+                return;
+            };
+            let Some(b) = weak.upgrade().filter(|b| b.doc.session().as_deref() == Some(session.as_str())) else {
+                return;
+            };
+            let rows = crate::app::rows(&listed, "sessions");
+            b.set_lamp(rows.iter().find(|s| crate::app::text(s, "name") == session).map_or("closed", |s| crate::app::text(s, "state")));
+        });
     }
 
     pub fn toast(&self, text: &str) {
@@ -1938,6 +1984,9 @@ impl Board {
                 };
                 let current = b.doc.session();
                 let rows = sessions.map(|v| crate::app::rows(&v, "sessions")).unwrap_or_default();
+                if let Some(c) = &current {
+                    b.set_lamp(rows.iter().find(|s| crate::app::text(s, "name") == c).map_or("closed", |s| crate::app::text(s, "state")));
+                }
                 let mut names: Vec<(String, String)> = rows
                     .iter()
                     .map(|s| (crate::app::text(s, "name").to_string(), crate::app::text(s, "state").to_string()))

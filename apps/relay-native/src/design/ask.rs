@@ -11,6 +11,11 @@ use relay_bus::ops::design::AssetAddOut;
 use serde_json::json;
 use std::rc::Rc;
 
+/// A session that has an agent to read what is typed into it, as the agent wall counts them.
+pub fn live(state: &str) -> bool {
+    matches!(state, "spawning" | "running" | "idle" | "blocked")
+}
+
 impl Board {
     pub(super) fn ask_agent(&self, anchor: &gtk::Widget) {
         let b = self.me();
@@ -19,15 +24,36 @@ impl Board {
         let in_bar = self.context.borrow().as_ref().is_some_and(|bar| anchor == bar || anchor.is_ancestor(bar));
         let anchor = if in_bar { self.ask.upcast_ref::<gtk::Widget>() } else { anchor };
         self.end_edit(true);
-        match self.doc.session() {
-            Some(session) => composer(&b, anchor, session),
-            None => pick_terminal(&b, anchor),
-        }
+        let (Some(session), Some(ui)) = (self.doc.session(), self.ui.upgrade()) else {
+            pick_terminal(&b, anchor, None);
+            return;
+        };
+        // A terminal that has closed reads nothing: offer the live ones instead.
+        let project = self.doc.design.borrow().project_id;
+        let weak = Rc::downgrade(&b);
+        let anchor = anchor.downgrade();
+        glib::spawn_future_local(async move {
+            let states = ui.call("session.list", json!({"project_id": project})).await.map(|v| rows(&v, "sessions"));
+            let (Some(b), Some(anchor)) = (weak.upgrade(), anchor.upgrade()) else {
+                return;
+            };
+            // Unread, the terminal is taken at its word, as before.
+            let state = states.as_ref().ok().map(|rows| {
+                rows.iter().find(|s| text(s, "name") == session).map_or("closed", |s| text(s, "state")).to_string()
+            });
+            if let Some(state) = &state {
+                b.set_lamp(state);
+            }
+            match state {
+                Some(state) if !live(&state) => pick_terminal(&b, &anchor, Some(&session)),
+                _ => composer(&b, &anchor, session),
+            }
+        });
     }
 }
 
-/// No terminal yet: choose one, which ties the design to it, then ask.
-fn pick_terminal(b: &Rc<Board>, anchor: &gtk::Widget) {
+/// No terminal yet, or `closed` has closed: choose one, which ties the design to it, then ask.
+fn pick_terminal(b: &Rc<Board>, anchor: &gtk::Widget, closed: Option<&str>) {
     let Some(ui) = b.ui.upgrade() else {
         return;
     };
@@ -35,7 +61,14 @@ fn pick_terminal(b: &Rc<Board>, anchor: &gtk::Widget) {
     pop.add_css_class("design-menu");
     pop.set_parent(anchor);
     let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    list.append(&label("Ask which terminal's agent?", "design-menu-heading"));
+    let heading = match closed {
+        Some(s) => format!("{s}'s terminal has closed. Ask which terminal's agent?"),
+        None => "Ask which terminal's agent?".to_string(),
+    };
+    let heading = label(&heading, "design-menu-heading");
+    heading.set_wrap(true);
+    heading.set_max_width_chars(36);
+    list.append(&heading);
     pop.set_child(Some(&list));
     pop.connect_closed(|p| {
         let p = p.clone();
@@ -51,11 +84,9 @@ fn pick_terminal(b: &Rc<Board>, anchor: &gtk::Widget) {
         let (Some(b), Some(pop)) = (weak.upgrade(), p.upgrade()) else {
             return;
         };
-        let live: Vec<String> = sessions
-            .iter()
-            .filter(|s| matches!(text(s, "state"), "running" | "starting" | "created"))
-            .map(|s| text(s, "name").to_string())
-            .collect();
+        // An agent waiting at its prompt (idle) or for a person (blocked) is as askable as one
+        // at work.
+        let live: Vec<String> = sessions.iter().filter(|s| live(text(s, "state"))).map(|s| text(s, "name").to_string()).collect();
         if live.is_empty() {
             let none = label("No agent is running in this project. Start one from Agents, then ask again.", "dim");
             none.set_wrap(true);
@@ -106,6 +137,14 @@ fn composer(b: &Rc<Board>, anchor: &gtk::Widget, session: String) {
     view.set_wrap_mode(gtk::WrapMode::WordChar);
     view.set_size_request(-1, 76);
     view.set_accepts_tab(false);
+    // What was typed and not sent waits for the next Ask.
+    view.buffer().set_text(&b.ask_draft.borrow());
+    let weak = Rc::downgrade(b);
+    view.buffer().connect_changed(move |buffer| {
+        if let Some(b) = weak.upgrade() {
+            *b.ask_draft.borrow_mut() = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
+        }
+    });
     let frame = gtk::ScrolledWindow::new();
     frame.set_child(Some(&view));
     frame.set_max_content_height(200);
@@ -147,6 +186,7 @@ fn composer(b: &Rc<Board>, anchor: &gtk::Widget, session: String) {
                 view.grab_focus();
                 return;
             }
+            b.ask_draft.borrow_mut().clear();
             if let Some(p) = p.upgrade() {
                 p.popdown();
             }
