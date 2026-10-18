@@ -52,6 +52,7 @@ import com.quietsoftware.relay.ui.shell.SpaceFrame
 import com.quietsoftware.relay.ui.theme.Relay
 import java.time.Instant
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.onEach
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -183,6 +184,10 @@ private val EMPHASIS = Regex("""\*\*|__|`""")
 private data class Draft(val title: String, val body: String, val base: Note?) {
     val changed: Boolean
         get() = base?.let { title.trim() != (it.title ?: "").trim() || body != it.body } ?: (title.isNotBlank() || body.isNotBlank())
+
+    /** What the note is called as it stands: its title, else its first line (doc.rs `name`). */
+    val name: String
+        get() = title.trim().ifEmpty { body.lineSequence().firstOrNull { it.isNotBlank() }?.trimStart('#', ' ')?.take(80) ?: "Untitled" }
 }
 
 /**
@@ -209,7 +214,9 @@ fun NoteScreen(id: String?, projectId: Long?, nav: Nav) {
     // A note made on this phone keeps its temp id until the PC numbers it; follow it there.
     val current by remember(ref) { ref?.let { nav.relay.resolved(it) } ?: flowOf<String?>(null) }
         .collectAsStateWithLifecycle(initialValue = ref)
-    val stored by remember(current) { current?.let { nav.relay.note(it) } ?: flowOf<Note?>(null) }
+    // Until the phone's copy answers, the note is being read, not missing.
+    var loaded by remember(current) { mutableStateOf(current == null) }
+    val stored by remember(current) { (current?.let { nav.relay.note(it) } ?: flowOf<Note?>(null)).onEach { loaded = true } }
         .collectAsStateWithLifecycle(initialValue = null)
     // A note this screen made shows from its own copy once the PC has numbered it and the phone's
     // temporary row has gone.
@@ -290,13 +297,15 @@ fun NoteScreen(id: String?, projectId: Long?, nav: Nav) {
     val back: () -> Unit = { guard { nav.back() } }
     BackHandler(enabled = draft?.changed == true) { leave = { nav.back() } }
 
+    // The desktop's question (doc.rs `request_close`), with its three answers.
     leave?.let { then ->
         Ask(
-            title = "Keep your changes?",
-            body = "This note has changes that are not saved.",
+            title = "Save changes to “${draft?.name ?: "Untitled"}” before closing?",
+            body = "If you don't save, your changes will be lost.",
             onDismiss = { leave = null },
         ) {
-            Key("Discard", { draft = null; leave = null; then() }, kind = KeyKind.Plain, compact = true)
+            Key("Cancel", { leave = null }, kind = KeyKind.Quiet, compact = true)
+            Key("Don't Save", { draft = null; leave = null; then() }, kind = KeyKind.Plain, compact = true)
             Key("Save", { save(); leave = null; then() }, kind = KeyKind.Primary, compact = true)
         }
     }
@@ -310,7 +319,7 @@ fun NoteScreen(id: String?, projectId: Long?, nav: Nav) {
             ) {
                 val n = note
                 if (n != null && !editing) {
-                    IconKey("pin", { pin(n) }, selected = n.pinned)
+                    IconKey("pin", { pin(n) }, selected = n.pinned, label = if (n.pinned) "Unpin" else "Pin")
                     IconKey("trash", { remove(n) })
                 }
             }
@@ -345,6 +354,7 @@ fun NoteScreen(id: String?, projectId: Long?, nav: Nav) {
                         },
                     )
                     n != null -> NoteView(n)
+                    !loaded -> Unit
                     else -> Empty("file-text", "Note not found", "It may have been deleted on the PC.")
                 }
             }
