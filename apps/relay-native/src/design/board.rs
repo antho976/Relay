@@ -248,6 +248,8 @@ pub struct Board {
     pub(super) terminal: gtk::MenuButton,
     pub(super) terminal_label: gtk::Label,
     pub(super) status: gtk::Label,
+    /// Counts what the status said, so a timer ages only the word it was set for.
+    status_serial: Cell<u64>,
     /// Undo the last change an agent made, shown once one arrives.
     agent_undo: gtk::Button,
     /// Whose change that Undo reverts.
@@ -333,7 +335,8 @@ impl Board {
         let status = label("Saved", "design-status");
         status.set_width_chars(22);
         status.set_xalign(1.0);
-        status.set_ellipsize(pango::EllipsizeMode::Start);
+        // Cut at its end, so "kevin edited it just now" keeps the name.
+        status.set_ellipsize(pango::EllipsizeMode::End);
         top.append(&status);
         let agent_undo = gtk::Button::with_label("Undo");
         agent_undo.add_css_class("design-agent-undo");
@@ -493,6 +496,7 @@ impl Board {
             terminal,
             terminal_label,
             status,
+            status_serial: Cell::new(0),
             agent_undo,
             agent_last: RefCell::default(),
             ask,
@@ -854,8 +858,14 @@ impl Board {
                 self.prune_selection();
                 self.invalidate();
                 if by != "user" && !changed.is_empty() {
-                    self.status.set_text(&format!("{by} edited it just now"));
-                    self.status.add_css_class("design-status-agent");
+                    // "Just now" for a minute; then who it was.
+                    let serial = self.set_status(&format!("{by} edited it just now"), Some("design-status-agent"));
+                    let (weak, who) = (self.me.clone(), by.clone());
+                    glib::timeout_add_local_once(std::time::Duration::from_secs(60), move || {
+                        if let Some(b) = weak.upgrade().filter(|b| b.status_serial.get() == serial) {
+                            b.set_status(&format!("Last edited by {who}"), None);
+                        }
+                    });
                     self.start_flash(changed.clone());
                     *self.agent_last.borrow_mut() = Some(by.clone());
                     self.agent_undo.set_tooltip_text(Some(&format!("Undo {by}'s last change to this design")));
@@ -865,8 +875,10 @@ impl Board {
             }
             Change::Design => self.design_changed(),
             Change::Saving(on) => {
-                self.status.remove_css_class("design-status-agent");
-                self.status.set_text(if *on { "Saving…" } else { "Saved" });
+                // A refused edit is not saved until the next one is.
+                let unsaved = !*on && self.doc.unsaved();
+                let text = if *on { "Saving…" } else if unsaved { "Not saved" } else { "Saved" };
+                self.set_status(text, unsaved.then_some("design-status-unsaved"));
                 self.refresh_actions();
             }
             Change::Error(e) => self.toast(e),
@@ -934,6 +946,21 @@ impl Board {
         if let Some(layers) = self.layers.borrow().as_ref() {
             layers.pages_changed();
         }
+    }
+
+    /// What the top bar says of saving and of who changed the design last; `class` marks an
+    /// agent's change or a refused edit. Returns the word's serial, for a timer that ages it.
+    fn set_status(&self, text: &str, class: Option<&str>) -> u64 {
+        for c in ["design-status-agent", "design-status-unsaved"] {
+            self.status.remove_css_class(c);
+        }
+        if let Some(c) = class {
+            self.status.add_css_class(c);
+        }
+        self.status.set_text(text);
+        let serial = self.status_serial.get() + 1;
+        self.status_serial.set(serial);
+        serial
     }
 
     pub fn toast(&self, text: &str) {
@@ -2246,8 +2273,7 @@ impl Board {
             };
             match undone {
                 Ok(_) => {
-                    b.status.remove_css_class("design-status-agent");
-                    b.status.set_text(&format!("Undid {agent}'s change"));
+                    b.set_status(&format!("Undid {agent}'s change"), None);
                     b.agent_undo.set_visible(more);
                 }
                 Err(e) => b.toast(&format!("Could not undo {agent}'s change: {e}")),

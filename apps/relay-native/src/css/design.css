@@ -46,6 +46,7 @@ menubutton.design-terminal > button { min-height: 24px; padding: 0 10px; border-
 menubutton.design-terminal.unlinked > button { color: @faint; font-weight: 500; }
 .design-status { color: @faint; font-size: 12px; margin-right: 6px; }
 .design-status.design-status-agent { color: @live; }
+.design-status.design-status-unsaved { color: @held_text; }
 button.design-agent-undo { min-height: 24px; padding: 0 10px; border-radius: 7px; font-size: 12px; }
 button.design-ask { background: @ink; border-color: @ink; color: @wall; font-weight: 600; }
 button.design-ask:hover { background: white; border-color: white; }

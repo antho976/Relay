@@ -57,6 +57,8 @@ pub struct Doc {
     /// A gesture or text edit is under way: a re-read would pull the scene from under it.
     hold: Cell<bool>,
     reading: Cell<bool>,
+    /// The engine refused the last edit sent, and none has been saved since.
+    refused: Cell<bool>,
     undo: RefCell<Vec<Vec<NodeOp>>>,
     redo: RefCell<Vec<Vec<NodeOp>>>,
     listeners: RefCell<Vec<Listener>>,
@@ -86,6 +88,7 @@ impl Doc {
             seen: Cell::new(0),
             hold: Cell::new(false),
             reading: Cell::new(false),
+            refused: Cell::new(false),
             undo: RefCell::default(),
             redo: RefCell::default(),
             listeners: RefCell::default(),
@@ -113,6 +116,11 @@ impl Doc {
 
     pub fn busy(&self) -> bool {
         self.sending.get() || !self.queue.borrow().is_empty()
+    }
+
+    /// The engine refused an edit and nothing has been saved since.
+    pub fn unsaved(&self) -> bool {
+        self.refused.get()
     }
 
     /// Run `ops` on the scene now and send them. One call is one undo step.
@@ -204,6 +212,7 @@ impl Doc {
                 let payload = json!({"design_id": doc.id, "ops": ops, "lenient": undoing.is_some()});
                 match ui.call("design.apply", payload).await.map_err(|e| e.to_string()).and_then(decode::<ApplyOut>) {
                     Ok(out) => {
+                        doc.refused.set(false);
                         if out.prev_rev != doc.rev.get() {
                             doc.stale.set(true);
                         }
@@ -248,7 +257,8 @@ impl Doc {
                         // Our scene ran ahead with edits the engine refused: take its copy.
                         doc.queue.borrow_mut().clear();
                         doc.stale.set(true);
-                        doc.tell(Change::Error(error));
+                        doc.refused.set(true);
+                        doc.tell(Change::Error(format!("Not saved: {error}")));
                     }
                 }
             }
