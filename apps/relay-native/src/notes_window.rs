@@ -233,7 +233,7 @@ pub fn refresh_notes(ui: &Rc<Ui>) {
                 Err(error) => {
                     window.pending.set(false);
                     window.loading.set(false);
-                    super::note_pages::load_error(&ui, &format!("Could not open Notes: {error}"));
+                    super::note_pages::load_error(&ui, &format!("Could not open Notes: {}", crate::editor::readable(&error)));
                     return;
                 }
             }
@@ -272,7 +272,7 @@ pub fn refresh_notes(ui: &Rc<Ui>) {
                     }
                     window.pending.set(true);
                 }
-                Err(error) => super::note_pages::load_error(&ui, &error.to_string()),
+                Err(error) => super::note_pages::load_error(&ui, &format!("Could not list the notes: {}", crate::editor::readable(&error))),
             }
         }
         if window.project.get() == 0 {

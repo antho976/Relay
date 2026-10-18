@@ -145,14 +145,6 @@ fn more_files(total: usize) -> Option<gtk::Label> {
     Some(more)
 }
 
-/// The bus message alone; the kind and code are for programs, not people.
-fn readable(err: &Error) -> String {
-    match err {
-        Error::Bus(bus) => bus.message.clone(),
-        other => other.to_string(),
-    }
-}
-
 /// What the Git panel draws, hashed: a refresh that fetched the same thing leaves it alone.
 fn git_signature(ui: &Ui, e: &Editor, status: &Value, results: &GitResults) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -422,7 +414,7 @@ impl Editor {
             let status = match result {
                 Ok(v) => v,
                 Err(err) => {
-                    ui.show_error(&err.to_string());
+                    ui.show_error(&readable(&err));
                     return;
                 }
             };
@@ -760,7 +752,7 @@ impl Editor {
                             field.buffer().set_text(text(&v, "message"))
                         }
                         Ok(_) => {}
-                        Err(err) => ui.show_error(&err.to_string()),
+                        Err(err) => ui.show_error(&readable(&err)),
                     }
                 });
             });
@@ -1067,7 +1059,7 @@ impl Editor {
                         )
                         .await
                     {
-                        ui.show_error(&e.to_string());
+                        ui.show_error(&readable(&e));
                     }
                     key.set_sensitive(true);
                     if ui.project.get() == project {
@@ -1116,7 +1108,7 @@ impl Editor {
                                 let ed = ed.clone();
                                 glib::spawn_future_local(async move {
                                     if let Err(err) = ui.call("integration.discard", json!({"integration_id":id})).await {
-                                        ui.show_error(&err.to_string());
+                                        ui.show_error(&readable(&err));
                                         key.set_sensitive(true);
                                     }
                                     if ui.project.get() == project {
@@ -1129,7 +1121,7 @@ impl Editor {
                         merge.append(&line);
                     }
                 }
-                Err(err) => merge.append(&label(&err.to_string(), "code-git-hint")),
+                Err(err) => merge.append(&label(&readable(&err), "code-git-hint")),
             }
             match results.0 {
                 Ok(v) => e.render_branch_picker(&ui, &branches_box, &branch_popup, &v),
@@ -1205,7 +1197,7 @@ impl Editor {
                         }
                     });
                 }
-                Err(err) => history_box.append(&label(&err.to_string(), "code-git-hint")),
+                Err(err) => history_box.append(&label(&readable(&err), "code-git-hint")),
             }
             restore_scrolls(e.git.upcast_ref(), scrolls);
             if typing {
@@ -1757,8 +1749,7 @@ impl Editor {
                         );
                     }
                 }
-                Err(err) if op.starts_with("git.branch.") => ui.show_error(&readable(&err)),
-                Err(err) => ui.show_error(&err.to_string()),
+                Err(err) => ui.show_error(&readable(&err)),
             }
         });
     }
@@ -1846,7 +1837,7 @@ impl Editor {
                     e.rerender_diff();
                     e.set_busy(false);
                 }
-                Err(err) => ui.show_error(&err.to_string()),
+                Err(err) => ui.show_error(&readable(&err)),
             }
         });
     }
@@ -2015,7 +2006,7 @@ impl Editor {
                     dialog.present();
                 }
                 Ok(_) => {}
-                Err(err) => ui.show_error(&err.to_string()),
+                Err(err) => ui.show_error(&readable(&err)),
             }
         });
     }

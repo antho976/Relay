@@ -274,7 +274,7 @@ impl Editor {
                         branch_list.append(&key);
                     }
                 }
-                Err(error) => branch_list.append(&label(&error.to_string(), "dim")),
+                Err(error) => branch_list.append(&label(&readable(&error), "dim")),
             }
         });
         search.connect_search_changed(move |search| {

@@ -1051,7 +1051,7 @@ pub fn to_task(ui: &Rc<Ui>, doc: &Rc<Doc>) {
                 doc.notice.add_css_class("info");
                 load_tasks(&ui, &doc);
             }
-            Err(error) => doc.show_notice(&ui, &format!("Could not create a task: {error}"), Vec::new()),
+            Err(error) => doc.show_notice(&ui, &format!("Could not create a task: {}", readable(&error)), Vec::new()),
         }
     });
 }
@@ -1153,7 +1153,7 @@ fn pin_changed(ui: &Rc<Ui>, doc: &Rc<Doc>) {
             }
             Err(error) => {
                 doc.sync_pin();
-                doc.show_notice(&ui, &error.to_string(), Vec::new());
+                doc.show_notice(&ui, &format!("Could not {}: {}", if pinned { "pin" } else { "unpin" }, readable(&error)), Vec::new());
             }
         }
         doc.update_meta();
@@ -1242,7 +1242,7 @@ pub fn save(ui: &Rc<Ui>, doc: &Rc<Doc>, then: AfterSave) {
             }
             Err(error) => doc.show_notice(
                 &ui,
-                &format!("Not saved: {error}"),
+                &format!("Not saved: {}", readable(&error)),
                 vec![("Try again", |ui, doc| save(ui, doc, None))],
             ),
         }
@@ -1320,7 +1320,7 @@ pub fn save_as(ui: &Rc<Ui>, doc: &Rc<Doc>) {
                 super::refresh_notes(&ui);
             }
             Err(error) => {
-                doc.show_notice(&ui, &format!("Could not save a copy: {error}"), Vec::new());
+                doc.show_notice(&ui, &format!("Could not save a copy: {}", readable(&error)), Vec::new());
                 doc.refresh_state(&ui);
             }
         }
@@ -1354,7 +1354,7 @@ pub fn reload(ui: &Rc<Ui>, doc: &Rc<Doc>, ask: bool) {
                 deleted_notice(&ui, &doc);
                 doc.refresh_state(&ui);
             }
-            Err(error) => doc.show_notice(&ui, &error.to_string(), Vec::new()),
+            Err(error) => doc.show_notice(&ui, &format!("Could not reload: {}", readable(&error)), Vec::new()),
         }
     });
 }

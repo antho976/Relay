@@ -13,6 +13,7 @@ mod text;
 
 use super::task_pages::{buffer_text, Draft};
 use super::*;
+use crate::editor::readable;
 use doc::Doc;
 use glyphs::{glyph, tool_glyph};
 use std::cell::{Cell, OnceCell};
@@ -301,7 +302,7 @@ fn with_full(ui: &Rc<Ui>, id: i64, then: impl FnOnce(&Rc<Ui>, Value) + 'static) 
     glib::spawn_future_local(async move {
         match fetch_full(&ui, id).await {
             Ok(note) => then(&ui, note),
-            Err(error) => shell_error(&ui, &format!("Could not read the note: {error}")),
+            Err(error) => shell_error(&ui, &format!("Could not read the note: {}", readable(&error))),
         }
     });
 }
@@ -1843,7 +1844,7 @@ pub(super) fn new_note(ui: &Rc<Ui>, title: Option<String>, body: String) {
                 open_doc(&ui, note, None).view.grab_focus();
                 refresh_notes(&ui);
             }
-            Err(error) => shell_error(&ui, &format!("Could not create a note: {error}")),
+            Err(error) => shell_error(&ui, &format!("Could not create a note: {}", readable(&error))),
         }
     });
 }
@@ -1933,7 +1934,7 @@ pub(super) fn pin_id(ui: &Rc<Ui>, id: i64) {
     glib::spawn_future_local(async move {
         match ui.call("notes.pin", json!({"note_id":id,"pinned":pinned})).await {
             Ok(_) => refresh_notes(&ui),
-            Err(error) => shell_error(&ui, &error.to_string()),
+            Err(error) => shell_error(&ui, &format!("Could not {}: {}", if pinned { "pin" } else { "unpin" }, readable(&error))),
         }
     });
 }
@@ -2004,8 +2005,8 @@ pub(super) fn confirm_delete(ui: &Rc<Ui>, id: i64, name: String) {
                 refresh_notes(&ui);
             }
             Err(error) => match doc_by_id(id) {
-                Some(doc) => doc.show_notice(&ui, &format!("Not deleted: {error}"), Vec::new()),
-                None => shell_error(&ui, &format!("Not deleted: {error}")),
+                Some(doc) => doc.show_notice(&ui, &format!("Not deleted: {}", readable(&error)), Vec::new()),
+                None => shell_error(&ui, &format!("Not deleted: {}", readable(&error))),
             },
         }
     });

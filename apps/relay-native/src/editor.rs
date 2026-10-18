@@ -863,7 +863,7 @@ impl Editor {
             }
             let v = match result {
                 Ok(v) => v,
-                Err(err) => return ui.show_error(&err.to_string()),
+                Err(err) => return ui.show_error(&readable(&err)),
             };
             // Every open folder is listed before a widget is touched, so the tree is rebuilt
             // in one go: rebuilding a level per round trip let the content collapse and the
@@ -1023,7 +1023,7 @@ impl Editor {
                         e.view.scroll_to_mark(&e.buffer.get_insert(), 0.0, false, 0.0, 0.0);
                     }
                 }
-                Err(err) => ui.show_error(&err.to_string()),
+                Err(err) => ui.show_error(&readable(&err)),
             }
         });
     }
@@ -1076,7 +1076,7 @@ impl Editor {
                     e.refresh_git(&ui);
                 }
                 Err(err) => {
-                    ui.show_error(&err.to_string());
+                    ui.show_error(&readable(&err));
                     e.save.set_sensitive(true);
                     // The file changed under the draft: offer reload or keep-and-overwrite
                     // instead of a Save that fails the same way again (RA-208).
@@ -1468,7 +1468,7 @@ impl Editor {
                     Err(err) => {
                         clear(&children);
                         loaded.set(false);
-                        ui.show_error(&err.to_string());
+                        ui.show_error(&readable(&err));
                     }
                 }
             });
@@ -1622,7 +1622,7 @@ impl Editor {
                     *e.worktrees.borrow_mut() = items;
                     e.update_scope_label(&ui);
                 }
-                Err(err) => ui.show_error(&err.to_string()),
+                Err(err) => ui.show_error(&readable(&err)),
             }
         });
     }
@@ -1853,7 +1853,7 @@ impl Editor {
                         e.tree.append(&b);
                     }
                 }
-                Err(err) => ui.show_error(&err.to_string()),
+                Err(err) => ui.show_error(&readable(&err)),
             }
         });
     }
@@ -2011,7 +2011,7 @@ impl Editor {
                                     }
                                     Err(err) => {
                                         button.set_sensitive(true);
-                                        ui.show_error(&err.to_string());
+                                        ui.show_error(&readable(&err));
                                     }
                                 }
                             });
@@ -2021,7 +2021,7 @@ impl Editor {
                         e.open(&ui, text(&v, "path").to_string());
                     }
                 }
-                Err(err) => ui.show_error(&err.to_string()),
+                Err(err) => ui.show_error(&readable(&err)),
             }
         });
     }
@@ -2111,7 +2111,7 @@ impl Editor {
                         ed.refresh_git(&ui);
                     }
                     Ok(Some(value)) => ed.follow_change(&ui, &moved, Some(text(&value, "path"))),
-                    Err(error) => ui.show_error(&error.to_string()),
+                    Err(error) => ui.show_error(&readable(&error)),
                 }
             });
             true
@@ -2145,7 +2145,7 @@ impl Editor {
             }
             let items = match result {
                 Ok(v) => trashed(&v),
-                Err(err) => return list.append(&label(&err.to_string(), "dim")),
+                Err(err) => return list.append(&label(&readable(&err), "dim")),
             };
             if items.is_empty() {
                 list.append(&label("Nothing from this project is in Relay trash.", "dim"));
@@ -2198,7 +2198,7 @@ impl Editor {
                             }
                             Err(err) => {
                                 button.set_sensitive(true);
-                                ui.show_error(&err.to_string());
+                                ui.show_error(&readable(&err));
                             }
                         }
                     });
@@ -2233,6 +2233,15 @@ async fn restore_trash(ui: &Ui, project: i64, trash_id: i64) -> Result<Value, cr
             ui.call("file.restore", json!({"project_id":project,"trash_id":trash_id}))
                 .await
         }
+    }
+}
+
+/// The engine's sentence alone: its kind and code ("Conflict file.edit_conflict: …") are for
+/// programs, not people. Code, its Git panel and Notes say every refusal this way.
+pub(crate) fn readable(err: &crate::client::Error) -> String {
+    match err {
+        crate::client::Error::Bus(bus) => bus.message.clone(),
+        other => other.to_string(),
     }
 }
 

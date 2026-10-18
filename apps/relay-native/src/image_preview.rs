@@ -523,7 +523,7 @@ impl Editor {
                                 Err(error) => Err(error.to_string()),
                             }
                         }
-                        Err(error) => Err(error.to_string()),
+                        Err(error) => Err(readable(&error)),
                     };
                     let (thumb, keep) = match decoded {
                         Ok((Ok(decoded), size)) => (Thumb {
@@ -575,7 +575,7 @@ impl Editor {
         glib::spawn_future_local(async move {
             let result = crate::client::Client::image_read(&ui.rt, ui.path.clone(),
                 json!({"project_id":project,"worktree":optional_scope(&worktree),"path":path,"max_bytes":MAX_BYTES}))
-                .await.map_err(|err| err.to_string());
+                .await.map_err(|err| readable(&err));
             if e.revision.get() != revision || !e.matches(&ui, project, &worktree) {
                 return;
             }
