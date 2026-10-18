@@ -499,6 +499,20 @@ fn denial_form(ui: &Rc<Ui>, card: &gtk::Box, keys: &gtk::Box, id: Value, placeho
     };
     let send_key = send.clone();
     reason.connect_activate(move |_| send_key.emit_clicked());
+    // Escape here takes the denial back, as Cancel does; it goes no further, to a panel the
+    // prompt happens to sit over.
+    let escape = gtk::EventControllerKey::new();
+    let cancel_key = cancel.downgrade();
+    escape.connect_key_pressed(move |_, key, _, _| {
+        if key != gtk::gdk::Key::Escape {
+            return glib::Propagation::Proceed;
+        }
+        if let Some(cancel) = cancel_key.upgrade() {
+            cancel.emit_clicked();
+        }
+        glib::Propagation::Stop
+    });
+    reason.add_controller(escape);
     send.connect_clicked(submit);
     let keys = keys.downgrade();
     let form = form.downgrade();
