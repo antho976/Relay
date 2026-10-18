@@ -3,7 +3,7 @@ use gtk4::gdk::{self, prelude::*, Key, ModifierType};
 pub const DEFAULTS: [(&str, &str, &str); 8] = [
     ("palette", "Command palette", "Ctrl+K"),
     ("agents", "Agents", "Ctrl+1"),
-    ("code", "Code", "Ctrl+2"),
+    ("code", "Files and Git", "Ctrl+2"),
     ("board", "Board", "Ctrl+3"),
     ("new_session", "New session", "Ctrl+N"),
     ("settings", "Settings", "Ctrl+,"),

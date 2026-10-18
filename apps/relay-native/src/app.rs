@@ -346,6 +346,7 @@ pub struct Ui {
     font_size: Cell<f64>,
     pub(crate) palette: RefCell<String>,
     pub keybindings: RefCell<Value>,
+    shortcut_hints: ShortcutHints,
     pub sound_busy: Cell<bool>,
     projects_box: gtk::Box,
     wall: gtk::Grid,
@@ -460,6 +461,16 @@ pub fn run(rt: Handle) -> glib::ExitCode {
     app.run_with_args::<&str>(&[])
 }
 
+/// The keys whose tooltips name their shortcut, and the palette key's keycap: they follow a
+/// rebinding in Settings (`Ui::show_shortcuts`).
+struct ShortcutHints {
+    palette: gtk::Button,
+    keycap: gtk::Label,
+    launch: gtk::Button,
+    sidebar: gtk::Button,
+    settings: gtk::Button,
+}
+
 /// The title bar, and the keys on it that the rest of the window wires up.
 struct TopBar {
     handle: gtk::WindowHandle,
@@ -471,6 +482,7 @@ struct TopBar {
     settings_tools: gtk::Box,
     actions: gtk::Box,
     palette_key: gtk::Button,
+    palette_keycap: gtk::Label,
     layouts_key: gtk::Button,
     skills_key: gtk::Button,
     plugins_key: gtk::Button,
@@ -523,9 +535,10 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     let top_actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     top_actions.add_css_class("topbar-actions");
     top.append(&top_actions);
-    // The palette's key reads as a search field: what it does, and its chord as a keycap.
+    // The palette's key reads as a search field: what it does, and its chord as a keycap. Both
+    // follow the binding (`Ui::show_shortcuts`).
     let palette_key = button("", "command-search");
-    palette_key.set_tooltip_text(Some("Command palette · Ctrl K"));
+    palette_key.set_tooltip_text(Some("Command palette"));
     palette_key.set_widget_name("command-palette");
     let palette_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     palette_row.append(&crate::icons::image("search", 14));
@@ -535,7 +548,8 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     let palette_text = crate::fit_label::FitLabel::new("Search or run a command", "Search", "command-search-text");
     palette_text.set_hexpand(true);
     palette_row.append(&palette_text);
-    palette_row.append(&label("Ctrl K", "keycap"));
+    let palette_keycap = label("Ctrl K", "keycap");
+    palette_row.append(&palette_keycap);
     palette_key.set_child(Some(&palette_row));
     palette_key.set_valign(gtk::Align::Center);
     let layouts_key = icon_button("view-grid-symbolic", "Window presets");
@@ -627,6 +641,7 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
         settings_tools,
         actions: top_actions,
         palette_key,
+        palette_keycap,
         layouts_key,
         skills_key,
         plugins_key,
@@ -1154,6 +1169,13 @@ impl Ui {
             font_size: Cell::new(9.75),
             palette: RefCell::new("matte".into()),
             keybindings: RefCell::new(json!({})),
+            shortcut_hints: ShortcutHints {
+                palette: top.palette_key.clone(),
+                keycap: top.palette_keycap.clone(),
+                launch: top.launch_key.clone(),
+                sidebar: top.sidebar_key.clone(),
+                settings: side.settings_key.clone(),
+            },
             sound_busy: Cell::new(false),
             projects_box: side.projects_box.clone(),
             wall: wall.wall,
@@ -1185,6 +1207,7 @@ impl Ui {
         });
         ui.wire_navigation(&side, &top);
         ui.wire_settings_return(&top, &bar.root);
+        ui.show_shortcuts();
         ui.wire_keys(&top, &bar, &wall.empty_launch, &side.add_project, &sheet.scrim);
         ui.wire_window();
         let mut dev_only: Vec<gtk::Widget> = vec![side.nav.clone().upcast(), top.layouts_key.clone().upcast(), top.launch_key.clone().upcast()];
@@ -1275,10 +1298,10 @@ impl Ui {
                 if settings { "chevron-left" } else { "sidebar" },
                 14,
             )));
-            back_key.set_tooltip_text(Some(if settings {
-                "Back from settings"
+            back_key.set_tooltip_text(Some(&if settings {
+                String::from("Back from settings")
             } else {
-                "Toggle sidebar"
+                ui.shortcut_tip("Toggle sidebar", "sidebar")
             }));
             top_actions.set_visible(!settings);
             bottom.set_visible(!settings);

@@ -1171,18 +1171,11 @@ impl Ui {
         }
         let palette = Rc::new(Palette { list: list.clone(), none, query: RefCell::default(), entries: RefCell::default() });
 
-        let bindings = self.keybindings.borrow().clone();
-        // The chord an action is bound to now, as the shortcut handler reads it.
-        let chord = |action: &str| {
-            crate::shortcuts::DEFAULTS
-                .iter()
-                .find(|(a, _, _)| *a == action)
-                .map(|(a, _, fallback)| (bindings[*a].as_str().unwrap_or(fallback).to_string(), "keycap"))
-        };
+        let chord = |action: &str| self.chord(action).map(|chord| (chord, "keycap"));
         for (page, name, icon, action) in [
             ("agents", "Agents", "terminal", Some("agents")),
             ("design", "Design", "design", None),
-            ("code", "Code", "code", Some("code")),
+            ("code", "Files and Git", "code", Some("code")),
             ("board", "Board", "columns", Some("board")),
             ("modules", "Modules", "modules", None),
             ("notes", "Notes", "notes", None),
@@ -1201,10 +1194,13 @@ impl Ui {
         if project != 0 {
             palette.add("Actions", "plus", "New task", None, false, Box::new(move |ui| crate::pages::new_task(ui, project, "backlog")));
         }
-        palette.add("Actions", "sidebar", "Toggle the sidebar", chord("sidebar"), false, Box::new(|ui| {
-            ui.sidebar.set_visible(!ui.sidebar.is_visible());
-            ui.save_layout();
-        }));
+        // Settings has its own category list in the sidebar's place.
+        if self.page.borrow().as_str() != "settings" {
+            palette.add("Actions", "sidebar", "Toggle the sidebar", chord("sidebar"), false, Box::new(|ui| {
+                ui.sidebar.set_visible(!ui.sidebar.is_visible());
+                ui.save_layout();
+            }));
+        }
         for (key, caption) in crate::money::palette_entries() {
             let (icon, hint) = match key {
                 "space" => ("refresh", chord("space")),
@@ -1267,6 +1263,13 @@ impl Ui {
         search.connect_activate(move |_| {
             if let Some(row) = p.list.selected_row().filter(|r| r.is_child_visible()) {
                 run(&row);
+            }
+        });
+        // The search takes Escape as stop-search, so the window never sees it to close the panel.
+        let close = Rc::downgrade(&window);
+        search.connect_stop_search(move |_| {
+            if let Some(window) = close.upgrade() {
+                window.close();
             }
         });
         // Up and Down move the highlight while the typing stays in the search.
@@ -1352,9 +1355,13 @@ impl Ui {
             let Some(ui) = weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
-            if !ui.panels.borrow().is_empty() {
+            // A modal panel keeps every key. A utility panel (Skills, Resources, Usage limits)
+            // keeps only Escape, which closes it (wire_window); the shortcuts still work.
+            let panels = ui.panels.borrow();
+            if panels.iter().any(|panel| panel.is_modal()) || (!panels.is_empty() && key == gtk::gdk::Key::Escape) {
                 return glib::Propagation::Proceed;
             }
+            drop(panels);
             // Capture runs before the focused terminal sees the key.
             let in_terminal = GtkWindowExt::focus(&ui.window).is_some_and(|w| {
                 w.is::<vte4::Terminal>() || w.ancestor(vte4::Terminal::static_type()).is_some()
@@ -1381,6 +1388,8 @@ impl Ui {
                     // Rebuilding an open sheet would discard what is being typed into it.
                     "new_session" if ui.launch.reveals_child() => {}
                     "new_session" => ui.show_launch(None),
+                    // Settings has its own category list in the sidebar's place.
+                    "sidebar" if ui.page.borrow().as_str() == "settings" => {}
                     "sidebar" => {
                         ui.sidebar.set_visible(!ui.sidebar.is_visible());
                         ui.save_layout();
@@ -1403,12 +1412,45 @@ impl Ui {
             let generation = ui.generation.get();
             match ui.call("settings.get", json!({"path":"keybindings"})).await {
                 Ok(v) if generation == ui.generation.get() => {
-                    *ui.keybindings.borrow_mut() = v["value"].clone()
+                    *ui.keybindings.borrow_mut() = v["value"].clone();
+                    ui.show_shortcuts();
                 }
                 Err(e) => ui.show_error(&e.to_string()),
                 _ => {}
             }
         });
+    }
+    /// The chord `action` is bound to now, as the shortcut handler reads it; none when it is
+    /// turned off in Settings.
+    pub(crate) fn chord(&self, action: &str) -> Option<String> {
+        let bindings = self.keybindings.borrow();
+        crate::shortcuts::DEFAULTS
+            .iter()
+            .find(|(a, _, _)| *a == action)
+            .map(|(a, _, fallback)| bindings[*a].as_str().unwrap_or(fallback).trim().to_string())
+            .filter(|chord| !chord.is_empty())
+    }
+    /// `caption`, with the chord of `action` after it when it has one.
+    pub(super) fn shortcut_tip(&self, caption: &str, action: &str) -> String {
+        match self.chord(action) {
+            Some(chord) => format!("{caption} · {chord}"),
+            None => caption.to_string(),
+        }
+    }
+    /// The keys that name their shortcut follow a rebinding: the palette key's keycap, and the
+    /// tooltips of it, New agent, the sidebar key and Settings.
+    pub(super) fn show_shortcuts(&self) {
+        let hints = &self.shortcut_hints;
+        hints.palette.set_tooltip_text(Some(&self.shortcut_tip("Command palette", "palette")));
+        let keycap = self.chord("palette").map(|chord| chord.split('+').map(str::trim).collect::<Vec<_>>().join(" "));
+        hints.keycap.set_visible(keycap.is_some());
+        hints.keycap.set_text(keycap.as_deref().unwrap_or(""));
+        hints.launch.set_tooltip_text(Some(&self.shortcut_tip("New agent", "new_session")));
+        hints.settings.set_tooltip_text(Some(&self.shortcut_tip("Settings", "settings")));
+        // On Settings the sidebar key is its back key.
+        if self.page.borrow().as_str() != "settings" {
+            hints.sidebar.set_tooltip_text(Some(&self.shortcut_tip("Toggle sidebar", "sidebar")));
+        }
     }
     pub(crate) fn load_appearance(self: &Rc<Self>) {
         /// What the last reload applied. Each runs 150 ms after any appearance or font-size
