@@ -8,7 +8,7 @@
 //! the engine's decimals see what was written. Colour keeps one meaning on every surface: green is
 //! a live strategy or money in, amber is paper (and Dev's waiting), red is a loss, a refusal or a
 //! halt.
-use super::pages::{card, columns, glyph_image, icon_row, meter_in, setting_row, tile, Tone};
+use super::pages::{card, columns, glyph_image, icon_row, meter_in, plural, setting_row, tile, Tone};
 use super::{message, page, toast, Action, Page};
 use crate::app::{button, clear, confirm_inline, confirm_inline_if, label, rows, text, Ui};
 use crate::client::Error;
@@ -134,6 +134,11 @@ fn pct(v: f64) -> String {
     } else {
         format!("−{s}")
     }
+}
+
+/// A drawdown, a fall: "−4.2%", and "0.0%" when there was none to speak of.
+fn drawdown(x: f64) -> String {
+    if x.abs() < 0.05 { String::from("0.0%") } else { format!("−{:.1}%", x.abs()) }
 }
 
 /// A price in its quote currency, with the decimals a price under 1 needs.
@@ -891,7 +896,7 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value) {
     let (left, right) = split(body, 360);
     portfolio(&left, s);
     strategies(ui, &left, s);
-    limits_today(&right, s);
+    limits_today(ui, &right, s);
     waiting(ui, &right, s);
     recent_fills(&right, s);
     let open = rows(s, "open_orders");
@@ -1077,8 +1082,14 @@ fn limit_meter(l: &Value, currency: &str) -> gtk::Box {
     b
 }
 
-fn limits_today(parent: &gtk::Box, s: &Value) {
-    let list = card(parent, "Limits today", None);
+fn limits_today(ui: &Rc<Ui>, parent: &gtk::Box, s: &Value) {
+    let weak = Rc::downgrade(ui);
+    let settings: Action = Rc::new(move || {
+        if let Some(ui) = weak.upgrade() {
+            ui.navigate("arbiter-settings");
+        }
+    });
+    let list = card(parent, "Limits today", Some(("Settings", settings)));
     let limits = rows(s, "limits");
     if limits.is_empty() {
         quiet_row(&list, "No limits across strategies yet. Set them in Settings.");
@@ -1120,11 +1131,16 @@ fn proposal_row(ui: &Rc<Ui>, p: &Value) -> gtk::Box {
     let keys = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     keys.set_margin_top(4);
     let review = button("Review", "money-text-action");
-    let approve = button("Approve", "primary");
+    let approve = button(approve_caption(p), "primary");
     approve.add_css_class("arbiter-small");
     let dismiss = button("Dismiss", "quiet");
     dismiss.add_css_class("arbiter-small");
     keys.append(&review);
+    if let Some(words) = expires_words(p) {
+        let l = label(&words, "money-row-detail");
+        l.set_valign(gtk::Align::Center);
+        keys.append(&l);
+    }
     let gap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     gap.set_hexpand(true);
     keys.append(&gap);
@@ -2224,8 +2240,8 @@ fn results_table(report: Option<&Value>, paper: &Value, live: &Value) -> gtk::Gr
             ret(whole["buy_hold_pct"].as_f64()),
         ]),
         ("Worst drawdown", [
-            (tuned["max_drawdown_pct"].as_f64().map_or_else(dash, |x| format!("−{x:.1}%")), None),
-            (judged["max_drawdown_pct"].as_f64().map_or_else(dash, |x| format!("−{x:.1}%")), None),
+            (tuned["max_drawdown_pct"].as_f64().map_or_else(dash, drawdown), None),
+            (judged["max_drawdown_pct"].as_f64().map_or_else(dash, drawdown), None),
             (dash(), None),
             (dash(), None),
             (dash(), None),
@@ -3369,7 +3385,7 @@ fn panel_strategies(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
         let currency = text(r, "currency");
         let pnl = num(&r["pnl_realized"]) + num(&r["pnl_open"]);
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let f = label(&format!("{} · {} trades", money_signed(pnl, currency), r["trades"].as_u64().unwrap_or(0)), "threads-panel-figures");
+        let f = label(&format!("{} · {}", money_signed(pnl, currency), plural(r["trades"].as_u64().unwrap_or(0) as usize, "trade")), "threads-panel-figures");
         add_tone(&f, pnl);
         f.set_hexpand(true);
         line.append(&f);
@@ -3544,6 +3560,17 @@ fn proposal_detail(p: &Value, pending: bool) -> String {
     }
 }
 
+/// The approve key's caption: an order says it is one.
+fn approve_caption(p: &Value) -> &'static str {
+    if text(p, "kind") == "order" { "Approve order" } else { "Approve" }
+}
+
+/// "expires in 8 min", while a card still waits for its answer.
+fn expires_words(p: &Value) -> Option<String> {
+    let left = p["expires_at"].as_str().and_then(minutes_until).filter(|m| *m >= 0)?;
+    Some(if left < 1 { String::from("expires in under a minute") } else { format!("expires in {left} min") })
+}
+
 /// What approving does, under the keys.
 fn proposal_footnote(p: &Value) -> String {
     match text(p, "kind") {
@@ -3621,13 +3648,13 @@ fn fill_card(slot: &gtk::Box, p: &Value) {
     }
     if pending {
         let keys = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let approve = button(if text(p, "kind") == "order" { "Approve order" } else { "Approve" }, "primary");
+        let approve = button(approve_caption(p), "primary");
         approve.set_widget_name(&format!("arbiter-approve-{}", p["id"]));
         let dismiss = button("Dismiss", "quiet");
         keys.append(&approve);
         keys.append(&dismiss);
-        if let Some(left) = p["expires_at"].as_str().and_then(minutes_until).filter(|m| *m >= 0) {
-            let l = label(&if left < 1 { String::from("expires in under a minute") } else { format!("expires in {left} min") }, "threads-card-detail");
+        if let Some(words) = expires_words(p) {
+            let l = label(&words, "threads-card-detail");
             l.set_valign(gtk::Align::Center);
             keys.append(&l);
         }
@@ -3731,6 +3758,8 @@ mod tests {
         assert_eq!(pct(4.24), "+4.2%");
         assert_eq!(pct(-3.0), "−3.0%");
         assert_eq!(pct(0.01), "0.0%");
+        assert_eq!(drawdown(4.24), "−4.2%");
+        assert_eq!(drawdown(0.04), "0.0%");
         assert_eq!(pair("ETH-CAD"), ("ETH", "CAD"));
     }
 

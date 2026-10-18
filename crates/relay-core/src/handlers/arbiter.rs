@@ -134,14 +134,14 @@ fn summary(engine: &Engine) -> Result<Summary, BusError> {
     let paper = account(Venue::Paper)?;
     let live = if conn.state == "none" || conn.state.is_empty() { None } else { Some(account(Venue::Live)?) };
 
-    // Today's use of the Arbiter-wide limits, for the meters.
+    // Today's use of the Arbiter-wide limits, for the meters, named as Settings names them.
     let held: f64 = rows.iter().map(|r| r.held_cost.to_f64().unwrap_or(0.0)).sum();
     let loss_today: f64 = rows.iter().map(|r| r.pnl_today.to_f64().unwrap_or(0.0)).filter(|p| *p < 0.0).map(|p| -p).sum();
     let orders_hour = with_book(engine, |b| Ok(b.orders_since(None, Venue::Paper, now - 3600)? + b.orders_since(None, Venue::Live, now - 3600)?))?;
     let limits = vec![
         LimitUse { label: "Daily loss".into(), used: loss_today, limit: global.daily_loss.and_then(|d| d.to_f64()), unit: "money".into() },
-        LimitUse { label: "In the market".into(), used: held, limit: global.max_exposure.and_then(|d| d.to_f64()), unit: "money".into() },
-        LimitUse { label: "Orders this hour".into(), used: f64::from(orders_hour), limit: global.orders_per_hour.map(f64::from), unit: "count".into() },
+        LimitUse { label: "Most held, all strategies".into(), used: held, limit: global.max_exposure.and_then(|d| d.to_f64()), unit: "money".into() },
+        LimitUse { label: "Orders per hour".into(), used: f64::from(orders_hour), limit: global.orders_per_hour.map(f64::from), unit: "count".into() },
     ];
 
     let mut watched: Vec<String> = strategies.iter().map(|s| s.product.clone()).collect();
