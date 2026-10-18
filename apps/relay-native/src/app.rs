@@ -1033,9 +1033,30 @@ impl Ui {
         split.set_resize_start_child(false);
         split.set_shrink_start_child(false);
         split.set_position(SIDEBAR_WIDTH);
-        split.connect_position_notify(|split| {
-            if split.position() > SIDEBAR_MAX {
-                split.set_position(SIDEBAR_MAX);
+        // The width the person chose, which a window too narrow for it squeezes and a wider one
+        // gives back; GtkPaned alone kept the squeezed width (a window opened small, or made
+        // narrower and wide again, left the sidebar at its 220px minimum for good).
+        let chosen = Rc::new(Cell::new(SIDEBAR_WIDTH));
+        split.connect_position_notify({
+            let chosen = chosen.clone();
+            move |split| {
+                if split.position() > SIDEBAR_MAX {
+                    split.set_position(SIDEBAR_MAX);
+                } else if split.position() < split.max_position() {
+                    chosen.set(split.position());
+                }
+            }
+        });
+        split.connect_max_position_notify(move |split| {
+            let want = chosen.get().min(split.max_position());
+            if split.position() < want {
+                // Not during the allocation that changed the room.
+                let split = split.downgrade();
+                glib::idle_add_local_once(move || {
+                    if let Some(split) = split.upgrade() {
+                        split.set_position(want);
+                    }
+                });
             }
         });
         body.append(&split);
