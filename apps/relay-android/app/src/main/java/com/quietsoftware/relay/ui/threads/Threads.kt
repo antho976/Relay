@@ -52,6 +52,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -123,7 +126,7 @@ private val SUGGESTIONS = listOf(
     "Where did my money go this week?" to "Spending by category",
     "Am I on pace this month?" to "Each budget against the day of the month",
     "What bills are coming up?" to "Due dates and whether you can cover them",
-    "Which entries have no category?" to "It suggests one for each, you approve",
+    "Any duplicates or odd entries this month?" to "Entries that look doubled or out of place",
 )
 
 /** How often a streaming reply redraws: about 30 a second. */
@@ -737,7 +740,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     Column(Modifier.fillMaxSize()) {
         PageBar(thread?.title?.ifBlank { null } ?: if (temp) "New thread" else "Thread", nav::back, subtitle) {
             Box {
-                IconKey("more", { menu = true }, tint = c.ink2, enabled = thread != null || create != null)
+                IconKey("more", { menu = true }, tint = c.ink2, enabled = thread != null || create != null, label = "Thread actions")
                 Choices(
                     open = menu,
                     onDismiss = { menu = false },
@@ -792,10 +795,11 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
             if (jump) {
                 Box(
                     Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp).size(TOUCH).clip(CircleShape)
-                        .clickable {
+                        .clickable(role = Role.Button) {
                             follow = true
                             scope.launch { list.toEnd(count) }
-                        },
+                        }
+                        .semantics { contentDescription = "Go to the newest" },
                     contentAlignment = Alignment.Center,
                 ) {
                     Box(Modifier.size(36.dp).shadow(10.dp, CircleShape).clip(CircleShape).background(c.slab).border(1.dp, c.strong, CircleShape), contentAlignment = Alignment.Center) {
@@ -1018,14 +1022,14 @@ private fun CopyKey(text: String) {
     val scope = rememberCoroutineScope()
     var copied by remember { mutableStateOf(false) }
     Box(
-        Modifier.size(TOUCH).clip(Radii.icon).clickable {
+        Modifier.size(TOUCH).clip(Radii.icon).clickable(role = Role.Button) {
             scope.launch {
                 clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("reply", text)))
                 copied = true
                 delay(1400)
                 copied = false
             }
-        },
+        }.semantics { contentDescription = if (copied) "Copied" else "Copy reply" },
         contentAlignment = Alignment.CenterStart,
     ) {
         Glyph(if (copied) "check" else "copy", 15.dp, c.inkDim)
