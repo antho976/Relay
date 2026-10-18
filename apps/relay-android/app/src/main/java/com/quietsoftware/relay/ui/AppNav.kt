@@ -97,8 +97,8 @@ private fun Destinations(nav: Nav, startRoute: String) {
         composable("guardrails?project={project}", listOf(opt("project"))) { GuardrailsScreen(it.long("project"), nav) }
         composable("mailbox/{project}?session={session}", listOf(opt("session"))) { MailboxScreen(it.long("project") ?: 0, it.str("session"), nav) }
         composable("files/{project}?worktree={worktree}", listOf(opt("worktree"))) { FilesScreen(it.long("project") ?: 0, it.str("worktree"), nav) }
-        composable("file/{project}?path={path}&worktree={worktree}", listOf(opt("path"), opt("worktree"))) {
-            FileScreen(it.long("project") ?: 0, it.str("path").orEmpty(), it.str("worktree"), nav)
+        composable("file/{project}?path={path}&worktree={worktree}&line={line}", listOf(opt("path"), opt("worktree"), opt("line"))) {
+            FileScreen(it.long("project") ?: 0, it.str("path").orEmpty(), it.str("worktree"), it.str("line")?.toIntOrNull(), nav)
         }
         composable("git/{project}?worktree={worktree}&session={session}", listOf(opt("worktree"), opt("session"))) {
             GitScreen(it.long("project") ?: 0, it.str("worktree"), it.str("session"), nav)

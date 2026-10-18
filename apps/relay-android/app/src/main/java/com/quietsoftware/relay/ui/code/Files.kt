@@ -221,7 +221,7 @@ fun FilesScreen(projectId: Long, worktree: String?, nav: Nav) {
         }
     })
 
-    fun openFile(path: String) = nav.file(projectId, path, wt)
+    fun openFile(path: String, line: Int? = null) = nav.file(projectId, path, wt, line)
 
     fun toggle(entry: TreeEntry) {
         if (entry.path in tree.open) tree.collapse(entry.path) else tree.expand(entry.path)
@@ -319,7 +319,7 @@ fun FilesScreen(projectId: Long, worktree: String?, nav: Nav) {
                         result.isEmpty() -> Empty("search", "No matches", "Nothing in this worktree matches.")
                         else -> LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 24.dp)) {
                             items(result) { hit ->
-                                HitRow(hit, onClick = { openFile(hit.path) })
+                                HitRow(hit, onClick = { openFile(hit.path, hit.line.takeIf { it > 0 }) })
                             }
                         }
                     }
@@ -515,10 +515,11 @@ private class FileDraft : ViewModel() {
 /**
  * One file: read with `file.read` (1 MiB at most), shown with line numbers and light colour, or
  * edited in full and saved with the hash of the text read, so an edit made on the PC since is
- * refused rather than overwritten. Images are drawn; anything binary says so.
+ * refused rather than overwritten. Images are drawn; anything binary says so. A search hit
+ * opens at its [line], marked.
  */
 @Composable
-fun FileScreen(projectId: Long, path: String, worktree: String?, nav: Nav) {
+fun FileScreen(projectId: Long, path: String, worktree: String?, line: Int?, nav: Nav) {
     val c = Relay.colors
     val scope = rememberCoroutineScope()
     val online = rememberOnline(nav)
@@ -672,7 +673,7 @@ fun FileScreen(projectId: Long, path: String, worktree: String?, nav: Nav) {
                     }
                 }
                 editing -> EditArea(draft, onChange = { draft = it })
-                else -> CodeView(body, name, Modifier.weight(1f))
+                else -> CodeView(body, name, Modifier.weight(1f), mark = line)
             }
         }
     }

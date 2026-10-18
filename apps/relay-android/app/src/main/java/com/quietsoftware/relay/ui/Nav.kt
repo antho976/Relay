@@ -84,7 +84,7 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
     fun note(id: String) = go("note" + q("id" to id))
     fun newNote(projectId: Long?) = go("note" + q("project" to projectId))
     fun files(projectId: Long, worktree: String? = null) = go("files/$projectId" + q("worktree" to worktree))
-    fun file(projectId: Long, path: String, worktree: String? = null) = go("file/$projectId" + q("path" to path, "worktree" to worktree))
+    fun file(projectId: Long, path: String, worktree: String? = null, line: Int? = null) = go("file/$projectId" + q("path" to path, "worktree" to worktree, "line" to line))
     fun git(projectId: Long, worktree: String? = null, session: String? = null) = go("git/$projectId" + q("worktree" to worktree, "session" to session))
     fun mailbox(projectId: Long, session: String? = null) = go("mailbox/$projectId" + q("session" to session))
     fun modules(projectId: Long) = go("modules/$projectId")
