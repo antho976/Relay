@@ -3,6 +3,10 @@ package com.quietsoftware.relay.ui
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -14,6 +18,7 @@ import com.quietsoftware.relay.ui.code.GitScreen
 import com.quietsoftware.relay.ui.dev.AgentsScreen
 import com.quietsoftware.relay.ui.dev.ChatScreen
 import com.quietsoftware.relay.ui.dev.LaunchScreen
+import com.quietsoftware.relay.ui.kit.LocalStaleLamps
 import com.quietsoftware.relay.ui.dev.SessionScreen
 import com.quietsoftware.relay.ui.dev.TerminalScreen
 import com.quietsoftware.relay.ui.pair.PairEntry
@@ -44,6 +49,8 @@ import com.quietsoftware.relay.ui.tools.DevicesScreen
 import com.quietsoftware.relay.ui.tools.IntegrationScreen
 import com.quietsoftware.relay.ui.tools.PcToolsScreen
 import com.quietsoftware.relay.ui.tools.ProjectSettingsScreen
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 private fun NavBackStackEntry.str(key: String): String? = arguments?.getString(key)?.takeIf { it.isNotEmpty() }
 private fun NavBackStackEntry.long(key: String): Long? = str(key)?.toLongOrNull()
@@ -53,6 +60,12 @@ private fun opt(name: String) = navArgument(name) { type = NavType.StringType; n
 /** Every destination and the screen that draws it. Arguments are strings; screens get them typed. */
 @Composable
 fun AppNav(nav: Nav, startRoute: String) {
+    val stale by remember(nav) { nav.shell.state.map { !it.online }.distinctUntilChanged() }.collectAsStateWithLifecycle(false)
+    CompositionLocalProvider(LocalStaleLamps provides stale) { Destinations(nav, startRoute) }
+}
+
+@Composable
+private fun Destinations(nav: Nav, startRoute: String) {
     NavHost(
         navController = nav.controller,
         startDestination = startRoute,

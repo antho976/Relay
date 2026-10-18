@@ -46,6 +46,7 @@ import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.RelayMark
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.ago
+import com.quietsoftware.relay.ui.kit.lampAlpha
 import com.quietsoftware.relay.ui.theme.Relay
 import com.quietsoftware.relay.core.wire.BusException
 import kotlinx.coroutines.delay
@@ -148,10 +149,10 @@ fun StatusBar(s: ShellState, onLink: () -> Unit, onOutbox: () -> Unit) {
                 }
                 val live = s.sessions.count { it.state in setOf("running", "idle", "spawning") }
                 if (s.needsYou > 0) {
-                    Dot(c.held, 6.dp)
+                    Dot(c.held.copy(alpha = lampAlpha()), 6.dp)
                     T("${s.needsYou} needs you", style = Relay.type.mono, color = c.ink3)
                 }
-                Dot(if (live > 0) c.live else c.ink3, 6.dp)
+                Dot(if (live > 0) c.live.copy(alpha = lampAlpha()) else c.ink3, 6.dp)
                 T("$live live", style = Relay.type.mono, color = c.ink3)
             }
         }
