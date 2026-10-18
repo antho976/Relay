@@ -156,6 +156,8 @@ enum Step {
 struct Tool {
     slot: gtk::Box,
     mark: gtk::Box,
+    /// What the line says: what the agent is doing while it runs, what it did after.
+    caption: gtk::Label,
     name: String,
     step: Step,
     group: Option<Group>,
@@ -1688,6 +1690,7 @@ fn set_working(v: &View, working: bool) {
         if v.working.parent().is_none() && v.middle.visible_child_name().as_deref() == Some("thread") {
             v.column.append(&v.working);
         }
+        v.working.set_visible(!running_tools());
     } else {
         if let Some(parent) = v.working.parent().and_downcast::<gtk::Box>() {
             parent.remove(&v.working);
@@ -1736,28 +1739,34 @@ fn turn_of(v: &View) -> Turn {
     let body = gtk::Box::new(gtk::Orientation::Vertical, 14);
     wrap.append(&body);
     let text: Rc<RefCell<String>> = Rc::default();
-    let copy = crate::app::icon_button("copy", "Copy this reply");
+    let words = text.clone();
+    let copy = copy_key("Copy this reply", move || words.borrow().clone());
     copy.add_css_class("threads-copy");
     copy.set_halign(gtk::Align::Start);
     copy.set_visible(false);
-    let words = text.clone();
+    wrap.append(&copy);
+    v.column.append(&wrap);
+    let turn = Turn { body, text, copy };
+    STATE.with(|s| *s.turn.borrow_mut() = Some(turn.clone()));
+    turn
+}
+
+/// A quiet Copy key: puts [`words`] on the clipboard and says so with a tick for a moment.
+fn copy_key(tip: &'static str, words: impl Fn() -> String + 'static) -> gtk::Button {
+    let copy = crate::app::icon_button("copy", tip);
     copy.connect_clicked(move |key| {
-        key.clipboard().set_text(&words.borrow());
+        key.clipboard().set_text(&words());
         key.set_child(Some(&crate::icons::image("check", 16)));
         key.set_tooltip_text(Some("Copied"));
         let key = key.downgrade();
         glib::timeout_add_local_once(std::time::Duration::from_millis(1400), move || {
             if let Some(key) = key.upgrade() {
                 key.set_child(Some(&crate::icons::image("copy", 16)));
-                key.set_tooltip_text(Some("Copy this reply"));
+                key.set_tooltip_text(Some(tip));
             }
         });
     });
-    wrap.append(&copy);
-    v.column.append(&wrap);
-    let turn = Turn { body, text, copy };
-    STATE.with(|s| *s.turn.borrow_mut() = Some(turn.clone()));
-    turn
+    copy
 }
 
 /// The box the agent's current turn draws into.
@@ -1986,7 +1995,16 @@ fn draw_reply(parent: &gtk::Box, text: &str) {
                 code.set_focusable(false);
                 code.set_wrap(true);
                 code.set_wrap_mode(gtk::pango::WrapMode::Char);
-                code.upcast()
+                // Code is what gets pasted somewhere: its own Copy key, in its corner on hover.
+                let block = gtk::Overlay::new();
+                block.add_css_class("threads-code-block");
+                block.set_child(Some(&code));
+                let copy = copy_key("Copy the code", move || text.clone());
+                copy.add_css_class("threads-code-copy");
+                copy.set_halign(gtk::Align::End);
+                copy.set_valign(gtk::Align::Start);
+                block.add_overlay(&copy);
+                block.upcast()
             }
             Block::Table(rows) => table(&rows).upcast(),
             Block::Rule => {
@@ -1994,6 +2012,7 @@ fn draw_reply(parent: &gtk::Box, text: &str) {
                 rule.add_css_class("threads-rule");
                 rule.upcast()
             }
+            Block::Quote(markup) => reply_label(&markup, "threads-quote").upcast(),
         };
         parent.append(&widget);
     }
@@ -2112,7 +2131,11 @@ fn draw_tool(v: &View, parent: &gtk::Box, block: &Value) {
     // A call with no id can never be answered: it shows as done.
     show_step(&mark, if id.is_some() { Step::Running } else { Step::Done }, writes);
     line.append(&mark);
-    let caption = label(&super::arbiter::tool_caption(&op).map_or_else(|| tool_caption(&name), str::to_string), "threads-tool-text");
+    let did = super::arbiter::tool_caption(&op).map_or_else(|| tool_caption(&name), str::to_string);
+    // While it runs the line says what the agent is doing, and is the only working line: the
+    // working row under it said the same again ("Added up spending" over "Adding up spending…").
+    let now = doing(&name);
+    let caption = label(if id.is_some() && now != "Working…" { now } else { did.as_str() }, "threads-tool-text");
     caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
     line.append(&caption);
     if let Some(op) = tool_op(&name) {
@@ -2140,7 +2163,8 @@ fn draw_tool(v: &View, parent: &gtk::Box, block: &Value) {
         if let Some(g) = &group {
             g.members.borrow_mut().push(id.clone());
         }
-        let tool = Tool { slot, mark, name, step: Step::Running, group: group.clone() };
+        v.working.set_visible(false);
+        let tool = Tool { slot, mark, caption, name, step: Step::Running, group: group.clone() };
         STATE.with(|s| s.tools.borrow_mut().insert(id, tool));
     }
     if let Some(g) = &group {
@@ -2224,21 +2248,28 @@ fn refresh_group(g: &Group) {
     g.summary.update_property(&[gtk::accessible::Property::Label(&text)]);
 }
 
+/// Whether a tool line is still turning.
+fn running_tools() -> bool {
+    STATE.with(|s| s.tools.borrow().values().any(|t| t.step == Step::Running))
+}
+
 /// The turn ended: a tool line still turning got no answer (the reply was stopped). It stops.
 fn settle_tools() {
-    let open: Vec<(gtk::Box, Option<Group>)> = STATE.with(|s| {
+    let open: Vec<(gtk::Box, gtk::Label, String, Option<Group>)> = STATE.with(|s| {
         s.tools
             .borrow_mut()
             .values_mut()
             .filter(|t| t.step == Step::Running)
             .map(|t| {
                 t.step = Step::Cut;
-                (t.mark.clone(), t.group.clone())
+                (t.mark.clone(), t.caption.clone(), t.name.clone(), t.group.clone())
             })
             .collect()
     });
-    for (mark, group) in open {
+    for (mark, caption, name, group) in open {
         show_step(&mark, Step::Cut, false);
+        let op = tool_op(&name).unwrap_or_default();
+        caption.set_text(&super::arbiter::tool_caption(&op).map_or_else(|| tool_caption(&name), str::to_string));
         if let Some(g) = group {
             refresh_group(&g);
         }
@@ -2254,13 +2285,16 @@ fn draw_tool_answer(v: &View, body: &Value) {
     let found = STATE.with(|s| {
         s.tools.borrow_mut().get_mut(id).map(|t| {
             t.step = step;
-            (t.slot.clone(), t.mark.clone(), t.name.clone(), t.group.clone())
+            (t.slot.clone(), t.mark.clone(), t.caption.clone(), t.name.clone(), t.group.clone())
         })
     });
-    let Some((slot, mark, name, group)) = found else { return };
+    let Some((slot, mark, caption, name, group)) = found else { return };
     let op = tool_op(&name).unwrap_or_default();
     let writes = tool_writes(&name) || super::arbiter::tool_writes(&op) || op == "thread.propose";
     show_step(&mark, step, writes);
+    caption.set_text(&super::arbiter::tool_caption(&op).map_or_else(|| tool_caption(&name), str::to_string));
+    // The working row comes back once no line is turning.
+    v.working.set_visible(!running_tools());
     if let Some(g) = &group {
         refresh_group(g);
     }

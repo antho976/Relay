@@ -5,7 +5,8 @@ captures the conversation and a new thread.
 
     python3 scripts/threads-smoke.py [shot ...]
 
-Shots (default all but the last): thread, threads, thread-compact, thread-tall (1440x1700). Needs target/debug/relay and
+Shots (default the first three): thread, threads, thread-compact, thread-tall (1440x1700),
+thread-working (a thread whose agent is mid-turn). Needs target/debug/relay and
 target/debug/relay-native, and a display: run it inside a headless compositor
 (kwin_wayland --virtual), never on someone's desktop. Captures and logs go to
 .impeccable/review/threads-*. No model is called and nothing reaches the person's own engine."""
@@ -15,13 +16,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / ".impeccable/review"; OUT.mkdir(parents=True, exist_ok=True)
 SHOTS = sys.argv[1:] or ["thread", "threads", "thread-compact"]
+# thread-working opens a thread whose agent is mid-turn; it runs last, as it becomes the newest.
+SHOTS.sort(key=lambda shot: shot == "thread-working")
 ENGINE = ROOT / "target/debug/relay"
 NATIVE = ROOT / "target/debug/relay-native"
 
 # Claude Code in print mode with stream-json in and out, as threads.rs runs it: an init line,
 # then for each message a tool call, its answer, the reply and the turn's result.
 FAKE_CLAUDE = r'''#!/usr/bin/env python3
-import json, sys, uuid
+import json, sys, time, uuid
 if "--version" in sys.argv:
     print("2.1.0 (Claude Code)"); sys.exit()
 if "auth" in sys.argv or "login" in sys.argv:
@@ -38,6 +41,10 @@ REPLIES = [
     ("mcp__relay__money_series", "Week by week, dining went **$71, $96, $142, $74**: the third week had two dinners out "
      "and a birthday. Without them you would be $18 under.\n\n- Café Olimpico: 6 visits, $112\n- Pho Lien: 3 visits, $79\n\n"
      "Moving $60 keeps every budget positive."),
+    ("mcp__relay__money_tx_list", "### What I would change\n\n1. Move **$60** from *Groceries* to *Dining*.\n2. Set a `$25` cap on "
+     "weeknight dinners.\n3. Look again on the 25th.\n\nThe rule, as Tally keeps it:\n\n```json\n{\"budget\": \"Dining\", "
+     "\"cap\": 2500, \"days\": [\"Mon\", \"Tue\", \"Wed\", \"Thu\"]}\n```\n\n> Budgets move with Undo for a day.\n\n"
+     "See [Tally's budget guide](https://example.com/tally/budgets) for more."),
 ]
 turn = 0
 for line in sys.stdin:
@@ -46,6 +53,12 @@ for line in sys.stdin:
     except ValueError:
         continue
     if msg.get("type") != "user":
+        continue
+    text = json.dumps(msg)
+    if "take your time" in text:
+        # Mid-turn for the working shot: a tool called, its answer not yet in.
+        out({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "slow", "name": "mcp__relay__money_series", "input": {}}]}})
+        time.sleep(60)
         continue
     tool, reply = REPLIES[min(turn, len(REPLIES) - 1)]
     call = "t%d" % turn
@@ -115,14 +128,20 @@ with tempfile.TemporaryDirectory(prefix="relay-threads-shot-") as temporary:
         tid = thread["id"]
         answered(tid, 1)
         call("thread.send", {"id": tid, "text": "Why is dining so far over?"})
-        got = answered(tid, 2)
+        answered(tid, 2)
+        call("thread.send", {"id": tid, "text": "What would you change?"})
+        got = answered(tid, 3)
         tools = [m for m in got["messages"] if m["role"] == "tool"]
-        assert len(tools) == 2 and not any(t["body"]["is_error"] for t in tools), tools
+        assert len(tools) == 3 and not any(t["body"]["is_error"] for t in tools), tools
 
         native_env = dict(os.environ, RELAY_NATIVE_SOCKET=str(path), RELAY_INSTANCE="test", XDG_CACHE_HOME=str(base / "native-cache"))
         for key in ("RELAY_SESSION", "RELAY_TOKEN", "RELAY_BRIEF"):
             native_env.pop(key, None)
         for shot in SHOTS:
+            if shot == "thread-working":
+                # A second thread, its agent mid-turn: the newest, so this shot opens it.
+                call("thread.create", {"text": "Plan next month, take your time"})
+                time.sleep(1.0)
             output = OUT / f"threads-{shot}.png"; output.unlink(missing_ok=True)
             # thread-tall shows a whole conversation at once (the compositor must be as tall).
             size = "1024,768" if shot.endswith("compact") else "1440,1700" if shot.endswith("tall") else "1440,900"

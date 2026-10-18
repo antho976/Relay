@@ -2,7 +2,8 @@
 //! each block's text already Pango markup, and plain captions for the tools the agent called.
 //!
 //! Only what agents actually write is read: paragraphs, headings, bullet and numbered lists,
-//! fenced code, tables, rules, and inline bold, italics, code and links. Anything else stays text.
+//! fenced code, tables, rules, quotes, and inline bold, italics, code and links. Anything else
+//! stays text.
 
 /// One block of a reply. Text fields are Pango markup, escaped.
 #[derive(Debug, Clone, PartialEq)]
@@ -16,6 +17,8 @@ pub enum Block {
     /// The header row first; every cell is markup.
     Table(Vec<Vec<String>>),
     Rule,
+    /// Lines quoted with `>`, joined: markup.
+    Quote(String),
 }
 
 /// Escape `text` for Pango markup.
@@ -163,6 +166,16 @@ pub fn markdown(text: &str) -> Vec<Block> {
                 i += 1;
                 continue;
             }
+        }
+        if trimmed.starts_with('>') {
+            flush(&mut paragraph, &mut blocks);
+            let mut quoted = Vec::new();
+            while let Some(rest) = lines.get(i).map(|l| l.trim()).and_then(|l| l.strip_prefix('>')) {
+                quoted.push(rest.strip_prefix(' ').unwrap_or(rest));
+                i += 1;
+            }
+            blocks.push(Block::Quote(inline(&quoted.join("\n"))));
+            continue;
         }
         if matches!(trimmed, "---" | "***" | "___") {
             flush(&mut paragraph, &mut blocks);
@@ -354,6 +367,14 @@ mod tests {
         assert_eq!(blocks[5], Block::Code { lang: "json".into(), text: "{\"a\": 1}".into() });
         assert_eq!(blocks[6], Block::Rule);
         assert_eq!(blocks.len(), 7);
+    }
+
+    #[test]
+    fn quoted_lines_are_one_quote_and_a_lone_mark_is_kept() {
+        let blocks = markdown("Before.\n\n> Budgets move with **Undo**\n>for a day.\n\n3 > 2 stays");
+        assert_eq!(blocks[1], Block::Quote("Budgets move with <b>Undo</b>\nfor a day.".into()));
+        assert_eq!(blocks[2], Block::Paragraph("3 &gt; 2 stays".into()));
+        assert_eq!(blocks.len(), 3);
     }
 
     #[test]
