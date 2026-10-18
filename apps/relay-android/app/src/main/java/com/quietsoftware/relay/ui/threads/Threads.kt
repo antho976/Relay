@@ -2,12 +2,15 @@ package com.quietsoftware.relay.ui.threads
 
 import android.content.ClipData
 import android.os.SystemClock
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -30,6 +33,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -39,6 +43,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,18 +57,22 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
@@ -92,7 +101,6 @@ import com.quietsoftware.relay.ui.dev.joinDraft
 import com.quietsoftware.relay.ui.dev.messageTouch
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Empty
-import com.quietsoftware.relay.ui.kit.Field
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.IconKey
 import com.quietsoftware.relay.ui.kit.Key
@@ -688,8 +696,11 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
             stopped = null
             return@LaunchedEffect
         }
-        // The turn ended: what a stop cut short stays, said so; the rest gives way to the stored reply.
-        val cut = stopping && buffer.isNotBlank()
+        // The turn ended: what a stop cut short stays, said so, as does a stop before any words;
+        // the rest gives way to the stored reply.
+        val lastUser = messages.indexOfLast { it.role == "user" }
+        val replied = messages.drop(lastUser + 1).any { it.role == "assistant" && written(it).isNotBlank() }
+        val cut = stopping && (buffer.isNotBlank() || !replied)
         stopping = false
         if (cut) stopped = buffer.toString() else delay(600)
         buffer.setLength(0)
@@ -727,8 +738,9 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     // When the last message went: the send key turns to Stop under the finger that sent it.
     var sentAt by remember { mutableLongStateOf(0L) }
     val focus = remember { FocusRequester() }
-    // The one message of the person's showing its keys, if any.
+    // The one message of the person's showing its keys, if any; Back puts them away first.
     var keysOn by remember(tid) { mutableStateOf<String?>(null) }
+    BackHandler(enabled = keysOn != null) { keysOn = null }
     var menu by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
@@ -793,6 +805,25 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
             put("effort", effort ?: thread?.effort.orEmpty())
         }, "Model and effort")
     }
+    // Try again (threads_view.rs `retry_key`): under the newest failed or stopped reply, until the
+    // next message, sending the person's newest message once more.
+    val lastWords = (rows.lastOrNull { it is Piece.User } as? Piece.User)?.text ?: firstText
+    val retryAt = if (stopped != null) "stopped" else rows.lastOrNull { it is Piece.Error || it is Piece.User }?.takeIf { it is Piece.Error }?.key
+    val retry: (() -> Unit)? = lastWords?.takeIf { target != null && !createFailed }?.let { words -> { resend(words) } }
+
+    // Nothing to show yet: no message, nothing streaming or waiting. Reading one the PC has
+    // messages for says so for about ten seconds, then that it could not be read.
+    val blank = loaded != null && found != null && rows.isEmpty() && firstText == null && !temp && !working && stopped == null && !hasStream
+    val reading = blank && s.online && !thread?.preview.isNullOrBlank()
+    var tries by remember(tid) { mutableIntStateOf(0) }
+    var slow by remember(tid) { mutableStateOf(false) }
+    LaunchedEffect(reading, tries) {
+        slow = false
+        if (reading) {
+            delay(10_000)
+            slow = true
+        }
+    }
 
     val subtitle = when {
         createFailed -> "Not started"
@@ -852,10 +883,17 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                 found != null && thread == null && create == null -> Empty("threads", "This thread was not started", "Its first message was dropped before the PC had it.") {
                     Key("New thread", { nav.newThread() }, glyph = "plus")
                 }
-                found != null && rows.isEmpty() && firstText == null && !temp && !working && stopped == null && !hasStream -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                // Only once the phone's copy was read: before, every thread looked empty for a moment.
+                blank -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     when {
                         !s.online -> Empty("threads", "Not on this phone yet", "Its messages arrive when the PC is back.")
                         thread?.preview.isNullOrBlank() -> Empty("threads", "No messages yet", "Ask something below.")
+                        slow -> Empty("threads", "Could not read this conversation", "The PC did not send its messages.") {
+                            Key("Try again", {
+                                tries++
+                                num?.let { nav.relay.hub.syncer.schedule(setOf(Fetch.Thread(it))) }
+                            }, glyph = "refresh")
+                        }
                         else -> T("Reading the conversation…", style = Relay.type.caption, color = c.ink3)
                     }
                 }
@@ -866,12 +904,15 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     if (firstText != null) item("first") { UserBubble(firstText, queued = false, online = s.online, modifier = cell.padding(top = 12.dp)) }
-                    items(rows, key = { it.key }, contentType = { it::class }) { p -> PieceView(p, cell, s.online, money, current, keys) }
+                    items(rows, key = { it.key }, contentType = { it::class }) { p -> PieceView(p, cell, s.online, money, current, keys, retry.takeIf { p.key == retryAt }, !working) }
                     stopped?.let { text ->
                         item("stopped") {
                             Column(cell.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Markdown(text)
-                                T("Stopped", style = Relay.type.caption, color = c.ink3)
+                                if (text.isNotBlank()) Markdown(text)
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    T("Stopped", style = Relay.type.caption, color = c.ink3)
+                                    retry?.let { RetryKey(!working, it) }
+                                }
                             }
                         }
                     }
@@ -957,8 +998,21 @@ private suspend fun LazyListState.toEnd(count: Int) {
     scrollBy(100_000f)
 }
 
+/** Try again, after a reply that failed or was stopped; off while the agent works. */
 @Composable
-private fun PieceView(p: Piece, cell: Modifier, online: Boolean, money: Money, proposals: Map<Long, JsonObject>, keys: BubbleKeys = BubbleKeys.None) {
+private fun RetryKey(enabled: Boolean, onClick: () -> Unit) = Key("Try again", onClick, kind = KeyKind.Quiet, glyph = "refresh", enabled = enabled)
+
+@Composable
+private fun PieceView(
+    p: Piece,
+    cell: Modifier,
+    online: Boolean,
+    money: Money,
+    proposals: Map<Long, JsonObject>,
+    keys: BubbleKeys = BubbleKeys.None,
+    retry: (() -> Unit)? = null,
+    idle: Boolean = true,
+) {
     val c = Relay.colors
     when (p) {
         is Piece.Day -> T(p.label, cell.padding(top = 18.dp, bottom = 2.dp), Relay.type.caption.copy(textAlign = TextAlign.Center), c.ink3)
@@ -975,9 +1029,12 @@ private fun PieceView(p: Piece, cell: Modifier, online: Boolean, money: Money, p
         is Piece.Reply -> Markdown(p.text, cell.padding(top = 12.dp))
         is Piece.Tool -> Box(cell.padding(top = if (p.call.card != null) 10.dp else 2.dp)) { ToolView(p.call, money, proposals) }
         is Piece.Reads -> Box(cell.padding(top = 2.dp)) { ReadsView(p, money, proposals) }
-        is Piece.Error -> Row(cell.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Glyph("close", 13.dp, c.heldText, Modifier.padding(top = 4.dp))
-            SelectionContainer { T(p.text, style = Relay.type.ui.copy(fontSize = 13.5.sp, lineHeight = 20.sp), color = c.heldText) }
+        is Piece.Error -> Column(cell.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Glyph("close", 13.dp, c.heldText, Modifier.padding(top = 4.dp))
+                SelectionContainer { T(p.text, style = Relay.type.ui.copy(fontSize = 13.5.sp, lineHeight = 20.sp), color = c.heldText) }
+            }
+            retry?.let { RetryKey(idle, it) }
         }
         is Piece.Copy -> Box(cell) { CopyKey(p.text) }
     }
@@ -1041,7 +1098,7 @@ private fun Waiting(create: OutboxEntry?, online: Boolean, modifier: Modifier, o
                 Modifier.weight(1f), Relay.type.caption, if (create?.parked == true) c.heldText else c.ink3,
             )
         }
-        if (create?.parked == true) Key("Open the outbox", onOutbox, glyph = "outbox", compact = true)
+        if (create?.parked == true) Key("Open the outbox", onOutbox, glyph = "outbox")
     }
 }
 
@@ -1104,7 +1161,8 @@ private fun ReadsView(g: Piece.Reads, money: Money, proposals: Map<Long, JsonObj
     }
     Column {
         Row(
-            Modifier.heightIn(min = TOUCH).clip(Radii.icon).clickable { open = !open }.padding(end = 8.dp),
+            Modifier.heightIn(min = TOUCH).clip(Radii.icon).clickable(role = Role.Button) { open = !open }
+                .semantics { stateDescription = if (open) "Expanded" else "Collapsed" }.padding(end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
@@ -1152,26 +1210,47 @@ private fun DialogCard(content: @Composable () -> Unit) {
 @Composable
 private fun RenameDialog(current: String, onDismiss: () -> Unit, onRename: (String) -> Unit) {
     val c = Relay.colors
-    var name by rememberSaveable { mutableStateOf(current) }
+    // The name opens selected, so typing replaces it (threads_view.rs).
+    var name by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue(current, TextRange(0, current.length))) }
     val focus = remember { FocusRequester() }
+    val source = remember { MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
     LaunchedEffect(Unit) { focus.requestFocus() }
     Dialog(onDismissRequest = onDismiss) {
         DialogCard {
             T("Rename thread", style = Relay.type.title, color = c.ink)
+            val typed = name.text.trim()
             fun done() {
-                if (name.isBlank()) return
-                onRename(name.trim())
+                if (typed.isEmpty()) return
+                // Done on the name as it was closes, as Cancel does: there is nothing to rename.
+                if (typed != current) onRename(typed)
                 onDismiss()
             }
-            Field(
-                name, { name = it }, Modifier.fillMaxWidth().focusRequester(focus),
-                placeholder = "Thread name",
+            // Field's look; Field takes only the text, and this needs its selection.
+            BasicTextField(
+                value = name,
+                onValueChange = { name = it },
+                modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                textStyle = Relay.type.ui.copy(color = c.ink),
+                singleLine = true,
+                cursorBrush = SolidColor(c.ink),
+                interactionSource = source,
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
                 keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { done() }),
+                decorationBox = { inner ->
+                    Box(
+                        Modifier.heightIn(min = 42.dp).clip(Radii.key).background(c.raised)
+                            .border(1.dp, if (focused) c.lineFocus else c.strong, Radii.key).padding(horizontal = 12.dp, vertical = 9.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        if (name.text.isEmpty()) T("Thread name", style = Relay.type.ui, color = c.ink3, maxLines = 1)
+                        inner()
+                    }
+                },
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
                 Key("Cancel", onDismiss, kind = KeyKind.Quiet)
-                Key("Rename", { done() }, kind = KeyKind.Primary, enabled = name.isNotBlank() && name.trim() != current)
+                Key("Rename", { done() }, kind = KeyKind.Primary, enabled = typed.isNotEmpty() && typed != current)
             }
         }
     }
