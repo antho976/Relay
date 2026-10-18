@@ -75,7 +75,7 @@ impl Board {
             name.add_css_class("design-name");
             name.set_tooltip_text(Some(&format!("{} name", kind_caption(first.kind))));
             // Enter or leaving the field names the layer; Esc puts back the name it had.
-            let shown = Rc::new(std::cell::RefCell::new(display_name(&first)));
+            let shown = Rc::new(std::cell::RefCell::new(display_name(&first).trim().to_string()));
             let weak = Rc::downgrade(&b);
             let s = shown.clone();
             let rename = Rc::new(move |e: &gtk::Entry| {
