@@ -390,11 +390,13 @@ impl Panel {
             let _ = send.try_send(false);
         });
         self.compact(true, 280);
-        self.present();
         // A dialog that asks for a name starts in its field, keeping the caret or selection
         // its caller set, and Enter there accepts it; a plain yes or no starts on Cancel.
         let entry = std::iter::successors(self.body.first_child(), |w| w.next_sibling())
             .find_map(|w| w.downcast::<gtk::Entry>().ok());
+        // Read before present(), whose Tab into the field selects all of it.
+        let (selection, caret) = entry.as_ref().map_or((None, 0), |e| (e.selection_bounds(), e.position()));
+        self.present();
         if let Some(entry) = entry {
             let accept = accept.downgrade();
             entry.connect_activate(move |_| {
@@ -403,6 +405,10 @@ impl Panel {
                 }
             });
             entry.grab_focus_without_selecting();
+            match selection {
+                Some((start, end)) => entry.select_region(start, end),
+                None => entry.set_position(caret),
+            }
         } else {
             cancel.grab_focus();
         }
