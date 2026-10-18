@@ -152,7 +152,9 @@ classes.
   records, each block with a quiet way into Avex. A row does not leave the thread: it drafts a
   question into the open thread's message box in the person's words ("About Legs A on Thu 8 Oct: ")
   for them to finish. The limits line says "Reads only".
-- The palette has each page and "Avex: import training history".
+- The palette has each page and "Avex: import training history". An export older than the copy
+  here (by its `exportedAt`) asks first, "Import an older export?": it would take the copy back to
+  that day.
 - A display smoke run opens a workout or a lift with `RELAY_NATIVE_AVEX=<id or name>` beside
   `RELAY_NATIVE_PAGE=avex-workout` or `avex-lift`, and shows a thread panel's source with
   `RELAY_NATIVE_SOURCE=avex`.

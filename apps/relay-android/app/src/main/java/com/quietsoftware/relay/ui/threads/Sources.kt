@@ -830,7 +830,7 @@ private fun AvexOverview(s: JsonObject, unit: String) {
     }
     StatGrid(listOf(
         { m -> Stat("This week", "$sessions${if (target > 0) " of $target" else ""}", "Last week ${last?.l("sessions") ?: 0}", m) },
-        { m -> Stat("Volume", volume(vol, unit), if (before > 0) String.format(java.util.Locale.ROOT, "%+.0f%% on last week", (vol / before - 1) * 100) else "Nothing last week", m) },
+        { m -> Stat("Volume", volume(vol, unit), if (vol <= 0) "No workouts yet this week" else if (before > 0) String.format(java.util.Locale.ROOT, "%+.0f%% on last week", (vol / before - 1) * 100) else "Nothing last week", m) },
         { m -> Stat("Streak", plural(maxOf(streak, 0L), "week"), "In a row with a workout", m) },
         { m -> Stat("Last workout", since, "${minutes(week?.l("active_minutes") ?: 0L)} training this week", m) },
     ))
