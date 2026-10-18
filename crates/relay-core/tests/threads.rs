@@ -493,3 +493,158 @@ fn a_thread_agent_records_no_activity_in_an_account_wealthsimple_fills() {
     ok(&engine, "money.invest.add", deposit(&filled));
     assert_eq!(ok(&engine, "money.invest.list", json!({}))["activities"].as_array().unwrap().len(), 2);
 }
+
+// ── Pictures ───────────────────────────────────────────────────────────────
+
+/// An engine whose store is a file under `root`, so its threads' pictures are in
+/// `root/threads/images` and a test can look at them.
+fn engine_at(root: &Path) -> std::sync::Arc<Engine> {
+    Engine::new(relay_core::Instance::Test, relay_core::Store::open(&root.join("store.db"), false).unwrap())
+}
+
+/// A PNG's signature and header, `w` by `h`, and `pad` bytes after: all Relay reads of one.
+fn png(w: u32, h: u32, pad: usize) -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+    bytes.extend(w.to_be_bytes());
+    bytes.extend(h.to_be_bytes());
+    bytes.resize(bytes.len() + pad, 0);
+    bytes
+}
+
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+fn upload(engine: &Engine, bytes: &[u8]) -> Value {
+    ok(engine, "thread.upload", json!({"media_type": "image/png", "bytes_b64": b64(bytes)}))["image"].clone()
+}
+
+fn picture_file(root: &Path, image: &Value) -> PathBuf {
+    root.join("threads/images").join(format!("{}.png", image["id"].as_str().unwrap()))
+}
+
+fn refused_upload(engine: &Engine, media_type: &str, encoded: String) -> String {
+    code(call(engine, "thread.upload", json!({"media_type": media_type, "bytes_b64": encoded})))
+}
+
+#[test]
+fn a_picture_is_uploaded_only_when_its_kind_and_size_can_be_read_and_reads_back() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = engine_at(root.path());
+    let bytes = png(640, 480, 64);
+    let image = upload(&engine, &bytes);
+    let id = image["id"].as_str().unwrap();
+    assert!(id.len() == 32 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)), "{id}");
+    assert_eq!(image, json!({"id": id, "media_type": "image/png", "width": 640, "height": 480, "bytes": bytes.len()}));
+    let file = picture_file(root.path(), &image);
+    assert_eq!(std::fs::read(&file).unwrap(), bytes, "beside threads.db");
+    assert!(root.path().join("threads.db").is_file());
+    let back = ok(&engine, "thread.image", json!({"id": id}));
+    assert_eq!(back, json!({"media_type": "image/png", "bytes_b64": b64(&bytes)}));
+    // The bytes decide what it is.
+    let called_jpeg = ok(&engine, "thread.upload", json!({"media_type": "image/jpeg", "bytes_b64": b64(&bytes)}));
+    assert_eq!(called_jpeg["image"]["media_type"], "image/png");
+    // At most 4 MiB, decoded.
+    let most = upload(&engine, &png(1, 1, (4 << 20) - 24));
+    assert_eq!(most["bytes"], 4 << 20);
+
+    let refused = |media_type: &str, encoded: String| refused_upload(&engine, media_type, encoded);
+    assert_eq!(refused("image/svg+xml", b64(b"<svg width='1' height='1'/>")), "thread.upload");
+    assert_eq!(refused("image/heic", b64(&bytes)), "thread.upload");
+    assert_eq!(refused("image/png", b64(b"<svg width='1' height='1'/>")), "thread.upload", "an SVG is no picture a model reads");
+    assert_eq!(refused("image/png", b64(b"just some text")), "thread.upload");
+    assert_eq!(refused("image/png", b64(&bytes[..20])), "thread.upload", "a header cut short has no size");
+    assert_eq!(refused("image/png", "not base64!".into()), "thread.upload");
+    let over = call(&engine, "thread.upload", json!({"media_type": "image/png", "bytes_b64": b64(&png(1, 1, 4 << 20))})).error.unwrap();
+    assert_eq!((over.code.as_str(), over.message.as_str()), ("thread.upload", "the picture is over 4 MiB"));
+    // The person's alone, and an unknown picture is not found.
+    assert!(call_as(&engine, Actor::agent("someone"), "thread.upload", json!({"media_type": "image/png", "bytes_b64": b64(&bytes)})).error.is_some());
+    assert!(call_as(&engine, Actor::agent("someone"), "thread.image", json!({"id": id})).error.is_some());
+    for unknown in ["f".repeat(32), "../store".into(), String::new()] {
+        let missing = call(&engine, "thread.image", json!({"id": unknown})).error.unwrap();
+        assert_eq!((missing.code.as_str(), missing.kind), ("thread.image_not_found", relay_bus::ErrorKind::NotFound), "{unknown}");
+    }
+}
+
+/// The content of the last line the stand-in Claude was given.
+fn last_content(dir: &Path) -> Value {
+    let lines = std::fs::read_to_string(dir.join("lines.log")).unwrap();
+    let line: Value = serde_json::from_str(lines.lines().last().unwrap()).unwrap();
+    line["message"]["content"].clone()
+}
+
+#[test]
+fn a_message_carries_up_to_four_pictures_to_a_claude_model() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = engine_at(root.path());
+    let dir = tempfile::tempdir().unwrap();
+    with_fake(&engine, dir.path());
+    let images: Vec<Value> = (1..=5).map(|n| upload(&engine, &png(100 * n, 50, 16))).collect();
+    let ids: Vec<&Value> = images.iter().map(|i| &i["id"]).collect();
+    let shown = |image: &Value| json!({"id": image["id"], "media_type": "image/png", "width": image["width"], "height": image["height"]});
+    let block = |image: &Value| json!({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64(&std::fs::read(picture_file(root.path(), image)).unwrap())}});
+
+    // A picture alone starts a thread named for it, and reaches the agent as an image block.
+    let created = ok(&engine, "thread.create", json!({"images": [ids[0]]}));
+    assert_eq!(created["title"], "Picture");
+    let read = settled(&engine, &created["id"], 4);
+    assert_eq!(read["messages"][0]["body"], json!({"text": "", "images": [shown(&images[0])]}));
+    assert_eq!(last_content(dir.path()), json!([block(&images[0])]));
+
+    // Words and pictures: the pictures first, then the words.
+    let sent = ok(&engine, "thread.send", json!({"id": created["id"], "text": " What is on these receipts? ", "images": [ids[1], ids[2]]}));
+    assert_eq!(sent["body"], json!({"text": "What is on these receipts?", "images": [shown(&images[1]), shown(&images[2])]}));
+    settled(&engine, &created["id"], 8);
+    assert_eq!(last_content(dir.path()), json!([block(&images[1]), block(&images[2]), {"type": "text", "text": "What is on these receipts?"}]));
+    // Words alone are a line as they always were.
+    ok(&engine, "thread.send", json!({"id": created["id"], "text": "Thanks"}));
+    settled(&engine, &created["id"], 12);
+    assert_eq!(last_content(dir.path()), "Thanks");
+
+    let two = ok(&engine, "thread.create", json!({"text": "  ", "images": [ids[3], ids[4]]}));
+    assert_eq!(two["title"], "2 pictures");
+    settled(&engine, &two["id"], 4);
+
+    // Refused: neither words nor pictures, five, one never uploaded; and a refused first message
+    // leaves no thread behind.
+    let id = &created["id"];
+    assert_eq!(code(call(&engine, "thread.send", json!({"id": id, "text": " ", "images": []}))), "thread.invalid");
+    assert_eq!(code(call(&engine, "thread.send", json!({"id": id, "text": "Five", "images": ids}))), "thread.invalid");
+    assert_eq!(code(call(&engine, "thread.send", json!({"id": id, "text": "This?", "images": ["0".repeat(32)]}))), "thread.image_unknown");
+    let threads = || ok(&engine, "thread.list", json!({}))["threads"].as_array().unwrap().len();
+    assert_eq!(threads(), 2);
+    assert_eq!(code(call(&engine, "thread.create", json!({"images": ["nope"]}))), "thread.image_unknown");
+
+    // A model on this PC reads no pictures: refused, and said why.
+    let local = call(&engine, "thread.create", json!({"text": "What is this?", "images": [ids[0]], "model": "qwen35-4b"})).error.unwrap();
+    assert_eq!((local.code.as_str(), local.kind), ("thread.images_unsupported", relay_bus::ErrorKind::Refused));
+    assert_eq!(local.message, "This thread runs on a model on this PC, which cannot read pictures: choose a Claude model for it to send them.");
+    assert_eq!(threads(), 2);
+    ok(&engine, "thread.set", json!({"id": two["id"], "model": "qwen35-4b"}));
+    assert_eq!(code(call(&engine, "thread.send", json!({"id": two["id"], "text": "And this?", "images": [ids[0]]}))), "thread.images_unsupported");
+}
+
+#[test]
+fn deleting_a_thread_removes_the_pictures_no_other_thread_carries() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = engine_at(root.path());
+    let dir = tempfile::tempdir().unwrap();
+    with_fake(&engine, dir.path());
+    let (only, shared, kept) = (upload(&engine, &png(3, 2, 0)), upload(&engine, &png(4, 2, 0)), upload(&engine, &png(5, 2, 0)));
+    let first = ok(&engine, "thread.create", json!({"text": "Both", "images": [only["id"], shared["id"]]}));
+    settled(&engine, &first["id"], 4);
+    let second = ok(&engine, "thread.create", json!({"text": "Again", "images": [shared["id"]]}));
+    settled(&engine, &second["id"], 4);
+
+    ok(&engine, "thread.delete", json!({"id": first["id"]}));
+    assert!(!picture_file(root.path(), &only).exists());
+    assert_eq!(code(call(&engine, "thread.image", json!({"id": only["id"]}))), "thread.image_not_found");
+    assert!(picture_file(root.path(), &shared).is_file(), "another thread's message carries it");
+    ok(&engine, "thread.image", json!({"id": shared["id"]}));
+    ok(&engine, "thread.delete", json!({"id": second["id"]}));
+    assert!(!picture_file(root.path(), &shared).exists());
+    // An upload not yet sent is no thread's: it waits for its message, or its day.
+    assert!(picture_file(root.path(), &kept).is_file());
+    ok(&engine, "thread.image", json!({"id": kept["id"]}));
+}

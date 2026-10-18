@@ -18,27 +18,53 @@ pub fn register(e: &mut Engine) {
         let messages = threads::messages(engine, p.id, p.after)?;
         Ok(GetOut { thread: threads::get(engine, p.id)?, messages })
     });
+    // A message's pictures are only looked up here, in `threads.db`; the agent is handed their
+    // bytes after the handler (`threads::deliver`).
     e.register::<Create>(|ctx, p| {
-        let text = p.text.as_deref().map(threads::checked_text).transpose()?;
-        let title = text.as_deref().map_or_else(|| "New thread".to_string(), threads::title_from);
+        let pictures = p.images.unwrap_or_default();
+        // Checked before the thread is made, so a refused first message leaves no thread behind.
+        let first = if p.text.is_some() || !pictures.is_empty() {
+            let (model, _) = threads::checked_agent(p.model.as_deref(), p.effort.as_deref())?;
+            Some(threads::checked_message(ctx.engine(), p.text.as_deref().unwrap_or(""), &pictures, model.as_deref())?)
+        } else {
+            None
+        };
+        let title = match &first {
+            Some((text, _)) if !text.is_empty() => threads::title_from(text),
+            Some((_, images)) => threads::images::title(images.len()),
+            None => "New thread".to_string(),
+        };
         let now = ctx.now.clone();
         let thread = threads::create(ctx.engine(), &title, p.model.as_deref(), p.effort.as_deref(), &now)?;
         ctx.emit("thread.changed", json!({"thread": thread}));
-        let Some(text) = text else { return Ok(thread) };
-        let (message, turn) = threads::post(ctx.engine(), thread.id, &text, &now)?;
+        let Some((text, images)) = first else { return Ok(thread) };
+        let (message, turn) = threads::post(ctx.engine(), thread.id, &text, &images, &now)?;
         ctx.emit("thread.message", json!({"thread": thread.id, "message": message}));
         let id = thread.id;
-        ctx.after_commit(move |engine| threads::deliver(&engine, id, turn, &text));
+        ctx.after_commit(move |engine| threads::deliver(&engine, id, turn, &text, &images));
         threads::get(ctx.engine(), id)
     });
     e.register::<Send>(|ctx, p| {
-        let text = threads::checked_text(&p.text)?;
+        let pictures = p.images.unwrap_or_default();
+        let model = if pictures.is_empty() { None } else { threads::get(ctx.engine(), p.id)?.model };
+        let (text, images) = threads::checked_message(ctx.engine(), &p.text, &pictures, model.as_deref())?;
         let now = ctx.now.clone();
-        let (message, turn) = threads::post(ctx.engine(), p.id, &text, &now)?;
+        let (message, turn) = threads::post(ctx.engine(), p.id, &text, &images, &now)?;
         ctx.emit("thread.message", json!({"thread": p.id, "message": message}));
         let id = p.id;
-        ctx.after_commit(move |engine| threads::deliver(&engine, id, turn, &text));
+        ctx.after_commit(move |engine| threads::deliver(&engine, id, turn, &text, &images));
         Ok(message)
+    });
+    // Decoding and writing the picture, and sweeping old uploads, are file work: none of it
+    // holds the store's lock, and the transaction has nothing to do.
+    e.register_staged::<Upload, _>(|ctx, p| {
+        let now = ctx.now.clone();
+        threads::images::upload(ctx.engine(), &p.media_type, &p.bytes_b64, &now)
+    }, |_ctx: &mut Ctx, _p, image: ImageView| Ok(UploadOut { image }));
+    e.register_unlocked::<Image>(|ctx, p| {
+        use base64::Engine as _;
+        let (image, bytes) = threads::images::read(ctx.engine(), &p.id)?;
+        Ok(ImageOut { media_type: image.media_type, bytes_b64: base64::engine::general_purpose::STANDARD.encode(bytes) })
     });
     e.register::<Stop>(|ctx, p| {
         threads::get(ctx.engine(), p.id)?;
@@ -81,8 +107,12 @@ pub fn register(e: &mut Engine) {
         Ok(Empty {})
     });
     e.register::<Delete>(|ctx, p| {
-        threads::delete(ctx.engine(), p.id)?;
+        let files = threads::delete(ctx.engine(), p.id)?;
         ctx.emit("thread.changed", json!({"id": p.id, "deleted": true}));
+        // Its pictures' files go once the lock is released.
+        if !files.is_empty() {
+            ctx.after_commit(move |_| threads::images::remove(&files));
+        }
         Ok(Empty {})
     });
     register_proposals(e);

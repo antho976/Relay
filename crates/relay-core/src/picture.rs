@@ -1,4 +1,4 @@
-//! Pictures Relay takes in (`design.asset.add`, `session.upload`): a picture's
+//! Pictures Relay takes in (`design.asset.add`, `session.upload`, `thread.upload`): a picture's
 //! format from its first bytes and its natural size from its header, without decoding it, and a
 //! picture sent as base64, decoded within what a door carries.
 

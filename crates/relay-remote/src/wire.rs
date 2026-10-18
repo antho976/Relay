@@ -174,9 +174,10 @@ pub const PHONE_OPS: &[&str] = &[
     "task.create", "task.delete", "task.detach", "task.dispatch", "task.get", "task.label.add",
     "task.label.list", "task.label.remove", "task.link_commit", "task.list", "task.move",
     "task.parent.set", "task.relate", "task.restore", "task.unrelate", "task.update",
-    // The Threads space on the phone: the same conversations as the PC's.
-    "thread.create", "thread.delete", "thread.get", "thread.list", "thread.rename", "thread.send",
-    "thread.set", "thread.stop",
+    // The Threads space on the phone: the same conversations as the PC's, and their pictures
+    // (`thread.upload` writes one for a message to carry, `thread.image` reads one to draw).
+    "thread.create", "thread.delete", "thread.get", "thread.image", "thread.list", "thread.rename",
+    "thread.send", "thread.set", "thread.stop", "thread.upload",
     "ui.page.switch",
     "usage.get",
     "workspace.create", "workspace.discover", "workspace.list", "workspace.remove", "workspace.update",
@@ -308,6 +309,15 @@ mod tests {
     fn a_phone_calls_only_the_ops_the_app_uses() {
         let line = |op: &str| format!(r#"{{"v":1,"id":"7f2b5d2e-2f1a-4b7c-9a6c-1c9d1e6a0004","actor":"user","op":"{op}","payload":{{}}}}"#);
         assert!(matches!(gate(&line("session.input"), Instance::Stable), Gate::Forward));
+        // A thread's pictures: the one write that sends a picture, and the read that draws it.
+        for op in ["thread.upload", "thread.image", "thread.send"] {
+            assert!(matches!(gate(&line(op), Instance::Stable), Gate::Forward), "{op}");
+        }
+        let kind = |op: &str| relay_bus::registry::Registry::global().get(op).unwrap().meta.kind;
+        assert_eq!(kind("thread.upload"), relay_bus::registry::OpKind::Mutation);
+        assert_eq!(kind("thread.image"), relay_bus::registry::OpKind::Query);
+        // A thread's agent proposes from the PC alone.
+        assert!(matches!(gate(&line("thread.propose"), Instance::Stable), Gate::Reject(_)));
         // Audit rows carry stored payloads (held actions, prompts, an old Arbiter key), and no
         // screen of the app reads them.
         for op in ["settings.set", "app.quit", "guardrail.grant.revoke", "worktree.remove", "os.open_url", "no.such", "audit.list", "audit.undo"] {
