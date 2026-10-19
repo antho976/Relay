@@ -691,7 +691,7 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
     // A thread's agent proposes for its own thread alone (`thread.propose`): its requests carry
     // the thread to their handler, which nothing in a request can claim.
     let thread = match peer {
-        crate::peer::Peer::Thread(id) => Some(id),
+        crate::peer::Peer::Thread(id) | crate::peer::Peer::Assistant(id) => Some(id),
         _ => None,
     };
     // The blocking dispatch keeps this Arc until its ownership update completes,

@@ -551,7 +551,9 @@ so no door computes this for itself.
 `integration.discard`, `device.*` and `avd.*` mutations except `device.claim` / `device.release`,
 `skill.*` mutations, `notify.settings.set`, `design.purge`. `app.resources.watch` is the one `app.*` mutation
 every actor may call; it only turns resource sampling on and off.
-SPEC §10 says no swarm: an agent never spawns, closes, or types into a session, full stop.
+SPEC §10 says no swarm: an agent never spawns, closes, or types into a session, full stop. The one
+exception is the Dev space's assistant (docs/THREADS.md, "The assistant"), which may *ask* for
+these with `thread.ask`; only the person's `thread.ask.resolve` runs them, as the person.
 
 **Layer 2 — row scope (runtime).** See *Own task / self* below: an op naming a `session` or a
 `task_id` only ever acts on the caller's own. Reads reach any session in the caller's **own

@@ -13,6 +13,11 @@
 //!
 //! Asking first: what the agent may not change alone it proposes (`thread.propose`, one
 //! [`Action`] each), and the person approves or declines it on a card (`thread.proposal.*`).
+//!
+//! The assistant (`kind: "assistant"`) is a thread about Relay itself, opened from the Dev space's
+//! title bar: it reads sessions, tasks, projects and mail, and what a lone session may not do it
+//! asks for (`thread.ask`, a few steps of user-only ops), the person approving each on a card
+//! (`thread.ask.*`).
 use crate::ops::money::{AccountAddIn, AccountUpdateIn, BudgetSetIn, IdIn as MoneyIdIn, TxUpdateIn};
 use crate::registry::{Actors, Audit, OpMeta, Scope};
 use crate::types::Id;
@@ -36,6 +41,9 @@ result!(#[schemars(rename = "ThreadView")] ThreadView {
     pub live: bool,
     /// The start of the last message, for the thread list.
     pub preview: Option<String>,
+    /// `money` (a Threads conversation about Tally, Arbiter and Avex) or `assistant` (the Dev
+    /// space's assistant, about Relay itself).
+    pub kind: String,
 });
 result!(#[schemars(rename = "ThreadMessage")] MessageView {
     pub id: Id,
@@ -51,8 +59,13 @@ result!(#[schemars(rename = "ThreadMessage")] MessageView {
     pub created_at: String,
 });
 
+payload!(#[schemars(rename = "ThreadListIn")] ListIn {
+    /// `assistant` for the Dev space's assistant conversations; absent or `money`, the Threads
+    /// space's.
+    pub kind: Option<String>,
+});
 result!(#[schemars(rename = "ThreadListOut")] ListOut { pub threads: Vec<ThreadView> });
-op!(List, "thread.list", Empty => ListOut, OpMeta::query(Scope::Global, 5, "Every thread, most recently used first"));
+op!(List, "thread.list", ListIn => ListOut, OpMeta::query(Scope::Global, 5, "Every thread of one kind, most recently used first"));
 
 payload!(#[schemars(rename = "ThreadGetIn")] GetIn {
     pub id: Id,
@@ -72,6 +85,8 @@ payload!(#[schemars(rename = "ThreadCreateIn")] CreateIn {
     pub model: Option<String>,
     /// How hard it thinks: `low`, `medium`, `high`, `xhigh` or `max`; the default when absent.
     pub effort: Option<String>,
+    /// `assistant` for the Dev space's assistant; absent or `money`, a Threads conversation.
+    pub kind: Option<String>,
 });
 op!(Create, "thread.create", CreateIn => ThreadView,
     OpMeta::mutation(Scope::Global, 5, "Start a thread, optionally with its first message").actors(Actors::UserOnly).emits(&["thread.changed", "thread.message"]));
@@ -328,4 +343,58 @@ op!(ProposalUndo, "thread.proposal.undo", IdIn => ProposalView,
     OpMeta::mutation(Scope::Global, 5, "Put an approved proposal back: entries and activities restored, budgets and accounts as they were, all or none")
         .actors(Actors::UserOnly).emits(&["thread.proposal", "money.changed"]));
 
-entries!(List, Get, Create, Send, Upload, Image, Stop, Set, Rename, Delete, Models, Pick, Propose, ProposalList, ProposalGet, ProposalResolve, ProposalUndo);
+// ── The assistant's asks ─────────────────────────────────────────────────
+
+payload!(
+/// One step of an ask: an op the person's approval runs, as the person, with its own payload.
+#[schemars(rename = "ThreadAskStep")] AskStep {
+    /// One of the ops an assistant may ask for: `session.create`, `session.spawn`,
+    /// `session.resume`, `session.park`, `session.wake`, `session.close`, `session.input`,
+    /// `session.update`, `task.create`, `task.update`, `task.move`, `task.dispatch`,
+    /// `task.delete`, `notes.create`, `notes.update`, `workspace.create`, `project.add`.
+    pub op: String,
+    /// That op's own payload. A `session` left out of a step after `session.create` is the
+    /// session it made.
+    pub payload: Value,
+});
+payload!(#[schemars(rename = "ThreadAskIn")] AskIn {
+    /// What approving runs, in order, at most 5; the first that fails stops the rest.
+    pub steps: Vec<AskStep>,
+    /// Why, in a sentence the person reads on the card.
+    pub why: String,
+});
+result!(#[schemars(rename = "ThreadAsk")] AskView {
+    pub id: Id,
+    pub thread_id: Id,
+    pub steps: Vec<AskStep>,
+    pub why: String,
+    /// What approving does, in words. Quote it.
+    pub summary: String,
+    /// `pending`, `running` (approved, under way), `approved`, `declined` or `failed`.
+    pub status: String,
+    /// What approving did, or why a step failed (and which steps ran before it).
+    pub outcome: Option<String>,
+    /// Each step's result that ran, in order.
+    pub results: Vec<Value>,
+    pub created_at: String,
+    pub resolved_at: Option<String>,
+});
+op!(Ask, "thread.ask", AskIn => AskView,
+    OpMeta::mutation(Scope::Global, 5, "The assistant asks the person for what a lone session may not do: launching, parking, waking, closing or typing into sessions, changing tasks, notes, workspaces and projects. It waits on a card; nothing runs until they approve")
+        .emits(&["thread.ask"]));
+
+payload!(#[schemars(rename = "ThreadAskListIn")] AskListIn {
+    pub thread_id: Id,
+    /// Only those still waiting when true.
+    pub pending: Option<bool>,
+});
+result!(#[schemars(rename = "ThreadAsksOut")] AsksOut { pub asks: Vec<AskView> });
+op!(AskList, "thread.ask.list", AskListIn => AsksOut,
+    OpMeta::query(Scope::Global, 5, "An assistant thread's asks, oldest first").actors(Actors::UserOnly));
+
+payload!(#[schemars(rename = "ThreadAskResolveIn")] AskResolveIn { pub id: Id, pub approve: bool });
+op!(AskResolve, "thread.ask.resolve", AskResolveIn => AskView,
+    OpMeta::mutation(Scope::Global, 5, "Approve or decline an assistant's ask. Approving runs its steps once, in order, as the person; the first failure stops the rest and is kept with its reason. The assistant hears the answer with the next message")
+        .actors(Actors::UserOnly).emits(&["thread.ask"]));
+
+entries!(List, Get, Create, Send, Upload, Image, Stop, Set, Rename, Delete, Models, Pick, Propose, ProposalList, ProposalGet, ProposalResolve, ProposalUndo, Ask, AskList, AskResolve);

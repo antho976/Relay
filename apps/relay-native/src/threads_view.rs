@@ -2541,7 +2541,7 @@ fn drop_pending(v: &View) {
 }
 
 /// An agent's text, its Markdown drawn as blocks.
-fn draw_reply(parent: &gtk::Box, text: &str) {
+pub(crate) fn draw_reply(parent: &gtk::Box, text: &str) {
     for block in markdown(text) {
         let widget: gtk::Widget = match block {
             Block::Paragraph(markup) => reply_label(&markup, "threads-reply").upcast(),

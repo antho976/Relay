@@ -70,14 +70,20 @@ pub(crate) async fn wait_within(
 
 /// True once `name` is a button a person could press: present, shown and sensitive.
 pub(crate) fn clickable(root: &impl IsA<gtk::Widget>, name: &str) -> bool {
-    named(root, name).is_some_and(|w| w.is::<gtk::Button>() && w.is_mapped() && w.is_sensitive())
+    named(root, name).is_some_and(|w| (w.is::<gtk::Button>() || w.is::<gtk::MenuButton>()) && w.is_mapped() && w.is_sensitive())
 }
 
 /// Clicks the button `name`. `emit_clicked` runs the handlers of a disabled or hidden
 /// button too, so this refuses one a person could not press (RA-716).
 pub(crate) fn click(root: &impl IsA<gtk::Widget>, name: &str) -> Result<(), String> {
-    let key = named(root, name)
-        .ok_or_else(|| format!("Missing control: {name}"))?
+    let found = named(root, name).ok_or_else(|| format!("Missing control: {name}"))?;
+    // A menu button (a picker) opens its menu, as a press would.
+    if let Some(menu) = found.downcast_ref::<gtk::MenuButton>() {
+        require(menu.is_mapped() && menu.is_sensitive(), &format!("{name} cannot be pressed"))?;
+        menu.popup();
+        return Ok(());
+    }
+    let key = found
         .downcast::<gtk::Button>()
         .map_err(|_| format!("Not a button: {name}"))?;
     press(&key, name)

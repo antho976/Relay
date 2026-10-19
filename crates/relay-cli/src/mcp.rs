@@ -400,7 +400,10 @@ async fn handle(instance: Instance, actor: &Actor, token: Option<&str>, message:
     let result = match method {
         Some("initialize") => {
             // A small model's thread is told what the tools are for, not how the bus works.
-            let instructions = if Style::from_env().lean {
+            let style = Style::from_env();
+            let instructions = if style.lean && style.assistant {
+                "Relay itself: workspaces, projects, sessions, the board, notes and mail. What a session may not do is asked for with thread.ask."
+            } else if style.lean {
                 "The person's own data: Tally, their budget (money.*), and Avex, their gym log (gym.*)."
             } else {
                 "Relay's typed command bus. Tool names are bus op names; typed refusals are returned as tool errors. The tool list is filtered to what this session may actually call, all three gating layers applied — if an op is missing, your role cannot call it. Result shapes are not inlined here: `bus.schema {op}` returns one op's full payload and result schema. `session.bootstrap` returns your peers, your callable ops and your guardrails."
@@ -792,13 +795,15 @@ struct Style {
     readings: bool,
     /// Tools described in plain words with an example each.
     docs: bool,
+    /// The Dev space's assistant's server, which a lean introduction describes as Relay's.
+    assistant: bool,
 }
 
 impl Style {
     fn from_env() -> Style {
         let spec = std::env::var("RELAY_MCP_STYLE").unwrap_or_default();
         let has = |part: &str| spec.split(',').any(|p| p.trim() == part);
-        Style { lean: has("lean"), readings: has("readings"), docs: has("docs") }
+        Style { lean: has("lean"), readings: has("readings"), docs: has("docs"), assistant: has("assistant") }
     }
 }
 
@@ -1079,7 +1084,7 @@ mod tests {
         assert_eq!(ok["content"][0]["text"], "TALLY, the person's budget.");
         assert!(ok.get("structuredContent").is_none(), "no JSON beside it for a client to prefer");
         let error = json!({"kind":"not_found","code":"money.not_found","message":"No entry 5","hint":"list entries with money.tx.list"});
-        let plain = refusal(error.clone(), None, &Style { lean: true, readings: true, docs: false });
+        let plain = refusal(error.clone(), None, &Style { lean: true, readings: true, docs: false, assistant: false });
         assert_eq!(plain["isError"], true);
         assert_eq!(plain["content"][0]["text"], "Not done (money.not_found): No entry 5. Hint: list entries with money.tx.list.");
         let json = refusal(error, None, &Style::default());
