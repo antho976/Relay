@@ -676,8 +676,9 @@ mod tests {
     }
 
     /// What root builds and installs is exactly the STAGED list both scripts carry, and every file
-    /// in it is plain printable ASCII: the installer refuses anything else, so a backspace or an
-    /// escape that could hide a line from less fails here first.
+    /// in it is plain printable ASCII with no tab, trailing space or line over 200 characters: the
+    /// installer refuses anything else, so a byte or a line that could mislead a reader of less
+    /// fails here first.
     #[test]
     fn the_shipped_files_are_the_staged_list_and_plain_ascii() {
         let crate_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -714,8 +715,12 @@ mod tests {
         for file in &listed {
             let path = if file.starts_with("key-proxy/") { root.join("scripts").join(file) } else { root.join("crates").join(file) };
             let bytes = std::fs::read(&path).unwrap();
-            let bad = bytes.iter().position(|&b| !(b == b'\t' || b == b'\n' || (0x20..0x7f).contains(&b)));
+            let bad = bytes.iter().position(|&b| !(b == b'\n' || (0x20..0x7f).contains(&b)));
             assert!(bad.is_none(), "{file} holds a byte other than printable ASCII at offset {bad:?}");
+            // A trailing space changes what bash reads and shows as nothing; a long line wraps.
+            for (n, line) in bytes.split(|&b| b == b'\n').enumerate() {
+                assert!(!line.ends_with(b" ") && line.len() <= 200, "{file}:{}: a trailing space or a line over 200 characters", n + 1);
+            }
         }
     }
 

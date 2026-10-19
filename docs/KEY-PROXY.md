@@ -84,7 +84,24 @@ root login on a real text console, from a root-owned clone of a commit you name 
   root can decrypt the key. As root at the console: `gpasswd -d <you> wheel`. Then check that no
   other rule lets you in: `sudo -l -U <you>` must say you may not run sudo, and nothing in
   `/etc/sudoers.d` may name you. From then on, do admin work at a root console, and never type
-  root's password anywhere else.
+  root's password anywhere else. Your desktop's admin prompts (network, firmware, apps) will now
+  ask for root's password: cancel them, or have polkit refuse them outright, so they never ask:
+
+  ```sh
+  printf '%s\n' 'polkit.addAdminRule(function(action, subject) { return []; });' > /etc/polkit-1/rules.d/40-no-admin.rules
+  ```
+
+  Check it from your desktop afterwards: an admin action should now fail at once, with no password
+  prompt.
+- **Close the other ways to root.** Nothing outside your home may be yours where root could run
+  it: list it with `find / -xdev -user <you> ! -path '/home/*' ! -path '/tmp/*' 2>/dev/null` and
+  give anything in a system folder to root (on this PC, `/usr/local/bin/lific` is yours:
+  `chown root:root /usr/local/bin/lific`). If you use Tailscale, make sure you are not its operator
+  (`tailscale set --operator=`) and that Tailscale SSH is off.
+- **Make sure the console boot has network.** The clone and the build need it. A Wi-Fi password
+  kept in your desktop keyring is not there without your desktop: use a cable, or a connection
+  saved for all users.
+- **The commit must be on `main`.** The installer refuses a commit that is not.
 
 **The first install**
 
@@ -95,16 +112,17 @@ root login on a real text console, from a root-owned clone of a commit you name 
    console.
 2. Log in as **root** on the console. Not as yourself followed by `su` or `sudo`: the script
    checks the login itself.
-3. Clone the commit, check that everything that will run as root is plain printable ASCII (the
-   first command must print nothing, and the installer refuses anything else anyway), and read it
-   all with `less -U`, which shows a backspace, carriage return or escape as `^H`, `^M`, `^[`
-   instead of obeying it, so no line can hide:
+3. Clone the commit, check that everything that will run as root is plain printable ASCII with no
+   tab, trailing space or line over 200 characters (the first command must print nothing, and the
+   installer refuses anything else anyway), and read it all with `less -U -N`: it shows a
+   backspace, carriage return or escape as `^H`, `^M`, `^[` instead of obeying it, and numbers each
+   line, so no line can hide and a wrapped line cannot pass for two:
 
    ```sh
    git clone --no-tags https://github.com/antho976/Relay /root/relay-key-proxy
    cd /root/relay-key-proxy && git checkout --detach <full commit hash>
-   LC_ALL=C grep -rn $'[^\t -~]' crates/relay-key-proxy scripts/key-proxy
-   LC_ALL=C LESSSECURE=1 less -U crates/relay-key-proxy/Cargo.toml crates/relay-key-proxy/Cargo.lock crates/relay-key-proxy/src/main.rs scripts/key-proxy/*
+   LC_ALL=C grep -rn -e '[^ -~]' -e ' $' -e '.\{201\}' crates/relay-key-proxy scripts/key-proxy
+   LC_ALL=C LESSSECURE=1 less -U -N crates/relay-key-proxy/Cargo.toml crates/relay-key-proxy/Cargo.lock crates/relay-key-proxy/src/main.rs scripts/key-proxy/*
    ```
 
    Those files are all the install builds, installs or runs, besides the crates `Cargo.lock` pins,
@@ -142,7 +160,7 @@ Start as for the first install (steps 1 and 2), then fetch the new commit and re
 `key-proxy-review` the last install left. It is root-owned and was itself reviewed, so the new
 commit cannot change what shows it to you; it compares with the copy installed last, not with
 GitHub, refuses any file off the list or not printable ASCII, and shows every difference, the
-installer's own changes included, in `less -U`:
+installer's own changes included, in `less -U -N`:
 
 ```sh
 cd /root/relay-key-proxy && git fetch --no-tags origin && git checkout --detach <full commit hash>

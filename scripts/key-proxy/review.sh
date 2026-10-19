@@ -45,7 +45,7 @@ main() {
     (cd "$state" && diff -ruN --text installed "$work/new") > "$work/diff" || rc=$?
     case $rc in
         0) echo "key-proxy: no differences from what is installed." ;;
-        1) env -i PATH=/usr/bin:/bin TERM="${TERM:-linux}" LC_ALL=C LESSSECURE=1 less -U -- "$work/diff" ;;
+        1) env -i PATH=/usr/bin:/bin TERM="${TERM:-linux}" LC_ALL=C LESSSECURE=1 less -U -N -- "$work/diff" ;;
         *) die "diff failed" ;;
     esac
     local answer
@@ -76,8 +76,9 @@ trusted_tree() {
 }
 
 # The STAGED files, copied out of the clone: all this builds and installs. The proxy's folders must
-# hold exactly those files, and each must be plain printable ASCII (tab, newline, space to tilde):
-# a backspace, an escape or a carriage return could hide a line from less. (Kept identical to
+# hold exactly those files, and each must be plain printable ASCII (newline, space to tilde), with
+# no trailing space and no line over 200 characters: a backspace, an escape or a carriage return
+# could hide a line from less, a trailing space changes what bash reads, and a long line wraps. (Kept identical to
 # install.sh.)
 stage() {
     local clone=$1 dest=$2 found file
@@ -88,7 +89,8 @@ $(printf '  %s\n' "${STAGED[@]}")"
     for file in "${STAGED[@]}"; do
         local from=$clone/crates/$file
         [[ $file == key-proxy/* ]] && from=$clone/scripts/$file
-        ! LC_ALL=C grep -q $'[^\t -~]' -- "$from" || die "$file holds bytes other than printable ASCII"
+        ! LC_ALL=C grep -q -e '[^ -~]' -e ' $' -e '.\{201\}' -- "$from" \
+            || die "$file holds a byte other than printable ASCII, a tab, a trailing space or a line over 200 characters"
         install -D -m 0644 -- "$from" "$dest/$file"
     done
 }
