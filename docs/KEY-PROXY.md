@@ -83,9 +83,11 @@ root login on a real text console, from a root-owned clone of a commit you name 
   polkit, whose vendor rules also let `wheel` change network connections, flash firmware and
   install system-wide apps without asking), and you type it into things agents can replace: the
   lock screen, a polkit prompt, `sudo` in a terminal. An agent that learns it can become root, and
-  root can decrypt the key. As root at the console: `gpasswd -d <you> wheel`. Then check that no
+  root can decrypt the key. As root at the console (booted as for the install, so nothing of yours
+  runs: while your desktop is up, your programs can even type as a virtual keyboard):
+  `gpasswd -d <you> wheel`. Then check that no
   other rule lets you in: `sudo -l -U <you>` must say you may not run sudo, and nothing in
-  `/etc/sudoers.d` may name you. From then on, do admin work at a root console, and never type
+  `/etc/sudoers.d` may name you. From then on, do admin work at a root console booted that way, and never type
   root's password anywhere else. Out of `wheel`, your desktop's admin prompts (network, firmware,
   apps) would ask for root's password instead. Make them name an account that cannot log in, so
   no prompt can ever take root's password:
@@ -157,10 +159,16 @@ root login on a real text console, from a root-owned clone of a commit you name 
    masked until it ends; the clone is root's all the way up, writable by no one else, holds no
    symbolic link, is exactly at the commit you named, clean, and on `origin/main`.
 
+   Both units must match, setting for setting, the copy `install.sh` carries of them, so a unit
+   cannot say more than the script you read; after loading them, it also checks what systemd made
+   of them (the throwaway user, no capabilities, no other command or dependency, the one listener,
+   no drop-in) before anything starts, with both kept switched off until then.
+
    It copies exactly the listed files out of the clone, each checked to be printable ASCII, and
    builds that copy alone, from outside it (so no `.cargo/config` applies), with a root-owned cargo
    home and `--locked`. It refuses a build script, a source file outside the folder (asked of
-   `cargo metadata`, which runs nothing, and checked again in what the compiler read), a proc
+   `cargo metadata`, which runs nothing, and checked again in the files the compiler read for the
+   proxy itself), a proc
    macro, and any dependency not from crates.io. It then asks for the key with no time limit and
    nothing shown as you type, checks its shape before touching anything, installs the binary, both
    units, `key-proxy-review` and `key-proxy-uninstall` to root-owned places, pipes the key straight

@@ -108,19 +108,13 @@ main() {
         [[ $answer == yes ]] || die "stopped; nothing was installed"
     fi
 
-    # The two units in the one shape this accepts, with the values that matter exactly as shipped.
-    local service=$stage/key-proxy/relay-key-proxy.service socket=$stage/key-proxy/relay-key-proxy.socket
-    check_unit "$service" "Unit Service Install" "Description Documentation Requires After Wants ExecStart \
-DynamicUser LoadCredentialEncrypted:2 Restart RestartSec NoNewPrivileges CapabilityBoundingSet AmbientCapabilities \
-ProtectSystem ProtectHome PrivateTmp PrivateDevices PrivateIPC ProtectProc ProcSubset ProtectKernelTunables \
-ProtectKernelModules ProtectKernelLogs ProtectControlGroups ProtectClock ProtectHostname RestrictAddressFamilies \
-IPAddressDeny IPAddressAllow RestrictNamespaces RestrictRealtime RestrictSUIDSGID LockPersonality \
-MemoryDenyWriteExecute RemoveIPC SystemCallArchitectures SystemCallFilter:2 UMask LimitCORE SocketBindDeny WantedBy"
-    check_unit "$socket" "Unit Socket Install" "Description ListenStream Accept NoDelay WantedBy"
-    local exact
-    for exact in "$service:ExecStart=/usr/local/libexec/relay/relay-key-proxy" "$service:DynamicUser=yes" \
-        "$socket:ListenStream=127.0.0.1:7445" "$socket:Accept=no"; do
-        grep -qxF -- "${exact#*:}" "${exact%%:*}" || die "${exact%%:*} must say ${exact#*:}"
+    # The two units must say exactly what this script says they say (unit_lines, below), line for
+    # line, comments and blank lines aside: a unit cannot change without this script changing with
+    # it, in the same review, and no systemd parsing quirk can make a unit mean more than it shows.
+    local unit
+    for unit in service socket; do
+        diff <(grep -v -e '^#' -e '^$' "$stage/key-proxy/relay-key-proxy.$unit") <(unit_lines "$unit") >/dev/null \
+            || die "relay-key-proxy.$unit differs from the copy in install.sh"
     done
 
     # Nothing in them may make cargo take code from elsewhere: a build script, a source file outside
@@ -204,11 +198,15 @@ $sources"
     # A DynamicUser unit reads back User= and Group= as its own name, and a static user of that
     # name would be used instead of a throwaway one, so there must be none.
     ! getent passwd relay-key-proxy >/dev/null || die "a user named relay-key-proxy exists; DynamicUser would use it"
+    ! getent group relay-key-proxy >/dev/null || die "a group named relay-key-proxy exists; DynamicUser would use it"
     local unit prop want got
     while read -r unit prop want; do
         got=$(systemctl show -p "$prop" --value "relay-key-proxy.$unit")
         [[ $got == "$want" ]] || die "relay-key-proxy.$unit has $prop=$got, not ${want:-nothing}; nothing was started"
     done <<'EXPECTED'
+service LoadState loaded
+service FragmentPath /etc/systemd/system/relay-key-proxy.service
+service DropInPaths
 service DynamicUser yes
 service User relay-key-proxy
 service Group relay-key-proxy
@@ -225,6 +223,17 @@ service ExecStartPost
 service ExecStop
 service ExecStopPost
 service ExecReload
+service CapabilityBoundingSet
+service AmbientCapabilities
+service Requisite
+service BindsTo
+service Upholds
+service OnFailure
+service OnSuccess
+socket LoadState loaded
+socket FragmentPath /etc/systemd/system/relay-key-proxy.socket
+socket DropInPaths
+socket Triggers relay-key-proxy.service
 socket Listen 127.0.0.1:7445 (Stream)
 socket ExecStartPre
 socket ExecStartPost
@@ -237,6 +246,7 @@ EXPECTED
     systemctl enable --now relay-key-proxy.socket >/dev/null
     systemctl enable relay-key-proxy.service >/dev/null
     systemctl restart relay-key-proxy.service
+    sleep 1
     systemctl is-active --quiet relay-key-proxy.service || die "the service did not start: journalctl -u relay-key-proxy"
     # What the next update is compared with, and may only replace once you approve it.
     rm -rf -- "$state/installed" "$state/approved"
@@ -327,31 +337,70 @@ $(printf '  %s\n' "${STAGED[@]}")"
     done
 }
 
-# A unit file in the one shape this install accepts: sections and keys from a fixed list, each key
-# once (or up to the count after its colon), written Key=value with nothing around the "=", no
-# continued lines, comments only as whole lines starting with "#". systemd reads looser files than
-# this; anything it could read differently from how the file looks is refused.
-check_unit() {
-    local file=$1 sections=" $2 " keys=" $3 " line key max count seen=" "
-    while IFS= read -r line; do
-        [[ -z $line || $line == \#* ]] && continue
-        if [[ $line =~ ^\[([A-Za-z]+)\]$ ]]; then
-            [[ $sections == *" ${BASH_REMATCH[1]} "* ]] || die "$file: section [${BASH_REMATCH[1]}] is not allowed"
-            continue
-        fi
-        [[ $line =~ ^([A-Za-z]+)= && $line != *\\ ]] || die "$file: a line not in the accepted shape: $line"
-        key=${BASH_REMATCH[1]}
-        if [[ $keys == *" $key "* ]]; then
-            max=1
-        elif [[ $keys =~ \ $key:([0-9]+)\  ]]; then
-            max=${BASH_REMATCH[1]}
-        else
-            die "$file: $key is not allowed"
-        fi
-        count=$(tr ' ' '\n' <<<"$seen" | grep -cxF -- "$key" || true)
-        ((count < max)) || die "$file: $key appears more than $max time(s)"
-        seen+="$key "
-    done < "$file"
+# The settings lines of the two units, as they must be (see main).
+unit_lines() {
+    case $1 in
+        service) cat <<'SERVICE'
+[Unit]
+Description=Relay API-key proxy (holds the Anthropic API key for Relay's API-key sessions)
+Documentation=https://github.com/antho976/Relay/blob/main/docs/KEY-PROXY.md
+Requires=relay-key-proxy.socket
+After=relay-key-proxy.socket network-online.target
+Wants=network-online.target
+[Service]
+ExecStart=/usr/local/libexec/relay/relay-key-proxy
+DynamicUser=yes
+LoadCredentialEncrypted=relay-anthropic-key
+LoadCredentialEncrypted=relay-proxy-token
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost 160.79.104.0/23 2607:6bc0::/48
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+UMask=0077
+LimitCORE=0
+SocketBindDeny=any
+[Install]
+WantedBy=multi-user.target
+SERVICE
+            ;;
+        socket) cat <<'SOCKET'
+[Unit]
+Description=Relay API-key proxy socket
+[Socket]
+ListenStream=127.0.0.1:7445
+Accept=no
+NoDelay=yes
+[Install]
+WantedBy=sockets.target
+SOCKET
+            ;;
+    esac
 }
 
 # One hash for a staged tree: every file's path and content. (Kept identical to review.sh.)

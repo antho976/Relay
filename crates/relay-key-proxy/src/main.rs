@@ -733,14 +733,14 @@ mod tests {
         assert_eq!(socket.iter().filter(|line| line.starts_with("Listen")).count(), 1, "one loopback listener only");
         let unit = include_str!("../../../scripts/key-proxy/relay-key-proxy.service");
         let lines: Vec<&str> = unit.lines().collect();
-        // The shape install.sh's check_unit accepts: whole-line comments, [Section] headers and
-        // Key=value with nothing around the "=" and no continued line.
-        for (name, text) in [("service", unit), ("socket", include_str!("../../../scripts/key-proxy/relay-key-proxy.socket"))] {
-            for line in text.lines().filter(|line| !line.is_empty() && !line.starts_with('#')) {
-                let header = line.starts_with('[') && line.ends_with(']');
-                let key = line.split_once('=').is_some_and(|(key, _)| !key.is_empty() && key.bytes().all(|b| b.is_ascii_alphabetic()));
-                assert!((header || key) && !line.ends_with('\\'), "{name}: a line install.sh would refuse: {line:?}");
-            }
+        // install.sh refuses a unit whose settings differ from the copy it carries (unit_lines).
+        let install = include_str!("../../../scripts/key-proxy/install.sh");
+        for (name, marker, text) in [("service", "SERVICE", unit), ("socket", "SOCKET", include_str!("../../../scripts/key-proxy/relay-key-proxy.socket"))] {
+            let open = format!("<<'{marker}'\n");
+            let start = install.find(&open).expect("a copy of the unit in install.sh") + open.len();
+            let end = start + install[start..].find(&format!("\n{marker}\n")).unwrap();
+            let settings: Vec<&str> = text.lines().filter(|line| !line.is_empty() && !line.starts_with('#')).collect();
+            assert_eq!(install[start..end].lines().collect::<Vec<_>>(), settings, "install.sh's copy of the {name} differs from the unit");
         }
         assert!(lines.contains(&"ExecStart=/usr/local/libexec/relay/relay-key-proxy"));
         for line in [
