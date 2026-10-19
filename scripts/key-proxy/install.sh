@@ -124,6 +124,14 @@ main() {
     foreign=$(grep '(' <<<"$tree" || true)
     [[ -z $foreign ]] || die "dependencies that are proc macros or come from outside crates.io:
 $foreign"
+    # And every package cargo resolves, dev and other-platform ones included (it reads their
+    # manifests even when it builds none of them): crates.io, but for the proxy itself.
+    local sources
+    sources=$(root_cargo "$cache" metadata --locked --format-version 1 --manifest-path "$crate/Cargo.toml" \
+        | grep -o '"source":[^,}]*' | grep -vx '"source":"registry+https://github.com/rust-lang/crates.io-index"' \
+        | sort | uniq -c | awk '{$1=$1};1')
+    [[ $sources == '1 "source":null' ]] || die "a package resolved from outside crates.io:
+$sources"
     echo "key-proxy: from crates.io, at the versions Cargo.lock pins:"
     tr '\n' ' ' <<<"$tree" | fold -s -w 100
     echo
@@ -174,6 +182,28 @@ $foreign"
         || die "could not write $token_dir/key-proxy-token"
 
     systemctl daemon-reload
+    # What systemd made of the unit, not just what its lines say: systemd takes the last of a
+    # repeated setting and allows spaces around "=", so check the result before it runs.
+    local prop want got
+    while read -r prop want; do
+        got=$(systemctl show -p "$prop" --value relay-key-proxy.service)
+        [[ $got == "$want" ]] || die "relay-key-proxy.service has $prop=$got, not ${want:-nothing}; nothing was started"
+    done <<'EXPECTED'
+DynamicUser yes
+User
+Group
+NoNewPrivileges yes
+ProtectSystem strict
+ProtectHome yes
+PrivateDevices yes
+ProtectProc invisible
+LimitCORE 0
+ExecStartPre
+ExecStartPost
+ExecStop
+ExecStopPost
+ExecReload
+EXPECTED
     systemctl enable --now relay-key-proxy.socket >/dev/null
     systemctl enable relay-key-proxy.service >/dev/null
     systemctl restart relay-key-proxy.service

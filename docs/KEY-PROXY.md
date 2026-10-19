@@ -26,7 +26,9 @@ Claude (you) ──x-api-key: <pass token>──▶ 127.0.0.1:7445  relay-key-pr
   `api.anthropic.com` only, over TLS checked against roots built into the binary (a certificate
   added to the system store cannot intercept it), with a fixed list of headers and the token
   swapped for the key. Everything else is answered by the proxy and goes nowhere. Admin keys
-  (`sk-ant-admin…`) are refused, so the token is never worth more than API calls.
+  (`sk-ant-admin…`) are refused, so the token is never worth more than API calls, including the
+  server-side tools those calls can use on the key's workspace (files, skills, containers): make
+  the key in a workspace of its own, with nothing else in it.
 - **Relay** stores only the session's on/off choice (`use_api_key`). An API-key session's
   `--settings` point Claude at the proxy (`env.ANTHROPIC_BASE_URL`) and give it
   `apiKeyHelper: /usr/bin/cat ~/.config/relay/key-proxy-token`. A launch is refused
@@ -39,7 +41,7 @@ Claude (you) ──x-api-key: <pass token>──▶ 127.0.0.1:7445  relay-key-pr
   caller, reach a local listener or use DNS): reading the code before it is installed is. Should
   Anthropic move its API, the service fails closed; widen `IPAddressAllow=` in the unit.
 - **The program** is `crates/relay-key-proxy`, its own workspace with its own `Cargo.lock`: about
-  700 lines (half of them tests), 22 crates from crates.io, no proc macros, and no build script of
+  700 lines (about 40% of them tests), 22 crates from crates.io, no proc macros, and no build script of
   its own (four of its crates have one: `httparse`, `libc`, `ring`, `rustls`). Root builds that
   folder alone, copied out of a clean clone.
 
@@ -84,20 +86,30 @@ root login on a real text console, from a root-owned clone of a commit you name 
   root can decrypt the key. As root at the console: `gpasswd -d <you> wheel`. Then check that no
   other rule lets you in: `sudo -l -U <you>` must say you may not run sudo, and nothing in
   `/etc/sudoers.d` may name you. From then on, do admin work at a root console, and never type
-  root's password anywhere else. Your desktop's admin prompts (network, firmware, apps) will now
-  ask for root's password: cancel them, or have polkit refuse them outright, so they never ask:
+  root's password anywhere else. Out of `wheel`, your desktop's admin prompts (network, firmware,
+  apps) would ask for root's password instead. Make them name an account that cannot log in, so
+  no prompt can ever take root's password:
 
   ```sh
-  printf '%s\n' 'polkit.addAdminRule(function(action, subject) { return []; });' > /etc/polkit-1/rules.d/40-no-admin.rules
+  printf '%s\n' 'polkit.addAdminRule(function(action, subject) { return ["unix-user:nobody"]; });' \
+      > /etc/polkit-1/rules.d/40-admin-nobody.rules
   ```
 
-  Check it from your desktop afterwards: an admin action should now fail at once, with no password
-  prompt.
+  Check it from your desktop afterwards: an admin prompt should name `nobody`, and no password can
+  satisfy it. Never type root's password into one.
 - **Close the other ways to root.** Nothing outside your home may be yours where root could run
-  it: list it with `find / -xdev -user <you> ! -path '/home/*' ! -path '/tmp/*' 2>/dev/null` and
-  give anything in a system folder to root (on this PC, `/usr/local/bin/lific` is yours:
-  `chown root:root /usr/local/bin/lific`). If you use Tailscale, make sure you are not its operator
-  (`tailscale set --operator=`) and that Tailscale SSH is off.
+  it, on any filesystem (this PC has several):
+
+  ```sh
+  find / \( -path /proc -o -path /sys -o -path /dev -o -path /run -o -path /home -o -path /tmp \) -prune \
+      -o -user <you> -print 2>/dev/null
+  ```
+
+  Give anything it lists in a system folder to root (on this PC, `/usr/local/bin/lific` is yours:
+  `chown root:root /usr/local/bin/lific`). Also: `id <you>` should list no group that a rule in
+  `/etc/polkit-1/rules.d` or `/usr/share/polkit-1/rules.d` grants actions to; `systemctl is-enabled
+  sshd` should say disabled (agents can write your `~/.ssh/authorized_keys`); and if you use
+  Tailscale, you must not be its operator (`tailscale set --operator=`), with Tailscale SSH off.
 - **Make sure the console boot has network.** The clone and the build need it. A Wi-Fi password
   kept in your desktop keyring is not there without your desktop: use a cable, or a connection
   saved for all users.
@@ -106,12 +118,14 @@ root login on a real text console, from a root-owned clone of a commit you name 
 **The first install**
 
 1. Power off with the button, turn on, and in the boot menu edit the entry and add
-   `systemd.unit=multi-user.target systemd.mask=user@1000.service systemd.mask=bluetooth.service`
-   to the kernel line (1000 is your user id). The desktop does not start, nor do your lingering user
-   services or Bluetooth, so nothing of yours can watch the screen, listen, type, or answer for the
+   `systemd.unit=multi-user.target systemd.mask=user@1000.service systemd.mask=bluetooth.service
+   systemd.mask=sshd.service systemd.mask=tailscaled.service` to the kernel line (1000 is your user
+   id). The desktop does not start, nor do your lingering user services, Bluetooth, SSH or
+   Tailscale, so nothing of yours can run to watch the screen, listen, type, or answer for the
    console.
 2. Log in as **root** on the console. Not as yourself followed by `su` or `sudo`: the script
-   checks the login itself.
+   checks the login itself. Then `pgrep -u <you>` must print nothing; if it prints anything, stop
+   it (`loginctl terminate-user <you>; systemctl stop user-1000.slice`) before you read on.
 3. Clone the commit, check that everything that will run as root is plain printable ASCII with no
    tab, trailing space or line over 200 characters (the first command must print nothing, and the
    installer refuses anything else anyway), and read it all with `less -U -N`: it shows a
@@ -168,7 +182,10 @@ cd /root/relay-key-proxy && git fetch --no-tags origin && git checkout --detach 
 bash scripts/key-proxy/install.sh --user <you> --commit <full commit hash>
 ```
 
-The installer builds only the exact tree you approved. A new token is made on every run. For a
+The installer builds only the exact tree you approved. A new token is made on every run, so
+restart any API-key session that was running. An update that adds a file to the proxy cannot pass
+the installed reviewer (its list refuses the new file): remove the proxy and install it afresh,
+reading everything again. For a
 new key, add `--replace-key` (after the review, if the commit changed).
 
 ### Removing it
