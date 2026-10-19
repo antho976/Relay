@@ -87,12 +87,27 @@ main() {
     local key_cred=$creds/relay-anthropic-key token_cred=$creds/relay-proxy-token
     local token_dir=$home/.config/relay
 
-    # What is built: the listed files alone, copied out of the clone.
-    install -d -o root -g root -m 0700 "$cache" "$state"
+    # What is built: the listed files alone, copied out of the clone, root's and read-only to the
+    # build account below.
+    install -d -o root -g root -m 0755 "$cache"
+    install -d -o root -g root -m 0700 "$state"
     local stage=$cache/stage crate
     rm -rf -- "$stage"
     stage "$repo" "$stage"
     crate=$stage/relay-key-proxy
+
+    # The build runs as its own system account, never as root: the crates' build scripts (ring,
+    # rustls, libc and httparse have one) run during it, and a bad release of one would then
+    # reach this folder, not the machine. Root reads the result. The folder is made afresh each
+    # time, so nothing an earlier build left (a cargo config, a cache) shapes this one.
+    local builder=relay-key-proxy-build build=$cache/build buid bgid
+    getent passwd "$builder" >/dev/null \
+        || useradd --system --user-group --no-create-home --home-dir "$build" --shell /usr/bin/nologin "$builder"
+    buid=$(id -u "$builder")
+    bgid=$(id -g "$builder")
+    ((buid < 1000)) || die "$builder is not a system account"
+    rm -rf -- "$build"
+    install -d -o "$buid" -g "$bgid" -m 0700 "$build"
 
     # Only what you read, before cargo touches anything. An update must be the exact tree
     # key-proxy-review showed you (the copy the last install left, so this commit could not change
@@ -121,14 +136,14 @@ main() {
     # the folder (asked of cargo metadata, which runs nothing), a proc macro, or a dependency not
     # from crates.io.
     local meta src
-    meta=$(root_cargo "$cache" metadata --no-deps --offline --format-version 1 --manifest-path "$crate/Cargo.toml")
+    meta=$(build_cargo "$build" "$buid" "$bgid" metadata --no-deps --offline --format-version 1 --manifest-path "$crate/Cargo.toml")
     ! grep -q '"custom-build"' <<<"$meta" || die "relay-key-proxy names a build script"
     # Resolved first: "relay-key-proxy/../x.rs" starts like a path inside it and is not.
     while read -r src; do
         [[ $(realpath -m -- "$src") == "$crate/"* ]] || die "relay-key-proxy builds a file outside its folder: $src"
     done < <(grep -o '"src_path":"[^"]*"' <<<"$meta" | cut -d'"' -f4)
     local tree foreign
-    tree=$(root_cargo "$cache" tree --locked --manifest-path "$crate/Cargo.toml" -e normal,build --prefix none --format '{p}' \
+    tree=$(build_cargo "$build" "$buid" "$bgid" tree --locked --manifest-path "$crate/Cargo.toml" -e normal,build --prefix none --format '{p}' \
         | sed 1d | sed -e 's/ (\*)$//' | sort -u)
     foreign=$(grep '(' <<<"$tree" || true)
     [[ -z $foreign ]] || die "dependencies that are proc macros or come from outside crates.io:
@@ -136,7 +151,7 @@ $foreign"
     # And every package cargo resolves, dev and other-platform ones included (it reads their
     # manifests even when it builds none of them): crates.io, but for the proxy itself.
     local sources
-    sources=$(root_cargo "$cache" metadata --locked --format-version 1 --manifest-path "$crate/Cargo.toml" \
+    sources=$(build_cargo "$build" "$buid" "$bgid" metadata --locked --format-version 1 --manifest-path "$crate/Cargo.toml" \
         | grep -o '"source":[^,}]*' | grep -vx '"source":"registry+https://github.com/rust-lang/crates.io-index"' \
         | sort | uniq -c | awk '{$1=$1};1')
     [[ $sources == '1 "source":null' ]] || die "a package resolved from outside crates.io:
@@ -146,13 +161,18 @@ $sources"
     echo
 
     echo "key-proxy: building $commit"
-    root_cargo "$cache" build --locked --release --manifest-path "$crate/Cargo.toml"
-    local binary=$cache/target/release/relay-key-proxy deps=$cache/target/release/relay-key-proxy.d dep
+    build_cargo "$build" "$buid" "$bgid" build --locked --release --manifest-path "$crate/Cargo.toml"
+    local binary=$build/target/release/relay-key-proxy deps=$build/target/release/relay-key-proxy.d dep
     [[ -f $binary && ! -L $binary && -s $deps ]] || die "the build left no $binary or no record of what it read"
+    # The build account owns that folder, so root takes the binary only from exactly this path, a
+    # plain file of that account's, through no link: a link there could make root copy a file of
+    # someone else's into a place everyone can read.
+    [[ $(realpath -e -- "$binary") == "$binary" && $(stat -c %u -- "$binary") == "$buid" ]] \
+        || die "$binary is not a plain file of $builder's at that path"
     # What the compiler actually read for the binary: the staged folder and pinned crates only.
     while read -r dep; do
         dep=$(realpath -m -- "$dep")
-        [[ $dep == "$crate/"* || $dep == "$cache/cargo/registry/src/"* ]] || die "the build read $dep"
+        [[ $dep == "$crate/"* || $dep == "$build/cargo/registry/src/"* ]] || die "the build read $dep"
     done < <(cut -d: -f2- "$deps" | tr ' ' '\n' | grep -v '^$')
 
     local key=""
@@ -246,7 +266,14 @@ EXPECTED
     systemctl enable relay-key-proxy.service >/dev/null
     systemctl restart relay-key-proxy.service
     sleep 1
-    systemctl is-active --quiet relay-key-proxy.service || die "the service did not start: journalctl -u relay-key-proxy"
+    if ! systemctl is-active --quiet relay-key-proxy.service; then
+        # Both off again, so a port nothing answers on does not keep starting a failing service.
+        # The key, the token and the files stay: once the cause is fixed, running this again on
+        # the same commit asks for nothing but the first-install question.
+        systemctl disable --now relay-key-proxy.socket relay-key-proxy.service >/dev/null 2>&1 || true
+        die "the service did not start, and both units are off again. Read journalctl -u relay-key-proxy,
+    then run this again with the same --user and --commit (the key is kept; it is not asked for again)."
+    fi
     # What the next update is compared with, and may only replace once you approve it.
     rm -rf -- "$state/installed"
     cp -R --no-dereference --preserve=mode -- "$stage" "$state/installed"
@@ -295,12 +322,14 @@ nothing_runs_as() {
     fi
 }
 
-# cargo as root, run from the root-owned cache (cargo reads .cargo/config files from where it
-# runs, so none from the clone applies), with a clean environment and a root-owned cargo home.
-root_cargo() {
-    local cache=$1
-    shift
-    (cd "$cache" && env -i PATH=/usr/bin:/bin HOME=/root LC_ALL=C CARGO_HOME="$cache/cargo" CARGO_TARGET_DIR="$cache/target" \
+# cargo as the build account (setpriv: no login, no PAM session), run from its own folder
+# (cargo reads .cargo/config files from where it runs, so none from the clone applies), with a
+# clean environment, and its cargo home and target in that folder.
+build_cargo() {
+    local build=$1 uid=$2 gid=$3
+    shift 3
+    (cd "$build" && setpriv --reuid="$uid" --regid="$gid" --init-groups --reset-env -- \
+        /usr/bin/env -i PATH=/usr/bin:/bin HOME="$build" LC_ALL=C CARGO_HOME="$build/cargo" CARGO_TARGET_DIR="$build/target" \
         /usr/bin/cargo "$@")
 }
 

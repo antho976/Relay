@@ -28,6 +28,8 @@ main() {
         "$libexec/relay-key-proxy" "$libexec/key-proxy-review" "$libexec/key-proxy-uninstall"
     rmdir -- "$libexec" 2>/dev/null || true
     rm -rf -- /var/cache/relay-key-proxy /var/lib/relay-key-proxy
+    # The account the install builds as.
+    ! getent passwd relay-key-proxy-build >/dev/null || userdel relay-key-proxy-build
     systemctl daemon-reload
     # As the person, without a login (setpriv opens no PAM session), detached and time-limited.
     timeout 10 setsid setpriv --reuid="$uid" --regid="$gid" --init-groups --reset-env -- \

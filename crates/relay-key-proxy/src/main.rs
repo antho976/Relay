@@ -42,6 +42,8 @@ const MAX_REFUSALS: usize = 16;
 const HEAD_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const PER_ADDRESS_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long one address gets to answer before the next is also tried (RFC 8305's figure).
+const CONNECT_STAGGER: Duration = Duration::from_millis(250);
 /// Longest silence in either direction once a request is under way. Anthropic's streams send a
 /// ping well within it while a model thinks.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
@@ -80,29 +82,51 @@ impl Upstream {
         let timed_out = || std::io::Error::new(std::io::ErrorKind::TimedOut, "connecting to api.anthropic.com timed out");
         match self {
             Upstream::Anthropic(tls) => {
-                // Each address on its own clock: a network that silently drops IPv6 must not use up
-                // the whole budget before IPv4 is tried.
                 let addrs: Vec<SocketAddr> =
                     tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::lookup_host((UPSTREAM, 443))).await.map_err(|_| timed_out())??.collect();
-                let mut tcp = None;
-                let mut last = std::io::Error::new(std::io::ErrorKind::NotFound, "api.anthropic.com has no address");
-                for addr in addrs {
-                    match tokio::time::timeout(PER_ADDRESS_TIMEOUT, TcpStream::connect(addr)).await {
-                        Ok(Ok(stream)) => {
-                            tcp = Some(stream);
-                            break;
-                        }
-                        Ok(Err(error)) => last = error,
-                        Err(_) => last = timed_out(),
-                    }
-                }
-                let tcp = tcp.ok_or(last)?;
+                let tcp = connect_first(addrs).await?;
                 tcp.set_nodelay(true)?;
                 let name = rustls::pki_types::ServerName::try_from(UPSTREAM).expect("a valid DNS name");
                 Ok(Box::new(tokio::time::timeout(CONNECT_TIMEOUT, tls.connect(name, tcp)).await.map_err(|_| timed_out())??))
             }
             #[cfg(test)]
             Upstream::Plain(addr) => Ok(Box::new(TcpStream::connect(addr).await?)),
+        }
+    }
+}
+
+/// The first of these addresses to connect. Attempts start in the resolver's order, each
+/// [`CONNECT_STAGGER`] after the one before unless that has already failed, and each on its own
+/// clock ([`PER_ADDRESS_TIMEOUT`]), so a network that silently drops one address family costs a
+/// request a quarter of a second, not that whole timeout, and never the whole budget.
+async fn connect_first(addrs: Vec<SocketAddr>) -> std::io::Result<TcpStream> {
+    let mut last = std::io::Error::new(std::io::ErrorKind::NotFound, "api.anthropic.com has no address");
+    let mut pending = addrs.into_iter();
+    // Dropped on return: the attempts still running are abandoned with it.
+    let mut attempts = tokio::task::JoinSet::new();
+    loop {
+        if let Some(addr) = pending.next() {
+            attempts.spawn(tokio::time::timeout(PER_ADDRESS_TIMEOUT, TcpStream::connect(addr)));
+        }
+        if attempts.is_empty() {
+            return Err(last);
+        }
+        // Wait for the next attempt to settle, but only for the stagger while another address
+        // could still be started.
+        let settled = if !pending.as_slice().is_empty() {
+            match tokio::time::timeout(CONNECT_STAGGER, attempts.join_next()).await {
+                Ok(settled) => settled,
+                Err(_) => continue,
+            }
+        } else {
+            attempts.join_next().await
+        };
+        match settled {
+            Some(Ok(Ok(Ok(stream)))) => return Ok(stream),
+            Some(Ok(Ok(Err(error)))) => last = error,
+            Some(Ok(Err(_))) => last = std::io::Error::new(std::io::ErrorKind::TimedOut, "connecting to api.anthropic.com timed out"),
+            Some(Err(join)) => last = std::io::Error::other(join),
+            None => return Err(last),
         }
     }
 }
@@ -651,6 +675,29 @@ mod tests {
         // Claude Code's liveness check is answered here, with no token.
         assert!(send(proxy, format!("HEAD /api/hello HTTP/1.1\r\nhost: {here}\r\n\r\n").as_bytes()).await.starts_with("HTTP/1.1 200"));
         assert!(seen.try_recv().is_err());
+    }
+
+    /// An address that never answers (a blackholed one, as an unrouted IPv6 is) ahead of one that
+    /// does delays the connection by the stagger, not by its own timeout; an address that refuses
+    /// at once costs nothing; none answering fails with the last error.
+    #[tokio::test]
+    async fn a_dead_address_ahead_of_a_live_one_costs_the_stagger_not_its_timeout() {
+        let live = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let live_addr = live.local_addr().unwrap();
+        // Nothing listens here: the connection is refused at once.
+        let refused = { let l = TcpListener::bind("127.0.0.1:0").await.unwrap(); l.local_addr().unwrap() };
+        // A documentation address (RFC 5737) is routed nowhere; where there is no route at all the
+        // attempt fails at once instead, and the test holds either way.
+        let blackhole: SocketAddr = "192.0.2.1:443".parse().unwrap();
+        let started = std::time::Instant::now();
+        let stream = connect_first(vec![blackhole, refused, live_addr]).await.unwrap();
+        assert_eq!(stream.peer_addr().unwrap(), live_addr);
+        assert!(started.elapsed() < PER_ADDRESS_TIMEOUT, "took {:?}", started.elapsed());
+        let (_, from) = live.accept().await.unwrap();
+        assert_eq!(from, stream.local_addr().unwrap());
+        let error = connect_first(vec![refused]).await.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::ConnectionRefused);
+        assert_eq!(connect_first(Vec::new()).await.unwrap_err().kind(), std::io::ErrorKind::NotFound);
     }
 
     /// A head whose lines end in a bare LF is measured as it is parsed: what follows is body.

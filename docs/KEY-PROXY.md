@@ -22,7 +22,8 @@ Claude (you) ──x-api-key: <pass token>──▶ 127.0.0.1:7445  relay-key-pr
 - **The pass token** in `~/.config/relay/key-proxy-token` is what Claude sends. The proxy serves one
   request per connection and forwards it only when it carries exactly that token, is addressed to
   `127.0.0.1:7445` (or `localhost:7445`), and goes to one of the endpoints Claude Code uses (`POST /v1/messages`,
-  `POST /v1/messages/count_tokens`, `GET /v1/models`) with a body of a stated length. It sends it to
+  `POST /v1/messages/count_tokens`, `GET /v1/models` and `GET /v1/models/<id>`) with a body of a stated
+  length. It sends it to
   `api.anthropic.com` only, over TLS checked against roots built into the binary (a certificate
   added to the system store cannot intercept it), with a fixed list of headers and the token
   swapped for the key. Everything else is answered by the proxy and goes nowhere. Admin keys
@@ -168,8 +169,10 @@ root login on a real text console, from a root-owned clone of a commit you name 
    no drop-in) before anything starts, with both kept switched off until then.
 
    It copies exactly the listed files out of the clone, each checked to be printable ASCII, and
-   builds that copy alone, from outside it (so no `.cargo/config` applies), with a root-owned cargo
-   home and `--locked`. It refuses a build script, a source file outside the folder (asked of
+   builds that copy alone, as its own system account (`relay-key-proxy-build`, which cannot log in:
+   the crates' build scripts run during a build, and a bad release of one then reaches that
+   account's folder, not root), from outside the copy (so no `.cargo/config` applies), with that
+   account's cargo home and `--locked`. It refuses a build script, a source file outside the folder (asked of
    `cargo metadata`, which runs nothing, and checked again in the files the compiler read for the
    proxy itself), a proc
    macro, and any dependency not from crates.io. It then asks for the key with no time limit and
@@ -180,6 +183,11 @@ root login on a real text console, from a root-owned clone of a commit you name 
    starts the socket and the service, keeps a copy of what it installed for the next update to be
    compared with, and makes one free call (`GET /v1/models`) through the proxy to tell you whether
    Anthropic accepts the key.
+
+   Should the service not start (the units' isolation has been checked setting by setting, but
+   only an install runs them as root installs them), the installer switches both units off again
+   and says so. Read `journalctl -u relay-key-proxy`, fix the cause, and run the same command
+   again: the key is kept and not asked for again, and the same commit needs no second review.
 5. `reboot` from that console, and turn on **Use API key** when launching a Claude session.
 
 ### Updating
@@ -237,7 +245,8 @@ every agent could read it.
   the console every key you replace or remove.
 - **The code you choose.** The service runs what the commit you picked builds, with its crates. You
   read it before it builds (first install) or approve its diff (an update); the script prints the
-  binary's sha256 for your records. The crates' own build scripts run as root during the build.
+  binary's sha256 for your records. The crates' own build scripts run during the build, as the
+  build account, never as root.
 - **Anthropic's side**, including Cloudflare, which ends TLS for it.
 - **Anywhere you paste the key yourself.** Relay blanks `sk-ant-` keys in terminal output,
   transcript replies and audit rows (`crates/relay-core/src/redact.rs`), as a best effort.

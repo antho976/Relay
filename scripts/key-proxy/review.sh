@@ -35,7 +35,7 @@ main() {
     local state=/var/lib/relay-key-proxy cache=/var/cache/relay-key-proxy
     [[ -d $state/installed ]] || die "nothing is installed to compare with: for a first install, read the files as docs/KEY-PROXY.md says"
 
-    install -d -o root -g root -m 0700 "$cache"
+    install -d -o root -g root -m 0755 "$cache"
     local work
     work=$(mktemp -d "$cache/review.XXXXXX")
     trap 'rm -rf -- "$work"' EXIT
