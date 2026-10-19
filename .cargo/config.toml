@@ -5,3 +5,16 @@
 # `CARGO_BUILD_JOBS` overrides it for one build.
 [build]
 jobs = 8
+
+# Every test and `cargo run` binary starts without git's repository variables
+# (`git rev-parse --local-env-vars`; relay_core::check::GIT_LOCAL_ENV). Run from a git hook, a
+# test inherits them, and its `git -C <tempdir>` fixtures then write the real repository: on
+# 2026-10-19 the pre-push check left `core.bare = true` and a Fixture user in the shared
+# .git/config and broke git in every worktree. `check.rs` tests that this list stays complete.
+[target.'cfg(all())']
+runner = ["env",
+  "-u", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "-u", "GIT_CONFIG", "-u", "GIT_CONFIG_PARAMETERS",
+  "-u", "GIT_CONFIG_COUNT", "-u", "GIT_OBJECT_DIRECTORY", "-u", "GIT_DIR", "-u", "GIT_WORK_TREE",
+  "-u", "GIT_IMPLICIT_WORK_TREE", "-u", "GIT_GRAFT_FILE", "-u", "GIT_INDEX_FILE",
+  "-u", "GIT_NO_REPLACE_OBJECTS", "-u", "GIT_REPLACE_REF_BASE", "-u", "GIT_PREFIX",
+  "-u", "GIT_SHALLOW_FILE", "-u", "GIT_COMMON_DIR"]

@@ -7,6 +7,42 @@
 
 use std::fs;
 use std::path::Path;
+use std::process::Command;
+
+/// What git exports to a hook that points at *its* repository (`git rev-parse
+/// --local-env-vars`). A check inheriting them sends every `git` it starts there: a test's
+/// `git -C <tempdir> config user.name Fixture` writes the pushing repository's config instead.
+/// On 2026-10-19 that left `core.bare = true` and a Fixture user in the shared `.git/config`
+/// and broke git in every worktree. [`check_command`] clears them, and so does the runner in
+/// `.cargo/config.toml` for every test binary, whatever runs it.
+pub const GIT_LOCAL_ENV: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+];
+
+/// The pre-push check `command`, run by `sh` in `worktree` with git's repository variables
+/// ([`GIT_LOCAL_ENV`]) cleared and its output on one stream, in the order it was written.
+pub fn check_command(command: &str, worktree: &Path) -> Command {
+    let mut check = Command::new("sh");
+    check.arg("-c").arg(format!("exec 2>&1\n{command}")).current_dir(worktree).stdin(std::process::Stdio::null());
+    for name in GIT_LOCAL_ENV {
+        check.env_remove(name);
+    }
+    check
+}
 
 /// The test command for the build tool at `root`, or `None` when nothing there names one.
 /// Reads a handful of files at the root and never walks the tree, so it is cheap enough to
@@ -55,7 +91,7 @@ pub fn pushes_commits(refs: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect, pushes_commits};
+    use super::{check_command, detect, pushes_commits, GIT_LOCAL_ENV};
 
     #[test]
     fn each_build_tool_names_its_tests() {
@@ -85,5 +121,29 @@ mod tests {
         assert!(!pushes_commits(""));
         assert!(!pushes_commits(&format!("(delete) {zero} refs/heads/old {sha}\n")));
         assert!(pushes_commits(&format!("refs/heads/main {sha} refs/heads/main {zero}\n")));
+    }
+
+    /// Every variable this git says points at a repository is cleared, by the push check and by
+    /// the test runner alike. A git that adds one fails here, not in someone's `.git/config`.
+    #[test]
+    fn the_check_and_the_test_runner_clear_every_repository_variable() {
+        let listed = std::process::Command::new("git").args(["rev-parse", "--local-env-vars"]).output().unwrap();
+        assert!(listed.status.success());
+        let listed = String::from_utf8(listed.stdout).unwrap();
+        for name in listed.lines().map(str::trim).filter(|name| !name.is_empty()) {
+            assert!(GIT_LOCAL_ENV.contains(&name), "git points {name} at the pushing repository, and nothing clears it");
+        }
+
+        let check = check_command("true", std::path::Path::new("."));
+        let cleared: Vec<_> = check.get_envs().filter(|(_, value)| value.is_none()).map(|(name, _)| name.to_str().unwrap().to_owned()).collect();
+        let runner = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../.cargo/config.toml")).unwrap();
+        for name in GIT_LOCAL_ENV {
+            assert!(cleared.iter().any(|c| c == name), "the push check keeps {name}");
+            assert!(runner.contains(&format!("\"-u\", \"{name}\"")), "the test runner keeps {name}");
+        }
+        // And the runner applies: this test binary was started without them.
+        for name in GIT_LOCAL_ENV {
+            assert!(std::env::var_os(name).is_none(), "{name} reached a test binary");
+        }
     }
 }
