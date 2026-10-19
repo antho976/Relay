@@ -11,11 +11,11 @@
 # tree you approved with the key-proxy-review the last install left. Never run this script from a
 # clone before you have read it (first install) or approved it (an update).
 #
-#   (powered on with systemd.unit=multi-user.target systemd.mask=user@<uid>.service
-#   systemd.mask=bluetooth.service, logged in as root on a text console:)
+#   (powered on with the kernel line docs/KEY-PROXY.md gives, so nothing of yours runs, and
+#   logged in as root on a text console:)
 #   git clone --no-tags https://github.com/antho976/Relay /root/relay-key-proxy
 #   cd /root/relay-key-proxy && git checkout --detach <full 40-character commit>
-#   first install: read the files docs/KEY-PROXY.md lists, with less -U
+#   first install: read the files docs/KEY-PROXY.md lists, with less -U -N
 #   an update:     /usr/local/libexec/relay/key-proxy-review /root/relay-key-proxy
 #   bash scripts/key-proxy/install.sh --user <login> --commit <same commit>                  # install or update
 #   bash scripts/key-proxy/install.sh --user <login> --commit <same commit> --replace-key    # new key
@@ -164,7 +164,6 @@ $sources"
         [[ $key =~ ^sk-ant-api[0-9]{2}-[A-Za-z0-9_-]{20,}$ ]] || { key=""; die "that is not an ordinary Anthropic API key (sk-ant-api...); admin keys are refused"; }
     fi
 
-    # The socket stays up throughout: PID 1 keeps the port while the service is replaced.
     # Off, socket included, until systemd's reading of the new units is checked: nothing may start
     # the new program under them before that, and on any failure below both stay off.
     systemctl disable --now relay-key-proxy.socket relay-key-proxy.service >/dev/null 2>&1 || true
@@ -249,8 +248,11 @@ EXPECTED
     sleep 1
     systemctl is-active --quiet relay-key-proxy.service || die "the service did not start: journalctl -u relay-key-proxy"
     # What the next update is compared with, and may only replace once you approve it.
-    rm -rf -- "$state/installed" "$state/approved"
+    rm -rf -- "$state/installed"
     cp -R --no-dereference --preserve=mode -- "$stage" "$state/installed"
+    # The installed tree stays approved, so running this again on the same commit (a new key, a
+    # new token) needs no second review; any other tree still does.
+    tree_hash "$stage" > "$state/approved"
     printf '%s\n' "$commit" > "$state/commit"
 
     # One free call through the proxy, as a session would make it: proves the key and the path.

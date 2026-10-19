@@ -41,6 +41,7 @@ const MAX_CONNECTIONS: usize = 256;
 const MAX_REFUSALS: usize = 16;
 const HEAD_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const PER_ADDRESS_TIMEOUT: Duration = Duration::from_secs(5);
 /// Longest silence in either direction once a request is under way. Anthropic's streams send a
 /// ping well within it while a model thinks.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
@@ -79,7 +80,23 @@ impl Upstream {
         let timed_out = || std::io::Error::new(std::io::ErrorKind::TimedOut, "connecting to api.anthropic.com timed out");
         match self {
             Upstream::Anthropic(tls) => {
-                let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((UPSTREAM, 443))).await.map_err(|_| timed_out())??;
+                // Each address on its own clock: a network that silently drops IPv6 must not use up
+                // the whole budget before IPv4 is tried.
+                let addrs: Vec<SocketAddr> =
+                    tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::lookup_host((UPSTREAM, 443))).await.map_err(|_| timed_out())??.collect();
+                let mut tcp = None;
+                let mut last = std::io::Error::new(std::io::ErrorKind::NotFound, "api.anthropic.com has no address");
+                for addr in addrs {
+                    match tokio::time::timeout(PER_ADDRESS_TIMEOUT, TcpStream::connect(addr)).await {
+                        Ok(Ok(stream)) => {
+                            tcp = Some(stream);
+                            break;
+                        }
+                        Ok(Err(error)) => last = error,
+                        Err(_) => last = timed_out(),
+                    }
+                }
+                let tcp = tcp.ok_or(last)?;
                 tcp.set_nodelay(true)?;
                 let name = rustls::pki_types::ServerName::try_from(UPSTREAM).expect("a valid DNS name");
                 Ok(Box::new(tokio::time::timeout(CONNECT_TIMEOUT, tls.connect(name, tcp)).await.map_err(|_| timed_out())??))

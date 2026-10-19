@@ -34,7 +34,9 @@ Claude (you) ──x-api-key: <pass token>──▶ 127.0.0.1:7445  relay-key-pr
   `apiKeyHelper: /usr/bin/cat ~/.config/relay/key-proxy-token`. A launch is refused
   (`session.key_proxy`) while the token file is missing or nothing answers on the port.
 - **The port** is held by PID 1 (`relay-key-proxy.socket`) and handed to the service, so no other
-  program can take it, and collect the token, while the service is stopped or replaced.
+  program can take it, and collect the token, while the service restarts. (The installer turns both
+  off while it works, when nothing of yours runs; should the service fail to start repeatedly, the
+  socket gives up the port too: still only the token.)
 - **The service** may connect only to loopback and Anthropic's published API ranges
   (`160.79.104.0/23`, `2607:6bc0::/48`), and marks itself undumpable. That narrows where a
   tampered build could send anything, but it is no defence on its own (it could still answer its
@@ -123,8 +125,9 @@ root login on a real text console, from a root-owned clone of a commit you name 
 **The first install**
 
 1. Power off with the button, turn on, and in the boot menu edit the entry and add
-   `systemd.unit=multi-user.target systemd.mask=user@1000.service systemd.mask=bluetooth.service
-   systemd.mask=sshd.service systemd.mask=tailscaled.service systemd.ssh_auto=no` to the kernel line
+   `systemd.unit=multi-user.target systemd.mask=user@1000.service systemd.mask=user-runtime-dir@1000.service
+   systemd.mask=bluetooth.service systemd.mask=sshd.service systemd.mask=tailscaled.service
+   systemd.ssh_auto=no` to the kernel line
    (1000 is your user id). The desktop does not start, nor do your lingering user services,
    Bluetooth, SSH (its socket-activated local listener included) or Tailscale, so nothing of yours can run to watch the screen, listen, type, or answer for the
    console.
@@ -226,6 +229,12 @@ every agent could read it.
   program running as you can use that session to make keys of its own. Sign in there from your
   phone only.
 - **Root**, and anyone who can become root: they can read the credential.
+- **What happened before.** If anything ever had root on this PC (an agent that caught your
+  password while you were in `wheel`, say), it could have left something behind that no checklist
+  here would find. If you have reason to think so, start from a clean system.
+- **Old copies of the encrypted key.** Snapshots of `/` (snapper, and the boot entries made from
+  them) keep earlier copies of `/etc/credstore.encrypted`. They are root's only; still, revoke in
+  the console every key you replace or remove.
 - **The code you choose.** The service runs what the commit you picked builds, with its crates. You
   read it before it builds (first install) or approve its diff (an update); the script prints the
   binary's sha256 for your records. The crates' own build scripts run as root during the build.

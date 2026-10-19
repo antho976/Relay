@@ -834,12 +834,17 @@ pub fn api_key_helper(token: &Path) -> String {
 /// The `--settings` value for a Claude launch: inline JSON, which Claude accepts in place of a
 /// file path, so the command it runs every turn cannot be rewritten by the agent it serves.
 /// `api_key_helper` is set for a `use_api_key` session, which then talks to the key proxy; the
-/// launch's own settings outrank the checkout's, so a repository cannot point it elsewhere.
+/// launch's own settings outrank the checkout's, so a repository cannot point it elsewhere, nor
+/// through a proxy of its own (NO_PROXY keeps loopback direct).
 pub fn claude_settings(api_key_helper: Option<&str>) -> String {
     let mut settings = json!({"statusLine": {"type": "command", "command": claude_statusline_script(), "padding": 0}});
     if let Some(helper) = api_key_helper {
         settings["apiKeyHelper"] = json!(helper);
-        settings["env"] = json!({"ANTHROPIC_BASE_URL": format!("http://127.0.0.1:{KEY_PROXY_PORT}")});
+        settings["env"] = json!({
+            "ANTHROPIC_BASE_URL": format!("http://127.0.0.1:{KEY_PROXY_PORT}"),
+            "NO_PROXY": "127.0.0.1,localhost",
+            "no_proxy": "127.0.0.1,localhost",
+        });
     }
     settings.to_string()
 }
@@ -1035,7 +1040,8 @@ mod tests {
         assert_eq!(helper, "/usr/bin/cat '/home/a b/.config/relay/key-proxy-token'");
         let settings: serde_json::Value = serde_json::from_str(&super::claude_settings(Some(&helper))).unwrap();
         assert_eq!(settings["apiKeyHelper"], helper);
-        assert_eq!(settings["env"], json!({"ANTHROPIC_BASE_URL": format!("http://127.0.0.1:{}", super::KEY_PROXY_PORT)}));
+        assert_eq!(settings["env"], json!({"ANTHROPIC_BASE_URL": format!("http://127.0.0.1:{}", super::KEY_PROXY_PORT),
+            "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"}));
         assert_eq!(settings["statusLine"]["command"], claude_statusline_script());
         // The proxy's socket listens where sessions are sent (the proxy's own test checks its side).
         let socket = include_str!("../../../scripts/key-proxy/relay-key-proxy.socket");
