@@ -95,8 +95,9 @@ root login on a real text console, from a root-owned clone of a commit you name 
       > /etc/polkit-1/rules.d/40-admin-nobody.rules
   ```
 
-  Check it from your desktop afterwards: an admin prompt should name `nobody`, and no password can
-  satisfy it. Never type root's password into one.
+  `nobody` must be locked, or an empty password could satisfy such a prompt: at the root console,
+  `passwd -S nobody` must show `L`. Check it from your desktop afterwards: an admin prompt should
+  name `nobody`, and no password can satisfy it. Never type root's password into one.
 - **Close the other ways to root.** Nothing outside your home may be yours where root could run
   it, on any filesystem (this PC has several):
 
@@ -106,8 +107,10 @@ root login on a real text console, from a root-owned clone of a commit you name 
   ```
 
   Give anything it lists in a system folder to root (on this PC, `/usr/local/bin/lific` is yours:
-  `chown root:root /usr/local/bin/lific`). Also: `id <you>` should list no group that a rule in
-  `/etc/polkit-1/rules.d` or `/usr/share/polkit-1/rules.d` grants actions to; `systemctl is-enabled
+  `chown root:root /usr/local/bin/lific`; caches under `/var/tmp` are expected and harmless).
+  Also: `id <you>` should list no group that a rule in `/etc/polkit-1/rules.d`,
+  `/run/polkit-1/rules.d`, `/usr/local/share/polkit-1/rules.d` or `/usr/share/polkit-1/rules.d`
+  grants actions to; `systemctl is-enabled
   sshd` should say disabled (agents can write your `~/.ssh/authorized_keys`); and if you use
   Tailscale, you must not be its operator (`tailscale set --operator=`), with Tailscale SSH off.
 - **Make sure the console boot has network.** The clone and the build need it. A Wi-Fi password
@@ -119,9 +122,9 @@ root login on a real text console, from a root-owned clone of a commit you name 
 
 1. Power off with the button, turn on, and in the boot menu edit the entry and add
    `systemd.unit=multi-user.target systemd.mask=user@1000.service systemd.mask=bluetooth.service
-   systemd.mask=sshd.service systemd.mask=tailscaled.service` to the kernel line (1000 is your user
-   id). The desktop does not start, nor do your lingering user services, Bluetooth, SSH or
-   Tailscale, so nothing of yours can run to watch the screen, listen, type, or answer for the
+   systemd.mask=sshd.service systemd.mask=tailscaled.service systemd.ssh_auto=no` to the kernel line
+   (1000 is your user id). The desktop does not start, nor do your lingering user services,
+   Bluetooth, SSH (its socket-activated local listener included) or Tailscale, so nothing of yours can run to watch the screen, listen, type, or answer for the
    console.
 2. Log in as **root** on the console. Not as yourself followed by `su` or `sudo`: the script
    checks the login itself. Then `pgrep -u <you>` must print nothing; if it prints anything, stop

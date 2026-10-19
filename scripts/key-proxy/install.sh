@@ -108,6 +108,21 @@ main() {
         [[ $answer == yes ]] || die "stopped; nothing was installed"
     fi
 
+    # The two units in the one shape this accepts, with the values that matter exactly as shipped.
+    local service=$stage/key-proxy/relay-key-proxy.service socket=$stage/key-proxy/relay-key-proxy.socket
+    check_unit "$service" "Unit Service Install" "Description Documentation Requires After Wants ExecStart \
+DynamicUser LoadCredentialEncrypted:2 Restart RestartSec NoNewPrivileges CapabilityBoundingSet AmbientCapabilities \
+ProtectSystem ProtectHome PrivateTmp PrivateDevices PrivateIPC ProtectProc ProcSubset ProtectKernelTunables \
+ProtectKernelModules ProtectKernelLogs ProtectControlGroups ProtectClock ProtectHostname RestrictAddressFamilies \
+IPAddressDeny IPAddressAllow RestrictNamespaces RestrictRealtime RestrictSUIDSGID LockPersonality \
+MemoryDenyWriteExecute RemoveIPC SystemCallArchitectures SystemCallFilter:2 UMask LimitCORE SocketBindDeny WantedBy"
+    check_unit "$socket" "Unit Socket Install" "Description ListenStream Accept NoDelay WantedBy"
+    local exact
+    for exact in "$service:ExecStart=/usr/local/libexec/relay/relay-key-proxy" "$service:DynamicUser=yes" \
+        "$socket:ListenStream=127.0.0.1:7445" "$socket:Accept=no"; do
+        grep -qxF -- "${exact#*:}" "${exact%%:*}" || die "${exact%%:*} must say ${exact#*:}"
+    done
+
     # Nothing in them may make cargo take code from elsewhere: a build script, a source file outside
     # the folder (asked of cargo metadata, which runs nothing), a proc macro, or a dependency not
     # from crates.io.
@@ -156,7 +171,9 @@ $sources"
     fi
 
     # The socket stays up throughout: PID 1 keeps the port while the service is replaced.
-    systemctl stop relay-key-proxy.service 2>/dev/null || true
+    # Off, socket included, until systemd's reading of the new units is checked: nothing may start
+    # the new program under them before that, and on any failure below both stay off.
+    systemctl disable --now relay-key-proxy.socket relay-key-proxy.service >/dev/null 2>&1 || true
     install -d -o root -g root -m 0755 "$libexec"
     install -o root -g root -m 0755 "$binary" "$libexec/relay-key-proxy"
     install -o root -g root -m 0755 "$stage/key-proxy/review.sh" "$libexec/key-proxy-review"
@@ -182,28 +199,41 @@ $sources"
         || die "could not write $token_dir/key-proxy-token"
 
     systemctl daemon-reload
-    # What systemd made of the unit, not just what its lines say: systemd takes the last of a
-    # repeated setting and allows spaces around "=", so check the result before it runs.
-    local prop want got
-    while read -r prop want; do
-        got=$(systemctl show -p "$prop" --value relay-key-proxy.service)
-        [[ $got == "$want" ]] || die "relay-key-proxy.service has $prop=$got, not ${want:-nothing}; nothing was started"
+    # And what systemd made of them, a second look past the file check above: nothing that runs as
+    # root, nothing that runs as anyone but the throwaway user, the one program, the one listener.
+    # A DynamicUser unit reads back User= and Group= as its own name, and a static user of that
+    # name would be used instead of a throwaway one, so there must be none.
+    ! getent passwd relay-key-proxy >/dev/null || die "a user named relay-key-proxy exists; DynamicUser would use it"
+    local unit prop want got
+    while read -r unit prop want; do
+        got=$(systemctl show -p "$prop" --value "relay-key-proxy.$unit")
+        [[ $got == "$want" ]] || die "relay-key-proxy.$unit has $prop=$got, not ${want:-nothing}; nothing was started"
     done <<'EXPECTED'
-DynamicUser yes
-User
-Group
-NoNewPrivileges yes
-ProtectSystem strict
-ProtectHome yes
-PrivateDevices yes
-ProtectProc invisible
-LimitCORE 0
-ExecStartPre
-ExecStartPost
-ExecStop
-ExecStopPost
-ExecReload
+service DynamicUser yes
+service User relay-key-proxy
+service Group relay-key-proxy
+service SupplementaryGroups
+service NoNewPrivileges yes
+service ProtectSystem strict
+service ProtectHome yes
+service PrivateDevices yes
+service ProtectProc invisible
+service LimitCORE 0
+service ExecCondition
+service ExecStartPre
+service ExecStartPost
+service ExecStop
+service ExecStopPost
+service ExecReload
+socket Listen 127.0.0.1:7445 (Stream)
+socket ExecStartPre
+socket ExecStartPost
+socket ExecStopPre
+socket ExecStopPost
 EXPECTED
+    got=$(systemctl show -p ExecStartEx --value relay-key-proxy.service)
+    [[ $got == "{ path=$libexec/relay-key-proxy ; argv[]=$libexec/relay-key-proxy ; flags= ;"* && $got != *"{"*"{"* ]] \
+        || die "relay-key-proxy.service starts something other than $libexec/relay-key-proxy, plainly; nothing was started"
     systemctl enable --now relay-key-proxy.socket >/dev/null
     systemctl enable relay-key-proxy.service >/dev/null
     systemctl restart relay-key-proxy.service
@@ -295,6 +325,33 @@ $(printf '  %s\n' "${STAGED[@]}")"
             || die "$file holds a byte other than printable ASCII, a tab, a trailing space or a line over 200 characters"
         install -D -m 0644 -- "$from" "$dest/$file"
     done
+}
+
+# A unit file in the one shape this install accepts: sections and keys from a fixed list, each key
+# once (or up to the count after its colon), written Key=value with nothing around the "=", no
+# continued lines, comments only as whole lines starting with "#". systemd reads looser files than
+# this; anything it could read differently from how the file looks is refused.
+check_unit() {
+    local file=$1 sections=" $2 " keys=" $3 " line key max count seen=" "
+    while IFS= read -r line; do
+        [[ -z $line || $line == \#* ]] && continue
+        if [[ $line =~ ^\[([A-Za-z]+)\]$ ]]; then
+            [[ $sections == *" ${BASH_REMATCH[1]} "* ]] || die "$file: section [${BASH_REMATCH[1]}] is not allowed"
+            continue
+        fi
+        [[ $line =~ ^([A-Za-z]+)= && $line != *\\ ]] || die "$file: a line not in the accepted shape: $line"
+        key=${BASH_REMATCH[1]}
+        if [[ $keys == *" $key "* ]]; then
+            max=1
+        elif [[ $keys =~ \ $key:([0-9]+)\  ]]; then
+            max=${BASH_REMATCH[1]}
+        else
+            die "$file: $key is not allowed"
+        fi
+        count=$(tr ' ' '\n' <<<"$seen" | grep -cxF -- "$key" || true)
+        ((count < max)) || die "$file: $key appears more than $max time(s)"
+        seen+="$key "
+    done < "$file"
 }
 
 # One hash for a staged tree: every file's path and content. (Kept identical to review.sh.)
