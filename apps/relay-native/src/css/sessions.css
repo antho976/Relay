@@ -69,50 +69,78 @@ button.notification-open:hover { background: @wash; }
 /* /adb-lease */
 
 /* sessions-2 */
-/* Agent settings: a popover anchored to the pane's sliders key, not a side sheet. */
-popover.agent-settings > contents { background: @slab; border: 1px solid @strong; border-radius: 2px; padding: 0; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45); }
-popover.agent-settings > arrow { background: @slab; border: 1px solid @strong; }
-.agent-menu { padding: 12px 10px 10px 10px; }
-/* Clear context and Close, pinned under the part that scrolls. */
-.agent-menu-foot { padding: 4px 10px 6px 10px; border-top: 1px solid @edge; }
-.agent-menu-tools { margin-top: 10px; }
-popover.agent-settings button.agent-menu-tool { background: transparent; border: 1px solid @edge; color: @ink; min-height: 30px; padding: 0 6px; border-radius: 2px; }
-popover.agent-settings button.agent-menu-tool:hover { background: @wash; border-color: @strong; }
-button.agent-menu-tool image { color: @secondary; }
-button.agent-menu-tool:hover image { color: @ink; }
-button.agent-menu-tool .agent-menu-caption { font-size: 12px; }
-.agent-menu-fact { padding: 3px 4px; }
-.agent-menu-fact .mono { color: @ink; font-size: 12px; }
-.agent-menu-fact .mono.unset { color: @secondary; }
+/* Agent settings: a popover anchored to the pane's sliders key. Opaque, like every menu that
+   floats over content; inside, settings sit in cards of rows the way Settings groups them. */
+popover.agent-settings > contents { background: @slab_solid; border: 1px solid @strong; border-radius: 12px; padding: 0; box-shadow: 0 14px 36px alpha(black, 0.5), 0 2px 8px alpha(black, 0.3); }
+popover.agent-settings > arrow { background: @slab_solid; border: 1px solid @strong; }
+.agent-menu { padding: 14px 12px 12px 12px; }
+/* When the groups run past the footer, the edge fades instead of cutting a row in half. */
+popover.agent-settings scrolledwindow > undershoot.bottom { background-image: linear-gradient(to top, @slab_solid, alpha(@slab_solid, 0)); background-size: 100% 36px; background-position: bottom; background-repeat: no-repeat; }
+popover.agent-settings scrolledwindow > undershoot.top { background-image: linear-gradient(to bottom, @slab_solid, alpha(@slab_solid, 0)); background-size: 100% 24px; background-position: top; background-repeat: no-repeat; }
 /* The popover lives under the pane header in the widget tree; undo the header's 22px keys. */
-popover.agent-settings button { min-height: 28px; min-width: 0; padding: 0 10px; font-size: 12px; }
+popover.agent-settings button { min-height: 28px; min-width: 0; padding: 0 10px; font-size: 12px; border-radius: 8px; }
+
+/* Identity: name and the strip's state word, then provider and role, then where it works. */
 .agent-menu-head { padding: 0 4px; }
-.agent-menu-title { color: @ink; font-size: 15px; font-weight: 600; }
-.agent-menu-state { font-family: 'Fira Sans Condensed'; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: @secondary; padding: 1px 6px; border: 1px solid @edge; border-radius: 2px; }
-.agent-menu-state.live { color: @live; border-color: alpha(@live, 0.45); }
-.agent-menu-state.held { color: @held; border-color: alpha(@held, 0.45); }
-.agent-menu-meta { color: @secondary; font-size: 12px; padding: 2px 4px 4px 4px; }
-.agent-menu-path { padding: 1px 4px; color: @faint; }
-.agent-menu-path label { color: @secondary; font-size: 11px; }
-.agent-menu-section { color: @faint; font-family: 'Fira Sans Condensed'; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; padding: 12px 4px 4px 4px; border-top: 1px solid @edge; margin-top: 8px; }
-popover.agent-settings button.agent-menu-row { background: transparent; border-color: transparent; color: @ink; min-height: 30px; padding: 0 6px; border-radius: 2px; }
-popover.agent-settings button.agent-menu-row:hover { background: @wash; }
-button.agent-menu-row:disabled { opacity: 0.45; }
-button.agent-menu-row image { color: @secondary; }
-button.agent-menu-row:hover image { color: @ink; }
+.agent-menu-title { color: @ink; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.agent-menu-state { font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; color: @secondary; padding: 2px 8px; border-radius: 999px; background: alpha(@ink, 0.07); }
+.agent-menu-state.live { color: @live; background: alpha(@live, 0.12); }
+.agent-menu-state.held { color: @held_text; background: alpha(@held, 0.14); }
+.agent-menu-state.waiting { color: @waiting; background: alpha(@waiting, 0.12); }
+.agent-menu-meta { color: @faint; font-size: 12px; padding: 1px 0 8px 0; }
+.agent-menu-path { padding: 2px 0; color: @ink_dim; }
+.agent-menu-path label { color: @secondary; }
+
+/* Brief and Designs share the row; the wall-position pair sits apart at its end. */
+.agent-menu-tools { margin-top: 12px; }
+popover.agent-settings button.agent-menu-tool { background: alpha(@ink, 0.055); border: 1px solid alpha(@ink, 0.11); color: @ink; min-height: 30px; padding: 0 10px; border-radius: 10px; }
+popover.agent-settings button.agent-menu-tool:hover { background: alpha(@ink, 0.09); border-color: alpha(@ink, 0.18); }
+button.agent-menu-tool image { color: @faint; }
+button.agent-menu-tool:hover image { color: @ink; }
+button.agent-menu-tool .agent-menu-caption { font-size: 12.5px; font-weight: 500; }
+.agent-menu-move { background: alpha(@ink, 0.03); border: 1px solid alpha(@ink, 0.07); border-radius: 10px; padding: 1px; }
+popover.agent-settings button.agent-menu-move-key { min-width: 30px; min-height: 26px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: @faint; }
+popover.agent-settings button.agent-menu-move-key:hover { background: alpha(@ink, 0.08); color: @ink; }
+popover.agent-settings button.agent-menu-move-key:disabled { opacity: 0.32; background: transparent; }
+
+/* A group: a heading in sentence case, a note on the right, then one card of rows. */
+.agent-menu-section { padding: 16px 4px 6px 4px; }
+.agent-menu-section-title { color: @secondary; font-size: 12px; font-weight: 600; }
+.agent-menu-section-note { color: @ink_dim; font-size: 11px; }
+.agent-menu-group { background: alpha(@ink, 0.035); border: 1px solid alpha(@ink, 0.07); border-radius: 10px; }
+.agent-menu-group > .agent-menu-item:not(:first-child) { border-top: 1px solid alpha(@ink, 0.06); }
+.agent-menu-switch { padding: 9px 12px; }
+.agent-menu-fact { padding: 8px 12px; }
+.agent-menu-fact .mono { color: @ink; }
+.agent-menu-fact .mono.unset { color: @faint; }
+.agent-menu-fields { padding: 10px 12px; }
 .agent-menu-caption { color: @ink; font-size: 13px; }
-.agent-menu-field { color: @secondary; font-size: 11px; padding: 0 2px; }
-.agent-menu-hint { color: @secondary; font-size: 11px; }
-.agent-menu entry { min-height: 28px; background: @screen; }
+.agent-menu-field { color: @faint; font-size: 11px; padding: 0 2px; }
+.agent-menu-hint { color: @faint; font-size: 11.5px; }
+.agent-menu-count { color: @faint; font-family: 'Geist Mono', monospace; font-size: 11.5px; }
+.agent-menu entry { min-height: 30px; }
 .agent-menu entry:disabled { opacity: 0.55; }
-.agent-menu-switch { padding: 4px 4px; }
-popover.agent-settings button.agent-menu-save { margin-top: 6px; min-height: 28px; padding: 0 16px; }
-.agent-menu-devices { margin: 2px 6px; }
-.agent-menu-phone { padding: 2px 6px 0 6px; }
-.agent-menu-phone label { font-family: 'Fira Mono', monospace; font-size: 11px; }
-popover.agent-settings button.agent-menu-danger:hover { background: alpha(@held, 0.14); }
-button.agent-menu-danger:hover label, button.agent-menu-danger:hover image { color: @held; }
-.agent-menu-confirm { margin: 4px 2px 2px 2px; padding: 10px; background: @console; border: 1px solid @edge; border-radius: 2px; }
+popover.agent-settings button.agent-menu-save { margin-top: 8px; min-height: 28px; padding: 0 16px; }
+
+/* Rows that act: inside a card they fill its width and square off, the card rounds them. */
+popover.agent-settings button.agent-menu-row { background: transparent; border: 0; color: @ink; min-height: 34px; padding: 0 8px; border-radius: 8px; }
+popover.agent-settings button.agent-menu-row:hover { background: alpha(@ink, 0.06); }
+popover.agent-settings .agent-menu-group button.agent-menu-row { min-height: 40px; padding: 0 12px; border-radius: 0; }
+button.agent-menu-row:disabled { opacity: 0.45; }
+button.agent-menu-row image { color: @faint; }
+button.agent-menu-row:hover image { color: @ink; }
+.agent-menu-reveal { padding: 2px 12px 12px 12px; }
+.agent-menu-devices { margin: 0 12px 8px 12px; }
+.agent-menu-phone { padding: 0 12px; }
+/* On the children, so the line takes no room while it has nothing to say. */
+.agent-menu-phone > label, .agent-menu-phone > button { margin-bottom: 10px; }
+.agent-menu-phone label { font-family: 'Geist Mono', monospace; font-size: 11px; }
+
+/* Clear context and Close, pinned under the part that scrolls. */
+.agent-menu-foot { padding: 6px 8px 8px 8px; border-top: 1px solid @edge; }
+popover.agent-settings button.agent-menu-danger:hover { background: alpha(@held, 0.12); }
+button.agent-menu-danger:hover label, button.agent-menu-danger:hover image { color: @held_text; }
+.agent-menu-confirm { margin: 4px 0 2px 0; padding: 12px; background: alpha(@held, 0.06); border: 1px solid alpha(@held, 0.24); border-radius: 10px; }
 .agent-menu-confirm checkbutton label { color: @secondary; font-size: 12px; }
 popover.agent-settings button.agent-menu-confirm-go { background: @held; border-color: @held; color: white; font-weight: 600; }
 popover.agent-settings button.agent-menu-confirm-go:hover { background: shade(@held, 1.12); border-color: shade(@held, 1.12); }
