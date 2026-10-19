@@ -1,0 +1,27 @@
+/* The assistant (assistant.rs): a drawer over the page's right edge, opened from the title bar.
+   Opaque, so a pane's terminal never shows through the conversation. Its replies, tool lines,
+   composer and cards are Threads' own (threads.css); only the frame and the ask card are here. */
+.assistant-drawer { background: @pane; border-left: 1px solid @edge; box-shadow: -12px 0 32px alpha(black, 0.28); }
+.assistant-head { padding: 14px 12px 12px 18px; border-bottom: 1px solid @line_subtle; }
+.assistant-title { font-size: 14px; font-weight: 600; color: @ink; }
+.assistant-subtitle { font-size: 12px; color: @faint; }
+.assistant-scroll, .assistant-scroll viewport { background: transparent; }
+.assistant-column { padding: 16px 18px 20px 18px; }
+.assistant-reply .threads-reply { font-size: 13px; line-height: 20px; }
+.assistant-column .threads-user { font-size: 13px; line-height: 20px; padding: 9px 13px; }
+.assistant-composer { margin: 0 12px 12px 12px; padding: 8px 8px 8px 14px; }
+button.assistant-send { min-width: 30px; min-height: 30px; padding: 0; border-radius: 9px; }
+
+.assistant-empty { margin-top: 4px; }
+.assistant-intro { font-size: 13px; line-height: 20px; color: @secondary; margin-bottom: 6px; }
+button.assistant-suggestion { padding: 9px 12px; border: 1px solid @edge; border-radius: 10px; background: @raised; color: @ink; font-size: 13px; font-weight: 400; box-shadow: none; }
+button.assistant-suggestion:hover { border-color: @line_emphasis; background: @wash; }
+
+/* An ask: Arbiter's amber pill and asking border while it waits, its steps exactly as they run. */
+.assistant-ask.assistant-ask-waiting { border-color: alpha(@waiting, 0.45); }
+.assistant-pill { padding: 1px 8px; border-radius: 999px; border: 1px solid @glass_edge; background: @glass_card; color: @secondary; font-size: 11px; font-weight: 600; }
+.assistant-pill.assistant-pill-waiting { color: @waiting; background: alpha(@waiting, 0.12); border-color: alpha(@waiting, 0.35); }
+.assistant-pill.assistant-pill-done { color: @live; background: alpha(@live, 0.12); border-color: alpha(@live, 0.35); }
+.assistant-pill.assistant-pill-failed { color: @held_text; background: alpha(@held, 0.14); border-color: alpha(@held, 0.4); }
+.assistant-steps { padding: 8px 10px; border-radius: 9px; background: @wash; }
+.assistant-step { font-family: "Geist Mono", monospace; font-size: 11px; line-height: 16px; color: @secondary; }

@@ -448,6 +448,7 @@ pub fn run(rt: Handle) -> glib::ExitCode {
             include_str!("css/launch.css"),
             include_str!("css/gaming.css"),
             include_str!("css/design.css"),
+            include_str!("css/assistant.css"),
         ));
         if let Some(display) = gtk::gdk::Display::default() {
             gtk::style_context_add_provider_for_display(
@@ -491,6 +492,7 @@ struct TopBar {
     layouts_key: gtk::Button,
     skills_key: gtk::Button,
     plugins_key: gtk::Button,
+    assistant_key: gtk::Button,
     notifications_key: gtk::Button,
     notification_count: gtk::Label,
     reconnect: gtk::Button,
@@ -562,6 +564,9 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     let skills_key = icon_button("skills", "Skills for this project");
     let plugins_key = icon_button("plugins", "Plugins for this project");
     plugins_key.set_widget_name("project-plugins");
+    // The assistant: a drawer over the page, about Relay itself (`assistant.rs`).
+    let assistant_key = icon_button("assistant", "Assistant");
+    assistant_key.set_widget_name("assistant-key");
     let notifications_key = icon_button("alarm-symbolic", "Notifications");
     let bell = gtk::Overlay::new();
     bell.set_child(Some(&crate::icons::image("bell", 18)));
@@ -572,7 +577,7 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     notification_count.set_can_target(false);
     bell.add_overlay(&notification_count);
     notifications_key.set_child(Some(&bell));
-    for (key, icon) in [(&skills_key, "skills"), (&plugins_key, "plugins"), (&layouts_key, "layout")] {
+    for (key, icon) in [(&skills_key, "skills"), (&plugins_key, "plugins"), (&layouts_key, "layout"), (&assistant_key, "assistant")] {
         key.set_child(Some(&crate::icons::image(icon, 18)));
     }
     for key in [
@@ -580,6 +585,7 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
         &skills_key,
         &plugins_key,
         &layouts_key,
+        &assistant_key,
         &notifications_key,
     ] {
         top_actions.append(key);
@@ -650,6 +656,7 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
         layouts_key,
         skills_key,
         plugins_key,
+        assistant_key,
         notifications_key,
         notification_count,
         reconnect,
@@ -1243,7 +1250,7 @@ impl Ui {
         ui.wire_keys(&top, &bar, &wall.empty_launch, &side.add_project, &sheet.scrim);
         ui.wire_window();
         ui.remember_sidebar_width();
-        let mut dev_only: Vec<gtk::Widget> = vec![side.nav.clone().upcast(), top.layouts_key.clone().upcast(), top.launch_key.clone().upcast()];
+        let mut dev_only: Vec<gtk::Widget> = vec![side.nav.clone().upcast(), top.layouts_key.clone().upcast(), top.assistant_key.clone().upcast(), top.launch_key.clone().upcast()];
         dev_only.extend(side.workspaces.iter().cloned());
         crate::money::install(&ui, &side.money_nav, &top.money_add, dev_only);
         crate::design::install(&ui);
@@ -1285,6 +1292,7 @@ impl Ui {
         });
         // Notifications open in place under the bell, never as a page of their own.
         notification_center::install(ui, &top.notifications_key);
+        crate::assistant::install(ui, &top.assistant_key, &ui.overlay);
         let weak = Rc::downgrade(ui);
         top.skills_key.connect_clicked(move |_| {
             if let Some(ui) = weak.upgrade() {
@@ -1738,7 +1746,9 @@ impl Ui {
                                     continue;
                                 }
                                 if e.ev.starts_with("thread.") {
-                                    crate::money::thread_event(&ui, &e.ev, &e.payload);
+                                    if !crate::assistant::event(&ui, &e.ev, &e.payload) {
+                                        crate::money::thread_event(&ui, &e.ev, &e.payload);
+                                    }
                                     continue;
                                 }
                                 if e.ev == "provider.update.changed" {
