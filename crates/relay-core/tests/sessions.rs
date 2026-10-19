@@ -839,6 +839,40 @@ fn recovery_releases_legacy_claims_but_preserves_new_work() {
     assert!(!again.fsck_fixes.iter().any(|fix| fix.contains("stale file claim")));
 }
 
+/// A session launched with `use_api_key` points Claude at the key proxy, with the command that
+/// reads its local pass token: Relay holds no key to hand over, so none is in an argument, row
+/// or reply. A subscription session gets neither. Codex has no such setting, and one asked for
+/// it is created without.
+#[test]
+fn an_api_key_session_points_claude_at_the_key_proxy() {
+    let f = fixture();
+    let claude = fake_discovery_provider(&f.root, "claude", "claude 1.0.0");
+    ok(&f.engine, "settings.set", json!({"path": "providers.claude.path", "value": claude}));
+    let keyed = ok(&f.engine, "session.create", json!({"project_id": 1, "provider": "claude", "use_api_key": true}));
+    assert_eq!(keyed["use_api_key"], true);
+    let plain = ok(&f.engine, "session.create", json!({"project_id": 1, "provider": "claude"}));
+    assert_eq!(plain["use_api_key"], false);
+    let helper = relay_core::hooks::api_key_helper(&relay_core::hooks::key_proxy_token_path().unwrap());
+    let proxy = format!("http://127.0.0.1:{}", relay_core::hooks::KEY_PROXY_PORT);
+    for (session, keyed) in [(&keyed, true), (&plain, false)] {
+        let worktree = PathBuf::from(session["worktree"].as_str().unwrap());
+        ok(&f.engine, "session.spawn", json!({"session": session["name"]}));
+        let captured = worktree.join(".relay/provider-args.txt");
+        wait_until("provider argv", || captured.is_file());
+        let args = std::fs::read_to_string(&captured).unwrap();
+        assert!(!args.contains("sk-ant-"), "{args}");
+        let args: Vec<&str> = args.lines().collect();
+        let settings = args.windows(2).find(|pair| pair[0] == "--settings").map(|pair| pair[1]).unwrap();
+        let settings: Value = serde_json::from_str(settings).unwrap();
+        assert_eq!(settings.get("apiKeyHelper").and_then(Value::as_str), keyed.then_some(helper.as_str()), "{settings}");
+        assert_eq!(settings["env"]["ANTHROPIC_BASE_URL"].as_str(), keyed.then_some(proxy.as_str()), "{settings}");
+        std::fs::remove_file(&captured).unwrap();
+        ok(&f.engine, "session.close", json!({"session": session["name"]}));
+    }
+    let codex = ok(&f.engine, "session.create", json!({"project_id": 1, "provider": "codex", "use_api_key": true}));
+    assert_eq!(codex["use_api_key"], false);
+}
+
 #[test]
 fn provider_discovery_is_explicit_cached_and_reports_version_changes() {
     let f = fixture();

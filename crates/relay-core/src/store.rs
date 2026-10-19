@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 /// The schema version this build knows. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: i64 = 28;
+pub const SCHEMA_VERSION: i64 = 29;
 
 /// Numbered migrations; index 0 brings a fresh DB to `user_version = 1`.
 pub const MIGRATIONS: &[&str] = &[
@@ -463,6 +463,11 @@ pub const MIGRATIONS: &[&str] = &[
       PRIMARY KEY (design_id, node_id)
     ) WITHOUT ROWID;
     CREATE INDEX design_nodes_parent ON design_nodes(design_id, parent_id, ord);
+    "#,
+    // v29 - a Claude session may run on an API key, through the key proxy, instead of the user's
+    // subscription (`session.create` `use_api_key`). Only the choice is stored, never the key.
+    r#"
+    ALTER TABLE sessions ADD COLUMN use_api_key INTEGER NOT NULL DEFAULT 0;
     "#,
 ];
 

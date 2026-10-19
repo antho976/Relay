@@ -889,6 +889,21 @@ fn prepare_launch(engine: &Engine, plan: LaunchPlan) -> Result<PreparedLaunch, B
     if row.session.provider == Provider::Claude {
         crate::hooks::install_claude(&cwd, instance, &relay_bin).bus()?;
         crate::hooks::add_claude_mcp_servers(&cwd, &plugin_servers).bus()?;
+        // The key itself is the key proxy's (docs/KEY-PROXY.md); without its pass token, or with
+        // the proxy down, Claude could only fail. A loopback connect answers at once either way,
+        // and this is the launch's unlocked phase. A test engine has no proxy and checks the
+        // arguments alone.
+        if row.session.use_api_key && instance != crate::Instance::Test {
+            if !crate::hooks::key_proxy_token_path().is_some_and(|path| path.is_file()) {
+                return Err(BusError::unavailable("session.key_proxy", "this session runs on your API key, and the key proxy is not set up")
+                    .with_hint("set it up once (docs/KEY-PROXY.md), or start the session without the API key"));
+            }
+            let proxy = std::net::SocketAddr::from(([127, 0, 0, 1], crate::hooks::KEY_PROXY_PORT));
+            if std::net::TcpStream::connect_timeout(&proxy, std::time::Duration::from_millis(500)).is_err() {
+                return Err(BusError::unavailable("session.key_proxy", format!("this session runs on your API key, and the key proxy is not answering on {proxy}"))
+                    .with_hint("systemctl status relay-key-proxy; or start the session without the API key"));
+            }
+        }
     } else if row.session.provider == Provider::Codex {
         crate::hooks::install_codex(&cwd, instance, &relay_bin).map_err(codex_hooks_error)?;
     }
@@ -985,6 +1000,16 @@ fn prepare_launch(engine: &Engine, plan: LaunchPlan) -> Result<PreparedLaunch, B
                 engine.store.path().display().to_string(),
             ),
         ],
+        // Claude takes a key from these before anything else, and its tools inherit them: one
+        // exported where Relay started would reach every agent's shell and override the
+        // session's own choice between the subscription and the key proxy.
+        // An API-key session also drops what would bill it to another account or provider.
+        env_remove: match (row.session.provider, row.session.use_api_key) {
+            (Provider::Claude, false) => ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"].map(String::from).to_vec(),
+            (Provider::Claude, true) => ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN",
+                "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"].map(String::from).to_vec(),
+            _ => Vec::new(),
+        },
         cwd,
         cols: 120,
         rows: 40,
@@ -1257,12 +1282,13 @@ fn finish_create(ctx: &mut Ctx, p: &CreateIn, prepared: &mut PreparedCreate) -> 
     }
     ctx.tx().execute(
         "INSERT INTO sessions(name, project_id, provider, role, model, effort, branch, worktree, task_id, module_id, pair_with,
-                              bus_writes, allow_ui, state, token, epoch, created_at, updated_at, launch_prompt)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'created', ?14, 0, ?15, ?15, ?16)",
+                              bus_writes, allow_ui, state, token, epoch, created_at, updated_at, launch_prompt, use_api_key)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'created', ?14, 0, ?15, ?15, ?16, ?17)",
         params![name, project.id, sessions::provider_str(p.provider), sessions::role_str(p.role.unwrap_or(relay_bus::types::Role::Builder)),
                 p.model, p.effort, branch, worktree_path, p.task_id, p.module_id, p.pair_with,
                 p.bus_writes.unwrap_or(false) as i64, p.allow_ui.unwrap_or(false) as i64, token, ctx.now,
-                p.prompt.as_deref().filter(|prompt| !prompt.trim().is_empty())],
+                p.prompt.as_deref().filter(|prompt| !prompt.trim().is_empty()),
+                (p.use_api_key.unwrap_or(false) && p.provider == relay_bus::types::Provider::Claude) as i64],
     ).bus()?;
     let id = ctx.tx().last_insert_rowid();
     if let Some(pair) = &pair {

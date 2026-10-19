@@ -117,6 +117,8 @@ pub fn read(provider: Provider, path: &Path, worktree: &Path, after: Option<u64>
     file.seek(SeekFrom::Start(start))?;
     let mut bytes = Vec::with_capacity((end - start) as usize);
     file.take(end - start).read_to_end(&mut bytes)?;
+    // The reply goes to whoever asked, a phone included.
+    crate::redact::Redactor::default().redact(&mut bytes);
     // A tail read begins mid-line; a read of any kind may end mid-line while the agent writes.
     let first = if resumed.is_none() && start > 0 { bytes.iter().position(|b| *b == b'\n').map_or(bytes.len(), |i| i + 1) } else { 0 };
     let last = bytes.iter().rposition(|b| *b == b'\n').map_or(first, |i| i + 1).max(first);

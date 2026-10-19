@@ -814,10 +814,39 @@ fn claude_statusline_script() -> &'static str {
      tmp=\"$out.$$\"; { printf '%s\\n' \"$input\" > \"$tmp\" && mv -f \"$tmp\" \"$out\"; } 2>/dev/null || rm -f \"$tmp\"; exit 0"
 }
 
+/// Where `relay-key-proxy` listens (docs/KEY-PROXY.md). It holds the Anthropic API key as its own
+/// system user, out of reach of everything that runs as the person; a `use_api_key` session's
+/// Claude sends its requests there.
+pub const KEY_PROXY_PORT: u16 = 7445;
+
+/// The local pass token a session's Claude shows the key proxy, written there by
+/// `scripts/key-proxy/install.sh`. It is not the key: it lets a program running as the person
+/// spend through the proxy on this machine, and shows no one the key.
+pub fn key_proxy_token_path() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config/relay/key-proxy-token"))
+}
+
+/// How a `use_api_key` session's Claude gets the pass token it puts in `x-api-key`.
+pub fn api_key_helper(token: &Path) -> String {
+    format!("/usr/bin/cat {}", shell_quote_path(token))
+}
+
 /// The `--settings` value for a Claude launch: inline JSON, which Claude accepts in place of a
 /// file path, so the command it runs every turn cannot be rewritten by the agent it serves.
-pub fn claude_settings() -> String {
-    json!({"statusLine": {"type": "command", "command": claude_statusline_script(), "padding": 0}}).to_string()
+/// `api_key_helper` is set for a `use_api_key` session, which then talks to the key proxy; the
+/// launch's own settings outrank the checkout's, so a repository cannot point it elsewhere, nor
+/// through a proxy of its own (NO_PROXY keeps loopback direct).
+pub fn claude_settings(api_key_helper: Option<&str>) -> String {
+    let mut settings = json!({"statusLine": {"type": "command", "command": claude_statusline_script(), "padding": 0}});
+    if let Some(helper) = api_key_helper {
+        settings["apiKeyHelper"] = json!(helper);
+        settings["env"] = json!({
+            "ANTHROPIC_BASE_URL": format!("http://127.0.0.1:{KEY_PROXY_PORT}"),
+            "NO_PROXY": "127.0.0.1,localhost",
+            "no_proxy": "127.0.0.1,localhost",
+        });
+    }
+    settings.to_string()
 }
 
 /// Hook setup is a handful of local `git config` calls; one that outlives this is stuck.
@@ -889,6 +918,7 @@ mod tests {
     use super::{claude_statusline_script, install_claude, install_git, refresh_git, relay_bin_from,
         remove_hook_dir, run_user_commit_msg, shell_quote, sweep_hook_dirs, uninstall_git};
     use crate::Instance;
+    use serde_json::json;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::process::Command;
@@ -1003,8 +1033,19 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&out).unwrap(), "{\"rate_limits\":{\"five_hour\":1}}\n");
         // Written beside and renamed into place, so a reader never sees half of it.
         assert_eq!(std::fs::read_dir(out.parent().unwrap()).unwrap().count(), 1, "a temp file was left behind");
-        let settings: serde_json::Value = serde_json::from_str(&super::claude_settings()).unwrap();
+        let settings: serde_json::Value = serde_json::from_str(&super::claude_settings(None)).unwrap();
         assert_eq!(settings["statusLine"]["command"], claude_statusline_script());
+        assert!(settings.get("apiKeyHelper").is_none() && settings.get("env").is_none(), "a subscription session must not be pointed at the key");
+        let helper = super::api_key_helper(Path::new("/home/a b/.config/relay/key-proxy-token"));
+        assert_eq!(helper, "/usr/bin/cat '/home/a b/.config/relay/key-proxy-token'");
+        let settings: serde_json::Value = serde_json::from_str(&super::claude_settings(Some(&helper))).unwrap();
+        assert_eq!(settings["apiKeyHelper"], helper);
+        assert_eq!(settings["env"], json!({"ANTHROPIC_BASE_URL": format!("http://127.0.0.1:{}", super::KEY_PROXY_PORT),
+            "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"}));
+        assert_eq!(settings["statusLine"]["command"], claude_statusline_script());
+        // The proxy's socket listens where sessions are sent (the proxy's own test checks its side).
+        let socket = include_str!("../../../scripts/key-proxy/relay-key-proxy.socket");
+        assert!(socket.contains(&format!("ListenStream=127.0.0.1:{}\n", super::KEY_PROXY_PORT)));
     }
 
     /// A checkout with no hook path of its own gets none back, not the one that was in effect;

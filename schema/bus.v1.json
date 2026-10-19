@@ -9941,6 +9941,13 @@
             "null"
           ]
         },
+        "use_api_key": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Claude only: run on the API key the key proxy holds instead of the signed-in account."
+        },
         "prompt": {
           "type": [
             "string",
@@ -10047,6 +10054,11 @@
         },
         "allow_ui": {
           "type": "boolean"
+        },
+        "use_api_key": {
+          "type": "boolean",
+          "description": "Claude runs on an API key instead of the signed-in account, through the key proxy, which\nholds the key as its own system user (docs/KEY-PROXY.md). Relay never has the key.",
+          "default": false
         },
         "state": {
           "$ref": "#/$defs/SessionState"

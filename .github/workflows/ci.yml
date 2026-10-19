@@ -71,6 +71,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo clippy --locked --all-targets -- -D warnings
 
+      # The API-key proxy is its own workspace (docs/KEY-PROXY.md), outside the default members.
+      - name: Key proxy
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test --locked --manifest-path crates/relay-key-proxy/Cargo.toml
+          cargo clippy --locked --manifest-path crates/relay-key-proxy/Cargo.toml --all-targets -- -D warnings
+
       # run.sh against a fake cargo, engine and client: no GTK, no display, nothing installed.
       - name: Launcher
         if: ${{ !cancelled() }}

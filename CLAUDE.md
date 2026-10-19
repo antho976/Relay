@@ -21,6 +21,10 @@ native client's GTK-free logic:
 helpers and the device mirror's decoder gate and input payloads).
 The full list in `README.md` is for a developer machine with GTK.
 
+`crates/relay-key-proxy`, the API-key proxy (`docs/KEY-PROXY.md`), is its own workspace with its
+own `Cargo.lock`, so root can build it alone: check it with
+`cargo test --locked --manifest-path crates/relay-key-proxy/Cargo.toml` (and the same for clippy).
+
 ## The phone app: `apps/relay-android`
 
 Relay's Android app (Kotlin, Compose, Room, Gradle; `docs/ANDROID.md`), independent of Cargo.

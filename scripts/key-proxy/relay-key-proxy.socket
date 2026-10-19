@@ -1,0 +1,14 @@
+# Relay's API-key proxy (docs/KEY-PROXY.md): PID 1 holds 127.0.0.1:7445 and hands it to
+# relay-key-proxy.service, so no other program can take the port, and with it the pass token,
+# while the service is stopped, restarting or being replaced. Installed by scripts/key-proxy/install.sh.
+
+[Unit]
+Description=Relay API-key proxy socket
+
+[Socket]
+ListenStream=127.0.0.1:7445
+Accept=no
+NoDelay=yes
+
+[Install]
+WantedBy=sockets.target

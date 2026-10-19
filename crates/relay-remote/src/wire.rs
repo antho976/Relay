@@ -244,6 +244,18 @@ impl OpProfile {
     }
 }
 
+/// Whether a request would create a session on the API key: `session.create` itself, or the
+/// template `task.dispatch` creates one session per task from. Anything there but `false` or
+/// null counts, so no spelling the engine would read as true gets past.
+fn asks_for_api_key(value: &serde_json::Value, op: &str) -> bool {
+    let at = match op {
+        "session.create" => "/payload/use_api_key",
+        "task.dispatch" => "/payload/create/use_api_key",
+        _ => return false,
+    };
+    value.pointer(at).is_some_and(|v| !matches!(v, serde_json::Value::Bool(false) | serde_json::Value::Null))
+}
+
 /// `gate_for` with the phone's list: the PC's own door.
 pub fn gate(line: &str, instance: Instance) -> Gate {
     gate_for(line, instance, OpProfile::Phone)
@@ -276,6 +288,11 @@ pub fn gate_for(line: &str, instance: Instance, profile: OpProfile) -> Gate {
         // phone: a phone builds a release, the desktop publishes it.
         BusError::refused("remote.publish", "publishing to Google Play is only from the desktop; a phone can build a release, not publish it")
             .with_hint("build it with publish off, then publish it from Relay on the PC")
+    } else if profile == OpProfile::Phone && asks_for_api_key(&value, op) {
+        // Billed to the user's own key: whoever holds or forges a phone's link could start as
+        // many as they liked. The choice is made at the PC.
+        BusError::refused("remote.api_key", "a session on your API key is started only from Relay on the PC")
+            .with_hint("start it without the API key, or from the desktop")
     } else {
         return Gate::Forward;
     };
@@ -367,6 +384,29 @@ mod tests {
                 assert!(error.message.contains("only from the desktop"), "{}", error.message);
             }
             Gate::Forward => panic!("a phone's publish was forwarded"),
+        }
+    }
+
+    #[test]
+    fn a_phone_starts_no_session_on_the_api_key() {
+        let line = |op: &str, payload: &str| format!(r#"{{"v":1,"id":"7f2b5d2e-2f1a-4b7c-9a6c-1c9d1e6a0007","actor":"user","op":"{op}","payload":{payload}}}"#);
+        for (op, payload) in [
+            ("session.create", r#"{"project_id":1,"provider":"claude"}"#),
+            ("session.create", r#"{"project_id":1,"provider":"claude","use_api_key":false}"#),
+            ("session.create", r#"{"project_id":1,"provider":"claude","use_api_key":null}"#),
+            ("task.dispatch", r#"{"task_id":1,"create":{"project_id":1,"provider":"claude"}}"#),
+        ] {
+            assert!(matches!(gate(&line(op, payload), Instance::Stable), Gate::Forward), "{op} {payload}");
+        }
+        for (op, payload) in [
+            ("session.create", r#"{"project_id":1,"provider":"claude","use_api_key":true}"#),
+            ("session.create", r#"{"project_id":1,"provider":"claude","use_api_key":"true"}"#),
+            ("task.dispatch", r#"{"task_id":1,"fanout":true,"create":{"project_id":1,"provider":"claude","use_api_key":true}}"#),
+        ] {
+            match gate(&line(op, payload), Instance::Stable) {
+                Gate::Reject(resp) => assert_eq!(resp.error.unwrap().code, "remote.api_key"),
+                Gate::Forward => panic!("{op} {payload} was forwarded"),
+            }
         }
     }
 

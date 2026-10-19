@@ -207,6 +207,8 @@ struct Profile {
     prompt: gtk::TextView,
     writes: gtk::Switch,
     ui_access: gtk::Switch,
+    /// Claude only: bill the session to the key proxy's API key, not the signed-in account.
+    api_key: gtk::Switch,
     more: gtk::Revealer,
     more_summary: gtk::Label,
     task_section: gtk::Box,
@@ -359,9 +361,12 @@ impl Profile {
         place.append(&worktree);
         options.append(&place);
         let mut switches = Vec::new();
+        let mut lines = Vec::new();
         for (caption, hint, on) in [
             ("Agent bus writes", "Let it write files, stage and commit through Relay, with guardrails checked as it goes.", true),
             ("UI control", "Let it drive the Relay window.", false),
+            ("Use API key", "Bill this session to your API key instead of your subscription. The key stays in \
+              Relay's key proxy, where no agent can read it; programs running as you can still spend through it.", false),
         ] {
             let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
             line.add_css_class("launch-switch");
@@ -377,7 +382,17 @@ impl Profile {
             line.append(&switch);
             options.append(&line);
             switches.push(switch);
+            lines.push(line);
         }
+        // Codex has no API-key setting here, so the switch is Claude's alone.
+        let api_line = lines.pop().expect("the API key line");
+        api_line.set_visible(provider.selected() == 0);
+        let weak_line = api_line.downgrade();
+        provider.connect_changed(move |provider| {
+            if let Some(line) = weak_line.upgrade() {
+                line.set_visible(provider == 0);
+            }
+        });
         more.set_child(Some(&options));
         root.append(&more);
         let m = more.downgrade();
@@ -389,7 +404,8 @@ impl Profile {
         });
         let writes = switches.remove(0);
         let ui_access = switches.remove(0);
-        for switch in [&writes, &ui_access] {
+        let api_key = switches.remove(0);
+        for switch in [&writes, &ui_access, &api_key] {
             let changed = changed.clone();
             switch.connect_active_notify(move |_| changed());
         }
@@ -444,6 +460,7 @@ impl Profile {
             prompt,
             writes,
             ui_access,
+            api_key,
             more,
             more_summary,
             task_section,
@@ -478,9 +495,10 @@ impl Profile {
         });
         let model = self.model.text().trim().to_string();
         let effort = EFFORTS.get(self.effort.selected() as usize);
+        let claude = self.provider.selected() == 0;
         let mut payload = json!({
             "project_id": project,
-            "provider": if self.provider.selected() == 0 { "claude" } else { "codex" },
+            "provider": if claude { "claude" } else { "codex" },
             "role": role,
             "model": if model.is_empty() { None } else { Some(model) },
             "effort": effort,
@@ -488,6 +506,10 @@ impl Profile {
             "allow_ui": self.ui_access.is_active(),
             "prompt": self.prompt(),
         });
+        // Sent only when on: an engine older than the option refuses a payload that names it.
+        if claude && self.api_key.is_active() {
+            payload["use_api_key"] = json!(true);
+        }
         let worktree = self.worktree.text().trim().to_string();
         if !worktree.is_empty() {
             payload["worktree"] = json!(worktree);
@@ -513,6 +535,9 @@ impl Profile {
         parts.push(if self.writes.is_active() { "Bus writes".into() } else { "No bus writes".into() });
         if self.ui_access.is_active() {
             parts.push("UI control".into());
+        }
+        if self.provider.selected() == 0 && self.api_key.is_active() {
+            parts.push("API key".into());
         }
         self.more_summary.set_text(&parts.join(" · "));
     }
@@ -554,6 +579,7 @@ impl Profile {
         self.prompt.buffer().set_text("");
         self.writes.set_active(true);
         self.ui_access.set_active(false);
+        self.api_key.set_active(false);
         self.more.set_reveal_child(false);
         self.preselect.set(None);
         for row in self.tasks.borrow().iter() {
