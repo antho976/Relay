@@ -831,12 +831,7 @@ async fn pre_push(instance: Instance, actor_override: Option<&str>) -> Result<u8
         }
     };
     let started = std::time::Instant::now();
-    // One stream, in the order the check wrote it.
-    let ran = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(format!("exec 2>&1\n{command}"))
-        .current_dir(&worktree)
-        .stdin(std::process::Stdio::null())
+    let ran = relay_core::check::check_command(&command, &worktree)
         .output()
         .with_context(|| format!("running `{command}`"))?;
     let seconds = started.elapsed().as_secs();
