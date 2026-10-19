@@ -31,10 +31,14 @@
    in and out (guardrail_pages::prompt_slot) rather than popping. Each card carries its own gap,
    so the gap closes with it. */
 .guardrail-tray { background: transparent; }
-.guardrail-prompt { margin-top: 8px; background: @console; border: 1px solid @strong; border-top: 2px solid alpha(@waiting, .8); border-radius: 10px; padding: 14px 16px 12px; box-shadow: 0 14px 36px alpha(black, .28), 0 2px 8px alpha(black, .18); opacity: 1; transition: opacity 260ms cubic-bezier(0.16, 1, 0.3, 1); }
+.guardrail-prompt { margin-top: 8px; background: @console; border: 1px solid @strong; border-top: 2px solid alpha(@waiting, .8); border-radius: 10px; padding: 10px 12px; box-shadow: 0 14px 36px alpha(black, .28), 0 2px 8px alpha(black, .18); opacity: 1; transition: opacity 260ms cubic-bezier(0.16, 1, 0.3, 1); }
 .guardrail-prompt.leaving { opacity: 0; transition: opacity 180ms cubic-bezier(0.4, 0, 1, 1); }
-.guardrail-prompt .guardrail-subject { font-size: 11px; border-radius: 6px; }
-.guardrail-prompt button { border-radius: 6px; }
+.guardrail-prompt .title { font-size: 13px; }
+.guardrail-prompt .guardrail-subject { font-size: 11px; border-radius: 6px; padding: 5px 8px; }
+.guardrail-prompt .guardrail-subject-scroll, .guardrail-prompt .guardrail-subject-scroll viewport { background: transparent; }
+.guardrail-prompt .guardrail-reason { font-size: 12px; }
+.guardrail-prompt .guardrail-keys { margin-top: 2px; }
+.guardrail-prompt button { border-radius: 6px; min-height: 24px; padding: 0 10px; font-size: 12px; }
 .guardrail-prompt button.icon-key { min-width: 26px; padding: 0; border-radius: 99px; }
 .guardrail-prompt .guardrail-deny entry { border-radius: 6px; }
 button.guardrail-more { margin-top: 8px; background: @console; border: 1px solid @strong; border-radius: 99px; color: @ink; box-shadow: 0 6px 18px alpha(black, .22); }

@@ -546,7 +546,7 @@ fn approved_notice(request: &Value, scope: &str) -> String {
 pub fn exception_card(ui: &Rc<Ui>, request: &Value, compact: bool) -> (gtk::Box, [gtk::Button; 2]) {
     let request = as_request(request);
     let id = request["id"].as_i64().unwrap_or_default();
-    let card = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    let card = gtk::Box::new(gtk::Orientation::Vertical, if compact { 6 } else { 8 });
     card.add_css_class("guardrail-card");
     card.add_css_class("guardrail-request");
     if compact {
@@ -559,46 +559,104 @@ pub fn exception_card(ui: &Rc<Ui>, request: &Value, compact: bool) -> (gtk::Box,
     let from = request["project_id"].as_i64().filter(|p| compact && *p != ui.project.get()).and_then(|p| {
         ui.projects.borrow().iter().find(|row| row["id"].as_i64() == Some(p)).map(|row| text(row, "name").to_owned())
     });
-    let eyebrow = match from {
-        Some(name) if !name.is_empty() => format!("Exception request · {name}"),
-        _ => "Exception request".to_owned(),
-    };
-    card.append(&head(&eyebrow, &ago(text(&request, "created_at"))));
-    let flag = hidden_flag();
-    card.append(&flag);
     let session = text(&request, "session");
     let kind = text(&request, "kind");
     let value = text(&request, "value");
+    let asked = text(&request, "requested_scope");
+    let flag = hidden_flag();
     let heading = label("", "title");
     set_agent_text(&heading, &format!("{session} asks to {}", kind_verb(kind)), &flag);
-    heading.set_wrap(true);
     heading.set_xalign(0.0);
-    card.append(&heading);
+    if compact {
+        // The prompt floats over your work, so it says it in one line: who wants what, from
+        // where and since when. The rule lifted is said on the keys' tooltips.
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let mark = crate::icons::image("shield", 14);
+        mark.add_css_class("guardrail-mark");
+        row.append(&mark);
+        // Wrapped, not cut: the session's name is part of what is being approved.
+        heading.set_hexpand(true);
+        heading.set_wrap(true);
+        heading.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        // A wrapping label asks for its whole text on one line; these keep the prompt narrow.
+        heading.set_max_width_chars(34);
+        flag.set_max_width_chars(46);
+        row.append(&heading);
+        let when = crate::relative::ago(text(&request, "created_at"), crate::relative::Form::Compact).unwrap_or_default();
+        let corner = match from {
+            Some(name) if !name.is_empty() => format!("{name} · {when}"),
+            _ => when,
+        };
+        let corner = label(&corner, "faint");
+        corner.set_valign(gtk::Align::Start);
+        row.append(&corner);
+        card.append(&row);
+        card.append(&flag);
+    } else {
+        let eyebrow = match from {
+            Some(name) if !name.is_empty() => format!("Exception request · {name}"),
+            _ => "Exception request".to_owned(),
+        };
+        card.append(&head(&eyebrow, &ago(text(&request, "created_at"))));
+        card.append(&flag);
+        heading.set_wrap(true);
+        card.append(&heading);
+    }
     if !value.is_empty() {
-        card.append(&agent_mono(&clip(value), &flag));
+        let subject = agent_mono(&clip(value), &flag);
+        if compact {
+            subject.set_max_width_chars(46);
+            // Every byte being approved stays readable, in a box that scrolls past a few lines
+            // rather than growing the prompt.
+            let scroll = gtk::ScrolledWindow::builder()
+                .child(&subject)
+                .hscrollbar_policy(gtk::PolicyType::Never)
+                .propagate_natural_height(true)
+                .max_content_height(84)
+                .build();
+            scroll.add_css_class("guardrail-subject-scroll");
+            card.append(&scroll);
+        } else {
+            card.append(&subject);
+        }
     }
     let reason = text(&request, "reason");
     if !reason.is_empty() {
         let why = agent_paragraph(&format!("“{}”", clip(reason)), "body", &flag);
         why.add_css_class("guardrail-reason");
+        if compact {
+            // The agent's case, not the thing approved: its opening is enough here, and the
+            // Guardrails page has the rest.
+            why.set_lines(2);
+            why.set_max_width_chars(46);
+            why.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            why.set_selectable(false);
+            why.set_tooltip_text(Some(&reveal(&clip(reason)).plain));
+        }
         card.append(&why);
     }
-    let asked = text(&request, "requested_scope");
-    let lifted = label("", "faint");
-    set_agent_text(
-        &lifted,
-        &format!(
-            "Asked for {}. Only this rule is lifted, and only for {session}.",
-            if asked == "session" { "the rest of the session" } else { "one use" },
-        ),
-        &flag,
-    );
-    card.append(&lifted);
+    if !compact {
+        let lifted = label("", "faint");
+        set_agent_text(
+            &lifted,
+            &format!(
+                "Asked for {}. Only this rule is lifted, and only for {session}.",
+                if asked == "session" { "the rest of the session" } else { "one use" },
+            ),
+            &flag,
+        );
+        card.append(&lifted);
+    }
     let keys = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     keys.add_css_class("guardrail-keys");
     let once = button("Approve once", if asked == "session" { "" } else { "primary" });
-    let always = button("Approve for this session", if asked == "session" { "primary" } else { "" });
-    let deny = button("Deny…", "quiet");
+    let always = button(if compact { "For the session" } else { "Approve for this session" }, if asked == "session" { "primary" } else { "" });
+    let deny = button(if compact { "Deny" } else { "Deny…" }, "quiet");
+    if compact {
+        let who = reveal(session).plain;
+        once.set_tooltip_text(Some(&format!("Lift only this rule, only for {who}, for one use")));
+        always.set_tooltip_text(Some(&format!("Lift only this rule, only for {who}, for the rest of its session")));
+    }
     for key in [&once, &always, &deny] {
         // A prompt is answered beside a terminal: a click must not pull the keys out of it.
         key.set_focus_on_click(!compact);
@@ -686,7 +744,7 @@ fn tray(ui: &Rc<Ui>) -> gtk::Box {
     tray.set_valign(gtk::Align::End);
     tray.set_margin_end(16);
     tray.set_margin_bottom(40);
-    tray.set_size_request(420, -1);
+    tray.set_size_request(360, -1);
     // The prompt waits beside whatever you are doing; its keys do not take keyboard focus on
     // a click (exception_card), and only the Deny form's reason entry asks for it.
     ui.overlay.add_overlay(&tray);
