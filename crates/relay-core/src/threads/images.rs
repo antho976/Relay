@@ -292,7 +292,7 @@ mod tests {
         let two_days_ago = crate::time::days_ago(2);
         let unsent = upload(&engine, "image/png", &png(4, 3), &two_days_ago).unwrap();
         let sent = upload(&engine, "image/png", &png(5, 3), &two_days_ago).unwrap();
-        let thread = super::super::create(&engine, "Receipts", None, None, &two_days_ago).unwrap().id;
+        let thread = super::super::create(&engine, super::super::MONEY, "Receipts", None, None, &two_days_ago).unwrap().id;
         super::super::post(&engine, thread, "", std::slice::from_ref(&sent), &two_days_ago).unwrap();
         // A file left with no row by a write cut short, a day and more ago, and one just now.
         let stray = dir(&engine).join(format!("{}.png", "0".repeat(32)));

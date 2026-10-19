@@ -1,0 +1,392 @@
+//! The assistant's asks (docs/THREADS.md, "The assistant"): what the Dev space's assistant may not
+//! do alone — what a lone session may not do — it asks for, and the person approves or declines
+//! each ask on a card.
+//!
+//! An ask is a few steps, each a user-only op from [`ASKABLE`] with its own payload, and a reason.
+//! It lives in `threads.db`, tied to the assistant thread whose agent sent it (`Ctx::thread`, set
+//! by the socket door from the process that connected). It is checked when it is made: each op on
+//! the list, no flag that throws work away or widens what a session may do ([`REFUSED_FLAGS`]),
+//! at most [`MAX_STEPS`] steps. The op checks its own payload when it runs.
+//!
+//! Approving claims the ask (`pending` → `running`) in the answer's transaction, so a second
+//! answer is refused, then runs the steps once, in order, as the person, each its own request
+//! through the engine's own pipeline, after that transaction and before the reply. The first step
+//! that fails stops the rest; which steps ran before it is kept with the failure. A `session` left
+//! out of a step after `session.create` is the session that step made.
+//!
+//! The agent hears how each ask was answered at the head of the person's next message
+//! ([`heard`]), once per answer.
+use super::{cut, with_db, ThreadStore};
+use crate::engine::Engine;
+use relay_bus::ops::thread::{AskStep, AskView};
+use relay_bus::types::Id;
+use relay_bus::{Actor, BusError, Request};
+use rusqlite::{params, OptionalExtension};
+use serde_json::{json, Value};
+
+/// The ops an ask may hold: lifecycle and board changes a session may not make itself. Never
+/// guardrails, settings, the app, removing a workspace or project, worktrees, Git, files, money,
+/// keys or pairing: those stay the person's to do themselves.
+pub const ASKABLE: &[&str] = &[
+    "session.create",
+    "session.spawn",
+    "session.resume",
+    "session.park",
+    "session.wake",
+    "session.close",
+    "session.input",
+    "session.update",
+    "task.create",
+    "task.update",
+    "task.move",
+    "task.dispatch",
+    "task.delete",
+    "notes.create",
+    "notes.update",
+    "workspace.create",
+    "project.add",
+];
+
+/// Payload fields an ask may not set to `true`: deleting uncommitted work or a worktree, and
+/// widening what a session may do or what it bills.
+const REFUSED_FLAGS: &[&str] = &["discard_changes", "remove_worktree", "remove_worktrees", "force", "bus_writes", "allow_ui", "use_api_key"];
+
+/// The most steps one ask may hold.
+pub const MAX_STEPS: usize = 5;
+/// The most asks one thread may have waiting at once.
+pub const MAX_PENDING: i64 = 20;
+/// The longest a reason may be, in characters.
+const MAX_WHY: usize = 1_000;
+
+pub(super) const SCHEMA: &str = "
+CREATE TABLE ask (
+    id INTEGER PRIMARY KEY,
+    thread_id INTEGER NOT NULL REFERENCES thread(id) ON DELETE CASCADE,
+    steps TEXT NOT NULL,
+    why TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    status TEXT NOT NULL,
+    outcome TEXT,
+    results TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    resolved_at TEXT,
+    told TEXT
+);
+CREATE INDEX ask_thread ON ask(thread_id, id);
+";
+
+const COLUMNS: &str = "id, thread_id, steps, why, summary, status, outcome, results, created_at, resolved_at";
+
+/// An ask's answer, for the agent: (id, status, summary, outcome).
+type Answer = (Id, String, String, Option<String>);
+
+fn row(r: &rusqlite::Row) -> rusqlite::Result<AskView> {
+    let steps: String = r.get(2)?;
+    let results: String = r.get(7)?;
+    Ok(AskView {
+        id: r.get(0)?,
+        thread_id: r.get(1)?,
+        steps: serde_json::from_str(&steps).unwrap_or_default(),
+        why: r.get(3)?,
+        summary: r.get(4)?,
+        status: r.get(5)?,
+        outcome: r.get(6)?,
+        results: serde_json::from_str(&results).unwrap_or_default(),
+        created_at: r.get(8)?,
+        resolved_at: r.get(9)?,
+    })
+}
+
+impl ThreadStore {
+    /// An ask Relay stopped in the middle of running: said, never left running.
+    pub(super) fn settle_interrupted_asks(&self, now: &str) -> rusqlite::Result<()> {
+        self.conn.prepare_cached(
+            "UPDATE ask SET status = 'failed', outcome = 'Relay stopped while it was running: check what it did before asking again', resolved_at = ?1 WHERE status = 'running'",
+        )?.execute([now])?;
+        Ok(())
+    }
+
+    fn ask(&self, thread: Id, steps: &str, why: &str, summary: &str, now: &str) -> rusqlite::Result<Id> {
+        self.conn
+            .prepare_cached("INSERT INTO ask (thread_id, steps, why, summary, status, created_at) VALUES (?1, ?2, ?3, ?4, 'pending', ?5)")?
+            .execute(params![thread, steps, why, summary, now])?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    fn ask_row(&self, id: Id) -> rusqlite::Result<Option<AskView>> {
+        self.conn.prepare_cached(&format!("SELECT {COLUMNS} FROM ask WHERE id = ?1"))?.query_row([id], row).optional()
+    }
+
+    fn asks(&self, thread: Id, pending: bool) -> rusqlite::Result<Vec<AskView>> {
+        let mut stmt = self.conn.prepare_cached(&format!("SELECT {COLUMNS} FROM ask WHERE thread_id = ?1 AND (?2 = 0 OR status = 'pending') ORDER BY id"))?;
+        let rows = stmt.query_map(params![thread, pending], row)?;
+        rows.collect()
+    }
+
+    /// An ask of the same thread already waiting with the same steps, and how many wait.
+    fn asks_waiting(&self, thread: Id, steps: &str) -> rusqlite::Result<(Option<Id>, i64)> {
+        let same = self.conn
+            .prepare_cached("SELECT id FROM ask WHERE thread_id = ?1 AND status = 'pending' AND steps = ?2 ORDER BY id LIMIT 1")?
+            .query_row(params![thread, steps], |r| r.get(0))
+            .optional()?;
+        let count = self.conn.prepare_cached("SELECT COUNT(*) FROM ask WHERE thread_id = ?1 AND status = 'pending'")?.query_row([thread], |r| r.get(0))?;
+        Ok((same, count))
+    }
+
+    /// Move an ask from `from` to `to`; `false` when it was not `from` any more (another answer
+    /// came first).
+    fn move_ask(&self, id: Id, from: &str, to: &str, outcome: Option<&str>, results: &str, now: &str) -> rusqlite::Result<bool> {
+        Ok(self.conn
+            .prepare_cached("UPDATE ask SET status = ?3, outcome = ?4, results = ?5, resolved_at = ?6 WHERE id = ?1 AND status = ?2")?
+            .execute(params![id, from, to, outcome, results, now])? > 0)
+    }
+
+    /// Answers the thread's agent has not been told.
+    fn untold_asks(&self, thread: Id) -> rusqlite::Result<Vec<Answer>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT id, status, summary, outcome FROM ask
+             WHERE thread_id = ?1 AND status IN ('approved', 'declined', 'failed') AND told IS NULL ORDER BY id",
+        )?;
+        let rows = stmt.query_map([thread], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        rows.collect()
+    }
+
+    fn ask_told(&self, id: Id, status: &str) -> rusqlite::Result<()> {
+        self.conn.prepare_cached("UPDATE ask SET told = ?2 WHERE id = ?1")?.execute(params![id, status])?;
+        Ok(())
+    }
+}
+
+fn not_found(id: Id) -> BusError {
+    BusError::not_found("thread.ask_not_found", format!("No ask {id}"))
+}
+
+fn invalid(message: impl Into<String>) -> BusError {
+    BusError::invalid("thread.invalid", message)
+}
+
+pub fn get(engine: &Engine, id: Id) -> Result<AskView, BusError> {
+    with_db(engine, |db| db.ask_row(id))?.ok_or_else(|| not_found(id))
+}
+
+pub fn list(engine: &Engine, thread: Id, pending: bool) -> Result<Vec<AskView>, BusError> {
+    super::get(engine, thread)?;
+    with_db(engine, |db| db.asks(thread, pending))
+}
+
+/// Steps as asked, checked: each op on [`ASKABLE`] with an object payload that sets no
+/// [`REFUSED_FLAGS`], at least one and at most [`MAX_STEPS`].
+pub fn checked(steps: &[AskStep]) -> Result<(), BusError> {
+    if steps.is_empty() || steps.len() > MAX_STEPS {
+        return Err(invalid(format!("An ask holds 1 to {MAX_STEPS} steps")));
+    }
+    for (at, step) in steps.iter().enumerate() {
+        let n = at + 1;
+        if !ASKABLE.contains(&step.op.as_str()) {
+            return Err(BusError::refused("thread.ask_op", format!("Step {n}: {} is not something the assistant may ask for", step.op))
+                .with_hint(format!("an ask runs one of {}; the rest the person does themselves", ASKABLE.join(", "))));
+        }
+        let Some(payload) = step.payload.as_object() else {
+            return Err(invalid(format!("Step {n}: the payload is an object, the op's own")));
+        };
+        if let Some(flag) = REFUSED_FLAGS.iter().find(|flag| payload.get(**flag).is_some_and(|v| v != &Value::Bool(false))) {
+            return Err(BusError::refused("thread.ask_flag", format!("Step {n}: an ask may not set {flag}"))
+                .with_hint("deleting work, and widening what a session may do or what it bills, stay the person's"));
+        }
+    }
+    Ok(())
+}
+
+/// A step in words, for the summary and the agent: the op and what it names.
+fn step_words(step: &AskStep) -> String {
+    let p = &step.payload;
+    let text = |key: &str| p.get(key).and_then(Value::as_str).map(|s| cut(s, 60));
+    let id = |key: &str| p.get(key).and_then(Value::as_i64);
+    let session = text("session").unwrap_or_else(|| "the new session".into());
+    match step.op.as_str() {
+        "session.create" => {
+            let provider = text("provider").unwrap_or_else(|| "an agent".into());
+            let role = text("role").unwrap_or_else(|| "builder".into());
+            let project = id("project_id").map(|p| format!(" in project {p}")).unwrap_or_default();
+            format!("create a {provider} {role}{project}")
+        }
+        "session.spawn" => format!("start {session}"),
+        "session.resume" => format!("resume {session}"),
+        "session.park" => format!("park {session}"),
+        "session.wake" => format!("wake {session}"),
+        "session.close" => format!("close {session}"),
+        "session.input" => format!("type \u{201c}{}\u{201d} into {session}", text("data").unwrap_or_default().trim_end()),
+        "session.update" => format!("change {session}"),
+        "task.create" => format!("create the task \u{201c}{}\u{201d}", text("title").unwrap_or_default()),
+        "task.update" => format!("edit task #{}", id("task_id").unwrap_or_default()),
+        "task.move" => format!("move task #{} to {}", id("task_id").unwrap_or_default(), text("column").unwrap_or_default()),
+        "task.dispatch" => format!("dispatch task #{}", id("task_id").unwrap_or_default()),
+        "task.delete" => format!("delete task #{}", id("task_id").unwrap_or_else(|| id("id").unwrap_or_default())),
+        "notes.create" => format!("create the note \u{201c}{}\u{201d}", text("title").unwrap_or_default()),
+        "notes.update" => format!("edit note {}", id("note_id").unwrap_or_default()),
+        "workspace.create" => format!("add the workspace {}", text("path").or_else(|| text("name")).unwrap_or_default()),
+        "project.add" => format!("add the project {}", text("path").unwrap_or_default()),
+        op => op.to_string(),
+    }
+}
+
+/// What approving does, in words: its steps, one after the other.
+pub fn summary(steps: &[AskStep]) -> String {
+    let words: Vec<String> = steps.iter().map(step_words).collect();
+    let mut out = words.join(", then ");
+    if let Some(first) = out.get(..1) {
+        out = first.to_uppercase() + &out[1..];
+    }
+    out
+}
+
+/// Store an ask from thread `thread`'s agent; the same steps already waiting are that ask.
+pub fn ask(engine: &Engine, thread: Id, steps: Vec<AskStep>, why: &str, now: &str) -> Result<AskView, BusError> {
+    if super::get(engine, thread)?.kind != super::ASSISTANT {
+        return Err(BusError::refused("thread.not_assistant", "Only the assistant asks this way; a Threads conversation proposes (thread.propose)"));
+    }
+    let why = why.trim();
+    if why.is_empty() || why.chars().count() > MAX_WHY {
+        return Err(invalid(format!("Say why in 1 to {MAX_WHY} characters")));
+    }
+    checked(&steps)?;
+    let stored = serde_json::to_string(&steps).map_err(|e| BusError::internal(e.to_string()))?;
+    let summary = summary(&steps);
+    let id = with_db(engine, |db| {
+        let (same, waiting) = db.asks_waiting(thread, &stored)?;
+        if let Some(same) = same {
+            return Ok(Ok(same));
+        }
+        if waiting >= MAX_PENDING {
+            return Ok(Err(BusError::conflict("thread.ask_full", format!("{MAX_PENDING} asks already wait in this thread"))
+                .with_hint("wait for the person to answer them")));
+        }
+        db.ask(thread, &stored, why, &summary, now).map(Ok)
+    })??;
+    get(engine, id)
+}
+
+/// Answer ask `id`: claim it, so a second answer is refused. Declining is then done; an approval
+/// is `running`, and its steps run in [`carry_out`] once the store's lock is released.
+pub fn answer(engine: &Engine, id: Id, approve: bool, now: &str) -> Result<AskView, BusError> {
+    get(engine, id)?;
+    let (to, outcome) = if approve { ("running", None) } else { ("declined", Some("Not done.")) };
+    if !with_db(engine, |db| db.move_ask(id, "pending", to, outcome, "[]", now))? {
+        return Err(BusError::conflict("thread.ask_answered", format!("Ask {id} was already answered ({})", get(engine, id)?.status)));
+    }
+    get(engine, id)
+}
+
+/// Run approved ask `id`'s steps as the person, each its own request, and keep what came of it.
+/// Called after the approval's transaction, with the store's lock released.
+pub fn carry_out(engine: &Engine, id: Id) -> Result<AskView, BusError> {
+    let asked = get(engine, id)?;
+    if asked.status != "running" {
+        return Ok(asked);
+    }
+    let (status, outcome, results) = run(engine, &asked.steps);
+    let results = Value::Array(results).to_string();
+    with_db(engine, |db| db.move_ask(id, "running", status, Some(&outcome), &results, &crate::time::now()))?;
+    get(engine, id)
+}
+
+/// Run `steps` in order as the person: the status, the outcome in words, and each result.
+fn run(engine: &Engine, steps: &[AskStep]) -> (&'static str, String, Vec<Value>) {
+    let mut results = Vec::new();
+    let mut made: Option<String> = None;
+    let mut done = Vec::new();
+    for (at, step) in steps.iter().enumerate() {
+        let mut payload = step.payload.clone();
+        if let (Some(name), Some(fields)) = (&made, payload.as_object_mut()) {
+            if step.op.starts_with("session.") && !fields.contains_key("session") {
+                fields.insert("session".into(), json!(name));
+            }
+        }
+        let answer = engine.dispatch(Request::new(Actor::User, step.op.clone(), payload), crate::engine::Door::InProcess).into_result();
+        match answer {
+            Ok(result) => {
+                if step.op == "session.create" {
+                    made = result["name"].as_str().map(str::to_string);
+                }
+                done.push(step_words(&AskStep { op: step.op.clone(), payload: result_named(&step.payload, &made) }));
+                results.push(result);
+            }
+            Err(error) => {
+                let ran = if done.is_empty() { String::new() } else { format!(" Done before it: {}.", done.join(", ")) };
+                return ("failed", format!("Step {} ({}) failed: {}.{ran}", at + 1, step.op, error.message.trim_end_matches('.')), results);
+            }
+        }
+    }
+    let mut outcome = done.join(", then ");
+    if let Some(first) = outcome.get(..1) {
+        outcome = first.to_uppercase() + &outcome[1..];
+    }
+    ("approved", format!("{outcome}: done."), results)
+}
+
+/// `payload` with the session a `session.create` made named in it, for the words of what ran.
+fn result_named(payload: &Value, made: &Option<String>) -> Value {
+    let mut payload = payload.clone();
+    if let (Some(name), Some(fields)) = (made, payload.as_object_mut()) {
+        fields.entry("session").or_insert_with(|| json!(name));
+    }
+    payload
+}
+
+/// The answers thread `thread`'s agent has not heard, one line each, and which they are.
+pub(super) fn heard(engine: &Engine, thread: Id) -> (Vec<String>, Vec<(Id, String)>) {
+    let Ok(untold) = with_db(engine, |db| db.untold_asks(thread)) else { return (Vec::new(), Vec::new()) };
+    let lines = untold.iter().map(|(id, status, summary, outcome)| {
+        let summary = cut(summary, 240);
+        match status.as_str() {
+            "approved" => format!("[Relay: the person approved ask {id} ({summary}); it is done.]"),
+            "declined" => format!("[Relay: the person declined ask {id} ({summary}); nothing was done.]"),
+            _ => format!("[Relay: ask {id} ({summary}) was approved but failed: {}]", outcome.as_deref().unwrap_or("no reason given")),
+        }
+    }).collect();
+    (lines, untold.into_iter().map(|(id, status, _, _)| (id, status)).collect())
+}
+
+/// The agent was given these answers.
+pub(super) fn told(engine: &Engine, answers: &[(Id, String)]) {
+    for (id, status) in answers {
+        if let Err(e) = with_db(engine, |db| db.ask_told(*id, status)) {
+            tracing::warn!(ask = id, "marking an ask's answer told failed: {}", e.message);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn step(op: &str, payload: Value) -> AskStep {
+        AskStep { op: op.into(), payload }
+    }
+
+    #[test]
+    fn only_askable_ops_without_destructive_flags_pass() {
+        assert!(checked(&[step("session.park", json!({"session": "calm-otter"}))]).is_ok());
+        assert!(checked(&[step("session.close", json!({"session": "calm-otter", "discard_changes": false}))]).is_ok());
+        assert_eq!(checked(&[]).unwrap_err().code, "thread.invalid");
+        assert_eq!(checked(&vec![step("session.park", json!({"session": "a"})); 6]).unwrap_err().code, "thread.invalid");
+        for op in ["guardrail.confirm", "settings.set", "project.remove", "workspace.remove", "git.commit", "file.write", "thread.ask", "audit.undo"] {
+            assert_eq!(checked(&[step(op, json!({}))]).unwrap_err().code, "thread.ask_op", "{op}");
+        }
+        for flag in REFUSED_FLAGS {
+            let refused = checked(&[step("session.close", json!({"session": "a", *flag: true}))]).unwrap_err();
+            assert_eq!(refused.code, "thread.ask_flag", "{flag}");
+        }
+        assert_eq!(checked(&[step("session.park", json!("calm-otter"))]).unwrap_err().code, "thread.invalid");
+    }
+
+    #[test]
+    fn a_summary_reads_its_steps_in_order() {
+        let steps = [
+            step("session.create", json!({"project_id": 1, "provider": "claude"})),
+            step("session.spawn", json!({"prompt": "Fix the build"})),
+        ];
+        assert_eq!(summary(&steps), "Create a claude builder in project 1, then start the new session");
+        assert_eq!(summary(&[step("session.input", json!({"session": "calm-otter", "data": "yes\r"}))]), "Type \u{201c}yes\u{201d} into calm-otter");
+    }
+}

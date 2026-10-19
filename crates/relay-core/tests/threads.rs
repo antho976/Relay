@@ -17,7 +17,7 @@ fn fake_claude(dir: &Path) -> (PathBuf, PathBuf) {
     let log = dir.join("args.log");
     let script = dir.join("claude");
     let body = r#"#!/bin/sh
-printf 'OPS=%s %s\n' "$RELAY_MCP_OPS" "$*" | tr '\n' ' ' >> "LOG"; echo >> "LOG"
+printf 'OPS=%s STYLE=%s %s\n' "$RELAY_MCP_OPS" "$RELAY_MCP_STYLE" "$*" | tr '\n' ' ' >> "LOG"; echo >> "LOG"
 while IFS= read -r line; do
   printf '%s\n' "$line" >> "DIR/lines.log"
   case "$line" in *die*) exit 3;; esac
@@ -653,4 +653,150 @@ fn deleting_a_thread_removes_the_pictures_no_other_thread_carries() {
     // An upload not yet sent is no thread's: it waits for its message, or its day.
     assert!(picture_file(root.path(), &kept).is_file());
     ok(&engine, "thread.image", json!({"id": kept["id"]}));
+}
+
+/// The Dev space's assistant: a thread of its own kind, kept out of Threads' list, run with its
+/// own prompt and tools, that asks the person for what a session may not do and hears the answer.
+#[test]
+fn the_assistant_asks_the_person_and_hears_what_came_of_it() {
+    let engine = engine();
+    let dir = tempfile::tempdir().unwrap();
+    let log = with_fake(&engine, dir.path());
+    let money = ok(&engine, "thread.create", json!({}))["id"].clone();
+    let created = ok(&engine, "thread.create", json!({"kind": "assistant", "text": "Set up a workspace for my games"}));
+    let id = created["id"].clone();
+    assert_eq!(created["kind"], "assistant");
+    assert_eq!(code(call(&engine, "thread.create", json!({"kind": "robot"}))), "thread.invalid");
+    settled(&engine, &id, 4);
+
+    // Threads' list is Threads'; the assistant's is asked for by kind.
+    let listed = |kind: Value| -> Vec<Value> {
+        ok(&engine, "thread.list", json!({"kind": kind}))["threads"].as_array().unwrap().iter().map(|t| t["id"].clone()).collect()
+    };
+    assert_eq!(listed(Value::Null), std::slice::from_ref(&money));
+    assert_eq!(listed(json!("assistant")), std::slice::from_ref(&id));
+
+    // Its own tools and prompt.
+    let run = std::fs::read_to_string(&log).unwrap();
+    let ops = run.split_whitespace().next().unwrap().trim_start_matches("OPS=").to_string();
+    assert!(ops.split(',').any(|op| op == "thread.ask") && ops.split(',').any(|op| op == "session.list"), "{ops}");
+    assert!(!ops.split(',').any(|op| op.starts_with("money.") || op == "session.create" || op == "thread.propose"), "{ops}");
+    assert!(run.contains("You are the assistant in Relay"), "the assistant's prompt");
+
+    // Only the assistant asks, and only for what is on its list.
+    let games = dir.path().join("games");
+    std::fs::create_dir(&games).unwrap();
+    let workspace = json!({"steps": [{"op": "workspace.create", "payload": {"path": games, "name": "Games"}}], "why": "You asked for a workspace for your games"});
+    assert_eq!(code(call(&engine, "thread.ask", workspace.clone())), "thread.not_agent");
+    assert_eq!(code(from_agent(&engine, &money, "thread.ask", workspace.clone())), "thread.not_assistant");
+    let refused = |steps: Value| code(from_agent(&engine, &id, "thread.ask", json!({"steps": steps, "why": "Because"})));
+    assert_eq!(refused(json!([{"op": "guardrail.confirm", "payload": {"hold_id": 1}}])), "thread.ask_op");
+    assert_eq!(refused(json!([{"op": "session.close", "payload": {"session": "calm-otter", "discard_changes": true}}])), "thread.ask_flag");
+    let asked = from_agent(&engine, &id, "thread.ask", workspace.clone()).into_result().unwrap();
+    assert_eq!((asked["status"].as_str(), asked["summary"].as_str()), (Some("pending"), Some(&*format!("Add the workspace {}", games.display()))));
+    assert_eq!(from_agent(&engine, &id, "thread.ask", workspace).into_result().unwrap()["id"], asked["id"], "asking again is the same card");
+    assert!(ok(&engine, "workspace.list", json!({}))["workspaces"].as_array().unwrap().is_empty(), "nothing runs before the person answers");
+
+    // The person answers, once; no agent answers.
+    assert_eq!(code(from_agent(&engine, &id, "thread.ask.resolve", json!({"id": asked["id"], "approve": true}))), "thread.not_person");
+    assert!(call_as(&engine, Actor::agent("brisk-otter"), "thread.ask.resolve", json!({"id": asked["id"], "approve": true})).error.is_some());
+    ok(&engine, "thread.ask.resolve", json!({"id": asked["id"], "approve": true}));
+    let done = &ok(&engine, "thread.ask.list", json!({"thread_id": id}))["asks"][0];
+    assert_eq!(done["status"], "approved", "{done}");
+    assert_eq!(done["results"][0]["name"], "Games");
+    assert_eq!(ok(&engine, "workspace.list", json!({}))["workspaces"].as_array().unwrap().len(), 1);
+    assert_eq!(code(call(&engine, "thread.ask.resolve", json!({"id": asked["id"], "approve": false}))), "thread.ask_answered");
+
+    // A failing step stops the rest and says what ran before it; a declined ask runs nothing.
+    let failing = from_agent(&engine, &id, "thread.ask", json!({"steps": [
+        {"op": "workspace.create", "payload": {"path": dir.path().join("missing")}},
+        {"op": "session.park", "payload": {"session": "nobody-here"}},
+    ], "why": "Two things"})).into_result().unwrap();
+    ok(&engine, "thread.ask.resolve", json!({"id": failing["id"], "approve": true}));
+    let failed = ok(&engine, "thread.ask.list", json!({"thread_id": id}))["asks"][1].clone();
+    assert_eq!(failed["status"], "failed");
+    let outcome = failed["outcome"].as_str().unwrap();
+    assert!(outcome.starts_with("Step 2 (session.park) failed: ") && outcome.ends_with(&format!("Done before it: add the workspace {}.", dir.path().join("missing").display())), "{failed}");
+    assert_eq!(failed["results"].as_array().unwrap().len(), 1, "the step that ran");
+    let declined = from_agent(&engine, &id, "thread.ask", json!({"steps": [{"op": "session.park", "payload": {"session": "calm-otter"}}], "why": "Idle"})).into_result().unwrap();
+    assert_eq!(ok(&engine, "thread.ask.resolve", json!({"id": declined["id"], "approve": false}))["status"], "declined");
+
+    // It hears each answer once, ahead of the person's next words.
+    ok(&engine, "thread.send", json!({"id": id, "text": "Done?"}));
+    settled(&engine, &id, 8);
+    let lines = std::fs::read_to_string(dir.path().join("lines.log")).unwrap();
+    let line: Value = serde_json::from_str(lines.lines().last().unwrap()).unwrap();
+    let content = line["message"]["content"].as_str().unwrap();
+    assert!(content.starts_with(&format!("[Relay: the person approved ask {} (Add the workspace", asked["id"])), "{content}");
+    assert!(content.contains(&format!("ask {} (Add the workspace {}, then park nobody-here) was approved but failed: Step 2", failing["id"], dir.path().join("missing").display())), "{content}");
+    assert!(content.contains(&format!("the person declined ask {} (Park calm-otter); nothing was done.", declined["id"])) && content.ends_with("\n\nDone?"), "{content}");
+    ok(&engine, "thread.send", json!({"id": id, "text": "And now?"}));
+    settled(&engine, &id, 12);
+    let lines = std::fs::read_to_string(dir.path().join("lines.log")).unwrap();
+    let line: Value = serde_json::from_str(lines.lines().last().unwrap()).unwrap();
+    assert_eq!(line["message"]["content"], "And now?");
+    ok(&engine, "thread.delete", json!({"id": id}));
+}
+
+/// The assistant on a model on this PC: the model's server started for it (a stand-in that only
+/// answers `/health` here), Relay's own short prompt in place of Claude Code's, the lean tools, a
+/// door that introduces them as Relay's, and what Relay holds handed over with the first message.
+#[test]
+fn the_assistant_runs_on_a_model_on_this_pc_with_its_lean_profile() {
+    let engine = engine();
+    let dir = tempfile::tempdir().unwrap();
+    let log = with_fake(&engine, dir.path());
+    let models = dir.path().join("models");
+    std::fs::create_dir(&models).unwrap();
+    std::fs::write(models.join("Qwen3.5-4B-Q8_0.gguf"), b"stand-in").unwrap();
+    let server = dir.path().join("llama-server");
+    std::fs::write(&server, r#"#!/usr/bin/env python3
+import sys, http.server
+port = int(sys.argv[sys.argv.index("--port") + 1])
+class Health(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def do_GET(self):
+        self.send_response(200); self.send_header("Content-Length", "2"); self.end_headers(); self.wfile.write(b"{}")
+    def log_message(self, *a): pass
+http.server.HTTPServer(("127.0.0.1", port), Health).serve_forever()
+"#).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    ok(&engine, "settings.set", json!({"path": "threads.local.dir", "value": models}));
+    ok(&engine, "settings.set", json!({"path": "threads.local.server", "value": server}));
+    let repo = dir.path().join("ws").join("Shooter");
+    std::fs::create_dir_all(&repo).unwrap();
+    common::init_repo(&repo);
+    let workspace = ok(&engine, "workspace.create", json!({"path": dir.path().join("ws")}));
+    ok(&engine, "project.add", json!({"workspace_id": workspace["id"], "path": repo}));
+
+    let created = ok(&engine, "thread.create", json!({"kind": "assistant", "model": "qwen35-4b", "text": "What is running?"}));
+    assert_eq!(created["model"], "qwen35-4b");
+    let id = created["id"].clone();
+    wait_until("the local agent's reply", || {
+        let read = thread(&engine, &id);
+        assert!(!read["messages"].as_array().unwrap().iter().any(|m| m["role"] == "error"), "{read}");
+        read["thread"]["working"] == false && read["messages"].as_array().unwrap().len() >= 4
+    });
+
+    let run = std::fs::read_to_string(&log).unwrap();
+    let mut words = run.split_whitespace();
+    let ops = words.next().unwrap().trim_start_matches("OPS=");
+    assert_eq!(ops, relay_core::threads::assistant_local_ops().join(","));
+    let style = words.next().unwrap().trim_start_matches("STYLE=");
+    assert!(style.split(',').any(|p| p == "lean") && style.split(',').any(|p| p == "assistant"), "{style}");
+    assert!(run.contains("--system-prompt") && run.contains("You are the assistant in Relay, an app on this computer"), "Relay's short prompt");
+    assert!(!run.contains("--append-system-prompt"), "in place of Claude Code's own");
+    let lines = std::fs::read_to_string(dir.path().join("lines.log")).unwrap();
+    let first: Value = serde_json::from_str(lines.lines().next().unwrap()).unwrap();
+    let content = first["message"]["content"].as_str().unwrap();
+    assert!(content.starts_with("[Relay attached what it holds now") && content.contains("Project Shooter (project_id 1"), "{content}");
+    assert!(content.ends_with("[End of what Relay holds. My message:]\nWhat is running?"), "{content}");
+    // The thread keeps the person's own words.
+    assert_eq!(thread(&engine, &id)["messages"][0]["body"]["text"], "What is running?");
+    ok(&engine, "thread.stop", json!({"id": id}));
+    ok(&engine, "thread.pick", json!({}));
 }

@@ -11,8 +11,9 @@
 //!
 //! One exception, and a narrow one: a thread's agent (docs/THREADS.md) is the person's own
 //! conversation and has no session, so Relay's MCP server under it speaks as `user`. A process in a
-//! thread agent's tree may, but only for the ops that thread is given (`threads::AGENT_OPS`); the
-//! engine checks the op on every request, whatever the client in between lists.
+//! thread agent's tree may, but only for the ops that thread is given (`threads::AGENT_OPS`, or
+//! `threads::ASSISTANT_OPS` for the Dev space's assistant); the engine checks the op on every
+//! request, whatever the client in between lists.
 
 use crate::engine::Engine;
 use std::collections::{HashMap, HashSet};
@@ -31,6 +32,8 @@ pub enum Peer {
     Session(String),
     /// Inside the process tree of this thread's agent.
     Thread(relay_bus::types::Id),
+    /// Inside the process tree of this assistant thread's agent (the Dev space's assistant).
+    Assistant(relay_bus::types::Id),
     /// Below the engine but in no live session: a session's orphan, a build, a hook.
     EngineChild,
     /// Not identifiable: a peer in another pid namespace, an unreadable `/proc`, a process gone.
@@ -49,6 +52,7 @@ impl Peer {
     pub fn may_act_as_user_for(&self, op: &str) -> bool {
         match self {
             Peer::Thread(_) => crate::threads::peer_may_call(op),
+            Peer::Assistant(_) => crate::threads::assistant_may_call(op),
             _ => self.may_act_as_user(),
         }
     }
@@ -63,6 +67,10 @@ impl Peer {
             Peer::Thread(id) => (
                 format!("from thread {id}'s agent, which acts for you only through that thread's tools"),
                 serde_json::json!({"peer": "thread", "thread": id}),
+            ),
+            Peer::Assistant(id) => (
+                format!("from the assistant (thread {id}), which acts for you only through its own tools and asks you for the rest"),
+                serde_json::json!({"peer": "assistant", "thread": id}),
             ),
             Peer::EngineChild => (
                 "from a process the engine started outside every session (an orphan of a session, a build or a hook)".to_string(),
@@ -120,12 +128,13 @@ pub(crate) fn classify(
     classify_with(peer, engine, sessions, &HashMap::new(), ppid_of)
 }
 
-/// [`classify`], also knowing each running thread agent's pid (`threads`, pid to thread id).
+/// [`classify`], also knowing each running thread agent's pid (`threads`, pid to
+/// [`Peer::Thread`] or [`Peer::Assistant`]).
 pub(crate) fn classify_with(
     peer: u32,
     engine: u32,
     sessions: &HashMap<u32, String>,
-    threads: &HashMap<u32, relay_bus::types::Id>,
+    threads: &HashMap<u32, Peer>,
     ppid_of: impl Fn(u32) -> Option<u32>,
 ) -> Peer {
     if peer == 0 {
@@ -140,7 +149,7 @@ pub(crate) fn classify_with(
             return Peer::Session(name.clone());
         }
         if let Some(thread) = threads.get(&pid) {
-            return Peer::Thread(*thread);
+            return thread.clone();
         }
         let Some(parent) = ppid_of(pid) else {
             return Peer::Unknown("its ancestry is unreadable");
@@ -381,7 +390,7 @@ mod tests {
     fn a_thread_agent_acts_for_the_person_only_through_its_tools() {
         // relay mcp 960 → claude 950 (thread 7's agent) → engine 500
         let links = [(960, 950), (950, ENGINE), (ENGINE, 1), (1, 0)];
-        let threads = HashMap::from([(950, 7)]);
+        let threads = HashMap::from([(950, Peer::Thread(7))]);
         let peer = classify_with(960, ENGINE, &sessions(), &threads, tree(&links));
         assert_eq!(peer, Peer::Thread(7));
         assert!(!peer.may_act_as_user(), "never a blanket user");
@@ -407,6 +416,27 @@ mod tests {
         assert!(!Peer::Session("calm-otter".into()).may_act_as_user_for("money.summary"));
         assert!(Peer::Outside.may_act_as_user_for("money.reset"));
         assert!(Peer::Thread(7).refusal("user").message.contains("thread 7"));
+    }
+
+    #[test]
+    fn the_assistant_acts_for_the_person_only_through_its_own_tools() {
+        // relay mcp 960 → claude 950 (assistant thread 9's agent) → engine 500
+        let links = [(960, 950), (950, ENGINE), (ENGINE, 1), (1, 0)];
+        let threads = HashMap::from([(950, Peer::Assistant(9))]);
+        let peer = classify_with(960, ENGINE, &sessions(), &threads, tree(&links));
+        assert_eq!(peer, Peer::Assistant(9));
+        assert!(!peer.may_act_as_user());
+        for op in ["session.list", "session.transcript", "task.list", "mailbox.send", "thread.ask", "bus.ops"] {
+            assert!(peer.may_act_as_user_for(op), "{op}");
+        }
+        // What it asks for runs only when the person approves it, from the app.
+        for op in [
+            "session.create", "session.spawn", "session.close", "session.input", "workspace.create", "project.add",
+            "thread.ask.resolve", "guardrail.confirm", "settings.set", "project.remove", "money.summary", "thread.propose",
+        ] {
+            assert!(!peer.may_act_as_user_for(op), "{op}");
+        }
+        assert!(peer.refusal("user").message.contains("assistant"));
     }
 
     #[test]

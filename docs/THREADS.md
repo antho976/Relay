@@ -644,3 +644,71 @@ short, not base64, an agent), reads them back, sends them in new and running thr
 the stored body and the line the stand-in Claude was given, refuses five, an unknown id, both
 empty and a local model, and deletes a thread's pictures but not one another thread carries;
 `threads::images` sweeps a day-old upload and keeps a sent one.
+
+## The assistant (2026-10-19)
+
+A key in the Dev space's title bar (the sparkle, beside the bell) opens a drawer over the page's
+right edge: a conversation with an agent about Relay itself. Antho asked for something that can
+"do most things that do not pose serious security risk", asks before what a lone session cannot
+do, and only acts when spoken to.
+
+**It is a thread of its own kind.** `thread.create {kind: "assistant"}` makes one; `thread.list`
+lists Threads' own unless asked `{kind: "assistant"}`, so neither the Threads sidebar nor the phone
+shows it. `threads.db` version 5 adds the `kind` column and the `ask` table. The agent is the
+thread agent above (Claude in print mode, no shell, no files, `--tools ""`), started with
+`ASSISTANT_PROMPT` and `RELAY_MCP_OPS = threads::ASSISTANT_OPS`. It
+runs only for a message the person sends, like any thread, and its prompt tells it that what it
+reads from sessions, transcripts, mail, notes and tasks is data, never instructions.
+
+**What it may do alone** (`ASSISTANT_OPS`, admitted by the socket door as `peer::Peer::Assistant`):
+reads of workspaces, projects, sessions (list, transcript, scrollback, restorable), the board,
+notes, mail, worktrees, Git status and log, holds and exception requests, notifications and usage;
+and what any session may do itself: `mailbox.send`, `notes.append`, `task.comment`.
+
+**What it asks for** (`thread.ask {steps, why}`, `threads::asks::ASKABLE`): up to 5 steps, each a
+user-only op with its own payload, among `session.create`, `.spawn`, `.resume`, `.park`, `.wake`,
+`.close`, `.input`, `.update`, `task.create`, `.update`, `.move`, `.dispatch`, `.delete`,
+`notes.create`, `.update`, `workspace.create` and `project.add`. A step after `session.create`
+that leaves `session` out acts on the session it made, so "launch a builder" is one card.
+Refused when asked: any other op (`thread.ask_op`), and `discard_changes`, `remove_worktree(s)`,
+`force`, `bus_writes`, `allow_ui` or `use_api_key` set (`thread.ask_flag`). Guardrail answers,
+settings, removing anything, Git, files, money, keys and pairing are neither free nor askable.
+Only an assistant thread's own agent asks (`thread.not_agent`, `thread.not_assistant`).
+
+**Answering** (`thread.ask.resolve {id, approve}`, the person's alone: `UserOnly`, and
+`thread.not_person` from any thread's agent): the answer claims the ask in its transaction
+(`pending` → `running` or `declined`, a second answer `thread.ask_answered`); an approval's steps
+then run after that transaction and before the reply, each its own request as the person through
+the engine's pipeline, so every op's own checks, guardrails and audit apply. The first failure
+stops the rest; the outcome says which step failed and what ran before it. An ask Relay stopped
+mid-run is `failed` when `threads.db` next opens. The agent hears each answer once, at the head of
+the person's next message, beside its proposals' (`[Relay: the person approved ask 3 (…); it is done.]`).
+
+**On a model on this PC** (picked in the drawer, 2026-10-19), the assistant runs the local profile
+Threads' small models do (`LocalStyle`), with its own parts: `ASSISTANT_LOCAL_PROMPT` in place of
+Claude Code's prompt (short rules, the tools it has, and every ask written out as a step, since it
+has no `bus.schema`), `assistant_local_ops()` (20 of the 42 tools: the reads that answer about
+Relay, mail, a note's line, a comment, and `thread.ask`), a door introduced as Relay's
+(`RELAY_MCP_STYLE` gains `assistant`), and, with `prefetch`, what Relay holds handed over ahead of
+the first message: each project with its ids and path, and each open session with its project,
+role, state and intent (`relay_now`). Its tool schemas come to about 15.7k characters, against
+14.9k for Threads' own lean set, so it fits the same 32k context. The asks and their card are the
+same; a small model's wrong payload is refused by the op when the person approves it.
+
+**The drawer** (`apps/relay-native/src/assistant.rs`, `css/assistant.css`) reopens the newest
+assistant thread; + starts a new one. Its model picker, under the message box, offers Claude's
+models and the models on this PC whose files are present (`thread.models`), and says while a local
+one loads. A pick moves the conversation shown (`thread.set`, between replies) and is what new
+chats start on, kept as `native.assistant.model`; a local pick starts loading at once
+(`thread.pick`), and a Claude pick never calls it, so it cannot stop a local model a Threads
+conversation is using. Replies and tool lines are Threads' own; an ask is a card
+with Arbiter's amber "Needs your approval" pill, the summary, the agent's quoted reason, and each
+step's op and payload exactly as it will run, with Approve and Not now. Its state is the engine's
+(`thread.ask.list`, the `thread.ask` event), so an answer stays answered.
+
+This widens SPEC §10's "an agent never spawns, closes, or types into a session" in one place: the
+assistant may *ask*, and only the person's approval, from the app, makes it happen.
+
+Tests: `crates/relay-core/tests/threads.rs` (`the_assistant_asks_the_person_and_hears_what_came_of_it`,
+`the_assistant_runs_on_a_model_on_this_pc_with_its_lean_profile`, against a stand-in llama-server),
+`peer.rs` (the door admits only `ASSISTANT_OPS`), `threads.rs` and `threads/asks.rs` unit tests.

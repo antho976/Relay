@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 329,
+  "op_count": 332,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -5201,7 +5201,7 @@
       }
     },
     "thread.list": {
-      "summary": "Every thread, most recently used first",
+      "summary": "Every thread of one kind, most recently used first",
       "kind": "query",
       "audit": "never",
       "undo": "none",
@@ -5212,7 +5212,7 @@
       "since": "1.0",
       "phase": 5,
       "payload": {
-        "$ref": "#/$defs/Empty"
+        "$ref": "#/$defs/ThreadListIn"
       },
       "result": {
         "$ref": "#/$defs/ThreadListOut"
@@ -5529,6 +5529,64 @@
       },
       "result": {
         "$ref": "#/$defs/ThreadProposal"
+      }
+    },
+    "thread.ask": {
+      "summary": "The assistant asks the person for what a lone session may not do: launching, parking, waking, closing or typing into sessions, changing tasks, notes, workspaces and projects. It waits on a card; nothing runs until they approve",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "thread.ask"
+      ],
+      "since": "1.0",
+      "phase": 5,
+      "payload": {
+        "$ref": "#/$defs/ThreadAskIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ThreadAsk"
+      }
+    },
+    "thread.ask.list": {
+      "summary": "An assistant thread's asks, oldest first",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 5,
+      "payload": {
+        "$ref": "#/$defs/ThreadAskListIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ThreadAsksOut"
+      }
+    },
+    "thread.ask.resolve": {
+      "summary": "Approve or decline an assistant's ask. Approving runs its steps once, in order, as the person; the first failure stops the rest and is kept with its reason. The assistant hears the answer with the next message",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "thread.ask"
+      ],
+      "since": "1.0",
+      "phase": 5,
+      "payload": {
+        "$ref": "#/$defs/ThreadAskResolveIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ThreadAsk"
       }
     },
     "arbiter.summary": {
@@ -20288,6 +20346,19 @@
         "started"
       ]
     },
+    "ThreadListIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`assistant` for the Dev space's assistant conversations; absent or `money`, the Threads\nspace's."
+        }
+      }
+    },
     "ThreadListOut": {
       "type": "object",
       "properties": {
@@ -20349,6 +20420,10 @@
             "null"
           ],
           "description": "The start of the last message, for the thread list."
+        },
+        "kind": {
+          "type": "string",
+          "description": "`money` (a Threads conversation about Tally, Arbiter and Avex) or `assistant` (the Dev\nspace's assistant, about Relay itself)."
         }
       },
       "required": [
@@ -20358,7 +20433,8 @@
         "created_at",
         "updated_at",
         "working",
-        "live"
+        "live",
+        "kind"
       ]
     },
     "ThreadGetIn": {
@@ -20464,6 +20540,13 @@
             "null"
           ],
           "description": "How hard it thinks: `low`, `medium`, `high`, `xhigh` or `max`; the default when absent."
+        },
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`assistant` for the Dev space's assistant; absent or `money`, a Threads conversation."
         }
       }
     },
@@ -21072,6 +21155,157 @@
             "null"
           ],
           "description": "The `seen` of the reading the person approved. Without it, an approval is refused once\nanything changed since the proposal."
+        }
+      },
+      "required": [
+        "id",
+        "approve"
+      ]
+    },
+    "ThreadAskIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ThreadAskStep"
+          },
+          "description": "What approving runs, in order, at most 5; the first that fails stops the rest."
+        },
+        "why": {
+          "type": "string",
+          "description": "Why, in a sentence the person reads on the card."
+        }
+      },
+      "required": [
+        "steps",
+        "why"
+      ]
+    },
+    "ThreadAskStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "description": "One of the ops an assistant may ask for: `session.create`, `session.spawn`,\n`session.resume`, `session.park`, `session.wake`, `session.close`, `session.input`,\n`session.update`, `task.create`, `task.update`, `task.move`, `task.dispatch`,\n`task.delete`, `notes.create`, `notes.update`, `workspace.create`, `project.add`."
+        },
+        "payload": {
+          "description": "That op's own payload. A `session` left out of a step after `session.create` is the\nsession it made."
+        }
+      },
+      "required": [
+        "op",
+        "payload"
+      ],
+      "description": "One step of an ask: an op the person's approval runs, as the person, with its own payload."
+    },
+    "ThreadAsk": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "thread_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ThreadAskStep"
+          }
+        },
+        "why": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string",
+          "description": "What approving does, in words. Quote it."
+        },
+        "status": {
+          "type": "string",
+          "description": "`pending`, `running` (approved, under way), `approved`, `declined` or `failed`."
+        },
+        "outcome": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What approving did, or why a step failed (and which steps ran before it)."
+        },
+        "results": {
+          "type": "array",
+          "items": true,
+          "description": "Each step's result that ran, in order."
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "resolved_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "steps",
+        "why",
+        "summary",
+        "status",
+        "results",
+        "created_at"
+      ]
+    },
+    "ThreadAskListIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "thread_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "pending": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Only those still waiting when true."
+        }
+      },
+      "required": [
+        "thread_id"
+      ]
+    },
+    "ThreadAsksOut": {
+      "type": "object",
+      "properties": {
+        "asks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ThreadAsk"
+          }
+        }
+      },
+      "required": [
+        "asks"
+      ]
+    },
+    "ThreadAskResolveIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "approve": {
+          "type": "boolean"
         }
       },
       "required": [
