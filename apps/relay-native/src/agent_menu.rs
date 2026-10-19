@@ -87,7 +87,38 @@ fn tool_key(icon: &str, caption: &str, tooltip: &str) -> gtk::Button {
     key
 }
 
-const MENU_WIDTH: i32 = 320;
+/// An icon-only key in the wall-position pair; the tooltip carries the words.
+fn icon_key(icon: &str, tooltip: &str) -> gtk::Button {
+    let key = gtk::Button::new();
+    key.add_css_class("agent-menu-move-key");
+    key.set_child(Some(&crate::icons::image(icon, 14)));
+    key.set_tooltip_text(Some(tooltip));
+    key.update_property(&[gtk::accessible::Property::Label(tooltip)]);
+    key
+}
+
+/// A titled card of rows, the way Settings groups its preferences. Each row appended to the card
+/// takes `agent-menu-item`, which draws the hairline between it and the row above.
+fn group(body: &gtk::Box, title: &str, note: Option<&str>) -> gtk::Box {
+    let heading = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    heading.add_css_class("agent-menu-section");
+    let words = label(title, "agent-menu-section-title");
+    words.set_xalign(0.0);
+    words.set_hexpand(true);
+    heading.append(&words);
+    if let Some(note) = note {
+        heading.append(&label(note, "agent-menu-section-note"));
+    }
+    body.append(&heading);
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    card.add_css_class("agent-menu-group");
+    // Hover fills on the first and last rows follow the card's corners.
+    card.set_overflow(gtk::Overflow::Hidden);
+    body.append(&card);
+    card
+}
+
+const MENU_WIDTH: i32 = 340;
 
 /// Cap the scrolling part so the whole popover fits on the roomier side of its key, however
 /// small the pane it belongs to; a confirmation opening in the footer takes its room from the
@@ -126,12 +157,6 @@ fn fit_menu(key: &gtk::Button, scroller: &gtk::ScrolledWindow, foot: &gtk::Box) 
         let apply = apply.clone();
         revealer.connect_reveal_child_notify(move |_| apply());
     }
-}
-
-fn section(title: &str) -> gtk::Label {
-    let heading = label(title, "agent-menu-section");
-    heading.set_xalign(0.0);
-    heading
 }
 
 fn bus_code(error: &Error) -> Option<&str> {
@@ -647,23 +672,25 @@ impl Ui {
         let state = text(session, "state").to_string();
 
         // Identity.
-        let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let head = gtk::Box::new(gtk::Orientation::Vertical, 0);
         head.add_css_class("agent-menu-head");
+        let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let title = label(&name, "agent-menu-title");
         title.set_hexpand(true);
         title.set_xalign(0.0);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        head.append(&title);
+        top.append(&title);
         // The strip's word and lamp, so the menu never calls an agent something its pane does not.
         let (word, lamp) = crate::terminal::state_word(&state);
         let chip = label(&word, "agent-menu-state");
         chip.set_valign(gtk::Align::Center);
         chip.add_css_class(lamp);
-        head.append(&chip);
-        body.append(&head);
+        top.append(&chip);
+        head.append(&top);
         let meta = label(&format!("{} · {}", text(session, "provider"), text(session, "role")), "agent-menu-meta");
         meta.set_xalign(0.0);
-        body.append(&meta);
+        head.append(&meta);
+        body.append(&head);
         for (icon, value, ellipsize) in [
             ("branch", text(session, "branch"), gtk::pango::EllipsizeMode::Middle),
             ("folder", text(session, "worktree"), gtk::pango::EllipsizeMode::Start),
@@ -684,18 +711,19 @@ impl Ui {
             path.set_xalign(0.0);
             path.set_tooltip_text(Some(value));
             line.append(&path);
-            body.append(&line);
+            head.append(&line);
         }
 
-        // Place on the wall and the launch brief: one row of keys.
-        let tools = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        // What it was told and what it drew, then its place on the wall as an up/down pair.
+        let tools = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         tools.add_css_class("agent-menu-tools");
-        tools.set_homogeneous(true);
+        let place = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        place.add_css_class("agent-menu-move");
         let moves = [
-            ("arrow-up", "Earlier", "Move this agent one place earlier on the wall", -1),
-            ("arrow-down", "Later", "Move this agent one place later on the wall", 1),
+            ("arrow-up", "Move one place earlier on the wall", -1),
+            ("arrow-down", "Move one place later on the wall", 1),
         ]
-        .map(|(icon, caption, tip, delta)| (tool_key(icon, caption, tip), delta));
+        .map(|(icon, tip, delta)| (icon_key(icon, tip), delta));
         // Off at the wall's ends, where the move would do nothing; set again after each move.
         let ends: Rc<dyn Fn()> = Rc::new({
             let keys = moves.each_ref().map(|(key, delta)| (key.downgrade(), *delta));
@@ -729,9 +757,10 @@ impl Ui {
                     ends();
                 }
             });
-            tools.append(&key);
+            place.append(&key);
         }
         let brief = tool_key("brief", "Brief", "Read the instructions and peer brief this agent was started with");
+        brief.set_hexpand(true);
         let weak = Rc::downgrade(self);
         let n = name.clone();
         let p = popover.downgrade();
@@ -760,6 +789,7 @@ impl Ui {
         tools.append(&brief);
         let designs = tool_key("design", "Designs", "This terminal's designs: what its agent drew, and canvases tied to it");
         designs.set_widget_name("agent-menu-designs");
+        designs.set_hexpand(true);
         let weak = Rc::downgrade(self);
         let n = name.clone();
         let p = popover.downgrade();
@@ -771,17 +801,19 @@ impl Ui {
             crate::design::show(&ui, Some(n.clone()));
         });
         tools.append(&designs);
+        tools.append(&place);
         body.append(&tools);
 
         // Permissions: a switch takes effect when flipped, and flips back if the engine refuses.
-        body.append(&section("PERMISSIONS"));
+        let card = group(body, "Permissions", None);
         for (caption, hint, field) in [
-            ("Agent bus writes", "Let it write files, stage and commit through Relay, with guardrails checked as it goes", "bus_writes"),
+            ("Agent bus writes", "Write files, stage and commit through Relay, with guardrails checked as it goes", "bus_writes"),
             ("UI control", "Drive the Relay window", "allow_ui"),
         ] {
-            let line = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+            line.add_css_class("agent-menu-item");
             line.add_css_class("agent-menu-switch");
-            let words = gtk::Box::new(gtk::Orientation::Vertical, 1);
+            let words = gtk::Box::new(gtk::Orientation::Vertical, 2);
             words.set_hexpand(true);
             let title = label(caption, "agent-menu-caption");
             title.set_xalign(0.0);
@@ -789,7 +821,7 @@ impl Ui {
             let sub = label(hint, "agent-menu-hint");
             sub.set_xalign(0.0);
             sub.set_wrap(true);
-            sub.set_max_width_chars(34);
+            sub.set_max_width_chars(30);
             words.append(&sub);
             line.append(&words);
             let switch = gtk::Switch::new();
@@ -797,7 +829,7 @@ impl Ui {
             switch.set_active(session[field] == true);
             switch.update_property(&[gtk::accessible::Property::Label(caption)]);
             line.append(&switch);
-            body.append(&line);
+            card.append(&line);
             let reverting = Rc::new(Cell::new(false));
             let weak = Rc::downgrade(self);
             let n = name.clone();
@@ -825,13 +857,14 @@ impl Ui {
         }
 
         // Model and effort: editable until the agent starts, then only shown.
-        body.append(&section("MODEL"));
         if !session["spawned_at"].is_null() {
+            let card = group(body, "Launch", Some("Fixed once started"));
             for (caption, value, fallback) in [("Model", text(session, "model"), "Provider default"), ("Effort", text(session, "effort"), "Default")] {
                 let line = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+                line.add_css_class("agent-menu-item");
                 line.add_css_class("agent-menu-fact");
                 line.set_tooltip_text(Some("Fixed once the agent has started"));
-                let key = label(caption, "agent-menu-hint");
+                let key = label(caption, "agent-menu-caption");
                 key.set_xalign(0.0);
                 line.append(&key);
                 let shown = label(if value.is_empty() { fallback } else { value }, "mono");
@@ -842,21 +875,19 @@ impl Ui {
                     shown.add_css_class("unset");
                 }
                 line.append(&shown);
-                body.append(&line);
+                card.append(&line);
             }
         } else {
-            self.launch_options(popover, body, session);
+            let card = group(body, "Launch", Some("Editable until it starts"));
+            self.launch_options(popover, &card, session);
         }
 
-        // Linked repositories.
+        // What else lives in its worktree: linked repositories, and the phone build of its branch.
+        let card = group(body, "Worktree", None);
         if state != "closed" {
-            body.append(&section("LINKED REPOS"));
-            self.linked_section(body, session);
+            self.linked_section(&card, session);
         }
-
-        // Phone.
-        body.append(&section("PHONE"));
-        self.phone_section(body, session);
+        self.phone_section(&card, session);
 
         // Session: pinned under the scrolling part.
         // An exited agent (it quit, crashed or lost its login) starts fresh the same way.
@@ -940,9 +971,13 @@ impl Ui {
     }
 
     /// Model and effort for an agent that has not started yet, saved together.
-    fn launch_options(self: &Rc<Self>, popover: &gtk::Popover, body: &gtk::Box, session: &Value) {
+    fn launch_options(self: &Rc<Self>, popover: &gtk::Popover, card: &gtk::Box, session: &Value) {
         let name = text(session, "name").to_string();
-        let options = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        body.add_css_class("agent-menu-item");
+        body.add_css_class("agent-menu-fields");
+        card.append(&body);
+        let options = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let model = gtk::Entry::builder().text(text(session, "model")).placeholder_text("Provider default").hexpand(true).build();
         let effort = gtk::Entry::builder().text(text(session, "effort")).placeholder_text("Default").width_chars(8).build();
         for (caption, entry) in [("Model", &model), ("Effort", &effort)] {
@@ -1021,8 +1056,47 @@ impl Ui {
     /// Other repositories cloned into this agent's checkout (`session.repo.*`): the list, read
     /// when the popover opens, and a field to link one more. A removal that would lose unpushed
     /// work asks first.
-    fn linked_section(self: &Rc<Self>, body: &gtk::Box, session: &Value) {
+    fn linked_section(self: &Rc<Self>, card: &gtk::Box, session: &Value) {
         let name = text(session, "name").to_string();
+        // Folded behind one row that says how many there are; opening it shows them and the field.
+        let item = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        item.add_css_class("agent-menu-item");
+        card.append(&item);
+        let toggle = gtk::Button::new();
+        toggle.add_css_class("agent-menu-row");
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        row.append(&crate::icons::image("folder", 16));
+        let caption = label("Linked repos", "agent-menu-caption");
+        caption.set_hexpand(true);
+        caption.set_xalign(0.0);
+        row.append(&caption);
+        let count = label("", "agent-menu-count");
+        row.append(&count);
+        let (closed, open) = (crate::icons::image("chevron-right", 12), crate::icons::image("chevron-down", 12));
+        open.set_visible(false);
+        row.append(&closed);
+        row.append(&open);
+        toggle.set_child(Some(&row));
+        toggle.set_tooltip_text(Some("Other repositories cloned into this agent's worktree, where it can read and edit them"));
+        toggle.update_property(&[gtk::accessible::Property::Label("Linked repos")]);
+        item.append(&toggle);
+        let revealer = gtk::Revealer::new();
+        revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
+        revealer.set_transition_duration(120);
+        let body = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        body.add_css_class("agent-menu-reveal");
+        revealer.set_child(Some(&body));
+        item.append(&revealer);
+        let r = revealer.downgrade();
+        toggle.connect_clicked(move |toggle| {
+            let Some(r) = r.upgrade() else { return };
+            let showing = !r.reveals_child();
+            r.set_reveal_child(showing);
+            closed.set_visible(!showing);
+            open.set_visible(showing);
+            toggle.update_state(&[gtk::accessible::State::Expanded(Some(showing))]);
+        });
+        toggle.update_state(&[gtk::accessible::State::Expanded(Some(false))]);
         let list = gtk::Box::new(gtk::Orientation::Vertical, 4);
         body.append(&list);
         let add = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -1042,10 +1116,10 @@ impl Ui {
         status.set_xalign(0.0);
         status.set_visible(false);
         body.append(&status);
-        self.load_linked(&name, &list);
+        self.load_linked(&name, &list, &count);
 
         let weak = Rc::downgrade(self);
-        let (n, l, st) = (name.clone(), list.downgrade(), status.downgrade());
+        let (n, l, st, c) = (name.clone(), list.downgrade(), status.downgrade(), count.downgrade());
         let start: Rc<dyn Fn()> = Rc::new({
             let (url, link) = (url.downgrade(), link.downgrade());
             move || {
@@ -1060,7 +1134,7 @@ impl Ui {
                     st.set_text(&format!("Cloning {wanted}…"));
                     st.set_visible(true);
                 }
-                let (n, l, st) = (n.clone(), l.clone(), st.clone());
+                let (n, l, st, c) = (n.clone(), l.clone(), st.clone(), c.clone());
                 glib::spawn_future_local(async move {
                     let result = ui.call("session.repo.add", json!({"session": n, "url": wanted})).await;
                     link.set_sensitive(true);
@@ -1075,8 +1149,8 @@ impl Ui {
                     if let Some(st) = st.upgrade() {
                         st.set_text(&said);
                     }
-                    if let Some(l) = l.upgrade() {
-                        ui.load_linked(&n, &l);
+                    if let (Some(l), Some(c)) = (l.upgrade(), c.upgrade()) {
+                        ui.load_linked(&n, &l, &c);
                     }
                 });
             }
@@ -1086,10 +1160,11 @@ impl Ui {
         url.connect_activate(move |_| start());
     }
 
-    /// Fill `list` with this session's linked repositories, each with a remove key.
-    fn load_linked(self: &Rc<Self>, session: &str, list: &gtk::Box) {
+    /// Fill `list` with this session's linked repositories, each with a remove key, and say how
+    /// many there are on the folded row.
+    fn load_linked(self: &Rc<Self>, session: &str, list: &gtk::Box, count: &gtk::Label) {
         let ui = self.clone();
-        let (session, list) = (session.to_string(), list.downgrade());
+        let (session, list, count) = (session.to_string(), list.downgrade(), count.downgrade());
         glib::spawn_future_local(async move {
             let result = ui.call("session.repo.list", json!({"session": session})).await;
             let Some(list) = list.upgrade() else { return };
@@ -1099,12 +1174,24 @@ impl Ui {
             let repos = match result {
                 Ok(out) => out["repos"].as_array().cloned().unwrap_or_default(),
                 Err(e) => {
-                    list.append(&label(&format!("Could not list them: {e}"), "agent-menu-hint"));
+                    let said = label(&format!("Could not list them: {e}"), "agent-menu-hint");
+                    said.set_wrap(true);
+                    said.set_xalign(0.0);
+                    list.append(&said);
+                    if let Some(count) = count.upgrade() {
+                        count.set_text("");
+                    }
                     return;
                 }
             };
+            if let Some(count) = count.upgrade() {
+                count.set_text(&if repos.is_empty() { String::from("None") } else { repos.len().to_string() });
+            }
             if repos.is_empty() {
-                list.append(&label("None. Link another repository this agent needs to read or edit.", "agent-menu-hint"));
+                let said = label("Link another repository this agent needs to read or edit.", "agent-menu-hint");
+                said.set_wrap(true);
+                said.set_xalign(0.0);
+                list.append(&said);
             }
             for repo in repos {
                 let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -1131,16 +1218,16 @@ impl Ui {
                 remove.set_tooltip_text(Some("Delete this clone; you are asked first if it holds work that is not pushed"));
                 remove.update_property(&[gtk::accessible::Property::Label(&format!("Remove {repo_name}"))]);
                 let weak = Rc::downgrade(&ui);
-                let (s, l) = (session.clone(), list.downgrade());
+                let (s, l, c) = (session.clone(), list.downgrade(), count.clone());
                 remove.connect_clicked(move |key| {
                     let Some(ui) = weak.upgrade() else { return };
                     key.set_sensitive(false);
-                    let (s, l, repo_name, key) = (s.clone(), l.clone(), repo_name.clone(), key.clone());
+                    let (s, l, c, repo_name, key) = (s.clone(), l.clone(), c.clone(), repo_name.clone(), key.clone());
                     glib::spawn_future_local(async move {
                         ui.remove_linked(&s, &repo_name).await;
                         key.set_sensitive(true);
-                        if let Some(l) = l.upgrade() {
-                            ui.load_linked(&s, &l);
+                        if let (Some(l), Some(c)) = (l.upgrade(), c.upgrade()) {
+                            ui.load_linked(&s, &l, &c);
                         }
                     });
                 });
@@ -1179,8 +1266,11 @@ impl Ui {
 
     // ------------------------------------------------------------------ build & install on phone
 
-    fn phone_section(self: &Rc<Self>, body: &gtk::Box, session: &Value) {
+    fn phone_section(self: &Rc<Self>, card: &gtk::Box, session: &Value) {
         let name = text(session, "name").to_string();
+        let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        body.add_css_class("agent-menu-item");
+        card.append(&body);
         let install = row_key("phone-install", "Build & install on phone", "Build this agent's branch with Gradle, install it on the connected phone over ADB and launch it");
         body.append(&install);
         let devices = gtk::DropDown::from_strings(&[]);
