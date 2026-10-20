@@ -433,8 +433,6 @@ impl Doc {
     }
 
     /// The design row a `design.update` of this board answered with (B83).
-    // board.rs's rename and terminal link call it from native-canvas on.
-    #[allow(dead_code)]
     pub fn adopt(&self, row: Design) {
         self.shared.adopt(row);
     }

@@ -377,15 +377,8 @@ pub fn optional_number(caption: &str, value: Option<f64>, tooltip: &str, commit:
 
 /// A number field: type and press Enter, step with Up/Down (Shift: 10), or drag the caption
 /// sideways to scrub (Shift: finer). Esc puts back what it showed. `None` shows an empty field
-/// (mixed values). A caption `@name` is a glyph.
-pub fn number(caption: &str, value: Option<f64>, tooltip: &str, commit: impl Fn(f64) + 'static) -> gtk::Box {
-    stored_number_step(caption, value, 1.0, tooltip, move |v| {
-        commit(v);
-        v
-    })
-}
-
-/// `number`, whose `commit` answers the value it stored, in the field's own units (an opacity
+/// (mixed values). A caption `@name` is a glyph. Its `commit` answers the value it stored, in
+/// the field's own units (an opacity
 /// typed as 150 is kept as 100, an X of 10.5 as 11): the field shows that after Enter, a step,
 /// a scrub or leaving it, not what was typed (B34).
 pub fn stored_number(caption: &str, value: Option<f64>, tooltip: &str, commit: impl Fn(f64) -> f64 + 'static) -> gtk::Box {
