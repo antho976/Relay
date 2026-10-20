@@ -492,6 +492,53 @@ pub(crate) fn unsaved() -> Option<String> {
     boards.iter().any(|b| b.doc.busy()).then(|| "Designs are still saving. Close again in a moment.".to_string())
 }
 
+thread_local! {
+    /// The person agreed to lose the design edits `unsent` asked about: set for the close that
+    /// answer makes (`close_anyway`) and no longer.
+    static LOSE_UNSENT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Before the main window closes, after `unsaved`: the question to ask when a design holds edits
+/// that have not reached Relay (held back while it is not connected, or behind a refusal), which
+/// closing loses. Asked, not refused: while Relay is down the edits cannot go, and a refusal
+/// would keep the window open for as long as it stays down. `None` once the person agreed
+/// (`close_anyway`), for that close only.
+pub(crate) fn unsent() -> Option<(String, &'static str)> {
+    if LOSE_UNSENT.with(Cell::get) {
+        return None;
+    }
+    // A design open on several boards is one design (B28).
+    let mut seen = std::collections::HashSet::new();
+    let (mut edits, mut refused) = (0, false);
+    for b in boards() {
+        if seen.insert(b.doc.id) {
+            edits += b.doc.unsent();
+            refused |= b.doc.unsaved();
+        }
+    }
+    unsent_text(edits, refused)
+}
+
+/// The person said to close and lose what `unsent` asked about: `close` runs without the
+/// question. A close another check holds asks again next time.
+pub(crate) fn close_anyway(close: impl FnOnce()) {
+    LOSE_UNSENT.with(|l| l.set(true));
+    close();
+    LOSE_UNSENT.with(|l| l.set(false));
+}
+
+/// What closing asks, and its detail, of `edits` design edits held back, and a refusal
+/// (`refused`: the engine refused an edit and nothing was saved since).
+fn unsent_text(edits: usize, refused: bool) -> Option<(String, &'static str)> {
+    const WAIT: &str = "Keep Relay open and they go out once it is connected again.";
+    match (edits, refused) {
+        (0, false) => None,
+        (0, true) => Some(("A design edit was refused, and nothing has been saved since. Close anyway?".into(), "The design shows “Not saved” until its next edit is.")),
+        (1, _) => Some(("1 design edit hasn't reached Relay yet. Close and lose it?".into(), "Keep Relay open and it goes out once it is connected again.")),
+        (n, _) => Some((format!("{n} design edits haven't reached Relay yet. Close and lose them?"), WAIT)),
+    }
+}
+
 /// Every design window closed, each board's words in progress committed first: the main window
 /// is closing (TM-39).
 pub(crate) fn close_windows() {
@@ -567,6 +614,19 @@ mod tests {
         opening.cancel();
         assert!(!opening.current(b), "back to the gallery, or another project");
         assert!(opening.current(opening.begin()));
+    }
+
+    /// Closing asks before it loses edits held back from Relay, and says nothing when none are.
+    #[test]
+    fn closing_asks_before_it_loses_edits_relay_has_not_had() {
+        assert_eq!(unsent_text(0, false), None);
+        let ask = |edits, refused| unsent_text(edits, refused).map(|(q, _)| q);
+        assert_eq!(ask(1, true).as_deref(), Some("1 design edit hasn't reached Relay yet. Close and lose it?"));
+        assert_eq!(ask(3, false).as_deref(), Some("3 design edits haven't reached Relay yet. Close and lose them?"));
+        assert!(ask(0, true).is_some_and(|t| t.contains("refused")));
+        // Agreed once, the close under way goes; the next asks again.
+        close_anyway(|| assert!(LOSE_UNSENT.with(Cell::get) && unsent().is_none()));
+        assert!(!LOSE_UNSENT.with(Cell::get));
     }
 
     /// TM-50: what the person hears of a design deleted elsewhere.

@@ -167,7 +167,9 @@ and looks over the layer's own, so it never changes layout, and the layer at res
   context menu), drawn at 30 fps and 1× (smaller where a frame would pass 8,192 px a side or 4
   megapixels), up to 600 frames (20 s). The
   APNG loops forever when the motion loops, else plays once and ends on its last frame; frames are
-  `name-0000.png`, …. They wait for something that moves. Every other export and picture (PNG,
+  `name-0000.png`, …; the folder is left with that sequence only (an earlier, longer export's frames
+  past the last are removed, and a write that fails takes out what it wrote). They wait for
+  something that moves. Every other export and picture (PNG,
   SVG, PDF, thumbnails, Ask's picture, a render) is drawn at rest, even during Play.
 
 ## Agents

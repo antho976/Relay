@@ -12,6 +12,7 @@ use relay_bus::design::motion::{MAX_KEYS, MAX_MS};
 use relay_bus::design::{Ease, Key, Motion, Node, NodeKind};
 use relay_client::design::motion::{preset, presets_for};
 use serde_json::{json, Map, Value};
+use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 /// The eases a key or a motion takes, by their stored names, with what the inspector calls them.
@@ -108,6 +109,50 @@ fn change(weak: &Weak<Board>, id: &str, f: impl Fn(&mut Motion)) {
     send(&b, Some(m));
 }
 
+/// The key a row of the Motion section edits: where it sat and what it held when the row last
+/// wrote it. `send` puts the keys in time order, and the inspector is not rebuilt while one of
+/// its fields has the keyboard, so a row finds its key by what it holds, not by where it was
+/// when the row was built: 600 typed into the first of keys at 0 and 300 ms makes it the second.
+type Slot = Rc<RefCell<(usize, Key)>>;
+
+/// Where key `was`, last seen at `at`, sits in `keys` now: there still, else the first that
+/// holds the same. `None` when no key holds it any more (an agent changed it meanwhile).
+fn find_key(keys: &[Key], at: usize, was: &Key) -> Option<usize> {
+    if keys.get(at) == Some(was) {
+        return Some(at);
+    }
+    keys.iter().position(|k| k == was)
+}
+
+/// Change key `i` of `keys` with `f` and put them in time order, as `send` writes them (a stable
+/// sort: keys at one time keep their order): where it sits after.
+fn edit_key(keys: &mut Vec<Key>, i: usize, f: impl FnOnce(&mut Key)) -> usize {
+    if let Some(k) = keys.get_mut(i) {
+        f(k);
+    }
+    let mut order: Vec<(usize, Key)> = std::mem::take(keys).into_iter().enumerate().collect();
+    order.sort_by(|a, c| a.1.at_ms.total_cmp(&c.1.at_ms));
+    let at = order.iter().position(|(j, _)| *j == i).unwrap_or(i);
+    *keys = order.into_iter().map(|(_, k)| k).collect();
+    at
+}
+
+/// Change the key `slot` holds, in node `id`'s motion as it is now, with `f`, and write it; the
+/// slot then follows the key to where it sorts. Nothing when the key is no longer there.
+fn change_key(weak: &Weak<Board>, id: &str, slot: &Slot, f: impl FnOnce(&mut Key)) {
+    let Some(b) = weak.upgrade() else { return };
+    let Some(mut m) = current(&b, id, |n| n.motion.clone()) else { return };
+    let (at, was) = slot.borrow().clone();
+    let Some(i) = find_key(&m.keys, at, &was) else { return };
+    let to = edit_key(&mut m.keys, i, f);
+    let now = m.keys[to].clone();
+    send(&b, Some(m));
+    // Only what the scene took: a refused edit leaves the key as it was.
+    if current(&b, id, |n| n.motion.clone()).is_some_and(|m| m.keys.get(to) == Some(&now)) {
+        *slot.borrow_mut() = (to, now);
+    }
+}
+
 /// A key `i`'s field through JSON, as the stored names have it.
 fn set_field(k: &mut Key, field: &str, value: Value) {
     let mut fields = serde_json::to_value(&*k).ok().and_then(|v| v.as_object().cloned()).unwrap_or_default();
@@ -200,7 +245,7 @@ pub(super) fn motion(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
     head.append(&remove);
     sec.append(&head);
     for (i, k) in m.keys.iter().enumerate() {
-        sec.append(&key_row(b, n, i, k, m.keys.len()));
+        sec.append(&key_row(b, n, Rc::new(RefCell::new((i, k.clone()))), m.keys.len()));
     }
     if m.keys.len() < MAX_KEYS {
         let add = gtk::Button::with_label("Add key");
@@ -243,22 +288,20 @@ pub(super) fn motion(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
     sec.append(&looped);
 }
 
-/// Key `i` of `count`: its time, what it sets, its ease and a delete key; it opens to a field per
-/// property it sets and a menu adding another.
-fn key_row(b: &Rc<Board>, n: &Node, i: usize, k: &Key, count: usize) -> gtk::Box {
+/// The key `slot` holds, of `count`: its time, what it sets, its ease and a delete key; it opens
+/// to a field per property it sets and a menu adding another.
+fn key_row(b: &Rc<Board>, n: &Node, slot: Slot, count: usize) -> gtk::Box {
+    let key = slot.borrow().1.clone();
+    let k = &key;
     let weak = Rc::downgrade(b);
     let id = n.id.clone();
     let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
     row.add_css_class("design-motion-key");
     let top = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let (w, id2) = (weak.clone(), id.clone());
+    let (w, id2, s) = (weak.clone(), id.clone(), slot.clone());
     let at = stored_number("ms", Some(k.at_ms), "When, in ms from the start of its timeline", move |v| {
         let v = v.clamp(0.0, MAX_MS).round();
-        change(&w, &id2, |m| {
-            if let Some(k) = m.keys.get_mut(i) {
-                k.at_ms = v;
-            }
-        });
+        change_key(&w, &id2, &s, |k| k.at_ms = v);
         v
     });
     at.set_width_request(84);
@@ -266,14 +309,10 @@ fn key_row(b: &Rc<Board>, n: &Node, i: usize, k: &Key, count: usize) -> gtk::Box
     let names: Vec<&str> = std::iter::once("Default").chain(EASES.iter().map(|e| e.1)).collect();
     let now = k.ease.map(ease_name);
     let pos = now.as_deref().and_then(|now| EASES.iter().position(|e| e.0 == now)).map_or(0, |p| p + 1);
-    let (w, id2) = (weak.clone(), id.clone());
+    let (w, id2, s) = (weak.clone(), id.clone(), slot.clone());
     let ease = dropdown(&names, Some(pos), "How the move from this key to the next eases", move |p| {
         let ease: Option<Ease> = p.checked_sub(1).and_then(|p| serde_json::from_value(json!(EASES[p].0)).ok());
-        change(&w, &id2, |m| {
-            if let Some(k) = m.keys.get_mut(i) {
-                k.ease = ease;
-            }
-        });
+        change_key(&w, &id2, &s, |k| k.ease = ease);
     });
     ease.set_hexpand(true);
     top.append(&ease);
@@ -282,9 +321,10 @@ fn key_row(b: &Rc<Board>, n: &Node, i: usize, k: &Key, count: usize) -> gtk::Box
         delete.add_css_class("design-context-key");
         delete.set_child(Some(&super::glyphs::image("trash", 14)));
         tip(&delete, "Delete this key");
-        let (w, id2) = (weak.clone(), id.clone());
+        let (w, id2, s) = (weak.clone(), id.clone(), slot.clone());
         delete.connect_clicked(move |_| change(&w, &id2, |m| {
-            if m.keys.len() > 2 && i < m.keys.len() {
+            let (at, was) = s.borrow().clone();
+            if let Some(i) = find_key(&m.keys, at, &was).filter(|_| m.keys.len() > 2) {
                 m.keys.remove(i);
             }
         }));
@@ -293,38 +333,30 @@ fn key_row(b: &Rc<Board>, n: &Node, i: usize, k: &Key, count: usize) -> gtk::Box
     row.append(&top);
     let fields = gtk::Box::new(gtk::Orientation::Vertical, 4);
     for (field, caption, _) in NUMBERS.iter().filter(|(f, _, _)| get_field(k, f).is_some()) {
-        let (w, id2, field) = (weak.clone(), id.clone(), *field);
+        let (w, id2, s, field) = (weak.clone(), id.clone(), slot.clone(), *field);
         let value = get_field(k, field).and_then(|v| v.as_f64());
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         let number = stored_number(caption, value, caption, move |v| {
-            change(&w, &id2, |m| {
-                if let Some(k) = m.keys.get_mut(i) {
-                    set_field(k, field, json!(v));
-                }
-            });
+            change_key(&w, &id2, &s, |k| set_field(k, field, json!(v)));
             v
         });
         number.set_hexpand(true);
         line.append(&number);
-        line.append(&unset(&weak, &id, i, field));
+        line.append(&unset(&weak, &id, &slot, field));
         fields.append(&line);
     }
     for (field, caption) in COLOURS.iter().filter(|(f, _)| get_field(k, f).is_some()) {
-        let (w, id2, field) = (weak.clone(), id.clone(), *field);
+        let (w, id2, s, field) = (weak.clone(), id.clone(), slot.clone(), *field);
         let value = get_field(k, field).and_then(|v| v.as_str().map(str::to_string));
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         line.append(&label(caption, "design-number-caption"));
         // Keys take literal colours only (MODEL-SPEC §1 #22).
         line.append(&color_key(b, value.as_deref(), caption, None, move |c| {
             if let Some(c) = c.filter(|c| !c.starts_with('$')) {
-                change(&w, &id2, |m| {
-                    if let Some(k) = m.keys.get_mut(i) {
-                        set_field(k, field, json!(c));
-                    }
-                });
+                change_key(&w, &id2, &s, |k| set_field(k, field, json!(c)));
             }
         }));
-        line.append(&unset(&weak, &id, i, field));
+        line.append(&unset(&weak, &id, &slot, field));
         fields.append(&line);
     }
     let missing: Vec<(&str, String)> = NUMBERS
@@ -335,15 +367,11 @@ fn key_row(b: &Rc<Board>, n: &Node, i: usize, k: &Key, count: usize) -> gtk::Box
         .collect();
     if !missing.is_empty() {
         let captions: Vec<String> = missing.iter().map(|m| m.1.clone()).collect();
-        let (w, id2, rest) = (weak.clone(), id.clone(), rest_values(n));
+        let (w, id2, s, rest) = (weak.clone(), id.clone(), slot.clone(), rest_values(n));
         fields.append(&menu("+ property", "Set another property at this key, from its look at rest", &captions, move |p| {
             let field = missing[p].0;
             let value = rest.get(field).cloned().unwrap_or(Value::Null);
-            change(&w, &id2, |m| {
-                if let Some(k) = m.keys.get_mut(i) {
-                    set_field(k, field, value.clone());
-                }
-            });
+            change_key(&w, &id2, &s, |k| set_field(k, field, value));
         }));
     }
     let more = gtk::Expander::new(Some(&summary(k)));
@@ -352,18 +380,14 @@ fn key_row(b: &Rc<Board>, n: &Node, i: usize, k: &Key, count: usize) -> gtk::Box
     row
 }
 
-/// A key that takes `field` off key `i`.
-fn unset(weak: &Weak<Board>, id: &str, i: usize, field: &'static str) -> gtk::Button {
+/// A key that takes `field` off the key `slot` holds.
+fn unset(weak: &Weak<Board>, id: &str, slot: &Slot, field: &'static str) -> gtk::Button {
     let key = gtk::Button::new();
     key.add_css_class("design-context-key");
     key.set_child(Some(&super::glyphs::image("x", 12)));
     tip(&key, "Take it off this key");
-    let (w, id) = (weak.clone(), id.to_string());
-    key.connect_clicked(move |_| change(&w, &id, |m| {
-        if let Some(k) = m.keys.get_mut(i) {
-            set_field(k, field, Value::Null);
-        }
-    }));
+    let (w, id, s) = (weak.clone(), id.to_string(), slot.clone());
+    key.connect_clicked(move |_| change_key(&w, &id, &s, |k| set_field(k, field, Value::Null)));
     key
 }
 
@@ -456,6 +480,26 @@ mod tests {
         assert!(takes(&line, "trim") && !takes(&line, "sweep"));
         assert!(takes(&ring, "sweep") && !takes(&ring, "trim") && !takes(&ring, "angle"));
         assert!(!takes(&Node::new(NodeKind::Rect), "color"), "a box without words has no text colour");
+    }
+
+    /// A row follows its key through the re-sort its own edit makes: 600 typed into the first of
+    /// keys at 0 and 300 ms makes it the second, and the row's next edit is of it still.
+    #[test]
+    fn a_row_follows_its_key_when_the_keys_sort_again() {
+        let (mut k0, k1) = (Key::at(0.0), Key::at(300.0));
+        set_field(&mut k0, "dy", json!(24.0));
+        let mut keys = vec![k0.clone(), k1.clone()];
+        let to = edit_key(&mut keys, 0, |k| k.at_ms = 600.0);
+        assert_eq!((to, keys[0].at_ms, keys[1].at_ms), (1, 300.0, 600.0));
+        let moved = keys[to].clone();
+        assert_eq!(find_key(&keys, to, &moved), Some(1));
+        // A row that kept its old place finds its key by what it holds.
+        assert_eq!(find_key(&keys, 0, &moved), Some(1));
+        assert_eq!(find_key(&keys, 1, &k1), Some(0));
+        // Keys at one time keep their order; a key no one holds any more is not edited.
+        let mut same = vec![Key::at(100.0), Key::at(100.0), Key::at(200.0)];
+        assert_eq!(edit_key(&mut same, 1, |k| k.opacity = Some(0.5)), 1);
+        assert_eq!(find_key(&keys, 0, &k0), None);
     }
 
     /// Every ease the panel offers reads as one the model has.

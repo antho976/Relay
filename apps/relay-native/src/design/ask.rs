@@ -133,6 +133,25 @@ fn unsent_note(session: &str, provider: &str) -> Option<String> {
     (!crate::terminal::prompt_line_empty(&row, provider)).then(|| format!("{session}'s prompt has unsent text; send or clear it there first."))
 }
 
+/// Where a request goes once its picture is ready, by `session`'s `state` then: pasted at its
+/// prompt unless text is left there (`unsent`, read only for an agent at its prompt), mail for
+/// one gone to work, else held with what to say, as Send's own check routes it (TM-1, TM-20).
+fn recheck(session: &str, state: &str, unsent: impl FnOnce() -> Option<String>) -> Result<Route, String> {
+    match route(state) {
+        Route::Type => unsent().map_or(Ok(Route::Type), Err),
+        Route::Mail => Ok(Route::Mail),
+        way => Err(hold_note(session, way).unwrap_or_else(|| format!("{session}'s terminal has closed."))),
+    }
+}
+
+/// The composer's draft once `sent` has gone: emptied while it is still what was sent, kept when
+/// the person has typed another since.
+fn clear_sent(draft: &mut String, sent: &str) {
+    if draft.trim() == sent.trim() {
+        draft.clear();
+    }
+}
+
 /// Show `session`'s terminal from the board, or say why it cannot be (TM-1, E-ask-7).
 fn show_terminal(b: &Board, session: &str) {
     if !b.ui.upgrade().is_some_and(|ui| ui.show_session(session)) {
@@ -767,6 +786,32 @@ fn send_request(b: &Rc<Board>, session: String, request: String, with_picture: b
             motion: moving.then(|| if matches!(picture, Ok(Some(_))) { sheet_times.as_deref().unwrap_or_default() } else { &[][..] }),
             request: &request,
         });
+        // The terminal may have moved on while the picture was drawn and stored: read it again
+        // just before typing, and go as Send's check would, mail or held (TM-1, TM-20).
+        let checked = match way {
+            Route::Mail => Ok((Route::Mail, None)),
+            _ => match ui.call("session.list", json!({"project_id": project})).await {
+                Ok(v) => {
+                    let state = state_of(&v, &session);
+                    recheck(&session, &state, || unsent_note(&session, &provider_of(&v, &session))).map(|way| (way, Some(state)))
+                }
+                Err(e) => Err(format!("Could not check {session}'s terminal: {e}.")),
+            },
+        };
+        let way = match checked {
+            Ok((way, state)) => {
+                if let (Some(b), Some(state)) = (weak.upgrade(), state) {
+                    b.set_lamp(&state);
+                }
+                way
+            }
+            Err(note) => {
+                if let Some(b) = weak.upgrade() {
+                    b.toast(&format!("{note} Your request is kept for the next Ask."));
+                }
+                return;
+            }
+        };
         // Ok(true): sent whole; Ok(false): typed, but its Enter did not go.
         let sent: Result<bool, String> = match way {
             Route::Mail => {
@@ -792,11 +837,11 @@ fn send_request(b: &Rc<Board>, session: String, request: String, with_picture: b
             Err(e) => return b.toast(&format!("Could not reach {session}: {e}. Your request is kept for the next Ask.")),
             Ok(false) => {
                 // Sending it again would type it twice.
-                b.ask_draft.borrow_mut().clear();
+                clear_sent(&mut b.ask_draft.borrow_mut(), &request);
                 return b.toast(&format!("{session} has the request typed but not sent: press Enter in its terminal"));
             }
             Ok(true) => {
-                b.ask_draft.borrow_mut().clear();
+                clear_sent(&mut b.ask_draft.borrow_mut(), &request);
                 b.toast(&match way {
                     Route::Mail => format!("{session} is busy; it gets this with its next tool call{without}"),
                     _ => format!("Sent to {session}{without}. Its changes show here as it makes them."),
@@ -994,5 +1039,29 @@ mod tests {
         assert!(answered(4, 5, "ada", "ada"));
         assert!(!answered(4, 4, "ada", "ada"));
         assert!(!answered(4, 6, "user", "ada"));
+    }
+
+    /// The check just before typing routes as Send's own: an agent gone to work gets mail, one
+    /// at a dialog, starting or gone holds it, and text left at the prompt holds it too.
+    #[test]
+    fn the_last_check_routes_as_the_first() {
+        let none = || None;
+        assert_eq!(recheck("dev", "idle", none), Ok(Route::Type));
+        assert_eq!(recheck("dev", "running", || panic!("no prompt to read for mail")), Ok(Route::Mail));
+        assert!(recheck("dev", "blocked", none).is_err_and(|n| n.contains("waiting on you")));
+        assert!(recheck("dev", "spawning", none).is_err_and(|n| n.contains("still starting")));
+        assert_eq!(recheck("dev", "closed", none), Err("dev's terminal has closed.".into()));
+        assert_eq!(recheck("dev", "idle", || Some("left".into())), Err("left".into()));
+    }
+
+    /// A finished Ask empties the draft only while it still holds what was sent.
+    #[test]
+    fn a_finished_ask_keeps_a_draft_typed_since() {
+        let mut draft = "Make it bigger \n".to_string();
+        clear_sent(&mut draft, "Make it bigger");
+        assert_eq!(draft, "");
+        let mut draft = "And bluer".to_string();
+        clear_sent(&mut draft, "Make it bigger");
+        assert_eq!(draft, "And bluer");
     }
 }
