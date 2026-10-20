@@ -149,7 +149,7 @@ fn shadows_follow_the_kinds_that_cast_them() {
     let name = ok(&e, "session.create", json!({"project_id": 1, "provider": "claude", "role": "builder"}))["name"].as_str().unwrap().to_string();
     let agent = relay_bus::Actor::agent(&name);
     let stored = json!({"id": "t", "parent": "card", "kind": "text", "text": "Hi", "shadow": {"inset": true, "color": "#000"}});
-    let out = common::ok_as(&e, agent, "design.apply", json!({"design_id": id, "lenient": true, "ops": [{"op": "add", "node": stored}]}));
+    let out = common::ok_as(&e, agent, "design.apply", json!({"design_id": id, "lenient": true, "ops": [{"op": "add", "node": stored}], "reply": "full"}));
     assert_eq!(out["warnings"], json!(["ops[0] add \"t\": shadow.inset: text nodes cast no inner shadow; kept as it was"]));
     assert_eq!(find(&out["nodes"], "t")["shadow"]["inset"], true);
 }

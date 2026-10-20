@@ -20,6 +20,8 @@ pub(crate) mod render;
 mod revs;
 mod styles;
 
+pub(crate) use expect::undo_conflicts;
+
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project, check_project};
 use relay_bus::design::{plain_label, Node, NodeKind, MAX_NAME, NODE_OVERHEAD};

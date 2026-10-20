@@ -363,7 +363,7 @@ fn agents_tag_their_own_terminal_and_the_person_any_of_the_project() {
     let mine = ok_as(&e, agent.clone(), "design.create", json!({"title": "Mine"}))["design"].clone();
     assert_eq!((mine["session"].as_str(), mine["created_by"].as_str(), mine["project_id"].as_i64()), (Some(a.as_str()), Some(a.as_str()), Some(1)));
     let id = mine["id"].as_i64().unwrap();
-    let out = ok_as(&e, agent.clone(), "design.apply", json!({"design_id": id, "ops": [{"op": "add", "node": {"parent": "page-1", "kind": "text", "text": "hi"}}]}));
+    let out = ok_as(&e, agent.clone(), "design.apply", json!({"design_id": id, "ops": [{"op": "add", "node": {"parent": "page-1", "kind": "text", "text": "hi"}}], "reply": "full"}));
     assert_eq!(out["design"]["updated_by"], a.as_str());
     assert_eq!(code(call_as(&e, agent.clone(), "design.create", json!({"session": b}))), "actor.scope");
     assert_eq!(code(call_as(&e, agent.clone(), "design.update", json!({"design_id": id, "session": b}))), "actor.scope");

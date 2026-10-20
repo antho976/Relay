@@ -232,7 +232,7 @@ fn an_agent_replaying_its_undo_of_legacy_nodes_hears_what_it_put_back() {
     rewrite(&e, id, "t", t.clone());
     let before = nodes(&e, id);
 
-    let out = ok_as(&e, agent.clone(), "design.apply", json!({"design_id": id, "ops": [{"op": "delete", "id": "g"}]}));
+    let out = ok_as(&e, agent.clone(), "design.apply", json!({"design_id": id, "ops": [{"op": "delete", "id": "g"}], "reply": "full"}));
     let undone = ok_as(&e, agent.clone(), "design.apply", json!({"design_id": id, "ops": out["inverse"], "lenient": true}));
     assert_eq!(nodes(&e, id), before);
     assert_eq!((body(&e, id, "g"), body(&e, id, "t")), (g, t));

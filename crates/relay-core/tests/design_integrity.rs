@@ -119,8 +119,8 @@ fn nesting_stops_at_64_and_names_the_chain() {
     // Reordered where it is, it is no deeper: nothing to check.
     apply(&e, id, json!([{"op": "move", "id": "box", "index": 0}]));
 
-    // An undo (a lenient list) skips an add it cannot nest, and what was to go inside it; an
-    // agent is told.
+    // An undo (a lenient list) skips an add it cannot nest, and what was to go inside it, and
+    // says why.
     let at = rev(&e, id);
     let out = ok_as(&e, agent(&e), "design.apply", json!({"design_id": id, "lenient": true, "ops": [
         {"op": "add", "node": {"id": "deep", "parent": "f64", "kind": "frame"}},
@@ -128,7 +128,8 @@ fn nesting_stops_at_64_and_names_the_chain() {
         {"op": "add", "node": {"id": "fine", "parent": "f63", "kind": "rect"}},
     ]}));
     assert_eq!(out["ids"], json!(["", "", "fine"]));
-    assert_eq!(out["warnings"], json!(["ops[0] add \"deep\": it would sit 65 deep (page-1 › f1 › … › f63 › f64); a design nests at most 64 levels; skipped"]));
+    assert_eq!(out["skipped"], json!([{"at": 0, "id": "deep", "reason": "too_deep"}, {"at": 1, "id": "deeper", "reason": "parent_skipped"}]));
+    assert!(out.get("warnings").is_none(), "{out}");
     assert_eq!(rev(&e, id), at + 1);
     // Moved up, it and what it holds are no deeper: f64 now takes a child.
     apply(&e, id, json!([{"op": "move", "id": "f63", "parent": "page-1"}, {"op": "add", "node": {"id": "child", "parent": "f64", "kind": "rect"}}]));
@@ -252,7 +253,7 @@ fn a_lenient_list_lets_go_of_a_missing_end_with_a_warning() {
     let id = connected(&e);
     let agent = agent(&e);
     let before = nodes(&e, id);
-    let out = ok_as(&e, agent.clone(), "design.apply", json!({"design_id": id, "lenient": true, "ops": [
+    let out = ok_as(&e, agent.clone(), "design.apply", json!({"design_id": id, "lenient": true, "reply": "full", "ops": [
         {"op": "add", "node": {"id": "link", "parent": "page-1", "kind": "line", "points": [[0, 0], [5, 5]], "from": "gone", "to": "b"}},
         {"op": "update", "id": "joined", "set": {"to": "far"}},
     ]}));
