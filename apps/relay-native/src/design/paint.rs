@@ -546,7 +546,9 @@ impl Painter {
     }
 
     /// Paint `parent`'s children in order. A child with a `blend` mixes with what is painted
-    /// before it in the same parent (and `ground`, the parent's own fill, under them all).
+    /// before it in the same parent (and `ground`, the parent's own fill, under them all). For a
+    /// vector file (`vector`), what they draw stays vectors, and each blended child is a picture
+    /// of the blend over what is under it, cut to where it draws, which every viewer shows.
     fn paint_children(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, parent: &str, view: Option<&Rect>, ground: Option<&dyn Fn(&gtk::Snapshot)>) {
         let kids = scene.children(parent);
         let blends = |id: &String| scene.node(id).is_some_and(|n| !n.is_hidden() && blend_mode(n).is_some());
@@ -559,9 +561,13 @@ impl Painter {
             }
             return;
         }
+        let vector = self.vector.get();
         let mut acc = gtk::Snapshot::new();
         if let Some(ground) = ground {
             ground(&acc);
+            if vector {
+                ground(snap);
+            }
         }
         for child in kids {
             match scene.node(child).filter(|n| !n.is_hidden()).and_then(blend_mode) {
@@ -575,15 +581,30 @@ impl Painter {
                     acc.pop();
                     self.paint(&acc, scene, placed, child, view);
                     acc.pop();
+                    if vector {
+                        let mixed = acc.to_node();
+                        acc = gtk::Snapshot::new();
+                        if let Some(mixed) = &mixed {
+                            acc.append_node(mixed);
+                            if let Some(area) = bounds::painted_bounds(scene, placed, self, child) {
+                                raster_on_cairo(snap, mixed, &area);
+                            }
+                        }
+                    }
+                }
+                None if vector => {
+                    let one = gtk::Snapshot::new();
+                    self.paint(&one, scene, placed, child, view);
+                    if let Some(node) = one.to_node() {
+                        acc.append_node(&node);
+                        snap.append_node(&node);
+                    }
                 }
                 None => self.paint(&acc, scene, placed, child, view),
             }
         }
-        if let Some(node) = acc.to_node() {
-            if self.vector.get() {
-                // A blend has no vector form most viewers draw: pictured.
-                raster_on_cairo(snap, &node);
-            } else {
+        if !vector {
+            if let Some(node) = acc.to_node() {
                 snap.append_node(&node);
             }
         }
@@ -679,14 +700,15 @@ impl Painter {
                 }
             }
             NodeKind::Icon => {
-                let flipped = flip_about(snap, n, &r);
+                // Cast outside the flip, so its shadows stay where the light puts them (B120).
                 let cast = self.cast(snap, n);
+                let flipped = flip_about(snap, n, &r);
                 self.icon(snap, scene, n, &r);
-                if cast {
-                    snap.pop();
-                }
                 if flipped {
                     snap.restore();
+                }
+                if cast {
+                    snap.pop();
                 }
             }
             NodeKind::Text => {
@@ -779,11 +801,11 @@ impl Painter {
     fn shape(&self, snap: &gtk::Snapshot, n: &Node, path: &gsk::Path, r: &Rect) {
         let shadows = shapes::effective_shadows(n);
         for s in shadows.iter().filter(|s| !s.inset) {
-            path_shadow(snap, path, s);
+            path_shadow(snap, path, s, self.vector.get());
         }
         self.fill_path(snap, n, path, r);
         for s in shadows.iter().filter(|s| s.inset) {
-            path_inset_shadow(snap, path, s, r);
+            path_inset_shadow(snap, path, s, r, self.vector.get());
         }
         let w = n.stroke_width.unwrap_or(1.0);
         if w > 0.0 && (n.stroke.is_some() || n.stroke_gradient.is_some()) {
@@ -803,7 +825,7 @@ impl Painter {
                     return;
                 };
                 snap.push_stroke(path, pen);
-                gradient(snap, g, &area);
+                gradient(snap, g, &area, self.vector.get());
                 snap.pop();
             }
             None => {
@@ -817,7 +839,7 @@ impl Painter {
     fn fill_path(&self, snap: &gtk::Snapshot, n: &Node, path: &gsk::Path, r: &Rect) {
         if let Some(g) = &n.gradient {
             snap.push_fill(path, gsk::FillRule::Winding);
-            gradient(snap, g, r);
+            gradient(snap, g, r, self.vector.get());
             snap.pop();
         } else if let Some(fill) = fill_of(n).filter(|f| parse_color(f).is_some_and(|c| c[3] > 0)) {
             snap.append_fill(path, gsk::FillRule::Winding, &rgba(&fill));
@@ -829,7 +851,7 @@ impl Painter {
         if let Some(g) = &n.gradient {
             snap.push_rounded_clip(rr);
             let b = rr.bounds();
-            gradient(snap, g, &Rect::new(b.x() as f64, b.y() as f64, b.width() as f64, b.height() as f64));
+            gradient(snap, g, &rect_of(b), self.vector.get());
             snap.pop();
         } else if let Some(fill) = fill_of(n).filter(|f| parse_color(f).is_some_and(|c| c[3] > 0)) {
             snap.push_rounded_clip(rr);
@@ -985,7 +1007,7 @@ impl Painter {
                     match (&n.stroke_gradient, &area) {
                         (Some(g), Some(area)) => {
                             snap.push_fill(head, gsk::FillRule::Winding);
-                            gradient(snap, g, area);
+                            gradient(snap, g, area, self.vector.get());
                             snap.pop();
                         }
                         _ => snap.append_fill(head, gsk::FillRule::Winding, &color),
@@ -1130,23 +1152,43 @@ fn texture_on_cairo(snap: &gtk::Snapshot, texture: &gdk::Texture, target: &Rect)
     }
 }
 
-/// `node` pictured at twice its size (at most 8192 px a side) and drawn through cairo: what a
-/// vector file cannot carry as itself, a blend.
-fn raster_on_cairo(snap: &gtk::Snapshot, node: &gsk::RenderNode) {
+/// Draw with `draw`, or for a vector file (`vector`) a picture of what it draws (inside `area`,
+/// else all of it): what cairo can carry into an SVG only as a filter on an element, which some
+/// viewers draw white (TM-21), as a conic gradient or a mask.
+fn pictured(snap: &gtk::Snapshot, vector: bool, area: Option<&Rect>, draw: impl FnOnce(&gtk::Snapshot)) {
+    if !vector {
+        return draw(snap);
+    }
+    let one = gtk::Snapshot::new();
+    draw(&one);
+    if let Some(node) = one.to_node() {
+        let area = area.copied().unwrap_or_else(|| rect_of(&node.bounds()));
+        raster_on_cairo(snap, &node, &area);
+    }
+}
+
+/// What `node` shows inside `area`, pictured at twice its size (at most 8192 px a side) and drawn
+/// there through cairo: what a vector file cannot carry as itself, a blend.
+fn raster_on_cairo(snap: &gtk::Snapshot, node: &gsk::RenderNode, area: &Rect) {
     let b = rect_of(&node.bounds());
+    let (x0, y0) = (b.x.max(area.x).floor(), b.y.max(area.y).floor());
+    let (x1, y1) = (b.right().min(area.right()).ceil(), b.bottom().min(area.bottom()).ceil());
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    let b = Rect::new(x0, y0, x1 - x0, y1 - y0);
     let k = 2.0f64.min(8192.0 / b.w.max(b.h).max(1.0));
     let (w, h) = ((b.w * k).ceil().max(1.0) as i32, (b.h * k).ceil().max(1.0) as i32);
     let Ok(surface) = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h) else {
-        return snap.append_node(node);
+        return;
     };
-    match cairo::Context::new(&surface) {
-        Ok(cr) => {
-            cr.scale(k, k);
-            cr.translate(-b.x, -b.y);
-            node.draw(&cr);
-        }
-        Err(_) => return snap.append_node(node),
-    }
+    let Ok(cr) = cairo::Context::new(&surface) else {
+        return;
+    };
+    cr.scale(k, k);
+    cr.translate(-b.x, -b.y);
+    node.draw(&cr);
+    drop(cr);
     surface.flush();
     surface_on_cairo(snap, &surface, &Rect::new(b.x, b.y, w as f64 / k, h as f64 / k));
 }
@@ -1181,8 +1223,12 @@ fn see_through(snap: &gtk::Snapshot, color: &gdk::RGBA, shape: impl FnOnce(&gdk:
 
 /// A drop shadow under the shape `path`: the shape moved by the offset, grown by a positive
 /// spread or shrunk by a negative one, blurred as a box's shadow is (TM-25: the same radius
-/// `append_outset_shadow` takes).
-fn path_shadow(snap: &gtk::Snapshot, path: &gsk::Path, s: &Shadow) {
+/// `append_outset_shadow` takes). Pictured for a vector file (`vector`): it may take a mask.
+fn path_shadow(snap: &gtk::Snapshot, path: &gsk::Path, s: &Shadow, vector: bool) {
+    pictured(snap, vector, None, |snap| path_shadow_on(snap, path, s));
+}
+
+fn path_shadow_on(snap: &gtk::Snapshot, path: &gsk::Path, s: &Shadow) {
     let c = rgba(&s.color);
     let blur = blur_of(s);
     snap.save();
@@ -1213,8 +1259,13 @@ fn path_shadow(snap: &gtk::Snapshot, path: &gsk::Path, s: &Shadow) {
 
 /// An inner shadow inside the shape `path` (its box `r`): everything outside the shape, moved by
 /// the offset, the shape grown inwards by a positive spread (outwards by a negative one),
-/// blurred, and kept inside the shape, as CSS's inset box-shadow.
-fn path_inset_shadow(snap: &gtk::Snapshot, path: &gsk::Path, s: &Shadow, r: &Rect) {
+/// blurred, and kept inside the shape, as CSS's inset box-shadow. Pictured for a vector file
+/// (`vector`): it takes a mask.
+fn path_inset_shadow(snap: &gtk::Snapshot, path: &gsk::Path, s: &Shadow, r: &Rect, vector: bool) {
+    pictured(snap, vector, None, |snap| path_inset_shadow_on(snap, path, s, r));
+}
+
+fn path_inset_shadow_on(snap: &gtk::Snapshot, path: &gsk::Path, s: &Shadow, r: &Rect) {
     let c = rgba(&s.color);
     let blur = blur_of(s);
     // Far enough round the shape that its edge never shows inside it.
@@ -1445,8 +1496,9 @@ fn stroke_of(n: &Node, width: f64) -> gsk::Stroke {
     stroke
 }
 
-/// Paint `g` over `r` (the caller clips it to the shape).
-fn gradient(snap: &gtk::Snapshot, g: &Gradient, r: &Rect) {
+/// Paint `g` over `r` (the caller clips it to the shape). A conic gradient is pictured for a
+/// vector file (`vector`).
+fn gradient(snap: &gtk::Snapshot, g: &Gradient, r: &Rect, vector: bool) {
     let mut stops: Vec<gsk::ColorStop> = g.stops.iter().map(|s| gsk::ColorStop::new(s.at as f32, rgba(&s.color))).collect();
     stops.sort_by(|a, b| a.offset().total_cmp(&b.offset()));
     let centre = graphene::Point::new(r.cx() as f32, r.cy() as f32);
@@ -1466,7 +1518,7 @@ fn gradient(snap: &gtk::Snapshot, g: &Gradient, r: &Rect) {
         }
         // Round the centre, clockwise from `angle` (0, the default, at the top), as CSS's
         // `conic-gradient(from …)` and GSK's rotation read it.
-        GradientKind::Conic => snap.append_conic_gradient(&grect(r), &centre, g.angle.unwrap_or(0.0) as f32, &stops),
+        GradientKind::Conic => pictured(snap, vector, Some(r), |snap| snap.append_conic_gradient(&grect(r), &centre, g.angle.unwrap_or(0.0) as f32, &stops)),
     }
 }
 
