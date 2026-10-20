@@ -10,7 +10,7 @@
 //! (`Scene::new(nodes).with_styles(..)`), and the `color`, `style` and `delete_style` edits change
 //! them through the rules the engine runs them by (`relay_bus::design::Styles`).
 
-use relay_bus::design::{fit_written, valid_id, Node, NodeKind, NodeOp, Styles, MAX_NODES};
+use relay_bus::design::{fit_written, valid_id, Node, NodeKind, NodeOp, Styles, MAX_DEPTH, MAX_NODES};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// The key pages are listed under in `children`.
@@ -235,6 +235,66 @@ impl Scene {
         self.ancestors(id).contains(&ancestor)
     }
 
+    /// How deep `id` sits: its ancestors, its page included (a page is 0 deep, its child 1).
+    /// The walk stops past [`MAX_DEPTH`], so a deeper chain an older Relay stored reads as
+    /// `MAX_DEPTH + 1`.
+    pub fn depth(&self, id: &str) -> usize {
+        let mut depth = 0;
+        let mut at = self.parent(id);
+        while let Some(p) = at {
+            depth += 1;
+            if depth > MAX_DEPTH {
+                break;
+            }
+            at = self.parent(p);
+        }
+        depth
+    }
+
+    /// How many levels `id` holds below it (0 for a node with no children), counted level by
+    /// level and stopping past [`MAX_DEPTH`], as [`Scene::depth`] does.
+    pub fn height(&self, id: &str) -> usize {
+        self.levels_below(id, MAX_DEPTH + 1)
+    }
+
+    fn levels_below(&self, id: &str, most: usize) -> usize {
+        let mut level = vec![id];
+        let mut height = 0;
+        while height < most {
+            let next: Vec<&str> = level.iter().flat_map(|at| self.children(at)).map(String::as_str).collect();
+            if next.is_empty() {
+                break;
+            }
+            height += 1;
+            level = next;
+        }
+        height
+    }
+
+    /// The refusal of an add under `parent` (with `moved`, a move of that node there), worded as
+    /// the engine's `design.too_deep`: how deep it would sit and the chain it would sit in.
+    fn too_deep(&self, parent: &str, moved: Option<&str>) -> String {
+        let mut chain = self.ancestors(parent);
+        chain.reverse();
+        chain.push(parent);
+        let mut deep = chain.len();
+        let mut what = "it";
+        if let Some(id) = moved {
+            chain.push(id);
+            let below = self.levels_below(id, usize::MAX);
+            if below > 0 {
+                deep += below;
+                what = "what it holds";
+            }
+        }
+        let shown = match chain.len() {
+            n if n > 5 => format!("{} › {} › … › {} › {}", chain[0], chain[1], chain[n - 2], chain[n - 1]),
+            _ => chain.join(" › "),
+        };
+        let more = if what == "it" { "" } else { " › …" };
+        format!("{what} would sit {deep} deep ({shown}{more}); a design nests at most {MAX_DEPTH} levels")
+    }
+
     /// `id` and everything inside it, each parent before its children, siblings bottom to top.
     pub fn subtree(&self, id: &str) -> Vec<String> {
         let mut out = Vec::new();
@@ -271,16 +331,16 @@ impl Scene {
 
     /// Run one edit as the engine runs a lenient list's (an undo or a redo replaying what was
     /// stored): the value rules only. What names a colour or style the design no longer holds is
-    /// taken out, and a `delete_style` of a name that is gone does nothing, as the engine skips
-    /// them. On an error nothing changed.
+    /// taken out, an add or move past [`MAX_DEPTH`] is skipped, and a `delete_style` of a name
+    /// that is gone does nothing, as the engine skips them. On an error nothing changed.
     pub fn apply(&mut self, op: &NodeOp) -> Result<(), String> {
         self.run(op, false)
     }
 
     /// Run one new edit as the engine runs a strict list's: [`Scene::apply`], and the rules on
-    /// what a caller writes (`Node::check_new`, `Node::check_update`) and every colour and style
-    /// a node names held by the design, so the canvas refuses exactly what the engine would. On
-    /// an error nothing changed.
+    /// what a caller writes (`Node::check_new`, `Node::check_update`), every colour and style a
+    /// node names held by the design, and no node more than [`MAX_DEPTH`] deep, so the canvas
+    /// refuses exactly what the engine would. On an error nothing changed.
     pub fn apply_strict(&mut self, op: &NodeOp) -> Result<(), String> {
         self.run(op, true)
     }
@@ -303,6 +363,13 @@ impl Scene {
                 node.validate()?;
                 if let Some(parent) = &node.parent {
                     self.check_container(parent)?;
+                    if self.depth(parent) + 1 > MAX_DEPTH {
+                        // A lenient list skips it, as the engine's does (too_deep).
+                        return match strict {
+                            true => Err(format!("add {}: {}", node.id, self.too_deep(parent, None))),
+                            false => Ok(()),
+                        };
+                    }
                 }
                 let mut node = node.clone();
                 if Styles::uses(&node) {
@@ -349,6 +416,14 @@ impl Scene {
                     self.check_container(&to)?;
                     if to == *id || self.is_inside(&to, id) {
                         return Err(format!("move: {to} is inside {id}"));
+                    }
+                    // Only a new parent can take it deeper: a node a deeper chain stored still
+                    // reorders among its siblings.
+                    if old.as_deref() != Some(to.as_str()) && self.depth(&to) + 1 + self.height(id) > MAX_DEPTH {
+                        return match strict {
+                            true => Err(format!("move {id}: {}", self.too_deep(&to, Some(id)))),
+                            false => Ok(()),
+                        };
                     }
                     Some(to)
                 };
@@ -823,5 +898,48 @@ pub(crate) mod tests {
         assert_eq!(placed.rect("c").map(|r| (r.w, r.h)), Some((32.0, 32.0)));
         let placed = crate::design::layout::place(&sample(), "p1", &BySize);
         assert_eq!(placed.rect("c").map(|r| (r.w, r.h)), Some((16.0, 16.0)));
+    }
+
+    /// A page and a chain of frames under it, `f1` to `f{deep}`, each inside the one before.
+    fn chain(deep: usize) -> Vec<Node> {
+        let mut nodes = vec![node("p1", None, NodeKind::Page, [0.0; 4])];
+        for i in 1..=deep {
+            let parent = if i == 1 { "p1".to_string() } else { format!("f{}", i - 1) };
+            nodes.push(node(&format!("f{i}"), Some(&parent), NodeKind::Frame, [0.0, 0.0, 10.0, 10.0]));
+        }
+        nodes
+    }
+
+    #[test]
+    fn nesting_stops_at_max_depth() {
+        let add = |id: &str, parent: &str| NodeOp::Add { node: node(id, Some(parent), NodeKind::Frame, [0.0, 0.0, 10.0, 10.0]), index: None };
+        let to = |id: &str, parent: &str| NodeOp::Move { id: id.into(), parent: Some(parent.into()), index: None, keep_position: None };
+        let mut s = Scene::new(chain(63));
+        assert_eq!((s.depth("p1"), s.depth("f63"), s.height("p1"), s.height("f63")), (0, 63, 63, 0));
+        s.apply_all(&[add("f64", "f63")]).unwrap();
+        assert_eq!(s.depth("f64"), MAX_DEPTH);
+        let why = s.apply_all(&[add("f65", "f64")]).unwrap_err();
+        assert_eq!(why, "ops[0]: add f65: it would sit 65 deep (p1 › f1 › … › f63 › f64); a design nests at most 64 levels");
+        // A replay skips it, as the engine's lenient list does.
+        s.apply(&add("f65", "f64")).unwrap();
+        assert!(s.node("f65").is_none());
+        // A move counts what the moved node holds.
+        s.apply_all(&[add("g", "p1"), add("h", "g")]).unwrap();
+        let why = s.apply_all(&[to("g", "f63")]).unwrap_err();
+        assert_eq!(why, "ops[0]: move g: what it holds would sit 65 deep (p1 › f1 › … › f63 › g › …); a design nests at most 64 levels");
+        let why = s.apply_all(&[to("h", "f64")]).unwrap_err();
+        assert_eq!(why, "ops[0]: move h: it would sit 65 deep (p1 › f1 › … › f64 › h); a design nests at most 64 levels");
+        s.apply(&to("g", "f63")).unwrap();
+        assert_eq!(s.parent("g"), Some("p1"));
+        s.apply_all(&[to("g", "f62")]).unwrap();
+        assert_eq!(s.depth("h"), MAX_DEPTH);
+        // A deeper chain an older Relay stored: the walks stop counting, and nothing recurses.
+        let mut legacy = Scene::new(chain(4990));
+        assert_eq!((legacy.depth("f4990"), legacy.height("p1"), legacy.to_nodes().len()), (MAX_DEPTH + 1, MAX_DEPTH + 1, 4991));
+        // Its nodes still reorder among their siblings, and nothing goes deeper.
+        legacy.apply_all(&[add("x", "p1"), NodeOp::Move { id: "f1".into(), parent: None, index: None, keep_position: None }]).unwrap();
+        assert_eq!(legacy.children("p1"), ["x", "f1"]);
+        let why = legacy.apply_all(&[add("y", "f4990")]).unwrap_err();
+        assert!(why.starts_with("ops[0]: add y: it would sit 4991 deep (p1 › f1 › … › f4989 › f4990)"), "{why}");
     }
 }
