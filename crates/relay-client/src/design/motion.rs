@@ -96,7 +96,8 @@ impl Clocks {
         &self.clocks
     }
 
-    /// The clock `owner`'s timeline (or, for a page, its implicit clock) runs, if anything plays on it.
+    /// The clock of `owner`'s timeline (a page's implicit clock when it has none), if anything
+    /// plays on it: the length a Timeline field shows when it names none.
     pub fn clock(&self, owner: &str) -> Option<&Clock> {
         self.clocks.iter().find(|c| c.owner == owner)
     }
