@@ -150,9 +150,12 @@ fn gif(b: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// The first frame header (SOF0 to SOF15, less the DHT, JPG and DAC markers that share
-/// the range), walking the segments before it.
+/// the range), walking the segments before it; its sides swapped when an Exif segment before it
+/// says the picture is shown turned a quarter (orientations 5 to 8, as a phone tags a portrait
+/// photo stored landscape), so the size is the one it is shown at (TM-24).
 fn jpeg(b: &[u8]) -> Option<(u32, u32)> {
     let mut at = 2;
+    let mut turned = false;
     loop {
         if *b.get(at)? != 0xFF {
             return None;
@@ -169,17 +172,55 @@ fn jpeg(b: &[u8]) -> Option<(u32, u32)> {
             0xD9 | 0xDA => return None,
             0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) => {
                 // length(2), precision(1), height(2), width(2)
-                return Some((be16(b, at + 5)?, be16(b, at + 3)?));
+                let (w, h) = (be16(b, at + 5)?, be16(b, at + 3)?);
+                return Some(if turned { (h, w) } else { (w, h) });
             }
             _ => {
                 let len = be16(b, at)? as usize;
                 if len < 2 {
                     return None;
                 }
+                if marker == 0xE1 {
+                    let segment = b.get(at + 2..(at + len).min(b.len())).unwrap_or_default();
+                    if let Some(orientation) = exif_orientation(segment) {
+                        turned = (5..=8).contains(&orientation);
+                    }
+                }
                 at += len;
             }
         }
     }
+}
+
+/// The orientation (tag 0x0112 of IFD0, 1 to 8) an APP1 segment's Exif data gives, if it is
+/// Exif and gives one.
+fn exif_orientation(segment: &[u8]) -> Option<u16> {
+    let tiff = segment.strip_prefix(b"Exif\0\0")?;
+    let big = match tiff.get(0..2)? {
+        b"MM" => true,
+        b"II" => false,
+        _ => return None,
+    };
+    let u16_at = |at: usize| -> Option<u16> {
+        let two: [u8; 2] = tiff.get(at..at.checked_add(2)?)?.try_into().ok()?;
+        Some(if big { u16::from_be_bytes(two) } else { u16::from_le_bytes(two) })
+    };
+    let u32_at = |at: usize| -> Option<u32> {
+        let four: [u8; 4] = tiff.get(at..at.checked_add(4)?)?.try_into().ok()?;
+        Some(if big { u32::from_be_bytes(four) } else { u32::from_le_bytes(four) })
+    };
+    if u16_at(2)? != 42 {
+        return None;
+    }
+    let ifd = u32_at(4)? as usize;
+    // 12 bytes an entry, after a count of them; a SHORT's value sits in the first two bytes of
+    // the entry's value field.
+    for entry in (0..u16_at(ifd)? as usize).map(|i| ifd + 2 + i * 12) {
+        if u16_at(entry)? == 0x0112 {
+            return (u16_at(entry + 2)? == 3).then(|| u16_at(entry + 8)).flatten();
+        }
+    }
+    None
 }
 
 /// The first chunk: lossy (`VP8 `), lossless (`VP8L`) or extended (`VP8X`, its canvas).
@@ -318,6 +359,48 @@ mod tests {
         assert_eq!(sniff(&lossless), pic("webp", 100, 50));
         let extended = riff(b"VP8X", &[0, 0, 0, 0, 0xFF, 0x03, 0x00, 0xFF, 0x01, 0x00]);
         assert_eq!(sniff(&extended), pic("webp", 1024, 512));
+    }
+
+    /// A JPEG of `w` by `h` stored, whose Exif says it is shown at `orientation`, in `order`'s
+    /// byte order (`II` or `MM`).
+    fn exif_jpeg(w: u16, h: u16, orientation: u16, order: &[u8; 2]) -> Vec<u8> {
+        let big = order == b"MM";
+        let n16 = |v: u16| if big { v.to_be_bytes() } else { v.to_le_bytes() };
+        let n32 = |v: u32| if big { v.to_be_bytes() } else { v.to_le_bytes() };
+        // The TIFF header, IFD0 at 8 with two entries (an ImageWidth first, so the walk steps
+        // over one), and no next IFD.
+        let entry = |tag: u16, value: u16| [n16(tag).as_slice(), &n16(3), &n32(1), &n16(value), &[0, 0]].concat();
+        let mut tiff = [order.as_slice(), &n16(42), &n32(8), &n16(2)].concat();
+        tiff.extend(entry(0x0100, w));
+        tiff.extend(entry(0x0112, orientation));
+        tiff.extend([0u8; 4]);
+        let app1 = [b"Exif\0\0".as_slice(), &tiff].concat();
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        jpeg.extend((app1.len() as u16 + 2).to_be_bytes());
+        jpeg.extend(app1);
+        jpeg.extend([0xFF, 0xC0, 0x00, 0x11, 0x08]);
+        jpeg.extend(h.to_be_bytes());
+        jpeg.extend(w.to_be_bytes());
+        jpeg
+    }
+
+    /// TM-24: a phone's portrait photo is stored landscape and tagged to be shown turned; its
+    /// size is the one it is shown at, as every viewer shows it.
+    #[test]
+    fn a_jpeg_turned_by_its_exif_is_sized_as_shown() {
+        for order in [b"II", b"MM"] {
+            assert_eq!(sniff(&exif_jpeg(200, 100, 6, order)), pic("jpg", 100, 200), "{order:?}");
+            assert_eq!(sniff(&exif_jpeg(200, 100, 8, order)), pic("jpg", 100, 200));
+            assert_eq!(sniff(&exif_jpeg(200, 100, 5, order)), pic("jpg", 100, 200), "turned and mirrored");
+            assert_eq!(sniff(&exif_jpeg(200, 100, 1, order)), pic("jpg", 200, 100), "upright");
+            assert_eq!(sniff(&exif_jpeg(200, 100, 3, order)), pic("jpg", 200, 100), "upside down keeps its sides");
+        }
+        // Exif cut short, or not Exif at all: the size as stored.
+        let mut cut = exif_jpeg(200, 100, 6, b"II");
+        cut[14] = b'X';
+        assert_eq!(sniff(&cut), pic("jpg", 200, 100), "a TIFF header that is not one");
+        assert_eq!(exif_orientation(b"Exif\0\0II*\0\x08\0\0\0\x05\0"), None, "entries past the end");
+        assert_eq!(exif_orientation(b"http://ns.adobe.com/xap/1.0/\0"), None);
     }
 
     /// B65's fix is in design.asset.add: the uploads a model reads keep the size a header
