@@ -763,3 +763,240 @@ fn the_test_instance_never_goes_online() {
     }
     assert!(started.elapsed() < std::time::Duration::from_secs(2), "at once: {:?}", started.elapsed());
 }
+
+// ------------------------------------------------------------------ add and credits (C5)
+
+const HUGE_HEADER: &[u8] = include_bytes!("fixtures/pictures/huge-header.png");
+const OPENVERSE_DETAIL_ND: &[u8] = include_bytes!("fixtures/pictures/openverse-detail-nd.json");
+/// The second photo in `openverse-search.json`, licensed CC BY.
+const OPENVERSE_SECOND: &str = "openverse:6f31796e-019b-4888-948c-882a30a648dd";
+
+fn add(design: i64, id: &str) -> Value {
+    json!({"design_id": design, "id": id})
+}
+
+/// Every file in `dir`, sorted, or none when it is not there.
+fn files_in(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir).into_iter().flatten().flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    names
+}
+
+fn assets(root: &Path) -> PathBuf {
+    root.join("store").join("design-assets")
+}
+
+#[test]
+fn add_stores_the_photo_and_its_credit() {
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::answering(vec![]);
+    let engine = engine_at(root.path(), fake.clone());
+    let (_, design) = designed(&engine, root.path());
+    let added = ok(&engine, "design.picture.add", add(design, OPENVERSE_ID));
+    let mut keys: Vec<&str> = added.as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["credit", "h", "path", "src", "w"]);
+    let src = added["src"].as_str().unwrap();
+    let stem = src.split_once('.').unwrap().0;
+    assert_eq!((added["w"].as_u64(), added["h"].as_u64()), (Some(64), Some(64)));
+    assert_eq!(files_in(&assets(root.path())), [format!("{stem}.credit.json"), src.to_string()]);
+    assert_eq!(added["credit"]["id"], OPENVERSE_ID);
+    assert!(added["credit"]["licence"].as_str().unwrap().starts_with("CC BY"), "{}", added["credit"]);
+    // One detail read (no search came first) and the original, through Openverse's proxy.
+    let urls: Vec<String> = fake.seen().into_iter().map(|s| s.url).collect();
+    assert_eq!(urls, ["https://api.openverse.org/v1/images/48e4625b-0930-43db-990c-22858b1d633e/".to_string(),
+        "https://api.openverse.org/v1/images/48e4625b-0930-43db-990c-22858b1d633e/thumb/".to_string()]);
+    // design.get answers the credit once an image node uses the picture.
+    assert!(ok(&engine, "design.get", json!({"design_id": design})).get("credits").is_none());
+    ok(&engine, "design.apply", json!({"design_id": design, "ops": [{"op": "add", "node": {"parent": "page-1", "kind": "image", "src": src, "w": 64, "h": 64}}]}));
+    let read = ok(&engine, "design.get", json!({"design_id": design}));
+    assert_eq!(read["credits"][src], added["credit"]);
+}
+
+#[test]
+fn add_twice_lands_on_one_file() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = engine_at(root.path(), Fake::answering(vec![]));
+    let (_, design) = designed(&engine, root.path());
+    let first = ok(&engine, "design.picture.add", add(design, OPENVERSE_ID));
+    let second = ok(&engine, "design.picture.add", add(design, OPENVERSE_ID));
+    assert_eq!(first["src"], second["src"]);
+    assert_eq!(files_in(&assets(root.path())).len(), 2, "one picture, one credit");
+}
+
+/// Two ids whose downloads are the same bytes share a picture, and the first id's credit.
+#[test]
+fn the_first_credit_for_a_picture_stays() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = engine_at(root.path(), Fake::answering(vec![]));
+    let (_, design) = designed(&engine, root.path());
+    ok(&engine, "design.picture.search", search(design, "kitchen"));
+    let first = ok(&engine, "design.picture.add", add(design, OPENVERSE_ID));
+    let second = ok(&engine, "design.picture.add", add(design, OPENVERSE_SECOND));
+    assert_eq!(first["src"], second["src"]);
+    assert_eq!((first["credit"]["id"].as_str(), second["credit"]["id"].as_str()), (Some(OPENVERSE_ID), Some(OPENVERSE_ID)));
+    assert_eq!(files_in(&assets(root.path())).len(), 2);
+}
+
+/// A design.get's credits stop at 128 (256 KiB at most), so a design with many credited photos
+/// and its nodes near the cap still answers under the clients' 2 MiB line.
+#[test]
+fn credits_stay_under_the_line() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = engine_at(root.path(), Fake::answering(vec![]));
+    let (_, design) = designed(&engine, root.path());
+    let dir = assets(root.path());
+    std::fs::create_dir_all(&dir).unwrap();
+    let long = |n: usize| "w".repeat(n);
+    let credit = json!({"source": "openverse", "id": OPENVERSE_ID, "title": long(200), "creator": long(200),
+        "creator_url": format!("https://e.org/{}", long(480)), "licence": "CC BY 2.0", "licence_url": format!("https://e.org/{}", long(480)),
+        "source_url": format!("https://e.org/{}", long(480)), "attribution": long(500), "caption": long(420)});
+    let mut ops = Vec::new();
+    for i in 0..300 {
+        let stem = format!("{i:032x}");
+        std::fs::write(dir.join(format!("{stem}.png")), PHOTO).unwrap();
+        std::fs::write(dir.join(format!("{stem}.credit.json")), serde_json::to_vec(&credit).unwrap()).unwrap();
+        ops.push(json!({"op": "add", "node": {"parent": "page-1", "kind": "image", "src": format!("{stem}.png"), "w": 64, "h": 64}}));
+    }
+    ok(&engine, "design.apply", json!({"design_id": design, "ops": ops}));
+    // About 1.3 MiB of text beside them.
+    let text = "x".repeat(9_000);
+    let texts: Vec<Value> = (0..140).map(|_| json!({"op": "add", "node": {"parent": "page-1", "kind": "text", "text": text}})).collect();
+    ok(&engine, "design.apply", json!({"design_id": design, "ops": texts}));
+    let read = ok(&engine, "design.get", json!({"design_id": design}));
+    let bytes = serde_json::to_vec(&read).unwrap().len();
+    assert!(bytes < 2 * 1024 * 1024, "{bytes} bytes");
+    let credits = read["credits"].as_object().unwrap();
+    assert!(credits.len() <= 128 && serde_json::to_vec(credits).unwrap().len() <= 256 << 10, "{} credits", credits.len());
+    assert!(credits.len() >= 64, "as many as fit: {}", credits.len());
+}
+
+/// A new engine on the same store, its memory empty, reads the photo again and lands on the same
+/// picture.
+#[test]
+fn an_id_resolves_after_a_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = engine_at(root.path(), Fake::answering(vec![]));
+    let (_, design) = designed(&engine, root.path());
+    ok(&engine, "design.picture.search", search(design, "kitchen"));
+    let before = ok(&engine, "design.picture.add", add(design, OPENVERSE_SECOND));
+    drop(engine);
+    let fake = Fake::answering(vec![]);
+    let engine = engine_at(root.path(), fake.clone());
+    let after = ok(&engine, "design.picture.add", add(design, OPENVERSE_ID));
+    assert_eq!(before["src"], after["src"]);
+    assert_eq!(fake.calls(), 2, "one detail read and the download: {:?}", fake.seen());
+}
+
+#[test]
+fn an_unlicensed_id_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::answering(vec![picture(OPENVERSE_DETAIL_ND)]);
+    let engine = engine_at(root.path(), fake.clone());
+    let (_, design) = designed(&engine, root.path());
+    let e = refused(call(&engine, "design.picture.add", add(design, "openverse:0b5c3a8e-5a8e-4c31-9d5a-111111111111")));
+    assert_eq!(e.code, "design.picture.licence");
+    assert_eq!(fake.calls(), 1, "nothing downloaded");
+    assert!(files_in(&assets(root.path())).is_empty());
+}
+
+#[test]
+fn add_refuses_what_is_not_a_photo() {
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::answering(vec![]);
+    let engine = engine_at(root.path(), fake.clone());
+    let (_, design) = designed(&engine, root.path());
+    ok(&engine, "design.picture.search", search(design, "kitchen"));
+    for (answer, code) in [
+        (picture(VECTOR), "design.picture.not_raster"),
+        (picture(&vec![0u8; 21 << 20]), "design.picture.too_big"),
+        (Err(NetError::TooBig), "design.picture.too_big"),
+        (picture(HUGE_HEADER), "design.picture.too_big"),
+    ] {
+        fake.then(answer);
+        assert_eq!(refused(call(&engine, "design.picture.add", add(design, OPENVERSE_ID))).code, code);
+    }
+    assert!(files_in(&assets(root.path())).is_empty(), "nothing stored");
+}
+
+/// A design deleted while its photo downloads: the answer says so (the file it fetched stays,
+/// content-named and harmless).
+#[test]
+fn a_design_deleted_during_the_download() {
+    struct Slow(Arc<std::sync::Barrier>);
+    impl Fetch for Slow {
+        fn get(&self, req: &Req) -> Result<Got, NetError> {
+            if req.url.ends_with("/thumb/") {
+                self.0.wait();
+                self.0.wait();
+            }
+            fixture(&req.url)
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let engine = engine_at(root.path(), Fake::answering(vec![]));
+    let (_, design) = designed(&engine, root.path());
+    set_fake_fetch(&engine, Arc::new(Slow(barrier.clone())));
+    let adding = {
+        let engine = engine.clone();
+        std::thread::spawn(move || call(&engine, "design.picture.add", add(design, OPENVERSE_ID)))
+    };
+    barrier.wait();
+    // The store is free while the download runs.
+    let started = std::time::Instant::now();
+    ok(&engine, "design.get", json!({"design_id": design}));
+    assert!(started.elapsed() < std::time::Duration::from_millis(200), "{:?}", started.elapsed());
+    ok(&engine, "design.delete", json!({"design_id": design}));
+    barrier.wait();
+    assert_eq!(refused(adding.join().unwrap()).code, "design.deleted");
+}
+
+/// Credits are shown with Pictures off; an agent's add is refused there, as search is.
+#[test]
+fn credits_outlive_the_switch() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = engine_at(root.path(), Fake::answering(vec![]));
+    let (agent, design) = designed(&engine, root.path());
+    pictures_on(&engine, true);
+    let added = ok_as(&engine, agent.clone(), "design.picture.add", add(design, OPENVERSE_ID));
+    ok(&engine, "design.apply", json!({"design_id": design, "ops": [{"op": "add", "node": {"parent": "page-1", "kind": "image", "src": added["src"], "w": 64, "h": 64}}]}));
+    pictures_on(&engine, false);
+    let read = ok(&engine, "design.get", json!({"design_id": design}));
+    assert_eq!(read["credits"].as_object().unwrap().len(), 1);
+    assert_eq!(code(call_as(&engine, agent, "design.picture.add", add(design, OPENVERSE_ID))), "plugin.off");
+}
+
+#[test]
+fn add_is_audited_search_is_not() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = engine_at(root.path(), Fake::answering(vec![]));
+    let (_, design) = designed(&engine, root.path());
+    ok(&engine, "design.picture.search", search(design, "kitchen"));
+    ok(&engine, "design.picture.add", add(design, OPENVERSE_ID));
+    let rows: Vec<(String, String)> = engine.store.lock()
+        .prepare("SELECT op, payload FROM audit WHERE op LIKE 'design.picture.%'").unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<Result<_, _>>().unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, "design.picture.add");
+    assert_eq!(serde_json::from_str::<Value>(&rows[0].1).unwrap(), add(design, OPENVERSE_ID));
+}
+
+/// The smoke run's fixtures (installed by `relay serve` on the test instance) answer a search and
+/// an add from the saved files, and nothing from a folder without them.
+#[test]
+fn the_smoke_fixtures_answer_a_search_and_an_add() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = Engine::new(Instance::Test, Store::open(&root.path().join("store/store.db"), false).unwrap());
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pictures");
+    set_fake_fetch(&engine, Arc::new(relay_core::pictures::net::Fixtures { dir }));
+    let (_, design) = designed(&engine, root.path());
+    let found = ok(&engine, "design.picture.search", search(design, "kitchen"));
+    assert_eq!(found["results"][0]["id"], OPENVERSE_ID);
+    let added = ok(&engine, "design.picture.add", add(design, OPENVERSE_ID));
+    assert_eq!(added["w"], 64);
+    let fixtures = relay_core::pictures::net::Fixtures { dir: root.path().to_path_buf() };
+    let req = relay_core::pictures::net::Req::openverse_search("kitchen", None, 1, 12);
+    assert_eq!(fixtures.get(&req).unwrap().status, 404, "a folder without the file answers nothing");
+}

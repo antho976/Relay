@@ -743,6 +743,129 @@ pub fn detail(engine: &Engine, fetch: &dyn Fetch, agent: bool, id: &Id) -> Resul
     Ok(item)
 }
 
+// ------------------------------------------------------------------ add, and credits (§5.4, §9)
+
+/// Most credits a `design.get` answers, and most bytes of them: with a design's nodes at their
+/// cap, the answer stays under the clients' 2 MiB line (§5.6).
+pub const CREDITS_MAX: usize = 128;
+pub const CREDITS_BYTES: usize = 256 << 10;
+/// The most a credit file may hold to be read: one at its field caps is about 3 KB.
+const CREDIT_FILE_MAX: u64 = 16 << 10;
+
+/// What `design.picture.add` stored: the picture's `src` and path, its size, and its credit.
+pub struct Added {
+    pub src: String,
+    pub path: PathBuf,
+    pub w: u32,
+    pub h: u32,
+    pub credit: PictureCredit,
+}
+
+/// `design.picture.add` once its design is checked (§5.4), in its prepare phase: photo `id` from
+/// the remembered hits or a detail read (through the licence allowlist, `design.picture.licence`),
+/// downloaded from its provider (never the photographer's host), checked to be a raster of at
+/// most 20 MiB and [`MAX_PIXELS`], kept in `dir` under its content's name as `design.asset.add`
+/// keeps a picture, and credited beside it ([`store_credit`]: the first credit for those bytes
+/// stays). An agent's download counts against the agents' Openverse day. Holds no lock.
+pub fn add(engine: &Engine, agent: bool, id: &Id, dir: &Path) -> Result<Added, BusError> {
+    let desk = &engine.pictures;
+    let fetch = desk.fetcher(engine.instance, id.source)?;
+    let item = match desk.hit(&id.to_string()) {
+        Some(item) => item,
+        None => detail(engine, &*fetch, agent, id)?,
+    };
+    let req = match id.source {
+        PictureSource::Openverse => Req::openverse_original(id),
+        // The parser keeps a Pexels photo only with both links on images.pexels.com.
+        PictureSource::Pexels => item.download_url.as_deref().and_then(|url| Req::pexels_image(url, Want::Original))
+            .ok_or_else(|| provider(id.source, None, "gave no download for this photo"))?,
+    };
+    let bytes = desk.ask(&*fetch, &req, agent)?;
+    // The client stops reading past the cap; a fetcher that does not is held to it here.
+    if bytes.len() as u64 > req.cap {
+        return Err(too_big(format!("over {} MiB", req.cap >> 20)));
+    }
+    let picture = photo(&bytes)?;
+    let digest = {
+        use sha2::Digest;
+        crate::hex(&sha2::Sha256::digest(&bytes))
+    };
+    let stem = &digest[..32];
+    let src = format!("{stem}.{}", picture.ext);
+    crate::handlers::design::store_asset(dir, &src, &bytes)?;
+    let credit = store_credit(dir, stem, &item.credit())?;
+    Ok(Added { path: dir.join(&src), src, w: picture.w, h: picture.h, credit })
+}
+
+/// Where the credit of the picture named `<stem>.<ext>` is kept, beside it.
+pub fn credit_path(dir: &Path, stem: &str) -> PathBuf {
+    dir.join(format!("{stem}.credit.json"))
+}
+
+/// Keep `credit` beside the picture `stem` names, written whole through a temporary file and
+/// never over one already there: the first credit for a picture stays (two ids can be the same
+/// bytes), and is the one answered. One that no longer reads is replaced.
+pub fn store_credit(dir: &Path, stem: &str, credit: &PictureCredit) -> Result<PictureCredit, BusError> {
+    let path = credit_path(dir, stem);
+    let write = || -> std::io::Result<Option<tempfile::PersistError>> {
+        let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+        tmp.write_all(&serde_json::to_vec(credit).map_err(std::io::Error::other)?)?;
+        tmp.as_file().sync_all()?;
+        Ok(tmp.persist_noclobber(&path).err())
+    };
+    let kept = |e: std::io::Error| crate::engine::internal(format!("pictures: a credit could not be kept in {}: {e}", dir.display()));
+    let Some(taken) = write().map_err(kept)? else { return Ok(credit.clone()) };
+    if taken.error.kind() != std::io::ErrorKind::AlreadyExists {
+        return Err(kept(taken.error));
+    }
+    if let Some(first) = read_credit(&path) {
+        return Ok(first);
+    }
+    taken.file.persist(&path).map_err(|e| kept(e.error))?;
+    Ok(credit.clone())
+}
+
+/// The credit kept at `path`, if it is a small regular file (never through a link) that reads.
+fn read_credit(path: &Path) -> Option<PictureCredit> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(CREDIT_FILE_MAX + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > CREDIT_FILE_MAX {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// The credits kept in `dir` for the pictures `srcs` name, by `src`, for `design.get` (§5.6):
+/// each distinct picture name once, in the order given, a missing or unreadable credit skipped,
+/// stopping at [`CREDITS_MAX`] credits or [`CREDITS_BYTES`] of them. Reads files: call it with
+/// nothing locked.
+pub fn credits_for<'a>(dir: &Path, srcs: impl IntoIterator<Item = &'a str>) -> std::collections::BTreeMap<String, PictureCredit> {
+    let mut credits = std::collections::BTreeMap::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut bytes = 0;
+    for src in srcs {
+        if credits.len() == CREDITS_MAX {
+            break;
+        }
+        if !relay_bus::design::valid_src(src) || !seen.insert(src) {
+            continue;
+        }
+        let Some((stem, _)) = src.rsplit_once('.') else { continue };
+        let Some(credit) = read_credit(&credit_path(dir, stem)) else { continue };
+        bytes += serde_json::to_vec(&credit).map_or(0, |json| json.len()) + src.len() + 4;
+        if bytes > CREDITS_BYTES {
+            break;
+        }
+        credits.insert(src.to_string(), credit);
+    }
+    credits
+}
+
 // ------------------------------------------------------------------ the thumbnail cache
 
 /// Where a thumbnail of `id` is kept: `<source>-<key>.<ext>` in the picture cache. Built from a

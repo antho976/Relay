@@ -9,13 +9,13 @@ use super::revs::removed_rev;
 use super::{get_design, kind_of};
 use crate::engine::{Engine, IntoBus};
 use crate::handlers::notes::check_project;
-use relay_bus::design::{nearest, Node, Styles, SINCE_WINDOW};
+use relay_bus::design::{nearest, Node, NodeKind, Styles, SINCE_WINDOW};
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{Get, GetIn, GetOut, GET_NODES_MAX};
 use relay_bus::types::{Design, Id};
 use rusqlite::params;
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 /// Every row of a design. A row of a kind this build does not know fails to parse, which is how a
@@ -387,7 +387,10 @@ pub(super) fn register(e: &mut Engine) {
         let assets_dir = ctx.engine().store.design_assets_dir().display().to_string();
         let Styles { colors, styles } = serde_json::from_str(&styles)
             .map_err(|why| BusError::internal(format!("design {}: its colours and styles do not read: {why}", design.id)))?;
-        Ok(GetOut { design, nodes: read.nodes, assets_dir, removed, indexes, left: read.left, colors, styles, credits: BTreeMap::new() })
+        // Where each picture it shows came from, read from the files beside them, unlocked.
+        let pictures = read.nodes.iter().filter(|n| n.kind == NodeKind::Image).filter_map(|n| n.src.as_deref());
+        let credits = crate::pictures::credits_for(&ctx.engine().store.design_assets_dir(), pictures);
+        Ok(GetOut { design, nodes: read.nodes, assets_dir, removed, indexes, left: read.left, colors, styles, credits })
     });
 }
 

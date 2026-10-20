@@ -431,6 +431,15 @@ fn sweep_assets(engine: &Engine, now: SystemTime) -> AssetsSwept {
         }
         if let Some(bytes) = remove_unseen(&path, since) {
             out.freed += bytes;
+            // A stock photo's credit goes with it (pictures-SPEC-v2 §9), and only then.
+            if let Some((stem, _)) = name.rsplit_once('.') {
+                let credit = crate::pictures::credit_path(&dir, stem);
+                if let Ok(meta) = std::fs::symlink_metadata(&credit) {
+                    if meta.is_file() && std::fs::remove_file(&credit).is_ok() {
+                        out.freed += meta.len();
+                    }
+                }
+            }
             out.removed.push(path);
         }
     }

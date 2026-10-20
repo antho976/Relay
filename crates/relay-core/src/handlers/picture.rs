@@ -1,20 +1,20 @@
 //! `design.picture.*` (pictures-SPEC-v2 §5): stock photo search, thumbnails, adding one to a
-//! design with its credit, and the Pexels key. Search, thumb and the key's ops are here; add comes
-//! with pictures-add, and answers bus.not_implemented until then.
+//! design with its credit, and the Pexels key.
 //!
 //! Search and thumb are unlocked queries: one short read checks the design, and the request to
 //! the provider runs with nothing held. An agent reaches them only where the Pictures plugin is on:
 //! `guardrail::authorize` refuses `plugin.off` before the handler runs, so no handler checks it.
 //! The person is not gated by the engine.
 //!
-//! Both key ops are staged: the check with Pexels and the keyring (`secret-tool`) run in prepare,
-//! with nothing locked, and the finish writes nothing. Neither emits an event: only the picker
-//! that sent one shows the key's state.
+//! Add and both key ops are staged: add's download and the files it keeps, the check with Pexels
+//! and the keyring (`secret-tool`) run in prepare, with nothing locked, and the finish writes
+//! nothing. None emits an event: add answers its `src` as design.asset.add does, and only the
+//! picker that sent a key op shows the key's state.
 
-use crate::engine::{Engine, IntoBus, Unlocked};
-use crate::handlers::notes::check_project;
-use crate::pictures::{self, key, SearchKey};
-use relay_bus::ops::picture::{KeyOut, KeyRemove, KeySet, Search, Thumb};
+use crate::engine::{Ctx, Engine, IntoBus, Unlocked};
+use crate::handlers::notes::{assert_actor_project, check_project};
+use crate::pictures::{self, key, Added, SearchKey};
+use relay_bus::ops::picture::{Add, AddOut, KeyOut, KeyRemove, KeySet, Search, Thumb};
 use relay_bus::types::Id;
 use relay_bus::BusError;
 use rusqlite::{Connection, OptionalExtension};
@@ -30,6 +30,18 @@ pub fn register(e: &mut Engine) {
         let id = pictures::parse_id(&p.id)?;
         check_design(ctx, p.design_id)?;
         pictures::thumb(ctx.engine(), ctx.actor.is_agent(), &id)
+    });
+    // Staged: the download takes up to 30 s and the picture is synced to disk; the finish only
+    // checks the design is still there, as design.asset.add's does. No undo and no event.
+    e.register_staged::<Add, Added>(|ctx, p| {
+        let id = pictures::parse_id(&p.id)?;
+        check_design(ctx, p.design_id)?;
+        pictures::add(ctx.engine(), ctx.actor.is_agent(), &id, &ctx.engine().store.design_assets_dir())
+    }, |ctx: &mut Ctx, p, added| {
+        let project = live_design_project(ctx.tx(), p.design_id)?;
+        assert_actor_project(ctx, project)?;
+        ctx.set_project(project);
+        Ok(AddOut { src: added.src, path: added.path.display().to_string(), w: added.w, h: added.h, credit: added.credit })
     });
     e.register_staged::<KeySet, ()>(|ctx, p| key::set(ctx.engine(), &p.key), |_, _, ()| Ok(KeyOut { saved: true }));
     e.register_staged::<KeyRemove, ()>(|ctx, _| key::remove(ctx.engine()), |_, _, ()| Ok(KeyOut { saved: false }));

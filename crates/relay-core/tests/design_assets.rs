@@ -326,6 +326,12 @@ fn pictures_no_design_names_go_after_the_undo_window() {
     std::fs::write(dir.join(".tmpNEW99"), b"in flight").unwrap();
     std::fs::write(dir.join("notes.txt"), b"not a picture").unwrap();
     date(&dir.join("notes.txt"), long_ago());
+    // A stock photo's credit, beside a picture that goes and one that stays.
+    let credit = |added: &Value| dir.join(format!("{}.credit.json", added["src"].as_str().unwrap().rsplit_once('.').unwrap().0));
+    for added in [&used, &unused] {
+        std::fs::write(credit(added), b"{}").unwrap();
+        date(&credit(added), long_ago());
+    }
 
     let swept = relay_core::disk_sweep::sweep_design_assets(&e);
     assert_eq!(swept.removed, vec![path(&unused)], "{swept:?}");
@@ -336,6 +342,7 @@ fn pictures_no_design_names_go_after_the_undo_window() {
     assert!(path(&fresh).is_file(), "unnamed, but within the window");
     assert!(!dir.join(".tmpXYZ12").exists() && dir.join(".tmpNEW99").exists(), "{:?}", files(&dir));
     assert!(dir.join("notes.txt").exists(), "nothing but pictures and leftovers is touched");
+    assert!(!credit(&unused).exists() && credit(&used).exists(), "a credit goes with its picture, and only then");
 
     // Once the undo is past the window too, its picture goes the next time it is old.
     e.store.lock().execute("UPDATE audit SET ts = '2000-01-01T00:00:00Z' WHERE op = 'design.apply'", []).unwrap();

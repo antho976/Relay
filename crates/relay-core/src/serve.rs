@@ -54,6 +54,13 @@ pub async fn start(instance: Instance, store_path: Option<PathBuf>) -> Result<Se
     let path = store_path.unwrap_or_else(|| instance.store_path());
     let store = Store::open(&path, true).map_err(BindError::Other)?;
     let engine = Engine::new(instance, store);
+    // The smoke run's stock photos come from saved answers, on the test instance only, which
+    // otherwise never goes online (pictures-SPEC-v2 §1.11).
+    if instance == Instance::Test {
+        if let Some(dir) = std::env::var_os("RELAY_PICTURE_FIXTURES").map(PathBuf::from).filter(|dir| dir.is_absolute() && dir.is_dir()) {
+            crate::pictures::set_fake_fetch(&engine, Arc::new(crate::pictures::net::Fixtures { dir }));
+        }
+    }
     if subreaper {
         crate::peer::spawn_orphan_reaper(&engine);
     }

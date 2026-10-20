@@ -20,6 +20,7 @@ pub(crate) mod render;
 mod revs;
 mod styles;
 
+pub(crate) use assets::store_asset;
 pub(crate) use expect::undo_conflicts;
 
 use crate::engine::{Ctx, Engine, IntoBus};

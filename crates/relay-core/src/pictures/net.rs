@@ -11,6 +11,7 @@ use super::{gone, key_rejected, offline, orientation, provider, rate_limited, sl
 use relay_bus::design::MAX_ASSET_FILE;
 use relay_bus::ops::picture::{Orientation, PictureSource};
 use relay_bus::BusError;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -238,6 +239,30 @@ pub fn failed(req: &Req, e: NetError) -> BusError {
         NetError::TooBig if req.want == Want::Original => too_big(format!("over {} MiB", req.cap >> 20)),
         NetError::TooBig => provider(req.source, None, format!("answered with more than {} KiB", req.cap >> 10)),
         NetError::NotAllowed => BusError::internal(format!("pictures: a {} request to a host outside the allowed three", slug(req.source))),
+    }
+}
+
+/// The smoke run's provider (pictures-SPEC-v2 §8.2, §1.11): answers from a folder of saved
+/// answers, never the network. Any Openverse search gets `openverse-search.json`, a detail read
+/// `openverse-detail.json`, and a preview or an original `photo.png`; anything else (Pexels
+/// included) is a 404. Installed only by `relay serve` on the test instance.
+pub struct Fixtures {
+    pub dir: PathBuf,
+}
+
+impl Fetch for Fixtures {
+    fn get(&self, req: &Req) -> Result<Got, NetError> {
+        let name = match (req.source, req.want) {
+            (PictureSource::Openverse, Want::Search) => "openverse-search.json",
+            (PictureSource::Openverse, Want::Detail) => "openverse-detail.json",
+            (PictureSource::Openverse, Want::Thumb | Want::Original) => "photo.png",
+            _ => return Ok(Got { status: 404, retry_after: None, body: Vec::new() }),
+        };
+        match std::fs::read(self.dir.join(name)) {
+            Ok(body) if body.len() as u64 <= req.cap => Ok(Got { status: 200, retry_after: None, body }),
+            Ok(_) => Err(NetError::TooBig),
+            Err(_) => Ok(Got { status: 404, retry_after: None, body: Vec::new() }),
+        }
     }
 }
 
