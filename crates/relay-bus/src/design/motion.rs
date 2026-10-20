@@ -7,10 +7,11 @@
 //! (`opacity`, `fill`, `stroke`, `color`, `blur`, `sweep`, `angle`, `trim`) show their value
 //! instead of its own. Times carry their unit in the name: milliseconds.
 //!
-//! The types and their checks live here; the sampler that poses a node at a time is the
-//! client's (client-motion).
+//! The types, their checks and the sampler live here: [`Motion::pose`] gives a node's pose at a
+//! time of its clock, and [`Pose::dress`] the node as that pose shows it. Which clock a node plays
+//! on needs the tree, and is the client's (`relay_client::design::motion`).
 
-use super::{color_ref, obj_vec, parse_color, NodeKind, MAX_COORD};
+use super::{color_ref, obj_vec, parse_color, Arc, Gradient, GradientKind, Node, NodeKind, MAX_COORD};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -158,7 +159,7 @@ pub struct Timeline {
 
 /// A node posed at one time: its moves (identity at rest: no offset, no turn, scales 1) about
 /// `origin`, and the looks a key shows instead of the node's own (`None` where none does). Made by
-/// the client's sampler; never stored.
+/// [`Motion::pose`]; never stored. `Pose::default()` is the rest pose.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pose {
     pub dx: f64,
@@ -262,6 +263,285 @@ impl Timeline {
             }
             _ => Ok(()),
         }
+    }
+}
+
+// The sampler (feature-motion §1.2, client-motion). Pure, so the engine, the canvas and a later
+// `design.sample` agree on what a motion shows at a time.
+
+/// How close the eases' solver gets to the time asked for.
+const EASE_EPSILON: f64 = 1e-7;
+
+impl Ease {
+    /// Its cubic-bezier's control points `[x1, y1, x2, y2]`, as CSS gives them; `None` for `hold`,
+    /// which steps.
+    fn bezier(self) -> Option<[f64; 4]> {
+        match self {
+            Ease::Linear => Some([0.0, 0.0, 1.0, 1.0]),
+            Ease::Standard => Some([0.25, 0.1, 0.25, 1.0]),
+            Ease::EaseIn => Some([0.42, 0.0, 1.0, 1.0]),
+            Ease::EaseOut => Some([0.0, 0.0, 0.58, 1.0]),
+            Ease::EaseInOut => Some([0.42, 0.0, 0.58, 1.0]),
+            Ease::Overshoot => Some([0.34, 1.56, 0.64, 1.0]),
+            Ease::Hold => None,
+        }
+    }
+
+    /// How far a move has gone (0 to 1, and past 1 for a while under `overshoot`) once `u` of its
+    /// time has passed (0 to 1, clamped): the cubic-bezier solved along time by Newton's method,
+    /// with bisection where that stalls, to 1e-7. Every ease gives 0 at 0 and 1 at 1; `hold` stays
+    /// at 0 until the end.
+    pub fn apply(self, u: f64) -> f64 {
+        let u = if u.is_nan() { 0.0 } else { u.clamp(0.0, 1.0) };
+        match self.bezier() {
+            None => if u >= 1.0 { 1.0 } else { 0.0 },
+            Some(_) if self == Ease::Linear || u == 0.0 || u == 1.0 => u,
+            Some([x1, y1, x2, y2]) => bezier(y1, y2, solve(x1, x2, u)),
+        }
+    }
+}
+
+/// One coordinate, at `s` (0 to 1), of a cubic-bezier from 0 to 1 whose control points have the
+/// coordinates `p1` and `p2`.
+fn bezier(p1: f64, p2: f64, s: f64) -> f64 {
+    let c = 3.0 * p1;
+    let b = 3.0 * (p2 - p1) - c;
+    let a = 1.0 - c - b;
+    ((a * s + b) * s + c) * s
+}
+
+/// The slope of [`bezier`] at `s`.
+fn bezier_slope(p1: f64, p2: f64, s: f64) -> f64 {
+    let c = 3.0 * p1;
+    let b = 3.0 * (p2 - p1) - c;
+    let a = 1.0 - c - b;
+    (3.0 * a * s + 2.0 * b) * s + c
+}
+
+/// The `s` at which a curve whose x control coordinates are `x1` and `x2` reaches `x` (0 to 1).
+/// The curve's x only grows on 0..1 (CSS holds x1 and x2 to 0..1), so bisection always ends there.
+fn solve(x1: f64, x2: f64, x: f64) -> f64 {
+    let mut s = x;
+    for _ in 0..8 {
+        let off = bezier(x1, x2, s) - x;
+        if off.abs() < EASE_EPSILON && (0.0..=1.0).contains(&s) {
+            return s;
+        }
+        let slope = bezier_slope(x1, x2, s);
+        if slope.abs() < 1e-6 {
+            break;
+        }
+        s -= off / slope;
+    }
+    let (mut lo, mut hi) = (0.0, 1.0);
+    s = x;
+    // 64 halvings take 1 well below the epsilon.
+    for _ in 0..64 {
+        let at = bezier(x1, x2, s);
+        if (at - x).abs() < EASE_EPSILON {
+            break;
+        }
+        if at < x {
+            lo = s;
+        } else {
+            hi = s;
+        }
+        s = (lo + hi) / 2.0;
+    }
+    s
+}
+
+/// A time to read keys at: a negative or non-finite one is the start.
+fn time(t_ms: f64) -> f64 {
+    if t_ms.is_finite() { t_ms.max(0.0) } else { 0.0 }
+}
+
+/// Two colours mixed `e` of the way from `a` to `b` in sRGB with premultiplied alpha, as CSS mixes
+/// them, so a fade from clear red to red stays red; `e` past 0..1 (an overshoot) is clamped
+/// channel by channel.
+fn mix(a: [u8; 4], b: [u8; 4], e: f64) -> [u8; 4] {
+    let (alpha_a, alpha_b) = (f64::from(a[3]) / 255.0, f64::from(b[3]) / 255.0);
+    let alpha = (alpha_a + (alpha_b - alpha_a) * e).clamp(0.0, 1.0);
+    let mut out = [0u8; 4];
+    for i in 0..3 {
+        let (ca, cb) = (f64::from(a[i]), f64::from(b[i]));
+        let c = if alpha > 0.0 {
+            (ca * alpha_a + (cb * alpha_b - ca * alpha_a) * e) / alpha
+        } else {
+            // Nothing shows; keep the straight mix so the colour is still a sensible one.
+            ca + (cb - ca) * e
+        };
+        out[i] = c.clamp(0.0, 255.0).round() as u8;
+    }
+    out[3] = (alpha * 255.0).round() as u8;
+    out
+}
+
+/// `#RRGGBBAA`.
+fn hex(c: [u8; 4]) -> String {
+    format!("#{:02X}{:02X}{:02X}{:02X}", c[0], c[1], c[2], c[3])
+}
+
+impl Key {
+    /// A key at `at_ms` that sets nothing yet (a key must set something to pass [`check`]).
+    pub fn at(at_ms: f64) -> Key {
+        Key {
+            at_ms,
+            ease: None,
+            dx: None,
+            dy: None,
+            rotate: None,
+            scale: None,
+            scale_x: None,
+            scale_y: None,
+            opacity: None,
+            fill: None,
+            stroke: None,
+            color: None,
+            blur: None,
+            sweep: None,
+            angle: None,
+            trim: None,
+        }
+    }
+}
+
+impl Motion {
+    /// The time of its last key: how long it takes once.
+    pub fn last_ms(&self) -> f64 {
+        self.keys.last().map_or(0.0, |k| k.at_ms)
+    }
+
+    /// The time its keys are read at, `t_ms` into its timeline: past its last key a looping
+    /// motion starts again (exactly on the last key it shows the end).
+    pub fn local_ms(&self, t_ms: f64) -> f64 {
+        let t = time(t_ms);
+        let last = self.last_ms();
+        if self.looped == Some(true) && last > 0.0 && t > last { t % last } else { t }
+    }
+
+    /// The node's pose `t_ms` into its timeline. Each property is read from the keys that set it:
+    /// at or before the first that does, that key's value; at or after the last, that one's;
+    /// between two, eased by the earlier key's `ease` (else the motion's, else `ease`) as CSS
+    /// shapes the interval that starts at a keyframe. Opacity and trim are clamped to 0..1, blur
+    /// and scales to 0 or more, sweep to ±360, colours to their bytes.
+    pub fn pose(&self, t_ms: f64) -> Pose {
+        let t = self.local_ms(t_ms);
+        let (before, after) = self.keys.split_at(self.keys.partition_point(|k| k.at_ms <= t));
+        let ease = |k: &Key| k.ease.or(self.ease).unwrap_or(Ease::Standard);
+        // The value of the property `get` reads, mixed by `mix` between the keys around `t`.
+        fn sample<T: Copy>(before: &[Key], after: &[Key], t: f64, ease: &dyn Fn(&Key) -> Ease,
+            get: impl Fn(&Key) -> Option<T>, mix: impl Fn(T, T, f64) -> T) -> Option<T> {
+            let from = before.iter().rev().find_map(|k| get(k).map(|v| (k, v)));
+            let to = after.iter().find_map(|k| get(k).map(|v| (k, v)));
+            match (from, to) {
+                (None, None) => None,
+                (Some((_, v)), None) | (None, Some((_, v))) => Some(v),
+                // `a` is at or before `t` and `b` after it, so they are apart.
+                (Some((a, va)), Some((b, vb))) => Some(mix(va, vb, ease(a).apply((t - a.at_ms) / (b.at_ms - a.at_ms)))),
+            }
+        }
+        let number = |get: fn(&Key) -> Option<f64>| sample(before, after, t, &ease, get, |a, b, e| a + (b - a) * e);
+        let colour = |get: fn(&Key) -> Option<&String>| {
+            sample(before, after, t, &ease, |k| get(k).and_then(|c| parse_color(c)), mix)
+        };
+        let scale = number(|k| k.scale).map_or(1.0, |s| s.max(0.0));
+        Pose {
+            dx: number(|k| k.dx).unwrap_or(0.0),
+            dy: number(|k| k.dy).unwrap_or(0.0),
+            rotate: number(|k| k.rotate).unwrap_or(0.0),
+            scale_x: scale * number(|k| k.scale_x).map_or(1.0, |s| s.max(0.0)),
+            scale_y: scale * number(|k| k.scale_y).map_or(1.0, |s| s.max(0.0)),
+            origin: self.origin.unwrap_or([0.5, 0.5]),
+            opacity: number(|k| k.opacity).map(|v| v.clamp(0.0, 1.0)),
+            fill: colour(|k| k.fill.as_ref()),
+            stroke: colour(|k| k.stroke.as_ref()),
+            color: colour(|k| k.color.as_ref()),
+            blur: number(|k| k.blur).map(|v| v.max(0.0)),
+            sweep: number(|k| k.sweep).map(|v| v.clamp(-360.0, 360.0)),
+            angle: number(|k| k.angle),
+            trim: number(|k| k.trim).map(|v| v.clamp(0.0, 1.0)),
+        }
+    }
+}
+
+impl Default for Pose {
+    /// At rest: where layout puts it, as it is drawn.
+    fn default() -> Pose {
+        Pose {
+            dx: 0.0,
+            dy: 0.0,
+            rotate: 0.0,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            origin: [0.5, 0.5],
+            opacity: None,
+            fill: None,
+            stroke: None,
+            color: None,
+            blur: None,
+            sweep: None,
+            angle: None,
+            trim: None,
+        }
+    }
+}
+
+/// Whether a key's `angle` turns `g`: a linear or conic gradient does, a radial one has none.
+fn turns(g: &Option<Gradient>) -> bool {
+    g.as_ref().is_some_and(|g| g.kind != GradientKind::Radial)
+}
+
+impl Pose {
+    /// Whether it moves the node at all: an offset, a turn or a scale away from 1.
+    pub fn moves(&self) -> bool {
+        self.dx != 0.0 || self.dy != 0.0 || self.rotate != 0.0 || self.scale_x != 1.0 || self.scale_y != 1.0
+    }
+
+    /// `n` as this pose shows it, or `None` when the pose changes none of its looks. Opacity,
+    /// colours (as `#RRGGBBAA`) and blur replace the node's own; a fill clears its gradient and a
+    /// stroke its stroke gradient; a sweep sets an ellipse's arc (a whole ellipse gets one from
+    /// the top); an angle turns a linear or conic gradient and stroke gradient. Trim is not a node
+    /// field: the painter reads it from the pose.
+    pub fn dress(&self, n: &Node) -> Option<Node> {
+        let sweeps = self.sweep.is_some() && n.kind == NodeKind::Ellipse;
+        let turned = self.angle.is_some() && (turns(&n.gradient) || turns(&n.stroke_gradient));
+        let looks = self.opacity.is_some() || self.fill.is_some() || self.stroke.is_some() || self.color.is_some() || self.blur.is_some();
+        if !looks && !sweeps && !turned {
+            return None;
+        }
+        let mut d = n.clone();
+        if let Some(o) = self.opacity {
+            d.opacity = Some(o);
+        }
+        if let Some(c) = self.fill {
+            d.fill = Some(hex(c));
+            d.gradient = None;
+        }
+        if let Some(c) = self.stroke {
+            d.stroke = Some(hex(c));
+            d.stroke_gradient = None;
+        }
+        if let Some(c) = self.color {
+            d.color = Some(hex(c));
+        }
+        if let Some(b) = self.blur {
+            d.blur = Some(b);
+        }
+        if let Some(sweep) = self.sweep.filter(|_| sweeps) {
+            match &mut d.arc {
+                Some(arc) => arc.sweep = sweep,
+                None => d.arc = Some(Arc { start: 0.0, sweep, inner: 0.0, cap: None }),
+            }
+        }
+        if let Some(angle) = self.angle {
+            for g in [&mut d.gradient, &mut d.stroke_gradient].into_iter().flatten() {
+                if g.kind != GradientKind::Radial {
+                    g.angle = Some(angle);
+                }
+            }
+        }
+        Some(d)
     }
 }
 
@@ -411,5 +691,195 @@ mod tests {
         assert_eq!((origin["minimum"].as_f64(), origin["maximum"].as_f64()), (Some(-MAX_ORIGIN), Some(MAX_ORIGIN)));
         let duration = &defs["DesignTimeline"]["properties"]["duration_ms"];
         assert_eq!((duration["minimum"].as_f64(), duration["maximum"].as_f64()), (Some(MIN_MOTION_MS), Some(MAX_MS)));
+    }
+
+    /// A motion as agents write it, without the node around it.
+    fn motion(value: Value) -> Motion {
+        serde_json::from_value(value).unwrap()
+    }
+
+    fn near(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-6
+    }
+
+    /// feature-motion §1.2: a property holds its first key's value before it and its last key's
+    /// after, moves between the keys that set it, steps under `hold`, jumps at equal times and
+    /// waits for a late first key.
+    #[test]
+    fn sampling_holds_eases_and_interpolates() {
+        let slide = motion(json!({"ease": "linear", "keys": [{"at_ms": 0, "dx": 0}, {"at_ms": 1000, "dx": 100}]}));
+        let dx = |m: &Motion, t: f64| m.pose(t).dx;
+        assert_eq!((dx(&slide, -5.0), dx(&slide, 0.0), dx(&slide, 500.0), dx(&slide, 1000.0), dx(&slide, 2000.0)), (0.0, 0.0, 50.0, 100.0, 100.0));
+        assert_eq!((dx(&slide, f64::NAN), dx(&slide, f64::INFINITY)), (0.0, 0.0), "a time that is no time is the start");
+        // What no key sets stays the node's own, and the rest pose does not move.
+        let rest = slide.pose(0.0);
+        assert_eq!((rest.opacity, rest.fill, rest.trim, rest.scale_x, rest.origin), (None, None, None, 1.0, [0.5, 0.5]));
+        assert!(!rest.moves() && slide.pose(1.0).moves() && !Pose::default().moves());
+        // The default ease is CSS `ease`: at half the time, 0.8024 of the way.
+        let eased = motion(json!({"keys": [{"at_ms": 0, "dx": 0}, {"at_ms": 1000, "dx": 100}]}));
+        assert!((dx(&eased, 500.0) - 80.2403).abs() < 1e-4, "{}", dx(&eased, 500.0));
+        assert!(near(Ease::EaseInOut.apply(0.5), 0.5));
+        // A key's own ease shapes the move that starts at it: `hold` keeps its value until the next key.
+        let blink = motion(json!({"ease": "linear", "keys": [{"at_ms": 0, "opacity": 0, "ease": "hold"}, {"at_ms": 500, "opacity": 1}, {"at_ms": 1000, "opacity": 0}]}));
+        let opacity = |t: f64| blink.pose(t).opacity.unwrap();
+        assert_eq!((opacity(0.0), opacity(499.0), opacity(500.0), opacity(750.0)), (0.0, 0.0, 1.0, 0.5));
+        // A property set only in keys 0 and 2 moves across key 1, which sets something else.
+        let across = motion(json!({"ease": "linear", "keys": [{"at_ms": 0, "dx": 0}, {"at_ms": 500, "opacity": 1}, {"at_ms": 1000, "dx": 100}]}));
+        assert_eq!((across.pose(500.0).dx, across.pose(250.0).opacity), (50.0, Some(1.0)));
+        // Two keys at one time jump.
+        let jump = motion(json!({"ease": "linear", "keys": [{"at_ms": 0, "dy": 0}, {"at_ms": 300, "dy": 0}, {"at_ms": 300, "dy": 50}, {"at_ms": 600, "dy": 50}]}));
+        assert_eq!((jump.pose(299.9).dy, jump.pose(300.0).dy, jump.pose(450.0).dy), (0.0, 50.0, 50.0));
+        // A late first key holds its value until it comes: a delay.
+        let late = motion(json!({"ease": "linear", "keys": [{"at_ms": 300, "opacity": 0}, {"at_ms": 700, "opacity": 1}]}));
+        assert_eq!((late.pose(0.0).opacity, late.pose(300.0).opacity, late.pose(500.0).opacity), (Some(0.0), Some(0.0), Some(0.5)));
+        // Scales multiply, and every move reads at once.
+        let all = motion(json!({"ease": "linear", "origin": [0.5, 1], "keys": [
+            {"at_ms": 0, "scale": 1, "scale_x": 1, "scale_y": 2, "rotate": 0, "blur": 0, "trim": 0},
+            {"at_ms": 100, "scale": 3, "scale_x": 2, "scale_y": 2, "rotate": 90, "blur": 8, "trim": 1}]}));
+        let mid = all.pose(50.0);
+        assert_eq!((mid.scale_x, mid.scale_y, mid.rotate, mid.blur, mid.trim, mid.origin), (3.0, 4.0, 45.0, Some(4.0), Some(0.5), [0.5, 1.0]));
+    }
+
+    /// Colours mix in sRGB with premultiplied alpha, so a fade from clear red stays red.
+    #[test]
+    fn colours_interpolate_premultiplied() {
+        let fade = motion(json!({"ease": "linear", "keys": [{"at_ms": 0, "fill": "#FF000000"}, {"at_ms": 100, "fill": "#FF0000FF"}]}));
+        assert_eq!(fade.pose(50.0).fill, Some([255, 0, 0, 128]));
+        assert_eq!((fade.pose(0.0).fill, fade.pose(100.0).fill), (Some([255, 0, 0, 0]), Some([255, 0, 0, 255])));
+        let grey = motion(json!({"ease": "linear", "keys": [{"at_ms": 0, "stroke": "#000"}, {"at_ms": 100, "stroke": "#FFFFFF"}]}));
+        assert_eq!(grey.pose(50.0).stroke, Some([128, 128, 128, 255]));
+        // Between two clear colours nothing shows, and the colour is still the straight mix.
+        let clear = motion(json!({"ease": "linear", "keys": [{"at_ms": 0, "color": "#00000000"}, {"at_ms": 100, "color": "#FFFFFF00"}]}));
+        assert_eq!(clear.pose(50.0).color, Some([128, 128, 128, 0]));
+        // An overshoot past the last colour stays within the bytes.
+        let pop = motion(json!({"ease": "overshoot", "keys": [{"at_ms": 0, "fill": "#00000000"}, {"at_ms": 100, "fill": "#FF8000FF"}]}));
+        for t in 1..=100 {
+            let [r, _, b, _] = pop.pose(f64::from(t)).fill.unwrap();
+            assert_eq!((r, b), (255, 0), "{t}: red stays red, blue stays out");
+        }
+        assert_eq!(pop.pose(60.0).fill.unwrap()[3], 255, "alpha clamps at 1 while it overshoots");
+    }
+
+    /// Every ease meets 0 at the start and 1 at the end, the CSS curves give CSS's values, all but
+    /// `overshoot` only grow, and what overshoots is clamped where it has a range.
+    #[test]
+    fn easings_meet_their_ends() {
+        let all = [Ease::Linear, Ease::Standard, Ease::EaseIn, Ease::EaseOut, Ease::EaseInOut, Ease::Overshoot, Ease::Hold];
+        for ease in all {
+            assert_eq!((ease.apply(0.0), ease.apply(1.0)), (0.0, 1.0), "{ease:?}");
+            assert_eq!((ease.apply(-1.0), ease.apply(2.0), ease.apply(f64::NAN)), (0.0, 1.0, 0.0), "{ease:?} clamps its time");
+            let curve: Vec<f64> = (0..=1000).map(|i| ease.apply(f64::from(i) / 1000.0)).collect();
+            if ease == Ease::Overshoot {
+                let peak = curve.iter().cloned().fold(0.0, f64::max);
+                assert!(peak > 1.09 && peak < 1.1, "overshoot peaks a little past 1: {peak}");
+            } else {
+                assert!(curve.windows(2).all(|w| w[1] >= w[0] - 1e-12), "{ease:?} only grows");
+            }
+        }
+        // The values CSS's cubic-bezier gives, solved independently.
+        let css = [
+            (Ease::Standard, [0.408511, 0.802403, 0.960459]),
+            (Ease::EaseIn, [0.093465, 0.315357, 0.621862]),
+            (Ease::EaseOut, [0.378138, 0.684643, 0.906535]),
+            (Ease::EaseInOut, [0.129162, 0.5, 0.870838]),
+            (Ease::Overshoot, [0.816289, 1.087401, 1.059647]),
+        ];
+        for (ease, want) in css {
+            for (u, w) in [0.25, 0.5, 0.75].into_iter().zip(want) {
+                assert!((ease.apply(u) - w).abs() < 1e-5, "{ease:?}({u}) = {} not {w}", ease.apply(u));
+            }
+        }
+        assert_eq!((Ease::Hold.apply(0.999), Ease::Linear.apply(0.3)), (0.0, 0.3));
+        // Under an overshoot, opacity and trim stay within 0 to 1 while a move goes past its end.
+        let pop = motion(json!({"ease": "overshoot", "keys": [{"at_ms": 0, "opacity": 0, "dx": 0, "scale": 0}, {"at_ms": 1000, "opacity": 1, "dx": 100, "scale": 1}]}));
+        let poses: Vec<Pose> = (0..=1000).map(|t| pop.pose(f64::from(t))).collect();
+        assert!(poses.iter().all(|p| p.opacity.unwrap() <= 1.0));
+        assert!(poses.iter().any(|p| p.dx > 105.0) && poses.iter().any(|p| p.scale_x > 1.05), "moves are not clamped");
+        let shrink = motion(json!({"ease": "overshoot", "keys": [{"at_ms": 0, "scale": 1, "blur": 4, "sweep": -300}, {"at_ms": 1000, "scale": 0, "blur": 0, "sweep": -360}]}));
+        let low = (0..=1000).map(|t| shrink.pose(f64::from(t))).fold((f64::MAX, f64::MAX, 0.0f64), |acc, p| (acc.0.min(p.scale_x), acc.1.min(p.blur.unwrap()), acc.2.min(p.sweep.unwrap())));
+        assert_eq!(low, (0.0, 0.0, -360.0), "scale and blur stay at 0 or more, sweep within -360");
+    }
+
+    /// A looping motion starts again past its last key, and landing on that key shows the end.
+    #[test]
+    fn a_looping_motion_repeats_and_ends_on_its_last_key() {
+        let spin = motion(json!({"ease": "linear", "loop": true, "keys": [{"at_ms": 0, "rotate": 0}, {"at_ms": 1000, "rotate": 360}]}));
+        assert_eq!(spin.last_ms(), 1000.0);
+        assert_eq!((spin.local_ms(1000.0), spin.local_ms(1010.0), spin.local_ms(2500.0), spin.local_ms(-4.0)), (1000.0, 10.0, 500.0, 0.0));
+        assert_eq!((spin.pose(1000.0).rotate, spin.pose(1010.0).rotate), (360.0, 3.6));
+        let once = Motion { looped: None, ..spin.clone() };
+        assert_eq!((once.local_ms(1010.0), once.pose(1010.0).rotate), (1010.0, 360.0));
+        let not = Motion { looped: Some(false), ..spin };
+        assert_eq!(not.local_ms(2500.0), 2500.0);
+    }
+
+    /// The looks a pose shows land on the node's own fields; what it cannot change gives `None`.
+    #[test]
+    fn dress_sets_paint_fields() {
+        let rect = node("rect", json!({"fill": "#111111", "gradient": {"stops": [{"at": 0, "color": "#000"}, {"at": 1, "color": "#fff"}]}, "opacity": 0.9})).unwrap();
+        let looks = Pose { opacity: Some(0.25), fill: Some([255, 0, 128, 255]), stroke: Some([1, 2, 3, 4]), color: Some([16, 32, 48, 64]), blur: Some(3.0), ..Pose::default() };
+        let d = looks.dress(&rect).unwrap();
+        assert_eq!((d.opacity, d.fill.as_deref(), d.gradient.as_ref(), d.stroke.as_deref(), d.color.as_deref(), d.blur),
+            (Some(0.25), Some("#FF0080FF"), None, Some("#01020304"), Some("#10203040"), Some(3.0)));
+        assert_eq!(Node { opacity: rect.opacity, fill: rect.fill.clone(), gradient: rect.gradient.clone(), stroke: None, color: None, blur: None, ..d },
+            rect, "nothing else changes");
+        // A whole ellipse gets an arc from the top; a ring keeps its start, hole and ends.
+        let disc = node("ellipse", json!({})).unwrap();
+        let fill = Pose { sweep: Some(120.0), ..Pose::default() };
+        assert_eq!(fill.dress(&disc).unwrap().arc, Some(Arc { start: 0.0, sweep: 120.0, inner: 0.0, cap: None }));
+        let ring = node("ellipse", json!({"arc": {"start": 90, "sweep": 300, "inner": 0.6, "cap": "round"}})).unwrap();
+        let arc = fill.dress(&ring).unwrap().arc.unwrap();
+        assert_eq!((arc.start, arc.sweep, arc.inner, arc.cap), (90.0, 120.0, 0.6, Some(crate::design::StrokeCap::Round)));
+        // Nothing to change: a sweep off an ellipse, an angle without a gradient that turns, a trim.
+        assert_eq!(fill.dress(&rect), None);
+        let turn = Pose { angle: Some(45.0), ..Pose::default() };
+        assert_eq!(turn.dress(&disc), None);
+        let radial = node("rect", json!({"gradient": {"kind": "radial", "stops": [{"at": 0, "color": "#000"}, {"at": 1, "color": "#fff"}]}})).unwrap();
+        assert_eq!(turn.dress(&radial), None, "a radial gradient has no angle");
+        assert_eq!(turn.dress(&rect).unwrap().gradient.unwrap().angle, Some(45.0), "a linear one turns");
+        assert_eq!(Pose { trim: Some(0.5), dx: 4.0, ..Pose::default() }.dress(&rect), None, "trim and moves are the painter's");
+        assert_eq!(Pose::default().dress(&rect), None);
+    }
+
+    /// A stroke key shows its colour, not the stroke gradient under it, as a fill key does with
+    /// the gradient; each leaves the other's gradient alone.
+    #[test]
+    fn dress_stroke_beats_a_stroke_gradient() {
+        let stops = json!([{"at": 0, "color": "#4AF0FF"}, {"at": 1, "color": "#7C5CFF"}]);
+        let card = node("rect", json!({"stroke_width": 2, "stroke_gradient": {"stops": stops}, "gradient": {"stops": stops}})).unwrap();
+        let red = card_pose(json!({"stroke": "#F00"}));
+        let d = red.dress(&card).unwrap();
+        assert_eq!((d.stroke.as_deref(), d.stroke_gradient.as_ref(), d.gradient.as_ref()), (Some("#FF0000FF"), None, card.gradient.as_ref()));
+        let d = card_pose(json!({"fill": "#0F0"})).dress(&card).unwrap();
+        assert_eq!((d.fill.as_deref(), d.gradient.as_ref(), d.stroke_gradient.as_ref()), (Some("#00FF00FF"), None, card.stroke_gradient.as_ref()));
+    }
+
+    /// The pose of a motion whose two keys both show the looks in `looks`.
+    fn card_pose(looks: Value) -> Pose {
+        let key = |at_ms: u32| {
+            let mut key = looks.clone();
+            key["at_ms"] = json!(at_ms);
+            key
+        };
+        motion(json!({"keys": [key(0), key(200)]})).pose(100.0)
+    }
+
+    /// An angle key turns a conic ring's gradient and a linear stroke gradient, not a radial one.
+    #[test]
+    fn an_angle_key_turns_a_conic_ring() {
+        let stops = json!([{"at": 0, "color": "#4AF0FF"}, {"at": 1, "color": "#7C5CFF"}]);
+        let ring = node("ellipse", json!({"arc": {"sweep": 360, "inner": 0.7}, "gradient": {"kind": "conic", "angle": 30, "stops": stops},
+            "stroke_gradient": {"angle": 90, "stops": stops}, "motion": {"ease": "linear", "loop": true, "keys": [{"at_ms": 0, "angle": 0}, {"at_ms": 1000, "angle": 360}]}})).unwrap();
+        let pose = ring.motion.as_ref().unwrap().pose(250.0);
+        assert_eq!(pose.angle, Some(90.0));
+        let d = pose.dress(&ring).unwrap();
+        let (g, s) = (d.gradient.unwrap(), d.stroke_gradient.unwrap());
+        assert_eq!((g.kind, g.angle, s.kind, s.angle), (GradientKind::Conic, Some(90.0), GradientKind::Linear, Some(90.0)));
+        assert_eq!(d.arc, ring.arc, "the ring itself stays as it is");
+        // Under a fill key the gradient is gone, and the angle still turns the stroke gradient.
+        let radial = Gradient { kind: GradientKind::Radial, ..ring.gradient.clone().unwrap() };
+        let mixed = Node { stroke_gradient: Some(radial.clone()), ..ring.clone() };
+        let d = Pose { angle: Some(10.0), ..Pose::default() }.dress(&mixed).unwrap();
+        assert_eq!((d.gradient.unwrap().angle, d.stroke_gradient), (Some(10.0), Some(radial)));
     }
 }
