@@ -9,9 +9,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quietsoftware.relay.core.design.DesignGot
@@ -133,6 +135,8 @@ fun DesignScreen(id: Long, nav: Nav) {
     val c = Relay.colors
     val payload = remember(id) { buildJsonObject { put("design_id", id) } }
     val plan = rememberDesignPlan(nav, payload)
+    val app = LocalContext.current.applicationContext
+    val pictures = remember(id) { DesignPictures.of(app, nav.relay, id) }
     val got = plan?.got
     val design = got?.design
     Page {
@@ -156,7 +160,7 @@ fun DesignScreen(id: Long, nav: Nav) {
                 )
                 unreadText(got)?.let { T(it, style = Relay.type.caption, color = c.ink3) }
                 if (plan.pages.isEmpty()) Empty("layout", "Nothing drawn yet", "This design has no pages.")
-                for (page in plan.pages) DesignPageBlock(page)
+                for (page in plan.pages) DesignPageBlock(page, pictures)
             }
         }
     }
@@ -164,13 +168,15 @@ fun DesignScreen(id: Long, nav: Nav) {
 
 /** A page: its name, its canvas, what the phone leaves out of it, and its frames. */
 @Composable
-private fun DesignPageBlock(page: PagePlan) {
+private fun DesignPageBlock(page: PagePlan, pictures: DesignPictures) {
+    // Its pictures, read as each answer for the page comes (one that failed is tried again).
+    LaunchedEffect(page) { pictures.load(pictureSrcs(page)) }
     val c = Relay.colors
     SectionLabel(page.name)
     when {
         page.failed -> T("This page could not be drawn here. Open it on the PC.", style = Relay.type.caption, color = c.ink3)
         page.bounds == null -> if (page.omissions.none) T("Nothing on this page yet.", style = Relay.type.caption, color = c.ink3)
-        else -> PageCanvas(page)
+        else -> PageCanvas(page, picture = pictures::picture)
     }
     omissionsText(page.omissions)?.let {
         Gap(6.dp)

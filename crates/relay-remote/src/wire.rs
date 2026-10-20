@@ -139,8 +139,9 @@ pub const PHONE_OPS: &[&str] = &[
     "avd.boot", "avd.list",
     "bus.ping", "bus.subscribe", "bus.unsubscribe",
     "dashboard.get",
-    // A project's design canvases, to list and open (docs/DESIGN-CANVAS.md).
-    "design.get", "design.list",
+    // A project's design canvases, to list, open and draw with their pictures
+    // (docs/DESIGN-CANVAS.md).
+    "design.asset.get", "design.get", "design.list",
     "device.build", "device.list", "device.run", "device.run.list", "device.run.stop",
     "file.create", "file.delete", "file.move", "file.read", "file.rename", "file.restore",
     "file.restore_head", "file.search", "file.trash.list", "file.tree", "file.write",
@@ -353,6 +354,9 @@ mod tests {
         let kind = |op: &str| relay_bus::registry::Registry::global().get(op).unwrap().meta.kind;
         assert_eq!(kind("thread.upload"), relay_bus::registry::OpKind::Mutation);
         assert_eq!(kind("thread.image"), relay_bus::registry::OpKind::Query);
+        // A design's pictures, read in pieces to draw on its canvas.
+        assert!(matches!(gate(&line("design.asset.get"), Instance::Stable), Gate::Forward));
+        assert_eq!(kind("design.asset.get"), relay_bus::registry::OpKind::Query);
         // A thread's agent proposes from the PC alone.
         assert!(matches!(gate(&line("thread.propose"), Instance::Stable), Gate::Reject(_)));
         // Audit rows carry stored payloads (held actions, prompts, an old Arbiter key), and no
