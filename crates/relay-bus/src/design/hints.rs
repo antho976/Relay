@@ -17,13 +17,16 @@ use std::sync::OnceLock;
 
 /// Edits agents name that are not edits, and what to do instead.
 pub const OP_HINTS: &[(&[&str], &str)] = &[
-    (&["copy", "duplicate", "clone"], "there is no copy edit: add the node again under a new id (design.get has its fields), then its children"),
-    (&["instance", "component", "symbol"], "components and instances are not supported yet: add a copy of the nodes"),
-    (&["set", "patch", "edit", "modify", "change", "style"], "use update with set"),
+    (&["duplicate", "clone"], "use copy {id, as}"),
+    (&["instance", "component", "symbol"], "components are not supported yet: copy the node and give the copies a style"),
+    (&["set", "patch", "edit", "modify", "change"], "use update with set"),
     (&["remove", "destroy"], "use delete"),
     (&["reorder", "reparent", "nest"], "use move with parent and index"),
     (&["create", "insert", "append"], "use add"),
     (&["group", "ungroup"], "add a group node and move nodes into it (ungroup: move them out, then delete the group)"),
+    (&["token", "palette", "variable", "colour", "name_color"], "use color {name, value}"),
+    (&["class", "theme"], "use style {name, set}"),
+    (&["remove_style", "delete_color", "remove_color"], "use delete_style {name}"),
 ];
 
 /// Kinds agents name that are not kinds, and the kind to use.
@@ -339,6 +342,10 @@ pub fn label(at: usize, op: &NodeOp) -> String {
         NodeOp::Update { id, .. } => format!("ops[{at}] update {id:?}"),
         NodeOp::Move { id, .. } => format!("ops[{at}] move {id:?}"),
         NodeOp::Delete { id } => format!("ops[{at}] delete {id:?}"),
+        NodeOp::Copy { id, .. } => format!("ops[{at}] copy {id:?}"),
+        NodeOp::Color { name, .. } => format!("ops[{at}] color {name:?}"),
+        NodeOp::Style { name, .. } => format!("ops[{at}] style {name:?}"),
+        NodeOp::DeleteStyle { name } => format!("ops[{at}] delete_style {name:?}"),
     }
 }
 
@@ -458,9 +465,10 @@ pub fn explain(at: usize, edit: &Value) -> Unread {
         return unread;
     };
     let node = map.get("node").and_then(Value::as_object);
+    // What the edit names, as `label` names it: a node's id, or a colour's or style's name.
     let id = match node {
         Some(node) => node.get("id"),
-        None => map.get("id"),
+        None => map.get("id").or_else(|| map.get("name")),
     };
     unread.id = id.and_then(Value::as_str).filter(|id| !id.is_empty()).map(str::to_string);
     let kind = node.and_then(|n| n.get("kind")).and_then(Value::as_str).and_then(NodeKind::from_name);
@@ -481,10 +489,13 @@ fn why_edit(shape: &Shape, map: &Map<String, Value>, edit: &Value) -> (Option<St
     let op = shape.op.as_str();
     for (key, value) in map.iter().filter(|(key, _)| *key != "op") {
         if !shape.keys.contains(key) {
-            let why = if field_kinds(key).is_some() && op == "update" {
-                format!("{key}: a node field goes in set: {{\"set\": {{{key:?}: …}}}}")
+            let why = if field_kinds(key).is_some() && matches!(op, "update" | "style") {
+                let what = if op == "style" { "style" } else { "node" };
+                format!("{key}: a {what} field goes in set: {{\"set\": {{{key:?}: …}}}}")
             } else if field_kinds(key).is_some() && op == "add" {
                 format!("{key}: a node field goes in node: {{\"node\": {{{key:?}: …}}}}")
+            } else if op == "copy" && matches!(key.as_str(), "x" | "y" | "offset" | "position") {
+                format!("{key}: not a field of copy; move the copy with dx and dy")
             } else {
                 let keys: Vec<&str> = shape.keys.iter().map(String::as_str).collect();
                 match nearest(key, keys.iter().copied()) {
@@ -502,6 +513,7 @@ fn why_edit(shape: &Shape, map: &Map<String, Value>, edit: &Value) -> (Option<St
             }
             let why = format!("{key}: {error}");
             return (Some(key.clone()), match key.as_str() {
+                "set" if op == "style" => format!("{why}; give the style fields to set, such as {{\"fill\": \"$accent\", \"radius\": 12}}"),
                 "set" => format!("{why}; give the node fields to change, such as {{\"fill\": \"#FFFFFF\"}}"),
                 "index" => format!("{why}; 0 is the bottom of the parent's children"),
                 _ => why,
@@ -511,6 +523,11 @@ fn why_edit(shape: &Shape, map: &Map<String, Value>, edit: &Value) -> (Option<St
     if let Some(key) = shape.required.iter().find(|key| !map.contains_key(*key)) {
         let tail = match key.as_str() {
             "id" => format!("name the node to {op}"),
+            "name" if op == "color" => "name the colour, as nodes will write it after a $".into(),
+            "name" if op == "style" => "name the style, as nodes will write it in style".into(),
+            "name" => "name the colour or style to take out".into(),
+            "value" => "give the colour, such as \"#4C9DFF\"".into(),
+            "set" if op == "style" => "give the style fields to set, such as {\"fill\": \"$accent\", \"radius\": 12}".into(),
             "node" => "give the node to add, such as {\"kind\": \"rect\", \"parent\": \"page-1\"}".into(),
             "set" => "give the node fields to change, such as {\"fill\": \"#FFFFFF\"}".into(),
             _ => format!("{op} needs it"),
@@ -690,11 +707,14 @@ mod tests {
         let align = json!({"id": "t", "parent": "p", "kind": "text", "align": "centre"});
         assert!(add(0, align).ends_with("; use \"center\""));
         // Edits and kinds that are not.
-        let why = read(json!([{"op": "add", "node": {"kind": "page"}}, {"op": "copy", "id": "a"}])).unwrap_err();
-        assert_eq!(why, "ops[1]: op \"copy\" is not an edit; there is no copy edit: add the node again under a new id (design.get has its fields), then its children");
-        assert!(read(json!([{"op": "instance"}])).unwrap_err().ends_with("components and instances are not supported yet: add a copy of the nodes"));
+        let why = read(json!([{"op": "add", "node": {"kind": "page"}}, {"op": "duplicate", "id": "a"}])).unwrap_err();
+        assert_eq!(why, "ops[1]: op \"duplicate\" is not an edit; use copy {id, as}");
+        assert!(read(json!([{"op": "instance"}])).unwrap_err().ends_with("components are not supported yet: copy the node and give the copies a style"));
+        assert!(read(json!([{"op": "palette"}])).unwrap_err().ends_with("use color {name, value}"));
+        assert!(read(json!([{"op": "theme"}])).unwrap_err().ends_with("use style {name, set}"));
+        assert!(read(json!([{"op": "remove_style"}])).unwrap_err().ends_with("use delete_style {name}"));
         assert_eq!(read(json!([{"op": "updte", "id": "a", "set": {}}])).unwrap_err(), "ops[0]: op \"updte\" is not an edit; did you mean \"update\"?");
-        assert_eq!(read(json!([{"op": "frobnicate"}])).unwrap_err(), "ops[0]: op \"frobnicate\" is not an edit; the edits are add, update, move or delete");
+        assert_eq!(read(json!([{"op": "frobnicate"}])).unwrap_err(), "ops[0]: op \"frobnicate\" is not an edit; the edits are add, update, move, delete, copy, color, style or delete_style");
         assert_eq!(read(json!([{"op": "add", "node": {"id": "b", "parent": "p", "kind": "button"}}])).unwrap_err(),
             "ops[0] add \"b\": node.kind: \"button\" is not a kind; use frame (layout: row or column lays out its children)");
         assert_eq!(read(json!([{"op": "add", "node": {"parent": "p", "kind": "elipse"}}])).unwrap_err(),
@@ -705,8 +725,8 @@ mod tests {
     #[test]
     fn each_edit_is_read_alone_and_explained() {
         let cases = [
-            (json!(["add"]), "ops[0]: each edit is an object with op: add, update, move or delete"),
-            (json!([{"id": "a"}]), "ops[0]: op: each edit is an object with op: add, update, move or delete"),
+            (json!(["add"]), "ops[0]: each edit is an object with op: add, update, move, delete, copy, color, style or delete_style"),
+            (json!([{"id": "a"}]), "ops[0]: op: each edit is an object with op: add, update, move, delete, copy, color, style or delete_style"),
             (json!([{"op": "update", "set": {}}]), "ops[0] update: id: missing; name the node to update"),
             (json!([{"op": "update", "id": "a"}]), "ops[0] update \"a\": set: missing; give the node fields to change, such as {\"fill\": \"#FFFFFF\"}"),
             (json!([{"op": "update", "id": "a", "set": "red"}]),
@@ -719,6 +739,13 @@ mod tests {
             (json!([{"op": "delete", "id": 7}]), "ops[0] delete: id: invalid type: integer `7`, expected a string"),
             (json!([{"op": "add"}]), "ops[0] add: node: missing; give the node to add, such as {\"kind\": \"rect\", \"parent\": \"page-1\"}"),
             (json!([{"op": "add", "node": "rect"}]), "ops[0] add: node: an add's node is an object of node fields, such as {\"kind\": \"rect\", \"parent\": \"page-1\"}"),
+            (json!([{"op": "copy", "id": "card", "offset": 1}]), "ops[0] copy \"card\": offset: not a field of copy; move the copy with dx and dy"),
+            (json!([{"op": "color", "name": "accent"}]), "ops[0] color \"accent\": value: missing; give the colour, such as \"#4C9DFF\""),
+            (json!([{"op": "color", "value": "#fff"}]), "ops[0] color: name: missing; name the colour, as nodes will write it after a $"),
+            (json!([{"op": "style", "name": "card", "radius": 12}]), "ops[0] style \"card\": radius: a style field goes in set: {\"set\": {\"radius\": …}}"),
+            (json!([{"op": "style", "name": "card", "set": [12]}]),
+                "ops[0] style \"card\": set: invalid type: sequence, expected a map; give the style fields to set, such as {\"fill\": \"$accent\", \"radius\": 12}"),
+            (json!([{"op": "delete_style"}]), "ops[0] delete_style: name: missing; name the colour or style to take out"),
             (json!([{"op": "add", "node": {"id": "n", "parent": "p"}}]),
                 "ops[0] add \"n\": node.kind: missing; one of page, frame, group, rect, ellipse, line, text, sticky, path, image, polygon or icon"),
         ];
@@ -748,7 +775,7 @@ mod tests {
         assert_eq!(locate(&json!({"design_id": "one"})), None);
         let long = json!({"ops": vec![json!({"op": "delete", "id": "a"}); MAX_LENIENT_OPS + 1]});
         assert_eq!(locate(&long).map(|(_, details)| details), Some(json!({"field": "ops"})));
-        let unread = explain(4, &json!({"op": "copy", "id": "a"}));
+        let unread = explain(4, &json!({"op": "clone", "id": "a"}));
         assert_eq!((unread.index, unread.id.as_deref(), unread.field.as_deref()), (4, None, Some("op")));
     }
 
@@ -823,7 +850,7 @@ mod tests {
     #[test]
     fn hints_never_shadow_what_exists() {
         let edits: Vec<&str> = shapes().iter().map(|s| s.op.as_str()).collect();
-        assert_eq!(edits, ["add", "update", "move", "delete"]);
+        assert_eq!(edits, ["add", "update", "move", "delete", "copy", "color", "style", "delete_style"]);
         for (names, _) in OP_HINTS {
             assert!(names.iter().all(|n| !edits.contains(n) && normal(n) == *n), "{names:?}");
         }

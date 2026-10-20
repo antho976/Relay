@@ -530,6 +530,14 @@ pub(super) fn register(e: &mut Engine) {
                 }
                 NodeOp::Move { id, parent, index, .. } => run.move_(id, parent, index)?,
                 NodeOp::Delete { id } => run.delete(id)?,
+                // Until the store keeps colours and styles and the engine copies (engine-reuse).
+                NodeOp::Copy { .. } | NodeOp::Color { .. } | NodeOp::Style { .. } | NodeOp::DeleteStyle { .. } => {
+                    let hint = match op {
+                        NodeOp::Copy { .. } => "add the node again under a new id (design.get has its fields), then its children",
+                        _ => "write each node's colours and look itself",
+                    };
+                    return Err(run.fail(ErrorKind::Invalid, "design.ops", format!("{} is not supported yet", op.name())).with_hint(hint));
+                }
             };
             run.ids.push(id.unwrap_or_default());
         }

@@ -208,3 +208,24 @@ fn named_colours_and_styles_are_refused_until_the_design_holds_them() {
     assert_eq!((error.code.as_str(), error.message.as_str()),
         ("design.node_invalid", "ops[0] update \"card\": fill: \"$\" is not #RGB, #RRGGBB, #RRGGBBAA or a $name colour"));
 }
+
+/// Reuse: copy, colour and style edits read, and are refused by name until the engine runs
+/// them (engine-reuse); nothing of the list stays.
+#[test]
+fn reuse_edits_are_refused_until_the_engine_runs_them() {
+    let (e, _root) = project();
+    let id = create(&e);
+    card(&e, id);
+    for (edit, message) in [
+        (json!({"op": "copy", "id": "card", "as": "card-2", "dx": 400}), "ops[1] copy \"card\": copy is not supported yet"),
+        (json!({"op": "color", "name": "accent", "value": "#4C9DFF"}), "ops[1] color \"accent\": color is not supported yet"),
+        (json!({"op": "style", "name": "card", "set": {"radius": 12}}), "ops[1] style \"card\": style is not supported yet"),
+        (json!({"op": "delete_style", "name": "card"}), "ops[1] delete_style \"card\": delete_style is not supported yet"),
+    ] {
+        let ops = json!([{"op": "update", "id": "card", "set": {"x": 30}}, edit]);
+        let error = refused(&e, id, ops);
+        assert_eq!((error.code.as_str(), error.message.as_str()), ("design.ops", message));
+        assert_eq!(error.details.as_ref().unwrap()["index"], 1);
+        assert!(error.hint.is_some());
+    }
+}

@@ -9,7 +9,7 @@ use super::{
     obj_opt, obj_vec_opt, object_only, valid_id, Blend, Gradient, Shadow, StrokeCap, StrokeJoin, TextAlign, TextCase, MAX_COORD,
     MAX_ID, MAX_NAME, MAX_SHADOWS,
 };
-use schemars::JsonSchema;
+use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
 use serde::de::{DeserializeSeed, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
@@ -167,6 +167,15 @@ impl fmt::Display for StyleError {
 pub enum Removed {
     Color(String),
     Style(Style),
+}
+
+/// A `style` edit's `set`: the style fields by name.
+pub(crate) fn style_set_schema(_: &mut SchemaGenerator) -> Schema {
+    json_schema!({
+        "type": "object",
+        "description": "Style fields to set, each with a value as a node takes it; null takes the field out of the style.",
+        "propertyNames": {"enum": STYLE_FIELDS},
+    })
 }
 
 /// A map of styles, each read only from a JSON object (TM-16): serde would read an array field by

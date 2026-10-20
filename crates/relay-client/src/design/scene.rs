@@ -229,6 +229,12 @@ impl Scene {
                     node.parent = new;
                 }
             }
+            // An agent's copy runs in the engine and arrives by a reread (MODEL-SPEC §2.11).
+            NodeOp::Copy { id, .. } => return Err(format!("copy {id}: the canvas does not send copy")),
+            // Until client-scene keeps the design's colours and styles.
+            NodeOp::Color { name, .. } | NodeOp::Style { name, .. } | NodeOp::DeleteStyle { name } => {
+                return Err(format!("{} {name}: colours and styles are not on the canvas yet", op.name()));
+            }
             NodeOp::Delete { id } => {
                 let node = self.nodes.get(id).ok_or_else(|| format!("delete: no node {id}"))?;
                 if node.kind == NodeKind::Page && self.pages().len() <= 1 {
@@ -263,7 +269,12 @@ impl Scene {
                 self.nodes.insert(id.clone(), patched);
                 Ok(())
             }
-            NodeOp::Move { .. } | NodeOp::Delete { .. } => self.apply(op),
+            NodeOp::Move { .. }
+            | NodeOp::Delete { .. }
+            | NodeOp::Copy { .. }
+            | NodeOp::Color { .. }
+            | NodeOp::Style { .. }
+            | NodeOp::DeleteStyle { .. } => self.apply(op),
         }
     }
 
@@ -413,6 +424,22 @@ pub(crate) mod tests {
         assert_eq!(s.to_nodes(), before);
         s.apply(&NodeOp::Move { id: "b".into(), parent: Some("p1".into()), index: None, keep_position: Some(false) }).unwrap();
         assert_eq!(s.parent("b"), Some("p1"));
+        let before = s.to_nodes();
+        let copy = NodeOp::Copy { id: "a".into(), as_id: Some("a2".into()), parent: None, index: None, dx: 0.0, dy: 0.0 };
+        assert_eq!(s.apply(&copy).unwrap_err(), "copy a: the canvas does not send copy");
+        let reuse = [
+            NodeOp::Color { name: "accent".into(), value: "#fff".into() },
+            NodeOp::Style { name: "card".into(), set: Default::default() },
+            NodeOp::DeleteStyle { name: "card".into() },
+        ];
+        for op in &reuse {
+            assert!(s.apply_all(std::slice::from_ref(op)).unwrap_err().contains("colours and styles are not on the canvas yet"), "{op:?}");
+        }
+        assert_eq!(s.to_nodes(), before);
+        // fit leaves them as they are.
+        let mut ops = reuse.to_vec();
+        assert!(s.fit(&mut ops).is_empty());
+        assert_eq!(ops, reuse);
     }
 
     /// What the canvas sends is fitted to the kinds of the nodes it writes, an add earlier in the

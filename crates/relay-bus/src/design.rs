@@ -1175,14 +1175,101 @@ pub enum NodeOp {
         #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
         id: String,
     },
+    /// Copy a node and everything inside it, as one edit (a page copies as a new page). The
+    /// copy's id is `as` (left out, the engine assigns one); each node inside takes an id made
+    /// from it: one starting with the copied node's id and `-`, `_`, `.` or `:` has that start
+    /// swapped for the copy's (`card-title` becomes `card-2-title`), any other gets the copy's id
+    /// and `:` in front (`text-14` becomes `card-2:text-14`), so later edits of the same list can
+    /// name them. A connector inside joins the copies of its ends; one attached to a node outside
+    /// the copy lets go of that end, staying where it is drawn.
+    Copy {
+        #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
+        id: String,
+        /// The copy's id; left out, the engine assigns one.
+        #[serde(default, rename = "as", skip_serializing_if = "Option::is_none")]
+        #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
+        as_id: Option<String>,
+        /// The page, frame or group to put the copy in; absent, the original's. A page's copy
+        /// takes none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
+        parent: Option<String>,
+        /// Its place among the parent's children, 0 at the bottom; absent puts it on top.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<u32>,
+        /// Added to the copy's `x`, in px (default 0).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        #[schemars(range(min = -MAX_COORD, max = MAX_COORD))]
+        dx: f64,
+        /// Added to the copy's `y`, in px (default 0).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        #[schemars(range(min = -MAX_COORD, max = MAX_COORD))]
+        dy: f64,
+    },
+    /// Name a colour that any colour field of a node, or of a style, takes as `$name`. Naming it
+    /// again changes it wherever it is used.
+    Color {
+        /// 1 to 64 letters, digits, `-`, `_`, `.` or `:`; one namespace with the styles.
+        #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
+        name: String,
+        /// `#RGB`, `#RRGGBB` or `#RRGGBBAA` (not another `$name`).
+        value: String,
+    },
+    /// Name a style, or change one: each key of `set` is a style field (fill, gradient, stroke,
+    /// stroke_width, dash, radius, radii, shadow, shadows, opacity, blur, blend, color, font,
+    /// font_size, font_weight, italic, underline, strike, align, line_height, letter_spacing,
+    /// text_case, stroke_cap, stroke_join, stroke_gradient) with a value as a node takes it;
+    /// `null` takes it out of the style. A node names it with `style`.
+    Style {
+        /// 1 to 64 letters, digits, `-`, `_`, `.` or `:`; one namespace with the colours.
+        #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
+        name: String,
+        #[schemars(schema_with = "style::style_set_schema")]
+        set: Map<String, Value>,
+    },
+    /// Take a named colour or style out of the design. What used it keeps its look: the colour,
+    /// or the style's fields a node did not set itself, are written into it.
+    DeleteStyle {
+        #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
+        name: String,
+    },
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 impl NodeOp {
-    /// The node the edit names; empty for an `add` whose node has no id yet.
+    /// What the edit names: a node (empty for an `add` whose node has no id yet), or a colour's
+    /// or style's name.
     pub fn target(&self) -> &str {
         match self {
             NodeOp::Add { node, .. } => &node.id,
-            NodeOp::Update { id, .. } | NodeOp::Move { id, .. } | NodeOp::Delete { id } => id,
+            NodeOp::Update { id, .. } | NodeOp::Move { id, .. } | NodeOp::Delete { id } | NodeOp::Copy { id, .. } => id,
+            NodeOp::Color { name, .. } | NodeOp::Style { name, .. } | NodeOp::DeleteStyle { name } => name,
+        }
+    }
+
+    /// The node the edit acts on, as [`NodeOp::target`] names it; `None` for an edit of a colour
+    /// or a style.
+    pub fn node_target(&self) -> Option<&str> {
+        match self {
+            NodeOp::Color { .. } | NodeOp::Style { .. } | NodeOp::DeleteStyle { .. } => None,
+            _ => Some(self.target()),
+        }
+    }
+
+    /// The edit's name as written: `delete_style`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            NodeOp::Add { .. } => "add",
+            NodeOp::Update { .. } => "update",
+            NodeOp::Move { .. } => "move",
+            NodeOp::Delete { .. } => "delete",
+            NodeOp::Copy { .. } => "copy",
+            NodeOp::Color { .. } => "color",
+            NodeOp::Style { .. } => "style",
+            NodeOp::DeleteStyle { .. } => "delete_style",
         }
     }
 }
@@ -2322,5 +2409,42 @@ mod tests {
         assert_eq!((node.w, node.h, node.padding_edges()), (320.0, 200.0, [16.0; 4]));
         assert_eq!(ops[1].target(), "");
         assert!(serde_json::from_value::<NodeOp>(json!({"op": "delete", "id": "a", "extra": 1})).is_err());
+    }
+
+    /// Reuse test list: the copy, colour and style edits read as agents write them, and write
+    /// back only what they hold.
+    #[test]
+    fn reuse_edits_read_as_agents_write_them() {
+        let edits = json!([
+            {"op": "copy", "id": "card", "as": "card-2", "dx": 400},
+            {"op": "copy", "id": "page-1", "index": 0},
+            {"op": "color", "name": "accent", "value": "#4C9DFF"},
+            {"op": "style", "name": "card", "set": {"fill": "$accent", "radius": 12, "shadow": null}},
+            {"op": "delete_style", "name": "accent"}
+        ]);
+        let ops: Vec<NodeOp> = serde_json::from_value(edits.clone()).unwrap();
+        let NodeOp::Copy { id, as_id, parent, index, dx, dy } = &ops[0] else { panic!() };
+        assert_eq!((id.as_str(), as_id.as_deref(), parent, index, *dx, *dy), ("card", Some("card-2"), &None, &None, 400.0, 0.0));
+        assert_eq!(ops.iter().map(NodeOp::target).collect::<Vec<_>>(), ["card", "page-1", "accent", "card", "accent"]);
+        assert_eq!(ops.iter().map(NodeOp::node_target).collect::<Vec<_>>(), [Some("card"), Some("page-1"), None, None, None]);
+        assert_eq!(ops.iter().map(NodeOp::name).collect::<Vec<_>>(), ["copy", "copy", "color", "style", "delete_style"]);
+        let labels: Vec<String> = ops.iter().enumerate().map(|(i, op)| label(i, op)).collect();
+        assert_eq!(labels, ["ops[0] copy \"card\"", "ops[1] copy \"page-1\"", "ops[2] color \"accent\"", "ops[3] style \"card\"", "ops[4] delete_style \"accent\""]);
+        // Written back as read: `as` by its name, a zero offset left out.
+        let written = serde_json::to_value(&ops).unwrap();
+        assert_eq!(written[0], json!({"op": "copy", "id": "card", "as": "card-2", "dx": 400.0}));
+        assert_eq!(written[1], json!({"op": "copy", "id": "page-1", "index": 0}));
+        assert_eq!(written.as_array().unwrap()[2..], edits.as_array().unwrap()[2..]);
+        for wrong in [json!({"op": "copy", "id": "a", "offset": 1}), json!({"op": "color", "name": "a", "value": "#fff", "alpha": 1}),
+            json!({"op": "delete_style", "name": "a", "force": true}), json!({"op": "copy", "id": "a", "as_id": "b"})] {
+            assert!(serde_json::from_value::<NodeOp>(wrong.clone()).is_err(), "{wrong}");
+        }
+        // The style edit's schema names the style fields.
+        let schema = serde_json::to_value(schemars::schema_for!(NodeOp)).unwrap();
+        let style = schema["oneOf"].as_array().unwrap().iter().find(|v| v["properties"]["op"]["const"] == "style").unwrap();
+        assert_eq!(style["properties"]["set"]["propertyNames"]["enum"], json!(STYLE_FIELDS));
+        let copy = schema["oneOf"].as_array().unwrap().iter().find(|v| v["properties"]["op"]["const"] == "copy").unwrap();
+        assert_eq!(copy["required"], json!(["op", "id"]));
+        assert!(copy["properties"].get("as").is_some());
     }
 }

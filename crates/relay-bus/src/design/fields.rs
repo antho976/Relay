@@ -488,7 +488,13 @@ pub fn fit_written(op: &mut NodeOp, kind_of: impl Fn(&str) -> Option<NodeKind>) 
                 }
             }
         }
-        NodeOp::Move { .. } | NodeOp::Delete { .. } => {}
+        // A copy writes what is stored, and colour and style edits name no node.
+        NodeOp::Move { .. }
+        | NodeOp::Delete { .. }
+        | NodeOp::Copy { .. }
+        | NodeOp::Color { .. }
+        | NodeOp::Style { .. }
+        | NodeOp::DeleteStyle { .. } => {}
     }
     dropped
 }

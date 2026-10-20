@@ -107,8 +107,8 @@ fn an_edit_that_does_not_read_is_named_before_the_list_runs() {
     let id = create(&e);
     let prefix = "payload for design.apply does not match its schema: ";
     let cases = [
-        (with(&[json!({"op": "copy", "id": "card"})]),
-            "ops[2]: op \"copy\" is not an edit; there is no copy edit: add the node again under a new id (design.get has its fields), then its children",
+        (with(&[json!({"op": "duplicate", "id": "card"})]),
+            "ops[2]: op \"duplicate\" is not an edit; use copy {id, as}",
             json!({"op": 2, "index": 2, "id": null, "field": "op"})),
         (with(&[json!({"op": "add", "node": {"id": "cta", "parent": "card", "kind": "button"}})]),
             "ops[2] add \"cta\": node.kind: \"button\" is not a kind; use frame (layout: row or column lays out its children)",

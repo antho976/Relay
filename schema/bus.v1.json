@@ -26819,6 +26819,175 @@
             "id"
           ],
           "description": "Delete a node and everything inside it. A design keeps at least one page."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "as": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The copy's id; left out, the engine assigns one.",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "parent": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The page, frame or group to put the copy in; absent, the original's. A page's copy\ntakes none.",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "index": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Its place among the parent's children, 0 at the bottom; absent puts it on top."
+            },
+            "dx": {
+              "type": "number",
+              "format": "double",
+              "description": "Added to the copy's `x`, in px (default 0).",
+              "minimum": -1000000.0,
+              "maximum": 1000000.0
+            },
+            "dy": {
+              "type": "number",
+              "format": "double",
+              "description": "Added to the copy's `y`, in px (default 0).",
+              "minimum": -1000000.0,
+              "maximum": 1000000.0
+            },
+            "op": {
+              "type": "string",
+              "const": "copy"
+            }
+          },
+          "required": [
+            "op",
+            "id"
+          ],
+          "description": "Copy a node and everything inside it, as one edit (a page copies as a new page). The\ncopy's id is `as` (left out, the engine assigns one); each node inside takes an id made\nfrom it: one starting with the copied node's id and `-`, `_`, `.` or `:` has that start\nswapped for the copy's (`card-title` becomes `card-2-title`), any other gets the copy's id\nand `:` in front (`text-14` becomes `card-2:text-14`), so later edits of the same list can\nname them. A connector inside joins the copies of its ends; one attached to a node outside\nthe copy lets go of that end, staying where it is drawn."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "1 to 64 letters, digits, `-`, `_`, `.` or `:`; one namespace with the styles.",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "value": {
+              "type": "string",
+              "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA` (not another `$name`)."
+            },
+            "op": {
+              "type": "string",
+              "const": "color"
+            }
+          },
+          "required": [
+            "op",
+            "name",
+            "value"
+          ],
+          "description": "Name a colour that any colour field of a node, or of a style, takes as `$name`. Naming it\nagain changes it wherever it is used."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "1 to 64 letters, digits, `-`, `_`, `.` or `:`; one namespace with the colours.",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "set": {
+              "type": "object",
+              "description": "Style fields to set, each with a value as a node takes it; null takes the field out of the style.",
+              "propertyNames": {
+                "enum": [
+                  "fill",
+                  "gradient",
+                  "stroke",
+                  "stroke_width",
+                  "dash",
+                  "radius",
+                  "radii",
+                  "shadow",
+                  "shadows",
+                  "opacity",
+                  "blur",
+                  "blend",
+                  "color",
+                  "font",
+                  "font_size",
+                  "font_weight",
+                  "italic",
+                  "underline",
+                  "strike",
+                  "align",
+                  "line_height",
+                  "letter_spacing",
+                  "text_case",
+                  "stroke_cap",
+                  "stroke_join",
+                  "stroke_gradient"
+                ]
+              }
+            },
+            "op": {
+              "type": "string",
+              "const": "style"
+            }
+          },
+          "required": [
+            "op",
+            "name",
+            "set"
+          ],
+          "description": "Name a style, or change one: each key of `set` is a style field (fill, gradient, stroke,\nstroke_width, dash, radius, radii, shadow, shadows, opacity, blur, blend, color, font,\nfont_size, font_weight, italic, underline, strike, align, line_height, letter_spacing,\ntext_case, stroke_cap, stroke_join, stroke_gradient) with a value as a node takes it;\n`null` takes it out of the style. A node names it with `style`."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "op": {
+              "type": "string",
+              "const": "delete_style"
+            }
+          },
+          "required": [
+            "op",
+            "name"
+          ],
+          "description": "Take a named colour or style out of the design. What used it keeps its look: the colour,\nor the style's fields a node did not set itself, are written into it."
         }
       ],
       "description": "One edit of a design. `design.apply` runs a list of them in order, all or none."
