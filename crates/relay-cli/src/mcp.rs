@@ -212,7 +212,7 @@ pub(crate) fn tool_result(mut value: Value, is_error: bool) -> Value {
     if let Some(dir) = cleanup.as_ref().and_then(Value::as_str).filter(|dir| relay_scratch(Path::new(dir))) {
         let _ = std::fs::remove_dir_all(dir);
     }
-    let text = serde_json::to_string_pretty(&value).unwrap_or_default();
+    let text = serde_json::to_string(&value).unwrap_or_default();
     content.insert(0, json!({"type":"text","text":text}));
     let mut result = json!({"content":content,"isError":is_error});
     if !is_error {
@@ -897,10 +897,13 @@ fn mail_notice(mail: Option<&MailHint>) -> Option<Value> {
     })
 }
 
+/// An op's result: its JSON as text, compact (pretty printing put each value of a design's nodes
+/// on its own line and took a large design past an agent's output cap), and the same value as
+/// `structuredContent`, which the text mirrors as MCP asks.
 fn tool_success(value: Value, mail: Option<&MailHint>) -> Result<Value> {
     let mut content = vec![json!({
         "type":"text",
-        "text":serde_json::to_string_pretty(&value)?
+        "text":serde_json::to_string(&value)?
     })];
     if let Some(notice) = mail_notice(mail) {
         content.push(notice);
@@ -909,7 +912,7 @@ fn tool_success(value: Value, mail: Option<&MailHint>) -> Result<Value> {
 }
 
 fn tool_error(error: Value, mail: Option<&MailHint>) -> Value {
-    let text = serde_json::to_string_pretty(&error).unwrap_or_else(|_| "Relay tool error".to_string());
+    let text = serde_json::to_string(&error).unwrap_or_else(|_| "Relay tool error".to_string());
     let mut content = vec![json!({"type":"text","text":text})];
     if let Some(notice) = mail_notice(mail) {
         content.push(notice);
@@ -1088,7 +1091,27 @@ mod tests {
         assert_eq!(plain["isError"], true);
         assert_eq!(plain["content"][0]["text"], "Not done (money.not_found): No entry 5. Hint: list entries with money.tx.list.");
         let json = refusal(error, None, &Style::default());
-        assert!(json["content"][0]["text"].as_str().unwrap().contains("\"code\": \"money.not_found\""));
+        assert!(json["content"][0]["text"].as_str().unwrap().contains("\"code\":\"money.not_found\""));
+    }
+
+    #[test]
+    fn tool_text_is_compact_json_that_mirrors_the_structured_content() {
+        // Pretty printing put each value of a design's nodes on its own line, which took a
+        // large design.get past an agent's output cap (TM-3).
+        let value = json!({"design": {"id": 3, "name": "Home"}, "nodes": [{"id": "a", "kind": "rect", "x": 0}, {"id": "b", "kind": "text"}]});
+        let success = tool_success(value.clone(), None).unwrap();
+        let text = success["content"][0]["text"].as_str().unwrap();
+        assert!(!text.contains('\n') && !text.contains(": "), "{text}");
+        assert_eq!(serde_json::from_str::<Value>(text).unwrap(), success["structuredContent"]);
+        assert_eq!(success["structuredContent"], value, "the typed result is kept for clients that read it");
+        let error = tool_error(json!({"kind":"conflict","code":"design.stale","details":{"conflicts":[{"id":"a"}]}}), None);
+        let text = error["content"][0]["text"].as_str().unwrap();
+        assert!(!text.contains('\n'), "{text}");
+        assert_eq!(serde_json::from_str::<Value>(text).unwrap()["details"]["conflicts"][0]["id"], "a");
+        let plugin = tool_result(json!({"objects": [{"name": "Cube"}, {"name": "Light"}]}), false);
+        let text = plugin["content"][0]["text"].as_str().unwrap();
+        assert!(!text.contains('\n'), "{text}");
+        assert_eq!(serde_json::from_str::<Value>(text).unwrap(), plugin["structuredContent"]);
     }
 
     #[test]
