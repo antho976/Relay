@@ -557,7 +557,7 @@ mod tests {
     use super::*;
     use crate::design::layout::{place, tests::Mono};
     use crate::design::scene::tests::node;
-    use relay_bus::design::{NodeKind as K, Scroll, Sizing, TextRun};
+    use relay_bus::design::{NodeKind as K, Scroll, Sizing, Styles, TextRun};
 
     fn page(nodes: Vec<Node>) -> (Scene, Placed) {
         let s = Scene::new(std::iter::once(node("p1", None, K::Page, [0.0; 4])).chain(nodes).collect());
@@ -653,8 +653,10 @@ mod tests {
             r#"["d","ellipse","p1",500,0,80,80,500,0,30]"#,
         ]);
         assert_eq!((b.total, b.hidden), (3, 1));
+        let row_ids = |b: &RenderBoxes| b.rows.iter().map(|r| r[0].clone()).collect::<Vec<_>>();
         let part = boxes(&s, &p, "p1", &ids(&["b", "a", "d"]), 200);
-        assert_eq!(rows(&part).len(), 3, "the outermost and what is inside them, once each");
+        assert_eq!(row_ids(&part), [json!("a"), json!("b"), json!("d")], "the outermost and what is inside them, once each");
+        assert_eq!(row_ids(&boxes(&s, &p, "p1", &ids(&["d", "a"]), 200)), [json!("a"), json!("b"), json!("d")], "in get order, whatever order the ids come in");
         assert_eq!(boxes(&s, &p, "p1", &ids(&["b"]), 200).rows[0][7], json!(10.13));
     }
 
@@ -841,12 +843,17 @@ mod tests {
         card.padding = Some(vec![16.0]);
         let mut badge = node("badge", Some("card"), K::Ellipse, [190.0, -5.0, 20.0, 20.0]);
         badge.absolute = Some(true);
-        let (s, p) = page(vec![card.clone(), node("body", Some("card"), K::Rect, [0.0, 0.0, 168.0, 40.0]), badge.clone()]);
+        // A pin over the laid-out body (16..184 by 16..56), past the padding's right (184).
+        let mut pin = node("pin", Some("card"), K::Ellipse, [170.0, 10.0, 20.0, 20.0]);
+        pin.absolute = Some(true);
+        let body = node("body", Some("card"), K::Rect, [0.0, 0.0, 168.0, 40.0]);
+        let (s, p) = page(vec![card.clone(), body.clone(), badge.clone(), pin.clone()]);
+        assert_eq!(p.rect("body"), Some(Rect::new(16.0, 16.0, 168.0, 40.0)));
         let found = all_issues(&s, &p);
-        assert_eq!(codes(&found), [("clipped", vec!["badge", "card"])], "a badge hanging off a clipping card is cut");
+        assert_eq!(codes(&found), [("clipped", vec!["badge", "card"])], "a badge hanging off a clipping card is cut; the pin is neither overflow nor overlap");
         assert_eq!(found.0[0].message, "badge is cut off 10 px past card's edge, which clips (right 210, limit 200)");
         card.clip = Some(false);
-        let (s, p) = page(vec![card, node("body", Some("card"), K::Rect, [0.0, 0.0, 168.0, 40.0]), badge]);
+        let (s, p) = page(vec![card, body, badge, pin]);
         assert!(all_issues(&s, &p).0.is_empty(), "nor past an open one's padding");
     }
 
@@ -971,20 +978,44 @@ mod tests {
     }
 
     #[test]
-    fn contrast_counts_opacity_and_passes_over_what_it_cannot_read() {
+    fn contrast_counts_opacity() {
         let mut faded = text("faded", "email", [10.0, 10.0, 0.0, 0.0], "Disabled");
         (faded.color, faded.opacity) = (Some("#1A1A1A".into()), Some(0.4));
         let (s, p) = on_ground("#FFFFFF", faded.clone());
         let found = all_issues(&s, &p);
         assert!(found.0[0].message.starts_with("faded: #1A1A1A at 40% opacity on #FFFFFF (email) is 2."), "{:?}", found.0);
         faded.opacity = Some(0.0);
-        let (s, p) = on_ground("#FFFFFF", faded.clone());
+        let (s, p) = on_ground("#FFFFFF", faded);
         assert!(all_issues(&s, &p).0.is_empty(), "a clear text is not read");
-        (faded.opacity, faded.color) = (None, Some("$muted".into()));
-        let (s, p) = on_ground("#FFFFFF", faded.clone());
-        assert!(all_issues(&s, &p).0.is_empty(), "a colour name the scene did not resolve");
-        faded.color = Some("#EEEEEE".into());
-        let (s, p) = on_ground("$paper", faded);
+    }
+
+    #[test]
+    fn contrast_reads_colours_as_drawn_and_passes_over_what_does_not_parse() {
+        // The scene holds nodes as drawn (`Scene::node`, `Styles::resolve`): each `$name` is the
+        // colour it names, and one the design does not hold is left out, so the default shows.
+        let drawn = |colors: &[(&str, &str)], nodes: Vec<Node>| {
+            let styles = Styles { colors: colors.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), ..Styles::default() };
+            page(nodes.iter().map(|n| styles.resolve(n)).collect())
+        };
+        let mut email = node("email", Some("p1"), K::Frame, [0.0, 0.0, 300.0, 100.0]);
+        email.fill = Some("$paper".into());
+        let mut hint = text("hint", "email", [10.0, 10.0, 0.0, 0.0], "Your address");
+        hint.color = Some("$muted".into());
+        let (s, p) = drawn(&[("muted", "#BBBBBB"), ("paper", "#FFFFFF")], vec![email.clone(), hint.clone()]);
+        assert_eq!(all_issues(&s, &p).0[0].message, "hint: #BBBBBB on #FFFFFF (email) is 1.91:1; text this size needs 4.5:1");
+        let (s, p) = drawn(&[("paper", "#FFFFFF")], vec![email.clone(), hint.clone()]);
+        assert!(all_issues(&s, &p).0.is_empty(), "no $muted: the painter's own colour, dark on white");
+        hint.color = Some("#EEEEEE".into());
+        let (s, p) = drawn(&[("paper", "#222222")], vec![email.clone(), hint.clone()]);
+        assert!(all_issues(&s, &p).0.is_empty(), "light words on a dark $paper");
+        let (s, p) = drawn(&[], vec![email, hint.clone()]);
+        assert_eq!(all_issues(&s, &p).0[0].message, "hint: #EEEEEE on #FFFFFF (email) is 1.16:1; text this size needs 4.5:1", "no $paper: a frame's white");
+        // A colour that does not parse is not read, as the words' colour or as their ground.
+        hint.color = Some("#12345".into());
+        let (s, p) = on_ground("#FFFFFF", hint.clone());
+        assert!(all_issues(&s, &p).0.is_empty());
+        hint.color = Some("#EEEEEE".into());
+        let (s, p) = on_ground("#12345", hint);
         assert!(all_issues(&s, &p).0.is_empty());
     }
 
@@ -1057,5 +1088,14 @@ mod tests {
         assert_eq!((short(4.4999), short(21.0)), ("4.49".into(), "21".into()));
         assert_eq!((hex([255, 0, 16, 255]), hex([0, 0, 0, 128])), ("#FF0010".into(), "#00000080".into()));
         assert_eq!(render_rect(&Rect::new(1.0, 2.0, 3.0, 4.0)), RenderRect { x: 1.0, y: 2.0, w: 3.0, h: 4.0 });
+    }
+
+    #[test]
+    fn columns_and_picture_cap_are_the_ones_agents_are_told() {
+        let doc = relay_bus::schema::render();
+        let said = |def: &str, field: &str| doc["$defs"][def]["properties"][field]["description"].as_str().unwrap_or_default().replace('\n', " ");
+        let fields = serde_json::to_string(&FIELDS).unwrap();
+        assert!(said("DesignRenderBoxes", "fields").contains(&format!("Always {fields}")), "{}", said("DesignRenderBoxes", "fields"));
+        assert!(said("DesignRenderIn", "scale").contains(&format!("{} megapixels", MAX_AREA_PX / 1e6)), "{}", said("DesignRenderIn", "scale"));
     }
 }
