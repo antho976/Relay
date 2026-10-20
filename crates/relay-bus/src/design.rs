@@ -18,17 +18,21 @@ use serde_json::{Map, Value};
 use std::fmt;
 use std::marker::PhantomData;
 
+mod expect;
 mod fields;
 mod hints;
+pub mod motion;
 mod pins;
 mod read;
 mod style;
 
+pub use expect::{Conflict, ConflictReason, Expect};
 pub use fields::{field_kinds, fit_written, plain_label, strip_controls, takes, Kinds, FIELDS};
 pub use hints::{
     de_ops, details, explain, field_hint, field_of, label, locate, nearest, patch_schema, value_hint, Unread, FIELD_HINTS,
     KIND_HINTS, OP_HINTS, SHAPE_HINTS, VALUE_HINTS,
 };
+pub use motion::{Ease, Key, Motion, Pose, Timeline};
 pub use pins::{follow_axis, page_point, Pin};
 pub use read::{read_node, read_nodes, read_nodes_opt, write_node, write_nodes, write_nodes_opt};
 pub use style::{
@@ -45,10 +49,14 @@ pub const MAX_OPS: usize = 2_000;
 pub const MAX_LENIENT_OPS: usize = MAX_NODES + MAX_OPS;
 /// Most ancestors a node has, its page included (a page's child is 1 deep).
 pub const MAX_DEPTH: usize = 64;
-/// The most node data one design holds, in bytes. `design.get` returns it whole, and the
-/// clients' sockets cap a line at 2 MiB (RA-227): this leaves room for the ids and the row.
+/// The most one design holds, in bytes, counted as `design.get` returns it (B60): each node's
+/// body, id and parent and [`NODE_OVERHEAD`], and its named colours' and styles' JSON. The
+/// clients' sockets cap a line at 2 MiB (RA-227): this leaves room for the design row and the
+/// envelope. A list is refused for growing a design past it, never for leaving one over it
+/// smaller than it found it.
 pub const MAX_DESIGN_BYTES: i64 = 1536 * 1024;
-/// JSON bytes a node takes in a `design.get` reply beyond its body, id and parent.
+/// JSON bytes a node takes in a `design.get` reply beyond its body, id and parent:
+/// `"id":"",` and `"parent":"",` and the comma between nodes.
 pub const NODE_OVERHEAD: i64 = 21;
 /// The largest picture `design.asset.add` copies in from a path.
 pub const MAX_ASSET_FILE: u64 = 20 * 1024 * 1024;
@@ -1097,6 +1105,19 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
     pub style: Option<String>,
+    /// How it moves when the design plays (any node but a page): 2 to 64 keys in time order on the
+    /// clock of the nearest frame or page with a `timeline` (itself included), else its page's. Its own fields are its
+    /// look at rest, which whatever does not play shows (the canvas until Play, exports,
+    /// `design.render` without `at_ms`). `dx`, `dy`, `rotate` and the scales move it from where
+    /// layout puts it; `opacity`, `fill`, `stroke`, `color`, `blur`, `sweep`, `angle` and `trim`
+    /// show their value instead of its own. Times are milliseconds:
+    /// `{"ease": "ease_out", "keys": [{"at_ms": 0, "dy": 24, "opacity": 0}, {"at_ms": 500, "dy": 0, "opacity": 1}]}`.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "obj_opt")]
+    pub motion: Option<Motion>,
+    /// A frame's or page's clock for the motion inside it: `{"duration_ms": 3000, "loop": true}`
+    /// (default: as long as the latest key, looping). A nested timeline keeps its own time.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "obj_opt")]
+    pub timeline: Option<Timeline>,
 
     /// What this build cannot read in a node another build wrote: a key it does not know, or a
     /// known one whose value it cannot read (a newer gradient kind). Kept and written back as it
@@ -1391,6 +1412,8 @@ impl Node {
             runs: None,
             max_lines: None,
             style: None,
+            motion: None,
+            timeline: None,
             extra: Map::new(),
         }
     }
@@ -1653,6 +1676,12 @@ impl Node {
         }
         if let Some(runs) = &self.runs {
             self.check_runs(runs)?;
+        }
+        if let Some(m) = &self.motion {
+            motion::check(self.kind, m)?;
+        }
+        if let Some(t) = &self.timeline {
+            t.check()?;
         }
         if let Some(style) = self.style.as_deref().filter(|s| !valid_id(s)) {
             return Err(format!("style: {style:?} is not a style name: use 1 to 64 letters, digits, '-', '_', '.' or ':'"));
@@ -1962,6 +1991,9 @@ mod tests {
             ("runs", json!([[0, 1, "#000"]])),
             ("stroke_gradient", json!(["linear", 90, [stop.clone(), stop.clone()]])),
             ("stroke_gradient", json!({"stops": [stop.clone(), [1, "#000"]]})),
+            ("motion", json!([[{"at_ms": 0, "opacity": 0}, {"at_ms": 500, "opacity": 1}]])),
+            ("motion", json!({"keys": [[0, "ease", 4], {"at_ms": 500, "opacity": 1}]})),
+            ("timeline", json!([3000, true])),
         ] {
             let body = json!({"kind": "ellipse", "parent": "p", "text": "Hi", field: value});
             assert!(serde_json::from_value::<Node>(body.clone()).is_err(), "{body}");

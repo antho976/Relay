@@ -1,6 +1,6 @@
 //! `design.apply`: a list of node edits run in order against the request's transaction.
 
-use super::{body_of, emit_design, kind_of, live_design, node_of};
+use super::{body_of, emit_design, kind_of, live_design, node_of, row_bytes};
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project};
 use relay_bus::design::{details, field_of, label, Node, NodeKind, NodeOp, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
@@ -10,7 +10,7 @@ use relay_bus::types::{Design, Id};
 use relay_bus::ErrorKind;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 /// The largest `design.apply` undo the audit keeps for `audit.undo`.
 const UNDO_KEPT: usize = 256 * 1024;
@@ -51,8 +51,14 @@ pub(super) struct Run<'a> {
     pub(super) warnings: Vec<String>,
     pub(super) pages: i64,
     pub(super) nodes: i64,
+    /// The design's size as `designs.bytes` counts it ([`row_bytes`] per node, B60).
     pub(super) bytes: i64,
     pub(super) next_node: i64,
+    /// The rev this list makes: every row it writes is dated with it.
+    pub(super) rev: i64,
+    /// Whether the design has removed ids on record (`design_removed`), so an add clears its
+    /// id's; set by any delete.
+    pub(super) tombstones: bool,
     /// The edit under way: its index, [`label`] and the node it names (none for an add that
     /// leaves its id to the engine).
     pub(super) at: usize,
@@ -273,11 +279,16 @@ impl Run<'_> {
         }
         let ord = self.slot(node.parent.as_deref(), index, None)?;
         let body = body_of(&mut node)?;
-        self.tx.prepare_cached("INSERT INTO design_nodes(design_id, node_id, parent_id, kind, ord, body) VALUES (?1, ?2, ?3, ?4, ?5, ?6)").bus()?
-            .execute(params![self.design, node.id, node.parent, node.kind.name(), ord, body]).bus()?;
+        self.tx.prepare_cached("INSERT INTO design_nodes(design_id, node_id, parent_id, kind, ord, body, rev) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)").bus()?
+            .execute(params![self.design, node.id, node.parent, node.kind.name(), ord, body, self.rev]).bus()?;
+        if self.tombstones {
+            // An id back in the design is no longer removed.
+            self.tx.prepare_cached("DELETE FROM design_removed WHERE design_id = ?1 AND node_id = ?2").bus()?
+                .execute(params![self.design, node.id]).bus()?;
+        }
         self.nodes += 1;
         self.pages += i64::from(node.kind == NodeKind::Page);
-        self.bytes += body.len() as i64;
+        self.bytes += row_bytes(&node.id, node.parent.as_deref(), &body);
         self.touch(&node.id);
         self.inverse.push(vec![NodeOp::Delete { id: node.id.clone() }]);
         Ok(Some(node.id))
@@ -293,8 +304,8 @@ impl Run<'_> {
         self.names_exist(&next)?;
         let body = body_of(&mut next)?;
         if body != row.body {
-            self.tx.prepare_cached("UPDATE design_nodes SET body = ?3 WHERE design_id = ?1 AND node_id = ?2").bus()?
-                .execute(params![self.design, next.id, body]).bus()?;
+            self.tx.prepare_cached("UPDATE design_nodes SET body = ?3, rev = ?4 WHERE design_id = ?1 AND node_id = ?2").bus()?
+                .execute(params![self.design, next.id, body, self.rev]).bus()?;
             self.bytes += body.len() as i64 - row.body.len() as i64;
         }
         self.touch(&next.id);
@@ -338,8 +349,10 @@ impl Run<'_> {
         };
         let old_index = self.index_of(from.as_deref(), &id, ord)?;
         let ord = self.slot(to.as_deref(), index, Some(&id))?;
-        self.tx.prepare_cached("UPDATE design_nodes SET parent_id = ?3, ord = ?4 WHERE design_id = ?1 AND node_id = ?2").bus()?
-            .execute(params![self.design, id, to, ord]).bus()?;
+        self.tx.prepare_cached("UPDATE design_nodes SET parent_id = ?3, ord = ?4, rev = ?5 WHERE design_id = ?1 AND node_id = ?2").bus()?
+            .execute(params![self.design, id, to, ord, self.rev]).bus()?;
+        // The parent's id is part of what design.get returns of the node.
+        self.bytes += to.as_ref().map_or(0, String::len) as i64 - from.as_ref().map_or(0, String::len) as i64;
         self.touch(&id);
         self.inverse.push(vec![NodeOp::Move { id: id.clone(), parent: from, index: Some(old_index), keep_position: None }]);
         Ok(Some(id))
@@ -378,11 +391,15 @@ impl Run<'_> {
             undo.push(NodeOp::Add { node, index: (i == 0).then_some(index) });
         }
         let mut remove = self.tx.prepare_cached("DELETE FROM design_nodes WHERE design_id = ?1 AND node_id = ?2").bus()?;
+        // Each id removed, at this rev: what design.get's since_rev answers as gone.
+        let mut tombstone = self.tx.prepare_cached("INSERT OR REPLACE INTO design_removed(design_id, node_id, rev) VALUES (?1, ?2, ?3)").bus()?;
         for (node_id, row) in doomed {
             remove.execute(params![self.design, node_id]).bus()?;
-            self.bytes -= row.body.len() as i64;
+            tombstone.execute(params![self.design, node_id, self.rev]).bus()?;
+            self.bytes -= row_bytes(&node_id, row.parent.as_deref(), &row.body);
             self.removed.push(node_id);
         }
+        self.tombstones = true;
         self.nodes -= undo.len() as i64;
         self.pages -= i64::from(matches!(&undo[0], NodeOp::Add { node, .. } if node.kind == NodeKind::Page));
         let id = undo[0].target().to_string();
@@ -468,8 +485,8 @@ impl Run<'_> {
             // A line that cannot be freed (none should fail) keeps its attachment.
             let Ok(mut next) = node.patched(&set) else { continue };
             let body = body_of(&mut next)?;
-            self.tx.prepare_cached("UPDATE design_nodes SET body = ?3 WHERE design_id = ?1 AND node_id = ?2").bus()?
-                .execute(params![self.design, next.id, body]).bus()?;
+            self.tx.prepare_cached("UPDATE design_nodes SET body = ?3, rev = ?4 WHERE design_id = ?1 AND node_id = ?2").bus()?
+                .execute(params![self.design, next.id, body, self.rev]).bus()?;
             self.bytes += body.len() as i64 - old_len;
             self.touch(&next.id);
             self.inverse.push(vec![NodeOp::Update { id: next.id.clone(), set: node.before(&set) }]);
@@ -498,6 +515,8 @@ pub(super) fn register(e: &mut Engine) {
         let by = actor_name(ctx)?;
         let (bytes, next_node): (i64, i64) = ctx.tx().prepare_cached("SELECT bytes, next_node FROM designs WHERE id = ?1").bus()?
             .query_row([design.id], |r| Ok((r.get(0)?, r.get(1)?))).bus()?;
+        let tombstones: bool = ctx.tx().prepare_cached("SELECT EXISTS(SELECT 1 FROM design_removed WHERE design_id = ?1)").bus()?
+            .query_row([design.id], |r| r.get(0)).bus()?;
         let mut run = Run {
             tx: ctx.tx(),
             design: design.id,
@@ -508,6 +527,8 @@ pub(super) fn register(e: &mut Engine) {
             nodes: design.nodes,
             bytes,
             next_node,
+            rev: design.rev + 1,
+            tombstones,
             at: 0,
             label: String::new(),
             target: None,
@@ -542,9 +563,11 @@ pub(super) fn register(e: &mut Engine) {
             run.ids.push(id.unwrap_or_default());
         }
         run.release_ends()?;
-        if run.bytes > MAX_DESIGN_BYTES {
+        // B60: a design over the cap (one counted before ids were) can still be edited down; a
+        // list is refused only for growing it past the cap.
+        if run.bytes > MAX_DESIGN_BYTES && run.bytes > bytes {
             return Err(BusError::invalid("design.too_large",
-                format!("the design would hold {} KiB of nodes; the limit is {} KiB", run.bytes >> 10, MAX_DESIGN_BYTES >> 10))
+                format!("the design would hold {} KiB of nodes as design.get returns them; the limit is {} KiB", run.bytes >> 10, MAX_DESIGN_BYTES >> 10))
                 .with_hint("split it across designs, or keep long text and big paths out of it"));
         }
         ctx.tx().prepare_cached(
@@ -575,6 +598,26 @@ pub(super) fn register(e: &mut Engine) {
             ctx.set_undo("design.apply", undo, None);
         }
         emit_design(ctx, &design)?;
-        Ok(ApplyOut { design, prev_rev, nodes, removed, ids, inverse, warnings })
+        // Every answer is full until engine-expect gives agents short ones (`reply`).
+        Ok(ApplyOut {
+            design_id: design.id,
+            rev: design.rev,
+            prev_rev,
+            rebased: false,
+            ids,
+            removed_count: removed.len() as u32,
+            audit_id: None,
+            skipped: Vec::new(),
+            warnings,
+            copied: BTreeMap::new(),
+            design: Some(design),
+            nodes: Some(nodes),
+            removed: Some(removed),
+            inverse: Some(inverse),
+            expect: None,
+            colors: None,
+            styles: None,
+            reread: false,
+        })
     });
 }

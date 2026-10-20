@@ -12,17 +12,23 @@
 
 mod apply;
 mod assets;
+mod expect;
+mod find;
 mod get;
+mod pins;
+mod render;
+mod styles;
 
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project, check_project};
-use relay_bus::design::{plain_label, Node, NodeKind, MAX_NAME};
+use relay_bus::design::{plain_label, Node, NodeKind, MAX_NAME, NODE_OVERHEAD};
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{Create, Delete, Duplicate, GetOut, List, ListOut, Purge, Restore, Update};
 use relay_bus::types::{Design, Id};
 use relay_bus::Empty;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::json;
+use std::collections::BTreeMap;
 
 const DEFAULT_TITLE: &str = "Untitled design";
 
@@ -127,6 +133,27 @@ fn body_of(node: &mut Node) -> Result<String, BusError> {
     body
 }
 
+/// What a node row adds to `designs.bytes` (B60): the node as design.get returns it, its body,
+/// id and parent and the JSON around them.
+pub(super) fn row_bytes(id: &str, parent: Option<&str>, body: &str) -> i64 {
+    (body.len() + id.len() + parent.map_or(0, str::len)) as i64 + NODE_OVERHEAD
+}
+
+/// `designs.bytes` as design `id`'s rows and named colours and styles make it, by
+/// [`row_bytes`] over its rows and the styles' JSON beyond `{}`: what every write keeps it at,
+/// and what migration v30 counted.
+const BYTES_OF: &str = "SELECT (SELECT COALESCE(SUM(length(CAST(body AS BLOB)) + length(CAST(node_id AS BLOB))
+        + COALESCE(length(CAST(parent_id AS BLOB)), 0) + 21), 0) FROM design_nodes WHERE design_id = ?1)
+    + MAX(length(CAST(styles AS BLOB)) - 2, 0) FROM designs WHERE id = ?1";
+
+/// Count design `id`'s bytes again from its rows and store the count (a design restored from a
+/// backup that counted them otherwise); the count. Integration tests hold every write to it.
+pub fn recount_bytes(conn: &Connection, id: Id) -> Result<i64, BusError> {
+    let bytes: i64 = conn.prepare_cached(BYTES_OF).bus()?.query_row([id], |r| r.get(0)).bus()?;
+    conn.prepare_cached("UPDATE designs SET bytes = ?2 WHERE id = ?1").bus()?.execute(params![id, bytes]).bus()?;
+    Ok(bytes)
+}
+
 /// The node a row holds, a field this build cannot read kept in `extra`. A row it cannot read
 /// at all (a kind it does not know, a body that is not a node) is refused as
 /// `design.node_unreadable`, never edited.
@@ -174,18 +201,18 @@ pub fn register(e: &mut Engine) {
         ctx.tx().execute(
             "INSERT INTO designs(project_id, session, title, rev, pages, nodes, bytes, next_node, created_by, updated_by, created_at, updated_at)
              VALUES (?1, ?2, ?3, 1, 1, 1, ?4, 2, ?5, ?5, ?6, ?6)",
-            params![p.project_id, session, title, body.len() as i64, by, ctx.now],
+            params![p.project_id, session, title, row_bytes(&page.id, None, &body), by, ctx.now],
         ).bus()?;
         let id = ctx.tx().last_insert_rowid();
         ctx.tx().execute(
-            "INSERT INTO design_nodes(design_id, node_id, parent_id, kind, ord, body) VALUES (?1, ?2, NULL, 'page', 1.0, ?3)",
+            "INSERT INTO design_nodes(design_id, node_id, parent_id, kind, ord, body, rev) VALUES (?1, ?2, NULL, 'page', 1.0, ?3, 1)",
             params![id, page.id, body],
         ).bus()?;
         let design = get_design(ctx.tx(), id)?;
         ctx.set_undo("design.delete", json!({"design_id": id}), None);
         emit_design(ctx, &design)?;
         let assets_dir = ctx.engine().store.design_assets_dir().display().to_string();
-        Ok(GetOut { design, nodes: vec![page], assets_dir })
+        Ok(GetOut { design, nodes: vec![page], assets_dir, removed: None, colors: BTreeMap::new(), styles: BTreeMap::new(), credits: BTreeMap::new() })
     });
     e.register::<Update>(|ctx: &mut Ctx, p| {
         let before = live_design(ctx.tx(), p.design_id)?;
@@ -220,15 +247,22 @@ pub fn register(e: &mut Engine) {
             Some(raw) => title(Some(raw), DEFAULT_TITLE)?,
             None => copy_title(&from.title),
         };
+        // TM-14: an agent's copy is its own terminal's, not the original's (another agent's, as
+        // like as not); the person's stays tied where the original is.
+        let session = match ctx.actor.session_name() {
+            Some(own) if ctx.actor.is_agent() => Some(own.to_string()),
+            _ => from.session.clone(),
+        };
+        // A new design at rev 1, its rows with it; its size and its colours and styles as they are.
         ctx.tx().execute(
-            "INSERT INTO designs(project_id, session, title, rev, pages, nodes, bytes, next_node, created_by, updated_by, created_at, updated_at)
-             SELECT project_id, session, ?2, 1, pages, nodes, bytes, next_node, ?3, ?3, ?4, ?4 FROM designs WHERE id = ?1",
-            params![from.id, title, by, ctx.now],
+            "INSERT INTO designs(project_id, session, title, rev, pages, nodes, bytes, next_node, styles, created_by, updated_by, created_at, updated_at)
+             SELECT project_id, ?2, ?3, 1, pages, nodes, bytes, next_node, styles, ?4, ?4, ?5, ?5 FROM designs WHERE id = ?1",
+            params![from.id, session, title, by, ctx.now],
         ).bus()?;
         let id = ctx.tx().last_insert_rowid();
         ctx.tx().execute(
-            "INSERT INTO design_nodes(design_id, node_id, parent_id, kind, ord, body)
-             SELECT ?1, node_id, parent_id, kind, ord, body FROM design_nodes WHERE design_id = ?2",
+            "INSERT INTO design_nodes(design_id, node_id, parent_id, kind, ord, body, rev)
+             SELECT ?1, node_id, parent_id, kind, ord, body, 1 FROM design_nodes WHERE design_id = ?2",
             params![id, from.id],
         ).bus()?;
         let design = get_design(ctx.tx(), id)?;
@@ -273,6 +307,7 @@ pub fn register(e: &mut Engine) {
             return Err(BusError::conflict("design.not_deleted", format!("design {} is not deleted", design.id))
                 .with_hint("design.delete it first; only a deleted design is purged"));
         }
+        ctx.tx().execute("DELETE FROM design_removed WHERE design_id = ?1", [design.id]).bus()?;
         ctx.tx().execute("DELETE FROM design_nodes WHERE design_id = ?1", [design.id]).bus()?;
         ctx.tx().execute("DELETE FROM designs WHERE id = ?1", [design.id]).bus()?;
         ctx.set_project(design.project_id);
@@ -281,6 +316,8 @@ pub fn register(e: &mut Engine) {
     });
     apply::register(e);
     assets::register(e);
+    find::register(e);
+    render::register(e);
 }
 
 #[cfg(test)]
@@ -303,6 +340,27 @@ mod tests {
             assert_eq!(serde_json::to_value(kind).unwrap(), kind.name(), "the column names a kind as its JSON does");
         }
         assert_eq!(kind_of("component"), None, "a newer build's kind");
+    }
+
+    /// The SQL count and the running count agree: both are `row_bytes` (NODE_OVERHEAD is 21 in
+    /// the SQL, as in migration v30).
+    #[test]
+    fn the_byte_count_is_row_bytes() {
+        assert_eq!(NODE_OVERHEAD, 21);
+        assert!(BYTES_OF.contains(&format!("+ {NODE_OVERHEAD}), 0)")));
+        let store = crate::Store::open_memory().unwrap();
+        let conn = store.lock();
+        conn.execute_batch("INSERT INTO workspaces(id, name, path, created_at, updated_at) VALUES (1, 'w', '/w', 'now', 'now');
+            INSERT INTO projects(id, workspace_id, name, path, created_at, updated_at) VALUES (1, 1, 'p', '/w/p', 'now', 'now');
+            INSERT INTO designs(id, project_id, title, created_by, updated_by, created_at, updated_at, styles)
+                VALUES (1, 1, 't', 'user', 'user', 'now', 'now', '{\"colors\":{\"a\":\"#fff\"}}');
+            INSERT INTO design_nodes(design_id, node_id, parent_id, kind, ord, body) VALUES (1, 'page-1', NULL, 'page', 1, '{\"kind\":\"page\"}');
+            INSERT INTO design_nodes(design_id, node_id, parent_id, kind, ord, body) VALUES (1, 'é', 'page-1', 'text', 1, '{\"kind\":\"text\",\"text\":\"ü\"}');").unwrap();
+        let want = row_bytes("page-1", None, r#"{"kind":"page"}"#) + row_bytes("é", Some("page-1"), r#"{"kind":"text","text":"ü"}"#)
+            + r##"{"colors":{"a":"#fff"}}"##.len() as i64 - 2;
+        assert_eq!(recount_bytes(&conn, 1).unwrap(), want, "bytes, not characters");
+        let stored: i64 = conn.query_row("SELECT bytes FROM designs WHERE id = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(stored, want);
     }
 
     #[test]

@@ -102,6 +102,7 @@ pub fn run(tx: &Transaction, store_dir: &Path) -> rusqlite::Result<Purged> {
         // named by its content and may be any design's, a removal backup's or an undo's.
         let designs = ids(tx, "SELECT id FROM designs WHERE deleted_at IS NOT NULL AND deleted_at < ?1", &cutoff)?;
         for &id in &designs {
+            tx.prepare_cached("DELETE FROM design_removed WHERE design_id=?1")?.execute([id])?;
             tx.prepare_cached("DELETE FROM design_nodes WHERE design_id=?1")?.execute([id])?;
             tx.prepare_cached("DELETE FROM designs WHERE id=?1")?.execute([id])?;
         }

@@ -14,6 +14,10 @@
 //! - fractions (`fraction`, 0.68) become a percent ("68") under `_pct`;
 //! - Unix seconds (`unix`) become a UTC time ("2025-10-11T00:00:00Z");
 //! - what only an app draws with (`omit`: palette colours, icons, sync ids) is left out.
+//!
+//! `omit` also hides a payload field only the person's clients send: the tool schema a model
+//! writes from leaves it out ([`agent_schema`]), so it never learns of it, and an answer leaves
+//! out what it would only send back (`design.apply`'s `expect`, which goes with an undo).
 
 use relay_money::csv::major_string;
 use serde_json::{Map, Value};
@@ -181,11 +185,21 @@ fn walk(value: &mut Value, schema: &Value, root: u32, siblings: Option<&Map<Stri
     }
     match value {
         Value::Object(map) => {
-            let around = map.clone();
+            // The siblings a `minor:<field>` unit reads its currency from, copied only when a field
+            // of this object has one: a design.apply list (which carries an `omit`) is not copied
+            // whole on its way to the engine.
+            let reads_sibling = |key: &String| {
+                property(schema, key).and_then(|sub| sub.get("x-unit")).and_then(Value::as_str).is_some_and(|u| u.starts_with("minor:"))
+            };
+            let around = map.keys().any(reads_sibling).then(|| map.clone());
             let mut moves = Vec::new();
             for (key, field) in map.iter_mut() {
                 let Some(sub) = property(schema, key) else { continue };
-                walk(field, sub, root, Some(&around), agent, apply)?;
+                // Nothing in a field whose schema has no unit is counted, renamed or left out.
+                if !has_units(sub) && sub.get("x-agent-name").is_none() {
+                    continue;
+                }
+                walk(field, sub, root, around.as_ref(), agent, apply)?;
                 let renamed = agent_key(key, sub);
                 if agent && renamed.as_deref() != Some(key.as_str()) {
                     moves.push((key.clone(), renamed));
@@ -427,6 +441,30 @@ mod tests {
         assert_eq!((changed["amount"].clone(), changed["previous"]["amount"].clone()), (json!("21.00"), json!("12.00")));
         let shown = agent_schema(payload).to_string();
         assert!(shown.contains("not cents") && !shown.contains("x-unit"), "{shown}");
+    }
+
+    /// `x-unit: omit` on a payload field hides it from what a model is shown: design.apply's
+    /// `expect` is the person's clients' alone (their undo sends it), so an agent's tool lists
+    /// no such field, its answers leave it out, and what it writes goes to the engine as written.
+    #[test]
+    fn design_apply_hides_expect_from_agents() {
+        let schema = schema("design.apply");
+        assert!(has_units(&schema["payload"]) && has_units(&schema["result"]));
+        let shown = agent_schema(&schema["payload"]);
+        let fields: Vec<&str> = shown["properties"].as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(fields, ["design_id", "ops", "base_rev", "lenient", "reply"]);
+        assert!(!shown.to_string().contains("x-unit"));
+        let mut payload = json!({"design_id": 4, "ops": [{"op": "update", "id": "a", "set": {"fill": "#fff", "x": 12}}], "lenient": true,
+            "expect": [{"id": "a", "set": {"fill": "#000"}}]});
+        let written = payload.clone();
+        to_engine(&mut payload, &schema["payload"], 2).unwrap();
+        assert_eq!(payload, written, "nothing in it is money");
+        let mut answer = json!({"design_id": 4, "rev": 9, "prev_rev": 8, "ids": ["a"], "removed_count": 0,
+            "inverse": [{"op": "update", "id": "a", "set": {"fill": "#000"}}], "expect": [{"id": "a", "set": {"fill": "#fff"}}]});
+        to_agent(&mut answer, &schema["result"], 2);
+        assert!(answer.get("expect").is_none(), "{answer}");
+        assert_eq!(answer["inverse"][0]["set"]["fill"], "#000", "the rest as it came");
+        assert!(agent_schema(&schema["result"])["properties"].get("expect").is_none());
     }
 
     #[test]

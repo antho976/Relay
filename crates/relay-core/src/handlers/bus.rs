@@ -115,6 +115,6 @@ pub fn register(e: &mut Engine) {
 /// The code of the refusal a socket-door op's handler gives.
 pub(crate) const DOOR_ONLY: &str = "bus.door";
 
-fn door_only(op: &str) -> BusError {
+pub(crate) fn door_only(op: &str) -> BusError {
     BusError::invalid(DOOR_ONLY, format!("{op} is answered by the socket door, not the engine"))
 }

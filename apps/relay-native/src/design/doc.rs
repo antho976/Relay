@@ -232,7 +232,7 @@ impl Doc {
                         if out.prev_rev != doc.rev.get() {
                             doc.stale.set(true);
                         }
-                        doc.rev.set(out.design.rev);
+                        doc.rev.set(out.rev);
                         if undoing.is_some() {
                             // Not run ahead of the engine: run it now, as the engine did.
                             let mut scene = doc.scene.borrow_mut();
@@ -244,24 +244,39 @@ impl Doc {
                                 doc.stale.set(true);
                             }
                         }
-                        {
-                            let mut scene = doc.scene.borrow_mut();
-                            for node in out.nodes {
-                                scene.confirm(node);
+                        match out.nodes {
+                            Some(nodes) => {
+                                let mut scene = doc.scene.borrow_mut();
+                                for node in nodes {
+                                    scene.confirm(node);
+                                }
+                            }
+                            // Left out of an answer too large to send: read the design again.
+                            None => doc.stale.set(true),
+                        }
+                        // An answer too large to carry its undo keeps none for this step.
+                        if let Some(inverse) = out.inverse {
+                            let target = match undoing {
+                                Some(true) => &doc.redo,
+                                _ => &doc.undo,
+                            };
+                            let mut stack = target.borrow_mut();
+                            stack.push((inverse, keep));
+                            if stack.len() > HISTORY {
+                                stack.remove(0);
                             }
                         }
-                        let target = match undoing {
-                            Some(true) => &doc.redo,
-                            _ => &doc.undo,
+                        let row_changed = match out.design {
+                            Some(design) => {
+                                let changed = doc.design.borrow().title != design.title;
+                                *doc.design.borrow_mut() = design;
+                                changed
+                            }
+                            None => {
+                                doc.stale.set(true);
+                                false
+                            }
                         };
-                        let mut stack = target.borrow_mut();
-                        stack.push((out.inverse, keep));
-                        if stack.len() > HISTORY {
-                            stack.remove(0);
-                        }
-                        drop(stack);
-                        let row_changed = doc.design.borrow().title != out.design.title;
-                        *doc.design.borrow_mut() = out.design;
                         if undoing.is_some() {
                             doc.tell(Change::Scene);
                         }

@@ -579,8 +579,14 @@ pub fn register(e: &mut Engine) {
             return Err(BusError::not_found("project.not_in_backup", format!("{} holds no project {}", path.display(), p.project_id)));
         }
         RESTORED.iter().map(|&(part, table, sql)| -> Result<Copied, BusError> {
-            // A backup from before a table existed has none of its rows to bring back.
-            let held: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)", [table], |r| r.get(0)).bus()?;
+            // A backup from before a table existed has none of its rows to bring back, nor one from
+            // before a table its select reads (design_removed's rows are found through designs').
+            let reads = std::iter::once(table).chain(sql.split("FROM ").skip(1)
+                .filter_map(|rest| rest.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).next()));
+            let mut held = true;
+            for read in reads {
+                held &= conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)", [read], |r| r.get::<_, bool>(0)).bus()?;
+            }
             if !held {
                 return Ok(Copied { part, table, columns: Vec::new(), rows: Vec::new() });
             }
@@ -616,6 +622,7 @@ const RESTORED: &[(&str, &str, &str)] = &[
     ("notes", "notes", "SELECT * FROM notes WHERE project_id = ?1"),
     ("designs", "designs", "SELECT * FROM designs WHERE project_id = ?1"),
     ("design_nodes", "design_nodes", "SELECT * FROM design_nodes WHERE design_id IN (SELECT id FROM designs WHERE project_id = ?1)"),
+    ("design_removed", "design_removed", "SELECT * FROM design_removed WHERE design_id IN (SELECT id FROM designs WHERE project_id = ?1)"),
     ("notifications", "notifications", "SELECT * FROM notifications WHERE project_id = ?1"),
     ("file_trash", "file_trash", "SELECT * FROM file_trash WHERE project_id = ?1"),
     ("ui_layouts", "ui_layouts", "SELECT * FROM ui_layouts WHERE project_id = ?1"),
@@ -743,6 +750,19 @@ fn restore_project(ctx: &mut Ctx, project_id: Id, copied: Vec<Copied>) -> Result
     ] {
         let mut stmt = ctx.tx().prepare_cached(sql).bus()?;
         if sql.contains("?1") { stmt.execute([project_id]) } else { stmt.execute([]) }.bus()?;
+    }
+    // A design from a backup older than v30 counted its size without its ids, and its rows carry
+    // no rev (0): count it again, as every write keeps it now (B60), and date the rows at their
+    // design's rev, so since_rev and base_rev see them as they are (W20).
+    let designs: Vec<Id> = {
+        let mut stmt = ctx.tx().prepare_cached("SELECT id FROM designs WHERE project_id = ?1").bus()?;
+        let rows = stmt.query_map([project_id], |r| r.get(0)).bus()?.collect::<rusqlite::Result<Vec<_>>>();
+        rows.bus()?
+    };
+    for design in designs {
+        super::design::recount_bytes(ctx.tx(), design)?;
+        ctx.tx().prepare_cached("UPDATE design_nodes SET rev = (SELECT rev FROM designs WHERE id = ?1) WHERE design_id = ?1 AND rev = 0").bus()?
+            .execute([design]).bus()?;
     }
     // Keep the high-water marks past the restored ids, whatever the backup predates.
     for (key, id) in [("ids.projects", project_id), ("ids.workspaces", workspace)] {
@@ -1008,6 +1028,7 @@ fn remove_project(ctx: &mut Ctx, project_id: Id, force: bool, remove_worktrees: 
         "DELETE FROM labels WHERE project_id=?1",
         "DELETE FROM modules WHERE project_id=?1",
         "DELETE FROM notes WHERE project_id=?1",
+        "DELETE FROM design_removed WHERE design_id IN (SELECT id FROM designs WHERE project_id=?1)",
         "DELETE FROM design_nodes WHERE design_id IN (SELECT id FROM designs WHERE project_id=?1)",
         "DELETE FROM designs WHERE project_id=?1",
         "DELETE FROM notifications WHERE project_id=?1",

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 /// The schema version this build knows. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: i64 = 29;
+pub const SCHEMA_VERSION: i64 = 30;
 
 /// Numbered migrations; index 0 brings a fresh DB to `user_version = 1`.
 pub const MIGRATIONS: &[&str] = &[
@@ -469,6 +469,26 @@ pub const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE sessions ADD COLUMN use_api_key INTEGER NOT NULL DEFAULT 0;
     "#,
+    // v30 - design canvases, round two (BUS.md §10.18). A design's named colours and styles, one
+    // JSON object read whole by design.get and rewritten whole by an apply that changes them; the
+    // rev at which each node row was last written, and the ids removed in the last 1000 revs
+    // (design.apply's base_rev, design.get's since_rev); and `bytes` recounted to hold each node
+    // as design.get returns it (its id, its parent and 21 bytes of JSON around them, besides its
+    // body), so the size cap keeps a design.get under the clients' 2 MiB line (B60). Rows written
+    // before take their design's rev now: they read as changed for any older base_rev.
+    r#"
+    ALTER TABLE designs ADD COLUMN styles TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE design_nodes ADD COLUMN rev INTEGER NOT NULL DEFAULT 0;
+    UPDATE design_nodes SET rev = (SELECT rev FROM designs WHERE designs.id = design_nodes.design_id);
+    CREATE INDEX design_nodes_rev ON design_nodes(design_id, rev);
+    CREATE TABLE design_removed (
+      design_id INTEGER NOT NULL REFERENCES designs(id) ON DELETE CASCADE,
+      node_id TEXT NOT NULL, rev INTEGER NOT NULL,
+      PRIMARY KEY (design_id, node_id)
+    ) WITHOUT ROWID;
+    UPDATE designs SET bytes = (SELECT COALESCE(SUM(length(CAST(body AS BLOB)) + length(CAST(node_id AS BLOB))
+      + COALESCE(length(CAST(parent_id AS BLOB)), 0) + 21), 0) FROM design_nodes WHERE design_nodes.design_id = designs.id);
+    "#,
 ];
 
 pub struct Store {
@@ -618,6 +638,25 @@ impl Store {
         match self.path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
             Some(dir) => dir.join("design-assets"),
             None => std::env::temp_dir().join(format!("relay-design-assets-{}", std::process::id())),
+        }
+    }
+
+    /// Where `design.render` writes the pictures it answers with, beside the store: the newest
+    /// few, each named by its render id. Per instance, and on disk rather than in the runtime dir
+    /// (tmpfs), since they can add up to more than a little memory.
+    pub fn design_renders_dir(&self) -> PathBuf {
+        match self.path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+            Some(dir) => dir.join("design-renders"),
+            None => std::env::temp_dir().join(format!("relay-design-renders-{}", std::process::id())),
+        }
+    }
+
+    /// Where the Pictures plugin keeps the search results' thumbnails it fetched, beside the
+    /// store: a cache, swept of what has not been looked at for a week.
+    pub fn picture_cache_dir(&self) -> PathBuf {
+        match self.path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+            Some(dir) => dir.join("picture-cache"),
+            None => std::env::temp_dir().join(format!("relay-picture-cache-{}", std::process::id())),
         }
     }
 

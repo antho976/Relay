@@ -27,6 +27,7 @@ pub const OP_HINTS: &[(&[&str], &str)] = &[
     (&["token", "palette", "variable", "colour", "name_color"], "use color {name, value}"),
     (&["class", "theme"], "use style {name, set}"),
     (&["remove_style", "delete_color", "remove_color"], "use delete_style {name}"),
+    (&["animate", "keyframe", "tween"], "use update with set: {motion: {keys: [{at_ms, …}, …]}}"),
 ];
 
 /// Kinds agents name that are not kinds, and the kind to use.
@@ -66,7 +67,8 @@ pub const FIELD_HINTS: &[(&[&str], &str)] = &[
     (&["line_cap", "stroke_linecap"], "use stroke_cap"),
     (&["line_join", "stroke_linejoin"], "use stroke_join"),
     (&["border_gradient", "stroke_fill"], "use stroke_gradient"),
-    (&["animation", "keyframes", "transition", "motion"], "nodes do not animate yet"),
+    (&["animation", "animations", "keyframes", "transition", "animate"], "use motion: {keys: [{at_ms, …}]} and a timeline on the frame"),
+    (&["duration", "duration_ms", "delay", "easing"], "motion keys set the times (at_ms) and its ease; a frame's timeline sets the length (duration_ms)"),
     (&["class", "token", "tokens", "variables"], "name colours with {op: color} and looks with {op: style}; a node takes style and $name colours"),
     (&["text_padding", "label_padding"], "use padding"),
     (&["background", "background_color", "bg"], "use fill"),
@@ -92,7 +94,7 @@ pub const FIELD_HINTS: &[(&[&str], &str)] = &[
         "use padding: [all], [vertical, horizontal] or [top, right, bottom, left]",
     ),
     (&["url", "href", "image_url"], "store the picture with design.asset.add and give its src"),
-    (&["rotate", "angle"], "use rotation"),
+    (&["rotate", "angle"], "use rotation (motion keys take rotate)"),
     (&["x1", "y1", "x2", "y2"], "use points: [[x1, y1], [x2, y2]]"),
     (&["bold", "weight"], "use font_weight (700 is bold)"),
     (&["dasharray", "dash_array", "stroke_dasharray"], "use dash, such as [6, 4]"),
@@ -125,6 +127,9 @@ pub const VALUE_HINTS: &[(&[&str], &[&str], &str)] = &[
     (&["text_case"], &["capitalize", "titlecase"], "title"),
     (&["gradient.kind", "stroke_gradient.kind"], &["sweep", "angular"], "conic"),
     (&["stroke_cap", "arc.cap"], &["flat"], "butt"),
+    (&["motion.ease"], &["bounce", "spring", "elastic", "back", "back_out"], "overshoot"),
+    (&["motion.ease"], &["step", "steps", "step_end", "step_start"], "hold"),
+    (&["motion.ease"], &["ease_in_out_cubic", "ease_in_out_sine", "smooth"], "ease_in_out"),
 ];
 
 /// What a field holds, for a value of the wrong shape (`padding: 16` from CSS habit).
@@ -139,6 +144,8 @@ pub const SHAPE_HINTS: &[(&str, &str)] = &[
     ("shadows", "give a list of shadows: [{x, y, blur, spread, color}, …]"),
     ("stroke_gradient", "give an object: {kind, angle, stops: [{at, color}, …]}"),
     ("runs", "give a list: [{start, end, font_size, color, …}, …]"),
+    ("motion", "give an object: {keys: [{at_ms, …}, …], ease, origin, loop}"),
+    ("timeline", "give an object: {duration_ms, loop}"),
 ];
 
 /// `name` as the tables spell names: lower case, words joined by `_` (`backgroundColor`,
@@ -691,6 +698,19 @@ mod tests {
         assert!(node("spans", json!([])).ends_with("spans: not a node field; use runs: [{start, end, …}] (character offsets)"));
         assert!(node("glow", json!(1)).ends_with("glow: not a node field; use shadow, or shadows for several (a glow: x 0, y 0, blur)"));
         assert!(node("strokeLinecap", json!("round")).ends_with("strokeLinecap: not a node field; use stroke_cap"));
+        // Motion: what other tools call it, and their eases.
+        assert!(node("animation", json!({})).ends_with("animation: not a node field; use motion: {keys: [{at_ms, …}]} and a timeline on the frame"));
+        assert!(node("transition", json!("all 0.3s")).ends_with("; use motion: {keys: [{at_ms, …}]} and a timeline on the frame"));
+        assert!(node("duration", json!(300)).ends_with("duration: not a node field; motion keys set the times (at_ms) and its ease; a frame's timeline sets the length (duration_ms)"));
+        assert!(node("rotate", json!(45)).ends_with("rotate: not a node field; use rotation (motion keys take rotate)"));
+        let keys = json!([{"at_ms": 0, "scale": 0.6}, {"at_ms": 350, "scale": 1}]);
+        let bouncy = json!({"id": "b", "parent": "p", "kind": "rect", "motion": {"ease": "bounce", "keys": keys}});
+        assert!(add(0, bouncy).ends_with("motion: unknown variant `bounce`, expected one of `linear`, `ease`, `ease_in`, `ease_out`, `ease_in_out`, `overshoot`, `hold`; use \"overshoot\""));
+        let stepped = json!({"id": "b", "parent": "p", "kind": "rect", "motion": {"ease": "steps", "keys": keys}});
+        assert!(add(0, stepped).ends_with("; use \"hold\""));
+        let seconds = json!({"id": "b", "parent": "p", "kind": "rect", "motion": [{"at": 0}]});
+        assert!(add(0, seconds).ends_with("motion: invalid type: sequence, expected an object; give an object: {keys: [{at_ms, …}, …], ease, origin, loop}"));
+        assert!(read(json!([{"op": "animate", "id": "b"}])).unwrap_err().ends_with("use update with set: {motion: {keys: [{at_ms, …}, …]}}"));
         // A nested value is looked up by its path.
         let stops = json!([{"at": 0, "color": "#fff"}, {"at": 1, "color": "#000"}]);
         let sweep = json!({"id": "e", "parent": "p", "kind": "ellipse", "gradient": {"kind": "sweep", "stops": stops}});
@@ -868,6 +888,7 @@ mod tests {
                 let wrap = |value: &str| match key {
                     None => json!(value),
                     Some(key) if field.ends_with("gradient") => json!({key: value, "stops": []}),
+                    Some(key) if field == "motion" => json!({key: value, "keys": []}),
                     Some(key) => json!({key: value}),
                 };
                 let probe = |value: &str| super::super::read::probe(kind, field, &wrap(value));

@@ -100,6 +100,10 @@ pub struct OpMeta {
     /// One line, for `bus.ops` and MCP tool descriptions.
     pub summary: &'static str,
     pub deprecated: Option<&'static str>,
+    /// The bundled plugin this op belongs to: an agent may call it only in a project with that
+    /// plugin on (BUS.md §9.1). `None` for the core ops. Agents learn it from `bus.ops`' `why`;
+    /// [`OpInfo`] does not carry it.
+    pub plugin: Option<&'static str>,
 }
 
 impl OpMeta {
@@ -118,6 +122,7 @@ impl OpMeta {
             phase,
             summary,
             deprecated: None,
+            plugin: None,
         }
     }
     /// A query with the common defaults: never audited, all actors, all doors.
@@ -135,6 +140,7 @@ impl OpMeta {
             phase,
             summary,
             deprecated: None,
+            plugin: None,
         }
     }
     pub const fn audit(mut self, a: Audit) -> Self {
@@ -163,6 +169,11 @@ impl OpMeta {
     }
     pub const fn deprecated(mut self, why: &'static str) -> Self {
         self.deprecated = Some(why);
+        self
+    }
+    /// The op comes with plugin `id` (`pictures`): callable by an agent only where it is on.
+    pub const fn plugin(mut self, id: &'static str) -> Self {
+        self.plugin = Some(id);
         self
     }
 }
