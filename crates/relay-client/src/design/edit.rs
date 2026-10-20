@@ -340,6 +340,12 @@ pub fn group(scene: &mut Scene, placed: &Placed, ids: &[String], kind: NodeKind)
 /// they showed ([`freeze`]: one the frame laid out keeps its box, a filling one its width),
 /// written through the parent's pins. Into a parent that lays them out they only move. A
 /// connector attached to the group or frame itself lets go of it where it is drawn (B112).
+///
+/// What the container laid over its children as it drew them becomes each child's own (TM-64):
+/// its turn, each child's centre carried round the container's and its own turn added (a
+/// line's points turn instead, a line taking no turn of its own); its fade, multiplied into
+/// each child's; and its blur, as each child's where it is more (blurring each one is not
+/// blurring them together, but it is the nearest a child can hold).
 pub fn ungroup(scene: &Scene, placed: &Placed, id: &str) -> Option<(Vec<NodeOp>, Vec<String>)> {
     let node = scene.stored(id)?;
     if !matches!(node.kind, NodeKind::Group | NodeKind::Frame) {
@@ -352,37 +358,101 @@ pub fn ungroup(scene: &Scene, placed: &Placed, id: &str) -> Option<(Vec<NodeOp>,
     let fit = fit_of(scene, placed, &parent);
     // Where its children count from on the page: as placed, or (hidden) at its own `x`/`y`.
     let inner = if placed.rect(id).is_some() { placed.origin(id) } else { (origin.0 + node.x, origin.1 + node.y) };
+    // As drawn: a style may give its fade or blur.
+    let look = scene.node(id)?;
+    let turn = shapes::rotation(look).rem_euclid(360.0);
+    let pivot = placed.rect(id).filter(|_| turn != 0.0).map(|r| (r.cx(), r.cy()));
+    let (fade, blur) = (look.opacity.unwrap_or(1.0), look.blur.unwrap_or(0.0));
     let start = scene.index(id)? as u32;
     let kids = scene.children(id).to_vec();
     // A connector of its own lets go below, from where it will sit.
     let mut ops: Vec<NodeOp> =
         release(scene, placed, &HashSet::from([id.to_string()])).into_iter().filter(|op| scene.parent(op.target()) != Some(id)).collect();
     for (index, child) in (start..).zip(&kids) {
-        let c = scene.stored(child)?;
-        let mut s = match shown(placed, child, origin) {
-            Some(rel) if joins && !c.is_absolute() => set(&[("x", json!(coord(rel.x))), ("y", json!(coord(rel.y)))]),
-            Some(rel) => settle(c, rel, fit, stretched(scene, child), Sizes::Freeze),
+        let (c, drawn) = (scene.stored(child)?, scene.node(child)?);
+        let free = !joins || c.is_absolute();
+        let (from, to) = (c.from.as_deref() == Some(id), c.to.as_deref() == Some(id));
+        // A line freed of the container, or turned with it, is written from its points on the
+        // page: as drawn for a connector, its own through its own turn for any other.
+        let points = placed.rect(child).filter(|_| c.kind == NodeKind::Line).and_then(|r| {
+            let own = shapes::rotation(drawn);
+            let pts: Vec<(f64, f64)> = if from || to {
+                match shapes::line_points(scene, placed, drawn).0.as_slice() {
+                    [a, .., b] => vec![*a, *b],
+                    _ => return None,
+                }
+            } else if pivot.is_some() {
+                c.points.iter().flatten().map(|p| (r.x + p[0], r.y + p[1])).collect()
+            } else {
+                return None;
+            };
+            let pts = pts.into_iter().map(|p| shapes::rotate(p.0, p.1, r.cx(), r.cy(), own));
+            Some(pts.map(|p| pivot.map_or(p, |(cx, cy)| shapes::rotate(p.0, p.1, cx, cy, turn))).collect::<Vec<_>>())
+        });
+        let mut s = match points.filter(|p| !p.is_empty()) {
+            Some(pts) => {
+                let (r, points) = line_box(&pts, origin);
+                let at = if free { unpinned(c, fit, r) } else { r };
+                let mut s = set(&[("x", json!(coord(at.x))), ("y", json!(coord(at.y))), ("w", json!(r.w)), ("h", json!(r.h)), ("points", json!(points))]);
+                if c.rotation.is_some() {
+                    s.insert("rotation".into(), Value::Null);
+                }
+                s
+            }
             None => {
-                // Hidden: at its own `x`/`y` in a group or a free frame; in a laid-out frame,
-                // whose layout never read them, at its content corner (B113).
-                let (x, y) = if laid {
-                    let [top, _, _, left] = node.padding_edges();
-                    (inner.0 + left, inner.1 + top)
-                } else {
-                    (inner.0 + c.x, inner.1 + c.y)
+                let shown = shown(placed, child, origin);
+                let mut rel = shown.unwrap_or_else(|| {
+                    // Hidden: at its own `x`/`y` in a group or a free frame; in a laid-out
+                    // frame, whose layout never read them, at its content corner (B113).
+                    let (x, y) = if laid {
+                        let [top, _, _, left] = node.padding_edges();
+                        (inner.0 + left, inner.1 + top)
+                    } else {
+                        (inner.0 + c.x, inner.1 + c.y)
+                    };
+                    Rect::new(x - origin.0, y - origin.1, c.w, c.h)
+                });
+                if let Some((cx, cy)) = pivot {
+                    // Its centre carried round the container's (a group's is its children's).
+                    let centre = placed.rect(child).map_or((origin.0 + rel.cx(), origin.1 + rel.cy()), |r| (r.cx(), r.cy()));
+                    let to = shapes::rotate(centre.0, centre.1, cx, cy, turn);
+                    rel = rel.translate(to.0 - centre.0, to.1 - centre.1);
+                }
+                let mut s = match shown {
+                    Some(_) if free => settle(c, rel, fit, stretched(scene, child), Sizes::Freeze),
+                    _ => {
+                        let r = if free { unpinned(c, fit, rel) } else { rel };
+                        set(&[("x", json!(coord(r.x))), ("y", json!(coord(r.y)))])
+                    }
                 };
-                let r = unpinned(c, fit.filter(|_| !joins), Rect::new(x - origin.0, y - origin.1, c.w, c.h));
-                set(&[("x", json!(coord(r.x))), ("y", json!(coord(r.y)))])
+                if pivot.is_some() && c.kind != NodeKind::Line {
+                    match (shapes::rotation(drawn) + turn).rem_euclid(360.0) {
+                        t if t.abs() < 1e-9 || (t - 360.0).abs() < 1e-9 => {
+                            if c.rotation.is_some() {
+                                s.insert("rotation".into(), Value::Null);
+                            }
+                        }
+                        t => {
+                            s.insert("rotation".into(), json!(if t > 180.0 { t - 360.0 } else { t }));
+                        }
+                    }
+                }
+                s
             }
         };
-        let (from, to) = (c.from.as_deref() == Some(id), c.to.as_deref() == Some(id));
         if from || to {
-            let freed = let_go(scene, placed, scene.node(child)?, from, to, origin);
-            if freed.contains_key("x") {
-                s = freed;
-            } else {
-                s.extend(freed);
+            // Not placed: it keeps its own points, or takes its ends' stored centres.
+            for (key, value) in let_go(scene, placed, drawn, from, to, origin) {
+                s.entry(key).or_insert(value);
             }
+        }
+        if fade < 1.0 {
+            let o = (drawn.opacity.unwrap_or(1.0) * fade * 1e4).round() / 1e4;
+            s.insert("opacity".into(), if o >= 1.0 { Value::Null } else { json!(o) });
+        }
+        let own_blur = drawn.blur.unwrap_or(0.0);
+        if blur > own_blur {
+            s.insert("blur".into(), json!(blur));
         }
         ops.push(NodeOp::Move { id: child.clone(), parent: Some(parent.clone()), index: Some(index), keep_position: None });
         ops.push(NodeOp::Update { id: child.clone(), set: s });
@@ -540,6 +610,21 @@ fn release(scene: &Scene, placed: &Placed, doomed: &HashSet<String>) -> Vec<Node
     ops
 }
 
+/// A free line's box and points from where its points are on the page, its box counted from page
+/// point `origin`: at their least corner, as big as they spread, each point from there. Every
+/// value within what `validate` takes (B70): a line more than a million pixels across is cut
+/// short there.
+fn line_box(pts: &[(f64, f64)], origin: (f64, f64)) -> (Rect, Vec<[f64; 2]>) {
+    let least = |a: fn(&(f64, f64)) -> f64| pts.iter().map(a).fold(f64::INFINITY, f64::min);
+    let (x, y) = (coord(least(|p| p.0) - origin.0), coord(least(|p| p.1) - origin.1));
+    let points: Vec<[f64; 2]> = pts.iter().map(|p| [coord(p.0 - origin.0 - x), coord(p.1 - origin.1 - y)]).collect();
+    let spread = |a: usize| {
+        let (lo, hi) = points.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p[a]), hi.max(p[a])));
+        (hi - lo).clamp(0.0, MAX_COORD)
+    };
+    (Rect::new(x, y, spread(0), spread(1)), points)
+}
+
 /// The update that frees a connector's `from` and/or `to` where the line is drawn now, its box
 /// counted from page point `origin` (its parent's). Every value within what `validate` takes
 /// (B70): a line drawn more than a million pixels across is cut short there rather than have
@@ -554,14 +639,8 @@ fn let_go(scene: &Scene, placed: &Placed, n: &Node, from: bool, to: bool, origin
     let drawn = placed.rect(&n.id).map(|_| shapes::line_points(scene, placed, n).0);
     match drawn.as_deref() {
         Some([a, .., b]) => {
-            let (x, y) = (coord(a.0.min(b.0) - origin.0), coord(a.1.min(b.1) - origin.1));
-            let end = |p: &(f64, f64)| [coord(p.0 - origin.0 - x), coord(p.1 - origin.1 - y)];
-            let (a, b) = (end(a), end(b));
-            s.insert("x".into(), json!(x));
-            s.insert("y".into(), json!(y));
-            s.insert("w".into(), json!((b[0] - a[0]).abs().min(MAX_COORD)));
-            s.insert("h".into(), json!((b[1] - a[1]).abs().min(MAX_COORD)));
-            s.insert("points".into(), json!([a, b]));
+            let (r, points) = line_box(&[*a, *b], origin);
+            s.extend(set(&[("x", json!(r.x)), ("y", json!(r.y)), ("w", json!(r.w)), ("h", json!(r.h)), ("points", json!(points))]));
         }
         // Not on the page shown: keep its own points, or take its ends' stored centres.
         _ if n.points.as_ref().is_some_and(|p| p.len() >= 2) => {}
@@ -1055,6 +1134,83 @@ mod tests {
         near(&drawn(&s, &after, "ln"), &was);
         near(&drawn(&s, &after, "ln2"), &was2);
         kept(&placed, &after, &["m1", "m2"]);
+    }
+
+    /// TM-64: ungrouping a turned group keeps every child where and as turned as it was
+    /// drawn: a box, a turned ellipse, a group inside (turned about its children's bounds) and
+    /// a free line, whose points turn instead.
+    #[test]
+    fn ungrouping_a_turned_group_keeps_each_child_as_drawn() {
+        let mut g = node("g", Some("p1"), K::Group, [100.0, 100.0, 0.0, 0.0]);
+        g.rotation = Some(30.0);
+        let mut e = node("e", Some("g"), K::Ellipse, [60.0, 40.0, 30.0, 30.0]);
+        e.rotation = Some(-40.0);
+        let mut l = node("l", Some("g"), K::Line, [10.0, 120.0, 50.0, 10.0]);
+        l.points = Some(vec![[0.0, 0.0], [50.0, 10.0]]);
+        let mut s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            g,
+            node("a", Some("g"), K::Rect, [0.0, 0.0, 40.0, 20.0]),
+            e,
+            node("in", Some("g"), K::Group, [0.0, 80.0, 0.0, 0.0]),
+            node("r", Some("in"), K::Rect, [5.0, 0.0, 30.0, 10.0]),
+            l,
+        ]);
+        let before = place(&s, "p1", &Mono);
+        let shown = |s: &Scene, placed: &Placed, id: &str| shapes::visual(s, placed, id).unwrap();
+        let page_points = |s: &Scene, placed: &Placed| {
+            let n = s.node("l").unwrap();
+            let r = placed.rect("l").unwrap();
+            n.points.iter().flatten().map(|p| shapes::to_page_pt(s, placed, "l", r.x + p[0], r.y + p[1])).collect::<Vec<_>>()
+        };
+        let was: Vec<(Rect, f64)> = ["a", "e", "in", "r"].iter().map(|id| shown(&s, &before, id)).collect();
+        let line_was = page_points(&s, &before);
+        let (ops, _) = ungroup(&s, &before, "g").unwrap();
+        run(&mut s, &ops);
+        let after = place(&s, "p1", &Mono);
+        for (id, (r, turn)) in ["a", "e", "in", "r"].iter().zip(was) {
+            let (now, now_turn) = shown(&s, &after, id);
+            assert!((now.cx() - r.cx()).abs() < 1.0 && (now.cy() - r.cy()).abs() < 1.0, "{id}: {now:?} against {r:?}");
+            let off = (now_turn - turn).rem_euclid(360.0);
+            assert!(off < 1e-6 || off > 360.0 - 1e-6, "{id} turns {now_turn}, was {turn}");
+        }
+        assert_eq!(s.node("e").unwrap().rotation, Some(-10.0));
+        assert_eq!(s.node("l").unwrap().rotation, None, "a line takes no turn of its own");
+        near(&page_points(&s, &after), &line_was);
+        // Turned back to none, a child's turn is cleared rather than written as 0.
+        let mut s = Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), node("h", Some("p1"), K::Group, [0.0; 4])]);
+        s.node_mut("h").unwrap().rotation = Some(90.0);
+        let mut k = node("k", Some("h"), K::Rect, [0.0, 0.0, 10.0, 10.0]);
+        k.rotation = Some(-90.0);
+        s.apply(&NodeOp::Add { node: k, index: None }).unwrap();
+        let placed = place(&s, "p1", &Mono);
+        let (ops, _) = ungroup(&s, &placed, "h").unwrap();
+        run(&mut s, &ops);
+        assert_eq!(s.node("k").unwrap().rotation, None);
+    }
+
+    /// TM-64: a faded frame's children take its fade times their own, and its blur where theirs
+    /// is less.
+    #[test]
+    fn ungrouping_a_faded_frame_keeps_its_fade_and_blur() {
+        let mut f = node("f", Some("p1"), K::Frame, [0.0, 0.0, 200.0, 200.0]);
+        (f.opacity, f.blur) = (Some(0.5), Some(4.0));
+        let mut faded = node("a", Some("f"), K::Rect, [0.0, 0.0, 10.0, 10.0]);
+        faded.opacity = Some(0.8);
+        let mut blurred = node("b", Some("f"), K::Rect, [20.0, 0.0, 10.0, 10.0]);
+        blurred.blur = Some(8.0);
+        let mut s = Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), f, faded, blurred]);
+        let placed = place(&s, "p1", &Mono);
+        let (ops, _) = ungroup(&s, &placed, "f").unwrap();
+        run(&mut s, &ops);
+        let (a, b) = (s.node("a").unwrap(), s.node("b").unwrap());
+        assert_eq!((a.opacity, a.blur), (Some(0.4), Some(4.0)));
+        assert_eq!((b.opacity, b.blur), (Some(0.5), Some(8.0)));
+        // A frame drawn as it is lays nothing over its children.
+        let s = sample();
+        let placed = place(&s, "p1", &Mono);
+        let (ops, _) = ungroup(&s, &placed, "a").unwrap();
+        assert!(ops.iter().all(|op| !matches!(op, NodeOp::Update { set, .. } if set.contains_key("opacity") || set.contains_key("rotation"))));
     }
 
     #[test]
