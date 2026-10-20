@@ -6,13 +6,13 @@ use super::board::{Board, Gesture, Handle, Tool, HANDLES};
 use gtk::prelude::*;
 use gtk::{gdk, gio};
 use gtk4 as gtk;
-use relay_bus::design::{Layout, Node, NodeKind, NodeOp, Sizing};
+use relay_bus::design::{Node, NodeKind, NodeOp, Sizing};
 use relay_client::design::edit::{self, Align};
 use relay_client::design::geom::simplify;
 use relay_client::design::hit;
 use relay_client::design::layout;
 use relay_client::design::snap::{self, Edges};
-use relay_client::design::Rect;
+use relay_client::design::{shapes, Rect};
 use serde_json::{json, Map, Value};
 use std::rc::Rc;
 
@@ -252,7 +252,7 @@ fn alt(m: gdk::ModifierType) -> bool {
 }
 
 /// The container a new shape goes into: the deepest frame under the point, else the page.
-fn container_at(b: &Board, p: (f64, f64)) -> String {
+pub(super) fn container_at(b: &Board, p: (f64, f64)) -> String {
     let placed = b.placed();
     let scene = b.doc.scene.borrow();
     let page = b.page.borrow().clone();
@@ -316,11 +316,12 @@ fn rotate_at(b: &Board, x: f64, y: f64) -> Option<String> {
         return None;
     };
     let scene = b.doc.scene.borrow();
-    let n = scene.node(id).filter(|n| !matches!(n.kind, NodeKind::Page | NodeKind::Line) && !n.is_locked())?;
-    let r = b.cam.get().rect_to_screen(&b.placed().rect(id)?);
-    let turn = relay_client::design::shapes::rotation(n);
+    scene.node(id).filter(|n| !matches!(n.kind, NodeKind::Page | NodeKind::Line) && !n.is_locked())?;
+    // Where it is drawn: a child of a turned frame turns with it (B12).
+    let (r, turn) = shapes::visual(&scene, &b.placed(), id)?;
+    let r = b.cam.get().rect_to_screen(&r);
     for (cx, cy, ox, oy) in [(r.x, r.y, -1.0, -1.0), (r.right(), r.y, 1.0, -1.0), (r.right(), r.bottom(), 1.0, 1.0), (r.x, r.bottom(), -1.0, 1.0)] {
-        let (hx, hy) = relay_client::design::shapes::rotate(cx + ox * 10.0, cy + oy * 10.0, r.cx(), r.cy(), turn);
+        let (hx, hy) = shapes::rotate(cx + ox * 10.0, cy + oy * 10.0, r.cx(), r.cy(), turn);
         if (x - hx).abs() <= 9.0 && (y - hy).abs() <= 9.0 {
             return Some(id.clone());
         }
@@ -329,11 +330,15 @@ fn rotate_at(b: &Board, x: f64, y: f64) -> Option<String> {
 }
 
 fn handle_at(b: &Board, x: f64, y: f64) -> Option<Handle> {
+    // A locked layer has no handles (B16).
+    if b.selection.borrow().iter().all(|id| b.doc.scene.borrow().node(id).is_none_or(Node::is_locked)) {
+        return None;
+    }
     if let Some((_, r, turn)) = b.single_turn() {
         let s = b.cam.get().rect_to_screen(&r);
         return HANDLES.into_iter().find(|h| {
             let (hx, hy) = super::board::handle_point(&s, *h);
-            let (hx, hy) = relay_client::design::shapes::rotate(hx, hy, s.cx(), s.cy(), turn);
+            let (hx, hy) = shapes::rotate(hx, hy, s.cx(), s.cy(), turn);
             (x - hx).abs() <= 6.0 && (y - hy).abs() <= 6.0
         });
     }
@@ -367,11 +372,12 @@ fn handle_at(b: &Board, x: f64, y: f64) -> Option<Handle> {
     })
 }
 
+/// The one selected line, whose ends can be dragged: not a locked one (B16).
 fn is_line_selected(b: &Board) -> Option<String> {
     let sel = b.selection.borrow();
     let scene = b.doc.scene.borrow();
     match sel.as_slice() {
-        [one] if scene.node(one).is_some_and(|n| n.kind == NodeKind::Line) => Some(one.clone()),
+        [one] if scene.node(one).is_some_and(|n| n.kind == NodeKind::Line && !n.is_locked()) => Some(one.clone()),
         _ => None,
     }
 }
@@ -535,7 +541,9 @@ fn begin_select(b: &Rc<Board>, x: f64, y: f64, p: (f64, f64), mods: gdk::Modifie
     if handle_at(b, x, y).is_none() {
         if let Some(id) = rotate_at(b, x, y) {
             let placed = b.placed();
-            let Some((orig, r)) = b.doc.scene.borrow().node(&id).cloned().zip(placed.rect(&id)) else {
+            // About where it is drawn; the pointer's angle there turns it by as much (B12).
+            let drawn = shapes::visual(&b.doc.scene.borrow(), &placed, &id).map(|(r, _)| r);
+            let Some((orig, r)) = b.doc.scene.borrow().node(&id).cloned().zip(drawn) else {
                 return;
             };
             let start = (p.1 - r.cy()).atan2(p.0 - r.cx()).to_degrees();
@@ -544,20 +552,26 @@ fn begin_select(b: &Rc<Board>, x: f64, y: f64, p: (f64, f64), mods: gdk::Modifie
             return;
         }
     }
-    // A resize handle of the selection.
+    // A resize handle of the selection: of its unlocked layers (B16).
     if is_line_selected(b).is_none() {
-        if let (Some(handle), Some(bounds)) = (handle_at(b, x, y), b.selection_bounds()) {
+        if let Some(handle) = handle_at(b, x, y) {
             let placed = b.placed();
             let scene = b.doc.scene.borrow();
-            let orig: Vec<(String, Node, Rect)> = b
-                .selected()
-                .into_iter()
-                .filter_map(|id| Some((id.clone(), scene.node(&id)?.clone(), placed.rect(&id)?)))
-                .collect();
+            let ids = edit::unlocked(&scene, b.selected());
+            let orig: Vec<(String, Node, Rect)> =
+                ids.iter().filter_map(|id| Some((id.clone(), scene.node(id)?.clone(), placed.rect(id)?))).collect();
+            // One node drawn turned resizes in its parent's frame, about its own turn (B12).
+            let turned = b.single_turn().and_then(|(id, _, _)| Some((scene.parent(&id)?.to_string(), shapes::rotation(scene.node(&id)?), placed.rect(&id)?)));
             drop(scene);
-            b.doc.set_hold(true);
-            *b.gesture.borrow_mut() = Gesture::Resize { handle, bounds, orig, moved: false };
-            return;
+            let (bounds, frame, turn) = match turned {
+                Some((parent, turn, r)) => (Some(r), Some(parent), turn),
+                None => (b.selection_bounds(), None, 0.0),
+            };
+            if let (Some(bounds), false) = (bounds, orig.is_empty()) {
+                b.doc.set_hold(true);
+                *b.gesture.borrow_mut() = Gesture::Resize { handle, bounds, orig, moved: false, frame, turn };
+                return;
+            }
         }
     }
     let placed = b.placed();
@@ -578,7 +592,10 @@ fn begin_select(b: &Rc<Board>, x: f64, y: f64, p: (f64, f64), mods: gdk::Modifie
     };
     let deep = chain.last().cloned();
     // Inside what is selected: drag moves it; a click selects what is under the pointer.
-    let in_selection = b.selection.borrow().iter().any(|id| placed.rect(id).is_some_and(|r| r.contains(p.0, p.1)));
+    let in_selection = {
+        let scene = b.doc.scene.borrow();
+        b.selection.borrow().iter().any(|id| super::board::shown_box(&scene, &placed, id).is_some_and(|r| r.contains(p.0, p.1)))
+    };
     if in_selection && !shift(mods) {
         start_move(b, p, mods, deep);
         return;
@@ -634,7 +651,8 @@ fn start_move(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType, click: Opti
     let scene = b.doc.scene.borrow();
     let ids: Vec<String> = ids.into_iter().filter(|id| scene.node(id).is_some_and(|n| !n.is_locked())).collect();
     let orig = ids.iter().filter_map(|id| scene.node(id).map(|n| (id.clone(), n.x, n.y))).collect();
-    let rects = ids.iter().filter_map(|id| placed.rect(id)).collect();
+    // What snaps is what shows: a turned node's turned box, a line's points (B13).
+    let rects = ids.iter().filter_map(|id| shapes::shown_rect(&scene, &placed, id)).collect();
     drop(scene);
     *b.gesture.borrow_mut() = Gesture::Move {
         ids,
@@ -809,7 +827,7 @@ fn move_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
             if let Gesture::Move { ids, orig, rects, dup, copies, .. } = &mut *b.gesture.borrow_mut() {
                 *ids = roots.clone();
                 *orig = roots.iter().filter_map(|id| scene.node(id).map(|n| (id.clone(), n.x, n.y))).collect();
-                *rects = roots.iter().filter_map(|id| placed.rect(id)).collect();
+                *rects = roots.iter().filter_map(|id| shapes::shown_rect(&scene, &placed, id)).collect();
                 *dup = false;
                 *copies = ops;
             }
@@ -820,34 +838,41 @@ fn move_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
     b.doc.set_hold(true);
     let placed = b.placed();
     let zoom = b.cam.get().zoom;
-    let (ids, start, orig, rects) = match &mut *b.gesture.borrow_mut() {
-        Gesture::Move { ids, start, orig, rects, moved, at, .. } => {
+    let (ids, start, orig, rects, copied) = match &mut *b.gesture.borrow_mut() {
+        Gesture::Move { ids, start, orig, rects, moved, at, copies, dup, .. } => {
             *moved = true;
             *at = p;
-            (ids.clone(), *start, orig.clone(), rects.clone())
+            (ids.clone(), *start, orig.clone(), rects.clone(), !copies.is_empty() || *dup)
         }
         _ => return,
     };
-    let mut dx = p.0 - start.0;
-    let mut dy = p.1 - start.1;
-    if shift(mods) {
-        if dx.abs() > dy.abs() { dy = 0.0 } else { dx = 0.0 }
-    }
     let scene_ref = b.doc.scene.borrow();
     let parent = ids.first().and_then(|id| scene_ref.parent(id)).map(str::to_string).unwrap_or_default();
+    // In a turned frame the nodes move in its turned coordinates: the pointer is taken there
+    // (B12), and snapping, whose guides are drawn on the page, is off.
+    let turned = !shapes::turned_ancestors(&scene_ref, &placed, &parent).is_empty() || scene_ref.node(&parent).is_some_and(|n| shapes::rotation(n) != 0.0);
+    let local = |q: (f64, f64)| if turned { shapes::to_local(&scene_ref, &placed, &parent, q.0, q.1) } else { q };
+    let (from, to) = (local(start), local(p));
+    let mut dx = to.0 - from.0;
+    let mut dy = to.1 - from.1;
+    // Shift keeps to one axis, and snaps along that one only (TM-65).
+    let (mut free_x, mut free_y) = (true, true);
+    if shift(mods) {
+        if dx.abs() > dy.abs() {
+            dy = 0.0;
+            free_y = false;
+        } else {
+            dx = 0.0;
+            free_x = false;
+        }
+    }
     let laid = edit::lays_out(&scene_ref, &parent);
     let parent_rect = placed.rect(&parent);
-    // One node of an auto-layout frame, still inside it: reorder.
-    if laid && ids.len() == 1 && parent_rect.is_some_and(|r| r.contains(p.0, p.1)) {
-        let row = scene_ref.node(&parent).is_some_and(|n| n.layout_mode() == Layout::Row);
-        let siblings: Vec<Rect> = scene_ref
-            .children(&parent)
-            .iter()
-            .filter(|c| **c != ids[0])
-            .filter(|c| scene_ref.node(c).is_some_and(|n| !n.is_hidden()))
-            .filter_map(|c| placed.rect(c))
-            .collect();
-        let index = siblings.iter().filter(|r| if row { p.0 > r.cx() } else { p.1 > r.cy() }).count() as u32;
+    // Children of an auto-layout frame, still inside it: reorder them, as one block (B18), to
+    // the index the engine reads, hidden siblings counted (B20).
+    let siblings = ids.iter().all(|id| scene_ref.parent(id) == Some(parent.as_str()));
+    if laid && siblings && !ids.is_empty() && parent_rect.is_some_and(|r| r.contains(to.0, to.1)) {
+        let index = layout::drop_index(&scene_ref, &placed, &parent, &ids, to);
         drop(scene_ref);
         if let Gesture::Move { reorder, target, .. } = &mut *b.gesture.borrow_mut() {
             *reorder = Some((parent, index));
@@ -857,7 +882,7 @@ fn move_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
         b.canvas.queue_draw();
         return;
     }
-    // Snap the moving box to its neighbours and its parent.
+    // Snap the moving box to its neighbours and its parent, as they show (B13).
     let moving = Rect::bounds(rects.iter()).unwrap_or_default().translate(dx, dy);
     let view = b.cam.get().visible(b.size.get().0, b.size.get().1);
     let mut others: Vec<Rect> = scene_ref
@@ -865,19 +890,33 @@ fn move_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
         .iter()
         .filter(|c| !ids.contains(c))
         .filter(|c| scene_ref.node(c).is_some_and(|n| !n.is_hidden()))
-        .filter_map(|c| placed.rect(c))
+        .filter_map(|c| shapes::shown_rect(&scene_ref, &placed, c))
         .filter(|r| r.intersects(&view))
         .collect();
     if let Some(pr) = parent_rect.filter(|_| scene_ref.node(&parent).is_some_and(|n| n.kind != NodeKind::Page)) {
         others.push(pr);
     }
-    let (sx, sy, guides) = if alt(mods) && !dup {
+    let edges = Edges {
+        left: free_x,
+        center_x: free_x,
+        right: free_x,
+        top: free_y,
+        center_y: free_y,
+        bottom: free_y,
+    };
+    // Alt held for a duplicate drag still snaps; Alt pressed during a plain drag turns it off
+    // (TM-72).
+    let (sx, sy, guides) = if turned || (alt(mods) && !copied) {
         (0.0, 0.0, Vec::new())
     } else {
-        snap::snap(&moving, &others, Edges::ALL, SNAP / zoom)
+        snap::snap(&moving, &others, edges, SNAP / zoom)
     };
-    dx += sx;
-    dy += sy;
+    if free_x {
+        dx += sx;
+    }
+    if free_y {
+        dy += sy;
+    }
     // Where it would land: the deepest frame under the pointer that is not one of them.
     let page = b.page.borrow().clone();
     let chain = hit::chain(&scene_ref, &placed, &page, p.0, p.1, 0.0);
@@ -914,21 +953,23 @@ fn move_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
 }
 
 fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
-    let (handle, bounds, orig) = match &mut *b.gesture.borrow_mut() {
-        Gesture::Resize { handle, bounds, orig, moved } => {
+    let (handle, bounds, orig, frame, turn) = match &mut *b.gesture.borrow_mut() {
+        Gesture::Resize { handle, bounds, orig, moved, frame, turn } => {
             *moved = true;
-            (*handle, *bounds, orig.clone())
+            (*handle, *bounds, orig.clone(), frame.clone(), *turn)
         }
         _ => return,
     };
     let zoom = b.cam.get().zoom;
-    // One turned node resizes in its own frame: the pointer is turned back about its centre,
-    // the dragged edges move there, and the new box is turned into place again.
-    let turn = match orig.as_slice() {
-        [(_, node, _)] => relay_client::design::shapes::rotation(node),
-        _ => 0.0,
+    let placed = b.placed();
+    // One node drawn turned resizes in its own frame: the pointer is taken into its parent's
+    // coordinates (through the turns of the frames it is in, B12), turned back about its centre
+    // by its own turn, the dragged edges move there, and the new box is turned into place again.
+    let p = match &frame {
+        Some(f) => shapes::to_local(&b.doc.scene.borrow(), &placed, f, p.0, p.1),
+        None => p,
     };
-    let p = if turn != 0.0 { relay_client::design::shapes::rotate(p.0, p.1, bounds.cx(), bounds.cy(), -turn) } else { p };
+    let p = if turn != 0.0 { shapes::rotate(p.0, p.1, bounds.cx(), bounds.cy(), -turn) } else { p };
     let (mut x0, mut y0, mut x1, mut y1) = (bounds.x, bounds.y, bounds.right(), bounds.bottom());
     let centred = alt(mods);
     if handle.left {
@@ -955,14 +996,20 @@ fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
             y0 = bounds.y - (p.1 - bounds.bottom());
         }
     }
-    // Snap the dragged edges.
+    // Snap the dragged edges to the siblings as they show, those on show only (B13, TM-74).
     let page = b.page.borrow().clone();
-    let placed = b.placed();
     let parent = orig.first().and_then(|(id, _, _)| b.doc.scene.borrow().parent(id).map(str::to_string)).unwrap_or(page);
     let ids: Vec<&String> = orig.iter().map(|(id, _, _)| id).collect();
+    let view = b.cam.get().visible(b.size.get().0, b.size.get().1);
     let others: Vec<Rect> = {
         let scene = b.doc.scene.borrow();
-        scene.children(&parent).iter().filter(|c| !ids.contains(c)).filter_map(|c| placed.rect(c)).collect()
+        scene
+            .children(&parent)
+            .iter()
+            .filter(|c| !ids.contains(c) && scene.node(c).is_some_and(|n| !n.is_hidden()))
+            .filter_map(|c| shapes::shown_rect(&scene, &placed, c))
+            .filter(|r| r.intersects(&view))
+            .collect()
     };
     let moving = Rect::new(x0.min(x1), y0.min(y1), (x1 - x0).abs(), (y1 - y0).abs());
     let edges = Edges {
@@ -973,7 +1020,7 @@ fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
         center_y: false,
         bottom: handle.bottom,
     };
-    let (sx, sy, guides) = if turn != 0.0 { (0.0, 0.0, Vec::new()) } else { snap::snap(&moving, &others, edges, SNAP / zoom) };
+    let (sx, sy, guides) = if turn != 0.0 || frame.is_some() { (0.0, 0.0, Vec::new()) } else { snap::snap(&moving, &others, edges, SNAP / zoom) };
     if handle.left { x0 += sx } else if handle.right { x1 += sx }
     if handle.top { y0 += sy } else if handle.bottom { y1 += sy }
     let keep_ratio = shift(mods) || (orig.len() == 1 && orig[0].1.kind == NodeKind::Image && !shift(mods));
@@ -991,7 +1038,7 @@ fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
     }
     let mut new = Rect::new(x0.min(x1), y0.min(y1), (x1 - x0).abs().max(1.0), (y1 - y0).abs().max(1.0));
     if turn != 0.0 {
-        let (cx, cy) = relay_client::design::shapes::rotate(new.cx(), new.cy(), bounds.cx(), bounds.cy(), turn);
+        let (cx, cy) = shapes::rotate(new.cx(), new.cy(), bounds.cx(), bounds.cy(), turn);
         new = Rect::new(cx - new.w / 2.0, cy - new.h / 2.0, new.w, new.h);
     }
     let sx = new.w / bounds.w.max(1e-9);
@@ -1002,16 +1049,26 @@ fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
             let nx = new.x + (r.x - bounds.x) * sx;
             let ny = new.y + (r.y - bounds.y) * sy;
             let (nw, nh) = ((r.w * sx).max(1.0), (r.h * sy).max(1.0));
+            // A line or path flat along an axis has no size there to scale: its box stays as
+            // flat as its points (B36).
+            let flat = |a: usize| {
+                matches!(node.kind, NodeKind::Line | NodeKind::Path)
+                    && node.points.as_ref().is_some_and(|pts| pts.iter().all(|q| (q[a] - pts[0][a]).abs() < 1e-9))
+            };
             if let Some(n) = scene.node_mut(id) {
                 n.x = (node.x + (nx - r.x)).round();
                 n.y = (node.y + (ny - r.y)).round();
-                if handle.left || handle.right {
+                if (handle.left || handle.right) && flat(0) {
+                    n.w = node.w;
+                } else if handle.left || handle.right {
                     n.w = nw.round();
                     if n.kind == NodeKind::Text || layout::w_sizing(node) == Sizing::Hug {
                         n.w_sizing = Some(Sizing::Fixed);
                     }
                 }
-                if handle.top || handle.bottom {
+                if (handle.top || handle.bottom) && flat(1) {
+                    n.h = node.h;
+                } else if handle.top || handle.bottom {
                     n.h = nh.round();
                     if layout::h_sizing(node) == Sizing::Hug {
                         n.h_sizing = Some(Sizing::Fixed);
@@ -1083,21 +1140,15 @@ fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
             };
             let mut ops = Vec::new();
             if let Some((parent, index)) = reorder {
-                ops.push(NodeOp::Move { id: ids[0].clone(), parent: Some(parent), index: Some(index), keep_position: None });
+                ops.extend(edit::reorder(&scene, &parent, &ids, index));
             } else if let Some(t) = target {
-                let index = edit::lays_out(&scene, &t).then(|| {
-                    let row = scene.node(&t).is_some_and(|n| n.layout_mode() == Layout::Row);
-                    scene
-                        .children(&t)
-                        .iter()
-                        .filter_map(|c| placed_before.rect(c))
-                        .filter(|r| if row { at.0 > r.cx() } else { at.1 > r.cy() })
-                        .count() as u32
-                });
-                for id in &ids {
+                // Into an auto layout at the place under the pointer, hidden children counted as
+                // the engine counts them (B20), one after another in the order they paint (B18).
+                let index = edit::lays_out(&scene, &t).then(|| layout::drop_index(&scene, &placed_before, &t, &ids, at));
+                for (k, id) in ids.iter().enumerate() {
                     let r = placed_before.rect(id).unwrap_or_default();
                     let (dx, dy) = delta(id);
-                    ops.extend(edit::reparent(&scene, &placed_before, id, &t, index, (r.x + dx, r.y + dy)));
+                    ops.extend(edit::reparent(&scene, &placed_before, id, &t, index.map(|i| i + k as u32), (r.x + dx, r.y + dy)));
                 }
             } else {
                 for (id, ox, oy) in &orig {
@@ -1190,7 +1241,11 @@ fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
                 }
             }
             b.doc.set_hold(false);
-            let ops = hits.into_iter().map(|(id, _)| NodeOp::Delete { id }).collect();
+            // Through the canvas's delete: a connector attached to a stroke rubbed out lets go
+            // where it is drawn, laid out, not at the stored boxes (B26).
+            let ids: Vec<String> = hits.into_iter().map(|(id, _)| id).collect();
+            let placed = b.placed();
+            let ops = edit::delete(&b.doc.scene.borrow(), &placed, &ids);
             b.commit(ops);
             b.invalidate();
         }

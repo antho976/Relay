@@ -12,7 +12,7 @@ use gtk::prelude::*;
 use gtk::{gdk, gio, graphene, gsk, pango};
 use gtk4 as gtk;
 use relay_bus::design::{Node, NodeKind, NodeOp};
-use relay_client::design::edit;
+use relay_client::design::{bounds, edit, shapes};
 use relay_client::design::geom::step_zoom;
 use relay_client::design::layout::{self, Placed};
 use relay_client::design::snap::Guide;
@@ -192,7 +192,9 @@ pub enum Gesture {
         click: Option<String>,
         at: (f64, f64),
     },
-    Resize { handle: Handle, bounds: Rect, orig: Vec<(String, Node, Rect)>, moved: bool },
+    /// `bounds` and the pointer are in `frame`'s coordinates when one node drawn turned is
+    /// resized (its parent's; B12), else on the page; `turn` is that node's own.
+    Resize { handle: Handle, bounds: Rect, orig: Vec<(String, Node, Rect)>, moved: bool, frame: Option<String>, turn: f64 },
     Endpoint { id: String, which: usize, orig: Node, moved: bool },
     /// `from`/`to`: the nodes a line's ends attach to, a connector's.
     Create { tool: Tool, parent: String, a: (f64, f64), b: (f64, f64), from: Option<String>, to: Option<String> },
@@ -743,7 +745,11 @@ impl Board {
         }
         let started = trace().then(std::time::Instant::now);
         let snap = gtk::Snapshot::new();
-        self.painter.paint_page(&snap, scene, placed, &self.page.borrow(), None);
+        // On the page's fill, which `draw_inner` lays under the grid: a top-level blend mixes
+        // with it, as it does in a frame (B30).
+        let page = self.page.borrow();
+        let ground = scene.node(&page).and_then(fill_of).unwrap_or_else(|| CANVAS.into());
+        self.painter.paint_page_on(&snap, scene, placed, &page, None, Some(&ground));
         let node = snap.to_node();
         if let Some(t) = started {
             println!("DESIGN_TRACE content {:.3} ms", t.elapsed().as_secs_f64() * 1e3);
@@ -752,16 +758,35 @@ impl Board {
         node
     }
 
+    /// What the page paints, its words, strokes and shadows included: what fit frames (B3: a
+    /// line an agent wrote without a box no longer pulls it to the origin).
     pub(super) fn page_bounds(&self) -> Option<Rect> {
         let placed = self.placed();
         let scene = self.doc.scene.borrow();
         let page = self.page.borrow();
-        Rect::bounds(scene.children(&page).iter().filter_map(|id| placed.rects.get(id)))
+        let shown = scene.children(&page).iter().filter(|id| scene.node(id).is_some_and(|n| !n.is_hidden()));
+        let painted: Vec<Rect> = shown.filter_map(|id| bounds::painted_bounds(&scene, &placed, &*self.painter, id)).collect();
+        Rect::bounds(painted.iter())
     }
 
+    /// The box the selection is drawn in on the page: each layer's as it shows (a line's
+    /// points wherever its box is, a turned node's turned box, a child of a turned frame where
+    /// the frame's turn carries it), as a flip turns them over. Its outline, handles and
+    /// toolbar sit on it.
     pub(super) fn selection_bounds(&self) -> Option<Rect> {
         let placed = self.placed();
-        Rect::bounds(self.selection.borrow().iter().filter_map(|id| placed.rects.get(id)))
+        let scene = self.doc.scene.borrow();
+        let shown: Vec<Rect> = self.selection.borrow().iter().filter_map(|id| shown_box(&scene, &placed, id)).collect();
+        Rect::bounds(shown.iter())
+    }
+
+    /// What the selection paints, for Zoom to selection (B3).
+    pub(super) fn selection_painted(&self) -> Option<Rect> {
+        let placed = self.placed();
+        let scene = self.doc.scene.borrow();
+        let painted: Vec<Rect> =
+            self.selection.borrow().iter().filter_map(|id| bounds::painted_bounds_in_page(&scene, &placed, &*self.painter, id)).collect();
+        Rect::bounds(painted.iter())
     }
 
     // ------------------------------------------------------------------ camera
@@ -896,6 +921,8 @@ impl Board {
     fn changed(&self, change: &Change) {
         match change {
             Change::Scene => {
+                // A picture deleted or replaced lets go of its decoded copy (B33).
+                self.painter.retain(&self.doc.scene.borrow());
                 // An undo can take away the page on show (one just added, or duplicated).
                 self.keep_page();
                 self.prune_selection();
@@ -1243,6 +1270,33 @@ impl Board {
         snap.append_border(&rr, &[width; 4], &[c, c, c, c]);
     }
 
+    /// One layer's outline where it is drawn: its turned box when it or a frame it is in is
+    /// turned, else the box it shows (a line's points, wherever its box is).
+    fn outline_node(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, id: &str, width: f32) {
+        let turned = scene.node(id).filter(|n| n.kind != NodeKind::Line).and_then(|_| shapes::visual(scene, placed, id)).filter(|(_, t)| *t != 0.0);
+        match turned {
+            Some((r, turn)) => self.quad(snap, &self.screen(&r), turn, width),
+            None => {
+                if let Some(r) = shown_box(scene, placed, id) {
+                    self.outline(snap, &self.screen(&r), SELECT, width);
+                }
+            }
+        }
+    }
+
+    /// Screen box `s` turned `turn` degrees about its centre, outlined.
+    fn quad(&self, snap: &gtk::Snapshot, s: &Rect, turn: f64, width: f32) {
+        let at = |x: f64, y: f64| shapes::rotate(x, y, s.cx(), s.cy(), turn);
+        let corners = [at(s.x, s.y), at(s.right(), s.y), at(s.right(), s.bottom()), at(s.x, s.bottom())];
+        let pb = gsk::PathBuilder::new();
+        pb.move_to(corners[0].0 as f32, corners[0].1 as f32);
+        for c in &corners[1..] {
+            pb.line_to(c.0 as f32, c.1 as f32);
+        }
+        pb.close();
+        snap.append_stroke(&pb.to_path(), &gsk::Stroke::new(width), &rgba(SELECT));
+    }
+
     fn label_layout(&self, key: &str, text: &str, size: f64, weight: pango::Weight, mono: bool) -> pango::Layout {
         let mut labels = self.labels.borrow_mut();
         if let Some(l) = labels.get(key) {
@@ -1333,7 +1387,7 @@ impl Board {
             let mut c = rgba(AGENT);
             c.set_alpha(alpha as f32);
             for id in &flash {
-                if let Some(r) = placed.rect(id) {
+                if let Some(r) = shown_box(scene, placed, id) {
                     let s = self.screen(&r).inflate(2.0);
                     let rr = gsk::RoundedRect::from_rect(grect(&s), 3.0);
                     snap.append_border(&rr, &[2.0; 4], &[c, c, c, c]);
@@ -1343,9 +1397,7 @@ impl Board {
         // Hover.
         if let Some(id) = self.hover.borrow().as_ref() {
             if !self.selection.borrow().contains(id) && matches!(*self.gesture.borrow(), Gesture::Idle) {
-                if let Some(r) = placed.rect(id) {
-                    self.outline(snap, &self.screen(&r), SELECT, 1.5);
-                }
+                self.outline_node(snap, scene, placed, id, 1.5);
             }
         }
         let gesture = self.gesture.borrow();
@@ -1363,43 +1415,35 @@ impl Board {
         let resizing = matches!(*gesture, Gesture::Resize { .. } | Gesture::Endpoint { .. });
         if !selection.is_empty() && editing.is_none() {
             for id in selection.iter() {
-                if let Some(r) = placed.rect(id) {
-                    self.outline(snap, &self.screen(&r), SELECT, 1.0);
-                }
+                self.outline_node(snap, scene, placed, id, 1.0);
             }
+            // A locked layer shows it is selected, but has no handles to drag (B16).
+            let locked = selection.iter().all(|id| scene.node(id).is_none_or(Node::is_locked));
             if let Some((_, r, turn)) = self.single_turn() {
-                // One turned node: its outline and handles turn with it.
+                // One turned node: its outline (drawn above) and handles turn with it.
                 let s = self.screen(&r);
-                let at = |x: f64, y: f64| relay_client::design::shapes::rotate(x, y, s.cx(), s.cy(), turn);
-                let pb = gsk::PathBuilder::new();
-                let corners = [at(s.x, s.y), at(s.right(), s.y), at(s.right(), s.bottom()), at(s.x, s.bottom())];
-                pb.move_to(corners[0].0 as f32, corners[0].1 as f32);
-                for c in &corners[1..] {
-                    pb.line_to(c.0 as f32, c.1 as f32);
-                }
-                pb.close();
-                snap.append_stroke(&pb.to_path(), &gsk::Stroke::new(1.0), &rgba(SELECT));
-                if !matches!(*gesture, Gesture::Move { moved: true, .. }) {
+                let at = |x: f64, y: f64| shapes::rotate(x, y, s.cx(), s.cy(), turn);
+                if !locked && !matches!(*gesture, Gesture::Move { moved: true, .. }) {
                     for h in HANDLES {
                         let (x, y) = handle_point(&s, h);
                         let (x, y) = at(x, y);
                         self.handle(snap, x, y, false);
                     }
                 }
-                let shown = relay_client::design::shapes::rotated_bounds(&s, turn);
+                let shown = shapes::rotated_bounds(&s, turn);
                 self.size_pill(snap, &shown, &r);
-            } else if let Some(b) = Rect::bounds(selection.iter().filter_map(|id| placed.rects.get(id))) {
+            } else if let Some(b) = Rect::bounds(selection.iter().filter_map(|id| shown_box(scene, placed, id)).collect::<Vec<_>>().iter()) {
                 let s = self.screen(&b);
                 if selection.len() > 1 {
                     self.outline(snap, &s, SELECT, 1.0);
                 }
                 let line = selection.len() == 1
                     && scene.node(&selection[0]).is_some_and(|n| n.kind == NodeKind::Line);
-                if line {
+                if line && !locked {
                     for p in self.endpoints(&selection[0]) {
                         self.handle(snap, p.0, p.1, true);
                     }
-                } else if !matches!(*gesture, Gesture::Move { moved: true, .. }) && s.w > 2.0 && s.h > 2.0 {
+                } else if !line && !locked && !matches!(*gesture, Gesture::Move { moved: true, .. }) && s.w > 2.0 && s.h > 2.0 {
                     for h in HANDLES {
                         let (x, y) = handle_point(&s, h);
                         if (h.left || h.right) && (h.top || h.bottom) || s.w.min(s.h) > 24.0 {
@@ -1454,7 +1498,7 @@ impl Board {
                     _ => {
                         let r = self.screen(&Rect::spanning(*a, *b));
                         if let Some((sides, star)) = polygon_of(*tool) {
-                            let pts = relay_client::design::shapes::polygon(&r, sides, star);
+                            let pts = shapes::polygon(&r, sides, star);
                             let pb = gsk::PathBuilder::new();
                             pb.move_to(pts[0].0 as f32, pts[0].1 as f32);
                             for q in &pts[1..] {
@@ -1532,28 +1576,23 @@ impl Board {
         }
     }
 
+    /// Where a reorder would put the dragged children: a bar before the child at `index` among
+    /// the others (hidden ones counted, as the engine counts them: B20), or after the last shown.
     fn insertion(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, parent: &str, index: usize, moving: &[String]) {
         let Some(p) = scene.node(parent) else {
             return;
         };
         let row = p.layout_mode() == relay_bus::design::Layout::Row;
-        let kids: Vec<Rect> = scene
-            .children(parent)
-            .iter()
-            .filter(|c| !moving.contains(c))
-            .filter_map(|c| placed.rect(c))
-            .collect();
+        let rest: Vec<&String> = scene.children(parent).iter().filter(|c| !moving.contains(c)).collect();
         let Some(pr) = placed.rect(parent) else {
             return;
         };
-        let at = if kids.is_empty() {
-            if row { pr.x + 8.0 } else { pr.y + 8.0 }
-        } else if index >= kids.len() {
-            let last = kids.last().copied().unwrap_or_default();
-            if row { last.right() + 2.0 } else { last.bottom() + 2.0 }
-        } else {
-            let k = kids[index];
-            if row { k.x - 2.0 } else { k.y - 2.0 }
+        let next = rest.iter().skip(index).find_map(|c| placed.rect(c));
+        let last = rest.iter().rev().find_map(|c| placed.rect(c));
+        let at = match (next, last) {
+            (Some(k), _) => if row { k.x - 2.0 } else { k.y - 2.0 },
+            (None, Some(l)) => if row { l.right() + 2.0 } else { l.bottom() + 2.0 },
+            (None, None) => if row { pr.x + 8.0 } else { pr.y + 8.0 },
         };
         let r = if row {
             Rect::new(at - 1.0, pr.y + 4.0, 2.0 / self.cam.get().zoom, pr.h - 8.0)
@@ -1590,19 +1629,17 @@ impl Board {
         snap.restore();
     }
 
-    /// The one selected node when it is turned: its id, unturned page box and turn.
+    /// The one selected node when it is drawn turned, by its own turn or a frame's it is in:
+    /// its id, its unturned box moved to where it is drawn on the page, and its whole turn (B12).
     pub(super) fn single_turn(&self) -> Option<(String, Rect, f64)> {
         let sel = self.selection.borrow();
         let [id] = sel.as_slice() else {
             return None;
         };
         let scene = self.doc.scene.borrow();
-        let n = scene.node(id).filter(|n| n.kind != NodeKind::Line)?;
-        let turn = relay_client::design::shapes::rotation(n);
-        if turn == 0.0 {
-            return None;
-        }
-        Some((id.clone(), self.placed().rect(id)?, turn))
+        scene.node(id).filter(|n| n.kind != NodeKind::Line)?;
+        let (r, turn) = shapes::visual(&scene, &self.placed(), id)?;
+        (turn != 0.0).then(|| (id.clone(), r, turn))
     }
 
     /// A line's ends, on screen.
@@ -1615,7 +1652,7 @@ impl Board {
         let cam = self.cam.get();
         // A connector's ends are where it is drawn: on the shapes it joins.
         if n.from.is_some() || n.to.is_some() {
-            let (pts, _) = relay_client::design::shapes::line_points(&scene, &placed, n);
+            let (pts, _) = shapes::line_points(&scene, &placed, n);
             return [pts.first(), pts.last()].into_iter().flatten().map(|p| cam.to_screen(p.0, p.1)).collect();
         }
         n.points
@@ -2274,6 +2311,11 @@ impl Board {
         };
         let s = self.screen(&b);
         let (cw, ch) = self.size.get();
+        // Scrolled out of sight, the selection takes its toolbar with it rather than leave it
+        // over what is on show (E-board-4); it comes back with the selection.
+        if !s.intersects(&Rect::new(0.0, 0.0, cw, ch)) {
+            return Some(away);
+        }
         // Between the layers panel and the inspector when they show and the bar fits there; it
         // sat over their own controls otherwise. Too narrow for both, it keeps clear of what it can.
         let inspector = self.inspector_scroll.is_visible().then(|| f64::from(self.inspector_scroll.width().max(INSPECTOR_W as i32)) + 12.0);
@@ -2352,7 +2394,7 @@ impl Board {
             b.fit(r, false);
         });
         add("zoom-selection", |b| {
-            let r = b.selection_bounds().or_else(|| b.page_bounds());
+            let r = b.selection_painted().or_else(|| b.page_bounds());
             b.fit(r, true);
         });
         add("zoom-50", |b| b.zoom_to(0.5));
@@ -2598,6 +2640,12 @@ impl Board {
         let placed = self.placed();
         let scene = self.doc.scene.borrow();
         let ids: Vec<String> = ids.into_iter().filter(|id| scene.node(id).is_some_and(|n| n.kind != NodeKind::Page)).collect();
+        // A locked layer stays (B16): said so, and the selection kept, when nothing else goes.
+        if !ids.is_empty() && edit::unlocked(&scene, ids.clone()).is_empty() {
+            drop(scene);
+            self.toast("Unlock the layer to delete it");
+            return;
+        }
         // Connectors attached to what goes let go where they are drawn, rather than dangle.
         let ops = edit::delete(&scene, &placed, &ids);
         drop(scene);
@@ -3116,6 +3164,13 @@ pub fn free_name(base: &str, taken: &[String]) -> String {
 /// anything, else its text's first line that does, else what it draws (B42, E-board-24).
 pub fn display_name(n: &Node) -> String {
     relay_client::design::names::display_name(n)
+}
+
+/// Where layer `id` shows on the page, as a box: `shapes::shown_rect` (its drawing, turned by its
+/// own turn) carried out through each turned frame it is in.
+pub(super) fn shown_box(scene: &Scene, placed: &Placed, id: &str) -> Option<Rect> {
+    let r = shapes::shown_rect(scene, placed, id)?;
+    Some(shapes::turned_ancestors(scene, placed, id).iter().rev().fold(r, |b, &(cx, cy, d)| shapes::rotated_bounds_about(&b, d, cx, cy)))
 }
 
 /// Undo agent's audit pages: rows a page, and how many pages it reads back.
