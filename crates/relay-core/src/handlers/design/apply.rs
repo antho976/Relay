@@ -220,13 +220,17 @@ impl Run<'_> {
 
     /// `parent` can take a child: it is there and is a page, frame or group. `Ok(false)` when
     /// it is gone and the list is lenient. A node of a kind this build cannot read holds
-    /// nothing it adds or moves.
-    pub(super) fn container(&self, parent: &str) -> Result<bool, BusError> {
+    /// nothing it adds or moves (an undo skips the edit).
+    pub(super) fn container(&mut self, parent: &str) -> Result<bool, BusError> {
         match self.meta(parent)? {
             None if self.lenient => Ok(false),
             None => Err(self.fail(ErrorKind::NotFound, "design.parent", format!("parent {parent:?} is not in the design"))),
             Some((_, Ok(kind), _)) if !kind.holds_children() => Err(self.fail(ErrorKind::Invalid, "design.parent",
                 format!("parent {parent:?} is a {}, which holds nothing; use a page, frame or group", kind.name()))),
+            Some((_, Err(kind), _)) if self.lenient => {
+                self.warn(format_args!("parent {parent:?} is of a kind this Relay cannot read ({kind:?}); skipped"));
+                Ok(false)
+            }
             Some((_, Err(kind), _)) => Err(self.fail(ErrorKind::Invalid, "design.parent",
                 format!("parent {parent:?} is of a kind this Relay cannot read ({kind:?}); use a page, frame or group"))),
             Some(_) => Ok(true),

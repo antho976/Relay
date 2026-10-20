@@ -163,8 +163,10 @@ fn a_row_of_an_unknown_kind_is_never_edited() {
     assert_eq!(refusal(json!([{"op": "move", "id": "r", "parent": "w"}])).0, "design.parent");
     assert_eq!(rev(&e, id), at, "nothing applied");
     // An undo skips them, as it skips a node that is gone.
-    let out = lenient(&e, id, json!([{"op": "update", "id": "w", "set": {"x": 1}}, {"op": "delete", "id": "f"}, {"op": "move", "id": "w2", "index": 0}]));
-    assert_eq!((out["ids"].clone(), out.get("warnings")), (json!(["", "", ""]), None));
+    let out = lenient(&e, id, json!([{"op": "update", "id": "w", "set": {"x": 1}}, {"op": "delete", "id": "f"},
+        {"op": "move", "id": "w2", "index": 0}, {"op": "move", "id": "r", "parent": "w"}]));
+    assert_eq!((out["ids"].clone(), out.get("warnings")), (json!(["", "", "", ""]), None));
+    assert_eq!(find(&nodes(&e, id), "r")["parent"], "page-1");
     assert!(ids(&nodes(&e, id)).contains(&"f".to_string()));
     // A connector's end on it is a node that is there: deleting the other end frees only that one.
     let out = apply(&e, id, json!([{"op": "delete", "id": "r"}]));
