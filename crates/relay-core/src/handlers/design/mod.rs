@@ -83,6 +83,31 @@ fn emit_design(ctx: &mut Ctx, design: &Design) -> Result<(), BusError> {
     Ok(())
 }
 
+/// Most ids each list of a `design.changed` from `design.apply` names (W21).
+const EVENT_IDS: usize = 100;
+
+/// `design.changed` for a `design.apply` (W21): the design row, and beside it the rev before the
+/// list (`prev_rev`), the ids it added, changed or moved (`touched`) and those it removed, at most
+/// 100 of each, with `all: true` when either was cut (`design.get` with `since_rev: prev_rev` then
+/// has them all).
+fn emit_applied<'a>(ctx: &mut Ctx, design: &Design, prev_rev: i64, touched: impl Iterator<Item = &'a str>, removed: &[String]) -> Result<(), BusError> {
+    let mut touched = touched;
+    let named: Vec<&str> = touched.by_ref().take(EVENT_IDS).collect();
+    let cut = touched.next().is_some() || removed.len() > EVENT_IDS;
+    let mut payload = serde_json::to_value(design).bus()?;
+    if let Some(row) = payload.as_object_mut() {
+        row.insert("prev_rev".into(), prev_rev.into());
+        row.insert("touched".into(), json!(named));
+        row.insert("removed".into(), json!(&removed[..removed.len().min(EVENT_IDS)]));
+        if cut {
+            row.insert("all".into(), true.into());
+        }
+    }
+    ctx.set_project(design.project_id);
+    ctx.emit("design.changed", payload);
+    Ok(())
+}
+
 /// `raw` trimmed, or `default` when there is none; 1 to [`MAX_NAME`] characters either way,
 /// and none a control character (B43: a NUL would cut it short in GTK, or panic a debug build).
 fn title(raw: Option<&str>, default: &str) -> Result<String, BusError> {

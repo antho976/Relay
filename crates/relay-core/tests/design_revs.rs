@@ -1,9 +1,10 @@
-//! Revisions (feature-agent-api W6, W19, W20; MODEL-SPEC §3.1-§3.2, §4; TM-58): every node row
-//! carries the rev that last wrote it and every id a delete took is on record for 1000 revs, so a
-//! `design.apply` sent against an older rev applies on top of what changed since unless it writes
-//! a node that changed; `design.get` answers only what changed since a rev, or some nodes and
-//! what is inside them; a refusal that names an id the design no longer holds says when it went;
-//! and an edit that changes nothing makes no rev, event or undo.
+//! Revisions (feature-agent-api W6, W19, W20, W21; MODEL-SPEC §3.1-§3.2, §4; TM-58): every node
+//! row carries the rev that last wrote it and every id a delete took is on record for 1000 revs,
+//! so a `design.apply` sent against an older rev applies on top of what changed since unless it
+//! writes a node that changed; `design.get` answers only what changed since a rev, or some nodes
+//! and what is inside them; a `design.changed` from an apply names the ids it touched; a refusal
+//! that names an id the design no longer holds says when it went; and an edit that changes
+//! nothing makes no rev, event or undo.
 
 mod common;
 
@@ -605,6 +606,8 @@ fn a_removed_parent_says_when_it_went() {
     assert_eq!(error.message, "ops[0] update \"nowhere\": no such node");
 }
 
+// --- Agents, and timings ----------------------------------------------------------------------
+
 /// Agents read changes the same way, within their own project only.
 #[test]
 fn an_agent_reads_what_changed_since() {
@@ -663,4 +666,47 @@ fn measure_since_rev_and_base_rev_on_5000() {
     println!("design.get since_rev, 5,000 nodes, one changed: median {:?} of {}", median(whole.clone()), whole.len());
     println!("design.get since_rev with page, 5,000 nodes, one changed: median {:?} of {}", median(paged.clone()), paged.len());
     println!("design.apply, one update, base_rev one behind, 5,000 nodes: median {:?} of {}", median(stale.clone()), stale.len());
+}
+
+// --- W21: what design.changed names -----------------------------------------------------------
+
+/// W21: an apply's design.changed carries the design row and, beside it, the rev before the
+/// list, the ids it added, changed or moved, and the ids it removed; past 100 of either, the
+/// first 100 and `all: true`. Other design ops announce the row alone, as before.
+#[test]
+fn changes_are_announced_with_the_ids_they_touched() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    let mut rx = e.subscribe();
+    apply(&e, id, json!([
+        {"op": "update", "id": "title", "set": {"text": "Hi"}},
+        {"op": "move", "id": "photo", "index": 0},
+        {"op": "add", "node": {"id": "badge", "parent": "card", "kind": "rect"}},
+        {"op": "delete", "id": "inner"},
+    ]));
+    let events = changed_events(&mut rx);
+    assert_eq!(events.len(), 1);
+    let ev = &events[0];
+    assert_eq!((ev["id"].as_i64(), ev["rev"].as_i64(), ev["prev_rev"].as_i64()), (Some(id), Some(3), Some(2)));
+    // The line from the dot let go of it: it was changed too.
+    assert_eq!(strings(&ev["touched"]), ["title", "photo", "badge", "link"]);
+    assert_eq!(strings(&ev["removed"]), ["inner", "dot"]);
+    assert!(ev.get("all").is_none());
+    assert_eq!(ev["title"], "Home", "the design row is all there");
+    // Over 100 of them: the first 100, and all.
+    let adds: Vec<Value> = (0..120).map(|i| json!({"op": "add", "node": {"id": format!("r{i}"), "parent": "page-1", "kind": "rect"}})).collect();
+    apply(&e, id, Value::Array(adds));
+    let ev = changed_events(&mut rx).remove(0);
+    assert_eq!((ev["touched"].as_array().unwrap().len(), ev["removed"].as_array().unwrap().len(), ev["all"].clone()), (100, 0, json!(true)));
+    let deletes: Vec<Value> = (0..101).map(|i| json!({"op": "delete", "id": format!("r{i}")})).collect();
+    apply(&e, id, Value::Array(deletes));
+    let ev = changed_events(&mut rx).remove(0);
+    assert_eq!((ev["touched"].as_array().unwrap().len(), ev["removed"].as_array().unwrap().len(), ev["all"].clone()), (0, 100, json!(true)));
+    // What the event leaves out, since_rev has.
+    let since = get(&e, json!({"design_id": id, "since_rev": ev["prev_rev"]}));
+    assert_eq!(since["removed"].as_array().unwrap().len(), 101);
+    // design.update announces the row alone.
+    ok(&e, "design.update", json!({"design_id": id, "title": "Home 2"}));
+    let ev = changed_events(&mut rx).remove(0);
+    assert!(ev.get("touched").is_none() && ev.get("prev_rev").is_none(), "{ev}");
 }

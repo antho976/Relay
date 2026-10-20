@@ -1,7 +1,7 @@
 //! `design.apply`: a list of node edits run in order against the request's transaction.
 
 use super::revs::{self, removed_rev};
-use super::{body_of, emit_design, kind_of, live_design, node_of, row_bytes};
+use super::{body_of, emit_applied, kind_of, live_design, node_of, row_bytes};
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project};
 use relay_bus::design::{details, field_of, label, nearest, Conflict, ConflictReason, Node, NodeKind, NodeOp, MAX_DEPTH, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
@@ -1108,7 +1108,7 @@ pub(super) fn register(e: &mut Engine) {
         if serde_json::to_vec(&undo).is_ok_and(|bytes| bytes.len() <= UNDO_KEPT) {
             ctx.set_undo("design.apply", undo, None);
         }
-        emit_design(ctx, &design)?;
+        emit_applied(ctx, &design, prev_rev, nodes.iter().map(|n| n.id.as_str()), &removed)?;
         // Every answer is full until engine-expect gives agents short ones (`reply`).
         Ok(ApplyOut {
             design_id: design.id,
