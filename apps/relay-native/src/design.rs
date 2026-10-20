@@ -21,7 +21,7 @@ mod layers;
 mod motion_panel;
 mod paint;
 mod pictures;
-mod render;
+pub(crate) mod render;
 mod shape_panels;
 mod textedit;
 mod tools;
@@ -475,8 +475,6 @@ fn delete_design(b: &Board) {
 /// Relay is connected again: every open design is read again, since events were missed
 /// meanwhile and the engine may hold an older copy (a store restored), and the gallery too
 /// (TM-54).
-// app.rs's connect() calls it from native-render on (TM-54 part b).
-#[allow(dead_code)]
 pub(crate) fn reconnected(ui: &Rc<Ui>) {
     doc::reread_all();
     if let Some(view) = view() {
@@ -486,8 +484,6 @@ pub(crate) fn reconnected(ui: &Rc<Ui>) {
 
 /// Before the main window closes: every board's words in progress are committed, and while any
 /// design still has edits on their way, the refusal to show (TM-39).
-// app.rs's close_request calls it from native-render on (TM-39 part b).
-#[allow(dead_code)]
 pub(crate) fn unsaved() -> Option<String> {
     let boards = boards();
     for b in &boards {
@@ -498,16 +494,12 @@ pub(crate) fn unsaved() -> Option<String> {
 
 /// Every design window closed, each board's words in progress committed first: the main window
 /// is closing (TM-39).
-// app.rs's close_request calls it from native-render on (TM-39 part b).
-#[allow(dead_code)]
 pub(crate) fn close_windows() {
     window::close_all();
 }
 
 /// `session.changed`: the lamp of each board whose design belongs to that terminal follows its
 /// state (E-ask-3).
-// app.rs routes session.changed here from native-render on (E-ask-3 part b).
-#[allow(dead_code)]
 pub(crate) fn session_changed(_ui: &Rc<Ui>, payload: &Value) {
     let (Some(name), Some(state)) = (payload["name"].as_str(), payload["state"].as_str()) else {
         return;
