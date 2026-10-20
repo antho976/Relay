@@ -131,3 +131,26 @@ fn bus_wait_matching_must_be_an_object() {
     assert!(validate(&serde_json::json!({"matching": "request_id=7"})).is_err());
     assert!(validate(&serde_json::json!({"matching": [{"request_id": 7}]})).is_err());
 }
+
+/// pictures v2 §4.1: only the Pictures plugin's own ops carry it. The key is machine-wide and the
+/// person's: its ops carry no plugin, admit no agent, and setting it writes no audit row.
+#[test]
+fn only_the_picture_ops_come_with_a_plugin() {
+    use relay_bus::registry::{Actors, Scope};
+    let reg = Registry::global();
+    for e in reg.entries() {
+        let brought = ["design.picture.search", "design.picture.thumb", "design.picture.add"].contains(&e.name);
+        assert_eq!(e.meta.plugin, brought.then_some("pictures"), "{}", e.name);
+    }
+    for op in ["design.picture.key_set", "design.picture.key_remove"] {
+        let m = reg.get(op).unwrap_or_else(|| panic!("{op} is not registered")).meta;
+        assert_eq!((m.kind, m.scope, m.actors), (OpKind::Mutation, Scope::Global, Actors::UserOnly), "{op}");
+    }
+    assert_eq!(reg.get("design.picture.key_set").unwrap().meta.audit, Audit::Never, "the payload is the key itself");
+    assert_eq!(reg.get("design.picture.key_remove").unwrap().meta.audit, Audit::Always);
+    // `{}` forgets nothing: the key is required.
+    assert!((reg.get("design.picture.key_set").unwrap().validate)(&serde_json::json!({})).is_err());
+    // The plugin is not in what bus.ops answers: the schema's OpInfo has no such field.
+    let info = &relay_bus::schema::render()["$defs"]["OpInfo"]["properties"];
+    assert!(info.get("plugin").is_none());
+}

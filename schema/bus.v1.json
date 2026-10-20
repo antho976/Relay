@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 332,
+  "op_count": 337,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -6427,6 +6427,96 @@
       },
       "result": {
         "$ref": "#/$defs/DesignAssetAddOut"
+      }
+    },
+    "design.picture.search": {
+      "summary": "Search free stock photos for a design (Openverse; Pexels with the person's key); answers ids for design.picture.add",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignPictureSearchIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignPictureSearchOut"
+      }
+    },
+    "design.picture.thumb": {
+      "summary": "A search result's small preview, to look at before choosing; through MCP the picture comes with the answer",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignPictureThumbIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignPictureThumbOut"
+      }
+    },
+    "design.picture.add": {
+      "summary": "Store a photo from design.picture.search for a design, with its credit; answers the src for an image node, as design.asset.add does",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignPictureAddIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignPictureAddOut"
+      }
+    },
+    "design.picture.key_set": {
+      "summary": "Check a Pexels API key with Pexels and keep it in the system keyring",
+      "kind": "mutation",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignPictureKeySetIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignPictureKeyOut"
+      }
+    },
+    "design.picture.key_remove": {
+      "summary": "Forget the saved Pexels key",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignPictureKeyOut"
       }
     }
   },
@@ -27403,6 +27493,342 @@
         "path",
         "w",
         "h"
+      ]
+    },
+    "DesignPictureSearchIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "query": {
+          "type": "string",
+          "description": "Two to four concrete nouns (\"sunlit kitchen plants\"); at most 200 characters.",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignPictureSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default openverse (no key). pexels needs the key the person saved."
+        },
+        "orientation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignPictureOrientation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "page": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1,
+          "description": "1 to 10; default 1.",
+          "maximum": 10
+        },
+        "count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1,
+          "description": "1 to 20; default 12; larger asks are cut to 20."
+        }
+      },
+      "required": [
+        "design_id",
+        "query"
+      ]
+    },
+    "DesignPictureSource": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "openverse",
+          "description": "Openverse's openly licensed photos; needs no key."
+        },
+        {
+          "type": "string",
+          "const": "pexels",
+          "description": "Pexels; needs the key the person saved."
+        }
+      ],
+      "description": "Where a stock photo comes from."
+    },
+    "DesignPictureOrientation": {
+      "type": "string",
+      "enum": [
+        "landscape",
+        "portrait",
+        "square"
+      ],
+      "description": "A photo's shape, to search for."
+    },
+    "DesignPictureSearchOut": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/DesignPictureSource"
+        },
+        "page": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "has_more": {
+          "type": "boolean",
+          "description": "Whether `page + 1` would answer (never past page 10)."
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignPictureHit"
+          }
+        }
+      },
+      "required": [
+        "source",
+        "page",
+        "has_more",
+        "results"
+      ]
+    },
+    "DesignPictureHit": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "`openverse:<uuid>` or `pexels:<digits>`: pass it to design.picture.add or .thumb."
+        },
+        "title": {
+          "type": "string",
+          "description": "May be empty; at most 200 characters."
+        },
+        "creator": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "licence": {
+          "type": "string",
+          "description": "\"CC BY 2.0\", \"CC BY-SA 4.0\", \"CC0\", \"Public domain\" or \"Pexels License\"."
+        },
+        "w": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The original's size in px, for its shape."
+        },
+        "h": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "licence",
+        "w",
+        "h"
+      ]
+    },
+    "DesignPictureThumbIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "id": {
+          "type": "string",
+          "description": "An id design.picture.search gave."
+        }
+      },
+      "required": [
+        "design_id",
+        "id"
+      ]
+    },
+    "DesignPictureThumbOut": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "A small JPEG, PNG, WebP or GIF on this machine. Through `relay mcp` the picture itself is\nattached to the answer; otherwise read the file."
+        },
+        "w": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "h": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "path",
+        "w",
+        "h"
+      ]
+    },
+    "DesignPictureAddIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "id": {
+          "type": "string",
+          "description": "An id design.picture.search gave."
+        }
+      },
+      "required": [
+        "design_id",
+        "id"
+      ]
+    },
+    "DesignPictureAddOut": {
+      "type": "object",
+      "properties": {
+        "src": {
+          "type": "string",
+          "description": "What an image node's `src` names."
+        },
+        "path": {
+          "type": "string"
+        },
+        "w": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The stored picture's size in px: give an image node this `w` and `h`."
+        },
+        "h": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "credit": {
+          "$ref": "#/$defs/DesignPictureCredit",
+          "description": "Where it came from and the line to put under it; design.get's `credits` keeps it by `src`."
+        }
+      },
+      "required": [
+        "src",
+        "path",
+        "w",
+        "h",
+        "credit"
+      ]
+    },
+    "DesignPictureCredit": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/DesignPictureSource"
+        },
+        "id": {
+          "type": "string",
+          "description": "The id design.picture.search gave it."
+        },
+        "title": {
+          "type": "string"
+        },
+        "creator": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "creator_url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "https only."
+        },
+        "licence": {
+          "type": "string"
+        },
+        "licence_url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "https only."
+        },
+        "source_url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The photo's page, https only."
+        },
+        "attribution": {
+          "type": "string",
+          "description": "One sentence naming its title, creator, source and licence."
+        },
+        "caption": {
+          "type": "string",
+          "description": "The line to put under the photo."
+        }
+      },
+      "required": [
+        "source",
+        "id",
+        "title",
+        "licence",
+        "attribution",
+        "caption"
+      ]
+    },
+    "DesignPictureKeySetIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "The Pexels API key (pexels.com/api).",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "key"
+      ]
+    },
+    "DesignPictureKeyOut": {
+      "type": "object",
+      "properties": {
+        "saved": {
+          "type": "boolean",
+          "description": "Whether a key is saved now."
+        }
+      },
+      "required": [
+        "saved"
       ]
     }
   }
