@@ -713,10 +713,12 @@ impl Pty {
 }
 
 /// `data` as one paste (`session.input {paste}`, I-4). `bracketed` (the program set DECSET 2004):
-/// between `ESC[200~` and `ESC[201~`, line breaks kept, with every ESC and 8-bit CSI taken out so
-/// nothing in it can end the paste early or act as a key. Otherwise as typed, but with each line
+/// between `ESC[200~` and `ESC[201~`, line breaks kept. Otherwise as typed, but with each line
 /// break (`\r\n`, `\r` or `\n`) a space, since a program without bracketed paste would read one
-/// as Enter. Nothing to paste is nothing to send.
+/// as Enter. Either way every other control character but a tab (C0, DEL, C1: ESC and the 8-bit
+/// CSI among them) is taken out, as terminals do when pasting, so nothing in it can end the paste
+/// early or act as a key; the tty would act on a Ctrl-C (`\x03`) even inside the brackets.
+/// Nothing to paste is nothing to send.
 pub fn paste_bytes(data: &str, bracketed: bool) -> Vec<u8> {
     if data.is_empty() {
         return Vec::new();
@@ -725,20 +727,23 @@ pub fn paste_bytes(data: &str, bracketed: bool) -> Vec<u8> {
     if bracketed {
         out.extend_from_slice(b"\x1b[200~");
         let mut buf = [0u8; 4];
-        for c in data.chars().filter(|c| !matches!(c, '\u{1b}' | '\u{9b}')) {
+        for c in data.chars().filter(|c| !c.is_control() || matches!(c, '\t' | '\n' | '\r')) {
             out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
         }
         out.extend_from_slice(b"\x1b[201~");
     } else {
-        let mut bytes = data.bytes().peekable();
-        while let Some(byte) = bytes.next() {
-            match byte {
-                b'\r' => {
-                    bytes.next_if_eq(&b'\n');
+        let mut buf = [0u8; 4];
+        let mut chars = data.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '\r' => {
+                    chars.next_if_eq(&'\n');
                     out.push(b' ');
                 }
-                b'\n' => out.push(b' '),
-                _ => out.push(byte),
+                '\n' => out.push(b' '),
+                '\t' => out.push(b'\t'),
+                c if c.is_control() => {}
+                c => out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes()),
             }
         }
     }
@@ -1195,6 +1200,8 @@ mod tests {
         assert_eq!(pasted, "\x1b[200~Make it\nbigger[201~\r\n/compact é201~\x1b[201~".as_bytes());
         assert_eq!(pasted.iter().filter(|b| **b == 0x1b).count(), 2, "only the brackets' own");
         assert!(paste_bytes("", true).is_empty());
+        // Nor can a control character the tty or the program acts on: Ctrl-C, Ctrl-Z, Ctrl-U, DEL.
+        assert_eq!(paste_bytes("ls\x03rm\x1a\x15\x7f\u{85}\tx", true), "\x1b[200~lsrm\tx\x1b[201~".as_bytes());
     }
 
     #[test]
@@ -1202,6 +1209,7 @@ mod tests {
         // Without DECSET 2004 a line break is Enter: each one is a space, `\r\n` a single one.
         assert_eq!(paste_bytes("one\ntwo\r\nthree\rfour", false), b"one two three four");
         assert_eq!(paste_bytes("tab\there é", false), "tab\there é".as_bytes());
+        assert_eq!(paste_bytes("ls\x03 \x1b[A\x15x\x7f", false), b"ls [Ax", "no control character acts as a key");
         assert!(paste_bytes("", false).is_empty());
     }
 
