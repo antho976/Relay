@@ -289,6 +289,9 @@ pub struct Board {
     /// starts compact rather than showing its words for a frame.
     pub(super) context_kind: Cell<&'static str>,
     context_refit: Cell<bool>,
+    /// What brings the toolbar's values up to date in place, for the selection's nodes.
+    #[allow(clippy::type_complexity)]
+    pub(super) context_values: RefCell<Vec<Box<dyn Fn(&[Node])>>>,
     pub(super) inspector: gtk::Box,
     pub(super) inspector_scroll: gtk::ScrolledWindow,
     /// The tools along the top left, which the inspector keeps clear of.
@@ -552,6 +555,7 @@ impl Board {
             context_compact: Cell::new(false),
             context_kind: Cell::new(""),
             context_refit: Cell::new(false),
+            context_values: RefCell::default(),
             inspector,
             inspector_scroll,
             dock: dock.clone(),
@@ -1715,6 +1719,8 @@ impl Board {
         let typing = self.context.borrow().as_ref().is_some_and(|bar| self.busy_in(bar));
         if !picking && !typing && self.edit.borrow().is_none() && matches!(*self.gesture.borrow(), Gesture::Idle) {
             self.rebuild_context();
+        } else if self.edit.borrow().is_some() {
+            self.refresh_context_values();
         }
         self.refresh_inspector_values();
         if let Some(layers) = self.layers.borrow().as_ref() {

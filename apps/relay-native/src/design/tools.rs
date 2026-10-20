@@ -1902,14 +1902,21 @@ impl Board {
         self.commit(ops);
     }
 
-    /// Flip a text style on every selected text: bold, italic or underline.
+    /// Flip a text style on every selected text, and every shape's label: bold, italic or
+    /// underline (E-board-12: a shape with words takes them as a text does).
     pub(super) fn toggle_text(&self, field: &str) {
         let ids = self.selected();
         let scene = self.doc.scene.borrow();
+        let editing = self.edit.borrow().as_ref().map(|e| e.id.clone());
         let texts: Vec<&Node> = ids
             .iter()
             .filter_map(|id| scene.node(id))
-            .filter(|n| matches!(n.kind, NodeKind::Text | NodeKind::Sticky))
+            .filter(|n| relay_bus::design::takes(n.kind, field))
+            .filter(|n| {
+                matches!(n.kind, NodeKind::Text | NodeKind::Sticky)
+                    || n.text.as_deref().is_some_and(relay_client::design::names::visible)
+                    || editing.as_deref() == Some(n.id.as_str())
+            })
             .collect();
         if texts.is_empty() {
             return;
