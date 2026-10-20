@@ -351,6 +351,11 @@ pub const RENDER_FRAMES_MIN: u8 = 2;
 pub const RENDER_FRAMES_MAX: u8 = 24;
 /// Most font families the desktop app reports with `design.render.serve`.
 pub const SERVE_FONTS_MAX: usize = 2_000;
+/// The columns of every `design.render` box row, in order: what `RenderBoxes.fields` holds. The
+/// desktop app builds its rows with them and the engine refuses an answer without them.
+pub const RENDER_BOX_FIELDS: [&str; 10] = ["id", "kind", "parent", "x", "y", "w", "h", "rx", "ry", "rot"];
+/// Most pixels in a `design.render` picture, width times height (4 megapixels).
+pub const RENDER_AREA_PX_MAX: u64 = 4_000_000;
 
 payload!(#[schemars(rename = "DesignRenderIn")] RenderIn {
     pub design_id: Id,
@@ -583,6 +588,8 @@ mod tests {
         assert!(doc(&render, "max_side").contains(&format!("Default {RENDER_SIDE_DEFAULT}")));
         assert!(doc(&render, "boxes_limit").contains(&format!("Default {RENDER_BOXES_DEFAULT}")));
         assert!(doc(&render, "timeout_ms").contains(&format!("Default {RENDER_TIMEOUT_DEFAULT_MS}")));
+        let fields = serde_json::to_string(&RENDER_BOX_FIELDS).unwrap();
+        assert!(doc(&schema::<RenderBoxes>(), "fields").contains(&format!("Always {fields}")), "the rows' columns are the ones the engine holds an answer to");
         let serve = schema::<ServeIn>();
         assert_eq!(serve["properties"]["fonts"]["maxItems"].as_u64(), Some(SERVE_FONTS_MAX as u64));
         assert_eq!(serve["properties"]["fonts"]["items"]["maxLength"].as_u64(), Some(crate::design::MAX_NAME as u64));
