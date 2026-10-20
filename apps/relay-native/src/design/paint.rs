@@ -12,22 +12,25 @@ use relay_bus::design::{
 };
 use relay_client::design::layout::{self, Measure, Placed, STICKY_PAD};
 use relay_client::design::shapes::{self, ArcEnd, Seg};
-use relay_client::design::{text, Rect, Scene};
+use relay_client::design::{bounds, text, Rect, Scene};
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-/// Defaults the schema documents: a white frame, a grey shape, a yellow sticky.
-pub const FRAME_FILL: &str = "#FFFFFF";
-pub const SHAPE_FILL: &str = "#D9D9D9";
-pub const STICKY_FILL: &str = "#FFE58A";
-pub const STROKE: &str = "#8C8C8C";
-/// A page's canvas when it names no fill: a step off the app's ground.
-pub const CANVAS: &str = "#1E1D1B";
-const DARK_TEXT: &str = "#1A1A1A";
-const LIGHT_TEXT: &str = "#EDE9E2";
+// The colour rules live in relay-client (client-geometry), where the render job's contrast
+// check and the phone's port read them too; the names stay here for the canvas's own files.
+pub use relay_client::design::color::{fill_of, luminance, text_color, CANVAS, STICKY_FILL, STROKE};
+// Kept for the files other streams own (MODEL-SPEC §5 #11), though nothing reads them now.
+#[allow(unused_imports)]
+pub use relay_client::design::color::{FRAME_FILL, SHAPE_FILL};
+
+/// What the painter draws, as a number saved thumbnails are keyed by: bump it whenever a change
+/// to drawing changes what a thumbnail shows, so the gallery draws them again (I-15).
+// The gallery keys its thumbnails with it from native-gallery on.
+#[allow(dead_code)]
+pub const PAINTER_VERSION: u32 = 2;
 
 pub fn rgba(hex: &str) -> gdk::RGBA {
     let [r, g, b, a] = parse_color(hex).unwrap_or([0, 0, 0, 255]);
@@ -36,62 +39,6 @@ pub fn rgba(hex: &str) -> gdk::RGBA {
 
 pub fn grect(r: &Rect) -> graphene::Rect {
     graphene::Rect::new(r.x as f32, r.y as f32, r.w as f32, r.h as f32)
-}
-
-/// Relative luminance of a colour, 0 (black) to 1 (white), ignoring alpha.
-pub fn luminance(hex: &str) -> f64 {
-    let [r, g, b, _] = parse_color(hex).unwrap_or([0, 0, 0, 255]);
-    let lin = |c: u8| {
-        let c = c as f64 / 255.0;
-        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
-    };
-    0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
-}
-
-/// The fill a node paints, its kind's default when it names none.
-pub fn fill_of(n: &Node) -> Option<String> {
-    n.fill.clone().or_else(|| {
-        match n.kind {
-            NodeKind::Frame => Some(FRAME_FILL),
-            NodeKind::Rect | NodeKind::Ellipse | NodeKind::Polygon => Some(SHAPE_FILL),
-            NodeKind::Sticky => Some(STICKY_FILL),
-            NodeKind::Page => Some(CANVAS),
-            _ => None,
-        }
-        .map(str::to_string)
-    })
-}
-
-/// A text's colour: its own, or dark on a light ground and light on a dark one, the ground
-/// being the nearest container that paints one.
-pub fn text_color(scene: &Scene, n: &Node) -> String {
-    if let Some(c) = &n.color {
-        return c.clone();
-    }
-    if matches!(n.kind, NodeKind::Sticky | NodeKind::Rect | NodeKind::Ellipse | NodeKind::Polygon) {
-        // A label sits on the shape itself.
-        let ground = n.gradient.as_ref().and_then(|g| g.stops.first()).map(|s| s.color.clone()).or_else(|| fill_of(n)).unwrap_or_default();
-        return if luminance(&ground) > 0.35 { DARK_TEXT } else { LIGHT_TEXT }.into();
-    }
-    let ground = std::iter::once(n.id.as_str())
-        .chain(scene.ancestors(&n.id))
-        .filter_map(|id| scene.node(id))
-        .filter(|a| a.id != n.id)
-        .find_map(|a| ground_of(a).filter(|f| parse_color(f).is_some_and(|c| c[3] >= 128)))
-        .unwrap_or_else(|| CANVAS.into());
-    if luminance(&ground) > 0.35 { DARK_TEXT } else { LIGHT_TEXT }.into()
-}
-
-/// The colour a node shows behind what is on it: its fill, or the middle of its gradient.
-fn ground_of(n: &Node) -> Option<String> {
-    match &n.gradient {
-        Some(g) if !g.stops.is_empty() => {
-            let mut stops = g.stops.clone();
-            stops.sort_by(|a, b| a.at.total_cmp(&b.at));
-            Some(stops[stops.len() / 2].color.clone())
-        }
-        _ => fill_of(n),
-    }
 }
 
 /// The GSK blend a node's `blend` names; `None` for normal.
@@ -358,6 +305,10 @@ pub struct Painter {
     loaded: RefCell<Option<Rc<dyn Fn()>>>,
     /// The text being edited in place is not drawn: the editor shows it.
     pub editing: RefCell<Option<String>>,
+    /// Set while drawing for an SVG or PDF file: pictures and blends are drawn through cairo as
+    /// images of their own, which every viewer shows, where a texture or blend node becomes a
+    /// filter some draw white (TM-21). Every decoded pixel of a picture is kept (TM-22).
+    pub vector: Cell<bool>,
     me: std::rc::Weak<Painter>,
 }
 
@@ -375,6 +326,7 @@ impl Painter {
             assets_dir: RefCell::default(),
             loaded: RefCell::default(),
             editing: RefCell::default(),
+            vector: Cell::default(),
         })
     }
 
@@ -561,6 +513,38 @@ impl Painter {
         self.paint_children(snap, scene, placed, page, view, None);
     }
 
+    /// Paint `page`'s content as it shows on `ground`, the page's fill, which the caller paints
+    /// under it: a top-level node with a `blend` mixes with the ground and what is under it,
+    /// as a frame's children mix with its fill (B29, B30). The ground goes into what this
+    /// paints only behind those nodes (their painted bounds), so whatever the caller shows
+    /// between the nodes, as the canvas's grid, stays seen; without a ground, or with nothing
+    /// blending at the top, this is `paint_page`.
+    // The board, the gallery and export switch to it in native-canvas, native-gallery and
+    // native-export (MODEL-SPEC §6.4).
+    #[allow(dead_code)]
+    pub fn paint_page_on(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, page: &str, view: Option<&Rect>, ground: Option<&str>) {
+        let fill = ground.filter(|g| parse_color(g).is_some_and(|c| c[3] > 0)).map(rgba);
+        let behind = match fill {
+            Some(_) => blend_region(scene, placed, self, page),
+            None => Vec::new(),
+        };
+        let (Some(fill), false) = (fill, behind.is_empty()) else {
+            return self.paint_children(snap, scene, placed, page, view, None);
+        };
+        let ground = |s: &gtk::Snapshot| match behind.as_slice() {
+            [one] => s.append_color(&fill, &grect(one)),
+            many => {
+                // One fill of all their boxes, so a see-through ground is not doubled where they overlap.
+                let b = gsk::PathBuilder::new();
+                for r in many {
+                    b.add_rect(&grect(r));
+                }
+                s.append_fill(&b.to_path(), gsk::FillRule::Winding, &fill);
+            }
+        };
+        self.paint_children(snap, scene, placed, page, view, Some(&ground));
+    }
+
     /// Paint `parent`'s children in order. A child with a `blend` mixes with what is painted
     /// before it in the same parent (and `ground`, the parent's own fill, under them all).
     fn paint_children(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, parent: &str, view: Option<&Rect>, ground: Option<&dyn Fn(&gtk::Snapshot)>) {
@@ -596,7 +580,12 @@ impl Painter {
             }
         }
         if let Some(node) = acc.to_node() {
-            snap.append_node(&node);
+            if self.vector.get() {
+                // A blend has no vector form most viewers draw: pictured.
+                raster_on_cairo(snap, &node);
+            } else {
+                snap.append_node(&node);
+            }
         }
     }
 
@@ -1034,6 +1023,7 @@ impl Painter {
                 // The fit is centred on the box, so it mirrors about the box's centre.
                 let flipped = flip_about(snap, n, r);
                 match &picture {
+                    Picture::Ready(t) if self.vector.get() => texture_on_cairo(snap, t, &target),
                     Picture::Ready(t) => snap.append_scaled_texture(t, gsk::ScalingFilter::Trilinear, &grect(&target)),
                     Picture::Vector(svg) => {
                         snap.save();
@@ -1094,6 +1084,71 @@ fn cut_lines(layout: &pango::Layout, max: u16) {
 /// Whether `id` or anything it is in is turned (by other than a whole number of turns).
 fn turned_within(scene: &Scene, id: &str) -> bool {
     std::iter::once(id).chain(scene.ancestors(id)).filter_map(|a| scene.node(a)).any(|n| shapes::rotation(n).rem_euclid(360.0) != 0.0)
+}
+
+/// The painted bounds of `page`'s top-level nodes that blend: where `paint_page_on` lays its
+/// ground.
+fn blend_region(scene: &Scene, placed: &Placed, measure: &dyn Measure, page: &str) -> Vec<Rect> {
+    scene
+        .children(page)
+        .iter()
+        .filter(|id| scene.node(id).is_some_and(|n| !n.is_hidden() && blend_mode(n).is_some()))
+        .filter_map(|id| bounds::painted_bounds(scene, placed, measure, id))
+        .collect()
+}
+
+/// An image surface holding `texture`'s pixels, at its size.
+fn surface_of(texture: &gdk::Texture) -> Option<cairo::ImageSurface> {
+    let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, texture.width(), texture.height()).ok()?;
+    let stride = surface.stride() as usize;
+    // GDK's default download is cairo's ARGB32: premultiplied, in the machine's order.
+    texture.download(&mut surface.data().ok()?, stride);
+    surface.mark_dirty();
+    Some(surface)
+}
+
+/// Paint `surface` filling `target` through a cairo node, unrepeated.
+fn surface_on_cairo(snap: &gtk::Snapshot, surface: &cairo::ImageSurface, target: &Rect) {
+    let (w, h) = (surface.width().max(1) as f64, surface.height().max(1) as f64);
+    let cr = snap.append_cairo(&grect(target));
+    cr.translate(target.x, target.y);
+    cr.scale(target.w / w, target.h / h);
+    let pattern = cairo::SurfacePattern::create(surface);
+    pattern.set_extend(cairo::Extend::None);
+    pattern.set_filter(cairo::Filter::Good);
+    if cr.set_source(&pattern).is_ok() {
+        let _ = cr.paint();
+    }
+}
+
+/// A picture drawn through cairo at the size it was decoded, scaled into `target`: for the SVG
+/// and PDF files, an image element of its own (TM-21) with every pixel it has (TM-22).
+fn texture_on_cairo(snap: &gtk::Snapshot, texture: &gdk::Texture, target: &Rect) {
+    match surface_of(texture) {
+        Some(surface) => surface_on_cairo(snap, &surface, target),
+        None => snap.append_scaled_texture(texture, gsk::ScalingFilter::Trilinear, &grect(target)),
+    }
+}
+
+/// `node` pictured at twice its size (at most 8192 px a side) and drawn through cairo: what a
+/// vector file cannot carry as itself, a blend.
+fn raster_on_cairo(snap: &gtk::Snapshot, node: &gsk::RenderNode) {
+    let b = rect_of(&node.bounds());
+    let k = 2.0f64.min(8192.0 / b.w.max(b.h).max(1.0));
+    let (w, h) = ((b.w * k).ceil().max(1.0) as i32, (b.h * k).ceil().max(1.0) as i32);
+    let Ok(surface) = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h) else {
+        return snap.append_node(node);
+    };
+    match cairo::Context::new(&surface) {
+        Ok(cr) => {
+            cr.scale(k, k);
+            cr.translate(-b.x, -b.y);
+            node.draw(&cr);
+        }
+        Err(_) => return snap.append_node(node),
+    }
+    surface.flush();
+    surface_on_cairo(snap, &surface, &Rect::new(b.x, b.y, w as f64 / k, h as f64 / k));
 }
 
 /// A shadow's blur as painted: within 0 to 200, as the node's own blur, whatever an older build
@@ -1681,6 +1736,44 @@ mod tests {
         assert!(!turned_within(&scene(&frame, &words), "t"));
         frame.rotation = Some(-15.0);
         assert!(turned_within(&scene(&frame, &words), "t"), "E-text-13: a turned frame turns its words");
+    }
+
+    #[test]
+    fn a_page_lays_its_ground_behind_its_blending_nodes_alone() {
+        let mut lone = node("lone", Some("p1"), NodeKind::Rect, [10.0, 10.0, 50.0, 40.0]);
+        lone.blend = Some(Blend::Multiply);
+        let mut hidden = node("hidden", Some("p1"), NodeKind::Rect, [300.0, 0.0, 50.0, 50.0]);
+        hidden.blend = Some(Blend::Screen);
+        hidden.hidden = Some(true);
+        let mut normal = node("normal", Some("p1"), NodeKind::Rect, [100.0, 0.0, 50.0, 50.0]);
+        normal.blend = Some(Blend::Normal);
+        let inside = |id: &str| {
+            let mut n = node(id, Some("f"), NodeKind::Rect, [0.0, 0.0, 20.0, 20.0]);
+            n.blend = Some(Blend::Difference);
+            n
+        };
+        let scene = Scene::new(vec![
+            node("p1", None, NodeKind::Page, [0.0; 4]),
+            node("under", Some("p1"), NodeKind::Rect, [0.0, 0.0, 400.0, 400.0]),
+            lone,
+            hidden,
+            normal,
+            node("f", Some("p1"), NodeKind::Frame, [500.0, 0.0, 100.0, 100.0]),
+            inside("in-frame"),
+        ]);
+        let placed = layout::place(&scene, "p1", &Mono);
+        // A frame's children blend with its own fill; only the page's own blending nodes count.
+        assert_eq!(blend_region(&scene, &placed, &Mono, "p1"), [Rect::new(10.0, 10.0, 50.0, 40.0)]);
+    }
+
+    #[test]
+    fn a_picture_reaches_cairo_with_its_own_pixels() {
+        // TM-21: a vector export draws the decoded pixels, in cairo's order, at their size.
+        let pixels = [0, 0, 255, 255, 255, 0, 0, 255, 0, 128, 0, 128];
+        let texture = gdk::MemoryTexture::new(3, 1, gdk::MemoryFormat::B8g8r8a8Premultiplied, &glib::Bytes::from(&pixels), 12);
+        let mut surface = surface_of(texture.upcast_ref()).unwrap();
+        assert_eq!((surface.width(), surface.height()), (3, 1));
+        assert_eq!(&surface.data().unwrap()[..12], &pixels);
     }
 
     #[test]
