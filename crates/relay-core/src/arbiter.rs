@@ -479,11 +479,8 @@ fn situation_for<'a>(engine: &Engine, s: &'a StrategyRec, product: Option<&'a Pr
     let (pos, exposure, loss_all, n, n_all, halted_all) = with_book(engine, |b| {
         let pos = b.position(s.id, s.venue)?;
         let mut exposure = Decimal::ZERO;
-        let mut pnl_all = Decimal::ZERO;
         for other in b.strategies()?.iter().filter(|o| o.venue == s.venue) {
-            let p = b.position(other.id, s.venue)?;
-            exposure += p.cost;
-            pnl_all += p.realized_today + p.open_pnl(last_price(engine, &other.product), taker).min(Decimal::ZERO);
+            exposure += b.position(other.id, s.venue)?.cost;
         }
         // Holdings come from fills, and a market buy is usually still pending when it is placed:
         // two strategies due in the same pass would each pass the Arbiter-wide limit alone. What
@@ -494,7 +491,7 @@ fn situation_for<'a>(engine: &Engine, s: &'a StrategyRec, product: Option<&'a Pr
         }
         let n = b.orders_since(Some(s.id), s.venue, now - 3600)?;
         let n_all = b.orders_since(None, s.venue, now - 3600)?;
-        Ok((pos, exposure, (-pnl_all).max(Decimal::ZERO), n, n_all, b.halted()?.is_some()))
+        Ok((pos, exposure, venue_loss(engine, b, s.venue, taker)?, n, n_all, b.halted()?.is_some()))
     })?;
     let price = q.map(|q| q.bid);
     let loss = (-(pos.realized_today + pos.open_pnl(price, taker).min(Decimal::ZERO))).max(Decimal::ZERO);
@@ -1034,43 +1031,58 @@ fn fingerprint(engine: &Engine) -> (i64, i64, String) {
     .unwrap_or_default()
 }
 
-/// What every strategy together has lost today at the last prices: what Arbiter's daily loss
-/// limit weighs.
-fn loss_today_all(engine: &Engine) -> Result<Decimal, BusError> {
+/// What every strategy together has lost on `venue` today at the last prices: realized, plus
+/// what holdings there are down. Each venue is weighed on its own, so paper's gains never offset
+/// a real loss; a strategy that has moved off the venue since still counts what it made there.
+/// What the gate and Arbiter's daily loss limit weigh.
+fn venue_loss(engine: &Engine, b: &Book, venue: Venue, taker: Decimal) -> book::Result<Decimal> {
+    let mut pnl = Decimal::ZERO;
+    for s in b.strategies()? {
+        let p = b.position(s.id, venue)?;
+        pnl += p.realized_today + p.open_pnl(last_price(engine, &s.product), taker).min(Decimal::ZERO);
+    }
+    Ok((-pnl).max(Decimal::ZERO))
+}
+
+/// The first venue whose loss today is at or past Arbiter's daily limit, live weighed first.
+fn venue_past(engine: &Engine, limit: Decimal) -> Result<Option<Venue>, BusError> {
     let taker = fees(engine).taker;
     with_book(engine, |b| {
-        let mut pnl = Decimal::ZERO;
-        for s in b.strategies()? {
-            let p = b.position(s.id, s.venue)?;
-            pnl += p.realized_today + p.open_pnl(last_price(engine, &s.product), taker).min(Decimal::ZERO);
+        for venue in [Venue::Live, Venue::Paper] {
+            if venue_loss(engine, b, venue, taker)? >= limit {
+                return Ok(Some(venue));
+            }
         }
-        Ok((-pnl).max(Decimal::ZERO))
+        Ok(None)
     })
 }
 
+/// Arbiter's daily loss limit: either venue past it halts everything, as the kill switch does,
+/// so a day lost on paper stops live trading too.
 fn global_loss(engine: &Engine) -> Result<(), BusError> {
     let g = with_book(engine, |b| b.global_limits())?;
     let Some(limit) = g.daily_loss else { return Ok(()) };
-    if loss_today_all(engine)? >= limit {
-        halt(engine, None, &format!("Arbiter's daily loss limit of {} reached", limit.normalize()))?;
+    if let Some(venue) = venue_past(engine, limit)? {
+        halt(engine, None, &format!("Arbiter's daily loss limit of {} reached on {}", limit.normalize(), venue.as_str()))?;
     }
     Ok(())
 }
 
 /// Refuses to lift a halt the runner's next pass would only put back: today's loss still at or
-/// past the daily limit, Arbiter's (no `strategy`) or the strategy's own. No network: the last
-/// prices, as the meters read them.
+/// past the daily limit, Arbiter's on either venue (no `strategy`) or the strategy's own. No
+/// network: the last prices, as the meters read them.
 pub fn check_restart(engine: &Engine, strategy: Option<i64>) -> Result<(), BusError> {
-    let past = |limit: Decimal, currency: &str, own: bool| -> Result<(), BusError> {
+    let past = |limit: Decimal, currency: &str, own: bool, on: &str| -> Result<(), BusError> {
         let (whose, raise) = if own { ("its", "raise it under Limits on its page") } else { ("the", "raise it in Settings") };
-        Err(BusError::refused("arbiter.daily_loss", format!("Today's loss is still past {whose} daily limit of {} {currency}: {raise}, or restart tomorrow", limit.normalize())))
+        Err(BusError::refused("arbiter.daily_loss", format!("Today's loss{on} is still past {whose} daily limit of {} {currency}: {raise}, or restart tomorrow", limit.normalize())))
     };
     match strategy {
         None => {
             let (g, home) = with_book(engine, |b| Ok((b.global_limits()?, b.home()?)))?;
-            match g.daily_loss {
-                Some(limit) if loss_today_all(engine)? >= limit => past(limit, &home, false),
-                _ => Ok(()),
+            let Some(limit) = g.daily_loss else { return Ok(()) };
+            match venue_past(engine, limit)? {
+                Some(venue) => past(limit, &home, false, &format!(" on {}", venue.as_str())),
+                None => Ok(()),
             }
         }
         Some(id) => {
@@ -1081,7 +1093,7 @@ pub fn check_restart(engine: &Engine, strategy: Option<i64>) -> Result<(), BusEr
             let read = lock(&engine.arbiter.quotes).get(&s.product).filter(|q| book::now() - q.at <= 300).map(|q| q.bid);
             let bid = read.or_else(|| last_price(engine, &s.product));
             let loss = (-(pos.realized_today + pos.open_pnl(bid, fees(engine).taker).min(Decimal::ZERO))).max(Decimal::ZERO);
-            if loss >= limit { past(limit, s.product.split_once('-').map_or("", |(_, q)| q), true) } else { Ok(()) }
+            if loss >= limit { past(limit, s.product.split_once('-').map_or("", |(_, q)| q), true, "") } else { Ok(()) }
         }
     }
 }

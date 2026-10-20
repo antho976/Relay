@@ -76,8 +76,10 @@ the exchange. It refuses rather than shrinks (a limit that resizes an order is n
   only what has filled;
 - a cooldown after a losing trade;
 - the **daily loss limit**, per strategy and Arbiter-wide: it halts the strategy, or everything,
-  until Antho restarts it. A restart is refused while today's loss is still past the limit, which
-  would only halt it again. (A drawdown halt is not built yet.)
+  until Antho restarts it. Arbiter-wide, each venue's loss is weighed on its own, so paper's gains
+  never cover a real loss; either venue past the limit halts everything, a day lost on paper
+  stopping live trading too. A restart is refused while today's loss is still past the limit,
+  which would only halt it again. (A drawdown halt is not built yet.)
 
 **The kill switch** (sidebar, panel and command palette): cancel every open order and halt every
 strategy; flattening positions is a separate, confirmed step.

@@ -720,3 +720,29 @@ fn arbiters_most_held_counts_what_other_strategies_open_buys_will_spend() {
     assert_eq!(out["refusal"]["code"], "arbiter.over_exposure", "{out:#}");
     assert_eq!(agent_buy(&engine, b, "40")["outcome"], "placed");
 }
+
+#[test]
+fn arbiters_daily_loss_is_weighed_on_each_venue_alone() {
+    let (engine, fake) = setup();
+    ok(&engine, "arbiter.limits.set", json!({"global": {"daily_loss": "4", "price_band_pct": "2", "slippage_pct": "0.1", "approval_minutes": 10}}));
+    let live = live_agent(&engine);
+    let paper = ok(&engine, "arbiter.strategy.save", json!({"draft": draft("Paper", "50")}))["row"]["id"].as_i64().unwrap();
+    ok(&engine, "arbiter.strategy.set", json!({"id": paper, "mode": "agent"}));
+    let sell = |id: i64| ok(&engine, "arbiter.order.place", json!({"strategy_id": id, "side": "sell", "why": "out"}));
+    // Paper makes about 11 today; live loses about 5.6, past the limit of 4.
+    fake.set(80.0);
+    agent_buy(&engine, paper, "50");
+    fake.set(100.0);
+    sell(paper);
+    agent_buy(&engine, live, "20");
+    fake.set(90.0);
+    sell(live);
+    // Paper's gain does not cover the real loss: everything halts, and stays halted.
+    pass(&engine);
+    let summary = ok(&engine, "arbiter.summary", json!({}));
+    assert_eq!(summary["halted"], true, "{summary:#}");
+    assert!(summary["halt_reason"].as_str().unwrap().ends_with("on live"), "{summary:#}");
+    let err = refused(call(&engine, "arbiter.restart", json!({})));
+    assert_eq!(err.code, "arbiter.daily_loss");
+    assert!(err.message.starts_with("Today's loss on live is still past"), "{}", err.message);
+}
