@@ -264,6 +264,34 @@ class DesignDrawTest {
         assertTrue(hex(out.rgb(25, 50)), out.near(25, 50, RED))
     }
 
+    /**
+     * A turned frame or group holding a blend is drawn whole: the layer its children blend in is
+     * bounded in its own frame, not as it sits turned on the page, which cut them to a strip.
+     */
+    @Test
+    fun `a turned frame or group holding a blend is drawn end to end`() {
+        fun kids(parent: String, long: Double) = arrayOf(
+            rect("a", 0.0, 0.0, long, 40.0, "#FF0000").copy(parent = parent),
+            rect("b", 0.0, 0.0, 40.0, 40.0, "#0000FF").copy(parent = parent, blend = "multiply"),
+        )
+        // A 200 by 40 frame turned a quarter about (100, 20) stands from y -80 to 120 (20 to 220
+        // drawn): its left end at the top, the red its first 160 px, its green ground the rest.
+        val frame = DesignNode(id = "f", kind = "frame", w = 200.0, h = 40.0, rotation = 90.0, fill = "#00FF00")
+        val f = draw(page(frame, *kids("f", 160.0), fill = "#FFFFFF"), h = 260, dy = 100f)
+        assertTrue(hex(f.rgb(100, 40)), f.near(100, 40, BLACK))
+        assertTrue(hex(f.rgb(100, 150)), f.near(100, 150, RED))
+        assertTrue(hex(f.rgb(100, 210)), f.near(100, 210, GREEN))
+        assertTrue(hex(f.rgb(70, 120)), f.near(70, 120, WHITE))
+        val g = draw(page(DesignNode(id = "g", kind = "group", rotation = 90.0), *kids("g", 200.0), fill = "#FFFFFF"), h = 260, dy = 100f)
+        assertTrue(hex(g.rgb(100, 40)), g.near(100, 40, BLACK))
+        assertTrue(hex(g.rgb(100, 200)), g.near(100, 200, RED))
+        // See-through as well: its own layer sits on the page turned, the one inside it unturned.
+        val faint = draw(page(frame.copy(opacity = 0.5), *kids("f", 160.0), fill = "#FFFFFF"), h = 260, dy = 100f)
+        assertTrue(hex(faint.rgb(100, 40)), faint.near(100, 40, 0x808080, slack = 8))
+        assertTrue(hex(faint.rgb(100, 150)), faint.near(100, 150, 0xFF8080, slack = 8))
+        assertTrue(hex(faint.rgb(100, 210)), faint.near(100, 210, 0x80FF80, slack = 8))
+    }
+
     /** Words are set and drawn in their colour, a run in its own. */
     @Test
     fun `words are drawn, a run in its own colour`() {

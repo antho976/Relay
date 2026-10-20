@@ -171,8 +171,10 @@ class PagePlan internal constructor(
     /** The colour the page shows behind what is on it. */
     val ground: Color,
     internal val words: Map<String, Words>,
-    /** Where a layer that is drawn on its own (see-through, blending, or holding a blend) paints. */
+    /** Where a see-through or blending layer paints, drawn on its own: in its parent's frame, turned as it sits there. */
     internal val layers: Map<String, Rect>,
+    /** Where what a node holds paints, its ground with it, when one of its children blends: in the node's own frame, before its turn. */
+    internal val held: Map<String, Rect>,
     internal val icons: Map<String, Path?>,
     /** The page's top-level frames, shown, at the size they are drawn. */
     val frames: List<FrameRow>,
@@ -236,7 +238,7 @@ fun planPages(got: DesignGot, measure: ComposeMeasure, only: String? = null): Li
             throw e
         } catch (_: RuntimeException) {
             // A design this phone's port trips on is said, not a crash: the PC still draws it.
-            PagePlan(page, name, scene, place(DesignScene(emptyList()), page, measure), null, colorOf(CANVAS)!!, emptyMap(), emptyMap(), emptyMap(), emptyList(), Omissions(), failed = true)
+            PagePlan(page, name, scene, place(DesignScene(emptyList()), page, measure), null, colorOf(CANVAS)!!, emptyMap(), emptyMap(), emptyMap(), emptyMap(), emptyList(), Omissions(), failed = true)
         }
     }
 }
@@ -246,18 +248,16 @@ internal fun planPage(scene: DesignScene, page: String, name: String, measure: C
     val placed = place(scene, page, measure)
     val words = HashMap<String, Words>()
     val layers = HashMap<String, Rect>()
+    val held = HashMap<String, Rect>()
     val icons = HashMap<String, Path?>()
-    fun bound(id: String) {
-        paintedBounds(scene, placed, measure, id)?.let { layers[id] = it }
-    }
     val todo = ArrayDeque(scene.children(page))
     while (todo.isNotEmpty()) {
         val id = todo.removeLast()
         val n = scene.node(id) ?: continue
         val r = placed.rect(id) ?: continue
         if (n.isHidden || (n.opacity ?: 1.0) <= 0.0) continue
-        if ((n.opacity ?: 1.0) < 1.0 || blendOf(n) != null) bound(id)
-        if (scene.children(id).any { blends(scene, it) }) bound(id)
+        if ((n.opacity ?: 1.0) < 1.0 || blendOf(n) != null) paintedBounds(scene, placed, measure, id)?.let { layers[id] = it }
+        if (scene.children(id).any { blends(scene, it) }) held[id] = heldBounds(scene, placed, measure, n, r)
         when (n.kind) {
             "text" -> if (!n.text.isNullOrEmpty()) {
                 val wrap = placed.wrapWidth(n, r)
@@ -280,14 +280,30 @@ internal fun planPage(scene: DesignScene, page: String, name: String, measure: C
         // A page of one level line or one point still has room to show it.
         if (b.w > 0.0 && b.h > 0.0) b else b.inflate(1.0)
     }
-    if (bounds != null && scene.children(page).any { blends(scene, it) }) layers[page] = bounds
+    if (bounds != null && scene.children(page).any { blends(scene, it) }) held[page] = bounds
     val frames = scene.children(page).mapNotNull { id ->
         val n = scene.node(id)?.takeIf { it.kind == "frame" && !it.isHidden } ?: return@mapNotNull null
         val r = placed.rect(id) ?: return@mapNotNull null
         FrameRow(id, n.name?.ifBlank { null } ?: "Frame", r.w, r.h)
     }
     val ground = scene.node(page)?.let(::groundOf)?.let(::colorOf)?.takeIf { it.alpha > 0f } ?: colorOf(CANVAS)!!
-    return PagePlan(page, name, scene, placed, bounds, ground, words, layers, icons, frames, omissions(scene, page))
+    return PagePlan(page, name, scene, placed, bounds, ground, words, layers, held, icons, frames, omissions(scene, page))
+}
+
+/**
+ * Where what [n] (placed at [r]) holds paints, its ground with it, in its own frame before its
+ * turn: the layer its children blend in is opened inside the turn, so it is bounded there, not
+ * by [paintedBounds], which is the box as it sits turned on the page and would cut what it holds
+ * to a strip. A clipping frame's box holds it all; otherwise its children as they paint, and a
+ * frame's ground in its box.
+ */
+private fun heldBounds(scene: DesignScene, placed: Placed, measure: Measure, n: DesignNode, r: Rect): Rect {
+    if (n.kind == "frame" && n.clip != false) return r
+    val kids = scene.children(n.id)
+        .filter { c -> scene.node(c)?.let { k -> !k.isHidden && (k.opacity ?: 1.0) > 0.0 } == true }
+        .mapNotNull { paintedBounds(scene, placed, measure, it) }
+        .reduceOrNull { a, b -> a.union(b) }
+    return if (n.kind == "frame") kids?.union(r) ?: r else kids ?: r
 }
 
 /** Whether [id] is a shown node that blends with what is under it. */
@@ -527,7 +543,7 @@ private const val MOST_ZOOM = 4f
 fun DrawScope.drawPage(plan: PagePlan, hair: Float, picture: (String) -> ImageBitmap? = { null }) {
     if (plan.failed) return
     with(PagePainter(plan, hair, picture)) {
-        children(plan.id) { plan.layers[plan.id]?.let { drawRect(plan.ground, it.topLeft, it.size) } }
+        children(plan.id) { plan.held[plan.id]?.let { drawRect(plan.ground, it.topLeft, it.size) } }
     }
 }
 
@@ -722,7 +738,7 @@ private class PagePainter(val plan: PagePlan, val hair: Float, val picture: (Str
     /**
      * [parent]'s children in order on [ground] (its fill and inner shadow). A child with a `blend`
      * mixes with what is painted before it under the same parent, its ground included, so they
-     * are painted in a layer of their own (paint.rs `paint_children`).
+     * are painted in a layer of their own (paint.rs `paint_children`), inside the parent's turn.
      */
     fun DrawScope.children(parent: String, ground: (DrawScope.() -> Unit)?) {
         val kids = scene.children(parent)
@@ -731,7 +747,7 @@ private class PagePainter(val plan: PagePlan, val hair: Float, val picture: (Str
             for (k in kids) paint(k)
             return
         }
-        layer(plan.layers[parent]) {
+        layer(plan.held[parent]) {
             ground?.invoke(this)
             for (k in kids) paint(k)
         }
