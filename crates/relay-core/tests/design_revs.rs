@@ -624,7 +624,8 @@ fn an_agent_reads_what_changed_since() {
 }
 
 /// Timings for what a reader of the most a design holds reads after one edit (W20), whole and
-/// cut to a page, and for an edit sent against the rev before it, which applies on top (W6).
+/// cut to a page, and for an edit sent against the rev before it, which applies on top (W6),
+/// beside the same edit sent without a base_rev.
 /// Run with `cargo test --release -p relay-core --test design_revs -- --ignored --nocapture`.
 #[test]
 #[ignore]
@@ -641,7 +642,7 @@ fn measure_since_rev_and_base_rev_on_5000() {
         apply(&e, id, Value::Array(ops));
     }
     let median = |mut runs: Vec<std::time::Duration>| { runs.sort(); runs[runs.len() / 2] };
-    let (mut whole, mut paged, mut stale) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut whole, mut paged, mut stale, mut plain) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for n in 0..12 {
         let at = apply(&e, id, json!([{"op": "update", "id": "f3-7", "set": {"x": n}}]))["rev"].as_i64().unwrap();
         let started = std::time::Instant::now();
@@ -656,16 +657,21 @@ fn measure_since_rev_and_base_rev_on_5000() {
         let applied = apply_at(&e, id, at - 1, json!([{"op": "update", "id": "f5-9", "set": {"x": n}}]));
         let took_stale = started.elapsed();
         assert_eq!(applied["rebased"], true);
+        let started = std::time::Instant::now();
+        apply(&e, id, json!([{"op": "update", "id": "f5-9", "set": {"x": n + 100}}]));
+        let took_plain = started.elapsed();
         if n >= 2 {
             whole.push(took);
             paged.push(took_paged);
             stale.push(took_stale);
+            plain.push(took_plain);
         }
     }
     assert_eq!(get(&e, json!({"design_id": id}))["nodes"].as_array().unwrap().len(), 5_000);
     println!("design.get since_rev, 5,000 nodes, one changed: median {:?} of {}", median(whole.clone()), whole.len());
     println!("design.get since_rev with page, 5,000 nodes, one changed: median {:?} of {}", median(paged.clone()), paged.len());
     println!("design.apply, one update, base_rev one behind, 5,000 nodes: median {:?} of {}", median(stale.clone()), stale.len());
+    println!("design.apply, one update, no base_rev, 5,000 nodes: median {:?} of {}", median(plain.clone()), plain.len());
 }
 
 // --- W21: what design.changed names -----------------------------------------------------------
