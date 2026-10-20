@@ -456,6 +456,46 @@ async fn verify_confirmations(ui: Rc<Ui>) -> Result<(), String> {
     Ok(())
 }
 
+/// Opens thread `a` (RELAY_NATIVE_THUMBS=a,b), then `b`, then `a` again, and prints for each
+/// opening how many thumbnails it read, how many of those were on screen, and the ms from opening
+/// until every picture on screen showed.
+async fn measure_thumbs(ui: Rc<Ui>) -> Result<(), String> {
+    use crate::money::{pictures, threads};
+    let ids: Vec<i64> = std::env::var("RELAY_NATIVE_THUMBS").unwrap_or_default().split(',').filter_map(|s| s.parse().ok()).collect();
+    let [a, b] = ids[..] else { return Err(String::from("RELAY_NATIVE_THUMBS=a,b")) };
+    for (step, id) in [("cold", a), ("away", b), ("reopen", a)] {
+        pictures::watch_reads(true);
+        let started = Instant::now();
+        threads::open(&ui, id);
+        let mut shown_ms = None;
+        let mut on_screen = Vec::new();
+        loop {
+            glib::timeout_future(Duration::from_millis(2)).await;
+            if let Some(now) = threads::pictures_on_screen() {
+                if shown_ms.is_none() && !now.is_empty() && now.iter().all(|(_, shown)| *shown) {
+                    shown_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+                }
+                on_screen = now;
+            }
+            let settled = started.elapsed() > Duration::from_millis(500) && !pictures::reading();
+            if settled && (shown_ms.is_some() || id == b) {
+                break;
+            }
+            require(started.elapsed() < Duration::from_secs(90), "Thumbnails never settled")?;
+        }
+        let read = pictures::watch_reads(false);
+        let names: std::collections::HashSet<String> = on_screen.iter().map(|(n, _)| n.clone()).collect();
+        let read_on_screen = read.iter().filter(|k| names.contains(&format!("thread-picture-{k}"))).count();
+        println!(
+            "THUMBS {step} reads={} on_screen={} on_screen_read={read_on_screen} shown_ms={:.1}",
+            read.len(),
+            names.len(),
+            shown_ms.unwrap_or(-1.0)
+        );
+    }
+    Ok(())
+}
+
 /// The assistant drawer opens from its key with the keyboard in its message box and the key lit,
 /// and closing it gives the keyboard back to the terminal that had it.
 async fn verify_assistant(ui: Rc<Ui>) -> Result<(), String> {
@@ -1028,6 +1068,11 @@ pub fn install(ui: &Rc<Ui>) {
                 } else {
                     navigate.project_plugins();
                 }
+                return;
+            }
+            // Thumbnails read again on reopening a thread (scripts/perf/thumbs-reopen.py).
+            if page == "thumbs" {
+                track("thumbs", measure_thumbs(navigate.clone()));
                 return;
             }
             // The start screen and the entry sheet, over Money's Home.

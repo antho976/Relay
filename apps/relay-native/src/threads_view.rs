@@ -402,6 +402,43 @@ pub fn chart_viewport() -> Option<gtk::Widget> {
     view().map(|v| v.scroll.clone().upcast())
 }
 
+/// The message pictures on screen in the conversation, by widget name, and whether each shows yet;
+/// `None` until the conversation is taller than its window and has landed on its newest message.
+/// For `scripts/perf/thumbs-reopen.py`.
+pub(crate) fn pictures_on_screen() -> Option<Vec<(String, bool)>> {
+    let v = view()?;
+    let adj = v.scroll.vadjustment();
+    if adj.upper() <= adj.page_size() || !at_bottom(&adj) {
+        return None;
+    }
+    let mut found = Vec::new();
+    let mut stack = vec![v.column.clone().upcast::<gtk::Widget>()];
+    while let Some(widget) = stack.pop() {
+        if widget.widget_name().starts_with("thread-picture-") {
+            let shown = widget.compute_bounds(&v.scroll).is_some_and(|r| r.y() + r.height() > 0.0 && r.y() < v.scroll.height() as f32);
+            if shown {
+                let mut painted = false;
+                let mut inner = widget.first_child();
+                while let Some(child) = inner {
+                    inner = child.first_child().or_else(|| child.next_sibling());
+                    if let Some(picture) = child.downcast_ref::<gtk::Picture>() {
+                        painted = picture.paintable().is_some();
+                        break;
+                    }
+                }
+                found.push((widget.widget_name().to_string(), painted));
+            }
+            continue;
+        }
+        let mut child = widget.first_child();
+        while let Some(c) = child {
+            child = c.next_sibling();
+            stack.push(c);
+        }
+    }
+    Some(found)
+}
+
 /// The page, built once and added to the window's stack by `money::add_pages`.
 pub fn page() -> gtk::Box {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);

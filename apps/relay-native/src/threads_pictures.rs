@@ -20,7 +20,7 @@ use gtk::{gdk, gio};
 use gtk4 as gtk;
 use serde_json::{json, Value};
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, SystemTime};
@@ -525,22 +525,68 @@ impl Attached {
     }
 }
 
+/// Thumbnails kept by id, at most `limit` of them. Each carries when it was last asked for, and past
+/// the limit the one asked for longest ago goes: a thread drawn whole asks oldest first, so it keeps
+/// its newest pictures, the ones on screen, whatever order their reads finish in.
+struct Kept<V> {
+    limit: usize,
+    clock: u64,
+    entries: HashMap<String, (u64, V)>,
+}
+
+impl<V: Clone> Kept<V> {
+    fn new(limit: usize) -> Self {
+        Kept { limit, clock: 0, entries: HashMap::new() }
+    }
+
+    /// Picture `key` is asked for now: the time it is asked at, and its thumbnail if kept.
+    fn ask(&mut self, key: &str) -> (u64, Option<V>) {
+        self.clock += 1;
+        let now = self.clock;
+        (now, self.entries.get_mut(key).map(|(at, v)| {
+            *at = now;
+            v.clone()
+        }))
+    }
+
+    fn peek(&self, key: &str) -> Option<V> {
+        self.entries.get(key).map(|(_, v)| v.clone())
+    }
+
+    /// Keep `value` for `key`, asked for at `at`; past the limit, the one asked for longest ago goes,
+    /// which may be this one.
+    fn keep(&mut self, key: String, at: u64, value: V) {
+        self.entries.insert(key, (at, value));
+        while self.entries.len() > self.limit {
+            let Some(oldest) = self.entries.iter().min_by_key(|(_, (at, _))| *at).map(|(k, _)| k.clone()) else { break };
+            self.entries.remove(&oldest);
+        }
+    }
+}
+
+impl<V: Clone> Default for Kept<V> {
+    fn default() -> Self {
+        Kept::new(KEPT)
+    }
+}
+
 /// What a read of a picture by id gave: its texture, or why not.
 type Read = Result<gdk::Texture, String>;
 type Waiting = Vec<Box<dyn FnOnce(&Read)>>;
 
-/// Thumbnails read by id, the oldest first in `order`, and those being read with who waits.
+/// Thumbnails read by id, and those being read: when each was last asked for, and who waits.
 #[derive(Default)]
 struct Seen {
-    order: VecDeque<String>,
-    kept: HashMap<String, Read>,
-    waiting: HashMap<String, Waiting>,
+    kept: Kept<Read>,
+    waiting: HashMap<String, (u64, Waiting)>,
     /// Pictures asked for and not yet being read, the newest asked last: a thread drawn whole asks
     /// for its newest pictures last, and those are the ones in view, so they are read first.
     asked: Vec<Value>,
     /// How many are being read: at most [`READING`], so a thread of many pictures does not open a
     /// connection for each at once.
     reading: usize,
+    /// Reading starts on the next idle, once the drawing that asks has asked for all it shows.
+    starting: bool,
 }
 
 /// Thumbnails read at once.
@@ -548,6 +594,26 @@ const READING: usize = 2;
 
 thread_local! {
     static SEEN: RefCell<Seen> = RefCell::default();
+    /// The thumbnails read, by key, while a measurement watches (`scripts/perf/thumbs-reopen.py`).
+    static READS: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+}
+
+/// Start (`true`) or stop recording the thumbnails read; what was recorded since the last call.
+pub(crate) fn watch_reads(on: bool) -> Vec<String> {
+    READS.with(|r| std::mem::replace(&mut *r.borrow_mut(), on.then(Vec::new))).unwrap_or_default()
+}
+
+/// Whether a thumbnail is being read or waits to be.
+pub(crate) fn reading() -> bool {
+    SEEN.with(|seen| {
+        let seen = seen.borrow();
+        seen.reading > 0 || !seen.asked.is_empty()
+    })
+}
+
+/// The widget name of a message's picture, for finding which show.
+pub(crate) fn picture_name(id: &Value) -> String {
+    format!("thread-picture-{}", key(id))
 }
 
 /// A picture's id as a key: the engine's id, whatever its JSON kind.
@@ -557,20 +623,14 @@ fn key(id: &Value) -> String {
 
 fn remember(key: String, read: Read) {
     SEEN.with(|seen| {
-        let seen = &mut *seen.borrow_mut();
-        if seen.kept.insert(key.clone(), read).is_none() {
-            seen.order.push_back(key);
-        }
-        while seen.order.len() > KEPT {
-            if let Some(oldest) = seen.order.pop_front() {
-                seen.kept.remove(&oldest);
-            }
-        }
+        let kept = &mut seen.borrow_mut().kept;
+        let (at, _) = kept.ask(&key);
+        kept.keep(key, at, read);
     });
 }
 
 fn cached(id: &Value) -> Option<Read> {
-    SEEN.with(|seen| seen.borrow().kept.get(&key(id)).cloned())
+    SEEN.with(|seen| seen.borrow().kept.peek(&key(id)))
 }
 
 /// Read picture `id` (`thread.image`) no larger than `edge`: its texture or why not, and whether
@@ -597,14 +657,16 @@ async fn read_picture(ui: &Rc<Ui>, id: &Value, edge: u32) -> (Read, bool) {
 /// Picture `id`'s thumbnail, for `then`: from memory when it was read, else read once however
 /// many ask for it meanwhile.
 pub(super) fn thumbnail(ui: &Rc<Ui>, id: &Value, then: impl FnOnce(&Read) + 'static) {
-    if let Some(read) = cached(id) {
+    let key = key(id);
+    let (at, kept) = SEEN.with(|seen| seen.borrow_mut().kept.ask(&key));
+    if let Some(read) = kept {
         then(&read);
         return;
     }
-    let key = key(id);
     let first = SEEN.with(|seen| {
         let mut seen = seen.borrow_mut();
-        let waiting = seen.waiting.entry(key.clone()).or_default();
+        let (asked_at, waiting) = seen.waiting.entry(key).or_default();
+        *asked_at = at;
         waiting.push(Box::new(then));
         waiting.len() == 1
     });
@@ -612,7 +674,20 @@ pub(super) fn thumbnail(ui: &Rc<Ui>, id: &Value, then: impl FnOnce(&Read) + 'sta
         return;
     }
     SEEN.with(|seen| seen.borrow_mut().asked.push(id.clone()));
-    read_asked(ui);
+    start_reading(ui);
+}
+
+/// Start reading on the next idle, once the drawing that asks has asked for all it shows: the
+/// newest are asked for last and read first, and the first reads are theirs too.
+fn start_reading(ui: &Rc<Ui>) {
+    if SEEN.with(|seen| std::mem::replace(&mut seen.borrow_mut().starting, true)) {
+        return;
+    }
+    let ui = ui.clone();
+    glib::idle_add_local_once(move || {
+        SEEN.with(|seen| seen.borrow_mut().starting = false);
+        read_asked(&ui);
+    });
 }
 
 /// Start reading the pictures asked for, the newest first, while fewer than [`READING`] are.
@@ -628,19 +703,25 @@ fn read_asked(ui: &Rc<Ui>) {
             Some(id)
         });
         let Some(id) = next else { return };
+        READS.with(|r| {
+            if let Some(log) = r.borrow_mut().as_mut() {
+                log.push(key(&id));
+            }
+        });
         let ui = ui.clone();
         glib::spawn_future_local(async move {
             let key = key(&id);
             let (read, keep) = read_picture(&ui, &id, THUMB_EDGE).await;
-            if keep {
-                remember(key.clone(), read.clone());
-            }
             let waiting = SEEN.with(|seen| {
                 let mut seen = seen.borrow_mut();
                 seen.reading = seen.reading.saturating_sub(1);
-                seen.waiting.remove(&key)
+                let (at, waiting) = seen.waiting.remove(&key).unwrap_or_default();
+                if keep {
+                    seen.kept.keep(key.clone(), at, read.clone());
+                }
+                waiting
             });
-            for then in waiting.unwrap_or_default() {
+            for then in waiting {
                 then(&read);
             }
             read_asked(&ui);
@@ -688,6 +769,7 @@ fn message_picture(ui: &Rc<Ui>, image: &Value, most: (f64, f64)) -> gtk::Button 
     let (width, height) = (image["width"].as_i64().unwrap_or(0), image["height"].as_i64().unwrap_or(0));
     let (w, h) = shown_size(width, height, most);
     let key = gtk::Button::new();
+    key.set_widget_name(&picture_name(&image["id"]));
     key.add_css_class("threads-user-picture");
     key.set_overflow(gtk::Overflow::Hidden);
     let frame = gtk::Overlay::new();
@@ -919,6 +1001,32 @@ mod tests {
         assert_eq!(said(&other), "A picture may be at most 4 MiB.");
         assert_eq!(key(&json!(12)), "12");
         assert_eq!(key(&json!("a1b2")), "a1b2");
+    }
+
+    #[test]
+    fn a_reopened_thread_keeps_the_pictures_on_screen() {
+        // A thread of 120 pictures is drawn whole: it asks for them oldest first, and the misses
+        // are read newest first (those are on screen). Then it is drawn again, and again.
+        let open = |kept: &mut Kept<u32>| -> Vec<u32> {
+            let asked: Vec<(u32, u64, bool)> = (0..120).map(|n| {
+                let (at, hit) = kept.ask(&n.to_string());
+                (n, at, hit.is_some())
+            }).collect();
+            let mut read = Vec::new();
+            for (n, at, _) in asked.iter().rev().filter(|(_, _, hit)| !hit) {
+                kept.keep(n.to_string(), *at, *n);
+                read.push(*n);
+            }
+            read
+        };
+        let mut kept = Kept::new(KEPT);
+        assert_eq!(open(&mut kept).len(), 120);
+        for _ in 0..3 {
+            // Only those past the limit at the top of the thread are read again; the newest stay.
+            let again = open(&mut kept);
+            assert_eq!(again.len(), 120 - KEPT);
+            assert!(again.iter().all(|n| *n < (120 - KEPT) as u32), "read again: {again:?}");
+        }
     }
 
     #[test]
