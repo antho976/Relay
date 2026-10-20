@@ -9,7 +9,7 @@ use super::revs::removed_rev;
 use super::{get_design, kind_of};
 use crate::engine::{Engine, IntoBus};
 use crate::handlers::notes::check_project;
-use relay_bus::design::{nearest, Node, SINCE_WINDOW};
+use relay_bus::design::{nearest, Node, Styles, SINCE_WINDOW};
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{Get, GetIn, GetOut, GET_NODES_MAX};
 use relay_bus::types::{Design, Id};
@@ -346,18 +346,19 @@ pub(super) fn register(e: &mut Engine) {
         check_reach(&p)?;
         let cut = p.page.is_some() || p.nodes.is_some();
         let (session_id, agent) = (ctx.actor_session_id(), ctx.actor.is_agent());
-        let (design, rows, removed) = ctx.read(|conn| {
+        let (design, rows, removed, styles) = ctx.read(|conn| {
             let design = get_design(conn, p.design_id)?;
             check_project(conn, design.project_id, session_id, agent)?;
+            // Its colours and styles, copied out as text and parsed once the store is free.
+            let (styles, tracked_from): (String, i64) = conn.prepare_cached("SELECT styles, tracked_from FROM designs WHERE id = ?1").bus()?
+                .query_row([design.id], |r| Ok((r.get(0)?, r.get(1)?))).bus()?;
             let Some(since) = p.since_rev else {
                 let mut stmt = conn.prepare_cached(if pages_only { PAGE_ROWS } else { ROWS }).bus()?;
                 let rows = stmt.query_map([design.id], |r| Ok(Raw {
                     id: r.get(0)?, parent: r.get(1)?, ord: r.get(2)?, known: true, changed: true, body: Some(r.get(3)?),
                 })).bus()?.collect::<rusqlite::Result<Vec<_>>>().bus()?;
-                return Ok((design, rows, None));
+                return Ok((design, rows, None, styles));
             };
-            let tracked_from = conn.prepare_cached("SELECT tracked_from FROM designs WHERE id = ?1").bus()?
-                .query_row([design.id], |r| r.get(0)).bus()?;
             check_since(&design, tracked_from, since)?;
             let rows = conn.prepare_cached(DELTA_ROWS).bus()?
                 .query_map(params![design.id, since, cut], |r| Ok(Raw {
@@ -365,7 +366,7 @@ pub(super) fn register(e: &mut Engine) {
                 })).bus()?.collect::<rusqlite::Result<Vec<_>>>().bus()?;
             let removed: Vec<String> = conn.prepare_cached(REMOVED).bus()?
                 .query_map(params![design.id, since], |r| r.get(0)).bus()?.collect::<rusqlite::Result<_>>().bus()?;
-            Ok((design, rows, Some(removed)))
+            Ok((design, rows, Some(removed), styles))
         })?;
         if let Some(named) = &p.nodes {
             // A node named that went since a `since_rev` is in `removed`: that is the answer.
@@ -384,7 +385,9 @@ pub(super) fn register(e: &mut Engine) {
         let read = ordered(design.id, rows, &scope)?;
         let indexes = scope.delta.then_some(read.indexes);
         let assets_dir = ctx.engine().store.design_assets_dir().display().to_string();
-        Ok(GetOut { design, nodes: read.nodes, assets_dir, removed, indexes, left: read.left, colors: BTreeMap::new(), styles: BTreeMap::new(), credits: BTreeMap::new() })
+        let Styles { colors, styles } = serde_json::from_str(&styles)
+            .map_err(|why| BusError::internal(format!("design {}: its colours and styles do not read: {why}", design.id)))?;
+        Ok(GetOut { design, nodes: read.nodes, assets_dir, removed, indexes, left: read.left, colors, styles, credits: BTreeMap::new() })
     });
 }
 

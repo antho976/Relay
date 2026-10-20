@@ -4,7 +4,7 @@ use super::revs::{self, removed_rev};
 use super::{body_of, emit_applied, expect, kind_of, live_design, node_of, row_bytes};
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project};
-use relay_bus::design::{details, field_of, label, nearest, Conflict, ConflictReason, Node, NodeKind, NodeOp, MAX_DEPTH, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
+use relay_bus::design::{details, field_of, label, nearest, Conflict, ConflictReason, Node, NodeKind, NodeOp, Styles, MAX_DEPTH, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{Apply, ApplyOut, Reply};
 use relay_bus::types::{Design, Id};
@@ -126,6 +126,13 @@ pub(super) struct Run<'a> {
     /// Edits not applied as sent, and why: the first [`MAX_SKIPPED`]; `skipped_total` counts all.
     pub(super) skipped: Vec<Conflict>,
     pub(super) skipped_total: usize,
+    /// The design's colours and styles, read on first need ([`Run::styles`]), the bytes of the
+    /// column as read, and whether an edit changed them.
+    pub(super) styles: Option<Styles>,
+    pub(super) styles_len: i64,
+    pub(super) styles_changed: bool,
+    /// Each copy edit's new node, and the node it copied.
+    pub(super) copied: BTreeMap<String, String>,
 }
 
 const NODE_META: &str = "SELECT parent_id, kind, ord FROM design_nodes WHERE design_id = ?1 AND node_id = ?2";
@@ -427,20 +434,6 @@ impl Run<'_> {
         Ok(())
     }
 
-    /// Every colour and style `node` names exists. Until the store keeps a design's colours and
-    /// styles (engine-reuse, with `Styles::check`), the design has none, so a node naming one is
-    /// refused by name rather than stored naming nothing (lenient or not: no stored node can name
-    /// one yet, so no undo carries one).
-    pub(super) fn names_exist(&self, node: &Node) -> Result<(), BusError> {
-        let why = match node.names().first() {
-            None => return Ok(()),
-            Some(("style", name)) => format!("style: the design has no style {name:?}"),
-            Some((field, name)) => format!("{field}: the design has no colour ${name}"),
-        };
-        Err(self.fail(ErrorKind::NotFound, "design.style_not_found", why)
-            .with_hint("named colours and styles are not supported yet: write the colour itself"))
-    }
-
     /// The node row `id`, if this build can read it: an edit naming one it cannot (a kind it
     /// does not know, a body it cannot parse) is refused, or skipped when lenient. Nothing of
     /// such a row is lost: it is left as it is.
@@ -592,7 +585,7 @@ impl Run<'_> {
         if let Err(why) = node.check_new() {
             self.breach(why)?;
         }
-        self.names_exist(&node)?;
+        self.check_names(&mut node)?;
         if node.parent.as_ref().is_some_and(|parent| self.skipped_adds.contains(parent)) {
             // W6: what it goes in was not added; neither is it.
             self.skip(Conflict::new(Some(self.at as u32), node.id.clone(), ConflictReason::ParentSkipped));
@@ -680,7 +673,7 @@ impl Run<'_> {
         if let Err(why) = Node::check_update(&node, &set, &next) {
             self.breach(why)?;
         }
-        self.names_exist(&next)?;
+        self.check_names(&mut next)?;
         let body = body_of(&mut next)?;
         if body == row.body {
             // TM-58: it already holds what was sent. Nothing is written or touched, and nothing
@@ -1158,6 +1151,10 @@ pub(super) fn register(e: &mut Engine) {
             updated: HashMap::new(),
             moved: HashSet::new(),
             added: HashSet::new(),
+            styles: None,
+            styles_len: 0,
+            styles_changed: false,
+            copied: BTreeMap::new(),
         };
         // B59: past the last edit that can make the design smaller (any but an add or a copy),
         // the list only grows it, so one over the cap by then is refused at the edit that took
@@ -1176,14 +1173,10 @@ pub(super) fn register(e: &mut Engine) {
                 }
                 NodeOp::Move { id, parent, index, .. } => run.move_(id, parent, index)?,
                 NodeOp::Delete { id } => run.delete(id)?,
-                // Until the store keeps colours and styles and the engine copies (engine-reuse).
-                NodeOp::Copy { .. } | NodeOp::Color { .. } | NodeOp::Style { .. } | NodeOp::DeleteStyle { .. } => {
-                    let hint = match op {
-                        NodeOp::Copy { .. } => "add the node again under a new id (design.get has its fields), then its children",
-                        _ => "write each node's colours and look itself",
-                    };
-                    return Err(run.fail(ErrorKind::Invalid, "design.ops", format!("{} is not supported yet", op.name())).with_hint(hint));
-                }
+                NodeOp::Copy { id, as_id, parent, index, dx, dy } => run.copy(id, as_id, parent, index, dx, dy)?,
+                NodeOp::Color { name, value } => run.color(name, value)?,
+                NodeOp::Style { name, set } => run.style(name, set)?,
+                NodeOp::DeleteStyle { name } => run.delete_style(name)?,
             };
             run.ids.push(id.unwrap_or_default());
             if run.bytes > MAX_DESIGN_BYTES && run.bytes > bytes && grows_from.is_none_or(|last| at >= last) && run.settled() {
@@ -1192,6 +1185,7 @@ pub(super) fn register(e: &mut Engine) {
         }
         run.release_ends()?;
         run.check_refs()?;
+        run.write_styles()?;
         // B60: a design over the cap (one counted before ids were) can still be edited down; a
         // list is refused only for growing it past the cap.
         if run.bytes > MAX_DESIGN_BYTES && run.bytes > bytes {
@@ -1212,7 +1206,7 @@ pub(super) fn register(e: &mut Engine) {
             audit_id: None,
             skipped,
             warnings: Vec::new(),
-            copied: BTreeMap::new(),
+            copied: std::mem::take(&mut run.copied),
             design: None,
             nodes: None,
             removed: None,
@@ -1271,7 +1265,7 @@ pub(super) fn register(e: &mut Engine) {
         } else if warnings.len() < MAX_WARNINGS {
             warnings.push(format!("this change is too large for the audit log to undo (over {} KiB)", UNDO_KEPT >> 10));
         }
-        emit_applied(ctx, &design, prev_rev, nodes.iter().map(|n| n.id.as_str()), &removed)?;
+        emit_applied(ctx, &design, prev_rev, nodes.iter().map(|n| n.id.as_str()), &removed, run.styles_changed)?;
         // The audit row this request's answer is written as, in this transaction (audit.undo's
         // replay answers with the row of the undo itself, which it does not return).
         out.audit_id = Some(crate::audit::next_id(ctx.tx()).bus()?);
@@ -1293,6 +1287,9 @@ pub(super) fn register(e: &mut Engine) {
                 (out.inverse, out.expect, out.removed) = (Some(inverse), Some(expect), Some(removed));
             }
             out.design = Some(design);
+            if let Some(styles) = run.styles.take().filter(|_| run.styles_changed) {
+                (out.colors, out.styles) = (Some(styles.colors), Some(styles.styles));
+            }
         }
         out.warnings = warnings;
         Ok(out)

@@ -186,9 +186,9 @@ fn an_image_needs_its_size_and_only_what_has_content_hugs() {
     ]));
 }
 
-/// Reuse: a node may name a `$name` colour or a style, but until the store keeps a design's
-/// colours and styles the design has none, so a node naming one is refused by name, not stored
-/// naming nothing.
+/// A node naming a colour or style the design does not hold is refused by name, saying how to
+/// make it, with the names it does hold; nothing of the list stays. (Copy and the colour and style
+/// edits themselves are design_reuse's.)
 #[test]
 fn named_colours_and_styles_are_refused_until_the_design_holds_them() {
     let (e, _root) = project();
@@ -196,39 +196,23 @@ fn named_colours_and_styles_are_refused_until_the_design_holds_them() {
     card(&e, id);
     for (ops, message) in [
         (json!([{"op": "add", "node": {"id": "cta", "parent": "card", "kind": "rect", "fill": "$accent"}}]),
-            "ops[0] add \"cta\": fill: the design has no colour $accent"),
+            "ops[0] add \"cta\": fill: the design has no colour $accent; name it first with {\"op\": \"color\", \"name\": \"accent\", \"value\": \"#RRGGBB\"}"),
         (json!([{"op": "add", "node": {"id": "cta", "parent": "card", "kind": "rect", "style": "button"}}]),
-            "ops[0] add \"cta\": style: the design has no style \"button\""),
+            "ops[0] add \"cta\": style: the design has no style \"button\"; make it first with {\"op\": \"style\", \"name\": \"button\", \"set\": {…}}"),
         (json!([{"op": "update", "id": "card", "set": {"shadow": {"blur": 4, "color": "$shade"}}}]),
-            "ops[0] update \"card\": shadow: the design has no colour $shade"),
+            "ops[0] update \"card\": shadow: the design has no colour $shade; name it first with {\"op\": \"color\", \"name\": \"shade\", \"value\": \"#RRGGBB\"}"),
     ] {
         let error = refused(&e, id, ops);
         assert_eq!((error.code.as_str(), error.message.as_str()), ("design.style_not_found", message));
-        assert!(error.hint.as_deref().is_some_and(|h| h.contains("not supported yet")), "{:?}", error.hint);
+        assert_eq!(error.hint.as_deref(), Some("name a colour with {\"op\": \"color\"} or a style with {\"op\": \"style\"} first"));
     }
+    // With some named, the hint lists them, and a near miss is named.
+    apply(&e, id, json!([{"op": "color", "name": "accent", "value": "#4C9DFF"}, {"op": "style", "name": "button", "set": {"radius": 8}}]));
+    let error = refused(&e, id, json!([{"op": "update", "id": "card", "set": {"fill": "$acent"}}]));
+    assert_eq!(error.message, "ops[0] update \"card\": fill: the design has no colour $acent; did you mean $accent?");
+    assert_eq!(error.hint.as_deref(), Some("the design's colours and styles: $accent, button"));
     // A name that is not one is a value error, as any colour.
     let error = refused(&e, id, json!([{"op": "update", "id": "card", "set": {"fill": "$"}}]));
     assert_eq!((error.code.as_str(), error.message.as_str()),
         ("design.node_invalid", "ops[0] update \"card\": fill: \"$\" is not #RGB, #RRGGBB, #RRGGBBAA or a $name colour"));
-}
-
-/// Reuse: copy, colour and style edits read, and are refused by name until the engine runs
-/// them (engine-reuse); nothing of the list stays.
-#[test]
-fn reuse_edits_are_refused_until_the_engine_runs_them() {
-    let (e, _root) = project();
-    let id = create(&e);
-    card(&e, id);
-    for (edit, message) in [
-        (json!({"op": "copy", "id": "card", "as": "card-2", "dx": 400}), "ops[1] copy \"card\": copy is not supported yet"),
-        (json!({"op": "color", "name": "accent", "value": "#4C9DFF"}), "ops[1] color \"accent\": color is not supported yet"),
-        (json!({"op": "style", "name": "card", "set": {"radius": 12}}), "ops[1] style \"card\": style is not supported yet"),
-        (json!({"op": "delete_style", "name": "card"}), "ops[1] delete_style \"card\": delete_style is not supported yet"),
-    ] {
-        let ops = json!([{"op": "update", "id": "card", "set": {"x": 30}}, edit]);
-        let error = refused(&e, id, ops);
-        assert_eq!((error.code.as_str(), error.message.as_str()), ("design.ops", message));
-        assert_eq!(error.details.as_ref().unwrap()["index"], 1);
-        assert!(error.hint.is_some());
-    }
 }
