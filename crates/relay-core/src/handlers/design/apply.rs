@@ -528,11 +528,14 @@ impl Run<'_> {
         }
         self.names_exist(&next)?;
         let body = body_of(&mut next)?;
-        if body != row.body {
-            self.tx.prepare_cached("UPDATE design_nodes SET body = ?3, rev = ?4 WHERE design_id = ?1 AND node_id = ?2").bus()?
-                .execute(params![self.design, next.id, body, self.rev]).bus()?;
-            self.bytes += body.len() as i64 - row.body.len() as i64;
+        if body == row.body {
+            // TM-58: it already holds what was sent. Nothing is written or touched, and nothing
+            // needs undoing; a list of only such edits leaves the design at its rev.
+            return Ok(Some(next.id));
         }
+        self.tx.prepare_cached("UPDATE design_nodes SET body = ?3, rev = ?4 WHERE design_id = ?1 AND node_id = ?2").bus()?
+            .execute(params![self.design, next.id, body, self.rev]).bus()?;
+        self.bytes += body.len() as i64 - row.body.len() as i64;
         self.touch(&next.id);
         self.inverse.push(vec![NodeOp::Update { id: next.id.clone(), set: node.before(&set) }]);
         for field in ["from", "to", "src"] {
@@ -977,6 +980,31 @@ pub(super) fn register(e: &mut Engine) {
         if run.bytes > MAX_DESIGN_BYTES && run.bytes > bytes {
             return Err(run.too_large(false));
         }
+        let prev_rev = design.rev;
+        if run.inverse.is_empty() {
+            // TM-58, MODEL-SPEC §1 #20: every edit found what it sent already there, or was
+            // skipped. The design stays as it was: the same rev, no event and no undo.
+            return Ok(ApplyOut {
+                design_id: design.id,
+                rev: prev_rev,
+                prev_rev,
+                rebased: false,
+                ids: std::mem::take(&mut run.ids),
+                removed_count: 0,
+                audit_id: None,
+                skipped: Vec::new(),
+                warnings: std::mem::take(&mut run.warnings),
+                copied: BTreeMap::new(),
+                design: Some(design),
+                nodes: Some(Vec::new()),
+                removed: Some(Vec::new()),
+                inverse: Some(Vec::new()),
+                expect: None,
+                colors: None,
+                styles: None,
+                reread: false,
+            });
+        }
         ctx.tx().prepare_cached(
             "UPDATE designs SET rev = rev + 1, pages = ?2, nodes = ?3, bytes = ?4, next_node = ?5, updated_by = ?6, updated_at = ?7 WHERE id = ?1",
         ).bus()?.execute(params![design.id, run.pages, run.nodes, run.bytes, run.next_node, by, ctx.now]).bus()?;
@@ -995,7 +1023,6 @@ pub(super) fn register(e: &mut Engine) {
         let ids = std::mem::take(&mut run.ids);
         let warnings = std::mem::take(&mut run.warnings);
         let (pages, count) = (run.pages, run.nodes);
-        let prev_rev = design.rev;
         let design = Design { rev: prev_rev + 1, pages, nodes: count, updated_by: by, updated_at: ctx.now.clone(), ..design };
         // The audit keeps the undo uncapped (payloads and results stop at 64 KiB): a big delete's
         // would store every node it took. Past UNDO_KEPT only the caller's copy, in the answer,

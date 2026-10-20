@@ -225,11 +225,17 @@ pub fn register(e: &mut Engine) {
         let session = match p.session {
             None => before.session.clone(),
             Some(None) => None,
+            // Tied where it already is: nothing to check.
+            Some(Some(session)) if before.session.as_deref() == Some(session.as_str()) => Some(session),
             Some(Some(session)) => {
                 check_session(ctx, before.project_id, &session)?;
                 Some(session)
             }
         };
+        if title == before.title && session == before.session {
+            // TM-58: it is already so. No new rev, no undo and no event, so nothing redraws.
+            return Ok(before);
+        }
         ctx.tx().execute(
             "UPDATE designs SET title = ?2, session = ?3, rev = rev + 1, updated_by = ?4, updated_at = ?5 WHERE id = ?1",
             params![before.id, title, session, by, ctx.now],

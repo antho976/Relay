@@ -184,20 +184,20 @@ fn rows_carry_the_rev_that_wrote_them_and_deletes_leave_tombstones() {
     assert_eq!(row_rev(&e, id, "page-1"), Some(1), "untouched");
     apply(&e, id, json!([{"op": "update", "id": "title", "set": {"text": "Hello"}}]));
     assert_eq!((row_rev(&e, id, "title"), row_rev(&e, id, "card")), (Some(3), Some(2)));
-    // An update that changes nothing stored writes nothing.
+    // An update that changes nothing stored writes nothing, the design's rev included (TM-58).
     apply(&e, id, json!([{"op": "update", "id": "title", "set": {"text": "Hello"}}]));
-    assert_eq!(row_rev(&e, id, "title"), Some(3));
+    assert_eq!((row_rev(&e, id, "title"), rev(&e, id)), (Some(3), 3));
     apply(&e, id, json!([{"op": "move", "id": "title", "parent": "side"}]));
-    assert_eq!(row_rev(&e, id, "title"), Some(5));
+    assert_eq!(row_rev(&e, id, "title"), Some(4));
     // A delete records every id it takes; the connector it frees is written at the same rev.
     apply(&e, id, json!([{"op": "delete", "id": "side"}, {"op": "delete", "id": "dot"}]));
-    assert_eq!((removed_at(&e, id, "side"), removed_at(&e, id, "title"), removed_at(&e, id, "dot")), (Some(6), Some(6), Some(6)));
-    assert_eq!(row_rev(&e, id, "link"), Some(6), "its end let go");
+    assert_eq!((removed_at(&e, id, "side"), removed_at(&e, id, "title"), removed_at(&e, id, "dot")), (Some(5), Some(5), Some(5)));
+    assert_eq!(row_rev(&e, id, "link"), Some(5), "its end let go");
     assert_eq!(removed_at(&e, id, "card"), None);
     // Added back: no longer removed, and written at the new rev.
     apply(&e, id, json!([{"op": "add", "node": {"id": "dot", "parent": "page-1", "kind": "ellipse", "w": 8, "h": 8}}]));
-    assert_eq!((removed_at(&e, id, "dot"), row_rev(&e, id, "dot")), (None, Some(7)));
-    assert_eq!(removed_at(&e, id, "side"), Some(6), "the others stay on record");
+    assert_eq!((removed_at(&e, id, "dot"), row_rev(&e, id, "dot")), (None, Some(6)));
+    assert_eq!(removed_at(&e, id, "side"), Some(5), "the others stay on record");
     // A duplicate starts its own history: rows at rev 1, nothing removed.
     let copy = ok(&e, "design.duplicate", json!({"design_id": id}))["id"].as_i64().unwrap();
     let revs: Vec<i64> = e.store.lock().prepare("SELECT DISTINCT rev FROM design_nodes WHERE design_id = ?1").unwrap()
