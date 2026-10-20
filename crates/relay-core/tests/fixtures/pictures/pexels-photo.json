@@ -1,0 +1,23 @@
+{
+ "_fixture": "Synthetic, written from the documented fields (pexels.com/api/documentation, read 2026-10-19).",
+ "id": 2014422,
+ "width": 3024,
+ "height": 3780,
+ "url": "https://www.pexels.com/photo/green-plants-on-a-kitchen-shelf-2014422/",
+ "photographer": "Ana Sample",
+ "photographer_url": "https://www.pexels.com/@ana-sample",
+ "photographer_id": 1001,
+ "avg_color": "#7E7B6F",
+ "src": {
+  "original": "https://images.pexels.com/photos/2014422/pexels-photo-2014422.jpeg",
+  "large2x": "https://images.pexels.com/photos/2014422/pexels-photo-2014422.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+  "large": "https://images.pexels.com/photos/2014422/pexels-photo-2014422.jpeg?auto=compress&cs=tinysrgb&h=650&w=940",
+  "medium": "https://images.pexels.com/photos/2014422/pexels-photo-2014422.jpeg?auto=compress&cs=tinysrgb&h=350",
+  "small": "https://images.pexels.com/photos/2014422/pexels-photo-2014422.jpeg?auto=compress&cs=tinysrgb&h=130",
+  "portrait": "https://images.pexels.com/photos/2014422/pexels-photo-2014422.jpeg?auto=compress&cs=tinysrgb&fit=crop&h=1200&w=800",
+  "landscape": "https://images.pexels.com/photos/2014422/pexels-photo-2014422.jpeg?auto=compress&cs=tinysrgb&fit=crop&h=627&w=1200",
+  "tiny": "https://images.pexels.com/photos/2014422/pexels-photo-2014422.jpeg?auto=compress&cs=tinysrgb&dpr=1&fit=crop&h=200&w=280"
+ },
+ "liked": false,
+ "alt": "Green plants on a kitchen shelf"
+}
