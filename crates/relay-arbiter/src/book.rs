@@ -1115,10 +1115,12 @@ pub fn draft_hash(d: &Draft) -> String {
     Sha256::digest(json.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
-/// What a change card was made from: the strategy's product, bars, rule and limits, its name
-/// left out. Approving the card is refused when this has changed since.
+/// What a change card was made from: the strategy as a draft, name, product, bars, rule and
+/// limits, as the card's changes are read against it. Approving the card is refused when this
+/// has changed since: its draft carries the rest of the strategy as it was then, so saving it
+/// would put back a rename as surely as a limit.
 pub fn strategy_hash(s: &StrategyRec) -> String {
-    draft_hash(&Draft { name: String::new(), ..s.draft() })
+    draft_hash(&s.draft())
 }
 
 fn opt_money(d: Option<Decimal>) -> String {
@@ -1401,17 +1403,18 @@ mod tests {
     }
 
     #[test]
-    fn a_strategys_hash_follows_its_rule_and_limits_not_its_name() {
+    fn a_strategys_hash_follows_its_name_rule_and_limits() {
         let book = Book::open_in_memory().unwrap();
         let sid = book.create_strategy(&draft()).unwrap();
-        let before = strategy_hash(&book.strategy(sid).unwrap());
+        let first = strategy_hash(&book.strategy(sid).unwrap());
         let mut d = draft();
         d.name = "Renamed".into();
         book.save_strategy(sid, &d).unwrap();
-        assert_eq!(strategy_hash(&book.strategy(sid).unwrap()), before);
+        let renamed = strategy_hash(&book.strategy(sid).unwrap());
+        assert_ne!(renamed, first);
         d.limits.max_position = Some(Decimal::new(100, 0));
         book.set_strategy_limits(sid, &d.limits).unwrap();
-        assert_ne!(strategy_hash(&book.strategy(sid).unwrap()), before);
+        assert_ne!(strategy_hash(&book.strategy(sid).unwrap()), renamed);
     }
 
     #[test]

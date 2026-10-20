@@ -862,3 +862,18 @@ fn an_order_coinbase_calls_a_duplicate_is_never_failed_as_never_placed() {
     assert_eq!(last_order(&engine, id)["status"], "filled");
     assert_eq!(fake.placed.lock().unwrap().len(), 1);
 }
+
+#[test]
+fn a_change_card_does_not_put_back_a_name_changed_since() {
+    let (engine, _) = setup();
+    let id = ok(&engine, "arbiter.strategy.save", json!({"draft": draft("Dip", "50")}))["row"]["id"].as_i64().unwrap();
+    let mut next = draft("Dip", "50");
+    next["rule"]["exit"]["take_profit_pct"] = json!("3");
+    let p = ok(&engine, "arbiter.propose", json!({"strategy_id": id, "draft": next, "why": "A smaller target won more often"}));
+    // The card shows no change of name; the person renames the strategy before answering it.
+    assert!(p["changes"].as_array().unwrap().iter().all(|c| !c.as_str().unwrap().starts_with("Name:")), "{p:#}");
+    ok(&engine, "arbiter.strategy.save", json!({"id": id, "draft": draft("Dip, slower", "50")}));
+    let r = ok(&engine, "arbiter.proposal.resolve", json!({"id": p["id"], "approve": true}));
+    assert_eq!(r["status"], "failed", "{r:#}");
+    assert_eq!(ok(&engine, "arbiter.strategy.get", json!({"id": id}))["row"]["name"], "Dip, slower");
+}

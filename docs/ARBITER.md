@@ -231,9 +231,9 @@ Behind the `engine` feature:
   order and its fills back from Coinbase, so a fill that raced the kill switch is still booked.
 - **A proposal** is placed on the venue and product it was asked for, or not at all: a card asked
   on paper fails once the strategy has gone live, and one asked for ETH once it trades SOL. A
-  proposed change applies only to the strategy as it was when the card was made (its rule,
-  limits, product and bars, hashed on the card): changed since, approving it fails rather than
-  put back what was changed. A card past its time cannot be approved, whether or not the runner
+  proposed change applies only to the strategy as it was when the card was made (its name, rule,
+  limits, product and bars, hashed on the card): changed since, a rename included, approving it
+  fails rather than put back what was changed. A card past its time cannot be approved, whether or not the runner
   has expired it yet.
 - **An exit that failed** (refused, unconfirmed, or filled in part) is tried again a minute later
   under a new cause, which names the holding as it is then; an expired card asks again, a dismissed
