@@ -184,7 +184,8 @@ Behind the `engine` feature:
 **The engine, `crates/relay-core/src/arbiter.rs`.**
 - **The desk.** It holds:
   - the book behind its own mutex, never held across a network call;
-  - the key, cached after one `secret-tool` lookup;
+  - the key, cached once the keyring answers, a key or none (a keyring that could not be read,
+    locked or timing out, is asked again a minute later);
   - quotes;
   - the trade mutex, which serializes the gate and the order being recorded.
 - **`execute`** is the only path an order takes. `route` sends an intent there, or turns it into a

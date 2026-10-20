@@ -41,6 +41,9 @@ const QUOTE_TTL: i64 = 10;
 const PRODUCTS_TTL: i64 = 3600;
 /// Balances and fees are re-read this often while anything is live.
 const ACCOUNT_TTL: i64 = 300;
+/// A keyring that could not be read is asked again after this, seconds: often enough to pick
+/// the key up once it is unlocked, not so often that a locked one prompts or times out each pass.
+const KEY_RETRY: i64 = 60;
 /// A scheduled buy missed by more than this (the app was closed) is skipped, not caught up.
 const SCHEDULE_GRACE: i64 = 3600;
 /// An order sent with no answer is sent again for this long, seconds; once Coinbase still has no
@@ -55,6 +58,8 @@ pub struct Desk {
     book: Mutex<Option<Book>>,
     /// The client for the saved key: `None` not yet loaded, `Some(None)` no key.
     keyed: Mutex<Option<Option<Arc<dyn Exchange>>>>,
+    /// When the keyring last failed to answer, Unix seconds: nothing is cached for it.
+    key_failed_at: Mutex<Option<i64>>,
     public: Mutex<Option<Arc<dyn Exchange>>>,
     /// Tests put a fake exchange here; it then serves both the market and the account.
     fake: Mutex<Option<Arc<dyn Exchange>>>,
@@ -167,19 +172,50 @@ fn keyring(cmd: &mut Command) -> Result<String, BusError> {
     }
 }
 
-fn load_key(engine: &Engine) -> Option<Credentials> {
+/// What a keyring lookup answered: the secret, `None` when none is stored (`secret-tool` exits 1
+/// and says nothing), or why the keyring could not be read (it says so on stderr).
+fn looked_up(out: &std::process::Output) -> Result<Option<String>, BusError> {
+    if out.status.success() {
+        return Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()));
+    }
+    let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if out.stdout.is_empty() && err.is_empty() {
+        return Ok(None);
+    }
+    Err(BusError::unavailable("arbiter.keyring", err).with_hint("unlock your desktop keyring"))
+}
+
+/// The saved key: `None` when none is saved (or what is saved cannot be a key), an error when the
+/// keyring could not be read, which says nothing about whether a key is saved.
+fn load_key(engine: &Engine) -> Result<Option<Credentials>, BusError> {
     if in_memory(engine) {
-        return None;
+        return Ok(None);
     }
     let body = if engine.instance == Instance::Test {
-        std::fs::read_to_string(test_key_file(engine)).ok()?
+        match std::fs::read_to_string(test_key_file(engine)) {
+            Ok(body) => body,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(BusError::unavailable("arbiter.keyring", e.to_string())),
+        }
     } else {
         let mut cmd = Command::new("secret-tool");
         cmd.args(["lookup", "application", "Relay", "purpose", "arbiter-coinbase"]);
-        keyring(&mut cmd).ok()?
+        match crate::proc::output_with_timeout(&mut cmd, Duration::from_secs(30)) {
+            Ok(Some(out)) => match looked_up(&out)? {
+                Some(body) => body,
+                None => return Ok(None),
+            },
+            Ok(None) => return Err(BusError::unavailable("arbiter.keyring", "The system keyring did not answer within 30 seconds")),
+            // Without the tool no key can have been saved: `store_key` uses it too.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(BusError::unavailable("arbiter.keyring", e.to_string())),
+        }
     };
-    let v: serde_json::Value = serde_json::from_str(body.trim()).ok()?;
-    Credentials::parse(v["key_name"].as_str()?, v["private_key"].as_str()?).ok()
+    let parse = || {
+        let v: serde_json::Value = serde_json::from_str(body.trim()).ok()?;
+        Credentials::parse(v["key_name"].as_str()?, v["private_key"].as_str()?).ok()
+    };
+    Ok(parse())
 }
 
 pub fn forget_key(engine: &Engine) -> Result<(), BusError> {
@@ -196,15 +232,29 @@ pub fn forget_key(engine: &Engine) -> Result<(), BusError> {
     keyring(&mut cmd).map(|_| ())
 }
 
-/// The account client for the saved key, loaded from the keyring once.
+/// The account client for the saved key, loaded from the keyring once it answers: a key saved,
+/// or none, is kept; a keyring that could not be read (locked, or the lookup timing out) is asked
+/// again on a call [`KEY_RETRY`] later.
 pub fn account(engine: &Engine) -> Option<Arc<dyn Exchange>> {
     if let Some(f) = lock(&engine.arbiter.fake).clone() {
         return (!*lock(&engine.arbiter.fake_keyless)).then_some(f);
     }
     let mut slot = lock(&engine.arbiter.keyed);
     if slot.is_none() {
-        let client = load_key(engine).and_then(|c| Coinbase::with_key(&c).ok()).map(|c| Arc::new(c) as Arc<dyn Exchange>);
-        *slot = Some(client);
+        let mut failed = lock(&engine.arbiter.key_failed_at);
+        if failed.is_some_and(|at| book::now() - at < KEY_RETRY) {
+            return None;
+        }
+        match load_key(engine) {
+            Ok(creds) => {
+                *slot = Some(creds.and_then(|c| Coinbase::with_key(&c).ok()).map(|c| Arc::new(c) as Arc<dyn Exchange>));
+                *failed = None;
+            }
+            Err(_) => {
+                *failed = Some(book::now());
+                return None;
+            }
+        }
     }
     slot.clone().flatten()
 }
@@ -1121,4 +1171,46 @@ pub fn spawn_runner(engine: &Arc<Engine>) {
 
 fn store_has_book(engine: &Engine) -> bool {
     !in_memory(engine) && engine.store.path().with_file_name("arbiter.db").exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    /// A throwaway P-256 key made for tests; it has never been near an exchange.
+    const KEY: &str = "-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEICr3hFJQLruuvjzXzQvrZyWUlBfa0SdE9HtDCMhP7NYqoAoGCCqGSM49
+AwEHoUQDQgAEIgIeCM0SMcTdKeIUVa5s6GrENsIc3sFPBcefipt5Ciw6PtUG6nMV
+TsGghZLrhr8kSV5nZX8i1b+Q+3+QzuY0wQ==
+-----END EC PRIVATE KEY-----";
+
+    #[test]
+    fn a_keyring_that_could_not_be_read_is_asked_again_and_no_key_stays_known() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::new(Instance::Test, crate::Store::open(&dir.path().join("store.db"), false).unwrap());
+        // No key saved: that is known, and kept.
+        assert!(account(&engine).is_none());
+        assert!(matches!(*lock(&engine.arbiter.keyed), Some(None)));
+        *lock(&engine.arbiter.keyed) = None;
+        // The keyring cannot be read (here the key's file is a folder): nothing is kept.
+        std::fs::create_dir(test_key_file(&engine)).unwrap();
+        assert!(account(&engine).is_none());
+        assert!(lock(&engine.arbiter.keyed).is_none());
+        // A key is there now: within the minute the keyring is not asked again, after it it is.
+        std::fs::remove_dir(test_key_file(&engine)).unwrap();
+        store_key(&engine, &Credentials::parse("organizations/o/apiKeys/k1", KEY).unwrap()).unwrap();
+        assert!(account(&engine).is_none());
+        *lock(&engine.arbiter.key_failed_at) = Some(book::now() - KEY_RETRY);
+        assert!(account(&engine).is_some());
+    }
+
+    #[test]
+    fn a_lookup_that_says_nothing_is_no_key_and_one_that_says_why_is_a_failure() {
+        let out = |code: i32, stdout: &str, stderr: &str| std::process::Output { status: std::process::ExitStatus::from_raw(code << 8), stdout: stdout.into(), stderr: stderr.into() };
+        assert_eq!(looked_up(&out(0, "{}", "")).unwrap().as_deref(), Some("{}"));
+        assert_eq!(looked_up(&out(1, "", "")).unwrap(), None);
+        let locked = looked_up(&out(1, "", "Cannot get secret of a locked object\n")).unwrap_err();
+        assert_eq!((locked.code.as_str(), locked.message.as_str()), ("arbiter.keyring", "Cannot get secret of a locked object"));
+    }
 }
