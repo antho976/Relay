@@ -19,6 +19,13 @@
 //! `DESIGN_FRAMES`, with how long the canvas's longest frame took meanwhile;
 //! `png:/abs/path.png[@ms]` writes the page as the PNG export draws it, at 1×, at rest or at
 //! `ms` of its motion, and prints `DESIGN_PNG`.
+//!
+//! Stock photos (pictures-SPEC-v2 §16, C8): `pictures:words[@pexels]` opens the image key's
+//! popover and searches for the words, on Pexels if named (or shows the Turn on note where
+//! Pictures is off); `picture-pick:n` places result `n` (0 first) as a click on it does;
+//! `picture-caption` puts the selected photo's credit under it, as the inspector's Add caption
+//! does. `inspector:Title` scrolls the inspector to its section of that title
+//! (`inspector:Credit`), for a capture of it.
 
 use super::board::{Board, Tool};
 use super::export;
@@ -303,6 +310,36 @@ fn next(b: Rc<Board>, steps: Vec<String>, at: usize) {
             pause = 600;
         }
         "icon" => super::icons::choose(&b, arg, None),
+        "pictures" => {
+            super::pictures::drive_search(&b, arg);
+            pause = 800;
+        }
+        // The download is not the board's: the next step waits for it a while.
+        "picture-pick" => {
+            super::pictures::drive_pick(&b, arg.parse().unwrap_or(0));
+            pause = 1500;
+        }
+        "inspector" => {
+            // The section's title is its first child; scroll so it sits at the top.
+            let scroll = &b.inspector_scroll;
+            let mut sec = b.inspector.first_child();
+            while let Some(s) = sec {
+                let titled = s.first_child().and_downcast::<gtk::Label>().is_some_and(|l| l.text() == arg);
+                if titled {
+                    if let Some(at) = s.compute_point(&b.inspector, &gtk::graphene::Point::new(0.0, 0.0)) {
+                        scroll.vadjustment().set_value(at.y() as f64);
+                    }
+                    break;
+                }
+                sec = s.next_sibling();
+            }
+        }
+        "picture-caption" => {
+            let id = b.selection.borrow().first().cloned();
+            if let Some(id) = id {
+                super::pictures::add_caption(&b, &id);
+            }
+        }
         "frame-preset" => {
             if let Some((name, w, h)) = super::board::FRAME_PRESETS.iter().find(|p| p.0 == arg) {
                 b.place_frame(name, *w as f64, *h as f64);

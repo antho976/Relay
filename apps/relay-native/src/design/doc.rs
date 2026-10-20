@@ -15,6 +15,7 @@ use crate::app::Ui;
 use crate::client::Error;
 use relay_bus::design::{Conflict, ConflictReason, Expect, NodeOp, Styles};
 use relay_bus::ops::design::{ApplyOut, GetOut};
+use relay_bus::ops::picture::PictureCredit;
 use relay_bus::types::Design;
 use relay_bus::BusError;
 use relay_client::design::edit::expect_for;
@@ -22,7 +23,7 @@ use relay_client::design::names::display_name;
 use relay_client::design::Scene;
 use serde_json::{json, Value};
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ops::Deref;
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
@@ -148,6 +149,10 @@ pub struct Shared {
     pub design: RefCell<Design>,
     pub scene: RefCell<Scene>,
     pub assets_dir: RefCell<String>,
+    /// Where each picture came from, by `src` (`design.get`'s `credits`), for the inspector's
+    /// Credit block. A credit is a fact about a file, which never changes, so a read of what
+    /// changed adds to them and only a whole read replaces them.
+    pub credits: RefCell<BTreeMap<String, PictureCredit>>,
     /// The `rev` our scene matches, as far as the engine has told us.
     rev: Cell<i64>,
     queue: RefCell<VecDeque<Pending>>,
@@ -471,6 +476,7 @@ impl Shared {
             design: RefCell::new(got.design),
             scene: RefCell::new(Scene::new(got.nodes).with_styles(styles)),
             assets_dir: RefCell::new(got.assets_dir),
+            credits: RefCell::new(got.credits),
             queue: RefCell::default(),
             replay: RefCell::default(),
             sending: Cell::new(false),
@@ -968,6 +974,7 @@ impl Shared {
             self.seen.set(0);
         }
         let styles = Styles { colors: got.colors, styles: got.styles };
+        let delta = got.removed.is_some() && got.indexes.is_some();
         let mut scene = match (got.removed, got.indexes) {
             // What changed since the last read, laid into the scene in hand.
             (Some(mut gone), Some(indexes)) => {
@@ -1004,6 +1011,11 @@ impl Shared {
         self.read_rev.set(got.design.rev);
         *self.design.borrow_mut() = got.design;
         *self.assets_dir.borrow_mut() = got.assets_dir;
+        if delta {
+            self.credits.borrow_mut().extend(got.credits);
+        } else {
+            *self.credits.borrow_mut() = got.credits;
+        }
         for doc in self.docs() {
             *doc.removed.borrow_mut() = removed.clone();
             *doc.actors.borrow_mut() = actors.clone();
@@ -1622,6 +1634,36 @@ mod tests {
         shared.read(Ok(delta), 0, None);
         assert_eq!(shared.rev.get(), 4, "nothing of it taken");
         assert!(shared.stale.get() && shared.whole.get(), "read again, whole");
+    }
+
+    /// pictures-SPEC-v2 §13.1: the credits come with the design; a read of what changed adds the
+    /// ones it carries, and a whole read replaces them.
+    #[test]
+    fn credits_come_with_each_read() {
+        let credit = |id: &str| PictureCredit {
+            source: relay_bus::ops::picture::PictureSource::Openverse,
+            id: id.into(),
+            title: "Lake".into(),
+            creator: Some("Ann".into()),
+            creator_url: None,
+            licence: "CC BY 2.0".into(),
+            licence_url: None,
+            source_url: None,
+            attribution: "\"Lake\" by Ann, CC BY 2.0".into(),
+            caption: "Photo: Ann, CC BY 2.0".into(),
+        };
+        let mut first = got(3, nodes());
+        first.credits.insert("a.png".into(), credit("openverse:a"));
+        let shared = Shared::build(Weak::new(), 1, first);
+        let _doc = Doc::of(&shared);
+        assert_eq!(shared.credits.borrow()["a.png"].id, "openverse:a");
+        let mut delta = got(4, vec![]);
+        (delta.removed, delta.indexes) = (Some(vec![]), Some(vec![]));
+        delta.credits.insert("b.png".into(), credit("openverse:b"));
+        shared.read(Ok(delta), 0, None);
+        assert_eq!(shared.credits.borrow().keys().collect::<Vec<_>>(), ["a.png", "b.png"], "a delta adds");
+        shared.read(Ok(got(5, nodes())), 0, None);
+        assert!(shared.credits.borrow().is_empty(), "a whole read replaces");
     }
 
     /// A read asked before an answer of ours landed may not hold it: it is not taken.

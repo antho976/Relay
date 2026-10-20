@@ -113,7 +113,7 @@ pub fn place_texture(b: &Rc<Board>, texture: gdk::Texture, at: Option<(f64, f64)
     });
 }
 
-fn add_images(b: &Rc<Board>, pictures: Vec<(AssetAddOut, Option<String>)>, at: Option<(f64, f64)>) {
+pub(super) fn add_images(b: &Rc<Board>, pictures: Vec<(AssetAddOut, Option<String>)>, at: Option<(f64, f64)>) {
     if pictures.is_empty() {
         return;
     }

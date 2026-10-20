@@ -61,21 +61,25 @@ fn head_string(head: &[u8], prefix: &[u8]) -> Option<String> {
 }
 
 pub fn is_lifecycle_request(op: &str) -> bool {
-    matches!(
-        op,
-        "session.create"
-            | "session.close"
-            | "session.park"
-            | "session.wake"
-            | "session.resume"
-            | "session.spawn"
-            | "session.clear_restorable"
-            | "session.discard_restorable"
-            | "task.dispatch"
-            // A clone may take many minutes; on the main connection every other request
-            // would wait behind it.
-            | "project.clone"
-    )
+    // Stock photos reach the network: a search or thumbnail (unlocked) would make the board's
+    // next edit wait behind it, and an add (staged) would stop the connection reading for the
+    // whole download (pictures-SPEC-v2 §1.4).
+    op.starts_with("design.picture.")
+        || matches!(
+            op,
+            "session.create"
+                | "session.close"
+                | "session.park"
+                | "session.wake"
+                | "session.resume"
+                | "session.spawn"
+                | "session.clear_restorable"
+                | "session.discard_restorable"
+                | "task.dispatch"
+                // A clone may take many minutes; on the main connection every other request
+                // would wait behind it.
+                | "project.clone"
+        )
 }
 
 fn request_timeout(op: &str) -> Duration {
@@ -89,6 +93,8 @@ fn request_timeout(op: &str) -> Duration {
         "arbiter.key.set" | "arbiter.flatten" | "arbiter.halt" | "arbiter.refresh" => Duration::from_secs(60),
         // Years of training: a file of tens of megabytes, read and written whole.
         "gym.import" => Duration::from_secs(120),
+        // A provider's answer, a download of up to 20 MiB, or the keyring's unlock prompt.
+        _ if op.starts_with("design.picture.") => Duration::from_secs(60),
         _ => Duration::from_secs(30),
     }
 }
@@ -476,9 +482,15 @@ mod tests {
 
     #[tokio::test]
     async fn lifecycle_actions_bypass_a_stalled_status_request() {
-        for op in ["session.close", "session.create", "task.dispatch"] {
+        for op in ["session.close", "session.create", "task.dispatch", "design.picture.search"] {
             lifecycle_bypasses_a_stalled_status_request(op).await;
         }
+        // A stock photo may wait on its provider, a 20 MiB download or the keyring's prompt.
+        for op in ["design.picture.search", "design.picture.add", "design.picture.key_set"] {
+            assert!(is_lifecycle_request(op), "{op}");
+            assert_eq!(request_timeout(op), Duration::from_secs(60), "{op}");
+        }
+        assert!(!is_lifecycle_request("design.get") && !is_lifecycle_request("design.pictures"));
     }
 
     async fn lifecycle_bypasses_a_stalled_status_request(op: &'static str) {

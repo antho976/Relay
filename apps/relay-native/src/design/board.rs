@@ -299,6 +299,8 @@ pub struct Board {
     pub(super) ask: gtk::Button,
     /// What was typed to Ask and not sent, for the next time it opens.
     pub(super) ask_draft: RefCell<String>,
+    /// The image key's stock photo picker: its last search, and the picker while it shows.
+    pub(super) pictures: RefCell<super::pictures::State>,
     pub(super) zoom_label: gtk::Label,
     pub(super) tool_keys: RefCell<Vec<(Tool, gtk::ToggleButton)>>,
     pub(super) shape_key: gtk::ToggleButton,
@@ -588,6 +590,7 @@ impl Board {
             agent_force: Cell::new(None),
             ask,
             ask_draft: RefCell::default(),
+            pictures: RefCell::default(),
             zoom_label,
             tool_keys: RefCell::default(),
             shape_key,
@@ -2638,14 +2641,26 @@ impl Board {
             }
         });
         dock.append(&icon_key);
-        let image_key = gtk::Button::new();
+        // A file from this computer is one click into its popover, and still Ctrl+Shift+K; the
+        // rest of it is stock photos (pictures-SPEC-v2 §13.2).
+        let image_key = gtk::MenuButton::new();
         image_key.add_css_class("design-tool");
         image_key.set_child(Some(&glyphs::image("image", 16)));
-        tip(&image_key, "Place an image (Ctrl+Shift+K)");
+        tip(&image_key, "Place an image or a stock photo");
+        image_key.set_widget_name("design-image-key");
+        let picker = gtk::Popover::new();
+        picker.add_css_class("design-menu");
+        image_key.set_popover(Some(&picker));
         let weak = Rc::downgrade(self);
-        image_key.connect_clicked(move |_| {
+        picker.connect_show(move |pop| {
             if let Some(b) = weak.upgrade() {
-                super::assets::choose_images(&b);
+                pop.set_child(Some(&super::pictures::picker(&b, pop)));
+            }
+        });
+        let weak = Rc::downgrade(self);
+        picker.connect_closed(move |pop| {
+            if let Some(b) = weak.upgrade() {
+                super::pictures::closed(&b, pop);
             }
         });
         dock.append(&image_key);
