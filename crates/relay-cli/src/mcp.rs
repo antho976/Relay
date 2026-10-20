@@ -3,7 +3,7 @@
 
 use crate::units;
 use anyhow::{Context, Result};
-use relay_bus::registry::{OpEntry, OpKind, Registry};
+use relay_bus::registry::{Op as _, OpEntry, OpKind, Registry};
 use relay_bus::{Actor, MailHint, Request};
 use relay_core::socket::Client;
 use relay_core::Instance;
@@ -596,6 +596,9 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
         if name == "bus.schema" {
             value = units::agent_schema(&value);
         }
+        if name == relay_bus::ops::design::Render::NAME {
+            return Ok(render_success(value, mail.as_ref()));
+        }
         Ok(tool_success(value, mail.as_ref())?)
     } else {
         Ok(refusal(serde_json::to_value(response.error)?, mail.as_ref(), &style))
@@ -1034,6 +1037,79 @@ fn tool_success(value: Value, mail: Option<&MailHint>) -> Result<Value> {
     Ok(json!({"content":content,"structuredContent":value,"isError":false}))
 }
 
+/// A design.render answer: the result as compact JSON, then the picture as an image block, so the
+/// model sees it without reading a file. No `structuredContent`: Claude Code gives the model its
+/// own JSON of that in place of this text, after the picture (render-SPEC-v2 §2.5); MCP asks for
+/// it only of a tool with an `outputSchema`, which no op declares. A picture that cannot be
+/// attached stays a path, and the text says where.
+fn render_success(value: Value, mail: Option<&MailHint>) -> Value {
+    let mut content = vec![json!({"type":"text","text":serde_json::to_string(&value).unwrap_or_default()})];
+    if let Some(path) = value.pointer("/png/path").and_then(Value::as_str) {
+        content.push(image_block(Path::new(path), &RENDERS).unwrap_or_else(|| {
+            json!({"type":"text","text":format!("The picture could not be attached; it is at {path}.")})
+        }));
+    }
+    if let Some(notice) = mail_notice(mail) {
+        content.push(notice);
+    }
+    json!({"content":content,"isError":false})
+}
+
+/// Where a bus answer's picture may be read from to reach the model as an image: the folder the
+/// engine writes it in, the names it gives there, and the size it holds it to. Nothing else is
+/// read, whatever path a result names.
+struct Shelf {
+    /// The folder's own name, beside the store.
+    folder: &'static str,
+    /// Whether a file name is one the engine gives there.
+    named: fn(&str) -> bool,
+    /// Most bytes.
+    max: u64,
+}
+
+/// design.render's pictures: `design-renders/<render id>.png`, at most 4 MiB (render-SPEC-v2 §5.6).
+const RENDERS: Shelf = Shelf { folder: "design-renders", named: render_name, max: relay_core::picture::UPLOAD_MAX as u64 };
+
+fn render_name(name: &str) -> bool {
+    name.strip_suffix(".png").is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+}
+
+/// The picture at `path` as an MCP image block, its type read from its bytes; `None` unless the
+/// path is absolute and plain (no `.` or `..`), names a file `shelf` holds, that file is a regular
+/// one (not a symlink) of at most `shelf.max` bytes, and its bytes are a PNG, JPEG, GIF or WebP.
+/// design.render's picture comes this way; a stock picture's thumbnail is to come the same way,
+/// from a shelf of its own.
+fn image_block(path: &Path, shelf: &Shelf) -> Option<Value> {
+    use std::io::Read as _;
+    use std::os::unix::fs::MetadataExt as _;
+    use std::path::Component;
+    let plain = path.is_absolute() && path.components().all(|c| matches!(c, Component::RootDir | Component::Normal(_)));
+    let (folder, name) = (path.parent()?.file_name()?, path.file_name()?.to_str()?);
+    if !plain || folder != shelf.folder || !(shelf.named)(name) {
+        return None;
+    }
+    let seen = std::fs::symlink_metadata(path).ok().filter(|m| m.file_type().is_file() && m.len() <= shelf.max)?;
+    let file = std::fs::File::open(path).ok()?;
+    // The file read is the one looked at, not a link put in its place since.
+    let opened = file.metadata().ok()?;
+    if (opened.dev(), opened.ino()) != (seen.dev(), seen.ino()) {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(seen.len() as usize);
+    file.take(shelf.max + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > shelf.max {
+        return None;
+    }
+    let picture = relay_core::picture::raster(&bytes)?;
+    Some(image_content(&bytes, picture.media_type()))
+}
+
+/// `bytes` as MCP image content of `media_type`.
+fn image_content(bytes: &[u8], media_type: &str) -> Value {
+    use base64::Engine as _;
+    json!({"type":"image","data":base64::engine::general_purpose::STANDARD.encode(bytes),"mimeType":media_type})
+}
+
 fn tool_error(error: Value, mail: Option<&MailHint>) -> Value {
     let text = serde_json::to_string(&error).unwrap_or_else(|_| "Relay tool error".to_string());
     let mut content = vec![json!({"type":"text","text":text})];
@@ -1322,6 +1398,118 @@ mod tests {
         let mut arguments = json!({"ops": [{"op": "add", "node": "{\"id\":\"a\"}"}]});
         unstring(&mut arguments, &schema);
         assert_eq!(arguments["ops"][0]["node"], "{\"id\":\"a\"}");
+    }
+
+    /// A 1×1 PNG.
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\
+        \0\0\0\nIDATx\x9cc\0\x01\0\0\x05\0\x01\r\n-\xb4\0\0\0\0IEND\xaeB`\x82";
+
+    fn decoded(block: &Value) -> Vec<u8> {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.decode(block["data"].as_str().unwrap()).unwrap()
+    }
+
+    /// A design.render answer whose picture is at `path`, or with none.
+    fn render_answer(path: Option<&Path>) -> Value {
+        let mut value = json!({
+            "design_id": 12, "rev": 15, "page": "page-1", "area": {"x": -32, "y": -32, "w": 454, "h": 908}, "scale": 1.0,
+            "issues": [{"code": "overflow", "ids": ["save", "card"], "message": "save extends 12 px past card's padding"}],
+            "issue_count": 1, "warnings": [],
+            "boxes": {"fields": ["id","kind","parent","x","y","w","h","rx","ry","rot"],
+                      "rows": [["card","frame","page-1",0,0,390,844,0,0,0], ["save","rect","card",24,72,151.5,31,24,72,0]], "total": 2, "hidden": 0},
+            "timings_ms": {"read": 6.1, "layout": 1.4, "paint": 7.9, "encode": 38.0},
+        });
+        if let Some(path) = path {
+            value["png"] = json!({"path": path, "w": 1, "h": 1});
+        }
+        value
+    }
+
+    /// `<dir>/design-renders/<uuid>.png` holding `bytes`, as the engine writes a render.
+    fn rendered(dir: &Path, bytes: &[u8]) -> PathBuf {
+        let renders = dir.join("design-renders");
+        std::fs::create_dir_all(&renders).unwrap();
+        let path = renders.join(format!("{}.png", uuid::Uuid::new_v4()));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_render_result_is_compact_text_then_the_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = rendered(dir.path(), PNG);
+        let answer = render_answer(Some(&path));
+        let result = render_success(answer.clone(), None);
+        assert_eq!(result["isError"], false);
+        let content = result["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2, "{content:?}");
+        let text = content[0]["text"].as_str().unwrap();
+        assert!(content[0]["type"] == "text" && !text.contains('\n'), "{text}");
+        assert_eq!(serde_json::from_str::<Value>(text).unwrap(), answer, "the whole answer, the path too, for a client that reads files");
+        assert_eq!((&content[1]["type"], &content[1]["mimeType"]), (&json!("image"), &json!("image/png")));
+        assert_eq!(decoded(&content[1]), PNG);
+    }
+
+    #[test]
+    fn a_render_result_has_no_structured_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let with = render_success(render_answer(Some(&rendered(dir.path(), PNG))), None);
+        assert!(with.get("structuredContent").is_none(), "Claude Code would give the model its own JSON of it in place of the text");
+        // Boxes alone (`png: false`, or nothing visible): the text, and nothing after it.
+        let without = render_success(render_answer(None), None);
+        assert!(without.get("structuredContent").is_none());
+        assert_eq!(without["content"].as_array().unwrap().len(), 1);
+        assert_eq!(serde_json::from_str::<Value>(without["content"][0]["text"].as_str().unwrap()).unwrap(), render_answer(None));
+    }
+
+    #[test]
+    fn a_symlink_a_foreign_folder_a_non_uuid_name_or_a_big_file_is_not_attached() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = rendered(dir.path(), PNG);
+        let renders = good.parent().unwrap().to_path_buf();
+        let id = || format!("{}.png", uuid::Uuid::new_v4());
+        let link = renders.join(id());
+        std::os::unix::fs::symlink(&good, &link).unwrap();
+        let foreign = dir.path().join("renders");
+        std::fs::create_dir_all(&foreign).unwrap();
+        let elsewhere = foreign.join(id());
+        std::fs::write(&elsewhere, PNG).unwrap();
+        let named = renders.join("shot.png");
+        std::fs::write(&named, PNG).unwrap();
+        let mut big_bytes = PNG.to_vec();
+        big_bytes.resize(relay_core::picture::UPLOAD_MAX + 1, 0);
+        let big = rendered(dir.path(), &big_bytes);
+        let text = rendered(dir.path(), b"not a picture");
+        let svg = rendered(dir.path(), b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"></svg>");
+        let around = renders.join("..").join("design-renders").join(good.file_name().unwrap());
+        let relative = Path::new("design-renders").join(good.file_name().unwrap());
+        let folder = renders.join(id());
+        std::fs::create_dir(&folder).unwrap();
+        let missing = renders.join(id());
+        for path in [&link, &elsewhere, &named, &big, &text, &svg, &around, &relative, &folder, &missing] {
+            let result = render_success(render_answer(Some(path)), None);
+            let content = result["content"].as_array().unwrap();
+            assert!(content.iter().all(|c| c["type"] == "text"), "{} was attached", path.display());
+            assert_eq!(content.len(), 2);
+            assert_eq!(content[1]["text"], format!("The picture could not be attached; it is at {}.", path.display()));
+        }
+        // The same file, named as the engine names it, is.
+        assert_eq!(render_success(render_answer(Some(&good)), None)["content"][1]["type"], "image");
+        let mut fits = PNG.to_vec();
+        fits.resize(relay_core::picture::UPLOAD_MAX, 0);
+        assert_eq!(render_success(render_answer(Some(&rendered(dir.path(), &fits))), None)["content"][1]["type"], "image", "4 MiB is allowed");
+    }
+
+    #[test]
+    fn mail_still_follows_a_render() {
+        let dir = tempfile::tempdir().unwrap();
+        let mail = MailHint { priority: 3 };
+        let result = render_success(render_answer(Some(&rendered(dir.path(), PNG))), Some(&mail));
+        let content = result["content"].as_array().unwrap();
+        assert_eq!(content.iter().map(|c| c["type"].as_str().unwrap()).collect::<Vec<_>>(), ["text", "image", "text"]);
+        assert!(content[2]["text"].as_str().unwrap().contains("3 unread"));
+        let without = render_success(render_answer(None), Some(&mail));
+        assert!(without["content"][1]["text"].as_str().unwrap().contains("mailbox.list"));
     }
 
     #[test]
