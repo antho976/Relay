@@ -437,12 +437,16 @@ pub fn paint(b: &Rc<Board>, sec: &gtk::Box, n: &Node, slot: Slot) {
         let weak = Rc::downgrade(b);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let tooltip = if slot == Slot::Fill { "Fill" } else { "Colour" };
-        row.append(&color_key(b, shown.as_deref(), tooltip, clear, move |c| {
+        // As stored where the layer holds one, so a named colour shows as its name.
+        let stored = b.doc.scene.borrow().stored(&n.id).and_then(|s| slot.colour(s));
+        let current = stored.or(shown.clone());
+        let field = if slot == Slot::Fill { "fill" } else { "stroke" };
+        row.append(&super::widgets::color_key_named(b, current.as_deref(), tooltip, clear, Some(field), move |c| {
             if let Some(b) = weak.upgrade() {
                 b.set_selected(set(&[(solid, json!(c))]));
             }
         }));
-        let caption = shown.as_deref().unwrap_or(if clear.is_none() { "Automatic" } else { "None" });
+        let caption = current.as_deref().unwrap_or(if clear.is_none() { "Automatic" } else { "None" });
         row.append(&label(caption, "design-hex-caption"));
         sec.append(&row);
         return;

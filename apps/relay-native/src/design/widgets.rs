@@ -46,10 +46,37 @@ pub fn color_key(
     clear: Option<&'static str>,
     pick: impl Fn(Option<String>) + 'static,
 ) -> gtk::MenuButton {
+    color_key_named(b, current, tooltip, clear, None, pick)
+}
+
+/// The colour `$name` names in the design `b` shows, or `text` itself when it names none.
+fn resolved(b: &Board, text: &str) -> String {
+    match text.strip_prefix('$') {
+        Some(name) => b.doc.scene.borrow().styles().colors.get(name).cloned().unwrap_or_else(|| text.to_string()),
+        None => text.to_string(),
+    }
+}
+
+/// [`color_key`], with the design's named colours first (reuse §4): `current` may be a `$name`,
+/// shown as the colour it names; picking a named one gives `$name`; a right click on one offers
+/// Change… (its value, for every layer naming it) and Delete (each layer keeps the colour). With
+/// `field` (`fill`, `stroke` or `color`), a Name… key names the selection's colour in it.
+pub fn color_key_named(
+    b: &Rc<Board>,
+    current: Option<&str>,
+    tooltip: &str,
+    clear: Option<&'static str>,
+    field: Option<&'static str>,
+    pick: impl Fn(Option<String>) + 'static,
+) -> gtk::MenuButton {
     let key = gtk::MenuButton::new();
     key.add_css_class("design-color-key");
-    tip(&key, tooltip);
-    let swatch = swatch_button(current, tooltip);
+    tip(&key, &match current.filter(|c| c.starts_with('$')) {
+        Some(name) => format!("{tooltip}: {name}"),
+        None => tooltip.to_string(),
+    });
+    let shown = current.map(|c| resolved(b, c));
+    let swatch = swatch_button(shown.as_deref(), tooltip);
     swatch.set_can_target(false);
     swatch.set_focusable(false);
     key.set_child(Some(&swatch));
@@ -65,6 +92,7 @@ pub fn color_key(
         };
         let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
         body.add_css_class("design-colors");
+        named_grid(&b, &body, pop, current.as_deref(), pick.clone());
         let doc_colors = document_colors(&b);
         let add_grid = |title: &str, colors: &[String]| {
             if colors.is_empty() {
@@ -126,6 +154,22 @@ pub fn color_key(
             }
         });
         row.append(&entry);
+        if let Some(field) = field {
+            let name = gtk::Button::with_label("Name…");
+            name.add_css_class("quiet");
+            name.set_tooltip_text(Some("Name this colour, so every layer using it follows when it changes"));
+            let (weak, p) = (Rc::downgrade(&b), pop.downgrade());
+            name.connect_clicked(move |key| {
+                if let (Some(b), Some(p)) = (weak.upgrade(), p.upgrade()) {
+                    p.popdown();
+                    ask_name(&b, key, "Name the colour", move |b, name| {
+                        let ops = relay_client::design::styles::name_color(&b.doc.scene.borrow(), &b.selected(), field, name);
+                        b.commit(ops);
+                    });
+                }
+            });
+            row.append(&name);
+        }
         if let Some(caption) = clear {
             let none = gtk::Button::with_label(caption);
             none.add_css_class("quiet");
@@ -144,6 +188,191 @@ pub fn color_key(
         pop.set_child(Some(&body));
     });
     key
+}
+
+/// The design's named colours atop the colour popover `pop`: each picks `$name`; a right click
+/// changes or deletes it.
+fn named_grid(b: &Rc<Board>, body: &gtk::Box, pop: &gtk::Popover, current: Option<&str>, pick: Rc<dyn Fn(Option<String>)>) {
+    let named: Vec<(String, String)> = b.doc.scene.borrow().styles().colors.iter().map(|(n, v)| (n.clone(), v.clone())).collect();
+    if named.is_empty() {
+        return;
+    }
+    body.append(&label("Named", "design-menu-heading"));
+    let grid = gtk::FlowBox::new();
+    grid.set_max_children_per_line(8);
+    grid.set_min_children_per_line(8);
+    grid.set_selection_mode(gtk::SelectionMode::None);
+    grid.set_column_spacing(4);
+    grid.set_row_spacing(4);
+    for (name, value) in named {
+        let s = swatch_button(Some(&value), &format!("${name} · {value}"));
+        let chosen = current == Some(format!("${name}").as_str());
+        if chosen {
+            s.add_css_class("chosen");
+        }
+        s.update_state(&[gtk::accessible::State::Pressed(pressed(chosen))]);
+        let (pick, n, p) = (pick.clone(), name.clone(), pop.downgrade());
+        s.connect_clicked(move |_| {
+            pick(Some(format!("${n}")));
+            if let Some(p) = p.upgrade() {
+                p.popdown();
+            }
+        });
+        let menu = gtk::GestureClick::new();
+        menu.set_button(gdk::BUTTON_SECONDARY);
+        let (weak, n, p) = (Rc::downgrade(b), name.clone(), pop.downgrade());
+        menu.connect_pressed(move |g, _, _, _| {
+            let (Some(b), Some(p), Some(at)) = (weak.upgrade(), p.upgrade(), g.widget()) else { return };
+            p.popdown();
+            named_menu(&b, &at, &n);
+        });
+        s.add_controller(menu);
+        grid.insert(&s, -1);
+    }
+    body.append(&grid);
+}
+
+/// Change… and Delete for named colour `name`, by `at`.
+fn named_menu(b: &Rc<Board>, at: &gtk::Widget, name: &str) {
+    let pop = gtk::Popover::new();
+    pop.add_css_class("design-menu");
+    pop.set_parent(at);
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let users = b.doc.scene.borrow().users(name).len();
+    body.append(&label(&format!("${name} · used by {users}"), "design-menu-heading"));
+    let entry = gtk::Entry::new();
+    entry.set_placeholder_text(Some("#RRGGBB or #RRGGBBAA"));
+    entry.set_text(&resolved(b, &format!("${name}")));
+    entry.add_css_class("design-hex");
+    entry.set_tooltip_text(Some("Change it: every layer naming it follows"));
+    let (weak, n, p) = (Rc::downgrade(b), name.to_string(), pop.downgrade());
+    entry.connect_activate(move |e| {
+        let mut t = e.text().trim().to_string();
+        if !t.starts_with('#') {
+            t.insert(0, '#');
+        }
+        match (parse_color(&t), weak.upgrade()) {
+            (Some(_), Some(b)) => {
+                b.commit(vec![relay_bus::design::NodeOp::Color { name: n.clone(), value: t.to_uppercase() }]);
+                if let Some(p) = p.upgrade() {
+                    p.popdown();
+                }
+            }
+            _ => e.add_css_class("error"),
+        }
+    });
+    body.append(&entry);
+    let delete = gtk::Button::with_label("Delete the name");
+    delete.add_css_class("quiet");
+    delete.set_tooltip_text(Some("Each layer using it keeps its colour"));
+    let (weak, n, p) = (Rc::downgrade(b), name.to_string(), pop.downgrade());
+    delete.connect_clicked(move |_| {
+        if let Some(b) = weak.upgrade() {
+            b.commit(vec![relay_bus::design::NodeOp::DeleteStyle { name: n.clone() }]);
+        }
+        if let Some(p) = p.upgrade() {
+            p.popdown();
+        }
+    });
+    body.append(&delete);
+    pop.set_child(Some(&body));
+    pop.connect_closed(|p| {
+        let p = p.clone();
+        glib::idle_add_local_once(move || p.unparent());
+    });
+    pop.popup();
+}
+
+/// Ask for a colour's or a style's name by `at`: one the design already has is refused there,
+/// since the edit would change that one. `done` takes a name that is free.
+pub fn ask_name(b: &Rc<Board>, at: &impl IsA<gtk::Widget>, title: &str, done: impl Fn(&Board, &str) + 'static) {
+    let pop = gtk::Popover::new();
+    pop.add_css_class("design-menu");
+    pop.set_parent(at);
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    body.append(&label(title, "design-menu-heading"));
+    let entry = gtk::Entry::new();
+    entry.set_placeholder_text(Some("accent, card, title…"));
+    body.append(&entry);
+    let note = label("", "design-note");
+    note.set_visible(false);
+    body.append(&note);
+    let (weak, p) = (Rc::downgrade(b), pop.downgrade());
+    entry.connect_activate(move |e| {
+        let Some(b) = weak.upgrade() else { return };
+        let name = e.text().trim().trim_start_matches('$').to_string();
+        let styles = b.doc.scene.borrow().styles().clone();
+        let why = if !relay_bus::design::valid_id(&name) {
+            Some("Letters, digits, - _ . or :, up to 64")
+        } else if styles.colors.contains_key(&name) || styles.styles.contains_key(&name) {
+            Some("The design already has that name")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            note.set_text(why);
+            note.set_visible(true);
+            return;
+        }
+        done(&b, &name);
+        if let Some(p) = p.upgrade() {
+            p.popdown();
+        }
+    });
+    pop.set_child(Some(&body));
+    pop.connect_closed(|p| {
+        let p = p.clone();
+        glib::idle_add_local_once(move || p.unparent());
+    });
+    pop.popup();
+    entry.grab_focus();
+}
+
+/// A number that may be unset (a min or max size): Enter or leaving the field commits what it
+/// holds, empty as `None`. `commit` answers what was stored, which it then shows.
+pub fn optional_number(caption: &str, value: Option<f64>, tooltip: &str, commit: impl Fn(Option<f64>) -> Option<f64> + 'static) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    row.add_css_class("design-number");
+    row.set_tooltip_text(Some(tooltip));
+    let cap = gtk::Label::new(Some(caption));
+    cap.add_css_class("design-number-caption");
+    row.append(&cap);
+    let entry = gtk::Entry::new();
+    entry.set_width_chars(4);
+    entry.set_max_width_chars(6);
+    entry.set_hexpand(true);
+    entry.set_placeholder_text(Some("—"));
+    entry.set_text(&value.map(fmt).unwrap_or_default());
+    entry.update_property(&[gtk::accessible::Property::Label(tooltip)]);
+    row.append(&entry);
+    let last = Rc::new(Cell::new(value));
+    let commit: Rc<dyn Fn(Option<f64>) -> Option<f64>> = Rc::new(commit);
+    let send = {
+        let (last, commit) = (last.clone(), commit.clone());
+        Rc::new(move |e: &gtk::Entry| {
+            let text = e.text();
+            let wanted = if text.trim().is_empty() { Some(None) } else { eval(&text).map(Some) };
+            match wanted {
+                Some(v) if v != last.get() => {
+                    let stored = commit(v);
+                    last.set(stored);
+                    e.set_text(&stored.map(fmt).unwrap_or_default());
+                }
+                _ => e.set_text(&last.get().map(fmt).unwrap_or_default()),
+            }
+        })
+    };
+    let s = send.clone();
+    entry.connect_activate(move |e| s(e));
+    let focus = gtk::EventControllerFocus::new();
+    let e = entry.downgrade();
+    focus.connect_leave(move |_| {
+        if let Some(e) = e.upgrade() {
+            send(&e);
+        }
+    });
+    entry.add_controller(focus);
+    row
 }
 
 /// A number field: type and press Enter, step with Up/Down (Shift: 10), or drag the caption

@@ -34,6 +34,8 @@ pub fn geometry(name: &str) -> &'static str {
         "row" => r##"<rect x="2" y="5" width="3.5" height="6" rx="1"/><rect x="6.25" y="5" width="3.5" height="6" rx="1"/><rect x="10.5" y="5" width="3.5" height="6" rx="1"/>"##,
         "column" => r##"<rect x="5" y="2" width="6" height="3.5" rx="1"/><rect x="5" y="6.25" width="6" height="3.5" rx="1"/><rect x="5" y="10.5" width="6" height="3.5" rx="1"/>"##,
         "free" => r##"<rect x="2.5" y="2.5" width="5" height="4" rx="1"/><rect x="8.5" y="9.5" width="5" height="4" rx="1"/>"##,
+        // Two rows, the second shorter: a row that breaks onto a new line.
+        "wrap" => r##"<rect x="2" y="3" width="3.5" height="4" rx="1"/><rect x="6.25" y="3" width="3.5" height="4" rx="1"/><rect x="10.5" y="3" width="3.5" height="4" rx="1"/><rect x="2" y="9" width="3.5" height="4" rx="1"/><rect x="6.25" y="9" width="3.5" height="4" rx="1"/>"##,
         "lock" => r##"<rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>"##,
         "unlock" => r##"<rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 4.9-.7"/>"##,
         "eye" => r##"<path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/>"##,

@@ -8,13 +8,14 @@
 use super::board::{kind_glyph, Board};
 use super::glyphs;
 use super::shape_panels::Slot;
-use super::widgets::{color_key, segmented, stored_number, stored_number_step, tip};
+use super::widgets::{color_key, color_key_named, segmented, stored_number, stored_number_step, tip};
 use crate::app::label;
 use glib::translate::IntoGlib;
 use gtk::prelude::*;
 use gtk4 as gtk;
 use relay_bus::design::{parse_color, takes, Blend, ImageFit, Items, Justify, Layout, Node, NodeKind, NodeOp, Shadow, Sizing, TextAlign, TextCase, MAX_SHADOWS};
 use relay_client::design::names::{display_name, name_key, node_caption};
+use relay_client::design::geom::Rect;
 use relay_client::design::{color, edit, layout, shapes, Scene};
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
@@ -210,6 +211,9 @@ impl Board {
             head.append(&key);
         }
         body.append(&head);
+        if !kinds(&[NodeKind::Page]) && all_take("style") {
+            self.style_row(&b, body, &ids);
+        }
 
         // Position and size.
         let geometry = section(body, "Position and size");
@@ -217,23 +221,43 @@ impl Board {
             let note = label("Follows the shapes it joins", "design-note");
             note.set_wrap(true);
             geometry.append(&note);
-        } else if parent_lays_out {
-            let note = label(&format!("Placed by {parent_name}'s auto layout"), "design-note");
-            note.set_wrap(true);
-            geometry.append(&note);
         } else {
-            let field = |axis: &'static str, caption: &str, tip: &str| {
-                let value = same(nodes.iter().map(|n| bits(if axis == "x" { n.x } else { n.y }))).map(f64::from_bits);
-                let w = Rc::downgrade(&b);
-                stored_number(caption, value, tip, move |v| {
-                    let v = v.round();
-                    if let Some(b) = w.upgrade() {
-                        b.set_selected(set(&[(axis, json!(v))]));
+            let absolute = nodes.iter().all(|n| n.is_absolute());
+            if parent_lays_out {
+                if !absolute {
+                    let note = label(&format!("Placed by {parent_name}'s auto layout"), "design-note");
+                    note.set_wrap(true);
+                    geometry.append(&note);
+                }
+                // Out of the layout where it shows, taking no room in it (feature-layout §3.6).
+                let check = gtk::CheckButton::with_label("Absolute position");
+                check.set_tooltip_text(Some("Keeps its own place inside the auto layout and takes no room"));
+                check.set_active(absolute);
+                let weak = Rc::downgrade(&b);
+                check.connect_toggled(move |c| {
+                    if let Some(b) = weak.upgrade() {
+                        b.set_absolute(c.is_active());
                     }
-                    v
-                })
-            };
-            geometry.append(&pair(field("x", "X", "X from the parent's left edge"), field("y", "Y", "Y from the parent's top edge")));
+                });
+                geometry.append(&check);
+            }
+            if !parent_lays_out || absolute {
+                // Where each shows from its parent's corner, written through its pins; a hidden
+                // one, which shows nowhere, by what it stores.
+                let shown = |axis: &str| {
+                    let scene = self.doc.scene.borrow();
+                    same(nodes.iter().map(|n| {
+                        let at = shown_rel(&scene, &placed, &n.id).map_or(if axis == "x" { n.x } else { n.y }, |(r, _)| if axis == "x" { r.x } else { r.y });
+                        bits(at.round())
+                    }))
+                    .map(f64::from_bits)
+                };
+                let field = |axis: &'static str, caption: &str, tip: &str| {
+                    let w = Rc::downgrade(&b);
+                    stored_number(caption, shown(axis), tip, move |v| w.upgrade().map_or(v, |b| b.set_position(axis, v.round())))
+                };
+                geometry.append(&pair(field("x", "X", "X from the parent's left edge"), field("y", "Y", "Y from the parent's top edge")));
+            }
         }
         if !joined {
             let size = |axis: &'static str, caption: &str, tip: &str| {
@@ -248,6 +272,11 @@ impl Board {
                 if flat {
                     field.set_sensitive(false);
                     field.set_tooltip_text(Some(if axis == "h" { "A flat line has no height: drag an end to tilt it" } else { "A flat line has no width: drag an end to tilt it" }));
+                }
+                // A group is as big as its layers (B90).
+                if kinds(&[NodeKind::Group]) {
+                    field.set_sensitive(false);
+                    field.set_tooltip_text(Some("A group's size is its layers'"));
                 }
                 field
             };
@@ -289,11 +318,12 @@ impl Board {
         if sizable {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             row.set_homogeneous(true);
-            for (axis, field) in [("w", "w_sizing"), ("h", "h_sizing")] {
+            for axis in ["w", "h"] {
                 let current = same(nodes.iter().map(|n| if axis == "w" { layout::w_sizing(n) } else { layout::h_sizing(n) }));
                 let options: Vec<(&str, &str)> = [("fixed", "Fixed"), ("hug", "Hug"), ("fill", "Fill")]
                     .into_iter()
-                    .filter(|(v, _)| *v != "fill" || parent_lays_out)
+                    // An absolute layer takes no room in the layout, so nothing to fill.
+                    .filter(|(v, _)| *v != "fill" || (parent_lays_out && !nodes.iter().any(Node::is_absolute)))
                     .filter(|(v, _)| *v != "hug" || nodes.iter().all(|n| n.kind == NodeKind::Text || n.layout_mode() != Layout::None))
                     .collect();
                 let names: Vec<&str> = options.iter().map(|o| o.1).collect();
@@ -312,7 +342,7 @@ impl Board {
                         return;
                     };
                     if let Some(b) = weak.upgrade() {
-                        b.set_selected(set(&[(field, json!(v))]));
+                        b.set_rule(axis, v);
                     }
                 });
                 let cell = gtk::Box::new(gtk::Orientation::Horizontal, 4);
@@ -323,6 +353,57 @@ impl Board {
             }
             geometry.append(&row);
         }
+        // Min and max sizes: empty is unset.
+        if !joined && nodes.iter().all(|n| !matches!(n.kind, NodeKind::Page | NodeKind::Group | NodeKind::Line | NodeKind::Path)) {
+            let bound = |key: &'static str, caption: &str, tip: &str, get: fn(&Node) -> Option<f64>| {
+                let value = same(nodes.iter().map(|n| get(n).map(bits))).flatten().map(f64::from_bits);
+                let w = Rc::downgrade(&b);
+                super::widgets::optional_number(caption, value, tip, move |v| w.upgrade().and_then(|b| b.set_bound(key, v)))
+            };
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            row.set_homogeneous(true);
+            row.append(&bound("min_w", "Min W", "Least width; empty for none", |n| n.min_w));
+            row.append(&bound("max_w", "Max W", "Most width; empty for none", |n| n.max_w));
+            row.append(&bound("min_h", "Min H", "Least height; empty for none", |n| n.min_h));
+            row.append(&bound("max_h", "Max H", "Most height; empty for none", |n| n.max_h));
+            geometry.append(&row);
+        }
+
+        // Constraints: how each layer follows a frame it sits free in as the frame's size
+        // changes (feature-layout §2.1).
+        let free_in_frame = {
+            let scene = self.doc.scene.borrow();
+            nodes.iter().all(|n| {
+                n.parent.as_deref().and_then(|p| scene.node(p)).is_some_and(|p| p.kind == NodeKind::Frame)
+                    && (!parent_lays_out || n.is_absolute())
+                    && !(n.kind == NodeKind::Line && (n.from.is_some() || n.to.is_some()))
+            })
+        };
+        if free_in_frame && !joined {
+            let sec = section(body, "Constraints");
+            let stretches = !nodes.iter().any(|n| matches!(n.kind, NodeKind::Line | NodeKind::Path | NodeKind::Group));
+            for (across, caption, options) in [
+                (true, "Across", vec![("left", "Left"), ("right", "Right"), ("left_right", "Left and right"), ("center", "Center"), ("scale", "Scale")]),
+                (false, "Down", vec![("top", "Top"), ("bottom", "Bottom"), ("top_bottom", "Top and bottom"), ("center", "Center"), ("scale", "Scale")]),
+            ] {
+                let options: Vec<(&'static str, &'static str)> = options.into_iter().filter(|(v, _)| stretches || !v.contains('_')).collect();
+                let current = same(nodes.iter().map(|n| {
+                    let pin = if across { n.pin_x.map(|p| p.name()) } else { n.pin_y.map(|p| p.name()) };
+                    pin.unwrap_or(if across { "left" } else { "top" })
+                }));
+                let dd = gtk::DropDown::from_strings(&options.iter().map(|o| o.1).collect::<Vec<_>>());
+                dd.add_css_class("design-dropdown");
+                dd.set_tooltip_text(Some(if across { "Follows its frame's width by" } else { "Follows its frame's height by" }));
+                dd.set_selected(current.and_then(|c| options.iter().position(|(v, _)| *v == c)).map_or(gtk::INVALID_LIST_POSITION, |i| i as u32));
+                let weak = Rc::downgrade(&b);
+                dd.connect_selected_notify(move |dd| {
+                    let (Some(b), Some((v, _))) = (weak.upgrade(), options.get(dd.selected() as usize)) else { return };
+                    b.set_pin(across, (!matches!(*v, "left" | "top")).then_some(*v));
+                });
+                dd.set_hexpand(true);
+                sec.append(&labelled(caption, dd));
+            }
+        }
 
         // Auto layout.
         if single && first.kind == NodeKind::Frame {
@@ -330,12 +411,17 @@ impl Board {
             let mode = first.layout.unwrap_or(Layout::None);
             let weak = Rc::downgrade(&b);
             sec.append(&segmented(
-                &[("none", "free", "Free: children keep their own place"), ("column", "column", "Column"), ("row", "row", "Row")],
+                &[
+                    ("none", "free", "Free: children keep their own place"),
+                    ("column", "column", "Column"),
+                    ("row", "row", "Row"),
+                    ("wrap", "wrap", "Wrap: rows that break onto new lines"),
+                ],
                 Some(match mode {
                     Layout::None => "none",
                     Layout::Column => "column",
-                    // Wrap shows as a row until native-panels-layout-styles gives it a segment.
-                    Layout::Row | Layout::Wrap => "row",
+                    Layout::Row => "row",
+                    Layout::Wrap => "wrap",
                 }),
                 move |v| {
                     if let Some(b) = weak.upgrade() {
@@ -347,8 +433,9 @@ impl Board {
                 let pad = first.padding_edges();
                 let weak = Rc::downgrade(&b);
                 let weak2 = Rc::downgrade(&b);
+                let wraps = mode == Layout::Wrap;
                 sec.append(&pair(
-                    stored_number("@gap", first.gap.or(Some(0.0)), "Gap between children", move |v| {
+                    stored_number("@gap", first.gap.or(Some(0.0)), if wraps { "Gap along a line" } else { "Gap between children" }, move |v| {
                         if let Some(b) = weak.upgrade() {
                             b.set_selected(set(&[("gap", json!(v))]));
                         }
@@ -380,7 +467,18 @@ impl Board {
                     }));
                 }
                 sec.append(&row);
-                let row_mode = mode == Layout::Row;
+                if wraps {
+                    let weak = Rc::downgrade(&b);
+                    // Shows the gap along a line while unset, which is what it takes then.
+                    sec.append(&labelled("Lines", stored_number("@gap", first.row_gap.or(first.gap).or(Some(0.0)), "Gap between lines", move |v| {
+                        let v = v.max(0.0);
+                        if let Some(b) = weak.upgrade() {
+                            b.set_selected(set(&[("row_gap", json!(v))]));
+                        }
+                        v
+                    })));
+                }
+                let row_mode = matches!(mode, Layout::Row | Layout::Wrap);
                 let weak = Rc::downgrade(&b);
                 sec.append(&labelled(
                     "Along",
@@ -429,14 +527,42 @@ impl Board {
                 ));
             }
             let clip = gtk::CheckButton::with_label("Clip content");
-            clip.set_active(first.clip != Some(false));
+            clip.set_active(first.clip != Some(false) || first.scroll.is_some());
+            // A frame that scrolls clips what it scrolls.
+            clip.set_sensitive(first.scroll.is_none());
             let weak = Rc::downgrade(&b);
             clip.connect_toggled(move |c| {
                 if let Some(b) = weak.upgrade() {
                     b.set_selected(set(&[("clip", if c.is_active() { Value::Null } else { json!(false) })]));
                 }
             });
-            sec.append(&clip);
+            // Scrolling along an axis the frame hugs would be refused: it has nothing to scroll.
+            let (hug_w, hug_h) = (first.w_rule() == Sizing::Hug, first.h_rule() == Sizing::Hug);
+            let scrolls: Vec<(&str, &str)> = [("none", "No scroll"), ("x", "Scrolls across"), ("y", "Scrolls down"), ("both", "Scrolls both ways")]
+                .into_iter()
+                .filter(|(v, _)| !(hug_w && matches!(*v, "x" | "both")) && !(hug_h && matches!(*v, "y" | "both")))
+                .collect();
+            let dd = gtk::DropDown::from_strings(&scrolls.iter().map(|o| o.1).collect::<Vec<_>>());
+            dd.add_css_class("design-dropdown");
+            dd.set_tooltip_text(Some("Scroll: what it holds past its edges shows by scrolling (a still design shows the start)"));
+            let now = match first.scroll {
+                None => "none",
+                Some(relay_bus::design::Scroll::X) => "x",
+                Some(relay_bus::design::Scroll::Y) => "y",
+                Some(relay_bus::design::Scroll::Both) => "both",
+            };
+            dd.set_selected(scrolls.iter().position(|(v, _)| *v == now).map_or(gtk::INVALID_LIST_POSITION, |i| i as u32));
+            let weak = Rc::downgrade(&b);
+            dd.connect_selected_notify(move |dd| {
+                if let (Some(b), Some((v, _))) = (weak.upgrade(), scrolls.get(dd.selected() as usize)) {
+                    b.set_selected(set(&[("scroll", if *v == "none" { Value::Null } else { json!(v) })]));
+                }
+            });
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            row.append(&clip);
+            dd.set_hexpand(true);
+            row.append(&dd);
+            sec.append(&row);
         }
 
         // Type: a text, a sticky, and a shape with a label, or one being typed into (E-text-6).
@@ -561,9 +687,9 @@ impl Board {
             );
             sec.append(&align);
             sec.append(&case);
-            let color = same(nodes.iter().map(|n| n.color.clone())).flatten();
+            let color = same(nodes.iter().map(|n| self::current(&b, &n.id, |s: &Node| s.color.clone()))).flatten();
             let weak = Rc::downgrade(&b);
-            sec.append(&labelled("Colour", color_key(&b, color.as_deref(), "Text colour", Some("Automatic"), move |c| {
+            sec.append(&labelled("Colour", color_key_named(&b, color.as_deref(), "Text colour", Some("Automatic"), Some("color"), move |c| {
                 if let Some(b) = weak.upgrade() {
                     b.set_selected(set(&[("color", json!(c))]));
                 }
@@ -606,12 +732,13 @@ impl Board {
             if single {
                 super::shape_panels::paint(&b, &sec, &first, Slot::Fill);
             } else {
-                let fill = same(nodes.iter().map(color::fill_of));
+                // As stored where a layer holds one, so a named colour shows as its name.
+                let fill = same(nodes.iter().map(|n| self::current(&b, &n.id, |s: &Node| s.fill.clone()).or_else(|| color::fill_of(n))));
                 let weak = Rc::downgrade(&b);
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
                 // Lines, paths and texts fill with nothing until given a colour.
                 let clear = if nodes.iter().all(|n| color::fill_of(n).is_none()) { "None" } else { "Automatic" };
-                row.append(&color_key(&b, fill.clone().flatten().as_deref(), "Fill", Some(clear), move |c| {
+                row.append(&color_key_named(&b, fill.clone().flatten().as_deref(), "Fill", Some(clear), Some("fill"), move |c| {
                     if let Some(b) = weak.upgrade() {
                         b.set_selected(set(&[("fill", json!(c)), ("gradient", Value::Null)]));
                     }
@@ -632,9 +759,9 @@ impl Board {
             if single {
                 super::shape_panels::paint(&b, &sec, &first, Slot::Stroke);
             } else {
-                let stroke = same(nodes.iter().map(|n| n.stroke.clone())).flatten();
+                let stroke = same(nodes.iter().map(|n| self::current(&b, &n.id, |s: &Node| s.stroke.clone()))).flatten();
                 let weak = Rc::downgrade(&b);
-                sec.append(&labelled("Colour", color_key(&b, stroke.as_deref(), "Colour", (!lines).then_some("None"), move |c| {
+                sec.append(&labelled("Colour", color_key_named(&b, stroke.as_deref(), "Colour", (!lines).then_some("None"), Some("stroke"), move |c| {
                     if let Some(b) = weak.upgrade() {
                         b.set_selected(set(&[("stroke", json!(c)), ("stroke_gradient", Value::Null)]));
                     }
@@ -801,17 +928,31 @@ impl Board {
         }
     }
 
-    /// A width or height typed in: a fixed size from now on (`edit::size_set`). A flat line
-    /// has none across it to give, and is left alone (B36). Answers the size the selection
+    /// A width or height typed in: a fixed size from now on (`edit::size_set`, within its min
+    /// and max), the size it shows, so a node a stretch pin sizes is stored at what makes it
+    /// show that (`layout::unpinned`). A flat line has none across it to give, and a group's
+    /// size is its layers' (B90): both are left alone (B36). Answers the size the selection
     /// shows now, for the field.
     pub(super) fn set_size(&self, axis: &str, v: f64) -> f64 {
         let v = v.max(1.0).round();
         let ids = self.selected();
         let scene = self.doc.scene.borrow();
+        let placed = self.placed();
         let ops: Vec<NodeOp> = ids
             .iter()
             .filter_map(|id| scene.stored(id))
-            .filter_map(|n| Some(NodeOp::Update { id: n.id.clone(), set: edit::size_set(n, axis, v)? }))
+            .filter(|n| n.kind != NodeKind::Group)
+            .filter_map(|n| {
+                let stored = match shown_rel(&scene, &placed, &n.id) {
+                    Some((mut rel, fit)) => {
+                        if axis == "w" { rel.w = v } else { rel.h = v }
+                        let r = layout::unpinned(n, fit, rel);
+                        if axis == "w" { r.w } else { r.h }
+                    }
+                    None => v,
+                };
+                Some(NodeOp::Update { id: n.id.clone(), set: edit::size_set(n, axis, stored.round())? })
+            })
             .collect();
         drop(scene);
         if !ops.is_empty() {
@@ -819,6 +960,193 @@ impl Board {
         }
         let placed = self.placed();
         same(ids.iter().filter_map(|id| placed.rect(id)).map(|r| bits(if axis == "w" { r.w } else { r.h }.round()))).map_or(v, f64::from_bits)
+    }
+
+    /// X or Y typed in: where the selection shows from its parent's corner, stored through its
+    /// pins (`layout::unpinned`), so it lands where it was typed whatever its parent's size; a
+    /// hidden layer, which shows nowhere, takes it as it is.
+    fn set_position(&self, axis: &str, v: f64) -> f64 {
+        let ids = self.selected();
+        let scene = self.doc.scene.borrow();
+        let placed = self.placed();
+        let ops: Vec<NodeOp> = ids
+            .iter()
+            .filter_map(|id| scene.stored(id))
+            .map(|n| {
+                let stored = match shown_rel(&scene, &placed, &n.id) {
+                    Some((mut rel, fit)) => {
+                        if axis == "x" { rel.x = v } else { rel.y = v }
+                        let r = layout::unpinned(n, fit, rel);
+                        if axis == "x" { r.x } else { r.y }
+                    }
+                    None => v,
+                };
+                NodeOp::Update { id: n.id.clone(), set: set(&[(axis, json!(stored.round()))]) }
+            })
+            .collect();
+        drop(scene);
+        self.commit(ops);
+        v
+    }
+
+    /// Take the selection out of its frame's auto layout where it shows (`absolute`), its box as
+    /// placed and a fill made fixed so nothing moves (`edit::freeze`), or put it back in.
+    fn set_absolute(&self, on: bool) {
+        let ids = self.selected();
+        let scene = self.doc.scene.borrow();
+        let placed = self.placed();
+        let ops: Vec<NodeOp> = ids
+            .iter()
+            .filter_map(|id| {
+                let n = scene.stored(id)?;
+                let parent = n.parent.as_deref()?;
+                if !on {
+                    return n.is_absolute().then(|| NodeOp::Update { id: id.clone(), set: set(&[("absolute", Value::Null)]) });
+                }
+                if n.is_absolute() {
+                    return None;
+                }
+                let mut s = edit::freeze(&scene, &placed, id, placed.origin(parent), layout::fit_of(&scene, &placed, parent)).unwrap_or_default();
+                s.insert("absolute".into(), json!(true));
+                Some(NodeOp::Update { id: id.clone(), set: s })
+            })
+            .collect();
+        drop(scene);
+        self.commit(ops);
+    }
+
+    /// Pin the selection across (`across`) or down to `pin` (`None`: left or top, the default),
+    /// stored again through the new pin so nothing moves ([`pin_set`]).
+    fn set_pin(&self, across: bool, pin: Option<&'static str>) {
+        let ids = self.selected();
+        let scene = self.doc.scene.borrow();
+        let placed = self.placed();
+        let ops: Vec<NodeOp> = ids.iter().filter_map(|id| Some(NodeOp::Update { id: id.clone(), set: pin_set(&scene, &placed, id, across, pin)? })).collect();
+        drop(scene);
+        self.commit(ops);
+    }
+
+    /// A min or max size (`key`) typed in, or cleared (`None`): [`bound_set`]. Answers what is
+    /// stored, for the field.
+    fn set_bound(&self, key: &'static str, v: Option<f64>) -> Option<f64> {
+        let v = v.map(|v| v.max(0.0).round());
+        let ids = self.selected();
+        let scene = self.doc.scene.borrow();
+        let ops: Vec<NodeOp> = ids
+            .iter()
+            .filter_map(|id| scene.stored(id))
+            .filter_map(|n| Some(NodeOp::Update { id: n.id.clone(), set: bound_set(n, key, v)? }))
+            .collect();
+        drop(scene);
+        self.commit(ops);
+        v
+    }
+
+    /// The width or height rule chosen: fixed holds the size each layer shows now (TM-8), so
+    /// nothing jumps; hug and fill are written as they are.
+    fn set_rule(&self, axis: &str, rule: &str) {
+        let field = if axis == "w" { "w_sizing" } else { "h_sizing" };
+        let ids = self.selected();
+        let placed = self.placed();
+        let ops: Vec<NodeOp> = ids
+            .iter()
+            .map(|id| {
+                let mut s = set(&[(field, json!(rule))]);
+                if let (Some(r), "fixed") = (placed.rect(id), rule) {
+                    s.insert(axis.into(), json!((if axis == "w" { r.w } else { r.h }).round()));
+                }
+                NodeOp::Update { id: id.clone(), set: s }
+            })
+            .collect();
+        self.commit(ops);
+    }
+
+    /// The selection's style (reuse §4): a key naming it, or "No style", whose menu gives each of
+    /// the design's styles, No style (each layer keeps its look), a new style from the layer,
+    /// and for the layer's style, Update it from the layer and Reset the layer to it (both only
+    /// while the layer sets its own over it) and Delete it (its layers keep their look).
+    fn style_row(&self, b: &Rc<Board>, body: &gtk::Box, ids: &[String]) {
+        let scene = self.doc.scene.borrow();
+        let names: Vec<String> = scene.styles().styles.keys().cloned().collect();
+        let current = same(ids.iter().map(|id| scene.stored(id).and_then(|n| n.style.clone())));
+        let first = ids.first().cloned().unwrap_or_default();
+        let (updates, resets) = match current.clone().flatten() {
+            Some(_) if ids.len() == 1 => (
+                !relay_client::design::styles::update_style(&scene, &first).is_empty(),
+                !relay_client::design::styles::reset_to_style(&scene, ids).is_empty(),
+            ),
+            _ => (false, false),
+        };
+        let users = current.clone().flatten().map_or(0, |name| scene.users(&name).len());
+        drop(scene);
+        let key = gtk::MenuButton::new();
+        key.add_css_class("design-dropdown");
+        key.set_label(&match &current {
+            Some(Some(name)) => name.clone(),
+            Some(None) => "No style".to_string(),
+            None => "Mixed styles".to_string(),
+        });
+        key.set_tooltip_text(Some("Style: a look this layer shares with others; changing it changes them all"));
+        key.set_hexpand(true);
+        let pop = gtk::Popover::new();
+        pop.add_css_class("design-menu");
+        let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let item = |caption: &str, act: MenuAct| {
+            let button = gtk::Button::with_label(caption);
+            button.add_css_class("design-menu-item");
+            let (weak, p) = (Rc::downgrade(b), pop.downgrade());
+            button.connect_clicked(move |button| {
+                if let Some(p) = p.upgrade() {
+                    p.popdown();
+                }
+                if let Some(b) = weak.upgrade() {
+                    act(&b, button);
+                }
+            });
+            menu.append(&button);
+        };
+        for name in names {
+            let n = name.clone();
+            item(&name, Box::new(move |b, _| b.set_selected(set(&[("style", json!(n))]))));
+        }
+        item("No style", Box::new(|b, _| {
+            let ops = relay_client::design::styles::detach(&b.doc.scene.borrow(), &b.selected());
+            b.commit(ops);
+        }));
+        if ids.len() == 1 {
+            let at = key.downgrade();
+            item("New style from this layer…", Box::new(move |b, _| {
+                let Some(at) = at.upgrade() else { return };
+                super::widgets::ask_name(b, &at, "Name the style", |b, name| {
+                    let id = b.selected().first().cloned().unwrap_or_default();
+                    let ops = relay_client::design::styles::new_style(&b.doc.scene.borrow(), &id, name);
+                    b.commit(ops);
+                });
+            }));
+        }
+        if let Some(Some(name)) = current {
+            if updates {
+                let f = first.clone();
+                item(&format!("Update ‹{name}› from this layer"), Box::new(move |b, _| {
+                    let ops = relay_client::design::styles::update_style(&b.doc.scene.borrow(), &f);
+                    b.commit(ops);
+                }));
+            }
+            if resets {
+                item(&format!("Reset to ‹{name}›"), Box::new(|b, _| {
+                    let ops = relay_client::design::styles::reset_to_style(&b.doc.scene.borrow(), &b.selected());
+                    b.commit(ops);
+                }));
+            }
+            let n = name.clone();
+            let caption = format!("Delete ‹{name}› ({users} {} keep {} look)", if users == 1 { "layer" } else { "layers" }, if users == 1 { "its" } else { "their" });
+            item(&caption, Box::new(move |b, _| {
+                b.commit(vec![NodeOp::DeleteStyle { name: n.clone() }]);
+            }));
+        }
+        pop.set_child(Some(&menu));
+        key.set_popover(Some(&pop));
+        body.append(&labelled("Style", key));
     }
 
     /// The most lines a text shows, the rest cut with "…"; empty shows them all.
@@ -1116,6 +1444,69 @@ fn blend_caption(m: Blend) -> String {
     chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
+/// The update that pins layer `id` across (`across`) or down to `pin` (`None`: left or top, the
+/// default) with nothing moving: its box stored again through the new pin (`layout::unpinned`),
+/// and a stretch on an axis that hugs or fills made fixed at the size it shows. `None` for a
+/// layer not placed.
+fn pin_set(scene: &Scene, placed: &layout::Placed, id: &str, across: bool, pin: Option<&str>) -> Option<Map<String, Value>> {
+    let n = scene.stored(id)?;
+    let (rel, fit) = shown_rel(scene, placed, id)?;
+    let (pin_key, pos, len, rule) = if across { ("pin_x", "x", "w", "w_sizing") } else { ("pin_y", "y", "h", "h_sizing") };
+    let value = pin.map(Value::from).unwrap_or(Value::Null);
+    let mut s = set(&[(pin_key, value.clone())]);
+    let mut pinned = n.patched(&set(&[(pin_key, value)])).ok()?;
+    // Both sides and scale change its length with its frame's.
+    let stretch = (if across { pinned.pins().0 } else { pinned.pins().1 }).stretches();
+    if stretch && (if across { pinned.w_rule() } else { pinned.h_rule() }) != Sizing::Fixed {
+        s.insert(rule.into(), json!("fixed"));
+        if across { pinned.w_sizing = Some(Sizing::Fixed) } else { pinned.h_sizing = Some(Sizing::Fixed) }
+    }
+    let r = layout::unpinned(&pinned, fit, rel);
+    // Not to whole pixels: a scale pin stores a share of what shows, and rounding it would move it.
+    let fine = |v: f64| (v * 1e4).round() / 1e4;
+    let (at, long, was_at, was_long) = if across { (r.x, r.w, n.x, n.w) } else { (r.y, r.h, n.y, n.h) };
+    if fine(at) != was_at {
+        s.insert(pos.into(), json!(fine(at)));
+    }
+    // Leaving a pin that sized it rewrites its length as much as taking one.
+    let sized = stretch || (if across { n.pins().0 } else { n.pins().1 }).stretches();
+    if sized && fine(long) != was_long {
+        s.insert(len.into(), json!(fine(long).max(0.0)));
+    }
+    Some(s)
+}
+
+/// The update that sets `n`'s min or max size `key` to `v` (`None` unsets it), and brings a
+/// fixed size it rules out within it; `None` when the bound does not read.
+fn bound_set(n: &Node, key: &str, v: Option<f64>) -> Option<Map<String, Value>> {
+    let mut s = set(&[(key, v.map(Value::from).unwrap_or(Value::Null))]);
+    // Read with the new bound but not checked, since the size it rules out is fixed below.
+    let mut fields = n.to_map();
+    fields.insert(key.into(), s[key].clone());
+    let bounded = Node::read(Value::Object(fields)).ok()?;
+    let (w, h) = (bounded.clamp_w(n.w), bounded.clamp_h(n.h));
+    if n.w_rule() == Sizing::Fixed && w != n.w {
+        s.insert("w".into(), json!(w));
+    }
+    if n.h_rule() == Sizing::Fixed && h != n.h {
+        s.insert("h".into(), json!(h));
+    }
+    n.patched(&s).ok().map(|_| s)
+}
+
+/// What a menu item of the inspector does when chosen.
+type MenuAct = Box<dyn Fn(&Rc<Board>, &gtk::Button)>;
+
+/// Where layer `id` shows from its parent's corner (its own point, its placed size), and how its
+/// parent is drawn against how it is stored; `None` for what is not placed, or sits in no parent.
+fn shown_rel(scene: &Scene, placed: &layout::Placed, id: &str) -> Option<(Rect, Option<layout::Fit>)> {
+    let parent = scene.parent(id)?;
+    let r = placed.rect(id)?;
+    let (px, py) = placed.point(id);
+    let (ox, oy) = placed.origin(parent);
+    Some((Rect::new(px - ox, py - oy, r.w, r.h), layout::fit_of(scene, placed, parent)))
+}
+
 fn sizing_name(s: Sizing) -> &'static str {
     match s {
         Sizing::Fixed => "fixed",
@@ -1250,6 +1641,47 @@ mod tests {
             s.inset = false;
         }
         assert_eq!(shadow_look(&rect), "drop");
+    }
+
+    #[test]
+    fn a_new_pin_moves_nothing() {
+        use relay_client::design::layout::{place, Measure};
+        // No text here: nothing to measure.
+        struct Mono;
+        impl Measure for Mono {
+            fn measure(&self, _: &Node, _: Option<f64>) -> (f64, f64) {
+                (0.0, 0.0)
+            }
+        }
+        let node = |id: &str, parent: Option<&str>, kind: NodeKind, r: [f64; 4]| {
+            let mut n = Node::new(kind);
+            (n.id, n.parent, n.x, n.y, n.w, n.h) = (id.into(), parent.map(Into::into), r[0], r[1], r[2], r[3]);
+            n
+        };
+        // A column that fills a row is drawn 100 wider than it stores, so its children's pins act.
+        let mut row = node("row", Some("p1"), NodeKind::Frame, [0.0, 0.0, 300.0, 200.0]);
+        row.layout = Some(Layout::Row);
+        let mut col = node("col", Some("row"), NodeKind::Frame, [0.0, 0.0, 200.0, 200.0]);
+        col.w_sizing = Some(Sizing::Fill);
+        let mut scene = Scene::new(vec![node("p1", None, NodeKind::Page, [0.0; 4]), row, col, node("key", Some("col"), NodeKind::Rect, [20.0, 10.0, 140.0, 20.0])]);
+        let shown = |s: &Scene| place(s, "p1", &Mono).rect("key").unwrap();
+        let before = shown(&scene);
+        for pin in [Some("right"), Some("center"), Some("left_right"), Some("scale"), None] {
+            let set = pin_set(&scene, &place(&scene, "p1", &Mono), "key", true, pin).unwrap();
+            scene.apply_all(&[NodeOp::Update { id: "key".into(), set }]).unwrap();
+            let now = shown(&scene);
+            let near = |a: f64, b: f64| (a - b).abs() < 0.01;
+            assert!(near(now.x, before.x) && near(now.y, before.y) && near(now.w, before.w) && near(now.h, before.h), "pinned {pin:?}: {now:?}");
+        }
+    }
+
+    #[test]
+    fn a_bound_brings_a_fixed_size_within_it() {
+        let mut n = Node::new(NodeKind::Rect);
+        (n.parent, n.w, n.h) = (Some("p1".into()), 300.0, 50.0);
+        assert_eq!(bound_set(&n, "max_w", Some(200.0)).unwrap(), set(&[("max_w", json!(200.0)), ("w", json!(200.0))]));
+        assert_eq!(bound_set(&n, "min_h", Some(80.0)).unwrap(), set(&[("min_h", json!(80.0)), ("h", json!(80.0))]));
+        assert_eq!(bound_set(&n, "min_w", None).unwrap(), set(&[("min_w", Value::Null)]));
     }
 
     #[test]
