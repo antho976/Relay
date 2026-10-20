@@ -373,7 +373,11 @@ impl Profile {
             let words = gtk::Box::new(gtk::Orientation::Vertical, 2);
             words.set_hexpand(true);
             words.append(&label(caption, "launch-switch-title"));
-            words.append(&label(hint, "launch-hint"));
+            // Wrapped: the API key's hint on one line would hold the sheet wider than its 780px.
+            let hint = label(hint, "launch-hint");
+            hint.set_wrap(true);
+            hint.set_max_width_chars(60);
+            words.append(&hint);
             line.append(&words);
             let switch = gtk::Switch::new();
             switch.set_active(on);
