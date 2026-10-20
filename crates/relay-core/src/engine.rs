@@ -1197,8 +1197,10 @@ impl Engine {
 
         match outcome {
             Ok(result) => {
+                // The result goes into the audit row and back out to the reply, never copied:
+                // a design.apply's full answer is the whole undo and every node it touched (B58).
+                let outcome = Ok(result);
                 if audited {
-                    let outcome = Ok(result.clone());
                     let e = AuditEntry {
                         on_behalf_of: on_behalf_of.as_ref(),
                         hold_id,
@@ -1217,7 +1219,7 @@ impl Engine {
                 }
                 tx.commit().map_err(internal)?;
                 self.publish(conn, span, events, after_commit);
-                Ok(Response::ok(req.id, result))
+                Ok(Response::ok(req.id, outcome?))
             }
             Err(err) => {
                 let outcome = Err(err.clone());
