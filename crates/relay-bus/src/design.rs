@@ -1102,8 +1102,8 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
     pub style: Option<String>,
-    /// How it moves when the design plays: 2 to 64 keys in time order on the clock of the nearest
-    /// frame or page with a `timeline` (itself included), else its page's. Its own fields are its
+    /// How it moves when the design plays (any node but a page): 2 to 64 keys in time order on the
+    /// clock of the nearest frame or page with a `timeline` (itself included), else its page's. Its own fields are its
     /// look at rest, which whatever does not play shows (the canvas until Play, exports,
     /// `design.render` without `at_ms`). `dx`, `dy`, `rotate` and the scales move it from where
     /// layout puts it; `opacity`, `fill`, `stroke`, `color`, `blur`, `sweep`, `angle` and `trim`
