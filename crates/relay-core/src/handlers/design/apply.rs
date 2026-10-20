@@ -481,6 +481,22 @@ impl Run<'_> {
         Ok(below as u32)
     }
 
+    /// Whether a move of node `id` (at `ord`, `at` among its siblings) to `index` among the same
+    /// `parent`'s children leaves it where it is: that index, or the top when there is none or
+    /// it is past the end and nothing sits above it. As [`Run::slot`] places it.
+    fn in_place(&self, parent: Option<&str>, id: &str, ord: f64, at: u32, index: Option<u32>) -> Result<bool, BusError> {
+        if index == Some(at) {
+            return Ok(true);
+        }
+        if index.is_some_and(|index| index < at) {
+            return Ok(false);
+        }
+        let above: bool = self.tx.prepare_cached("SELECT EXISTS(SELECT 1 FROM design_nodes WHERE design_id = ?1 AND parent_id IS ?2
+            AND (ord > ?3 OR (ord = ?3 AND node_id > ?4)))").bus()?
+            .query_row(params![self.design, parent, ord, id], |r| r.get(0)).bus()?;
+        Ok(!above)
+    }
+
     /// `{kind}-{n}` from the design's counter, past any id already taken.
     pub(super) fn assign(&mut self, kind: NodeKind) -> Result<String, BusError> {
         loop {
@@ -660,6 +676,11 @@ impl Run<'_> {
             Some(to)
         };
         let old_index = self.index_of(from.as_deref(), &id, ord)?;
+        if to == from && self.in_place(to.as_deref(), &id, ord, old_index, index)? {
+            // TM-58: it already sits where it was sent. Nothing is written or touched, and
+            // nothing needs undoing.
+            return Ok(Some(id));
+        }
         let ord = self.slot(to.as_deref(), index, Some(&id))?;
         self.tx.prepare_cached("UPDATE design_nodes SET parent_id = ?3, ord = ?4, rev = ?5 WHERE design_id = ?1 AND node_id = ?2").bus()?
             .execute(params![self.design, id, to, ord, self.rev]).bus()?;

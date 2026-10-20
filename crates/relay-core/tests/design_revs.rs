@@ -143,8 +143,9 @@ fn an_update_to_what_a_design_already_is_changes_nothing() {
     assert_eq!(ok(&e, "design.update", json!({"design_id": id, "session": null}))["rev"], untied["rev"], "untied already");
 }
 
-/// TM-58: an apply whose every edit finds what it sends already there makes no rev, event or
-/// undo, and answers an empty undo; a list mixing one with a real change undoes only the change.
+/// TM-58: an apply whose every edit finds what it sends already there (an update to the values a
+/// node holds, a move to where it sits) makes no rev, event or undo, and answers an empty undo; a
+/// list mixing one with a real change undoes only the change.
 #[test]
 fn an_apply_of_identical_sets_makes_no_rev() {
     let (e, _root) = project();
@@ -152,13 +153,20 @@ fn an_apply_of_identical_sets_makes_no_rev() {
     let now = rev(&e, id);
     let undo = last_undo(&e, "design.apply");
     let mut rx = e.subscribe();
+    // card holds title, photo and inner, bottom to top; page-2 is the top page.
     let applied = apply(&e, id, json!([
         {"op": "update", "id": "title", "set": {"text": "Hello", "font_size": 20.0}},
         {"op": "update", "id": "photo", "set": {"fill": "#ff0000", "w": 100}},
+        {"op": "move", "id": "photo", "index": 1},
+        {"op": "move", "id": "title", "parent": "card", "index": 0},
+        {"op": "move", "id": "inner"},
+        {"op": "move", "id": "inner", "parent": "card", "index": 9},
+        {"op": "move", "id": "page-2"},
+        {"op": "move", "id": "page-1", "index": 0},
     ]));
     assert_eq!((applied["rev"].as_i64(), applied["prev_rev"].as_i64()), (Some(now), Some(now)));
     assert_eq!((applied["inverse"].clone(), applied["nodes"].clone(), applied["removed_count"].clone()), (json!([]), json!([]), json!(0)));
-    assert_eq!(strings(&applied["ids"]), ["title", "photo"]);
+    assert_eq!(strings(&applied["ids"]), ["title", "photo", "photo", "title", "inner", "inner", "page-2", "page-1"]);
     assert!(applied.get("audit_id").is_none());
     assert!(changed_events(&mut rx).is_empty());
     assert_eq!(rev(&e, id), now);
@@ -168,10 +176,15 @@ fn an_apply_of_identical_sets_makes_no_rev() {
     let mixed = apply(&e, id, json!([
         {"op": "update", "id": "title", "set": {"text": "Hello"}},
         {"op": "update", "id": "photo", "set": {"fill": "#00ff00"}},
+        {"op": "move", "id": "inner", "index": 2},
     ]));
     assert_eq!(mixed["rev"].as_i64(), Some(now + 1));
     assert_eq!(mixed["inverse"], json!([{"op": "update", "id": "photo", "set": {"fill": "#ff0000"}}]));
     assert_eq!(ids(&mixed["nodes"]), ["photo"]);
+    // A move one place down is a move, undone by one back.
+    let moved = apply(&e, id, json!([{"op": "move", "id": "inner", "index": 1}]));
+    assert_eq!((moved["rev"].as_i64(), ids(&moved["nodes"])), (Some(now + 2), vec!["inner".to_string()]));
+    assert_eq!(moved["inverse"], json!([{"op": "move", "id": "inner", "parent": "card", "index": 2}]));
 }
 
 // --- W20: since_rev and nodes -----------------------------------------------------------------
@@ -473,7 +486,7 @@ fn a_stale_base_rev_names_each_node_changed_since() {
     let id = sample(&e);
     let base = rev(&e, id);
     apply(&e, id, json!([{"op": "update", "id": "title", "set": {"text": "Hi"}}]));
-    apply(&e, id, json!([{"op": "update", "id": "dot", "set": {"fill": "#00ff00"}}, {"op": "move", "id": "chip", "index": 0}]));
+    apply(&e, id, json!([{"op": "update", "id": "dot", "set": {"fill": "#00ff00"}}, {"op": "move", "id": "chip", "parent": "page-1"}]));
     let now = rev(&e, id);
     let error = refused_at(&e, id, base, json!([
         {"op": "add", "node": {"id": "badge", "parent": "page-1", "kind": "rect"}},
