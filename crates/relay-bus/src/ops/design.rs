@@ -36,6 +36,7 @@ result!(#[schemars(rename = "DesignGetOut")] GetOut {
     pub design: Design,
     /// Pages first in their order, then every other node after its parent, siblings bottom to
     /// top.
+    #[serde(serialize_with = "crate::design::write_nodes", deserialize_with = "crate::design::read_nodes")]
     pub nodes: Vec<Node>,
     /// Where an image's `src` is, on this machine.
     pub assets_dir: String,
@@ -100,6 +101,7 @@ result!(#[schemars(rename = "DesignApplyOut")] ApplyOut {
     /// changed the design in between; read it again with `design.get`.
     pub prev_rev: i64,
     /// Each node an edit added, changed or moved, as stored now.
+    #[serde(serialize_with = "crate::design::write_nodes", deserialize_with = "crate::design::read_nodes")]
     pub nodes: Vec<Node>,
     /// The ids deleted, with everything that was inside them.
     pub removed: Vec<String>,
@@ -108,6 +110,11 @@ result!(#[schemars(rename = "DesignApplyOut")] ApplyOut {
     pub ids: Vec<String>,
     /// The edits that undo these, in the order to apply them.
     pub inverse: Vec<NodeOp>,
+    /// For an agent, what a lenient list applied as written although a strict one would have
+    /// refused it, or skipped because this Relay cannot read the node: each edit's label and
+    /// why (at most 20).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 });
 op!(Apply, "design.apply", ApplyIn => ApplyOut,
     OpMeta::mutation(Scope::Project, 12, "Add, change, move or delete a design's nodes in one all-or-none list, only when the person asked for it; returns what changed and its undo")

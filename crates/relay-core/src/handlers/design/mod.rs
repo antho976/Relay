@@ -16,7 +16,7 @@ mod get;
 
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project, check_project};
-use relay_bus::design::{Node, NodeKind, MAX_NAME};
+use relay_bus::design::{plain_label, Node, NodeKind, MAX_NAME};
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{Create, Delete, Duplicate, GetOut, List, ListOut, Purge, Restore, Update};
 use relay_bus::types::{Design, Id};
@@ -76,12 +76,16 @@ fn emit_design(ctx: &mut Ctx, design: &Design) -> Result<(), BusError> {
     Ok(())
 }
 
-/// `raw` trimmed, or `default` when there is none; 1 to [`MAX_NAME`] characters either way.
+/// `raw` trimmed, or `default` when there is none; 1 to [`MAX_NAME`] characters either way,
+/// and none a control character (B43: a NUL would cut it short in GTK, or panic a debug build).
 fn title(raw: Option<&str>, default: &str) -> Result<String, BusError> {
     let title = raw.map_or(default, str::trim);
     let n = title.chars().count();
     if n == 0 || n > MAX_NAME {
         return Err(BusError::invalid("design.title", format!("a design title is 1 to {MAX_NAME} characters")));
+    }
+    if !plain_label(title) {
+        return Err(BusError::invalid("design.title", "a design title has no control characters"));
     }
     Ok(title.to_string())
 }
@@ -108,53 +112,28 @@ fn check_session(ctx: &Ctx, project_id: Id, session: &str) -> Result<(), BusErro
     Ok(())
 }
 
-fn kind_str(kind: NodeKind) -> &'static str {
-    match kind {
-        NodeKind::Page => "page",
-        NodeKind::Frame => "frame",
-        NodeKind::Group => "group",
-        NodeKind::Rect => "rect",
-        NodeKind::Ellipse => "ellipse",
-        NodeKind::Line => "line",
-        NodeKind::Text => "text",
-        NodeKind::Sticky => "sticky",
-        NodeKind::Path => "path",
-        NodeKind::Image => "image",
-        NodeKind::Polygon => "polygon",
-        NodeKind::Icon => "icon",
-    }
+/// The kind a row's `kind` column names; `None` for one this build does not know (a newer
+/// build's), whose row every scan leaves alone and every edit refuses to touch.
+fn kind_of(text: &str) -> Option<NodeKind> {
+    NodeKind::from_name(text)
 }
 
-fn kind_of(text: &str) -> Result<NodeKind, BusError> {
-    Ok(match text {
-        "page" => NodeKind::Page,
-        "frame" => NodeKind::Frame,
-        "group" => NodeKind::Group,
-        "rect" => NodeKind::Rect,
-        "ellipse" => NodeKind::Ellipse,
-        "line" => NodeKind::Line,
-        "text" => NodeKind::Text,
-        "sticky" => NodeKind::Sticky,
-        "path" => NodeKind::Path,
-        "image" => NodeKind::Image,
-        "polygon" => NodeKind::Polygon,
-        "icon" => NodeKind::Icon,
-        other => return Err(BusError::internal(format!("a design node of unknown kind {other:?}"))),
-    })
-}
-
-/// A node's JSON as stored: everything but its id and parent, which are columns.
+/// A node's JSON as stored: everything but its id and parent, which are columns, with what this
+/// build could not read of it (`extra`) written back as it came.
 fn body_of(node: &mut Node) -> Result<String, BusError> {
     let (id, parent) = (std::mem::take(&mut node.id), node.parent.take());
-    let body = serde_json::to_string(node).bus();
+    let body = if node.extra.is_empty() { serde_json::to_string(node) } else { serde_json::to_string(&node.to_map()) }.bus();
     (node.id, node.parent) = (id, parent);
     body
 }
 
-/// The node a row holds.
+/// The node a row holds, a field this build cannot read kept in `extra`. A row it cannot read
+/// at all (a kind it does not know, a body that is not a node) is refused as
+/// `design.node_unreadable`, never edited.
 fn node_of(id: String, parent: Option<String>, body: &str) -> Result<Node, BusError> {
-    let mut node: Node = serde_json::from_str(body)
-        .map_err(|e| BusError::internal(format!("design node {id:?} is unreadable: {e}")))?;
+    let mut node = Node::read_str(body).map_err(|e| {
+        BusError::invalid("design.node_unreadable", format!("node {id:?} cannot be read ({e}); open it in a newer Relay"))
+    })?;
     (node.id, node.parent) = (id, parent);
     Ok(node)
 }
@@ -319,12 +298,11 @@ mod tests {
 
     #[test]
     fn every_kind_reads_back_as_itself() {
-        for kind in [NodeKind::Page, NodeKind::Frame, NodeKind::Group, NodeKind::Rect, NodeKind::Ellipse,
-                     NodeKind::Line, NodeKind::Text, NodeKind::Sticky, NodeKind::Path, NodeKind::Image,
-                     NodeKind::Polygon, NodeKind::Icon] {
-            assert_eq!(kind_of(kind_str(kind)).unwrap(), kind);
-            assert_eq!(serde_json::to_value(kind).unwrap(), kind_str(kind), "the column names a kind as its JSON does");
+        for kind in NodeKind::ALL {
+            assert_eq!(kind_of(kind.name()), Some(kind));
+            assert_eq!(serde_json::to_value(kind).unwrap(), kind.name(), "the column names a kind as its JSON does");
         }
+        assert_eq!(kind_of("component"), None, "a newer build's kind");
     }
 
     #[test]

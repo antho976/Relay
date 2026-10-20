@@ -26182,6 +26182,13 @@
             "$ref": "#/$defs/DesignNodeOp"
           },
           "description": "The edits that undo these, in the order to apply them."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "For an agent, what a lenient list applied as written although a strict one would have\nrefused it, or skipped because this Relay cannot read the node: each edit's label and\nwhy (at most 20)."
         }
       },
       "required": [

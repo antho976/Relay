@@ -6,6 +6,7 @@ use crate::handlers::notes::check_project;
 use relay_bus::design::Node;
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{Get, GetOut};
+use relay_bus::types::Id;
 use std::collections::HashMap;
 
 /// One node row as `design.get` copies it out under the lock; parsed once the lock is gone.
@@ -18,8 +19,10 @@ struct Raw {
 
 /// `rows` in `design.get`'s order: the pages by `ord`, then each page's nodes in pre-order,
 /// siblings bottom to top. With `page`, that page and what is on it. A node whose parent is
-/// gone (none should be) is left out rather than shown nowhere.
-fn ordered(rows: Vec<Raw>, page: Option<&str>) -> Result<Vec<Node>, BusError> {
+/// gone (none should be) is left out rather than shown nowhere; so is a row this build cannot
+/// read (a newer build's kind, a body that is not a node), with what is inside it, rather than
+/// failing the whole design (B61).
+fn ordered(design: Id, rows: Vec<Raw>, page: Option<&str>) -> Result<Vec<Node>, BusError> {
     let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
     let mut pages = Vec::new();
     for (i, row) in rows.iter().enumerate() {
@@ -37,21 +40,35 @@ fn ordered(rows: Vec<Raw>, page: Option<&str>) -> Result<Vec<Node>, BusError> {
             return Err(BusError::not_found("design.page_not_found", format!("the design has no page {page:?}")));
         }
     }
-    let mut order = pages.clone();
+    // Each row in order, with the row it sits in (none for a page).
+    let mut order: Vec<(usize, Option<usize>)> = pages.iter().map(|&p| (p, None)).collect();
     let mut stack = Vec::new();
     for &p in &pages {
-        stack.extend(children.get(rows[p].id.as_str()).into_iter().flatten().rev());
-        while let Some(i) = stack.pop() {
-            order.push(i);
-            stack.extend(children.get(rows[i].id.as_str()).into_iter().flatten().rev());
+        stack.extend(children.get(rows[p].id.as_str()).into_iter().flatten().rev().map(|&c| (c, p)));
+        while let Some((i, up)) = stack.pop() {
+            order.push((i, Some(up)));
+            stack.extend(children.get(rows[i].id.as_str()).into_iter().flatten().rev().map(|&c| (c, i)));
         }
     }
     drop(children);
+    let mut left_out = vec![false; rows.len()];
     let mut rows: Vec<Option<Raw>> = rows.into_iter().map(Some).collect();
-    order.into_iter()
-        .filter_map(|i| rows[i].take())
-        .map(|row| node_of(row.id, row.parent, &row.body))
-        .collect()
+    let mut nodes = Vec::with_capacity(order.len());
+    for (i, up) in order {
+        let Some(row) = rows[i].take() else { continue };
+        if up.is_some_and(|p| left_out[p]) {
+            left_out[i] = true;
+            continue;
+        }
+        match node_of(row.id, row.parent, &row.body) {
+            Ok(node) => nodes.push(node),
+            Err(error) => {
+                left_out[i] = true;
+                tracing::warn!(design, "design.get: {}; left out with what is inside it", error.message);
+            }
+        }
+    }
+    Ok(nodes)
 }
 
 pub(super) fn register(e: &mut Engine) {
@@ -66,7 +83,7 @@ pub(super) fn register(e: &mut Engine) {
                 .collect::<rusqlite::Result<Vec<_>>>().bus()?;
             Ok((design, rows))
         })?;
-        let nodes = ordered(rows, p.page.as_deref())?;
+        let nodes = ordered(design.id, rows, p.page.as_deref())?;
         let assets_dir = ctx.engine().store.design_assets_dir().display().to_string();
         Ok(GetOut { design, nodes, assets_dir })
     });

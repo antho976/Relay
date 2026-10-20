@@ -1,9 +1,9 @@
 //! `design.apply`: a list of node edits run in order against the request's transaction.
 
-use super::{body_of, emit_design, kind_of, kind_str, live_design, node_of};
+use super::{body_of, emit_design, kind_of, live_design, node_of};
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project};
-use relay_bus::design::{Node, NodeKind, NodeOp, MAX_NODES, MAX_OPS};
+use relay_bus::design::{Node, NodeKind, NodeOp, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{Apply, ApplyOut};
 use relay_bus::types::{Design, Id};
@@ -12,31 +12,28 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 
-/// The most node JSON one design holds, in bytes. `design.get` returns it whole, and the
-/// clients' sockets cap a line at 2 MiB (RA-227): this leaves room for the ids and the row.
-const MAX_BYTES: i64 = 1536 * 1024;
 /// The largest `design.apply` undo the audit keeps for `audit.undo`.
 const UNDO_KEPT: usize = 256 * 1024;
+/// Most `warnings` one answer carries.
+const MAX_WARNINGS: usize = 20;
 
-/// `set` with the `width`/`height` spellings an `add` accepts renamed to the fields they fill,
-/// so a patch never holds both names of one field and its undo restores the field it changed.
-fn canonical(set: Map<String, Value>) -> Map<String, Value> {
-    if !set.contains_key("width") && !set.contains_key("height") {
-        return set;
-    }
-    set.into_iter()
-        .map(|(key, value)| match key.as_str() {
-            "width" => ("w".to_string(), value),
-            "height" => ("h".to_string(), value),
-            _ => (key, value),
-        })
-        .collect()
+/// A row's kind: `Err` holds the name of one this build does not know (a newer build's), whose
+/// row is a leaf it can neither read nor edit.
+pub(super) type RowKind = Result<NodeKind, String>;
+
+fn row_kind(text: String) -> RowKind {
+    kind_of(&text).ok_or(text)
+}
+
+/// The refusal of an edit naming node `id`, of a kind this build does not know.
+fn unknown_kind(id: &str, kind: &str) -> String {
+    format!("node {id:?} is of a kind this Relay cannot read ({kind:?}); open it in a newer Relay")
 }
 
 /// A node row: where it sits, what it is, and its JSON.
 pub(super) struct Stored {
     pub(super) parent: Option<String>,
-    pub(super) kind: NodeKind,
+    pub(super) kind: RowKind,
     pub(super) ord: f64,
     pub(super) body: String,
 }
@@ -44,7 +41,7 @@ pub(super) struct Stored {
 /// Where edit `at` of a `design.apply` stands, for its refusals: `ops[3] update "hero"`.
 fn label(at: usize, op: &NodeOp) -> String {
     match op {
-        NodeOp::Add { node, .. } if node.id.is_empty() => format!("ops[{at}] add {}", kind_str(node.kind)),
+        NodeOp::Add { node, .. } if node.id.is_empty() => format!("ops[{at}] add {}", node.kind.name()),
         NodeOp::Add { node, .. } => format!("ops[{at}] add {:?}", node.id),
         NodeOp::Update { id, .. } => format!("ops[{at}] update {id:?}"),
         NodeOp::Move { id, .. } => format!("ops[{at}] move {id:?}"),
@@ -57,7 +54,12 @@ fn label(at: usize, op: &NodeOp) -> String {
 pub(super) struct Run<'a> {
     pub(super) tx: &'a Connection,
     pub(super) design: Id,
+    /// An undo or a redo: a written rule's breach is applied as written, and an edit of a node
+    /// that is gone or cannot be read is skipped, where a strict list refuses either.
     pub(super) lenient: bool,
+    /// An agent asked: what a lenient list let through is told it in `warnings`.
+    pub(super) agent: bool,
+    pub(super) warnings: Vec<String>,
     pub(super) pages: i64,
     pub(super) nodes: i64,
     pub(super) bytes: i64,
@@ -95,16 +97,58 @@ impl Run<'_> {
         Err(self.fail(ErrorKind::NotFound, "design.node_not_found", what))
     }
 
-    pub(super) fn meta(&self, id: &str) -> Result<Option<(Option<String>, NodeKind, f64)>, BusError> {
+    /// Tell an agent what its lenient list let through or skipped (at most [`MAX_WARNINGS`]).
+    pub(super) fn warn(&mut self, what: impl std::fmt::Display) {
+        if self.agent && self.warnings.len() < MAX_WARNINGS {
+            self.warnings.push(format!("{}: {what}", self.label));
+        }
+    }
+
+    /// A written rule `why` is broken: refused in a strict list; a lenient one (an undo putting
+    /// back what was stored) applies it as written and tells an agent.
+    pub(super) fn breach(&mut self, why: String) -> Result<(), BusError> {
+        if !self.lenient {
+            return Err(self.fail(ErrorKind::Invalid, "design.node_invalid", why));
+        }
+        self.warn(format_args!("{why}; kept as it was"));
+        Ok(())
+    }
+
+    /// The node row `id`, if this build can read it: an edit naming one it cannot (a kind it
+    /// does not know, a body it cannot parse) is refused, or skipped when lenient. Nothing of
+    /// such a row is lost: it is left as it is.
+    pub(super) fn readable(&mut self, id: &str, row: &Stored) -> Result<Option<Node>, BusError> {
+        let why = match &row.kind {
+            Err(kind) => unknown_kind(id, kind),
+            Ok(_) => match node_of(id.to_string(), row.parent.clone(), &row.body) {
+                Ok(node) => return Ok(Some(node)),
+                Err(error) => error.message,
+            },
+        };
+        self.unreadable(why)?;
+        Ok(None)
+    }
+
+    /// An edit cannot touch a node this build cannot read (`why`): refused, or skipped (`Ok`)
+    /// when lenient.
+    pub(super) fn unreadable(&mut self, why: String) -> Result<(), BusError> {
+        if !self.lenient {
+            return Err(self.fail(ErrorKind::Invalid, "design.node_unreadable", why));
+        }
+        self.warn(format_args!("{why}; skipped"));
+        Ok(())
+    }
+
+    pub(super) fn meta(&self, id: &str) -> Result<Option<(Option<String>, RowKind, f64)>, BusError> {
         let found: Option<(Option<String>, String, f64)> = self.tx.prepare_cached(NODE_META).bus()?
             .query_row(params![self.design, id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional().bus()?;
-        found.map(|(parent, kind, ord)| Ok((parent, kind_of(&kind)?, ord))).transpose()
+        Ok(found.map(|(parent, kind, ord)| (parent, row_kind(kind), ord)))
     }
 
     pub(super) fn row(&self, id: &str) -> Result<Option<Stored>, BusError> {
         let found: Option<(Option<String>, String, f64, String)> = self.tx.prepare_cached(NODE_ROW).bus()?
             .query_row(params![self.design, id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).optional().bus()?;
-        found.map(|(parent, kind, ord, body)| Ok(Stored { parent, kind: kind_of(&kind)?, ord, body })).transpose()
+        Ok(found.map(|(parent, kind, ord, body)| Stored { parent, kind: row_kind(kind), ord, body }))
     }
 
     pub(super) fn touch(&mut self, id: &str) {
@@ -166,7 +210,7 @@ impl Run<'_> {
     /// `{kind}-{n}` from the design's counter, past any id already taken.
     pub(super) fn assign(&mut self, kind: NodeKind) -> Result<String, BusError> {
         loop {
-            let id = format!("{}-{}", kind_str(kind), self.next_node);
+            let id = format!("{}-{}", kind.name(), self.next_node);
             self.next_node += 1;
             if self.meta(&id)?.is_none() {
                 return Ok(id);
@@ -175,19 +219,25 @@ impl Run<'_> {
     }
 
     /// `parent` can take a child: it is there and is a page, frame or group. `Ok(false)` when
-    /// it is gone and the list is lenient.
+    /// it is gone and the list is lenient. A node of a kind this build cannot read holds
+    /// nothing it adds or moves.
     pub(super) fn container(&self, parent: &str) -> Result<bool, BusError> {
         match self.meta(parent)? {
             None if self.lenient => Ok(false),
             None => Err(self.fail(ErrorKind::NotFound, "design.parent", format!("parent {parent:?} is not in the design"))),
-            Some((_, kind, _)) if !kind.holds_children() => Err(self.fail(ErrorKind::Invalid, "design.parent",
-                format!("parent {parent:?} is a {}, which holds nothing; use a page, frame or group", kind_str(kind)))),
+            Some((_, Ok(kind), _)) if !kind.holds_children() => Err(self.fail(ErrorKind::Invalid, "design.parent",
+                format!("parent {parent:?} is a {}, which holds nothing; use a page, frame or group", kind.name()))),
+            Some((_, Err(kind), _)) => Err(self.fail(ErrorKind::Invalid, "design.parent",
+                format!("parent {parent:?} is of a kind this Relay cannot read ({kind:?}); use a page, frame or group"))),
             Some(_) => Ok(true),
         }
     }
 
     pub(super) fn add(&mut self, mut node: Node, index: Option<u32>) -> Result<Option<String>, BusError> {
         node.validate().map_err(|why| self.fail(ErrorKind::Invalid, "design.node_invalid", why))?;
+        if let Err(why) = node.check_new() {
+            self.breach(why)?;
+        }
         if let Some(parent) = node.parent.as_deref() {
             if !self.container(parent)? {
                 return Ok(None);
@@ -205,7 +255,7 @@ impl Run<'_> {
         let ord = self.slot(node.parent.as_deref(), index, None)?;
         let body = body_of(&mut node)?;
         self.tx.prepare_cached("INSERT INTO design_nodes(design_id, node_id, parent_id, kind, ord, body) VALUES (?1, ?2, ?3, ?4, ?5, ?6)").bus()?
-            .execute(params![self.design, node.id, node.parent, kind_str(node.kind), ord, body]).bus()?;
+            .execute(params![self.design, node.id, node.parent, node.kind.name(), ord, body]).bus()?;
         self.nodes += 1;
         self.pages += i64::from(node.kind == NodeKind::Page);
         self.bytes += body.len() as i64;
@@ -216,9 +266,11 @@ impl Run<'_> {
 
     pub(super) fn update(&mut self, id: String, set: Map<String, Value>) -> Result<Option<String>, BusError> {
         let Some(row) = self.row(&id)? else { return self.missing("no such node") };
-        let node = node_of(id, row.parent, &row.body)?;
-        let set = canonical(set);
+        let Some(node) = self.readable(&id, &row)? else { return Ok(None) };
         let mut next = node.patched(&set).map_err(|why| self.fail(ErrorKind::Invalid, "design.node_invalid", why))?;
+        if let Err(why) = Node::check_update(&node, &set, &next) {
+            self.breach(why)?;
+        }
         let body = body_of(&mut next)?;
         if body != row.body {
             self.tx.prepare_cached("UPDATE design_nodes SET body = ?3 WHERE design_id = ?1 AND node_id = ?2").bus()?
@@ -232,6 +284,13 @@ impl Run<'_> {
 
     pub(super) fn move_(&mut self, id: String, parent: Option<String>, index: Option<u32>) -> Result<Option<String>, BusError> {
         let Some((from, kind, ord)) = self.meta(&id)? else { return self.missing("no such node") };
+        let kind = match kind {
+            Ok(kind) => kind,
+            Err(kind) => {
+                self.unreadable(unknown_kind(&id, &kind))?;
+                return Ok(None);
+            }
+        };
         let to = if kind == NodeKind::Page {
             if parent.is_some() {
                 return Err(self.fail(ErrorKind::Invalid, "design.parent", "a page sits in no parent; a move only reorders it among the pages"));
@@ -268,7 +327,7 @@ impl Run<'_> {
 
     pub(super) fn delete(&mut self, id: String) -> Result<Option<String>, BusError> {
         let Some(root) = self.row(&id)? else { return self.missing("no such node") };
-        if root.kind == NodeKind::Page && self.pages <= 1 {
+        if root.kind == Ok(NodeKind::Page) && self.pages <= 1 {
             return Err(self.fail(ErrorKind::Conflict, "design.last_page", "a design keeps at least one page")
                 .with_hint("add another page first, or delete the design"));
         }
@@ -280,25 +339,29 @@ impl Run<'_> {
         let mut children = self.tx
             .prepare_cached("SELECT node_id, kind, ord, body FROM design_nodes WHERE design_id = ?1 AND parent_id = ?2 ORDER BY ord, node_id").bus()?;
         while next < doomed.len() {
-            if doomed[next].1.kind.holds_children() {
+            if matches!(doomed[next].1.kind, Ok(kind) if kind.holds_children()) {
                 let parent = doomed[next].0.clone();
                 let found = children.query_map(params![self.design, parent], |r| Ok((r.get(0)?, r.get::<_, String>(1)?, r.get(2)?, r.get(3)?))).bus()?
                     .collect::<rusqlite::Result<Vec<(String, String, f64, String)>>>().bus()?;
                 for (child, kind, ord, body) in found {
-                    doomed.push((child, Stored { parent: Some(parent.clone()), kind: kind_of(&kind)?, ord, body }));
+                    doomed.push((child, Stored { parent: Some(parent.clone()), kind: row_kind(kind), ord, body }));
                 }
             }
             next += 1;
         }
         drop(children);
-        let mut remove = self.tx.prepare_cached("DELETE FROM design_nodes WHERE design_id = ?1 AND node_id = ?2").bus()?;
+        // Every node of it is read before any goes: the undo re-adds each, and a node this build
+        // cannot read could not be put back, so a subtree holding one is not deleted.
         let mut undo = Vec::with_capacity(doomed.len());
-        for (i, (node_id, row)) in doomed.into_iter().enumerate() {
+        for (i, (node_id, row)) in doomed.iter().enumerate() {
+            let Some(node) = self.readable(node_id, row)? else { return Ok(None) };
+            undo.push(NodeOp::Add { node, index: (i == 0).then_some(index) });
+        }
+        let mut remove = self.tx.prepare_cached("DELETE FROM design_nodes WHERE design_id = ?1 AND node_id = ?2").bus()?;
+        for (node_id, row) in doomed {
             remove.execute(params![self.design, node_id]).bus()?;
             self.bytes -= row.body.len() as i64;
-            self.removed.push(node_id.clone());
-            let node = node_of(node_id, row.parent, &row.body)?;
-            undo.push(NodeOp::Add { node, index: (i == 0).then_some(index) });
+            self.removed.push(node_id);
         }
         self.nodes -= undo.len() as i64;
         self.pages -= i64::from(matches!(&undo[0], NodeOp::Add { node, .. } if node.kind == NodeKind::Page));
@@ -308,9 +371,10 @@ impl Run<'_> {
     }
 
     /// Node `id` as stored now, or as an edit of this list deleted it (its undo re-adds it).
+    /// A node this build cannot read has no box it can use: `None`.
     pub(super) fn stored(&self, id: &str) -> Result<Option<Node>, BusError> {
         if let Some(row) = self.row(id)? {
-            return node_of(id.to_string(), row.parent, &row.body).map(Some);
+            return Ok(node_of(id.to_string(), row.parent, &row.body).ok());
         }
         Ok(self.inverse.iter().rev().flatten().find_map(|op| match op {
             NodeOp::Add { node, .. } if node.id == id => Some(node.clone()),
@@ -347,7 +411,14 @@ impl Run<'_> {
             .collect::<rusqlite::Result<_>>().bus()?;
         let mut releases = Vec::new();
         for (id, parent, body) in attached {
-            let node = node_of(id, parent, &body)?;
+            // A row this build cannot read is left as it is (a newer build's own kind of line).
+            let node = match node_of(id, parent, &body) {
+                Ok(node) => node,
+                Err(error) => {
+                    tracing::warn!(design = self.design, "design.apply: {}; its ends are left as they are", error.message);
+                    continue;
+                }
+            };
             let mut set = Map::new();
             for (field, end) in [("from", &node.from), ("to", &node.to)] {
                 if let Some(end) = end.as_deref().filter(|e| removed.contains(e)) {
@@ -389,10 +460,11 @@ impl Run<'_> {
 
 pub(super) fn register(e: &mut Engine) {
     e.register::<Apply>(|ctx: &mut Ctx, p| {
-        // An undo re-adds every node a delete took, one edit each, so a lenient list (an undo or
-        // a redo) may hold a whole design's worth besides a list's.
-        let lenient = p.lenient.unwrap_or(false);
-        let most = if lenient { MAX_NODES + MAX_OPS } else { MAX_OPS };
+        // An undo re-adds every node a delete took, one edit each, so a lenient list of the
+        // person's (an undo or a redo) may hold a whole design's worth besides a list's. An
+        // agent's lists, lenient or not, stay within MAX_OPS.
+        let (lenient, agent) = (p.lenient.unwrap_or(false), ctx.actor.is_agent());
+        let most = if lenient && !agent { MAX_LENIENT_OPS } else { MAX_OPS };
         if p.ops.is_empty() || p.ops.len() > most {
             return Err(BusError::invalid("design.ops", format!("give 1 to {most} edits; this list has {}", p.ops.len())));
         }
@@ -410,6 +482,8 @@ pub(super) fn register(e: &mut Engine) {
             tx: ctx.tx(),
             design: design.id,
             lenient,
+            agent,
+            warnings: Vec::new(),
             pages: design.pages,
             nodes: design.nodes,
             bytes,
@@ -433,9 +507,9 @@ pub(super) fn register(e: &mut Engine) {
             run.ids.push(id.unwrap_or_default());
         }
         run.release_ends()?;
-        if run.bytes > MAX_BYTES {
+        if run.bytes > MAX_DESIGN_BYTES {
             return Err(BusError::invalid("design.too_large",
-                format!("the design would hold {} KiB of nodes; the limit is {} KiB", run.bytes >> 10, MAX_BYTES >> 10))
+                format!("the design would hold {} KiB of nodes; the limit is {} KiB", run.bytes >> 10, MAX_DESIGN_BYTES >> 10))
                 .with_hint("split it across designs, or keep long text and big paths out of it"));
         }
         ctx.tx().prepare_cached(
@@ -454,6 +528,7 @@ pub(super) fn register(e: &mut Engine) {
             .collect();
         let inverse: Vec<NodeOp> = std::mem::take(&mut run.inverse).into_iter().rev().flatten().collect();
         let ids = std::mem::take(&mut run.ids);
+        let warnings = std::mem::take(&mut run.warnings);
         let (pages, count) = (run.pages, run.nodes);
         let prev_rev = design.rev;
         let design = Design { rev: prev_rev + 1, pages, nodes: count, updated_by: by, updated_at: ctx.now.clone(), ..design };
@@ -465,6 +540,6 @@ pub(super) fn register(e: &mut Engine) {
             ctx.set_undo("design.apply", undo, None);
         }
         emit_design(ctx, &design)?;
-        Ok(ApplyOut { design, prev_rev, nodes, removed, ids, inverse })
+        Ok(ApplyOut { design, prev_rev, nodes, removed, ids, inverse, warnings })
     });
 }

@@ -5,14 +5,11 @@ use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{assert_actor_project, check_project};
 use crate::picture;
 use base64::Engine as _;
+use relay_bus::design::{MAX_ASSET_B64, MAX_ASSET_FILE};
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{AssetAdd, AssetAddOut};
 use std::io::{Read, Write};
 use std::path::Path;
-
-/// The largest picture `design.asset.add` copies in from a path, and takes as `bytes_b64`.
-const ASSET_FILE_MAX: u64 = 20 * 1024 * 1024;
-const ASSET_B64_MAX: usize = 1024 * 1024;
 
 /// The node an asset name stands for, and its natural size: `design.asset.add`'s read phase,
 /// done with the store unlocked.
@@ -23,7 +20,7 @@ struct StagedAsset {
     h: u32,
 }
 
-/// The picture at `raw`: an absolute path to a regular file of at most [`ASSET_FILE_MAX`].
+/// The picture at `raw`: an absolute path to a regular file of at most [`MAX_ASSET_FILE`].
 fn read_asset(raw: &str) -> Result<Vec<u8>, BusError> {
     let path = Path::new(raw);
     if !path.is_absolute() {
@@ -33,33 +30,33 @@ fn read_asset(raw: &str) -> Result<Vec<u8>, BusError> {
     if !meta.is_file() {
         return Err(BusError::invalid("design.asset", format!("{raw} is not a regular file")));
     }
-    let too_big = || BusError::invalid("design.asset", format!("{raw} is over {} MiB", ASSET_FILE_MAX >> 20));
-    if meta.len() > ASSET_FILE_MAX {
+    let too_big = || BusError::invalid("design.asset", format!("{raw} is over {} MiB", MAX_ASSET_FILE >> 20));
+    if meta.len() > MAX_ASSET_FILE {
         return Err(too_big());
     }
     let mut bytes = Vec::with_capacity(meta.len() as usize);
-    std::fs::File::open(path).bus()?.take(ASSET_FILE_MAX + 1).read_to_end(&mut bytes).bus()?;
-    if bytes.len() as u64 > ASSET_FILE_MAX {
+    std::fs::File::open(path).bus()?.take(MAX_ASSET_FILE + 1).read_to_end(&mut bytes).bus()?;
+    if bytes.len() as u64 > MAX_ASSET_FILE {
         return Err(too_big());
     }
     Ok(bytes)
 }
 
-/// `bytes_b64` decoded (line breaks allowed), at most [`ASSET_B64_MAX`] bytes.
+/// `bytes_b64` decoded (line breaks allowed), at most [`MAX_ASSET_B64`] bytes.
 fn decode_asset(encoded: &str) -> Result<Vec<u8>, BusError> {
     let compact: std::borrow::Cow<str> = if encoded.bytes().any(|b| b.is_ascii_whitespace()) {
         encoded.chars().filter(|c| !c.is_ascii_whitespace()).collect::<String>().into()
     } else {
         encoded.into()
     };
-    let too_big = || BusError::invalid("design.asset", format!("bytes_b64 is over {} KiB decoded", ASSET_B64_MAX >> 10))
+    let too_big = || BusError::invalid("design.asset", format!("bytes_b64 is over {} KiB decoded", MAX_ASSET_B64 >> 10))
         .with_hint("pass a larger picture as a path");
-    if compact.len() > ASSET_B64_MAX.div_ceil(3) * 4 {
+    if compact.len() > MAX_ASSET_B64.div_ceil(3) * 4 {
         return Err(too_big());
     }
     let bytes = base64::engine::general_purpose::STANDARD.decode(compact.as_bytes())
         .map_err(|_| BusError::invalid("design.asset", "bytes_b64 is not base64"))?;
-    if bytes.len() > ASSET_B64_MAX {
+    if bytes.len() > MAX_ASSET_B64 {
         return Err(too_big());
     }
     Ok(bytes)

@@ -6,15 +6,46 @@
 //! Geometry is in pixels. A node's `x`/`y` are relative to its parent's top-left corner (a
 //! page's origin is 0,0), so moving a frame moves everything in it. Children paint in order,
 //! the last on top.
+//!
+//! A node another build wrote is read whole: what this build cannot read waits in
+//! [`Node::extra`] and is written back as it was (`read`). Which fields each kind uses, and the
+//! rules a caller's new writes are held to, are in `fields`.
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
+use std::fmt;
+use std::marker::PhantomData;
+
+mod fields;
+mod read;
+
+pub use fields::{field_kinds, fit_written, plain_label, strip_controls, takes, Kinds, FIELDS};
+pub use read::{read_node, read_nodes, read_nodes_opt, write_node, write_nodes, write_nodes_opt};
 
 /// Most nodes one design holds.
 pub const MAX_NODES: usize = 5_000;
-/// Most edits one `design.apply` carries.
+/// Most edits one `design.apply` carries: any list of an agent's, lenient or not.
 pub const MAX_OPS: usize = 2_000;
+/// Most edits in a lenient list of the person's clients: an undo re-adds every node a delete
+/// took, one edit each, so it may hold a whole design's worth besides a list's.
+pub const MAX_LENIENT_OPS: usize = MAX_NODES + MAX_OPS;
+/// Most ancestors a node has, its page included (a page's child is 1 deep).
+pub const MAX_DEPTH: usize = 64;
+/// The most node data one design holds, in bytes. `design.get` returns it whole, and the
+/// clients' sockets cap a line at 2 MiB (RA-227): this leaves room for the ids and the row.
+pub const MAX_DESIGN_BYTES: i64 = 1536 * 1024;
+/// JSON bytes a node takes in a `design.get` reply beyond its body, id and parent.
+pub const NODE_OVERHEAD: i64 = 21;
+/// The largest picture `design.asset.add` copies in from a path.
+pub const MAX_ASSET_FILE: u64 = 20 * 1024 * 1024;
+/// The largest picture `design.asset.add` takes as `bytes_b64`, decoded.
+pub const MAX_ASSET_B64: usize = 1024 * 1024;
+/// How many revs back `design.get` can answer what changed since.
+pub const SINCE_WINDOW: i64 = 1_000;
+/// The widest shadow blur a caller may write, in px: a node's own `blur` cap.
+pub const MAX_SHADOW_BLUR: f64 = 200.0;
 /// Longest text a node holds, in characters.
 pub const MAX_TEXT: usize = 10_000;
 /// Most points one path or line holds.
@@ -55,9 +86,47 @@ pub enum NodeKind {
 }
 
 impl NodeKind {
+    pub const ALL: [NodeKind; 12] = [
+        NodeKind::Page,
+        NodeKind::Frame,
+        NodeKind::Group,
+        NodeKind::Rect,
+        NodeKind::Ellipse,
+        NodeKind::Line,
+        NodeKind::Text,
+        NodeKind::Sticky,
+        NodeKind::Path,
+        NodeKind::Image,
+        NodeKind::Polygon,
+        NodeKind::Icon,
+    ];
+
     /// Whether nodes can sit inside this one.
     pub fn holds_children(self) -> bool {
         matches!(self, NodeKind::Page | NodeKind::Frame | NodeKind::Group)
+    }
+
+    /// Its name as stored and written: `polygon`.
+    pub fn name(self) -> &'static str {
+        match self {
+            NodeKind::Page => "page",
+            NodeKind::Frame => "frame",
+            NodeKind::Group => "group",
+            NodeKind::Rect => "rect",
+            NodeKind::Ellipse => "ellipse",
+            NodeKind::Line => "line",
+            NodeKind::Text => "text",
+            NodeKind::Sticky => "sticky",
+            NodeKind::Path => "path",
+            NodeKind::Image => "image",
+            NodeKind::Polygon => "polygon",
+            NodeKind::Icon => "icon",
+        }
+    }
+
+    /// The kind `name` names; `None` for one this build does not know (a newer build's).
+    pub fn from_name(name: &str) -> Option<NodeKind> {
+        NodeKind::ALL.into_iter().find(|k| k.name() == name)
     }
 }
 
@@ -117,6 +186,7 @@ pub struct Gradient {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub angle: Option<f64>,
     /// 2 to 8 colours along it.
+    #[serde(deserialize_with = "obj_vec")]
     pub stops: Vec<Stop>,
 }
 
@@ -235,6 +305,69 @@ fn full_turn() -> f64 {
     360.0
 }
 
+/// A nested object, read only from a JSON object. serde's derived structs also read an array,
+/// field by field in order, so `"arc": [0, 90]` would quietly be a start and a sweep (TM-16).
+pub(crate) fn object_only<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<T, D::Error> {
+    struct Only<T>(PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for Only<T> {
+        type Value = T;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("an object")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
+            T::deserialize(de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    d.deserialize_map(Only(PhantomData))
+}
+
+/// [`object_only`] for an optional field: `null` is none.
+pub(crate) fn obj_opt<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+    struct Opt<T>(PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for Opt<T> {
+        type Value = Option<T>;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("an object or null")
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Option<T>, E> {
+            Ok(None)
+        }
+        fn visit_unit<E: de::Error>(self) -> Result<Option<T>, E> {
+            Ok(None)
+        }
+        fn visit_some<D: Deserializer<'de>>(self, d: D) -> Result<Option<T>, D::Error> {
+            object_only(d).map(Some)
+        }
+    }
+    d.deserialize_option(Opt(PhantomData))
+}
+
+/// [`object_only`] for each entry of a list.
+pub(crate) fn obj_vec<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Vec<T>, D::Error> {
+    struct Object<T>(PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> DeserializeSeed<'de> for Object<T> {
+        type Value = T;
+        fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<T, D::Error> {
+            object_only(d)
+        }
+    }
+    struct Objects<T>(PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for Objects<T> {
+        type Value = Vec<T>;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a list of objects")
+        }
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<T>, A::Error> {
+            let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(64));
+            while let Some(item) = seq.next_element_seed(Object(PhantomData))? {
+                out.push(item);
+            }
+            Ok(out)
+        }
+    }
+    d.deserialize_seq(Objects(PhantomData))
+}
+
 /// How a node mixes with what is under it in the same parent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -338,8 +471,12 @@ impl TextCase {
 
 /// One node of a design. Every field but `kind` is optional on input; an absent style field
 /// takes the kind's default (a white frame, a grey rect, dark 16px Geist text, a yellow sticky).
+//
+// Unknown keys are not a serde error (they land in `extra`) so that a body a newer build wrote
+// still reads; the tool schema still says `additionalProperties: false`, and a caller's add or
+// update naming one is refused by `Node::check_new` / `Node::check_update`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 #[schemars(rename = "DesignNode")]
 pub struct Node {
     /// Unique in the design: letters, digits, `-`, `_`, `.` or `:`, at most 64. Give your own
@@ -380,7 +517,7 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opacity: Option<f64>,
     /// A drop shadow under a frame, rect, ellipse, sticky or image.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "obj_opt")]
     pub shadow: Option<Shadow>,
     /// Whether a frame hides what overflows it (default true).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -468,7 +605,7 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub star: Option<f64>,
     /// A gradient painted instead of `fill`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "obj_opt")]
     pub gradient: Option<Gradient>,
     /// Corner radii top-left, top-right, bottom-right, bottom-left, instead of `radius`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -511,7 +648,7 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flip_y: Option<bool>,
     /// Draws only part of an ellipse: a pie slice, a donut or an arc of a ring.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "obj_opt")]
     pub arc: Option<Arc>,
     /// How the node mixes with what is under it in its parent (default `normal`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -519,6 +656,14 @@ pub struct Node {
     /// Draws a text's or label's letters upper, lower or title case.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_case: Option<TextCase>,
+
+    /// What this build cannot read in a node another build wrote: a key it does not know, or a
+    /// known one whose value it cannot read (a newer gradient kind). Kept and written back as it
+    /// was by [`Node::to_map`]; never set by this build. The derived `Serialize` leaves it out,
+    /// so no key is written twice.
+    #[serde(flatten, skip_serializing)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
 }
 
 /// One edit of a design. `design.apply` runs a list of them in order, all or none.
@@ -532,6 +677,8 @@ pub enum NodeOp {
     /// Add `node` (its `parent` is a page, frame or group already there or added earlier in
     /// the same list).
     Add {
+        // Read and written whole: an undo re-adds a stored node, `extra` included.
+        #[serde(serialize_with = "write_node", deserialize_with = "read_node")]
         node: Node,
         /// Its place among the parent's children, 0 at the bottom; absent puts it on top.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -565,7 +712,7 @@ impl NodeOp {
 }
 
 /// The field a patch key names: `width` and `height` are `w` and `h`.
-fn canonical_key(key: &str) -> &str {
+pub(crate) fn canonical_key(key: &str) -> &str {
     match key {
         "width" => "w",
         "height" => "h",
@@ -659,20 +806,26 @@ impl Node {
             arc: None,
             blend: None,
             text_case: None,
+            extra: Map::new(),
         }
     }
 
     /// This node with `set` applied (`NodeOp::Update`), validated. The error names the field.
-    /// `width` and `height` are read as `w` and `h`, as an `add` reads them.
+    /// `width` and `height` are read as `w` and `h`, as an `add` reads them; a `set` naming both
+    /// spellings of one is refused (B71). A key no field reads lands in `extra`, which
+    /// [`Node::check_update`] refuses in a strict list; a `null` removes a field or such a key.
     pub fn patched(&self, set: &Map<String, Value>) -> Result<Node, String> {
-        let Value::Object(mut fields) = serde_json::to_value(self).map_err(|e| e.to_string())? else {
-            return Err("a node serializes to an object".into());
-        };
+        for (field, alias) in [("w", "width"), ("h", "height")] {
+            if set.contains_key(field) && set.contains_key(alias) {
+                return Err(format!("{field}: give {field} or {alias}, not both"));
+            }
+        }
+        let mut fields = self.to_map();
         for (key, value) in set {
-            let key = &canonical_key(key).to_string();
-            match key.as_str() {
+            let key = canonical_key(key);
+            match key {
                 "id" | "kind" | "parent" => {
-                    return Err(format!("{key} cannot change in an update; {}", match key.as_str() {
+                    return Err(format!("{key} cannot change in an update; {}", match key {
                         "parent" => "use a move",
                         _ => "delete the node and add another",
                     }))
@@ -681,23 +834,92 @@ impl Node {
                     fields.remove(key);
                 }
                 _ => {
-                    fields.insert(key.clone(), value.clone());
+                    fields.insert(key.to_string(), value.clone());
                 }
             }
         }
-        let node: Node = serde_json::from_value(Value::Object(fields)).map_err(|e| e.to_string())?;
+        let node = Node::read(Value::Object(fields))?;
         node.validate()?;
         Ok(node)
     }
 
-    /// The fields `set` would change, at their current values (`null` where absent): the
-    /// update that undoes it.
+    /// The fields `set` would change, at their current values (`null` where absent), `extra`
+    /// keys included: the update that undoes it.
     pub fn before(&self, set: &Map<String, Value>) -> Map<String, Value> {
-        let current = serde_json::to_value(self).unwrap_or(Value::Null);
+        let current = self.to_map();
         set.keys()
             .map(|key| canonical_key(key))
             .map(|key| (key.to_string(), current.get(key).cloned().unwrap_or(Value::Null)))
             .collect()
+    }
+
+    /// How its width is decided: `w_sizing`, or by default `fixed` (a text without a width
+    /// hugs its words).
+    pub fn w_rule(&self) -> Sizing {
+        self.w_sizing.unwrap_or(if self.kind == NodeKind::Text && self.w <= 0.0 { Sizing::Hug } else { Sizing::Fixed })
+    }
+
+    /// How its height is decided: `h_sizing`, or by default `fixed` (a text hugs its lines).
+    pub fn h_rule(&self) -> Sizing {
+        self.h_sizing.unwrap_or(if self.kind == NodeKind::Text { Sizing::Hug } else { Sizing::Fixed })
+    }
+
+    /// Give a shape, frame or icon added without a size one (B49): 100 for a rect, ellipse,
+    /// polygon or frame, 24 for an icon, on each axis that is 0 and `fixed`. An axis that fills
+    /// or hugs keeps its 0. Whether anything changed.
+    pub fn fill_default_size(&mut self) -> bool {
+        let size = match self.kind {
+            NodeKind::Rect | NodeKind::Ellipse | NodeKind::Polygon | NodeKind::Frame => 100.0,
+            NodeKind::Icon => 24.0,
+            _ => return false,
+        };
+        let w = self.w == 0.0 && self.w_rule() == Sizing::Fixed;
+        let h = self.h == 0.0 && self.h_rule() == Sizing::Fixed;
+        if w {
+            self.w = size;
+        }
+        if h {
+            self.h = size;
+        }
+        w || h
+    }
+
+    /// Fit a free line's or path's box to its points (B3): the points start at 0,0, `w`/`h`
+    /// are their extent, and `x`/`y` move so the drawing stays where it was, turned or not (a
+    /// turn is about the box's centre, which the fit moves). A connector (`from`, `to` or
+    /// `route`) is drawn from its ends and keeps its box. Whether anything changed.
+    pub fn contain_points(&mut self) -> bool {
+        let free = match self.kind {
+            NodeKind::Path => true,
+            NodeKind::Line => self.from.is_none() && self.to.is_none() && self.route.is_none(),
+            _ => false,
+        };
+        let Some(points) = self.points.as_mut().filter(|p| free && !p.is_empty()) else {
+            return false;
+        };
+        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for p in points.iter() {
+            for a in 0..2 {
+                lo[a] = lo[a].min(p[a]);
+                hi[a] = hi[a].max(p[a]);
+            }
+        }
+        let e = [hi[0] - lo[0], hi[1] - lo[1]];
+        if lo == [0.0, 0.0] && e == [self.w, self.h] {
+            return false;
+        }
+        // The new origin is the old plus m + (R − I)·k, with m the points' least corner and k
+        // their centre less the old box's centre (MODEL-SPEC §2.8).
+        let k = [lo[0] + e[0] / 2.0 - self.w / 2.0, lo[1] + e[1] / 2.0 - self.h / 2.0];
+        let (s, c) = self.rotation.unwrap_or(0.0).to_radians().sin_cos();
+        self.x += lo[0] + (c * k[0] - s * k[1]) - k[0];
+        self.y += lo[1] + (s * k[0] + c * k[1]) - k[1];
+        for p in points.iter_mut() {
+            p[0] -= lo[0];
+            p[1] -= lo[1];
+        }
+        (self.w, self.h) = (e[0], e[1]);
+        true
     }
 
     /// Everything about one node that holds whatever its parent: ranges, colours, sizes. That
@@ -941,12 +1163,178 @@ mod tests {
     #[test]
     fn a_patch_names_the_bad_field() {
         let r = rect();
+        // A typo reads (it waits in `extra`); a strict list refuses it by name.
         let typo = json!({"fil": "#fff"}).as_object().unwrap().clone();
-        assert!(r.patched(&typo).unwrap_err().contains("fil"));
+        let patched = r.patched(&typo).unwrap();
+        assert_eq!(patched.extra.get("fil"), Some(&json!("#fff")));
+        assert!(Node::check_update(&r, &typo, &patched).unwrap_err().starts_with("fil: not a node field"));
         let bad = json!({"fill": "red"}).as_object().unwrap().clone();
         assert!(r.patched(&bad).unwrap_err().starts_with("fill"));
         let neg = json!({"w": -1}).as_object().unwrap().clone();
         assert!(r.patched(&neg).unwrap_err().starts_with("w:"));
+        // A value that does not read is named with serde's reason.
+        let wide = json!({"sides": 300}).as_object().unwrap().clone();
+        let patched = r.patched(&wide).unwrap();
+        assert!(Node::check_update(&r, &wide, &patched).unwrap_err().starts_with("sides: invalid value"), "{:?}", Node::check_update(&r, &wide, &patched));
+    }
+
+    /// B71: an update naming both spellings of a size is refused, whichever comes first.
+    #[test]
+    fn a_patch_refuses_both_spellings_of_a_size() {
+        let r = rect();
+        for set in [json!({"w": 1, "width": 2}), json!({"width": 2, "w": 1})] {
+            assert_eq!(r.patched(set.as_object().unwrap()).unwrap_err(), "w: give w or width, not both");
+        }
+        for set in [json!({"h": 1, "height": 2}), json!({"height": 2, "h": 1})] {
+            assert_eq!(r.patched(set.as_object().unwrap()).unwrap_err(), "h: give h or height, not both");
+        }
+        assert_eq!(r.patched(json!({"width": 300}).as_object().unwrap()).unwrap().w, 300.0);
+    }
+
+    /// TM-16: a nested object written as an array is not read field by field.
+    #[test]
+    fn arrays_are_not_objects() {
+        let stop = json!({"at": 0, "color": "#fff"});
+        for (field, value) in [
+            ("arc", json!([0, 90])),
+            ("shadow", json!([0, 2, 6, 0, "#000"])),
+            ("gradient", json!(["linear", 90, [stop.clone(), stop.clone()]])),
+            ("gradient", json!({"stops": [stop.clone(), [1, "#000"]]})),
+        ] {
+            let body = json!({"kind": "ellipse", "parent": "p", field: value});
+            assert!(serde_json::from_value::<Node>(body.clone()).is_err(), "{body}");
+            let node = Node::read(body).unwrap();
+            let why = node.check_new().unwrap_err();
+            assert!(why.starts_with(&format!("{field}: invalid type: sequence, expected an object")), "{why}");
+        }
+        // An object still reads, and null is none.
+        let node: Node = serde_json::from_value(json!({"kind": "ellipse", "parent": "p", "arc": {"sweep": 90},
+            "shadow": null, "gradient": {"stops": [stop.clone(), stop]}})).unwrap();
+        assert_eq!((node.arc.map(|a| a.sweep), node.shadow, node.gradient.map(|g| g.stops.len())), (Some(90.0), None, Some(2)));
+    }
+
+    /// The tool schema still refuses unknown keys, and does not show `extra`.
+    #[test]
+    fn the_node_schema_still_refuses_unknown_keys() {
+        let schema = serde_json::to_value(schemars::schema_for!(Node)).unwrap();
+        assert_eq!(schema["additionalProperties"], json!(false), "{schema}");
+        assert!(schema["properties"].get("extra").is_none());
+        assert!(schema["properties"].get("w").is_some());
+    }
+
+    #[test]
+    fn kinds_are_named_as_stored() {
+        for kind in NodeKind::ALL {
+            assert_eq!(serde_json::to_value(kind).unwrap(), kind.name());
+            assert_eq!(NodeKind::from_name(kind.name()), Some(kind));
+        }
+        assert_eq!(NodeKind::from_name("component"), None);
+    }
+
+    fn line(points: Vec<[f64; 2]>) -> Node {
+        let mut n = Node::new(NodeKind::Line);
+        n.parent = Some("p".into());
+        n.points = Some(points);
+        n
+    }
+
+    /// Where `n` draws its points on the page: about its box's centre, turned.
+    fn drawn(n: &Node) -> Vec<[f64; 2]> {
+        let (s, c) = n.rotation.unwrap_or(0.0).to_radians().sin_cos();
+        let (cx, cy) = (n.x + n.w / 2.0, n.y + n.h / 2.0);
+        n.points.as_ref().unwrap().iter().map(|p| {
+            let (dx, dy) = (n.x + p[0] - cx, n.y + p[1] - cy);
+            [cx + dx * c - dy * s, cy + dx * s + dy * c]
+        }).collect()
+    }
+
+    /// B3: a free line's or path's box is fitted to its points, and the drawing stays put.
+    #[test]
+    fn contain_points_fits_a_free_line_box() {
+        let mut n = line(vec![[0.0, 0.0], [300.0, -50.0]]);
+        (n.x, n.y) = (100.0, 100.0);
+        assert!(n.contain_points());
+        assert_eq!((n.x, n.y, n.w, n.h), (100.0, 50.0, 300.0, 50.0));
+        assert_eq!(n.points, Some(vec![[0.0, 50.0], [300.0, 0.0]]));
+        assert!(!n.contain_points(), "a fitted box stays");
+        // A box larger than its points shrinks to them.
+        let mut wide = line(vec![[10.0, 10.0], [20.0, 10.0]]);
+        (wide.w, wide.h) = (100.0, 100.0);
+        assert!(wide.contain_points());
+        assert_eq!((wide.x, wide.y, wide.w, wide.h, wide.points.clone()), (10.0, 10.0, 10.0, 0.0, Some(vec![[0.0, 0.0], [10.0, 0.0]])));
+        // A connector is drawn from its ends; it keeps its box.
+        let mut link = line(vec![[0.0, 0.0], [300.0, -50.0]]);
+        link.from = Some("a".into());
+        assert!(!link.contain_points());
+        link.from = None;
+        link.route = Some(Route::Elbow);
+        assert!(!link.contain_points());
+        // A one-point path.
+        let mut dot = Node::new(NodeKind::Path);
+        dot.points = Some(vec![[-4.0, 7.0]]);
+        assert!(dot.contain_points());
+        assert_eq!((dot.x, dot.y, dot.w, dot.h, dot.points.clone()), (-4.0, 7.0, 0.0, 0.0, Some(vec![[0.0, 0.0]])));
+        // Other kinds are left alone.
+        let mut r = rect();
+        r.points = Some(vec![[-5.0, -5.0]]);
+        assert!(!r.contain_points());
+    }
+
+    #[test]
+    fn contain_points_keeps_a_turned_path_still() {
+        for rotation in [30.0, -75.0, 180.0, 412.0] {
+            let mut n = Node::new(NodeKind::Path);
+            (n.x, n.y, n.w, n.h, n.rotation) = (40.0, 60.0, 20.0, 10.0, Some(rotation));
+            n.points = Some(vec![[-30.0, 5.0], [80.0, -20.0], [15.0, 90.0]]);
+            let before = drawn(&n);
+            assert!(n.contain_points());
+            assert_eq!((n.w, n.h), (110.0, 110.0));
+            assert_eq!(n.points.as_ref().unwrap()[0], [0.0, 25.0]);
+            for (a, b) in before.iter().zip(drawn(&n)) {
+                assert!((a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9, "{rotation}: {a:?} moved to {b:?}");
+            }
+        }
+    }
+
+    /// B49: a shape, frame or icon added without a size gets one on its fixed axes.
+    #[test]
+    fn a_shape_added_without_a_size_gets_one() {
+        for (kind, size) in [(NodeKind::Rect, 100.0), (NodeKind::Ellipse, 100.0), (NodeKind::Polygon, 100.0), (NodeKind::Frame, 100.0), (NodeKind::Icon, 24.0)] {
+            let mut n = Node::new(kind);
+            assert!(n.fill_default_size());
+            assert_eq!((n.w, n.h), (size, size), "{kind:?}");
+            assert!(!n.fill_default_size(), "a size given stays");
+        }
+        // An axis that fills or hugs keeps its 0; the other gets its size.
+        let mut fill = Node::new(NodeKind::Rect);
+        fill.w_sizing = Some(Sizing::Fill);
+        assert!(fill.fill_default_size());
+        assert_eq!((fill.w, fill.h), (0.0, 100.0));
+        let mut hug = Node::new(NodeKind::Frame);
+        (hug.layout, hug.w_sizing, hug.h_sizing) = (Some(Layout::Column), Some(Sizing::Hug), Some(Sizing::Hug));
+        assert!(!hug.fill_default_size());
+        assert_eq!((hug.w, hug.h), (0.0, 0.0));
+        // A rect given its width keeps it.
+        let mut half = Node::new(NodeKind::Rect);
+        half.w = 30.0;
+        half.fill_default_size();
+        assert_eq!((half.w, half.h), (30.0, 100.0));
+        // Text hugs, a line follows its points, a group bounds its children, a page has no size.
+        for kind in [NodeKind::Text, NodeKind::Line, NodeKind::Path, NodeKind::Group, NodeKind::Page, NodeKind::Sticky, NodeKind::Image] {
+            let mut n = Node::new(kind);
+            assert!(!n.fill_default_size(), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn size_rules_default_by_kind() {
+        let mut t = Node::new(NodeKind::Text);
+        assert_eq!((t.w_rule(), t.h_rule()), (Sizing::Hug, Sizing::Hug));
+        t.w = 120.0;
+        assert_eq!((t.w_rule(), t.h_rule()), (Sizing::Fixed, Sizing::Hug));
+        t.h_sizing = Some(Sizing::Fixed);
+        assert_eq!(t.h_rule(), Sizing::Fixed);
+        assert_eq!((rect().w_rule(), rect().h_rule()), (Sizing::Fixed, Sizing::Fixed));
     }
 
     #[test]
