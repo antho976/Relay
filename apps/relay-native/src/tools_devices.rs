@@ -270,9 +270,19 @@ fn sync_targets(devices: &[Value], avds: &[Value]) {
     for (serial, title) in &next {
         combo.append(Some(serial), title);
     }
+    no_target(&combo, next.is_empty());
     if !selected.is_some_and(|id| combo.set_active_id(Some(&id))) {
         combo.set_active(Some(0));
     }
+}
+
+/// With nothing connected, the picker says so instead of showing an empty box. Its row has no id,
+/// so Run stays off.
+fn no_target(combo: &gtk::ComboBoxText, none: bool) {
+    if none {
+        combo.append(None, "No device connected");
+    }
+    combo.set_sensitive(!none);
 }
 
 /// One checkout the picker offers.
@@ -631,12 +641,15 @@ pub(crate) async fn verify_worktree_picker(ui: &Rc<Ui>) {
     window.close();
 }
 
-/// The target picker starts empty: `refresh` fills it through `sync_targets` right after.
+/// The target picker starts on its no-device row: `refresh` fills it through `sync_targets` right
+/// after.
 fn build_form(ui: &Rc<Ui>, page: &gtk::Box, project: i64, worktrees: &[Value], last: Option<&str>) -> WorktreePicker {
     let form = section(page, "Build & run");
     let tree = WorktreePicker::new(worktrees, last);
     field("Build from", &tree.widget, &form);
     let target = gtk::ComboBoxText::new();
+    no_target(&target, true);
+    target.set_active(Some(0));
     TARGETS.with(|targets| *targets.borrow_mut() = Some(Targets { combo: target.downgrade(), shown: Vec::new() }));
     field("Target device", &target, &form);
     let variant = gtk::Entry::builder().text("debug").build();
