@@ -23,6 +23,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::{Duration, SystemTime};
 
 /// What `thread.upload` takes; the chooser offers these.
 pub(super) const MEDIA_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -49,6 +50,16 @@ const CHIP: i32 = 56;
 /// What a model on this PC says to a picture.
 pub(super) const LOCAL_CANNOT: &str = "This model on your PC cannot read pictures: choose a Claude model";
 const NOT_A_PICTURE: &str = "This is not a PNG, JPEG, GIF or WebP picture";
+/// What a picture says once the engine has let it go.
+const EXPIRED: &str = "Not sent within a day, so Relay let it go: add it again";
+/// How long the engine keeps a picture no message carries (`threads::images::UNSENT`).
+const UNSENT: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Whether a picture that went up at `up_at` has been let go by `now`; one with no time, put back
+/// from a sent message, is carried by it.
+fn expired(up_at: Option<SystemTime>, now: SystemTime) -> bool {
+    up_at.and_then(|at| now.duration_since(at).ok()).is_some_and(|age| age >= UNSENT)
+}
 
 /// A picture on its way into the message box.
 pub(super) enum Source {
@@ -77,6 +88,7 @@ pub(super) fn is_picture(path: &Path) -> bool {
 pub(super) fn said(e: &Error) -> String {
     match e {
         Error::Bus(b) if b.code == "thread.images_unsupported" => LOCAL_CANNOT.to_string(),
+        Error::Bus(b) if b.code == "thread.image_unknown" => EXPIRED.to_string(),
         Error::Bus(b) if b.code == "bus.unknown_op" => String::from("This engine does not handle pictures yet: update Relay's engine"),
         Error::Bus(b) => b.message.clone(),
         e => e.to_string(),
@@ -304,6 +316,9 @@ pub(super) struct Attached {
     name: String,
     upload: RefCell<Upload>,
     thumb: RefCell<Option<gdk::Texture>>,
+    /// When it went up, by the wall clock the engine's sweep keeps; none when a sent message
+    /// carries it.
+    up_at: Cell<Option<SystemTime>>,
 }
 
 impl Attached {
@@ -351,7 +366,7 @@ impl Attached {
         key.update_property(&[gtk::accessible::Property::Label("Remove this picture")]);
         key.connect_clicked(move |_| remove(serial));
         root.add_overlay(&key);
-        let me = Rc::new(Attached { serial, root, face, picture, glyph, state, name, upload: RefCell::new(Upload::Going), thumb: RefCell::default() });
+        let me = Rc::new(Attached { serial, root, face, picture, glyph, state, name, upload: RefCell::new(Upload::Going), thumb: RefCell::default(), up_at: Cell::new(None) });
         me.show_state();
         me
     }
@@ -387,6 +402,7 @@ impl Attached {
                     if let Some(thumb) = chip.thumb.borrow().clone() {
                         remember(key(&answer["image"]["id"]), Ok(thumb));
                     }
+                    chip.up_at.set(Some(SystemTime::now()));
                     Upload::Ready(answer["image"].clone())
                 }
                 Ok(_) => Upload::Refused(String::from("The engine did not keep it")),
@@ -437,6 +453,18 @@ impl Attached {
         match &*self.upload.borrow() {
             Upload::Refused(why) => Some(why.clone()),
             _ => None,
+        }
+    }
+
+    /// A send refused for a picture the engine no longer holds: each one here that went up a day
+    /// ago or more was let go unsent, and says so, rather than failing every send the same way.
+    pub(super) fn expire(e: &Error, attached: &[Rc<Attached>]) {
+        if !matches!(e, Error::Bus(b) if b.code == "thread.image_unknown") {
+            return;
+        }
+        let now = SystemTime::now();
+        for chip in attached.iter().filter(|chip| expired(chip.up_at.get(), now)) {
+            chip.finish(Upload::Refused(String::from(EXPIRED)));
         }
     }
 
@@ -891,5 +919,17 @@ mod tests {
         assert_eq!(said(&other), "A picture may be at most 4 MiB.");
         assert_eq!(key(&json!(12)), "12");
         assert_eq!(key(&json!("a1b2")), "a1b2");
+    }
+
+    #[test]
+    fn a_picture_left_unsent_a_day_is_let_go() {
+        let gone = Error::Bus(Box::new(relay_bus::BusError::invalid("thread.image_unknown", "No picture 3fa2")));
+        assert_eq!(said(&gone), EXPIRED);
+        let now = SystemTime::now();
+        let ago = |hours: u64| Some(now - Duration::from_secs(hours * 60 * 60));
+        assert!(expired(ago(24), now) && expired(ago(30), now));
+        assert!(!expired(ago(23), now));
+        // One put back from a sent message is carried by it, and never let go.
+        assert!(!expired(None, now));
     }
 }

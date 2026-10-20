@@ -3506,6 +3506,7 @@ fn send_with(ui: &Rc<Ui>, text: &str, images: Vec<Value>, attached: Vec<Rc<Attac
             Ok(_) => {}
             Err(e) => {
                 let why = pictures::said(&e);
+                Attached::expire(&e, &attached);
                 put_back(to, &text, attached);
                 if let Some(v) = view().filter(|_| current() == to && !ids.is_empty()) {
                     note(&v, &why);
