@@ -10,7 +10,7 @@ use relay_bus::design::{
     parse_color, strip_controls, Blend, Gradient, GradientKind, ImageFit, Node, NodeKind, Shadow, StrokeCap, StrokeJoin, TextAlign, TextRun, MAX_COORD,
     MAX_SHADOW_BLUR,
 };
-use relay_client::design::layout::{self, Measure, Placed, STICKY_PAD};
+use relay_client::design::layout::{Measure, Placed, STICKY_PAD};
 use relay_client::design::shapes::{self, ArcEnd, Seg};
 use relay_client::design::{bounds, text, Rect, Scene};
 use std::borrow::Cow;
@@ -681,7 +681,7 @@ impl Painter {
                 if n.kind == NodeKind::Sticky {
                     if !editing {
                         let inner = Rect::new(r.x + STICKY_PAD, r.y + STICKY_PAD, (r.w - 2.0 * STICKY_PAD).max(1.0), r.h);
-                        self.text(snap, scene, n, &inner, layout::wrap_width(n, &r));
+                        self.text(snap, scene, n, &inner, placed.wrap_width(n, &r));
                     }
                 } else if !editing {
                     self.shape_text(snap, scene, n, &r);
@@ -713,7 +713,7 @@ impl Painter {
                 if !editing {
                     // Its letters cast its shadows, not its fill box (CSS's text-shadow).
                     let cast = self.cast(snap, n);
-                    self.text(snap, scene, n, &r, layout::wrap_width(n, &r));
+                    self.text(snap, scene, n, &r, placed.wrap_width(n, &r));
                     if cast {
                         snap.pop();
                     }
@@ -1560,6 +1560,7 @@ impl Measure for Painter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use relay_client::design::layout;
 
     fn node(id: &str, parent: Option<&str>, kind: NodeKind, rect: [f64; 4]) -> Node {
         let mut n = Node::new(kind);
