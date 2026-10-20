@@ -85,6 +85,18 @@ class PictureViewerTest {
     }
 
     @Test
+    fun aPictureThePcCouldNotSendShowsOnceItIsBack() {
+        var online by mutableStateOf(false)
+        show { SentPictures(listOf(Picture(JsonPrimitive("pic2"), 40, 30)), onView = {}, online = online) }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("Shows once the PC is in reach").fetchSemanticsNodes().isNotEmpty() }
+        // The PC is back, and sends it (here: it is on the phone by then).
+        ThreadPictures.keep(context, JsonPrimitive("pic2"), jpeg)
+        online = true
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("Shows once the PC is in reach").fetchSemanticsNodes().isEmpty() }
+        compose.onAllNodesWithText("Could not be read").assertCountEquals(0)
+    }
+
+    @Test
     fun theViewerOutlivesItsBubble() {
         // The picture is on this phone already, as one sent from here is.
         ThreadPictures.keep(context, JsonPrimitive("pic1"), jpeg)

@@ -1221,7 +1221,7 @@ private fun UserBubble(
         if (pictures.isNotEmpty()) Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
             val haptic = LocalHapticFeedback.current
             SentPictures(
-                pictures, onView, Modifier.padding(bottom = if (text.isNotBlank()) 6.dp else 0.dp),
+                pictures, onView, Modifier.padding(bottom = if (text.isNotBlank()) 6.dp else 0.dp), online = online,
                 onKeys = onOpen?.let { toggle -> { haptic.performHapticFeedback(HapticFeedbackType.LongPress); toggle() } },
             )
         }

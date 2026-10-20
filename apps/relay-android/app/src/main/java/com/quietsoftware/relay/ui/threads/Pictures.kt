@@ -237,21 +237,24 @@ private sealed interface Shown {
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun SentPictures(pictures: List<Picture>, onView: (Picture) -> Unit, modifier: Modifier = Modifier, onKeys: (() -> Unit)? = null) {
+internal fun SentPictures(pictures: List<Picture>, onView: (Picture) -> Unit, modifier: Modifier = Modifier, onKeys: (() -> Unit)? = null, online: Boolean = true) {
     val one = pictures.size == 1
     FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        for (p in pictures) SentPicture(p, if (one) 240.dp else 116.dp, if (one) 320.dp else 160.dp, onKeys) { onView(p) }
+        for (p in pictures) SentPicture(p, if (one) 240.dp else 116.dp, if (one) 320.dp else 160.dp, online, onKeys) { onView(p) }
     }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SentPicture(p: Picture, maxWidth: Dp, maxHeight: Dp, onKeys: (() -> Unit)?, onOpen: () -> Unit) {
+private fun SentPicture(p: Picture, maxWidth: Dp, maxHeight: Dp, online: Boolean, onKeys: (() -> Unit)?, onOpen: () -> Unit) {
     val c = Relay.colors
     val nav = LocalNav.current
     val app = LocalContext.current.applicationContext
-    val state by produceState<Shown>(ThreadPictures.drawn(p.id)?.let { Shown.Ready(it) } ?: Shown.Reading, p.id) {
+    // Read again when the PC comes back: one that could not be read said it would show then.
+    val state by produceState<Shown>(ThreadPictures.drawn(p.id)?.let { Shown.Ready(it) } ?: Shown.Reading, p.id, online) {
         if (value is Shown.Ready) return@produceState
+        if (value is Shown.Absent && !online) return@produceState
+        value = Shown.Reading
         value = try {
             ThreadPictures.image(app, nav.relay, p.id)?.let { Shown.Ready(it) } ?: Shown.Absent("The phone cannot draw it")
         } catch (e: BusException) {
