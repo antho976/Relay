@@ -487,8 +487,8 @@ impl Book {
         }
         // The runner weighs and exits a strategy on its venue only: a holding left on the old one
         // would have no stop-loss, take-profit or trailing stop, count in no limit, and could not
-        // be sold from here.
-        if self.position(id, s.venue)?.base > Decimal::ZERO {
+        // be sold from here. Dust no order can sell is not a holding to wait for.
+        if self.holds_sellable(id, s.venue, &s.product)? {
             return invalid(format!("It still holds what it bought: sell it before switching to {}", venue.as_str()));
         }
         if venue == Venue::Live && s.mode != Mode::Ask && s.limits.max_order.is_none() {
@@ -525,7 +525,7 @@ impl Book {
             return invalid("Stop the strategy before deleting it");
         }
         for v in [Venue::Paper, Venue::Live] {
-            if self.position(id, v)?.base > Decimal::ZERO {
+            if self.holds_sellable(id, v, &s.product)? {
                 return invalid(format!("It still holds {} on {}: sell it first", s.product, v.as_str()));
             }
         }
@@ -535,6 +535,20 @@ impl Book {
         self.conn.prepare_cached("UPDATE strategies SET deleted = 1, state = 'stopped', updated_at = ?2 WHERE id = ?1")?.execute(params![id, now()])?;
         self.log(Some(id), "setting", &format!("Deleted \"{}\".", s.name), None)?;
         Ok(())
+    }
+
+    /// Whether the strategy holds anything on `venue` an order could sell: at least the product's
+    /// smallest order once floored to its increment, as the gate floors a sell. Less is dust that
+    /// no sell can take, so a guard waiting for the holding to be sold would wait for good. With
+    /// the product not cached, anything held counts.
+    pub fn holds_sellable(&self, id: i64, venue: Venue, product: &str) -> Result<bool> {
+        let base = self.position(id, venue)?.base;
+        if base <= Decimal::ZERO {
+            return Ok(false);
+        }
+        let Some(p) = self.cached_product(product)? else { return Ok(true) };
+        let sellable = if p.base_increment > Decimal::ZERO { (base / p.base_increment).trunc() * p.base_increment } else { base };
+        Ok(sellable > Decimal::ZERO && sellable >= p.base_min_size)
     }
 
     pub fn set_cursor(&self, id: i64, last_bar: Option<i64>, last_schedule: Option<i64>) -> Result<()> {
@@ -1246,6 +1260,39 @@ mod tests {
         let sell = order(&book, sid, Side::Sell, "b");
         book.add_fill(sell, Venue::Paper, &fill("t2", 3, Decimal::new(1666666667, 8), Decimal::ZERO, now())).unwrap();
         assert!(book.position(sid, Venue::Paper).unwrap().base.is_zero());
+    }
+
+    #[test]
+    fn dust_no_order_can_sell_does_not_hold_a_strategy_on_its_venue() {
+        let mut book = Book::open_in_memory().unwrap();
+        let eth = Product {
+            id: "ETH-CAD".into(), base: "ETH".into(), quote: "CAD".into(), base_increment: Decimal::new(1, 8),
+            quote_increment: Decimal::new(1, 2), price_increment: Decimal::new(1, 2), base_min_size: Decimal::new(1, 3),
+            quote_min_size: Decimal::ONE, price: None, change_24h: None, tradable: true, limit_only: false,
+        };
+        book.store_products(&[eth]).unwrap();
+        let filled = |book: &Book, id: i64| {
+            let x = ExchangeOrder { order_id: format!("p{id}"), client_order_id: String::new(), status: OrderStatus::Filled, filled_size: Decimal::ZERO, average_filled_price: Decimal::ZERO, total_fees: Decimal::ZERO, reason: None };
+            book.update_order(id, &x).unwrap();
+        };
+        // Bought 0.0105 and sold 0.01: 0.0005 is left, below the smallest order of 0.001.
+        let dusty = book.create_strategy(&draft()).unwrap();
+        let buy = order(&book, dusty, Side::Buy, "b1");
+        book.add_fill(buy, Venue::Paper, &fill("t1", 100, Decimal::new(105, 4), Decimal::ZERO, now())).unwrap();
+        filled(&book, buy);
+        let sell = order(&book, dusty, Side::Sell, "s1");
+        book.add_fill(sell, Venue::Paper, &fill("t2", 100, Decimal::new(1, 2), Decimal::ZERO, now())).unwrap();
+        filled(&book, sell);
+        assert_eq!(book.position(dusty, Venue::Paper).unwrap().base, Decimal::new(5, 4));
+        book.set_venue(dusty, Venue::Live).unwrap();
+        book.delete_strategy(dusty).unwrap();
+        // 0.002 can be sold: that holding is waited for.
+        let holding = book.create_strategy(&draft()).unwrap();
+        let buy = order(&book, holding, Side::Buy, "b2");
+        book.add_fill(buy, Venue::Paper, &fill("t3", 100, Decimal::new(2, 3), Decimal::ZERO, now())).unwrap();
+        filled(&book, buy);
+        assert!(book.set_venue(holding, Venue::Live).is_err());
+        assert!(book.delete_strategy(holding).is_err());
     }
 
     #[test]

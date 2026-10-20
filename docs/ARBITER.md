@@ -58,7 +58,10 @@ and simulates fills (Coinbase has no paper trading; its sandbox returns canned r
 shows the paper record and the limits in one confirmation. Either way, the switch waits for an open
 order and for what the strategy holds on its venue to be sold: the runner exits and weighs a
 strategy on its own venue only, so a holding left behind would have no stop-loss, take-profit or
-trailing stop, count in no limit, and could not be sold from Arbiter.
+trailing stop, count in no limit, and could not be sold from Arbiter. Dust below the product's
+smallest order, which no sell can take, does not count, here or when deleting a strategy. (It
+still blocks a change of product: a strategy's holding is read from all its fills on a venue, so
+the old product's dust would count in the new one's.)
 
 ## The risk gate
 
