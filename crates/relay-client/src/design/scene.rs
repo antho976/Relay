@@ -10,7 +10,7 @@
 //! (`Scene::new(nodes).with_styles(..)`), and the `color`, `style` and `delete_style` edits change
 //! them through the rules the engine runs them by (`relay_bus::design::Styles`).
 
-use relay_bus::design::{fit_written, valid_id, Node, NodeKind, NodeOp, Styles, MAX_DEPTH, MAX_NODES};
+use relay_bus::design::{fit_written, valid_id, Node, NodeKind, NodeOp, Styles, MAX_DEPTH, MAX_NODES, MAX_OPS};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// The key pages are listed under in `children`.
@@ -67,6 +67,11 @@ fn insert_at(list: &mut Vec<String>, id: String, index: Option<u32>) {
 fn names(styles: &Styles, node: &Node, name: &str) -> bool {
     node.names().iter().any(|(_, used)| *used == name)
         || node.style.as_deref().and_then(|s| styles.styles.get(s)).is_some_and(|s| s.names().iter().any(|(_, used)| *used == name))
+}
+
+/// B44: the engine's refusal of a list longer than it takes, said before anything runs.
+fn too_many(n: usize) -> String {
+    format!("that is {n} changes at once; one edit makes at most {MAX_OPS}. Select fewer layers.")
 }
 
 impl Scene {
@@ -502,6 +507,39 @@ impl Scene {
         Ok(())
     }
 
+    /// [`Scene::apply_all`] for an edit the canvas is about to send, refused whole, before
+    /// anything runs, when it holds more edits than the engine takes in one list (B44).
+    pub fn apply_edit(&mut self, ops: &[NodeOp]) -> Result<(), String> {
+        if ops.len() > MAX_OPS {
+            return Err(too_many(ops.len()));
+        }
+        self.apply_all(ops)
+    }
+
+    /// Run an edit the canvas is about to send, all or none, as [`Scene::apply_all`] does, leaving
+    /// out each update that would change nothing of the stored node as the list has it by then
+    /// (B86: a click on the key already lit). Answers what is left to send; empty, nothing is.
+    /// Refused whole, the scene as it was, when what is left holds more edits than the engine
+    /// takes in one list (B44). An error names the edit by its place in `ops`.
+    pub fn apply_effective(&mut self, ops: Vec<NodeOp>) -> Result<Vec<NodeOp>, String> {
+        let mut trial = self.clone();
+        let mut kept = Vec::with_capacity(ops.len());
+        for (i, op) in ops.into_iter().enumerate() {
+            if let NodeOp::Update { id, set } = &op {
+                if trial.stored(id).is_some_and(|node| node.patched(set).is_ok_and(|after| after == *node)) {
+                    continue;
+                }
+            }
+            trial.apply_strict(&op).map_err(|e| format!("ops[{i}]: {e}"))?;
+            kept.push(op);
+        }
+        if kept.len() > MAX_OPS {
+            return Err(too_many(kept.len()));
+        }
+        *self = trial;
+        Ok(kept)
+    }
+
     /// Fit edits about to be sent to what a strict list takes (`relay_bus::design::fit_written`),
     /// each update read against its node's kind here or as an earlier add of the list made it;
     /// an update left with nothing to set is dropped. Returns the keys taken out, as `id.key`.
@@ -530,6 +568,28 @@ impl Scene {
     pub fn confirm(&mut self, node: Node) {
         if self.nodes.get(&node.id).is_some_and(|mine| mine.parent == node.parent) {
             self.put(node);
+        }
+    }
+
+    /// [`Scene::confirm`] each node of an answer, but those that an edit still waiting to be sent
+    /// or answered (`ahead`, already run here) changes: its node, and for a `delete_style` every
+    /// node naming what it deletes (B27). Taking the engine's copy of those would undo the later
+    /// edit here; its own answer confirms them.
+    pub fn confirm_all<'a>(&mut self, nodes: Vec<Node>, ahead: impl IntoIterator<Item = &'a NodeOp>) {
+        let mut targets: FxHashSet<&str> = FxHashSet::default();
+        let mut deleted: Vec<&str> = Vec::new();
+        for op in ahead {
+            match op {
+                NodeOp::DeleteStyle { name } => deleted.push(name),
+                _ => targets.extend(op.node_target()),
+            }
+        }
+        for node in nodes {
+            let named = || node.names().iter().any(|(_, used)| deleted.contains(used));
+            if targets.contains(node.id.as_str()) || (!deleted.is_empty() && named()) {
+                continue;
+            }
+            self.confirm(node);
         }
     }
 
@@ -941,5 +1001,85 @@ pub(crate) mod tests {
         assert_eq!(legacy.children("p1"), ["x", "f1"]);
         let why = legacy.apply_all(&[add("y", "f4990")]).unwrap_err();
         assert!(why.starts_with("ops[0]: add y: it would sit 4991 deep (p1 › f1 › … › f4989 › f4990)"), "{why}");
+    }
+
+    /// B27: an answer to an earlier edit does not undo, here, a later edit still on its way.
+    #[test]
+    fn an_answer_leaves_nodes_a_queued_edit_changes() {
+        let mut s = styled();
+        let x = |v: f64| update("b", json!({"x": v}));
+        s.apply_all(&[x(11.0)]).unwrap();
+        // A second nudge while the first is in flight: run here, queued to send.
+        let queued = vec![x(12.0)];
+        s.apply_all(&queued).unwrap();
+        let mut engine_b = s.stored("b").unwrap().clone();
+        engine_b.x = 11.0;
+        let mut engine_d = s.stored("d").unwrap().clone();
+        engine_d.opacity = Some(0.5);
+        s.confirm_all(vec![engine_b.clone(), engine_d], &queued);
+        assert_eq!((s.node("b").unwrap().x, s.node("d").unwrap().opacity), (12.0, Some(0.5)));
+        // So a third nudge starts from 12, and the queued edit's own answer confirms it.
+        assert_eq!(s.stored("b").unwrap().x + 1.0, 13.0);
+        engine_b.x = 12.0;
+        s.confirm_all(vec![engine_b.clone()], &Vec::new());
+        assert_eq!(s.stored("b"), Some(&engine_b));
+        // A queued delete_style: what it detached keeps the look it was given here.
+        let queued = vec![NodeOp::DeleteStyle { name: "card".into() }];
+        s.apply_all(&queued).unwrap();
+        let detached = s.stored("b").unwrap().clone();
+        s.confirm_all(vec![engine_b], &queued);
+        assert_eq!(s.stored("b"), Some(&detached));
+    }
+
+    /// B44: a list longer than the engine takes is refused whole, before any of it runs.
+    #[test]
+    fn an_edit_past_max_ops_is_refused_whole() {
+        let x = |v: usize| update("b", json!({"x": v}));
+        let mut s = sample();
+        let before = s.to_nodes();
+        let ops: Vec<NodeOp> = (0..=MAX_OPS).map(x).collect();
+        let why = s.apply_edit(&ops).unwrap_err();
+        assert_eq!(why, format!("that is {} changes at once; one edit makes at most {MAX_OPS}. Select fewer layers.", MAX_OPS + 1));
+        assert_eq!(s.to_nodes(), before);
+        s.apply_edit(&ops[..MAX_OPS]).unwrap();
+        assert_eq!(s.node("b").unwrap().x, (MAX_OPS - 1) as f64);
+        // What apply_effective would send is what counts: a no-op left out makes room.
+        let mut s = sample();
+        let mut ops: Vec<NodeOp> = (1..=MAX_OPS).map(x).collect();
+        ops.insert(0, x(10));
+        assert_eq!(s.apply_effective(ops).unwrap().len(), MAX_OPS);
+        let mut s = sample();
+        assert!(s.apply_effective((1..=MAX_OPS + 1).map(x).collect()).unwrap_err().starts_with("that is 2001 changes"));
+        assert_eq!(s.to_nodes(), before);
+    }
+
+    /// B86: an update that changes nothing is not sent, so it neither takes an undo step nor
+    /// clears the redo stack.
+    #[test]
+    fn apply_effective_drops_unchanged_updates() {
+        let fill = |id: &str, c: &str| update(id, json!({"fill": c}));
+        let mut s = sample();
+        s.apply_all(&[fill("b", "#ff0000")]).unwrap();
+        let before = s.to_nodes();
+        assert!(s.apply_effective(vec![fill("b", "#ff0000")]).unwrap().is_empty());
+        assert_eq!(s.to_nodes(), before);
+        let moved = update("b", json!({"x": 5}));
+        assert_eq!(s.apply_effective(vec![fill("b", "#ff0000"), moved.clone()]).unwrap(), [moved]);
+        assert_eq!(s.node("b").unwrap().x, 5.0);
+        // Judged against the list so far: an update after the add it follows.
+        let mut r2 = node("r2", Some("a"), NodeKind::Rect, [0.0, 0.0, 5.0, 5.0]);
+        r2.fill = Some("#00ff00".into());
+        let kept = s.apply_effective(vec![NodeOp::Add { node: r2, index: None }, fill("r2", "#00ff00")]).unwrap();
+        assert!(matches!(kept.as_slice(), [NodeOp::Add { .. }]), "{kept:?}");
+        // A refusal names the edit by its place in the list sent, and changes nothing.
+        let before = s.to_nodes();
+        let why = s.apply_effective(vec![update("b", json!({"x": 6})), update("b", json!({"opacity": 2}))]).unwrap_err();
+        assert!(why.starts_with("ops[1]: update b: opacity"), "{why}");
+        assert_eq!(s.to_nodes(), before);
+        // Against what is stored: the name it holds is no change, the colour it draws is one.
+        let mut s = styled();
+        assert!(s.apply_effective(vec![fill("d", "$accent")]).unwrap().is_empty());
+        assert_eq!(s.apply_effective(vec![fill("d", "#4C9DFF")]).unwrap().len(), 1);
+        assert_eq!(s.stored("d").unwrap().fill.as_deref(), Some("#4C9DFF"));
     }
 }
