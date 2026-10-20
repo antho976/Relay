@@ -3,7 +3,6 @@
 //! ends, so a drag is one undo step and the engine hears nothing until the pointer lets go.
 
 use super::board::{Board, Gesture, Handle, Tool, HANDLES};
-use super::paint::{fill_of, luminance, CANVAS};
 use gtk::prelude::*;
 use gtk::{gdk, gio};
 use gtk4 as gtk;
@@ -329,17 +328,6 @@ fn rotate_at(b: &Board, x: f64, y: f64) -> Option<String> {
     None
 }
 
-/// The colour a mark reads well on inside `container`.
-fn ink_for(b: &Board, container: &str) -> String {
-    let scene = b.doc.scene.borrow();
-    let ground = std::iter::once(container)
-        .chain(scene.ancestors(container))
-        .filter_map(|id| scene.node(id))
-        .find_map(fill_of)
-        .unwrap_or_else(|| CANVAS.into());
-    if luminance(&ground) > 0.35 { "#1A1A1A".into() } else { "#EDE9E2".into() }
-}
-
 fn handle_at(b: &Board, x: f64, y: f64) -> Option<Handle> {
     if let Some((_, r, turn)) = b.single_turn() {
         let s = b.cam.get().rect_to_screen(&r);
@@ -443,9 +431,9 @@ fn begin(b: &Rc<Board>, x: f64, y: f64, mods: gdk::ModifierType) {
             b.create_text(p, parent);
         }
         Tool::Sticky => create_sticky(b, p),
-        Tool::Pen | Tool::Highlighter => {
+        tool @ (Tool::Pen | Tool::Highlighter) => {
             let parent = container_at(b, p);
-            *b.gesture.borrow_mut() = Gesture::Draw { parent, points: vec![[p.0, p.1]] };
+            *b.gesture.borrow_mut() = Gesture::Draw { parent, points: vec![[p.0, p.1]], tool };
         }
         Tool::Hand | Tool::Vector => {}
     }
@@ -509,7 +497,7 @@ pub fn finish_vector(b: &Board, closed: bool) {
     // Whole pixels from the box's own rounded corner, so nothing shifts on the way in.
     let (ox, oy) = (origin.x + n.x, origin.y + n.y);
     n.points = Some(points.iter().map(|p| [(p[0] - ox).round(), (p[1] - oy).round()]).collect());
-    n.stroke = Some(b.pen_color(false));
+    n.stroke = Some(b.pen_color(Tool::Vector, n.parent.as_deref().unwrap_or_default()));
     n.stroke_width = Some(2.0);
     if closed && points.len() > 2 {
         n.closed = Some(true);
@@ -1206,7 +1194,7 @@ fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
             b.commit(ops);
             b.invalidate();
         }
-        Gesture::Draw { parent, points } => finish_drawing(b, parent, points),
+        Gesture::Draw { parent, points, tool } => finish_drawing(b, parent, points, tool),
     }
     update_cursor(b, None);
 }
@@ -1269,7 +1257,8 @@ fn create_shape(b: &Rc<Board>, tool: Tool, parent: String, a: (f64, f64), end: (
         n.w = r.w.round();
         n.h = r.h.round();
         n.points = Some(vec![[(a.0 - r.x).round(), (a.1 - r.y).round()], [(end.0 - r.x).round(), (end.1 - r.y).round()]]);
-        n.stroke = Some(ink_for(b, &parent));
+        // A connector sits on the page, but its ink is for where it starts (TM-42).
+        n.stroke = Some(b.ink_for(&container_at(b, a)));
         n.stroke_width = Some(2.0);
         if tool == Tool::Arrow {
             n.arrow_end = Some(true);
@@ -1310,9 +1299,9 @@ fn create_shape(b: &Rc<Board>, tool: Tool, parent: String, a: (f64, f64), end: (
     }
 }
 
-fn finish_drawing(b: &Rc<Board>, parent: String, points: Vec<[f64; 2]>) {
+fn finish_drawing(b: &Rc<Board>, parent: String, points: Vec<[f64; 2]>, tool: Tool) {
     let zoom = b.cam.get().zoom;
-    let highlighter = b.tool.get() == Tool::Highlighter;
+    let highlighter = tool == Tool::Highlighter;
     let simple = simplify(&points, 0.6 / zoom);
     let min_x = simple.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
     let min_y = simple.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
@@ -1324,13 +1313,14 @@ fn finish_drawing(b: &Rc<Board>, parent: String, points: Vec<[f64; 2]>) {
     let origin = b.origin_of(&parent);
     let mut n = Node::new(NodeKind::Path);
     n.id = b.doc.scene.borrow_mut().fresh_id(NodeKind::Path);
+    let parent_id = parent.clone();
     n.parent = Some(parent);
     n.x = ((min_x - origin.x) * 100.0).round() / 100.0;
     n.y = ((min_y - origin.y) * 100.0).round() / 100.0;
     n.w = (max_x - min_x).max(1.0);
     n.h = (max_y - min_y).max(1.0);
     n.points = Some(simple.iter().map(|p| [((p[0] - min_x) * 10.0).round() / 10.0, ((p[1] - min_y) * 10.0).round() / 10.0]).collect());
-    n.stroke = Some(b.pen_color(highlighter));
+    n.stroke = Some(b.pen_color(tool, &parent_id));
     n.stroke_width = Some(if highlighter { 16.0 } else { 3.0 });
     if highlighter {
         n.name = Some("Highlight".into());
@@ -1369,7 +1359,9 @@ pub const STICKY_COLORS: [(&str, &str); 6] = [
     ("Green", "#B8EDB0"),
 ];
 
-fn cancel(b: &Rc<Board>) {
+/// Put back what the gesture under way previewed, and end it: Esc, and an undo or redo pressed
+/// in the middle of a drag (B11).
+pub(super) fn cancel(b: &Board) {
     let gesture = std::mem::replace(&mut *b.gesture.borrow_mut(), Gesture::Idle);
     {
         let mut scene = b.doc.scene.borrow_mut();

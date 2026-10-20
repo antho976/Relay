@@ -196,7 +196,8 @@ pub enum Gesture {
     Endpoint { id: String, which: usize, orig: Node, moved: bool },
     /// `from`/`to`: the nodes a line's ends attach to, a connector's.
     Create { tool: Tool, parent: String, a: (f64, f64), b: (f64, f64), from: Option<String>, to: Option<String> },
-    Draw { parent: String, points: Vec<[f64; 2]> },
+    /// A pen or highlighter stroke: the tool it began with draws it, whatever is picked since (B17).
+    Draw { parent: String, points: Vec<[f64; 2]>, tool: Tool },
     /// Turning one node about its centre (page coordinates), from the pointer's first angle.
     Rotate { id: String, centre: (f64, f64), start: f64, orig: Node, moved: bool },
     /// Rubbing out strokes: each touched one with the opacity it had.
@@ -238,7 +239,8 @@ pub struct Board {
     flash: RefCell<(HashSet<String>, i64)>,
     flash_tick: RefCell<Option<gtk::TickCallbackId>>,
     labels: RefCell<HashMap<String, pango::Layout>>,
-    pub(super) pen: RefCell<String>,
+    /// The colour picked for each drawing tool (pen, highlighter, vector pen); none is automatic.
+    pub(super) pens: RefCell<HashMap<Tool, String>>,
     pub(super) clip: RefCell<Vec<Node>>,
     /// A copied style (Ctrl+Alt+C), to lay on other layers.
     pub(super) style_clip: RefCell<Option<serde_json::Map<String, Value>>>,
@@ -255,8 +257,16 @@ pub struct Board {
     status_serial: Cell<u64>,
     /// Undo the last change an agent made, shown once one arrives.
     agent_undo: gtk::Button,
+    /// Go to the page an agent changed while another was on show, and what it changed there.
+    goto: gtk::Button,
+    goto_page: RefCell<Option<(String, HashSet<String>)>>,
     /// Whose change that Undo reverts.
     agent_last: RefCell<Option<String>>,
+    /// An Undo agent is on its way: another press is dropped (B80).
+    agent_undoing: Cell<bool>,
+    /// The audit row whose undo was refused as edited since, and when: a second press soon
+    /// after undoes it anyway.
+    agent_force: Cell<Option<(i64, i64)>>,
     pub(super) ask: gtk::Button,
     /// What was typed to Ask and not sent, for the next time it opens.
     pub(super) ask_draft: RefCell<String>,
@@ -355,6 +365,11 @@ impl Board {
         agent_undo.set_widget_name("design-agent-undo");
         agent_undo.set_visible(false);
         top.append(&agent_undo);
+        let goto = gtk::Button::with_label("Show");
+        goto.add_css_class("design-agent-undo");
+        goto.set_widget_name("design-agent-goto");
+        goto.set_visible(false);
+        top.insert_child_after(&goto, Some(&status));
         let ask = gtk::Button::new();
         ask.add_css_class("design-ask");
         let ask_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -502,7 +517,7 @@ impl Board {
             flash: RefCell::new((HashSet::new(), 0)),
             flash_tick: RefCell::default(),
             labels: RefCell::default(),
-            pen: RefCell::new(String::new()),
+            pens: RefCell::default(),
             clip: RefCell::default(),
             style_clip: RefCell::default(),
             vector: RefCell::default(),
@@ -514,7 +529,11 @@ impl Board {
             status,
             status_serial: Cell::new(0),
             agent_undo,
+            goto,
+            goto_page: RefCell::default(),
             agent_last: RefCell::default(),
+            agent_undoing: Cell::new(false),
+            agent_force: Cell::new(None),
             ask,
             ask_draft: RefCell::default(),
             zoom_label,
@@ -623,6 +642,12 @@ impl Board {
             }
         });
         let weak = Rc::downgrade(&board);
+        board.goto.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.go_to_change();
+            }
+        });
+        let weak = Rc::downgrade(&board);
         board.inspector_key.connect_toggled(move |key| {
             tip(key, inspector_tip(key.is_active()));
             INSPECTOR_ON.with(|on| on.set(key.is_active()));
@@ -650,6 +675,11 @@ impl Board {
         });
         board.design_changed();
         board.refresh_terminal_menu();
+        // Opened on a design an agent changed last: its Undo is still offered (E-ask-9).
+        let by = board.doc.design.borrow().updated_by.clone();
+        if !by.is_empty() && by != "user" {
+            board.offer_agent_undo(by);
+        }
         board
     }
 
@@ -876,19 +906,10 @@ impl Board {
                 self.painter.retain(&self.doc.scene.borrow());
                 self.prune_selection();
                 self.invalidate();
-                if by != "user" && !changed.is_empty() {
-                    // "Just now" for a minute; then who it was.
-                    let serial = self.set_status(&format!("{by} edited it just now"), Some("design-status-agent"));
-                    let (weak, who) = (self.me.clone(), by.clone());
-                    glib::timeout_add_local_once(std::time::Duration::from_secs(60), move || {
-                        if let Some(b) = weak.upgrade().filter(|b| b.status_serial.get() == serial) {
-                            b.set_status(&format!("Last edited by {who}"), None);
-                        }
-                    });
-                    self.start_flash(changed.clone());
-                    *self.agent_last.borrow_mut() = Some(by.clone());
-                    self.agent_undo.set_tooltip_text(Some(&format!("Undo {by}'s last change to this design")));
-                    self.agent_undo.set_visible(true);
+                let removed = self.doc.take_removed();
+                let actors = self.doc.take_actors();
+                if by != "user" && (!changed.is_empty() || !removed.is_empty()) {
+                    self.agent_changed(by, changed, &actors, removed.len());
                 }
                 self.keep_page();
             }
@@ -914,6 +935,72 @@ impl Board {
                 self.refresh_actions();
             }
             Change::Error(e) => self.toast(e),
+        }
+    }
+
+    /// An agent changed the design (the read after it names `changed` and `removed` layers):
+    /// say so, glow what each agent changed, and offer to undo the newest's change (TM-12,
+    /// TM-13). What it changed on another page is named with a key that goes there (E-ask-10).
+    fn agent_changed(&self, by: &str, changed: &HashSet<String>, actors: &[(String, HashSet<String>)], removed: usize) {
+        let glow: HashSet<String> = if actors.is_empty() { changed.clone() } else { actors.iter().flat_map(|(_, ids)| ids.iter().cloned()).collect() };
+        let page = self.page.borrow().clone();
+        let elsewhere = {
+            let scene = self.doc.scene.borrow();
+            let mut pages: Vec<(String, usize)> = Vec::new();
+            for id in &glow {
+                match scene.page_of(id) {
+                    Some(p) if p != page => match pages.iter_mut().find(|(q, _)| q == p) {
+                        Some((_, n)) => *n += 1,
+                        None => pages.push((p.to_string(), 1)),
+                    },
+                    _ => {}
+                }
+            }
+            pages.into_iter().max_by_key(|(_, n)| *n).map(|(p, _)| p)
+        };
+        let here = glow.iter().any(|id| self.doc.scene.borrow().page_of(id) == Some(page.as_str()));
+        // "Just now" for a minute; then who it was.
+        let words = match &elsewhere {
+            Some(p) if !here => format!("{by} edited {}", self.page_name(p)),
+            _ => format!("{by} edited it just now"),
+        };
+        let serial = self.set_status(&words, Some("design-status-agent"));
+        let (weak, who) = (self.me.clone(), by.to_string());
+        glib::timeout_add_local_once(std::time::Duration::from_secs(60), move || {
+            if let Some(b) = weak.upgrade().filter(|b| b.status_serial.get() == serial) {
+                b.set_status(&format!("Last edited by {who}"), None);
+            }
+        });
+        match elsewhere {
+            Some(p) => {
+                self.goto.set_tooltip_text(Some(&format!("Show {} and what {by} changed there", self.page_name(&p))));
+                *self.goto_page.borrow_mut() = Some((p, glow.clone()));
+                self.goto.set_visible(true);
+            }
+            None => {
+                self.goto_page.borrow_mut().take();
+                self.goto.set_visible(false);
+            }
+        }
+        self.start_flash(glow);
+        if removed > 0 {
+            self.toast(&format!("{by} removed {removed} {}", if removed == 1 { "layer" } else { "layers" }));
+        }
+        *self.agent_last.borrow_mut() = Some(by.to_string());
+        self.agent_force.set(None);
+        self.agent_undo.set_tooltip_text(Some(&format!("Undo {by}'s last change to this design")));
+        self.agent_undo.set_visible(true);
+    }
+
+    /// Show the page an agent's change was on, and glow what it changed there.
+    fn go_to_change(&self) {
+        let Some((page, ids)) = self.goto_page.borrow_mut().take() else {
+            return;
+        };
+        self.goto.set_visible(false);
+        if self.doc.scene.borrow().node(&page).is_some() {
+            self.set_page(&page);
+            self.start_flash(ids);
         }
     }
 
@@ -947,7 +1034,9 @@ impl Board {
     }
 
     fn design_changed(&self) {
-        let design = self.doc.design.borrow().clone();
+        let mut design = self.doc.design.borrow().clone();
+        // A title stored before control characters were refused would stop GTK at a NUL (B43).
+        design.title = relay_bus::design::strip_controls(&design.title, false).into_owned();
         self.title.set_text(&design.title);
         // The whole title, which the key cuts short past 48 characters.
         if let Some(key) = self.title.ancestor(gtk::MenuButton::static_type()) {
@@ -1032,7 +1121,7 @@ impl Board {
         let serial = self.toast_serial.get() + 1;
         self.toast_serial.set(serial);
         let weak = self.me.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_millis(2600 + text.len() as u64 * 30), move || {
+        glib::timeout_add_local_once(std::time::Duration::from_millis(toast_ms(text)), move || {
             if let Some(b) = weak.upgrade().filter(|b| b.toast_serial.get() == serial) {
                 b.toast.set_reveal_child(false);
             }
@@ -1178,6 +1267,9 @@ impl Board {
     fn frame_labels(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, page: &str) {
         let selection = self.selection.borrow();
         let hover = self.hover.borrow();
+        // A grey that reads on the page's own fill, 4.5:1 or better on either (E-board-1).
+        let ground = scene.node(page).and_then(fill_of).unwrap_or_else(|| CANVAS.into());
+        let ink = label_ink(paint::luminance(&ground));
         for id in scene.children(page) {
             let Some(n) = scene.node(id).filter(|n| n.kind == NodeKind::Frame && !n.is_hidden()) else {
                 continue;
@@ -1189,13 +1281,13 @@ impl Board {
             if s.w < 28.0 || s.bottom() < 0.0 || s.y > self.size.get().1 + 20.0 {
                 continue;
             }
-            let name = n.name.clone().unwrap_or_else(|| "Frame".into());
+            let name = display_name(n);
             let layout = self.label_layout(&format!("frame:{id}"), &name, 12.0, pango::Weight::Medium, false);
             layout.set_width((s.w * pango::SCALE as f64) as i32);
             layout.set_ellipsize(pango::EllipsizeMode::End);
             let (_, lh) = layout.pixel_size();
             let lit = selection.contains(id) || hover.as_deref() == Some(id.as_str());
-            let color = if lit { rgba(SELECT) } else { gdk::RGBA::new(0.62, 0.6, 0.57, 1.0) };
+            let color = if lit { rgba(SELECT) } else { ink };
             snap.save();
             snap.translate(&graphene::Point::new(s.x as f32, (s.y - lh as f64 - 6.0) as f32));
             snap.append_layout(&layout, &color);
@@ -1219,7 +1311,7 @@ impl Board {
             if s.w < 28.0 {
                 continue;
             }
-            let name = n.name.clone().unwrap_or_else(|| "Frame".into());
+            let name = display_name(n);
             let layout = self.label_layout(&format!("frame:{id}"), &name, 12.0, pango::Weight::Medium, false);
             let (lw, lh) = layout.pixel_size();
             let hit = Rect::new(s.x, s.y - lh as f64 - 8.0, (lw as f64).min(s.w) + 4.0, lh as f64 + 6.0);
@@ -1383,7 +1475,7 @@ impl Board {
                 }
             }
             _ if self.vector.borrow().is_some() => self.draw_vector(snap),
-            Gesture::Draw { points, .. } if points.len() > 1 => {
+            Gesture::Draw { points, tool, parent } if points.len() > 1 => {
                 let cam = self.cam.get();
                 let pb = gsk::PathBuilder::new();
                 let (x0, y0) = cam.to_screen(points[0][0], points[0][1]);
@@ -1392,12 +1484,12 @@ impl Board {
                     let (x, y) = cam.to_screen(p[0], p[1]);
                     pb.line_to(x as f32, y as f32);
                 }
-                let highlighter = self.tool.get() == Tool::Highlighter;
+                let highlighter = *tool == Tool::Highlighter;
                 let width = if highlighter { 16.0 } else { 3.0 } * cam.zoom;
                 let stroke = gsk::Stroke::new(width as f32);
                 stroke.set_line_cap(gsk::LineCap::Round);
                 stroke.set_line_join(gsk::LineJoin::Round);
-                snap.append_stroke(&pb.to_path(), &stroke, &rgba(&self.pen_color(highlighter)));
+                snap.append_stroke(&pb.to_path(), &stroke, &rgba(&self.pen_color(*tool, parent)));
             }
             _ => {}
         }
@@ -1538,16 +1630,28 @@ impl Board {
             .unwrap_or_default()
     }
 
-    pub(super) fn pen_color(&self, highlighter: bool) -> String {
-        if highlighter {
+    /// The colour `tool` (the pen, the highlighter or the vector pen) draws with inside
+    /// `container`: the one picked for that tool, else the highlighter's yellow, else the ink
+    /// that reads on the ground it draws on (TM-42, E-board-18).
+    pub(super) fn pen_color(&self, tool: Tool, container: &str) -> String {
+        if let Some(chosen) = self.pens.borrow().get(&tool).filter(|c| !c.is_empty()) {
+            return chosen.clone();
+        }
+        if tool == Tool::Highlighter {
             return "#FFD60A66".into();
         }
-        let chosen = self.pen.borrow().clone();
-        if !chosen.is_empty() {
-            return chosen;
-        }
+        self.ink_for(container)
+    }
+
+    /// The colour a mark reads well on inside `container`: dark on a light ground, light on a
+    /// dark one, the ground being the container's fill, or its nearest ancestor's, or the canvas.
+    pub(super) fn ink_for(&self, container: &str) -> String {
         let scene = self.doc.scene.borrow();
-        let ground = scene.node(&self.page.borrow()).and_then(fill_of).unwrap_or_else(|| CANVAS.into());
+        let ground = std::iter::once(container)
+            .chain(scene.ancestors(container))
+            .filter_map(|id| scene.node(id))
+            .find_map(fill_of)
+            .unwrap_or_else(|| CANVAS.into());
         if paint::luminance(&ground) > 0.35 { "#1A1A1A".into() } else { "#EDE9E2".into() }
     }
 
@@ -1927,8 +2031,13 @@ impl Board {
                 let p = pop.downgrade();
                 swatch.connect_clicked(move |_| {
                     if let Some(b) = weak.upgrade() {
-                        *b.pen.borrow_mut() = color.to_string();
-                        b.set_tool(Tool::Pen);
+                        // The drawing tool on hand takes it; any other picks the pen.
+                        let tool = match b.tool.get() {
+                            t @ (Tool::Pen | Tool::Highlighter | Tool::Vector) => t,
+                            _ => Tool::Pen,
+                        };
+                        b.pens.borrow_mut().insert(tool, color.to_string());
+                        b.set_tool(tool);
                     }
                     if let Some(p) = p.upgrade() {
                         p.popdown();
@@ -2073,6 +2182,10 @@ impl Board {
     }
 
     pub(super) fn link_session(&self, session: Option<String>) {
+        // The terminal it already belongs to: nothing to write (TM-58).
+        if session == self.doc.session() {
+            return;
+        }
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
@@ -2083,7 +2196,7 @@ impl Board {
             match ui.call("design.update", json!({"design_id": id, "session": session})).await {
                 Ok(v) => {
                     if let Ok(row) = serde_json::from_value(v) {
-                        *doc.design.borrow_mut() = row;
+                        doc.adopt(row);
                     }
                     if let Some(b) = weak.upgrade() {
                         b.design_changed();
@@ -2302,64 +2415,176 @@ impl Board {
         }
     }
 
-    /// The newest change `agent` made to this design that is still standing: an audited
-    /// `design.apply` with its undo kept and not undone yet.
-    async fn agent_change(ui: &Rc<Ui>, design: i64, project: i64, agent: &str) -> Option<i64> {
-        let listed = ui
-            .call("audit.list", json!({"project_id": project, "actor": format!("agent:{agent}"), "op_prefix": "design.apply", "limit": 500}))
-            .await
-            .ok()?;
-        let mut rows = crate::app::rows(&listed, "rows");
-        rows.sort_by_key(|r| std::cmp::Reverse(r["id"].as_i64().unwrap_or(0)));
-        rows.into_iter()
-            .find(|r| {
-                r["kind"] == "ok"
-                    && r["undone_by"].is_null()
-                    && r["undo_op"]["payload"]["design_id"].as_i64() == Some(design)
-            })
-            .and_then(|r| r["id"].as_i64())
+    /// The newest change `agent` made to this design (TM-11): audited `design.apply` rows of
+    /// the project, read back 500 at a time until one of this design turns up, at most five
+    /// times (E-ask-8: an agent busy elsewhere pushes it past one page).
+    async fn agent_change(ui: &Rc<Ui>, design: i64, project: i64, agent: &str) -> AgentChange {
+        let mut until: Option<(Value, i64)> = None;
+        for _ in 0..AGENT_PAGES {
+            let mut ask = json!({"project_id": project, "actor": format!("agent:{agent}"), "op_prefix": "design.apply", "limit": AGENT_PAGE});
+            if let Some((ts, _)) = &until {
+                ask["until"] = ts.clone();
+            }
+            let Ok(listed) = ui.call("audit.list", ask).await else {
+                return AgentChange::None;
+            };
+            let mut rows = crate::app::rows(&listed, "rows");
+            if let Some((_, below)) = &until {
+                rows.retain(|r| r["id"].as_i64().is_some_and(|id| id < *below));
+            }
+            if let Some(found) = pick_agent_change(&rows, design) {
+                return found;
+            }
+            match rows.iter().filter_map(|r| Some((r["ts"].clone(), r["id"].as_i64()?))).min_by_key(|(_, id)| *id) {
+                Some(oldest) if crate::app::rows(&listed, "rows").len() >= AGENT_PAGE as usize => until = Some(oldest),
+                _ => return AgentChange::None,
+            }
+        }
+        AgentChange::None
     }
 
-    /// Revert the last change the agent named by the status made, through `audit.undo`: the
-    /// person's veto over what an agent drew. Each press undoes one more of its changes.
-    pub(super) fn undo_agent(&self) {
-        let (Some(ui), Some(agent)) = (self.ui.upgrade(), self.agent_last.borrow().clone()) else {
+    /// Show Undo agent for `agent`'s newest change still standing, as found: the key when it
+    /// can be undone, the reason when it is too large to (I-7). For a board opening on a design
+    /// an agent edited last (E-ask-9).
+    fn offer_agent_undo(&self, agent: String) {
+        let Some(ui) = self.ui.upgrade() else {
             return;
         };
         let design = self.doc.id;
         let project = self.doc.design.borrow().project_id;
         let weak = self.me.clone();
         glib::spawn_future_local(async move {
-            let Some(audit) = Self::agent_change(&ui, design, project, &agent).await else {
-                if let Some(b) = weak.upgrade() {
-                    b.agent_undo.set_visible(false);
-                    b.toast(&format!("Nothing of {agent}'s left to undo here"));
-                }
-                return;
-            };
-            let undone = ui.call("audit.undo", json!({"audit_id": audit})).await;
-            let more = Self::agent_change(&ui, design, project, &agent).await.is_some();
+            let found = Self::agent_change(&ui, design, project, &agent).await;
             let Some(b) = weak.upgrade() else {
                 return;
             };
+            // An agent's change heard meanwhile has set the key already.
+            if b.agent_last.borrow().as_ref().is_some_and(|a| *a != agent) {
+                return;
+            }
+            match found {
+                AgentChange::Undoable(_) => {
+                    b.set_status(&format!("Last edited by {agent}"), None);
+                    *b.agent_last.borrow_mut() = Some(agent.clone());
+                    b.agent_undo.set_tooltip_text(Some(&format!("Undo {agent}'s last change to this design")));
+                    b.agent_undo.set_visible(true);
+                }
+                AgentChange::TooLarge => {
+                    b.set_status(&format!("Last edited by {agent}"), None);
+                    b.agent_undo.set_tooltip_text(Some(&too_large(&agent)));
+                }
+                AgentChange::None => {}
+            }
+        });
+    }
+
+    /// Revert the last change the agent named by the status made, through `audit.undo`: the
+    /// person's veto over what an agent drew. Each press undoes one more of its changes, and a
+    /// press while one is on its way is dropped (B80). A change the person edited since is
+    /// kept, with what was edited named; a second press on it within ten seconds undoes it
+    /// anyway. A change too large to have kept its undo is said to be, and nothing older is
+    /// undone in its place (TM-11).
+    pub(super) fn undo_agent(&self) {
+        let (Some(ui), Some(agent)) = (self.ui.upgrade(), self.agent_last.borrow().clone()) else {
+            return;
+        };
+        if self.agent_undoing.replace(true) {
+            return;
+        }
+        self.agent_undo.set_sensitive(false);
+        let design = self.doc.id;
+        let project = self.doc.design.borrow().project_id;
+        let weak = self.me.clone();
+        glib::spawn_future_local(async move {
+            let found = Self::agent_change(&ui, design, project, &agent).await;
+            let audit = match found {
+                AgentChange::Undoable(audit) => audit,
+                other => {
+                    if let Some(b) = weak.upgrade() {
+                        b.agent_undoing.set(false);
+                        b.agent_undo.set_sensitive(true);
+                        b.agent_undo.set_visible(false);
+                        b.toast(&match other {
+                            AgentChange::TooLarge => too_large(&agent),
+                            _ => format!("Nothing of {agent}'s left to undo here"),
+                        });
+                    }
+                    return;
+                }
+            };
+            let now = glib::monotonic_time();
+            let force = weak.upgrade().is_some_and(|b| b.agent_force.take().is_some_and(|(id, at)| id == audit && now - at < FORCE_US));
+            let mut ask = json!({"audit_id": audit});
+            if force {
+                ask["force"] = json!(true);
+            }
+            let undone = ui.call("audit.undo", ask).await;
+            let more = Self::agent_change(&ui, design, project, &agent).await;
+            let Some(b) = weak.upgrade() else {
+                return;
+            };
+            b.agent_undoing.set(false);
+            b.agent_undo.set_sensitive(true);
             match undone {
                 Ok(_) => {
                     b.set_status(&format!("Undid {agent}'s change"), None);
-                    b.agent_undo.set_visible(more);
+                    b.agent_undo.set_visible(more != AgentChange::None);
+                }
+                Err(crate::client::Error::Bus(e)) if e.code == "audit.stale" => {
+                    let what = e.details.as_ref().map(|d| b.conflict_names(d)).unwrap_or_default();
+                    let what = if what.is_empty() { String::new() } else { format!(": {what}") };
+                    b.toast(&format!("{agent}'s change was edited since{what}. Press Undo again to undo it anyway."));
+                    b.agent_force.set(Some((audit, glib::monotonic_time())));
+                }
+                // Undone already (from another window, or by the agent): nothing to say.
+                Err(crate::client::Error::Bus(e)) if e.code == "audit.not_undoable" => {
+                    b.agent_undo.set_visible(more != AgentChange::None);
                 }
                 Err(e) => b.toast(&format!("Could not undo {agent}'s change: {e}")),
             }
         });
     }
 
+    /// The layers an `audit.stale` names (`details.conflicts`), as the canvas calls them, with
+    /// the fields edited since: "Button (fill), Title and 2 more".
+    fn conflict_names(&self, details: &Value) -> String {
+        let scene = self.doc.scene.borrow();
+        let named: Vec<String> = details["conflicts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|c| {
+                let id = c["id"].as_str()?;
+                let name = scene.node(id).map_or_else(|| id.to_string(), display_name);
+                let fields: Vec<&str> = c["fields"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+                Some(if fields.is_empty() { name } else { format!("{name} ({})", fields.join(", ")) })
+            })
+            .collect();
+        match named.len() {
+            0..=3 => named.join(", "),
+            n => format!("{} and {} more", named[..3].join(", "), n - 3),
+        }
+    }
+
+    /// Undo the last step. A drag under way is put back first, as Esc does, so the step's
+    /// inverse lands on what the engine holds and the release has nothing left to send (B11).
     pub(super) fn undo(&self) {
+        self.cancel_gesture();
         self.end_edit(true);
         self.doc.undo(self.selection.borrow().clone());
     }
 
     pub(super) fn redo(&self) {
+        self.cancel_gesture();
         self.end_edit(true);
         self.doc.redo(self.selection.borrow().clone());
+    }
+
+    /// Put back what a gesture under way has previewed and end it.
+    pub(super) fn cancel_gesture(&self) {
+        if !matches!(*self.gesture.borrow(), Gesture::Idle | Gesture::Pan { .. }) {
+            super::tools::cancel(self);
+        }
     }
 
     pub(super) fn delete_selection(&self) {
@@ -2556,8 +2781,16 @@ impl Board {
     }
 
     fn paste_text(&self, text: &str) {
-        if text.is_empty() {
+        // Only spaces or zero-width characters: a text that shows nothing (B42).
+        if !relay_client::design::names::visible(text) {
             return;
+        }
+        // Cut at a text's most, without splitting what is drawn as one character, and said so
+        // rather than losing the rest without a word (B102).
+        let max = relay_bus::design::MAX_TEXT;
+        let (text, cut) = relay_client::design::names::cut_text(text, max);
+        if cut {
+            self.toast(&format!("Pasted the first {} characters: a text holds at most {max}", text.chars().count()));
         }
         let target = self.paste_target();
         let (w, h) = self.size.get();
@@ -2566,7 +2799,7 @@ impl Board {
         let mut n = Node::new(NodeKind::Text);
         n.id = self.doc.scene.borrow_mut().fresh_id(NodeKind::Text);
         n.parent = Some(target);
-        n.text = Some(text.chars().take(relay_bus::design::MAX_TEXT).collect());
+        n.text = Some(text.clone());
         n.x = (cx - origin.x).round();
         n.y = (cy - origin.y).round();
         if text.chars().count() > 60 {
@@ -2674,22 +2907,37 @@ impl Board {
         pop.add_css_class("design-menu");
         pop.set_parent(&self.title);
         let entry = gtk::Entry::new();
-        entry.set_text(&self.doc.title());
+        let shown = relay_bus::design::strip_controls(&self.doc.title(), false).into_owned();
+        entry.set_text(&shown);
         entry.set_width_chars(32);
         pop.set_child(Some(&entry));
-        let weak = self.me.clone();
+        // Enter, or a click elsewhere that closes it, renames the design, as the inspector's
+        // name field does on leaving it (B88); Esc closes it with the title as it was.
+        let cancel = Rc::new(Cell::new(false));
+        let keys = gtk::EventControllerKey::new();
+        let c = cancel.clone();
+        keys.connect_key_pressed(move |_, key, _, _| {
+            if key == gdk::Key::Escape {
+                c.set(true);
+            }
+            glib::Propagation::Proceed
+        });
+        entry.add_controller(keys);
         let p = pop.downgrade();
-        entry.connect_activate(move |entry| {
-            let title = entry.text().trim().to_string();
+        entry.connect_activate(move |_| {
             if let Some(p) = p.upgrade() {
                 p.popdown();
             }
-            let Some(b) = weak.upgrade() else {
+        });
+        let weak = self.me.clone();
+        let e = entry.downgrade();
+        pop.connect_closed(move |p| {
+            let title = e.upgrade().filter(|_| !cancel.replace(true)).and_then(|e| title_set(&e.text(), &shown));
+            let p = p.clone();
+            glib::idle_add_local_once(move || p.unparent());
+            let (Some(b), Some(title)) = (weak.upgrade(), title) else {
                 return;
             };
-            if title.is_empty() || title == b.doc.title() {
-                return;
-            }
             let Some(ui) = b.ui.upgrade() else {
                 return;
             };
@@ -2697,8 +2945,10 @@ impl Board {
             glib::spawn_future_local(async move {
                 match ui.call("design.update", json!({"design_id": id, "title": title})).await {
                     Ok(v) => {
+                        // Our own write: the doc keeps its rev when it is the one write since,
+                        // rather than read the whole design again (B83).
                         if let Ok(row) = serde_json::from_value(v) {
-                            *b.doc.design.borrow_mut() = row;
+                            b.doc.adopt(row);
                         }
                         b.design_changed();
                         super::gallery_changed(&ui);
@@ -2707,10 +2957,18 @@ impl Board {
                 }
             });
         });
-        pop.connect_closed(|p| p.unparent());
         pop.popup();
         entry.grab_focus();
     }
+}
+
+/// The title a rename sends for what was typed, against the title shown: trimmed, without
+/// control characters (a pasted line break or NUL, which the engine refuses, B43); `None` when
+/// it is empty or unchanged.
+fn title_set(typed: &str, shown: &str) -> Option<String> {
+    let plain = relay_bus::design::strip_controls(typed, false);
+    let title = plain.trim();
+    (!title.is_empty() && title != shown.trim()).then(|| title.to_string())
 }
 
 thread_local! {
@@ -2779,12 +3037,9 @@ pub fn handle_point(s: &Rect, h: Handle) -> (f64, f64) {
     (x, y)
 }
 
-/// A size as the pill shows it: whole pixels, or one decimal under 10.
+/// A size as the pill shows it: up to two decimals, as the number fields show it (B103).
 pub fn fmt(v: f64) -> String {
-    // Up to two decimals, as typed: 13.5 stays 13.5 and 1.25 stays 1.25.
-    let text = format!("{:.2}", (v * 100.0).round() / 100.0);
-    let text = text.trim_end_matches('0').trim_end_matches('.');
-    if text == "-0" { "0".into() } else { text.into() }
+    relay_client::design::number::fmt(v)
 }
 
 /// A round colour key; `None` shows the automatic (checkered) swatch.
@@ -2829,22 +3084,9 @@ pub fn swatch_button(color: Option<&str>, tooltip: &str) -> gtk::Button {
     swatch
 }
 
-#[allow(dead_code)]
+/// What a node of `kind` is called on the canvas (`names::kind_caption`).
 pub fn kind_caption(kind: NodeKind) -> &'static str {
-    match kind {
-        NodeKind::Page => "Page",
-        NodeKind::Frame => "Frame",
-        NodeKind::Group => "Group",
-        NodeKind::Rect => "Rectangle",
-        NodeKind::Ellipse => "Ellipse",
-        NodeKind::Line => "Line",
-        NodeKind::Text => "Text",
-        NodeKind::Sticky => "Sticky",
-        NodeKind::Path => "Drawing",
-        NodeKind::Image => "Image",
-        NodeKind::Polygon => "Polygon",
-        NodeKind::Icon => "Icon",
-    }
+    relay_client::design::names::kind_caption(kind)
 }
 
 pub fn kind_glyph(kind: NodeKind) -> &'static str {
@@ -2870,20 +3112,75 @@ pub fn free_name(base: &str, taken: &[String]) -> String {
     (1..).map(|n| format!("{base} {n}")).find(|name| !taken.contains(name)).unwrap_or_default()
 }
 
-/// A node's name as the layers and the breadcrumb show it.
+/// A node's name as the breadcrumb, Ask and export show it, never blank: its name when it shows
+/// anything, else its text's first line that does, else what it draws (B42, E-board-24).
 pub fn display_name(n: &Node) -> String {
-    if let Some(name) = n.name.as_deref().filter(|s| !s.is_empty()) {
-        return name.to_string();
-    }
-    if let Some(text) = n.text.as_deref().filter(|t| !t.trim().is_empty()) {
-        let first = text.lines().next().unwrap_or("");
-        let mut line: String = first.chars().take(40).collect();
-        if line.len() < first.len() {
-            line.push('…');
-        }
-        return line;
-    }
-    kind_caption(n.kind).to_string()
+    relay_client::design::names::display_name(n)
+}
+
+/// Undo agent's audit pages: rows a page, and how many pages it reads back.
+const AGENT_PAGE: u32 = 500;
+const AGENT_PAGES: usize = 5;
+/// How long a second press undoes an agent's change edited since anyway, in microseconds.
+const FORCE_US: i64 = 10_000_000;
+
+/// What Undo agent finds of an agent's changes to a design.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AgentChange {
+    /// The newest one standing, by audit row: it can be undone.
+    Undoable(i64),
+    /// The newest one standing kept no undo: it was too large to (64 KiB).
+    TooLarge,
+    None,
+}
+
+/// The design an audited `design.apply` row wrote: its payload's, else its undo's, else its
+/// answer's (a payload too large to keep is stored as none).
+fn row_design(r: &Value) -> Option<i64> {
+    r["payload"]["design_id"]
+        .as_i64()
+        .or_else(|| r["undo_op"]["payload"]["design_id"].as_i64())
+        .or_else(|| r["result_summary"]["design_id"].as_i64())
+        .or_else(|| r["result_summary"]["design"]["id"].as_i64())
+}
+
+/// Among audit `rows`, the newest change of `design` still standing (applied, not undone), if
+/// any is there: undoable when it kept its undo, too large otherwise. Older changes are never
+/// offered in place of a newer one that cannot be undone (TM-11).
+pub(super) fn pick_agent_change(rows: &[Value], design: i64) -> Option<AgentChange> {
+    let newest = rows
+        .iter()
+        .filter(|r| r["kind"] == "ok" && r["undone_by"].is_null() && row_design(r) == Some(design) && changed_something(r))
+        .max_by_key(|r| r["id"].as_i64().unwrap_or(0))?;
+    Some(match (newest["undo_op"].is_object(), newest["id"].as_i64()) {
+        (true, Some(id)) => AgentChange::Undoable(id),
+        _ => AgentChange::TooLarge,
+    })
+}
+
+/// Whether an audited apply changed the design: a list that changed nothing is audited too,
+/// with no undo and its answer's `rev` its `prev_rev`, and is no change to offer.
+fn changed_something(r: &Value) -> bool {
+    let answer = &r["result_summary"];
+    r["undo_op"].is_object() || answer["rev"].is_null() || answer["rev"] != answer["prev_rev"]
+}
+
+/// What Undo agent says of a change it cannot undo for its size.
+fn too_large(agent: &str) -> String {
+    format!("{agent}'s last change is too large to undo here")
+}
+
+/// The frame names' grey on a ground of `luminance`: a dark one on a light page, the light one
+/// on a dark page, switching where the two read alike (E-board-1); 4.5:1 or better on white
+/// and on the canvas's own dark.
+fn label_ink(luminance: f64) -> gdk::RGBA {
+    if luminance > 0.19 { gdk::RGBA::new(0.33, 0.32, 0.3, 1.0) } else { gdk::RGBA::new(0.62, 0.6, 0.57, 1.0) }
+}
+
+/// How long a toast stays up for `text`: longer for more words, by characters rather than bytes
+/// (a CJK message is not three times as long), and never past about six seconds (B75).
+pub fn toast_ms(text: &str) -> u64 {
+    2600 + text.chars().count().min(120) as u64 * 30
 }
 
 /// A menu entry for `design.{action}` that shows its shortcut (`<Control>c`), as the notes'
@@ -2903,4 +3200,54 @@ pub(super) fn export_menu() -> gio::Menu {
     section.append(Some("Export selection as SVG…"), Some("design.export-svg"));
     section.append(Some("Export selection as PDF…"), Some("design.export-pdf"));
     section
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(id: i64, design: i64, undo: bool) -> Value {
+        let undo_op = if undo { json!({"op": "design.apply", "payload": {"design_id": design}}) } else { Value::Null };
+        json!({"id": id, "kind": "ok", "undone_by": null, "payload": {"design_id": design}, "undo_op": undo_op,
+               "result_summary": {"design_id": design, "rev": id + 1, "prev_rev": id}})
+    }
+
+    #[test]
+    fn undo_agent_takes_the_newest_change_or_says_it_is_too_large() {
+        let rows = vec![row(3, 7, true), row(9, 8, true), row(5, 7, true)];
+        assert_eq!(pick_agent_change(&rows, 7), Some(AgentChange::Undoable(5)));
+        assert_eq!(pick_agent_change(&rows, 1), None, "none of this design on the page: read further");
+        // The newest kept no undo: an older one is not undone in its place (TM-11).
+        let rows = vec![row(3, 7, true), row(6, 7, false)];
+        assert_eq!(pick_agent_change(&rows, 7), Some(AgentChange::TooLarge));
+        // Undone, refused, or a list that changed nothing do not count.
+        let mut undone = row(8, 7, true);
+        undone["undone_by"] = json!(12);
+        let mut refused = row(9, 7, true);
+        refused["kind"] = json!("error");
+        let mut nothing = row(10, 7, false);
+        nothing["result_summary"]["rev"] = json!(10);
+        assert_eq!(pick_agent_change(&[row(3, 7, true), undone, refused, nothing], 7), Some(AgentChange::Undoable(3)));
+        // A payload too large to keep names its design in the undo.
+        let mut big = row(4, 7, true);
+        big["payload"] = Value::Null;
+        assert_eq!(pick_agent_change(&[big], 7), Some(AgentChange::Undoable(4)));
+    }
+
+    #[test]
+    fn toast_time_counts_characters_and_is_capped() {
+        assert_eq!(toast_ms("中文消息"), toast_ms("abcd"));
+        assert!(toast_ms(&"x".repeat(5000)) <= 6200);
+        assert!(toast_ms("a longer message") > toast_ms("short"));
+    }
+
+    #[test]
+    fn a_title_is_sent_trimmed_plain_and_only_when_changed() {
+        assert_eq!(title_set("Home", "Home"), None);
+        assert_eq!(title_set("  Home ", "Home"), None);
+        assert_eq!(title_set("   ", "Home"), None);
+        assert_eq!(title_set("\u{0}", "Home"), None);
+        assert_eq!(title_set(" Hero\u{0}x\n", "Home"), Some("Herox".into()));
+        assert_eq!(title_set("Landing", "Home"), Some("Landing".into()));
+    }
 }
