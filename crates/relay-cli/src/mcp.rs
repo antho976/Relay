@@ -615,6 +615,9 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
         if name == relay_bus::ops::design::Render::NAME {
             return Ok(render_success(value, mail.as_ref()));
         }
+        if name == relay_bus::ops::picture::Thumb::NAME {
+            return Ok(thumb_success(value, mail.as_ref()));
+        }
         Ok(tool_success(value, mail.as_ref())?)
     } else {
         Ok(refusal(serde_json::to_value(response.error)?, mail.as_ref(), &style))
@@ -1057,9 +1060,21 @@ fn tool_success(value: Value, mail: Option<&MailHint>) -> Result<Value> {
 /// it only of a tool with an `outputSchema`, which no op declares. A picture that cannot be
 /// attached stays a path, and the text says where.
 fn render_success(value: Value, mail: Option<&MailHint>) -> Value {
+    picture_success(value, "/png/path", &RENDERS, mail)
+}
+
+/// A design.picture.thumb answer, as a render's: the compact JSON, then the thumbnail itself, so
+/// an agent sees it without reading a file outside its write roots (pictures-SPEC-v2 §5.3).
+fn thumb_success(value: Value, mail: Option<&MailHint>) -> Value {
+    picture_success(value, "/path", &THUMBS, mail)
+}
+
+/// An answer that names a picture at `pointer`: its compact JSON, then the picture as an image
+/// block when `shelf` holds it, else a line saying where it is; no `structuredContent`.
+fn picture_success(value: Value, pointer: &str, shelf: &Shelf, mail: Option<&MailHint>) -> Value {
     let mut content = vec![json!({"type":"text","text":serde_json::to_string(&value).unwrap_or_default()})];
-    if let Some(path) = value.pointer("/png/path").and_then(Value::as_str) {
-        content.push(image_block(Path::new(path), &RENDERS).unwrap_or_else(|| {
+    if let Some(path) = value.pointer(pointer).and_then(Value::as_str) {
+        content.push(image_block(Path::new(path), shelf).unwrap_or_else(|| {
             json!({"type":"text","text":format!("The picture could not be attached; it is at {path}.")})
         }));
     }
@@ -1088,11 +1103,22 @@ fn render_name(name: &str) -> bool {
     name.strip_suffix(".png").is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
 }
 
+/// design.picture.thumb's previews: `picture-cache/<openverse|pexels>-<key>.<jpg|png|webp|gif>`,
+/// at most 2 MiB, the most the engine fetches for one (`Want::Thumb`).
+const THUMBS: Shelf = Shelf { folder: "picture-cache", named: thumb_name, max: 2 << 20 };
+
+/// A name the engine gives a kept thumbnail: its picture id's source and key, and a raster's
+/// extension. The key is checked as the engine checks an id, so no other file there qualifies.
+fn thumb_name(name: &str) -> bool {
+    let Some((stem, ext)) = name.rsplit_once('.') else { return false };
+    let Some((source, key)) = stem.split_once('-') else { return false };
+    matches!(ext, "jpg" | "png" | "webp" | "gif") && relay_core::pictures::parse_id(&format!("{source}:{key}")).is_ok()
+}
+
 /// The picture at `path` as an MCP image block, its type read from its bytes; `None` unless the
 /// path is absolute and plain (no `.` or `..`), names a file `shelf` holds, that file is a regular
 /// one (not a symlink) of at most `shelf.max` bytes, and its bytes are a PNG, JPEG, GIF or WebP.
-/// design.render's picture comes this way; a stock picture's thumbnail is to come the same way,
-/// from a shelf of its own.
+/// design.render's picture and a stock picture's thumbnail come this way, each from its shelf.
 fn image_block(path: &Path, shelf: &Shelf) -> Option<Value> {
     use std::io::Read as _;
     use std::os::unix::fs::MetadataExt as _;
@@ -1553,6 +1579,73 @@ mod tests {
         assert!(content[2]["text"].as_str().unwrap().contains("3 unread"));
         let without = render_success(render_answer(None), Some(&mail));
         assert!(without["content"][1]["text"].as_str().unwrap().contains("mailbox.list"));
+    }
+
+    const OPENVERSE_ID: &str = "48e4625b-0930-43db-990c-22858b1d633e";
+
+    /// `<dir>/picture-cache/<name>` holding `bytes`, as the engine keeps a thumbnail.
+    fn kept_thumb(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
+        let cache = dir.join("picture-cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        let path = cache.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn thumb_answer(path: &Path) -> Value {
+        json!({"path": path, "w": 1, "h": 1})
+    }
+
+    /// pictures-SPEC-v2 §5.3: an agent sees a preview without reading the store's folder, which
+    /// its sandbox may not reach.
+    #[test]
+    fn a_thumbnail_comes_as_compact_text_then_the_image() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [format!("openverse-{OPENVERSE_ID}.png"), "pexels-2014422.png".to_string()] {
+            let path = kept_thumb(dir.path(), &name, PNG);
+            let result = thumb_success(thumb_answer(&path), None);
+            assert_eq!(result["isError"], false);
+            assert!(result.get("structuredContent").is_none());
+            let content = result["content"].as_array().unwrap();
+            assert_eq!(serde_json::from_str::<Value>(content[0]["text"].as_str().unwrap()).unwrap(), thumb_answer(&path));
+            assert_eq!((&content[1]["type"], &content[1]["mimeType"]), (&json!("image"), &json!("image/png")), "{name}");
+            assert_eq!(decoded(&content[1]), PNG);
+        }
+        assert_eq!(THUMBS.max, relay_core::pictures::net::Want::Thumb.cap(), "the most the engine keeps");
+    }
+
+    #[test]
+    fn a_thumbnail_the_engine_did_not_keep_stays_a_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = kept_thumb(dir.path(), &format!("openverse-{OPENVERSE_ID}.png"), PNG);
+        let cache = good.parent().unwrap().to_path_buf();
+        let link = cache.join("pexels-1.png");
+        std::os::unix::fs::symlink(&good, &link).unwrap();
+        let foreign = dir.path().join("design-assets");
+        std::fs::create_dir_all(&foreign).unwrap();
+        let elsewhere = foreign.join(format!("openverse-{OPENVERSE_ID}.png"));
+        std::fs::write(&elsewhere, PNG).unwrap();
+        let mut big_bytes = PNG.to_vec();
+        big_bytes.resize(3 << 20, 0);
+        let big = kept_thumb(dir.path(), "pexels-2.png", &big_bytes);
+        let svg = kept_thumb(dir.path(), "pexels-3.png", b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"></svg>");
+        let svg_named = kept_thumb(dir.path(), "pexels-4.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"></svg>");
+        let render = kept_thumb(dir.path(), &format!("{}.png", uuid::Uuid::new_v4()), PNG);
+        let odd_names: Vec<PathBuf> = ["flickr-1.png", "pexels-0123.png", "pexels-.png", "openverse-x.png", "pexels-5.bmp", "pexels-6", "photo.png"]
+            .iter().map(|name| kept_thumb(dir.path(), name, PNG)).collect();
+        let around = cache.join("..").join("picture-cache").join(good.file_name().unwrap());
+        let relative = Path::new("picture-cache").join(good.file_name().unwrap());
+        let mut paths = vec![link, elsewhere, big, svg, svg_named, render, around, relative, cache.join("pexels-7.png")];
+        paths.extend(odd_names);
+        for path in &paths {
+            let content = thumb_success(thumb_answer(path), None)["content"].clone();
+            let content = content.as_array().unwrap();
+            assert!(content.iter().all(|c| c["type"] == "text"), "{} was attached", path.display());
+            assert_eq!(content[1]["text"], format!("The picture could not be attached; it is at {}.", path.display()));
+        }
+        // A render's picture is not a thumbnail, nor a thumbnail a render's picture.
+        assert_eq!(thumb_success(thumb_answer(&good), None)["content"][1]["type"], "image");
+        assert_eq!(render_success(json!({"png": {"path": good}}), None)["content"][1]["type"], "text");
     }
 
     #[test]

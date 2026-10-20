@@ -2,7 +2,8 @@
 //! sends, the providers' answers read with their licences ([`parse`]), a client for their three
 //! fixed hosts ([`net`]), the thumbnail cache, and the [`Desk`]: what the engine remembers between
 //! requests (hits, searches, cooldowns, the agents' allowance, the Pexels key's state), held by
-//! the engine as `Engine::pictures`. The Pexels key at rest is [`key`]'s. The ops are in
+//! the engine as `Engine::pictures`. The Pexels key at rest is [`key`]'s. [`search`] and
+//! [`thumb`] are the two queries' work once their design is checked; the ops are registered in
 //! `handlers/picture.rs`.
 //!
 //! Lock rules (§7.1): no `Desk` mutex is held across I/O, or while the store is taken
@@ -19,7 +20,7 @@ use crate::picture::{self, Picture};
 use crate::Instance;
 use net::{Fetch, Req, Ureq, Want};
 use parse::Item;
-use relay_bus::ops::picture::{Orientation, SearchOut};
+use relay_bus::ops::picture::{Orientation, SearchIn, SearchOut, ThumbOut};
 pub use relay_bus::ops::picture::{PictureCredit, PictureHit, PictureSource, PLUGIN};
 use relay_bus::BusError;
 use serde_json::json;
@@ -169,6 +170,21 @@ pub struct SearchKey {
     pub orientation: Option<Orientation>,
     pub page: u32,
     pub count: u32,
+}
+
+impl SearchKey {
+    /// A search as asked (§5.2 step 1), checked before anything is read or sent: its words
+    /// normalised, its page 1 to [`MAX_PAGE`], its count cut to 1 to [`MAX_COUNT`], Openverse
+    /// when no source is named.
+    pub fn of(p: &SearchIn) -> Result<SearchKey, BusError> {
+        Ok(SearchKey {
+            source: p.source.unwrap_or(PictureSource::Openverse),
+            query: normalise_query(&p.query)?,
+            orientation: p.orientation,
+            page: page(p.page)?,
+            count: count(p.count),
+        })
+    }
 }
 
 /// The picture in fetched bytes: a PNG, JPEG, GIF or WebP (never SVG) of at most [`MAX_PIXELS`];
@@ -463,6 +479,21 @@ impl Desk {
         self.send_past_cooldown(fetch, req)
     }
 
+    /// [`Desk::send`] for a caller of search, thumb or add (§5.2 step 5): refused at once, with
+    /// nothing sent or counted, while its bucket cools; then, when `agent`, counted against the
+    /// bucket's 24-hour allowance (Openverse only; over it is `rate_limited`); then sent. The
+    /// person is never counted.
+    pub fn ask(&self, fetch: &dyn Fetch, req: &Req, agent: bool) -> Result<Vec<u8>, BusError> {
+        let (bucket, now) = (req.bucket(), Instant::now());
+        if let Some(left) = self.cooling(bucket, now) {
+            return Err(rate_limited(bucket.source(), left));
+        }
+        if agent {
+            self.spend_allowance(bucket, now)?;
+        }
+        self.send(fetch, req)
+    }
+
     /// [`Desk::send`], sent even while its bucket cools: only for checking a new Pexels key,
     /// whose hourly allowance is its own, not the one the saved key spent. A 429 still cools.
     pub fn send_past_cooldown(&self, fetch: &dyn Fetch, req: &Req) -> Result<Vec<u8>, BusError> {
@@ -619,6 +650,97 @@ pub fn set_fake_fetch(engine: &Engine, fake: Arc<dyn Fetch>) {
 /// saved.
 pub fn saved_key(engine: &Engine, agent: bool) -> Result<SecretKey, BusError> {
     engine.pictures.key_with(agent, || key::load(&key::Keyring::of(engine)))
+}
+
+// ------------------------------------------------------------------ the two queries
+
+/// `design.picture.search` once its design is checked (§5.2): Pexels takes the saved key first
+/// (`design.picture.no_key` when none is); a search answered less than [`FRESH`] ago is answered
+/// again; otherwise one request, refused at once while its source cools and, for an agent on
+/// Openverse, counted against the agents' day ([`Desk::ask`]). Its hits are remembered for
+/// `thumb` and `add`. A failure is the answer: nothing older is ever served. Holds no lock.
+pub fn search(engine: &Engine, agent: bool, search: SearchKey) -> Result<SearchOut, BusError> {
+    let desk = &engine.pictures;
+    let key = match search.source {
+        PictureSource::Pexels => Some(saved_key(engine, agent)?),
+        PictureSource::Openverse => None,
+    };
+    if let Some(out) = desk.fresh_search(&search, Instant::now()) {
+        return Ok(out);
+    }
+    let fetch = desk.fetcher(engine.instance, search.source)?;
+    let SearchKey { source, ref query, orientation, page, count } = search;
+    let req = match key {
+        Some(key) => Req::pexels_search(key, query, orientation, page, count),
+        None => Req::openverse_search(query, orientation, page, count),
+    };
+    let body = desk.ask(&*fetch, &req, agent)?;
+    let (mut items, has_more) = match source {
+        PictureSource::Openverse => parse::openverse_page(&body, page)?,
+        PictureSource::Pexels => parse::pexels_page(&body, page)?,
+    };
+    items.truncate(count as usize);
+    let out = SearchOut { source, page, has_more, results: items.iter().map(Item::hit).collect() };
+    desk.remember(items);
+    desk.keep_search(search, out.clone(), Instant::now());
+    Ok(out)
+}
+
+/// `design.picture.thumb` once its design is checked (§5.3): the preview kept from before (its
+/// time refreshed, so no sweep takes it), else fetched once: Openverse's own small copy, by the
+/// id; Pexels' `src.medium`, from the remembered hit or a detail read, sent without the key. The
+/// bytes must be a raster (`design.picture.not_raster`). It is kept in the picture cache, which
+/// is swept of what nobody asked for in a week, at most once a day. Holds no lock.
+pub fn thumb(engine: &Engine, agent: bool, id: &Id) -> Result<ThumbOut, BusError> {
+    let dir = engine.store.picture_cache_dir();
+    if let Some((path, picture)) = cached_thumb(&dir, id) {
+        return Ok(thumb_out(&path, &picture));
+    }
+    let desk = &engine.pictures;
+    let fetch = desk.fetcher(engine.instance, id.source)?;
+    let req = match id.source {
+        PictureSource::Openverse => Req::openverse_thumb(id),
+        PictureSource::Pexels => {
+            let item = match desk.hit(&id.to_string()) {
+                Some(item) => item,
+                None => detail(engine, &*fetch, agent, id)?,
+            };
+            // The parser keeps a Pexels photo only with both links on images.pexels.com.
+            item.thumb_url.as_deref().and_then(|url| Req::pexels_image(url, Want::Thumb))
+                .ok_or_else(|| provider(id.source, None, "gave no preview for this photo"))?
+        }
+    };
+    let bytes = desk.ask(&*fetch, &req, agent)?;
+    let picture = photo(&bytes)?;
+    let path = keep_thumb(&dir, id, &bytes, &picture)
+        .map_err(|e| crate::engine::internal(format!("pictures: a thumbnail could not be kept in {}: {e}", dir.display())))?;
+    if desk.sweep_due(Instant::now()) {
+        let removed = sweep(&dir, SystemTime::now());
+        tracing::debug!(removed, "pictures: thumbnails nobody asked for in a week were swept");
+    }
+    Ok(thumb_out(&path, &picture))
+}
+
+fn thumb_out(path: &Path, picture: &Picture) -> ThumbOut {
+    ThumbOut { path: path.display().to_string(), w: picture.w, h: picture.h }
+}
+
+/// Photo `id` described again by its provider, for an id that is not among the remembered hits
+/// (one from before a restart, or one handed on from elsewhere): read through the same allowlist
+/// as a search, so an id from anywhere brings in only what a search could
+/// (`design.picture.licence`). The detail read spends the source's API bucket, and an agent's
+/// counts against the agents' Openverse day; Pexels needs the saved key. The item is remembered.
+pub fn detail(engine: &Engine, fetch: &dyn Fetch, agent: bool, id: &Id) -> Result<Item, BusError> {
+    let desk = &engine.pictures;
+    let item = match id.source {
+        PictureSource::Openverse => parse::openverse_detail(&desk.ask(fetch, &Req::openverse_detail(id), agent)?, id)?,
+        PictureSource::Pexels => {
+            let req = Req::pexels_detail(saved_key(engine, agent)?, id);
+            parse::pexels_detail(&desk.ask(fetch, &req, agent)?, id)?
+        }
+    };
+    desk.remember([item.clone()]);
+    Ok(item)
 }
 
 // ------------------------------------------------------------------ the thumbnail cache
@@ -937,6 +1059,23 @@ mod tests {
         let fake = Fake::answering(vec![status(429, None)]);
         assert!(pexels.send(&fake, &Req::pexels_key_check(SecretKey::new("k"))).is_err());
         assert_eq!(pexels.cooling(Bucket::Pexels, Instant::now()).map(|s| s > 58), Some(true), "60 s without Retry-After");
+    }
+
+    #[test]
+    fn a_cooling_bucket_refuses_before_an_agent_is_counted() {
+        let desk = Desk::default();
+        let fake = Fake::default();
+        let search = Req::openverse_search("kitchen", None, 1, 12);
+        let counted = |desk: &Desk| lock(&desk.allowance).get(&Bucket::OpenverseApi).map_or(0, VecDeque::len);
+        assert_eq!(desk.ask(&fake, &search, false).unwrap(), b"ok");
+        assert_eq!(counted(&desk), 0, "the person is never counted");
+        desk.ask(&fake, &search, true).unwrap();
+        assert_eq!(counted(&desk), 1);
+        desk.cool(Bucket::OpenverseApi, 30, Instant::now());
+        let e = desk.ask(&fake, &search, true).unwrap_err();
+        assert_eq!((e.code.as_str(), counted(&desk), fake.calls()), ("design.picture.rate_limited", 1, 2), "nothing counted or sent");
+        assert!(desk.ask(&fake, &Req::openverse_thumb(&ov()), true).is_ok(), "the images bucket is not cooling");
+        assert_eq!(lock(&desk.allowance)[&Bucket::OpenverseImages].len(), 1);
     }
 
     #[test]
