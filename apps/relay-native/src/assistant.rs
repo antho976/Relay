@@ -72,6 +72,8 @@ struct Assistant {
     cards: RefCell<HashMap<i64, Vec<glib::WeakRef<gtk::Box>>>>,
     /// The drawer was opened once, and the newest thread read.
     loaded: Cell<bool>,
+    /// What had the keyboard when the drawer opened (a terminal, mostly), which gets it back.
+    before: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
 }
 
 thread_local! {
@@ -202,11 +204,14 @@ pub fn install(ui: &Rc<Ui>, key: &gtk::Button, host: &gtk::Overlay) {
         tools: RefCell::default(),
         cards: RefCell::default(),
         loaded: Cell::new(false),
+        before: RefCell::default(),
     });
     ASSISTANT.with(|slot| *slot.borrow_mut() = Some(a.clone()));
     fill_models(&a);
     restore_choice(ui);
 
+    // Pressing the key leaves the keyboard where it was, for the drawer to give back on closing.
+    key.set_focus_on_click(false);
     key.connect_clicked(|_| toggle());
     close.connect_clicked(|_| show(false));
     fresh.connect_clicked(|_| new_chat());
@@ -269,6 +274,17 @@ fn toggle() {
 
 fn show(open: bool) {
     let Some(a) = the() else { return };
+    let focus = a.revealer.root().and_then(|root| root.focus());
+    if open && !a.revealer.reveals_child() {
+        *a.before.borrow_mut() = focus.filter(|w| !w.is_ancestor(&a.revealer)).map(|w| w.downgrade());
+    } else if !open && a.revealer.reveals_child() {
+        // Closing takes the keyboard out of the drawer, back to what had it; focus moved elsewhere
+        // since stays there.
+        let held = focus.is_none_or(|w| w.is_ancestor(&a.revealer));
+        if let Some(w) = a.before.take().and_then(|w| w.upgrade()).filter(|w| held && w.is_mapped()) {
+            w.grab_focus();
+        }
+    }
     a.revealer.set_reveal_child(open);
     a.revealer.set_can_target(open);
     if open {
