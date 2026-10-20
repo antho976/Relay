@@ -79,7 +79,7 @@ private data class DesignList(val designs: List<DesignRow> = emptyList())
 
 /** The fields of a node (types.rs `DesignNode`) this outline draws; the rest is left to the PC. */
 @Serializable
-private data class DesignNode(
+internal data class DesignNode(
     val id: String = "",
     val parent: String? = null,
     val kind: String = "",
@@ -216,7 +216,7 @@ fun DesignScreen(id: Long, nav: Nav) {
                 val pages = got.nodes.filter { it.kind == "page" }
                 if (pages.isEmpty()) Empty("layout", "Nothing drawn yet", "This design has no pages.")
                 pages.forEachIndexed { index, page ->
-                    val frames = kids[page.id].orEmpty().filter { it.kind == "frame" }
+                    val frames = pageFrames(page, kids)
                     SectionLabel(page.name?.ifBlank { null } ?: "Page ${index + 1}")
                     PageOutline(page, kids)
                     if (frames.isNotEmpty()) {
@@ -237,6 +237,13 @@ fun DesignScreen(id: Long, nav: Nav) {
     }
 }
 
+/** Whether the outline draws [n] at all: a hidden layer is left out, and so is its row in the frames list. */
+private fun shown(n: DesignNode) = n.hidden != true
+
+/** The frames listed under a page's outline: its top-level ones that it draws. */
+internal fun pageFrames(page: DesignNode, kids: Map<String?, List<DesignNode>>): List<DesignNode> =
+    kids[page.id].orEmpty().filter { it.kind == "frame" && shown(it) }
+
 /** The kinds this outline draws, and the containers it looks into. */
 private val DRAWN = setOf("frame", "rect", "sticky", "ellipse", "polygon", "line", "path", "group")
 
@@ -244,7 +251,7 @@ private val DRAWN = setOf("frame", "rect", "sticky", "ellipse", "polygon", "line
 @Composable
 private fun PageOutline(page: DesignNode, kids: Map<String?, List<DesignNode>>) {
     val c = Relay.colors
-    val top = kids[page.id].orEmpty().filter { it.hidden != true && it.kind in DRAWN }
+    val top = kids[page.id].orEmpty().filter { shown(it) && it.kind in DRAWN }
     val box = remember(top) { extent(top) }
     if (box == null) {
         T("Nothing on this page the phone can draw.", style = Relay.type.caption, color = c.ink3)
@@ -302,7 +309,7 @@ private fun extent(nodes: List<DesignNode>): androidx.compose.ui.geometry.Rect? 
  * it holds where that is drawn at its own coordinates: a group, or a frame without auto layout.
  */
 private fun DrawScope.drawNode(n: DesignNode, kids: Map<String?, List<DesignNode>>, ox: Float, oy: Float, alpha: Float, hair: Float) {
-    if (n.hidden == true || n.kind !in DRAWN) return
+    if (!shown(n) || n.kind !in DRAWN) return
     val a = alpha * (n.opacity?.toFloat() ?: 1f).coerceIn(0f, 1f)
     val left = ox + n.x.toFloat()
     val top = oy + n.y.toFloat()
