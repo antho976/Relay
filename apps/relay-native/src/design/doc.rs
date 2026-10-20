@@ -1242,3 +1242,547 @@ fn dropped_text(n: usize) -> String {
         n => format!("{n} later edits no longer applied and were dropped"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! A doc with no app behind it sends nothing and reads nothing: `pump` and `reread` find no
+    //! connection and return, so each test plays the engine itself, through `next`, `answered`,
+    //! `event` and `read`, as the futures would.
+    use super::*;
+    use relay_bus::design::{Node, NodeKind, MAX_OPS};
+    use relay_bus::ErrorKind;
+
+    fn node(id: &str, parent: Option<&str>, kind: NodeKind, x: f64) -> Node {
+        let mut n = Node::new(kind);
+        n.id = id.into();
+        n.parent = parent.map(Into::into);
+        (n.x, n.w, n.h) = (x, 50.0, 50.0);
+        n
+    }
+
+    fn named(mut n: Node, name: &str) -> Node {
+        n.name = Some(name.into());
+        n
+    }
+
+    /// p1 › card (frame) › button, label (rects); p1 › dot (ellipse).
+    fn nodes() -> Vec<Node> {
+        vec![
+            node("p1", None, NodeKind::Page, 0.0),
+            named(node("card", Some("p1"), NodeKind::Frame, 0.0), "Card"),
+            named(node("button", Some("card"), NodeKind::Rect, 10.0), "Button"),
+            named(node("label", Some("card"), NodeKind::Rect, 100.0), "Label"),
+            node("dot", Some("p1"), NodeKind::Ellipse, 500.0),
+        ]
+    }
+
+    fn row(rev: i64) -> Design {
+        Design {
+            id: 1,
+            project_id: 1,
+            session: None,
+            title: "Home".into(),
+            rev,
+            pages: 1,
+            nodes: 4,
+            created_by: "user".into(),
+            updated_by: "user".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            deleted_at: None,
+        }
+    }
+
+    fn got(rev: i64, nodes: Vec<Node>) -> GetOut {
+        GetOut { design: row(rev), nodes, assets_dir: String::new(), removed: None, colors: Default::default(), styles: Default::default(), credits: Default::default() }
+    }
+
+    fn describe(change: &Change) -> String {
+        match change {
+            Change::Scene => "scene".into(),
+            Change::Reloaded { changed, by } => {
+                let mut changed: Vec<&str> = changed.iter().map(String::as_str).collect();
+                changed.sort();
+                format!("reloaded by {by}: {}", changed.join(" "))
+            }
+            Change::Design => "design".into(),
+            Change::Selected(ids) => format!("selected {}", ids.join(" ")),
+            Change::Saving(on) => format!("saving {on}"),
+            Change::Error(e) => format!("said {e}"),
+        }
+    }
+
+    type Heard = Rc<RefCell<Vec<String>>>;
+
+    fn listen(doc: &Doc) -> Heard {
+        let heard: Heard = Rc::default();
+        let into = heard.clone();
+        doc.listen(move |change| into.borrow_mut().push(describe(change)));
+        heard
+    }
+
+    /// The design at `rev`, open on one board, and what that board hears.
+    fn open(rev: i64) -> (Rc<Shared>, Rc<Doc>, Heard) {
+        let shared = Shared::build(Weak::new(), 1, got(rev, nodes()));
+        let doc = Doc::of(&shared);
+        let heard = listen(&doc);
+        (shared, doc, heard)
+    }
+
+    fn set(id: &str, set: Value) -> NodeOp {
+        NodeOp::Update { id: id.into(), set: set.as_object().expect("an object").clone() }
+    }
+
+    fn x(shared: &Shared, id: &str) -> f64 {
+        shared.scene.borrow().node(id).expect("in the scene").x
+    }
+
+    /// The engine's node: the scene's, at `x`.
+    fn at(shared: &Shared, id: &str, x: f64) -> Node {
+        let mut n = shared.scene.borrow().stored(id).expect("in the scene").clone();
+        n.x = x;
+        n
+    }
+
+    fn answer(prev_rev: i64, rev: i64, nodes: Vec<Node>, inverse: Option<Vec<NodeOp>>) -> ApplyOut {
+        ApplyOut {
+            design_id: 1,
+            rev,
+            prev_rev,
+            rebased: false,
+            ids: Vec::new(),
+            removed_count: 0,
+            audit_id: None,
+            skipped: Vec::new(),
+            warnings: Vec::new(),
+            copied: Default::default(),
+            design: Some(row(rev)),
+            nodes: Some(nodes),
+            removed: Some(Vec::new()),
+            inverse,
+            expect: None,
+            colors: None,
+            styles: None,
+            reread: false,
+        }
+    }
+
+    fn said(heard: &Heard) -> Vec<String> {
+        heard.borrow().iter().filter_map(|h| h.strip_prefix("said ").map(String::from)).collect()
+    }
+
+    #[test]
+    fn open_things_are_found_by_id_while_something_holds_them() {
+        let mut live: Live<u8> = Live::default();
+        let one = Rc::new(1u8);
+        live.put(5, &one);
+        assert!(Rc::ptr_eq(&live.get(5).expect("open"), &one));
+        assert!(live.get(6).is_none(), "another id");
+        assert_eq!(live.all().len(), 1);
+        drop(one);
+        assert!(live.get(5).is_none() && live.0.is_empty(), "gone with its last holder, and pruned");
+    }
+
+    /// B28: a window popped out of a board, or opened beside it, is the same design: one scene,
+    /// one queue and one history, each board hearing what changes.
+    #[test]
+    fn every_board_on_a_design_shares_its_scene_and_history() {
+        let (shared, board, _) = open(3);
+        let window = board.share();
+        let in_window = listen(&window);
+        assert!(Rc::ptr_eq(&board.shared, &window.shared));
+        assert!(board.commit(vec![set("button", json!({"x": 20.0}))], vec![]));
+        assert_eq!(window.scene.borrow().node("button").unwrap().x, 20.0);
+        assert_eq!(in_window.borrow().as_slice(), ["scene"], "the window draws the board's edit");
+        let sent = shared.next().unwrap();
+        shared.answered(sent, Ok(answer(3, 4, vec![at(&shared, "button", 20.0)], Some(vec![set("button", json!({"x": 10.0}))]))));
+        assert!(window.can_undo(), "the window can undo what the board did");
+        drop(board);
+        assert_eq!(shared.docs().len(), 1, "the board's listeners went with it");
+        shared.tell(Change::Design);
+        assert_eq!(in_window.borrow().last().unwrap(), "design");
+    }
+
+    /// B28: a gesture holds rereads back on its board alone; a board's repeated holds and one
+    /// release let go, and a board closed mid-gesture holds nothing.
+    #[test]
+    fn a_hold_is_each_boards_own() {
+        let (shared, board, _) = open(3);
+        let window = board.share();
+        board.set_hold(true);
+        board.set_hold(true);
+        window.set_hold(true);
+        board.set_hold(false);
+        assert!(shared.held(), "the window still holds");
+        window.set_hold(false);
+        assert!(!shared.held());
+        window.set_hold(true);
+        drop(window);
+        assert!(!shared.held(), "a board closed mid-gesture holds nothing");
+    }
+
+    /// B86: an edit that changes nothing sends nothing, keeps no step and keeps the redo stack;
+    /// the expectations sent are only those of what goes out (W8).
+    #[test]
+    fn an_edit_that_changes_nothing_is_not_sent() {
+        let (shared, doc, heard) = open(3);
+        shared.push_step(true, vec![set("dot", json!({"x": 400.0}))], Vec::new(), Vec::new());
+        assert!(doc.commit(vec![set("button", json!({"x": 10.0}))], vec![]));
+        assert!(shared.queue.borrow().is_empty() && shared.can_redo(), "no request, and the redo is kept");
+        assert!(heard.borrow().is_empty());
+        assert!(doc.commit(vec![set("button", json!({"x": 10.0})), set("dot", json!({"fill": "#ff0000"}))], vec!["dot".into()]));
+        assert!(!shared.can_redo(), "a real edit clears the redo stack");
+        let sent = shared.next().unwrap();
+        assert_eq!(sent.ops, vec![set("dot", json!({"fill": "#ff0000"}))]);
+        let payload = sent.payload(1);
+        assert_eq!(payload["reply"], "full");
+        assert!(payload.get("lenient").is_none(), "an edit is strict");
+        assert_eq!(payload["expect"], json!([{"id": "dot", "set": {"fill": null}}]), "what the scene showed of what it writes");
+    }
+
+    /// B44: an edit of more edits than one list takes is refused before anything runs.
+    #[test]
+    fn an_edit_past_one_list_is_refused_whole() {
+        let (shared, doc, heard) = open(3);
+        let ops: Vec<NodeOp> = (0..=MAX_OPS).map(|i| set("button", json!({"x": 11.0 + i as f64}))).collect();
+        assert!(!doc.commit(ops, vec![]));
+        assert_eq!(x(&shared, "button"), 10.0, "nothing ran");
+        assert!(shared.queue.borrow().is_empty());
+        assert_eq!(said(&heard), [format!("that is {} changes at once; one edit makes at most {MAX_OPS}. Select fewer layers.", MAX_OPS + 1)]);
+    }
+
+    /// B27: the engine's copy of a node a queued edit changes again is not taken: it would put
+    /// the node back where the second edit moved it from.
+    #[test]
+    fn an_answer_leaves_what_a_queued_edit_changes() {
+        let (shared, doc, _) = open(3);
+        doc.commit(vec![set("button", json!({"x": 11.0}))], vec![]);
+        doc.commit(vec![set("button", json!({"x": 12.0}))], vec![]);
+        let sent = shared.next().unwrap();
+        let mut dot = at(&shared, "dot", 500.0);
+        dot.fill = Some("#00ff00".into());
+        shared.answered(sent, Ok(answer(3, 4, vec![at(&shared, "button", 11.0), dot], Some(vec![set("button", json!({"x": 10.0}))]))));
+        assert_eq!(x(&shared, "button"), 12.0, "the second edit still shows");
+        assert_eq!(shared.scene.borrow().node("dot").unwrap().fill.as_deref(), Some("#00ff00"), "what nothing ahead changes is confirmed");
+        let sent = shared.next().unwrap();
+        shared.answered(sent, Ok(answer(4, 5, vec![at(&shared, "button", 12.0)], Some(vec![set("button", json!({"x": 11.0}))]))));
+        assert_eq!((x(&shared, "button"), shared.undo.borrow().len(), shared.rev.get()), (12.0, 2, 5));
+        assert!(!shared.stale.get(), "both answers followed on from our rev");
+    }
+
+    /// B10: an undo leaves its stack only once the engine ran it. Never sent, it waits for the
+    /// connection; refused, it is taken off and said; run, it moves to the redo stack.
+    #[test]
+    fn an_undo_leaves_its_stack_only_once_run() {
+        let (shared, doc, heard) = open(3);
+        shared.push_step(false, vec![set("button", json!({"x": 30.0}))], Vec::new(), vec!["button".into()]);
+        doc.undo(vec!["dot".into()]);
+        let sent = shared.next().unwrap();
+        assert_eq!(shared.undo.borrow().len(), 1, "still on its stack while out");
+        assert_eq!(sent.payload(1)["lenient"], true);
+        shared.answered(sent, Err(Failure::Unsent));
+        assert_eq!(shared.undo.borrow().len(), 1);
+        assert!(matches!(shared.replay.borrow().front(), Some(Pending::Step { undo: true, .. })), "it goes out once Relay is back");
+        // Back: read, then it goes out.
+        shared.read(Ok(got(3, nodes())), 0, None);
+        let sent = shared.next().unwrap();
+        let refusal = BusError::new(ErrorKind::Invalid, "design.too_large", "the design would pass 1536 KiB");
+        shared.answered(sent, Err(Failure::Refused(Box::new(refusal))));
+        assert!(!shared.can_undo(), "a refused step is taken off");
+        assert!(said(&heard).last().unwrap().ends_with("the design would pass 1536 KiB. It was taken off the history."));
+        shared.push_step(false, vec![set("button", json!({"x": 30.0}))], Vec::new(), vec!["button".into()]);
+        doc.undo(vec!["dot".into()]);
+        let sent = shared.next().unwrap();
+        shared.answered(sent, Ok(answer(3, 4, vec![at(&shared, "button", 30.0)], Some(vec![set("button", json!({"x": 10.0}))]))));
+        assert_eq!(x(&shared, "button"), 30.0, "run on the scene as the engine ran it");
+        assert!(!shared.can_undo() && shared.redo.borrow()[0].selection == ["dot"]);
+        assert_eq!(heard.borrow().last().unwrap(), "selected button");
+    }
+
+    /// B10: a redo whose stack a new edit cleared while it was out takes nothing off it.
+    #[test]
+    fn a_redo_answered_after_an_edit_takes_nothing_off() {
+        let (shared, doc, _) = open(3);
+        shared.push_step(true, vec![set("button", json!({"x": 30.0}))], Vec::new(), Vec::new());
+        doc.redo(Vec::new());
+        let sent = shared.next().unwrap();
+        doc.commit(vec![set("dot", json!({"x": 1.0}))], vec![]);
+        shared.push_step(true, vec![set("dot", json!({"x": 2.0}))], Vec::new(), Vec::new());
+        shared.answered(sent, Ok(answer(3, 4, vec![], Some(vec![set("button", json!({"x": 10.0}))]))));
+        assert_eq!(shared.redo.borrow().len(), 1, "the step pushed since stays");
+    }
+
+    /// B9: the edits queued behind a refused one run again on the engine's copy; those that no
+    /// longer apply are dropped and counted, and new edits wait their turn behind them.
+    #[test]
+    fn a_refusal_keeps_the_edits_behind_it() {
+        let (shared, doc, heard) = open(3);
+        doc.commit(vec![set("button", json!({"x": 20.0}))], vec![]);
+        doc.commit(vec![set("dot", json!({"x": 600.0}))], vec![]);
+        doc.commit(vec![set("label", json!({"x": 120.0}))], vec![]);
+        let sent = shared.next().unwrap();
+        let refusal = BusError::new(ErrorKind::NotFound, "design.node_not_found", "no node \"button\"");
+        shared.answered(sent, Err(Failure::Refused(Box::new(refusal))));
+        assert!(shared.queue.borrow().is_empty() && shared.replay.borrow().len() == 2);
+        assert!(shared.unsaved() && shared.stale.get());
+        assert_eq!(said(&heard), ["Not saved: no node \"button\""]);
+        doc.commit(vec![set("dot", json!({"y": 7.0}))], vec![]);
+        assert_eq!(shared.replay.borrow().len(), 3, "a new edit waits behind them");
+        // The engine's copy: an agent deleted the label.
+        let engine: Vec<Node> = nodes().into_iter().filter(|n| n.id != "label").collect();
+        shared.read(Ok(got(5, engine)), 0, None);
+        assert_eq!((x(&shared, "button"), x(&shared, "dot")), (10.0, 600.0), "the refused edit is not run again; the next is");
+        assert!(shared.scene.borrow().node("label").is_none());
+        let queued: Vec<Vec<NodeOp>> = shared.queue.borrow().iter().map(|p| p.ops().to_vec()).collect();
+        assert_eq!(queued, [vec![set("dot", json!({"x": 600.0}))], vec![set("dot", json!({"y": 7.0}))]]);
+        assert_eq!(said(&heard).last().unwrap(), "1 later edit no longer applied and was dropped");
+        // What they expect is what the engine's copy shows.
+        let expect = match shared.queue.borrow().front() {
+            Some(Pending::Edit { expect, .. }) => json!(expect),
+            _ => panic!("an edit"),
+        };
+        assert_eq!(expect, json!([{"id": "dot", "set": {"x": 500.0}}]));
+    }
+
+    /// B78: a rev announced while a read is out, which the read does not hold, is read again;
+    /// a read that holds it settles.
+    #[test]
+    fn a_change_announced_during_a_read_is_read_again() {
+        let (shared, _doc, _) = open(3);
+        shared.reading.set(true);
+        shared.event(&json!(row(5)));
+        assert_eq!(shared.seen.get(), 5);
+        shared.read(Ok(got(4, nodes())), 0, None);
+        assert_eq!(shared.rev.get(), 4);
+        assert!(shared.stale.get() && shared.seen.get() == 5, "rev 5 is owed");
+        shared.read(Ok(got(5, nodes())), 0, None);
+        assert!(!shared.stale.get() && shared.seen.get() == 0);
+    }
+
+    /// A read asked before an answer of ours landed may not hold it: it is not taken.
+    #[test]
+    fn a_read_older_than_our_answer_is_not_taken() {
+        let (shared, doc, heard) = open(3);
+        let asked = shared.answers.get();
+        doc.commit(vec![set("button", json!({"x": 20.0}))], vec![]);
+        let sent = shared.next().unwrap();
+        shared.answered(sent, Ok(answer(3, 4, vec![at(&shared, "button", 20.0)], Some(vec![set("button", json!({"x": 10.0}))]))));
+        shared.read(Ok(got(3, nodes())), asked, None);
+        assert_eq!((x(&shared, "button"), shared.rev.get()), (20.0, 4));
+        assert!(shared.stale.get(), "read again");
+        assert!(!heard.borrow().iter().any(|h| h.starts_with("reloaded")));
+    }
+
+    /// TM-12: an agent's deletions and reorders change no field of what is left; the read says
+    /// what went and which layers moved among their siblings.
+    #[test]
+    fn a_read_says_what_was_removed_and_reordered() {
+        let (shared, doc, heard) = open(3);
+        let mut engine = nodes();
+        engine.retain(|n| n.id != "dot");
+        engine.swap(2, 3);
+        shared.read(Ok(got(4, engine)), 0, None);
+        assert_eq!(shared.scene.borrow().children("card"), ["label", "button"]);
+        assert_eq!(heard.borrow()[0], "reloaded by user: label", "the two swapped: one of them moved");
+        assert_eq!(doc.take_removed(), ["dot"]);
+        assert!(doc.take_removed().is_empty(), "taken once");
+        assert!(reordered(&[], &[]).is_empty());
+        let ids = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(reordered(&ids(&["a", "b", "c", "d"]), &ids(&["b", "c", "d", "a"])), ["a"]);
+        assert_eq!(reordered(&ids(&["a", "b", "c"]), &ids(&["c", "a", "b"])), ["c"]);
+        assert_eq!(reordered(&ids(&["a", "b", "c"]), &ids(&["x", "a", "c"])), Vec::<String>::new(), "added and removed are not moves");
+    }
+
+    /// TM-13: each change goes to the agent that made it, not to whoever wrote last.
+    #[test]
+    fn changes_are_credited_to_who_made_them() {
+        let changed: HashSet<String> = ["a", "b", "c", "d"].map(String::from).into();
+        let ids = |list: &[&str]| Some(list.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let by = |list: &[(&str, &[&str])]| -> Vec<(String, HashSet<String>)> {
+            list.iter().map(|(who, ids)| (who.to_string(), ids.iter().map(|s| s.to_string()).collect())).collect()
+        };
+        // No notice: the design's last writer, as before.
+        assert_eq!(credit(&[], &changed, "agent-a"), ("agent-a".into(), by(&[("agent-a", &["a", "b", "c", "d"])])));
+        assert_eq!(credit(&[], &changed, "user"), ("user".into(), Vec::new()));
+        // The person's edit landed after the agent's: still the agent's change.
+        let notices = [("agent-a".to_string(), None), ("user".to_string(), None)];
+        assert_eq!(credit(&notices, &changed, "user").0, "agent-a");
+        // Named ids: each to its last namer; the person's are nobody's; the rest to the last agent.
+        let notices = [("agent-a".to_string(), ids(&["a", "d"])), ("agent-b".to_string(), ids(&["b"])), ("user".to_string(), ids(&["d"]))];
+        assert_eq!(credit(&notices, &changed, "user"), ("agent-b".into(), by(&[("agent-a", &["a"]), ("agent-b", &["b", "c"])])));
+        // Through the doc: an agent's event, then the read.
+        let (shared, doc, heard) = open(3);
+        let mut event = json!(Design { updated_by: "agent-a".into(), ..row(4) });
+        event["touched"] = json!(["button"]);
+        shared.event(&event);
+        let mut engine = nodes();
+        engine[2].x = 40.0;
+        let mut agent_row = got(4, engine);
+        agent_row.design.updated_by = "user".into();
+        shared.read(Ok(agent_row), 0, None);
+        assert_eq!(heard.borrow()[0], "reloaded by agent-a: button");
+        assert_eq!(doc.take_actors(), by(&[("agent-a", &["button"])]));
+        assert!(shared.notices.borrow().is_empty(), "cleared by the read");
+        assert_eq!(ids_of(&json!({"touched": ["a"], "removed": ["b"]})), ids(&["a", "b"]));
+        assert_eq!(ids_of(&json!({"touched": ["a"], "all": true})), None, "cut short: not all named");
+        assert_eq!(ids_of(&json!({})), None);
+    }
+
+    /// TM-54: an engine holding an older copy than ours (a restored store) is taken, and the
+    /// history, which no longer fits it, is cleared.
+    #[test]
+    fn an_older_copy_clears_the_history() {
+        let (shared, _doc, heard) = open(3);
+        shared.push_step(false, vec![set("button", json!({"x": 30.0}))], Vec::new(), Vec::new());
+        shared.seen.set(9);
+        shared.read(Ok(got(2, nodes())), 0, None);
+        assert_eq!(shared.rev.get(), 2);
+        assert!(!shared.can_undo() && !shared.stale.get() && shared.seen.get() == 0, "nothing owed from before");
+        assert_eq!(said(&heard), ["This design went back to an earlier copy, so its undo history was cleared."]);
+    }
+
+    /// W7, B50: an undo the engine ran without what was changed since is read again, not run
+    /// here, and the person is told what it kept.
+    #[test]
+    fn an_undo_that_kept_later_changes_says_which() {
+        let (shared, doc, heard) = open(3);
+        shared.push_step(false, vec![set("button", json!({"fill": "#000000"}))], Vec::new(), Vec::new());
+        doc.undo(Vec::new());
+        let sent = shared.next().unwrap();
+        let mut out = answer(3, 4, Vec::new(), Some(Vec::new()));
+        out.skipped = vec![
+            Conflict { fields: vec!["fill".into()], ..Conflict::new(Some(0), "button", ConflictReason::Fields) },
+            Conflict::new(Some(1), "card", ConflictReason::Inside),
+            Conflict::new(Some(2), "gone", ConflictReason::ParentSkipped),
+        ];
+        shared.answered(sent, Ok(out));
+        assert!(shared.stale.get() && shared.scene.borrow().node("button").unwrap().fill.is_none(), "not run here: read");
+        assert_eq!(said(&heard), ["Undo kept 2 later changes: Button (fill) and Card (new layers inside)"]);
+    }
+
+    /// W8: an edit refused because what it writes changed says what changed.
+    #[test]
+    fn a_stale_refusal_names_what_changed() {
+        let (shared, doc, heard) = open(3);
+        let stale = |conflicts: Value| {
+            BusError::new(ErrorKind::Conflict, "design.stale", "the design changed").with_details(json!({"rev": 4, "conflicts": conflicts}))
+        };
+        let scene = shared.scene.borrow();
+        let one = stale(json!([{"id": "button", "reason": "fields", "fields": ["fill", "radius"]}]));
+        assert_eq!(stale_text(&one, &scene), "Not saved: Button's fill and radius changed just before. Showing the newer version.");
+        let two = stale(json!([{"id": "button", "reason": "fields", "fields": ["fill"]}, {"id": "card", "reason": "parent"}, {"id": "zz", "reason": "missing"}]));
+        assert_eq!(stale_text(&two, &scene), "Not saved: Button (fill), Card (place) and zz changed just before. Showing the newer version.");
+        assert_eq!(stale_text(&stale(json!([])), &scene), "Not saved: the design changed. Showing the newer version.");
+        drop(scene);
+        doc.commit(vec![set("button", json!({"fill": "#ff0000"}))], vec![]);
+        let sent = shared.next().unwrap();
+        shared.answered(sent, Err(Failure::Refused(Box::new(stale(json!([{"id": "button", "reason": "fields", "fields": ["fill"]}]))))));
+        assert_eq!(said(&heard), ["Not saved: Button's fill changed just before. Showing the newer version."]);
+        assert!(shared.unsaved() && shared.stale.get());
+    }
+
+    /// B7: an answer too large to read, or none in time, may be an edit that applied: read the
+    /// design, keep the queue, and say only what is true.
+    #[test]
+    fn an_edit_that_may_have_applied_is_read_not_refused() {
+        let (shared, doc, heard) = open(3);
+        doc.commit(vec![set("button", json!({"x": 20.0}))], vec![]);
+        doc.commit(vec![set("dot", json!({"x": 600.0}))], vec![]);
+        doc.commit(vec![set("label", json!({"x": 120.0}))], vec![]);
+        let sent = shared.next().unwrap();
+        shared.answered(sent, Err(Failure::TooLarge));
+        assert!(!shared.unsaved() && shared.stale.get() && !shared.can_undo());
+        assert_eq!(shared.queue.borrow().len(), 2, "the rest still goes");
+        assert_eq!(said(&heard), ["Saved, but it cannot be undone from here."]);
+        let sent = shared.next().unwrap();
+        shared.answered(sent, Err(Failure::Unknown("Request timed out.".into())));
+        assert_eq!(said(&heard).len(), 1, "a timeout is read, not said");
+        assert_eq!(shared.queue.borrow().len(), 1);
+    }
+
+    /// An answer too large to carry its undo keeps no step and says so; one without its nodes
+    /// is read again.
+    #[test]
+    fn an_answer_without_its_undo_keeps_no_step() {
+        let (shared, doc, heard) = open(3);
+        doc.commit(vec![set("button", json!({"x": 20.0}))], vec![]);
+        let sent = shared.next().unwrap();
+        let mut out = answer(3, 4, Vec::new(), None);
+        out.nodes = None;
+        out.reread = true;
+        shared.answered(sent, Ok(out));
+        assert!(!shared.can_undo() && shared.stale.get());
+        assert_eq!(said(&heard), ["Saved. This change is too large to undo."]);
+    }
+
+    /// The design's named colours, given whole with an answer, are taken once nothing of ours
+    /// is ahead to change them again.
+    #[test]
+    fn an_answer_takes_the_colours_once_nothing_is_ahead() {
+        let (shared, doc, _) = open(3);
+        doc.commit(vec![set("button", json!({"x": 20.0}))], vec![]);
+        doc.commit(vec![set("button", json!({"x": 30.0}))], vec![]);
+        let colors = |hex: &str| Some([("accent".to_string(), hex.to_string())].into());
+        let sent = shared.next().unwrap();
+        let mut out = answer(3, 4, Vec::new(), Some(Vec::new()));
+        out.colors = colors("#ff0000");
+        shared.answered(sent, Ok(out));
+        assert!(shared.scene.borrow().styles().colors.is_empty(), "an edit is still ahead");
+        let sent = shared.next().unwrap();
+        let mut out = answer(4, 5, Vec::new(), Some(Vec::new()));
+        out.colors = colors("#00ff00");
+        shared.answered(sent, Ok(out));
+        assert_eq!(shared.scene.borrow().styles().colors["accent"], "#00ff00");
+    }
+
+    /// B83: the row a rename answers moves the scene's rev only when it is the one write since.
+    #[test]
+    fn a_rename_answer_moves_the_rev_only_when_it_is_the_one_write() {
+        assert!(adopt_rev(5, 6, true));
+        assert!(!adopt_rev(5, 7, true), "something came between");
+        assert!(!adopt_rev(5, 6, false), "ours out, or a read owed");
+        let (shared, doc, heard) = open(5);
+        doc.adopt(Design { title: "Renamed".into(), ..row(6) });
+        assert_eq!((shared.rev.get(), shared.title()), (6, "Renamed".to_string()));
+        assert_eq!(heard.borrow().as_slice(), ["design"]);
+        shared.stale.set(true);
+        doc.adopt(Design { title: "Again".into(), ..row(7) });
+        assert_eq!((shared.rev.get(), shared.title()), (6, "Again".to_string()), "the read owed brings rev 7");
+    }
+
+    /// B109: what events say of a design while an open of it reads it.
+    #[test]
+    fn an_open_hears_what_happened_while_it_read() {
+        watch(42);
+        noticed(42, 9, false, false);
+        noticed(42, 8, true, false);
+        watch(42);
+        assert_eq!(unwatch(42), Watch { opens: 2, rev: 9, deleted: false, purged: false }, "an older event says nothing");
+        noticed(42, 10, true, false);
+        assert_eq!(unwatch(42), Watch { opens: 1, rev: 10, deleted: true, purged: false }, "the other open still hears");
+        noticed(42, 11, false, true);
+        assert_eq!(unwatch(42), Watch::default(), "nobody watches it now");
+        noticed(43, 3, false, true);
+        assert_eq!(WATCHED.with(|w| w.borrow().len()), 0);
+    }
+
+    /// A design deleted elsewhere takes no more of what is queued for it.
+    #[test]
+    fn a_deleted_design_sends_nothing_more() {
+        let (shared, doc, heard) = open(3);
+        doc.commit(vec![set("button", json!({"x": 20.0}))], vec![]);
+        shared.event(&json!(Design { deleted_at: Some("2026-10-20T09:00:00Z".into()), ..row(4) }));
+        assert!(shared.queue.borrow().is_empty() && shared.next().is_none());
+        assert!(heard.borrow().contains(&"design".to_string()));
+    }
+
+    #[test]
+    fn expectations_follow_what_is_still_written() {
+        let expect = vec![
+            Expect { id: "a".into(), set: Some(json!({"fill": null, "w": 10}).as_object().unwrap().clone()), parent: Some("p1".into()), within: None },
+            Expect { id: "b".into(), set: Some(json!({"x": 1}).as_object().unwrap().clone()), parent: None, within: None },
+        ];
+        let ops = vec![set("a", json!({"width": 20})), NodeOp::Move { id: "a".into(), parent: None, index: Some(0), keep_position: None }];
+        assert_eq!(json!(keep_expect(expect, &ops)), json!([{"id": "a", "set": {"w": 10}, "parent": "p1"}]));
+    }
+}
