@@ -175,6 +175,8 @@ pub struct Shared {
     /// The rev of the last read: a change after it is noted even when an answer of ours has
     /// moved `rev` past it, since only a read shows it.
     read_rev: Cell<i64>,
+    /// The next read takes the design whole: the last read's changes did not fit the scene.
+    whole: Cell<bool>,
     /// The boards' docs on it.
     docs: RefCell<Vec<Weak<Doc>>>,
 }
@@ -484,6 +486,7 @@ impl Shared {
             steps: Cell::new(0),
             notices: RefCell::default(),
             read_rev: Cell::new(rev),
+            whole: Cell::new(false),
             docs: RefCell::default(),
         })
     }
@@ -903,7 +906,10 @@ impl Shared {
         }
     }
 
-    /// Read the design again, and say which nodes differ from ours.
+    /// Read the design again, and say which nodes differ from ours: only what changed since the
+    /// last read (TM-80: `since_rev`, patched into the scene in hand), or the whole design when
+    /// the engine cannot answer that (too old, or an engine before it could) or the last changes
+    /// did not fit.
     fn reread(self: &Rc<Self>) {
         if self.reading.get() {
             return;
@@ -916,11 +922,21 @@ impl Shared {
         self.reading.set(true);
         let asked = self.answers.get();
         let doc = self.clone();
+        let since = (!self.whole.replace(false)).then(|| self.read_rev.get()).filter(|rev| *rev > 0);
         glib::spawn_future_local(async move {
             let started = trace().then(Instant::now);
-            let got = ui.call("design.get", json!({"design_id": doc.id})).await.map_err(|e| e.to_string());
+            let delta = match since {
+                Some(rev) => ui.call("design.get", json!({"design_id": doc.id, "since_rev": rev})).await.ok()
+                    .and_then(|v| decode::<GetOut>(v).ok())
+                    .filter(|got| got.removed.is_some() && got.indexes.as_ref().is_some_and(|i| i.len() == got.nodes.len())),
+                None => None,
+            };
+            let got = match delta {
+                Some(got) => Ok(got),
+                None => ui.call("design.get", json!({"design_id": doc.id})).await.map_err(|e| e.to_string()).and_then(decode::<GetOut>),
+            };
             let fetched = started.map(|t| (t, t.elapsed()));
-            doc.read(got.and_then(decode::<GetOut>), asked, fetched);
+            doc.read(got, asked, fetched);
         });
     }
 
@@ -953,8 +969,27 @@ impl Shared {
         if !owed {
             self.seen.set(0);
         }
+        let styles = Styles { colors: got.colors, styles: got.styles };
+        let mut scene = match (got.removed, got.indexes) {
+            // What changed since the last read, laid into the scene in hand.
+            (Some(mut gone), Some(indexes)) => {
+                gone.extend(got.left);
+                let mut scene = self.scene.borrow().clone();
+                scene.set_styles(styles);
+                if let Err(why) = scene.patch(got.nodes.into_iter().zip(indexes).collect(), &gone) {
+                    if trace() {
+                        println!("DESIGN_TRACE reread delta did not fit ({why}); reading it whole");
+                    }
+                    self.whole.set(true);
+                    self.stale.set(true);
+                    self.settle();
+                    return;
+                }
+                scene
+            }
+            _ => Scene::new(got.nodes).with_styles(styles),
+        };
         self.stale.set(owed);
-        let mut scene = Scene::new(got.nodes).with_styles(Styles { colors: got.colors, styles: got.styles });
         // What was held back behind a refusal runs again on the engine's copy (B9).
         let (again, dropped) = rebase(&mut scene, self.replay.take());
         let built = fetched.map(|(t, _)| t.elapsed());
@@ -1302,7 +1337,7 @@ mod tests {
     }
 
     fn got(rev: i64, nodes: Vec<Node>) -> GetOut {
-        GetOut { design: row(rev), nodes, assets_dir: String::new(), removed: None, colors: Default::default(), styles: Default::default(), credits: Default::default() }
+        GetOut { design: row(rev), nodes, assets_dir: String::new(), removed: None, indexes: None, left: Vec::new(), colors: Default::default(), styles: Default::default(), credits: Default::default() }
     }
 
     fn describe(change: &Change) -> String {
@@ -1565,6 +1600,30 @@ mod tests {
         assert!(shared.stale.get() && shared.seen.get() == 5, "rev 5 is owed");
         shared.read(Ok(got(5, nodes())), 0, None);
         assert!(!shared.stale.get() && shared.seen.get() == 0);
+    }
+
+    /// TM-80: a read of what changed since the last one is laid into the scene in hand: changed
+    /// nodes in their places, removed ones and those that left it out; one that does not fit is
+    /// not taken, and the next read is whole.
+    #[test]
+    fn a_read_of_what_changed_is_patched_in() {
+        let (shared, doc, heard) = open(3);
+        let mut moved = node("button", Some("card"), NodeKind::Rect, 40.0);
+        moved.name = Some("Button".into());
+        let mut delta = got(4, vec![moved]);
+        (delta.removed, delta.indexes) = (Some(vec!["dot".into()]), Some(vec![1]));
+        shared.read(Ok(delta), 0, None);
+        assert_eq!((x(&shared, "button"), shared.rev.get(), shared.read_rev.get()), (40.0, 4, 4));
+        assert_eq!(shared.scene.borrow().children("card"), ["label", "button"], "at its index");
+        assert!(shared.scene.borrow().node("dot").is_none() && !shared.stale.get());
+        assert_eq!(heard.borrow()[0], "reloaded by user: button label", "label's place changed too");
+        assert_eq!(doc.take_removed(), ["dot"]);
+        // A delta that does not fit (a parent the scene does not hold) is not taken.
+        let mut delta = got(5, vec![node("lost", Some("nowhere"), NodeKind::Rect, 0.0)]);
+        (delta.removed, delta.indexes) = (Some(vec![]), Some(vec![0]));
+        shared.read(Ok(delta), 0, None);
+        assert_eq!(shared.rev.get(), 4, "nothing of it taken");
+        assert!(shared.stale.get() && shared.whole.get(), "read again, whole");
     }
 
     /// A read asked before an answer of ours landed may not hold it: it is not taken.
