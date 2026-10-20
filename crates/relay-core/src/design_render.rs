@@ -2,29 +2,36 @@
 //! the renders waiting for their answer, the checks an answer passes, and the pictures written
 //! for agents.
 //!
-//! A render crosses three requests. The agent's `design.render` reaches the socket door, which
-//! checks it against the store and calls [`Renders::start`]: that queues one
-//! `design.render.request` line on the newest leased connection's own queue (never a broadcast,
-//! never in the `Recent` ring) and leaves a [`Wait`] under a fresh render id. The desktop app
-//! draws and sends `design.render.answer` with that id on the same connection; [`answer`] takes
-//! the wait, checks what was drawn, writes the PNG and hands the result to the door, which
-//! answers the agent.
+//! A render crosses three requests. The desktop app leases a connection of its own with
+//! `design.render.serve` ([`RenderLease`], held by the socket door for as long as that connection
+//! lives). The agent's `design.render` reaches the socket door, which checks it against the store
+//! and calls [`begin`]: that queues one `design.render.request` line on the newest leased
+//! connection's own queue ([`Renders::start`]; never a broadcast, never in the `Recent` ring) and
+//! leaves a [`Wait`] under a fresh render id, which the door waits on with no lock held. The
+//! desktop app draws and sends `design.render.answer` with that id on the same connection;
+//! [`answer`] takes the wait, checks what was drawn, writes the PNG and hands the result to the
+//! door, which answers the agent.
 //!
 //! Everything here sits behind one `std::sync::Mutex`, held for microseconds and never across an
-//! await, and nothing here touches the store: the answer is an unlocked query (D149).
+//! await. Only the door's checks read the store, in one short hold before anything is sent; the
+//! answer is an unlocked query (D149).
 
 use crate::engine::Engine;
+use crate::handlers::design::render::{render_target, Ask};
 use crate::picture;
 use relay_bus::design::motion::MAX_MS;
 use relay_bus::design::MAX_NAME;
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{
-    AnswerIn, AnswerOut, RenderDrawn, RenderFailure, RenderIssue, RenderOut, RenderPng, RenderRequest,
-    RENDER_AREA_PX_MAX, RENDER_BOX_FIELDS, RENDER_SCALE_MAX, SERVE_FONTS_MAX,
+    AnswerIn, AnswerOut, Render, RenderDrawn, RenderFailure, RenderIn, RenderIssue, RenderOut, RenderPng, RenderRequest,
+    RENDER_AREA_PX_MAX, RENDER_BOXES_DEFAULT, RENDER_BOXES_MAX, RENDER_BOX_FIELDS, RENDER_FRAMES_MAX, RENDER_FRAMES_MIN,
+    RENDER_NODES_MAX, RENDER_SCALE_MAX, RENDER_SCALE_MIN, RENDER_SIDE_DEFAULT, RENDER_SIDE_MAX, RENDER_SIDE_MIN,
+    RENDER_TIMEOUT_DEFAULT_MS, RENDER_TIMEOUT_MAX_MS, RENDER_TIMEOUT_MIN_MS, SERVE_FONTS_MAX,
 };
+use relay_bus::registry::Op;
 use relay_bus::types::Id;
 use relay_bus::{Actor, Event};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::fs::DirBuilderExt;
@@ -106,8 +113,6 @@ pub(crate) struct Wait {
 
 /// What the door resolved against the store: the design, the page's id and the nodes a render
 /// narrows to, all checked.
-// Built by the socket door (render-door); until it is wired, only the tests build one.
-#[allow(dead_code)]
 pub(crate) struct Target {
     pub design_id: Id,
     pub page: String,
@@ -115,8 +120,6 @@ pub(crate) struct Target {
 }
 
 /// A render's options after the door's range checks, defaults filled in.
-// Built by the socket door (render-door); until it is wired, only the tests build one.
-#[allow(dead_code)]
 pub(crate) struct Options {
     pub png: bool,
     pub scale: f64,
@@ -130,9 +133,6 @@ pub(crate) struct Options {
     pub by: Option<String>,
 }
 
-// The lease, the start, the cancel and the fonts are the socket door's and design.fonts' (the
-// render-door and engine-find-fonts streams); until they are wired, only the tests call them.
-#[allow(dead_code)]
 impl Renders {
     /// A number for a connection's lease, never given twice.
     pub(crate) fn new_lease(&self) -> u64 {
@@ -219,6 +219,8 @@ impl Renders {
     /// The font families the newest connected app that reported any can draw (sorted, each
     /// once): what design.fonts lists and design.apply's font warnings read. None when no
     /// connected app has reported them.
+    // design.fonts' (the engine-find-fonts stream); until it is wired, only the tests call it.
+    #[allow(dead_code)]
     pub(crate) fn fonts(&self) -> Option<Arc<Vec<String>>> {
         let inner = self.inner.lock().unwrap();
         inner.renderers.iter().rev().filter(|renderer| renderer.tx.strong_count() > 0).find_map(|renderer| renderer.fonts.clone())
@@ -267,6 +269,136 @@ fn request_line(id: Uuid, target: &Target, options: &Options, now_ms: i64) -> Re
 
 fn unix_ms(at: SystemTime) -> i64 {
     at.duration_since(UNIX_EPOCH).map_or(0, |since| i64::try_from(since.as_millis()).unwrap_or(i64::MAX))
+}
+
+// ---- the socket door's half (render-SPEC-v2 §5.1-§5.3) ----
+
+/// A connection's offer to draw (`design.render.serve`). The socket door makes one the first time
+/// a connection serves and holds it for as long as the connection lives, so it is dropped with the
+/// connection however that ends, which forgets the lease and ends the renders it was drawing
+/// (`design.render.renderer_gone`). A connection that never serves holds none.
+pub(crate) struct RenderLease {
+    engine: Arc<Engine>,
+    lease: u64,
+}
+
+impl RenderLease {
+    pub(crate) fn new(engine: &Arc<Engine>) -> RenderLease {
+        RenderLease { engine: engine.clone(), lease: engine.renders.new_lease() }
+    }
+
+    /// Offer to draw on the connection whose queue `tx` feeds, with the font families its app
+    /// reported; from now on the newest offer. Serving again replaces the offer.
+    pub(crate) fn serve(&self, tx: mpsc::WeakSender<String>, fonts: Option<Vec<String>>) {
+        self.engine.renders.serve(self.lease, tx, fonts);
+    }
+}
+
+impl Drop for RenderLease {
+    fn drop(&mut self) {
+        self.engine.renders.release(self.lease);
+    }
+}
+
+/// An agent asking for a render: its project, the only one whose designs it may see, and its
+/// session's name, which an open board's note names. None asks for the person.
+pub(crate) struct Asker {
+    pub project_id: Id,
+    pub session: String,
+}
+
+/// A render the door has sent and now waits on, with no lock held: the answer arrives on `reply`
+/// (its sender dropped when the app's connection ends first), and the door gives up after
+/// `timeout`. Dropped however the door stops waiting (an answer, the timeout, its agent leaving,
+/// the engine going down), which forgets the wait if no answer took it.
+pub(crate) struct Waiting {
+    pub(crate) reply: oneshot::Receiver<Reply>,
+    pub(crate) timeout: Duration,
+    started: Instant,
+    _guard: WaitGuard,
+}
+
+struct WaitGuard {
+    engine: Arc<Engine>,
+    id: Uuid,
+}
+
+impl Drop for WaitGuard {
+    fn drop(&mut self) {
+        self.engine.renders.cancel(self.id);
+    }
+}
+
+impl Waiting {
+    /// What the agent gets: the answer the app sent (`Some(Ok)`), `renderer_gone` when its
+    /// connection ended without one (`Some(Err)`), or `timeout` when none came in time (`None`).
+    pub(crate) fn finish(self, outcome: Option<Result<Reply, oneshot::error::RecvError>>) -> Reply {
+        match outcome {
+            Some(Ok(reply)) => reply,
+            Some(Err(_)) => Err(renderer_gone()),
+            None => Err(timeout(self.started.elapsed())),
+        }
+    }
+}
+
+/// `design.render` at the socket door: its options checked, its target resolved against the store
+/// in one short hold on the blocking pool, then the line sent to the newest desktop app that
+/// takes it and its wait left. A refusal at any step sends nothing and leaves nothing behind.
+pub(crate) async fn begin(engine: &Arc<Engine>, payload: Value, asker: Option<Asker>) -> Result<Waiting, BusError> {
+    // The door's preflight has read it once already.
+    let p: RenderIn = serde_json::from_value(payload).map_err(|e| BusError::schema(Render::NAME, e))?;
+    let mut options = options_of(&p)?;
+    let ask = Ask { design_id: p.design_id, page: p.page, nodes: nodes(p.nodes)?, base_rev: p.base_rev };
+    let project = asker.as_ref().map(|asker| asker.project_id);
+    options.by = asker.map(|asker| asker.session);
+    let e = engine.clone();
+    let target = tokio::task::spawn_blocking(move || render_target(&e.store.lock(), &ask, project))
+        .await
+        .map_err(|e| BusError::internal(format!("design.render's checks did not finish: {e}")))??;
+    let (id, reply) = engine.renders.start(&target, &options)?;
+    Ok(Waiting { reply, timeout: options.timeout, started: Instant::now(), _guard: WaitGuard { engine: engine.clone(), id } })
+}
+
+/// A render's options with the defaults filled in, each checked as given: a value out of range is
+/// refused with its range (`design.render.args`), never moved into it.
+fn options_of(p: &RenderIn) -> Result<Options, BusError> {
+    fn within<T: PartialOrd + std::fmt::Display + Copy>(field: &str, value: Option<T>, lo: T, hi: T, default: T) -> Result<T, BusError> {
+        match value {
+            None => Ok(default),
+            // Written so a NaN is outside, not inside.
+            Some(v) if v >= lo && v <= hi => Ok(v),
+            Some(v) => Err(args(format!("{field}: {v} is outside {lo} to {hi}"))),
+        }
+    }
+    if p.at_ms.is_some() && p.frames.is_some() {
+        return Err(args("give at_ms or frames, not both: at_ms pictures one time, frames a contact sheet of several"));
+    }
+    Ok(Options {
+        png: p.png.unwrap_or(true),
+        scale: within("scale", p.scale, RENDER_SCALE_MIN, RENDER_SCALE_MAX, 1.0)?,
+        max_side: within("max_side", p.max_side, RENDER_SIDE_MIN, RENDER_SIDE_MAX, RENDER_SIDE_DEFAULT)?,
+        boxes_limit: within("boxes_limit", p.boxes_limit, 0, RENDER_BOXES_MAX, RENDER_BOXES_DEFAULT)?,
+        base_rev: p.base_rev,
+        timeout: Duration::from_millis(within("timeout_ms", p.timeout_ms, RENDER_TIMEOUT_MIN_MS, RENDER_TIMEOUT_MAX_MS, RENDER_TIMEOUT_DEFAULT_MS)?),
+        at_ms: p.at_ms.map(|at| within("at_ms", Some(at), 0.0, MAX_MS, 0.0)).transpose()?,
+        frames: p.frames.map(|n| within("frames", Some(n), RENDER_FRAMES_MIN, RENDER_FRAMES_MAX, RENDER_FRAMES_MIN)).transpose()?,
+        by: None,
+    })
+}
+
+/// The nodes a render narrows to, each once in the order first named: at most
+/// [`RENDER_NODES_MAX`] as sent, and at least one.
+fn nodes(nodes: Option<Vec<String>>) -> Result<Option<Vec<String>>, BusError> {
+    let Some(nodes) = nodes else { return Ok(None) };
+    if nodes.len() > RENDER_NODES_MAX {
+        return Err(args(format!("nodes: {} of them, over {RENDER_NODES_MAX}", nodes.len()))
+            .with_hint("name the outermost nodes (what is inside them comes with them), or picture the whole page without nodes"));
+    }
+    if nodes.is_empty() {
+        return Err(args("nodes: name at least one node, or leave nodes out to picture the whole page"));
+    }
+    let mut seen = std::collections::HashSet::with_capacity(nodes.len());
+    Ok(Some(nodes.into_iter().filter(|id| seen.insert(id.clone())).collect()))
 }
 
 /// `design.render.answer`: the desktop app's answer to the render `render_id` names. `accepted`
@@ -485,9 +617,12 @@ pub(crate) fn timeout(waited: Duration) -> BusError {
         .with_hint("the desktop app may be busy: call design.render once more; if it times out again, carry on without the picture and say so")
 }
 
+/// `design.render.args`: an option out of its range, or nodes a render cannot picture together.
+pub(crate) fn args(why: impl Into<String>) -> BusError {
+    BusError::invalid("design.render.args", why)
+}
+
 /// `design.render.renderer_gone`: the app's connection ended while it drew.
-// The socket door's (render-door), when a wait's sender drops.
-#[allow(dead_code)]
 pub(crate) fn renderer_gone() -> BusError {
     BusError::unavailable("design.render.renderer_gone", "the desktop app's connection closed while it drew the design")
         .with_hint("the desktop app closed: call design.render again once it is open")
@@ -1050,5 +1185,99 @@ mod tests {
 
         let unknown = Request::new(Actor::User, RenderAnswer::NAME, json!({"render_id": Uuid::new_v4().to_string(), "drawn": drawn(1)}));
         assert_eq!(engine.dispatch(unknown, Door::Socket).result, Some(json!({"accepted": false})));
+    }
+
+    fn render_in(payload: Value) -> RenderIn {
+        let mut payload = payload;
+        payload["design_id"] = json!(12);
+        serde_json::from_value(payload).unwrap()
+    }
+
+    #[test]
+    fn options_are_checked_as_given_with_their_range() {
+        let defaults = options_of(&render_in(json!({}))).unwrap();
+        assert_eq!(
+            (defaults.png, defaults.scale, defaults.max_side, defaults.boxes_limit, defaults.timeout, defaults.at_ms, defaults.frames, defaults.by),
+            (true, 1.0, 1568, 200, Duration::from_secs(20), None, None, None)
+        );
+        let given = options_of(&render_in(json!({"png": false, "scale": 0.25, "max_side": 2560, "boxes_limit": 0, "base_rev": 7, "timeout_ms": 2000, "at_ms": 600000.0}))).unwrap();
+        assert_eq!(
+            (given.png, given.scale, given.max_side, given.boxes_limit, given.base_rev, given.timeout, given.at_ms),
+            (false, 0.25, 2560, 0, Some(7), Duration::from_millis(2000), Some(600_000.0))
+        );
+        assert_eq!(options_of(&render_in(json!({"frames": 24}))).unwrap().frames, Some(24));
+
+        let refused = |payload: Value| {
+            let error = options_of(&render_in(payload)).err().expect("refused");
+            assert_eq!((error.kind, error.code.as_str()), (ErrorKind::Invalid, "design.render.args"));
+            error.message
+        };
+        // Out of range is refused with the range, never moved into it.
+        assert_eq!(refused(json!({"scale": 0.2})), "scale: 0.2 is outside 0.25 to 2");
+        assert_eq!(refused(json!({"scale": 3})), "scale: 3 is outside 0.25 to 2");
+        assert_eq!(refused(json!({"max_side": 63})), "max_side: 63 is outside 64 to 2560");
+        assert_eq!(refused(json!({"max_side": 2561})), "max_side: 2561 is outside 64 to 2560");
+        assert_eq!(refused(json!({"boxes_limit": 501})), "boxes_limit: 501 is outside 0 to 500");
+        assert_eq!(refused(json!({"timeout_ms": 1999})), "timeout_ms: 1999 is outside 2000 to 60000");
+        assert_eq!(refused(json!({"timeout_ms": 60001})), "timeout_ms: 60001 is outside 2000 to 60000");
+        assert_eq!(refused(json!({"at_ms": -1})), "at_ms: -1 is outside 0 to 600000");
+        assert_eq!(refused(json!({"at_ms": 600001})), "at_ms: 600001 is outside 0 to 600000");
+        assert_eq!(refused(json!({"frames": 1})), "frames: 1 is outside 2 to 24");
+        assert_eq!(refused(json!({"frames": 25})), "frames: 25 is outside 2 to 24");
+        assert!(refused(json!({"at_ms": 100, "frames": 4})).starts_with("give at_ms or frames, not both"));
+    }
+
+    #[test]
+    fn nodes_are_counted_as_sent_then_each_kept_once() {
+        let names = |n: usize| (0..n).map(|i| format!("n{i}")).collect::<Vec<_>>();
+        assert_eq!(nodes(None).unwrap(), None);
+        assert_eq!(nodes(Some(names(RENDER_NODES_MAX))).unwrap().unwrap().len(), RENDER_NODES_MAX);
+        let over = nodes(Some(names(RENDER_NODES_MAX + 1))).unwrap_err();
+        assert_eq!((over.code.as_str(), over.message.as_str()), ("design.render.args", "nodes: 201 of them, over 200"));
+        assert!(over.hint.unwrap().contains("outermost"));
+        let twice: Vec<String> = ["b", "a", "b", "c", "a"].map(String::from).to_vec();
+        assert_eq!(nodes(Some(twice)).unwrap().unwrap(), ["b", "a", "c"], "each once, in the order first named");
+        assert_eq!(nodes(Some(Vec::new())).unwrap_err().code, "design.render.args");
+    }
+
+    #[test]
+    fn a_door_that_stops_waiting_forgets_its_wait() {
+        let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
+        let first = app(&engine.renders, None);
+        let waiting = |engine: &Arc<Engine>| {
+            let (id, reply) = engine.renders.start(&target(), &options()).unwrap();
+            (id, Waiting { reply, timeout: Duration::from_secs(20), started: Instant::now(), _guard: WaitGuard { engine: engine.clone(), id } })
+        };
+        let waits = |engine: &Engine| engine.renders.inner.lock().unwrap().waits.len();
+        // Timed out: the agent is told how long it waited, and the wait goes with the door.
+        let (_, door) = waiting(&engine);
+        let error = door.finish(None).unwrap_err();
+        assert_eq!((error.kind, error.code.as_str()), (ErrorKind::Unavailable, "design.render.timeout"));
+        assert!(error.details.unwrap()["waited_ms"].is_u64());
+        assert_eq!(waits(&engine), 0);
+        // Dropped unfinished (its agent left): the same.
+        drop(waiting(&engine));
+        assert_eq!(waits(&engine), 0);
+        // The app's connection ended first: its sender dropped.
+        let (_, mut door) = waiting(&engine);
+        engine.renders.release(first.lease);
+        assert!(matches!(door.reply.try_recv(), Err(oneshot::error::TryRecvError::Closed)));
+        let error = door.finish(Some(Err(closed()))).unwrap_err();
+        assert_eq!(error.code, "design.render.renderer_gone");
+        assert!(error.hint.unwrap().contains("once it is open"));
+        // An answer is the agent's as it came.
+        let _second = app(&engine.renders, None);
+        let (id, mut door) = waiting(&engine);
+        let (_root, dir) = renders_dir();
+        assert!(answer_into(&engine.renders, &dir, drawn_answer(id, drawn(3))).accepted);
+        let reply = door.reply.try_recv().unwrap();
+        assert_eq!(door.finish(Some(Ok(reply))).unwrap().rev, 3);
+    }
+
+    /// The error an awaited oneshot gives once its sender is gone, which a test cannot build.
+    fn closed() -> oneshot::error::RecvError {
+        let (tx, rx) = oneshot::channel::<()>();
+        drop(tx);
+        tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(rx).unwrap_err()
     }
 }

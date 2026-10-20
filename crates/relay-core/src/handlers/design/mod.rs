@@ -16,7 +16,7 @@ mod expect;
 mod find;
 mod get;
 mod pins;
-mod render;
+pub(crate) mod render;
 mod styles;
 
 use crate::engine::{Ctx, Engine, IntoBus};
