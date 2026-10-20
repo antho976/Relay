@@ -666,8 +666,9 @@ fn fill(slot: &gtk::Box, ask: &Value) {
             let approve = button("Approve", "primary");
             approve.add_css_class("threads-card-key");
             for (key, yes) in [(&decline, false), (&approve, true)] {
-                let (approve, decline) = (approve.clone(), decline.clone());
-                key.connect_clicked(move |_| answer(id, yes, &[&approve, &decline]));
+                // Weak: a key holding itself in its own handler would outlive its card.
+                let pair = [approve.downgrade(), decline.downgrade()];
+                key.connect_clicked(move |_| answer(id, yes, pair.iter().filter_map(|k| k.upgrade()).collect()));
             }
             keys.append(&decline);
             keys.append(&approve);
@@ -703,12 +704,11 @@ fn compact(payload: &Value) -> String {
     }).collect::<Vec<_>>().join(" · ")
 }
 
-fn answer(id: i64, approve: bool, keys: &[&gtk::Button]) {
+fn answer(id: i64, approve: bool, keys: Vec<gtk::Button>) {
     let Some(ui) = the().and_then(|a| a.ui.upgrade()) else { return };
-    for key in keys {
+    for key in &keys {
         key.set_sensitive(false);
     }
-    let keys: Vec<gtk::Button> = keys.iter().map(|k| (*k).clone()).collect();
     glib::spawn_future_local(async move {
         if let Err(e) = ui.call("thread.ask.resolve", json!({"id": id, "approve": approve})).await {
             for key in &keys {
