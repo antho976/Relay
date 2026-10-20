@@ -46,10 +46,14 @@ pub const MAX_OPS: usize = 2_000;
 pub const MAX_LENIENT_OPS: usize = MAX_NODES + MAX_OPS;
 /// Most ancestors a node has, its page included (a page's child is 1 deep).
 pub const MAX_DEPTH: usize = 64;
-/// The most node data one design holds, in bytes. `design.get` returns it whole, and the
-/// clients' sockets cap a line at 2 MiB (RA-227): this leaves room for the ids and the row.
+/// The most one design holds, in bytes, counted as `design.get` returns it (B60): each node's
+/// body, id and parent and [`NODE_OVERHEAD`], and its named colours' and styles' JSON. The
+/// clients' sockets cap a line at 2 MiB (RA-227): this leaves room for the design row and the
+/// envelope. A list is refused for growing a design past it, never for leaving one over it
+/// smaller than it found it.
 pub const MAX_DESIGN_BYTES: i64 = 1536 * 1024;
-/// JSON bytes a node takes in a `design.get` reply beyond its body, id and parent.
+/// JSON bytes a node takes in a `design.get` reply beyond its body, id and parent:
+/// `"id":"",` and `"parent":"",` and the comma between nodes.
 pub const NODE_OVERHEAD: i64 = 21;
 /// The largest picture `design.asset.add` copies in from a path.
 pub const MAX_ASSET_FILE: u64 = 20 * 1024 * 1024;

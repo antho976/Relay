@@ -316,3 +316,35 @@ fn a_v29_backup_restores_counted_and_dated() {
     assert_eq!(removed_at(&e, id, "title"), Some(at + 1));
     assert!(title_rev.is_some() && row_rev(&e, id, "title").is_none());
 }
+
+/// feature-motion §10: motion and a timeline go through design.apply like any field: stored as
+/// written, refused by the key and field at fault, and undone whole.
+#[test]
+fn motion_and_timeline_are_stored_checked_and_undone() {
+    let (e, _root) = project();
+    let id = create(&e);
+    let timeline = json!({"duration_ms": 3000.0, "loop": false});
+    let motion = json!({"ease": "ease_out", "keys": [{"at_ms": 0.0, "dy": 24.0, "opacity": 0.0}, {"at_ms": 500.0, "dy": 0.0, "opacity": 1.0}]});
+    apply(&e, id, json!([
+        {"op": "add", "node": {"id": "hero", "parent": "page-1", "kind": "frame", "w": 390, "h": 844, "timeline": timeline}},
+        {"op": "add", "node": {"id": "r", "parent": "hero", "kind": "rect", "w": 40, "h": 40, "motion": motion}},
+    ]));
+    let got = ok(&e, "design.get", json!({"design_id": id}));
+    let find = |id: &str| got["nodes"].as_array().unwrap().iter().find(|n| n["id"] == id).unwrap().clone();
+    assert_eq!((find("hero")["timeline"].clone(), find("r")["motion"].clone()), (timeline, motion.clone()));
+    let pop = json!({"ease": "overshoot", "loop": true, "keys": [{"at_ms": 300.0, "scale": 0.6}, {"at_ms": 700.0, "scale": 1.0}]});
+    let out = apply(&e, id, json!([{"op": "update", "id": "r", "set": {"motion": pop}}]));
+    assert_eq!(out["nodes"][0]["motion"], pop);
+    ok(&e, "design.apply", json!({"design_id": id, "ops": out["inverse"], "lenient": true}));
+    let back = ok(&e, "design.get", json!({"design_id": id}))["nodes"].as_array().unwrap().iter().find(|n| n["id"] == "r").unwrap().clone();
+    assert_eq!(back["motion"], motion, "the undo puts the motion back whole");
+    counted(&e, id);
+    let at = rev(&e, id);
+    let refused = call(&e, "design.apply", json!({"design_id": id, "ops": [{"op": "update", "id": "r", "set": {"motion": {"keys": [{"at_ms": 0, "opacity": 0}, {"at_ms": 0.5, "opacity": 1}]}}}]}));
+    let error = refused.error.unwrap();
+    assert_eq!(error.code, "design.node_invalid");
+    assert_eq!(error.message, "ops[0] update \"r\": motion.keys: the last key is at 0.5 ms; times are milliseconds (half a second is 500)");
+    let refused = call(&e, "design.apply", json!({"design_id": id, "ops": [{"op": "update", "id": "r", "set": {"timeline": {"duration_ms": 1000}}}]}));
+    assert_eq!(refused.error.unwrap().message, "ops[0] update \"r\": timeline: only a frame or a page keeps time");
+    assert_eq!(rev(&e, id), at, "nothing applied");
+}
