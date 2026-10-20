@@ -2114,7 +2114,7 @@
       }
     },
     "session.input": {
-      "summary": "Text to the PTY",
+      "summary": "Text to the PTY, as keys or as one paste",
       "kind": "mutation",
       "audit": "agent_only",
       "undo": "none",
@@ -12174,6 +12174,11 @@
         },
         "data": {
           "type": "string"
+        },
+        "paste": {
+          "type": "boolean",
+          "description": "Deliver `data` as one paste, not as keys: wrapped in bracketed paste (its ESC bytes\ndropped) when the terminal asked for it (DECSET 2004), else with its line breaks as\nspaces. Either way no line break in it sends it, and the program reads it as text.",
+          "default": false
         }
       },
       "required": [

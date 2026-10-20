@@ -1458,7 +1458,7 @@ impl Engine {
                 }
                 // The one keystroke per idle period that owes the store a row: hand it to a
                 // worker so the character itself is already in the PTY either way.
-                if write_input(&pty, &p.data)? {
+                if write_input(&pty, &p.data, p.paste)? {
                     if let Some(engine) = self.arc() {
                         std::thread::spawn(move || engine.mark_session_running(session_id));
                     }
@@ -1649,14 +1649,21 @@ struct InputRef<'a> {
     session: std::borrow::Cow<'a, str>,
     #[serde(borrow)]
     data: std::borrow::Cow<'a, str>,
+    #[serde(default)]
+    paste: bool,
 }
 
 /// Write a keystroke batch to a live PTY, shared by the in-memory fast path and the staged
 /// `session.input` fallback. `true` when this write ends an idle period, which owes the store
-/// a `running` row (RA-646).
-pub(crate) fn write_input(pty: &crate::pty::Pty, data: &str) -> Result<bool, BusError> {
-    pty.write(data.as_bytes())
-        .map_err(|e| BusError::conflict("session.io", e.to_string()))?;
+/// a `running` row (RA-646). A `paste` goes in brackets when the program asked for them, which
+/// the PTY knows from its own output, not the store (D148, I-4).
+pub(crate) fn write_input(pty: &crate::pty::Pty, data: &str, paste: bool) -> Result<bool, BusError> {
+    let written = if paste {
+        pty.write(&crate::pty::paste_bytes(data, pty.bracketed_paste()))
+    } else {
+        pty.write(data.as_bytes())
+    };
+    written.map_err(|e| BusError::conflict("session.io", e.to_string()))?;
     if data.is_empty() { return Ok(false); }
     pty.owe_ping();
     Ok(pty.claim_idle_edge())
@@ -1680,14 +1687,17 @@ mod inline_path_tests {
             json!({"session": "s"}),
             json!({"data": "k"}),
             json!({"session": "s", "data": "k", "extra": 1}),
+            json!({"session": "s", "data": "a\nb", "paste": true}),
+            json!({"session": "s", "data": "k", "paste": false}),
+            json!({"session": "s", "data": "k", "paste": "yes"}),
             json!({"session": "s", "data": 7}),
             json!({"session": null, "data": "k"}),
             json!(["s", "k"]),
             json!("s"),
         ];
         for payload in &payloads {
-            let typed = InputIn::deserialize(payload).map(|p| (p.session, p.data)).map_err(|e| e.to_string());
-            let borrowed = InputRef::deserialize(payload).map(|p| (p.session.into_owned(), p.data.into_owned())).map_err(|e| e.to_string());
+            let typed = InputIn::deserialize(payload).map(|p| (p.session, p.data, p.paste)).map_err(|e| e.to_string());
+            let borrowed = InputRef::deserialize(payload).map(|p| (p.session.into_owned(), p.data.into_owned(), p.paste)).map_err(|e| e.to_string());
             assert_eq!(borrowed, typed, "{payload}");
         }
         let payload = json!({"session": "s", "data": "k"});
@@ -1763,6 +1773,44 @@ mod inline_path_tests {
             json!({"session":"brisk-otter","data":7}),
         )));
 
+        e.shutdown();
+    }
+
+    /// I-4: a paste reaches a program that asked for bracketed paste inside the brackets, its
+    /// lines kept, from memory; keys typed after it are not bracketed.
+    #[test]
+    fn a_paste_goes_in_brackets_once_the_program_asks_for_them() {
+        let e = engine();
+        let pty = crate::pty::Pty::spawn(
+            crate::pty::SpawnSpec {
+                cmd: "sh".into(),
+                args: vec!["-c".into(), "stty -echo -icanon; printf '\\033[?2004hREADY\\n'; exec cat -v".into()],
+                env: Vec::new(),
+                env_remove: Vec::new(),
+                cwd: std::env::temp_dir(),
+                cols: 80,
+                rows: 24,
+                epoch: 1,
+                initial_scrollback: Vec::new(),
+            },
+            |_| {},
+        )
+        .unwrap();
+        e.set_pty(1, "brisk-otter", pty.clone());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let wait = |what: &str, done: &dyn Fn() -> bool| {
+            while !done() {
+                assert!(std::time::Instant::now() < deadline, "{what} never happened");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        wait("bracketed paste on", &|| pty.bracketed_paste());
+        let paste = Request::new(Actor::User, "session.input", json!({"session":"brisk-otter","data":"a\nb\u{1b}","paste":true}));
+        assert!(e.answers_from_memory(&paste));
+        assert!(e.dispatch(paste, Door::InProcess).ok);
+        assert!(e.dispatch(input("brisk-otter", "!"), Door::InProcess).ok);
+        wait("the paste echoed", &|| pty.scrollback(None).0.contains("b^[[201~!"));
+        assert!(pty.scrollback(None).0.contains("^[[200~a\r\nb^[[201~!"), "{:?}", pty.scrollback(None).0);
         e.shutdown();
     }
 
