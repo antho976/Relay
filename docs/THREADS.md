@@ -671,7 +671,11 @@ user-only op with its own payload, among `session.create`, `.spawn`, `.resume`, 
 `notes.create`, `.update`, `workspace.create` and `project.add`. A step after `session.create`
 that leaves `session` out acts on the session it made, so "launch a builder" is one card.
 Refused when asked: any other op (`thread.ask_op`), and `discard_changes`, `remove_worktree(s)`,
-`force`, `bus_writes`, `allow_ui` or `use_api_key` set (`thread.ask_flag`). Guardrail answers,
+`force`, `bus_writes`, `allow_ui` or `use_api_key` set (`thread.ask_flag`), at any depth of the
+payload, since `task.dispatch` carries a whole `session.create` in `create`. A `session.close`
+that leaves `remove_worktree` out is stored with it `false`: the op removes the checkout by
+default, and an ask never does. A second `session.create` in one ask makes its own session; the
+steps after it act on that one. Guardrail answers,
 settings, removing anything, Git, files, money, keys and pairing are neither free nor askable.
 Only an assistant thread's own agent asks (`thread.not_agent`, `thread.not_assistant`).
 
