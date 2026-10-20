@@ -319,7 +319,14 @@ as an agent would, and drives the real client (`design/drive.rs`, `RELAY_SMOKE_D
   show polygons, icons, gradients, dashes, rotation, connectors and labels as an agent writes them
   and then the tools that make them (`shapes`); draw a closed shape with the vector pen, flip a
   polygon, paste a style and export the page as SVG over fixture arcs, blends, inner shadows and
-  smooth paths (`more`); and time a 1,721-node design (`perf`, `RELAY_DESIGN_TRACE`).
+  smooth paths (`more`, which also rasterises its SVG and PDF and compares them with the PNG, and
+  compares shadow softness on a box and an arc); time a 1,721-node design (`perf`,
+  `RELAY_DESIGN_TRACE`); check who undoes what after the person and an agent both edit
+  (`agent-undo`), a text edit that loses to an agent's (`agent-stale`) and an agent deleting layers
+  (`agent-delete`); re-read named colours and styles an agent changes (`reuse`); play, seek, sheet
+  and export a page's motion with its rev unchanged (`motion`); answer `design.render` with and
+  without the app (`render`); and search, place and credit a stock photo from fixtures
+  (`pictures`). Each shot opens its design by id (`RELAY_SMOKE_DESIGN_ID`) and fails on a panic.
 - **Drive steps** are `;`-separated and go through the same code the pointer and keys use, each
   waiting for the engine: `select`, `click`, `dbl`, `drag` (with `:shift` or `:alt`), `press`,
   `idle` and `release`, `tool`, `type`, `nudge`, `set`, `align`, `layout`, `duplicate`, `group`,
