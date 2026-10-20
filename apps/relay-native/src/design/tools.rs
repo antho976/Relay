@@ -811,7 +811,8 @@ fn move_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
             _ => Vec::new(),
         };
         b.doc.set_hold(true);
-        let (ops, roots) = edit::duplicate(&mut b.doc.scene.borrow_mut(), &ids, 0.0);
+        let placed = b.placed();
+        let (ops, roots) = edit::duplicate(&mut b.doc.scene.borrow_mut(), &placed, &ids, 0.0);
         let shown = b.doc.scene.borrow_mut().apply_all(&ops);
         if shown.is_ok() {
             b.invalidate();

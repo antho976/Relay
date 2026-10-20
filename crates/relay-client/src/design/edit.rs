@@ -83,6 +83,9 @@ fn stretched(scene: &Scene, id: &str) -> (bool, bool) {
 enum Sizes {
     /// Fixed at the size shown: a fill, and a hug of what no longer measures it.
     Freeze,
+    /// Written as `w`/`h` with each rule kept where it reads them out of a layout (a fill, a
+    /// frame hugging with no layout of its own), so a copy laid out again still fills.
+    Carry,
 }
 
 /// The fields that put `n` (as stored) at `rel` out of any auto layout (TM-8): `rel` is the box
@@ -141,11 +144,11 @@ fn fresh_ids(scene: &mut Scene, nodes: &[Node]) -> HashMap<String, String> {
 }
 
 /// The page point a node's `x`/`y` put it at, read from the stored tree (no layout): `nodes`
-/// first, then the scene.
-fn stored_point(scene: &Scene, nodes: &HashMap<&str, &Node>, id: &str) -> Option<(f64, f64)> {
+/// first, then the scene, if any.
+fn stored_point(scene: Option<&Scene>, nodes: &HashMap<&str, &Node>, id: &str) -> Option<(f64, f64)> {
     let (mut x, mut y, mut at) = (0.0, 0.0, id);
-    for _ in 0..=scene.len() + nodes.len() {
-        let n = nodes.get(at).copied().or_else(|| scene.node(at))?;
+    for _ in 0..=scene.map_or(0, Scene::len) + nodes.len() {
+        let n = nodes.get(at).copied().or_else(|| scene?.node(at))?;
         (x, y) = (x + n.x, y + n.y);
         match n.parent.as_deref() {
             Some(parent) => at = parent,
@@ -155,13 +158,23 @@ fn stored_point(scene: &Scene, nodes: &HashMap<&str, &Node>, id: &str) -> Option
     None
 }
 
+/// Where `id`'s children count from on the page: as placed, or, not placed (hidden, or on
+/// another page), its stored point.
+fn page_origin(scene: &Scene, placed: &Placed, id: &str) -> (f64, f64) {
+    match placed.rect(id) {
+        Some(_) => placed.origin(id),
+        None => stored_point(Some(scene), &HashMap::new(), id).unwrap_or_default(),
+    }
+}
+
 /// A connector's two ends relative to its own `x`/`y`, from the stored boxes of the nodes it is
-/// attached to (their centres), for a line that has no points of its own to fall back on. Each
-/// within what `validate` takes (B70), however far apart a design spreads them.
-fn stored_ends(scene: &Scene, nodes: &HashMap<&str, &Node>, line: &Node) -> Vec<[f64; 2]> {
+/// attached to (their centres): `nodes` first, then the scene, if any. For a line that has no
+/// points of its own to fall back on; each within what `validate` takes (B70), however far
+/// apart a design spreads them.
+fn stored_ends(scene: Option<&Scene>, nodes: &HashMap<&str, &Node>, line: &Node) -> Vec<[f64; 2]> {
     let centre = |end: &Option<String>| {
         let id = end.as_deref()?;
-        let n = nodes.get(id).copied().or_else(|| scene.node(id))?;
+        let n = nodes.get(id).copied().or_else(|| scene?.node(id))?;
         let (x, y) = stored_point(scene, nodes, id)?;
         Some((x + n.w / 2.0, y + n.h / 2.0))
     };
@@ -171,9 +184,45 @@ fn stored_ends(scene: &Scene, nodes: &HashMap<&str, &Node>, line: &Node) -> Vec<
     }
 }
 
-/// A copied connector's ends: one attached to a node copied with it follows the copy; one
-/// attached to a node left behind lets go, the line keeping where it was last drawn.
-fn rewire(scene: &Scene, nodes: &HashMap<&str, &Node>, fresh: &HashMap<String, String>, copy: &mut Node) {
+/// Let each connector among `nodes` go of an end attached to a node not among them, where the
+/// line is drawn now, whatever points it stores (TM-59): a copy lands on the route the person
+/// sees, not the one first drawn, and names no node of the design it comes from, which a paste
+/// elsewhere would look up there. A line not on the page shown keeps its own points, or takes
+/// its ends' stored centres. Answers the ids whose box it wrote from where they are drawn.
+fn let_go_outside(scene: &Scene, placed: &Placed, nodes: &mut [Node]) -> HashSet<String> {
+    let ids: HashSet<String> = nodes.iter().map(|n| n.id.clone()).collect();
+    let mut drawn = HashSet::new();
+    for n in nodes.iter_mut() {
+        let out = |end: &Option<String>| end.as_ref().is_some_and(|e| !ids.contains(e));
+        let (from, to) = (out(&n.from), out(&n.to));
+        let Some(line) = scene.node(&n.id).filter(|_| from || to) else {
+            continue;
+        };
+        let origin = n.parent.as_deref().map_or((0.0, 0.0), |p| page_origin(scene, placed, p));
+        let set = let_go(scene, placed, line, from, to, origin);
+        if set.contains_key("x") {
+            drawn.insert(n.id.clone());
+        }
+        match n.patched(&set) {
+            Ok(next) => *n = next,
+            // None should fail; if one does, it lets go of its ends where it stands.
+            Err(_) => {
+                n.from = n.from.take().filter(|_| !from);
+                n.to = n.to.take().filter(|_| !to);
+                if n.points.as_ref().is_none_or(|p| p.len() < 2) {
+                    n.points = Some(vec![[0.0, 0.0], [n.w, n.h]]);
+                }
+            }
+        }
+    }
+    drawn
+}
+
+/// A copied connector's ends: one attached to a node copied with it follows the copy. One
+/// attached to a node left behind was let go when the copy was taken ([`let_go_outside`]); a
+/// clipboard an older Relay wrote may still hold one, which lets go at its own points, or at its
+/// ends' stored centres among the copied nodes, never at a node of the design pasted into.
+fn rewire(nodes: &HashMap<&str, &Node>, fresh: &HashMap<String, String>, copy: &mut Node) {
     let original = nodes.get(copy.id.as_str()).copied();
     let mut freed = false;
     for end in [&mut copy.from, &mut copy.to] {
@@ -185,18 +234,13 @@ fn rewire(scene: &Scene, nodes: &HashMap<&str, &Node>, fresh: &HashMap<String, S
         }
     }
     if freed && copy.points.as_ref().is_none_or(|p| p.len() < 2) {
-        copy.points = Some(original.map_or_else(|| vec![[0.0, 0.0], [copy.w, copy.h]], |o| stored_ends(scene, nodes, o)));
+        copy.points = Some(original.map_or_else(|| vec![[0.0, 0.0], [copy.w, copy.h]], |o| stored_ends(None, nodes, o)));
     }
 }
 
 /// Copies of `nodes` (whole subtrees, parents first) under the ids in `fresh`. `place` says
 /// where each root goes: its parent, index and shift. Returns the edits and the new roots.
-fn copies(
-    scene: &Scene,
-    nodes: &[Node],
-    fresh: &HashMap<String, String>,
-    mut place: impl FnMut(&Node) -> (String, Option<u32>, f64, f64),
-) -> (Vec<NodeOp>, Vec<String>) {
+fn copies(nodes: &[Node], fresh: &HashMap<String, String>, mut place: impl FnMut(&Node) -> (String, Option<u32>, f64, f64)) -> (Vec<NodeOp>, Vec<String>) {
     let by_id: HashMap<&str, &Node> = nodes.iter().map(|n| (n.id.as_str(), n)).collect();
     let mut ops = Vec::new();
     let mut roots = Vec::new();
@@ -207,14 +251,14 @@ fn copies(
         // A fresh add, held to what its kind uses: a stale field or one a newer build wrote
         // stays with the original.
         let mut copy = n.without_foreign();
-        rewire(scene, &by_id, fresh, &mut copy);
+        rewire(&by_id, fresh, &mut copy);
         copy.id = fresh[&n.id].clone();
         let root = n.parent.as_deref().is_none_or(|p| !by_id.contains_key(p));
         if root {
             let (parent, index, dx, dy) = place(n);
             copy.parent = Some(parent);
-            copy.x = (copy.x + dx).round();
-            copy.y = (copy.y + dy).round();
+            copy.x = coord(copy.x + dx);
+            copy.y = coord(copy.y + dy);
             roots.push(copy.id.clone());
             ops.push(NodeOp::Add { node: copy, index });
         } else {
@@ -225,9 +269,11 @@ fn copies(
     (ops, roots)
 }
 
-/// Copies of `nodes` (whole subtrees, as `copy` gathered them) under fresh ids: roots go into
+/// Copies of `nodes` (whole subtrees, as [`gather`] took them) under fresh ids: roots go into
 /// `parent` at `index`, moved by `(dx, dy)`. A connector between two copied nodes joins the
-/// copies; an end attached to a node not copied lets go. Returns the edits and the new roots.
+/// copies; an end attached to a node not copied lets go, read from the copied nodes alone
+/// (TM-59: the design pasted into may hold a node of that id). Returns the edits and the new
+/// roots.
 pub fn clone_into(
     scene: &mut Scene,
     nodes: &[Node],
@@ -238,7 +284,7 @@ pub fn clone_into(
 ) -> (Vec<NodeOp>, Vec<String>) {
     let fresh = fresh_ids(scene, nodes);
     let mut at = index;
-    copies(scene, nodes, &fresh, |_| {
+    copies(nodes, &fresh, |_| {
         let here = at;
         at = at.map(|i| i + 1);
         (parent.to_string(), here, dx, dy)
@@ -247,12 +293,50 @@ pub fn clone_into(
 
 /// Every node of the selection's subtrees, parents first, as stored (their colour and style
 /// names kept): what Copy puts on the clipboard.
-pub fn gather(scene: &Scene, ids: &[String]) -> Vec<Node> {
-    outermost(scene, ids)
-        .iter()
-        .flat_map(|id| scene.subtree(id))
-        .filter_map(|id| scene.stored(&id).cloned())
-        .collect()
+///
+/// - A connector's end attached to a node not copied lets go where the line is drawn
+///   ([`let_go_outside`], TM-59).
+/// - A selection across parents is put in page space (B14): each root's parent becomes its
+///   page and its `x`/`y` where it shows on it, so the arrangement survives a paste into one
+///   parent. Roots of one parent keep their own, but for:
+/// - A root its parent lays out, or one moved to page space, carries the box it shows (TM-8),
+///   its fill kept (which reads its stored size outside a layout), so it pastes out of a layout
+///   as big as it showed and back into one still filling. A hidden one keeps its stored box.
+pub fn gather(scene: &Scene, placed: &Placed, ids: &[String]) -> Vec<Node> {
+    let roots = outermost(scene, ids);
+    let mut nodes: Vec<Node> = roots.iter().flat_map(|id| scene.subtree(id)).filter_map(|id| scene.stored(&id).cloned()).collect();
+    let freed = let_go_outside(scene, placed, &mut nodes);
+    let parents: HashSet<Option<&str>> = roots.iter().map(|id| scene.parent(id)).collect();
+    let spread = parents.len() > 1;
+    let roots: HashSet<&str> = roots.iter().map(String::as_str).collect();
+    for n in nodes.iter_mut().filter(|n| roots.contains(n.id.as_str())) {
+        let Some(parent) = n.parent.clone() else {
+            continue;
+        };
+        let laid = is_laid(scene, &n.id);
+        if !spread && !laid {
+            continue;
+        }
+        // From its page, or its parent's origin.
+        let (origin, fit) = match spread {
+            true => ((0.0, 0.0), None),
+            false => (placed.origin(&parent), fit_of(scene, placed, &parent)),
+        };
+        let page_shift = if spread { page_origin(scene, placed, &parent) } else { (0.0, 0.0) };
+        let set = match shown(placed, &n.id, origin).filter(|_| !freed.contains(&n.id)) {
+            Some(rel) => settle(n, rel, fit, stretched(scene, &n.id), Sizes::Carry),
+            // Freed where it is drawn, or not placed: its own box, from its page.
+            None => set(&[("x", json!(coord(n.x + page_shift.0))), ("y", json!(coord(n.y + page_shift.1)))]),
+        };
+        match n.patched(&set) {
+            Ok(next) => *n = next,
+            Err(_) => (n.x, n.y) = (coord(n.x + page_shift.0), coord(n.y + page_shift.1)),
+        }
+        if spread {
+            n.parent = scene.page_of(&n.id).map(str::to_string);
+        }
+    }
+    nodes
 }
 
 /// `nodes` as they draw, naming no colour or style: for another design, which may not hold the
@@ -270,22 +354,28 @@ pub fn baked(scene: &Scene, nodes: &[Node]) -> Vec<Node> {
 }
 
 /// Duplicate the selection in place, each copy just above its original and `offset` away, as
-/// stored (a copy names the colours and style its original names). One set of fresh ids covers
-/// the whole selection, so a connector between two duplicated nodes joins their copies.
-pub fn duplicate(scene: &mut Scene, ids: &[String], offset: f64) -> (Vec<NodeOp>, Vec<String>) {
+/// stored (a copy names the colours and style its original names), as far as it shows (along a
+/// `scale` pin, `layout::stored_shift`); one its parent lays out is not moved. One set of fresh
+/// ids covers the whole selection, so a connector between two duplicated nodes joins their
+/// copies; an end attached to a node not duplicated lets go where the line is drawn (TM-59).
+pub fn duplicate(scene: &mut Scene, placed: &Placed, ids: &[String], offset: f64) -> (Vec<NodeOp>, Vec<String>) {
     let roots: Vec<String> = outermost(scene, ids).into_iter().filter(|id| scene.parent(id).is_some()).collect();
-    let nodes: Vec<Node> = roots.iter().flat_map(|id| scene.subtree(id)).filter_map(|n| scene.stored(&n).cloned()).collect();
+    let mut nodes: Vec<Node> = roots.iter().flat_map(|id| scene.subtree(id)).filter_map(|n| scene.stored(&n).cloned()).collect();
+    let_go_outside(scene, placed, &mut nodes);
     let fresh = fresh_ids(scene, &nodes);
     // Copies already put in a parent, all below the next original there (roots run in paint
     // order): each later original sits that much higher.
     let mut added: HashMap<String, u32> = HashMap::new();
-    copies(scene, &nodes, &fresh, |n| {
+    copies(&nodes, &fresh, |n| {
         let parent = n.parent.clone().unwrap_or_default();
         let before = added.entry(parent.clone()).or_default();
         let index = scene.index(&n.id).map(|i| i as u32 + 1 + *before);
         *before += 1;
-        let shift = if is_laid(scene, &n.id) { 0.0 } else { offset };
-        (parent, index, shift, shift)
+        let (dx, dy) = match is_laid(scene, &n.id) {
+            true => (0.0, 0.0),
+            false => stored_shift(n, fit_of(scene, placed, &parent), offset, offset),
+        };
+        (parent, index, dx, dy)
     })
 }
 
@@ -645,7 +735,7 @@ fn let_go(scene: &Scene, placed: &Placed, n: &Node, from: bool, to: bool, origin
         // Not on the page shown: keep its own points, or take its ends' stored centres.
         _ if n.points.as_ref().is_some_and(|p| p.len() >= 2) => {}
         _ => {
-            s.insert("points".into(), json!(stored_ends(scene, &HashMap::new(), n)));
+            s.insert("points".into(), json!(stored_ends(Some(scene), &HashMap::new(), n)));
         }
     }
     s
@@ -806,7 +896,8 @@ mod tests {
     #[test]
     fn duplicate_copies_whole_subtrees_above_the_original() {
         let mut s = sample();
-        let (ops, roots) = duplicate(&mut s, &["a".into(), "b".into()], 10.0);
+        let placed = place(&s, "p1", &Mono);
+        let (ops, roots) = duplicate(&mut s, &placed, &["a".into(), "b".into()], 10.0);
         run(&mut s, &ops);
         assert_eq!(roots.len(), 1);
         let copy = &roots[0];
@@ -825,7 +916,8 @@ mod tests {
             "shadow": {"blur": 4, "color": "#000"}})).unwrap();
         s.apply(&NodeOp::Add { node: legacy, index: None }).unwrap();
         s.apply(&NodeOp::Add { node: node("in", Some("g"), K::Rect, [0.0, 0.0, 5.0, 5.0]), index: None }).unwrap();
-        let (ops, roots) = duplicate(&mut s, &["g".into()], 10.0);
+        let placed = place(&s, "p1", &Mono);
+        let (ops, roots) = duplicate(&mut s, &placed, &["g".into()], 10.0);
         run(&mut s, &ops);
         let copy = s.node(&roots[0]).unwrap();
         assert_eq!((copy.shadow.clone(), copy.extra.len(), copy.x), (None, 0, 10.0));
@@ -838,14 +930,15 @@ mod tests {
     #[test]
     fn duplicate_keeps_style_links() {
         let mut s = styled();
-        let (ops, roots) = duplicate(&mut s, &ids(&["a", "d"]), 10.0);
+        let placed = place(&s, "p1", &Mono);
+        let (ops, roots) = duplicate(&mut s, &placed, &ids(&["a", "d"]), 10.0);
         run(&mut s, &ops);
         let (frame, ellipse) = (&roots[0], &roots[1]);
         let b = s.children(frame)[0].clone();
         assert_eq!(s.stored(&b).unwrap().style.as_deref(), Some("card"));
         assert_eq!(s.stored(ellipse).unwrap().fill.as_deref(), Some("$accent"));
         assert_eq!(s.node(ellipse).unwrap().fill.as_deref(), Some("#4C9DFF"), "and draws it");
-        let clip = gather(&s, &ids(&["b", "c"]));
+        let clip = gather(&s, &place(&s, "p1", &Mono), &ids(&["b", "c"]));
         assert_eq!(clip.iter().map(|n| n.style.as_deref()).collect::<Vec<_>>(), [Some("card"), Some("title")]);
         assert_eq!(clip[0].fill, None, "the style's fill is not baked in");
     }
@@ -854,7 +947,7 @@ mod tests {
     #[test]
     fn baked_copies_name_nothing() {
         let s = styled();
-        let clip = gather(&s, &ids(&["a", "d"]));
+        let clip = gather(&s, &place(&s, "p1", &Mono), &ids(&["a", "d"]));
         let baked = baked(&s, &clip);
         assert_eq!(baked.len(), clip.len());
         for n in &baked {
@@ -964,7 +1057,7 @@ mod tests {
     #[test]
     fn paste_lands_in_the_target_with_fresh_ids() {
         let mut s = sample();
-        let clip = gather(&s, &["a".into(), "c".into()]);
+        let clip = gather(&s, &place(&s, "p1", &Mono), &["a".into(), "c".into()]);
         assert_eq!(clip.len(), 3);
         let (ops, roots) = clone_into(&mut s, &clip, "p1", None, 600.0, 0.0);
         run(&mut s, &ops);
@@ -987,7 +1080,8 @@ mod tests {
     #[test]
     fn duplicating_siblings_puts_each_copy_just_above_its_own_original() {
         let mut s = row(3);
-        let (ops, roots) = duplicate(&mut s, &ids(&["x0", "x2"]), 10.0);
+        let placed = place(&s, "p1", &Mono);
+        let (ops, roots) = duplicate(&mut s, &placed, &ids(&["x0", "x2"]), 10.0);
         run(&mut s, &ops);
         let kids = s.children("p1");
         assert_eq!(kids.len(), 5);
@@ -1009,25 +1103,114 @@ mod tests {
     fn a_duplicated_connector_joins_the_copies_or_lets_go() {
         // Both ends and the line copied together: the copy runs between the copies.
         let mut s = connected();
-        let (ops, roots) = duplicate(&mut s, &ids(&["x0", "x1", "ln"]), 10.0);
+        let placed = place(&s, "p1", &Mono);
+        let (ops, roots) = duplicate(&mut s, &placed, &ids(&["x0", "x1", "ln"]), 10.0);
         run(&mut s, &ops);
         let copy = s.node(&roots[2]).unwrap();
         assert_eq!((copy.from.as_ref(), copy.to.as_ref()), (Some(&roots[0]), Some(&roots[1])));
-        // Only the line and one end: the other end lets go where the line was drawn.
+        // Only the line and one end: the other end lets go where the line is drawn (TM-59).
         let mut s = connected();
-        let (ops, roots) = duplicate(&mut s, &ids(&["x0", "ln"]), 0.0);
+        let placed = place(&s, "p1", &Mono);
+        let drawn = shapes::line_points(&s, &placed, s.node("ln").unwrap()).0;
+        let (ops, roots) = duplicate(&mut s, &placed, &ids(&["x0", "ln"]), 0.0);
         run(&mut s, &ops);
         let copy = s.node(&roots[1]).unwrap();
         assert_eq!((copy.from.as_ref(), copy.to.as_deref()), (Some(&roots[0]), None));
-        assert_eq!(copy.points, Some(vec![[5.0, 5.0], [25.0, 5.0]]), "its ends' last centres");
-        // Pasted alone: both ends let go; its own points are kept.
+        assert_eq!(shapes::line_points(&s, &place(&s, "p1", &Mono), copy).0, drawn);
+        // Pasted alone: both ends let go where it is drawn, not at the points it stores.
         let mut s = connected();
         s.node_mut("ln").unwrap().points = Some(vec![[1.0, 2.0], [3.0, 4.0]]);
-        let clip = gather(&s, &ids(&["ln"]));
+        let placed = place(&s, "p1", &Mono);
+        let drawn = shapes::line_points(&s, &placed, s.node("ln").unwrap()).0;
+        let clip = gather(&s, &placed, &ids(&["ln"]));
         let (ops, roots) = clone_into(&mut s, &clip, "p1", None, 0.0, 0.0);
         run(&mut s, &ops);
         let copy = s.node(&roots[0]).unwrap();
-        assert_eq!((copy.from.as_deref(), copy.to.as_deref(), copy.points.clone()), (None, None, Some(vec![[1.0, 2.0], [3.0, 4.0]])));
+        assert_eq!((copy.from.as_deref(), copy.to.as_deref()), (None, None));
+        assert_eq!(shapes::line_points(&s, &place(&s, "p1", &Mono), copy).0, drawn);
+    }
+
+    /// TM-59: a connector whose end moved since it was first drawn is copied on the route it
+    /// shows, not at the points it stores; a clipboard that still names an end left behind is
+    /// never resolved against the design it is pasted into.
+    #[test]
+    fn a_copied_connector_lands_where_it_is_drawn() {
+        let mut s = connected();
+        s.node_mut("ln").unwrap().points = Some(vec![[5.0, 5.0], [25.0, 5.0]]);
+        run(&mut s, &[NodeOp::Update { id: "x1".into(), set: set(&[("x", json!(300.0)), ("y", json!(120.0))]) }]);
+        let placed = place(&s, "p1", &Mono);
+        let drawn = shapes::line_points(&s, &placed, s.node("ln").unwrap()).0;
+        let (ops, roots) = duplicate(&mut s, &placed, &ids(&["ln"]), 0.0);
+        run(&mut s, &ops);
+        let copy = s.node(&roots[0]).unwrap();
+        assert_eq!((copy.from.as_deref(), copy.to.as_deref()), (None, None));
+        assert_eq!(shapes::line_points(&s, &place(&s, "p1", &Mono), copy).0, drawn);
+        // An older clipboard's line, its ends left behind and no points of its own: pasted into
+        // a design holding nodes of those ids far away, it keeps its own box.
+        let mut legacy = node("ln", Some("p1"), K::Line, [0.0, 0.0, 30.0, 0.0]);
+        (legacy.from, legacy.to) = (Some("x0".into()), Some("x1".into()));
+        let mut other = connected();
+        run(&mut other, &[NodeOp::Update { id: "x1".into(), set: set(&[("x", json!(900.0)), ("y", json!(900.0))]) }]);
+        let (ops, roots) = clone_into(&mut other, &[legacy], "p1", None, 0.0, 0.0);
+        run(&mut other, &ops);
+        let copy = other.node(&roots[0]).unwrap();
+        assert_eq!((copy.from.as_deref(), copy.points.clone()), (None, Some(vec![[0.0, 0.0], [30.0, 0.0]])));
+    }
+
+    /// B14: a selection across two frames is copied in page space, so pasted into one parent
+    /// it keeps its arrangement; one in a laid-out frame counts from where the layout put it.
+    #[test]
+    fn copying_across_frames_keeps_the_arrangement() {
+        let mut col = node("fc", Some("p1"), K::Frame, [0.0, 200.0, 100.0, 100.0]);
+        col.layout = Some(Layout::Column);
+        col.padding = Some(vec![5.0]);
+        let mut s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            node("fa", Some("p1"), K::Frame, [0.0, 0.0, 100.0, 100.0]),
+            node("ra", Some("fa"), K::Rect, [10.0, 10.0, 20.0, 20.0]),
+            node("fb", Some("p1"), K::Frame, [300.0, 50.0, 100.0, 100.0]),
+            node("rb", Some("fb"), K::Rect, [10.0, 10.0, 20.0, 20.0]),
+            col,
+            node("rc", Some("fc"), K::Rect, [70.0, 70.0, 20.0, 20.0]),
+        ]);
+        let placed = place(&s, "p1", &Mono);
+        let clip = gather(&s, &placed, &ids(&["ra", "rb", "rc"]));
+        let at: Vec<(&str, Option<&str>, f64, f64)> = clip.iter().map(|n| (n.id.as_str(), n.parent.as_deref(), n.x, n.y)).collect();
+        assert_eq!(at, [("ra", Some("p1"), 10.0, 10.0), ("rb", Some("p1"), 310.0, 60.0), ("rc", Some("p1"), 5.0, 205.0)]);
+        let (ops, roots) = clone_into(&mut s, &clip, "p1", None, 16.0, 16.0);
+        run(&mut s, &ops);
+        let after = place(&s, "p1", &Mono);
+        let r: Vec<Rect> = roots.iter().map(|id| after.rect(id).unwrap()).collect();
+        assert_eq!(((r[1].x - r[0].x, r[1].y - r[0].y), (r[2].x - r[0].x, r[2].y - r[0].y)), ((300.0, 50.0), (-5.0, 195.0)));
+        // Roots of one free parent are copied as they are stored.
+        let s = sample();
+        let clip = gather(&s, &place(&s, "p1", &Mono), &ids(&["b", "c"]));
+        assert_eq!(clip.iter().map(|n| (n.parent.as_deref(), n.x)).collect::<Vec<_>>(), [(Some("a"), 10.0), (Some("a"), 100.0)]);
+    }
+
+    /// TM-8: a filling field copied out of its column carries the width it showed, and still
+    /// fills when pasted back into a layout.
+    #[test]
+    fn a_copied_laid_child_keeps_its_box_and_its_fill() {
+        let mut s = login();
+        let placed = place(&s, "p1", &Mono);
+        let clip = gather(&s, &placed, &ids(&["email"]));
+        let field = &clip[0];
+        assert_eq!((field.x, field.y, field.w, field.w_sizing), (24.0, 164.0, 342.0, Some(Sizing::Fill)));
+        let (mut ops, mut roots) = clone_into(&mut s, &clip, "p1", None, 0.0, 600.0);
+        let (more, more_roots) = clone_into(&mut s, &clip, "login", None, 0.0, 0.0);
+        ops.extend(more);
+        roots.extend(more_roots);
+        run(&mut s, &ops);
+        let after = place(&s, "p1", &Mono);
+        assert_eq!(after.rect(&roots[0]), Some(Rect::new(24.0, 764.0, 342.0, 52.0)), "on the page, as it showed");
+        assert_eq!(after.rect(&roots[1]).map(|r| r.w), Some(342.0), "back in a column, it fills");
+        // A hugging text a column stretched is fixed at the width it wrapped at.
+        let mut s = login();
+        s.node_mut("login").unwrap().items = Some(Items::Stretch);
+        let placed = place(&s, "p1", &Mono);
+        let clip = gather(&s, &placed, &ids(&["login-title"]));
+        assert_eq!((clip[0].w, clip[0].w_sizing), (342.0, Some(Sizing::Fixed)));
     }
 
     #[test]

@@ -2383,7 +2383,8 @@ impl Board {
 
     pub(super) fn duplicate(&self) {
         let ids = self.selected();
-        let (ops, roots) = edit::duplicate(&mut self.doc.scene.borrow_mut(), &ids, 16.0);
+        let placed = self.placed();
+        let (ops, roots) = edit::duplicate(&mut self.doc.scene.borrow_mut(), &placed, &ids, 16.0);
         if self.commit(ops) {
             self.select(roots);
         }
@@ -2433,7 +2434,8 @@ impl Board {
 
     /// Put the selection on the clipboard; how many layers that was.
     fn copy_quietly(&self) -> Option<usize> {
-        let nodes = edit::gather(&self.doc.scene.borrow(), &self.selection.borrow());
+        let placed = self.placed();
+        let nodes = edit::gather(&self.doc.scene.borrow(), &placed, &self.selection.borrow());
         if nodes.is_empty() {
             return None;
         }
