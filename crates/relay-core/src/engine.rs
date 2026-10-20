@@ -537,6 +537,9 @@ pub struct Engine {
     pub(crate) resource_disk_refresh: std::sync::Mutex<(bool, Option<Instant>)>,
     /// Who holds which Android device (`device_lease`). Its own lock; never the store's.
     pub(crate) device_leases: crate::device_lease::Leases,
+    /// The desktop apps that offered to draw designs for `design.render`, and the renders
+    /// waiting on them (`design_render`). Its own lock; never the store's.
+    pub(crate) renders: crate::design_render::Renders,
     /// Which new worktrees are waiting on a build-seed copy or build (`build_seed`). Its own
     /// lock; never the store's.
     pub(crate) build_seeds: crate::build_seed::Seeds,
@@ -591,6 +594,7 @@ impl Engine {
                 resource_disk: std::sync::Mutex::new(HashMap::new()),
                 resource_disk_refresh: std::sync::Mutex::new((false, None)),
                 device_leases: Default::default(),
+                renders: Default::default(),
                 build_seeds: Default::default(),
                 skill_refresh: Default::default(),
                 money: Default::default(),
