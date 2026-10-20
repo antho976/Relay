@@ -164,6 +164,26 @@ fn stored_point(scene: &Scene, id: &str) -> Option<(f64, f64)> {
     None
 }
 
+/// The centre of `id`'s box from its own point, as stored, for what is not placed (hidden): its
+/// `w`/`h`'s, or a group's, its shown children's stored bounds' (each child group's own where it
+/// sits), as layout bounds them but for a size only a measure gives (a hugging text).
+fn stored_centre(scene: &Scene, id: &str) -> (f64, f64) {
+    fn bounds(scene: &Scene, id: &str) -> Option<Rect> {
+        let boxes = scene.children(id).iter().filter_map(|c| scene.node(c)).filter(|k| !k.is_hidden());
+        boxes
+            .filter_map(|k| match k.kind {
+                NodeKind::Group => bounds(scene, &k.id).map(|b| b.translate(k.x, k.y)),
+                _ => Some(Rect::new(k.x, k.y, k.w, k.h)),
+            })
+            .reduce(|a, b| a.union(&b))
+    }
+    match scene.node(id) {
+        Some(n) if n.kind == NodeKind::Group => bounds(scene, id).map_or((0.0, 0.0), |b| (b.cx(), b.cy())),
+        Some(n) => (n.w / 2.0, n.h / 2.0),
+        None => (0.0, 0.0),
+    }
+}
+
 /// Where `id`'s children count from on the page: as placed, or, not placed (hidden, or on
 /// another page), its stored point.
 fn page_origin(scene: &Scene, placed: &Placed, id: &str) -> (f64, f64) {
@@ -438,10 +458,10 @@ pub fn group(scene: &mut Scene, placed: &Placed, ids: &[String], kind: NodeKind)
 /// connector attached to the group or frame itself lets go of it where it is drawn (B112).
 ///
 /// What the container laid over its children as it drew them becomes each child's own (TM-64):
-/// its turn, each child's centre carried round the container's and its own turn added (a
-/// line's points turn instead, a line taking no turn of its own); its fade, multiplied into
-/// each child's; and its blur, as each child's where it is more (blurring each one is not
-/// blurring them together, but it is the nearest a child can hold).
+/// its turn, each child's centre carried round the container's (a hidden one's as stored) and
+/// its own turn added (a line's points turn instead, a line taking no turn of its own); its
+/// fade, multiplied into each child's; and its blur, as each child's where it is more (blurring
+/// each one is not blurring them together, but it is the nearest a child can hold).
 pub fn ungroup(scene: &Scene, placed: &Placed, id: &str) -> Option<(Vec<NodeOp>, Vec<String>)> {
     let going = HashSet::from([id.to_string()]);
     let (more, kids) = ungroup_one(scene, placed, id, &going, scene.index(id)? as u32)?;
@@ -474,8 +494,28 @@ fn ungroup_one(scene: &Scene, placed: &Placed, id: &str, going: &HashSet<String>
     // As drawn: a style may give its fade or blur.
     let look = scene.node(id)?;
     let turn = shapes::rotation(look).rem_euclid(360.0);
-    let pivot = placed.rect(id).filter(|_| turn != 0.0).map(|r| (r.cx(), r.cy()));
+    // What it turns about: its box's centre (a group's, its children's bounds') as placed, or,
+    // hidden, as stored.
+    let pivot = (turn != 0.0).then(|| match placed.rect(id) {
+        Some(r) => (r.cx(), r.cy()),
+        None => {
+            let (cx, cy) = stored_centre(scene, id);
+            (inner.0 + cx, inner.1 + cy)
+        }
+    });
     let (fade, blur) = (look.opacity.unwrap_or(1.0), look.blur.unwrap_or(0.0));
+    // Where a child not placed (hidden) sits on the page: at its own `x`/`y` in a group or a
+    // free frame; in a laid-out frame, whose layout never read them, at its content corner
+    // (B113).
+    let unplaced = |c: &Node| {
+        let (x, y) = if laid {
+            let [top, _, _, left] = node.padding_edges();
+            (inner.0 + left, inner.1 + top)
+        } else {
+            (inner.0 + c.x, inner.1 + c.y)
+        };
+        Rect::new(x, y, c.w, c.h)
+    };
     let kids = scene.children(id).to_vec();
     let mut ops = Vec::new();
     for (index, child) in (start..).zip(&kids) {
@@ -484,18 +524,21 @@ fn ungroup_one(scene: &Scene, placed: &Placed, id: &str, going: &HashSet<String>
         let gone = |end: &Option<String>| end.as_ref().is_some_and(|e| going.contains(e));
         let (from, to) = (gone(&c.from), gone(&c.to));
         // A line freed of the container, or turned with it, is written from its points on the
-        // page: as drawn for a connector, its own through its own turn for any other.
-        let points = placed.rect(child).filter(|_| c.kind == NodeKind::Line).and_then(|r| {
+        // page: as drawn for a connector, its own through its own turn for any other, hidden
+        // or not. A hidden connector lets go below, of its own points.
+        let points = (c.kind == NodeKind::Line).then(|| placed.rect(child)).and_then(|r| {
             let own = shapes::rotation(drawn);
-            let pts: Vec<(f64, f64)> = if from || to {
-                match shapes::line_points(scene, placed, drawn).0.as_slice() {
-                    [a, .., b] => vec![*a, *b],
+            let (r, pts): (Rect, Vec<(f64, f64)>) = match r {
+                Some(r) if from || to => match shapes::line_points(scene, placed, drawn).0.as_slice() {
+                    [a, .., b] => (r, vec![*a, *b]),
                     _ => return None,
+                },
+                None if from || to => return None,
+                r if pivot.is_some() => {
+                    let r = r.unwrap_or_else(|| unplaced(c));
+                    (r, c.points.iter().flatten().map(|p| (r.x + p[0], r.y + p[1])).collect())
                 }
-            } else if pivot.is_some() {
-                c.points.iter().flatten().map(|p| (r.x + p[0], r.y + p[1])).collect()
-            } else {
-                return None;
+                _ => return None,
             };
             let pts = pts.into_iter().map(|p| shapes::rotate(p.0, p.1, r.cx(), r.cy(), own));
             Some(pts.map(|p| pivot.map_or(p, |(cx, cy)| shapes::rotate(p.0, p.1, cx, cy, turn))).collect::<Vec<_>>())
@@ -512,20 +555,16 @@ fn ungroup_one(scene: &Scene, placed: &Placed, id: &str, going: &HashSet<String>
             }
             None => {
                 let shown = shown(placed, child, origin);
-                let mut rel = shown.unwrap_or_else(|| {
-                    // Hidden: at its own `x`/`y` in a group or a free frame; in a laid-out
-                    // frame, whose layout never read them, at its content corner (B113).
-                    let (x, y) = if laid {
-                        let [top, _, _, left] = node.padding_edges();
-                        (inner.0 + left, inner.1 + top)
-                    } else {
-                        (inner.0 + c.x, inner.1 + c.y)
-                    };
-                    Rect::new(x - origin.0, y - origin.1, c.w, c.h)
-                });
+                let mut rel = shown.unwrap_or_else(|| unplaced(c).translate(-origin.0, -origin.1));
                 if let Some((cx, cy)) = pivot {
                     // Its centre carried round the container's (a group's is its children's).
-                    let centre = placed.rect(child).map_or((origin.0 + rel.cx(), origin.1 + rel.cy()), |r| (r.cx(), r.cy()));
+                    let centre = placed.rect(child).map_or_else(
+                        || {
+                            let (cx, cy) = stored_centre(scene, child);
+                            (origin.0 + rel.x + cx, origin.1 + rel.y + cy)
+                        },
+                        |r| (r.cx(), r.cy()),
+                    );
                     let to = shapes::rotate(centre.0, centre.1, cx, cy, turn);
                     rel = rel.translate(to.0 - centre.0, to.1 - centre.1);
                 }
@@ -1530,15 +1569,16 @@ mod tests {
     /// TM-64: ungrouping a turned group keeps every child where and as turned as it was
     /// drawn: a box, a turned ellipse, a group inside (turned about its children's bounds) and
     /// a free line, whose points turn instead.
-    #[test]
-    fn ungrouping_a_turned_group_keeps_each_child_as_drawn() {
+    /// A group turned 30° at (100, 100), hidden or not, holding a box, a turned ellipse, a group
+    /// holding a box, and a free line.
+    fn turned(hidden: bool) -> Scene {
         let mut g = node("g", Some("p1"), K::Group, [100.0, 100.0, 0.0, 0.0]);
-        g.rotation = Some(30.0);
+        (g.rotation, g.hidden) = (Some(30.0), hidden.then_some(true));
         let mut e = node("e", Some("g"), K::Ellipse, [60.0, 40.0, 30.0, 30.0]);
         e.rotation = Some(-40.0);
         let mut l = node("l", Some("g"), K::Line, [10.0, 120.0, 50.0, 10.0]);
         l.points = Some(vec![[0.0, 0.0], [50.0, 10.0]]);
-        let mut s = Scene::new(vec![
+        Scene::new(vec![
             node("p1", None, K::Page, [0.0; 4]),
             g,
             node("a", Some("g"), K::Rect, [0.0, 0.0, 40.0, 20.0]),
@@ -1546,28 +1586,40 @@ mod tests {
             node("in", Some("g"), K::Group, [0.0, 80.0, 0.0, 0.0]),
             node("r", Some("in"), K::Rect, [5.0, 0.0, 30.0, 10.0]),
             l,
-        ]);
-        let before = place(&s, "p1", &Mono);
-        let shown = |s: &Scene, placed: &Placed, id: &str| shapes::visual(s, placed, id).unwrap();
-        let page_points = |s: &Scene, placed: &Placed| {
-            let n = s.node("l").unwrap();
-            let r = placed.rect("l").unwrap();
-            n.points.iter().flatten().map(|p| shapes::to_page_pt(s, placed, "l", r.x + p[0], r.y + p[1])).collect::<Vec<_>>()
-        };
-        let was: Vec<(Rect, f64)> = ["a", "e", "in", "r"].iter().map(|id| shown(&s, &before, id)).collect();
-        let line_was = page_points(&s, &before);
-        let (ops, _) = ungroup(&s, &before, "g").unwrap();
-        run(&mut s, &ops);
-        let after = place(&s, "p1", &Mono);
-        for (id, (r, turn)) in ["a", "e", "in", "r"].iter().zip(was) {
-            let (now, now_turn) = shown(&s, &after, id);
+        ])
+    }
+
+    /// Boxes as drawn and their turns, and a line's points on the page.
+    type Drawing = (Vec<(Rect, f64)>, Vec<(f64, f64)>);
+
+    /// Each of `turned`'s children where it is drawn and as turned, and its line's points on
+    /// the page.
+    fn as_drawn(s: &Scene) -> Drawing {
+        let placed = place(s, "p1", &Mono);
+        let shown = ["a", "e", "in", "r"].iter().map(|id| shapes::visual(s, &placed, id).unwrap()).collect();
+        let (n, r) = (s.node("l").unwrap(), placed.rect("l").unwrap());
+        (shown, n.points.iter().flatten().map(|p| shapes::to_page_pt(s, &placed, "l", r.x + p[0], r.y + p[1])).collect())
+    }
+
+    /// The same boxes' centres within a pixel and the same turns, and the same points.
+    fn same_drawing(now: &Drawing, was: &Drawing) {
+        for (id, ((now, now_turn), (r, turn))) in ["a", "e", "in", "r"].iter().zip(now.0.iter().zip(&was.0)) {
             assert!((now.cx() - r.cx()).abs() < 1.0 && (now.cy() - r.cy()).abs() < 1.0, "{id}: {now:?} against {r:?}");
             let off = (now_turn - turn).rem_euclid(360.0);
             assert!(off < 1e-6 || off > 360.0 - 1e-6, "{id} turns {now_turn}, was {turn}");
         }
+        near(&now.1, &was.1);
+    }
+
+    #[test]
+    fn ungrouping_a_turned_group_keeps_each_child_as_drawn() {
+        let mut s = turned(false);
+        let was = as_drawn(&s);
+        let (ops, _) = ungroup(&s, &place(&s, "p1", &Mono), "g").unwrap();
+        run(&mut s, &ops);
+        same_drawing(&as_drawn(&s), &was);
         assert_eq!(s.node("e").unwrap().rotation, Some(-10.0));
         assert_eq!(s.node("l").unwrap().rotation, None, "a line takes no turn of its own");
-        near(&page_points(&s, &after), &line_was);
         // Turned back to none, a child's turn is cleared rather than written as 0.
         let mut s = Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), node("h", Some("p1"), K::Group, [0.0; 4])]);
         s.node_mut("h").unwrap().rotation = Some(90.0);
@@ -1578,6 +1630,35 @@ mod tests {
         let (ops, _) = ungroup(&s, &placed, "h").unwrap();
         run(&mut s, &ops);
         assert_eq!(s.node("k").unwrap().rotation, None);
+    }
+
+    /// TM-64 for a hidden group, ungrouped from the layers list: nothing of it is placed, so it
+    /// turns its children about the centre of their stored bounds, and each one, shown once the
+    /// group is gone, is where and as turned as the group would have drawn it, a line's points
+    /// turned too.
+    #[test]
+    fn ungrouping_a_hidden_turned_group_keeps_its_turn() {
+        let was = as_drawn(&turned(false));
+        let mut s = turned(true);
+        let placed = place(&s, "p1", &Mono);
+        assert!(placed.rect("g").is_none() && placed.rect("a").is_none());
+        let (ops, _) = ungroup(&s, &placed, "g").unwrap();
+        run(&mut s, &ops);
+        same_drawing(&as_drawn(&s), &was);
+        assert_eq!((s.node("e").unwrap().rotation, s.node("l").unwrap().rotation), (Some(-10.0), None));
+        // A hidden frame turns them about its stored box's centre.
+        let frame = |hidden: bool| {
+            let mut f = node("f", Some("p1"), K::Frame, [20.0, 20.0, 100.0, 50.0]);
+            (f.rotation, f.hidden) = (Some(90.0), hidden.then_some(true));
+            Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), f, node("k", Some("f"), K::Rect, [0.0, 0.0, 10.0, 10.0])])
+        };
+        let shown = frame(false);
+        let (was, was_turn) = shapes::visual(&shown, &place(&shown, "p1", &Mono), "k").unwrap();
+        let mut s = frame(true);
+        let (ops, _) = ungroup(&s, &place(&s, "p1", &Mono), "f").unwrap();
+        run(&mut s, &ops);
+        let (now, now_turn) = shapes::visual(&s, &place(&s, "p1", &Mono), "k").unwrap();
+        assert!((now.cx() - was.cx()).abs() < 1.0 && (now.cy() - was.cy()).abs() < 1.0 && now_turn == was_turn, "{now:?} against {was:?}");
     }
 
     /// TM-64: a faded frame's children take its fade times their own, and its blur where theirs
