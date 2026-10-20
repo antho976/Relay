@@ -1223,11 +1223,15 @@ or style naming a colour or style the design lacks), `design.position` (a `keep_
 either place is laid out by auto layout), or `design.node_unreadable` (an edit naming a node of a
 kind this build cannot read).
 
-`copy` takes `{id, as?, parent?, index?, dx?, dy?}` and copies a node and everything inside it, as
+`copy` takes `{id, as?, parent?, index?, dx?, dy?, rename?}` and copies a node and everything inside it, as
 one edit (a page copies as a page). Each node inside the copy takes an id from the copied id: one
 starting with the copied id and `-`, `_`, `.` or `:` has that start swapped for the copy's
 (`card-title` becomes `card-2-title`); any other gets the copy's id and `:` in front (`text-14`
-becomes `card-2:text-14`). A connector inside joins the copies of its ends; one attached outside the
+becomes `card-2:text-14`). `rename` (1 to 16 id starts) overrides that: an id inside that a key
+starts takes the key's value there, the longest key first, and the root too when `as` is left out
+(`{"v2-": "v3-"}` copies `v2-phone` as `v3-phone` and `v2-fade` as `v3-fade`). A `not_found` of a
+later edit's id adds the copy of the id it is nearest, or the ids the latest copy made, to its
+hint. A connector inside joins the copies of its ends; one attached outside the
 copy lets go of that end where the stored boxes draw it. `color` `{name, value}` names a colour that
 a colour field takes as `$name`. `style` `{name, set}` names a style or changes one. `delete_style`
 `{name}` takes one out, and what used it keeps its look: the colour, or the style's fields a node did

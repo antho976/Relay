@@ -232,7 +232,10 @@ make a variant). The copy is `as` (or an assigned id, answered in `ids`), and `c
 maps each new root to the node it copied. Nodes inside take ids from it: an id starting with the
 copied id and `-`, `_`, `.` or `:` has that start swapped (`card-title` becomes `card-2-title`), any
 other gets the copy's id and `:` in front (`text-14` becomes `card-2:text-14`), so later edits of
-the same list can name them. **A connector inside the copy joins the copies of its ends; an end
+the same list can name them. **When the ids inside share a start that is not the copied id's, pick
+them with `rename`**: copying `v2-phone` with `"rename": {"v2-": "v3-"}` makes `v3-phone` (when `as`
+is left out) and `v3-fade` from `v2-fade`, instead of `v3-phone:v2-fade`. A later edit naming an id
+the copy did not make is refused with the ids it did make. **A connector inside the copy joins the copies of its ends; an end
 outside the copy is let go**: the line stays drawn where it was, attached to nothing at that end.
 `dx`/`dy` add to the copy's stored `x/y`, which a laid-out parent ignores.
 

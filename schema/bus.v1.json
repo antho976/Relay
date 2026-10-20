@@ -27852,6 +27852,16 @@
               "minimum": -1000000.0,
               "maximum": 1000000.0
             },
+            "rename": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Id starts to swap, 1 to 16: each node copied whose id starts with a key takes its\nvalue there instead (the longest key that fits), whatever the rule above would give;\n`{\"v2-\": \"v3-\"}` copies `v2-phone` as `v3-phone` (when `as` is left out) and `v2-fade`\ninside it as `v3-fade`. Ids no key starts keep the rule above."
+            },
             "op": {
               "type": "string",
               "const": "copy"
@@ -27861,7 +27871,7 @@
             "op",
             "id"
           ],
-          "description": "Copy a node and everything inside it, as one edit (a page copies as a new page). The\ncopy's id is `as` (left out, the engine assigns one); each node inside takes an id made\nfrom it: one starting with the copied node's id and `-`, `_`, `.` or `:` has that start\nswapped for the copy's (`card-title` becomes `card-2-title`), any other gets the copy's id\nand `:` in front (`text-14` becomes `card-2:text-14`), so later edits of the same list can\nname them. A connector inside joins the copies of its ends; one attached to a node outside\nthe copy lets go of that end, staying where it is drawn."
+          "description": "Copy a node and everything inside it, as one edit (a page copies as a new page). The\ncopy's id is `as` (left out, the engine assigns one); each node inside takes an id made\nfrom it: one starting with the copied node's id and `-`, `_`, `.` or `:` has that start\nswapped for the copy's (`card-title` becomes `card-2-title`), any other gets the copy's id\nand `:` in front (`text-14` becomes `card-2:text-14`), so later edits of the same list can\nname them; `rename` picks them yourself. A refusal of a later edit that names an id the\ncopy did not make lists those it did. A connector inside joins the copies of its ends;\none attached to a node outside the copy lets go of that end, staying where it is drawn."
         },
         {
           "type": "object",

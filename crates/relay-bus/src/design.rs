@@ -15,6 +15,7 @@ use schemars::JsonSchema;
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
 
@@ -36,7 +37,7 @@ pub use motion::{Ease, Key, Motion, Pose, Timeline};
 pub use pins::{follow_axis, page_point, Pin};
 pub use read::{read_node, read_nodes, read_nodes_opt, write_node, write_nodes, write_nodes_opt};
 pub use style::{
-    color_ref, copy_id, read_styles, read_styles_opt, write_styles, write_styles_opt, Removed, Style, StyleError, Styles,
+    color_ref, copy_id, copy_id_renamed, renamed, read_styles, read_styles_opt, write_styles, write_styles_opt, Removed, Style, StyleError, Styles,
     MAX_STYLES, STYLE_FIELDS,
 };
 
@@ -70,6 +71,8 @@ pub const MAX_SHADOW_BLUR: f64 = 200.0;
 pub const MAX_SHADOWS: usize = 8;
 /// Most entries of a node's `runs`.
 pub const MAX_RUNS: usize = 64;
+/// Most id starts one `copy` swaps (`rename`).
+pub const MAX_RENAMES: usize = 16;
 /// Longest text a node holds, in characters.
 pub const MAX_TEXT: usize = 10_000;
 /// Most points one path or line holds.
@@ -1204,8 +1207,9 @@ pub enum NodeOp {
     /// from it: one starting with the copied node's id and `-`, `_`, `.` or `:` has that start
     /// swapped for the copy's (`card-title` becomes `card-2-title`), any other gets the copy's id
     /// and `:` in front (`text-14` becomes `card-2:text-14`), so later edits of the same list can
-    /// name them. A connector inside joins the copies of its ends; one attached to a node outside
-    /// the copy lets go of that end, staying where it is drawn.
+    /// name them; `rename` picks them yourself. A refusal of a later edit that names an id the
+    /// copy did not make lists those it did. A connector inside joins the copies of its ends;
+    /// one attached to a node outside the copy lets go of that end, staying where it is drawn.
     Copy {
         #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
         id: String,
@@ -1229,6 +1233,13 @@ pub enum NodeOp {
         #[serde(default, skip_serializing_if = "is_zero")]
         #[schemars(range(min = -MAX_COORD, max = MAX_COORD))]
         dy: f64,
+        /// Id starts to swap, 1 to 16: each node copied whose id starts with a key takes its
+        /// value there instead (the longest key that fits), whatever the rule above would give;
+        /// `{"v2-": "v3-"}` copies `v2-phone` as `v3-phone` (when `as` is left out) and `v2-fade`
+        /// inside it as `v3-fade`. Ids no key starts keep the rule above.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(length(min = 1, max = MAX_RENAMES))]
+        rename: Option<BTreeMap<String, String>>,
     },
     /// Name a colour that any colour field of a node, or of a style, takes as `$name`. Naming it
     /// again changes it wherever it is used.
@@ -2475,7 +2486,7 @@ mod tests {
             {"op": "delete_style", "name": "accent"}
         ]);
         let ops: Vec<NodeOp> = serde_json::from_value(edits.clone()).unwrap();
-        let NodeOp::Copy { id, as_id, parent, index, dx, dy } = &ops[0] else { panic!() };
+        let NodeOp::Copy { id, as_id, parent, index, dx, dy, .. } = &ops[0] else { panic!() };
         assert_eq!((id.as_str(), as_id.as_deref(), parent, index, *dx, *dy), ("card", Some("card-2"), &None, &None, 400.0, 0.0));
         assert_eq!(ops.iter().map(NodeOp::target).collect::<Vec<_>>(), ["card", "page-1", "accent", "card", "accent"]);
         assert_eq!(ops.iter().map(NodeOp::node_target).collect::<Vec<_>>(), [Some("card"), Some("page-1"), None, None, None]);

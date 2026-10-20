@@ -176,6 +176,59 @@ fn a_copy_refuses_taken_ids_long_ids_cycles_and_the_cap() {
     assert_eq!(node(&e, id, "chip").unwrap()["x"].as_f64(), Some(500.0), "nothing of the list stayed");
 }
 
+/// `rename` picks a copy's ids: the longest start that fits is swapped, the root too when `as`
+/// is left out, and ids no start fits keep copy_id's rule. A bad rename is refused by its field.
+#[test]
+fn a_copy_renames_the_ids_it_makes() {
+    let (e, _root) = project();
+    let id = create(&e);
+    apply(&e, id, json!([
+        {"op": "add", "node": {"id": "v2-phone", "parent": "page-1", "kind": "frame", "w": 390, "h": 844}},
+        {"op": "add", "node": {"id": "v2-fade", "parent": "v2-phone", "kind": "rect"}},
+        {"op": "add", "node": {"id": "v2-head-title", "parent": "v2-phone", "kind": "text", "text": "Trail"}},
+        {"op": "add", "node": {"id": "badge", "parent": "v2-phone", "kind": "ellipse"}},
+    ]));
+    let out = apply(&e, id, json!([
+        {"op": "copy", "id": "v2-phone", "dx": 470, "rename": {"v2-": "v3-", "v2-head-": "v3-top-"}},
+        {"op": "update", "id": "v3-fade", "set": {"opacity": 0.5}},
+    ]));
+    assert_eq!(out["ids"], json!(["v3-phone", "v3-fade"]));
+    let made: Vec<String> = ids(&get(&e, id)["nodes"]).into_iter().filter(|n| !n.starts_with("v2-") && n != "badge" && n != "page-1").collect();
+    assert_eq!(made, ["v3-phone", "v3-fade", "v3-top-title", "v3-phone:badge"], "the longest start, and the plain rule for the rest");
+    let again = apply(&e, id, json!([{"op": "copy", "id": "v2-phone", "as": "v4", "rename": {"v2-": "v4-"}}]));
+    assert_eq!(again["ids"], json!(["v4"]), "as names the root");
+    assert!(node(&e, id, "v4-fade").is_some());
+    for (rename, why) in [(json!({}), "rename: 1 to 16 id starts"), (json!({"v2-": "bad id"}), "rename: \"v2-\" to \"bad id\"")] {
+        let error = refused(call(&e, "design.apply", json!({"design_id": id, "ops": [{"op": "copy", "id": "v2-phone", "rename": rename}]})));
+        assert!(error.message.contains(why), "{}", error.message);
+        assert_eq!(error.details.as_ref().unwrap()["field"], "rename");
+    }
+    let error = refused(call(&e, "design.apply", json!({"design_id": id, "ops": [{"op": "copy", "id": "v2-phone", "rename": {"v2-": "v3-"}}]})));
+    assert_eq!(error.code, "design.node_exists", "{}", error.message);
+}
+
+/// A later edit naming an id no copy made is told what the copy made: the copy of the id it is
+/// nearest when there is one, else the copy's ids.
+#[test]
+fn a_refused_id_after_a_copy_names_the_copys_ids() {
+    let (e, _root) = project();
+    let id = create(&e);
+    apply(&e, id, json!([
+        {"op": "add", "node": {"id": "v2-phone", "parent": "page-1", "kind": "frame", "w": 390, "h": 844}},
+        {"op": "add", "node": {"id": "v2-fade", "parent": "v2-phone", "kind": "rect"}},
+    ]));
+    let wrong = |guess: &str| refused(call(&e, "design.apply", json!({"design_id": id, "ops": [
+        {"op": "copy", "id": "v2-phone", "as": "v3-phone"},
+        {"op": "update", "id": guess, "set": {"opacity": 0.5}},
+    ]})));
+    let error = wrong("v3-fade");
+    assert_eq!(error.code, "design.node_not_found");
+    let hint = error.hint.unwrap();
+    assert!(hint.contains("did you mean \"v2-fade\"?") && hint.contains("ops[0] copied \"v2-fade\" as \"v3-phone:v2-fade\""), "{hint}");
+    let hint = wrong("totally-else").hint.unwrap();
+    assert!(hint.contains("ops[0]'s copy made \"v3-phone\", \"v3-phone:v2-fade\""), "{hint}");
+}
+
 /// A page copies as a page, after the others; an unnamed copy takes an id from the counter.
 #[test]
 fn a_page_copies_as_a_page_and_an_unnamed_copy_takes_an_assigned_id() {

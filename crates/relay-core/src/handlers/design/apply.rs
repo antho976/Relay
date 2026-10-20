@@ -33,6 +33,8 @@ const RENUMBER_STEP: f64 = 1024.0;
 /// How many times a list asks after one parent's children, one query each, before it reads
 /// them whole and holds them ([`Siblings`]).
 const SIBLINGS_ASKED: u32 = 2;
+/// Most ids of a copy a refusal lists.
+const COPY_IDS_LISTED: usize = 12;
 const TOO_LARGE_HINT: &str = "split it across designs, or keep long text and big paths out of it";
 
 /// A row's kind: `Err` holds the name of one this build does not know (a newer build's), whose
@@ -172,6 +174,9 @@ pub(super) struct Run<'a> {
     pub(super) styles_changed: bool,
     /// Each copy edit's new node, and the node it copied.
     pub(super) copied: BTreeMap<String, String>,
+    /// Each copy edit's index and the ids it made, each beside the id it copied, in walk order:
+    /// what a refusal of a later edit naming an id no copy made lists ([`Run::copies_note`]).
+    pub(super) copy_ids: Vec<(usize, Vec<(String, String)>)>,
     /// The follow rule's reading (feature-layout §2.1): each frame an update resized, at its size
     /// before, and each axis (`true` across) the list set on a node itself.
     pub(super) resized: Vec<(String, (f64, f64))>,
@@ -329,10 +334,32 @@ impl Run<'_> {
         let ids: Vec<String> = self.tx.prepare_cached("SELECT node_id FROM design_nodes WHERE design_id = ?1").bus()?
             .query_map([self.design], |r| r.get(0)).bus()?
             .collect::<rusqlite::Result<_>>().bus()?;
-        Ok(match nearest(want, ids.iter().map(String::as_str)) {
+        let close = nearest(want, ids.iter().map(String::as_str));
+        let hint = match close {
             Some(id) => format!("did you mean {id:?}?"),
             None => "design.get lists the ids (pass page to read one page)".to_string(),
+        };
+        Ok(match self.copies_note(want, close) {
+            Some(note) => format!("{hint} {note}"),
+            None => hint,
         })
+    }
+
+    /// What a refusal of an id the design does not hold adds when this list copied: the copy
+    /// of the id it wanted, or of the one nearest it, when a copy made one; else the ids the
+    /// latest copy made (the first [`COPY_IDS_LISTED`]), so a guess at a copy's ids is put right.
+    pub(super) fn copies_note(&self, want: &str, close: Option<&str>) -> Option<String> {
+        let (at, made) = self.copy_ids.last()?;
+        let copied = |id: &str| self.copy_ids.iter().rev().find_map(|(at, made)| {
+            made.iter().find(|(from, _)| from == id).map(|(from, to)| format!("ops[{at}] copied {from:?} as {to:?}"))
+        });
+        if let Some(note) = copied(want).or_else(|| close.and_then(copied)) {
+            return Some(format!("{note}; a copy's ids follow its as, or its rename ({{\"v2-\": \"v3-\"}})"));
+        }
+        let listed: Vec<String> = made.iter().take(COPY_IDS_LISTED).map(|(_, to)| format!("{to:?}")).collect();
+        let more = made.len().saturating_sub(COPY_IDS_LISTED);
+        let more = if more > 0 { format!(" and {more} more") } else { String::new() };
+        Some(format!("ops[{at}]'s copy made {}{more}; a copy's rename ({{\"v2-\": \"v3-\"}}) picks its ids", listed.join(", ")))
     }
 
     /// Learn where node `id` sits: its chain up to its page (or WALK levels) into `parents`.
@@ -1394,6 +1421,7 @@ pub(super) fn register(e: &mut Engine) {
             styles_len: 0,
             styles_changed: false,
             copied: BTreeMap::new(),
+            copy_ids: Vec::new(),
             resized: Vec::new(),
             set_here: HashSet::new(),
             fonts: ctx.engine().renders.fonts(),
@@ -1413,7 +1441,7 @@ pub(super) fn register(e: &mut Engine) {
                 NodeOp::Update { id, set } => run.update(id, set)?,
                 NodeOp::Move { id, parent, index, keep_position } => run.move_(id, parent, index, keep_position == Some(true))?,
                 NodeOp::Delete { id } => run.delete(id)?,
-                NodeOp::Copy { id, as_id, parent, index, dx, dy } => run.copy(id, as_id, parent, index, dx, dy)?,
+                NodeOp::Copy { id, as_id, parent, index, dx, dy, rename } => run.copy(id, as_id, parent, index, dx, dy, rename)?,
                 NodeOp::Color { name, value } => run.color(name, value)?,
                 NodeOp::Style { name, set } => run.style(name, set)?,
                 NodeOp::DeleteStyle { name } => run.delete_style(name)?,
