@@ -343,6 +343,220 @@ pub fn soon(engine: Weak<Engine>) {
     if spawned.is_err() { SOON.store(false, Ordering::Release); }
 }
 
+/// What a design-assets sweep did ([`sweep_design_assets`]).
+#[derive(Debug, Default)]
+pub struct AssetsSwept {
+    /// Pictures removed: nothing had named them for an undo window.
+    pub removed: Vec<PathBuf>,
+    /// Old pictures something still names, dated now.
+    pub seen: usize,
+    /// Temporary files a store that never finished left behind, removed.
+    pub leftovers: usize,
+    pub freed: u64,
+}
+
+/// A temporary file [`crate::picture::keep`] left (a crash mid-store) is garbage after this long.
+const ASSET_TMP_STALE: Duration = Duration::from_secs(24 * 60 * 60);
+/// Audit rows read at a time for the edits an undo would make: the lock is let go between them.
+const AUDIT_BATCH: i64 = 256;
+/// One design-assets sweep at a time; a second waits and then finds little left to do.
+static ASSETS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Remove the pictures in `design-assets/` that nothing has named for an undo window
+/// (`undo.grace_days`, B66). A picture is named by its content and shared by every design, so no
+/// delete or purge can tell whether it was the last to use one; this sweep asks once the file
+/// has sat untouched for the window: a picture any design (deleted ones included, which
+/// `design.restore` brings back), any undoable edit of the window, or any removal backup
+/// (`project.restore`) names is kept and dated now, so a file's time is when it was last seen
+/// named, and one is removed only after a whole window unnamed, while an undo can still want
+/// it. `design.asset.add` dates a picture now too, so one stored again before the edit that
+/// names it is not taken from under it. 0 or less days keeps every picture.
+///
+/// File work and short reads, one design or one batch of audit rows a lock: call it with no
+/// store lock held, after the retention pass. Most passes find no picture old enough and read
+/// nothing at all.
+pub fn sweep_design_assets(engine: &Engine) -> AssetsSwept {
+    // A store in memory shares its pictures folder with every other in the process: never swept.
+    if !engine.store.path().is_file() {
+        return AssetsSwept::default();
+    }
+    let _one = ASSETS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let out = sweep_assets(engine, SystemTime::now());
+    if !out.removed.is_empty() || out.leftovers > 0 {
+        tracing::info!(removed = out.removed.len(), leftovers = out.leftovers, freed_kb = out.freed / 1024,
+            "swept {} unused design picture(s)", out.removed.len());
+    }
+    out
+}
+
+fn sweep_assets(engine: &Engine, now: SystemTime) -> AssetsSwept {
+    let mut out = AssetsSwept::default();
+    let grace = crate::purge::grace_days(&engine.store.lock());
+    let dir = engine.store.design_assets_dir();
+    let unseen_since = now.checked_sub(Duration::from_secs(grace.max(0) as u64 * 24 * 60 * 60));
+    let old = |meta: &std::fs::Metadata, since: SystemTime| meta.modified().is_ok_and(|at| at < since);
+    let mut candidates: Vec<(String, PathBuf)> = Vec::new();
+    for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        // Not followed: a link here is nobody's picture, and its target is not ours to remove.
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() { continue; }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if relay_bus::design::valid_src(&name) {
+            if grace > 0 && unseen_since.is_some_and(|since| old(&meta, since)) {
+                candidates.push((name, entry.path()));
+            }
+        } else if name.starts_with(".tmp") && now.checked_sub(ASSET_TMP_STALE).is_some_and(|since| old(&meta, since))
+            && std::fs::remove_file(entry.path()).is_ok() {
+            out.leftovers += 1;
+            out.freed += meta.len();
+        }
+    }
+    let (Some(since), false) = (unseen_since, candidates.is_empty()) else { return out };
+    // Nothing is known to be unnamed while a removal backup cannot be read.
+    let Some(named) = named_pictures(engine, &crate::time::days_ago(grace)) else { return out };
+    for (name, path) in candidates {
+        if named.contains(&name) {
+            if std::fs::File::open(&path).and_then(|file| file.set_modified(now)).is_ok() {
+                out.seen += 1;
+            }
+            continue;
+        }
+        // Looked at again just before it goes: a design.asset.add since dated it now.
+        let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
+        if meta.is_file() && old(&meta, since) && std::fs::remove_file(&path).is_ok() {
+            out.freed += meta.len();
+            out.removed.push(path);
+        }
+    }
+    out
+}
+
+/// Every picture name the store's designs, the undoable edits since `since` and the removal
+/// backups hold; `None` when a removal backup cannot be read. Read as text (node bodies, named
+/// styles, undo payloads), so a field this build cannot read still keeps its picture.
+fn named_pictures(engine: &Engine, since: &str) -> Option<HashSet<String>> {
+    let mut named = HashSet::new();
+    let designs: Vec<i64> = {
+        let conn = engine.store.lock();
+        let ids = conn.prepare_cached("SELECT id FROM designs")
+            .and_then(|mut stmt| stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>());
+        match ids {
+            Ok(ids) => ids,
+            Err(error) => {
+                tracing::warn!(%error, "design-assets sweep could not read the designs; keeping every picture");
+                return None;
+            }
+        }
+    };
+    for design in designs {
+        let conn = engine.store.lock();
+        if let Err(error) = design_names(&conn, design, &mut named) {
+            tracing::warn!(design, %error, "design-assets sweep could not read a design; keeping every picture");
+            return None;
+        }
+    }
+    // The edits an undo of the window would make (the canvas's own and audit.undo's), a batch of
+    // rows at a time in the order the (op, ts) index keeps them.
+    for op in ["design.apply", "audit.undo"] {
+        let (mut ts, mut id) = (since.to_string(), 0i64);
+        loop {
+            let conn = engine.store.lock();
+            let batch = conn.prepare_cached(
+                "SELECT ts, id, undo_op FROM audit WHERE op = ?1 AND (ts, id) > (?2, ?3) AND kind = 'ok'
+                   AND undone_by IS NULL AND undo_op IS NOT NULL ORDER BY ts, id LIMIT ?4+0",
+            ).and_then(|mut stmt| {
+                let mut rows = stmt.query(rusqlite::params![op, ts, id, AUDIT_BATCH])?;
+                let mut n = 0;
+                while let Some(row) = rows.next()? {
+                    n += 1;
+                    (ts, id) = (row.get(0)?, row.get(1)?);
+                    if let Ok(text) = row.get_ref(2)?.as_str() {
+                        names_in(text, |name| { named.insert(name.to_string()); });
+                    }
+                }
+                Ok(n)
+            });
+            drop(conn);
+            match batch {
+                Ok(n) if n < AUDIT_BATCH => break,
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "design-assets sweep could not read the undo history; keeping every picture");
+                    return None;
+                }
+            }
+        }
+    }
+    // `project.restore` brings a removed project's designs back from the backup taken before it
+    // went: their pictures must be there.
+    let backups = engine.store.list_backups().ok()?;
+    for backup in backups.iter().filter(|b| matches!(b.reason.as_str(), "project-remove" | "workspace-remove")) {
+        let read = rusqlite::Connection::open_with_flags(
+            &backup.path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ).and_then(|conn| {
+            let held: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'design_nodes')", [], |r| r.get(0))?;
+            if !held {
+                return Ok(());
+            }
+            let designs: Vec<i64> = conn.prepare("SELECT id FROM designs")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            for design in designs {
+                design_names(&conn, design, &mut named)?;
+            }
+            Ok(())
+        });
+        if let Err(error) = read {
+            tracing::warn!(backup = %backup.path.display(), %error, "unreadable removal backup; keeping every design picture");
+            return None;
+        }
+    }
+    Some(named)
+}
+
+/// The picture names design `id`'s nodes and named styles hold, added to `named`. A store from
+/// before v30 (a backup) has no styles column.
+fn design_names(conn: &Connection, id: i64, named: &mut HashSet<String>) -> rusqlite::Result<()> {
+    let mut each = |text: &str| names_in(text, |name| { named.insert(name.to_string()); });
+    let mut nodes = conn.prepare_cached("SELECT body FROM design_nodes WHERE design_id = ?1")?;
+    let mut rows = nodes.query([id])?;
+    while let Some(row) = rows.next()? {
+        if let Ok(body) = row.get_ref(0)?.as_str() {
+            each(body);
+        }
+    }
+    let styled = conn.prepare_cached("SELECT styles FROM designs WHERE id = ?1").and_then(|mut stmt| stmt.query_row([id], |r| r.get::<_, String>(0)));
+    match styled {
+        Ok(styles) => each(&styles),
+        Err(rusqlite::Error::SqliteFailure(..)) => {}
+        Err(error) => return Err(error),
+    }
+    Ok(())
+}
+
+/// Each picture name in `text`: a run of hex digits and an extension that `valid_src` reads as
+/// a stored picture's name, wherever it stands (a `src`, a newer build's field, an undo's edit).
+fn names_in(text: &str, mut each: impl FnMut(&str)) {
+    let b = text.as_bytes();
+    let mut at = 0;
+    while at < b.len() {
+        if !b[at].is_ascii_hexdigit() {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < b.len() && b[at].is_ascii_hexdigit() { at += 1; }
+        if at - start < 16 || b.get(at) != Some(&b'.') { continue; }
+        let mut end = at + 1;
+        while end < b.len() && b[end].is_ascii_alphanumeric() { end += 1; }
+        let name = &text[start..end];
+        if relay_bus::design::valid_src(name) {
+            each(name);
+        }
+        at = end;
+    }
+}
+
 fn canon(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }

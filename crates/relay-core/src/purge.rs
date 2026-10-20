@@ -4,9 +4,12 @@
 //!
 //! [`run`] does only SQL, so it can run inside the request transaction. The files those rows
 //! named (attachments, `.relay/trash/<id>/`) are returned for the caller to remove once the
-//! transaction is gone — never under the store mutex.
+//! transaction is gone — never under the store mutex, and so are the designs it purged, for the
+//! caller to announce once they are gone. Pictures no design names any more are not rows: the
+//! design-assets sweep (`disk_sweep::sweep_design_assets`) takes them, after the pass.
 
-use rusqlite::{params, Transaction};
+use rusqlite::{params, Connection, Transaction};
+use serde_json::json;
 use std::path::{Path, PathBuf};
 
 const DEFAULT_GRACE_DAYS: i64 = 7;
@@ -33,13 +36,30 @@ pub struct Purged {
     pub actions: Vec<String>,
     /// Files and directories to remove after commit.
     pub paths: Vec<PathBuf>,
+    /// The designs purged, as (id, project id): each is announced `design.deleted` after commit,
+    /// as `design.purge` announces one, so an open board or Deleted list lets go of it (W72).
+    pub designs: Vec<(i64, i64)>,
 }
 
-fn setting_days(tx: &Transaction, path: &str, default: i64) -> i64 {
-    tx.query_row("SELECT value FROM settings WHERE path=?1", [path], |r| r.get::<_, String>(0))
+impl Purged {
+    /// `design.deleted` for each design purged: what `design.purge` emits for one.
+    pub fn deleted_designs(&self) -> impl Iterator<Item = serde_json::Value> + '_ {
+        self.designs.iter().map(|(id, project_id)| json!({"id": id, "project_id": project_id}))
+    }
+}
+
+fn setting_days(conn: &Connection, path: &str, default: i64) -> i64 {
+    conn.prepare_cached("SELECT value FROM settings WHERE path=?1")
+        .and_then(|mut stmt| stmt.query_row([path], |r| r.get::<_, String>(0)))
         .ok()
         .and_then(|value| serde_json::from_str::<i64>(&value).ok())
         .unwrap_or(default)
+}
+
+/// `undo.grace_days`: how long a soft-deleted row, and a picture nothing names, is kept; 0 or
+/// less keeps them forever.
+pub fn grace_days(conn: &Connection) -> i64 {
+    setting_days(conn, "undo.grace_days", DEFAULT_GRACE_DAYS)
 }
 
 fn ids(tx: &Transaction, sql: &str, cutoff: &str) -> rusqlite::Result<Vec<i64>> {
@@ -53,7 +73,7 @@ pub fn run(tx: &Transaction, store_dir: &Path) -> rusqlite::Result<Purged> {
     let mut note = |n: usize, what: &str| if n > 0 { out.actions.push(format!("purged {n} {what}")) };
 
     // Soft-deleted board rows, after the undo grace window. 0 (or less) keeps them forever.
-    let grace = setting_days(tx, "undo.grace_days", DEFAULT_GRACE_DAYS);
+    let grace = grace_days(tx);
     let mut paths = Vec::new();
     if grace > 0 {
         let cutoff = crate::time::days_ago(grace);
@@ -98,15 +118,19 @@ pub fn run(tx: &Transaction, store_dir: &Path) -> rusqlite::Result<Purged> {
         // A task made from a purged note keeps its card: `ON DELETE SET NULL` clears its `note_id`.
         note(tx.execute("DELETE FROM notes WHERE deleted_at IS NOT NULL AND deleted_at < ?1", [&cutoff])?, "deleted note(s) past the undo window");
 
-        // Deleted designs with their nodes. Their pictures stay in `design-assets/`: a file is
-        // named by its content and may be any design's, a removal backup's or an undo's.
-        let designs = ids(tx, "SELECT id FROM designs WHERE deleted_at IS NOT NULL AND deleted_at < ?1", &cutoff)?;
-        for &id in &designs {
+        // Deleted designs with their nodes. Their pictures stay in `design-assets/` for now: a
+        // file is named by its content and may be any design's, a removal backup's or an undo's,
+        // so the design-assets sweep, not this pass, decides when one goes.
+        let designs: Vec<(i64, i64)> = tx.prepare_cached(
+            "SELECT id, project_id FROM designs WHERE deleted_at IS NOT NULL AND deleted_at < ?1",
+        )?.query_map([&cutoff], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        for &(id, _) in &designs {
             tx.prepare_cached("DELETE FROM design_removed WHERE design_id=?1")?.execute([id])?;
             tx.prepare_cached("DELETE FROM design_nodes WHERE design_id=?1")?.execute([id])?;
             tx.prepare_cached("DELETE FROM designs WHERE id=?1")?.execute([id])?;
         }
         note(designs.len(), "deleted design(s) past the undo window");
+        out.designs = designs;
 
         // Trashed files: the row and its `.relay/trash/<id>/` directory. Restored rows have no
         // payload left; their row is only history.
@@ -228,11 +252,16 @@ pub fn spawn_timer(engine: &std::sync::Arc<crate::engine::Engine>) {
                         tracing::info!(actions = ?purged.actions, "retention pass");
                         engine.emit_system("notify.changed", serde_json::json!({"purged": true}));
                     }
+                    for deleted in purged.deleted_designs() {
+                        engine.emit_system("design.deleted", deleted);
+                    }
                     remove_paths(&purged.paths);
                 }
                 Err(error) => tracing::warn!(error = %error, "retention pass failed"),
             }
-            // Build output and scratch space closed sessions left behind (`disk_sweep`).
+            // Pictures no design has named for an undo window (B66), then build output and
+            // scratch space closed sessions left behind (`disk_sweep`).
+            crate::disk_sweep::sweep_design_assets(&engine);
             crate::disk_sweep::run(&engine);
             drop(engine);
             wait = EVERY;

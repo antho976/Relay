@@ -1,13 +1,15 @@
-//! A design's pictures (MODEL-SPEC §6.4 engine-assets): `design.asset.get` reading a stored
-//! picture back in pieces; `design.asset.add` storing one durably (B51), refusing one no node
-//! could take (B65), reading what an agent names in its worktree (I-10), saying why a file
-//! cannot be read (TM-15), sizing a turned JPEG as shown (TM-24).
+//! A design's pictures and its lifecycle beyond the canvas (MODEL-SPEC §6.4 engine-assets):
+//! `design.asset.get` reading a stored picture back in pieces; `design.asset.add` storing one
+//! durably (B51), refusing one no node could take (B65), reading what an agent names in its
+//! worktree (I-10), saying why a file cannot be read (TM-15), sizing a turned JPEG as shown
+//! (TM-24); the sweep of pictures nothing names (B66); and the retention pass announcing the
+//! designs it purges (W72).
 
 mod common;
 
 use base64::Engine as _;
 use common::{call, call_as, code, committed_repo, engine_with_project, ok, ok_as, refused};
-use relay_bus::Actor;
+use relay_bus::{Actor, Event};
 use relay_core::engine::Engine;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -67,6 +69,10 @@ fn files(dir: &Path) -> Vec<String> {
         .map(|e| e.file_name().to_string_lossy().into_owned()).collect();
     names.sort();
     names
+}
+
+fn drain(rx: &mut tokio::sync::broadcast::Receiver<Event>) -> Vec<Event> {
+    std::iter::from_fn(|| rx.try_recv().ok()).collect()
 }
 
 /// 2000-01-01: long before any undo window.
@@ -279,4 +285,116 @@ fn a_turned_photo_is_added_at_the_size_it_is_shown() {
     jpeg.extend([0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 100, 0x00, 200]);
     let added = add(&e, id, &jpeg);
     assert_eq!((added["w"].as_u64(), added["h"].as_u64()), (Some(100), Some(200)));
+}
+
+// ---------------------------------------------------------------- the sweep
+
+/// B66: a picture nothing names (no design, deleted or not; no undo of the window; no removal
+/// backup) goes once it has sat a whole undo window unnamed; one still named is dated now, so
+/// the window starts again from its last use. Temporary files a crash left go after a day.
+#[test]
+fn pictures_no_design_names_go_after_the_undo_window() {
+    let (e, root) = project();
+    let started = SystemTime::now() - Duration::from_secs(5);
+    let dir = assets_dir(root.path());
+    let home = create(&e);
+    let used = add(&e, home, &png(10, 10, 0));
+    apply(&e, home, json!([{"op": "add", "node": {"id": "photo", "parent": "page-1", "kind": "image", "src": used["src"], "w": 10, "h": 10}}]));
+    let unused = add(&e, home, br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"/>"#);
+    let fresh = add(&e, home, &png(11, 11, 0));
+    // A deleted design still holds its pictures: design.restore brings it back.
+    let binned = create(&e);
+    let kept = add(&e, binned, &png(12, 12, 0));
+    apply(&e, binned, json!([{"op": "add", "node": {"parent": "page-1", "kind": "image", "src": kept["src"], "w": 12, "h": 12}}]));
+    ok(&e, "design.delete", json!({"design_id": binned}));
+    // A picture whose node was deleted is still named by the delete's undo.
+    let undone = add(&e, home, &png(13, 13, 0));
+    apply(&e, home, json!([{"op": "add", "node": {"id": "gone", "parent": "page-1", "kind": "image", "src": undone["src"], "w": 13, "h": 13}}]));
+    apply(&e, home, json!([{"op": "delete", "id": "gone"}]));
+    // A newer Relay's field this one cannot read still keeps its picture.
+    let newer = add(&e, home, &png(14, 14, 0));
+    e.store.lock().execute(
+        "UPDATE design_nodes SET body = json_set(body, '$.fill_image', ?2) WHERE design_id = ?1 AND node_id = 'photo'",
+        rusqlite::params![home, newer["src"].as_str().unwrap()],
+    ).unwrap();
+    let path = |added: &Value| dir.join(added["src"].as_str().unwrap());
+    for added in [&used, &unused, &kept, &undone, &newer] {
+        date(&path(added), long_ago());
+    }
+    std::fs::write(dir.join(".tmpXYZ12"), b"half").unwrap();
+    date(&dir.join(".tmpXYZ12"), long_ago());
+    std::fs::write(dir.join(".tmpNEW99"), b"in flight").unwrap();
+    std::fs::write(dir.join("notes.txt"), b"not a picture").unwrap();
+    date(&dir.join("notes.txt"), long_ago());
+
+    let swept = relay_core::disk_sweep::sweep_design_assets(&e);
+    assert_eq!(swept.removed, vec![path(&unused)], "{swept:?}");
+    assert_eq!((swept.seen, swept.leftovers), (4, 1), "{swept:?}");
+    for added in [&used, &kept, &undone, &newer] {
+        assert!(modified(&path(added)) >= started, "{} is dated now", added["src"]);
+    }
+    assert!(path(&fresh).is_file(), "unnamed, but within the window");
+    assert!(!dir.join(".tmpXYZ12").exists() && dir.join(".tmpNEW99").exists(), "{:?}", files(&dir));
+    assert!(dir.join("notes.txt").exists(), "nothing but pictures and leftovers is touched");
+
+    // Once the undo is past the window too, its picture goes the next time it is old.
+    e.store.lock().execute("UPDATE audit SET ts = '2000-01-01T00:00:00Z' WHERE op = 'design.apply'", []).unwrap();
+    date(&path(&undone), long_ago());
+    assert_eq!(relay_core::disk_sweep::sweep_design_assets(&e).removed, vec![path(&undone)]);
+
+    // An undo of the window brings an image back with its picture: the redo's edits name it.
+    let again = add(&e, home, &png(15, 15, 0));
+    apply(&e, home, json!([{"op": "add", "node": {"id": "back", "parent": "page-1", "kind": "image", "src": again["src"], "w": 15, "h": 15}}]));
+    let row: i64 = e.store.lock().query_row("SELECT MAX(id) FROM audit WHERE op = 'design.apply'", [], |r| r.get(0)).unwrap();
+    ok(&e, "audit.undo", json!({"audit_id": row}));
+    date(&path(&again), long_ago());
+    let swept = relay_core::disk_sweep::sweep_design_assets(&e);
+    assert!(swept.removed.is_empty() && path(&again).is_file(), "audit.undo's row can still be undone: {swept:?}");
+
+    // 0 days keeps every picture.
+    e.store.lock().execute("INSERT INTO settings (path, value, updated_at) VALUES ('undo.grace_days', '0', '')", []).unwrap();
+    date(&path(&fresh), long_ago());
+    assert!(relay_core::disk_sweep::sweep_design_assets(&e).removed.is_empty());
+    assert!(path(&fresh).is_file());
+}
+
+/// B66: a removed project's pictures stay while its removal backup can bring its designs back.
+#[test]
+fn a_removed_projects_pictures_stay_for_its_restore() {
+    let (e, root) = project();
+    let id = create(&e);
+    let added = add(&e, id, &png(20, 20, 0));
+    apply(&e, id, json!([{"op": "add", "node": {"id": "photo", "parent": "page-1", "kind": "image", "src": added["src"], "w": 20, "h": 20}}]));
+    // Its undo is history: only the backup names it.
+    e.store.lock().execute("UPDATE audit SET ts = '2000-01-01T00:00:00Z'", []).unwrap();
+    ok(&e, "project.remove", json!({"project_id": 1}));
+    let picture = assets_dir(root.path()).join(added["src"].as_str().unwrap());
+    date(&picture, long_ago());
+    let swept = relay_core::disk_sweep::sweep_design_assets(&e);
+    assert!(swept.removed.is_empty() && picture.is_file(), "{swept:?}");
+
+    let backup = ok(&e, "project.removed.list", json!({}))["removed"][0]["backup_path"].as_str().unwrap().to_string();
+    ok(&e, "project.restore", json!({"backup_path": backup, "project_id": 1}));
+    let got = ok(&e, "design.asset.get", json!({"design_id": id, "src": added["src"]}));
+    assert_eq!(unb64(got["bytes_b64"].as_str().unwrap()), png(20, 20, 0), "the restored design's picture is there");
+}
+
+// ---------------------------------------------------------------- designs that go away
+/// W72 (TM-18): the retention pass announces each design it purges, as design.purge does, so
+/// an open Deleted list drops the card and a board on it closes.
+#[test]
+fn the_retention_pass_announces_each_design_it_purges() {
+    let (e, _root) = project();
+    let (old, recent) = (create(&e), create(&e));
+    for id in [old, recent] {
+        ok(&e, "design.delete", json!({"design_id": id}));
+    }
+    e.store.lock().execute("UPDATE designs SET deleted_at = '2000-01-01T00:00:00Z' WHERE id = ?1", [old]).unwrap();
+    let mut rx = e.subscribe();
+    ok(&e, "app.reconcile", json!({}));
+    let deleted: Vec<Value> = drain(&mut rx).into_iter().filter(|ev| ev.ev == "design.deleted").map(|ev| ev.payload).collect();
+    assert_eq!(deleted, vec![json!({"id": old, "project_id": 1})]);
+    assert_eq!(code(call(&e, "design.get", json!({"design_id": old}))), "design.not_found");
+    let listed = ok(&e, "design.list", json!({"project_id": 1, "include_deleted": true}))["designs"].clone();
+    assert_eq!(listed.as_array().unwrap().iter().map(|d| d["id"].as_i64().unwrap()).collect::<Vec<_>>(), vec![recent]);
 }
