@@ -11,6 +11,7 @@ use relay_bus::types::{Design, Id};
 use relay_bus::ErrorKind;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -26,6 +27,12 @@ const MAX_SKIPPED: usize = 100;
 /// How far a walk up or down a design goes: past MAX_DEPTH, so a design another build nested
 /// deeper is still measured, but never the whole of a chain gone wrong.
 pub(super) const WALK: usize = MAX_DEPTH + 6;
+/// How far apart [`Run::renumber`] spaces a parent's children: room for a thousand nodes put
+/// one after another in any gap before the next renumbering (B58).
+const RENUMBER_STEP: f64 = 1024.0;
+/// How many times a list asks after one parent's children, one query each, before it reads
+/// them whole and holds them ([`Siblings`]).
+const SIBLINGS_ASKED: u32 = 2;
 const TOO_LARGE_HINT: &str = "split it across designs, or keep long text and big paths out of it";
 
 /// A row's kind: `Err` holds the name of one this build does not know (a newer build's), whose
@@ -39,6 +46,38 @@ fn row_kind(text: String) -> RowKind {
 /// The refusal of an edit naming node `id`, of a kind this build does not know.
 fn unknown_kind(id: &str, kind: &str) -> String {
     format!("node {id:?} is of a kind this Relay cannot read ({kind:?}); open it in a newer Relay")
+}
+
+/// B58: one parent's children as a list knows them. A move or a delete counted the siblings
+/// below the node (O(siblings) each), and an add or a move at an index walked to it, so a list
+/// moving 2,000 nodes out of or into one parent of 5,000 walked it 2,000 times. Past
+/// [`SIBLINGS_ASKED`] asks the children are read once, in paint order, `(ord, id)`, and kept as
+/// the list's own adds, moves, deletes and renumbering change them.
+pub(super) enum Siblings {
+    Asked(u32),
+    Held(Vec<(f64, String)>),
+}
+
+/// Whether sibling `sib` paints below the node `id` at `ord`: SQLite's `ORDER BY ord, node_id`.
+fn below(sib: &(f64, String), ord: f64, id: &str) -> bool {
+    sib.0 < ord || (sib.0 == ord && sib.1.as_str() < id)
+}
+
+/// How many bytes `value`'s JSON takes, counted as it is written rather than kept: an undo of
+/// 5,000 nodes is most of a megabyte, sized only to choose whether the audit keeps it (B58).
+fn json_len(value: &impl serde::Serialize) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    serde_json::to_writer(&mut count, value).map_or(usize::MAX, |()| count.0)
 }
 
 /// A node row: where it sits, what it is, and its JSON.
@@ -141,6 +180,10 @@ pub(super) struct Run<'a> {
     /// and those a warning already named.
     pub(super) fonts: Option<std::sync::Arc<Vec<String>>>,
     pub(super) warned: HashSet<String>,
+    /// B58: each parent's children as far as the list holds them ([`Siblings`]), by parent id
+    /// (`""` for the pages), and where it last put a node, by parent.
+    pub(super) siblings: RefCell<HashMap<String, Siblings>>,
+    pub(super) last_placed: RefCell<Option<(Option<String>, f64)>>,
 }
 
 const NODE_META: &str = "SELECT parent_id, kind, ord FROM design_nodes WHERE design_id = ?1 AND node_id = ?2";
@@ -508,34 +551,65 @@ impl Run<'_> {
     }
 
     /// The `ord` that puts a node at `index` among `parent`'s children (the pages, for `None`),
-    /// `skip` aside: 0 at the bottom, absent or past the end on top.
+    /// `skip` aside: 0 at the bottom, absent or past the end on top. For a caller that writes the
+    /// node itself (a copy's root): the children of `parent` this list holds ([`Siblings`]) are
+    /// let go, since it does not tell them where the node went.
     pub(super) fn slot(&self, parent: Option<&str>, index: Option<u32>, skip: Option<&str>) -> Result<f64, BusError> {
+        let ord = self.place_in(parent, index, skip)?;
+        self.siblings.borrow_mut().remove(parent.unwrap_or(""));
+        Ok(ord)
+    }
+
+    /// [`Run::slot`] for an add or a move, which tell the children held where the node went
+    /// ([`Run::sibling_placed`]).
+    fn place_in(&self, parent: Option<&str>, index: Option<u32>, skip: Option<&str>) -> Result<f64, BusError> {
         let top = || -> Result<f64, BusError> {
-            let last: Option<f64> = self.tx.prepare_cached(TOP_ORD).bus()?
-                .query_row(params![self.design, parent, skip], |r| r.get(0)).optional().bus()?;
+            let held = self.held(parent, |list| list.iter().rev().find(|(_, id)| Some(id.as_str()) != skip).map(|(ord, _)| *ord));
+            let last: Option<f64> = match held {
+                Some(last) => last,
+                None => self.tx.prepare_cached(TOP_ORD).bus()?
+                    .query_row(params![self.design, parent, skip], |r| r.get(0)).optional().bus()?,
+            };
             Ok(last.map_or(1.0, |ord| ord + 1.0))
         };
         let Some(index) = index else { return top() };
-        let around: Vec<f64> = self.tx.prepare_cached(SIBLING_ORDS).bus()?
-            .query_map(params![self.design, parent, skip, i64::from(index.saturating_sub(1))], |r| r.get(0)).bus()?
-            .collect::<rusqlite::Result<_>>().bus()?;
+        let from = index.saturating_sub(1) as usize;
+        let held = self.asked(parent, |list| list.iter().filter(|(_, id)| Some(id.as_str()) != skip).skip(from).take(2).map(|(ord, _)| *ord).collect())?;
+        let around: Vec<f64> = match held {
+            Some(around) => around,
+            None => self.tx.prepare_cached(SIBLING_ORDS).bus()?
+                .query_map(params![self.design, parent, skip, from as i64], |r| r.get(0)).bus()?
+                .collect::<rusqlite::Result<_>>().bus()?,
+        };
         match (index, around.as_slice()) {
             (0, []) => Ok(1.0),
             (0, [first, ..]) => Ok(first - 1.0),
             (_, []) => top(),
             (_, [last]) => Ok(last + 1.0),
             (_, &[below, above, ..]) => {
-                let mid = below + (above - below) / 2.0;
-                if above - below > 1e-9 && below < mid && mid < above {
-                    return Ok(mid);
+                // B58: one step from the node this list put here last, rather than halfway, when
+                // the gap has room: a list that puts node after node in one gap (an ungroup, the
+                // undo of a group) halved it each time and spent it every 30 nodes, renumbering
+                // every sibling each time. Above the last one placed when it sits above.
+                let gap = above - below;
+                let last = self.last_placed.borrow().as_ref().filter(|(p, _)| p.as_deref() == parent).map(|(_, ord)| *ord);
+                let at = match last {
+                    _ if gap <= 2.0 => below + gap / 2.0,
+                    Some(ord) if ord == above => above - 1.0,
+                    _ => below + 1.0,
+                };
+                if gap > 1e-9 && below < at && at < above {
+                    *self.last_placed.borrow_mut() = Some((parent.map(str::to_string), at));
+                    return Ok(at);
                 }
-                // The gap is spent: space the siblings 1 apart and look again.
+                // The gap is spent: space the siblings apart and look again.
                 self.renumber(parent)?;
-                self.slot(parent, Some(index), skip)
+                self.place_in(parent, Some(index), skip)
             }
         }
     }
 
+    /// Space `parent`'s children [`RENUMBER_STEP`] apart, in their order.
     pub(super) fn renumber(&self, parent: Option<&str>) -> Result<(), BusError> {
         let ids: Vec<String> = self.tx
             .prepare_cached("SELECT node_id FROM design_nodes WHERE design_id = ?1 AND parent_id IS ?2 ORDER BY ord, node_id").bus()?
@@ -543,13 +617,19 @@ impl Run<'_> {
             .collect::<rusqlite::Result<_>>().bus()?;
         let mut set = self.tx.prepare_cached("UPDATE design_nodes SET ord = ?3 WHERE design_id = ?1 AND node_id = ?2").bus()?;
         for (i, id) in ids.iter().enumerate() {
-            set.execute(params![self.design, id, (i + 1) as f64]).bus()?;
+            set.execute(params![self.design, id, (i + 1) as f64 * RENUMBER_STEP]).bus()?;
         }
+        let list = ids.into_iter().enumerate().map(|(i, id)| ((i + 1) as f64 * RENUMBER_STEP, id)).collect();
+        self.siblings.borrow_mut().insert(parent.unwrap_or("").to_string(), Siblings::Held(list));
+        *self.last_placed.borrow_mut() = None;
         Ok(())
     }
 
     /// Where node `id` (at `ord`) sits among its siblings: how many paint below it.
     pub(super) fn index_of(&self, parent: Option<&str>, id: &str, ord: f64) -> Result<u32, BusError> {
+        if let Some(below) = self.asked(parent, |list| list.partition_point(|sib| below(sib, ord, id)))? {
+            return Ok(below as u32);
+        }
         let below: i64 = self.tx
             .prepare_cached("SELECT COUNT(*) FROM design_nodes WHERE design_id = ?1 AND parent_id IS ?2
                 AND (ord < ?3 OR (ord = ?3 AND node_id < ?4))").bus()?
@@ -567,10 +647,65 @@ impl Run<'_> {
         if index.is_some_and(|index| index < at) {
             return Ok(false);
         }
+        if let Some(top) = self.held(parent, |list| list.last().is_none_or(|(o, i)| !below(&(ord, id.to_string()), *o, i))) {
+            return Ok(top);
+        }
         let above: bool = self.tx.prepare_cached("SELECT EXISTS(SELECT 1 FROM design_nodes WHERE design_id = ?1 AND parent_id IS ?2
             AND (ord > ?3 OR (ord = ?3 AND node_id > ?4)))").bus()?
             .query_row(params![self.design, parent, ord, id], |r| r.get(0)).bus()?;
         Ok(!above)
+    }
+
+    /// `f` of `parent`'s children, when this list holds them.
+    fn held<R>(&self, parent: Option<&str>, f: impl FnOnce(&[(f64, String)]) -> R) -> Option<R> {
+        match self.siblings.borrow().get(parent.unwrap_or("")) {
+            Some(Siblings::Held(list)) => Some(f(list)),
+            _ => None,
+        }
+    }
+
+    /// [`Run::held`], counting the ask: past [`SIBLINGS_ASKED`] asks of one parent, its children
+    /// are read whole and held from then on.
+    fn asked<R>(&self, parent: Option<&str>, f: impl FnOnce(&[(f64, String)]) -> R) -> Result<Option<R>, BusError> {
+        let key = parent.unwrap_or("");
+        let mut siblings = self.siblings.borrow_mut();
+        match siblings.get_mut(key) {
+            Some(Siblings::Held(list)) => return Ok(Some(f(list))),
+            Some(Siblings::Asked(n)) if *n < SIBLINGS_ASKED => {
+                *n += 1;
+                return Ok(None);
+            }
+            Some(Siblings::Asked(_)) => {}
+            None => {
+                siblings.insert(key.to_string(), Siblings::Asked(1));
+                return Ok(None);
+            }
+        }
+        let list: Vec<(f64, String)> = self.tx
+            .prepare_cached("SELECT ord, node_id FROM design_nodes WHERE design_id = ?1 AND parent_id IS ?2 ORDER BY ord, node_id").bus()?
+            .query_map(params![self.design, parent], |r| Ok((r.get(0)?, r.get(1)?))).bus()?
+            .collect::<rusqlite::Result<_>>().bus()?;
+        let out = f(&list);
+        siblings.insert(key.to_string(), Siblings::Held(list));
+        Ok(Some(out))
+    }
+
+    /// Node `id` now sits in `parent` at `ord`: the children held of it say so.
+    fn sibling_placed(&self, parent: Option<&str>, ord: f64, id: &str) {
+        if let Some(Siblings::Held(list)) = self.siblings.borrow_mut().get_mut(parent.unwrap_or("")) {
+            let at = list.partition_point(|sib| below(sib, ord, id));
+            list.insert(at, (ord, id.to_string()));
+        }
+    }
+
+    /// Node `id`, at `ord`, left `parent`.
+    fn sibling_left(&self, parent: Option<&str>, ord: f64, id: &str) {
+        if let Some(Siblings::Held(list)) = self.siblings.borrow_mut().get_mut(parent.unwrap_or("")) {
+            let at = list.partition_point(|sib| below(sib, ord, id));
+            if list.get(at).is_some_and(|(_, sib)| sib == id) {
+                list.remove(at);
+            }
+        }
     }
 
     /// `{kind}-{n}` from the design's counter, past any id already taken.
@@ -655,10 +790,11 @@ impl Run<'_> {
         if self.nodes >= MAX_NODES as i64 {
             return Err(self.fail(ErrorKind::Invalid, "design.too_large", format!("a design holds at most {MAX_NODES} nodes")));
         }
-        let ord = self.slot(node.parent.as_deref(), index, None)?;
+        let ord = self.place_in(node.parent.as_deref(), index, None)?;
         let body = body_of(&mut node)?;
         self.tx.prepare_cached("INSERT INTO design_nodes(design_id, node_id, parent_id, kind, ord, body, rev) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)").bus()?
             .execute(params![self.design, node.id, node.parent, node.kind.name(), ord, body, self.rev]).bus()?;
+        self.sibling_placed(node.parent.as_deref(), ord, &node.id);
         if self.tombstones {
             // An id back in the design is no longer removed.
             self.tx.prepare_cached("DELETE FROM design_removed WHERE design_id = ?1 AND node_id = ?2").bus()?
@@ -839,9 +975,12 @@ impl Run<'_> {
             // nothing needs undoing.
             return Ok(Some(id));
         }
-        let ord = self.slot(to.as_deref(), index, Some(&id))?;
+        let old_ord = ord;
+        let ord = self.place_in(to.as_deref(), index, Some(&id))?;
         self.tx.prepare_cached("UPDATE design_nodes SET parent_id = ?3, ord = ?4, rev = ?5 WHERE design_id = ?1 AND node_id = ?2").bus()?
             .execute(params![self.design, id, to, ord, self.rev]).bus()?;
+        self.sibling_left(from.as_deref(), old_ord, &id);
+        self.sibling_placed(to.as_deref(), ord, &id);
         // The parent's id is part of what design.get returns of the node.
         self.bytes += to.as_ref().map_or(0, String::len) as i64 - from.as_ref().map_or(0, String::len) as i64;
         self.touch(&id);
@@ -889,7 +1028,13 @@ impl Run<'_> {
         let mut remove = self.tx.prepare_cached("DELETE FROM design_nodes WHERE design_id = ?1 AND node_id = ?2").bus()?;
         // Each id removed, at this rev: what design.get's since_rev answers as gone.
         let mut tombstone = self.tx.prepare_cached("INSERT OR REPLACE INTO design_removed(design_id, node_id, rev) VALUES (?1, ?2, ?3)").bus()?;
+        if let Some((root_id, root)) = doomed.first() {
+            self.sibling_left(root.parent.as_deref(), root.ord, root_id);
+        }
         for (node_id, row) in doomed {
+            if row.kind.as_ref().is_ok_and(|kind| kind.holds_children()) {
+                self.siblings.borrow_mut().remove(&node_id);
+            }
             remove.execute(params![self.design, node_id]).bus()?;
             tombstone.execute(params![self.design, node_id, self.rev]).bus()?;
             self.bytes -= row_bytes(&node_id, row.parent.as_deref(), &row.body);
@@ -1250,6 +1395,8 @@ pub(super) fn register(e: &mut Engine) {
             set_here: HashSet::new(),
             fonts: ctx.engine().renders.fonts(),
             warned: HashSet::new(),
+            siblings: RefCell::new(HashMap::new()),
+            last_placed: RefCell::new(None),
         };
         // B59: past the last edit that can make the design smaller (any but an add or a copy),
         // the list only grows it, so one over the cap by then is refused at the edit that took
@@ -1349,8 +1496,7 @@ pub(super) fn register(e: &mut Engine) {
         // can undo it. The replay's own answer, which audit.undo drops, is kept short.
         let undo = json!({"design_id": design.id, "ops": inverse, "lenient": true, "reply": "short"});
         let kept = json!({"nodes": expect});
-        let undo_len = serde_json::to_vec(&undo).map_or(usize::MAX, |bytes| bytes.len())
-            .saturating_add(serde_json::to_vec(&kept).map_or(usize::MAX, |bytes| bytes.len()));
+        let undo_len = json_len(&undo).saturating_add(json_len(&kept));
         if undo_len <= UNDO_KEPT {
             ctx.set_undo("design.apply", undo, Some(kept));
         } else if warnings.len() < MAX_WARNINGS {
@@ -1389,4 +1535,87 @@ pub(super) fn register(e: &mut Engine) {
         out.warnings = warnings;
         Ok(out)
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use relay_bus::{Actor, Request};
+    use std::path::Path;
+
+    /// The walk down a moved node's subtree looks each level's children up in the parent index,
+    /// never by a pass over every row of the design (B58).
+    #[test]
+    fn the_walk_down_searches_the_parent_index() {
+        let store = crate::Store::open_memory().unwrap();
+        let conn = store.lock();
+        let plan: Vec<String> = conn.prepare(&format!("EXPLAIN QUERY PLAN {HEIGHT}")).unwrap()
+            .query_map(params![1, "a", 70], |r| r.get::<_, String>(3)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert!(plan.iter().any(|step| step.contains("INDEX design_nodes_parent (design_id=? AND parent_id=?)")), "{plan:?}");
+    }
+
+    fn git(repo: &Path, args: &[&str]) {
+        assert!(std::process::Command::new("git").arg("-C").arg(repo).args(args).status().unwrap().success(), "git {args:?}");
+    }
+
+    fn ok(engine: &Engine, op: &str, payload: Value) -> Value {
+        engine.dispatch(Request::new(Actor::User, op, payload), crate::engine::Door::InProcess).into_result()
+            .unwrap_or_else(|error| panic!("{op}: {} {}", error.code, error.message))
+    }
+
+    /// The page's children in paint order, as design.get answers them.
+    fn order(engine: &Engine, design: i64) -> Vec<String> {
+        ok(engine, "design.get", json!({"design_id": design}))["nodes"].as_array().unwrap().iter()
+            .filter(|n| n["parent"] == "page-1").map(|n| n["id"].as_str().unwrap().to_string()).collect()
+    }
+
+    /// B58: a list that moves, adds and deletes many children of one parent reads them once and
+    /// keeps them as it goes, and renumbers a spent gap. The order it leaves is the one the
+    /// client's Scene gives the same list, and its undo puts every node back where it was.
+    #[test]
+    fn a_long_list_in_one_parent_keeps_the_order_the_scene_gives_it() {
+        let root = tempfile::tempdir().unwrap();
+        let ws = std::fs::canonicalize(root.path()).unwrap().join("ws");
+        let repo = ws.join("app");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["config", "user.email", "t@t"]);
+        git(&repo, &["config", "user.name", "t"]);
+        std::fs::write(repo.join("README.md"), "# app\n").unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-q", "-m", "init"]);
+        let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
+        ok(&engine, "workspace.create", json!({"path": ws}));
+        ok(&engine, "project.add", json!({"workspace_id": 1, "path": repo}));
+        let design = ok(&engine, "design.create", json!({"project_id": 1, "title": "Order"}))["design"]["id"].as_i64().unwrap();
+        let seed: Vec<Value> = (0..300).map(|i| json!({"op": "add", "node": {"id": format!("s{i}"), "parent": "page-1", "kind": if i % 5 == 0 { "frame" } else { "rect" }}})).collect();
+        ok(&engine, "design.apply", json!({"design_id": design, "ops": seed}));
+        let before = order(&engine, design);
+
+        // A group of 100, one of them moved within it, a delete and an add at an index beside
+        // them, and the group taken apart again node after node in one gap (spending it).
+        let mut ops = vec![json!({"op": "add", "node": {"id": "g", "parent": "page-1", "kind": "group"}, "index": 100})];
+        ops.extend((100..200).map(|i| json!({"op": "move", "id": format!("s{i}"), "parent": "g"})));
+        ops.push(json!({"op": "move", "id": "s150", "parent": "g", "index": 0}));
+        ops.push(json!({"op": "delete", "id": "s50"}));
+        ops.push(json!({"op": "add", "node": {"id": "n1", "parent": "page-1", "kind": "rect"}, "index": 10}));
+        ops.push(json!({"op": "move", "id": "s20", "parent": "page-1", "index": 250}));
+        ops.extend((100..200).rev().map(|i| json!({"op": "move", "id": format!("s{i}"), "parent": "page-1", "index": 100})));
+        ops.push(json!({"op": "delete", "id": "g"}));
+        ops.push(json!({"op": "move", "id": "s0", "parent": "page-1"}));
+
+        let nodes: Vec<Node> = serde_json::from_value(ok(&engine, "design.get", json!({"design_id": design}))["nodes"].clone()).unwrap();
+        let mut scene = relay_client::design::Scene::new(nodes);
+        let edits: Vec<NodeOp> = serde_json::from_value(Value::Array(ops.clone())).unwrap();
+        scene.apply_all(&edits).unwrap();
+        let out = ok(&engine, "design.apply", json!({"design_id": design, "ops": ops}));
+        let after = order(&engine, design);
+        assert_eq!(after, scene.children("page-1"), "the engine's order is the scene's");
+        let first = after.iter().position(|id| id == "s100").unwrap();
+        let run: Vec<String> = (100..200).map(|i| format!("s{i}")).collect();
+        assert_eq!(after[first..first + 100], run, "each put below the one before it");
+
+        ok(&engine, "design.apply", json!({"design_id": design, "ops": out["inverse"], "lenient": true, "expect": out["expect"]}));
+        assert_eq!(order(&engine, design), before, "the undo puts every node back");
+    }
 }

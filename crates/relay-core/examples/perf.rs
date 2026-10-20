@@ -1995,7 +1995,7 @@ fn sql_trace(engine: &Engine) {
 fn sql_summary(iters: usize) -> Value {
     let seen = SQL_SEEN.lock().unwrap().take().unwrap_or_default();
     let mut rows: Vec<(String, (u64, u64))> = seen.into_iter().collect();
-    rows.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+    rows.sort_by_key(|(_, (_, ns))| std::cmp::Reverse(*ns));
     let n = iters.max(1) as u64;
     let total: u64 = rows.iter().map(|(_, (count, _))| count).sum();
     json!({
