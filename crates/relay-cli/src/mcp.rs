@@ -535,6 +535,7 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
     // Money goes to a model as decimals and comes back from it as decimals (`units`): the
     // bus's own integers stay between the engine and people's apps.
     let schema = relay_bus::schema::render_op(name).unwrap_or(Value::Null);
+    unstring(&mut arguments, &schema["payload"]);
     let (in_units, out_units) = (units::has_units(&schema["payload"]), units::has_units(&schema["result"]));
     let ledger = if in_units || out_units { ledger_digits(&mut client, actor, token).await } else { 2 };
     let style = Style::from_env();
@@ -599,6 +600,128 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
     } else {
         Ok(refusal(serde_json::to_value(response.error)?, mail.as_ref(), &style))
     }
+}
+
+/// Arguments as models sometimes write them: an array or an object sent as the string of its
+/// JSON (`"ops": "[{\"op\":\"add\",…}]"`). Such a string, in a field that takes an array or an
+/// object and never a string, is replaced by what it parses to when that is of the type the field
+/// takes: at the top level, and one level down (each object of an array, as design.apply's `node`
+/// and `set`). The call then runs as the model meant it, where the engine would refuse it with an
+/// error larger than the request (TM-6). Anything else is left for the engine to judge.
+fn unstring(arguments: &mut Value, payload: &Value) {
+    unstring_in(arguments, &[payload], payload, 1);
+}
+
+/// [`unstring`] of `value`, which `schemas` describe (any of them; references resolve in `root`),
+/// going `depth` more levels into the fields it holds.
+fn unstring_in(value: &mut Value, schemas: &[&Value], root: &Value, depth: u8) {
+    match value {
+        Value::Object(map) => {
+            for (key, field) in map.iter_mut() {
+                // Below the last level only a string can change, so only its field is looked up.
+                if !(field.is_string() || (depth > 0 && (field.is_object() || field.is_array()))) {
+                    continue;
+                }
+                let subs: Vec<&Value> = schemas.iter().flat_map(|schema| fields(schema, key, root, 0)).collect();
+                if subs.is_empty() {
+                    continue;
+                }
+                if let Value::String(text) = field {
+                    match parsed_as(text, &subs, root) {
+                        Some(parsed) => *field = parsed,
+                        None => continue,
+                    }
+                }
+                if depth > 0 {
+                    unstring_in(field, &subs, root, depth - 1);
+                }
+            }
+        }
+        Value::Array(items) => {
+            let subs: Vec<&Value> = schemas.iter().flat_map(|schema| items_of(schema, root, 0)).collect();
+            if !subs.is_empty() {
+                items.iter_mut().filter(|item| item.is_object()).for_each(|item| unstring_in(item, &subs, root, depth));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `text` as JSON, when it is an array or an object that one of `schemas` takes and none of them
+/// takes a string.
+fn parsed_as(text: &str, schemas: &[&Value], root: &Value) -> Option<Value> {
+    let start = text.trim_start().chars().next()?;
+    if start != '[' && start != '{' {
+        return None;
+    }
+    let mut types = Vec::new();
+    for schema in schemas {
+        types_of(schema, root, 0, &mut types)?;
+    }
+    if types.contains(&"string") {
+        return None;
+    }
+    serde_json::from_str::<Value>(text).ok()
+        .filter(|parsed| (parsed.is_array() && types.contains(&"array")) || (parsed.is_object() && types.contains(&"object")))
+}
+
+/// How far references and `anyOf`/`oneOf`/`allOf` branches are followed: a recursive schema
+/// stops there.
+const SCHEMA_HOPS: u8 = 8;
+
+/// `schema` with its local `$ref` (`#/$defs/…`) followed in `root`.
+fn resolved<'a>(mut schema: &'a Value, root: &'a Value) -> &'a Value {
+    for _ in 0..SCHEMA_HOPS {
+        match schema.get("$ref").and_then(Value::as_str).and_then(|r| r.strip_prefix('#')).and_then(|at| root.pointer(at)) {
+            Some(target) => schema = target,
+            None => break,
+        }
+    }
+    schema
+}
+
+fn branches_of(schema: &Value) -> impl Iterator<Item = &Value> {
+    ["anyOf", "oneOf", "allOf"].into_iter().filter_map(|k| schema.get(k)?.as_array()).flatten()
+}
+
+/// The schemas `key` has in an object schema: its own, and each branch's.
+fn fields<'a>(schema: &'a Value, key: &str, root: &'a Value, hops: u8) -> Vec<&'a Value> {
+    let schema = resolved(schema, root);
+    let mut found: Vec<&Value> = schema.get("properties").and_then(|p| p.get(key)).into_iter().collect();
+    if hops < SCHEMA_HOPS {
+        found.extend(branches_of(schema).flat_map(|branch| fields(branch, key, root, hops + 1)));
+    }
+    found
+}
+
+/// The schemas an array schema gives its items: its own, and each branch's.
+fn items_of<'a>(schema: &'a Value, root: &'a Value, hops: u8) -> Vec<&'a Value> {
+    let schema = resolved(schema, root);
+    let mut found: Vec<&Value> = schema.get("items").into_iter().collect();
+    if hops < SCHEMA_HOPS {
+        found.extend(branches_of(schema).flat_map(|branch| items_of(branch, root, hops + 1)));
+    }
+    found
+}
+
+/// Adds the JSON types `schema` takes to `types`; `None` when it takes any value (no `type`
+/// anywhere it can be read), so nothing may be read as something else.
+fn types_of<'a>(schema: &'a Value, root: &'a Value, hops: u8, types: &mut Vec<&'a str>) -> Option<()> {
+    let schema = resolved(schema, root);
+    match schema.get("type") {
+        Some(Value::String(one)) => types.push(one),
+        Some(Value::Array(many)) => types.extend(many.iter().filter_map(Value::as_str)),
+        _ => {
+            let mut branches = branches_of(schema).peekable();
+            if branches.peek().is_none() || hops >= SCHEMA_HOPS {
+                return None;
+            }
+            for branch in branches {
+                types_of(branch, root, hops + 1, types)?;
+            }
+        }
+    }
+    Some(())
 }
 
 /// Whether this server has given its model money.lists: this process serves one thread's agent.
@@ -1112,6 +1235,93 @@ mod tests {
         let text = plugin["content"][0]["text"].as_str().unwrap();
         assert!(!text.contains('\n'), "{text}");
         assert_eq!(serde_json::from_str::<Value>(text).unwrap(), plugin["structuredContent"]);
+    }
+
+    /// design.apply's arguments as a model writes them, its edits given as `ops`.
+    fn apply_args(ops: Value) -> Value {
+        json!({"design_id": 12, "base_rev": 4, "ops": ops})
+    }
+
+    fn apply_payload() -> Value {
+        relay_bus::schema::render_op("design.apply").unwrap()["payload"].clone()
+    }
+
+    #[test]
+    fn a_stringified_ops_array_is_applied_as_if_it_were_an_array() {
+        let ops = json!([
+            {"op": "add", "node": {"id": "card", "parent": "page-1", "kind": "rect", "x": 0, "y": 0, "w": 120, "h": 80, "fill": "#ffffff"}},
+            {"op": "update", "id": "title", "set": {"text": "[not, an, array]", "font_size": 18}},
+        ]);
+        let mut arguments = apply_args(Value::String(ops.to_string()));
+        unstring(&mut arguments, &apply_payload());
+        assert_eq!(arguments, apply_args(ops.clone()), "the edits are read from the string, and a text that looks like JSON stays text");
+        let read: relay_bus::ops::design::ApplyIn = serde_json::from_value(arguments).expect("the engine reads it as the array");
+        let given: relay_bus::ops::design::ApplyIn = serde_json::from_value(apply_args(ops)).unwrap();
+        assert_eq!(read, given);
+        // What is not JSON of the type a field takes is left for the engine to refuse as it was.
+        for ops in [json!("[{\"op\": \"add\""), json!("{\"op\": \"delete\", \"id\": \"card\"}"), json!("card")] {
+            let mut arguments = apply_args(ops.clone());
+            unstring(&mut arguments, &apply_payload());
+            assert_eq!(arguments["ops"], ops);
+        }
+        // Only arrays and objects: a number sent as a string is not this door's to guess.
+        let mut arguments = json!({"design_id": "12", "ops": []});
+        unstring(&mut arguments, &apply_payload());
+        assert_eq!(arguments["design_id"], "12");
+    }
+
+    #[test]
+    fn a_stringified_node_or_set_inside_one_op_is_parsed_too() {
+        let node = json!({"id": "card", "parent": "page-1", "kind": "rect", "x": 0, "y": 0, "w": 120, "h": 80});
+        let set = json!({"fill": "#ff0000", "points": [[0, 0], [10, 10]]});
+        let mut arguments = apply_args(json!([
+            {"op": "add", "node": node.to_string()},
+            {"op": "update", "id": "line", "set": set.to_string()},
+            {"op": "delete", "id": "[\"old\"]"},
+        ]));
+        unstring(&mut arguments, &apply_payload());
+        assert_eq!(arguments["ops"], json!([
+            {"op": "add", "node": node},
+            {"op": "update", "id": "line", "set": set},
+            {"op": "delete", "id": "[\"old\"]"},
+        ]), "an id is a string, whatever it looks like");
+        // Both at once: the list a string, an edit's node a string inside it.
+        let ops = json!([{"op": "add", "node": node.to_string()}]);
+        let mut arguments = apply_args(Value::String(ops.to_string()));
+        unstring(&mut arguments, &apply_payload());
+        assert_eq!(arguments["ops"][0]["node"], node);
+    }
+
+    #[test]
+    fn stringified_arguments_are_read_through_the_schemas_references() {
+        // A payload schema whose fields name shared definitions instead of inlining them, as a
+        // schema rendered with $defs is.
+        let schema = json!({
+            "$ref": "#/$defs/In",
+            "$defs": {
+                "In": {"type": "object", "properties": {
+                    "ops": {"type": "array", "items": {"$ref": "#/$defs/Op"}},
+                    "reply": {"anyOf": [{"$ref": "#/$defs/Reply"}, {"type": "null"}]},
+                    "extra": {},
+                }},
+                "Op": {"oneOf": [
+                    {"type": "object", "properties": {"op": {"const": "add", "type": "string"}, "node": {"$ref": "#/$defs/Node"}}},
+                    {"type": "object", "properties": {"op": {"const": "put", "type": "string"}, "node": {"type": "string"}}},
+                    {"type": "object", "properties": {"op": {"const": "update", "type": "string"}, "set": {"type": ["object", "null"]}}},
+                ]},
+                "Node": {"type": "object"},
+                "Reply": {"type": "string", "enum": ["short", "full"]},
+            },
+        });
+        let mut arguments = json!({"ops": "[{\"op\":\"update\",\"set\":\"{\\\"x\\\":1}\"}]", "reply": "[\"full\"]", "extra": "{\"a\":1}"});
+        unstring(&mut arguments, &schema);
+        assert_eq!(arguments["ops"], json!([{"op": "update", "set": {"x": 1}}]));
+        assert_eq!(arguments["reply"], "[\"full\"]", "a field that takes a string keeps it");
+        assert_eq!(arguments["extra"], "{\"a\":1}", "a field that takes anything keeps what it was given");
+        // `node` is an object in one edit and a string in another: a string is taken, so kept.
+        let mut arguments = json!({"ops": [{"op": "add", "node": "{\"id\":\"a\"}"}]});
+        unstring(&mut arguments, &schema);
+        assert_eq!(arguments["ops"][0]["node"], "{\"id\":\"a\"}");
     }
 
     #[test]
