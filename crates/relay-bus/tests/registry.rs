@@ -154,3 +154,19 @@ fn only_the_picture_ops_come_with_a_plugin() {
     let info = &relay_bus::schema::render()["$defs"]["OpInfo"]["properties"];
     assert!(info.get("plugin").is_none());
 }
+
+/// MODEL-SPEC §3.3: the new design queries' attributes. A picture's bytes are the person's
+/// clients' to read; agents have `assets_dir`.
+#[test]
+fn the_design_queries_have_their_attributes() {
+    use relay_bus::registry::{Actors, Doors, Scope};
+    let reg = Registry::global();
+    for (op, scope, actors) in [("design.find", Scope::Project, Actors::All), ("design.fonts", Scope::Global, Actors::All),
+        ("design.asset.get", Scope::Project, Actors::UserOnly)] {
+        let m = reg.get(op).unwrap_or_else(|| panic!("{op} is not registered")).meta;
+        assert_eq!((m.kind, m.audit, m.scope, m.actors, m.doors), (OpKind::Query, Audit::Never, scope, actors, Doors::All), "{op}");
+    }
+    let find = reg.get("design.find").unwrap().validate;
+    assert!(find(&serde_json::json!({"design_id": 1, "kind": ["text", "sticky"], "any_color": "#4C9DFF", "with_nodes": true})).is_ok());
+    assert!(find(&serde_json::json!({"design_id": 1, "kind": ["button"]})).is_err(), "kinds are the node kinds");
+}

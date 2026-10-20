@@ -7,7 +7,7 @@
 //! A design is pages of nodes (`crate::design`). Every change goes through `design.apply`, a
 //! list of node edits run in order, all or none; it answers with the nodes as stored and the
 //! edits that undo it, so the canvas's undo and `audit.undo` revert exactly what was done.
-use crate::design::{Conflict, Expect, Node, NodeOp, Style, MAX_OPS};
+use crate::design::{Conflict, Expect, Node, NodeKind, NodeOp, Style, MAX_OPS};
 use crate::ops::picture::PictureCredit;
 use crate::registry::{Actors, OpEntry, OpMeta, Scope, Undo};
 use crate::types::{Design, Id};
@@ -16,6 +16,11 @@ use std::collections::BTreeMap;
 
 /// Most ids `design.get`'s `nodes` names.
 pub const GET_NODES_MAX: usize = 500;
+/// Most matches `design.find` returns whole with `with_nodes`, and the most of their JSON.
+pub const FIND_NODES_MAX: usize = 200;
+pub const FIND_BYTES_MAX: usize = 512 * 1024;
+/// The largest piece of a picture one `design.asset.get` answers, decoded.
+pub const ASSET_PIECE: usize = 3 * 1024 * 1024;
 /// Most credits `design.get` answers, and the most of their JSON.
 pub const CREDITS_MAX: usize = 128;
 pub const CREDITS_BYTES_MAX: usize = 256 * 1024;
@@ -229,6 +234,64 @@ op!(Apply, "design.apply", ApplyIn => ApplyOut,
     OpMeta::mutation(Scope::Project, 12, "Add, change, move, copy or delete a design's nodes and name its colours and styles, in one all-or-none list of up to 2000 edits, only when the person asked for it (a design holds at most 5000 nodes and 1536 KiB; an id an edit adds can be a parent later in the list); returns the new rev and each edit's node id; see the result with design.render")
         .undo(Undo::Inverse).emits(&["design.changed"]));
 
+payload!(#[schemars(rename = "DesignFindIn")] FindIn {
+    pub design_id: Id,
+    /// Only on this page: its id, or its name when no other page has that name.
+    pub page: Option<String>,
+    /// Only inside this node (not the node itself).
+    pub inside: Option<String>,
+    /// Any of these kinds.
+    pub kind: Option<Vec<NodeKind>>,
+    /// Words in its name, any case.
+    #[schemars(length(min = 1))]
+    pub name: Option<String>,
+    /// Words in its text, any case.
+    #[schemars(length(min = 1))]
+    pub text: Option<String>,
+    /// Its fill as drawn (a `$name` colour or a style gives one too). `#RGB` or `#RRGGBB` matches
+    /// any alpha; `#RRGGBBAA` matches exactly.
+    pub fill: Option<String>,
+    /// Its stroke as drawn, compared the same way.
+    pub stroke: Option<String>,
+    /// Its text colour (`color`) as drawn, compared the same way.
+    pub color: Option<String>,
+    /// This colour anywhere: fill, stroke, text colour, a shadow, a gradient's or stroke
+    /// gradient's stop, or a run of its text.
+    pub any_color: Option<String>,
+    /// Its font family (or a run's), any case.
+    #[schemars(length(min = 1))]
+    pub font: Option<String>,
+    /// Also return the matching nodes as stored: the first 200, up to 512 KiB.
+    pub with_nodes: Option<bool>,
+});
+result!(#[schemars(rename = "DesignFindOut")] FindOut {
+    /// Every match, in design.get's order. With no filter, every node but the pages.
+    pub ids: Vec<String>,
+    /// With `with_nodes`: the first matches as stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "crate::design::write_nodes_opt", deserialize_with = "crate::design::read_nodes_opt")]
+    pub nodes: Option<Vec<Node>>,
+    /// With `with_nodes`: true when `nodes` stops before `ids` does.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cut: bool,
+});
+op!(Find, "design.find", FindIn => FindOut,
+    OpMeta::query(Scope::Project, 12, "Find a design's nodes by kind, name, words, colour or font; returns their ids in paint order"));
+
+payload!(#[schemars(rename = "DesignFontsIn")] FontsIn {
+    /// Only families whose name holds these words, any case.
+    pub name: Option<String>,
+});
+result!(#[schemars(rename = "DesignFontsOut")] FontsOut {
+    /// Families a design's text can be drawn in, sorted. Geist, Geist Mono and Sora are always
+    /// there.
+    pub families: Vec<String>,
+    /// false when no desktop app has reported its fonts: only those three are known.
+    pub complete: bool,
+});
+op!(Fonts, "design.fonts", FontsIn => FontsOut,
+    OpMeta::query(Scope::Global, 12, "The font families Relay's desktop app can draw a design's text in"));
+
 payload!(#[schemars(rename = "DesignAssetAddIn")] AssetAddIn {
     pub design_id: Id,
     /// An absolute path to a PNG, JPEG, GIF, WebP or SVG file on this machine, at most 20 MiB,
@@ -250,6 +313,27 @@ result!(#[schemars(rename = "DesignAssetAddOut")] AssetAddOut {
 op!(AssetAdd, "design.asset.add", AssetAddIn => AssetAddOut,
     OpMeta::mutation(Scope::Project, 12, "Store a picture for a design's image nodes; returns the src to give them"));
 
+payload!(#[schemars(rename = "DesignAssetGetIn")] AssetGetIn {
+    pub design_id: Id,
+    /// An image node's `src`, as `design.asset.add` gave it.
+    pub src: String,
+    /// Where this piece starts, in bytes (default 0): the `next` of the piece before.
+    pub offset: Option<u64>,
+});
+result!(#[schemars(rename = "DesignAssetGetOut")] AssetGetOut {
+    /// `image/png`, `image/jpeg`, `image/gif`, `image/webp` or `image/svg+xml`, from its name.
+    pub media_type: String,
+    /// The whole picture's length in bytes.
+    pub size: u64,
+    /// This piece, base64: at most 3 MiB decoded.
+    pub bytes_b64: String,
+    /// Where the next piece starts; null on the last.
+    pub next: Option<u64>,
+});
+op!(AssetGet, "design.asset.get", AssetGetIn => AssetGetOut,
+    OpMeta::query(Scope::Project, 12, "A picture an image node shows, in pieces of at most 3 MiB, to draw it where its file is out of reach")
+        .actors(Actors::UserOnly));
+
 /// The design ops; `design.apply`'s `bus.schema` refusals name the edit and key at fault
 /// (`design::locate`).
 pub fn entries() -> Vec<OpEntry> {
@@ -263,7 +347,10 @@ pub fn entries() -> Vec<OpEntry> {
         OpEntry::of::<Restore>(),
         OpEntry::of::<Purge>(),
         OpEntry::of::<Apply>().located(crate::design::locate),
+        OpEntry::of::<Find>(),
+        OpEntry::of::<Fonts>(),
         OpEntry::of::<AssetAdd>(),
+        OpEntry::of::<AssetGet>(),
     ]
 }
 
@@ -292,10 +379,13 @@ mod tests {
         assert!(doc(&add, "bytes_b64").contains(&format!("at most {} MiB decoded", MAX_ASSET_B64 >> 20)));
         let size = doc(&schema::<AssetAddOut>(), "w");
         assert!(size.contains("viewBox's aspect") && size.contains("300 by 150"), "{size}");
+        assert!(doc(&schema::<AssetGetOut>(), "bytes_b64").contains(&format!("at most {} MiB", ASSET_PIECE >> 20)));
+        assert!(<AssetGet as crate::registry::Op>::META.summary.contains(&format!("{} MiB", ASSET_PIECE >> 20)));
         let get = schema::<GetIn>();
         assert_eq!(get["properties"]["nodes"]["maxItems"].as_u64(), Some(GET_NODES_MAX as u64));
         assert!(doc(&get, "nodes").contains(&format!("1 to {GET_NODES_MAX} ids")));
         assert!(doc(&get, "since_rev").contains(&format!("{} revs", crate::design::SINCE_WINDOW)));
+        assert!(doc(&schema::<FindIn>(), "with_nodes").contains(&format!("first {FIND_NODES_MAX}, up to {} KiB", FIND_BYTES_MAX >> 10)));
         assert!(doc(&schema::<GetOut>(), "credits").contains(&format!("at most {CREDITS_MAX}")));
     }
 

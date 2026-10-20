@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 337,
+  "op_count": 340,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -6411,6 +6411,42 @@
         "$ref": "#/$defs/DesignApplyOut"
       }
     },
+    "design.find": {
+      "summary": "Find a design's nodes by kind, name, words, colour or font; returns their ids in paint order",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignFindIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignFindOut"
+      }
+    },
+    "design.fonts": {
+      "summary": "The font families Relay's desktop app can draw a design's text in",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignFontsIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignFontsOut"
+      }
+    },
     "design.asset.add": {
       "summary": "Store a picture for a design's image nodes; returns the src to give them",
       "kind": "mutation",
@@ -6427,6 +6463,24 @@
       },
       "result": {
         "$ref": "#/$defs/DesignAssetAddOut"
+      }
+    },
+    "design.asset.get": {
+      "summary": "A picture an image node shows, in pieces of at most 3 MiB, to draw it where its file is out of reach",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignAssetGetIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignAssetGetOut"
       }
     },
     "design.picture.search": {
@@ -28094,6 +28148,164 @@
       ],
       "description": "Why an edit did not go ahead as sent."
     },
+    "DesignFindIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "page": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Only on this page: its id, or its name when no other page has that name."
+        },
+        "inside": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Only inside this node (not the node itself)."
+        },
+        "kind": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignNodeKind"
+          },
+          "description": "Any of these kinds."
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Words in its name, any case.",
+          "minLength": 1
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Words in its text, any case.",
+          "minLength": 1
+        },
+        "fill": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its fill as drawn (a `$name` colour or a style gives one too). `#RGB` or `#RRGGBB` matches\nany alpha; `#RRGGBBAA` matches exactly."
+        },
+        "stroke": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its stroke as drawn, compared the same way."
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its text colour (`color`) as drawn, compared the same way."
+        },
+        "any_color": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "This colour anywhere: fill, stroke, text colour, a shadow, a gradient's or stroke\ngradient's stop, or a run of its text."
+        },
+        "font": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its font family (or a run's), any case.",
+          "minLength": 1
+        },
+        "with_nodes": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Also return the matching nodes as stored: the first 200, up to 512 KiB."
+        }
+      },
+      "required": [
+        "design_id"
+      ]
+    },
+    "DesignFindOut": {
+      "type": "object",
+      "properties": {
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Every match, in design.get's order. With no filter, every node but the pages."
+        },
+        "nodes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignNode"
+          },
+          "description": "With `with_nodes`: the first matches as stored."
+        },
+        "cut": {
+          "type": "boolean",
+          "description": "With `with_nodes`: true when `nodes` stops before `ids` does."
+        }
+      },
+      "required": [
+        "ids"
+      ]
+    },
+    "DesignFontsIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Only families whose name holds these words, any case."
+        }
+      }
+    },
+    "DesignFontsOut": {
+      "type": "object",
+      "properties": {
+        "families": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Families a design's text can be drawn in, sorted. Geist, Geist Mono and Sora are always\nthere."
+        },
+        "complete": {
+          "type": "boolean",
+          "description": "false when no desktop app has reported its fonts: only those three are known."
+        }
+      },
+      "required": [
+        "families",
+        "complete"
+      ]
+    },
     "DesignAssetAddIn": {
       "type": "object",
       "additionalProperties": false,
@@ -28149,6 +28361,66 @@
         "path",
         "w",
         "h"
+      ]
+    },
+    "DesignAssetGetIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "src": {
+          "type": "string",
+          "description": "An image node's `src`, as `design.asset.add` gave it."
+        },
+        "offset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Where this piece starts, in bytes (default 0): the `next` of the piece before."
+        }
+      },
+      "required": [
+        "design_id",
+        "src"
+      ]
+    },
+    "DesignAssetGetOut": {
+      "type": "object",
+      "properties": {
+        "media_type": {
+          "type": "string",
+          "description": "`image/png`, `image/jpeg`, `image/gif`, `image/webp` or `image/svg+xml`, from its name."
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The whole picture's length in bytes."
+        },
+        "bytes_b64": {
+          "type": "string",
+          "description": "This piece, base64: at most 3 MiB decoded."
+        },
+        "next": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Where the next piece starts; null on the last."
+        }
+      },
+      "required": [
+        "media_type",
+        "size",
+        "bytes_b64"
       ]
     },
     "DesignPictureSearchIn": {
