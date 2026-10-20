@@ -272,7 +272,8 @@ pub fn install(b: &Rc<Board>) {
     let drop = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
     let weak = Rc::downgrade(b);
     drop.connect_drop(move |_, value, x, y| {
-        let Some(b) = weak.upgrade() else {
+        // Play edits nothing, by pointer or by a drop.
+        let Some(b) = weak.upgrade().filter(|b| !b.playing()) else {
             return false;
         };
         let Ok(files) = value.get::<gdk::FileList>() else {
@@ -458,6 +459,8 @@ pub(super) fn simulate(b: &Rc<Board>, from: (f64, f64), to: (f64, f64), mods: gd
 pub fn update_cursor(b: &Board, name: Option<&str>) {
     let name = name.unwrap_or(if b.space.get() || b.tool.get() == Tool::Hand {
         "grab"
+    } else if b.playing() {
+        "default"
     } else {
         match b.tool.get() {
             Tool::Select => "default",
@@ -633,6 +636,12 @@ fn begin(b: &Rc<Board>, x: f64, y: f64, mods: gdk::ModifierType) {
     b.canvas.grab_focus();
     if b.edit.borrow().is_some() {
         b.end_edit(true);
+    }
+    // While Play runs the pointer only moves the view (the Hand, Space, the middle button): it
+    // edits nothing. The inspector stays open to retime what plays.
+    if b.playing() && !b.space.get() && b.tool.get() != Tool::Hand {
+        *b.gesture.borrow_mut() = Gesture::Idle;
+        return;
     }
     let p = b.to_page(x, y);
     if b.tool.get() == Tool::Vector && !b.space.get() {
@@ -2026,7 +2035,7 @@ fn hover(b: &Rc<Board>, x: f64, y: f64) {
     if b.vector.borrow().is_some() {
         b.canvas.queue_draw();
     }
-    if !matches!(*b.gesture.borrow(), Gesture::Idle) {
+    if !matches!(*b.gesture.borrow(), Gesture::Idle) || b.playing() {
         return;
     }
     if b.space.get() || b.tool.get() == Tool::Hand {
@@ -2061,6 +2070,9 @@ fn hover(b: &Rc<Board>, x: f64, y: f64) {
 }
 
 fn context_menu(b: &Rc<Board>, x: f64, y: f64) {
+    if b.playing() {
+        return;
+    }
     let p = b.to_page(x, y);
     b.menu_at.set(Some(p));
     let placed = b.placed();
@@ -2163,6 +2175,16 @@ fn key_pressed(
         }
         return stop;
     }
+    if b.playing() {
+        match while_playing(key.to_lower(), base, ctrl, shift, alt) {
+            Playing::Stop => {
+                b.stop_play();
+                return stop;
+            }
+            Playing::Swallow => return stop,
+            Playing::Pass => {}
+        }
+    }
     // In the middle of a drag only Esc acts, putting it back: a shortcut would act on what the
     // drag previews and the release then overwrite it (TM-43).
     if !matches!(*b.gesture.borrow(), Gesture::Idle) {
@@ -2192,6 +2214,7 @@ fn key_pressed(
             Key::minus | Key::underscore | Key::KP_Subtract => b.step_zoom(-1),
             Key::_0 | Key::KP_0 => b.zoom_to(1.0),
             Key::period => b.inspector_key.set_active(!b.inspector_key.is_active()),
+            Key::p => b.toggle_play(),
             Key::b => b.toggle_text("font_weight"),
             Key::i => b.toggle_text("italic"),
             Key::u => b.toggle_text("underline"),
@@ -2352,6 +2375,38 @@ fn key_pressed(
         }
     }
     stop
+}
+
+/// What a key does while Play runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Playing {
+    /// Ctrl+P or Esc: Play ends.
+    Stop,
+    /// It does what it always does: zoom, undo and redo, the panels, the shortcut sheet, the
+    /// Hand and Move tools.
+    Pass,
+    /// Nothing: every key that would edit, pick a tool or move the selection.
+    Swallow,
+}
+
+/// What `key` (lower case; `base` unshifted) does while Play runs.
+fn while_playing(key: gdk::Key, base: gdk::Key, ctrl: bool, shift: bool, alt: bool) -> Playing {
+    use gdk::Key;
+    match key {
+        Key::Escape => Playing::Stop,
+        Key::p if ctrl => Playing::Stop,
+        Key::z | Key::y | Key::equal | Key::plus | Key::KP_Add | Key::minus | Key::underscore | Key::KP_Subtract | Key::_0 | Key::KP_0 | Key::period
+            if ctrl && !alt =>
+        {
+            Playing::Pass
+        }
+        _ if shift && !ctrl && !alt && matches!(base, Key::_0 | Key::_1 | Key::_2) => Playing::Pass,
+        _ if alt && !ctrl && base == Key::_1 => Playing::Pass,
+        Key::question => Playing::Pass,
+        // The Hand and Move tools, which only look.
+        Key::h | Key::v if !ctrl && !shift && !alt => Playing::Pass,
+        _ => Playing::Swallow,
+    }
 }
 
 fn find_layers_key(b: &Board) -> Option<gtk::ToggleButton> {
@@ -2578,6 +2633,31 @@ mod tests {
 
     fn page(nodes: Vec<Node>) -> Scene {
         Scene::new(std::iter::once(node("p1", None, NodeKind::Page, [0.0; 4])).chain(nodes).collect())
+    }
+
+    #[test]
+    fn while_playing_keys_only_stop_view_and_undo() {
+        use gdk::Key;
+        let plain = |key| while_playing(key, key, false, false, false);
+        let ctrl = |key| while_playing(key, key, true, false, false);
+        assert_eq!((plain(Key::Escape), ctrl(Key::p)), (Playing::Stop, Playing::Stop));
+        for key in [Key::z, Key::y, Key::equal, Key::minus, Key::_0, Key::period] {
+            assert_eq!(ctrl(key), Playing::Pass, "{key:?}");
+        }
+        assert_eq!(while_playing(Key::z, Key::z, true, true, false), Playing::Pass, "redo");
+        assert_eq!(while_playing(Key::exclam, Key::_1, false, true, false), Playing::Pass, "Shift 1 fits");
+        assert_eq!(while_playing(Key::_1, Key::_1, false, false, true), Playing::Pass, "Alt 1 shows the layers");
+        assert_eq!((plain(Key::question), plain(Key::h), plain(Key::v)), (Playing::Pass, Playing::Pass, Playing::Pass));
+        // What would edit, pick a tool or move the selection does nothing.
+        for key in [Key::Delete, Key::BackSpace, Key::Return, Key::Left, Key::Tab, Key::r, Key::t, Key::k] {
+            assert_eq!(plain(key), Playing::Swallow, "{key:?}");
+        }
+        for key in [Key::c, Key::v, Key::x, Key::d, Key::g, Key::a] {
+            assert_eq!(ctrl(key), Playing::Swallow, "Ctrl {key:?}");
+        }
+        assert_eq!(while_playing(Key::c, Key::c, true, false, true), Playing::Swallow, "copy style");
+        assert_eq!(while_playing(Key::h, Key::h, false, true, false), Playing::Swallow, "a flip");
+        assert_eq!(while_playing(Key::a, Key::a, false, false, true), Playing::Swallow, "an alignment");
     }
 
     const RIGHT: Handle = Handle { left: false, right: true, top: false, bottom: false };

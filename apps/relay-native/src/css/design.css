@@ -205,3 +205,10 @@ textview.design-text-edit text selection { background: alpha(#4C9DFF, 0.32); }
 .design-lamp.parked, .design-lamp.exited, .design-lamp.closed { background: transparent; border-color: @ink_dim; }
 
 window.design-window { padding: 0; margin: 0; border: 0; box-shadow: none; background: @wall_solid; }
+
+/* Play: the time bar under the canvas while a page's motion plays. */
+.design-timebar { padding: 3px; border-radius: 12px; background: @slab_solid; border: 1px solid @strong; box-shadow: 0 10px 28px alpha(black, 0.38), 0 1px 3px alpha(black, 0.3); }
+.design-timebar button { min-height: 28px; min-width: 28px; padding: 0 6px; border: 0; border-radius: 8px; background: transparent; color: @secondary; }
+.design-timebar button:hover { background: @wash_solid; color: @ink; }
+.design-timebar-time { min-width: 96px; margin: 0 4px; font-family: 'Geist Mono'; font-size: 11.5px; color: @ink; }
+.design-timebar scale { min-width: 220px; margin: 0 6px; }
