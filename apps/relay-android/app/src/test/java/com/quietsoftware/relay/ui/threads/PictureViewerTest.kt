@@ -8,6 +8,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -65,6 +68,8 @@ class PictureViewerTest {
         }
     }
 
+    private val opens = SemanticsMatcher("opens the picture") { it.config.getOrNull(SemanticsActions.OnClick)?.label == "Open the picture" }
+
     /** A thread whose one message is a picture, with no words. */
     private fun pictureAlone() = runBlocking {
         val ledger = relay.hub.ledger
@@ -107,8 +112,9 @@ class PictureViewerTest {
             ledger.upsert(listOf(Row.of(Kind.Message, Wire.parse(picture)!!)!!))
         }
         show { nav -> AppNav(nav, "thread/301") }
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Picture you sent").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithContentDescription("Picture you sent").performClick()
+        // Drawn, so a tap opens it: one still being read opens nothing.
+        compose.waitUntil(10_000) { compose.onAllNodes(opens).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(opens).performClick()
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Close the picture").fetchSemanticsNodes().isNotEmpty() }
 
         // A long answer arrives: the list follows it, and the picture's message leaves the composition.
