@@ -2,14 +2,20 @@ package com.quietsoftware.relay.ui.threads
 
 import android.content.Context
 import android.graphics.Bitmap
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.navigation.compose.rememberNavController
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -39,21 +45,48 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.ByteArrayOutputStream
 
-/** A picture open full screen stays open while a reply scrolls its message away. */
+/** A message's pictures in a thread: the full-screen viewer, the message's keys, and a picture read once the PC is back. */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(qualifiers = "w411dp-h891dp-xxhdpi")
 class PictureViewerTest {
     @get:Rule val compose = createComposeRule()
 
+    private val context = ApplicationProvider.getApplicationContext<Context>()
+    private val relay = Relay(context, Room.inMemoryDatabaseBuilder(context, RelayDb::class.java).allowMainThreadQueries().build(), PcStore(context), CoroutineScope(SupervisorJob() + Dispatchers.Default))
+    private val shell by lazy { ShellModel(relay, Settings(context)) }
+    private val jpeg = ByteArrayOutputStream().also { Bitmap.createBitmap(40, 30, Bitmap.Config.ARGB_8888).compress(Bitmap.CompressFormat.JPEG, 90, it) }.toByteArray()
+
+    private fun show(content: @Composable (Nav) -> Unit) = compose.setContent {
+        val controller = rememberNavController()
+        val nav = remember { Nav(controller, shell) }
+        RelayTheme(Palette.Matte) {
+            CompositionLocalProvider(LocalNav provides nav) { content(nav) }
+        }
+    }
+
+    /** A thread whose one message is a picture, with no words. */
+    private fun pictureAlone() = runBlocking {
+        val ledger = relay.hub.ledger
+        ledger.upsert(listOf(Row.of(Kind.Thread, Wire.parse("""{"id":301,"title":"Receipts","provider":"claude","created_at":"2026-10-09T10:00:00Z","updated_at":"2026-10-09T21:00:00Z","working":false,"live":false,"preview":"Picture"}""")!!)!!))
+        ledger.upsert(listOf(Row.of(Kind.Message, Wire.parse("""{"id":401,"thread_id":301,"role":"user","body":{"text":"","images":[{"id":"pic1","media_type":"image/jpeg","width":40,"height":30}]},"created_at":"2026-10-09T21:00:00Z"}""")!!)!!))
+    }
+
+    @Test
+    fun aMessageOfPicturesAloneOpensItsKeysOnALongPress() {
+        ThreadPictures.keep(context, JsonPrimitive("pic1"), jpeg)
+        pictureAlone()
+        show { nav -> AppNav(nav, "thread/301") }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Picture you sent").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Picture you sent").performTouchInput { longClick() }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Send again").fetchSemanticsNodes().isNotEmpty() }
+        // No words to copy or edit.
+        compose.onAllNodesWithText("Copy").assertCountEquals(0)
+    }
+
     @Test
     fun theViewerOutlivesItsBubble() {
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        val db = Room.inMemoryDatabaseBuilder(context, RelayDb::class.java).allowMainThreadQueries().build()
-        val relay = Relay(context, db, PcStore(context), CoroutineScope(SupervisorJob() + Dispatchers.Default))
-        val settings = Settings(context)
         // The picture is on this phone already, as one sent from here is.
-        val jpeg = ByteArrayOutputStream().also { Bitmap.createBitmap(40, 30, Bitmap.Config.ARGB_8888).compress(Bitmap.CompressFormat.JPEG, 90, it) }.toByteArray()
         ThreadPictures.keep(context, JsonPrimitive("pic1"), jpeg)
         runBlocking {
             val ledger = relay.hub.ledger
@@ -61,14 +94,7 @@ class PictureViewerTest {
             val picture = """{"id":401,"thread_id":301,"role":"user","body":{"text":"","images":[{"id":"pic1","media_type":"image/jpeg","width":40,"height":30}]},"created_at":"2026-10-09T21:00:00Z"}"""
             ledger.upsert(listOf(Row.of(Kind.Message, Wire.parse(picture)!!)!!))
         }
-        val shell = ShellModel(relay, settings)
-        compose.setContent {
-            val controller = rememberNavController()
-            val nav = remember { Nav(controller, shell) }
-            RelayTheme(Palette.Matte) {
-                CompositionLocalProvider(LocalNav provides nav) { AppNav(nav, "thread/301") }
-            }
-        }
+        show { nav -> AppNav(nav, "thread/301") }
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Picture you sent").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Picture you sent").performClick()
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Close the picture").fetchSemanticsNodes().isNotEmpty() }

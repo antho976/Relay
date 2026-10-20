@@ -7,7 +7,8 @@ import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -232,18 +233,20 @@ private sealed interface Shown {
  * The pictures of a message of the person's, above its words: one up to 240dp wide, several side
  * by side, each in its own shape and rounded as a card. A tap hands one to [onView], which opens
  * it full screen from outside the list: a reply that scrolls the message away must not close it.
+ * A long press is [onKeys], the message's keys, which a message of pictures alone has no words for.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun SentPictures(pictures: List<Picture>, onView: (Picture) -> Unit, modifier: Modifier = Modifier) {
+internal fun SentPictures(pictures: List<Picture>, onView: (Picture) -> Unit, modifier: Modifier = Modifier, onKeys: (() -> Unit)? = null) {
     val one = pictures.size == 1
     FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        for (p in pictures) SentPicture(p, if (one) 240.dp else 116.dp, if (one) 320.dp else 160.dp) { onView(p) }
+        for (p in pictures) SentPicture(p, if (one) 240.dp else 116.dp, if (one) 320.dp else 160.dp, onKeys) { onView(p) }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SentPicture(p: Picture, maxWidth: Dp, maxHeight: Dp, onOpen: () -> Unit) {
+private fun SentPicture(p: Picture, maxWidth: Dp, maxHeight: Dp, onKeys: (() -> Unit)?, onOpen: () -> Unit) {
     val c = Relay.colors
     val nav = LocalNav.current
     val app = LocalContext.current.applicationContext
@@ -262,7 +265,17 @@ private fun SentPicture(p: Picture, maxWidth: Dp, maxHeight: Dp, onOpen: () -> U
     val w = minOf(maxWidth, maxHeight * ratio)
     Box(
         Modifier.size(w, w / ratio).clip(Radii.card).background(c.slab).border(1.dp, c.edge, Radii.card)
-            .then(if (ready != null) Modifier.clickable(onClickLabel = "Open the picture", role = Role.Button, onClick = onOpen) else Modifier)
+            .then(
+                if (ready != null || onKeys != null) {
+                    Modifier.combinedClickable(
+                        onClickLabel = if (ready != null) "Open the picture" else null,
+                        role = Role.Button,
+                        onLongClickLabel = if (onKeys != null) "Show this message's keys" else null,
+                        onLongClick = onKeys,
+                        onClick = { if (ready != null) onOpen() },
+                    )
+                } else Modifier,
+            )
             .semantics { if (ready == null) contentDescription = "Picture you sent" },
         contentAlignment = Alignment.Center,
     ) {

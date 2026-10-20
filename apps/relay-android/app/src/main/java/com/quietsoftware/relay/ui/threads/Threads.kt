@@ -63,6 +63,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -1218,7 +1219,11 @@ private fun UserBubble(
     val c = Relay.colors
     Column(modifier, horizontalAlignment = Alignment.End) {
         if (pictures.isNotEmpty()) Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
-            SentPictures(pictures, onView, Modifier.padding(bottom = if (text.isNotBlank()) 6.dp else 0.dp))
+            val haptic = LocalHapticFeedback.current
+            SentPictures(
+                pictures, onView, Modifier.padding(bottom = if (text.isNotBlank()) 6.dp else 0.dp),
+                onKeys = onOpen?.let { toggle -> { haptic.performHapticFeedback(HapticFeedbackType.LongPress); toggle() } },
+            )
         }
         if (text.isNotBlank() || pictures.isEmpty()) Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
             Box(
