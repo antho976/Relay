@@ -156,7 +156,8 @@ fn stored_point(scene: &Scene, nodes: &HashMap<&str, &Node>, id: &str) -> Option
 }
 
 /// A connector's two ends relative to its own `x`/`y`, from the stored boxes of the nodes it is
-/// attached to (their centres), for a line that has no points of its own to fall back on.
+/// attached to (their centres), for a line that has no points of its own to fall back on. Each
+/// within what `validate` takes (B70), however far apart a design spreads them.
 fn stored_ends(scene: &Scene, nodes: &HashMap<&str, &Node>, line: &Node) -> Vec<[f64; 2]> {
     let centre = |end: &Option<String>| {
         let id = end.as_deref()?;
@@ -165,7 +166,7 @@ fn stored_ends(scene: &Scene, nodes: &HashMap<&str, &Node>, line: &Node) -> Vec<
         Some((x + n.w / 2.0, y + n.h / 2.0))
     };
     match (stored_point(scene, nodes, &line.id), centre(&line.from), centre(&line.to)) {
-        (Some((ox, oy)), Some(a), Some(b)) => vec![[(a.0 - ox).round(), (a.1 - oy).round()], [(b.0 - ox).round(), (b.1 - oy).round()]],
+        (Some((ox, oy)), Some(a), Some(b)) => vec![[coord(a.0 - ox), coord(a.1 - oy)], [coord(b.0 - ox), coord(b.1 - oy)]],
         _ => vec![[0.0, 0.0], [line.w, line.h]],
     }
 }
@@ -337,7 +338,8 @@ pub fn group(scene: &mut Scene, placed: &Placed, ids: &[String], kind: NodeKind)
 
 /// Ungroup a group or frame: its children take its place in its parent, where and as big as
 /// they showed ([`freeze`]: one the frame laid out keeps its box, a filling one its width),
-/// written through the parent's pins. Into a parent that lays them out they only move.
+/// written through the parent's pins. Into a parent that lays them out they only move. A
+/// connector attached to the group or frame itself lets go of it where it is drawn (B112).
 pub fn ungroup(scene: &Scene, placed: &Placed, id: &str) -> Option<(Vec<NodeOp>, Vec<String>)> {
     let node = scene.stored(id)?;
     if !matches!(node.kind, NodeKind::Group | NodeKind::Frame) {
@@ -351,11 +353,13 @@ pub fn ungroup(scene: &Scene, placed: &Placed, id: &str) -> Option<(Vec<NodeOp>,
     // Where its children count from on the page: as placed, or (hidden) at its own `x`/`y`.
     let inner = if placed.rect(id).is_some() { placed.origin(id) } else { (origin.0 + node.x, origin.1 + node.y) };
     let start = scene.index(id)? as u32;
-    let mut ops = Vec::new();
     let kids = scene.children(id).to_vec();
+    // A connector of its own lets go below, from where it will sit.
+    let mut ops: Vec<NodeOp> =
+        release(scene, placed, &HashSet::from([id.to_string()])).into_iter().filter(|op| scene.parent(op.target()) != Some(id)).collect();
     for (index, child) in (start..).zip(&kids) {
         let c = scene.stored(child)?;
-        let s = match shown(placed, child, origin) {
+        let mut s = match shown(placed, child, origin) {
             Some(rel) if joins && !c.is_absolute() => set(&[("x", json!(coord(rel.x))), ("y", json!(coord(rel.y)))]),
             Some(rel) => settle(c, rel, fit, stretched(scene, child), Sizes::Freeze),
             None => {
@@ -371,6 +375,15 @@ pub fn ungroup(scene: &Scene, placed: &Placed, id: &str) -> Option<(Vec<NodeOp>,
                 set(&[("x", json!(coord(r.x))), ("y", json!(coord(r.y)))])
             }
         };
+        let (from, to) = (c.from.as_deref() == Some(id), c.to.as_deref() == Some(id));
+        if from || to {
+            let freed = let_go(scene, placed, scene.node(child)?, from, to, origin);
+            if freed.contains_key("x") {
+                s = freed;
+            } else {
+                s.extend(freed);
+            }
+        }
         ops.push(NodeOp::Move { id: child.clone(), parent: Some(parent.clone()), index: Some(index), keep_position: None });
         ops.push(NodeOp::Update { id: child.clone(), set: s });
     }
@@ -488,12 +501,29 @@ pub fn set_layout(scene: &Scene, placed: &Placed, frames: &[String], mode: Optio
     ops
 }
 
-/// Delete the selection. A connector attached to a node going lets go of that end first, where
-/// it is drawn now (its points become its own), so no line names a node that is gone; the
-/// list's undo attaches it again.
+/// The layers of `ids` that are not locked: what a canvas command may move or delete (B16). A
+/// locked layer can be selected from the layers list, and stays selected when it is locked, but
+/// only its own flag counts, as for a drag: a locked frame's children are its own.
+pub fn unlocked(scene: &Scene, ids: Vec<String>) -> Vec<String> {
+    ids.into_iter().filter(|id| scene.node(id).is_some_and(|n| !n.is_locked())).collect()
+}
+
+/// Delete the selection, but a locked layer (B16). A connector attached to a node going lets go
+/// of that end first, where it is drawn now (its points become its own), so no line names a
+/// node that is gone; the list's undo attaches it again.
 pub fn delete(scene: &Scene, placed: &Placed, ids: &[String]) -> Vec<NodeOp> {
-    let roots = outermost(scene, ids);
+    let roots = unlocked(scene, outermost(scene, ids));
     let doomed: HashSet<String> = roots.iter().flat_map(|id| scene.subtree(id)).collect();
+    let mut ops = release(scene, placed, &doomed);
+    ops.extend(roots.into_iter().map(|id| NodeOp::Delete { id }));
+    ops
+}
+
+/// The updates that free each connector not in `doomed` of its ends attached to a node in it,
+/// where the line is drawn now (B112), as the pages paint: what has to come before deleting
+/// `doomed`. Without it the scene keeps the line naming a node that is gone, which then draws
+/// at its stored points, and the engine frees it there.
+fn release(scene: &Scene, placed: &Placed, doomed: &HashSet<String>) -> Vec<NodeOp> {
     let mut ops = Vec::new();
     for page in scene.pages() {
         for id in scene.subtree(page) {
@@ -502,16 +532,19 @@ pub fn delete(scene: &Scene, placed: &Placed, ids: &[String]) -> Vec<NodeOp> {
             };
             let gone = |end: &Option<String>| end.as_ref().is_some_and(|e| doomed.contains(e));
             if gone(&n.from) || gone(&n.to) {
-                ops.push(NodeOp::Update { id: id.clone(), set: let_go(scene, placed, n, gone(&n.from), gone(&n.to)) });
+                let origin = n.parent.as_deref().map_or((0.0, 0.0), |p| placed.origin(p));
+                ops.push(NodeOp::Update { id: id.clone(), set: let_go(scene, placed, n, gone(&n.from), gone(&n.to), origin) });
             }
         }
     }
-    ops.extend(roots.into_iter().map(|id| NodeOp::Delete { id }));
     ops
 }
 
-/// The update that frees a connector's `from` and/or `to` where the line is drawn now.
-fn let_go(scene: &Scene, placed: &Placed, n: &Node, from: bool, to: bool) -> Map<String, Value> {
+/// The update that frees a connector's `from` and/or `to` where the line is drawn now, its box
+/// counted from page point `origin` (its parent's). Every value within what `validate` takes
+/// (B70): a line drawn more than a million pixels across is cut short there rather than have
+/// the whole delete refused.
+fn let_go(scene: &Scene, placed: &Placed, n: &Node, from: bool, to: bool, origin: (f64, f64)) -> Map<String, Value> {
     let mut s = Map::new();
     for (end, freed) in [("from", from), ("to", to)] {
         if freed {
@@ -521,14 +554,14 @@ fn let_go(scene: &Scene, placed: &Placed, n: &Node, from: bool, to: bool) -> Map
     let drawn = placed.rect(&n.id).map(|_| shapes::line_points(scene, placed, n).0);
     match drawn.as_deref() {
         Some([a, .., b]) => {
-            let (a, b) = (*a, *b);
-            let (x0, y0) = (a.0.min(b.0), a.1.min(b.1));
-            let origin = n.parent.as_deref().map_or((0.0, 0.0), |p| placed.origin(p));
-            s.insert("x".into(), px(x0 - origin.0));
-            s.insert("y".into(), px(y0 - origin.1));
-            s.insert("w".into(), px((b.0 - a.0).abs()));
-            s.insert("h".into(), px((b.1 - a.1).abs()));
-            s.insert("points".into(), json!([[(a.0 - x0).round(), (a.1 - y0).round()], [(b.0 - x0).round(), (b.1 - y0).round()]]));
+            let (x, y) = (coord(a.0.min(b.0) - origin.0), coord(a.1.min(b.1) - origin.1));
+            let end = |p: &(f64, f64)| [coord(p.0 - origin.0 - x), coord(p.1 - origin.1 - y)];
+            let (a, b) = (end(a), end(b));
+            s.insert("x".into(), json!(x));
+            s.insert("y".into(), json!(y));
+            s.insert("w".into(), json!((b[0] - a[0]).abs().min(MAX_COORD)));
+            s.insert("h".into(), json!((b[1] - a[1]).abs().min(MAX_COORD)));
+            s.insert("points".into(), json!([a, b]));
         }
         // Not on the page shown: keep its own points, or take its ends' stored centres.
         _ if n.points.as_ref().is_some_and(|p| p.len() >= 2) => {}
@@ -541,9 +574,10 @@ fn let_go(scene: &Scene, placed: &Placed, n: &Node, from: bool, to: bool) -> Map
 
 /// Move the selection by `(dx, dy)` page pixels, each node as far as it shows: along a `scale`
 /// pin its stored offset moves by the frame's stored size over its placed one
-/// (`layout::stored_shift`). A node its parent lays out stays put; an `absolute` one moves.
+/// (`layout::stored_shift`). A locked layer (B16) and one its parent lays out stay put; an
+/// `absolute` one moves.
 pub fn nudge(scene: &Scene, placed: &Placed, ids: &[String], dx: f64, dy: f64) -> Vec<NodeOp> {
-    outermost(scene, ids)
+    unlocked(scene, outermost(scene, ids))
         .into_iter()
         .filter(|id| scene.parent(id).is_some() && !is_laid(scene, id))
         .filter_map(|id| {
@@ -575,10 +609,12 @@ pub enum Align {
     DistributeY,
 }
 
-/// Align the selection to its own bounds (or one node to its parent). A node its parent lays
-/// out stays put; an `absolute` one moves.
+/// Align the selection to its own bounds (or one node to its parent). A locked layer (B16) and
+/// one its parent lays out stay put, and the rest align among themselves; an `absolute` one
+/// moves.
 pub fn align(scene: &Scene, placed: &Placed, ids: &[String], how: Align) -> Vec<NodeOp> {
-    let ids: Vec<String> = outermost(scene, ids).into_iter().filter(|id| scene.parent(id).is_some() && !is_laid(scene, id)).collect();
+    let ids: Vec<String> =
+        unlocked(scene, outermost(scene, ids)).into_iter().filter(|id| scene.parent(id).is_some() && !is_laid(scene, id)).collect();
     let rects: Vec<(String, Rect)> = ids.iter().filter_map(|id| Some((id.clone(), placed.rect(id)?))).collect();
     let target = match rects.as_slice() {
         [] => return Vec::new(),
@@ -933,6 +969,94 @@ mod tests {
         assert_eq!(delete(&s, &placed, &ids(&["x1", "ln"])).len(), 2);
     }
 
+    /// B16: a locked layer still selected (from the layers list, or just locked) is not nudged,
+    /// aligned or deleted; the others are.
+    #[test]
+    fn locked_nodes_are_not_moved_or_deleted() {
+        let mut s = row(2);
+        s.node_mut("x0").unwrap().locked = Some(true);
+        let placed = place(&s, "p1", &Mono);
+        let both = ids(&["x0", "x1"]);
+        let ops = nudge(&s, &placed, &both, 5.0, 0.0);
+        assert!(matches!(&ops[..], [NodeOp::Update { id, .. }] if id == "x1"), "{ops:?}");
+        // Alone, the unlocked one aligns to its parent, a page, which has no box: nothing moves.
+        assert!(align(&s, &placed, &both, Align::Left).iter().all(|op| op.target() != "x0"));
+        let ops = delete(&s, &placed, &both);
+        assert!(matches!(&ops[..], [NodeOp::Delete { id }] if id == "x1"), "{ops:?}");
+        // Inside an unlocked frame that goes, it goes with it: only its own flag counts.
+        let mut s = sample();
+        s.node_mut("b").unwrap().locked = Some(true);
+        let placed = place(&s, "p1", &Mono);
+        assert_eq!(delete(&s, &placed, &ids(&["a", "b"])).len(), 1);
+        assert_eq!(unlocked(&s, ids(&["b", "c", "gone"])), ["c"]);
+    }
+
+    /// B70: a connector freed across more than a million pixels is cut short within what
+    /// `validate` takes, so the delete goes through rather than being refused whole.
+    #[test]
+    fn a_connector_freed_across_a_huge_span_still_lets_go() {
+        let mut link = node("link", Some("p1"), K::Line, [-900_000.0, 0.0, 0.0, 0.0]);
+        link.from = Some("a".into());
+        link.to = Some("b".into());
+        let mut s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            node("g", Some("p1"), K::Group, [900_000.0, 0.0, 0.0, 0.0]),
+            node("a", Some("g"), K::Rect, [900_000.0, 0.0, 10.0, 10.0]),
+            node("b", Some("p1"), K::Rect, [-900_000.0, 0.0, 10.0, 10.0]),
+            link,
+        ]);
+        let placed = place(&s, "p1", &Mono);
+        let ops = delete(&s, &placed, &ids(&["g"]));
+        run(&mut s, &ops);
+        let link = s.node("link").unwrap();
+        assert_eq!((link.from.as_deref(), link.to.as_deref()), (None, Some("b")));
+        assert!(link.points.iter().flatten().flatten().all(|v| v.abs() <= MAX_COORD) && link.w <= MAX_COORD);
+        // Off the page shown, from the stored boxes alone, the same.
+        let mut s2 = Scene::new(s.to_nodes());
+        s2.apply(&NodeOp::Add { node: node("c", Some("p1"), K::Rect, [MAX_COORD, MAX_COORD, 10.0, 10.0]), index: None }).unwrap();
+        s2.node_mut("link").unwrap().from = Some("c".into());
+        s2.node_mut("link").unwrap().points = None;
+        let ops = delete(&s2, &Placed::default(), &ids(&["c"]));
+        run(&mut s2, &ops);
+        assert!(s2.node("link").unwrap().points.iter().flatten().flatten().all(|v| v.abs() <= MAX_COORD));
+    }
+
+    /// B112: ungrouping a group a connector is attached to lets the connector go where it is
+    /// drawn, whether it sits beside the group or inside it, rather than leave it naming a node
+    /// that is gone, drawn at its stored points.
+    #[test]
+    fn ungrouping_a_connected_group_lets_its_connector_go_where_drawn() {
+        let mut s = row(3);
+        let mut g = node("g", Some("p1"), K::Group, [200.0, 100.0, 0.0, 0.0]);
+        g.name = Some("pair".into());
+        let mut beside = node("ln", Some("p1"), K::Line, [0.0; 4]);
+        (beside.from, beside.to) = (Some("g".into()), Some("x1".into()));
+        let mut inside = node("ln2", Some("g"), K::Line, [0.0; 4]);
+        (inside.from, inside.to) = (Some("x0".into()), Some("g".into()));
+        for op in [
+            NodeOp::Add { node: g, index: None },
+            NodeOp::Add { node: node("m1", Some("g"), K::Rect, [0.0, 0.0, 20.0, 20.0]), index: None },
+            NodeOp::Add { node: node("m2", Some("g"), K::Rect, [40.0, 30.0, 20.0, 20.0]), index: None },
+            NodeOp::Add { node: beside, index: None },
+            NodeOp::Add { node: inside, index: None },
+        ] {
+            s.apply(&op).unwrap();
+        }
+        let placed = place(&s, "p1", &Mono);
+        let drawn = |s: &Scene, placed: &Placed, id: &str| shapes::line_points(s, placed, s.node(id).unwrap()).0;
+        let (was, was2) = (drawn(&s, &placed, "ln"), drawn(&s, &placed, "ln2"));
+        let (ops, _) = ungroup(&s, &placed, "g").unwrap();
+        run(&mut s, &ops);
+        let after = place(&s, "p1", &Mono);
+        let (ln, ln2) = (s.node("ln").unwrap(), s.node("ln2").unwrap());
+        assert_eq!((ln.from.as_deref(), ln.to.as_deref()), (None, Some("x1")));
+        assert_eq!((ln2.from.as_deref(), ln2.to.as_deref(), ln2.parent.as_deref()), (Some("x0"), None, Some("p1")));
+        // Where it was drawn, to the whole pixel its freed end is written at.
+        near(&drawn(&s, &after, "ln"), &was);
+        near(&drawn(&s, &after, "ln2"), &was2);
+        kept(&placed, &after, &["m1", "m2"]);
+    }
+
     #[test]
     fn restacking_several_keeps_their_order() {
         let order = |s: &Scene| s.children("p1").to_vec();
@@ -1035,6 +1159,12 @@ mod tests {
         ]))
         .unwrap();
         Scene::new(nodes)
+    }
+
+    /// The same points, each within a pixel.
+    fn near(a: &[(f64, f64)], b: &[(f64, f64)]) {
+        assert_eq!(a.len(), b.len(), "{a:?} against {b:?}");
+        assert!(a.iter().zip(b).all(|(p, q)| (p.0 - q.0).abs() < 1.0 && (p.1 - q.1).abs() < 1.0), "{a:?} against {b:?}");
     }
 
     /// Each of `ids` is placed in `after` as in `before`.
