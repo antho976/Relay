@@ -1,17 +1,20 @@
 //! The Pictures plugin's engine side (pictures-SPEC-v2 §7): picture ids and the words a search
 //! sends, the providers' answers read with their licences ([`parse`]), a client for their three
 //! fixed hosts ([`net`]), the thumbnail cache, and the [`Desk`]: what the engine remembers between
-//! requests (hits, searches, cooldowns, the agents' allowance, the Pexels key's state). The ops
-//! come with pictures-key, pictures-search and pictures-add (`handlers/picture.rs`).
+//! requests (hits, searches, cooldowns, the agents' allowance, the Pexels key's state), held by
+//! the engine as `Engine::pictures`. The Pexels key at rest is [`key`]'s. The ops are in
+//! `handlers/picture.rs`.
 //!
 //! Lock rules (§7.1): no `Desk` mutex is held across I/O, or while the store is taken
 //! (`ctx.read`): a caller copies out what it needs and lets go, so the store, when held, is always
 //! taken first. Every `Desk` mutex is taken poison-tolerantly, so one panic breaks no later call.
 //! Nothing here sleeps: a provider that asks to wait is refused locally until then.
 
+pub mod key;
 pub mod net;
 pub mod parse;
 
+use crate::engine::Engine;
 use crate::picture::{self, Picture};
 use crate::Instance;
 use net::{Fetch, Req, Ureq, Want};
@@ -393,7 +396,7 @@ impl<K: Hash + Eq + Clone, V> Recent<K, V> {
 }
 
 /// What the engine remembers of pictures between requests, all in memory: a restart loses it and
-/// nothing else, because ids resolve again through detail reads (§1.7). An `Engine` field.
+/// nothing else, because ids resolve again through detail reads (§1.7). `Engine::pictures`.
 pub struct Desk {
     /// A fake that serves every request: tests, and the smoke run's fixtures.
     fetch: Mutex<Option<Arc<dyn Fetch>>>,
@@ -457,9 +460,15 @@ impl Desk {
         if let Some(left) = self.cooling(bucket, Instant::now()) {
             return Err(rate_limited(bucket.source(), left));
         }
+        self.send_past_cooldown(fetch, req)
+    }
+
+    /// [`Desk::send`], sent even while its bucket cools: only for checking a new Pexels key,
+    /// whose hourly allowance is its own, not the one the saved key spent. A 429 still cools.
+    pub fn send_past_cooldown(&self, fetch: &dyn Fetch, req: &Req) -> Result<Vec<u8>, BusError> {
         let got = fetch.get(req).map_err(|e| net::failed(req, e))?;
         if got.status == 429 {
-            self.cool(bucket, got.retry_after.unwrap_or(COOL_DEFAULT_S), Instant::now());
+            self.cool(req.bucket(), got.retry_after.unwrap_or(COOL_DEFAULT_S), Instant::now());
         }
         net::classify(req, got)
     }
@@ -478,6 +487,11 @@ impl Desk {
         let mut cool = lock(&self.cool);
         let at = cool.entry(bucket).or_insert(until);
         *at = (*at).max(until);
+    }
+
+    /// End `bucket`'s cooldown: a new Pexels key comes with an hourly allowance of its own.
+    pub fn warm(&self, bucket: Bucket) {
+        lock(&self.cool).remove(&bucket);
     }
 
     /// Counts one agent request against `bucket`'s 24-hour allowance, or refuses it with
@@ -590,6 +604,21 @@ impl Desk {
 
 fn keyring_unread() -> BusError {
     keyring("the desktop keyring could not be read")
+}
+
+/// Serve every picture request `engine` sends from `fake` from now on: tests, and the smoke run's
+/// fixtures. As `arbiter::set_fake_exchange`.
+pub fn set_fake_fetch(engine: &Engine, fake: Arc<dyn Fetch>) {
+    engine.pictures.set_fake_fetch(fake);
+}
+
+/// The Pexels key the person saved, for a Pexels request (§7.4): read from the keyring on the
+/// first call that needs it, never for Openverse and never in a finish phase. `agent` says who
+/// asks: after the keyring failed, agents are answered `design.picture.keyring` at once for a
+/// minute, while the person's call asks it again. Refuses `design.picture.no_key` when none is
+/// saved.
+pub fn saved_key(engine: &Engine, agent: bool) -> Result<SecretKey, BusError> {
+    engine.pictures.key_with(agent, || key::load(&key::Keyring::of(engine)))
 }
 
 // ------------------------------------------------------------------ the thumbnail cache
@@ -908,6 +937,21 @@ mod tests {
         let fake = Fake::answering(vec![status(429, None)]);
         assert!(pexels.send(&fake, &Req::pexels_key_check(SecretKey::new("k"))).is_err());
         assert_eq!(pexels.cooling(Bucket::Pexels, Instant::now()).map(|s| s > 58), Some(true), "60 s without Retry-After");
+    }
+
+    #[test]
+    fn a_new_keys_check_goes_through_a_cooldown_and_warm_ends_it() {
+        let desk = Desk::default();
+        let fake = Fake::answering(vec![status(429, Some(30)), status(429, Some(10))]);
+        let check = Req::pexels_key_check(SecretKey::new("k"));
+        assert_eq!(desk.send(&fake, &check).unwrap_err().code, "design.picture.rate_limited");
+        assert_eq!(desk.send_past_cooldown(&fake, &check).unwrap_err().code, "design.picture.rate_limited", "sent, and answered 429");
+        assert_eq!(fake.calls(), 2);
+        assert!(desk.cooling(Bucket::Pexels, Instant::now()).is_some_and(|s| s > 20), "the longer cooldown stands");
+        assert_eq!(desk.send_past_cooldown(&fake, &check).unwrap(), b"ok");
+        desk.warm(Bucket::Pexels);
+        assert_eq!(desk.cooling(Bucket::Pexels, Instant::now()), None);
+        assert_eq!(desk.send(&fake, &check).unwrap(), b"ok");
     }
 
     #[test]
