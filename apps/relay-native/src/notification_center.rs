@@ -230,38 +230,43 @@ impl Center {
         dot.set_valign(gtk::Align::Start);
         dot.set_opacity(if unread { 1.0 } else { 0.0 });
         content.append(&dot);
-        let copy = gtk::Box::new(gtk::Orientation::Vertical, 3);
+        let copy = gtk::Box::new(gtk::Orientation::Vertical, 2);
         copy.set_hexpand(true);
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let title = label(text(item, "title"), "notification-row-title");
         title.set_hexpand(true);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         top.append(&title);
-        top.append(&label(&relative_time(text(item, "created_at")), "notification-time"));
+        // Where, only when it is not here, then when, in the corner: the dot already says what
+        // kind, and the title who.
+        let when = crate::relative::ago(text(item, "created_at"), crate::relative::Form::Compact).unwrap_or_default();
+        let here = self.ui.upgrade().map(|ui| ui.project.get());
+        let corner = match project.filter(|p| !p.is_empty() && item["project_id"].as_i64() != here) {
+            Some(project) => format!("{project} · {when}"),
+            None => when,
+        };
+        let corner_label = label(&corner, "notification-time");
+        corner_label.set_ellipsize(gtk::pango::EllipsizeMode::Start);
+        corner_label.set_max_width_chars(22);
+        corner_label.set_tooltip_text(Some(&relative_time(text(item, "created_at"))));
+        top.append(&corner_label);
         copy.append(&top);
-        let body = text(item, "body").trim();
-        if !body.is_empty() {
-            let body_label = label(body, "notification-body");
+        // An agent's whole final message arrives as the body; the row shows its opening, in
+        // plain words, and following the row opens the rest.
+        let (gist, cut) = excerpt(text(item, "body"));
+        if !gist.is_empty() {
+            let body_label = label(&gist, "notification-body");
             body_label.set_wrap(true);
             body_label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-            body_label.set_lines(3);
+            body_label.set_lines(2);
             body_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            body_label.set_max_width_chars(48);
-            body_label.set_tooltip_text(Some(body));
+            body_label.set_max_width_chars(46);
+            body_label.set_xalign(0.0);
+            if cut {
+                body_label.set_tooltip_text(Some(&gist));
+            }
             copy.append(&body_label);
         }
-        // What kind, then where: a long project name is cut, not the kind, and no longer
-        // widens the popover.
-        let mut meta = vec![kind(category)];
-        if let Some(project) = project.filter(|p| !p.is_empty()) {
-            meta.push(project.to_string());
-        }
-        let meta = meta.join(" · ");
-        let meta_label = label(&meta, "notification-meta");
-        meta_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        meta_label.set_xalign(0.0);
-        meta_label.set_tooltip_text(Some(&meta));
-        copy.append(&meta_label);
         content.append(&copy);
         // A notification whose link the UI cannot route, or that has none, offers no "Open"
         // (D121): its row is plain text, and only Mark read acts on it.
@@ -281,8 +286,8 @@ impl Center {
         } else {
             // The padding button.notification-open would have given it.
             content.set_hexpand(true);
-            content.set_margin_top(10);
-            content.set_margin_bottom(10);
+            content.set_margin_top(8);
+            content.set_margin_bottom(8);
             content.set_margin_start(12);
             content.set_margin_end(12);
             row.append(&content);
@@ -348,27 +353,48 @@ impl Center {
     }
 }
 
-/// A notification's kind in a few words, after the switch in Settings › Notifications that
-/// silences it ("Agent needs you"; "Integration" for one of Integrations). A guardrail notice
-/// may be a refusal filed quietly, so it reads "Guardrail", not "Guardrail needs you".
-fn kind(category: &str) -> String {
-    match category {
-        "agent_blocked" => "Agent needs you",
-        "agent_done" => "Agent finished",
-        "guardrail" => "Guardrail",
-        "provider" => "Provider",
-        "integration" => "Integration",
-        "disk" => "Disk",
-        "system" => "System",
-        other => {
-            let mut words = other.replace('_', " ");
-            if let Some(first) = words.get_mut(0..1) {
-                first.make_ascii_uppercase();
+/// How much of a body a row keeps; two lines show well under this, and the rest is the link's.
+const EXCERPT_CHARS: usize = 240;
+
+/// The opening of `body` as one plain paragraph, and whether anything was left out: markdown
+/// marks, list bullets, headings, tables and code blocks dropped, line breaks run together.
+fn excerpt(body: &str) -> (String, bool) {
+    let mut words = String::new();
+    let mut fenced = false;
+    let mut dropped = false;
+    for line in body.lines() {
+        let line = line.trim();
+        if line.starts_with("```") {
+            fenced = !fenced;
+            dropped = true;
+            continue;
+        }
+        if fenced || line.starts_with('|') {
+            dropped = true;
+            continue;
+        }
+        let line = line.trim_start_matches('#').trim_start_matches('>').trim_start();
+        let line = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")).unwrap_or(line);
+        let digits = line.len() - line.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        let line = match line[digits..].strip_prefix(". ") {
+            Some(rest) if digits > 0 => rest,
+            _ => line,
+        };
+        for word in line.split_whitespace() {
+            let word = word.replace("**", "").replace("__", "").replace('`', "");
+            if word.is_empty() {
+                continue;
             }
-            return words;
+            if !words.is_empty() {
+                words.push(' ');
+            }
+            words.push_str(&word);
         }
     }
-    .to_string()
+    match words.char_indices().nth(EXCERPT_CHARS) {
+        None => (words, dropped),
+        Some((at, _)) => (format!("{}…", words[..at].trim_end()), true),
+    }
 }
 
 /// The page following `item` opens, or None when its link names nothing the UI can route
@@ -387,4 +413,26 @@ fn route(item: &Value) -> Option<&str> {
         "session.get" | "guardrail.confirm" => "agents",
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_excerpt_reads_as_plain_words() {
+        let body = "The queue is set up:\n\n1. **Gemma v1** is running; `23` passed.\n- Next: distill\n\n| a | b |\n|---|---|\n```\ncode\n```";
+        assert_eq!(excerpt(body), ("The queue is set up: Gemma v1 is running; 23 passed. Next: distill".into(), true));
+        assert_eq!(excerpt("  Short.  "), ("Short.".into(), false));
+        assert_eq!(excerpt(""), (String::new(), false));
+        assert_eq!(excerpt("2026 was a year"), ("2026 was a year".into(), false));
+    }
+
+    #[test]
+    fn a_long_body_is_cut_at_a_char_boundary() {
+        let (gist, cut) = excerpt(&"é".repeat(500));
+        assert!(cut);
+        assert_eq!(gist.chars().count(), EXCERPT_CHARS + 1);
+        assert!(gist.ends_with('…'));
+    }
 }

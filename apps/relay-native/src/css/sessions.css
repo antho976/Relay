@@ -23,7 +23,7 @@ popover.notification-center contents { padding: 0; }
 .notification-summary { color: @faint; font-size: 11px; }
 .notification-row { border-bottom: 1px solid @edge; }
 .notification-row:last-child { border-bottom: 0; }
-button.notification-open { background: transparent; border: 0; border-radius: 0; padding: 10px 12px; min-height: 0; }
+button.notification-open { background: transparent; border: 0; border-radius: 0; padding: 8px 12px; min-height: 0; }
 button.notification-open:hover { background: @wash; }
 .notification-row button.notification-read { margin: 0 8px 0 2px; }
 .notification-row-title { color: @secondary; font-size: 12px; font-weight: 500; }
