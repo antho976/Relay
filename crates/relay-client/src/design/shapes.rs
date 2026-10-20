@@ -3,6 +3,15 @@
 //! is stroked along and its arrowheads, the shadows a node casts, a ring segment's capped ends,
 //! a box's rounded corners and a shape's label box. The canvas draws with these and hit testing
 //! reads them, so what you click is what you see.
+//!
+//! The phone runs a port of this file
+//! (`apps/relay-android/core/src/main/kotlin/com/quietsoftware/relay/core/design/Shapes.kt`):
+//! `node_polygon` (a star has 5 points unless it says), `arc` and `arc_ends`, `smooth_segments`,
+//! `path_segments`, `arrowheads`, `effective_shadows`, the edge points and `line_points`, an
+//! elbow between two overlapping spans running straight through the middle of the overlap. A
+//! change here changes it there in the same piece of work, with a case in
+//! `apps/relay-android/core/src/test/resources/design/layout-cases.json`, which the Rust side
+//! runs too.
 
 use super::geom::{segment_distance, Rect};
 use super::layout::{Measure, Placed};
@@ -796,6 +805,15 @@ mod tests {
         assert!(inside(&star, 50.0, 50.0));
         assert!(!inside(&star, 2.0, 2.0));
         assert!(inside(&tri, 50.0, 60.0) && !inside(&tri, 5.0, 5.0));
+    }
+
+    #[test]
+    fn star_without_sides_has_five_points() {
+        // B57: the rule the phone's port follows.
+        let mut star = node("s", Some("p1"), K::Polygon, [0.0, 0.0, 100.0, 100.0]);
+        star.star = Some(0.4);
+        assert_eq!(node_polygon(&star, &Rect::new(0.0, 0.0, 100.0, 100.0)).len(), 10);
+        assert_eq!(node_polygon(&node("t", Some("p1"), K::Polygon, [0.0; 4]), &Rect::new(0.0, 0.0, 100.0, 100.0)).len(), 3);
     }
 
     #[test]

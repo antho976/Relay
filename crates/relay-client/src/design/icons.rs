@@ -1,5 +1,10 @@
 //! The icons an `icon` node draws: outline geometry on a 24-unit grid as SVG path data, drawn
 //! with round caps and joins in the node's stroke. Names are `relay_bus::design::ICONS`.
+//!
+//! The phone draws the same set from a copy
+//! (`apps/relay-android/core/src/main/resources/design/icons.json`, read by `Icons.kt` in
+//! `apps/relay-android/core/src/main/kotlin/com/quietsoftware/relay/core/design/`). A change here
+//! changes it there in the same piece of work.
 
 /// An icon's path data, or `None` for a name not in the set.
 pub fn path(name: &str) -> Option<&'static str> {
