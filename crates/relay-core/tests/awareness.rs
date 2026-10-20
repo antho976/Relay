@@ -655,3 +655,48 @@ fn an_oversized_brief_section_is_cut_with_a_pointer_to_the_full_list() {
     // A section within its budget is whole and says nothing more.
     assert!(!brief["parts"]["peers"].as_str().unwrap().contains("full list"));
 }
+
+/// A session can sit for hours between launch and its first turn while the base moves on, and
+/// the brief's counts are from launch. Bootstrap reads the refs again at the call.
+#[test]
+fn bootstrap_says_how_far_the_checkout_is_behind_the_base_now() {
+    let f = Fixture::new();
+    let e = &f.engine;
+    let current = ok(e, Actor::agent(f.a_name()), "session.bootstrap", json!({}));
+    assert_eq!(current["base_sync"]["base"], "main");
+    assert_eq!(current["base_sync"]["behind"], 0);
+    assert_eq!(current["base_sync"]["ahead"], 0);
+    assert!(current["base_sync"]["hint"].as_str().unwrap().starts_with("Up to date with main."));
+
+    let repo = f._root.path().join("ws").join("app");
+    common::git(&repo, &["commit", "-q", "--allow-empty", "-m", "merged while the session waited"]);
+    let tip = common::git(&repo, &["rev-parse", "main"]);
+    let behind = ok(e, Actor::agent(f.a_name()), "session.bootstrap", json!({}));
+    assert_eq!(behind["base_sync"]["behind"], 1);
+    assert_eq!(behind["base_sync"]["ahead"], 0);
+    assert_eq!(behind["base_sync"]["head"], tip.as_str());
+    let hint = behind["base_sync"]["hint"].as_str().unwrap();
+    assert!(hint.contains("1 commit behind main"), "{hint}");
+    assert!(hint.contains("`git merge --ff-only main`"), "{hint}");
+    // session.create fetched a moment ago, so the count needs no new fetch.
+    assert!(behind["base_sync"]["fetched_secs_ago"].as_u64().unwrap() < 3600);
+    assert!(!hint.contains("git fetch"), "{hint}");
+    // A fetch hours old is worth repeating before the count is trusted.
+    let touched = std::process::Command::new("touch")
+        .args(["-d", "2 hours ago"]).arg(repo.join(".git").join("FETCH_HEAD")).status().unwrap();
+    assert!(touched.success());
+    let stale = ok(e, Actor::agent(f.a_name()), "session.bootstrap", json!({}));
+    assert!(stale["base_sync"]["fetched_secs_ago"].as_u64().unwrap() >= 7200);
+    assert!(stale["base_sync"]["hint"].as_str().unwrap().contains("`git fetch` first"));
+
+    let worktree = PathBuf::from(f.a["worktree"].as_str().unwrap());
+    std::fs::write(worktree.join("own.txt"), "own work\n").unwrap();
+    common::git(&worktree, &["add", "own.txt"]);
+    // The session's checkout carries Relay's commit hooks, which want a live engine socket.
+    common::git(&worktree, &["-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "own work"]);
+    let diverged = ok(e, Actor::agent(f.a_name()), "session.bootstrap", json!({}));
+    assert_eq!(diverged["base_sync"]["behind"], 1);
+    assert_eq!(diverged["base_sync"]["ahead"], 1);
+    let hint = diverged["base_sync"]["hint"].as_str().unwrap();
+    assert!(hint.contains("has 1 commit of its own. Merge main into it"), "{hint}");
+}

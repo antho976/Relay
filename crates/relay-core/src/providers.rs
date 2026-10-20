@@ -47,7 +47,8 @@ and result with `bus.schema {\"op\":\"<op>\"}`; do not guess fields. From a shel
 const COMMON_INSTRUCTIONS: &str = "On your first turn, obtain the current assignment and queue before \
 acting: call the session.bootstrap Relay MCP tool when available; otherwise run `$RELAY_BIN q \
 session.bootstrap`. It also returns your live peers, every op you may call, and your \
-guardrails. Coordinate with those peers through Relay `mailbox.send` — it reaches every \
+guardrails, and `base_sync` says how far your checkout is behind the base right now: when \
+`behind` is not 0, follow its `hint` before starting. Coordinate with those peers through Relay `mailbox.send` — it reaches every \
 provider including Codex, which your own cross-agent messaging tool does not; send \
 `{\"to\":\"*\",\"text\":\"...\"}` to broadcast, and `mailbox.outbox` shows what you sent. Declare the files you are taking on with `session.claim` — it names any \
 peer already holding them — and one line of what you are doing with `session.intent`. Before \
@@ -616,6 +617,7 @@ mod tests {
             assert!(text.contains("mail.priority"), "{role:?} will miss priority mail");
             assert!(text.contains("has a current task"), "{role:?} will try to file an unattributed suggestion");
             assert!(text.contains("target: \"suggestions\""), "{role:?} cannot record observed friction");
+            assert!(text.contains("base_sync"), "{role:?} may build on a base that moved since launch");
         }
         // The common half is one string; keep the roles from drifting apart again.
         assert!(COMMON_INSTRUCTIONS.contains("mailbox.send"));
