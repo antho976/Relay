@@ -7,10 +7,11 @@ use gtk::prelude::*;
 use gtk::{gdk, graphene, gsk, pango};
 use gtk4 as gtk;
 use relay_bus::design::{
-    parse_color, strip_controls, Blend, Gradient, GradientKind, ImageFit, Node, NodeKind, Shadow, StrokeCap, StrokeJoin, TextAlign, TextRun, MAX_COORD,
-    MAX_SHADOW_BLUR,
+    parse_color, strip_controls, Blend, Gradient, GradientKind, ImageFit, Node, NodeKind, Pose, Shadow, StrokeCap, StrokeJoin, TextAlign, TextRun,
+    MAX_COORD, MAX_SHADOW_BLUR,
 };
-use relay_client::design::layout::{self, Measure, Placed, STICKY_PAD};
+use relay_client::design::layout::{Measure, Placed, STICKY_PAD};
+use relay_client::design::motion::{self, Clocks};
 use relay_client::design::shapes::{self, ArcEnd, Seg};
 use relay_client::design::{bounds, text, Rect, Scene};
 use std::borrow::Cow;
@@ -217,7 +218,9 @@ const DECODE_EDGE: i32 = 2048;
 enum Picture {
     Loading,
     Ready(gdk::Texture),
-    Vector(gtk::Svg),
+    /// An SVG, its bytes (to put it back at its first frame) and whether it animates itself
+    /// (SMIL), which it does only while Play runs (W66).
+    Vector { svg: gtk::Svg, bytes: glib::Bytes, moves: bool },
     Failed,
 }
 
@@ -250,10 +253,10 @@ fn decode(path: &std::path::Path) -> Result<gdk::Texture, String> {
 
 /// An SVG picture that reads nothing outside itself: no files or addresses it links to, so a
 /// picture an agent added cannot reach the disk or the network when it is drawn.
-fn svg(bytes: Vec<u8>) -> gtk::Svg {
+fn svg(bytes: &glib::Bytes) -> gtk::Svg {
     let svg = gtk::Svg::new();
     svg.set_features(gtk::SvgFeatures::ANIMATIONS | gtk::SvgFeatures::SYSTEM_RESOURCES | gtk::SvgFeatures::EXTENSIONS);
-    svg.load_from_bytes(&glib::Bytes::from_owned(bytes));
+    svg.load_from_bytes(bytes);
     svg
 }
 
@@ -291,6 +294,14 @@ fn prune_pictures(map: &mut HashMap<String, Picture>, scene: &Scene, drop_failed
     });
 }
 
+/// What a frame of Play draws (feature-motion §3): each mover's pose at the frame's time, and
+/// the clocks that say what moves, whose rest is drawn from the pictures kept of it.
+#[derive(Clone)]
+pub struct Posing {
+    pub poses: HashMap<String, Pose>,
+    pub clocks: Rc<Clocks>,
+}
+
 /// Caches for drawing one design. One per canvas (and one for the gallery's thumbnails).
 pub struct Painter {
     ctx: pango::Context,
@@ -309,6 +320,13 @@ pub struct Painter {
     /// images of their own, which every viewer shows, where a texture or blend node becomes a
     /// filter some draw white (TM-21). Every decoded pixel of a picture is kept (TM-22).
     pub vector: Cell<bool>,
+    /// The poses drawn, only while `with_posing` runs: nothing else this painter draws (an
+    /// export, Ask's picture) ever shows a frame of Play.
+    posing: RefCell<Option<Rc<Posing>>>,
+    /// While posing: what each node that neither moves nor holds a mover paints, kept from one
+    /// frame of Play to the next, and the clocks they were kept for.
+    stills: RefCell<HashMap<String, Option<gsk::RenderNode>>>,
+    stills_for: RefCell<Option<Rc<Clocks>>>,
     me: std::rc::Weak<Painter>,
 }
 
@@ -327,7 +345,70 @@ impl Painter {
             loaded: RefCell::default(),
             editing: RefCell::default(),
             vector: Cell::default(),
+            posing: RefCell::default(),
+            stills: RefCell::default(),
+            stills_for: RefCell::default(),
         })
+    }
+
+    /// Run `f` drawing `posing`'s poses (none: everything at rest), then draw as before. What
+    /// does not move is painted once and kept while the clocks stay the same `Rc`: a new one
+    /// (an edit, a reread, another export) paints them afresh.
+    pub fn with_posing<R>(&self, posing: Option<Rc<Posing>>, f: impl FnOnce() -> R) -> R {
+        if let Some(p) = &posing {
+            let mut kept = self.stills_for.borrow_mut();
+            if !kept.as_ref().is_some_and(|c| Rc::ptr_eq(c, &p.clocks)) {
+                self.stills.borrow_mut().clear();
+                *kept = Some(p.clocks.clone());
+            }
+        }
+        let before = self.posing.replace(posing);
+        let out = f();
+        *self.posing.borrow_mut() = before;
+        out
+    }
+
+    /// Forget what was kept of the nodes that do not move: what they paint has changed (a
+    /// picture loaded), or Play is over.
+    pub fn clear_stills(&self) {
+        self.stills.borrow_mut().clear();
+        self.stills_for.borrow_mut().take();
+    }
+
+    /// Start the SVG pictures that animate themselves on `clock`, the canvas's (W66); again
+    /// after a pause, they go on where they were.
+    pub fn play_pictures(&self, clock: &gdk::FrameClock) {
+        for p in self.pictures.borrow().values() {
+            if let Picture::Vector { svg, moves: true, .. } = p {
+                svg.set_frame_clock(clock);
+                svg.play();
+            }
+        }
+    }
+
+    /// Hold the moving SVG pictures where they are.
+    pub fn pause_pictures(&self) {
+        for p in self.pictures.borrow().values() {
+            if let Picture::Vector { svg, moves: true, .. } = p {
+                svg.pause();
+            }
+        }
+    }
+
+    /// Stop the moving SVG pictures and put them back at their first frame, as the editing view
+    /// and every still picture show them.
+    pub fn stop_pictures(&self) {
+        for p in self.pictures.borrow().values() {
+            if let Picture::Vector { svg, bytes, moves: true } = p {
+                svg.pause();
+                svg.load_from_bytes(bytes);
+            }
+        }
+    }
+
+    /// The pictures loaded so far that animate themselves.
+    pub fn moving_srcs(&self) -> HashSet<String> {
+        self.pictures.borrow().iter().filter(|(_, p)| matches!(p, Picture::Vector { moves: true, .. })).map(|(src, _)| src.clone()).collect()
     }
 
     pub fn on_loaded(&self, f: impl Fn() + 'static) {
@@ -471,7 +552,11 @@ impl Painter {
             .await;
             let picture = match read {
                 Ok(Ok(Decoded::Raster(texture))) => Picture::Ready(texture),
-                Ok(Ok(Decoded::Svg(bytes))) => Picture::Vector(svg(bytes)),
+                Ok(Ok(Decoded::Svg(bytes))) => {
+                    let moves = motion::svg_moves(&bytes);
+                    let bytes = glib::Bytes::from_owned(bytes);
+                    Picture::Vector { svg: svg(&bytes), bytes, moves }
+                }
                 _ => Picture::Failed,
             };
             if let Some(painter) = painter_ptr.upgrade() {
@@ -603,14 +688,53 @@ impl Painter {
         }
     }
 
-    /// Paint one node and what is inside it.
+    /// Paint one node and what is inside it; while posing, as the frame of Play shows it.
     pub fn paint(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, id: &str, view: Option<&Rect>) {
-        let Some(n) = scene.node(id).filter(|n| !n.is_hidden()) else {
+        let posing = self.posing.borrow().clone();
+        match posing {
+            Some(p) if !p.clocks.touches(id) => self.paint_still(snap, scene, placed, id),
+            Some(p) => self.paint_node(snap, scene, placed, id, view, p.poses.get(id)),
+            None => self.paint_node(snap, scene, placed, id, view, None),
+        }
+    }
+
+    /// Paint `id`, which neither moves nor holds what moves, as it rests: the picture kept of it
+    /// since the clocks were made, else painted once (with no cull, at rest) and kept. One frame
+    /// of Play so repaints only its movers and what holds them.
+    fn paint_still(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, id: &str) {
+        if let Some(kept) = self.stills.borrow().get(id) {
+            if let Some(node) = kept {
+                snap.append_node(node);
+            }
+            return;
+        }
+        let one = gtk::Snapshot::new();
+        let posing = self.posing.replace(None);
+        self.paint_node(&one, scene, placed, id, None, None);
+        *self.posing.borrow_mut() = posing;
+        let node = one.to_node();
+        if let Some(node) = &node {
+            snap.append_node(node);
+        }
+        self.stills.borrow_mut().insert(id.to_string(), node);
+    }
+
+    /// Paint one node and what is inside it, `pose`d: its looks as the pose dresses it, moved by
+    /// its pose's transform outside its own turn (CSS's order: `transform` from the motion, the
+    /// node's rotation within), and a line or path drawn on as far as its trim.
+    fn paint_node(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, id: &str, view: Option<&Rect>, pose: Option<&Pose>) {
+        let Some(rest) = scene.node(id).filter(|n| !n.is_hidden()) else {
             return;
         };
         let Some(r) = placed.rect(id) else {
             return;
         };
+        let dressed = pose.and_then(|p| p.dress(rest));
+        let n = dressed.as_ref().unwrap_or(rest);
+        // Scaled to nothing, it shows nothing (and a transform of no size has no inverse).
+        if pose.is_some_and(|p| p.scale_x.abs() < 1e-6 || p.scale_y.abs() < 1e-6) {
+            return;
+        }
         let clips = n.kind == NodeKind::Frame && n.clip != Some(false);
         let turn = shapes::rotation(n);
         // How far what it draws reaches past its box: shadows, ring caps, a line's stroke and
@@ -622,7 +746,8 @@ impl Painter {
         let reach = shapes::shadow_reach(n) + shapes::cap_reach(n, &r) + stroke.max(0.0) + n.blur.unwrap_or(0.0).max(0.0) * 2.0 + 16.0;
         // A connector runs wherever its ends are, not inside its stored box.
         let connector = n.kind == NodeKind::Line && (n.from.is_some() || n.to.is_some());
-        let culls = (!n.kind.holds_children() || clips) && !connector;
+        // A posed node may be anywhere its motion takes it: never culled.
+        let culls = (!n.kind.holds_children() || clips) && !connector && pose.is_none();
         if culls && view.is_some_and(|v| !v.intersects(&shapes::rotated_bounds(&r, turn).inflate(reach))) {
             return;
         }
@@ -632,6 +757,11 @@ impl Painter {
         }
         if opacity < 1.0 {
             snap.push_opacity(opacity);
+        }
+        let moved = pose.filter(|p| p.moves()).map(|p| motion_transform(&r, p));
+        if let Some(t) = &moved {
+            snap.save();
+            snap.transform(Some(t));
         }
         if turn != 0.0 {
             snap.save();
@@ -681,7 +811,7 @@ impl Painter {
                 if n.kind == NodeKind::Sticky {
                     if !editing {
                         let inner = Rect::new(r.x + STICKY_PAD, r.y + STICKY_PAD, (r.w - 2.0 * STICKY_PAD).max(1.0), r.h);
-                        self.text(snap, scene, n, &inner, layout::wrap_width(n, &r));
+                        self.text(snap, scene, n, &inner, placed.wrap_width(n, &r));
                     }
                 } else if !editing {
                     self.shape_text(snap, scene, n, &r);
@@ -713,7 +843,7 @@ impl Painter {
                 if !editing {
                     // Its letters cast its shadows, not its fill box (CSS's text-shadow).
                     let cast = self.cast(snap, n);
-                    self.text(snap, scene, n, &r, layout::wrap_width(n, &r));
+                    self.text(snap, scene, n, &r, placed.wrap_width(n, &r));
                     if cast {
                         snap.pop();
                     }
@@ -722,7 +852,7 @@ impl Painter {
             NodeKind::Line | NodeKind::Path => {
                 // Fill, stroke and heads glow together.
                 let cast = self.cast(snap, n);
-                self.stroke(snap, scene, placed, n, &r);
+                self.stroke(snap, scene, placed, n, &r, pose.and_then(|p| p.trim));
                 if cast {
                     snap.pop();
                 }
@@ -733,6 +863,9 @@ impl Painter {
             snap.pop();
         }
         if turn != 0.0 {
+            snap.restore();
+        }
+        if moved.is_some() {
             snap.restore();
         }
         if opacity < 1.0 {
@@ -937,8 +1070,9 @@ impl Painter {
     /// A line or path: its fill (three or more free points), its stroke and its arrowheads
     /// (`shapes::arrowheads`, which hit testing takes too), drawn from its box's corner `r`, where
     /// its points count from. A weight of 0 draws no stroke and no heads (B97); a closed shape
-    /// strokes inside its edge as a polygon does (B95).
-    fn stroke(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, n: &Node, r: &Rect) {
+    /// strokes inside its edge as a polygon does (B95). A `trim` under 1 (Play's draw-on) strokes
+    /// that much of its length from its start, and its end's arrowhead waits for the whole.
+    fn stroke(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, n: &Node, r: &Rect, trim: Option<f64>) {
         // Page points narrowed to f32 once the corner is taken off (B110).
         let local = |p: (f64, f64)| ((p.0 - r.x) as f32, (p.1 - r.y) as f32);
         let path = if shapes::routed(n) {
@@ -976,15 +1110,25 @@ impl Painter {
         let width = n.stroke_width.unwrap_or(2.0);
         let color = rgba(n.stroke.as_deref().unwrap_or(STROKE));
         let shown = n.stroke_gradient.is_some() || n.stroke.as_deref().is_none_or(|s| parse_color(s).is_some_and(|c| c[3] > 0));
+        let trim = trim.unwrap_or(1.0);
+        let drawn = trimmed(&path, trim);
         if width > 0.0 && shown {
             if shapes::closed_shape(n) {
-                snap.push_fill(&path, gsk::FillRule::Winding);
-                self.stroke_with(snap, n, &path, &stroke_of(n, width * 2.0), Some(&color), None);
-                snap.pop();
+                if let Some(drawn) = &drawn {
+                    snap.push_fill(&path, gsk::FillRule::Winding);
+                    self.stroke_with(snap, n, drawn, &stroke_of(n, width * 2.0), Some(&color), None);
+                    snap.pop();
+                }
             } else {
                 let pen = stroke_of(n, width);
+                // Its end, where a trimmed stroke has not reached yet.
+                let end = path.end_point().map(|p| p.position(&path)).filter(|_| trim < 1.0);
                 let heads: Vec<gsk::Path> = shapes::arrowheads(scene, placed, n, r)
                     .into_iter()
+                    .filter(|[tip, ..]| end.is_none_or(|e| {
+                        let (x, y) = local(*tip);
+                        (x - e.x()).abs() > 0.01 || (y - e.y()).abs() > 0.01
+                    }))
                     .map(|[tip, a, b]| {
                         let p = gsk::PathBuilder::new();
                         let [(tx, ty), (ax, ay), (bx, by)] = [local(tip), local(a), local(b)];
@@ -997,7 +1141,9 @@ impl Painter {
                     .collect();
                 // One gradient over the line and its heads, so a head carries the colour on.
                 let area = path.stroke_bounds(&pen).map(|b| heads.iter().filter_map(gsk::Path::bounds).fold(rect_of(&b), |a, h| a.union(&rect_of(&h))));
-                self.stroke_with(snap, n, &path, &pen, Some(&color), area.as_ref());
+                if let Some(drawn) = &drawn {
+                    self.stroke_with(snap, n, drawn, &pen, Some(&color), area.as_ref());
+                }
                 for head in &heads {
                     match (&n.stroke_gradient, &area) {
                         (Some(g), Some(area)) => {
@@ -1024,7 +1170,7 @@ impl Painter {
         let picture = n.src.as_deref().map(|s| self.picture(s)).unwrap_or(Picture::Failed);
         let natural = match &picture {
             Picture::Ready(t) => Some((t.width() as f64, t.height() as f64)),
-            Picture::Vector(svg) => Some((svg.intrinsic_width().max(1) as f64, svg.intrinsic_height().max(1) as f64)),
+            Picture::Vector { svg, .. } => Some((svg.intrinsic_width().max(1) as f64, svg.intrinsic_height().max(1) as f64)),
             _ => None,
         };
         match natural {
@@ -1043,7 +1189,7 @@ impl Painter {
                 match &picture {
                     Picture::Ready(t) if self.vector.get() => texture_on_cairo(snap, t, &target),
                     Picture::Ready(t) => snap.append_scaled_texture(t, gsk::ScalingFilter::Trilinear, &grect(&target)),
-                    Picture::Vector(svg) => {
+                    Picture::Vector { svg, .. } => {
                         snap.save();
                         snap.translate(&graphene::Point::new(target.x as f32, target.y as f32));
                         svg.snapshot(snap.upcast_ref::<gdk::Snapshot>(), target.w, target.h);
@@ -1426,6 +1572,35 @@ fn build_path(start: (f64, f64), segs: &[Seg], closed: bool) -> gsk::Path {
     b.to_path()
 }
 
+/// The first `trim` of `path` by its length, from its start (Play's draw-on): all of it from 1
+/// up, none at 0 or below.
+fn trimmed(path: &gsk::Path, trim: f64) -> Option<gsk::Path> {
+    if trim >= 1.0 {
+        return Some(path.clone());
+    }
+    if trim.is_nan() || trim <= 0.0 {
+        return None;
+    }
+    let measure = gsk::PathMeasure::new(path);
+    let end = measure.point((f64::from(measure.length()) * trim) as f32)?;
+    let b = gsk::PathBuilder::new();
+    b.add_segment(path, &path.start_point()?, &end);
+    Some(b.to_path())
+}
+
+/// The transform a pose moves a node placed at `r` by, in page coordinates: offset, then turned
+/// and scaled about its origin (fractions of `r`), as CSS applies `translate rotate scale` with
+/// `transform-origin`; `motion::posed_bounds` maps a box the same way.
+fn motion_transform(r: &Rect, pose: &Pose) -> gsk::Transform {
+    let (ox, oy) = ((r.x + pose.origin[0] * r.w) as f32, (r.y + pose.origin[1] * r.h) as f32);
+    gsk::Transform::new()
+        .translate(&graphene::Point::new(pose.dx as f32, pose.dy as f32))
+        .translate(&graphene::Point::new(ox, oy))
+        .rotate(pose.rotate as f32)
+        .scale(pose.scale_x as f32, pose.scale_y as f32)
+        .translate(&graphene::Point::new(-ox, -oy))
+}
+
 fn rect_of(b: &graphene::Rect) -> Rect {
     Rect::new(b.x() as f64, b.y() as f64, b.width() as f64, b.height() as f64)
 }
@@ -1560,6 +1735,7 @@ impl Measure for Painter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use relay_client::design::layout;
 
     fn node(id: &str, parent: Option<&str>, kind: NodeKind, rect: [f64; 4]) -> Node {
         let mut n = Node::new(kind);
@@ -1822,6 +1998,132 @@ mod tests {
         let mut surface = surface_of(texture.upcast_ref()).unwrap();
         assert_eq!((surface.width(), surface.height()), (3, 1));
         assert_eq!(&surface.data().unwrap()[..12], &pixels);
+    }
+
+    /// A pose's transform moves a box where `motion::posed_bounds` says it goes (export frames
+    /// its pictures by those bounds), and an unmoved pose leaves it where it is.
+    #[test]
+    fn a_pose_moves_a_node_where_its_bounds_say() {
+        let r = Rect::new(100.0, 40.0, 80.0, 20.0);
+        let poses = [
+            Pose { dx: 12.0, dy: -8.0, ..Pose::default() },
+            Pose { rotate: 30.0, ..Pose::default() },
+            Pose { scale_x: 0.5, scale_y: 2.0, origin: [0.5, 1.0], ..Pose::default() },
+            Pose { dx: -40.0, rotate: -90.0, scale_x: 1.5, scale_y: 1.5, origin: [0.0, 0.0], ..Pose::default() },
+        ];
+        for pose in poses {
+            let b = rect_of(&motion_transform(&r, &pose).transform_bounds(&grect(&r)));
+            let want = motion::posed_bounds(&r, &pose);
+            for (got, want) in [(b.x, want.x), (b.y, want.y), (b.w, want.w), (b.h, want.h)] {
+                assert!((got - want).abs() < 0.01, "{pose:?}: {b:?} against {want:?}");
+            }
+        }
+        // The origin stays put under a turn and a scale about it.
+        let pose = Pose { rotate: 45.0, scale_x: 3.0, scale_y: 3.0, origin: [0.25, 0.5], ..Pose::default() };
+        let at = motion_transform(&r, &pose).transform_point(&pt(120.0, 50.0));
+        assert!((at.x() - 120.0).abs() < 0.01 && (at.y() - 50.0).abs() < 0.01);
+    }
+
+    /// A draw-on stroke is the first part of the path by length; none at 0, all of it at 1.
+    #[test]
+    fn a_trimmed_stroke_draws_its_first_part() {
+        let b = gsk::PathBuilder::new();
+        b.move_to(0.0, 0.0);
+        b.line_to(100.0, 0.0);
+        b.line_to(100.0, 100.0);
+        let path = b.to_path();
+        assert!(trimmed(&path, 0.0).is_none() && trimmed(&path, -1.0).is_none() && trimmed(&path, f64::NAN).is_none());
+        assert_eq!(trimmed(&path, 1.0).unwrap().to_str(), path.to_str());
+        let quarter = trimmed(&path, 0.25).unwrap().bounds().unwrap();
+        assert_eq!((quarter.x(), quarter.width(), quarter.height()), (0.0, 50.0, 0.0), "the first 50 of 200");
+        let most = trimmed(&path, 0.75).unwrap().bounds().unwrap();
+        assert_eq!((most.width(), most.height()), (100.0, 50.0), "round the corner and half down");
+    }
+
+    /// The perf reading's design (`scripts/design-smoke.py perf`: 40 phone artboards in auto
+    /// layout, each a title and a list of 10 rows of a text and a toggle with its knob; 1,721
+    /// nodes), with 50 movers: in 5 artboards the title slides up and 9 knobs slide across, again
+    /// and again.
+    fn play_design() -> Scene {
+        let read = |v: serde_json::Value| Node::read(v.clone()).unwrap_or_else(|why| panic!("{v}: {why}"));
+        let mut nodes = vec![read(serde_json::json!({"id": "p", "kind": "page"}))];
+        let slide = serde_json::json!({"ease": "ease_out", "keys": [{"at_ms": 0, "dy": 24, "opacity": 0}, {"at_ms": 500, "dy": 0, "opacity": 1}]});
+        let knob = serde_json::json!({"ease": "ease_in_out", "loop": true, "keys": [{"at_ms": 0, "dx": 0}, {"at_ms": 600, "dx": -18}, {"at_ms": 1200, "dx": 0}]});
+        for a in 0..40 {
+            let ab = format!("a{a}");
+            let moves = a % 8 == 0;
+            nodes.push(read(serde_json::json!({"id": ab, "parent": "p", "kind": "frame", "x": (a % 8) * 470, "y": (a / 8) * 924, "w": 390, "h": 844,
+                "fill": "#F4F2EE", "layout": "column", "gap": 12, "padding": [48, 20]})));
+            let mut title = read(serde_json::json!({"id": format!("{ab}-t"), "parent": ab, "kind": "text", "text": format!("Screen {}", a + 1), "font_size": 28, "font_weight": 700}));
+            if moves {
+                title.motion = serde_json::from_value(slide.clone()).ok();
+            }
+            nodes.push(title);
+            nodes.push(read(serde_json::json!({"id": format!("{ab}-l"), "parent": ab, "kind": "frame", "fill": "#FFFFFF", "radius": 14, "layout": "column",
+                "padding": [4, 14], "w_sizing": "fill", "h_sizing": "hug"})));
+            for r in 0..10 {
+                let row = format!("{ab}-r{r}");
+                nodes.push(read(serde_json::json!({"id": row, "parent": format!("{ab}-l"), "kind": "frame", "fill": "#00000000", "layout": "row", "items": "center",
+                    "justify": "space_between", "padding": [12, 0], "w_sizing": "fill", "h_sizing": "hug"})));
+                nodes.push(read(serde_json::json!({"id": format!("{row}-x"), "parent": row, "kind": "text", "text": format!("Setting number {}", r + 1), "font_size": 15})));
+                nodes.push(read(serde_json::json!({"id": format!("{row}-s"), "parent": row, "kind": "frame", "w": 46, "h": 28, "radius": 14, "fill": "#2EC469",
+                    "layout": "row", "padding": [3], "justify": "end"})));
+                let mut k = read(serde_json::json!({"id": format!("{row}-k"), "parent": format!("{row}-s"), "kind": "ellipse", "w": 22, "h": 22, "fill": "#FFFFFF"}));
+                if moves && r < 9 {
+                    k.motion = serde_json::from_value(knob.clone()).ok();
+                }
+                nodes.push(k);
+            }
+        }
+        Scene::new(nodes)
+    }
+
+    /// A frame of Play on that design: the poses and the page's render node, as the canvas
+    /// builds them each frame (feature-motion §9: a p95 under 8.3 ms, 120 Hz), against a whole
+    /// rebuild at rest. Needs a display, so it is ignored: inside a headless compositor,
+    /// `cargo test -p relay-native --release a_play_frame -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn a_play_frame_builds_within_its_budget() {
+        gtk::init().expect("a display: run it inside kwin_wayland --virtual");
+        let area = gtk::DrawingArea::new();
+        let painter = Painter::new(&area);
+        let scene = play_design();
+        assert_eq!(scene.len(), 1721);
+        let placed = layout::place(&scene, "p", &*painter);
+        let clocks = Rc::new(Clocks::new(&scene, "p"));
+        assert_eq!(clocks.movers().count(), 50);
+        let build = |posing: Option<Rc<Posing>>| {
+            let snap = gtk::Snapshot::new();
+            painter.with_posing(posing, || painter.paint_page_on(&snap, &scene, &placed, "p", None, Some(CANVAS)));
+            snap.to_node().is_some()
+        };
+        let ms = |t: std::time::Instant| t.elapsed().as_secs_f64() * 1e3;
+        let stats = |mut v: Vec<f64>| {
+            v.sort_by(f64::total_cmp);
+            (v[v.len() / 2], v[(v.len() * 95).div_ceil(100) - 1], v[v.len() - 1])
+        };
+        let rest: Vec<f64> = (0..40).map(|_| {
+            let t = std::time::Instant::now();
+            assert!(build(None));
+            ms(t)
+        }).collect();
+        let mut posing = Rc::new(Posing { poses: HashMap::new(), clocks });
+        let mut frames = Vec::new();
+        for i in 0..241 {
+            let t = std::time::Instant::now();
+            let p = Rc::make_mut(&mut posing);
+            let clocks = p.clocks.clone();
+            clocks.poses(&scene, f64::from(i) * 1000.0 / 120.0, &mut p.poses);
+            assert!(build(Some(posing.clone())));
+            frames.push(ms(t));
+        }
+        let first = frames.remove(0);
+        let (rm, rp, rx) = stats(rest);
+        let (pm, pp, px) = stats(frames);
+        println!("PLAY_PERF rest rebuild: median {rm:.3} ms, p95 {rp:.3} ms, max {rx:.3} ms (40)");
+        println!("PLAY_PERF play frame: first {first:.3} ms; then median {pm:.3} ms, p95 {pp:.3} ms, max {px:.3} ms (240)");
+        assert!(pp < 8.3, "a frame of Play past its budget: p95 {pp:.3} ms");
     }
 
     #[test]

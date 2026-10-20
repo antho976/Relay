@@ -5,7 +5,7 @@
 use super::canvas::Canvas;
 use super::doc::{Change, Doc};
 use super::glyphs;
-use super::paint::{self, fill_of, grect, rgba, Painter, CANVAS};
+use super::paint::{self, fill_of, grect, rgba, Painter, Posing, CANVAS};
 use super::widgets::tip;
 use crate::app::{label, Ui};
 use gtk::prelude::*;
@@ -15,6 +15,7 @@ use relay_bus::design::{Layout, Node, NodeKind, NodeOp, Scroll};
 use relay_client::design::{bounds, edit, shapes};
 use relay_client::design::geom::step_zoom;
 use relay_client::design::layout::{self, Placed, Scrolled};
+use relay_client::design::motion::{self, Clocks};
 use relay_client::design::snap::Guide;
 use relay_client::design::{Camera, Rect, Scene};
 use serde_json::{json, Map, Value};
@@ -334,6 +335,11 @@ pub struct Board {
     /// Back to the gallery, when the board sits in the Design view.
     pub(super) back: RefCell<Option<Rc<dyn Fn()>>>,
     pub(super) windowed: bool,
+    /// Play, while the page's motion plays (or is paused): never written to the design.
+    play: RefCell<Option<Play>>,
+    /// The top bar's Play key, shown while something on the page moves.
+    play_key: gtk::Button,
+    timebar: TimeBar,
     me: Weak<Board>,
 }
 
@@ -411,6 +417,10 @@ impl Board {
         ask.set_child(Some(&ask_row));
         ask.set_tooltip_text(Some("Ask the terminal's agent to change the selection or this page (Ctrl+Enter)"));
         ask.set_widget_name("design-ask");
+        let play_key = crate::app::icon_button("play", PLAY_TIP);
+        play_key.set_widget_name("design-play");
+        play_key.set_visible(false);
+        top.append(&play_key);
         top.append(&ask);
         let pop_out = crate::app::icon_button("window", "Open in a new window");
         pop_out.set_child(Some(&glyphs::image("window", 16)));
@@ -515,6 +525,8 @@ impl Board {
         let toast_label = label("", "design-toast");
         toast.set_child(Some(&toast_label));
         overlay.add_overlay(&toast);
+        let timebar = time_bar();
+        overlay.add_overlay(&timebar.root);
 
         let shape_key = gtk::ToggleButton::new();
         let pen_key = gtk::ToggleButton::new();
@@ -603,6 +615,9 @@ impl Board {
             actions,
             back: RefCell::default(),
             windowed,
+            play: RefCell::default(),
+            play_key,
+            timebar,
             me: me.clone(),
         });
 
@@ -622,6 +637,10 @@ impl Board {
         board.painter.on_loaded(move || {
             if let Some(b) = weak.upgrade() {
                 b.content.borrow_mut().take();
+                b.painter.clear_stills();
+                // An SVG that animates itself may have just loaded: it plays, and Play is offered.
+                b.refresh_play();
+                b.refresh_play_key();
                 b.canvas.queue_draw();
             }
         });
@@ -642,6 +661,7 @@ impl Board {
         board.build_dock(&dock);
         board.build_zoom_menu(&zoom_menu);
         board.install_actions();
+        board.wire_play();
         board.build_title_menu(&title_key);
         let layers = super::layers::Layers::new(&board);
         board.layers_panel.set_child(Some(&layers.root));
@@ -651,6 +671,7 @@ impl Board {
         let weak = Rc::downgrade(&board);
         back_key.connect_clicked(move |_| {
             if let Some(b) = weak.upgrade() {
+                b.stop_play();
                 b.end_edit(true);
                 if let Some(back) = b.back.borrow().clone() {
                     back();
@@ -764,6 +785,7 @@ impl Board {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
+        self.stop_play();
         self.end_edit(true);
         let state = self.state();
         super::window::pop_out(&ui, self.doc.clone(), move |b| b.restore(state));
@@ -866,6 +888,8 @@ impl Board {
     pub(super) fn invalidate(&self) {
         self.placed.borrow_mut().take();
         self.content.borrow_mut().take();
+        // While Play runs, an edit (the inspector's, an agent's) shows in the running motion.
+        self.refresh_play();
         self.canvas.queue_draw();
         self.schedule_chrome();
     }
@@ -889,15 +913,27 @@ impl Board {
             return Some(node.clone());
         }
         let started = trace().then(std::time::Instant::now);
+        // While Play runs: each mover's pose at the frame's time, in a map kept from frame to frame.
+        let posing = self.play.borrow_mut().as_mut().map(|p| {
+            let posing = Rc::make_mut(&mut p.posing);
+            let clocks = posing.clocks.clone();
+            clocks.poses(scene, p.t_ms, &mut posing.poses);
+            p.posing.clone()
+        });
+        let movers = posing.as_ref().map(|p| p.poses.len());
         let snap = gtk::Snapshot::new();
         // On the page's fill, which `draw_inner` lays under the grid: a top-level blend mixes
         // with it, as it does in a frame (B30).
         let page = self.page.borrow();
         let ground = scene.node(&page).and_then(fill_of).unwrap_or_else(|| CANVAS.into());
-        self.painter.paint_page_on(&snap, scene, placed, &page, None, Some(&ground));
+        self.painter.with_posing(posing, || self.painter.paint_page_on(&snap, scene, placed, &page, None, Some(&ground)));
         let node = snap.to_node();
         if let Some(t) = started {
-            println!("DESIGN_TRACE content {:.3} ms", t.elapsed().as_secs_f64() * 1e3);
+            let ms = t.elapsed().as_secs_f64() * 1e3;
+            match movers {
+                Some(n) => println!("DESIGN_TRACE play_frame {ms:.3} ms movers {n}"),
+                None => println!("DESIGN_TRACE content {ms:.3} ms"),
+            }
         }
         self.content.borrow_mut().clone_from(&node);
         node
@@ -992,6 +1028,8 @@ impl Board {
         if !self.doc.scene.borrow().node(page).is_some_and(|n| n.kind == NodeKind::Page) {
             return;
         }
+        // Play is of the page it was started on.
+        self.stop_play();
         // A vector path being placed is finished on the page it was drawn on (TM-68).
         super::tools::finish_vector(self, false);
         self.end_edit(true);
@@ -1595,6 +1633,10 @@ impl Board {
                 }
             }
         }
+        // While Play runs the page shows as it plays: no selection, hover, guides or handles.
+        if self.playing() {
+            return;
+        }
         // Hover.
         if let Some(id) = self.hover.borrow().as_ref() {
             if !self.selection.borrow().contains(id) && matches!(*self.gesture.borrow(), Gesture::Idle) {
@@ -1999,6 +2041,334 @@ impl Board {
         if paint::luminance(&ground) > 0.35 { "#1A1A1A".into() } else { "#EDE9E2".into() }
     }
 
+    // ------------------------------------------------------------------ play
+
+    /// Whether the page's motion is playing or paused in Play (feature-motion §3).
+    pub(super) fn playing(&self) -> bool {
+        self.play.borrow().is_some()
+    }
+
+    /// The page's clocks for Play, with the shown pictures that animate themselves touched (they
+    /// repaint every frame), and whether there are any.
+    fn play_clocks(&self) -> (Clocks, bool) {
+        let scene = self.doc.scene.borrow();
+        let page = self.page.borrow().clone();
+        let mut clocks = Clocks::new(&scene, &page);
+        let moving = self.painter.moving_srcs();
+        let mut pictures = false;
+        if !moving.is_empty() {
+            let mut stack = vec![page];
+            while let Some(id) = stack.pop() {
+                let Some(n) = scene.node(&id).filter(|n| !n.is_hidden()) else {
+                    continue;
+                };
+                if n.kind == NodeKind::Image && n.src.as_deref().is_some_and(|s| moving.contains(s)) {
+                    clocks.touch(&scene, &id);
+                    pictures = true;
+                }
+                stack.extend(scene.children(&id).iter().cloned());
+            }
+        }
+        (clocks, pictures)
+    }
+
+    /// The Play key shows while something on the page moves, or Play runs.
+    fn refresh_play_key(&self) {
+        let shows = self.playing() || {
+            let (clocks, pictures) = self.play_clocks();
+            !clocks.is_empty() || pictures
+        };
+        if self.play_key.is_visible() != shows {
+            self.play_key.set_visible(shows);
+        }
+    }
+
+    /// Ctrl+P and the Play key: start Play, or end it.
+    pub(super) fn toggle_play(&self) {
+        if self.playing() {
+            self.stop_play();
+        } else {
+            self.start_play();
+        }
+    }
+
+    /// Play the page's motion from its start: every clock at 0 together, on the canvas's frame
+    /// clock. Typing and any drag end first; Play edits nothing.
+    pub(super) fn start_play(&self) {
+        if self.playing() {
+            return;
+        }
+        super::tools::finish_vector(self, false);
+        self.end_edit(true);
+        self.cancel_gesture();
+        let (clocks, pictures) = self.play_clocks();
+        if clocks.is_empty() && !pictures {
+            self.toast("Nothing on this page moves yet");
+            return;
+        }
+        let posing = Rc::new(Posing { poses: HashMap::new(), clocks: Rc::new(clocks) });
+        *self.play.borrow_mut() = Some(Play { tick: None, timing: Timing::default(), t_ms: 0.0, posing, pictures, ended: false, labelled: f64::NEG_INFINITY });
+        self.hover.borrow_mut().take();
+        self.run_play();
+        self.show_play(true);
+        self.content.borrow_mut().take();
+        self.canvas.queue_draw();
+    }
+
+    /// Run the clock from where it is shown: a tick callback each frame (the frame clock, never
+    /// a timer), and the pictures that animate themselves.
+    fn run_play(&self) {
+        let weak = self.me.clone();
+        let tick = self.canvas.add_tick_callback(move |_, clock| {
+            let Some(b) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            b.play_tick(clock.frame_time());
+            glib::ControlFlow::Continue
+        });
+        match self.play.borrow_mut().as_mut() {
+            Some(p) => {
+                p.timing.resume();
+                p.tick = Some(tick);
+            }
+            None => return tick.remove(),
+        }
+        if let Some(clock) = self.canvas.frame_clock() {
+            self.painter.play_pictures(&clock);
+        }
+        self.show_time(true);
+    }
+
+    fn play_tick(&self, frame_us: i64) {
+        let t = match self.play.borrow_mut().as_mut() {
+            Some(p) => p.timing.at(frame_us),
+            None => return,
+        };
+        self.play_frame(t);
+    }
+
+    /// Show the frame at `t_ms` (the poses are taken as it draws). Past the end of a motion that
+    /// does not loop, with no picture animating itself, Play holds the end and pauses there, so a
+    /// finished animation asks for no more frames.
+    fn play_frame(&self, t_ms: f64) {
+        let end = {
+            let mut play = self.play.borrow_mut();
+            let Some(p) = play.as_mut() else {
+                return;
+            };
+            let (span, looped) = play_span(&p.posing.clocks);
+            let end = ends(t_ms, span, looped, p.pictures);
+            p.t_ms = if end { span } else { t_ms.max(0.0) };
+            p.ended = end;
+            end
+        };
+        if end {
+            self.pause_play();
+        }
+        // Not `invalidate`: layout stands, and the chrome has nothing new to show.
+        self.content.borrow_mut().take();
+        self.canvas.queue_draw();
+        self.show_time(false);
+    }
+
+    /// Hold Play where it is: the clock and the animated pictures stop until it resumes.
+    pub(super) fn pause_play(&self) {
+        let tick = {
+            let mut play = self.play.borrow_mut();
+            let Some(p) = play.as_mut() else {
+                return;
+            };
+            let at = p.t_ms;
+            p.timing.pause(at);
+            p.tick.take()
+        };
+        let Some(tick) = tick else {
+            return;
+        };
+        tick.remove();
+        self.painter.pause_pictures();
+        self.show_time(true);
+    }
+
+    /// Go on from where Play was paused; from the start once it has ended.
+    pub(super) fn resume_play(&self) {
+        {
+            let mut play = self.play.borrow_mut();
+            let Some(p) = play.as_mut().filter(|p| p.tick.is_none()) else {
+                return;
+            };
+            if p.ended {
+                p.ended = false;
+                p.t_ms = 0.0;
+                p.timing.seek(0.0);
+            }
+        }
+        self.run_play();
+        self.content.borrow_mut().take();
+        self.canvas.queue_draw();
+    }
+
+    /// A paused frame at `ms` into the page's motion (the scrubber). Pictures that animate
+    /// themselves cannot be sought, so they stay where they were.
+    pub(super) fn seek(&self, ms: f64) {
+        self.pause_play();
+        {
+            let mut play = self.play.borrow_mut();
+            let Some(p) = play.as_mut() else {
+                return;
+            };
+            let ms = if ms.is_finite() { ms.max(0.0) } else { 0.0 };
+            p.t_ms = ms;
+            p.timing.seek(ms);
+            p.ended = false;
+        }
+        self.content.borrow_mut().take();
+        self.canvas.queue_draw();
+        self.show_time(true);
+    }
+
+    /// End Play: the page shows at rest again, its pictures at their first frame.
+    pub(super) fn stop_play(&self) {
+        let Some(play) = self.play.borrow_mut().take() else {
+            return;
+        };
+        if let Some(tick) = play.tick {
+            tick.remove();
+        }
+        self.painter.stop_pictures();
+        self.painter.clear_stills();
+        self.show_play(false);
+        self.content.borrow_mut().take();
+        self.canvas.queue_draw();
+        self.overlay.queue_allocate();
+        self.schedule_chrome();
+    }
+
+    /// The scene, the layout or the pictures changed while Play runs: its clocks again from the
+    /// page as it is (the pictures kept of what rests go with them), at the same time. Nothing
+    /// left to play ends it.
+    fn refresh_play(&self) {
+        if !self.playing() {
+            return;
+        }
+        let (clocks, pictures) = self.play_clocks();
+        if clocks.is_empty() && !pictures {
+            self.stop_play();
+            return;
+        }
+        let running = {
+            let mut play = self.play.borrow_mut();
+            let Some(p) = play.as_mut() else {
+                return;
+            };
+            p.posing = Rc::new(Posing { poses: HashMap::new(), clocks: Rc::new(clocks) });
+            p.pictures = pictures;
+            p.tick.is_some()
+        };
+        // A picture that animates itself may have loaded since.
+        if let Some(clock) = self.canvas.frame_clock().filter(|_| running) {
+            self.painter.play_pictures(&clock);
+        }
+        self.show_time(true);
+    }
+
+    /// The time bar and the Play key as Play starts (`on`) or ends.
+    fn show_play(&self, on: bool) {
+        self.timebar.root.set_visible(on);
+        // The toast rises above the bar while it shows.
+        self.toast.set_margin_bottom(if on { 68 } else { 16 });
+        let (icon, tip) = if on { ("stop", "Stop playing (Esc)") } else { ("play", PLAY_TIP) };
+        self.play_key.set_child(Some(&crate::icons::image(icon, 16)));
+        self.play_key.set_tooltip_text(Some(tip));
+        self.play_key.update_property(&[gtk::accessible::Property::Label(tip)]);
+        self.refresh_play_key();
+        self.show_time(true);
+    }
+
+    /// The time bar: the time (at most every 100 ms unless `now`), the scrubber every frame, and
+    /// the pause key as paused, playing or ended.
+    fn show_time(&self, now: bool) {
+        let mut play = self.play.borrow_mut();
+        let Some(p) = play.as_mut() else {
+            return;
+        };
+        let (span, looped) = play_span(&p.posing.clocks);
+        let shown = if span > 0.0 { motion::local_time(p.t_ms, span, looped) } else { p.t_ms };
+        let bar = &self.timebar;
+        if span > 0.0 {
+            let adjust = bar.scrub.adjustment();
+            if adjust.upper() != span {
+                adjust.set_upper(span);
+            }
+            bar.scrub.set_value(shown);
+        }
+        bar.scrub.set_visible(span > 0.0);
+        if now || (p.t_ms - p.labelled).abs() >= 100.0 {
+            p.labelled = p.t_ms;
+            bar.time.set_text(&time_text(shown, span));
+        }
+        if now {
+            let (icon, tip) = match (p.tick.is_some(), p.ended) {
+                (true, _) => ("pause", "Pause"),
+                (false, true) => ("resume", "Play again"),
+                (false, false) => ("play", "Play"),
+            };
+            bar.pause.set_child(Some(&crate::icons::image(icon, 16)));
+            bar.pause.set_tooltip_text(Some(tip));
+        }
+    }
+
+    /// The Play key, the time bar's keys and scrubber, and a pause when the canvas is hidden.
+    fn wire_play(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        self.play_key.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.toggle_play();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.timebar.pause.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                let running = b.play.borrow().as_ref().is_some_and(|p| p.tick.is_some());
+                if running {
+                    b.pause_play();
+                } else {
+                    b.resume_play();
+                }
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.timebar.restart.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.seek(0.0);
+                b.resume_play();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.timebar.stop.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.stop_play();
+            }
+        });
+        // Only the person's drags and keys: the bar sets the value every frame itself.
+        let weak = Rc::downgrade(self);
+        self.timebar.scrub.connect_change_value(move |_, _, ms| {
+            if let Some(b) = weak.upgrade() {
+                b.seek(ms);
+            }
+            glib::Propagation::Proceed
+        });
+        // Hidden (another view, a minimised window), Play holds: nothing ticks behind it.
+        let weak = Rc::downgrade(self);
+        self.canvas.connect_unmap(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.pause_play();
+            }
+        });
+        keep_canvas_focus(self.timebar.root.upcast_ref());
+        self.timebar.scrub.set_focus_on_click(false);
+    }
+
     // ------------------------------------------------------------------ chrome
 
     pub(super) fn refresh_chrome(&self) {
@@ -2026,6 +2396,7 @@ impl Board {
         if let Some(layers) = self.layers.borrow().as_ref() {
             layers.refresh();
         }
+        self.refresh_play_key();
         let page = self.page_name(&self.page.borrow());
         self.page_label.set_text(&page);
         // The whole name, which the key cuts short.
@@ -2614,7 +2985,7 @@ impl Board {
         type Group<'a> = (&'a str, &'a [(&'a str, &'a str)]);
         let tools: Group = ("Tools", &[("V", "Move"), ("H or Space", "Hand"), ("F", "Frame"), ("R / O", "Rectangle / ellipse"), ("Shift R / Shift S", "Triangle / star"), ("K", "Icon"), ("E", "Eraser"), ("L / Shift L", "Line / arrow"), ("T", "Text"), ("S", "Sticky note"), ("P / Shift P", "Pen / highlighter"), ("B", "Vector pen: click points, close on the first")]);
         let text: Group = ("Text", &[("Esc or Ctrl Enter", "Finish typing"), ("Ctrl B / I / U", "Bold / italic / underline")]);
-        let view: Group = ("View", &[("Ctrl scroll / pinch", "Zoom at the pointer"), ("Alt scroll", "Scroll a scrolling frame"), ("Ctrl − / Ctrl =", "Zoom out / in"), ("Shift 1", "Zoom to fit"), ("Shift 2", "Zoom to selection"), ("Shift 0 or Ctrl 0", "Zoom to 100%"), ("Alt 1", "Pages and layers"), ("Ctrl .", "Inspector")]);
+        let view: Group = ("View", &[("Ctrl scroll / pinch", "Zoom at the pointer"), ("Alt scroll", "Scroll a scrolling frame"), ("Ctrl − / Ctrl =", "Zoom out / in"), ("Shift 1", "Zoom to fit"), ("Shift 2", "Zoom to selection"), ("Shift 0 or Ctrl 0", "Zoom to 100%"), ("Alt 1", "Pages and layers"), ("Ctrl .", "Inspector"), ("Ctrl P", "Play the page's motion; Esc stops")]);
         let selection: Group = ("Selection", &[("Click", "Select what is under the pointer"), ("Esc", "Select the parent"), ("Enter", "Edit text, or select inside"), ("Tab / Shift Tab", "Next / previous layer"), ("Shift click", "Add or remove"), ("Ctrl A", "Select all"), ("Alt drag", "Duplicate while moving"), ("Alt while dragging", "No snapping"), ("Alt drag a handle", "Resize from the centre"), ("Shift drag a handle", "Keep proportions")]);
         let edit: Group = ("Edit", &[("Ctrl Z / Ctrl Shift Z", "Undo / redo"), ("Ctrl C / X / V", "Copy / cut / paste"), ("Ctrl D", "Duplicate"), ("Delete / Backspace", "Delete"), ("Ctrl G / Ctrl Shift G", "Group / ungroup"), ("Ctrl Alt G", "Frame selection"), ("Ctrl ] / Ctrl [", "Forward / backward"), ("Ctrl Shift ] / [", "Bring to front / send to back"), ("Shift H / Shift V", "Flip horizontally / vertically"), ("Ctrl Alt C / V", "Copy / paste style"), ("Alt A / D / W / S", "Align left / right / top / bottom"), ("Alt H / Alt V", "Align centres / middles"), ("Ctrl Shift L / H", "Lock / hide"), ("Ctrl Shift K", "Place an image"), ("Ctrl Enter", "Ask the agent"), ("Arrows", "Nudge 1 px (Shift: 10)")]);
         // Two columns, each group under the last, so a longer group never runs into the next.
@@ -2669,7 +3040,7 @@ impl Board {
         // Out of sight while a gesture runs or nothing is selected; an overlay child given no
         // place would cover the whole canvas.
         let away = gdk::Rectangle::new(-10_000, -10_000, w, h);
-        if self.selection.borrow().is_empty() || !matches!(*self.gesture.borrow(), Gesture::Idle) {
+        if self.selection.borrow().is_empty() || !matches!(*self.gesture.borrow(), Gesture::Idle) || self.playing() {
             return Some(away);
         }
         let Some(b) = self.selection_bounds() else {
@@ -2787,6 +3158,7 @@ impl Board {
         add("delete-design", super::delete_design);
         add("pop-out", |b| b.pop_out());
         add("add-page", |b| b.add_page());
+        add("play", |b| b.toggle_play());
     }
 
     fn refresh_actions(&self) {
@@ -3939,6 +4311,120 @@ pub(super) fn menu_item(caption: &str, action: &str, accel: Option<&str>) -> gio
     item
 }
 
+/// The Play key's tooltip while Play is off.
+const PLAY_TIP: &str = "Play the motion on this page (Ctrl+P)";
+
+/// Play under way: the clock, the frame shown and its poses. Never written to the design.
+struct Play {
+    /// The frame clock's callback while it runs; `None` while paused.
+    tick: Option<gtk::TickCallbackId>,
+    timing: Timing,
+    /// The time shown, in ms since every clock started.
+    t_ms: f64,
+    /// The poses of the frame shown (filled as it draws) and the page's clocks.
+    posing: Rc<Posing>,
+    /// A shown picture animates itself: Play then runs until it is stopped.
+    pictures: bool,
+    /// Paused at the end of a motion that does not loop.
+    ended: bool,
+    /// The time the time bar's words last showed.
+    labelled: f64,
+}
+
+/// Where Play is in time, from the frame clock's frame times (µs): GTK-free, so its rule is
+/// tested alone. While running, the time shown is `base_ms` plus the time since the first frame
+/// after it started; paused, `base_ms`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct Timing {
+    base_ms: f64,
+    from_us: Option<i64>,
+    running: bool,
+}
+
+impl Timing {
+    /// The time at a frame at `frame_us`.
+    fn at(&mut self, frame_us: i64) -> f64 {
+        if !self.running {
+            return self.base_ms;
+        }
+        let from = *self.from_us.get_or_insert(frame_us);
+        self.base_ms + (frame_us - from).max(0) as f64 / 1000.0
+    }
+
+    /// Hold at `at_ms`.
+    fn pause(&mut self, at_ms: f64) {
+        *self = Timing { base_ms: at_ms, from_us: None, running: false };
+    }
+
+    /// Run on from where it holds, counting from the next frame.
+    fn resume(&mut self) {
+        self.running = true;
+        self.from_us = None;
+    }
+
+    /// Show `ms` (and run on from it, if running).
+    fn seek(&mut self, ms: f64) {
+        self.base_ms = ms;
+        self.from_us = None;
+    }
+}
+
+/// The span Play runs over: its longest clock, and whether any clock loops (then it never ends,
+/// and the time shown starts again at the end).
+fn play_span(clocks: &Clocks) -> (f64, bool) {
+    (clocks.span().0, clocks.clocks().iter().any(|c| c.looped))
+}
+
+/// Whether a frame at `t_ms` ends Play: no clock loops, no shown picture animates itself, and
+/// the span has run.
+fn ends(t_ms: f64, span: f64, looped: bool, pictures: bool) -> bool {
+    !looped && !pictures && span > 0.0 && t_ms >= span
+}
+
+/// The time bar's words: "1.20 / 3.00 s", or the time alone when only pictures move.
+fn time_text(t_ms: f64, span_ms: f64) -> String {
+    if span_ms > 0.0 {
+        format!("{:.2} / {:.2} s", t_ms / 1000.0, span_ms / 1000.0)
+    } else {
+        format!("{:.2} s", t_ms / 1000.0)
+    }
+}
+
+/// The bar under the canvas while Play runs: start again, pause or play, the time, a scrubber
+/// and stop.
+struct TimeBar {
+    root: gtk::Box,
+    restart: gtk::Button,
+    pause: gtk::Button,
+    time: gtk::Label,
+    scrub: gtk::Scale,
+    stop: gtk::Button,
+}
+
+fn time_bar() -> TimeBar {
+    let root = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+    root.add_css_class("design-timebar");
+    root.set_widget_name("design-timebar");
+    root.set_halign(gtk::Align::Center);
+    root.set_valign(gtk::Align::End);
+    root.set_margin_bottom(12);
+    root.set_visible(false);
+    let restart = crate::app::icon_button("resume", "Start again");
+    let pause = crate::app::icon_button("pause", "Pause");
+    let time = label("0.00 s", "design-timebar-time");
+    time.set_xalign(0.5);
+    let scrub = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 10.0);
+    scrub.set_draw_value(false);
+    scrub.set_hexpand(true);
+    scrub.set_tooltip_text(Some("Drag to a moment of the motion"));
+    let stop = crate::app::icon_button("stop", "Stop playing (Esc)");
+    for w in [restart.upcast_ref::<gtk::Widget>(), pause.upcast_ref(), time.upcast_ref(), scrub.upcast_ref(), stop.upcast_ref()] {
+        w.set_valign(gtk::Align::Center);
+        root.append(w);
+    }
+    TimeBar { root, restart, pause, time, scrub, stop }
+}
+
 /// "Export selection as" PNG, SVG or PDF, for the menus that offer it.
 pub(super) fn export_menu() -> gio::Menu {
     let section = gio::Menu::new();
@@ -4130,6 +4616,69 @@ mod tests {
         n.pin_y = Some(PinY::Top);
         let lines = pin_lines(&n, &r, &pr, 1.0);
         assert_eq!(lines, [((0.0, 60.0), (100.0, 60.0)), ((140.0, 60.0), (300.0, 60.0)), ((120.0, 0.0), (120.0, 50.0))]);
+    }
+
+    #[test]
+    fn plays_time_runs_from_its_first_frame_and_holds_while_paused() {
+        let mut t = Timing::default();
+        assert_eq!(t.at(5_000_000), 0.0, "stopped: where it was");
+        t.resume();
+        assert_eq!(t.at(5_000_000), 0.0, "the first frame after a start is its 0");
+        assert_eq!(t.at(5_500_000), 500.0);
+        assert_eq!(t.at(4_900_000), 0.0, "a frame time from before the start is the start");
+        let at = t.at(6_200_000);
+        t.pause(at);
+        assert_eq!((t.at(9_000_000), t.at(12_000_000)), (1200.0, 1200.0), "paused, it holds");
+        t.resume();
+        assert_eq!((t.at(20_000_000), t.at(20_016_000)), (1200.0, 1216.0), "and goes on from there");
+        t.seek(300.0);
+        assert_eq!((t.at(30_000_000), t.at(30_100_000)), (300.0, 400.0), "a seek while running runs on from it");
+        t.pause(2000.0);
+        t.seek(50.0);
+        assert_eq!(t.at(40_000_000), 50.0, "a seek while paused shows that moment");
+    }
+
+    #[test]
+    fn play_ends_only_after_a_motion_that_never_loops() {
+        assert!(ends(3000.0, 3000.0, false, false), "the end itself is the end");
+        assert!(ends(3016.0, 3000.0, false, false));
+        assert!(!ends(2990.0, 3000.0, false, false));
+        assert!(!ends(9000.0, 3000.0, true, false), "a loop plays on");
+        assert!(!ends(9000.0, 3000.0, false, true), "so does a picture that animates itself");
+        assert!(!ends(9000.0, 0.0, false, true), "pictures alone have no end");
+    }
+
+    #[test]
+    fn plays_time_reads_in_seconds() {
+        assert_eq!(time_text(1200.0, 3000.0), "1.20 / 3.00 s");
+        assert_eq!(time_text(0.0, 450.0), "0.00 / 0.45 s");
+        assert_eq!(time_text(65_432.0, 0.0), "65.43 s");
+    }
+
+    #[test]
+    fn the_span_loops_when_any_clock_does() {
+        use relay_bus::design::Motion;
+        let motion = |last: f64, looped: bool| -> Motion {
+            serde_json::from_value(json!({"loop": looped, "keys": [{"at_ms": 0, "opacity": 0}, {"at_ms": last, "opacity": 1}]})).unwrap()
+        };
+        let mut page = Node::new(NodeKind::Page);
+        page.id = "p".into();
+        let mut a = rect("a", "#FFFFFF");
+        a.parent = Some("p".into());
+        a.motion = Some(motion(800.0, false));
+        let mut f = Node::new(NodeKind::Frame);
+        (f.id, f.parent) = ("f".into(), Some("p".into()));
+        f.timeline = serde_json::from_value(json!({"duration_ms": 2000, "loop": false})).unwrap();
+        let mut b = rect("b", "#FFFFFF");
+        b.parent = Some("f".into());
+        b.motion = Some(motion(500.0, true));
+        let scene = Scene::new(vec![page.clone(), a.clone(), f.clone(), b.clone()]);
+        // The page's own clock loops by default; the frame's is told not to.
+        assert_eq!(play_span(&Clocks::new(&scene, "p")), (2000.0, true));
+        let mut page = page;
+        page.timeline = serde_json::from_value(json!({"loop": false})).unwrap();
+        let scene = Scene::new(vec![page, a, f, b]);
+        assert_eq!(play_span(&Clocks::new(&scene, "p")), (2000.0, false), "a looping motion on a clock that ends ends with it");
     }
 
     #[test]
