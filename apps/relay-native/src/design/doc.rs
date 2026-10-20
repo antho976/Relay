@@ -172,6 +172,9 @@ pub struct Shared {
     /// Who changed the design since it was last read, each with the ids its `design.changed`
     /// named (none when it did not name them all), oldest first (TM-13).
     notices: RefCell<Vec<(String, Option<Vec<String>>)>>,
+    /// The rev of the last read: a change after it is noted even when an answer of ours has
+    /// moved `rev` past it, since only a read shows it.
+    read_rev: Cell<i64>,
     /// The boards' docs on it.
     docs: RefCell<Vec<Weak<Doc>>>,
 }
@@ -460,10 +463,11 @@ fn adopt_rev(current: i64, row_rev: i64, idle: bool) -> bool {
 impl Shared {
     fn build(ui: Weak<Ui>, id: i64, got: GetOut) -> Rc<Shared> {
         let styles = Styles { colors: got.colors, styles: got.styles };
+        let rev = got.design.rev;
         Rc::new(Shared {
             id,
             ui,
-            rev: Cell::new(got.design.rev),
+            rev: Cell::new(rev),
             design: RefCell::new(got.design),
             scene: RefCell::new(Scene::new(got.nodes).with_styles(styles)),
             assets_dir: RefCell::new(got.assets_dir),
@@ -479,6 +483,7 @@ impl Shared {
             redo: RefCell::default(),
             steps: Cell::new(0),
             notices: RefCell::default(),
+            read_rev: Cell::new(rev),
             docs: RefCell::default(),
         })
     }
@@ -615,10 +620,12 @@ impl Shared {
         if deleted {
             self.stop();
         }
+        if rev > self.read_rev.get() {
+            self.note(by, ids_of(payload));
+        }
         if rev <= self.rev.get() {
             return;
         }
-        self.note(by, ids_of(payload));
         // Kept whatever is under way, so that a read out now, which may answer an older rev,
         // reads again (B78).
         self.seen.set(self.seen.get().max(rev));
@@ -961,6 +968,7 @@ impl Shared {
             self.redo.borrow_mut().clear();
         }
         self.rev.set(got.design.rev);
+        self.read_rev.set(got.design.rev);
         *self.design.borrow_mut() = got.design;
         *self.assets_dir.borrow_mut() = got.assets_dir;
         for doc in self.docs() {
@@ -1626,6 +1634,24 @@ mod tests {
         assert_eq!(ids_of(&json!({"touched": ["a"], "removed": ["b"]})), ids(&["a", "b"]));
         assert_eq!(ids_of(&json!({"touched": ["a"], "all": true})), None, "cut short: not all named");
         assert_eq!(ids_of(&json!({})), None);
+    }
+
+    /// TM-13: an agent's change whose notice comes after our own answer moved the rev past it is
+    /// still the agent's, not the person's who wrote last.
+    #[test]
+    fn an_agents_notice_after_our_answer_is_still_credited() {
+        let (shared, doc, heard) = open(3);
+        doc.commit(vec![set("dot", json!({"x": 600.0}))], vec![]);
+        let sent = shared.next().unwrap();
+        // The agent's apply landed first (rev 4): ours answers rev 5.
+        shared.answered(sent, Ok(answer(4, 5, vec![at(&shared, "dot", 600.0)], Some(vec![set("dot", json!({"x": 500.0}))]))));
+        assert!(shared.stale.get(), "someone came between");
+        shared.event(&json!(Design { updated_by: "agent-a".into(), ..row(4) }));
+        let mut engine = nodes();
+        engine[2].x = 40.0;
+        engine[4].x = 600.0;
+        shared.read(Ok(got(5, engine)), shared.answers.get(), None);
+        assert_eq!(heard.borrow().iter().find(|h| h.starts_with("reloaded")).unwrap(), "reloaded by agent-a: button");
     }
 
     /// TM-54: an engine holding an older copy than ours (a restored store) is taken, and the
