@@ -23,13 +23,19 @@ OUT = ROOT / ".impeccable/review"; OUT.mkdir(parents=True, exist_ok=True)
 SHOTS = sys.argv[1:] or ["gallery", "board", "board-select", "board-narrow", "edit", "script", "agent", "media", "shapes", "more", "perf"]
 FAKE_AGENT = r'''#!/usr/bin/env python3
 """A fixture provider: echoes input, and answers a [Relay design] prompt by turning the
-selected layer green through design.apply, as the session's own agent."""
+selected layer green through design.apply, as the session's own agent. It says it is at its prompt
+whenever it is, as a real agent's hooks do."""
 import json, os, re, subprocess, sys
 if "--version" in sys.argv:
     print("fixture 1.0"); sys.exit()
 if "auth" in sys.argv or "login" in sys.argv:
     print('{"loggedIn":true}'); sys.exit()
 print("Fixture agent ready.", flush=True)
+def idle():
+    """At its prompt again, as a real agent's Stop hook says: Ask types only into an idle agent."""
+    subprocess.run([os.environ["RELAY_BIN"], "cmd", "session.report",
+                    json.dumps({"session": os.environ.get("RELAY_SESSION", ""), "kind": "idle"})], capture_output=True)
+idle()
 for line in sys.stdin:
     print("echo: " + line.rstrip()[:400], flush=True)
     m = re.search(r"design_id (\d+)", line)
@@ -39,6 +45,7 @@ for line in sys.stdin:
         done = subprocess.run([os.environ["RELAY_BIN"], "cmd", "design.apply",
                                json.dumps({"design_id": int(m.group(1)), "ops": ops})], capture_output=True, text=True)
         print("agent applied: " + (done.stdout.strip()[:200] or done.stderr.strip()[:400]), flush=True)
+    idle()
 '''
 
 ENGINE = ROOT / "target/debug/relay"
@@ -318,7 +325,9 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                 e["RELAY_SMOKE_DESIGN_SCRIPT"] = "fit;wait:600;pan:6,0,240;zoom:1;wait:400;pan:-4,-2,240;fit;wait:400;select:a0;drag:200,30>900,330;wait:400;print"
             if shot == "agent":
                 e["RELAY_NATIVE_SMOKE_SECONDS"] = "15"
-                e["RELAY_SMOKE_DESIGN_SCRIPT"] = "select:cta;ask:make the button green;wait:3000;print;undo-agent;wait:1500;print"
+                # The app's paste check types into the terminal as it starts, which sets the agent working
+                # until it says it is at its prompt again: Ask waits for that rather than mail it.
+                e["RELAY_SMOKE_DESIGN_SCRIPT"] = "select:cta;wait:1500;ask:make the button green;wait:3000;print;undo-agent;wait:1500;print"
             if shot == "script":
                 e["RELAY_NATIVE_SMOKE_SECONDS"] = "16"
                 e["RELAY_SMOKE_DESIGN_SCRIPT"] = ";".join([
@@ -396,6 +405,7 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                 got = call("design.get", {"design_id": d1["design"]["id"]})
                 cta = next(n for n in got["nodes"] if n["id"] == "cta")
                 scroll = call("session.scrollback", {"session": sname})["text"]
+                assert "DESIGN_ASK " + sname + " idle" in logtext, logtext[-1500:]
                 assert "[Relay design]" in scroll and "Selected: cta" in scroll and "Picture of it:" in scroll, scroll[-1500:]
                 assert "agent applied" in scroll, scroll[-1500:]
                 # The board's Undo put the agent's change back, through the audit.
