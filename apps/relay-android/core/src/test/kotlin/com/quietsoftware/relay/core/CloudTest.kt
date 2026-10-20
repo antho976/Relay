@@ -153,6 +153,58 @@ class CloudTest {
     }
 
     @Test
+    fun `with the PC in reach the server's copy is never dialled, a kick included`() = runBlocking {
+        pc.reachable = setOf(pcRoute)
+        val hub = Hub(scope, dialer, source(pcProfile), replica, outbox, cloudProfiles = source(cloudProfile), cloudGraceMs = 1_000)
+        hub.start()
+        // The app coming to the front kicks both links before the PC has answered.
+        hub.link.kick()
+        hub.cloud.kick()
+        withTimeout(10_000) { hub.state.first { it is LinkState.Online } }
+        delay(1_500)
+        assertEquals(0, server.dials)
+        assertEquals(LinkState.Stopped, hub.cloud.state.value)
+    }
+
+    @Test
+    fun `a PC disconnected here is not stood in for`() = runBlocking {
+        pc.reachable = setOf(pcRoute)
+        val hub = Hub(scope, dialer, source(pcProfile), replica, outbox, cloudProfiles = source(cloudProfile), cloudGraceMs = 0)
+        hub.start()
+        withTimeout(10_000) { hub.state.first { it is LinkState.Online } }
+        withTimeout(10_000) { hub.cloud.state.first { it is LinkState.Stopped } }
+        val dialled = server.dials
+        // Disconnect.
+        hub.link.stop()
+        delay(500)
+        assertEquals(dialled, server.dials)
+        assertEquals(LinkState.Stopped, hub.cloud.state.value)
+        assertEquals(0, hub.catchUpFromCloud(waitMs = 500))
+        assertEquals(dialled, server.dials)
+    }
+
+    @Test
+    fun `a copy that refused this phone is not asked again as the PC comes and goes`() = runBlocking {
+        val hub = Hub(scope, dialer, source(pcProfile), replica, outbox, cloudProfiles = source(cloudProfile.copy(token = "spent")), cloudGraceMs = 0)
+        hub.start()
+        withTimeout(10_000) { hub.cloud.state.first { it is LinkState.Revoked } }
+        val dialled = server.dials
+
+        pc.reachable = setOf(pcRoute)
+        hub.link.kick()
+        withTimeout(10_000) { hub.state.first { it is LinkState.Online } }
+        assertTrue(hub.cloud.state.value is LinkState.Revoked)
+
+        pc.reachable = emptySet()
+        pc.dropAll()
+        withTimeout(10_000) { hub.state.first { it !is LinkState.Online } }
+        delay(500)
+        assertEquals(dialled, server.dials)
+        assertTrue(hub.cloud.state.value is LinkState.Revoked)
+        assertEquals(0, hub.catchUpFromCloud(waitMs = 500))
+    }
+
+    @Test
     fun `the PC's link never takes the server's copy, nor the copy's link a PC`() = runBlocking {
         // The PC's credential, presented at the server's copy: let in, and refused by the phone.
         server.reachable = setOf(pcRoute, cloudRoute)

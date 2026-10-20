@@ -75,11 +75,11 @@ class Hub(
     val syncer = Syncer(scope, ledger, store, now)
 
     /**
-     * The second link, to the server's copy: data only, dialled while the PC link is not online
-     * (after [cloudGraceMs], so a PC that answers at once costs the server nothing), and stopped
-     * as soon as it is.
+     * The second link, to the server's copy: data only, dialled while the PC is away (after
+     * [cloudGraceMs], so a PC that answers at once costs the server nothing), and stopped as soon
+     * as it is back, disconnected or forgotten. Nothing else starts it, a kick included.
      */
-    val cloud = Link(scope, dialer, cloudProfiles ?: NoCloud, now, Wire.OPS_CLOUD)
+    val cloud = Link(scope, dialer, cloudProfiles ?: NoCloud, now, Wire.OPS_CLOUD, wantedAtFirst = false)
 
     private val cloudStale = MutableSharedFlow<Set<String>>(extraBufferCapacity = 64)
 
@@ -140,12 +140,13 @@ class Hub(
         link.start()
         if (!standingIn.compareAndSet(false, true)) return
         scope.launch {
-            link.state.map { it is LinkState.Online }.distinctUntilChanged().collectLatest { online ->
-                if (online) {
+            link.state.map { away(it) }.distinctUntilChanged().collectLatest { away ->
+                if (!away) {
                     cloud.stop()
                 } else {
                     delay(cloudGraceMs)
-                    cloud.start()
+                    // A copy that refused this phone stays refused until it is paired again (cloudChanged).
+                    if (cloud.state.value !is LinkState.Revoked) cloud.start()
                 }
             }
         }
@@ -153,8 +154,11 @@ class Hub(
 
     /** The server's copy was paired or forgotten: dial it again, if the PC is away. */
     fun cloudChanged() {
-        if (link.state.value is LinkState.Online) cloud.stop() else cloud.restart()
+        if (away(link.state.value)) cloud.restart() else cloud.stop()
     }
+
+    /** Whether the PC is away, so the copy stands in: not when it is online, nor when the person disconnected it or none is paired. */
+    private fun away(state: LinkState) = state !is LinkState.Online && state !is LinkState.Stopped && state !is LinkState.Unpaired
 
     /** A session with the server's copy: its ledger and history events only, nothing read into the replica. */
     private suspend fun cloudSession(s: BusSession) {
@@ -280,7 +284,7 @@ class Hub(
      * recent copy. Waits up to [waitMs] for the copy's link. Returns how many it read.
      */
     suspend fun catchUpFromCloud(waitMs: Long = CLOUD_CATCH_UP_WAIT_MS): Int {
-        if (link.state.value is LinkState.Online) return 0
+        if (!away(link.state.value) || cloud.state.value is LinkState.Revoked) return 0
         cloud.start()
         cloud.kick()
         withTimeoutOrNull(waitMs) { cloud.state.first { it is LinkState.Online || it is LinkState.Revoked || it is LinkState.Unpaired } }

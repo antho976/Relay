@@ -21,7 +21,7 @@ sealed interface LinkState {
     /** No PC is paired. */
     data object Unpaired : LinkState
 
-    /** The person pressed Disconnect; nothing dials until they connect again. */
+    /** The person pressed Disconnect, or the link is not wanted yet; nothing dials until it is started. */
     data object Stopped : LinkState
 
     data class Connecting(val attempt: Int) : LinkState
@@ -43,7 +43,8 @@ sealed interface LinkState {
  * (direct first), proves the token, subscribes, keeps the session alive with `bus.ping`, and
  * redials with backoff when it drops. Everything that talks to the PC goes through [session].
  * [ops] is the kind of door it must reach: a PC's, or the server's copy for the second link
- * ([com.quietsoftware.relay.core.Hub.cloud]).
+ * ([com.quietsoftware.relay.core.Hub.cloud]), which waits [Stopped][LinkState.Stopped] until it
+ * is started ([wantedAtFirst] false): a [kick] alone never dials it.
  */
 class Link(
     private val scope: CoroutineScope,
@@ -51,6 +52,7 @@ class Link(
     private val profiles: ProfileSource,
     private val now: () -> Long = System::currentTimeMillis,
     private val ops: String = Wire.OPS_PC,
+    wantedAtFirst: Boolean = true,
 ) {
     /** Where the paired PC's profile lives. The app persists it; tests keep it in memory. */
     interface ProfileSource {
@@ -63,7 +65,7 @@ class Link(
     /** Called with each new session, before anyone else sees it: subscribe, resync, flush. */
     var onSession: suspend (BusSession) -> Unit = {}
 
-    private val _state = MutableStateFlow<LinkState>(LinkState.Connecting(0))
+    private val _state = MutableStateFlow<LinkState>(if (wantedAtFirst) LinkState.Connecting(0) else LinkState.Stopped)
     val state: StateFlow<LinkState> = _state.asStateFlow()
 
     private val _session = MutableStateFlow<BusSession?>(null)
@@ -71,7 +73,7 @@ class Link(
 
     private val wake = Channel<Unit>(Channel.CONFLATED)
     private var loop: Job? = null
-    @Volatile private var wanted = true
+    @Volatile private var wanted = wantedAtFirst
 
     fun start() {
         wanted = true
@@ -88,14 +90,14 @@ class Link(
         start()
     }
 
-    /** Disconnect and stay disconnected until [start]. */
+    /** Disconnect and stay disconnected until [start]. A refused credential still says so. */
     fun stop() {
         wanted = false
         loop?.cancel()
         loop = null
         _session.value?.close()
         _session.value = null
-        _state.value = LinkState.Stopped
+        if (_state.value !is LinkState.Revoked) _state.value = LinkState.Stopped
     }
 
     /** Drop the current session and dial again, e.g. after the profile's routes changed. */
