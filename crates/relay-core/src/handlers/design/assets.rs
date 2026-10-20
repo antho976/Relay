@@ -1,14 +1,16 @@
-//! `design.asset.add`: a picture read, sniffed and stored beside the store, unlocked.
+//! `design.asset.add`: a picture read, sniffed and stored beside the store, unlocked; and
+//! `design.asset.get`: a stored picture read back in pieces, for a client its file is out of
+//! reach of (the phone).
 
-use super::live_design;
+use super::{get_design, live_design};
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{assert_actor_project, check_project};
 use crate::picture;
 use base64::Engine as _;
-use relay_bus::design::{MAX_ASSET_B64, MAX_ASSET_FILE};
+use relay_bus::design::{valid_src, MAX_ASSET_B64, MAX_ASSET_FILE};
 use relay_bus::error::BusError;
-use relay_bus::ops::design::{AssetAdd, AssetAddOut};
-use std::io::{Read, Write};
+use relay_bus::ops::design::{AssetAdd, AssetAddOut, AssetGet, AssetGetOut, ASSET_PIECE};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 /// The node an asset name stands for, and its natural size: `design.asset.add`'s read phase,
@@ -79,6 +81,54 @@ fn store_asset(dir: &Path, path: &Path, bytes: &[u8]) -> Result<(), BusError> {
     }
 }
 
+/// A stored picture's media type, from its name's extension (`valid_src` names one of five).
+fn media_type(src: &str) -> &'static str {
+    match src.rsplit_once('.').map_or("", |(_, ext)| ext) {
+        "png" => "image/png",
+        "jpg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => "image/svg+xml",
+    }
+}
+
+/// The piece of stored picture `src` that starts at `offset`: at most [`ASSET_PIECE`] bytes,
+/// and where the next one starts.
+fn read_piece(dir: &Path, src: &str, offset: u64) -> Result<AssetGetOut, BusError> {
+    let missing = || BusError::not_found("design.asset_not_found", format!("no picture {src} on this machine"))
+        .with_hint("design.asset.add stores it again from its file");
+    let mut file = match std::fs::File::open(dir.join(src)) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Err(missing()),
+        Err(error) => return Err(crate::engine::internal(error)),
+    };
+    let meta = file.metadata().bus()?;
+    // An empty file at a picture's name is one a crash cut short: there is no picture to give.
+    if !meta.is_file() || meta.len() == 0 {
+        return Err(missing());
+    }
+    let size = meta.len();
+    if offset >= size {
+        return Err(BusError::invalid("design.asset", format!("offset {offset} is at or past the end of {src} ({size} bytes)"))
+            .with_hint("start at 0, then at each piece's next"));
+    }
+    file.seek(SeekFrom::Start(offset)).bus()?;
+    let mut bytes = Vec::with_capacity((size - offset).min(ASSET_PIECE as u64) as usize);
+    file.take(ASSET_PIECE as u64).read_to_end(&mut bytes).bus()?;
+    // A file that shrank under the read would otherwise answer an empty piece that names
+    // itself as the next, forever.
+    if bytes.is_empty() {
+        return Err(missing());
+    }
+    let end = offset + bytes.len() as u64;
+    Ok(AssetGetOut {
+        media_type: media_type(src).to_string(),
+        size,
+        bytes_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        next: (end < size).then_some(end),
+    })
+}
+
 pub(super) fn register(e: &mut Engine) {
     // Staged (D149): the picture is read, sniffed and written beside the store with the lock
     // released — a path may name a 20 MiB file — and the transaction only checks the design.
@@ -101,7 +151,7 @@ pub(super) fn register(e: &mut Engine) {
             crate::hex(&sha2::Sha256::digest(&bytes))
         };
         let src = format!("{}.{}", &digest[..32], picture.ext);
-        debug_assert!(relay_bus::design::valid_src(&src));
+        debug_assert!(valid_src(&src));
         let dir = ctx.engine().store.design_assets_dir();
         let path = dir.join(&src);
         store_asset(&dir, &path, &bytes)?;
@@ -112,4 +162,30 @@ pub(super) fn register(e: &mut Engine) {
         ctx.set_project(design.project_id);
         Ok(AssetAddOut { src: staged.src, path: staged.path, w: staged.w, h: staged.h })
     });
+    // Unlocked (D149): one short read to check the design, then the file, which may be 20 MiB,
+    // read with nothing held. A deleted design's pictures still read, as design.get reads it.
+    e.register_unlocked::<AssetGet>(|ctx, p| {
+        if !valid_src(&p.src) {
+            return Err(BusError::invalid("design.asset", format!("src {:?} is not a design picture's name (design.asset.add gives one)", p.src)));
+        }
+        let (session_id, agent) = (ctx.actor_session_id(), ctx.actor.is_agent());
+        ctx.read(|conn| {
+            let design = get_design(conn, p.design_id)?;
+            check_project(conn, design.project_id, session_id, agent)
+        })?;
+        read_piece(&ctx.engine().store.design_assets_dir(), &p.src, p.offset.unwrap_or(0))
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stored_picture_names_its_media_type() {
+        for (src, media) in [("a.png", "image/png"), ("a.jpg", "image/jpeg"), ("a.gif", "image/gif"), ("a.webp", "image/webp"), ("a.svg", "image/svg+xml")] {
+            assert_eq!(media_type(src), media);
+            assert_eq!(picture::raster_ext(media).unwrap_or("svg"), src.trim_start_matches("a."), "the names asset.add stores under");
+        }
+    }
 }
