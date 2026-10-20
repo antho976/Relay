@@ -133,7 +133,7 @@ fun DesignsScreen(projectId: Long, nav: Nav) {
                     Empty(
                         "layout",
                         "No designs yet",
-                        "Sketch screens, flows and ideas on the PC's infinite canvas. Agents in this project make and change designs too: ask one, and watch it draw.",
+                        "Sketch screens, flows and ideas on the PC's infinite canvas. Agents in this project make and change designs too: ask one, and they show up here as it draws.",
                     )
                 } else {
                     SectionLabel("Designs · ${designs.size}")
@@ -189,7 +189,8 @@ private fun DesignLine(d: DesignRow, lamp: Lamp?, onClick: (() -> Unit)?) {
 /**
  * One design, read only: each page as an outline of its frames and shapes where they sit, with
  * its frames by name and size. Text, pictures, icons and what an auto-layout frame holds are
- * laid out by the PC's canvas, so they are not drawn here.
+ * laid out by the PC's canvas, so they are not drawn here. It reads again as the design changes
+ * (`design.*` events), so an agent's drawing shows while the screen stays open.
  */
 @Composable
 fun DesignScreen(id: Long, nav: Nav) {
