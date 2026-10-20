@@ -210,7 +210,8 @@ pub fn install(ui: &Rc<Ui>, key: &gtk::Button, host: &gtk::Overlay) {
     key.connect_clicked(|_| toggle());
     close.connect_clicked(|_| show(false));
     fresh.connect_clicked(|_| new_chat());
-    a.send.connect_clicked(|_| submit());
+    // The key stops a reply while one runs; Enter only ever sends.
+    a.send.connect_clicked(|_| if the().is_some_and(|a| a.busy.get()) { stop() } else { submit() });
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     keys.connect_key_pressed(|_, key, _, mods| {
@@ -337,12 +338,15 @@ fn new_chat() {
 
 fn submit() {
     let Some(a) = the() else { return };
-    if a.busy.get() {
-        stop();
-        return;
-    }
     let buffer = a.input.buffer();
     let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).trim().to_string();
+    // Words written while it answers stay in the box, and Enter says why.
+    if a.busy.get() {
+        if let Some(ui) = a.ui.upgrade().filter(|_| !text.is_empty()) {
+            ui.show_info("The assistant is still answering: stop it first, or wait");
+        }
+        return;
+    }
     if text.is_empty() {
         return;
     }
