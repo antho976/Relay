@@ -183,7 +183,7 @@ impl Unlocked<'_> {
         session_id: Option<Id>,
     ) -> Result<Option<Prepared>, BusError> {
         let entry = Registry::global().get(op).ok_or_else(|| BusError::unknown_op(op))?;
-        (entry.validate)(payload).map_err(|e| BusError::schema(entry.name, e))?;
+        entry.check(payload)?;
         let Some(prepare) = self.engine.prepares.get(entry.name).cloned() else {
             return Ok(None);
         };
@@ -391,7 +391,7 @@ impl<'a> Ctx<'a> {
         let entry = Registry::global()
             .get(op)
             .ok_or_else(|| BusError::unknown_op(op))?;
-        (entry.validate)(&payload).map_err(|e| BusError::schema(entry.name, e))?;
+        entry.check(&payload)?;
         let handler = self
             .engine
             .handlers
@@ -1030,7 +1030,7 @@ impl Engine {
         };
         let req = filled.as_ref().unwrap_or(req);
         // validate (before authorization — BUS.md §5; for every op, implemented or not)
-        (entry.validate)(&req.payload).map_err(|e| BusError::schema(entry.name, e))?;
+        entry.check(&req.payload)?;
         // authorize — fixed op-level allowlist, then the session role/options/scope.
         if !entry.meta.actors.admits(&req.actor) {
             let err = BusError::allowlist(
