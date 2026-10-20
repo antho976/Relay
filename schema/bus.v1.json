@@ -25217,7 +25217,7 @@
             "boolean",
             "null"
           ],
-          "description": "Whether a frame hides what overflows it (default true)."
+          "description": "Whether a frame hides what overflows it (default true; a scrolling frame always does)."
         },
         "hidden": {
           "type": [
@@ -25360,7 +25360,7 @@
               "type": "null"
             }
           ],
-          "description": "A frame's auto layout: `row` or `column` places its children one after another, `gap`\napart inside `padding`, ignoring their `x`/`y`. Default `none`."
+          "description": "A frame's auto layout: `row` or `column` places its children one after another, `gap`\napart inside `padding`, ignoring their `x`/`y` (an `absolute` child keeps its own); `wrap`\nis a row that starts a new line when the next child would pass the frame's width. Default\n`none`."
         },
         "gap": {
           "type": [
@@ -25368,7 +25368,7 @@
             "null"
           ],
           "format": "double",
-          "description": "Space between laid-out children, in px, -10000 to 10000 (default 0); negative overlaps\nthem.",
+          "description": "Space between laid-out children along a row, column or wrap line, in px, -10000 to 10000\n(default 0); negative overlaps them.",
           "minimum": -10000,
           "maximum": 10000
         },
@@ -25713,6 +25713,96 @@
           ],
           "description": "Draws a text's, sticky's or label's letters upper, lower or title case; the stored words\nkeep theirs."
         },
+        "pin_x": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignPinX"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How it follows its parent's width: `left` (the default), `right`, `left_right` (its width\nstretches), `center` or `scale`. Its `x`/`w` are where it sits while the parent is at its\nstored `w`; a parent resized, or drawn wider or narrower (fill, stretch, hug), carries it\nalong. Only a child free in a frame (one without auto layout, or `absolute`) is pinned. A\nstretching pin needs a fixed width (a text, a `w`); a line, path or group cannot stretch."
+        },
+        "pin_y": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignPinY"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How it follows its parent's height: `top` (the default), `bottom`, `top_bottom` (its\nheight stretches), `center` or `scale`, as `pin_x` (a text needs `h_sizing: fixed` to\nstretch)."
+        },
+        "absolute": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "In a frame with auto layout: keeps its own `x`/`y` from the frame's top-left, takes no\nroom and is not counted when the frame hugs (a badge on a card); pin it to stick to an\nedge. Elsewhere it changes nothing. Default false."
+        },
+        "min_w": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Smallest width in px, 0 to 1000000, whatever decides it (hug, fill, stretch, a pin). A\nfixed `w` must lie between `min_w` and `max_w`.",
+          "minimum": 0,
+          "maximum": 1000000.0
+        },
+        "max_w": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Largest width in px, 0 to 1000000, whatever decides it; a hugging text wraps at it, and so\ndoes a hugging `wrap` frame.",
+          "minimum": 0,
+          "maximum": 1000000.0
+        },
+        "min_h": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Smallest height in px, 0 to 1000000, whatever decides it. A fixed `h` must lie between\n`min_h` and `max_h`.",
+          "minimum": 0,
+          "maximum": 1000000.0
+        },
+        "max_h": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Largest height in px, 0 to 1000000, whatever decides it.",
+          "minimum": 0,
+          "maximum": 1000000.0
+        },
+        "row_gap": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Space between the lines of a `wrap` layout, in px, -10000 to 10000 (default: `gap`).",
+          "minimum": -10000,
+          "maximum": 10000
+        },
+        "scroll": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignScroll"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A frame whose content scrolls that way (`x`, `y` or `both`): what overflows is clipped, a\nstill picture shows the start, and the canvas scrolls it with Alt+wheel. Children keep\ntheir sizes, so a row of fixed-width cards overflows into a carousel. The scrolling axis\nneeds a fixed or fill size."
+        },
         "width": {
           "type": "number",
           "minimum": 0,
@@ -25867,7 +25957,7 @@
         {
           "type": "string",
           "const": "fill",
-          "description": "Stretch to the room left in a laid-out parent (along its axis), or to its full depth\n(across it)."
+          "description": "Stretch to the room left in a laid-out parent (along its axis; in a `wrap` layout, the\nroom left in its line), or to its full depth (across it)."
         }
       ],
       "description": "How a node's width or height is decided."
@@ -25888,6 +25978,11 @@
           "type": "string",
           "const": "column",
           "description": "Top to bottom, `gap` apart."
+        },
+        {
+          "type": "string",
+          "const": "wrap",
+          "description": "Left to right like a row, starting a new line when the next child would pass the\nframe's inner width; `gap` apart along a line, `row_gap` between lines. A frame that hugs\nits width wraps only at `max_w`."
         }
       ],
       "description": "The direction a frame lays its children out in."
@@ -26096,6 +26191,87 @@
         }
       ],
       "description": "How a text's letters are cased when drawn; the stored words keep theirs. Upper and lower use\nUnicode's default case mapping, one letter at a time (no language's own rules)."
+    },
+    "DesignPinX": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "left",
+          "description": "Keeps its distance from the parent's left edge (the default)."
+        },
+        {
+          "type": "string",
+          "const": "right",
+          "description": "Keeps its distance from the parent's right edge."
+        },
+        {
+          "type": "string",
+          "const": "left_right",
+          "description": "Keeps both distances: its width stretches with the parent's."
+        },
+        {
+          "type": "string",
+          "const": "center",
+          "description": "Keeps its offset from the parent's centre line."
+        },
+        {
+          "type": "string",
+          "const": "scale",
+          "description": "Keeps its place and width as fractions of the parent's width."
+        }
+      ],
+      "description": "How a child follows its parent's width when the parent is resized, or drawn wider or narrower\nthan its stored `w`."
+    },
+    "DesignPinY": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "top",
+          "description": "Keeps its distance from the parent's top edge (the default)."
+        },
+        {
+          "type": "string",
+          "const": "bottom",
+          "description": "Keeps its distance from the parent's bottom edge."
+        },
+        {
+          "type": "string",
+          "const": "top_bottom",
+          "description": "Keeps both distances: its height stretches with the parent's."
+        },
+        {
+          "type": "string",
+          "const": "center",
+          "description": "Keeps its offset from the parent's middle."
+        },
+        {
+          "type": "string",
+          "const": "scale",
+          "description": "Keeps its place and height as fractions of the parent's height."
+        }
+      ],
+      "description": "How a child follows its parent's height, as [`PinX`] its width."
+    },
+    "DesignScroll": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "both"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "x",
+          "description": "Across: a carousel."
+        },
+        {
+          "type": "string",
+          "const": "y",
+          "description": "Down: a feed."
+        }
+      ],
+      "description": "Which way a frame's content scrolls."
     },
     "DesignCreateIn": {
       "type": "object",
@@ -26321,6 +26497,15 @@
                   "arc",
                   "blend",
                   "text_case",
+                  "pin_x",
+                  "pin_y",
+                  "absolute",
+                  "min_w",
+                  "max_w",
+                  "min_h",
+                  "max_h",
+                  "row_gap",
+                  "scroll",
                   "width",
                   "height"
                 ]
@@ -26366,6 +26551,13 @@
               "format": "uint32",
               "minimum": 0,
               "description": "0 at the bottom; absent puts it on top."
+            },
+            "keep_position": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Keep it where it is on the page: its `x`/`y` are rewritten for the new parent from the\nstored offsets up both parents' chains. Refused (`design.position`) when it or a parent\non either side is placed by auto layout, since that place is not stored. Default false:\n`x`/`y` stay as they are, relative to the new parent."
             },
             "op": {
               "type": "string",

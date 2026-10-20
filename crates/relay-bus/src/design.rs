@@ -20,6 +20,7 @@ use std::marker::PhantomData;
 
 mod fields;
 mod hints;
+mod pins;
 mod read;
 
 pub use fields::{field_kinds, fit_written, plain_label, strip_controls, takes, Kinds, FIELDS};
@@ -27,6 +28,7 @@ pub use hints::{
     de_ops, details, explain, field_hint, field_of, label, locate, nearest, patch_schema, value_hint, Unread, FIELD_HINTS,
     KIND_HINTS, OP_HINTS, SHAPE_HINTS, VALUE_HINTS,
 };
+pub use pins::{follow_axis, page_point, Pin};
 pub use read::{read_node, read_nodes, read_nodes_opt, write_node, write_nodes, write_nodes_opt};
 
 /// Most nodes one design holds.
@@ -216,8 +218,8 @@ pub enum Sizing {
     /// Shrink to the content: a text's or sticky's words, or a laid-out frame's children and
     /// padding.
     Hug,
-    /// Stretch to the room left in a laid-out parent (along its axis), or to its full depth
-    /// (across it).
+    /// Stretch to the room left in a laid-out parent (along its axis; in a `wrap` layout, the
+    /// room left in its line), or to its full depth (across it).
     Fill,
 }
 
@@ -232,6 +234,77 @@ pub enum Layout {
     Row,
     /// Top to bottom, `gap` apart.
     Column,
+    /// Left to right like a row, starting a new line when the next child would pass the
+    /// frame's inner width; `gap` apart along a line, `row_gap` between lines. A frame that hugs
+    /// its width wraps only at `max_w`.
+    Wrap,
+}
+
+/// How a child follows its parent's width when the parent is resized, or drawn wider or narrower
+/// than its stored `w`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "DesignPinX")]
+pub enum PinX {
+    /// Keeps its distance from the parent's left edge (the default).
+    Left,
+    /// Keeps its distance from the parent's right edge.
+    Right,
+    /// Keeps both distances: its width stretches with the parent's.
+    LeftRight,
+    /// Keeps its offset from the parent's centre line.
+    Center,
+    /// Keeps its place and width as fractions of the parent's width.
+    Scale,
+}
+
+/// How a child follows its parent's height, as [`PinX`] its width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "DesignPinY")]
+pub enum PinY {
+    /// Keeps its distance from the parent's top edge (the default).
+    Top,
+    /// Keeps its distance from the parent's bottom edge.
+    Bottom,
+    /// Keeps both distances: its height stretches with the parent's.
+    TopBottom,
+    /// Keeps its offset from the parent's middle.
+    Center,
+    /// Keeps its place and height as fractions of the parent's height.
+    Scale,
+}
+
+/// Which way a frame's content scrolls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "DesignScroll")]
+pub enum Scroll {
+    /// Across: a carousel.
+    X,
+    /// Down: a feed.
+    Y,
+    Both,
+}
+
+impl Scroll {
+    /// Whether it scrolls across.
+    pub fn x(self) -> bool {
+        matches!(self, Scroll::X | Scroll::Both)
+    }
+
+    /// Whether it scrolls down.
+    pub fn y(self) -> bool {
+        matches!(self, Scroll::Y | Scroll::Both)
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Scroll::X => "x",
+            Scroll::Y => "y",
+            Scroll::Both => "both",
+        }
+    }
 }
 
 /// Where a laid-out frame puts its children along its direction.
@@ -628,7 +701,7 @@ pub struct Node {
     /// within ±10000 px, `blur` 0 to 200.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "obj_opt")]
     pub shadow: Option<Shadow>,
-    /// Whether a frame hides what overflows it (default true).
+    /// Whether a frame hides what overflows it (default true; a scrolling frame always does).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clip: Option<bool>,
     /// Not drawn, not hit and left out of auto layout, with everything inside it (default
@@ -698,11 +771,13 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub h_sizing: Option<Sizing>,
     /// A frame's auto layout: `row` or `column` places its children one after another, `gap`
-    /// apart inside `padding`, ignoring their `x`/`y`. Default `none`.
+    /// apart inside `padding`, ignoring their `x`/`y` (an `absolute` child keeps its own); `wrap`
+    /// is a row that starts a new line when the next child would pass the frame's width. Default
+    /// `none`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<Layout>,
-    /// Space between laid-out children, in px, -10000 to 10000 (default 0); negative overlaps
-    /// them.
+    /// Space between laid-out children along a row, column or wrap line, in px, -10000 to 10000
+    /// (default 0); negative overlaps them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = -10_000, max = 10_000))]
     pub gap: Option<f64>,
@@ -813,6 +888,53 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_case: Option<TextCase>,
 
+    /// How it follows its parent's width: `left` (the default), `right`, `left_right` (its width
+    /// stretches), `center` or `scale`. Its `x`/`w` are where it sits while the parent is at its
+    /// stored `w`; a parent resized, or drawn wider or narrower (fill, stretch, hug), carries it
+    /// along. Only a child free in a frame (one without auto layout, or `absolute`) is pinned. A
+    /// stretching pin needs a fixed width (a text, a `w`); a line, path or group cannot stretch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_x: Option<PinX>,
+    /// How it follows its parent's height: `top` (the default), `bottom`, `top_bottom` (its
+    /// height stretches), `center` or `scale`, as `pin_x` (a text needs `h_sizing: fixed` to
+    /// stretch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_y: Option<PinY>,
+    /// In a frame with auto layout: keeps its own `x`/`y` from the frame's top-left, takes no
+    /// room and is not counted when the frame hugs (a badge on a card); pin it to stick to an
+    /// edge. Elsewhere it changes nothing. Default false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub absolute: Option<bool>,
+    /// Smallest width in px, 0 to 1000000, whatever decides it (hug, fill, stretch, a pin). A
+    /// fixed `w` must lie between `min_w` and `max_w`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0, max = MAX_COORD))]
+    pub min_w: Option<f64>,
+    /// Largest width in px, 0 to 1000000, whatever decides it; a hugging text wraps at it, and so
+    /// does a hugging `wrap` frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0, max = MAX_COORD))]
+    pub max_w: Option<f64>,
+    /// Smallest height in px, 0 to 1000000, whatever decides it. A fixed `h` must lie between
+    /// `min_h` and `max_h`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0, max = MAX_COORD))]
+    pub min_h: Option<f64>,
+    /// Largest height in px, 0 to 1000000, whatever decides it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0, max = MAX_COORD))]
+    pub max_h: Option<f64>,
+    /// Space between the lines of a `wrap` layout, in px, -10000 to 10000 (default: `gap`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = -10_000, max = 10_000))]
+    pub row_gap: Option<f64>,
+    /// A frame whose content scrolls that way (`x`, `y` or `both`): what overflows is clipped, a
+    /// still picture shows the start, and the canvas scrolls it with Alt+wheel. Children keep
+    /// their sizes, so a row of fixed-width cards overflows into a carousel. The scrolling axis
+    /// needs a fixed or fill size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll: Option<Scroll>,
+
     /// What this build cannot read in a node another build wrote: a key it does not know, or a
     /// known one whose value it cannot read (a newer gradient kind). Kept and written back as it
     /// was by [`Node::to_map`]; never set by this build. The derived `Serialize` leaves it out,
@@ -881,6 +1003,12 @@ pub enum NodeOp {
         /// 0 at the bottom; absent puts it on top.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         index: Option<u32>,
+        /// Keep it where it is on the page: its `x`/`y` are rewritten for the new parent from the
+        /// stored offsets up both parents' chains. Refused (`design.position`) when it or a parent
+        /// on either side is placed by auto layout, since that place is not stored. Default false:
+        /// `x`/`y` stay as they are, relative to the new parent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        keep_position: Option<bool>,
     },
     /// Delete a node and everything inside it. A design keeps at least one page.
     Delete {
@@ -997,6 +1125,15 @@ impl Node {
             arc: None,
             blend: None,
             text_case: None,
+            pin_x: None,
+            pin_y: None,
+            absolute: None,
+            min_w: None,
+            max_w: None,
+            min_h: None,
+            max_h: None,
+            row_gap: None,
+            scroll: None,
             extra: Map::new(),
         }
     }
@@ -1056,8 +1193,9 @@ impl Node {
     }
 
     /// Give a shape, frame or icon added without a size one (B49): 100 for a rect, ellipse,
-    /// polygon or frame, 24 for an icon, on each axis that is 0 and `fixed`. An axis that fills
-    /// or hugs keeps its 0. Whether anything changed.
+    /// polygon or frame, 24 for an icon, within its `min_w`/`max_w` (`min_h`/`max_h`), on each
+    /// axis that is 0 and `fixed`. An axis that fills or hugs keeps its 0. Whether anything
+    /// changed.
     pub fn fill_default_size(&mut self) -> bool {
         let size = match self.kind {
             NodeKind::Rect | NodeKind::Ellipse | NodeKind::Polygon | NodeKind::Frame => 100.0,
@@ -1067,10 +1205,10 @@ impl Node {
         let w = self.w == 0.0 && self.w_rule() == Sizing::Fixed;
         let h = self.h == 0.0 && self.h_rule() == Sizing::Fixed;
         if w {
-            self.w = size;
+            self.w = self.clamp_w(size);
         }
         if h {
-            self.h = size;
+            self.h = self.clamp_h(size);
         }
         w || h
     }
@@ -1162,6 +1300,11 @@ impl Node {
             ("line_height", self.line_height, 0.1, 10.0),
             ("letter_spacing", self.letter_spacing, -100.0, 1_000.0),
             ("gap", self.gap, -10_000.0, 10_000.0),
+            ("row_gap", self.row_gap, -10_000.0, 10_000.0),
+            ("min_w", self.min_w, 0.0, MAX_COORD),
+            ("max_w", self.max_w, 0.0, MAX_COORD),
+            ("min_h", self.min_h, 0.0, MAX_COORD),
+            ("max_h", self.max_h, 0.0, MAX_COORD),
         ];
         for (field, value, lo, hi) in ranged {
             if let Some(v) = value.filter(|v| !v.is_finite() || !(lo..=hi).contains(v)) {
@@ -1245,6 +1388,7 @@ impl Node {
         if let Some(name) = self.icon.as_deref().filter(|n| !ICONS.contains(n)) {
             return Err(format!("icon: {name:?} is not one of Relay's icons ({})", ICONS.join(", ")));
         }
+        self.check_layout()?;
         match self.kind {
             NodeKind::Line
                 if self.points.as_ref().is_none_or(|p| p.len() < 2) && (self.from.is_none() || self.to.is_none()) =>

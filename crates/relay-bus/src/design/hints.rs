@@ -34,6 +34,7 @@ pub const KIND_HINTS: &[(&[&str], &str)] = &[
     ),
     (&["rectangle", "square"], "use rect"),
     (&["circle", "oval"], "use ellipse"),
+    (&["carousel", "scroller"], "use frame (scroll: x on a row)"),
     (&["progress", "ring", "gauge", "donut", "pie"], "use ellipse (arc with inner draws a ring)"),
     (&["triangle", "diamond", "hexagon", "star"], "use polygon (sides; star for a star)"),
     (&["arrow", "connector"], "use line (arrow_end; from and to attach it)"),
@@ -46,14 +47,17 @@ pub const KIND_HINTS: &[(&[&str], &str)] = &[
 /// Fields agents write that are not node fields (other tools' and CSS's names), and the field
 /// to write instead.
 pub const FIELD_HINTS: &[(&[&str], &str)] = &[
-    (&["anchor", "anchors", "constraints"], "nodes have no anchors: x/y place a node from its parent's top-left, and a frame's layout places its children"),
-    (&["position"], "use x and y, from the parent's top-left (a frame's layout places its children)"),
+    (
+        &["anchor", "anchors", "constraints"],
+        "use pin_x (left, right, left_right, center, scale) and pin_y (top, bottom, top_bottom, center, scale); in auto layout also absolute: true",
+    ),
+    (&["position"], "use absolute: true (with x, y) inside auto layout; elsewhere x and y place a node from its parent's top-left"),
     (&["truncate", "ellipsis", "text_overflow", "line_clamp", "max_lines"], "text cannot be cut short yet: give it a w (it wraps) inside a frame with a fixed h that clips"),
     (&["spans", "rich_text", "runs"], "a text has one style: put differently styled words in their own texts inside a row frame"),
-    (&["flex_wrap", "wrap"], "frames do not wrap yet: lay rows out in a column frame"),
-    (&["column_gap", "row_gap"], "use gap"),
-    (&["min_width", "max_width", "min_height", "max_height", "min_w", "max_w", "min_h", "max_h"], "sizes have no limits yet: give w and h"),
-    (&["overflow", "scrollable", "scroll"], "use clip on a frame (true hides what overflows it); frames do not scroll yet"),
+    (&["flex_wrap", "wrap"], "use layout: wrap"),
+    (&["column_gap"], "use gap (row_gap between wrapped lines)"),
+    (&["min_width", "max_width", "min_height", "max_height"], "use min_w, max_w, min_h, max_h"),
+    (&["overflow", "scrollable"], "use scroll: x, y or both on a frame (clip hides what overflows)"),
     (&["box_shadow", "drop_shadow", "glow", "shadows"], "use shadow: {x, y, blur, spread, color} (a glow: x 0, y 0)"),
     (&["line_cap", "stroke_linecap", "stroke_cap", "line_join", "stroke_linejoin", "stroke_join"], "a stroke's ends and corners cannot be chosen yet"),
     (&["animation", "keyframes", "transition", "motion"], "nodes do not animate yet"),
@@ -93,6 +97,12 @@ pub const FIELD_HINTS: &[(&[&str], &str)] = &[
 pub const VALUE_HINTS: &[(&[&str], &[&str], &str)] = &[
     (&["layout"], &["vertical", "vstack"], "column"),
     (&["layout"], &["horizontal", "hstack"], "row"),
+    (&["layout"], &["flex_wrap"], "wrap"),
+    (&["pin_x"], &["stretch", "both", "left_and_right"], "left_right"),
+    (&["pin_y"], &["stretch", "both", "top_and_bottom"], "top_bottom"),
+    (&["pin_x", "pin_y"], &["middle", "centre"], "center"),
+    (&["scroll"], &["horizontal"], "x"),
+    (&["scroll"], &["vertical"], "y"),
     (&["justify", "items"], &["flex_start", "left", "top"], "start"),
     (&["justify", "items"], &["flex_end", "right", "bottom"], "end"),
     (&["justify", "items"], &["middle", "centre"], "center"),
@@ -613,7 +623,7 @@ mod tests {
     #[test]
     fn each_bad_edit_names_its_index_and_field() {
         let why = add(3, json!({"id": "x", "parent": "p", "kind": "frame", "layout": "grid"}));
-        assert_eq!(why, "ops[3] add \"x\": layout: unknown variant `grid`, expected one of `none`, `row`, `column`");
+        assert_eq!(why, "ops[3] add \"x\": layout: unknown variant `grid`, expected one of `none`, `row`, `column`, `wrap`");
         assert_eq!(add(0, json!({"id": "x", "parent": "p", "kind": "polygon", "sides": 300})), "ops[0] add \"x\": sides: 300 is outside 3 to 24");
         assert_eq!(add(0, json!({"id": "x", "parent": "p", "kind": "polygon", "sides": -1})), "ops[0] add \"x\": sides: -1 is outside 3 to 24");
         let rect = json!({"id": "r", "parent": "p", "kind": "rect"});
@@ -630,14 +640,17 @@ mod tests {
             node[key] = value;
             add(0, node)
         };
-        assert!(node("anchor", json!("top")).ends_with("anchor: not a node field; nodes have no anchors: x/y place a node from its parent's top-left, and a frame's layout places its children"));
+        assert!(node("anchor", json!("top")).ends_with("anchor: not a node field; use pin_x (left, right, left_right, center, scale) and pin_y (top, bottom, top_bottom, center, scale); in auto layout also absolute: true"));
+        assert!(node("minWidth", json!(10)).ends_with("minWidth: not a node field; use min_w, max_w, min_h, max_h"));
+        let pinned = json!({"id": "t", "parent": "p", "kind": "rect", "pin_x": "stretch"});
+        assert!(add(0, pinned).ends_with("; use \"left_right\""));
         for key in ["truncate", "max_lines"] {
             assert!(node(key, json!(1)).contains(&format!("{key}: not a node field; text cannot be cut short yet")), "{key}");
         }
         assert!(node("runs", json!([])).contains("runs: not a node field; a text has one style"));
         assert!(node("Background-Color", json!("#fff")).ends_with("Background-Color: not a node field; use fill"));
         let frame = json!({"id": "f", "parent": "p", "kind": "frame", "layout": "vertical"});
-        assert!(add(0, frame).ends_with("layout: unknown variant `vertical`, expected one of `none`, `row`, `column`; use \"column\""));
+        assert!(add(0, frame).ends_with("layout: unknown variant `vertical`, expected one of `none`, `row`, `column`, `wrap`; use \"column\""));
         let justify = json!({"id": "f", "parent": "p", "kind": "frame", "justify": "space-between"});
         assert!(add(0, justify).ends_with("; did you mean \"space_between\"?"));
         let align = json!({"id": "t", "parent": "p", "kind": "text", "align": "centre"});

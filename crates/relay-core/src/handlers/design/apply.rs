@@ -325,7 +325,7 @@ impl Run<'_> {
         self.tx.prepare_cached("UPDATE design_nodes SET parent_id = ?3, ord = ?4 WHERE design_id = ?1 AND node_id = ?2").bus()?
             .execute(params![self.design, id, to, ord]).bus()?;
         self.touch(&id);
-        self.inverse.push(vec![NodeOp::Move { id: id.clone(), parent: from, index: Some(old_index) }]);
+        self.inverse.push(vec![NodeOp::Move { id: id.clone(), parent: from, index: Some(old_index), keep_position: None }]);
         Ok(Some(id))
     }
 
@@ -507,7 +507,12 @@ pub(super) fn register(e: &mut Engine) {
             let id = match op {
                 NodeOp::Add { node, index } => run.add(node, index)?,
                 NodeOp::Update { id, set } => run.update(id, set)?,
-                NodeOp::Move { id, parent, index } => run.move_(id, parent, index)?,
+                // Until engine-pins rewrites x/y from page points (MODEL-SPEC §2.11).
+                NodeOp::Move { keep_position: Some(true), .. } => {
+                    return Err(run.fail_on("keep_position", ErrorKind::Invalid, "design.ops", "keep_position is not supported yet")
+                        .with_hint("move it without keep_position, then set x and y in an update"));
+                }
+                NodeOp::Move { id, parent, index, .. } => run.move_(id, parent, index)?,
                 NodeOp::Delete { id } => run.delete(id)?,
             };
             run.ids.push(id.unwrap_or_default());

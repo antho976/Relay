@@ -1094,7 +1094,7 @@ fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
             };
             let mut ops = Vec::new();
             if let Some((parent, index)) = reorder {
-                ops.push(NodeOp::Move { id: ids[0].clone(), parent: Some(parent), index: Some(index) });
+                ops.push(NodeOp::Move { id: ids[0].clone(), parent: Some(parent), index: Some(index), keep_position: None });
             } else if let Some(t) = target {
                 let index = edit::lays_out(&scene, &t).then(|| {
                     let row = scene.node(&t).is_some_and(|n| n.layout_mode() == Layout::Row);

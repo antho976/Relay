@@ -116,6 +116,16 @@ pub const FIELDS: &[(&str, Kinds, Option<&str>)] = &[
     ("flip_x", Kinds(Y | I | C), None),
     ("flip_y", Kinds(Y | I | C), None),
     ("arc", Kinds(E), None),
+    ("pin_x", Kinds(ALL & !P), Some("pin_x: a page sits in no parent")),
+    ("pin_y", Kinds(ALL & !P), Some("pin_y: a page sits in no parent")),
+    ("absolute", Kinds(ALL & !P), Some("absolute: a page sits in no parent")),
+    // A group's size comes from its children, a line's or path's from its points.
+    ("min_w", Kinds(F | R | E | Y | S | T | I | C), None),
+    ("max_w", Kinds(F | R | E | Y | S | T | I | C), None),
+    ("min_h", Kinds(F | R | E | Y | S | T | I | C), None),
+    ("max_h", Kinds(F | R | E | Y | S | T | I | C), None),
+    ("row_gap", Kinds(F), None),
+    ("scroll", Kinds(F), Some("scroll: only a frame scrolls")),
 ];
 
 fn table() -> &'static HashMap<&'static str, (Kinds, Option<&'static str>)> {
@@ -513,7 +523,8 @@ mod tests {
             "src": "0123456789abcdef0123.png", "fit": "cover", "rotation": 1, "sides": 3, "star": 0.5,
             "gradient": {"stops": []}, "radii": [1, 1, 1, 1], "dash": [1], "blur": 1, "icon": "home", "from": "a",
             "to": "b", "route": "straight", "closed": true, "smooth": true, "flip_x": true, "flip_y": true,
-            "arc": {}, "blend": "normal", "text_case": "upper"
+            "arc": {}, "blend": "normal", "text_case": "upper", "pin_x": "left", "pin_y": "top", "absolute": false,
+            "min_w": 1, "max_w": 1, "min_h": 1, "max_h": 1, "row_gap": 1, "scroll": "x"
         }"##).unwrap();
         let keys = present(&full);
         assert_eq!(keys.len(), FIELDS.len(), "{keys:?}");

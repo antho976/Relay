@@ -53,7 +53,7 @@ fn each_refusal_names_its_edit_and_field() {
     let id = create(&e);
     let cases = [
         (with(&[json!({"op": "delete", "id": "title"}), json!({"op": "add", "node": {"id": "x", "parent": "card", "kind": "frame", "layout": "grid"}})]),
-            "ops[3] add \"x\": layout: unknown variant `grid`, expected one of `none`, `row`, `column`", 3, Some("x"), Some("layout")),
+            "ops[3] add \"x\": layout: unknown variant `grid`, expected one of `none`, `row`, `column`, `wrap`", 3, Some("x"), Some("layout")),
         (with(&[json!({"op": "add", "node": {"id": "star", "parent": "card", "kind": "polygon", "star": 0.4, "sides": 300}})]),
             "ops[2] add \"star\": sides: 300 is outside 3 to 24", 2, Some("star"), Some("sides")),
         (with(&[json!({"op": "add", "node": {"id": "x", "parent": "card", "kind": "rect", "fil": "#fff"}})]),
@@ -68,7 +68,7 @@ fn each_refusal_names_its_edit_and_field() {
         (with(&[json!({"op": "update", "id": "card", "set": {"background": "#fff"}})]),
             "ops[2] update \"card\": background: not a node field; use fill", 2, Some("card"), Some("background")),
         (with(&[json!({"op": "add", "node": {"id": "col", "parent": "card", "kind": "frame", "layout": "vertical"}})]),
-            "ops[2] add \"col\": layout: unknown variant `vertical`, expected one of `none`, `row`, `column`; use \"column\"", 2, Some("col"), Some("layout")),
+            "ops[2] add \"col\": layout: unknown variant `vertical`, expected one of `none`, `row`, `column`, `wrap`; use \"column\"", 2, Some("col"), Some("layout")),
         (with(&[json!({"op": "add", "node": {"parent": "card", "kind": "rect", "shadow": {"blur": 300, "color": "#000"}}})]),
             "ops[2] add rect: shadow.blur: 300 is outside 0 to 200", 2, None, Some("shadow.blur")),
     ];
