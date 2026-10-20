@@ -3,19 +3,24 @@
 use super::{body_of, emit_design, kind_of, live_design, node_of, row_bytes};
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project};
-use relay_bus::design::{details, field_of, label, Node, NodeKind, NodeOp, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
+use relay_bus::design::{details, field_of, label, nearest, Node, NodeKind, NodeOp, MAX_DEPTH, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{Apply, ApplyOut};
 use relay_bus::types::{Design, Id};
 use relay_bus::ErrorKind;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::PathBuf;
 
 /// The largest `design.apply` undo the audit keeps for `audit.undo`.
 const UNDO_KEPT: usize = 256 * 1024;
 /// Most `warnings` one answer carries.
 const MAX_WARNINGS: usize = 20;
+/// How far a walk up or down a design goes: past MAX_DEPTH, so a design another build nested
+/// deeper is still measured, but never the whole of a chain gone wrong.
+const WALK: usize = MAX_DEPTH + 6;
+const TOO_LARGE_HINT: &str = "split it across designs, or keep long text and big paths out of it";
 
 /// A row's kind: `Err` holds the name of one this build does not know (a newer build's), whose
 /// row is a leaf it can neither read nor edit.
@@ -36,6 +41,17 @@ pub(super) struct Stored {
     pub(super) kind: RowKind,
     pub(super) ord: f64,
     pub(super) body: String,
+}
+
+/// A connector end or a picture an edit wrote (B6), checked as the node holds it once the list
+/// has run, so an end may name a node a later edit adds.
+pub(super) struct Ref {
+    pub(super) id: String,
+    /// `from`, `to` or `src`.
+    pub(super) field: &'static str,
+    /// The edit that wrote it, and its label.
+    pub(super) at: usize,
+    pub(super) label: String,
 }
 
 /// One `design.apply` under way: the design's counters as its edits change them, and what the
@@ -71,6 +87,23 @@ pub(super) struct Run<'a> {
     pub(super) ids: Vec<String>,
     /// Each applied edit's undo, in edit order; a delete's is the whole subtree's re-adds.
     pub(super) inverse: Vec<Vec<NodeOp>>,
+    /// Where nodes sit, as far as this list has looked: each node's parent, read a chain at a
+    /// time when first needed (or whole, once a move to another page has the connectors' ends
+    /// placed) and kept as its adds, moves and deletes change them. Depths and pages are read
+    /// off it (W14, B6).
+    pub(super) parents: HashMap<String, Option<String>>,
+    /// The last node an add asked the depth of, and that depth: a list adds a node's children
+    /// one after another. A move or a delete forgets it.
+    pub(super) last_depth: Option<(String, usize)>,
+    /// The connector ends and pictures the list wrote, in edit order (B6).
+    pub(super) refs: Vec<Ref>,
+    /// Each node the list deleted, with what was inside it, and the last edit that did.
+    pub(super) removed_at: HashMap<String, usize>,
+    /// Each node the list moved to another page, and the last edit that did (B6); a node a later
+    /// edit took out of one so moved, with that one's edit, since its own move crossed nothing.
+    pub(super) crossed: HashMap<String, usize>,
+    /// Where pictures are stored: an image's `src` names a file in it (B6).
+    pub(super) assets: PathBuf,
 }
 
 const NODE_META: &str = "SELECT parent_id, kind, ord FROM design_nodes WHERE design_id = ?1 AND node_id = ?2";
@@ -80,6 +113,30 @@ const SIBLING_ORDS: &str = "SELECT ord FROM design_nodes WHERE design_id = ?1 AN
     ORDER BY ord, node_id LIMIT 2 OFFSET ?4+0";
 const TOP_ORD: &str = "SELECT ord FROM design_nodes WHERE design_id = ?1 AND parent_id IS ?2 AND node_id IS NOT ?3
     ORDER BY ord DESC, node_id DESC LIMIT 1";
+/// Node `?2` and its ancestors as far as `?3` levels up, nearest first.
+const ANCESTORS: &str = "WITH RECURSIVE up(node_id, parent_id, d) AS (
+        SELECT node_id, parent_id, 0 FROM design_nodes WHERE design_id = ?1 AND node_id = ?2
+        UNION ALL
+        SELECT n.node_id, n.parent_id, up.d + 1 FROM up JOIN design_nodes n ON n.design_id = ?1 AND n.node_id = up.parent_id
+        WHERE up.d < ?3)
+    SELECT node_id, parent_id FROM up";
+/// How many ancestors node `?2` has, counted to its page as far as `?3` levels up: none when its
+/// chain does not reach a page by then.
+const DEPTH: &str = "WITH RECURSIVE up(parent_id, d) AS (
+        SELECT parent_id, 0 FROM design_nodes WHERE design_id = ?1 AND node_id = ?2
+        UNION ALL
+        SELECT n.parent_id, up.d + 1 FROM up JOIN design_nodes n ON n.design_id = ?1 AND n.node_id = up.parent_id
+        WHERE up.d < ?3)
+    SELECT MAX(d) FROM up WHERE parent_id IS NULL";
+/// Every node of the design and its parent, from the parent index alone.
+const PARENTS: &str = "SELECT node_id, parent_id FROM design_nodes WHERE design_id = ?1";
+/// How many levels below node `?2` the deepest node inside it sits, counted as far as `?3`.
+const HEIGHT: &str = "WITH RECURSIVE down(node_id, d) AS (
+        SELECT ?2, 0
+        UNION ALL
+        SELECT n.node_id, down.d + 1 FROM down JOIN design_nodes n ON n.design_id = ?1 AND n.parent_id = down.node_id
+        WHERE down.d < ?3)
+    SELECT MAX(d) FROM down";
 
 impl Run<'_> {
     /// The refusal of the edit under way: `ops[3] update "hero": fill: …`, with `details` naming
@@ -95,12 +152,164 @@ impl Run<'_> {
         BusError::new(kind, code, format!("{}: {why}", self.label)).with_details(details(self.at, self.target.as_deref(), Some(field)))
     }
 
-    /// The node an edit names is not there: skipped when lenient, else refused.
+    /// The node an edit names is not there: skipped when lenient, else refused with the nearest
+    /// id the design holds (W19).
     pub(super) fn missing(&self, what: impl std::fmt::Display) -> Result<Option<String>, BusError> {
         if self.lenient {
             return Ok(None);
         }
-        Err(self.fail(ErrorKind::NotFound, "design.node_not_found", what))
+        let hint = self.nearest_id(self.target.as_deref().unwrap_or_default())?;
+        Err(self.fail(ErrorKind::NotFound, "design.node_not_found", what).with_hint(hint))
+    }
+
+    /// W19: the hint for an id the design does not hold, the nearest one it does or where to
+    /// find them. It reads every id, on the way to a refusal only.
+    pub(super) fn nearest_id(&self, want: &str) -> Result<String, BusError> {
+        let ids: Vec<String> = self.tx.prepare_cached("SELECT node_id FROM design_nodes WHERE design_id = ?1").bus()?
+            .query_map([self.design], |r| r.get(0)).bus()?
+            .collect::<rusqlite::Result<_>>().bus()?;
+        Ok(match nearest(want, ids.iter().map(String::as_str)) {
+            Some(id) => format!("did you mean {id:?}?"),
+            None => "design.get lists the ids (pass page to read one page)".to_string(),
+        })
+    }
+
+    /// Learn where node `id` sits: its chain up to its page (or WALK levels) into `parents`.
+    /// A node the list has not seen is read alone when its parent has been (a leaf it added,
+    /// most often), and with the rest of its chain in one query when not.
+    fn learn(&mut self, id: &str) -> Result<(), BusError> {
+        let mut at = id.to_string();
+        for _ in 0..=WALK {
+            let parent = match self.parents.get(&at) {
+                Some(Some(parent)) => parent.clone(),
+                Some(None) => return Ok(()),
+                None => {
+                    let Some((parent, _, _)) = self.meta(&at)? else { return Ok(()) };
+                    self.parents.insert(at, parent.clone());
+                    let Some(parent) = parent else { return Ok(()) };
+                    if !self.parents.contains_key(&parent) {
+                        let rows: Vec<(String, Option<String>)> = self.tx.prepare_cached(ANCESTORS).bus()?
+                            .query_map(params![self.design, parent, WALK as i64], |r| Ok((r.get(0)?, r.get(1)?))).bus()?
+                            .collect::<rusqlite::Result<_>>().bus()?;
+                        self.parents.extend(rows);
+                        return Ok(());
+                    }
+                    parent
+                }
+            };
+            at = parent;
+        }
+        Ok(())
+    }
+
+    /// Node `id` and its ancestors as `parents` knows them, nearest first, at most WALK + 1.
+    fn chain<'s>(&'s self, id: &'s str) -> impl Iterator<Item = &'s str> + 's {
+        std::iter::successors(Some(id), |at| self.parents.get(*at)?.as_deref()).take(WALK + 1)
+    }
+
+    /// How many ancestors node `id` has by `parents`: `None` when it meets a node it has not
+    /// seen, `Some(None)` past WALK.
+    fn known_depth(&self, id: &str) -> Option<Option<usize>> {
+        let mut at = id;
+        for depth in 0..=WALK {
+            match self.parents.get(at)? {
+                Some(parent) => at = parent,
+                None => return Some(Some(depth)),
+            }
+        }
+        Some(None)
+    }
+
+    /// How many ancestors node `id` has (a page's child 1): `None` when it is not in the design
+    /// or sits too deep to tell. Each add asks it of its parent, so it walks what the list has
+    /// seen, and reads the design only for a chain it has not.
+    pub(super) fn depth(&mut self, id: &str) -> Result<Option<usize>, BusError> {
+        if let Some((last, depth)) = &self.last_depth {
+            if last == id {
+                return Ok(Some(*depth));
+            }
+        }
+        let depth = match self.known_depth(id) {
+            Some(depth) => depth,
+            None => {
+                self.learn(id)?;
+                self.known_depth(id).flatten()
+            }
+        };
+        self.last_depth = depth.map(|depth| (id.to_string(), depth));
+        Ok(depth)
+    }
+
+    /// Where node `id` sits: how many ancestors it has (a page's child 1) and its page (a page
+    /// its own). `None` when it is not in the design, or sits too deep to tell (a chain past
+    /// WALK another build left).
+    pub(super) fn place(&mut self, id: &str) -> Result<Option<(usize, String)>, BusError> {
+        self.learn(id)?;
+        if !self.parents.contains_key(id) {
+            return Ok(None);
+        }
+        let (depth, top) = self.chain(id).enumerate().last().unwrap_or((0, id));
+        Ok(matches!(self.parents.get(top), Some(None)).then(|| (depth, top.to_string())))
+    }
+
+    /// How many ancestors node `id` has however deep it sits, for a node past WALK (a chain
+    /// another build nested): one query up its whole chain, bounded by MAX_NODES. `None` when it
+    /// does not reach a page.
+    fn full_depth(&self, id: &str) -> Result<Option<usize>, BusError> {
+        let depth: Option<i64> = self.tx.prepare_cached(DEPTH).bus()?
+            .query_row(params![self.design, id, MAX_NODES as i64], |r| r.get(0)).bus()?;
+        Ok(depth.map(|depth| depth as usize))
+    }
+
+    /// Where every node of the design sits, read whole: what [`Run::release_ends`] places each
+    /// connector's ends by after a move to another page, one read rather than a chain per end.
+    fn learn_all(&mut self) -> Result<(), BusError> {
+        let rows: Vec<(String, Option<String>)> = self.tx.prepare_cached(PARENTS).bus()?
+            .query_map([self.design], |r| Ok((r.get(0)?, r.get(1)?))).bus()?
+            .collect::<rusqlite::Result<_>>().bus()?;
+        self.parents.reserve(rows.len().saturating_sub(self.parents.len()));
+        self.parents.extend(rows);
+        Ok(())
+    }
+
+    /// How many levels below node `id` the deepest node inside it sits, counted as far as WALK.
+    pub(super) fn height(&self, id: &str) -> Result<usize, BusError> {
+        let height: Option<i64> = self.tx.prepare_cached(HEIGHT).bus()?
+            .query_row(params![self.design, id, WALK as i64], |r| r.get(0)).bus()?;
+        Ok(height.unwrap_or(0) as usize)
+    }
+
+    /// The ancestors a node put in `parent` would have, page first, for a refusal: two at each
+    /// end of a long chain (`page-1 › shell › … › row-63 › row-64`).
+    fn chain_text(&self, parent: &str) -> String {
+        let mut chain: Vec<&str> = self.chain(parent).collect();
+        chain.reverse();
+        if chain.len() > 5 {
+            chain = [&chain[..2], &["…"], &chain[chain.len() - 2..]].concat();
+        }
+        chain.join(" › ")
+    }
+
+    /// W14: whether node `id`, with the `height` levels it holds below it (0 for one holding
+    /// nothing), fits in `parent`, at most MAX_DEPTH deep. Past it a strict list is refused,
+    /// naming the chain it would hang from; a lenient one skips the edit (`Ok(false)`), telling
+    /// an agent.
+    pub(super) fn fits(&mut self, parent: &str, id: &str, height: usize) -> Result<bool, BusError> {
+        let deepest = self.depth(parent)?.map(|depth| depth + 1 + height);
+        if deepest.is_some_and(|deepest| deepest <= MAX_DEPTH) {
+            return Ok(true);
+        }
+        let deep = deepest.map_or_else(|| format!("more than {WALK}"), |deepest| deepest.to_string());
+        let chain = self.chain_text(parent);
+        let why = match height {
+            0 => format!("it would sit {deep} deep ({chain}); a design nests at most {MAX_DEPTH} levels"),
+            _ => format!("what it holds would sit {deep} deep ({chain} › {id} › …); a design nests at most {MAX_DEPTH} levels"),
+        };
+        if self.lenient {
+            self.warn(format_args!("{why}; skipped"));
+            return Ok(false);
+        }
+        Err(self.fail(ErrorKind::Invalid, "design.too_deep", why).with_hint("nest less: lay rows out in one frame rather than a frame per row"))
     }
 
     /// Tell an agent what its lenient list let through or skipped (at most [`MAX_WARNINGS`]).
@@ -244,7 +453,8 @@ impl Run<'_> {
     pub(super) fn container(&mut self, parent: &str) -> Result<bool, BusError> {
         match self.meta(parent)? {
             None if self.lenient => Ok(false),
-            None => Err(self.fail(ErrorKind::NotFound, "design.parent", format!("parent {parent:?} is not in the design"))),
+            None => Err(self.fail(ErrorKind::NotFound, "design.parent", format!("parent {parent:?} is not in the design"))
+                .with_hint(self.nearest_id(parent)?)),
             Some((_, Ok(kind), _)) if !kind.holds_children() => Err(self.fail(ErrorKind::Invalid, "design.parent",
                 format!("parent {parent:?} is a {}, which holds nothing; use a page, frame or group", kind.name()))),
             Some((_, Err(kind), _)) if self.lenient => {
@@ -264,7 +474,7 @@ impl Run<'_> {
         }
         self.names_exist(&node)?;
         if let Some(parent) = node.parent.as_deref() {
-            if !self.container(parent)? {
+            if !self.container(parent)? || !self.fits(parent, &node.id, 0)? {
                 return Ok(None);
             }
         }
@@ -291,7 +501,22 @@ impl Run<'_> {
         self.bytes += row_bytes(&node.id, node.parent.as_deref(), &body);
         self.touch(&node.id);
         self.inverse.push(vec![NodeOp::Delete { id: node.id.clone() }]);
+        // What a later add may go in; where a leaf sits is read when asked (B6), seldom.
+        if node.kind.holds_children() {
+            self.parents.insert(node.id.clone(), node.parent.clone());
+        }
+        for (field, written) in [("from", node.from.is_some()), ("to", node.to.is_some()), ("src", node.src.is_some())] {
+            if written {
+                self.wrote(&node.id, field);
+            }
+        }
         Ok(Some(node.id))
+    }
+
+    /// Note that the edit under way wrote `field` (a connector end or a picture) of node `id`,
+    /// for [`Run::check_refs`].
+    pub(super) fn wrote(&mut self, id: &str, field: &'static str) {
+        self.refs.push(Ref { id: id.to_string(), field, at: self.at, label: self.label.clone() });
     }
 
     pub(super) fn update(&mut self, id: String, set: Map<String, Value>) -> Result<Option<String>, BusError> {
@@ -310,6 +535,11 @@ impl Run<'_> {
         }
         self.touch(&next.id);
         self.inverse.push(vec![NodeOp::Update { id: next.id.clone(), set: node.before(&set) }]);
+        for field in ["from", "to", "src"] {
+            if set.contains_key(field) {
+                self.wrote(&next.id, field);
+            }
+        }
         Ok(Some(next.id))
     }
 
@@ -322,6 +552,7 @@ impl Run<'_> {
                 return Ok(None);
             }
         };
+        let mut crossed = None;
         let to = if kind == NodeKind::Page {
             if parent.is_some() {
                 return Err(self.fail_on("parent", ErrorKind::Invalid, "design.parent", "a page sits in no parent; a move only reorders it among the pages"));
@@ -344,6 +575,33 @@ impl Run<'_> {
                     }
                     up = self.meta(&ancestor)?.and_then(|(parent, _, _)| parent);
                 }
+                // W14: no deeper than a design nests, unless no deeper than it sat, so a design
+                // another build nested past the limit can still be flattened.
+                let (here, there) = (self.place(&id)?, self.place(&to)?);
+                let deeper = match (&here, &there) {
+                    (Some((now, _)), Some((above, _))) => above + 1 > *now,
+                    (Some(_), None) => true,
+                    // It sits past WALK and goes where a walk reaches a page: no deeper than it was.
+                    (None, Some(_)) => false,
+                    // Both past it: each counted to its page.
+                    (None, None) => match (self.full_depth(&id)?, self.full_depth(&to)?) {
+                        (Some(now), Some(above)) => above + 1 > now,
+                        _ => true,
+                    },
+                };
+                if deeper {
+                    let height = self.height(&id)?;
+                    if !self.fits(&to, &id, height)? {
+                        return Ok(None);
+                    }
+                }
+                // B6: carried to another page, it parts the connectors between it and its page;
+                // taken out of a node an earlier edit carried there, it stays carried as of then.
+                let carried = self.chain(&id).skip(1).filter_map(|up| self.crossed.get(up).copied()).max();
+                crossed = match (here, there) {
+                    (Some((_, was)), Some((_, will))) if was == will => carried,
+                    _ => Some(self.at),
+                };
             }
             Some(to)
         };
@@ -354,6 +612,14 @@ impl Run<'_> {
         // The parent's id is part of what design.get returns of the node.
         self.bytes += to.as_ref().map_or(0, String::len) as i64 - from.as_ref().map_or(0, String::len) as i64;
         self.touch(&id);
+        self.last_depth = None;
+        if to.is_some() {
+            self.parents.insert(id.clone(), to.clone());
+        }
+        if let Some(at) = crossed {
+            let last = self.crossed.entry(id.clone()).or_insert(at);
+            *last = (*last).max(at);
+        }
         self.inverse.push(vec![NodeOp::Move { id: id.clone(), parent: from, index: Some(old_index), keep_position: None }]);
         Ok(Some(id))
     }
@@ -397,9 +663,12 @@ impl Run<'_> {
             remove.execute(params![self.design, node_id]).bus()?;
             tombstone.execute(params![self.design, node_id, self.rev]).bus()?;
             self.bytes -= row_bytes(&node_id, row.parent.as_deref(), &row.body);
+            self.parents.remove(&node_id);
+            self.removed_at.insert(node_id.clone(), self.at);
             self.removed.push(node_id);
         }
         self.tombstones = true;
+        self.last_depth = None;
         self.nodes -= undo.len() as i64;
         self.pages -= i64::from(matches!(&undo[0], NodeOp::Add { node, .. } if node.kind == NodeKind::Page));
         let id = undo[0].target().to_string();
@@ -432,20 +701,73 @@ impl Run<'_> {
         Ok(None)
     }
 
+    /// Connector `id` lets go of its `ends` (`from`, `to`). It keeps its own points (where it
+    /// was last drawn); one with fewer than two is given its ends' stored centres. The undo
+    /// attaches it again.
+    pub(super) fn free(&mut self, id: &str, ends: &[&str]) -> Result<(), BusError> {
+        let Some(row) = self.row(id)? else { return Ok(()) };
+        let Ok(node) = node_of(id.to_string(), row.parent, &row.body) else { return Ok(()) };
+        let mut set: Map<String, Value> = ends.iter().map(|end| (end.to_string(), Value::Null)).collect();
+        if node.points.as_ref().is_none_or(|p| p.len() < 2) {
+            let centre = |b: Option<(f64, f64, f64, f64)>| b.map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0));
+            let ends = match node.from.as_deref().zip(node.to.as_deref()) {
+                Some((from, to)) => (self.stored_box(&node.id)?, centre(self.stored_box(from)?), centre(self.stored_box(to)?)),
+                None => (None, None, None),
+            };
+            let points = match ends {
+                (Some((ox, oy, _, _)), Some(a), Some(b)) => json!([[(a.0 - ox).round(), (a.1 - oy).round()], [(b.0 - ox).round(), (b.1 - oy).round()]]),
+                _ => json!([[0.0, 0.0], [node.w, node.h]]),
+            };
+            set.insert("points".into(), points);
+        }
+        // A line that cannot be freed (none should fail) keeps its attachment.
+        let Ok(mut next) = node.patched(&set) else { return Ok(()) };
+        let body = body_of(&mut next)?;
+        self.tx.prepare_cached("UPDATE design_nodes SET body = ?3, rev = ?4 WHERE design_id = ?1 AND node_id = ?2").bus()?
+            .execute(params![self.design, next.id, body, self.rev]).bus()?;
+        self.bytes += body.len() as i64 - row.body.len() as i64;
+        self.touch(&next.id);
+        self.inverse.push(vec![NodeOp::Update { id: next.id.clone(), set: node.before(&set) }]);
+        Ok(())
+    }
+
+    /// The last edit of this list that moved connector `line` or its `end`, or a node holding
+    /// either, to another page, when they now sit on different pages. `None` when they share a
+    /// page, or when the list moved neither: a connector it leaves alone keeps its ends. Read off
+    /// `parents` alone, which holds the whole design by then ([`Run::learn_all`]).
+    fn parted_at(&self, line: &str, end: &str) -> Option<usize> {
+        let at = self.chain(line).chain(self.chain(end)).filter_map(|id| self.crossed.get(id).copied()).max()?;
+        let page = |id| self.chain(id).last().filter(|top| matches!(self.parents.get(*top), Some(None)));
+        match (page(line), page(end)) {
+            (Some(a), Some(b)) if a != b => Some(at),
+            _ => None,
+        }
+    }
+
     /// Connectors attached to a node this list deleted let go of that end, so no line names a
-    /// node that is gone. A line keeps its own points (where it was last drawn); one with none
-    /// is given its ends' stored centres. The undo attaches it again.
+    /// node that is gone; so do those a move of this list left on another page than an end of
+    /// theirs (B6, MODEL-SPEC §2.11). An end the list wrote after the edit that took its node
+    /// away is left for [`Run::check_refs`], which refuses it in a strict list.
     pub(super) fn release_ends(&mut self) -> Result<(), BusError> {
-        if self.removed.is_empty() {
+        if self.removed.is_empty() && self.crossed.is_empty() {
             return Ok(());
         }
-        let removed: HashSet<&str> = self.removed.iter().map(String::as_str).collect();
+        // The last edit that wrote each line's `from` and `to`.
+        let mut written: HashMap<String, [Option<usize>; 2]> = HashMap::new();
+        for r in self.refs.iter().filter(|r| r.field != "src") {
+            written.entry(r.id.clone()).or_default()[usize::from(r.field == "to")] = Some(r.at);
+        }
         // The text test is loose (a text could hold the words); each body is read to be sure.
         let attached: Vec<(String, Option<String>, String)> = self.tx
             .prepare_cached("SELECT node_id, parent_id, body FROM design_nodes WHERE design_id = ?1
                 AND (instr(body, '\"from\":') > 0 OR instr(body, '\"to\":') > 0)").bus()?
             .query_map([self.design], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).bus()?
             .collect::<rusqlite::Result<_>>().bus()?;
+        // After a move to another page each connector's ends are placed, so where every node sits
+        // is read in one query rather than a chain at a time (MODEL-SPEC §5 #5).
+        if !self.crossed.is_empty() && !attached.is_empty() {
+            self.learn_all()?;
+        }
         let mut releases = Vec::new();
         for (id, parent, body) in attached {
             // A row this build cannot read is left as it is (a newer build's own kind of line).
@@ -456,42 +778,114 @@ impl Run<'_> {
                     continue;
                 }
             };
-            let mut set = Map::new();
-            for (field, end) in [("from", &node.from), ("to", &node.to)] {
-                if let Some(end) = end.as_deref().filter(|e| removed.contains(e)) {
-                    if self.meta(end)?.is_none() {
-                        set.insert(field.to_string(), Value::Null);
-                    }
+            let mut ends = Vec::new();
+            for (i, (field, end)) in [("from", &node.from), ("to", &node.to)].into_iter().enumerate() {
+                let Some(end) = end.as_deref() else { continue };
+                let parted = match self.removed_at.get(end) {
+                    Some(&at) if self.meta(end)?.is_none() => Some(at),
+                    _ if self.crossed.is_empty() => None,
+                    _ => self.parted_at(&node.id, end),
+                };
+                let set = written.get(node.id.as_str()).and_then(|at| at[i]);
+                if parted.is_some_and(|parted| set.is_none_or(|set| set < parted)) {
+                    ends.push(field);
                 }
             }
-            if !set.is_empty() {
-                releases.push((node, set, body.len() as i64));
+            if !ends.is_empty() {
+                releases.push((node.id, ends));
             }
         }
-        drop(removed);
-        for (node, mut set, old_len) in releases {
-            if node.points.as_ref().is_none_or(|p| p.len() < 2) {
-                let centre = |b: Option<(f64, f64, f64, f64)>| b.map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0));
-                let ends = match node.from.as_deref().zip(node.to.as_deref()) {
-                    Some((from, to)) => (self.stored_box(&node.id)?, centre(self.stored_box(from)?), centre(self.stored_box(to)?)),
-                    None => (None, None, None),
-                };
-                let points = match ends {
-                    (Some((ox, oy, _, _)), Some(a), Some(b)) => json!([[(a.0 - ox).round(), (a.1 - oy).round()], [(b.0 - ox).round(), (b.1 - oy).round()]]),
-                    _ => json!([[0.0, 0.0], [node.w, node.h]]),
-                };
-                set.insert("points".into(), points);
-            }
-            // A line that cannot be freed (none should fail) keeps its attachment.
-            let Ok(mut next) = node.patched(&set) else { continue };
-            let body = body_of(&mut next)?;
-            self.tx.prepare_cached("UPDATE design_nodes SET body = ?3, rev = ?4 WHERE design_id = ?1 AND node_id = ?2").bus()?
-                .execute(params![self.design, next.id, body, self.rev]).bus()?;
-            self.bytes += body.len() as i64 - old_len;
-            self.touch(&next.id);
-            self.inverse.push(vec![NodeOp::Update { id: next.id.clone(), set: node.before(&set) }]);
+        for (id, ends) in releases {
+            self.free(&id, &ends)?;
         }
         Ok(())
+    }
+
+    /// Why a connector `line` cannot hold `end` at either end, if it cannot (B6): the refusal's
+    /// kind and code, and what `end` is. Nothing when it sits too deep to tell.
+    fn misplaced(&mut self, line: &str, end: &str) -> Result<Option<(ErrorKind, &'static str, String)>, BusError> {
+        let connector = |why: String| Ok(Some((ErrorKind::Invalid, "design.connector", why)));
+        if end == line {
+            return connector("is this line itself".into());
+        }
+        let Some((_, page)) = self.place(end)? else {
+            let missing = !self.parents.contains_key(end);
+            return Ok(missing.then(|| (ErrorKind::NotFound, "design.node_not_found", "is not in the design".to_string())));
+        };
+        if page == end {
+            return connector("is a page, not a node on one".into());
+        }
+        match self.place(line)? {
+            Some((_, own)) if own != page => connector(format!("is on page {page:?}, not on this line's page {own:?}")),
+            _ => Ok(None),
+        }
+    }
+
+    /// B6, once the edits have run and the ends they parted have let go: each connector end and
+    /// picture the list wrote names what is there, as the node holds it now. An end is a node of
+    /// the line's own page that is not the line or a page; a `src`, a stored picture (a stat,
+    /// not a read). A strict list is refused at the edit that wrote it; a lenient one lets go of
+    /// such an end (as a delete does) and keeps such a picture, telling an agent.
+    pub(super) fn check_refs(&mut self) -> Result<(), BusError> {
+        let refs = std::mem::take(&mut self.refs);
+        let last: HashMap<(&str, &str), usize> = refs.iter().enumerate().map(|(i, r)| ((r.id.as_str(), r.field), i)).collect();
+        let mut held: Option<Node> = None;
+        for (i, r) in refs.iter().enumerate() {
+            if last[&(r.id.as_str(), r.field)] != i {
+                continue;
+            }
+            if held.as_ref().is_none_or(|node| node.id != r.id) {
+                held = match self.row(&r.id)? {
+                    Some(row) => node_of(r.id.clone(), row.parent, &row.body).ok(),
+                    None => None,
+                };
+            }
+            // Gone by now: a later edit deleted it.
+            let Some(node) = held.as_ref() else { continue };
+            (self.at, self.label, self.target) = (r.at, r.label.clone(), Some(r.id.clone()));
+            if r.field == "src" {
+                let Some(src) = node.src.as_deref().filter(|src| !self.assets.join(src).is_file()) else { continue };
+                let why = format!("src: {src:?} is not a stored picture");
+                if !self.lenient {
+                    return Err(self.fail(ErrorKind::NotFound, "design.asset_not_found", why)
+                        .with_hint("store it with design.asset.add and use the src it returns"));
+                }
+                self.warn(format_args!("{why}; kept as it was"));
+                continue;
+            }
+            let Some(end) = (if r.field == "from" { node.from.clone() } else { node.to.clone() }) else { continue };
+            let Some((kind, code, what)) = self.misplaced(&r.id, &end)? else { continue };
+            if !self.lenient {
+                let hint = match kind {
+                    ErrorKind::NotFound => self.nearest_id(&end)?,
+                    _ => "attach it to a node on the same page".to_string(),
+                };
+                let mut error = self.fail(kind, code, format!("{}: {end:?} {what}", r.field)).with_hint(hint);
+                if let Some(Value::Object(details)) = error.details.as_mut() {
+                    details.insert("end".into(), end.into());
+                }
+                return Err(error);
+            }
+            self.warn(format_args!("{}: let go of {end:?}, which {what}", r.field));
+            self.free(&r.id, &[r.field])?;
+            held = None;
+        }
+        Ok(())
+    }
+
+    /// Nothing after the edits can change the design's size: no node was deleted or moved to
+    /// another page (whose connectors [`Run::release_ends`] rewrites) and no lenient end may let
+    /// go ([`Run::check_refs`]). A pass that rewrites nodes after the edits joins this test.
+    pub(super) fn settled(&self) -> bool {
+        self.removed.is_empty() && self.crossed.is_empty() && !(self.lenient && self.refs.iter().any(|r| r.field != "src"))
+    }
+
+    /// `design.too_large` for a design of `self.bytes` (B60): `at_least` while edits remain.
+    fn too_large(&self, at_least: bool) -> BusError {
+        let why = format!("the design would hold {}{} KiB of nodes as design.get returns them; the limit is {} KiB",
+            if at_least { "at least " } else { "" }, self.bytes >> 10, MAX_DESIGN_BYTES >> 10);
+        let error = if at_least { self.fail(ErrorKind::Invalid, "design.too_large", why) } else { BusError::invalid("design.too_large", why) };
+        error.with_hint(TOO_LARGE_HINT)
     }
 }
 
@@ -517,6 +911,7 @@ pub(super) fn register(e: &mut Engine) {
             .query_row([design.id], |r| Ok((r.get(0)?, r.get(1)?))).bus()?;
         let tombstones: bool = ctx.tx().prepare_cached("SELECT EXISTS(SELECT 1 FROM design_removed WHERE design_id = ?1)").bus()?
             .query_row([design.id], |r| r.get(0)).bus()?;
+        let assets = ctx.engine().store.design_assets_dir();
         let mut run = Run {
             tx: ctx.tx(),
             design: design.id,
@@ -537,7 +932,17 @@ pub(super) fn register(e: &mut Engine) {
             removed: Vec::new(),
             ids: Vec::with_capacity(p.ops.len()),
             inverse: Vec::with_capacity(p.ops.len()),
+            parents: HashMap::new(),
+            last_depth: None,
+            refs: Vec::new(),
+            removed_at: HashMap::new(),
+            crossed: HashMap::new(),
+            assets,
         };
+        // B59: past the last edit that can make the design smaller (any but an add or a copy),
+        // the list only grows it, so one over the cap by then is refused at the edit that took
+        // it over rather than after writing the rest.
+        let grows_from = p.ops.iter().rposition(|op| !matches!(op, NodeOp::Add { .. } | NodeOp::Copy { .. }));
         for (at, op) in p.ops.into_iter().enumerate() {
             (run.at, run.label) = (at, label(at, &op));
             run.target = Some(op.target()).filter(|id| !id.is_empty()).map(str::to_string);
@@ -561,14 +966,16 @@ pub(super) fn register(e: &mut Engine) {
                 }
             };
             run.ids.push(id.unwrap_or_default());
+            if run.bytes > MAX_DESIGN_BYTES && run.bytes > bytes && grows_from.is_none_or(|last| at >= last) && run.settled() {
+                return Err(run.too_large(true));
+            }
         }
         run.release_ends()?;
+        run.check_refs()?;
         // B60: a design over the cap (one counted before ids were) can still be edited down; a
         // list is refused only for growing it past the cap.
         if run.bytes > MAX_DESIGN_BYTES && run.bytes > bytes {
-            return Err(BusError::invalid("design.too_large",
-                format!("the design would hold {} KiB of nodes as design.get returns them; the limit is {} KiB", run.bytes >> 10, MAX_DESIGN_BYTES >> 10))
-                .with_hint("split it across designs, or keep long text and big paths out of it"));
+            return Err(run.too_large(false));
         }
         ctx.tx().prepare_cached(
             "UPDATE designs SET rev = rev + 1, pages = ?2, nodes = ?3, bytes = ?4, next_node = ?5, updated_by = ?6, updated_at = ?7 WHERE id = ?1",

@@ -161,7 +161,10 @@ fn an_image_needs_its_size_and_only_what_has_content_hugs() {
     let (e, _root) = project();
     let id = create(&e);
     card(&e, id);
-    let src = "0123456789abcdef0123.png";
+    // A stored picture (B6: a strict list's image names one), a 1×1 PNG.
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    let src = ok(&e, "design.asset.add", json!({"design_id": id, "bytes_b64": png}))["src"].as_str().unwrap().to_string();
+    let src = src.as_str();
     for (node, message) in [
         (json!({"id": "pic", "parent": "card", "kind": "image", "src": src}),
             "ops[0] add \"pic\": w: an image needs its size; design.asset.add answers w and h"),
