@@ -64,6 +64,39 @@ impl Rect {
     pub fn translate(&self, dx: f64, dy: f64) -> Rect {
         Rect::new(self.x + dx, self.y + dy, self.w, self.h)
     }
+
+    /// Its corners, top-left first, clockwise.
+    pub fn corners(&self) -> [(f64, f64); 4] {
+        [(self.x, self.y), (self.right(), self.y), (self.right(), self.bottom()), (self.x, self.bottom())]
+    }
+
+    /// The smallest box holding `points`, or `None` for none.
+    pub fn around(points: impl IntoIterator<Item = (f64, f64)>) -> Option<Rect> {
+        let (mut lo, mut hi) = ((f64::INFINITY, f64::INFINITY), (f64::NEG_INFINITY, f64::NEG_INFINITY));
+        for (x, y) in points {
+            (lo, hi) = ((lo.0.min(x), lo.1.min(y)), (hi.0.max(x), hi.1.max(y)));
+        }
+        (lo.0 <= hi.0 && lo.1 <= hi.1).then(|| Rect::new(lo.0, lo.1, hi.0 - lo.0, hi.1 - lo.1))
+    }
+}
+
+/// Whether two convex quadrilaterals (corners in order round each) overlap or touch: no side of
+/// either separates them.
+pub fn quads_overlap(a: &[(f64, f64); 4], b: &[(f64, f64); 4]) -> bool {
+    let spread = |q: &[(f64, f64); 4], (nx, ny): (f64, f64)| {
+        q.iter().map(|p| p.0 * nx + p.1 * ny).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)))
+    };
+    [a, b].iter().all(|q| {
+        (0..4).all(|i| {
+            let (p, r) = (q[i], q[(i + 1) % 4]);
+            let normal = (r.1 - p.1, p.0 - r.0);
+            if normal == (0.0, 0.0) {
+                return true;
+            }
+            let ((a0, a1), (b0, b1)) = (spread(a, normal), spread(b, normal));
+            a1 >= b0 && b1 >= a0
+        })
+    })
 }
 
 /// The view onto a page: the page point at the screen's top-left corner, and the scale.
@@ -230,5 +263,21 @@ mod tests {
         assert_eq!(Rect::spanning((10.0, 2.0), (4.0, 8.0)), Rect::new(4.0, 2.0, 6.0, 6.0));
         assert_eq!(Rect::bounds([&a, &b]), Some(Rect::new(0.0, 0.0, 15.0, 15.0)));
         assert!(a.contains_rect(&Rect::new(1.0, 1.0, 2.0, 2.0)));
+        assert_eq!(Rect::around([(3.0, 9.0), (-1.0, 2.0), (5.0, 4.0)]), Some(Rect::new(-1.0, 2.0, 6.0, 7.0)));
+        assert_eq!(Rect::around([]), None);
+        assert_eq!(a.corners()[2], (10.0, 10.0));
+    }
+
+    #[test]
+    fn quads_overlap_unless_a_side_parts_them() {
+        let square = Rect::new(0.0, 0.0, 10.0, 10.0).corners();
+        assert!(quads_overlap(&square, &Rect::new(5.0, 5.0, 10.0, 10.0).corners()));
+        assert!(quads_overlap(&square, &Rect::new(10.0, 0.0, 5.0, 5.0).corners()), "touching counts, as Rect::intersects");
+        assert!(!quads_overlap(&square, &Rect::new(11.0, 0.0, 5.0, 5.0).corners()));
+        // A diamond centred at (20, 5) reaching 6 to each side: a box in its bounds' corner meets
+        // the bounds, not the diamond.
+        let diamond = [(20.0, -1.0), (26.0, 5.0), (20.0, 11.0), (14.0, 5.0)];
+        assert!(!quads_overlap(&Rect::new(14.0, -1.0, 2.0, 2.0).corners(), &diamond), "only the diamond's side parts them");
+        assert!(quads_overlap(&Rect::new(9.0, 3.0, 6.0, 4.0).corners(), &diamond));
     }
 }
