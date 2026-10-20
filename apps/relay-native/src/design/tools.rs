@@ -558,9 +558,14 @@ fn rotate_at(b: &Board, x: f64, y: f64) -> Option<String> {
         return None;
     };
     let scene = b.doc.scene.borrow();
-    scene.node(id).filter(|n| !matches!(n.kind, NodeKind::Page | NodeKind::Line) && !n.is_locked())?;
-    // Where it is drawn: a child of a turned frame turns with it (B12).
-    let (r, turn) = shapes::visual(&scene, &b.placed(), id)?;
+    let n = scene.node(id).filter(|n| n.kind != NodeKind::Page && !super::board::ends_dragged(n) && !n.is_locked())?;
+    // Where it is drawn: a child of a turned frame turns with it (B12); a vector path or a
+    // closed shape, whose own turn is not drawn (B99), on the box its handles are on.
+    let (r, turn) = if n.kind == NodeKind::Line {
+        (super::board::shown_box(&scene, &b.placed(), id)?, 0.0)
+    } else {
+        shapes::visual(&scene, &b.placed(), id)?
+    };
     let r = b.cam.get().rect_to_screen(&r);
     for (cx, cy, ox, oy) in [(r.x, r.y, -1.0, -1.0), (r.right(), r.y, 1.0, -1.0), (r.right(), r.bottom(), 1.0, 1.0), (r.x, r.bottom(), -1.0, 1.0)] {
         let (hx, hy) = shapes::rotate(cx + ox * 10.0, cy + oy * 10.0, r.cx(), r.cy(), turn);
@@ -785,8 +790,15 @@ fn begin_select(b: &Rc<Board>, x: f64, y: f64, p: (f64, f64), mods: gdk::Modifie
     if handle_at(b, x, y).is_none() {
         if let Some(id) = rotate_at(b, x, y) {
             let placed = b.placed();
-            // About where it is drawn; the pointer's angle there turns it by as much (B12).
-            let drawn = shapes::visual(&b.doc.scene.borrow(), &placed, &id).map(|(r, _)| r);
+            // About where it is drawn; the pointer's angle there turns it by as much (B12). A
+            // line turns its points, about the box they show in.
+            let drawn = {
+                let scene = b.doc.scene.borrow();
+                match scene.node(&id).map(|n| n.kind) {
+                    Some(NodeKind::Line) => super::board::shown_box(&scene, &placed, &id),
+                    _ => shapes::visual(&scene, &placed, &id).map(|(r, _)| r),
+                }
+            };
             let Some((orig, r)) = b.doc.scene.borrow().node(&id).cloned().zip(drawn) else {
                 return;
             };
@@ -1030,6 +1042,21 @@ fn update(b: &Rc<Board>, x: f64, y: f64, dx: f64, dy: f64, mods: gdk::ModifierTy
         Gesture::Rotate { id, centre, start, orig, moved } => {
             *moved = true;
             let angle = (p.1 - centre.1).atan2(p.0 - centre.0).to_degrees();
+            // A vector path or closed shape turns its points: its own turn is not drawn (B99).
+            if orig.kind == NodeKind::Line {
+                let mut by = angle - *start;
+                if shift(mods) {
+                    by = (by / 15.0).round() * 15.0;
+                }
+                let turned = turned_points(orig, by);
+                let id = id.clone();
+                drop(gesture);
+                if let Some(n) = b.doc.scene.borrow_mut().node_mut(&id) {
+                    *n = turned;
+                }
+                b.invalidate();
+                return;
+            }
             let mut turn = orig.rotation.unwrap_or(0.0) + angle - *start;
             if shift(mods) {
                 turn = (turn / 15.0).round() * 15.0;
@@ -1667,6 +1694,19 @@ fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
             b.invalidate();
         }
         Gesture::Create { tool, parent, a, b: end, from, to } => create_shape(b, tool, parent, a, end, from, to),
+        Gesture::Rotate { id, orig, moved, .. } if orig.kind == NodeKind::Line => {
+            if moved {
+                let after = b.doc.scene.borrow().node(&id).cloned();
+                if let Some(n) = b.doc.scene.borrow_mut().node_mut(&id) {
+                    *n = orig.clone();
+                }
+                if let Some(op) = after.and_then(|after| diff_op(&id, &orig, &after)) {
+                    b.commit(vec![op]);
+                }
+            }
+            b.doc.set_hold(false);
+            b.invalidate();
+        }
         Gesture::Rotate { id, orig, moved, .. } => {
             if moved {
                 let turned = b.doc.scene.borrow().node(&id).and_then(|n| n.rotation);
@@ -1720,6 +1760,30 @@ fn diff_op(id: &str, before: &Node, after: &Node) -> Option<NodeOp> {
         }
     }
     (!set.is_empty()).then(|| NodeOp::Update { id: id.to_string(), set })
+}
+
+/// Line `n` with its points turned `degrees` clockwise about the middle of the box they span,
+/// its box moved and sized around them again: how a vector path or closed shape turns, its own
+/// turn not being drawn (B99). Tenths of a pixel.
+fn turned_points(n: &Node, degrees: f64) -> Node {
+    let mut out = n.clone();
+    let Some(pts) = n.points.as_ref().filter(|p| !p.is_empty()) else {
+        return out;
+    };
+    let Some(r) = Rect::around(pts.iter().map(|q| (q[0], q[1]))) else {
+        return out;
+    };
+    let tenth = |v: f64| (v * 10.0).round() / 10.0;
+    let turned: Vec<(f64, f64)> = pts.iter().map(|q| shapes::rotate(q[0], q[1], r.cx(), r.cy(), degrees)).collect();
+    let Some(at) = Rect::around(turned.iter().copied()) else {
+        return out;
+    };
+    out.x = tenth(n.x + at.x);
+    out.y = tenth(n.y + at.y);
+    out.w = tenth(at.w);
+    out.h = tenth(at.h);
+    out.points = Some(turned.iter().map(|q| [tenth(q.0 - at.x), tenth(q.1 - at.y)]).collect());
+    out
 }
 
 /// A line whose points start at its own origin again, with its box around them.
@@ -2681,6 +2745,20 @@ mod tests {
         scene.apply_all(&drop_into(&scene, &placed, "q", "g", None, (0.0, 0.0), (-250.0, 10.0))).unwrap();
         let q = scene.node("q").unwrap();
         assert_eq!((q.x, q.y, q.rotation), (50.0, 50.0, None));
+    }
+
+    #[test]
+    fn a_vector_path_turns_its_points_about_their_middle() {
+        let mut n = node("v", Some("p1"), NodeKind::Line, [100.0, 50.0, 40.0, 20.0]);
+        n.points = Some(vec![[0.0, 0.0], [40.0, 0.0], [40.0, 20.0]]);
+        n.closed = Some(true);
+        let t = turned_points(&n, 90.0);
+        // The 40 by 20 box turned a quarter about its middle (120, 60): 20 by 40 at (110, 40).
+        assert_eq!((t.x, t.y, t.w, t.h), (110.0, 40.0, 20.0, 40.0));
+        assert_eq!(t.points.as_deref(), Some(&[[20.0, 0.0], [20.0, 40.0], [0.0, 40.0]][..]));
+        assert_eq!(t.rotation, None, "its own turn is not drawn, so none is written");
+        let back = turned_points(&t, -90.0);
+        assert_eq!((back.x, back.y, back.points), (n.x, n.y, n.points.clone()));
     }
 
     #[test]
