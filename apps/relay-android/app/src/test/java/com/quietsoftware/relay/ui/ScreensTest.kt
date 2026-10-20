@@ -160,14 +160,19 @@ class ScreensTest {
                 designs,
                 System.currentTimeMillis(),
             )
-            relay.hub.store.putQuery(
-                com.quietsoftware.relay.core.sync.QueryKey.of("design.get", kotlinx.serialization.json.buildJsonObject {
-                    put("design_id", kotlinx.serialization.json.JsonPrimitive(1))
-                }),
-                // The :core module's test resources, from this module's directory (Gradle's working one).
-                java.io.File("../core/src/test/resources/design/get-reply.json").readText(),
-                System.currentTimeMillis(),
+            // The :core module's test resources, from this module's directory (Gradle's working one).
+            val reply = java.io.File("../core/src/test/resources/design/get-reply.json").readText()
+            // The design screen reads its pages alone, then a page; an older PC's whole read too.
+            val keys = listOf(
+                kotlinx.serialization.json.buildJsonObject { put("design_id", kotlinx.serialization.json.JsonPrimitive(1)) },
+                kotlinx.serialization.json.buildJsonObject {
+                    put("design_id", kotlinx.serialization.json.JsonPrimitive(1)); put("pages_only", kotlinx.serialization.json.JsonPrimitive(true))
+                },
+                kotlinx.serialization.json.buildJsonObject {
+                    put("design_id", kotlinx.serialization.json.JsonPrimitive(1)); put("page", kotlinx.serialization.json.JsonPrimitive("page-1"))
+                },
             )
+            for (key in keys) relay.hub.store.putQuery(com.quietsoftware.relay.core.sync.QueryKey.of("design.get", key), reply, System.currentTimeMillis())
         }
         shell = ShellModel(relay, settings)
     }
@@ -270,6 +275,8 @@ class ScreensTest {
     @Test fun designs() = shoot("designs", "designs/1")
     /** A design drawn as the PC draws it, from the fixture: every kind, laid out, its words set, pictures as placeholders. */
     @Test fun design() = shootWhenShown("design", "design/1", "Settings")
+    /** A page full screen, fitted, from the same fixture. */
+    @Test fun designPage() = shootWhenShown("design-page", "design/1/page/page-1", "Mobile")
     @Test fun share() = shoot("share", "share?text=Crash%20in%20the%20login%20flow%0Asteps%20to%20reproduce")
 
     private companion object {

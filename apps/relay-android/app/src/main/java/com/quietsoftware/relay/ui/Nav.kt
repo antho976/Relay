@@ -89,6 +89,7 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
     /** A project's design canvases, and one of them (read only). */
     fun designs(projectId: Long) = go("designs/$projectId")
     fun design(id: Long) = go("design/$id")
+    fun designPage(id: Long, page: String) = go("design/$id/page/${Uri.encode(page)}")
     fun mailbox(projectId: Long, session: String? = null) = go("mailbox/$projectId" + q("session" to session))
     fun modules(projectId: Long) = go("modules/$projectId")
     fun guardrails(projectId: Long?) = go("guardrails" + q("project" to projectId))

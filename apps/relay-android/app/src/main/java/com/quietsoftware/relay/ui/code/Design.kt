@@ -1,5 +1,27 @@
 package com.quietsoftware.relay.ui.code
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.quietsoftware.relay.core.design.CANVAS
+import com.quietsoftware.relay.core.design.decodeDesignGot
+import com.quietsoftware.relay.ui.kit.Pill
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -126,23 +148,43 @@ private fun DesignLine(d: DesignRow, lamp: Lamp?, onClick: (() -> Unit)?) {
 
 
 /**
- * One design, read only: each page drawn as the PC draws it (DesignCanvas.kt), with its frames
- * by name and size and a line for what the phone leaves out. It reads again as the design changes
- * (`design.*` events), so an agent's drawing shows while the screen stays open.
+ * One design, read only, a page at a time: its pages as chips (read alone, a small answer), and
+ * the page chosen drawn as the PC draws it (DesignCanvas.kt), with its frames by name and size and
+ * a line for what the phone leaves out. A tap on the page opens it full screen. It reads again as
+ * the design changes (`design.*` events), so an agent's drawing shows while the screen stays open.
+ * A PC too old to read the pages alone is read whole, every page in turn, as before.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DesignScreen(id: Long, nav: Nav) {
     val c = Relay.colors
-    val payload = remember(id) { buildJsonObject { put("design_id", id) } }
-    val plan = rememberDesignPlan(nav, payload)
     val app = LocalContext.current.applicationContext
     val pictures = remember(id) { DesignPictures.of(app, nav.relay, id) }
+    val pagesLive = rememberLive(nav, "design.get", remember(id) { buildJsonObject { put("design_id", id); put("pages_only", true) } })
+    // An older PC refuses the flag it does not know: it is read whole.
+    val whole = pagesLive.error?.code == "bus.schema"
+    val listed = remember(pagesLive.result) { decodeDesignGot(pagesLive.result) }
+    val pages = listed?.nodes?.filter { it.kind == "page" }.orEmpty()
+    var chosen by rememberSaveable(id) { mutableStateOf<String?>(null) }
+    val page = chosen?.takeIf { want -> pages.any { it.id == want } } ?: pages.firstOrNull()?.id
+    val payload = remember(id, page, whole) {
+        when {
+            whole -> buildJsonObject { put("design_id", id) }
+            page != null -> buildJsonObject { put("design_id", id); put("page", page) }
+            else -> null
+        }
+    }
+    val plan = rememberDesignPlan(nav, payload)
     val got = plan?.got
-    val design = got?.design
+    val design = got?.design ?: listed?.design
     Page {
         Column(Modifier.fillMaxSize()) {
             PageBar(design?.title?.ifBlank { null } ?: "Design", nav::back, subtitle = "Design")
             ScrollBody {
+                if (!whole && listed == null) {
+                    LiveWait(pagesLive, page = true)
+                    return@ScrollBody
+                }
                 if (plan == null || plan.live.result == null) {
                     LiveWait(plan?.live ?: Live(), page = true)
                     return@ScrollBody
@@ -159,24 +201,31 @@ fun DesignScreen(id: Long, nav: Nav) {
                     color = c.ink3,
                 )
                 unreadText(got)?.let { T(it, style = Relay.type.caption, color = c.ink3) }
+                if (!whole && pages.size > 1) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        pages.forEachIndexed { i, p ->
+                            Pill(p.name?.ifBlank { null } ?: "Page ${i + 1}", selected = p.id == page, onClick = { chosen = p.id })
+                        }
+                    }
+                }
                 if (plan.pages.isEmpty()) Empty("layout", "Nothing drawn yet", "This design has no pages.")
-                for (page in plan.pages) DesignPageBlock(page, pictures)
+                for (p in plan.pages) DesignPageBlock(p, pictures, onOpen = { nav.designPage(id, p.id) })
             }
         }
     }
 }
 
-/** A page: its name, its canvas, what the phone leaves out of it, and its frames. */
+/** A page: its name, its canvas (a tap opens it full screen), what the phone leaves out of it, and its frames. */
 @Composable
-private fun DesignPageBlock(page: PagePlan, pictures: DesignPictures) {
+private fun DesignPageBlock(page: PagePlan, pictures: DesignPictures, onOpen: () -> Unit) {
+    val c = Relay.colors
     // Its pictures, read as each answer for the page comes (one that failed is tried again).
     LaunchedEffect(page) { pictures.load(pictureSrcs(page)) }
-    val c = Relay.colors
     SectionLabel(page.name)
     when {
         page.failed -> T("This page could not be drawn here. Open it on the PC.", style = Relay.type.caption, color = c.ink3)
         page.bounds == null -> if (page.omissions.none) T("Nothing on this page yet.", style = Relay.type.caption, color = c.ink3)
-        else -> PageCanvas(page, picture = pictures::picture)
+        else -> PageCanvas(page, Modifier.clickable(onClickLabel = "Open the page full screen", onClick = onOpen), picture = pictures::picture)
     }
     omissionsText(page.omissions)?.let {
         Gap(6.dp)
@@ -190,6 +239,70 @@ private fun DesignPageBlock(page: PagePlan, pictures: DesignPictures) {
                 Row(Modifier.fillMaxWidth().padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
                     T(f.name, Modifier.weight(1f), Relay.type.ui, c.ink, maxLines = 1)
                     T(f.size, style = Relay.type.mono, color = c.ink3)
+                }
+            }
+        }
+    }
+}
+
+/** The most a page is zoomed in past fitting the screen. */
+private const val MOST_PAGE_ZOOM = 8f
+
+/**
+ * One page full screen (feature-phone §4.7): fitted at first, then pinched up to 8 times and
+ * panned; a double tap fits it again. The page is drawn once at fit and the layer scaled, so its
+ * words stay sharp (the display list replays at the layer's scale).
+ */
+@Composable
+fun DesignPageScreen(id: Long, page: String, nav: Nav) {
+    val c = Relay.colors
+    val app = LocalContext.current.applicationContext
+    val pictures = remember(id) { DesignPictures.of(app, nav.relay, id) }
+    val plan = rememberDesignPlan(nav, remember(id, page) { buildJsonObject { put("design_id", id); put("page", page) } })
+    val shown = plan?.pages?.firstOrNull()
+    var zoom by remember(id, page) { mutableFloatStateOf(1f) }
+    var pan by remember(id, page) { mutableStateOf(Offset.Zero) }
+    Page {
+        Column(Modifier.fillMaxSize()) {
+            PageBar(shown?.name ?: "Page", nav::back, subtitle = plan?.got?.design?.title?.ifBlank { null } ?: "Design")
+            if (shown?.bounds == null) {
+                ScrollBody {
+                    when {
+                        plan == null || plan.live.result == null -> LiveWait(plan?.live ?: Live(), page = true)
+                        shown == null -> Empty("layout", "This page is not in the design any more", "It may have been deleted on the PC.")
+                        shown.failed -> Empty("layout", "This page could not be drawn here", "Open it on the PC.")
+                        else -> Empty("layout", "Nothing on this page yet", "")
+                    }
+                }
+                return@Column
+            }
+            LaunchedEffect(shown) { pictures.load(pictureSrcs(shown)) }
+            val box = shown.bounds
+            Box(
+                Modifier.fillMaxSize().clipToBounds().background(colorOf(CANVAS)!!)
+                    .pointerInput(id, page) {
+                        detectTransformGestures { _, move, scale, _ ->
+                            zoom = (zoom * scale).coerceIn(1f, MOST_PAGE_ZOOM)
+                            pan = if (zoom == 1f) Offset.Zero else pan + move
+                        }
+                    }
+                    .pointerInput(id, page) { detectTapGestures(onDoubleTap = { zoom = 1f; pan = Offset.Zero }) }
+                    .semantics { contentDescription = "${shown.name}, full screen; pinch to zoom, double tap to fit" },
+            ) {
+                Canvas(Modifier.fillMaxSize().graphicsLayer(scaleX = zoom, scaleY = zoom, translationX = pan.x, translationY = pan.y).background(shown.ground)) {
+                    val pad = 16.dp.toPx()
+                    val fit = fitZoom(box, size.width - 2 * pad, size.height - 2 * pad)
+                    val dx = (size.width - box.w.toFloat() * fit) / 2 - box.x.toFloat() * fit
+                    val dy = (size.height - box.h.toFloat() * fit) / 2 - box.y.toFloat() * fit
+                    withTransform({
+                        translate(dx, dy)
+                        scale(fit, fit, Offset.Zero)
+                    }) {
+                        drawPage(shown, 1f / (fit * zoom), pictures::picture)
+                    }
+                }
+                omissionsText(shown.omissions)?.let {
+                    T(it, Modifier.align(Alignment.BottomStart).padding(12.dp), Relay.type.caption, c.ink3)
                 }
             }
         }
