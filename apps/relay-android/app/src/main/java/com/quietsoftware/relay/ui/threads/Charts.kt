@@ -260,7 +260,7 @@ private fun readPrice(v: JsonObject): Numbers {
         val i = starts.indexOfLast { it <= at }.takeIf { it >= 0 } ?: return@mapNotNull null
         Triple(i, ((m.d("price") ?: 0.0) * 100).roundToLong(), m.s("side") == "buy")
     }
-    return Numbers(labels, labels.map { null }, listOf(v.str("product") to closes), listOf(labels.size), Fmt.Price(quote), fromZero = false, marks = marks, names = times.map { it.format(WHEN) })
+    return Numbers(labels, labels.map { null }, listOf(Series(v.str("product"), closes)), listOf(labels.size), Fmt.Price(quote), fromZero = false, marks = marks, names = times.map { it.format(WHEN) })
 }
 
 private val HOUR = java.time.format.DateTimeFormatter.ofPattern("HH:mm", java.util.Locale.ENGLISH)
