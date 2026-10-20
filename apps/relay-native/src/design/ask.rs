@@ -607,6 +607,8 @@ pub(super) fn ask_now(b: &Rc<Board>, request: &str) {
         let Some(b) = weak.upgrade() else {
             return;
         };
+        // For the harness's log, as its other steps print theirs.
+        println!("DESIGN_ASK {session} {}", state.as_deref().unwrap_or("unread"));
         match state.as_deref().map(route) {
             Ok(way @ (Route::Type | Route::Mail)) => send_request(&b, session, request, true, way),
             Ok(way) => b.toast(&hold_note(&session, way).unwrap_or_else(|| format!("{session}'s terminal has closed"))),
