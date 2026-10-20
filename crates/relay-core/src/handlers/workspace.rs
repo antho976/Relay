@@ -1011,6 +1011,14 @@ fn remove_project(ctx: &mut Ctx, project_id: Id, force: bool, remove_worktrees: 
         ctx.invoke_registered("device.run.stop", json!({ "run_id": run }))?;
     }
 
+    // Every design, deleted or not, is announced deleted once the project is gone (B67): a
+    // board or window showing one closes, as on design.purge. project.restore brings them back
+    // with the same ids.
+    let designs: Vec<Id> = {
+        let mut stmt = ctx.tx().prepare_cached("SELECT id FROM designs WHERE project_id = ?1 ORDER BY id").bus()?;
+        let rows = stmt.query_map([pr.id], |r| r.get(0)).bus()?.collect::<rusqlite::Result<Vec<_>>>();
+        rows.bus()?
+    };
     // `project.remove` forgets Relay metadata only. Audit rows deliberately remain as the
     // immutable history, while every FK-owned row is removed in dependency order.
     for sql in [
@@ -1052,6 +1060,9 @@ fn remove_project(ctx: &mut Ctx, project_id: Id, force: bool, remove_worktrees: 
         params![ctx.now, pr.id]).bus()?;
     ctx.tx().execute("DELETE FROM projects WHERE id = ?1", [pr.id]).bus()?;
     ctx.set_project(pr.id);
+    for id in designs {
+        ctx.emit("design.deleted", json!({ "id": id, "project_id": pr.id }));
+    }
     ctx.emit("project.deleted", json!({ "id": pr.id, "backup": backup }));
     Ok(ProjectRemoveOut { sessions_closed: open.len() as i64, runs_stopped: live_runs.len() as i64 })
 }

@@ -2,8 +2,8 @@
 //! `design.asset.get` reading a stored picture back in pieces; `design.asset.add` storing one
 //! durably (B51), refusing one no node could take (B65), reading what an agent names in its
 //! worktree (I-10), saying why a file cannot be read (TM-15), sizing a turned JPEG as shown
-//! (TM-24); the sweep of pictures nothing names (B66); and the retention pass announcing the
-//! designs it purges (W72).
+//! (TM-24); the sweep of pictures nothing names (B66); and every way a design goes away
+//! announcing it (B67, W72).
 
 mod common;
 
@@ -380,6 +380,30 @@ fn a_removed_projects_pictures_stay_for_its_restore() {
 }
 
 // ---------------------------------------------------------------- designs that go away
+
+/// B67: a removed project's designs, live and in Deleted, are each announced deleted, so a
+/// window or board showing one closes, as when one is purged.
+#[test]
+fn removing_a_project_announces_each_of_its_designs_deleted() {
+    for op in ["project.remove", "workspace.remove"] {
+        let (e, _root) = project();
+        let live = create(&e);
+        let binned = create(&e);
+        ok(&e, "design.delete", json!({"design_id": binned}));
+        let mut rx = e.subscribe();
+        match op {
+            "project.remove" => ok(&e, op, json!({"project_id": 1})),
+            _ => ok(&e, op, json!({"workspace_id": 1, "force": true})),
+        };
+        let deleted: Vec<(Option<i64>, Value)> = drain(&mut rx).into_iter().filter(|ev| ev.ev == "design.deleted")
+            .map(|ev| (ev.project_id, ev.payload)).collect();
+        assert_eq!(deleted, vec![
+            (Some(1), json!({"id": live, "project_id": 1})),
+            (Some(1), json!({"id": binned, "project_id": 1})),
+        ], "{op}");
+    }
+}
+
 /// W72 (TM-18): the retention pass announces each design it purges, as design.purge does, so
 /// an open Deleted list drops the card and a board on it closes.
 #[test]
