@@ -190,6 +190,11 @@ plus domain events (`session.state`, `session.output` on the data plane, `guardr
 `ui.toast` from the shell model of §6.5). `design.changed` carries the `Design` row, never its
 nodes; `design.deleted` is `{id, project_id}` (§10.18). Rule: **every
 mutation emits at least one event**, and every event's payload is reproducible by a query op.
+`design.asset.add` and `design.picture.add` are the exception: they store a content-addressed file and
+change no row any query shows, so they emit no event (a documented exemption). From `design.apply`,
+`design.changed` also carries `prev_rev` (the rev before the list), `touched` (the ids it added, changed
+or moved), `removed` (the ids it removed, at most 100 of each), `all: true` when either list was cut,
+and `styles: true` when the list changed the design's named colours or styles (§10.18).
 
 A full-entity `noun.changed` carries the row with its own `id`. A hint carries the scope it
 touched instead — `task_id`, `module_id` or `project_id`, plus what changed (`state`, `col`,
@@ -198,6 +203,10 @@ Session lifecycle transitions (`task.changed {task_id, state}`), module delete/r
 (`task.changed {module_id, task_ids}`) and the v3 import (`{project_id, bulk: true}`) send
 hints. `bus.wait`'s `matching` is a conjunction, so a wait on `{id: N}` misses the hints and
 one on `{task_id: N}` misses the full rows: wait on the event name and re-read.
+
+On one connection, a request's `design.changed` can arrive before or after its reply, or interleave
+with an earlier request's event. A client tells its own changes by rev: `prev_rev` and `touched` say
+what a list did, and `design.get` with `since_rev: prev_rev` reads the rest.
 
 ---
 
@@ -331,6 +340,10 @@ replays its row. Duplicate `id` with a *different* payload hash is `conflict` /
 are safe to repeat by nature. A script that retries `relay cmd` must send the full-envelope form
 with its own `id` (`relay cmd '{"id":"…","op":"…","payload":{…}}'`); `relay cmd <op> <payload>` mints a
 fresh id per call, so each call is a new request.
+
+A replay whose stored result was too large to keep is not sent back. It answers `conflict` /
+`bus.replay_unavailable` with `details.applied: true`: the first copy was applied. Read the current
+state (`design.get`, say) and do not send the request again.
 
 "Forever" is bounded by retention (D151): launch recovery prunes audit rows older than
 `settings: audit.retention_days` (default 180, `0` keeps everything), so a request id from
@@ -549,7 +562,8 @@ so no door computes this for itself.
 `guardrail.config.set`, `settings.*` mutations, `app.*` mutations, `workspace.*` and
 `project.*` mutations, `provider.refresh`, `worktree.*` mutations, `git.branch.clean_merged`,
 `integration.discard`, `device.*` and `avd.*` mutations except `device.claim` / `device.release`,
-`skill.*` mutations, `notify.settings.set`, `design.purge`. `app.resources.watch` is the one `app.*` mutation
+`skill.*` mutations, `notify.settings.set`, `design.purge`, `design.picture.key_set/key_remove`, and the
+query `design.asset.get` (an agent reads a picture from `assets_dir`). `app.resources.watch` is the one `app.*` mutation
 every actor may call; it only turns resource sampling on and off.
 SPEC §10 says no swarm: an agent never spawns, closes, or types into a session, full stop. The one
 exception is the Dev space's assistant (docs/THREADS.md, "The assistant"), which may *ask* for
@@ -789,6 +803,14 @@ All `app.*` mutations except `app.resources.watch` are `user_only` (§9.1 layer 
 | `audit.list` | query · user | `{ project_id?, actor?, session_id?, op_prefix?, parent_req?, since?, until?, limit?: ≤1000 }` → `{ rows: AuditRow[] }` — `since`/`until` take RFC 3339 with any offset, a bare date (UTC midnight) or epoch seconds/ms; anything else is `invalid`/`time.invalid` |
 | `audit.get` | query · user | `{ audit_id }` → `AuditRow` (with stored payload if kept) — both reads are `user_only`: stored payloads hold frozen actions, launch prompts and private mail |
 | `audit.undo` | mutation · always · undo none · global · user | `{ audit_id, force?: bool }` → `{ undone: Id, by: Id }` — `conflict`/`audit.not_undoable` if the row has no inverse or was already undone; `conflict`/`audit.stale` if the entity changed since (§5.5) |
+
+A `design.apply` row keeps, with its undo, what the undo expects to find (`expect.nodes`): each field
+the list updated at the value it held then, each moved node's parent, and each added container's
+`within` (the ids it may hold: anything else added inside it since is a conflict). `audit.undo` refuses
+`conflict` / `audit.stale`, with `details.conflicts`, when a later change would be overwritten: a field
+that holds another value, a node in another parent, a container holding nodes added since, or an id the
+undo would add back that is taken. A node removed since is not a conflict: the lenient replay skips it.
+`force: true` skips the check. Rows kept before expectations existed undo as they did.
 
 ### 10.4 workspace / project
 
@@ -1142,27 +1164,97 @@ to the parent; siblings paint in order, the last on top.
 | op | attrs | payload → result |
 |---|---|---|
 | `design.list` | query | `{ project_id, session?, include_deleted? }` → `{ designs: Design[] }` — newest change first |
-| `design.get` | query | `{ design_id, page? }` → `{ design, nodes: DesignNode[], assets_dir }` — pages in their order, then each page's nodes in pre-order, siblings bottom to top; `page` keeps one page and what is on it (`not_found` / `design.page_not_found`). A deleted design still reads |
+| `design.get` | query | `{ design_id, page?, pages_only?, nodes?, since_rev? }` → `{ design, nodes: DesignNode[], assets_dir, colors, styles, credits?, removed?, indexes?, left? }` — pages in their order, then each page's nodes in pre-order, siblings bottom to top; `page` (an id, or a name no other page has) keeps one page and what is on it (`not_found` / `design.page_not_found`); `pages_only` answers the pages without what is on them (with `page`, that one) and is refused with `nodes` or `since_rev` (`design.pages_only`); `nodes` (1 to 500 ids) answers those nodes and what is inside them, an unknown id is `not_found` / `design.node_not_found` naming the nearest id it holds and the rev it was removed at, when on record; `since_rev` answers what changed since that rev (below); `colors` and `styles` are always whole; `credits` is the credit of each picture added with `design.picture.add`, by `src` (at most 128, and 256 KiB). A deleted design still reads |
 | `design.create` | mutation · always · inverse | `{ project_id, title? = "Untitled design", session? }` → `DesignGetOut` — one empty page, `page-1`. An agent's design is its own session's (layer 2 refuses another name); the person may name any session of the project (`invalid` / `design.session`) or none. Titles are 1–200 characters (`design.title`) |
 | `design.update` | mutation · always · inverse | `{ design_id, title?, session?: string \| null }` → `Design` — bumps `rev` |
 | `design.duplicate` | mutation · always · inverse | `{ design_id, title? = "<title> copy" }` → `Design` — every node, with its id, and the id counter |
 | `design.delete` / `design.restore` | mutation · always · inverse | `{ design_id }` → `{}` / `Design` — soft (§5.4): the retention pass purges a deleted design past `undo.grace_days`. Any change to a deleted design is `conflict` / `design.deleted` |
 | `design.purge` | mutation · always · user_only | `{ design_id }` → `{}` — a deleted one only (`conflict` / `design.not_deleted`), nodes and all; emits `design.deleted` |
-| `design.apply` | mutation · always · inverse | `{ design_id, ops: DesignNodeOp[], base_rev?, lenient? }` → `{ design, prev_rev, nodes, removed, ids, inverse }` — below |
+| `design.apply` | mutation · always · inverse | `{ design_id, ops: DesignNodeOp[], base_rev?, lenient?, reply?, expect? }` → `ApplyOut`: short (`rev`, `prev_rev`, `ids`, `removed_count`, `audit_id`, `skipped`, `warnings`, `copied`, `rebased`), or with `reply: "full"` also `design`, `nodes`, `removed`, `inverse`, `expect`, `colors`, `styles`, `reread` — below |
 | `design.asset.add` | mutation · always | `{ design_id, path? \| bytes_b64? }` → `{ src, path, w, h }` — a PNG, JPEG, GIF, WebP or SVG, by its bytes (`invalid` / `design.asset` for anything else); an absolute `path` up to 20 MiB or `bytes_b64` up to 1 MiB. Stored once by content in `design-assets/` beside the store as `<32 hex of SHA-256>.<ext>`, the `src` an image node names; `w`/`h` its natural size (an SVG's `width`/`height` in px, else its `viewBox`, else 300×150). Staged: the file work runs unlocked |
+| `design.find` | query | `{ design_id, page?, inside?, kind?, name?, text?, fill?, stroke?, color?, any_color?, font?, with_nodes? }` → `{ ids, nodes?, cut? }` — the nodes that match every filter given, in paint order (`ids`); `kind` is any of its kinds, `name` and `text` a case-insensitive word match, `font` a family, and colours compare as drawn (a `$name` or a style counts). `inside` (not the node itself) is `not_found` / `design.node_not_found` when unknown. `with_nodes` adds the first 200 matches as stored (512 KiB at most; `cut` when more) |
+| `design.fonts` | query · global | `{ name? }` → `{ families, complete }` — the families the newest connected desktop app can draw a design's text in, sorted, `name` a case-insensitive word match. With no app reporting, Geist, Geist Mono and Sora with `complete: false` |
+| `design.asset.get` | query · user | `{ design_id, src, offset? }` → `{ media_type, size, bytes_b64, next }` — an image node's picture, in pieces of at most 3 MiB decoded from `offset`; `next` is where the next piece starts, null on the last |
+| `design.picture.search` | query · plugin `pictures` | `{ design_id, query, source?, orientation?, page?, count? }` → `{ source, page, has_more, results }` — stock photos from Openverse (no key) or Pexels (the person's key); a hit's `id` goes to `thumb` and `add`. Agents may call it only in a project where the plugin is on |
+| `design.picture.thumb` | query · plugin `pictures` | `{ design_id, id }` → `{ path, w, h }` — a search result's small preview, to look at before choosing |
+| `design.picture.add` | mutation · always · plugin `pictures` | `{ design_id, id }` → `{ src, path, w, h, credit }` — stores the photo for the design with its credit beside it (`<stem>.credit.json`; the first credit for those bytes is kept); answers the `src` an image node names, as `design.asset.add` does. Emits no event, as `design.asset.add` |
+| `design.picture.key_set` | mutation · never · user_only | `{ key }` → `{ saved }` — checks a Pexels API key with Pexels and keeps it in the system keyring; never audited, since the payload is the key |
+| `design.picture.key_remove` | mutation · always · user_only | `{}` → `{ saved }` — forgets the saved Pexels key |
 
-`design.apply` runs 1–2,000 `add` / `update` / `move` / `delete` edits in order inside the
-request's transaction, all or none, then bumps `rev`. `base_rev` that is no longer current is
-`conflict` / `design.stale` (`details.rev`). An `add` without an `id` gets `{kind}-{n}`;
-`index` is a place among the parent's children, 0 at the bottom, absent on top. A refusal names
-the edit and the field — `ops[3] update "hero": fill: "red" is not #RGB…`, `details.op` —
-as `design.node_invalid`, `design.node_not_found`, `design.node_exists`, `design.parent` (gone,
-or not a page, frame or group; a page sits in nothing), `design.cycle`, `design.last_page` or
-`design.too_large` (5,000 nodes, 1.5 MiB of node JSON). `lenient` skips an edit of a node, or
-into a parent, that is gone (its `ids` entry is `""`). `nodes` are the nodes added, changed or
-moved as stored now; `removed` every id now gone, subtrees included; `inverse` the edits that
-undo the list, in the order to apply them (a delete's re-adds the subtree in place). The audit
-row's undo is that `inverse`, applied leniently.
+`design.apply` runs 1–2,000 `add` / `update` / `move` / `delete` / `copy` / `color` / `style` /
+`delete_style` edits in order inside the request's transaction, all or none, then bumps `rev`. A
+person's lenient list (an undo or a redo) may hold up to 7,000 edits; an agent's lists, lenient or
+not, hold at most 2,000. An `add` without an `id` gets `{kind}-{n}`; `index` is a place among the
+parent's children, 0 at the bottom, absent on top. A refusal names the edit and the field —
+`ops[3] update "hero": fill: "red" is not #RGB…`, `details.op` — as `design.node_invalid`,
+`design.node_not_found`, `design.node_exists`, `design.parent` (gone, or not a page, frame or group;
+a page sits in nothing), `design.cycle`, `design.last_page`, `design.too_large` (5,000 nodes, 1.5 MiB
+of node JSON), `design.style_invalid`, `design.style_exists` or `design.style_not_found` (a node, run
+or style naming a colour or style the design lacks), `design.position` (a `keep_position` move where
+either place is laid out by auto layout), or `design.node_unreadable` (an edit naming a node of a
+kind this build cannot read).
+
+`copy` takes `{id, as?, parent?, index?, dx?, dy?}` and copies a node and everything inside it, as
+one edit (a page copies as a page). Each node inside the copy takes an id from the copied id: one
+starting with the copied id and `-`, `_`, `.` or `:` has that start swapped for the copy's
+(`card-title` becomes `card-2-title`); any other gets the copy's id and `:` in front (`text-14`
+becomes `card-2:text-14`). A connector inside joins the copies of its ends; one attached outside the
+copy lets go of that end where the stored boxes draw it. `color` `{name, value}` names a colour that
+a colour field takes as `$name`. `style` `{name, set}` names a style or changes one. `delete_style`
+`{name}` takes one out, and what used it keeps its look: the colour, or the style's fields a node did
+not set itself, are written into it. A `move` with `keep_position: true` keeps the node where it is
+on its page.
+
+`base_rev` is the rev the edits were made against. A list is refused `conflict` / `design.stale`
+(`details.rev`, `details.base_rev`, `details.conflicts`, each `changed`, `missing` or `inside`) only
+when a node it writes, moves or deletes, or one inside a node it deletes, changed after that rev;
+otherwise it applies on top, and the reply says `rebased: true`. `expect` says what the nodes must
+still hold: a strict list is refused `conflict` / `design.stale` naming the fields that moved, and a
+lenient list drops those fields or skips the edit.
+
+`lenient` replays an undo. An edit whose node or parent is gone, whose node this build cannot read,
+or that would overwrite a change made since (`expect`) is skipped rather than refusing the list, and
+what was stored goes back even where a new edit's rules would refuse it. Each skip is in `skipped`
+with its `reason`: `missing` (and the `rev` it went at), `no_parent`, `parent_skipped`, `fields` (and
+the fields that moved), `parent`, `inside` (and the `ids` added inside it), `exists`, `changed`,
+`too_deep` or `unreadable`. At most 100 are listed, with a warning counting the rest. An undo that
+meets an id taken since skips that node and what was inside it, and never renames it. A lenient
+delete of a node something was added inside since is skipped as `inside`. A list that applies
+nothing changes nothing: no rev, event or undo.
+
+`reply` `short` (an agent's default) answers the rev, each edit's node id in `ids`, `removed_count`,
+`audit_id`, `skipped`, `warnings`, `copied` (each copy's new node and the node it copied) and
+`rebased`. `full` (the person's clients' default) also answers the design row, each node an edit
+touched as stored, the `removed` ids with what was inside them, the `inverse` edits that undo the
+list in the order to apply them, the `expect` the undo needs, and `colors` and `styles` when an edit
+changed them. A full answer over 1 MiB of nodes and undo leaves the nodes out (`reread: true`: read
+the design again); over it without them, the undo is left out too, with a warning. The audit row's
+undo is that `inverse`, applied leniently, with its `expect` kept beside it (§10.3).
+
+A strict add of a shape, frame or icon with no size gets a default one (100, or 24 for an icon), and
+a free line's or path's box is fitted to its points; a strict update refits it. Follow rule: when an
+update changes a frame's stored `w` or `h`, its pinned free and absolute children follow it on each
+axis the list did not set on them itself (`Node::follow`), level by level, up to 64 levels down. Each
+follow is an update of its own, counted, undone and expected like any other. A connector that a
+delete or a move to another page frees is drawn again from its ends' stored centres. A node, run or
+style naming a font the desktop lacks gets a warning, never a refusal; `design.fonts` lists what is
+there.
+
+`design.get` with `since_rev` (0 to the design's rev) answers what changed since that rev: `nodes`
+are those added, changed or moved since, each with its place among its siblings in `indexes`, and
+`removed` lists the ids gone since, in the order they went, with everything a delete took. With
+`page` or `nodes`, it answers what changed in what they name (a changed node with what is inside it),
+and `left` lists the changed ids outside them, which a holder drops. It reaches back 1000 revs:
+`conflict` / `design.since_too_old` (`details.rev`) for a rev older than that, or older than the rev
+the design's removals are on record from; `invalid` / `design.since_rev` for a negative rev or one
+ahead of the design. In either case, read the design whole.
+
+Migration v30 (schema 30) adds `designs.styles` (the named colours and styles, one JSON object),
+`designs.tracked_from` (the rev the removals began to be kept at), the rev each node row was last
+written at (`design_nodes.rev`), and `design_removed` (the ids removed in the last 1000 revs, with the
+rev each went at). It recounts `designs.bytes` so the size cap counts each node as `design.get`
+returns it. Rows written before take their design's rev, so an older `base_rev` reads them as
+changed; a restored v29 backup's rows are dated the same way, and its removals are kept from that rev.
 
 ---
 
