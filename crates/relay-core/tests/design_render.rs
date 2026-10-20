@@ -725,3 +725,29 @@ async fn a_page_by_name_resolves_and_an_unknown_page_lists_the_pages() {
     assert!(error_of(&empty).hint.as_deref().unwrap().contains("add one with design.apply"));
     renderer.quiet().await;
 }
+
+/// W68: design.fonts lists what the newest connected desktop app reported; an agent's apply
+/// naming a family it lacks (on a node, a text run or a style) is warned of once and applied;
+/// one it has, or a generic one, is not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fonts_come_from_the_app_and_an_unknown_one_warns() {
+    let fx = fixture().await;
+    let _app = Renderer::serve_with(&fx, json!({"fonts": ["Geist", "Inter Display", "Sora"]})).await;
+    let fonts = fx.at_once(fx.agent.request("design.fonts", json!({"name": "inter"}))).await;
+    assert_eq!(fonts.result, Some(json!({"families": ["Inter Display"], "complete": true})));
+    let apply = |ops: Value| fx.agent.request("design.apply", json!({"design_id": fx.design, "ops": ops}));
+    let out = fx.at_once(apply(json!([
+        {"op": "update", "id": "title", "set": {"font": "Inter"}},
+        {"op": "add", "node": {"id": "sub", "parent": "card", "kind": "text", "text": "Hi there", "font": "inter display",
+            "runs": [{"start": 0, "end": 2, "font": "Inter"}, {"start": 3, "end": 8, "font": "Comic"}]}},
+        {"op": "style", "name": "body", "set": {"font": "monospace"}},
+        {"op": "style", "name": "head", "set": {"font": "Papyrus"}},
+    ]))).await;
+    assert!(out.ok, "{:?}", out.error);
+    let warnings = out.result.unwrap()["warnings"].clone();
+    assert_eq!(warnings, json!([
+        "ops[0] update \"title\": font \"Inter\" (title) is not on the desktop that draws this design; it is drawn in a fallback face. design.fonts lists what is there",
+        "ops[1] add \"sub\": font \"Comic\" (sub) is not on the desktop that draws this design; it is drawn in a fallback face. design.fonts lists what is there",
+        "ops[3] style \"head\": font \"Papyrus\" (style \"head\") is not on the desktop that draws this design; it is drawn in a fallback face. design.fonts lists what is there",
+    ]), "once per family; a run's font and a style's count; a generic family does not");
+}

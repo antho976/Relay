@@ -219,8 +219,6 @@ impl Renders {
     /// The font families the newest connected app that reported any can draw (sorted, each
     /// once): what design.fonts lists and design.apply's font warnings read. None when no
     /// connected app has reported them.
-    // design.fonts' (the engine-find-fonts stream); until it is wired, only the tests call it.
-    #[allow(dead_code)]
     pub(crate) fn fonts(&self) -> Option<Arc<Vec<String>>> {
         let inner = self.inner.lock().unwrap();
         inner.renderers.iter().rev().filter(|renderer| renderer.tx.strong_count() > 0).find_map(|renderer| renderer.fonts.clone())

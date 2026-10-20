@@ -20,7 +20,7 @@ use std::fmt::Write as _;
 
 /// Every row of a design. A row of a kind this build does not know fails to parse, which is how a
 /// whole read leaves it out, so its `kind` is not read.
-const ROWS: &str = "SELECT node_id, parent_id, ord, body FROM design_nodes WHERE design_id = ?1";
+pub(super) const ROWS: &str = "SELECT node_id, parent_id, ord, body FROM design_nodes WHERE design_id = ?1";
 /// A design's pages alone (`pages_only`), found through `design_nodes_parent` without a pass
 /// over the rest of the design. The `ORDER BY` is what the index already gives, and what makes
 /// SQLite take it: without statistics it reckons `IS NULL` matches most rows and scans the
@@ -42,26 +42,26 @@ const HINT_PAGES: usize = 20;
 const HINT_IDS: usize = 20;
 
 /// One node row as `design.get` copies it out under the lock; parsed once the lock is gone.
-struct Raw {
-    id: String,
-    parent: Option<String>,
-    ord: f64,
+pub(super) struct Raw {
+    pub(super) id: String,
+    pub(super) parent: Option<String>,
+    pub(super) ord: f64,
     /// Of a kind this build knows: one it does not is a row it cannot read.
-    known: bool,
+    pub(super) known: bool,
     /// Written after `since_rev`; every row of a whole read.
-    changed: bool,
+    pub(super) changed: bool,
     /// None where a `since_rev` read does not need it.
-    body: Option<String>,
+    pub(super) body: Option<String>,
 }
 
 /// What a read takes of a design's rows.
-struct Scope<'a> {
+pub(super) struct Scope<'a> {
     /// Only this page and what is on it: its id or the name it goes by.
-    page: Option<&'a str>,
+    pub(super) page: Option<&'a str>,
     /// Only these nodes and what is inside them.
-    named: Option<HashSet<&'a str>>,
+    pub(super) named: Option<HashSet<&'a str>>,
     /// Only what changed since a rev (`since_rev`).
-    delta: bool,
+    pub(super) delta: bool,
 }
 
 impl Scope<'_> {
@@ -71,14 +71,14 @@ impl Scope<'_> {
 }
 
 /// What a read answers of the rows.
-struct Read {
-    nodes: Vec<Node>,
+pub(super) struct Read {
+    pub(super) nodes: Vec<Node>,
     /// With `since_rev`: each node's index among its siblings now, in the order of `nodes`.
-    indexes: Vec<u32>,
+    pub(super) indexes: Vec<u32>,
     /// With `since_rev`: the rows a reader that held the read at that rev drops: each written
     /// since that the answer leaves out (outside what it reads now, or a row this build cannot
     /// read), and what is inside such a node that the read does not take.
-    left: Vec<String>,
+    pub(super) left: Vec<String>,
 }
 
 /// Whether the `kind` at column `i` is one this build knows, read without copying it out.
@@ -101,7 +101,7 @@ fn known_kind(r: &rusqlite::Row, i: usize) -> rusqlite::Result<bool> {
 /// have moved out) with what is inside it that the read does not take. A body a delta did not
 /// copy is not parsed, so an unchanged row of a known kind that does not read is not seen to be
 /// left out.
-fn ordered(design: Id, rows: Vec<Raw>, scope: &Scope) -> Result<Read, BusError> {
+pub(super) fn ordered(design: Id, rows: Vec<Raw>, scope: &Scope) -> Result<Read, BusError> {
     let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
     let mut pages = Vec::new();
     for (i, row) in rows.iter().enumerate() {

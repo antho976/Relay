@@ -120,6 +120,9 @@ impl Run<'_> {
         }
         let undo = made.map_err(|error| self.style_error(error))?;
         let now = self.styles()?.styles.get(&name).cloned();
+        if let Some(font) = now.as_ref().and_then(|style| style.font.clone()).filter(|_| set.contains_key("font")) {
+            self.check_fonts([font.as_str()], &format!("style {name:?}"));
+        }
         if now == old {
             return Ok(Some(name));
         }

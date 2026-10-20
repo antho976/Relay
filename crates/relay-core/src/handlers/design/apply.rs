@@ -137,6 +137,10 @@ pub(super) struct Run<'a> {
     /// before, and each axis (`true` across) the list set on a node itself.
     pub(super) resized: Vec<(String, (f64, f64))>,
     pub(super) set_here: HashSet<(String, bool)>,
+    /// W68: the families the desktop that draws this design has (none when no app has said),
+    /// and those a warning already named.
+    pub(super) fonts: Option<std::sync::Arc<Vec<String>>>,
+    pub(super) warned: HashSet<String>,
 }
 
 const NODE_META: &str = "SELECT parent_id, kind, ord FROM design_nodes WHERE design_id = ?1 AND node_id = ?2";
@@ -440,6 +444,22 @@ impl Run<'_> {
         Ok(())
     }
 
+    /// W68: tell an agent once per family when `owner` (a node, or a style) names a font the
+    /// desktop that draws the design lacks: it is drawn in a fallback face. Never a refusal; no
+    /// word when no desktop has said what it has.
+    pub(super) fn check_fonts<'f>(&mut self, families: impl IntoIterator<Item = &'f str>, owner: &str) {
+        const GENERIC: [&str; 7] = ["sans-serif", "serif", "monospace", "sans", "system-ui", "cursive", "fantasy"];
+        let Some(known) = self.fonts.clone() else { return };
+        for family in families {
+            let lower = family.to_lowercase();
+            let held = known.iter().map(String::as_str).chain(super::find::ALWAYS).any(|f| f.to_lowercase() == lower);
+            if held || GENERIC.contains(&lower.as_str()) || !self.warned.insert(lower) {
+                continue;
+            }
+            self.warn(format_args!("font {family:?} ({owner}) is not on the desktop that draws this design; it is drawn in a fallback face. design.fonts lists what is there"));
+        }
+    }
+
     /// The node row `id`, if this build can read it: an edit naming one it cannot (a kind it
     /// does not know, a body it cannot parse) is refused, or skipped when lenient. Nothing of
     /// such a row is lost: it is left as it is.
@@ -649,6 +669,8 @@ impl Run<'_> {
         self.bytes += row_bytes(&node.id, node.parent.as_deref(), &body);
         self.touch(&node.id);
         self.set_axes(&node.id, true, true);
+        let families: Vec<String> = super::find::families(&node).map(str::to_string).collect();
+        self.check_fonts(families.iter().map(String::as_str), &node.id);
         self.added.insert(node.id.clone());
         self.inverse.push(vec![NodeOp::Delete { id: node.id.clone() }]);
         // What a later add may go in; where a leaf sits is read when asked (B6), seldom.
@@ -717,6 +739,10 @@ impl Run<'_> {
             .execute(params![self.design, next.id, body, self.rev]).bus()?;
         self.bytes += body.len() as i64 - row.body.len() as i64;
         self.touch(&next.id);
+        if set.contains_key("font") || set.contains_key("runs") {
+            let families: Vec<String> = super::find::families(&next).map(str::to_string).collect();
+            self.check_fonts(families.iter().map(String::as_str), &next.id.clone());
+        }
         let before = node.before(&set);
         self.updated.entry(next.id.clone()).or_default().extend(before.keys().cloned());
         self.inverse.push(vec![NodeOp::Update { id: next.id.clone(), set: before }]);
@@ -1219,6 +1245,8 @@ pub(super) fn register(e: &mut Engine) {
             copied: BTreeMap::new(),
             resized: Vec::new(),
             set_here: HashSet::new(),
+            fonts: ctx.engine().renders.fonts(),
+            warned: HashSet::new(),
         };
         // B59: past the last edit that can make the design smaller (any but an add or a copy),
         // the list only grows it, so one over the cap by then is refused at the edit that took
