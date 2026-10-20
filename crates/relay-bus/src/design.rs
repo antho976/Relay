@@ -65,23 +65,28 @@ pub enum NodeKind {
     /// An artboard: a filled box that clips what is inside it and can lay its children out
     /// (`layout`). Screens, cards and buttons are frames.
     Frame,
-    /// Nodes moved together; it paints nothing itself.
+    /// Nodes moved together; it paints nothing itself, and its box is its children's.
     Group,
+    /// A box: `fill`, a border (`stroke`), corners (`radius`) and a centred label (`text`).
     Rect,
+    /// An oval filling its box (`arc` draws part of one), with a centred label (`text`).
     Ellipse,
-    /// A straight line through `points`; `arrow_start`/`arrow_end` put heads on it.
+    /// A line through `points`, or a connector between two nodes (`from`, `to`);
+    /// `arrow_start`/`arrow_end` put heads on it.
     Line,
+    /// Words (`text`), as wide as they are until given a width, then wrapped to it.
     Text,
-    /// A note card: `fill` paper with `text` on it.
+    /// A note card: `fill` paper with `text` on it, growing to fit its words.
     Sticky,
     /// A freehand stroke through `points`.
     Path,
     /// A picture from `design.asset.add`, named by `src`.
     Image,
     /// A regular polygon (`sides`: 3 a triangle, 4 a diamond, 6 a hexagon…) or, with `star`, a
-    /// star of `sides` points. Its first point is at the top centre.
+    /// star of `sides` points (5 when `sides` is left out). Its first point is at the top centre.
     Polygon,
-    /// An interface icon from Relay's set (`icon`, one of [`ICONS`]), drawn in `stroke`.
+    /// An interface icon from Relay's set, named by `icon` (one of the names listed for `icon`),
+    /// drawn in `stroke`.
     Icon,
 }
 
@@ -169,8 +174,9 @@ pub enum GradientKind {
 #[schemars(rename = "DesignGradientStop")]
 pub struct Stop {
     /// 0 at the start, 1 at the end.
+    #[schemars(range(min = 0, max = 1))]
     pub at: f64,
-    /// `#RRGGBB` or `#RRGGBBAA`.
+    /// `#RGB`, `#RRGGBB` or `#RRGGBBAA`.
     pub color: String,
 }
 
@@ -187,6 +193,7 @@ pub struct Gradient {
     pub angle: Option<f64>,
     /// 2 to 8 colours along it.
     #[serde(deserialize_with = "obj_vec")]
+    #[schemars(length(min = 2, max = 8))]
     pub stops: Vec<Stop>,
 }
 
@@ -201,7 +208,8 @@ fn linear() -> GradientKind {
 pub enum Sizing {
     /// `w`/`h` as given.
     Fixed,
-    /// Shrink to the content: a text's words, or a laid-out frame's children and padding.
+    /// Shrink to the content: a text's or sticky's words, or a laid-out frame's children and
+    /// padding.
     Hug,
     /// Stretch to the room left in a laid-out parent (along its axis), or to its full depth
     /// (across it).
@@ -270,15 +278,23 @@ pub enum ImageFit {
 #[serde(deny_unknown_fields)]
 #[schemars(rename = "DesignShadow")]
 pub struct Shadow {
+    /// Offset right, in px (default 0).
     #[serde(default)]
+    #[schemars(range(min = -10_000, max = 10_000))]
     pub x: f64,
+    /// Offset down, in px (default 0).
     #[serde(default)]
+    #[schemars(range(min = -10_000, max = 10_000))]
     pub y: f64,
+    /// Softness in px, 0 to 200 (default 0, a hard edge).
     #[serde(default)]
+    #[schemars(range(min = 0, max = MAX_SHADOW_BLUR))]
     pub blur: f64,
+    /// How far it reaches past the edge before it blurs, in px (default 0).
     #[serde(default)]
+    #[schemars(range(min = -10_000, max = 10_000))]
     pub spread: f64,
-    /// `#RRGGBB` or `#RRGGBBAA`.
+    /// `#RGB`, `#RRGGBB` or `#RRGGBBAA`.
     pub color: String,
     /// An inner shadow, cast inside the edge instead of under the node.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -290,14 +306,18 @@ pub struct Shadow {
 #[serde(deny_unknown_fields)]
 #[schemars(rename = "DesignArc")]
 pub struct Arc {
-    /// Where it starts, in degrees clockwise from the top (default 0).
+    /// Where it starts, in degrees clockwise from the top (default 0), within ±3600.
     #[serde(default)]
+    #[schemars(range(min = -3600, max = 3600))]
     pub start: f64,
-    /// How far round it goes, in degrees clockwise (default 360, the whole ellipse).
+    /// How far round it goes, in degrees clockwise (default 360, the whole ellipse), within ±360.
     #[serde(default = "full_turn")]
+    #[schemars(range(min = -360, max = 360))]
     pub sweep: f64,
-    /// The hole in the middle as a fraction of the radius: 0 (the default) a pie, 0.6 a donut.
+    /// The hole in the middle as a fraction of the radius, from 0 (the default, a pie) to below
+    /// 1: 0.6 a donut.
     #[serde(default)]
+    #[schemars(range(min = 0))]
     pub inner: f64,
 }
 
@@ -526,165 +546,238 @@ fn title_case(c: char, out: &mut String) {
 }
 
 /// One node of a design. Every field but `kind` is optional on input; an absent style field
-/// takes the kind's default (a white frame, a grey rect, dark 16px Geist text, a yellow sticky).
+/// takes the kind's default (a white frame, a grey rect, Geist text at 16px, dark on a light
+/// ground and light on a dark one, a yellow sticky).
 //
 // Unknown keys are not a serde error (they land in `extra`) so that a body a newer build wrote
 // still reads; the tool schema still says `additionalProperties: false`, and a caller's add or
 // update naming one is refused by `Node::check_new` / `Node::check_update`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
-#[schemars(rename = "DesignNode")]
+#[schemars(rename = "DesignNode", transform = size_aliases)]
 pub struct Node {
     /// Unique in the design: letters, digits, `-`, `_`, `.` or `:`, at most 64. Give your own
     /// (`"hero"`, `"hero-title"`) to refer to it later in the same `design.apply`; left out,
     /// the engine assigns one.
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[schemars(length(max = MAX_ID), pattern(ID_PATTERN))]
     pub id: String,
     /// The page, frame or group this node sits in. Required for everything but a page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
     pub parent: Option<String>,
+    /// What the node is; it decides which fields it draws (see each kind). Fixed once added:
+    /// delete it and add another to change it.
     pub kind: NodeKind,
-    /// Shown in the layer list and above a frame on the canvas.
+    /// Shown in the layer list and above a frame on the canvas; at most 200 characters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = MAX_NAME))]
     pub name: Option<String>,
-    /// Left edge, relative to the parent's top-left corner.
+    /// Left edge in px, relative to the parent's top-left corner, within ±1000000.
     #[serde(default)]
+    #[schemars(range(min = -MAX_COORD, max = MAX_COORD))]
     pub x: f64,
-    /// Top edge, relative to the parent's top-left corner.
+    /// Top edge in px, relative to the parent's top-left corner, within ±1000000.
     #[serde(default)]
+    #[schemars(range(min = -MAX_COORD, max = MAX_COORD))]
     pub y: f64,
+    /// Width in px, 0 to 1000000 (`width` is read as `w`). A text with no `w` hugs its words.
+    /// In a laid-out frame `w_sizing` hug or fill replaces it.
     #[serde(default, alias = "width")]
+    #[schemars(range(min = 0, max = MAX_COORD))]
     pub w: f64,
+    /// Height in px, 0 to 1000000 (`height` is read as `h`). A text hugs its lines whatever `h`
+    /// says, unless `h_sizing` is fixed; a sticky grows past it to fit its words.
     #[serde(default, alias = "height")]
+    #[schemars(range(min = 0, max = MAX_COORD))]
     pub h: f64,
-    /// Background: `#RRGGBB` or `#RRGGBBAA`. A page's fill is the canvas colour; a text's
-    /// colour is `color`, not this.
+    /// Background: `#RGB`, `#RRGGBB` or `#RRGGBBAA`. Default: a frame `#FFFFFF`, a rect,
+    /// ellipse or polygon `#D9D9D9`, a sticky `#FFE58A`, a page `#1E1D1B` (the canvas colour); a
+    /// text, line or path paints none unless given one (a text's is a box behind its words, a
+    /// line's or path's of three points or more fills inside them). A text's letters are `color`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<String>,
-    /// Outline colour; drawn `stroke_width` wide (default 1) inside the edge.
+    /// Outline colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`. A box's border (frame, rect, sticky,
+    /// image) and an ellipse's or polygon's outline are drawn only when set, inside the edge; a
+    /// line or path defaults to `#8C8C8C`; an icon is drawn in it (default: its `color`, else dark
+    /// on a light ground and light on a dark one).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stroke: Option<String>,
+    /// In px, 0 to 1000. Default 1 for a border or outline, 2 for a line, path or icon (an
+    /// icon's is in its 24-unit grid).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0, max = 1000))]
     pub stroke_width: Option<f64>,
-    /// Corner radius of a frame, rect, sticky or image.
+    /// Corner radius of a frame, rect, sticky or image, in px (default 0; `radii` sets each
+    /// corner).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0, max = MAX_COORD))]
     pub radius: Option<f64>,
-    /// 0 to 1, of the node and everything in it.
+    /// 0 to 1 (default 1), of the node and everything in it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0, max = 1))]
     pub opacity: Option<f64>,
-    /// A drop shadow under a frame, rect, ellipse, sticky or image.
+    /// A shadow under a frame, rect, ellipse, polygon, sticky or image, or with `inset` inside its
+    /// edge; a text, line, path or icon casts an outer one only, without spread (a glow when `x`
+    /// and `y` are 0). A sticky casts a soft one of its own unless given one. `x`, `y` and `spread`
+    /// within ±10000 px, `blur` 0 to 200.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "obj_opt")]
     pub shadow: Option<Shadow>,
     /// Whether a frame hides what overflows it (default true).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clip: Option<bool>,
+    /// Not drawn, not hit and left out of auto layout, with everything inside it (default
+    /// false).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden: Option<bool>,
-    /// Locked nodes cannot be selected or moved on the canvas.
+    /// Locked nodes cannot be selected or moved on the canvas (default false); edits still change
+    /// them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locked: Option<bool>,
 
-    /// The words of a text or sticky. Newlines break lines.
+    /// The words of a text or sticky, or a centred label on a rect, ellipse or polygon; at most
+    /// 10000 characters. Newlines break lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = MAX_TEXT))]
     pub text: Option<String>,
-    /// Text colour (default `#1A1A1A`): `#RRGGBB` or `#RRGGBBAA`.
+    /// Colour of the letters of a text, sticky or label, and of an icon without a `stroke`:
+    /// `#RGB`, `#RRGGBB` or `#RRGGBBAA` (default: dark on a light ground, light on a dark one).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
-    /// Font family (default `Geist`; `Geist Mono` and `Sora` are always there).
+    /// Font family of a text, sticky or label (default `Geist`; `Geist Mono` and `Sora` are
+    /// always there; `design.fonts` lists the rest). A family the desktop app lacks is drawn in
+    /// a fallback face, and the reply warns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = MAX_NAME))]
     pub font: Option<String>,
-    /// In px (default 16).
+    /// Letter size of a text, sticky or label in px, 1 to 1000 (default 16).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 1000))]
     pub font_size: Option<f64>,
-    /// 100 to 900 (default 400; 600 is semibold, 700 bold).
+    /// 1 to 1000 (default 400; 600 is semibold, 700 bold); the nearest face the family has is
+    /// drawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 1000))]
     pub font_weight: Option<u16>,
+    /// A text's or label's letters slanted (default false).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub italic: Option<bool>,
+    /// A text's or label's letters underlined (default false).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub underline: Option<bool>,
+    /// A line through a text's or label's letters (default false).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strike: Option<bool>,
+    /// A text's lines across its box: `left` (the default; `center` for a label), `center` or
+    /// `right`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align: Option<TextAlign>,
-    /// Line height as a multiple of the font size (default 1.3).
+    /// Line height as a multiple of the font size, 0.1 to 10 (default 1.3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.1, max = 10))]
     pub line_height: Option<f64>,
-    /// Extra space between letters, in px.
+    /// Extra space between letters, in px, -100 to 1000 (default 0).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = -100, max = 1000))]
     pub letter_spacing: Option<f64>,
 
-    /// Width rule (default `fixed`; a text `hug`s its words until given a width, then wraps).
+    /// Width rule (default `fixed`: its `w`; a text without a `w` hugs its words). `hug`
+    /// shrinks a text or sticky to its words and a laid-out frame to its children; `fill` takes
+    /// the room a laid-out parent leaves along its direction, or its inner width across it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub w_sizing: Option<Sizing>,
-    /// Height rule (default `fixed`; a text `hug`s its lines).
+    /// Height rule (default `fixed`; a text hugs its lines). A sticky's fixed `h` is a minimum
+    /// that grows to fit its words, and `hug` makes it exactly as tall as they are, as a text's.
+    /// `fill` takes the room a laid-out parent leaves along its direction, or its inner height
+    /// across it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub h_sizing: Option<Sizing>,
     /// A frame's auto layout: `row` or `column` places its children one after another, `gap`
     /// apart inside `padding`, ignoring their `x`/`y`. Default `none`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<Layout>,
-    /// Space between laid-out children, in px.
+    /// Space between laid-out children, in px, -10000 to 10000 (default 0); negative overlaps
+    /// them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = -10_000, max = 10_000))]
     pub gap: Option<f64>,
-    /// Inner space of a laid-out frame in CSS order: `[all]`, `[vertical, horizontal]` or
-    /// `[top, right, bottom, left]`.
+    /// Inner space in px, each 0 to 10000, in CSS order: `[all]`, `[vertical, horizontal]` or
+    /// `[top, right, bottom, left]`. A laid-out frame's around its children, a rect's,
+    /// ellipse's or polygon's around its label (default `[0, 12]`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 4), inner(range(min = 0, max = 10_000)))]
     pub padding: Option<Vec<f64>>,
+    /// Where a laid-out frame puts its children along its direction (default `start`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub justify: Option<Justify>,
+    /// Where a laid-out frame puts its children across it (default `start`; `stretch` gives each
+    /// the frame's inner depth).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub items: Option<Items>,
 
-    /// A line's or path's points, relative to the node's `x`/`y`.
+    /// A line's or path's points in px, relative to the node's `x`/`y`: at most 4000, each
+    /// within ±1000000.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = MAX_POINTS), inner(inner(range(min = -MAX_COORD, max = MAX_COORD))))]
     pub points: Option<Vec<[f64; 2]>>,
+    /// A head at a line's or path's first point (default false).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arrow_start: Option<bool>,
+    /// A head at a line's or path's last point (default false).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arrow_end: Option<bool>,
 
-    /// An image's picture: the `src` `design.asset.add` returned.
+    /// An image's picture: the `src` `design.asset.add` returned. It must be stored
+    /// (`design.asset_not_found` otherwise).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub src: Option<String>,
+    /// How an image fills its box (default `cover`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fit: Option<ImageFit>,
 
-    /// Clockwise turn in degrees about the node's centre.
+    /// Clockwise turn in degrees about the node's centre, within ±3600.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = -3600, max = 3600))]
     pub rotation: Option<f64>,
-    /// A polygon's corners (3 to 24, default 3), or a star's points.
+    /// A polygon's corners, or a star's points: 3 to 24 (default 3, or 5 points for a star).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 3, max = 24))]
     pub sides: Option<u8>,
     /// Makes a polygon a star: its inner points at this fraction of the outer (0.05 to 0.95;
     /// 0.4 is a classic star).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.05, max = 0.95))]
     pub star: Option<f64>,
     /// A gradient painted instead of `fill`.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "obj_opt")]
     pub gradient: Option<Gradient>,
-    /// Corner radii top-left, top-right, bottom-right, bottom-left, instead of `radius`.
+    /// Corner radii in px, top-left, top-right, bottom-right, bottom-left, instead of `radius`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(inner(range(min = 0, max = MAX_COORD)))]
     pub radii: Option<[f64; 4]>,
-    /// The stroke's dash pattern in px: `[6, 4]` dashes, `[1, 4]` dots. Absent is solid.
+    /// The stroke's dash pattern in px, 1 to 8 lengths from 0 to 1000, not all 0: `[6, 4]`
+    /// dashes, `[0, 4]` round dots. Absent is solid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 8), inner(range(min = 0, max = 1000)))]
     pub dash: Option<Vec<f64>>,
-    /// Blur of the whole node, in px.
+    /// Blur of the whole node, in px, 0 to 200.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0, max = 200))]
     pub blur: Option<f64>,
-    /// An icon node's icon: one of the names in the `ICONS` list (home, search, settings,
-    /// user, bell, mail, heart, star, plus, check, x, chevron-*, arrow-*, menu, trash, edit,
-    /// calendar, clock, image, file, folder, shopping-cart, credit-card, globe, map-pin, phone,
-    /// message, send, filter, sliders, grid, list, play, pause, refresh, lock, eye, info,
-    /// alert, help, sun, moon, wifi, battery, terminal, code, zap, cloud, bar-chart…).
+    /// An icon node's icon, one of these outline icons, drawn on a 24-unit grid scaled to the
+    /// smaller of `w` and `h` (24 is its natural size).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "icon_schema")]
     pub icon: Option<String>,
-    /// A connector's start: the node it is attached to. The line then runs from that node's
-    /// edge and follows it when it moves; `points` are only where it was last drawn.
+    /// A connector's start: a node on the same page, not the line itself or a page. The line
+    /// then runs from that node's edge and follows it when it moves; `points` are only where it
+    /// was last drawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
     pub from: Option<String>,
-    /// A connector's end: the node it is attached to.
+    /// A connector's end: a node on the same page, not the line itself or a page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
     pub to: Option<String>,
     /// How a line runs between its ends (default `straight`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -696,11 +789,12 @@ pub struct Node {
     /// Runs a line through its `points` in a smooth curve instead of straight segments.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smooth: Option<bool>,
-    /// Mirrors a polygon, image or icon left to right (a line or path is flipped by its
-    /// `points`, a box by its corners).
+    /// Mirrors a polygon, image or icon left to right. Other kinds ignore it: a line or path is
+    /// flipped by its points, a box by where it sits; text is never mirrored, and a flipped
+    /// frame's words still read left to right.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flip_x: Option<bool>,
-    /// Mirrors a polygon, image or icon top to bottom.
+    /// Mirrors a polygon, image or icon top to bottom (other kinds as `flip_x`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flip_y: Option<bool>,
     /// Draws only part of an ellipse: a pie slice, a donut or an arc of a ring.
@@ -709,7 +803,8 @@ pub struct Node {
     /// How the node mixes with what is under it in its parent (default `normal`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blend: Option<Blend>,
-    /// Draws a text's or label's letters upper, lower or title case.
+    /// Draws a text's, sticky's or label's letters upper, lower or title case; the stored words
+    /// keep theirs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_case: Option<TextCase>,
 
@@ -720,6 +815,28 @@ pub struct Node {
     #[serde(flatten, skip_serializing)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
+}
+
+/// `icon`'s schema: the names of [`ICONS`], so the list an agent reads is whole and stays in step
+/// with what validates.
+fn icon_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let names: Vec<Value> = ICONS.iter().map(|name| Value::from(*name)).chain([Value::Null]).collect();
+    schemars::json_schema!({"type": ["string", "null"], "enum": names})
+}
+
+/// The node schema also names `width` and `height`, which an add reads as `w` and `h`, so a
+/// client that holds a node to its schema lets them through.
+fn size_aliases(schema: &mut schemars::Schema) {
+    let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else { return };
+    for (alias, field) in [("width", "w"), ("height", "h")] {
+        let range = properties.get(field).cloned().unwrap_or_default();
+        properties.insert(alias.into(), serde_json::json!({
+            "type": "number",
+            "minimum": range.get("minimum"),
+            "maximum": range.get("maximum"),
+            "description": format!("`{field}` by another name: give one or the other."),
+        }));
+    }
 }
 
 /// One edit of a design. `design.apply` runs a list of them in order, all or none.
@@ -742,19 +859,28 @@ pub enum NodeOp {
     },
     /// Change some fields of a node: each key of `set` is a node field other than `id`, `kind`
     /// and `parent` (use `move`); `null` puts a field back to its default.
-    Update { id: String, set: Map<String, Value> },
+    Update {
+        #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
+        id: String,
+        set: Map<String, Value>,
+    },
     /// Put a node in another parent, or at another place among its siblings.
     Move {
+        #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
         id: String,
         /// The new parent; absent keeps the current one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
         parent: Option<String>,
         /// 0 at the bottom; absent puts it on top.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         index: Option<u32>,
     },
     /// Delete a node and everything inside it. A design keeps at least one page.
-    Delete { id: String },
+    Delete {
+        #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
+        id: String,
+    },
 }
 
 impl NodeOp {
@@ -775,6 +901,9 @@ pub(crate) fn canonical_key(key: &str) -> &str {
         other => other,
     }
 }
+
+/// A node id's characters, as the schema states them ([`valid_id`] also holds it to 64).
+pub const ID_PATTERN: &str = "^[A-Za-z0-9_.:-]+$";
 
 /// A node id: 1 to 64 of letters, digits, `-`, `_`, `.` and `:`.
 pub fn valid_id(id: &str) -> bool {
@@ -1011,7 +1140,7 @@ impl Node {
         }
         if let Some(shadow) = &self.shadow {
             if parse_color(&shadow.color).is_none() {
-                return Err(format!("shadow.color: {:?} is not #RRGGBB or #RRGGBBAA", shadow.color));
+                return Err(format!("shadow.color: {:?} is not #RGB, #RRGGBB or #RRGGBBAA", shadow.color));
             }
             if [shadow.x, shadow.y, shadow.blur, shadow.spread].iter().any(|v| !v.is_finite() || v.abs() > 10_000.0)
                 || shadow.blur < 0.0
@@ -1232,6 +1361,35 @@ mod tests {
         let wide = json!({"sides": 300}).as_object().unwrap().clone();
         let patched = r.patched(&wide).unwrap();
         assert!(Node::check_update(&r, &wide, &patched).unwrap_err().starts_with("sides: invalid value"), "{:?}", Node::check_update(&r, &wide, &patched));
+    }
+
+    /// B122: the weights the schema documents are the ones that validate.
+    #[test]
+    fn font_weight_runs_from_1_to_1000() {
+        let mut t = rect();
+        for (weight, ok) in [(1, true), (1000, true), (0, false), (1001, false)] {
+            t.font_weight = Some(weight);
+            match t.validate() {
+                Ok(()) => assert!(ok, "{weight}"),
+                Err(why) => assert!(!ok && why.starts_with("font_weight"), "{weight}: {why}"),
+            }
+        }
+    }
+
+    /// B125: a shadow takes `#RGB` like every colour, and its refusal names all three forms.
+    #[test]
+    fn a_shadow_takes_short_colours_and_names_all_three() {
+        let mut r = rect();
+        r.shadow = Some(Shadow { x: 0.0, y: 2.0, blur: 4.0, spread: 0.0, color: "#000".into(), inset: false });
+        assert_eq!(r.validate(), Ok(()));
+        r.shadow.as_mut().unwrap().color = "red".into();
+        assert_eq!(r.validate().unwrap_err(), "shadow.color: \"red\" is not #RGB, #RRGGBB or #RRGGBBAA");
+        // Every colour's doc names the three forms.
+        let schema = serde_json::to_value(schemars::schema_for!(Node)).unwrap();
+        for doc in [&schema["properties"]["fill"], &schema["properties"]["stroke"], &schema["properties"]["color"],
+            &schema["$defs"]["DesignShadow"]["properties"]["color"], &schema["$defs"]["DesignGradientStop"]["properties"]["color"]] {
+            assert!(doc["description"].as_str().unwrap().contains("`#RGB`, `#RRGGBB` or `#RRGGBBAA`"), "{doc}");
+        }
     }
 
     /// B71: an update naming both spellings of a size is refused, whichever comes first.
