@@ -30,6 +30,9 @@ const MODELS: [(&str, &str); 5] = [
     ("claude-fable-5-1", "Fable 5.1"),
 ];
 
+/// The message box's placeholder.
+const HINT: &str = "Ask about your sessions, tasks or projects";
+
 /// What the empty drawer offers to ask.
 const SUGGESTIONS: [&str; 3] = [
     "What are my sessions doing right now?",
@@ -44,6 +47,8 @@ struct Assistant {
     column: gtk::Box,
     empty: gtk::Box,
     input: gtk::TextView,
+    /// The message box's placeholder, shown while it is empty.
+    hint: gtk::Label,
     send: gtk::Button,
     /// The model picker: its key, the caption it shows, and its list.
     model_key: gtk::MenuButton,
@@ -132,9 +137,19 @@ pub fn install(ui: &Rc<Ui>, key: &gtk::Button, host: &gtk::Overlay) {
     input.add_css_class("threads-input");
     input.set_wrap_mode(gtk::WrapMode::WordChar);
     input.set_hexpand(true);
-    input.update_property(&[gtk::accessible::Property::Label("Message the assistant")]);
+    // Tab leaves the box, for the picker and Send, as in Threads.
+    input.set_accepts_tab(false);
+    input.update_property(&[gtk::accessible::Property::Label("Message the assistant"), gtk::accessible::Property::Placeholder(HINT)]);
     let input_scroll = gtk::ScrolledWindow::builder().child(&input).hscrollbar_policy(gtk::PolicyType::Never).propagate_natural_height(true).max_content_height(160).build();
     input_scroll.set_hexpand(true);
+    // The placeholder: a text view has none of its own.
+    let field = gtk::Overlay::new();
+    field.set_child(Some(&input_scroll));
+    let hint = label(HINT, "threads-hint");
+    hint.set_can_target(false);
+    hint.set_valign(gtk::Align::Start);
+    hint.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    field.add_overlay(&hint);
     // Under the words: the model picker at the start, Send at the end.
     let foot = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let model_key = gtk::MenuButton::new();
@@ -161,10 +176,11 @@ pub fn install(ui: &Rc<Ui>, key: &gtk::Button, host: &gtk::Overlay) {
     send.set_valign(gtk::Align::End);
     send.set_child(Some(&crate::icons::image("arrow-up", 16)));
     send.set_tooltip_text(Some("Send (Enter)"));
+    send.update_property(&[gtk::accessible::Property::Label("Send")]);
     foot.append(&send);
     let stack = gtk::Box::new(gtk::Orientation::Vertical, 6);
     stack.set_hexpand(true);
-    stack.append(&input_scroll);
+    stack.append(&field);
     stack.append(&foot);
     composer.append(&stack);
     drawer.append(&composer);
@@ -187,6 +203,7 @@ pub fn install(ui: &Rc<Ui>, key: &gtk::Button, host: &gtk::Overlay) {
         column,
         empty,
         input,
+        hint,
         send,
         model_key,
         model_shown,
@@ -223,6 +240,12 @@ pub fn install(ui: &Rc<Ui>, key: &gtk::Button, host: &gtk::Overlay) {
     fresh.connect_clicked(|_| new_chat());
     // The key stops a reply while one runs; Enter only ever sends.
     a.send.connect_clicked(|_| if the().is_some_and(|a| a.busy.get()) { stop() } else { submit() });
+    a.input.buffer().connect_changed(|_| {
+        if let Some(a) = the() {
+            update_send(&a);
+        }
+    });
+    update_send(&a);
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     keys.connect_key_pressed(|_, key, _, mods| {
@@ -447,6 +470,8 @@ fn set_busy(a: &Assistant, busy: bool) {
     a.model_key.set_tooltip_text(Some(if busy { "Waits for this reply to finish" } else { "The model the assistant runs on" }));
     a.send.set_child(Some(&crate::icons::image(if busy { "stop" } else { "arrow-up" }, 16)));
     a.send.set_tooltip_text(Some(if busy { "Stop" } else { "Send (Enter)" }));
+    a.send.update_property(&[gtk::accessible::Property::Label(if busy { "Stop" } else { "Send" })]);
+    update_send(a);
     if busy {
         if a.working.parent().is_none() {
             a.column.append(&a.working);
@@ -460,6 +485,15 @@ fn set_busy(a: &Assistant, busy: bool) {
         }
         a.pending.set_text("");
     }
+}
+
+/// The send key: Stop while a reply runs, else Send once there are words to send. The placeholder
+/// shows while the box is empty.
+fn update_send(a: &Assistant) {
+    let buffer = a.input.buffer();
+    a.hint.set_visible(buffer.char_count() == 0);
+    let written = !buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).trim().is_empty();
+    a.send.set_sensitive(a.busy.get() || written);
 }
 
 /// Scroll to the newest: on the next frame, and once more after it, when wrapped text and a card
