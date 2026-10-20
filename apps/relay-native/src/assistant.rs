@@ -42,6 +42,8 @@ const SUGGESTIONS: [&str; 3] = [
 
 struct Assistant {
     ui: Weak<Ui>,
+    /// The title bar's key, lit while the drawer is open.
+    key: gtk::Button,
     revealer: gtk::Revealer,
     scroll: gtk::ScrolledWindow,
     column: gtk::Box,
@@ -198,6 +200,7 @@ pub fn install(ui: &Rc<Ui>, key: &gtk::Button, host: &gtk::Overlay) {
 
     let a = Rc::new(Assistant {
         ui: Rc::downgrade(ui),
+        key: key.clone(),
         revealer,
         scroll,
         column,
@@ -229,6 +232,7 @@ pub fn install(ui: &Rc<Ui>, key: &gtk::Button, host: &gtk::Overlay) {
 
     // Pressing the key leaves the keyboard where it was, for the drawer to give back on closing.
     key.set_focus_on_click(false);
+    key.update_state(&[gtk::accessible::State::Expanded(Some(false))]);
     key.connect_clicked(|_| toggle());
     // The key is the Dev space's: in Threads it hides, and the drawer closes with it.
     key.connect_visible_notify(|key| {
@@ -316,6 +320,12 @@ fn show(open: bool) {
     }
     a.revealer.set_reveal_child(open);
     a.revealer.set_can_target(open);
+    if open {
+        a.key.add_css_class("assistant-open");
+    } else {
+        a.key.remove_css_class("assistant-open");
+    }
+    a.key.update_state(&[gtk::accessible::State::Expanded(Some(open))]);
     if open {
         a.input.grab_focus();
         // A model file added since shows up the next time the drawer opens.
