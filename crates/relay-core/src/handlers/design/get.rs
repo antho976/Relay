@@ -300,15 +300,20 @@ fn check_reach(p: &GetIn) -> Result<(), BusError> {
 }
 
 /// `since_rev` is a rev of `design` that a read can still reach: not past its rev, and within the
-/// last [`SINCE_WINDOW`] revs, whose removals are on record.
-fn check_since(design: &Design, since: i64) -> Result<(), BusError> {
+/// last [`SINCE_WINDOW`] revs, whose removals are on record, from `tracked_from` on (the rev a
+/// design held when its store began keeping them).
+fn check_since(design: &Design, tracked_from: i64, since: i64) -> Result<(), BusError> {
     if since > design.rev {
         return Err(BusError::invalid("design.since_rev", format!("since_rev: design {} is at rev {}; {since} is ahead of it", design.id, design.rev))
             .with_hint("send the rev design.get or design.apply last answered with"));
     }
-    if since < design.rev - SINCE_WINDOW {
-        return Err(BusError::conflict("design.since_too_old",
-            format!("since_rev: rev {since} is more than {SINCE_WINDOW} revs behind the design's ({}); what was removed that long ago is not kept", design.rev))
+    if since < design.rev - SINCE_WINDOW || since < tracked_from {
+        let why = if since < tracked_from {
+            format!("since_rev: rev {since} is before rev {tracked_from}, when this design's removals began to be kept")
+        } else {
+            format!("since_rev: rev {since} is more than {SINCE_WINDOW} revs behind the design's ({}); what was removed that long ago is not kept", design.rev)
+        };
+        return Err(BusError::conflict("design.since_too_old", why)
             .with_details(json!({"rev": design.rev}))
             .with_hint("read it whole: design.get without since_rev"));
     }
@@ -351,7 +356,9 @@ pub(super) fn register(e: &mut Engine) {
                 })).bus()?.collect::<rusqlite::Result<Vec<_>>>().bus()?;
                 return Ok((design, rows, None));
             };
-            check_since(&design, since)?;
+            let tracked_from = conn.prepare_cached("SELECT tracked_from FROM designs WHERE id = ?1").bus()?
+                .query_row([design.id], |r| r.get(0)).bus()?;
+            check_since(&design, tracked_from, since)?;
             let rows = conn.prepare_cached(DELTA_ROWS).bus()?
                 .query_map(params![design.id, since, cut], |r| Ok(Raw {
                     id: r.get(0)?, parent: r.get(1)?, ord: r.get(2)?, known: known_kind(r, 3)?, changed: r.get(4)?, body: r.get(5)?,

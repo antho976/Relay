@@ -238,6 +238,23 @@ fn since_rev_older_than_the_window_is_refused() {
     assert_eq!(error.details.unwrap(), json!({"rev": now}));
 }
 
+/// A design that was in the store before it kept removals (migration v30) keeps them from the
+/// rev it held then: an older since_rev, though within the window, is too old.
+#[test]
+fn since_rev_before_removals_were_kept_is_refused() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    let at = rev(&e, id);
+    e.store.lock().execute("UPDATE designs SET tracked_from = rev WHERE id = ?1", [id]).unwrap();
+    assert!(get(&e, json!({"design_id": id, "since_rev": at}))["nodes"].as_array().unwrap().is_empty());
+    let error = get_refused(&e, json!({"design_id": id, "since_rev": at - 1}));
+    assert_eq!((error.kind, error.code.as_str(), error.message.clone()),
+        (ErrorKind::Conflict, "design.since_too_old", format!("since_rev: rev {} is before rev {at}, when this design's removals began to be kept", at - 1)));
+    // A design made since keeps them from its start.
+    let fresh = sample(&e);
+    assert!(get(&e, json!({"design_id": fresh, "since_rev": 0}))["removed"].as_array().unwrap().is_empty());
+}
+
 /// The removals on record are kept for the window and no longer: a list that removes something
 /// forgets those no since_rev can reach.
 #[test]
