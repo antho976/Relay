@@ -19,9 +19,14 @@ use std::fmt;
 use std::marker::PhantomData;
 
 mod fields;
+mod hints;
 mod read;
 
 pub use fields::{field_kinds, fit_written, plain_label, strip_controls, takes, Kinds, FIELDS};
+pub use hints::{
+    de_ops, details, explain, field_hint, field_of, label, locate, nearest, patch_schema, value_hint, Unread, FIELD_HINTS,
+    KIND_HINTS, OP_HINTS, SHAPE_HINTS, VALUE_HINTS,
+};
 pub use read::{read_node, read_nodes, read_nodes_opt, write_node, write_nodes, write_nodes_opt};
 
 /// Most nodes one design holds.
@@ -862,6 +867,7 @@ pub enum NodeOp {
     Update {
         #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
         id: String,
+        #[schemars(schema_with = "patch_schema")]
         set: Map<String, Value>,
     },
     /// Put a node in another parent, or at another place among its siblings.
@@ -1357,10 +1363,14 @@ mod tests {
         assert!(r.patched(&bad).unwrap_err().starts_with("fill"));
         let neg = json!({"w": -1}).as_object().unwrap().clone();
         assert!(r.patched(&neg).unwrap_err().starts_with("w:"));
-        // A value that does not read is named with serde's reason.
+        // A value that does not read is named, with its range when its type cannot hold it.
         let wide = json!({"sides": 300}).as_object().unwrap().clone();
         let patched = r.patched(&wide).unwrap();
-        assert!(Node::check_update(&r, &wide, &patched).unwrap_err().starts_with("sides: invalid value"), "{:?}", Node::check_update(&r, &wide, &patched));
+        assert_eq!(Node::check_update(&r, &wide, &patched).unwrap_err(), "sides: 300 is outside 3 to 24");
+        // A type error names its key (W16).
+        let text = json!({"x": "12"}).as_object().unwrap().clone();
+        let patched = r.patched(&text).unwrap();
+        assert_eq!(Node::check_update(&r, &text, &patched).unwrap_err(), "x: invalid type: string \"12\", expected f64");
     }
 
     /// B122: the weights the schema documents are the ones that validate.

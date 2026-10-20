@@ -8,6 +8,7 @@
 //! was there. The canvas fits what it writes with [`fit_written`] first, so it never sends what
 //! a strict list refuses.
 
+use super::hints::{bad_value, not_a_field};
 use super::read::probe;
 use super::{canonical_key, Node, NodeKind, NodeOp, MAX_SHADOW_BLUR};
 use serde::ser::{self, Impossible, Serialize, SerializeStruct, Serializer};
@@ -145,18 +146,14 @@ fn foreign(kind: NodeKind, field: &str) -> Option<String> {
     })
 }
 
-/// The refusal of a key no node field has.
-pub(crate) fn not_a_field(key: &str) -> String {
-    format!("{key}: not a node field; design.get lists a node's fields")
-}
-
-/// Why a node holds `key` in `extra`: a name no field has, or a field whose value does not read.
+/// Why a node holds `key` in `extra`: a name no field has (with the field meant, when the hints
+/// know it or one is close), or a field whose value does not read (with what it takes).
 fn unreadable(kind: NodeKind, key: &str, value: &Value) -> String {
     if field_kinds(key).is_none() {
         return not_a_field(key);
     }
     match probe(kind, key, value) {
-        Err(why) => format!("{key}: {why}"),
+        Err(why) => bad_value(key, value, &why),
         // It reads alone: it was set aside because the other spelling of the size came too.
         Ok(()) => {
             let field = canonical_key(key);

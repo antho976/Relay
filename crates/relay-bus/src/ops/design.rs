@@ -7,8 +7,8 @@
 //! A design is pages of nodes (`crate::design`). Every change goes through `design.apply`, a
 //! list of node edits run in order, all or none; it answers with the nodes as stored and the
 //! edits that undo it, so the canvas's undo and `audit.undo` revert exactly what was done.
-use crate::design::{Node, NodeOp};
-use crate::registry::{Actors, OpMeta, Scope, Undo};
+use crate::design::{Node, NodeOp, MAX_OPS};
+use crate::registry::{Actors, OpEntry, OpMeta, Scope, Undo};
 use crate::types::{Design, Id};
 use crate::{op, Empty};
 
@@ -87,7 +87,12 @@ op!(Purge, "design.purge", IdIn => Empty,
 
 payload!(#[schemars(rename = "DesignApplyIn")] ApplyIn {
     pub design_id: Id,
-    /// Run in order, all or none.
+    /// Run in order, all or none: 1 to 2000 edits. A design holds at most 5000 nodes, 1536 KiB of
+    /// node JSON and 64 levels of nesting. A node an edit adds can be the parent of a later one.
+    /// An edit that does not read is refused by its index and the key at fault (`ops[3] update
+    /// "hero": set: …`).
+    #[serde(deserialize_with = "crate::design::de_ops")]
+    #[schemars(length(min = 1, max = MAX_OPS))]
     pub ops: Vec<NodeOp>,
     /// Refuse (`design.stale`) unless the design is still at this `rev`.
     pub base_rev: Option<i64>,
@@ -118,7 +123,7 @@ result!(#[schemars(rename = "DesignApplyOut")] ApplyOut {
     pub warnings: Vec<String>,
 });
 op!(Apply, "design.apply", ApplyIn => ApplyOut,
-    OpMeta::mutation(Scope::Project, 12, "Add, change, move or delete a design's nodes in one all-or-none list, only when the person asked for it; returns what changed and its undo")
+    OpMeta::mutation(Scope::Project, 12, "Add, change, move or delete a design's nodes in one all-or-none list of up to 2000 edits, only when the person asked for it (a design holds at most 5000 nodes and 1536 KiB; an id an edit adds can be a parent later in the list); returns what changed and its undo")
         .undo(Undo::Inverse).emits(&["design.changed"]));
 
 payload!(#[schemars(rename = "DesignAssetAddIn")] AssetAddIn {
@@ -140,4 +145,19 @@ result!(#[schemars(rename = "DesignAssetAddOut")] AssetAddOut {
 op!(AssetAdd, "design.asset.add", AssetAddIn => AssetAddOut,
     OpMeta::mutation(Scope::Project, 12, "Store a picture for a design's image nodes; returns the src to give them"));
 
-entries!(List, Get, Create, Update, Duplicate, Delete, Restore, Purge, Apply, AssetAdd);
+/// The design ops; `design.apply`'s `bus.schema` refusals name the edit and key at fault
+/// (`design::locate`).
+pub fn entries() -> Vec<OpEntry> {
+    vec![
+        OpEntry::of::<List>(),
+        OpEntry::of::<Get>(),
+        OpEntry::of::<Create>(),
+        OpEntry::of::<Update>(),
+        OpEntry::of::<Duplicate>(),
+        OpEntry::of::<Delete>(),
+        OpEntry::of::<Restore>(),
+        OpEntry::of::<Purge>(),
+        OpEntry::of::<Apply>().located(crate::design::locate),
+        OpEntry::of::<AssetAdd>(),
+    ]
+}
