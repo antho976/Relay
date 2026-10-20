@@ -6,9 +6,10 @@
 use gtk::prelude::*;
 use gtk::{gdk, graphene, gsk, pango};
 use gtk4 as gtk;
-use relay_bus::design::{parse_color, Blend, Gradient, GradientKind, ImageFit, Node, NodeKind, TextAlign};
+use relay_bus::design::{parse_color, Blend, Gradient, GradientKind, ImageFit, Node, NodeKind, StrokeCap, StrokeJoin, TextAlign};
 use relay_client::design::layout::{self, Measure, Placed, STICKY_PAD};
-use relay_client::design::{shapes, Rect, Scene};
+use relay_client::design::shapes::{self, ArcEnd, Seg};
+use relay_client::design::{Rect, Scene};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -406,55 +407,27 @@ impl Painter {
         Picture::Loading
     }
 
-    /// A stroke's path: smoothed through the midpoints for a pen path, straight for a line.
-    fn path(&self, n: &Node, origin: (f64, f64)) -> Option<gsk::Path> {
+    /// A free line's or path's stroke as `shapes::path_segments` describes it (hit testing
+    /// flattens the same pieces, so a click lands on the curve drawn, B118), in its own box's
+    /// coordinates: its points are narrowed to f32 there, not on the page, so a drawing far from
+    /// the origin keeps its shape (B110), and moving it reuses the cached path.
+    fn path(&self, n: &Node) -> Option<gsk::Path> {
         let points = n.points.as_deref()?;
         let mut h = std::collections::hash_map::DefaultHasher::new();
         for p in points {
             p[0].to_bits().hash(&mut h);
             p[1].to_bits().hash(&mut h);
         }
-        origin.0.to_bits().hash(&mut h);
-        origin.1.to_bits().hash(&mut h);
         (n.kind == NodeKind::Path).hash(&mut h);
         n.smooth.hash(&mut h);
-        n.closed.hash(&mut h);
+        shapes::closed_shape(n).hash(&mut h);
         let key = h.finish();
         if let Some((k, path)) = self.paths.borrow().get(&n.id) {
             if *k == key {
                 return Some(path.clone());
             }
         }
-        let b = gsk::PathBuilder::new();
-        let at = |p: &[f64; 2]| ((origin.0 + p[0]) as f32, (origin.1 + p[1]) as f32);
-        let (x0, y0) = at(points.first()?);
-        b.move_to(x0, y0);
-        let closed = n.closed == Some(true) && points.len() > 2;
-        if points.len() == 1 {
-            b.line_to(x0 + 0.01, y0);
-        } else if n.kind == NodeKind::Line && n.smooth == Some(true) && points.len() > 2 {
-            let pts: Vec<(f64, f64)> = points.iter().map(|p| (origin.0 + p[0], origin.1 + p[1])).collect();
-            for [c1, c2, to] in shapes::smooth_segments(&pts, closed) {
-                b.cubic_to(c1.0 as f32, c1.1 as f32, c2.0 as f32, c2.1 as f32, to.0 as f32, to.1 as f32);
-            }
-        } else if n.kind == NodeKind::Path && points.len() > 2 {
-            for w in points.windows(2).skip(1) {
-                let (cx, cy) = at(&w[0]);
-                let (nx, ny) = at(&w[1]);
-                b.quad_to(cx, cy, (cx + nx) / 2.0, (cy + ny) / 2.0);
-            }
-            let (lx, ly) = at(points.last()?);
-            b.line_to(lx, ly);
-        } else {
-            for p in &points[1..] {
-                let (x, y) = at(p);
-                b.line_to(x, y);
-            }
-        }
-        if closed {
-            b.close();
-        }
-        let path = b.to_path();
+        let path = stroke_path(n)?;
         self.paths.borrow_mut().insert(n.id.clone(), (key, path.clone()));
         Some(path)
     }
@@ -559,8 +532,7 @@ impl Painter {
                 self.border(snap, n, &r);
             }
             NodeKind::Ellipse if shapes::arc(n).is_some() => {
-                let path = arc_path(n, &r);
-                self.shape(snap, n, &path, &r);
+                self.shape_at(snap, n, &r, arc_path);
                 if !editing {
                     self.shape_text(snap, scene, n, &r);
                 }
@@ -582,8 +554,7 @@ impl Painter {
                 }
             }
             NodeKind::Polygon => {
-                let path = polygon_path(n, &r);
-                self.shape(snap, n, &path, &r);
+                self.shape_at(snap, n, &r, polygon_path);
                 if !editing {
                     self.shape_text(snap, scene, n, &r);
                 }
@@ -644,8 +615,19 @@ impl Painter {
         }
     }
 
-    /// A shape drawn from a path (a polygon, an arc, a closed line): its shadow, fill and
-    /// stroke, the stroke inside the edge as a box's border is.
+    /// A polygon or an arc in its box `r`: its outline built in the box's own coordinates (at
+    /// 0, 0) and drawn from the box's corner, so its corners are narrowed to f32 after the
+    /// corner is taken off (B110).
+    fn shape_at(&self, snap: &gtk::Snapshot, n: &Node, r: &Rect, outline: fn(&Node, &Rect) -> gsk::Path) {
+        let own = Rect::new(0.0, 0.0, r.w, r.h);
+        snap.save();
+        snap.translate(&graphene::Point::new(r.x as f32, r.y as f32));
+        self.shape(snap, n, &outline(n, &own), &own);
+        snap.restore();
+    }
+
+    /// A shape drawn from a path (a polygon, an arc): its shadow, fill and stroke, the stroke
+    /// inside the edge as a box's border is.
     fn shape(&self, snap: &gtk::Snapshot, n: &Node, path: &gsk::Path, r: &Rect) {
         if let Some(s) = &n.shadow {
             let c = rgba(&s.color);
@@ -683,12 +665,31 @@ impl Painter {
         } else {
             self.fill_path(snap, n, path, r);
         }
-        if let Some(stroke) = &n.stroke {
-            let w = n.stroke_width.unwrap_or(1.0);
-            if w > 0.0 {
-                snap.push_fill(path, gsk::FillRule::Winding);
-                snap.append_stroke(path, &stroke_of(n, w * 2.0), &rgba(stroke));
+        let w = n.stroke_width.unwrap_or(1.0);
+        if w > 0.0 && (n.stroke.is_some() || n.stroke_gradient.is_some()) {
+            // Twice as wide, clipped to the inside.
+            snap.push_fill(path, gsk::FillRule::Winding);
+            self.stroke_with(snap, n, path, &stroke_of(n, w * 2.0), n.stroke.as_deref().map(rgba).as_ref(), Some(r));
+            snap.pop();
+        }
+    }
+
+    /// Stroke `path` with `pen`: in `n`'s `stroke_gradient` laid over `bounds` (the node's box,
+    /// else the stroke's own bounds, so a level line keeps a height), else in `color`.
+    fn stroke_with(&self, snap: &gtk::Snapshot, n: &Node, path: &gsk::Path, pen: &gsk::Stroke, color: Option<&gdk::RGBA>, bounds: Option<&Rect>) {
+        match &n.stroke_gradient {
+            Some(g) => {
+                let Some(area) = bounds.copied().or_else(|| path.stroke_bounds(pen).map(|b| rect_of(&b))) else {
+                    return;
+                };
+                snap.push_stroke(path, pen);
+                gradient(snap, g, &area);
                 snap.pop();
+            }
+            None => {
+                if let Some(c) = color {
+                    snap.append_stroke(path, pen, c);
+                }
             }
         }
     }
@@ -717,26 +718,31 @@ impl Painter {
         }
     }
 
-    /// The outline drawn inside the edge; dashed, as a stroke along the edge inset by half its
-    /// width.
+    /// The outline drawn inside the edge; dashed or in a gradient, as a stroke along the edge
+    /// inset by half its width.
     fn border(&self, snap: &gtk::Snapshot, n: &Node, r: &Rect) {
-        let Some(stroke) = &n.stroke else {
+        if n.stroke.is_none() && n.stroke_gradient.is_none() {
             return;
-        };
+        }
         let w = n.stroke_width.unwrap_or(1.0);
         if w <= 0.0 {
             return;
         }
-        let c = rgba(stroke);
-        if n.dash.is_some() {
+        let c = n.stroke.as_deref().map(rgba);
+        if n.dash.is_some() || n.stroke_gradient.is_some() {
             // Along the middle of the border, its corners following the fill's.
             let half = (w / 2.0).min(r.w / 2.0).min(r.h / 2.0) as f32;
             let mut inset = outline(n, r);
             inset.shrink(half, half, half, half);
             let b = gsk::PathBuilder::new();
             b.add_rounded_rect(&inset);
-            snap.append_stroke(&b.to_path(), &stroke_of(n, w), &c);
-        } else {
+            let pen = stroke_of(n, w);
+            if n.dash.is_none() {
+                // Square corners, as a solid border's.
+                pen.set_line_join(gsk::LineJoin::Miter);
+            }
+            self.stroke_with(snap, n, &b.to_path(), &pen, c.as_ref(), Some(r));
+        } else if let Some(c) = c {
             snap.append_border(&outline(n, r), &[w as f32; 4], &[c, c, c, c]);
         }
     }
@@ -778,85 +784,96 @@ impl Painter {
             snap.append_color(&gdk::RGBA::new(0.55, 0.55, 0.55, 0.3), &grect(r));
             return;
         };
+        let width = n.stroke_width.unwrap_or(2.0);
+        if width <= 0.0 {
+            return;
+        }
         let s = (r.w.min(r.h) / 24.0).max(0.01);
         snap.save();
         snap.translate(&graphene::Point::new((r.cx() - 12.0 * s) as f32, (r.cy() - 12.0 * s) as f32));
         snap.scale(s as f32, s as f32);
-        let stroke = gsk::Stroke::new(n.stroke_width.unwrap_or(2.0) as f32);
-        stroke.set_line_cap(gsk::LineCap::Round);
-        stroke.set_line_join(gsk::LineJoin::Round);
-        snap.append_stroke(&path, &stroke, &color);
+        // Weight and dashes in the icon's own 24-unit grid, so they keep its proportions (B96).
+        snap.append_stroke(&path, &stroke_of(n, width), &color);
         snap.restore();
     }
 
+    /// A line or path: its fill (three or more free points), its stroke and its arrowheads
+    /// (`shapes::arrowheads`, which hit testing takes too), drawn from its box's corner `r`, where
+    /// its points count from. A weight of 0 draws no stroke and no heads (B97); a closed shape
+    /// strokes inside its edge as a polygon does (B95).
     fn stroke(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, n: &Node, r: &Rect) {
-        let width = n.stroke_width.unwrap_or(2.0).max(0.5);
-        let color = rgba(n.stroke.as_deref().unwrap_or(STROKE));
-        let routed = n.kind == NodeKind::Line && (n.from.is_some() || n.to.is_some() || n.route.is_some());
-        // The two segments an arrowhead sits on: from where to the tip, at each end.
-        let (path, ends) = if routed {
+        // Page points narrowed to f32 once the corner is taken off (B110).
+        let local = |p: (f64, f64)| ((p.0 - r.x) as f32, (p.1 - r.y) as f32);
+        let path = if shapes::routed(n) {
             let (pts, curved) = shapes::line_points(scene, placed, n);
             if pts.len() < 2 {
                 return;
             }
             let b = gsk::PathBuilder::new();
-            b.move_to(pts[0].0 as f32, pts[0].1 as f32);
+            let (x, y) = local(pts[0]);
+            b.move_to(x, y);
             if curved {
-                b.cubic_to(pts[1].0 as f32, pts[1].1 as f32, pts[2].0 as f32, pts[2].1 as f32, pts[3].0 as f32, pts[3].1 as f32);
+                let [(ax, ay), (bx, by), (cx, cy)] = [local(pts[1]), local(pts[2]), local(pts[3])];
+                b.cubic_to(ax, ay, bx, by, cx, cy);
             } else {
                 for p in &pts[1..] {
-                    b.line_to(p.0 as f32, p.1 as f32);
+                    let (x, y) = local(*p);
+                    b.line_to(x, y);
                 }
             }
-            let last = pts.len() - 1;
-            (b.to_path(), Some(((pts[last - 1], pts[last]), (pts[1], pts[0]))))
+            b.to_path()
         } else {
-            let Some(path) = self.path(n, (r.x, r.y)) else {
+            let Some(path) = self.path(n) else {
                 return;
             };
-            let ends = n.points.as_deref().filter(|p| p.len() >= 2).map(|p| {
-                let at = |q: &[f64; 2]| (r.x + q[0], r.y + q[1]);
-                ((at(&p[p.len() - 2]), at(&p[p.len() - 1])), (at(&p[1]), at(&p[0])))
-            });
-            (path, ends)
+            path
         };
-        let points = n.points.as_deref().map_or(0, <[_]>::len);
-        if !routed && points > 2 && (n.fill.is_some() || n.gradient.is_some()) {
-            self.fill_path(snap, n, &path, r);
+        snap.save();
+        snap.translate(&graphene::Point::new(r.x as f32, r.y as f32));
+        if shapes::fillable_line(n) && (n.fill.is_some() || n.gradient.is_some()) {
+            // A gradient spans the box, or the points where an agent left the box empty.
+            let own = Rect::new(0.0, 0.0, r.w, r.h);
+            let area = if r.w > 0.0 && r.h > 0.0 { Some(own) } else { path.bounds().map(|b| rect_of(&b)) };
+            self.fill_path(snap, n, &path, &area.unwrap_or(own));
         }
-        if n.stroke.as_deref().is_none_or(|s| parse_color(s).is_some_and(|c| c[3] > 0)) {
-            snap.append_stroke(&path, &stroke_of(n, width), &color);
-        }
-        if n.closed == Some(true) && !routed {
-            return;
-        }
-        let Some((end, start)) = ends else {
-            return;
-        };
-        let mut heads = Vec::new();
-        if n.arrow_end == Some(true) {
-            heads.push(end);
-        }
-        if n.arrow_start == Some(true) {
-            heads.push(start);
-        }
-        for (from, tip) in heads {
-            let (dx, dy) = (tip.0 - from.0, tip.1 - from.1);
-            let len = (dx * dx + dy * dy).sqrt();
-            if len < 0.001 {
-                continue;
+        let width = n.stroke_width.unwrap_or(2.0);
+        let color = rgba(n.stroke.as_deref().unwrap_or(STROKE));
+        let shown = n.stroke_gradient.is_some() || n.stroke.as_deref().is_none_or(|s| parse_color(s).is_some_and(|c| c[3] > 0));
+        if width > 0.0 && shown {
+            if shapes::closed_shape(n) {
+                snap.push_fill(&path, gsk::FillRule::Winding);
+                self.stroke_with(snap, n, &path, &stroke_of(n, width * 2.0), Some(&color), None);
+                snap.pop();
+            } else {
+                let pen = stroke_of(n, width);
+                let heads: Vec<gsk::Path> = shapes::arrowheads(scene, placed, n, r)
+                    .into_iter()
+                    .map(|[tip, a, b]| {
+                        let p = gsk::PathBuilder::new();
+                        let [(tx, ty), (ax, ay), (bx, by)] = [local(tip), local(a), local(b)];
+                        p.move_to(tx, ty);
+                        p.line_to(ax, ay);
+                        p.line_to(bx, by);
+                        p.close();
+                        p.to_path()
+                    })
+                    .collect();
+                // One gradient over the line and its heads, so a head carries the colour on.
+                let area = path.stroke_bounds(&pen).map(|b| heads.iter().filter_map(gsk::Path::bounds).fold(rect_of(&b), |a, h| a.union(&rect_of(&h))));
+                self.stroke_with(snap, n, &path, &pen, Some(&color), area.as_ref());
+                for head in &heads {
+                    match (&n.stroke_gradient, &area) {
+                        (Some(g), Some(area)) => {
+                            snap.push_fill(head, gsk::FillRule::Winding);
+                            gradient(snap, g, area);
+                            snap.pop();
+                        }
+                        _ => snap.append_fill(head, gsk::FillRule::Winding, &color),
+                    }
+                }
             }
-            let (ux, uy) = (dx / len, dy / len);
-            let size = (width * 3.5).max(8.0);
-            let back = (tip.0 - ux * size, tip.1 - uy * size);
-            let (px, py) = (-uy * size * 0.55, ux * size * 0.55);
-            let b = gsk::PathBuilder::new();
-            b.move_to(tip.0 as f32, tip.1 as f32);
-            b.line_to((back.0 + px) as f32, (back.1 + py) as f32);
-            b.line_to((back.0 - px) as f32, (back.1 - py) as f32);
-            b.close();
-            snap.append_fill(&b.to_path(), gsk::FillRule::Winding, &color);
         }
+        snap.restore();
     }
 
     fn image(&self, snap: &gtk::Snapshot, n: &Node, r: &Rect) {
@@ -929,7 +946,7 @@ pub fn outline(n: &Node, r: &Rect) -> gsk::RoundedRect {
             let c = |v: f64| graphene::Size::new(cap(v), cap(v));
             gsk::RoundedRect::new(grect(r), c(tl), c(tr), c(br), c(bl))
         }
-        None => rounded(r, n.radius.unwrap_or(if n.kind == NodeKind::Sticky { 6.0 } else { 0.0 })),
+        None => rounded(r, n.radius.unwrap_or(shapes::default_radius(n.kind))),
     }
 }
 
@@ -946,13 +963,19 @@ fn polygon_path(n: &Node, r: &Rect) -> gsk::Path {
     b.to_path()
 }
 
-/// An ellipse's arc: a pie slice, or with a hole a ring segment, as a closed path.
+/// An ellipse's arc: a pie slice, or with a hole a ring segment, as a closed path. A ring
+/// segment's ends are shaped by its `arc.cap` (`shapes::arc_ends`): round or square ends are part
+/// of the outline, so the ring stays one fill that takes gradients, shadows and borders.
 pub fn arc_path(n: &Node, r: &Rect) -> gsk::Path {
     let b = gsk::PathBuilder::new();
     let Some((start, sweep, inner)) = shapes::arc(n) else {
         b.add_rounded_rect(&outline(n, r));
         return b.to_path();
     };
+    if inner > 0.0 && sweep.abs() >= 360.0 {
+        // A whole ring: the hole is a second outline, cut out by the even-odd rule.
+        return ring_path(r, inner);
+    }
     let (cx, cy, rx, ry) = (r.cx(), r.cy(), r.w / 2.0, r.h / 2.0);
     let at = |deg: f64, k: f64| {
         let a = deg.to_radians();
@@ -972,18 +995,80 @@ pub fn arc_path(n: &Node, r: &Rect) -> gsk::Path {
     b.move_to(x, y);
     along(&b, start, start + sweep, 1.0);
     if inner > 0.0 {
-        let (x, y) = at(start + sweep, inner);
-        b.line_to(x, y);
-        along(&b, start + sweep, start, inner);
+        match shapes::arc_ends(n, r) {
+            Some((cap, [first, last])) => {
+                cap_to(&b, cap, &last, true, sweep > 0.0);
+                along(&b, start + sweep, start, inner);
+                cap_to(&b, cap, &first, false, sweep > 0.0);
+            }
+            None => {
+                let (x, y) = at(start + sweep, inner);
+                b.line_to(x, y);
+                along(&b, start + sweep, start, inner);
+            }
+        }
     } else if sweep.abs() < 360.0 {
         b.line_to(cx as f32, cy as f32);
     }
     b.close();
-    if inner > 0.0 && sweep.abs() >= 360.0 {
-        // A whole ring: the hole is a second outline, cut out by the even-odd rule.
-        return ring_path(r, inner);
+    b.to_path()
+}
+
+/// Across one capped end of a ring segment, from the outer edge to the inner one (`inward`) or
+/// back: half a circle bulging past the end for `round`, turning the way the ring runs
+/// (`clockwise` for a positive sweep); out and back by half the ring's thickness for `square`.
+fn cap_to(b: &gsk::PathBuilder, cap: StrokeCap, end: &ArcEnd, inward: bool, clockwise: bool) {
+    let (from, to) = if inward { (end.outer, end.inner) } else { (end.inner, end.outer) };
+    let c = end.cap_radius();
+    match cap {
+        StrokeCap::Round => b.svg_arc_to(c as f32, c as f32, 0.0, false, clockwise, to.0 as f32, to.1 as f32),
+        StrokeCap::Square => {
+            let (ox, oy) = (end.out.0 * c, end.out.1 * c);
+            b.line_to((from.0 + ox) as f32, (from.1 + oy) as f32);
+            b.line_to((to.0 + ox) as f32, (to.1 + oy) as f32);
+            b.line_to(to.0 as f32, to.1 as f32);
+        }
+        StrokeCap::Butt => b.line_to(to.0 as f32, to.1 as f32),
+    }
+}
+
+/// A free line's or path's stroke from its points as they are stored, relative to its box's
+/// corner: `shapes::path_segments` from (0, 0).
+fn stroke_path(n: &Node) -> Option<gsk::Path> {
+    let (start, segs) = shapes::path_segments(n, (0.0, 0.0))?;
+    Some(build_path(start, &segs, shapes::closed_shape(n)))
+}
+
+/// A path from `start` through `segs` (`shapes::path_segments`), closed for a closed shape.
+fn build_path(start: (f64, f64), segs: &[Seg], closed: bool) -> gsk::Path {
+    let b = gsk::PathBuilder::new();
+    let f = |p: (f64, f64)| (p.0 as f32, p.1 as f32);
+    let (x, y) = f(start);
+    b.move_to(x, y);
+    for seg in segs {
+        match *seg {
+            Seg::Line(to) => {
+                let (x, y) = f(to);
+                b.line_to(x, y);
+            }
+            Seg::Quad(c, to) => {
+                let [(cx, cy), (x, y)] = [f(c), f(to)];
+                b.quad_to(cx, cy, x, y);
+            }
+            Seg::Cubic(c1, c2, to) => {
+                let [(ax, ay), (bx, by), (x, y)] = [f(c1), f(c2), f(to)];
+                b.cubic_to(ax, ay, bx, by, x, y);
+            }
+        }
+    }
+    if closed {
+        b.close();
     }
     b.to_path()
+}
+
+fn rect_of(b: &graphene::Rect) -> Rect {
+    Rect::new(b.x() as f64, b.y() as f64, b.width() as f64, b.height() as f64)
 }
 
 /// A whole ring: the ellipse less its hole, as two outlines.
@@ -1014,19 +1099,36 @@ fn flip_about(snap: &gtk::Snapshot, n: &Node, r: &Rect) -> bool {
     true
 }
 
-/// The pen for a node's stroke: round joins, and its dash pattern if it has one. Dashes end
-/// square so their gaps stay open at any weight; a pattern with zero-length dashes is dots,
-/// which need round ends to show.
+/// How a stroke's ends are drawn: its `stroke_cap`, else round, except dashes, which end flat so
+/// their gaps stay open at any weight, and dots (zero-length dashes), which need round ends to show.
+fn cap_of(n: &Node) -> gsk::LineCap {
+    let dots = n.dash.as_ref().is_some_and(|d| d.iter().step_by(2).any(|v| *v == 0.0));
+    match n.stroke_cap {
+        Some(StrokeCap::Butt) => gsk::LineCap::Butt,
+        Some(StrokeCap::Round) => gsk::LineCap::Round,
+        Some(StrokeCap::Square) => gsk::LineCap::Square,
+        None if n.dash.is_some() && !dots => gsk::LineCap::Butt,
+        None => gsk::LineCap::Round,
+    }
+}
+
+/// How a stroke turns its corners: its `stroke_join`, else round. The miter limit stays GSK's
+/// (and CSS's) 4.
+fn join_of(n: &Node) -> gsk::LineJoin {
+    match n.stroke_join {
+        Some(StrokeJoin::Miter) => gsk::LineJoin::Miter,
+        Some(StrokeJoin::Bevel) => gsk::LineJoin::Bevel,
+        Some(StrokeJoin::Round) | None => gsk::LineJoin::Round,
+    }
+}
+
+/// The pen for a node's stroke: its weight, ends (`cap_of`), corners (`join_of`) and dashes.
 fn stroke_of(n: &Node, width: f64) -> gsk::Stroke {
     let stroke = gsk::Stroke::new(width as f32);
-    stroke.set_line_join(gsk::LineJoin::Round);
-    match &n.dash {
-        Some(dash) => {
-            let dots = dash.iter().step_by(2).any(|v| *v == 0.0);
-            stroke.set_line_cap(if dots { gsk::LineCap::Round } else { gsk::LineCap::Butt });
-            stroke.set_dash(&dash.iter().map(|v| *v as f32).collect::<Vec<_>>());
-        }
-        None => stroke.set_line_cap(gsk::LineCap::Round),
+    stroke.set_line_join(join_of(n));
+    stroke.set_line_cap(cap_of(n));
+    if let Some(dash) = &n.dash {
+        stroke.set_dash(&dash.iter().map(|v| *v as f32).collect::<Vec<_>>());
     }
     stroke
 }
@@ -1035,9 +1137,9 @@ fn stroke_of(n: &Node, width: f64) -> gsk::Stroke {
 fn gradient(snap: &gtk::Snapshot, g: &Gradient, r: &Rect) {
     let mut stops: Vec<gsk::ColorStop> = g.stops.iter().map(|s| gsk::ColorStop::new(s.at as f32, rgba(&s.color))).collect();
     stops.sort_by(|a, b| a.offset().total_cmp(&b.offset()));
+    let centre = graphene::Point::new(r.cx() as f32, r.cy() as f32);
     match g.kind {
-        // A conic gradient paints as linear until native-paint draws it round its centre.
-        GradientKind::Linear | GradientKind::Conic => {
+        GradientKind::Linear => {
             // CSS reading: 0 points up, 90 right, 180 (the default) down.
             let a = g.angle.unwrap_or(180.0).to_radians();
             let (dx, dy) = (a.sin(), -a.cos());
@@ -1048,9 +1150,11 @@ fn gradient(snap: &gtk::Snapshot, g: &Gradient, r: &Rect) {
             snap.append_linear_gradient(&grect(r), &start, &end, &stops);
         }
         GradientKind::Radial => {
-            let centre = graphene::Point::new(r.cx() as f32, r.cy() as f32);
             snap.append_radial_gradient(&grect(r), &centre, (r.w / 2.0).max(0.5) as f32, (r.h / 2.0).max(0.5) as f32, 0.0, 1.0, &stops);
         }
+        // Round the centre, clockwise from `angle` (0, the default, at the top), as CSS's
+        // `conic-gradient(from …)` and GSK's rotation read it.
+        GradientKind::Conic => snap.append_conic_gradient(&grect(r), &centre, g.angle.unwrap_or(0.0) as f32, &stops),
     }
 }
 
@@ -1145,6 +1249,87 @@ mod tests {
         assert_eq!(decode_edge(DECODE_EDGE + 1), Some(DECODE_EDGE));
         assert_eq!(decode_edge(DECODE_EDGE), None);
         assert_eq!(decode_edge(640), None);
+    }
+
+    /// Words 8 px a character on 20 px lines, wrapped at `wrap`.
+    struct Mono;
+
+    impl Measure for Mono {
+        fn measure(&self, n: &Node, wrap: Option<f64>) -> (f64, f64) {
+            let chars = n.text.as_deref().map_or(0, |t| t.chars().count()) as f64;
+            let line = wrap.map_or(f64::INFINITY, |w| (w / 8.0).floor().max(1.0));
+            ((chars * 8.0).min(wrap.unwrap_or(f64::INFINITY)), (chars / line).ceil().max(1.0) * 20.0)
+        }
+    }
+
+    fn pt(x: f32, y: f32) -> graphene::Point {
+        graphene::Point::new(x, y)
+    }
+
+    #[test]
+    fn caps_and_joins_follow_the_fields_and_keep_todays_rule_without_them() {
+        let mut n = node("l", Some("p1"), NodeKind::Line, [0.0; 4]);
+        assert_eq!((cap_of(&n), join_of(&n)), (gsk::LineCap::Round, gsk::LineJoin::Round));
+        n.dash = Some(vec![6.0, 4.0]);
+        assert_eq!(cap_of(&n), gsk::LineCap::Butt, "dashes end flat so their gaps stay open");
+        n.dash = Some(vec![0.0, 4.0]);
+        assert_eq!(cap_of(&n), gsk::LineCap::Round, "dots need round ends to show");
+        n.stroke_cap = Some(StrokeCap::Square);
+        n.stroke_join = Some(StrokeJoin::Miter);
+        assert_eq!((cap_of(&n), join_of(&n)), (gsk::LineCap::Square, gsk::LineJoin::Miter));
+        n.dash = Some(vec![6.0, 4.0]);
+        n.stroke_cap = Some(StrokeCap::Round);
+        n.stroke_join = Some(StrokeJoin::Bevel);
+        assert_eq!((cap_of(&n), join_of(&n)), (gsk::LineCap::Round, gsk::LineJoin::Bevel));
+    }
+
+    #[test]
+    fn a_ring_segment_ends_as_its_cap_says() {
+        let r = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let mut n = node("e", Some("p1"), NodeKind::Ellipse, [0.0, 0.0, 100.0, 100.0]);
+        let ring = |cap| relay_bus::design::Arc { start: 0.0, sweep: 90.0, inner: 0.6, cap };
+        let filled = |n: &Node, x: f32, y: f32| arc_path(n, &r).in_fill(&pt(x, y), gsk::FillRule::Winding);
+        // The end at 90 degrees runs from (100, 50) to (80, 50); the start at the top from
+        // (50, 0) to (50, 20). Just past each end:
+        n.arc = Some(ring(None));
+        assert!(filled(&n, 90.0, 45.0) && !filled(&n, 90.0, 57.0) && !filled(&n, 43.0, 10.0));
+        n.arc = Some(ring(Some(StrokeCap::Butt)));
+        assert!(!filled(&n, 90.0, 57.0));
+        n.arc = Some(ring(Some(StrokeCap::Round)));
+        assert!(filled(&n, 90.0, 57.0) && filled(&n, 43.0, 10.0));
+        assert!(!filled(&n, 41.0, 1.5), "a round end leaves the square's corner out");
+        n.arc = Some(ring(Some(StrokeCap::Square)));
+        assert!(filled(&n, 90.0, 57.0) && filled(&n, 41.0, 1.5));
+        // Running the other way, the caps turn with it.
+        n.arc = Some(relay_bus::design::Arc { start: 90.0, sweep: -90.0, inner: 0.6, cap: Some(StrokeCap::Round) });
+        assert!(filled(&n, 90.0, 57.0) && filled(&n, 43.0, 10.0));
+    }
+
+    #[test]
+    fn a_pen_path_is_drawn_on_the_curve_hit_testing_takes() {
+        // B118: through the midpoints (it passes (43.75, 62.5)), so it never reaches its middle
+        // point, and hit testing takes the same curve.
+        let mut n = node("a", Some("p1"), NodeKind::Path, [0.0, 0.0, 100.0, 100.0]);
+        n.points = Some(vec![[0.0, 0.0], [50.0, 100.0], [100.0, 0.0]]);
+        n.stroke_width = Some(2.0);
+        let path = stroke_path(&n).unwrap();
+        assert!(path.closest_point(&pt(43.75, 62.5), 1.0).is_some());
+        assert!(path.closest_point(&pt(50.0, 99.0), 1.0).is_none());
+        let scene = Scene::new(vec![node("p1", None, NodeKind::Page, [0.0; 4]), n.clone()]);
+        let placed = layout::place(&scene, "p1", &Mono);
+        let r = placed.rect("a").unwrap();
+        assert!(relay_client::design::hit::on_shape(&scene, &placed, &n, &r, 43.75, 62.5, 1.0));
+    }
+
+    #[test]
+    fn a_drawing_far_out_keeps_its_shape() {
+        // B110: at 3e7 px f32 steps by 2, so narrowed on the page these points would fold.
+        let x = 30_000_000.0;
+        assert_eq!((x + 1.0) as f32, x as f32);
+        let mut n = node("l", Some("p1"), NodeKind::Line, [x, x, 2.0, 1.0]);
+        n.points = Some(vec![[0.0, 0.0], [1.0, 0.0], [2.0, 1.0]]);
+        let b = stroke_path(&n).unwrap().bounds().unwrap();
+        assert_eq!((b.x(), b.y(), b.width(), b.height()), (0.0, 0.0, 2.0, 1.0));
     }
 
     #[test]
