@@ -71,7 +71,9 @@ fn painted_bounds(scene: &Scene, placed: &Placed, id: &str) -> Option<Rect> {
 /// corner, and those bounds. The page carries its canvas colour; a selection is drawn on
 /// transparency.
 fn picture(b: &Board, ids: &[String], page: bool, scale: f64) -> Option<(gsk::RenderNode, Rect, f64)> {
-    let placed = b.placed();
+    // As a still picture shows it: every scrolling frame at its start, however the canvas is
+    // scrolled (feature-layout §2.5).
+    let placed = b.still_placed();
     let scene = b.doc.scene.borrow();
     let page_id = b.page.borrow().clone();
     let ids: Vec<String> = if page { scene.children(&page_id).to_vec() } else { edit::outermost(&scene, ids) };

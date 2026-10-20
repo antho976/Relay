@@ -56,6 +56,8 @@ pub fn geometry(name: &str) -> &'static str {
         "icon" => r##"<circle cx="8" cy="8" r="6"/><path d="M5.5 9.5s.9 1.5 2.5 1.5 2.5-1.5 2.5-1.5M6 6.3h.01M10 6.3h.01"/>"##,
         "connector" => r##"<rect x="1.5" y="2.5" width="5" height="4" rx="1"/><rect x="9.5" y="9.5" width="5" height="4" rx="1"/><path d="M4 6.5v5h5.5"/>"##,
         "eraser" => r##"<path d="M6 13.5h7.5M3.3 10.3l6.5-6.6a1.4 1.4 0 0 1 2 0l1.5 1.5a1.4 1.4 0 0 1 0 2L7 13.5H5.4z"/><path d="M6.5 7l3.5 3.5"/>"##,
+        // An S between two dots: a connector routed as a curve (E-board-5).
+        "curve" => r##"<path d="M3.5 12.5C3.5 7 12.5 9 12.5 3.5"/><circle cx="3.5" cy="12.5" r="1.2"/><circle cx="12.5" cy="3.5" r="1.2"/>"##,
         "rotate" => r##"<path d="M13 8a5 5 0 1 1-1.5-3.5"/><path d="M12 2v3h-3"/>"##,
         "gradient" => r##"<rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M2.5 9.5l7-7M5.5 13.5l8-8M9.5 13.5l4-4"/>"##,
         "dash-solid" => r##"<path d="M2 8h12"/>"##,
