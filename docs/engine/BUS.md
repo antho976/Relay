@@ -175,7 +175,7 @@ Every op is registered with, and the schema publishes:
 - `scope`: `global` | `project` | `session` — which id the payload must carry
 - `actors`: default allow-set before per-session allowlists apply (§9.1)
 - `doors`: `all` | `socket_only` — a socket-only op (`bus.subscribe`, `bus.unsubscribe`,
-  `bus.wait`) acts on the connection that sends it, so the socket door answers it; dispatched
+  `bus.wait`, `design.render`, `design.render.serve`) acts on the connection that sends it, so the socket door answers it; dispatched
   to the engine directly it is `invalid` / `bus.door`
 - `stream`: the data-plane stream the op attaches, if any (§7)
 - `emits`: event names it can produce
@@ -205,8 +205,9 @@ hints. `bus.wait`'s `matching` is a conjunction, so a wait on `{id: N}` misses t
 one on `{task_id: N}` misses the full rows: wait on the event name and re-read.
 
 On one connection, a request's `design.changed` can arrive before or after its reply, or interleave
-with an earlier request's event. A client tells its own changes by rev: `prev_rev` and `touched` say
-what a list did, and `design.get` with `since_rev: prev_rev` reads the rest.
+with an earlier request's event. A client tells its own changes by the event's `cause` (§1.3), the id
+of the request that made it, or by rev: `prev_rev` and `touched` say what a list did, and
+`design.get` with `since_rev: prev_rev` reads the rest.
 
 ---
 
@@ -422,6 +423,27 @@ at most 64 MiB; a longer one is discarded and answered `bus.too_large` (with no 
 `app.quit` (or SIGINT/SIGTERM) is under way, requests are answered `app.quitting`, and the door
 closes, ending its connections, before the engine kills its children.
 
+**The render door and its lease.** `design.render` and `design.render.serve` are socket-only: the
+socket door answers them itself, after the same envelope, actor and allowlist checks as any request
+(`bus.door` from anywhere else). The desktop app offers to draw with `design.render.serve
+{fonts?}` on a connection of its own that carries nothing else; the engine keeps a weak sender to it
+(the *lease*) until that connection closes, newest lease first, and a second `serve` on one lease
+replaces it (the font families it lists, at most 2,000, are what `design.fonts` answers). An
+agent's `design.render` is checked against the store first (the design is its own project's, `base_rev`
+is current, the page and nodes exist), so a refusal sends nothing. Then the engine writes one
+`{ev: "design.render.request"}` line, with a fresh `render_id` and a `deadline_unix_ms`, to the
+newest lease only (never a broadcast, and not an event any subscriber sees), and the door waits with no lock
+held. The app draws and answers with `design.render.answer {render_id, drawn | error}` on the same
+connection; the engine checks the picture against what was asked (a PNG of at most 4 MiB within
+`max_side`, 4 megapixels and the box limit), writes it to `design-renders/<render id>.png` beside the store (the
+newest 32 are kept, and none older than an hour once a newer one is written), and the door answers
+the agent. Four renders wait at once, engine-wide. A render ends in `unavailable` /
+`design.render.no_renderer` (no lease), `.busy` (four waiting, or the app's queue full), `.timeout`
+(no answer in `timeout_ms`; the client leaving ends the wait too) or `.renderer_gone` (the lease's
+connection closed first); `invalid` / `design.render.args` for an option out of range; and
+`design.render.failed` (`details.reason`) or `.no_surface` from the app. A client that wants only boxes and
+issues passes `png: false`.
+
 The socket is served by whichever process owns the engine: `relay serve` (headless engine —
 what the test suite and CI drive; also how you run Relay's core on a machine with no display),
 or `relay serve --remote` with the phone door in the same process. The desktop app is a client
@@ -563,7 +585,7 @@ so no door computes this for itself.
 `project.*` mutations, `provider.refresh`, `worktree.*` mutations, `git.branch.clean_merged`,
 `integration.discard`, `device.*` and `avd.*` mutations except `device.claim` / `device.release`,
 `skill.*` mutations, `notify.settings.set`, `design.purge`, `design.picture.key_set/key_remove`, and the
-query `design.asset.get` (an agent reads a picture from `assets_dir`). `app.resources.watch` is the one `app.*` mutation
+queries `design.asset.get` (an agent reads a picture from `assets_dir`) and `design.render.serve` / `design.render.answer` (the desktop app's half of a render, §6.2). `app.resources.watch` is the one `app.*` mutation
 every actor may call; it only turns resource sampling on and off.
 SPEC §10 says no swarm: an agent never spawns, closes, or types into a session, full stop. The one
 exception is the Dev space's assistant (docs/THREADS.md, "The assistant"), which may *ask* for
@@ -1171,10 +1193,13 @@ to the parent; siblings paint in order, the last on top.
 | `design.delete` / `design.restore` | mutation · always · inverse | `{ design_id }` → `{}` / `Design` — soft (§5.4): the retention pass purges a deleted design past `undo.grace_days`. Any change to a deleted design is `conflict` / `design.deleted` |
 | `design.purge` | mutation · always · user_only | `{ design_id }` → `{}` — a deleted one only (`conflict` / `design.not_deleted`), nodes and all; emits `design.deleted` |
 | `design.apply` | mutation · always · inverse | `{ design_id, ops: DesignNodeOp[], base_rev?, lenient?, reply?, expect? }` → `ApplyOut`: short (`rev`, `prev_rev`, `ids`, `removed_count`, `audit_id`, `skipped`, `warnings`, `copied`, `rebased`), or with `reply: "full"` also `design`, `nodes`, `removed`, `inverse`, `expect`, `colors`, `styles`, `reread` — below |
-| `design.asset.add` | mutation · always | `{ design_id, path? \| bytes_b64? }` → `{ src, path, w, h }` — a PNG, JPEG, GIF, WebP or SVG, by its bytes (`invalid` / `design.asset` for anything else); an absolute `path` up to 20 MiB or `bytes_b64` up to 1 MiB. Stored once by content in `design-assets/` beside the store as `<32 hex of SHA-256>.<ext>`, the `src` an image node names; `w`/`h` its natural size (an SVG's `width`/`height` in px, else its `viewBox`, else 300×150). Staged: the file work runs unlocked |
+| `design.asset.add` | mutation · always | `{ design_id, path? \| bytes_b64? }` → `{ src, path, w, h }` — a PNG, JPEG, GIF, WebP or SVG, by its bytes (`invalid` / `design.asset` for anything else); an absolute `path` up to 20 MiB or `bytes_b64` up to 1 MiB. Stored once by content in `design-assets/` beside the store as `<32 hex of SHA-256>.<ext>`, the `src` an image node names; `w`/`h` its natural size (an SVG's `width`/`height` in px, else its `viewBox`, else 300×150). Staged: the file work runs unlocked. Emits no event: it changes no row a query shows (§3.3) |
 | `design.find` | query | `{ design_id, page?, inside?, kind?, name?, text?, fill?, stroke?, color?, any_color?, font?, with_nodes? }` → `{ ids, nodes?, cut? }` — the nodes that match every filter given, in paint order (`ids`); `kind` is any of its kinds, `name` and `text` a case-insensitive word match, `font` a family, and colours compare as drawn (a `$name` or a style counts). `inside` (not the node itself) is `not_found` / `design.node_not_found` when unknown. `with_nodes` adds the first 200 matches as stored (512 KiB at most; `cut` when more) |
 | `design.fonts` | query · global | `{ name? }` → `{ families, complete }` — the families the newest connected desktop app can draw a design's text in, sorted, `name` a case-insensitive word match. With no app reporting, Geist, Geist Mono and Sora with `complete: false` |
 | `design.asset.get` | query · user | `{ design_id, src, offset? }` → `{ media_type, size, bytes_b64, next }` — an image node's picture, in pieces of at most 3 MiB decoded from `offset`; `next` is where the next piece starts, null on the last |
+| `design.render` | query · socket only | `{ design_id, page?, nodes?, png? = true, scale? = 1, max_side? = 1568, boxes_limit? = 200, base_rev?, timeout_ms? = 20000, at_ms?, frames? }` → `{ design_id, rev, page, area, scale, png?, issues, issue_count, warnings, boxes, timings_ms, times_ms? }` — the desktop app draws a page, or the outermost of up to 200 `nodes` on one page, and answers a PNG written beside the store (`png.path`, `w`, `h`; shown to an MCP caller as an image) and every visible node's laid-out box in page px, hugged text measured: `boxes.fields` is always `id, kind, parent, x, y, w, h, rx, ry, rot`, `rows` at most `boxes_limit` (0–500) of them, `total` and `hidden` counting the rest. `issues` (worst first, at most 100; `issue_count` counts all) are `overflow`, `overlap`, `text_overlap`, `clipped` and `contrast`, each with the ids it concerns. `scale` is 0.25–2 and is lowered to fit `max_side` (64–2560) and 4 megapixels; `area` is the page rectangle pictured. `at_ms` (0–600000) poses each node at that time of its motion, `frames` (2–24, not with `at_ms`) draws a contact sheet of that many frames over the longest timeline in scope, their times in `times_ms`; boxes and issues stay at rest. `base_rev` refuses `conflict` / `design.stale` unless the design is still at that rev. An agent may picture only its own project's designs. Waits for the app with no lock held; see §6.2 for the lease, the codes and the limits |
+| `design.render.serve` | query · global · socket only · user_only | `{ fonts? }` → `{}` — the desktop app offers to draw on this connection until it closes (§6.2) |
+| `design.render.answer` | query · global · user_only | `{ render_id, drawn? \| error? }` → `{ accepted }` — the app's answer to one `design.render.request`, exactly one of `drawn` and `error`; `accepted` is whether a render still waited for it. Unlocked: it decodes and checks the picture without the store |
 | `design.picture.search` | query · plugin `pictures` | `{ design_id, query, source?, orientation?, page?, count? }` → `{ source, page, has_more, results }` — stock photos from Openverse (no key) or Pexels (the person's key); a hit's `id` goes to `thumb` and `add`. Agents may call it only in a project where the plugin is on |
 | `design.picture.thumb` | query · plugin `pictures` | `{ design_id, id }` → `{ path, w, h }` — a search result's small preview, to look at before choosing |
 | `design.picture.add` | mutation · always · plugin `pictures` | `{ design_id, id }` → `{ src, path, w, h, credit }` — stores the photo for the design with its credit beside it (`<stem>.credit.json`; the first credit for those bytes is kept); answers the `src` an image node names, as `design.asset.add` does. Emits no event, as `design.asset.add` |
