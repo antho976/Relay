@@ -509,21 +509,12 @@ impl Painter {
         Some(path)
     }
 
-    /// Paint `page`'s content: its children, in page coordinates. `view` culls what lies
-    /// wholly outside it.
-    pub fn paint_page(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, page: &str, view: Option<&Rect>) {
-        self.paint_children(snap, scene, placed, page, view, None);
-    }
-
-    /// Paint `page`'s content as it shows on `ground`, the page's fill, which the caller paints
-    /// under it: a top-level node with a `blend` mixes with the ground and what is under it,
-    /// as a frame's children mix with its fill (B29, B30). The ground goes into what this
-    /// paints only behind those nodes (their painted bounds), so whatever the caller shows
-    /// between the nodes, as the canvas's grid, stays seen; without a ground, or with nothing
-    /// blending at the top, this is `paint_page`.
-    // The board, the gallery and export switch to it in native-canvas, native-gallery and
-    // native-export (MODEL-SPEC §6.4).
-    #[allow(dead_code)]
+    /// Paint `page`'s content, in page coordinates, as it shows on `ground`, the page's fill,
+    /// which the caller paints under it: a top-level node with a `blend` mixes with the ground
+    /// and what is under it, as a frame's children mix with its fill (B29, B30). The ground
+    /// goes into what this paints only behind those nodes (their painted bounds), so whatever
+    /// the caller shows between the nodes, as the canvas's grid, stays seen. `view` culls what
+    /// lies wholly outside it.
     pub fn paint_page_on(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, page: &str, view: Option<&Rect>, ground: Option<&str>) {
         let fill = ground.filter(|g| parse_color(g).is_some_and(|c| c[3] > 0)).map(rgba);
         let behind = match fill {
