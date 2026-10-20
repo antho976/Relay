@@ -12,7 +12,7 @@ use crate::app::label;
 use gtk::prelude::*;
 use gtk4 as gtk;
 use relay_bus::design::{Layout, NodeKind, TextAlign};
-use relay_client::design::edit::Align;
+use relay_client::design::edit::{self, Align};
 use relay_client::design::shapes;
 use serde_json::{json, Map, Value};
 use std::rc::Rc;
@@ -163,7 +163,7 @@ impl Board {
                 let (glyph, next, tip) = match route {
                     relay_bus::design::Route::Straight => ("line", "elbow", "Straight — make it an elbow"),
                     relay_bus::design::Route::Elbow => ("connector", "curve", "Elbow — make it a curve"),
-                    relay_bus::design::Route::Curve => ("rotate", "straight", "Curve — make it straight"),
+                    relay_bus::design::Route::Curve => ("curve", "straight", "Curve — make it straight"),
                 };
                 let key = gtk::Button::new();
                 key.add_css_class("design-context-key");
@@ -237,12 +237,7 @@ impl Board {
                     let mode = one.layout.unwrap_or(Layout::None);
                     let key = gtk::Button::new();
                     key.add_css_class("design-context-key");
-                    let (glyph, tip, next) = match mode {
-                        Layout::None => ("free", "Auto layout: add (stack children in a column)", "column"),
-                        Layout::Column => ("column", "Auto layout: column — switch to a row", "row"),
-                        // Wrap shows as a row until native-canvas-layout gives it its own key.
-                        Layout::Row | Layout::Wrap => ("row", "Auto layout: row — remove", "none"),
-                    };
+                    let (glyph, tip, next) = layout_key(mode);
                     key.set_child(Some(&glyphs::image(glyph, 16)));
                     super::widgets::tip(&key, tip);
                     let weak = Rc::downgrade(&b);
@@ -586,28 +581,17 @@ impl Board {
         bar.append(&key);
     }
 
-    /// Turn auto layout on a frame to `mode` (`none`, `row` or `column`), padding it the first
-    /// time so its children do not touch its edges.
+    /// Turn auto layout on the selected frames to `mode` (`none`, `column`, `row` or `wrap`),
+    /// padding each the first time so its children do not touch its edges. Off, each child it
+    /// laid out keeps the box it shows, and the frame its size where it hugged them
+    /// (`edit::set_layout`, TM-8): `layout: null` alone dropped them at stale places.
     pub(super) fn set_layout(&self, mode: &str) {
+        let Some(mode) = layout_mode(mode) else {
+            return;
+        };
         let ids = self.selected();
-        let scene = self.doc.scene.borrow();
-        let ops = ids
-            .iter()
-            .filter_map(|id| scene.node(id).filter(|n| n.kind == NodeKind::Frame))
-            .map(|n| {
-                let mut s = set(&[("layout", if mode == "none" { Value::Null } else { json!(mode) })]);
-                if mode != "none" && n.layout.is_none() {
-                    if n.gap.is_none() {
-                        s.insert("gap".into(), json!(12));
-                    }
-                    if n.padding.is_none() {
-                        s.insert("padding".into(), json!([16]));
-                    }
-                }
-                relay_bus::design::NodeOp::Update { id: n.id.clone(), set: s }
-            })
-            .collect();
-        drop(scene);
+        let placed = self.placed();
+        let ops = edit::set_layout(&self.doc.scene.borrow(), &placed, &ids, Some(mode));
         self.commit(ops);
     }
 }
@@ -619,8 +603,51 @@ pub(super) fn closed_shape(n: &relay_bus::design::Node) -> bool {
     shapes::closed_shape(n)
 }
 
+/// A layout key's mode by its stored name; `none` is no layout.
+fn layout_mode(name: &str) -> Option<Layout> {
+    serde_json::from_value(json!(name)).ok()
+}
+
+/// A frame's layout key for its `mode`: its glyph, its tip and the mode a press turns on, round
+/// none, column, row and wrap.
+fn layout_key(mode: Layout) -> (&'static str, &'static str, &'static str) {
+    match mode {
+        Layout::None => ("free", "Auto layout: add (stack children in a column)", "column"),
+        Layout::Column => ("column", "Auto layout: column — switch to a row", "row"),
+        Layout::Row => ("row", "Auto layout: row — switch to wrap", "wrap"),
+        Layout::Wrap => ("wrap", "Auto layout: wrap — remove", "none"),
+    }
+}
+
 fn sep() -> gtk::Separator {
     let s = gtk::Separator::new(gtk::Orientation::Vertical);
     s.add_css_class("design-context-sep");
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_layout_key_goes_round_none_column_row_and_wrap() {
+        let mut mode = Layout::None;
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            let (glyph, _, next) = layout_key(mode);
+            assert!(glyphs::known(glyph), "{glyph} has its own glyph");
+            seen.push(glyph);
+            mode = layout_mode(next).expect("a stored layout name");
+        }
+        assert_eq!(seen, ["free", "column", "row", "wrap"]);
+        assert_eq!(mode, Layout::None, "wrap's press removes it");
+        assert!(layout_key(Layout::Wrap).1.ends_with("remove"));
+        assert_eq!(layout_mode("sideways"), None);
+    }
+
+    #[test]
+    fn a_curved_connector_has_its_own_glyph() {
+        assert!(glyphs::known("curve"));
+        assert_ne!(glyphs::geometry("curve"), glyphs::geometry("rotate"));
+    }
 }
