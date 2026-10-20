@@ -46,6 +46,9 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -443,7 +446,7 @@ private fun TallyEntries(f: EntriesFilter, money: Money, missing: String) {
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
         keyboardActions = KeyboardActions(onSearch = { f.query = typed.trim(); f.reset() }),
         trailing = {
-            if (typed.isNotEmpty()) Box(Modifier.size(28.dp).clip(Radii.icon).clickable { typed = ""; f.query = ""; f.reset() }, contentAlignment = Alignment.Center) {
+            if (typed.isNotEmpty()) Box(Modifier.size(28.dp).clip(Radii.icon).clickable(onClickLabel = "Clear the search", role = Role.Button) { typed = ""; f.query = ""; f.reset() }.semantics { contentDescription = "Clear the search" }, contentAlignment = Alignment.Center) {
                 Glyph("close", 13.dp, c.ink3)
             }
         },
