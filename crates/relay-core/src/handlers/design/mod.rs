@@ -23,6 +23,7 @@ use relay_bus::types::{Design, Id};
 use relay_bus::Empty;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::json;
+use std::collections::BTreeMap;
 
 const DEFAULT_TITLE: &str = "Untitled design";
 
@@ -185,7 +186,7 @@ pub fn register(e: &mut Engine) {
         ctx.set_undo("design.delete", json!({"design_id": id}), None);
         emit_design(ctx, &design)?;
         let assets_dir = ctx.engine().store.design_assets_dir().display().to_string();
-        Ok(GetOut { design, nodes: vec![page], assets_dir })
+        Ok(GetOut { design, nodes: vec![page], assets_dir, removed: None, colors: BTreeMap::new(), styles: BTreeMap::new(), credits: BTreeMap::new() })
     });
     e.register::<Update>(|ctx: &mut Ctx, p| {
         let before = live_design(ctx.tx(), p.design_id)?;

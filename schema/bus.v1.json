@@ -6254,7 +6254,7 @@
       }
     },
     "design.get": {
-      "summary": "A design and all its nodes (or one page's)",
+      "summary": "A design and its nodes: all, one page's (by id or name), the pages alone, some nodes with what is inside them, or only what changed since a rev",
       "kind": "query",
       "audit": "never",
       "undo": "none",
@@ -6312,7 +6312,7 @@
       }
     },
     "design.duplicate": {
-      "summary": "Copy a design, every page and node, under a new title",
+      "summary": "Copy a design, every page and node, under a new title; an agent's copy is tied to its own terminal",
       "kind": "mutation",
       "audit": "always",
       "undo": "inverse",
@@ -6392,7 +6392,7 @@
       }
     },
     "design.apply": {
-      "summary": "Add, change, move or delete a design's nodes in one all-or-none list of up to 2000 edits, only when the person asked for it (a design holds at most 5000 nodes and 1536 KiB; an id an edit adds can be a parent later in the list); returns what changed and its undo",
+      "summary": "Add, change, move, copy or delete a design's nodes and name its colours and styles, in one all-or-none list of up to 2000 edits, only when the person asked for it (a design holds at most 5000 nodes and 1536 KiB; an id an edit adds can be a parent later in the list); returns the new rev and each edit's node id; see the result with design.render",
       "kind": "mutation",
       "audit": "always",
       "undo": "inverse",
@@ -25152,7 +25152,35 @@
             "string",
             "null"
           ],
-          "description": "Only this page and what is on it."
+          "description": "Only this page and what is on it: its id, or its name when no other page has that name."
+        },
+        "pages_only": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Only the pages themselves (with `page`, that one), without what is on them: the design's\npage list, to read one page at a time. Not with `nodes` or `since_rev`."
+        },
+        "nodes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Only these nodes (1 to 500 ids) and what is inside them.",
+          "minItems": 1,
+          "maxItems": 500
+        },
+        "since_rev": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "Only what changed after this rev (0 to the design's rev): `nodes` are those added,\nchanged or moved since, in this answer's usual order, and `removed` the ids gone since.\nIt reaches back 1000 revs (older is design.since_too_old: read it whole). With `nodes`,\nonly what changed inside them.",
+          "minimum": 0
         }
       },
       "required": [
@@ -25175,6 +25203,37 @@
         "assets_dir": {
           "type": "string",
           "description": "Where an image's `src` is, on this machine."
+        },
+        "removed": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "With `since_rev`: the ids removed since."
+        },
+        "colors": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The design's named colours, by name: a node's colour field takes one as `$name` (a\n`color` edit names one). Always whole."
+        },
+        "styles": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/DesignStyle"
+          },
+          "description": "The design's named styles, by name: a node takes one with `style` (a `style` edit names\none). Always whole."
+        },
+        "credits": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/DesignPictureCredit"
+          },
+          "description": "Where each picture came from, by `src`, for those stored with a credit\n(design.picture.add): at most 128 of them."
         }
       },
       "required": [
@@ -26883,6 +26942,327 @@
       },
       "description": "A frame's or page's clock for the motion inside it."
     },
+    "DesignStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fill": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour."
+        },
+        "gradient": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignGradient"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stroke": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour."
+        },
+        "stroke_width": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "dash": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "minItems": 1,
+          "maxItems": 8
+        },
+        "radius": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": 0,
+          "maximum": 1000000.0
+        },
+        "radii": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double",
+            "minimum": 0,
+            "maximum": 1000000.0
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "shadow": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignShadow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shadows": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignShadow"
+          },
+          "minItems": 1,
+          "maxItems": 8
+        },
+        "opacity": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "blur": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": 0,
+          "maximum": 200
+        },
+        "blend": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignBlend"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour."
+        },
+        "font": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "font_size": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "font_weight": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "italic": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "underline": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "strike": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "align": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignTextAlign"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "line_height": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": 0.1,
+          "maximum": 10
+        },
+        "letter_spacing": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": -100,
+          "maximum": 1000
+        },
+        "text_case": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignTextCase"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stroke_cap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignStrokeCap"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stroke_join": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignStrokeJoin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stroke_gradient": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignGradient"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "description": "A named look nodes share: any of the style fields, each as a node holds it (a colour may be a\n`$name`). A node takes each field it does not set itself; `fill` and `gradient` count as one\nfield, and so do `radius` and `radii`, `shadow` and `shadows`, `stroke` and `stroke_gradient`."
+    },
+    "DesignPictureCredit": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/DesignPictureSource"
+        },
+        "id": {
+          "type": "string",
+          "description": "The id design.picture.search gave it."
+        },
+        "title": {
+          "type": "string"
+        },
+        "creator": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "creator_url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "https only."
+        },
+        "licence": {
+          "type": "string"
+        },
+        "licence_url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "https only."
+        },
+        "source_url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The photo's page, https only."
+        },
+        "attribution": {
+          "type": "string",
+          "description": "One sentence naming its title, creator, source and licence."
+        },
+        "caption": {
+          "type": "string",
+          "description": "The line to put under the photo."
+        }
+      },
+      "required": [
+        "source",
+        "id",
+        "title",
+        "licence",
+        "attribution",
+        "caption"
+      ]
+    },
+    "DesignPictureSource": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "openverse",
+          "description": "Openverse's openly licensed photos; needs no key."
+        },
+        {
+          "type": "string",
+          "const": "pexels",
+          "description": "Pexels; needs the key the person saved."
+        }
+      ],
+      "description": "Where a stock photo comes from."
+    },
     "DesignCreateIn": {
       "type": "object",
       "additionalProperties": false,
@@ -26983,7 +27363,7 @@
           "items": {
             "$ref": "#/$defs/DesignNodeOp"
           },
-          "description": "Run in order, all or none: 1 to 2000 edits. A design holds at most 5000 nodes, 1536 KiB of\nnode JSON and 64 levels of nesting. A node an edit adds can be the parent of a later one.\nAn edit that does not read is refused by its index and the key at fault (`ops[3] update\n\"hero\": set: …`).",
+          "description": "Run in order, all or none: 1 to 2000 edits. A design holds at most 5000 nodes, 1536 KiB of\nthem as design.get returns them (ids, parents and its named colours and styles counted)\nand 64 levels of nesting. A node an edit adds can be the parent of a later one. An edit\nthat does not read is refused by its index and the key at fault (`ops[3] update \"hero\":\nset: …`).",
           "minItems": 1,
           "maxItems": 2000
         },
@@ -26993,14 +27373,37 @@
             "null"
           ],
           "format": "int64",
-          "description": "Refuse (`design.stale`) unless the design is still at this `rev`."
+          "description": "The rev your edits were made against: the one you read, or the last reply's `rev`. The list\nis refused (`design.stale`, with `details.conflicts`) only when a node it changes, moves or\ndeletes, or one inside a node it deletes, changed after this rev; changes elsewhere do not\nstop it, and the reply says `rebased: true`."
         },
         "lenient": {
           "type": [
             "boolean",
             "null"
           ],
-          "description": "Replay an undo: skip an edit of a node that no longer exists (or that this Relay cannot\nread), and put back what was stored even where a new edit's rules would refuse it,\ninstead of refusing the whole list. Only for an `inverse` an answer gave you."
+          "description": "Replay an undo (an `inverse` a reply gave): skip an edit whose node or parent is gone,\nwhose node this Relay cannot read, or that would overwrite a change made since (`expect`),\nand put back what was stored even where a new edit's rules would refuse it, instead of\nrefusing the whole list. `skipped` says which and why. A list that applies nothing changes\nnothing: no new rev, no event and no undo. An agent's list holds at most 2000 edits,\nlenient or not."
+        },
+        "reply": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignReply"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`short` (an agent's default) or `full` (the person's clients' default)."
+        },
+        "expect": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignExpect"
+          },
+          "description": "What the nodes must still hold: the `expect` a full reply gave with its `inverse`, sent\nback with that undo by the person's clients. An edit that would overwrite a change made\nsince is refused (`design.stale`), or skipped when lenient.",
+          "default": null,
+          "x-unit": "omit"
         }
       },
       "required": [
@@ -27382,61 +27785,314 @@
       ],
       "description": "One edit of a design. `design.apply` runs a list of them in order, all or none."
     },
+    "DesignReply": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "short",
+          "description": "The rev, each edit's node id, how many nodes went, the audit row, and what was skipped or\nwarned of."
+        },
+        {
+          "type": "string",
+          "const": "full",
+          "description": "Also the design row, each node touched as stored, the removed ids, the edits that undo\nthe list and what that undo expects to find."
+        }
+      ],
+      "description": "What `design.apply` answers with."
+    },
+    "DesignExpect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "set": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true,
+          "description": "Field values it must hold, as an update's `set` writes them (`null`: the field unset)."
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The parent it must sit in. Not used for pages.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "within": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "The ids it may hold: anything else inside it (added since) is a conflict. An undo that\ndeletes it sends this."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "description": "What a node must still hold for a `design.apply` to go ahead as sent. The person's clients send\nthe `expect` a full reply gave them with the undo of that list, and the values their own scene\nshowed with an ordinary edit."
+    },
     "DesignApplyOut": {
       "type": "object",
       "properties": {
-        "design": {
-          "$ref": "#/$defs/Design"
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "rev": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The design's rev now: the next `base_rev`, and the one design.render pictures. Unchanged\nwhen nothing applied."
         },
         "prev_rev": {
           "type": "integer",
           "format": "int64",
           "description": "The `rev` before these edits: when it is not the one you last read, someone else\nchanged the design in between; read it again with `design.get`."
         },
-        "nodes": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/DesignNode"
-          },
-          "description": "Each node an edit added, changed or moved, as stored now."
-        },
-        "removed": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "The ids deleted, with everything that was inside them."
+        "rebased": {
+          "type": "boolean",
+          "description": "`base_rev` was behind, but nothing this list writes had changed since: it applied on top."
         },
         "ids": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "For each edit, the id of the node it acted on (an `add`'s assigned id); empty for one\nskipped by `lenient`."
+          "description": "For each edit, the id of the node it acted on (an add's or a copy's assigned id; a\ncolour's or style's name); \"\" for one skipped."
         },
-        "inverse": {
+        "removed_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How many nodes are gone, everything inside deleted nodes included."
+        },
+        "audit_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "The audit row of this change: audit.get shows it with its undo, and the person can undo it\nfrom the board or the audit log. Absent when nothing applied."
+        },
+        "skipped": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/DesignNodeOp"
+            "$ref": "#/$defs/DesignConflict"
           },
-          "description": "The edits that undo these, in the order to apply them."
+          "description": "Edits (or fields of one) not applied, and why: at most 100, a warning counts the rest."
         },
         "warnings": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "For an agent, what a lenient list applied as written although a strict one would have\nrefused it, or skipped because this Relay cannot read the node: each edit's label and\nwhy (at most 20)."
+          "description": "What applied but may not be what you meant (a font the desktop lacks, a written rule a\nlenient list let through), each saying what to do: at most 20."
+        },
+        "copied": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Each copy edit's new node and the node it copied (`{\"card-2\": \"card\"}`). The nodes inside\na copy take ids by copy's rule (`card-title` becomes `card-2-title`)."
+        },
+        "design": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Design"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Full only: the design row."
+        },
+        "nodes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignNode"
+          },
+          "description": "Full only: each node an edit added, changed or moved, as stored now. Left out (with\n`reread`) when the answer would be too large."
+        },
+        "removed": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Full only: the ids deleted, with everything that was inside them."
+        },
+        "inverse": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignNodeOp"
+          },
+          "description": "Full only: the edits that undo these, in the order to apply them, sent `lenient` with\n`expect`. Absent when too large to send (a warning says the step cannot be undone)."
+        },
+        "expect": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignExpect"
+          },
+          "description": "Full only: what the undo expects to find; send it with `inverse`.",
+          "x-unit": "omit"
+        },
+        "colors": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Full only, when an edit of the list changed them: the design's named colours, whole."
+        },
+        "styles": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/DesignStyle"
+          },
+          "description": "Full only, when an edit of the list changed them: the design's named styles, whole."
+        },
+        "reread": {
+          "type": "boolean",
+          "description": "Full only: `nodes` (and perhaps `inverse`) were left out to keep the answer under the\nclients' 2 MiB line; read the design again."
         }
       },
       "required": [
-        "design",
+        "design_id",
+        "rev",
         "prev_rev",
-        "nodes",
-        "removed",
         "ids",
-        "inverse"
+        "removed_count"
       ]
+    },
+    "DesignConflict": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The edit's index in `ops`, when one edit is to blame."
+        },
+        "id": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/DesignConflictReason"
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "For `fields`: the fields that hold other values now (a skipped update dropped these and\napplied the rest)."
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "For `inside`: the nodes added inside it since, at most 20."
+        },
+        "rev": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "For `changed`, and a `missing` found among the removals: the rev it changed or went at."
+        }
+      },
+      "required": [
+        "id",
+        "reason"
+      ],
+      "description": "One node an edit could not act on as sent: in `design.stale`'s and `audit.stale`'s\n`details.conflicts`, and in a lenient reply's `skipped`."
+    },
+    "DesignConflictReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "missing",
+          "description": "The node is gone."
+        },
+        {
+          "type": "string",
+          "const": "no_parent",
+          "description": "Its parent is gone."
+        },
+        {
+          "type": "string",
+          "const": "parent_skipped",
+          "description": "Its parent's add was skipped, so it was too."
+        },
+        {
+          "type": "string",
+          "const": "fields",
+          "description": "`fields` hold other values than expected."
+        },
+        {
+          "type": "string",
+          "const": "parent",
+          "description": "It sits in another parent than expected."
+        },
+        {
+          "type": "string",
+          "const": "inside",
+          "description": "It holds nodes added since (`ids`); deleting it would take them."
+        },
+        {
+          "type": "string",
+          "const": "exists",
+          "description": "An undo would add it back, but its id is taken."
+        },
+        {
+          "type": "string",
+          "const": "changed",
+          "description": "It changed after `base_rev` (at `rev`)."
+        },
+        {
+          "type": "string",
+          "const": "too_deep",
+          "description": "Adding it would nest it more than 64 deep."
+        },
+        {
+          "type": "string",
+          "const": "unreadable",
+          "description": "It is of a kind this Relay cannot read, so it is left as it is."
+        }
+      ],
+      "description": "Why an edit did not go ahead as sent."
     },
     "DesignAssetAddIn": {
       "type": "object",
@@ -27451,7 +28107,7 @@
             "string",
             "null"
           ],
-          "description": "A PNG, JPEG, GIF, WebP or SVG file on this machine, copied in."
+          "description": "An absolute path to a PNG, JPEG, GIF, WebP or SVG file on this machine, at most 20 MiB,\ncopied in."
         },
         "bytes_b64": {
           "type": [
@@ -27480,7 +28136,7 @@
           "type": "integer",
           "format": "uint32",
           "minimum": 0,
-          "description": "Its natural size in px (an SVG's declared size, or 300 by 150)."
+          "description": "Its natural size in px: an SVG's width and height, the missing one taken from its\nviewBox's aspect, else the viewBox's size, else 300 by 150."
         },
         "h": {
           "type": "integer",
@@ -27554,21 +28210,6 @@
         "design_id",
         "query"
       ]
-    },
-    "DesignPictureSource": {
-      "oneOf": [
-        {
-          "type": "string",
-          "const": "openverse",
-          "description": "Openverse's openly licensed photos; needs no key."
-        },
-        {
-          "type": "string",
-          "const": "pexels",
-          "description": "Pexels; needs the key the person saved."
-        }
-      ],
-      "description": "Where a stock photo comes from."
     },
     "DesignPictureOrientation": {
       "type": "string",
@@ -27741,67 +28382,6 @@
         "w",
         "h",
         "credit"
-      ]
-    },
-    "DesignPictureCredit": {
-      "type": "object",
-      "properties": {
-        "source": {
-          "$ref": "#/$defs/DesignPictureSource"
-        },
-        "id": {
-          "type": "string",
-          "description": "The id design.picture.search gave it."
-        },
-        "title": {
-          "type": "string"
-        },
-        "creator": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "creator_url": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "https only."
-        },
-        "licence": {
-          "type": "string"
-        },
-        "licence_url": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "https only."
-        },
-        "source_url": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "The photo's page, https only."
-        },
-        "attribution": {
-          "type": "string",
-          "description": "One sentence naming its title, creator, source and licence."
-        },
-        "caption": {
-          "type": "string",
-          "description": "The line to put under the photo."
-        }
-      },
-      "required": [
-        "source",
-        "id",
-        "title",
-        "licence",
-        "attribution",
-        "caption"
       ]
     },
     "DesignPictureKeySetIn": {

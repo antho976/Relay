@@ -7,7 +7,7 @@ use relay_bus::design::Node;
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{Get, GetOut};
 use relay_bus::types::Id;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// One node row as `design.get` copies it out under the lock; parsed once the lock is gone.
 struct Raw {
@@ -85,6 +85,6 @@ pub(super) fn register(e: &mut Engine) {
         })?;
         let nodes = ordered(design.id, rows, p.page.as_deref())?;
         let assets_dir = ctx.engine().store.design_assets_dir().display().to_string();
-        Ok(GetOut { design, nodes, assets_dir })
+        Ok(GetOut { design, nodes, assets_dir, removed: None, colors: BTreeMap::new(), styles: BTreeMap::new(), credits: BTreeMap::new() })
     });
 }

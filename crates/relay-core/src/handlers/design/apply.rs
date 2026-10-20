@@ -10,7 +10,7 @@ use relay_bus::types::{Design, Id};
 use relay_bus::ErrorKind;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 /// The largest `design.apply` undo the audit keeps for `audit.undo`.
 const UNDO_KEPT: usize = 256 * 1024;
@@ -575,6 +575,26 @@ pub(super) fn register(e: &mut Engine) {
             ctx.set_undo("design.apply", undo, None);
         }
         emit_design(ctx, &design)?;
-        Ok(ApplyOut { design, prev_rev, nodes, removed, ids, inverse, warnings })
+        // Every answer is full until engine-expect gives agents short ones (`reply`).
+        Ok(ApplyOut {
+            design_id: design.id,
+            rev: design.rev,
+            prev_rev,
+            rebased: false,
+            ids,
+            removed_count: removed.len() as u32,
+            audit_id: None,
+            skipped: Vec::new(),
+            warnings,
+            copied: BTreeMap::new(),
+            design: Some(design),
+            nodes: Some(nodes),
+            removed: Some(removed),
+            inverse: Some(inverse),
+            expect: None,
+            colors: None,
+            styles: None,
+            reread: false,
+        })
     });
 }
