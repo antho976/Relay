@@ -1369,7 +1369,8 @@ pub(crate) mod tests {
             f(&mut n);
             n
         };
-        let unfit: Vec<(Vec<(Node, u32)>, Vec<String>, &str)> = vec![
+        type Upserts = Vec<(Node, u32)>;
+        let unfit: Vec<(Upserts, Vec<String>, &str)> = vec![
             (vec![], vec!["a".into()], "b would be left without its parent a"),
             (vec![(with("b", &|n| n.x = 3.0), 0)], vec!["a".into(), "b".into(), "c".into()], "b is both changed and removed"),
             (vec![(held("b"), 0), (held("b"), 0)], vec![], "b is changed twice"),
