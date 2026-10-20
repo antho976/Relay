@@ -837,7 +837,7 @@ fn choose(model: &str) {
     let Some(a) = the() else { return };
     let Some(ui) = a.ui.upgrade() else { return };
     *a.choice.borrow_mut() = model.to_string();
-    *a.shown_model.borrow_mut() = model.to_string();
+    let was = a.shown_model.replace(model.to_string());
     show_model(&a);
     let (model, thread) = (model.to_string(), a.thread.get());
     let local = a.local.borrow().iter().any(|(id, _)| *id == model);
@@ -852,6 +852,11 @@ fn choose(model: &str) {
         }
         if let Some(id) = thread {
             if let Err(e) = ui.call("thread.set", json!({"id": id, "model": model})).await {
+                // The conversation stays on its model, and the picker says which.
+                if let Some(a) = the().filter(|a| a.thread.get() == Some(id) && *a.shown_model.borrow() == model) {
+                    *a.shown_model.borrow_mut() = was;
+                    show_model(&a);
+                }
                 ui.show_error(&format!("The assistant kept its model: {e}"));
             }
         }
