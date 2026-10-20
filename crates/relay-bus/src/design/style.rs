@@ -15,6 +15,7 @@
 //! each counted as one field, so a node's own colour is never painted over by its style's
 //! gradient.
 
+use super::fields::{casts_outer_only, fit_shadow};
 use super::hints::bad_value;
 use super::{
     field_hint, field_kinds, nearest, obj_opt, obj_vec_opt, object_only, parse_color, plain_label, takes, valid_id, Blend,
@@ -25,6 +26,7 @@ use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
 use serde::de::{DeserializeSeed, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
@@ -282,8 +284,8 @@ impl Style {
     /// `Node::validate`, so a message names the field: "font_size: 2000 is outside 1 to 1000"),
     /// and what a caller may write in a node: a font without control characters, `shadow` or
     /// `shadows` but not both, and each shadow's blur within 200. An inner shadow or a spread is
-    /// accepted: a box draws it, and a text, line, path or icon the style lies under casts its
-    /// outer shadows only, as paint reads them (MODEL-SPEC §1 #13).
+    /// accepted: a box draws it, and under a text, line, path or icon it lies as that node casts
+    /// a shadow ([`Style::for_kind`]).
     pub fn validate(&self) -> Result<(), String> {
         let mut probe = Node::new(NodeKind::Rect);
         probe.parent = Some("style".into());
@@ -352,10 +354,35 @@ impl Style {
     /// Lay it under `node`: each field it holds that the node's kind uses and the node does not
     /// set itself (`fill`/`gradient`, `radius`/`radii`, `shadow`/`shadows` and
     /// `stroke`/`stroke_gradient` counting as one field each; a key held in `extra` counts as
-    /// set). A style's radius never lands on an ellipse, nor its stroke join on a box.
+    /// set). A style's radius never lands on an ellipse, nor its stroke join on a box, nor its
+    /// inner shadow on a text ([`Style::for_kind`]).
     pub fn lay_under(&self, node: &mut Node) {
-        let bits = self.under(node);
-        self.lay(bits, node);
+        let style = self.for_kind(node.kind);
+        let bits = style.under(node);
+        style.lay(bits, node);
+    }
+
+    /// It as it lies under a `kind` node. A text, line, path or icon casts outer shadows only,
+    /// without spread (MODEL-SPEC §1 #13), so there its inner shadows are left out and its spread
+    /// is 0, as paint draws them and as the node's own written rules take them (`fit_shadow`, as
+    /// `fit_written` fits an edit): what it lays is drawn alike, and what a detach writes, a
+    /// later update of the field keeps. A shadow field left with none is not held.
+    fn for_kind(&self, kind: NodeKind) -> Cow<'_, Style> {
+        let mut shadows = self.shadow.iter().chain(self.shadows.iter().flatten());
+        if !casts_outer_only(kind) || shadows.all(|s| !s.inset && s.spread == 0.0) {
+            return Cow::Borrowed(self);
+        }
+        let mut fitted = self.clone();
+        if fitted.shadow.as_mut().is_some_and(|s| !fit_shadow(kind, s)) {
+            fitted.shadow = None;
+        }
+        if fitted.shadows.as_mut().is_some_and(|list| {
+            list.retain_mut(|s| fit_shadow(kind, s));
+            list.is_empty()
+        }) {
+            fitted.shadows = None;
+        }
+        Cow::Owned(fitted)
     }
 
     /// The fields [`Style::lay_under`] writes into `node`, as bits. A node's own butt ends and a
@@ -713,16 +740,18 @@ impl Styles {
 
     /// The update that keeps `node` looking as it did once `removed`, named `name`, is gone, or
     /// `None` when the node does not use it. For a style: `style: null` and each field the style
-    /// laid under the node (only fields its kind uses, as [`Style::lay_under`] lays them). For a
-    /// colour: each field naming it, with the colour written in, whole (`shadow`, `shadows`, a
-    /// gradient and `runs` as objects and lists); a field the node's kind does not use is
-    /// rewritten too, since it already holds it and would otherwise name nothing.
+    /// laid under the node, as [`Style::lay_under`] lays it (only fields its kind uses; on a text,
+    /// line, path or icon, outer shadows without spread). For a colour: each field naming it,
+    /// with the colour written in, whole (`shadow`, `shadows`, a gradient and `runs` as objects
+    /// and lists); a field the node's kind does not use is rewritten too, since it already holds
+    /// it and would otherwise name nothing.
     pub fn detach(node: &Node, name: &str, removed: &Removed) -> Option<Map<String, Value>> {
         match removed {
             Removed::Style(style) => {
                 if node.style.as_deref() != Some(name) {
                     return None;
                 }
+                let style = style.for_kind(node.kind);
                 let held = style.to_set();
                 let bits = style.under(node);
                 let mut set = Map::from_iter([("style".to_string(), Value::Null)]);
@@ -1083,13 +1112,13 @@ mod tests {
         assert_eq!(refuse(json!({"fill": "accent"})), "fill: \"accent\" is not #RGB, #RRGGBB, #RRGGBBAA or a $name colour");
         assert_eq!(refuse(json!({"stroke_width": -1})), "stroke_width: -1 is outside 0 to 1000");
 
-        // An inner shadow with spread is a box's look; a text it lies under casts outer ones only,
-        // as paint reads them (§1 #13), so it is taken here and laid as written.
+        // An inner shadow with spread is a box's look, so a style takes it; a text it lies under
+        // casts the outer one only (§1 #13, a_style_shadow_lies_under_a_kind_as_it_casts_one).
         let glow = Style::default().patched(&set(json!({"fill": "$accent", "shadows": [
             {"inset": true, "spread": 2, "blur": 8, "color": "#00000044"}, {"blur": 200, "color": "$ink"}]}))).unwrap();
         let mut text = node(json!({"parent": "p", "kind": "text", "text": "Hi"}));
         glow.lay_under(&mut text);
-        assert_eq!(text.shadows.as_ref().map(Vec::len), Some(2));
+        assert_eq!(text.shadows.as_ref().map(Vec::len), Some(1));
         assert_eq!(glow.names(), [("fill", "accent"), ("shadows", "ink")]);
     }
 
@@ -1338,5 +1367,47 @@ mod tests {
         let detach = Styles::detach(&own_butt, "s", &Removed::Style(dots)).unwrap();
         assert_eq!(Value::Object(detach.clone()), json!({"style": null, "stroke_width": 3.0}));
         assert!(own_butt.patched(&detach).is_ok());
+    }
+
+    /// MODEL-SPEC §1 #13: a text, line, path or icon casts outer shadows only, without spread. A
+    /// style's inner shadows and spread lie under it as paint draws them, so a detach writes what
+    /// the node's own written rules take, and a later update of the field is not refused.
+    #[test]
+    fn a_style_shadow_lies_under_a_kind_as_it_casts_one() {
+        let style = |set_: Value| Style::default().patched(&set(set_)).unwrap();
+        let glow = style(json!({"shadows": [{"inset": true, "spread": 2, "blur": 8, "color": "#00000044"}, {"spread": 3, "blur": 4, "color": "#000"}]}));
+        let lift = style(json!({"shadow": {"y": 2, "spread": 3, "blur": 4, "color": "#000"}}));
+        let inner = style(json!({"shadow": {"inset": true, "blur": 4, "color": "#000"}, "opacity": 0.5}));
+        let text = node(json!({"parent": "p", "kind": "text", "text": "Hi", "style": "s"}));
+        let line = node(json!({"parent": "p", "kind": "line", "points": [[0, 0], [10, 0]], "style": "s"}));
+        let icon = node(json!({"parent": "p", "kind": "icon", "icon": "star", "style": "s"}));
+        let rect = node(json!({"parent": "p", "kind": "rect", "style": "s"}));
+
+        let laid = |style: &Style, n: &Node| {
+            let mut drawn = n.clone();
+            style.lay_under(&mut drawn);
+            drawn
+        };
+        // A box draws them as written; a text the outer one, without its spread.
+        assert_eq!(laid(&glow, &rect).shadows, glow.shadows);
+        let cast = laid(&glow, &text).shadows.unwrap();
+        assert_eq!(cast.iter().map(|s| (s.inset, s.spread, s.blur)).collect::<Vec<_>>(), [(false, 0.0, 4.0)]);
+        assert_eq!(laid(&lift, &line).shadow.map(|s| (s.y, s.spread)), Some((2.0, 0.0)));
+        assert_eq!((laid(&inner, &icon).shadow, laid(&inner, &icon).opacity), (None, Some(0.5)), "an inner shadow alone casts nothing");
+
+        for (style, n) in [(&glow, &text), (&lift, &line), (&inner, &icon), (&glow, &line), (&glow, &rect), (&lift, &rect), (&inner, &rect)] {
+            let detach = Styles::detach(n, "s", &Removed::Style(style.clone())).unwrap();
+            let kept = n.patched(&detach).unwrap();
+            let at = format!("{:?} from a {}", style.to_set(), n.kind.name());
+            assert_eq!(Node::check_update(n, &detach, &kept), Ok(()), "{at}");
+            assert_eq!(kept, Node { style: None, ..laid(style, n) }, "the detach keeps what was laid: {at}");
+            // So a later strict update of the field is taken.
+            if let Some(shadows) = kept.to_map().get("shadows").cloned() {
+                let again = set(json!({ "shadows": shadows }));
+                assert_eq!(Node::check_update(&kept, &again, &kept.patched(&again).unwrap()), Ok(()), "{at}");
+            }
+        }
+        let detach = Styles::detach(&line, "s", &Removed::Style(inner)).unwrap();
+        assert_eq!(Value::Object(detach), json!({"style": null, "opacity": 0.5}), "no shadow left, none written");
     }
 }
