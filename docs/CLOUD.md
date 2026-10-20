@@ -85,7 +85,8 @@ per row on each side, as with Tally, so the two converge. The wholesale acts kee
 
 Either way the ledger being replaced is copied first, on its own machine: every `money.sync` with
 `replace: true` that erases a ledger holding anything writes `money-backups/money-<time>-<n>.db`
-beside that `money.db` (0700 folder, 0600 file, the newest ten; docs/MONEY.md, "Sync"). To go back
+beside that `money.db` (0700 folder, 0600 file, the newest ten and each day's first for fourteen
+days; docs/MONEY.md, "Sync"). To go back
 to one, stop Relay and put it in place of `money.db`.
 
 **A replace from the cloud may be held.** Any device the cloud copy lets sync can replace its

@@ -13,8 +13,10 @@ use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-/// How many copies of the ledger a replace keeps in `money-backups/` beside `money.db`.
+/// How many copies of the ledger a replace keeps in `money-backups/` beside `money.db`: the newest
+/// this many, and the first of each of the last [`SNAPSHOT_DAYS`] days.
 pub const SNAPSHOTS_KEPT: usize = 10;
+pub const SNAPSHOT_DAYS: usize = 14;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -283,14 +285,17 @@ impl Ledger {
     }
 
     /// Copies this ledger, whole, to `money-backups/money-<time>-<n>.db` beside its file (0700
-    /// folder, 0600 file), and keeps the newest [`SNAPSHOTS_KEPT`]. A copy is a `money.db` like any
+    /// folder, 0600 file), and keeps the newest [`SNAPSHOTS_KEPT`] and the first of each of the last
+    /// [`SNAPSHOT_DAYS`] days. A copy is a `money.db` like any
     /// other: put it in place of `money.db` while Relay is stopped to go back to it. `None` in memory.
     pub fn snapshot(&self) -> Result<Option<PathBuf>> {
         let Some(path) = &self.path else { return Ok(None) };
         let failed = |e: std::io::Error| LedgerError::Invalid(format!("Could not keep a copy of the ledger before replacing it, so nothing was replaced: {e}"));
         let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(std::path::Path::new(".")).join("money-backups");
         private_dir(&dir).map_err(failed)?;
-        let name = format!("money-{}-{}.db", jiff::Timestamp::now().strftime("%Y%m%dT%H%M%SZ"), &crate::ledger::new_uid()[..8]);
+        // To the millisecond, so the names sort as the copies were made, two in one second included.
+        let at = jiff::Timestamp::now();
+        let name = format!("money-{}.{:03}Z-{}.db", at.strftime("%Y%m%dT%H%M%S"), at.subsec_millisecond(), &crate::ledger::new_uid()[..8]);
         let to = dir.join(name);
         self.conn.execute("VACUUM INTO ?1", [to.to_string_lossy().into_owned()])?;
         private_file(&to).map_err(failed)?;
@@ -301,7 +306,16 @@ impl Ledger {
             .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("money-") && n.ends_with(".db")))
             .collect();
         kept.sort();
-        for old in kept.iter().rev().skip(SNAPSHOTS_KEPT) {
+        // Any credential that may sync can send a replace, so a burst of them would push the newest
+        // ten out within a minute; the first copy of a day is the ledger before its first replace.
+        let mut firsts: std::collections::BTreeMap<&str, &PathBuf> = std::collections::BTreeMap::new();
+        for p in &kept {
+            if let Some(day) = p.file_name().and_then(|n| n.to_str()).and_then(|n| n.get(6..14)) {
+                firsts.entry(day).or_insert(p);
+            }
+        }
+        let pinned: Vec<&PathBuf> = firsts.values().rev().take(SNAPSHOT_DAYS).copied().collect();
+        for old in kept.iter().rev().skip(SNAPSHOTS_KEPT).filter(|p| !pinned.contains(p)) {
             let _ = std::fs::remove_file(old);
         }
         Ok(Some(to))
@@ -920,12 +934,16 @@ mod tests {
         let kept = Ledger::open(&copies[0]).unwrap();
         assert_eq!(kept.accounts().unwrap()[0].name, "Chequing", "the copy is the ledger as it was");
         drop(kept);
-        // The newest ten stay.
+        let before = copies[0].clone();
+        // The newest ten stay, and the day's first: a burst of replaces cannot push out the copy of
+        // the ledger as it was before them.
         for _ in 0..SNAPSHOTS_KEPT + 3 {
             l.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
         }
-        let n = std::fs::read_dir(&backups).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".db")).count();
-        assert_eq!(n, SNAPSHOTS_KEPT);
+        let mut copies: Vec<PathBuf> = std::fs::read_dir(&backups).unwrap().map(|e| e.unwrap().path()).filter(|p| p.to_string_lossy().ends_with(".db")).collect();
+        copies.sort();
+        assert_eq!(copies.len(), SNAPSHOTS_KEPT + 1);
+        assert_eq!(copies[0], before, "the day's first copy is still the ledger before the burst");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
