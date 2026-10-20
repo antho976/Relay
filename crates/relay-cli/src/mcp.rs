@@ -637,8 +637,10 @@ fn unstring_in(value: &mut Value, schemas: &[&Value], root: &Value, depth: u8) {
     match value {
         Value::Object(map) => {
             for (key, field) in map.iter_mut() {
-                // Below the last level only a string can change, so only its field is looked up.
-                if !(field.is_string() || (depth > 0 && (field.is_object() || field.is_array()))) {
+                // Only a string that opens an array or an object can change here, and below the
+                // last level nothing else is looked at, so a long list's ids and tags cost no lookup.
+                let opens = field.as_str().is_some_and(|text| matches!(text.trim_start().chars().next(), Some('[' | '{')));
+                if !(opens || (depth > 0 && (field.is_object() || field.is_array()))) {
                     continue;
                 }
                 let subs: Vec<&Value> = schemas.iter().flat_map(|schema| fields(schema, key, root, 0)).collect();
@@ -669,10 +671,6 @@ fn unstring_in(value: &mut Value, schemas: &[&Value], root: &Value, depth: u8) {
 /// `text` as JSON, when it is an array or an object that one of `schemas` takes and none of them
 /// takes a string.
 fn parsed_as(text: &str, schemas: &[&Value], root: &Value) -> Option<Value> {
-    let start = text.trim_start().chars().next()?;
-    if start != '[' && start != '{' {
-        return None;
-    }
     let mut types = Vec::new();
     for schema in schemas {
         types_of(schema, root, 0, &mut types)?;
