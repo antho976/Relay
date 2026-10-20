@@ -282,6 +282,22 @@ fn get_nodes_returns_subtrees_and_suggests_unknown_ids() {
     assert_eq!((since["nodes"].clone(), strings(&since["removed"])), (json!([]), vec!["chip".to_string(), "side".to_string(), "link".to_string()]));
 }
 
+/// A duplicate starts its own history at rev 1, its rows with it: since_rev 0 reads every node
+/// of it in order, since_rev 1 nothing, and none of the original's removals come with it.
+#[test]
+fn a_duplicate_reads_from_its_own_revs() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    apply(&e, id, json!([{"op": "delete", "id": "note"}]));
+    let copy = ok(&e, "design.duplicate", json!({"design_id": id}))["id"].as_i64().unwrap();
+    let all = get(&e, json!({"design_id": copy, "since_rev": 0}));
+    let whole = get(&e, json!({"design_id": copy}));
+    assert_eq!((all["nodes"].clone(), all["removed"].clone()), (whole["nodes"].clone(), json!([])));
+    let none = get(&e, json!({"design_id": copy, "since_rev": 1}));
+    assert_eq!((none["nodes"].clone(), none["removed"].clone()), (json!([]), json!([])));
+    assert_eq!(strings(&get(&e, json!({"design_id": id, "since_rev": 2}))["removed"]), ["note"], "the original keeps its own");
+}
+
 // --- A full read plus deltas is a full read ---------------------------------------------------
 
 fn read_out(reply: Value) -> GetOut {
