@@ -55,7 +55,7 @@ import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Fence
 import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.T
-import com.quietsoftware.relay.ui.kit.ago
+import com.quietsoftware.relay.ui.kit.staleText
 import com.quietsoftware.relay.ui.theme.Fonts
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.flow.flowOf
@@ -609,19 +609,22 @@ private fun Donut(data: Numbers) {
     }
 }
 
+/** Where a chart's numbers come from: the reply, the PC just now, or a copy and how old it is. */
+internal fun footNote(spec: ChartSpec, live: RelayData.Live): String = when {
+    spec.data != null -> "Claude's numbers from this reply, not Tally's: it does not redraw"
+    live.result != null && !live.fresh -> staleText(live.at, live.cloud)
+    spec.gym != null -> "From Avex's last export, redraws when a newer one comes in"
+    spec.price != null -> "Live from Arbiter, redraws when it trades"
+    else -> "Live from Tally, redraws when the ledger changes"
+}
+
 /** Where the numbers come from and how fresh they are, and the newest series' total. */
 @Composable
 private fun Foot(spec: ChartSpec, live: RelayData.Live, data: Numbers?) {
     val c = Relay.colors
     val asked = spec.data == null
     val stale = asked && live.result != null && !live.fresh
-    val note = when {
-        !asked -> "Claude's numbers from this reply, not Tally's: it does not redraw"
-        stale -> "Saved on this phone · ${ago(live.at)}"
-        spec.gym != null -> "From Avex's last export, redraws when a newer one comes in"
-        spec.price != null -> "Live from Arbiter, redraws when it trades"
-        else -> "Live from Tally, redraws when the ledger changes"
-    }
+    val note = footNote(spec, live)
     // The figure says what it is: the newest series' name, or "Total". A reply's own numbers
     // have none: summed, a projection or a balance over months says nothing.
     val total = data?.takeIf { asked && spec.kind != ChartKind.Donut && it.series.isNotEmpty() }?.let { d ->

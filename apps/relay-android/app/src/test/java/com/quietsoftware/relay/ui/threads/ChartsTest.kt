@@ -1,6 +1,8 @@
 package com.quietsoftware.relay.ui.threads
 
+import com.quietsoftware.relay.data.Relay as RelayData
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -64,6 +66,16 @@ class ChartsTest {
         assertEquals(listOf(2), n.known)
         assertEquals(listOf(Triple(1, 6129025L, true)), n.marks)
         assertFalse(n.fromZero)
+    }
+
+    @Test
+    fun aChartSaysWhichCopyItsNumbersCameFrom() {
+        val spec = chartSpec("""{"type": "bar", "title": "Spending", "query": {"measure": "spending"}}""")!!
+        val at = System.currentTimeMillis()
+        val read = JsonObject(emptyMap())
+        assertEquals("From your server's copy · just now", footNote(spec, RelayData.Live(read, at, fresh = false, cloud = true)))
+        assertEquals("Saved on this phone · just now", footNote(spec, RelayData.Live(read, at, fresh = false)))
+        assertEquals("Live from Tally, redraws when the ledger changes", footNote(spec, RelayData.Live(read, at, fresh = true)))
     }
 
     @Test

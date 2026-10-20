@@ -527,8 +527,8 @@ fun plural(n: Long, word: String): String = if (n == 1L) "1 $word" else "$n ${wo
 
 fun plural(n: Int, word: String): String = plural(n.toLong(), word)
 
-/** What [StaleNote] says, for a caption laid out its own way. */
-fun staleText(at: Long): String = (if (RelayData.fromServer(at)) "From your server's copy" else "Saved on this phone") + " · ${ago(at)}"
+/** What [StaleNote] says, for a caption laid out its own way; [cloud] when the server's copy answered. */
+fun staleText(at: Long, cloud: Boolean = RelayData.fromServer(at)): String = (if (cloud) "From your server's copy" else "Saved on this phone") + " · ${ago(at)}"
 
 /** "just now", "5m ago", "3h ago", "2d ago", "3w ago", then "on Mar 1": the desktop's (relative.rs `CompactAgo`). */
 fun ago(epochMs: Long, now: Long = System.currentTimeMillis()): String {
