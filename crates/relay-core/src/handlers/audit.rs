@@ -168,7 +168,7 @@ pub fn register(e: &mut Engine) {
                 }
                 _ => None,
             };
-            let by: i64 = ctx.tx().query_row("SELECT COALESCE(MAX(id),0)+1 FROM audit", [], |r| r.get(0)).bus()?;
+            let by = log::next_id(ctx.tx()).bus()?;
             ctx.invoke_prepared(&inverse.op, inverse.payload, prepared)?;
             // The queue rows the update added, as (task, session) pairs, unless already worked.
             if inverse.op == "session.update" {
@@ -213,6 +213,14 @@ fn undoable(conn: &Connection, audit_id: i64, force: bool) -> Result<(AuditRow, 
         if !moved.is_empty() {
             return Err(BusError::conflict("audit.stale", "the session's fields changed after the audited operation")
                 .with_details(serde_json::json!({"fields": moved})));
+        }
+    } else if inverse.op == "design.apply" && expect.get("nodes").is_some() {
+        // B1, W7: what the change's own undo expects to find; a node removed since is skipped
+        // by the lenient replay, as before. Rows kept before expectations undo as they did.
+        let conflicts = crate::handlers::design::undo_conflicts(conn, &inverse.payload, &expect["nodes"])?;
+        if !conflicts.is_empty() {
+            return Err(BusError::conflict("audit.stale", "later edits to the design would be overwritten; pass force to undo anyway")
+                .with_details(serde_json::json!({"conflicts": conflicts})));
         }
     } else if let Some(expected) = expect.get("updated_at").and_then(Value::as_str) {
         let actual = target_updated_at(conn, &inverse.op, &inverse.payload)?;

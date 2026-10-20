@@ -100,6 +100,10 @@ pub struct OpMeta {
     /// One line, for `bus.ops` and MCP tool descriptions.
     pub summary: &'static str,
     pub deprecated: Option<&'static str>,
+    /// The bundled plugin this op belongs to: an agent may call it only in a project with that
+    /// plugin on (BUS.md §9.1). `None` for the core ops. Agents learn it from `bus.ops`' `why`;
+    /// [`OpInfo`] does not carry it.
+    pub plugin: Option<&'static str>,
 }
 
 impl OpMeta {
@@ -118,6 +122,7 @@ impl OpMeta {
             phase,
             summary,
             deprecated: None,
+            plugin: None,
         }
     }
     /// A query with the common defaults: never audited, all actors, all doors.
@@ -135,6 +140,7 @@ impl OpMeta {
             phase,
             summary,
             deprecated: None,
+            plugin: None,
         }
     }
     pub const fn audit(mut self, a: Audit) -> Self {
@@ -165,6 +171,11 @@ impl OpMeta {
         self.deprecated = Some(why);
         self
     }
+    /// The op comes with plugin `id` (`pictures`): callable by an agent only where it is on.
+    pub const fn plugin(mut self, id: &'static str) -> Self {
+        self.plugin = Some(id);
+        self
+    }
 }
 
 /// An op is a type: name + meta + payload + result. Handlers in `relay-core` are keyed by
@@ -176,6 +187,9 @@ pub trait Op: 'static {
     type Result: Serialize + DeserializeOwned + JsonSchema + Send + Sync + 'static;
 }
 
+/// An op's explanation of a payload its `validate` refused: `bus.schema`'s reason and `details`.
+pub type Locate = fn(&serde_json::Value) -> Option<(String, serde_json::Value)>;
+
 /// A type-erased registry row.
 #[derive(Clone)]
 pub struct OpEntry {
@@ -186,6 +200,10 @@ pub struct OpEntry {
     /// Typed validation of a payload (BUS.md §5.2) — available for every op, implemented or
     /// not, so an agent learns about a bad payload before it learns the op is not built yet.
     pub validate: fn(&serde_json::Value) -> Result<(), String>,
+    /// Why and where a payload `validate` refused went wrong, for an op that can say better than
+    /// serde: `bus.schema`'s reason and `details` (`design.apply`: the edit at fault, its key and
+    /// advice). Runs on a refusal only, so the payloads that read pay nothing for it.
+    pub locate: Option<Locate>,
 }
 
 impl OpEntry {
@@ -199,7 +217,23 @@ impl OpEntry {
             // every request, implemented op or not, and cloning the payload to throw the copy
             // away doubled what a large `file.write` or `session.report` cost to check.
             validate: |v| serde::Deserialize::deserialize(v).map(|_: O::Payload| ()).map_err(|e: serde_json::Error| e.to_string()),
+            locate: None,
         }
+    }
+
+    /// This entry, its `bus.schema` refusals explained by `locate`.
+    pub fn located(mut self, locate: Locate) -> Self {
+        self.locate = Some(locate);
+        self
+    }
+
+    /// `payload` checked as the bus checks it: `bus.schema` when it does not read, explained
+    /// and with `details` where the op can say where.
+    pub fn check(&self, payload: &serde_json::Value) -> Result<(), crate::BusError> {
+        (self.validate)(payload).map_err(|why| match self.locate.and_then(|locate| locate(payload)) {
+            Some((why, details)) => crate::BusError::schema(self.name, why).with_details(details),
+            None => crate::BusError::schema(self.name, why),
+        })
     }
 }
 

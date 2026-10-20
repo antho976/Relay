@@ -180,9 +180,15 @@ op!(Report, "session.report", ReportIn => Empty,
 payload!(#[schemars(rename = "SessionAttachIn")] AttachIn { pub session: String, pub from_seq: Option<u64>, pub epoch: Option<u64> });
 op!(Attach, "session.attach", AttachIn => Empty, OpMeta::query(Scope::Session, 3, "Attach the pty stream, replaying from (epoch, seq)").stream("pty"));
 op!(Detach, "session.detach", NameIn => Empty, OpMeta::query(Scope::Session, 3, "Detach the pty stream"));
-payload!(#[schemars(rename = "SessionInputIn")] InputIn { pub session: String, pub data: String });
+payload!(#[schemars(rename = "SessionInputIn")] InputIn {
+    pub session: String, pub data: String,
+    /// Deliver `data` as one paste, not as keys: wrapped in bracketed paste (its ESC bytes
+    /// dropped) when the terminal asked for it (DECSET 2004), else with its line breaks as
+    /// spaces. Either way no line break in it sends it, and the program reads it as text.
+    #[serde(default)] pub paste: bool,
+});
 op!(Input, "session.input", InputIn => Empty,
-    OpMeta::mutation(Scope::Session, 3, "Text to the PTY").audit(Audit::AgentOnly).actors(Actors::UserOnly).emits(&["session.changed"]));
+    OpMeta::mutation(Scope::Session, 3, "Text to the PTY, as keys or as one paste").audit(Audit::AgentOnly).actors(Actors::UserOnly).emits(&["session.changed"]));
 payload!(#[schemars(rename = "SessionResizeIn")] ResizeIn {
     pub session: String, pub cols: u16, pub rows: u16,
     /// Borrow the size: on a connection door, the PTY goes back to the size it had when this

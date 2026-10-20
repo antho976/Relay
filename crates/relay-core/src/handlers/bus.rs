@@ -44,13 +44,14 @@ pub fn register(e: &mut Engine) {
             Some(session) => Some(crate::guardrail::config(ctx.tx(), Some(session.project_id))?),
             None => None,
         };
+        let plugins_on = enabled_plugins(ctx.tx(), session.as_ref())?;
         let ops = Registry::global()
             .entries()
             .iter()
             .filter(|e| e.meta.actors.admits(&actor))
             .map(|e| {
                 let (call, why) =
-                    crate::guardrail::callability(e, &actor, session.as_ref(), cfg.as_ref());
+                    crate::guardrail::callability(e, &actor, session.as_ref(), cfg.as_ref(), &plugins_on);
                 OpInfo::from_entry(e, ctx.engine().is_implemented(e.name)).with_call(call, why)
             })
             .collect();
@@ -67,6 +68,7 @@ pub fn register(e: &mut Engine) {
             Some(session) => Some(crate::guardrail::config(ctx.tx(), Some(session.project_id))?),
             None => None,
         };
+        let plugins_on = enabled_plugins(ctx.tx(), session.as_ref())?;
         let project = match &session {
             Some(session) => ctx.tx().query_row(
                 "SELECT name FROM projects WHERE id=?1",
@@ -80,7 +82,7 @@ pub fn register(e: &mut Engine) {
             .iter()
             .filter(|entry| ctx.engine().is_implemented(entry.name))
             .filter(|entry| {
-                crate::guardrail::callability(entry, &ctx.actor, session.as_ref(), cfg.as_ref()).0
+                crate::guardrail::callability(entry, &ctx.actor, session.as_ref(), cfg.as_ref(), &plugins_on).0
                     != Callable::No
             })
             .map(|entry| entry.name.to_string())
@@ -112,9 +114,18 @@ pub fn register(e: &mut Engine) {
     e.register::<Unsubscribe>(|_, _| Err(door_only(Unsubscribe::NAME)));
 }
 
+/// The plugins on for the session's project, which `guardrail::callability` reads; none
+/// without a session (the person is not gated by plugins).
+fn enabled_plugins(conn: &rusqlite::Connection, session: Option<&Session>) -> Result<Vec<String>, BusError> {
+    match session {
+        Some(session) => crate::plugins::enabled_ids(conn, session.project_id).bus(),
+        None => Ok(Vec::new()),
+    }
+}
+
 /// The code of the refusal a socket-door op's handler gives.
 pub(crate) const DOOR_ONLY: &str = "bus.door";
 
-fn door_only(op: &str) -> BusError {
+pub(crate) fn door_only(op: &str) -> BusError {
     BusError::invalid(DOOR_ONLY, format!("{op} is answered by the socket door, not the engine"))
 }

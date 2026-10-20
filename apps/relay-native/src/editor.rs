@@ -1851,6 +1851,12 @@ impl Editor {
             let mods = state & (M::CONTROL_MASK | M::SHIFT_MASK | M::ALT_MASK | M::SUPER_MASK | M::META_MASK);
             if mods == M::CONTROL_MASK {
                 if key == gtk::gdk::Key::s {
+                    // Only a document's buffer is saved: with a design (focus in its inspector,
+                    // layers or text editor, which the canvas never sees), an image or the agents
+                    // showing, the file behind them is not touched (TM-70).
+                    if e.design_visible() || !e.document_tools.is_visible() {
+                        return glib::Propagation::Proceed;
+                    }
                     if let Some(ui) = weak.upgrade() {
                         e.save_file(&ui);
                     }

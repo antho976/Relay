@@ -3,7 +3,7 @@
 
 use crate::units;
 use anyhow::{Context, Result};
-use relay_bus::registry::{OpEntry, OpKind, Registry};
+use relay_bus::registry::{Op as _, OpEntry, OpKind, Registry};
 use relay_bus::{Actor, MailHint, Request};
 use relay_core::socket::Client;
 use relay_core::Instance;
@@ -190,8 +190,9 @@ pub(crate) fn tool(name: &str, description: &str, properties: Value, required: &
     })
 }
 
-/// A plugin call's result as MCP content. `_images` (label and PNG path) become image content,
-/// up to [`MAX_IMAGES`]; `_cleanup` names a folder of them to delete once they are read.
+/// A plugin call's result as MCP content. `_images` (label and picture path) become image
+/// content of the type their bytes are, up to [`MAX_IMAGES`]; `_cleanup` names a folder of them
+/// to delete once they are read.
 pub(crate) fn tool_result(mut value: Value, is_error: bool) -> Value {
     let images = value.as_object_mut().and_then(|o| o.remove("_images")).and_then(|v| v.as_array().cloned()).unwrap_or_default();
     let cleanup = value.as_object_mut().and_then(|o| o.remove("_cleanup"));
@@ -199,12 +200,11 @@ pub(crate) fn tool_result(mut value: Value, is_error: bool) -> Value {
     let mut shown = Vec::new();
     for image in images.iter().take(MAX_IMAGES) {
         let Some(path) = image["path"].as_str() else { continue };
-        if let Ok(bytes) = std::fs::read(path) {
-            use base64::Engine as _;
-            content.push(json!({"type":"text","text":format!("Image: {}", image["label"].as_str().unwrap_or(""))}));
-            content.push(json!({"type":"image","data":base64::engine::general_purpose::STANDARD.encode(bytes),"mimeType":"image/png"}));
-            shown.push(image["label"].clone());
-        }
+        let Ok(bytes) = std::fs::read(path) else { continue };
+        let Some(media_type) = preview_type(&bytes, Path::new(path)) else { continue };
+        content.push(json!({"type":"text","text":format!("Image: {}", image["label"].as_str().unwrap_or(""))}));
+        content.push(image_content(&bytes, media_type));
+        shown.push(image["label"].clone());
     }
     if !images.is_empty() {
         value["images"] = json!({"shown": shown, "requested": images.len(), "limit": MAX_IMAGES});
@@ -212,13 +212,29 @@ pub(crate) fn tool_result(mut value: Value, is_error: bool) -> Value {
     if let Some(dir) = cleanup.as_ref().and_then(Value::as_str).filter(|dir| relay_scratch(Path::new(dir))) {
         let _ = std::fs::remove_dir_all(dir);
     }
-    let text = serde_json::to_string_pretty(&value).unwrap_or_default();
+    let text = serde_json::to_string(&value).unwrap_or_default();
     content.insert(0, json!({"type":"text","text":text}));
     let mut result = json!({"content":content,"isError":is_error});
     if !is_error {
         result["structuredContent"] = value;
     }
     result
+}
+
+/// A plugin preview's media type, from its bytes (a capture may be a JPEG, whatever its name);
+/// from its name when its header is not one this side reads; `None` for what a model cannot be
+/// shown (SVG, EXR, text), which is then left out rather than sent under a type it is not (W73).
+fn preview_type(bytes: &[u8], path: &Path) -> Option<&'static str> {
+    match relay_core::picture::sniff(bytes) {
+        Some(picture) => (picture.ext != "svg").then(|| picture.media_type()),
+        None => match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+            "png" => Some("image/png"),
+            "jpg" | "jpeg" => Some("image/jpeg"),
+            "gif" => Some("image/gif"),
+            "webp" => Some("image/webp"),
+            _ => None,
+        },
+    }
 }
 
 /// Whether `dir` is a folder a plugin made for one call's images, so `_cleanup` may delete it: a
@@ -535,6 +551,7 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
     // Money goes to a model as decimals and comes back from it as decimals (`units`): the
     // bus's own integers stay between the engine and people's apps.
     let schema = relay_bus::schema::render_op(name).unwrap_or(Value::Null);
+    unstring(&mut arguments, &schema["payload"]);
     let (in_units, out_units) = (units::has_units(&schema["payload"]), units::has_units(&schema["result"]));
     let ledger = if in_units || out_units { ledger_digits(&mut client, actor, token).await } else { 2 };
     let style = Style::from_env();
@@ -595,10 +612,136 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
         if name == "bus.schema" {
             value = units::agent_schema(&value);
         }
+        if name == relay_bus::ops::design::Render::NAME {
+            return Ok(render_success(value, mail.as_ref()));
+        }
+        if name == relay_bus::ops::picture::Thumb::NAME {
+            return Ok(thumb_success(value, mail.as_ref()));
+        }
         Ok(tool_success(value, mail.as_ref())?)
     } else {
         Ok(refusal(serde_json::to_value(response.error)?, mail.as_ref(), &style))
     }
+}
+
+/// Arguments as models sometimes write them: an array or an object sent as the string of its
+/// JSON (`"ops": "[{\"op\":\"add\",…}]"`). Such a string, in a field that takes an array or an
+/// object and never a string, is replaced by what it parses to when that is of the type the field
+/// takes: at the top level, and one level down (each object of an array, as design.apply's `node`
+/// and `set`). The call then runs as the model meant it, where the engine would refuse it with an
+/// error larger than the request (TM-6). Anything else is left for the engine to judge.
+fn unstring(arguments: &mut Value, payload: &Value) {
+    unstring_in(arguments, &[payload], payload, 1);
+}
+
+/// [`unstring`] of `value`, which `schemas` describe (any of them; references resolve in `root`),
+/// going `depth` more levels into the fields it holds.
+fn unstring_in(value: &mut Value, schemas: &[&Value], root: &Value, depth: u8) {
+    match value {
+        Value::Object(map) => {
+            for (key, field) in map.iter_mut() {
+                // Only a string that opens an array or an object can change here, and below the
+                // last level nothing else is looked at, so a long list's ids and tags cost no lookup.
+                let opens = field.as_str().is_some_and(|text| matches!(text.trim_start().chars().next(), Some('[' | '{')));
+                if !(opens || (depth > 0 && (field.is_object() || field.is_array()))) {
+                    continue;
+                }
+                let subs: Vec<&Value> = schemas.iter().flat_map(|schema| fields(schema, key, root, 0)).collect();
+                if subs.is_empty() {
+                    continue;
+                }
+                if let Value::String(text) = field {
+                    match parsed_as(text, &subs, root) {
+                        Some(parsed) => *field = parsed,
+                        None => continue,
+                    }
+                }
+                if depth > 0 {
+                    unstring_in(field, &subs, root, depth - 1);
+                }
+            }
+        }
+        Value::Array(items) => {
+            let subs: Vec<&Value> = schemas.iter().flat_map(|schema| items_of(schema, root, 0)).collect();
+            if !subs.is_empty() {
+                items.iter_mut().filter(|item| item.is_object()).for_each(|item| unstring_in(item, &subs, root, depth));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `text` as JSON, when it is an array or an object that one of `schemas` takes and none of them
+/// takes a string.
+fn parsed_as(text: &str, schemas: &[&Value], root: &Value) -> Option<Value> {
+    let mut types = Vec::new();
+    for schema in schemas {
+        types_of(schema, root, 0, &mut types)?;
+    }
+    if types.contains(&"string") {
+        return None;
+    }
+    serde_json::from_str::<Value>(text).ok()
+        .filter(|parsed| (parsed.is_array() && types.contains(&"array")) || (parsed.is_object() && types.contains(&"object")))
+}
+
+/// How far references and `anyOf`/`oneOf`/`allOf` branches are followed: a recursive schema
+/// stops there.
+const SCHEMA_HOPS: u8 = 8;
+
+/// `schema` with its local `$ref` (`#/$defs/…`) followed in `root`.
+fn resolved<'a>(mut schema: &'a Value, root: &'a Value) -> &'a Value {
+    for _ in 0..SCHEMA_HOPS {
+        match schema.get("$ref").and_then(Value::as_str).and_then(|r| r.strip_prefix('#')).and_then(|at| root.pointer(at)) {
+            Some(target) => schema = target,
+            None => break,
+        }
+    }
+    schema
+}
+
+fn branches_of(schema: &Value) -> impl Iterator<Item = &Value> {
+    ["anyOf", "oneOf", "allOf"].into_iter().filter_map(|k| schema.get(k)?.as_array()).flatten()
+}
+
+/// The schemas `key` has in an object schema: its own, and each branch's.
+fn fields<'a>(schema: &'a Value, key: &str, root: &'a Value, hops: u8) -> Vec<&'a Value> {
+    let schema = resolved(schema, root);
+    let mut found: Vec<&Value> = schema.get("properties").and_then(|p| p.get(key)).into_iter().collect();
+    if hops < SCHEMA_HOPS {
+        found.extend(branches_of(schema).flat_map(|branch| fields(branch, key, root, hops + 1)));
+    }
+    found
+}
+
+/// The schemas an array schema gives its items: its own, and each branch's.
+fn items_of<'a>(schema: &'a Value, root: &'a Value, hops: u8) -> Vec<&'a Value> {
+    let schema = resolved(schema, root);
+    let mut found: Vec<&Value> = schema.get("items").into_iter().collect();
+    if hops < SCHEMA_HOPS {
+        found.extend(branches_of(schema).flat_map(|branch| items_of(branch, root, hops + 1)));
+    }
+    found
+}
+
+/// Adds the JSON types `schema` takes to `types`; `None` when it takes any value (no `type`
+/// anywhere it can be read), so nothing may be read as something else.
+fn types_of<'a>(schema: &'a Value, root: &'a Value, hops: u8, types: &mut Vec<&'a str>) -> Option<()> {
+    let schema = resolved(schema, root);
+    match schema.get("type") {
+        Some(Value::String(one)) => types.push(one),
+        Some(Value::Array(many)) => types.extend(many.iter().filter_map(Value::as_str)),
+        _ => {
+            let mut branches = branches_of(schema).peekable();
+            if branches.peek().is_none() || hops >= SCHEMA_HOPS {
+                return None;
+            }
+            for branch in branches {
+                types_of(branch, root, hops + 1, types)?;
+            }
+        }
+    }
+    Some(())
 }
 
 /// Whether this server has given its model money.lists: this process serves one thread's agent.
@@ -897,10 +1040,13 @@ fn mail_notice(mail: Option<&MailHint>) -> Option<Value> {
     })
 }
 
+/// An op's result: its JSON as text, compact (pretty printing put each value of a design's nodes
+/// on its own line and took a large design past an agent's output cap), and the same value as
+/// `structuredContent`, which the text mirrors as MCP asks.
 fn tool_success(value: Value, mail: Option<&MailHint>) -> Result<Value> {
     let mut content = vec![json!({
         "type":"text",
-        "text":serde_json::to_string_pretty(&value)?
+        "text":serde_json::to_string(&value)?
     })];
     if let Some(notice) = mail_notice(mail) {
         content.push(notice);
@@ -908,8 +1054,104 @@ fn tool_success(value: Value, mail: Option<&MailHint>) -> Result<Value> {
     Ok(json!({"content":content,"structuredContent":value,"isError":false}))
 }
 
+/// A design.render answer: the result as compact JSON, then the picture as an image block, so the
+/// model sees it without reading a file. No `structuredContent`: Claude Code gives the model its
+/// own JSON of that in place of this text, after the picture (render-SPEC-v2 §2.5); MCP asks for
+/// it only of a tool with an `outputSchema`, which no op declares. A picture that cannot be
+/// attached stays a path, and the text says where.
+fn render_success(value: Value, mail: Option<&MailHint>) -> Value {
+    picture_success(value, "/png/path", &RENDERS, mail)
+}
+
+/// A design.picture.thumb answer, as a render's: the compact JSON, then the thumbnail itself, so
+/// an agent sees it without reading a file outside its write roots (pictures-SPEC-v2 §5.3).
+fn thumb_success(value: Value, mail: Option<&MailHint>) -> Value {
+    picture_success(value, "/path", &THUMBS, mail)
+}
+
+/// An answer that names a picture at `pointer`: its compact JSON, then the picture as an image
+/// block when `shelf` holds it, else a line saying where it is; no `structuredContent`.
+fn picture_success(value: Value, pointer: &str, shelf: &Shelf, mail: Option<&MailHint>) -> Value {
+    let mut content = vec![json!({"type":"text","text":serde_json::to_string(&value).unwrap_or_default()})];
+    if let Some(path) = value.pointer(pointer).and_then(Value::as_str) {
+        content.push(image_block(Path::new(path), shelf).unwrap_or_else(|| {
+            json!({"type":"text","text":format!("The picture could not be attached; it is at {path}.")})
+        }));
+    }
+    if let Some(notice) = mail_notice(mail) {
+        content.push(notice);
+    }
+    json!({"content":content,"isError":false})
+}
+
+/// Where a bus answer's picture may be read from to reach the model as an image: the folder the
+/// engine writes it in, the names it gives there, and the size it holds it to. Nothing else is
+/// read, whatever path a result names.
+struct Shelf {
+    /// The folder's own name, beside the store.
+    folder: &'static str,
+    /// Whether a file name is one the engine gives there.
+    named: fn(&str) -> bool,
+    /// Most bytes.
+    max: u64,
+}
+
+/// design.render's pictures: `design-renders/<render id>.png`, at most 4 MiB (render-SPEC-v2 §5.6).
+const RENDERS: Shelf = Shelf { folder: "design-renders", named: render_name, max: relay_core::picture::UPLOAD_MAX as u64 };
+
+fn render_name(name: &str) -> bool {
+    name.strip_suffix(".png").is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+}
+
+/// design.picture.thumb's previews: `picture-cache/<openverse|pexels>-<key>.<jpg|png|webp|gif>`,
+/// at most 2 MiB, the most the engine fetches for one (`Want::Thumb`).
+const THUMBS: Shelf = Shelf { folder: "picture-cache", named: thumb_name, max: 2 << 20 };
+
+/// A name the engine gives a kept thumbnail: its picture id's source and key, and a raster's
+/// extension. The key is checked as the engine checks an id, so no other file there qualifies.
+fn thumb_name(name: &str) -> bool {
+    let Some((stem, ext)) = name.rsplit_once('.') else { return false };
+    let Some((source, key)) = stem.split_once('-') else { return false };
+    matches!(ext, "jpg" | "png" | "webp" | "gif") && relay_core::pictures::parse_id(&format!("{source}:{key}")).is_ok()
+}
+
+/// The picture at `path` as an MCP image block, its type read from its bytes; `None` unless the
+/// path is absolute and plain (no `.` or `..`), names a file `shelf` holds, that file is a regular
+/// one (not a symlink) of at most `shelf.max` bytes, and its bytes are a PNG, JPEG, GIF or WebP.
+/// design.render's picture and a stock picture's thumbnail come this way, each from its shelf.
+fn image_block(path: &Path, shelf: &Shelf) -> Option<Value> {
+    use std::io::Read as _;
+    use std::os::unix::fs::MetadataExt as _;
+    use std::path::Component;
+    let plain = path.is_absolute() && path.components().all(|c| matches!(c, Component::RootDir | Component::Normal(_)));
+    let (folder, name) = (path.parent()?.file_name()?, path.file_name()?.to_str()?);
+    if !plain || folder != shelf.folder || !(shelf.named)(name) {
+        return None;
+    }
+    let seen = std::fs::symlink_metadata(path).ok().filter(|m| m.file_type().is_file() && m.len() <= shelf.max)?;
+    let file = std::fs::File::open(path).ok()?;
+    // The file read is the one looked at, not a link put in its place since.
+    let opened = file.metadata().ok()?;
+    if (opened.dev(), opened.ino()) != (seen.dev(), seen.ino()) {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(seen.len() as usize);
+    file.take(shelf.max + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > shelf.max {
+        return None;
+    }
+    let picture = relay_core::picture::raster(&bytes)?;
+    Some(image_content(&bytes, picture.media_type()))
+}
+
+/// `bytes` as MCP image content of `media_type`.
+fn image_content(bytes: &[u8], media_type: &str) -> Value {
+    use base64::Engine as _;
+    json!({"type":"image","data":base64::engine::general_purpose::STANDARD.encode(bytes),"mimeType":media_type})
+}
+
 fn tool_error(error: Value, mail: Option<&MailHint>) -> Value {
-    let text = serde_json::to_string_pretty(&error).unwrap_or_else(|_| "Relay tool error".to_string());
+    let text = serde_json::to_string(&error).unwrap_or_else(|_| "Relay tool error".to_string());
     let mut content = vec![json!({"type":"text","text":text})];
     if let Some(notice) = mail_notice(mail) {
         content.push(notice);
@@ -1088,7 +1330,322 @@ mod tests {
         assert_eq!(plain["isError"], true);
         assert_eq!(plain["content"][0]["text"], "Not done (money.not_found): No entry 5. Hint: list entries with money.tx.list.");
         let json = refusal(error, None, &Style::default());
-        assert!(json["content"][0]["text"].as_str().unwrap().contains("\"code\": \"money.not_found\""));
+        assert!(json["content"][0]["text"].as_str().unwrap().contains("\"code\":\"money.not_found\""));
+    }
+
+    #[test]
+    fn tool_text_is_compact_json_that_mirrors_the_structured_content() {
+        // Pretty printing put each value of a design's nodes on its own line, which took a
+        // large design.get past an agent's output cap (TM-3).
+        let value = json!({"design": {"id": 3, "name": "Home"}, "nodes": [{"id": "a", "kind": "rect", "x": 0}, {"id": "b", "kind": "text"}]});
+        let success = tool_success(value.clone(), None).unwrap();
+        let text = success["content"][0]["text"].as_str().unwrap();
+        assert!(!text.contains('\n') && !text.contains(": "), "{text}");
+        assert_eq!(serde_json::from_str::<Value>(text).unwrap(), success["structuredContent"]);
+        assert_eq!(success["structuredContent"], value, "the typed result is kept for clients that read it");
+        let error = tool_error(json!({"kind":"conflict","code":"design.stale","details":{"conflicts":[{"id":"a"}]}}), None);
+        let text = error["content"][0]["text"].as_str().unwrap();
+        assert!(!text.contains('\n'), "{text}");
+        assert_eq!(serde_json::from_str::<Value>(text).unwrap()["details"]["conflicts"][0]["id"], "a");
+        let plugin = tool_result(json!({"objects": [{"name": "Cube"}, {"name": "Light"}]}), false);
+        let text = plugin["content"][0]["text"].as_str().unwrap();
+        assert!(!text.contains('\n'), "{text}");
+        assert_eq!(serde_json::from_str::<Value>(text).unwrap(), plugin["structuredContent"]);
+    }
+
+    /// design.apply's arguments as a model writes them, its edits given as `ops`.
+    fn apply_args(ops: Value) -> Value {
+        json!({"design_id": 12, "base_rev": 4, "ops": ops})
+    }
+
+    fn apply_payload() -> Value {
+        relay_bus::schema::render_op("design.apply").unwrap()["payload"].clone()
+    }
+
+    #[test]
+    fn a_stringified_ops_array_is_applied_as_if_it_were_an_array() {
+        let ops = json!([
+            {"op": "add", "node": {"id": "card", "parent": "page-1", "kind": "rect", "x": 0, "y": 0, "w": 120, "h": 80, "fill": "#ffffff"}},
+            {"op": "update", "id": "title", "set": {"text": "[not, an, array]", "font_size": 18}},
+        ]);
+        let mut arguments = apply_args(Value::String(ops.to_string()));
+        unstring(&mut arguments, &apply_payload());
+        assert_eq!(arguments, apply_args(ops.clone()), "the edits are read from the string, and a text that looks like JSON stays text");
+        let read: relay_bus::ops::design::ApplyIn = serde_json::from_value(arguments).expect("the engine reads it as the array");
+        let given: relay_bus::ops::design::ApplyIn = serde_json::from_value(apply_args(ops)).unwrap();
+        assert_eq!(read, given);
+        // What is not JSON of the type a field takes is left for the engine to refuse as it was.
+        for ops in [json!("[{\"op\": \"add\""), json!("{\"op\": \"delete\", \"id\": \"card\"}"), json!("card")] {
+            let mut arguments = apply_args(ops.clone());
+            unstring(&mut arguments, &apply_payload());
+            assert_eq!(arguments["ops"], ops);
+        }
+        // Only arrays and objects: a number sent as a string is not this door's to guess.
+        let mut arguments = json!({"design_id": "12", "ops": []});
+        unstring(&mut arguments, &apply_payload());
+        assert_eq!(arguments["design_id"], "12");
+    }
+
+    #[test]
+    fn a_stringified_node_or_set_inside_one_op_is_parsed_too() {
+        let node = json!({"id": "card", "parent": "page-1", "kind": "rect", "x": 0, "y": 0, "w": 120, "h": 80});
+        let set = json!({"fill": "#ff0000", "points": [[0, 0], [10, 10]]});
+        let mut arguments = apply_args(json!([
+            {"op": "add", "node": node.to_string()},
+            {"op": "update", "id": "line", "set": set.to_string()},
+            {"op": "delete", "id": "[\"old\"]"},
+        ]));
+        unstring(&mut arguments, &apply_payload());
+        assert_eq!(arguments["ops"], json!([
+            {"op": "add", "node": node},
+            {"op": "update", "id": "line", "set": set},
+            {"op": "delete", "id": "[\"old\"]"},
+        ]), "an id is a string, whatever it looks like");
+        // Both at once: the list a string, an edit's node a string inside it.
+        let ops = json!([{"op": "add", "node": node.to_string()}]);
+        let mut arguments = apply_args(Value::String(ops.to_string()));
+        unstring(&mut arguments, &apply_payload());
+        assert_eq!(arguments["ops"][0]["node"], node);
+    }
+
+    #[test]
+    fn stringified_arguments_are_read_through_the_schemas_references() {
+        // A payload schema whose fields name shared definitions instead of inlining them, as a
+        // schema rendered with $defs is.
+        let schema = json!({
+            "$ref": "#/$defs/In",
+            "$defs": {
+                "In": {"type": "object", "properties": {
+                    "ops": {"type": "array", "items": {"$ref": "#/$defs/Op"}},
+                    "reply": {"anyOf": [{"$ref": "#/$defs/Reply"}, {"type": "null"}]},
+                    "extra": {},
+                }},
+                "Op": {"oneOf": [
+                    {"type": "object", "properties": {"op": {"const": "add", "type": "string"}, "node": {"$ref": "#/$defs/Node"}}},
+                    {"type": "object", "properties": {"op": {"const": "put", "type": "string"}, "node": {"type": "string"}}},
+                    {"type": "object", "properties": {"op": {"const": "update", "type": "string"}, "set": {"type": ["object", "null"]}}},
+                ]},
+                "Node": {"type": "object"},
+                "Reply": {"type": "string", "enum": ["short", "full"]},
+            },
+        });
+        let mut arguments = json!({"ops": "[{\"op\":\"update\",\"set\":\"{\\\"x\\\":1}\"}]", "reply": "[\"full\"]", "extra": "{\"a\":1}"});
+        unstring(&mut arguments, &schema);
+        assert_eq!(arguments["ops"], json!([{"op": "update", "set": {"x": 1}}]));
+        assert_eq!(arguments["reply"], "[\"full\"]", "a field that takes a string keeps it");
+        assert_eq!(arguments["extra"], "{\"a\":1}", "a field that takes anything keeps what it was given");
+        // `node` is an object in one edit and a string in another: a string is taken, so kept.
+        let mut arguments = json!({"ops": [{"op": "add", "node": "{\"id\":\"a\"}"}]});
+        unstring(&mut arguments, &schema);
+        assert_eq!(arguments["ops"][0]["node"], "{\"id\":\"a\"}");
+    }
+
+    /// A 1×1 PNG.
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\
+        \0\0\0\nIDATx\x9cc\0\x01\0\0\x05\0\x01\r\n-\xb4\0\0\0\0IEND\xaeB`\x82";
+
+    /// The start of a 32×16 JPEG: as far as its frame header, which is what gives its type and size.
+    const JPEG: &[u8] = &[0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x10, 0x00, 0x20, 0x03, 0x01, 0x22, 0x00];
+
+    #[test]
+    fn a_plugin_preview_takes_its_type_from_its_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = |name: &str, bytes: &[u8]| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            json!({"label": name.split('.').next().unwrap(), "path": path})
+        };
+        let images = [
+            file("front.png", JPEG),
+            file("side.jpg", PNG),
+            // A header cut short: what its name says, as before.
+            file("top.png", b"\x89PNG"),
+            // What a model cannot be shown, whatever the name.
+            file("plan.png", b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"/>"),
+            file("notes.txt", b"hello"),
+            file("depth.exr", b"v/1\x01\0\0\0\0"),
+        ];
+        let result = tool_result(json!({"_images": images}), false);
+        let content = result["content"].as_array().unwrap();
+        let types: Vec<&str> = content.iter().filter(|c| c["type"] == "image").filter_map(|c| c["mimeType"].as_str()).collect();
+        assert_eq!(types, ["image/jpeg", "image/png", "image/png"]);
+        assert_eq!(decoded(&content[2]), JPEG);
+        assert_eq!(result["structuredContent"]["images"], json!({"shown": ["front", "side", "top"], "requested": 6, "limit": MAX_IMAGES}));
+    }
+
+    fn decoded(block: &Value) -> Vec<u8> {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.decode(block["data"].as_str().unwrap()).unwrap()
+    }
+
+    /// A design.render answer whose picture is at `path`, or with none.
+    fn render_answer(path: Option<&Path>) -> Value {
+        let mut value = json!({
+            "design_id": 12, "rev": 15, "page": "page-1", "area": {"x": -32, "y": -32, "w": 454, "h": 908}, "scale": 1.0,
+            "issues": [{"code": "overflow", "ids": ["save", "card"], "message": "save extends 12 px past card's padding"}],
+            "issue_count": 1, "warnings": [],
+            "boxes": {"fields": ["id","kind","parent","x","y","w","h","rx","ry","rot"],
+                      "rows": [["card","frame","page-1",0,0,390,844,0,0,0], ["save","rect","card",24,72,151.5,31,24,72,0]], "total": 2, "hidden": 0},
+            "timings_ms": {"read": 6.1, "layout": 1.4, "paint": 7.9, "encode": 38.0},
+        });
+        if let Some(path) = path {
+            value["png"] = json!({"path": path, "w": 1, "h": 1});
+        }
+        value
+    }
+
+    /// `<dir>/design-renders/<uuid>.png` holding `bytes`, as the engine writes a render.
+    fn rendered(dir: &Path, bytes: &[u8]) -> PathBuf {
+        let renders = dir.join("design-renders");
+        std::fs::create_dir_all(&renders).unwrap();
+        let path = renders.join(format!("{}.png", uuid::Uuid::new_v4()));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_render_result_is_compact_text_then_the_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = rendered(dir.path(), PNG);
+        let answer = render_answer(Some(&path));
+        let result = render_success(answer.clone(), None);
+        assert_eq!(result["isError"], false);
+        let content = result["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2, "{content:?}");
+        let text = content[0]["text"].as_str().unwrap();
+        assert!(content[0]["type"] == "text" && !text.contains('\n'), "{text}");
+        assert_eq!(serde_json::from_str::<Value>(text).unwrap(), answer, "the whole answer, the path too, for a client that reads files");
+        assert_eq!((&content[1]["type"], &content[1]["mimeType"]), (&json!("image"), &json!("image/png")));
+        assert_eq!(decoded(&content[1]), PNG);
+    }
+
+    #[test]
+    fn a_render_result_has_no_structured_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let with = render_success(render_answer(Some(&rendered(dir.path(), PNG))), None);
+        assert!(with.get("structuredContent").is_none(), "Claude Code would give the model its own JSON of it in place of the text");
+        // Boxes alone (`png: false`, or nothing visible): the text, and nothing after it.
+        let without = render_success(render_answer(None), None);
+        assert!(without.get("structuredContent").is_none());
+        assert_eq!(without["content"].as_array().unwrap().len(), 1);
+        assert_eq!(serde_json::from_str::<Value>(without["content"][0]["text"].as_str().unwrap()).unwrap(), render_answer(None));
+    }
+
+    #[test]
+    fn a_symlink_a_foreign_folder_a_non_uuid_name_or_a_big_file_is_not_attached() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = rendered(dir.path(), PNG);
+        let renders = good.parent().unwrap().to_path_buf();
+        let id = || format!("{}.png", uuid::Uuid::new_v4());
+        let link = renders.join(id());
+        std::os::unix::fs::symlink(&good, &link).unwrap();
+        let foreign = dir.path().join("renders");
+        std::fs::create_dir_all(&foreign).unwrap();
+        let elsewhere = foreign.join(id());
+        std::fs::write(&elsewhere, PNG).unwrap();
+        let named = renders.join("shot.png");
+        std::fs::write(&named, PNG).unwrap();
+        let mut big_bytes = PNG.to_vec();
+        big_bytes.resize(relay_core::picture::UPLOAD_MAX + 1, 0);
+        let big = rendered(dir.path(), &big_bytes);
+        let text = rendered(dir.path(), b"not a picture");
+        let svg = rendered(dir.path(), b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"></svg>");
+        let around = renders.join("..").join("design-renders").join(good.file_name().unwrap());
+        let relative = Path::new("design-renders").join(good.file_name().unwrap());
+        let folder = renders.join(id());
+        std::fs::create_dir(&folder).unwrap();
+        let missing = renders.join(id());
+        for path in [&link, &elsewhere, &named, &big, &text, &svg, &around, &relative, &folder, &missing] {
+            let result = render_success(render_answer(Some(path)), None);
+            let content = result["content"].as_array().unwrap();
+            assert!(content.iter().all(|c| c["type"] == "text"), "{} was attached", path.display());
+            assert_eq!(content.len(), 2);
+            assert_eq!(content[1]["text"], format!("The picture could not be attached; it is at {}.", path.display()));
+        }
+        // The same file, named as the engine names it, is.
+        assert_eq!(render_success(render_answer(Some(&good)), None)["content"][1]["type"], "image");
+        let mut fits = PNG.to_vec();
+        fits.resize(relay_core::picture::UPLOAD_MAX, 0);
+        assert_eq!(render_success(render_answer(Some(&rendered(dir.path(), &fits))), None)["content"][1]["type"], "image", "4 MiB is allowed");
+    }
+
+    #[test]
+    fn mail_still_follows_a_render() {
+        let dir = tempfile::tempdir().unwrap();
+        let mail = MailHint { priority: 3 };
+        let result = render_success(render_answer(Some(&rendered(dir.path(), PNG))), Some(&mail));
+        let content = result["content"].as_array().unwrap();
+        assert_eq!(content.iter().map(|c| c["type"].as_str().unwrap()).collect::<Vec<_>>(), ["text", "image", "text"]);
+        assert!(content[2]["text"].as_str().unwrap().contains("3 unread"));
+        let without = render_success(render_answer(None), Some(&mail));
+        assert!(without["content"][1]["text"].as_str().unwrap().contains("mailbox.list"));
+    }
+
+    const OPENVERSE_ID: &str = "48e4625b-0930-43db-990c-22858b1d633e";
+
+    /// `<dir>/picture-cache/<name>` holding `bytes`, as the engine keeps a thumbnail.
+    fn kept_thumb(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
+        let cache = dir.join("picture-cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        let path = cache.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn thumb_answer(path: &Path) -> Value {
+        json!({"path": path, "w": 1, "h": 1})
+    }
+
+    /// pictures-SPEC-v2 §5.3: an agent sees a preview without reading the store's folder, which
+    /// its sandbox may not reach.
+    #[test]
+    fn a_thumbnail_comes_as_compact_text_then_the_image() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [format!("openverse-{OPENVERSE_ID}.png"), "pexels-2014422.png".to_string()] {
+            let path = kept_thumb(dir.path(), &name, PNG);
+            let result = thumb_success(thumb_answer(&path), None);
+            assert_eq!(result["isError"], false);
+            assert!(result.get("structuredContent").is_none());
+            let content = result["content"].as_array().unwrap();
+            assert_eq!(serde_json::from_str::<Value>(content[0]["text"].as_str().unwrap()).unwrap(), thumb_answer(&path));
+            assert_eq!((&content[1]["type"], &content[1]["mimeType"]), (&json!("image"), &json!("image/png")), "{name}");
+            assert_eq!(decoded(&content[1]), PNG);
+        }
+        assert_eq!(THUMBS.max, relay_core::pictures::net::Want::Thumb.cap(), "the most the engine keeps");
+    }
+
+    #[test]
+    fn a_thumbnail_the_engine_did_not_keep_stays_a_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = kept_thumb(dir.path(), &format!("openverse-{OPENVERSE_ID}.png"), PNG);
+        let cache = good.parent().unwrap().to_path_buf();
+        let link = cache.join("pexels-1.png");
+        std::os::unix::fs::symlink(&good, &link).unwrap();
+        let foreign = dir.path().join("design-assets");
+        std::fs::create_dir_all(&foreign).unwrap();
+        let elsewhere = foreign.join(format!("openverse-{OPENVERSE_ID}.png"));
+        std::fs::write(&elsewhere, PNG).unwrap();
+        let mut big_bytes = PNG.to_vec();
+        big_bytes.resize(3 << 20, 0);
+        let big = kept_thumb(dir.path(), "pexels-2.png", &big_bytes);
+        let svg = kept_thumb(dir.path(), "pexels-3.png", b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"></svg>");
+        let svg_named = kept_thumb(dir.path(), "pexels-4.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"></svg>");
+        let render = kept_thumb(dir.path(), &format!("{}.png", uuid::Uuid::new_v4()), PNG);
+        let odd_names: Vec<PathBuf> = ["flickr-1.png", "pexels-0123.png", "pexels-.png", "openverse-x.png", "pexels-5.bmp", "pexels-6", "photo.png"]
+            .iter().map(|name| kept_thumb(dir.path(), name, PNG)).collect();
+        let around = cache.join("..").join("picture-cache").join(good.file_name().unwrap());
+        let relative = Path::new("picture-cache").join(good.file_name().unwrap());
+        let mut paths = vec![link, elsewhere, big, svg, svg_named, render, around, relative, cache.join("pexels-7.png")];
+        paths.extend(odd_names);
+        for path in &paths {
+            let content = thumb_success(thumb_answer(path), None)["content"].clone();
+            let content = content.as_array().unwrap();
+            assert!(content.iter().all(|c| c["type"] == "text"), "{} was attached", path.display());
+            assert_eq!(content[1]["text"], format!("The picture could not be attached; it is at {}.", path.display()));
+        }
+        // A render's picture is not a thumbnail, nor a thumbnail a render's picture.
+        assert_eq!(thumb_success(thumb_answer(&good), None)["content"][1]["type"], "image");
+        assert_eq!(render_success(json!({"png": {"path": good}}), None)["content"][1]["type"], "text");
     }
 
     #[test]

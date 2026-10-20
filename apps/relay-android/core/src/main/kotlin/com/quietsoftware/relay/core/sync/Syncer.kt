@@ -11,10 +11,13 @@ import com.quietsoftware.relay.core.wire.s
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -133,14 +136,31 @@ object EventRouter {
         }
     }
 
-    /** What the phone subscribes to: everything it keeps or shows. `resource.sample` only while a screen watches it. */
+    /**
+     * What the phone subscribes to: everything it keeps or shows. `resource.sample` only while a
+     * screen watches it. `design.*` keeps an open design in step while an agent draws it: no
+     * routing case, the default marks domain `design` stale, which both design screens read.
+     */
     val SUBSCRIBE = listOf(
         "session.*", "guardrail.*", "notify.*", "task.*", "project.*", "workspace.*", "mailbox.*",
         "notes.*", "module.*", "git.*", "file.*", "worktree.*", "overlap.*", "integration.*", "usage.*",
         "run.*", "device.*", "avd.*", "skill.*", "plugin.*", "provider.*", "settings.*", "github.*",
         "thread.*", "money.*", "arbiter.*", "gym.*", "design.*",
     )
+
+    /** Whether the door sends [ev] to a phone that subscribed to [events]: as socket.rs `Filter::matches` reads them. */
+    fun subscribes(ev: String, events: List<String> = SUBSCRIBE): Boolean =
+        events.isEmpty() || events.any { it == "*" || it == ev || (it.endsWith(".*") && ev.startsWith(it.dropLast(1))) }
 }
+
+/**
+ * The stale marks a screen showing [domain] reads again on: its own, and `*` after a gap.
+ * Conflated, so a read that is still running leaves at most one more behind it: an agent's run
+ * of `design.apply`, one `design.changed` each, costs an open design two reads, the last after
+ * the last event. It also keeps a slow read from holding [Syncer.stale]'s bounded buffer, which
+ * once full would drop every later mark for every screen.
+ */
+fun Flow<Set<String>>.rereadsOf(domain: String): Flow<Set<String>> = filter { domain in it || "*" in it }.conflate()
 
 /**
  * Keeps the replica in step with the PC over a live session: a full read on connect, then

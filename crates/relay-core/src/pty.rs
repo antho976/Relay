@@ -9,7 +9,7 @@ use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
@@ -224,6 +224,12 @@ impl TermModes {
         };
         if on { self.0 |= bit } else { self.0 &= !bit }
     }
+    /// Whether DEC private `mode` is on; false for one not tracked.
+    fn on(self, mode: u16) -> bool {
+        let mut probe = TermModes(0);
+        probe.set(mode, true);
+        probe.0 != 0 && self.0 & probe.0 == probe.0
+    }
     /// Switch the screen of a terminal in modes `from` (`None`: unknown) to this one's.
     fn write_screen(self, from: Option<TermModes>, out: &mut Vec<u8>) {
         let alt = self.0 & ALT_SCREEN != 0;
@@ -406,6 +412,9 @@ struct Shared {
     /// Set by [`Pty::silence_exit`]: the request that stops this child records the outcome
     /// itself, so the exit callback must not race it to the row.
     silent: AtomicBool,
+    /// The [`TermModes`] after the last read, stored by the reader: `session.input` asks it
+    /// whether a paste goes in brackets without reading the ring or the store (D148).
+    modes: AtomicU16,
 }
 
 /// A live PTY. Cheap to clone the handle (`Arc`).
@@ -478,6 +487,7 @@ impl Pty {
             idle: AtomicBool::new(false),
             ping_owed: AtomicBool::new(true),
             silent: AtomicBool::new(false),
+            modes: AtomicU16::new(term.modes.0),
             exited: AtomicBool::new(false),
             group_gone: AtomicBool::new(false),
         });
@@ -498,6 +508,7 @@ impl Pty {
                         // Outside the lock: the scan is this thread's alone (RA-242).
                         let mark = term.mark();
                         term.feed(&data);
+                        sh.modes.store(term.modes.0, Ordering::Relaxed);
                         // Numbered under the ring lock: `attach` reads the seq under it too, so
                         // a seq it sees is always one whose bytes are already in the ring. Taken
                         // before the lock, an attach in between skipped that frame as caught up
@@ -586,6 +597,11 @@ impl Pty {
     /// queued behind a paste that is waiting for the child to drain would park that thread.
     pub fn writer_idle(&self) -> bool {
         self.writer.try_lock().is_ok()
+    }
+
+    /// The program has asked for bracketed paste (DECSET 2004) and not switched it off since.
+    pub fn bracketed_paste(&self) -> bool {
+        TermModes(self.shared.modes.load(Ordering::Relaxed)).on(2004)
     }
 
     pub fn write(&self, data: &[u8]) -> Result<()> {
@@ -694,6 +710,44 @@ impl Pty {
         self.writer.lock().unwrap().take();
         self.master.lock().unwrap().take();
     }
+}
+
+/// `data` as one paste (`session.input {paste}`, I-4). `bracketed` (the program set DECSET 2004):
+/// between `ESC[200~` and `ESC[201~`, line breaks kept. Otherwise as typed, but with each line
+/// break (`\r\n`, `\r` or `\n`) a space, since a program without bracketed paste would read one
+/// as Enter. Either way every other control character but a tab (C0, DEL, C1: ESC and the 8-bit
+/// CSI among them) is taken out, as terminals do when pasting, so nothing in it can end the paste
+/// early or act as a key; the tty would act on a Ctrl-C (`\x03`) even inside the brackets.
+/// Nothing to paste is nothing to send.
+pub fn paste_bytes(data: &str, bracketed: bool) -> Vec<u8> {
+    if data.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(data.len() + 12);
+    if bracketed {
+        out.extend_from_slice(b"\x1b[200~");
+        let mut buf = [0u8; 4];
+        for c in data.chars().filter(|c| !c.is_control() || matches!(c, '\t' | '\n' | '\r')) {
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        }
+        out.extend_from_slice(b"\x1b[201~");
+    } else {
+        let mut buf = [0u8; 4];
+        let mut chars = data.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '\r' => {
+                    chars.next_if_eq(&'\n');
+                    out.push(b' ');
+                }
+                '\n' => out.push(b' '),
+                '\t' => out.push(b'\t'),
+                c if c.is_control() => {}
+                c => out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes()),
+            }
+        }
+    }
+    out
 }
 
 /// [`Pty::kill`] for many PTYs against one shared deadline: SIGTERM to every group, one wait
@@ -1135,6 +1189,37 @@ mod tests {
         assert!(attached.catch_up[prelude.len()..].iter().all(|b| *b == b'x' || b"END\r\n".contains(b)));
         // Caught up from where it left off: no prelude.
         assert!(pty.attach(Some(1), Some(pty.seq())).catch_up.is_empty());
+        pty.kill(Duration::from_millis(100));
+    }
+
+    #[test]
+    fn a_bracketed_paste_keeps_its_lines_and_cannot_end_itself() {
+        // I-4: the lines go in as they are; an ESC (or 8-bit CSI) inside would let the text
+        // close the paste and act as keys after it.
+        let pasted = paste_bytes("Make it\nbigger\x1b[201~\r\n/compact é\u{9b}201~", true);
+        assert_eq!(pasted, "\x1b[200~Make it\nbigger[201~\r\n/compact é201~\x1b[201~".as_bytes());
+        assert_eq!(pasted.iter().filter(|b| **b == 0x1b).count(), 2, "only the brackets' own");
+        assert!(paste_bytes("", true).is_empty());
+        // Nor can a control character the tty or the program acts on: Ctrl-C, Ctrl-Z, Ctrl-U, DEL.
+        assert_eq!(paste_bytes("ls\x03rm\x1a\x15\x7f\u{85}\tx", true), "\x1b[200~lsrm\tx\x1b[201~".as_bytes());
+    }
+
+    #[test]
+    fn a_paste_without_brackets_is_typed_on_one_line() {
+        // Without DECSET 2004 a line break is Enter: each one is a space, `\r\n` a single one.
+        assert_eq!(paste_bytes("one\ntwo\r\nthree\rfour", false), b"one two three four");
+        assert_eq!(paste_bytes("tab\there é", false), "tab\there é".as_bytes());
+        assert_eq!(paste_bytes("ls\x03 \x1b[A\x15x\x7f", false), b"ls [Ax", "no control character acts as a key");
+        assert!(paste_bytes("", false).is_empty());
+    }
+
+    #[test]
+    fn a_live_pty_knows_whether_its_program_asked_for_bracketed_paste() {
+        let pty = Pty::spawn(sh("printf '\\033[?2004h'; echo on; read x; printf '\\033[?2004l'; echo off; sleep 5"), |_| {}).unwrap();
+        assert!(!TermModes::default().on(2004) && !TermModes::default().on(7), "off as it powers on; 7 is not tracked");
+        wait_for("bracketed paste on", || pty.bracketed_paste());
+        pty.write(b"\n").unwrap();
+        wait_for("bracketed paste off", || !pty.bracketed_paste());
         pty.kill(Duration::from_millis(100));
     }
 

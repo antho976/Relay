@@ -1514,6 +1514,30 @@ impl Ui {
             self.show_error(&refusal);
             return glib::Propagation::Stop;
         }
+        // Words being typed into a design go in; edits still on their way hold the close (TM-39).
+        if let Some(refusal) = crate::design::unsaved() {
+            self.show_error(&refusal);
+            return glib::Propagation::Stop;
+        }
+        // Edits held back while Relay is not connected (or behind a refusal) would be lost: ask,
+        // since refusing would keep the window open for as long as Relay stays down.
+        if let Some((question, detail)) = crate::design::unsent() {
+            let ui = self.clone();
+            glib::spawn_future_local(async move {
+                let dialog = gtk::AlertDialog::builder()
+                    .message(question)
+                    .detail(detail)
+                    .buttons(["Cancel", "Close Anyway"])
+                    .cancel_button(0)
+                    .default_button(0)
+                    .modal(true)
+                    .build();
+                if dialog.choose_future(Some(&ui.window)).await.ok() == Some(1) {
+                    crate::design::close_anyway(|| ui.window.close());
+                }
+            });
+            return glib::Propagation::Stop;
+        }
         if self.editor.is_dirty() {
             self.show_error("Save or discard your editor changes before closing.");
             return glib::Propagation::Stop;
@@ -1531,6 +1555,7 @@ impl Ui {
             notes.window.destroy();
         }
         crate::mirror::close_all();
+        crate::design::close_windows();
         self.generation.set(self.generation.get() + 1);
         self.set_connected(false);
         self.client.borrow_mut().take();
@@ -1657,6 +1682,10 @@ impl Ui {
                     if generation != ui.generation.get() {
                         return;
                     }
+                    // Open designs read again, as events were missed meanwhile (TM-54); and the
+                    // app offers to draw them for agents on a connection of its own.
+                    crate::design::reconnected(&ui);
+                    crate::design::render::lease(&ui);
                     ui.set_connected(true);
                     crate::provider_updates::startup(&ui);
                     ui.status.set_text("");
@@ -1769,6 +1798,11 @@ impl Ui {
                                 if e.ev.starts_with("design.") {
                                     crate::design::event(&ui, &e.ev, &e.payload);
                                     continue;
+                                }
+                                // A board's lamp follows its terminal, whatever project the main
+                                // window shows (E-ask-3).
+                                if e.ev == "session.changed" {
+                                    crate::design::session_changed(&ui, &e.payload);
                                 }
                                 if e.project_id.is_some_and(|id| id != ui.project.get())
                                     && !e.ev.starts_with("project.")

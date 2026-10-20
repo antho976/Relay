@@ -2989,8 +2989,11 @@ dependencies = [
 name = "relay-client"
 version = "4.0.0-dev"
 dependencies = [
+ "crc32fast",
  "relay-bus",
+ "rustc-hash",
  "serde_json",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -3028,6 +3031,7 @@ dependencies = [
  "tree-sitter-rust",
  "tree-sitter-svelte-next",
  "tree-sitter-typescript",
+ "ureq",
  "uuid",
  "which",
 ]

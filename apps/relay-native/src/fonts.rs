@@ -85,6 +85,8 @@ pub fn install(window: &gtk4::ApplicationWindow) {
             "geist-latin-400-normal.ttf",
             "geist-latin-500-normal.ttf",
             "geist-latin-600-normal.ttf",
+            // Bold: a design's 700 (the B key, Display and Title) draws bold, not as 600 (TM-9).
+            "geist-latin-700-normal.ttf",
             "geist-mono-latin-400-normal.ttf",
             "geist-mono-latin-500-normal.ttf",
             // The wordmark's face (start.rs and the title bar).

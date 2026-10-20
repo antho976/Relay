@@ -758,6 +758,10 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
         std::collections::HashMap::new();
     // Dropped with the connection, which is when a borrowed size goes back.
     let mut borrowed = Borrowed::default();
+    // This connection's offer to draw designs (`design.render.serve`), made the first time it
+    // serves: an agent's connection never holds one. Dropped with the connection, which forgets
+    // the offer and ends the renders it was drawing.
+    let mut render_lease: Option<crate::design_render::RenderLease> = None;
     // Unlocked queries in flight on this connection. One client multiplexes all of its UI
     // traffic here, so a slow read (a PR listing, a diff, a search) used to hold up every
     // request queued behind it; D149's parallelism held only across connections (RA-015).
@@ -976,6 +980,54 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
                         }
                     }
                 },
+            }
+        } else if req.op == relay_bus::ops::design::RenderServe::NAME {
+            // The desktop app offers to draw on this connection (render-SPEC-v2 §5.2). The engine
+            // keeps only a weak sender to it, so the offer never keeps the writer alive.
+            match door_preflight(&engine, &req).await? {
+                Err(refused) => refused,
+                Ok(_) => match serde_json::from_value::<relay_bus::ops::design::ServeIn>(req.payload.clone()) {
+                    Err(e) => Response::err(req.id, BusError::schema(&req.op, e)),
+                    Ok(p) => {
+                        let lease = render_lease.get_or_insert_with(|| crate::design_render::RenderLease::new(&engine));
+                        lease.serve(out_tx.downgrade(), p.fonts);
+                        Response::ok(req.id, serde_json::to_value(Empty {})?)
+                    }
+                },
+            }
+        } else if req.op == relay_bus::ops::design::Render::NAME {
+            // A picture of a design, drawn by the desktop app (render-SPEC-v2 §5.3). Checked against
+            // the store and sent before the wait; the wait holds no lock, as bus.wait's.
+            match door_preflight(&engine, &req).await? {
+                Err(refused) => refused,
+                Ok(scope) => {
+                    let asker = scope.map(|scope| crate::design_render::Asker { project_id: scope.project_id, session: scope.session });
+                    match crate::design_render::begin(&engine, req.payload.clone(), asker).await {
+                        Err(error) => Response::err(req.id, error),
+                        Ok(mut waiting) => {
+                            let timer = tokio::time::sleep(waiting.timeout);
+                            tokio::pin!(timer);
+                            let outcome = loop {
+                                tokio::select! {
+                                    // An answer that lands with the timeout is still the answer.
+                                    biased;
+                                    answer = &mut waiting.reply => break Some(answer),
+                                    () = &mut timer => break None,
+                                    // As bus.wait: a client that leaves ends the render and frees
+                                    // its place; a line sent meanwhile is answered after it.
+                                    next = reader.next(), if pending.is_none() => match next? {
+                                        Some(incoming) => pending = Some(incoming),
+                                        None => break 'conn,
+                                    },
+                                }
+                            };
+                            match waiting.finish(outcome) {
+                                Ok(out) => Response::ok(req.id, serde_json::to_value(out)?),
+                                Err(error) => Response::err(req.id, error),
+                            }
+                        }
+                    }
+                }
             }
         } else if req.op == relay_bus::ops::bus::Unsubscribe::NAME {
             match door_preflight(&engine, &req).await? {
@@ -1288,6 +1340,9 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
     while inflight.join_next().await.is_some() {}
     drop(streams);
     attached_mirrors.clear();
+    // Before the writer is awaited: a cleanly closed connection's offer goes now, so the next
+    // render is `no_renderer` at once rather than sent here.
+    drop(render_lease);
     drop(device_watch);
     drop(resource_watch);
     drop(out_tx);
@@ -1644,6 +1699,35 @@ mod conn_tests {
         }
         let subscribed = client.call(&agent("ghost", "bus.subscribe", json!({})), |_| {}).await.unwrap();
         assert!(subscribed.ok, "{:?}", subscribed.error);
+    }
+
+    /// W68: the font families the desktop app reports on its render lease are what design.fonts
+    /// reads, for as long as that connection lives; a lease refused by the pipeline is no lease.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_lease_keeps_its_apps_fonts_while_its_connection_lives() {
+        let (engine, _fixture, server) = server().await;
+        let mut app = Client::connect(&server.path).await.unwrap();
+        let serve = |fonts: serde_json::Value| Request::new(Actor::User, "design.render.serve", json!({"fonts": fonts}));
+        let served = app.call(&serve(json!(["Sora", "Geist", "Sora"])), |_| {}).await.unwrap();
+        assert!(served.ok, "{:?}", served.error);
+        assert_eq!(engine.renders.fonts().unwrap().as_slice(), ["Geist", "Sora"]);
+        // Serving again on the connection replaces what it reported.
+        assert!(app.call(&serve(json!(["Inter"])), |_| {}).await.unwrap().ok);
+        assert_eq!(engine.renders.fonts().unwrap().as_slice(), ["Inter"]);
+
+        let mut other = Client::connect(&server.path).await.unwrap();
+        let bad = other.call(&serve(json!("Geist")), |_| {}).await.unwrap();
+        assert_eq!(bad.error.unwrap().code, "bus.schema");
+        assert_eq!(engine.renders.fonts().unwrap().as_slice(), ["Inter"], "the refused lease reported nothing");
+
+        drop(app);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while engine.renders.fonts().is_some() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the lease went with its connection");
     }
 
     /// RA-337: an agent hears its own project, shared devices, and only its own mail.

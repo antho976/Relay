@@ -1031,3 +1031,147 @@ fn destructive_pushes_and_pairing_commands_are_refused_to_an_agent() {
     let user = ok(engine, Actor::User, "guardrail.check", json!({"project_id": 1, "kind": "exec", "command": "relay remote approve"}));
     assert_eq!(user["verdict"], "allow");
 }
+
+/// The plugin layer (pictures-SPEC-v2 §4, C1): an op a plugin brings is offered to an agent and
+/// callable by it only in a project with that plugin on; discovery (`callability`) and execution
+/// (`authorize`) answer from one rule. The person is not gated.
+#[test]
+fn an_op_a_plugin_brings_exists_only_where_it_is_on() {
+    use relay_bus::registry::{Callable, Registry};
+    use relay_core::{guardrail, plugins, sessions};
+    let fixture = Fixture::new();
+    let engine = &fixture.engine;
+    let session = fixture.session("builder", "claude");
+    let name = session["name"].as_str().unwrap();
+    let agent = Actor::agent(name);
+    // The bundled design plugin stands in for one that brings ops: plugin.enable refuses an id
+    // with no folder. A query and a mutation, since authorize answers queries early.
+    let brought: Vec<_> = ["design.get", "design.create"]
+        .into_iter()
+        .map(|op| {
+            let mut entry = Registry::global().get(op).unwrap().clone();
+            entry.meta.plugin = Some("design");
+            entry
+        })
+        .collect();
+    let gate = |on: bool| {
+        let conn = engine.store.lock();
+        let row = sessions::by_name(&conn, name).unwrap();
+        let cfg = guardrail::config(&conn, Some(1)).unwrap();
+        let plugins_on = plugins::enabled_ids(&conn, 1).unwrap();
+        assert_eq!(plugins_on.iter().any(|id| id == "design"), on);
+        for entry in &brought {
+            let (call, why) = guardrail::callability(entry, &agent, Some(&row.session), Some(&cfg), &plugins_on);
+            let verdict = guardrail::authorize(&conn, row.session.id, entry, &json!({}));
+            if on {
+                assert_ne!(call, Callable::No, "{}: {why}", entry.name);
+                assert!(verdict.is_ok(), "{}: {verdict:?}", entry.name);
+            } else {
+                assert_eq!((call, why.as_str()), (Callable::No, "plugin:design is off for this project"), "{}", entry.name);
+                let refused = verdict.unwrap_err();
+                assert_eq!((refused.kind, refused.code.as_str()), (ErrorKind::Refused, "plugin.off"), "{}", entry.name);
+                assert_eq!(refused.details, Some(json!({"plugin": "design"})));
+                assert_eq!(refused.message, "Design is off for this project");
+                assert!(refused.hint.as_deref().unwrap().contains("switch on Design for this project"), "{:?}", refused.hint);
+            }
+            // The person, with no session, is not gated by plugins.
+            assert_eq!(guardrail::callability(entry, &Actor::User, None, None, &[]).0, Callable::Yes);
+        }
+        // An op no plugin brings is untouched by the switch.
+        let plain = Registry::global().get("design.get").unwrap();
+        assert_ne!(guardrail::callability(plain, &agent, Some(&row.session), Some(&cfg), &plugins_on).0, Callable::No);
+        assert!(guardrail::authorize(&conn, row.session.id, plain, &json!({})).is_ok());
+    };
+    gate(false);
+    ok(engine, Actor::User, "plugin.enable", json!({"plugin_id": "design", "project_id": 1, "enabled": true}));
+    gate(true);
+    ok(engine, Actor::User, "plugin.enable", json!({"plugin_id": "design", "project_id": 1, "enabled": false}));
+    gate(false);
+
+    // The real thing: the Pictures ops in a project without Pictures. bus.ops offers them with
+    // the reason, execution refuses before the handler (or its absence) is reached, and the
+    // person's call is not refused for the plugin.
+    let ops = ok(engine, agent.clone(), "bus.ops", json!({}));
+    let rows = ops["ops"].as_array().unwrap();
+    for op in ["design.picture.search", "design.picture.thumb", "design.picture.add"] {
+        let row = rows.iter().find(|row| row["name"] == op).unwrap_or_else(|| panic!("{op} is listed"));
+        assert_eq!((row["call"].as_str(), row["why"].as_str()), (Some("no"), Some("plugin:pictures is off for this project")), "{op}");
+    }
+    for op in ["design.picture.key_set", "design.picture.key_remove"] {
+        assert!(!rows.iter().any(|row| row["name"] == op), "{op} is the person's alone");
+    }
+    // Every op a plugin brings, whatever it is and however it is registered, where its plugin is
+    // off for this project (the fixture's has none on).
+    {
+        let conn = engine.store.lock();
+        let row = sessions::by_name(&conn, name).unwrap();
+        let cfg = guardrail::config(&conn, Some(1)).unwrap();
+        let brought: Vec<_> = Registry::global().entries().iter().filter(|entry| entry.meta.plugin.is_some()).collect();
+        assert!(brought.len() >= 3, "the Pictures ops carry their plugin");
+        for entry in brought {
+            let plugin = entry.meta.plugin.unwrap();
+            if entry.meta.actors.admits(&agent) {
+                assert_eq!(guardrail::callability(entry, &agent, Some(&row.session), Some(&cfg), &[]).0, Callable::No, "{}", entry.name);
+                let refused = guardrail::authorize(&conn, row.session.id, entry, &json!({})).unwrap_err();
+                assert_eq!((refused.code.as_str(), refused.details), ("plugin.off", Some(json!({"plugin": plugin}))), "{}", entry.name);
+            }
+        }
+    }
+    let thumb = json!({"design_id": 1, "id": "nope"});
+    let refused = call(engine, agent.clone(), "design.picture.thumb", thumb.clone());
+    assert_eq!((error(&refused).code.as_str(), &error(&refused).details), ("plugin.off", &Some(json!({"plugin": "pictures"}))));
+    let mine = ok(engine, Actor::User, "bus.ops", json!({}));
+    let row = mine["ops"].as_array().unwrap().iter().find(|row| row["name"] == "design.picture.thumb").unwrap();
+    assert_eq!(row["call"], "yes");
+    let person = call(engine, Actor::User, "design.picture.thumb", thumb);
+    assert_ne!(person.error.as_ref().map(|err| err.code.as_str()), Some("plugin.off"));
+}
+
+/// E-agent-2: a session name that is no live session of the agent's project is a typo or a stale
+/// name, and is answered as one, with the nearest name of that project; `actor.scope` is kept
+/// for a real session of the project that the agent may not act on.
+#[test]
+fn a_session_name_that_names_nobody_here_is_not_found_not_a_permission_problem() {
+    let fixture = Fixture::new();
+    let engine = &fixture.engine;
+    let me = fixture.session("builder", "claude");
+    let peer = fixture.session("builder", "codex");
+    let (me, peer) = (me["name"].as_str().unwrap(), peer["name"].as_str().unwrap());
+    let agent = Actor::agent(me);
+
+    let typo = call(engine, agent.clone(), "design.list", json!({"session": "typo"}));
+    let typo = error(&typo);
+    assert_eq!((typo.kind, typo.code.as_str()), (ErrorKind::NotFound, "session.not_found"), "{}", typo.message);
+    assert!(typo.message.contains("\"typo\"") && typo.message.contains("this project"), "{}", typo.message);
+    // A slip of one letter is pointed at the session it was meant to be.
+    let slip = format!("{}{}", &peer[..peer.len() - 1], if peer.ends_with('x') { 'y' } else { 'x' });
+    let slipped = call(engine, agent.clone(), "design.list", json!({"session": slip}));
+    assert_eq!(error(&slipped).code, "session.not_found");
+    assert_eq!(error(&slipped).hint.as_deref(), Some(format!("did you mean {peer:?}?").as_str()));
+    // A mutation naming nobody is a typo too, not a refusal to act on someone else.
+    let mutation = call(engine, agent.clone(), "session.intent", json!({"session": "typo", "text": "x"}));
+    assert_eq!(error(&mutation).code, "session.not_found");
+
+    // A real peer: reads reach it, writes stay the peer's own.
+    ok(engine, agent.clone(), "design.list", json!({"session": peer}));
+    let theirs = call(engine, agent.clone(), "session.intent", json!({"session": peer, "text": "x"}));
+    assert_eq!(error(&theirs).code, "actor.scope");
+    ok(engine, agent.clone(), "design.list", json!({"session": me}));
+
+    // Another project's session is not this agent's to know of: not found here, and no hint
+    // names it.
+    let other = fixture.repo.parent().unwrap().join("other");
+    committed_repo(&other, &[("README.md", "other\n")]);
+    ok(engine, Actor::User, "project.add", json!({"workspace_id": 1, "path": other}));
+    let outsider = ok(engine, Actor::User, "session.create", json!({"project_id": 2, "provider": "claude", "role": "builder"}));
+    let outsider = outsider["name"].as_str().unwrap();
+    for (op, payload) in [
+        ("design.list", json!({"session": outsider})),
+        ("session.intent", json!({"session": outsider, "text": "x"})),
+    ] {
+        let refused = call(engine, agent.clone(), op, payload);
+        let refused = error(&refused);
+        assert_eq!(refused.code, "session.not_found", "{op}");
+        assert!(!refused.hint.as_deref().unwrap_or("").contains(outsider), "{op}: {:?}", refused.hint);
+    }
+}

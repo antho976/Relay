@@ -157,6 +157,12 @@ pub fn append(tx: &Transaction, e: &AuditEntry) -> Result<Id> {
     Ok(tx.last_insert_rowid())
 }
 
+/// The id the next audit row takes: a request's own row, asked for from inside its transaction
+/// (rows are never written between a handler and its own).
+pub fn next_id(conn: &Connection) -> rusqlite::Result<Id> {
+    conn.prepare_cached("SELECT COALESCE(MAX(id), 0) + 1 FROM audit")?.query_row([], |r| r.get(0))
+}
+
 /// A previously recorded outcome for `req_id`, for idempotent replay (BUS.md §5.3).
 pub struct Recorded {
     pub payload_hash: String,
@@ -177,7 +183,10 @@ pub fn lookup(conn: &Connection, req_id: Uuid) -> Result<Option<Recorded>> {
         ("ok", Some(s)) => {
             let v: Value = serde_json::from_str(&s)?;
             if v.get("truncated").is_some() && v.get("bytes").is_some() && v.as_object().map(|o| o.len() == 2).unwrap_or(false) {
-                Response::err(req_id, BusError::conflict("bus.replay_unavailable", "the recorded result was too large to keep; re-issue with a new id"))
+                // Sending it again under a new id would apply it twice (E-agent-7).
+                Response::err(req_id, BusError::conflict("bus.replay_unavailable", "this request was already applied; its result was too large to keep")
+                    .with_details(serde_json::json!({"applied": true}))
+                    .with_hint("read the current state (e.g. design.get) instead of sending it again"))
             } else {
                 Response::ok(req_id, v)
             }

@@ -38,6 +38,8 @@ notify.workspace = true
 regex.workspace = true
 similar.workspace = true
 tempfile = "3"
+# The Pictures plugin's client for its fixed hosts (pictures-core), as relay-remote's.
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 
 # The native client's headless half: tests/native_input.rs sends its mirror payload builders.
 [dev-dependencies]

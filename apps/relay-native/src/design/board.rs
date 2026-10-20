@@ -5,16 +5,17 @@
 use super::canvas::Canvas;
 use super::doc::{Change, Doc};
 use super::glyphs;
-use super::paint::{self, fill_of, grect, rgba, Painter, CANVAS};
+use super::paint::{self, fill_of, grect, rgba, Painter, Posing, CANVAS};
 use super::widgets::tip;
 use crate::app::{label, Ui};
 use gtk::prelude::*;
 use gtk::{gdk, gio, graphene, gsk, pango};
 use gtk4 as gtk;
-use relay_bus::design::{Node, NodeKind, NodeOp};
-use relay_client::design::edit;
+use relay_bus::design::{Layout, Node, NodeKind, NodeOp, Scroll};
+use relay_client::design::{bounds, edit, shapes};
 use relay_client::design::geom::step_zoom;
-use relay_client::design::layout::{self, Placed};
+use relay_client::design::layout::{self, Placed, Scrolled};
+use relay_client::design::motion::{self, Clocks};
 use relay_client::design::snap::Guide;
 use relay_client::design::{Camera, Rect, Scene};
 use serde_json::{json, Map, Value};
@@ -184,19 +185,33 @@ pub enum Gesture {
         /// so the copy and its move are one undo step.
         copies: Vec<NodeOp>,
         moved: bool,
-        /// A container the nodes would land in, when it is not their parent.
+        /// A container the nodes would land in, when it is not their parent, and the place they
+        /// would take there when it lays out its children.
         target: Option<String>,
+        into: Option<u32>,
         /// In an auto-layout parent: the place the node would take.
         reorder: Option<(String, u32)>,
         /// The node to select if the press ends as a click.
         click: Option<String>,
         at: (f64, f64),
+        /// How far the free ones show moved, snapped, in their parent's coordinates.
+        shown: (f64, f64),
+        /// Alt drag: the layers copied, selected again if Esc drops the copies (E-board-11).
+        sources: Vec<String>,
+        /// What the laid-out ones paint, drawn under the pointer as they are dragged: their
+        /// layout keeps them in place until the drop (E-board-10).
+        ghost: Option<gsk::RenderNode>,
     },
-    Resize { handle: Handle, bounds: Rect, orig: Vec<(String, Node, Rect)>, moved: bool },
+    /// `bounds` and the pointer are in `frame`'s coordinates when one node drawn turned is
+    /// resized (its parent's; B12), else on the page; `turn` is that node's own.
+    /// `kept`: the pinned layers inside the frames resized, as they were, which the preview moves
+    /// as the follow rule will and puts back each update.
+    Resize { handle: Handle, bounds: Rect, orig: Vec<(String, Node, Rect)>, kept: Vec<Node>, moved: bool, frame: Option<String>, turn: f64 },
     Endpoint { id: String, which: usize, orig: Node, moved: bool },
     /// `from`/`to`: the nodes a line's ends attach to, a connector's.
     Create { tool: Tool, parent: String, a: (f64, f64), b: (f64, f64), from: Option<String>, to: Option<String> },
-    Draw { parent: String, points: Vec<[f64; 2]> },
+    /// A pen or highlighter stroke: the tool it began with draws it, whatever is picked since (B17).
+    Draw { parent: String, points: Vec<[f64; 2]>, tool: Tool },
     /// Turning one node about its centre (page coordinates), from the pointer's first angle.
     Rotate { id: String, centre: (f64, f64), start: f64, orig: Node, moved: bool },
     /// Rubbing out strokes: each touched one with the opacity it had.
@@ -220,26 +235,42 @@ pub struct Board {
     pub(super) painter: Rc<Painter>,
     pub(super) page: RefCell<String>,
     pub(super) placed: RefCell<Option<Rc<Placed>>>,
+    /// How far each scrolling frame is scrolled on the canvas (Alt+wheel), by frame id: view
+    /// state, never stored or exported, gone when the board closes (feature-layout §2.5).
+    pub(super) scroll: RefCell<HashMap<String, (f64, f64)>>,
     pub(super) content: RefCell<Option<gsk::RenderNode>>,
     pub(super) cam: Cell<Camera>,
     pub(super) cams: RefCell<HashMap<String, Camera>>,
     pub(super) size: Cell<(f64, f64)>,
     fitted: Cell<bool>,
+    /// A view was put back (a pop-out's): the one kept in the settings does not replace it.
+    restored: Cell<bool>,
     pub(super) selection: RefCell<Vec<String>>,
     pub(super) hover: RefCell<Option<String>>,
     pub(super) tool: Cell<Tool>,
     pub(super) tool_lock: Cell<bool>,
     pub(super) gesture: RefCell<Gesture>,
     pub(super) guides: RefCell<Vec<Guide>>,
+    /// The frame whose coordinates the guides are in, a turned one's; the page's when none.
+    pub(super) guides_in: RefCell<Option<String>>,
     pub(super) space: Cell<bool>,
+    /// Shift is held, as the keys and the pointer last told.
+    pub(super) shift_held: Cell<bool>,
     pub(super) pointer: Cell<(f64, f64)>,
+    /// The drag under way's last update (screen point, offset, modifiers), which auto-pan
+    /// runs again as the camera moves under a still pointer.
+    pub(super) drag_at: Cell<Option<DragAt>>,
+    pub(super) autopan: Cell<bool>,
     /// The last primary press, for telling a double click: time in µs and where.
     pub(super) last_press: Cell<(i64, f64, f64)>,
     flash: RefCell<(HashSet<String>, i64)>,
     flash_tick: RefCell<Option<gtk::TickCallbackId>>,
     labels: RefCell<HashMap<String, pango::Layout>>,
-    pub(super) pen: RefCell<String>,
+    /// The colour picked for each drawing tool (pen, highlighter, vector pen); none is automatic.
+    pub(super) pens: RefCell<HashMap<Tool, String>>,
     pub(super) clip: RefCell<Vec<Node>>,
+    /// Where the context menu was opened, on the page: its Paste puts things there (E-board-15).
+    pub(super) menu_at: Cell<Option<(f64, f64)>>,
     /// A copied style (Ctrl+Alt+C), to lay on other layers.
     pub(super) style_clip: RefCell<Option<serde_json::Map<String, Value>>>,
     /// The vector pen's path being placed: its parent and its points, in page coordinates.
@@ -254,17 +285,29 @@ pub struct Board {
     /// Counts what the status said, so a timer ages only the word it was set for.
     status_serial: Cell<u64>,
     /// Undo the last change an agent made, shown once one arrives.
-    agent_undo: gtk::Button,
+    pub(super) agent_undo: gtk::Button,
+    /// Go to the page an agent changed while another was on show, and what it changed there.
+    goto: gtk::Button,
+    goto_page: RefCell<Option<(String, HashSet<String>)>>,
     /// Whose change that Undo reverts.
     agent_last: RefCell<Option<String>>,
+    /// An Undo agent is on its way: another press is dropped (B80).
+    agent_undoing: Cell<bool>,
+    /// The audit row whose undo was refused as edited since, and when: a second press soon
+    /// after undoes it anyway.
+    agent_force: Cell<Option<(i64, i64)>>,
     pub(super) ask: gtk::Button,
     /// What was typed to Ask and not sent, for the next time it opens.
     pub(super) ask_draft: RefCell<String>,
+    /// The image key's stock photo picker: its last search, and the picker while it shows.
+    pub(super) pictures: RefCell<super::pictures::State>,
     pub(super) zoom_label: gtk::Label,
     pub(super) tool_keys: RefCell<Vec<(Tool, gtk::ToggleButton)>>,
     pub(super) shape_key: gtk::ToggleButton,
     pub(super) pen_key: gtk::ToggleButton,
     pub(super) page_label: gtk::Label,
+    /// The dock's page list, rebuilt while open when the pages change.
+    pages_popover: RefCell<Option<gtk::Popover>>,
     pub(super) context: RefCell<Option<gtk::Widget>>,
     pub(super) context_at: Cell<(i32, i32)>,
     /// The toolbar's width with its words showing, measured before it was made compact.
@@ -275,6 +318,9 @@ pub struct Board {
     /// starts compact rather than showing its words for a frame.
     pub(super) context_kind: Cell<&'static str>,
     context_refit: Cell<bool>,
+    /// What brings the toolbar's values up to date in place, for the selection's nodes.
+    #[allow(clippy::type_complexity)]
+    pub(super) context_values: RefCell<Vec<Box<dyn Fn(&[Node])>>>,
     pub(super) inspector: gtk::Box,
     pub(super) inspector_scroll: gtk::ScrolledWindow,
     /// The tools along the top left, which the inspector keeps clear of.
@@ -283,14 +329,19 @@ pub struct Board {
     pub(super) layers: RefCell<Option<Rc<super::layers::Layers>>>,
     pub(super) layers_panel: gtk::Revealer,
     pub(super) edit: RefCell<Option<super::textedit::Edit>>,
-    toast: gtk::Revealer,
-    toast_label: gtk::Label,
+    pub(super) toast: gtk::Revealer,
+    pub(super) toast_label: gtk::Label,
     toast_serial: Cell<u64>,
     chrome_pending: Cell<bool>,
     pub(super) actions: gio::SimpleActionGroup,
     /// Back to the gallery, when the board sits in the Design view.
     pub(super) back: RefCell<Option<Rc<dyn Fn()>>>,
     pub(super) windowed: bool,
+    /// Play, while the page's motion plays (or is paused): never written to the design.
+    play: RefCell<Option<Play>>,
+    /// The top bar's Play key, shown while something on the page moves.
+    play_key: gtk::Button,
+    timebar: TimeBar,
     me: Weak<Board>,
 }
 
@@ -355,6 +406,11 @@ impl Board {
         agent_undo.set_widget_name("design-agent-undo");
         agent_undo.set_visible(false);
         top.append(&agent_undo);
+        let goto = gtk::Button::with_label("Show");
+        goto.add_css_class("design-agent-undo");
+        goto.set_widget_name("design-agent-goto");
+        goto.set_visible(false);
+        top.insert_child_after(&goto, Some(&status));
         let ask = gtk::Button::new();
         ask.add_css_class("design-ask");
         let ask_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -363,6 +419,10 @@ impl Board {
         ask.set_child(Some(&ask_row));
         ask.set_tooltip_text(Some("Ask the terminal's agent to change the selection or this page (Ctrl+Enter)"));
         ask.set_widget_name("design-ask");
+        let play_key = crate::app::icon_button("play", PLAY_TIP);
+        play_key.set_widget_name("design-play");
+        play_key.set_visible(false);
+        top.append(&play_key);
         top.append(&ask);
         let pop_out = crate::app::icon_button("window", "Open in a new window");
         pop_out.set_child(Some(&glyphs::image("window", 16)));
@@ -467,6 +527,8 @@ impl Board {
         let toast_label = label("", "design-toast");
         toast.set_child(Some(&toast_label));
         overlay.add_overlay(&toast);
+        let timebar = time_bar();
+        overlay.add_overlay(&timebar.root);
 
         let shape_key = gtk::ToggleButton::new();
         let pen_key = gtk::ToggleButton::new();
@@ -485,26 +547,33 @@ impl Board {
             painter,
             page: RefCell::new(first_page),
             placed: RefCell::default(),
+            scroll: RefCell::default(),
             content: RefCell::default(),
             cam: Cell::new(Camera::default()),
             cams: RefCell::default(),
             size: Cell::new((0.0, 0.0)),
             fitted: Cell::new(false),
+            restored: Cell::new(false),
             selection: RefCell::default(),
             hover: RefCell::default(),
             tool: Cell::new(Tool::Select),
             tool_lock: Cell::new(false),
             gesture: RefCell::new(Gesture::Idle),
             guides: RefCell::default(),
+            guides_in: RefCell::default(),
             space: Cell::new(false),
+            shift_held: Cell::new(false),
             pointer: Cell::new((0.0, 0.0)),
+            drag_at: Cell::new(None),
+            autopan: Cell::new(false),
             last_press: Cell::new((0, 0.0, 0.0)),
             flash: RefCell::new((HashSet::new(), 0)),
             flash_tick: RefCell::default(),
             labels: RefCell::default(),
-            pen: RefCell::new(String::new()),
+            pens: RefCell::default(),
             clip: RefCell::default(),
             style_clip: RefCell::default(),
+            menu_at: Cell::new(None),
             vector: RefCell::default(),
             title,
             terminal,
@@ -514,20 +583,27 @@ impl Board {
             status,
             status_serial: Cell::new(0),
             agent_undo,
+            goto,
+            goto_page: RefCell::default(),
             agent_last: RefCell::default(),
+            agent_undoing: Cell::new(false),
+            agent_force: Cell::new(None),
             ask,
             ask_draft: RefCell::default(),
+            pictures: RefCell::default(),
             zoom_label,
             tool_keys: RefCell::default(),
             shape_key,
             pen_key,
             page_label,
+            pages_popover: RefCell::default(),
             context: RefCell::default(),
             context_at: Cell::new((0, 0)),
             context_full: Cell::new(None),
             context_compact: Cell::new(false),
             context_kind: Cell::new(""),
             context_refit: Cell::new(false),
+            context_values: RefCell::default(),
             inspector,
             inspector_scroll,
             dock: dock.clone(),
@@ -542,6 +618,9 @@ impl Board {
             actions,
             back: RefCell::default(),
             windowed,
+            play: RefCell::default(),
+            play_key,
+            timebar,
             me: me.clone(),
         });
 
@@ -561,6 +640,10 @@ impl Board {
         board.painter.on_loaded(move || {
             if let Some(b) = weak.upgrade() {
                 b.content.borrow_mut().take();
+                b.painter.clear_stills();
+                // An SVG that animates itself may have just loaded: it plays, and Play is offered.
+                b.refresh_play();
+                b.refresh_play_key();
                 b.canvas.queue_draw();
             }
         });
@@ -581,6 +664,7 @@ impl Board {
         board.build_dock(&dock);
         board.build_zoom_menu(&zoom_menu);
         board.install_actions();
+        board.wire_play();
         board.build_title_menu(&title_key);
         let layers = super::layers::Layers::new(&board);
         board.layers_panel.set_child(Some(&layers.root));
@@ -590,6 +674,7 @@ impl Board {
         let weak = Rc::downgrade(&board);
         back_key.connect_clicked(move |_| {
             if let Some(b) = weak.upgrade() {
+                b.stop_play();
                 b.end_edit(true);
                 if let Some(back) = b.back.borrow().clone() {
                     back();
@@ -601,13 +686,7 @@ impl Board {
         let weak = Rc::downgrade(&board);
         pop_out.connect_clicked(move |_| {
             if let Some(b) = weak.upgrade() {
-                if let Some(ui) = b.ui.upgrade() {
-                    b.end_edit(true);
-                    super::window::pop_out(&ui, b.doc.clone());
-                    if let Some(back) = b.back.borrow().clone() {
-                        back();
-                    }
-                }
+                b.pop_out();
             }
         });
         let weak = Rc::downgrade(&board);
@@ -620,6 +699,12 @@ impl Board {
         board.agent_undo.connect_clicked(move |_| {
             if let Some(b) = weak.upgrade() {
                 b.undo_agent();
+            }
+        });
+        let weak = Rc::downgrade(&board);
+        board.goto.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.go_to_change();
             }
         });
         let weak = Rc::downgrade(&board);
@@ -650,7 +735,92 @@ impl Board {
         });
         board.design_changed();
         board.refresh_terminal_menu();
+        board.restore_view();
+        // Opened on a design an agent changed last: its Undo is still offered (E-ask-9).
+        let by = board.doc.design.borrow().updated_by.clone();
+        if !by.is_empty() && by != "user" {
+            board.offer_agent_undo(by);
+        }
         board
+    }
+
+    /// What the board shows, to show it again elsewhere (E-gallery-6): its page, the camera on
+    /// each page, the selection and its panels.
+    pub(super) fn state(&self) -> BoardState {
+        let mut cams = self.cams.borrow().clone();
+        cams.insert(self.page.borrow().clone(), self.cam.get());
+        BoardState {
+            page: self.page.borrow().clone(),
+            cam: self.cam.get(),
+            cams,
+            selection: self.selection.borrow().clone(),
+            layers_open: self.layers_panel.reveals_child(),
+            inspector_open: self.inspector_key.is_active(),
+        }
+    }
+
+    /// Show `state` (once laid out): its page where it still is, its camera rather than a fit,
+    /// what of its selection is still there, and its panels.
+    pub(super) fn restore(&self, state: BoardState) {
+        let page_lives = self.doc.scene.borrow().node(&state.page).is_some_and(|n| n.kind == NodeKind::Page);
+        if !page_lives {
+            return;
+        }
+        self.fitted.set(true);
+        self.restored.set(true);
+        self.set_page(&state.page);
+        self.cams.borrow_mut().extend(state.cams);
+        self.set_cam(state.cam);
+        let ids: Vec<String> = {
+            let scene = self.doc.scene.borrow();
+            state.selection.into_iter().filter(|id| scene.page_of(id) == Some(state.page.as_str())).collect()
+        };
+        self.select(ids);
+        if let Some(key) = super::tools::find_named(self.overlay.upcast_ref(), "design-layers-key").and_downcast::<gtk::ToggleButton>() {
+            key.set_active(state.layers_open);
+        }
+        self.inspector_key.set_active(state.inspector_open);
+    }
+
+    /// Open the design in a window of its own, showing what this board shows, and leave the
+    /// Design view for the gallery.
+    fn pop_out(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        self.stop_play();
+        self.end_edit(true);
+        let state = self.state();
+        super::window::pop_out(&ui, self.doc.clone(), move |b| b.restore(state));
+        if let Some(back) = self.back.borrow().clone() {
+            back();
+        }
+    }
+
+    /// Show the page and camera this design was last left at, read from the settings (I-15),
+    /// unless the person has moved since it opened.
+    fn restore_view(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let (weak, id) = (self.me.clone(), self.doc.id);
+        glib::spawn_future_local(async move {
+            let Ok(got) = ui.call("settings.get", json!({"path": format!("{VIEWS}.{id}")})).await else {
+                return;
+            };
+            let Some(b) = weak.upgrade() else {
+                return;
+            };
+            let Some((page, cam)) = read_view(&got["value"]) else {
+                return;
+            };
+            let opened = *b.page.borrow() == b.doc.scene.borrow().pages().first().cloned().unwrap_or_default();
+            if opened && !b.restored.get() && b.selection.borrow().is_empty() && b.doc.scene.borrow().node(&page).is_some_and(|n| n.kind == NodeKind::Page) {
+                b.fitted.set(true);
+                b.set_page(&page);
+                b.set_cam(cam);
+            }
+        });
     }
 
     pub(super) fn me(&self) -> Rc<Board> {
@@ -676,7 +846,7 @@ impl Board {
         }
         let scene = self.doc.scene.borrow();
         let started = trace().then(std::time::Instant::now);
-        let placed = Rc::new(layout::place(&scene, &self.page.borrow(), &*self.painter));
+        let placed = Rc::new(layout::place_scrolled(&scene, &self.page.borrow(), &*self.painter, &self.scroll.borrow()));
         if let Some(t) = started {
             println!("DESIGN_TRACE layout {:.3} ms {} nodes", t.elapsed().as_secs_f64() * 1e3, placed.rects.len());
         }
@@ -684,11 +854,45 @@ impl Board {
         placed
     }
 
+    /// The page as a still picture shows it, every scrolling frame at its start: what export
+    /// and `design.render` draw. The canvas's own layout when nothing is scrolled.
+    pub(super) fn still_placed(&self) -> Rc<Placed> {
+        if self.scroll.borrow().values().all(|&(x, y)| x == 0.0 && y == 0.0) {
+            return self.placed();
+        }
+        Rc::new(layout::place(&self.doc.scene.borrow(), &self.page.borrow(), &*self.painter))
+    }
+
+    /// Scroll the scrolling frame `id` by `(dx, dy)` page px, held within what its content
+    /// overflows (as last placed). Whether it moved.
+    pub(super) fn scroll_by(&self, id: &str, dx: f64, dy: f64) -> bool {
+        let placed = self.placed();
+        let Some((r, s)) = placed.rect(id).zip(placed.scrolls.get(id).copied()) else {
+            return false;
+        };
+        let Some(scroll) = self.doc.scene.borrow().node(id).and_then(|n| n.scroll) else {
+            return false;
+        };
+        let to = scroll_to(&r, &s, scroll, (dx, dy));
+        if to == s.offset {
+            return false;
+        }
+        if to == (0.0, 0.0) {
+            self.scroll.borrow_mut().remove(id);
+        } else {
+            self.scroll.borrow_mut().insert(id.to_string(), to);
+        }
+        self.invalidate();
+        true
+    }
+
     /// The scene or the layout changed: lay out again and redraw, and refresh the chrome
     /// once this turn of the main loop is done.
     pub(super) fn invalidate(&self) {
         self.placed.borrow_mut().take();
         self.content.borrow_mut().take();
+        // While Play runs, an edit (the inspector's, an agent's) shows in the running motion.
+        self.refresh_play();
         self.canvas.queue_draw();
         self.schedule_chrome();
     }
@@ -712,26 +916,61 @@ impl Board {
             return Some(node.clone());
         }
         let started = trace().then(std::time::Instant::now);
+        // While Play runs: each mover's pose at the frame's time, in a map kept from frame to frame.
+        let posing = self.play.borrow_mut().as_mut().map(|p| {
+            let posing = Rc::make_mut(&mut p.posing);
+            let clocks = posing.clocks.clone();
+            clocks.poses(scene, p.t_ms, &mut posing.poses);
+            p.posing.clone()
+        });
+        let movers = posing.as_ref().map(|p| p.poses.len());
         let snap = gtk::Snapshot::new();
-        self.painter.paint_page(&snap, scene, placed, &self.page.borrow(), None);
+        // On the page's fill, which `draw_inner` lays under the grid: a top-level blend mixes
+        // with it, as it does in a frame (B30).
+        let page = self.page.borrow();
+        let ground = scene.node(&page).and_then(fill_of).unwrap_or_else(|| CANVAS.into());
+        self.painter.with_posing(posing, || self.painter.paint_page_on(&snap, scene, placed, &page, None, Some(&ground)));
         let node = snap.to_node();
         if let Some(t) = started {
-            println!("DESIGN_TRACE content {:.3} ms", t.elapsed().as_secs_f64() * 1e3);
+            let ms = t.elapsed().as_secs_f64() * 1e3;
+            match movers {
+                Some(n) => println!("DESIGN_TRACE play_frame {ms:.3} ms movers {n}"),
+                None => println!("DESIGN_TRACE content {ms:.3} ms"),
+            }
         }
         self.content.borrow_mut().clone_from(&node);
         node
     }
 
+    /// What the page paints, its words, strokes and shadows included: what fit frames (B3: a
+    /// line an agent wrote without a box no longer pulls it to the origin).
     pub(super) fn page_bounds(&self) -> Option<Rect> {
         let placed = self.placed();
         let scene = self.doc.scene.borrow();
         let page = self.page.borrow();
-        Rect::bounds(scene.children(&page).iter().filter_map(|id| placed.rects.get(id)))
+        let shown = scene.children(&page).iter().filter(|id| scene.node(id).is_some_and(|n| !n.is_hidden()));
+        let painted: Vec<Rect> = shown.filter_map(|id| bounds::painted_bounds(&scene, &placed, &*self.painter, id)).collect();
+        Rect::bounds(painted.iter())
     }
 
+    /// The box the selection is drawn in on the page: each layer's as it shows (a line's
+    /// points wherever its box is, a turned node's turned box, a child of a turned frame where
+    /// the frame's turn carries it), as a flip turns them over. Its outline, handles and
+    /// toolbar sit on it.
     pub(super) fn selection_bounds(&self) -> Option<Rect> {
         let placed = self.placed();
-        Rect::bounds(self.selection.borrow().iter().filter_map(|id| placed.rects.get(id)))
+        let scene = self.doc.scene.borrow();
+        let shown: Vec<Rect> = self.selection.borrow().iter().filter_map(|id| shown_box(&scene, &placed, id)).collect();
+        Rect::bounds(shown.iter())
+    }
+
+    /// What the selection paints, for Zoom to selection (B3).
+    pub(super) fn selection_painted(&self) -> Option<Rect> {
+        let placed = self.placed();
+        let scene = self.doc.scene.borrow();
+        let painted: Vec<Rect> =
+            self.selection.borrow().iter().filter_map(|id| bounds::painted_bounds_in_page(&scene, &placed, &*self.painter, id)).collect();
+        Rect::bounds(painted.iter())
     }
 
     // ------------------------------------------------------------------ camera
@@ -766,12 +1005,16 @@ impl Board {
 
     fn fit_cam(&self, r: Option<Rect>, closer: bool) -> Camera {
         let (w, h) = self.size.get();
-        // The dock sits over the top left: fit below it, and keep the frame names in view.
-        let top = 76.0;
+        // Clear of the layers panel on the left and the inspector on the right where they show
+        // (E-board-21), 8 px from each.
+        let layers = self.layers_panel.reveals_child().then(|| f64::from(self.layers_panel.width()) + 12.0 + 8.0);
+        let inspector = self.inspector_scroll.is_visible().then(|| w - f64::from(self.inspector_scroll.width().max(INSPECTOR_W as i32)) - 12.0 - 8.0);
+        let area = fit_area(w, h, layers, inspector);
         match r {
             Some(r) => {
-                let mut cam = Camera::fit(&r, w, (h - top).max(1.0), 56.0, if closer { 4.0 } else { 1.0 });
-                cam.y -= top / cam.zoom;
+                let mut cam = Camera::fit(&r, area.w, area.h, 56.0, if closer { 4.0 } else { 1.0 });
+                cam.x -= area.x / cam.zoom;
+                cam.y -= area.y / cam.zoom;
                 cam
             }
             None => Camera { x: -w / 2.0, y: -h / 2.0, zoom: 1.0 },
@@ -784,6 +1027,14 @@ impl Board {
         if *self.page.borrow() == page {
             return;
         }
+        // A page deleted meanwhile (its row still in an open list) is not shown (TM-69).
+        if !self.doc.scene.borrow().node(page).is_some_and(|n| n.kind == NodeKind::Page) {
+            return;
+        }
+        // Play is of the page it was started on.
+        self.stop_play();
+        // A vector path being placed is finished on the page it was drawn on (TM-68).
+        super::tools::finish_vector(self, false);
         self.end_edit(true);
         self.release_fields();
         let old = self.page.replace(page.to_string());
@@ -811,6 +1062,11 @@ impl Board {
     pub(super) fn select(&self, ids: Vec<String>) {
         if *self.selection.borrow() == ids {
             return;
+        }
+        // Another layer picked while one is typed into: those words are done (E-text-5).
+        let editing = self.edit.borrow().as_ref().map(|e| e.id.clone());
+        if editing.is_some_and(|e| !ids.contains(&e)) {
+            self.end_edit(true);
         }
         self.release_fields();
         *self.selection.borrow_mut() = ids;
@@ -866,29 +1122,24 @@ impl Board {
     fn changed(&self, change: &Change) {
         match change {
             Change::Scene => {
+                self.keep_typed();
+                // A picture deleted or replaced lets go of its decoded copy (B33).
+                self.painter.retain(&self.doc.scene.borrow());
                 // An undo can take away the page on show (one just added, or duplicated).
                 self.keep_page();
                 self.prune_selection();
                 self.invalidate();
             }
             Change::Reloaded { changed, by } => {
+                self.keep_typed();
                 *self.painter.assets_dir.borrow_mut() = self.doc.assets_dir.borrow().clone();
                 self.painter.retain(&self.doc.scene.borrow());
                 self.prune_selection();
                 self.invalidate();
-                if by != "user" && !changed.is_empty() {
-                    // "Just now" for a minute; then who it was.
-                    let serial = self.set_status(&format!("{by} edited it just now"), Some("design-status-agent"));
-                    let (weak, who) = (self.me.clone(), by.clone());
-                    glib::timeout_add_local_once(std::time::Duration::from_secs(60), move || {
-                        if let Some(b) = weak.upgrade().filter(|b| b.status_serial.get() == serial) {
-                            b.set_status(&format!("Last edited by {who}"), None);
-                        }
-                    });
-                    self.start_flash(changed.clone());
-                    *self.agent_last.borrow_mut() = Some(by.clone());
-                    self.agent_undo.set_tooltip_text(Some(&format!("Undo {by}'s last change to this design")));
-                    self.agent_undo.set_visible(true);
+                let removed = self.doc.take_removed();
+                let actors = self.doc.take_actors();
+                if by != "user" && (!changed.is_empty() || !removed.is_empty()) {
+                    self.agent_changed(by, changed, &actors, removed.len());
                 }
                 self.keep_page();
             }
@@ -917,6 +1168,92 @@ impl Board {
         }
     }
 
+    /// The words being typed stay on the canvas when the scene is put back to what the engine
+    /// holds (a confirm, a reread), which has the words as they were before typing (TM-46).
+    /// The edit still sends them when it ends.
+    fn keep_typed(&self) {
+        let typed = self.edit.borrow().as_ref().filter(|e| !e.created).map(|e| {
+            let buffer = e.view.buffer();
+            (e.id.clone(), buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string())
+        });
+        let Some((id, words)) = typed else {
+            return;
+        };
+        if let Some(n) = self.doc.scene.borrow_mut().node_mut(&id) {
+            if n.text.as_deref() != Some(words.as_str()) {
+                let runs = relay_client::design::text::remap_runs(n.text.as_deref().unwrap_or(""), &words, n.runs.as_deref().unwrap_or_default());
+                n.runs = (!runs.is_empty()).then_some(runs);
+                n.text = Some(words);
+            }
+        }
+    }
+
+    /// An agent changed the design (the read after it names `changed` and `removed` layers):
+    /// say so, glow what each agent changed, and offer to undo the newest's change (TM-12,
+    /// TM-13). What it changed on another page is named with a key that goes there (E-ask-10).
+    fn agent_changed(&self, by: &str, changed: &HashSet<String>, actors: &[(String, HashSet<String>)], removed: usize) {
+        let glow: HashSet<String> = if actors.is_empty() { changed.clone() } else { actors.iter().flat_map(|(_, ids)| ids.iter().cloned()).collect() };
+        let page = self.page.borrow().clone();
+        let elsewhere = {
+            let scene = self.doc.scene.borrow();
+            let mut pages: Vec<(String, usize)> = Vec::new();
+            for id in &glow {
+                match scene.page_of(id) {
+                    Some(p) if p != page => match pages.iter_mut().find(|(q, _)| q == p) {
+                        Some((_, n)) => *n += 1,
+                        None => pages.push((p.to_string(), 1)),
+                    },
+                    _ => {}
+                }
+            }
+            pages.into_iter().max_by_key(|(_, n)| *n).map(|(p, _)| p)
+        };
+        let here = glow.iter().any(|id| self.doc.scene.borrow().page_of(id) == Some(page.as_str()));
+        // "Just now" for a minute; then who it was.
+        let words = match &elsewhere {
+            Some(p) if !here => format!("{by} edited {}", self.page_name(p)),
+            _ => format!("{by} edited it just now"),
+        };
+        let serial = self.set_status(&words, Some("design-status-agent"));
+        let (weak, who) = (self.me.clone(), by.to_string());
+        glib::timeout_add_local_once(std::time::Duration::from_secs(60), move || {
+            if let Some(b) = weak.upgrade().filter(|b| b.status_serial.get() == serial) {
+                b.set_status(&format!("Last edited by {who}"), None);
+            }
+        });
+        match elsewhere {
+            Some(p) => {
+                self.goto.set_tooltip_text(Some(&format!("Show {} and what {by} changed there", self.page_name(&p))));
+                *self.goto_page.borrow_mut() = Some((p, glow.clone()));
+                self.goto.set_visible(true);
+            }
+            None => {
+                self.goto_page.borrow_mut().take();
+                self.goto.set_visible(false);
+            }
+        }
+        self.start_flash(glow);
+        if removed > 0 {
+            self.toast(&format!("{by} removed {removed} {}", if removed == 1 { "layer" } else { "layers" }));
+        }
+        *self.agent_last.borrow_mut() = Some(by.to_string());
+        self.agent_force.set(None);
+        self.agent_undo.set_tooltip_text(Some(&format!("Undo {by}'s last change to this design")));
+        self.agent_undo.set_visible(true);
+    }
+
+    /// Show the page an agent's change was on, and glow what it changed there.
+    fn go_to_change(&self) {
+        let Some((page, ids)) = self.goto_page.borrow_mut().take() else {
+            return;
+        };
+        self.goto.set_visible(false);
+        if self.doc.scene.borrow().node(&page).is_some() {
+            self.set_page(&page);
+            self.start_flash(ids);
+        }
+    }
+
     /// Show the first page when the one on show is gone, and bring the page list up to date.
     fn keep_page(&self) {
         let gone = self.doc.scene.borrow().node(&self.page.borrow()).is_none();
@@ -926,6 +1263,10 @@ impl Board {
         }
         if let Some(layers) = self.layers.borrow().as_ref() {
             layers.pages_changed();
+        }
+        // The dock's open page list lists the pages there are now (TM-69).
+        if let Some(pop) = self.pages_popover.borrow().as_ref().filter(|p| p.is_visible()) {
+            pop.set_child(Some(&super::layers::pages_menu(&self.me(), pop)));
         }
     }
 
@@ -947,7 +1288,9 @@ impl Board {
     }
 
     fn design_changed(&self) {
-        let design = self.doc.design.borrow().clone();
+        let mut design = self.doc.design.borrow().clone();
+        // A title stored before control characters were refused would stop GTK at a NUL (B43).
+        design.title = relay_bus::design::strip_controls(&design.title, false).into_owned();
         self.title.set_text(&design.title);
         // The whole title, which the key cuts short past 48 characters.
         if let Some(key) = self.title.ancestor(gtk::MenuButton::static_type()) {
@@ -1032,7 +1375,7 @@ impl Board {
         let serial = self.toast_serial.get() + 1;
         self.toast_serial.set(serial);
         let weak = self.me.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_millis(2600 + text.len() as u64 * 30), move || {
+        glib::timeout_add_local_once(std::time::Duration::from_millis(toast_ms(text)), move || {
             if let Some(b) = weak.upgrade().filter(|b| b.toast_serial.get() == serial) {
                 b.toast.set_reveal_child(false);
             }
@@ -1119,7 +1462,22 @@ impl Board {
             snap.restore();
         }
         self.frame_labels(snap, &scene, &placed, &page);
+        if scene.children(&page).is_empty() && matches!(*self.gesture.borrow(), Gesture::Idle) && self.vector.borrow().is_none() {
+            self.empty_hint(snap, w, h, &canvas_fill);
+        }
         self.overlays(snap, &scene, &placed);
+    }
+
+    /// What an empty page says, in its middle (I-16).
+    fn empty_hint(&self, snap: &gtk::Snapshot, w: f64, h: f64, ground: &str) {
+        let layout = self.label_layout("empty", "Press F, R or T to start, or Ask an agent", 14.0, pango::Weight::Normal, false);
+        let (lw, lh) = layout.pixel_size();
+        let mut ink = label_ink(paint::luminance(ground));
+        ink.set_alpha(0.8);
+        snap.save();
+        snap.translate(&graphene::Point::new(((w - lw as f64) / 2.0) as f32, ((h - lh as f64) / 2.0) as f32));
+        snap.append_layout(&layout, &ink);
+        snap.restore();
     }
 
     /// A dot every 8, 16, 32… page pixels, whichever falls 16 to 32 screen pixels apart.
@@ -1154,6 +1512,33 @@ impl Board {
         snap.append_border(&rr, &[width; 4], &[c, c, c, c]);
     }
 
+    /// One layer's outline where it is drawn: its turned box when it or a frame it is in is
+    /// turned, else the box it shows (a line's points, wherever its box is).
+    fn outline_node(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, id: &str, width: f32) {
+        let turned = scene.node(id).filter(|n| n.kind != NodeKind::Line).and_then(|_| shapes::visual(scene, placed, id)).filter(|(_, t)| *t != 0.0);
+        match turned {
+            Some((r, turn)) => self.quad(snap, &self.screen(&r), turn, width),
+            None => {
+                if let Some(r) = shown_box(scene, placed, id) {
+                    self.outline(snap, &self.screen(&r), SELECT, width);
+                }
+            }
+        }
+    }
+
+    /// Screen box `s` turned `turn` degrees about its centre, outlined.
+    fn quad(&self, snap: &gtk::Snapshot, s: &Rect, turn: f64, width: f32) {
+        let at = |x: f64, y: f64| shapes::rotate(x, y, s.cx(), s.cy(), turn);
+        let corners = [at(s.x, s.y), at(s.right(), s.y), at(s.right(), s.bottom()), at(s.x, s.bottom())];
+        let pb = gsk::PathBuilder::new();
+        pb.move_to(corners[0].0 as f32, corners[0].1 as f32);
+        for c in &corners[1..] {
+            pb.line_to(c.0 as f32, c.1 as f32);
+        }
+        pb.close();
+        snap.append_stroke(&pb.to_path(), &gsk::Stroke::new(width), &rgba(SELECT));
+    }
+
     fn label_layout(&self, key: &str, text: &str, size: f64, weight: pango::Weight, mono: bool) -> pango::Layout {
         let mut labels = self.labels.borrow_mut();
         if let Some(l) = labels.get(key) {
@@ -1178,6 +1563,9 @@ impl Board {
     fn frame_labels(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, page: &str) {
         let selection = self.selection.borrow();
         let hover = self.hover.borrow();
+        // A grey that reads on the page's own fill, 4.5:1 or better on either (E-board-1).
+        let ground = scene.node(page).and_then(fill_of).unwrap_or_else(|| CANVAS.into());
+        let ink = label_ink(paint::luminance(&ground));
         for id in scene.children(page) {
             let Some(n) = scene.node(id).filter(|n| n.kind == NodeKind::Frame && !n.is_hidden()) else {
                 continue;
@@ -1189,13 +1577,13 @@ impl Board {
             if s.w < 28.0 || s.bottom() < 0.0 || s.y > self.size.get().1 + 20.0 {
                 continue;
             }
-            let name = n.name.clone().unwrap_or_else(|| "Frame".into());
+            let name = frame_label(n);
             let layout = self.label_layout(&format!("frame:{id}"), &name, 12.0, pango::Weight::Medium, false);
             layout.set_width((s.w * pango::SCALE as f64) as i32);
             layout.set_ellipsize(pango::EllipsizeMode::End);
             let (_, lh) = layout.pixel_size();
             let lit = selection.contains(id) || hover.as_deref() == Some(id.as_str());
-            let color = if lit { rgba(SELECT) } else { gdk::RGBA::new(0.62, 0.6, 0.57, 1.0) };
+            let color = if lit { rgba(SELECT) } else { ink };
             snap.save();
             snap.translate(&graphene::Point::new(s.x as f32, (s.y - lh as f64 - 6.0) as f32));
             snap.append_layout(&layout, &color);
@@ -1219,7 +1607,7 @@ impl Board {
             if s.w < 28.0 {
                 continue;
             }
-            let name = n.name.clone().unwrap_or_else(|| "Frame".into());
+            let name = frame_label(n);
             let layout = self.label_layout(&format!("frame:{id}"), &name, 12.0, pango::Weight::Medium, false);
             let (lw, lh) = layout.pixel_size();
             let hit = Rect::new(s.x, s.y - lh as f64 - 8.0, (lw as f64).min(s.w) + 4.0, lh as f64 + 6.0);
@@ -1241,27 +1629,42 @@ impl Board {
             let mut c = rgba(AGENT);
             c.set_alpha(alpha as f32);
             for id in &flash {
-                if let Some(r) = placed.rect(id) {
+                if let Some(r) = shown_box(scene, placed, id) {
                     let s = self.screen(&r).inflate(2.0);
                     let rr = gsk::RoundedRect::from_rect(grect(&s), 3.0);
                     snap.append_border(&rr, &[2.0; 4], &[c, c, c, c]);
                 }
             }
         }
+        // While Play runs the page shows as it plays: no selection, hover, guides or handles.
+        if self.playing() {
+            return;
+        }
         // Hover.
         if let Some(id) = self.hover.borrow().as_ref() {
             if !self.selection.borrow().contains(id) && matches!(*self.gesture.borrow(), Gesture::Idle) {
-                if let Some(r) = placed.rect(id) {
-                    self.outline(snap, &self.screen(&r), SELECT, 1.5);
-                }
+                self.outline_node(snap, scene, placed, id, 1.5);
             }
         }
+        self.scrollbars(snap, scene, placed);
         let gesture = self.gesture.borrow();
-        // Where a dragged node would land.
-        if let Gesture::Move { target: Some(t), moved: true, .. } = &*gesture {
-            if let Some(r) = placed.rect(t) {
-                self.outline(snap, &self.screen(&r), SELECT, 2.0);
+        // Where a dragged node would land, and its place there in a layout.
+        if let Gesture::Move { target: Some(t), into, moved: true, ids, .. } = &*gesture {
+            self.outline_node(snap, scene, placed, t, 2.0);
+            if let Some(index) = into {
+                self.insertion(snap, scene, placed, t, *index as usize, ids);
             }
+        }
+        // Laid-out layers dragged: what they paint, under the pointer (E-board-10).
+        if let Gesture::Move { ghost: Some(ghost), moved: true, start, at, .. } = &*gesture {
+            let cam = self.cam.get();
+            snap.save();
+            snap.scale(cam.zoom as f32, cam.zoom as f32);
+            snap.translate(&graphene::Point::new((at.0 - start.0 - cam.x) as f32, (at.1 - start.1 - cam.y) as f32));
+            snap.push_opacity(0.6);
+            snap.append_node(ghost);
+            snap.pop();
+            snap.restore();
         }
         if let Gesture::Move { reorder: Some((parent, index)), moved: true, ids, .. } = &*gesture {
             self.insertion(snap, scene, placed, parent, *index as usize, ids);
@@ -1271,43 +1674,35 @@ impl Board {
         let resizing = matches!(*gesture, Gesture::Resize { .. } | Gesture::Endpoint { .. });
         if !selection.is_empty() && editing.is_none() {
             for id in selection.iter() {
-                if let Some(r) = placed.rect(id) {
-                    self.outline(snap, &self.screen(&r), SELECT, 1.0);
-                }
+                self.outline_node(snap, scene, placed, id, 1.0);
             }
+            // A locked layer shows it is selected, but has no handles to drag (B16), nor does a
+            // group, whose box is its children's (B90).
+            let locked = !handled(scene, &selection);
             if let Some((_, r, turn)) = self.single_turn() {
-                // One turned node: its outline and handles turn with it.
+                // One turned node: its outline (drawn above) and handles turn with it.
                 let s = self.screen(&r);
-                let at = |x: f64, y: f64| relay_client::design::shapes::rotate(x, y, s.cx(), s.cy(), turn);
-                let pb = gsk::PathBuilder::new();
-                let corners = [at(s.x, s.y), at(s.right(), s.y), at(s.right(), s.bottom()), at(s.x, s.bottom())];
-                pb.move_to(corners[0].0 as f32, corners[0].1 as f32);
-                for c in &corners[1..] {
-                    pb.line_to(c.0 as f32, c.1 as f32);
-                }
-                pb.close();
-                snap.append_stroke(&pb.to_path(), &gsk::Stroke::new(1.0), &rgba(SELECT));
-                if !matches!(*gesture, Gesture::Move { moved: true, .. }) {
+                let at = |x: f64, y: f64| shapes::rotate(x, y, s.cx(), s.cy(), turn);
+                if !locked && !matches!(*gesture, Gesture::Move { moved: true, .. }) {
                     for h in HANDLES {
                         let (x, y) = handle_point(&s, h);
                         let (x, y) = at(x, y);
                         self.handle(snap, x, y, false);
                     }
                 }
-                let shown = relay_client::design::shapes::rotated_bounds(&s, turn);
+                let shown = shapes::rotated_bounds(&s, turn);
                 self.size_pill(snap, &shown, &r);
-            } else if let Some(b) = Rect::bounds(selection.iter().filter_map(|id| placed.rects.get(id))) {
+            } else if let Some(b) = Rect::bounds(selection.iter().filter_map(|id| shown_box(scene, placed, id)).collect::<Vec<_>>().iter()) {
                 let s = self.screen(&b);
                 if selection.len() > 1 {
                     self.outline(snap, &s, SELECT, 1.0);
                 }
-                let line = selection.len() == 1
-                    && scene.node(&selection[0]).is_some_and(|n| n.kind == NodeKind::Line);
-                if line {
+                let line = selection.len() == 1 && scene.node(&selection[0]).is_some_and(ends_dragged);
+                if line && !locked {
                     for p in self.endpoints(&selection[0]) {
                         self.handle(snap, p.0, p.1, true);
                     }
-                } else if !matches!(*gesture, Gesture::Move { moved: true, .. }) && s.w > 2.0 && s.h > 2.0 {
+                } else if !line && !locked && !matches!(*gesture, Gesture::Move { moved: true, .. }) && s.w > 2.0 && s.h > 2.0 {
                     for h in HANDLES {
                         let (x, y) = handle_point(&s, h);
                         if (h.left || h.right) && (h.top || h.bottom) || s.w.min(s.h) > 24.0 {
@@ -1320,11 +1715,25 @@ impl Board {
                 }
             }
         }
-        // Guides.
+        if editing.is_none() && matches!(*gesture, Gesture::Idle | Gesture::Resize { .. }) {
+            self.pin_marks(snap, scene, placed);
+        }
+        // Guides; inside a turned frame, turned with it.
+        let guides_in = self.guides_in.borrow().clone();
         for g in self.guides.borrow().iter() {
             let c = rgba(GUIDE);
             let cam = self.cam.get();
-            if g.vertical {
+            if let Some(f) = &guides_in {
+                let ends = if g.vertical { [(g.at, g.from), (g.at, g.to)] } else { [(g.from, g.at), (g.to, g.at)] };
+                let [a, z] = ends.map(|(x, y)| {
+                    let (x, y) = shapes::to_page_pt(scene, placed, f, x, y);
+                    cam.to_screen(x, y)
+                });
+                let pb = gsk::PathBuilder::new();
+                pb.move_to(a.0 as f32, a.1 as f32);
+                pb.line_to(z.0 as f32, z.1 as f32);
+                snap.append_stroke(&pb.to_path(), &gsk::Stroke::new(1.0), &c);
+            } else if g.vertical {
                 let (x, y0) = cam.to_screen(g.at, g.from);
                 let (_, y1) = cam.to_screen(g.at, g.to);
                 snap.append_color(&c, &graphene::Rect::new(x.round() as f32 - 0.5, y0 as f32, 1.0, (y1 - y0) as f32));
@@ -1362,7 +1771,7 @@ impl Board {
                     _ => {
                         let r = self.screen(&Rect::spanning(*a, *b));
                         if let Some((sides, star)) = polygon_of(*tool) {
-                            let pts = relay_client::design::shapes::polygon(&r, sides, star);
+                            let pts = shapes::polygon(&r, sides, star);
                             let pb = gsk::PathBuilder::new();
                             pb.move_to(pts[0].0 as f32, pts[0].1 as f32);
                             for q in &pts[1..] {
@@ -1383,7 +1792,7 @@ impl Board {
                 }
             }
             _ if self.vector.borrow().is_some() => self.draw_vector(snap),
-            Gesture::Draw { points, .. } if points.len() > 1 => {
+            Gesture::Draw { points, tool, parent } if points.len() > 1 => {
                 let cam = self.cam.get();
                 let pb = gsk::PathBuilder::new();
                 let (x0, y0) = cam.to_screen(points[0][0], points[0][1]);
@@ -1392,14 +1801,87 @@ impl Board {
                     let (x, y) = cam.to_screen(p[0], p[1]);
                     pb.line_to(x as f32, y as f32);
                 }
-                let highlighter = self.tool.get() == Tool::Highlighter;
+                let highlighter = *tool == Tool::Highlighter;
                 let width = if highlighter { 16.0 } else { 3.0 } * cam.zoom;
                 let stroke = gsk::Stroke::new(width as f32);
                 stroke.set_line_cap(gsk::LineCap::Round);
                 stroke.set_line_join(gsk::LineJoin::Round);
-                snap.append_stroke(&pb.to_path(), &stroke, &rgba(&self.pen_color(highlighter)));
+                snap.append_stroke(&pb.to_path(), &stroke, &rgba(&self.pen_color(*tool, parent)));
             }
             _ => {}
+        }
+    }
+
+    /// How the one selected layer is pinned in its frame: a dashed line from each pinned edge to
+    /// the frame's, and a tick on the frame's middle for a centred axis (feature-layout §3.5).
+    fn pin_marks(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed) {
+        let selection = self.selection.borrow();
+        let [id] = selection.as_slice() else {
+            return;
+        };
+        let Some(n) = scene.node(id).filter(|n| n.is_pinned() && !layout::is_laid(scene, id)) else {
+            return;
+        };
+        let Some(parent) = scene.parent(id).filter(|p| scene.node(p).is_some_and(|p| p.kind == NodeKind::Frame)) else {
+            return;
+        };
+        let (Some(r), Some(pr)) = (placed.rect(id), placed.rect(parent)) else {
+            return;
+        };
+        let cam = self.cam.get();
+        let pb = gsk::PathBuilder::new();
+        for (a, z) in pin_lines(n, &r, &pr, 1.0 / cam.zoom) {
+            let [a, z] = [a, z].map(|(x, y)| {
+                let (x, y) = shapes::to_page_pt(scene, placed, parent, x, y);
+                cam.to_screen(x, y)
+            });
+            pb.move_to(a.0 as f32, a.1 as f32);
+            pb.line_to(z.0 as f32, z.1 as f32);
+        }
+        let stroke = gsk::Stroke::new(1.0);
+        stroke.set_dash(&[3.0, 2.0]);
+        snap.append_stroke(&pb.to_path(), &stroke, &rgba(SELECT));
+    }
+
+    /// The overlay scrollbars of the scrolling frames under the pointer, selected or holding the
+    /// selection (feature-layout §2.5): drawn over the canvas, never part of the content, so no
+    /// export carries them. A turned frame's turn with it.
+    fn scrollbars(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed) {
+        if placed.scrolls.is_empty() {
+            return;
+        }
+        let hover = self.hover.borrow().clone();
+        let selection = self.selection.borrow();
+        let px = 1.0 / self.cam.get().zoom;
+        // A mid grey reads on light and dark content alike.
+        let mut c = rgba("#7A7A7A");
+        c.set_alpha(0.7);
+        for (id, s) in &placed.scrolls {
+            let Some((n, r)) = scene.node(id).filter(|n| !n.is_hidden()).zip(placed.rect(id)) else {
+                continue;
+            };
+            let near = |other: &str| other == id || scene.is_inside(other, id);
+            if !hover.as_deref().is_some_and(near) && !selection.iter().any(|sel| near(sel)) {
+                continue;
+            }
+            let turned = !shapes::turned_ancestors(scene, placed, id).is_empty() || shapes::rotation(n) != 0.0;
+            for bar in scroll_bars(&r, s, n.scroll.unwrap_or(Scroll::Both), px) {
+                if turned {
+                    let pb = gsk::PathBuilder::new();
+                    for (i, (x, y)) in bar.corners().into_iter().enumerate() {
+                        let (x, y) = shapes::to_page_pt(scene, placed, id, x, y);
+                        let (x, y) = self.cam.get().to_screen(x, y);
+                        if i == 0 { pb.move_to(x as f32, y as f32) } else { pb.line_to(x as f32, y as f32) }
+                    }
+                    pb.close();
+                    snap.append_fill(&pb.to_path(), gsk::FillRule::Winding, &c);
+                } else {
+                    let rr = gsk::RoundedRect::from_rect(grect(&self.screen(&bar)), 2.0);
+                    snap.push_rounded_clip(&rr);
+                    snap.append_color(&c, &grect(&self.screen(&bar)));
+                    snap.pop();
+                }
+            }
         }
     }
 
@@ -1427,7 +1909,14 @@ impl Board {
         let rubber = gsk::PathBuilder::new();
         let last = screen[screen.len() - 1];
         rubber.move_to(last.0 as f32, last.1 as f32);
-        let to = if closing { first } else { pointer };
+        // With Shift, at 45° steps from the last point, where the click would put it (E-board-2).
+        let to = if closing {
+            first
+        } else if self.shift_held.get() {
+            super::tools::constrain45(last, pointer)
+        } else {
+            pointer
+        };
         rubber.line_to(to.0 as f32, to.1 as f32);
         let dashed = gsk::Stroke::new(1.0);
         dashed.set_dash(&[4.0, 3.0]);
@@ -1440,35 +1929,23 @@ impl Board {
         }
     }
 
+    /// Where a reorder or a drop would put the dragged children: a bar before the child at
+    /// `index` among the others (hidden ones counted, as the engine counts them: B20), or after
+    /// the last shown; in a wrap, beside that child at its height.
     fn insertion(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, parent: &str, index: usize, moving: &[String]) {
         let Some(p) = scene.node(parent) else {
             return;
         };
-        let row = p.layout_mode() == relay_bus::design::Layout::Row;
-        let kids: Vec<Rect> = scene
-            .children(parent)
-            .iter()
-            .filter(|c| !moving.contains(c))
-            .filter_map(|c| placed.rect(c))
-            .collect();
         let Some(pr) = placed.rect(parent) else {
             return;
         };
-        let at = if kids.is_empty() {
-            if row { pr.x + 8.0 } else { pr.y + 8.0 }
-        } else if index >= kids.len() {
-            let last = kids.last().copied().unwrap_or_default();
-            if row { last.right() + 2.0 } else { last.bottom() + 2.0 }
-        } else {
-            let k = kids[index];
-            if row { k.x - 2.0 } else { k.y - 2.0 }
-        };
-        let r = if row {
-            Rect::new(at - 1.0, pr.y + 4.0, 2.0 / self.cam.get().zoom, pr.h - 8.0)
-        } else {
-            Rect::new(pr.x + 4.0, at - 1.0, pr.w - 8.0, 2.0 / self.cam.get().zoom)
-        };
-        let s = self.screen(&r);
+        let rest: Vec<&String> = scene.children(parent).iter().filter(|c| !moving.contains(c)).collect();
+        // What the layout places: neither hidden (no box) nor absolute.
+        let laid = |c: &&String| scene.node(c).is_some_and(|n| !n.is_absolute()).then(|| placed.rect(c)).flatten();
+        let next = rest.iter().skip(index).find_map(laid);
+        let last = rest.iter().rev().find_map(laid);
+        let bar = insertion_bar(p.layout_mode(), &pr, next, last, 1.0 / self.cam.get().zoom);
+        let s = self.screen(&bar);
         snap.append_color(&rgba(SELECT), &grect(&Rect::new(s.x, s.y, s.w.max(2.0), s.h.max(2.0))));
     }
 
@@ -1498,19 +1975,23 @@ impl Board {
         snap.restore();
     }
 
-    /// The one selected node when it is turned: its id, unturned page box and turn.
+    /// Whether the selection has resize handles: something in it is neither locked (B16) nor a
+    /// group (B90).
+    pub(super) fn has_handles(&self) -> bool {
+        handled(&self.doc.scene.borrow(), &self.selection.borrow())
+    }
+
+    /// The one selected node when it is drawn turned, by its own turn or a frame's it is in:
+    /// its id, its unturned box moved to where it is drawn on the page, and its whole turn (B12).
     pub(super) fn single_turn(&self) -> Option<(String, Rect, f64)> {
         let sel = self.selection.borrow();
         let [id] = sel.as_slice() else {
             return None;
         };
         let scene = self.doc.scene.borrow();
-        let n = scene.node(id).filter(|n| n.kind != NodeKind::Line)?;
-        let turn = relay_client::design::shapes::rotation(n);
-        if turn == 0.0 {
-            return None;
-        }
-        Some((id.clone(), self.placed().rect(id)?, turn))
+        scene.node(id).filter(|n| n.kind != NodeKind::Line)?;
+        let (r, turn) = shapes::visual(&scene, &self.placed(), id)?;
+        (turn != 0.0).then(|| (id.clone(), r, turn))
     }
 
     /// A line's ends, on screen.
@@ -1523,7 +2004,7 @@ impl Board {
         let cam = self.cam.get();
         // A connector's ends are where it is drawn: on the shapes it joins.
         if n.from.is_some() || n.to.is_some() {
-            let (pts, _) = relay_client::design::shapes::line_points(&scene, &placed, n);
+            let (pts, _) = shapes::line_points(&scene, &placed, n);
             return [pts.first(), pts.last()].into_iter().flatten().map(|p| cam.to_screen(p.0, p.1)).collect();
         }
         n.points
@@ -1538,17 +2019,357 @@ impl Board {
             .unwrap_or_default()
     }
 
-    pub(super) fn pen_color(&self, highlighter: bool) -> String {
-        if highlighter {
+    /// The colour `tool` (the pen, the highlighter or the vector pen) draws with inside
+    /// `container`: the one picked for that tool, else the highlighter's yellow, else the ink
+    /// that reads on the ground it draws on (TM-42, E-board-18).
+    pub(super) fn pen_color(&self, tool: Tool, container: &str) -> String {
+        if let Some(chosen) = self.pens.borrow().get(&tool).filter(|c| !c.is_empty()) {
+            return chosen.clone();
+        }
+        if tool == Tool::Highlighter {
             return "#FFD60A66".into();
         }
-        let chosen = self.pen.borrow().clone();
-        if !chosen.is_empty() {
-            return chosen;
-        }
+        self.ink_for(container)
+    }
+
+    /// The colour a mark reads well on inside `container`: dark on a light ground, light on a
+    /// dark one, the ground being the container's fill, or its nearest ancestor's, or the canvas.
+    pub(super) fn ink_for(&self, container: &str) -> String {
         let scene = self.doc.scene.borrow();
-        let ground = scene.node(&self.page.borrow()).and_then(fill_of).unwrap_or_else(|| CANVAS.into());
+        let ground = std::iter::once(container)
+            .chain(scene.ancestors(container))
+            .filter_map(|id| scene.node(id))
+            .find_map(fill_of)
+            .unwrap_or_else(|| CANVAS.into());
         if paint::luminance(&ground) > 0.35 { "#1A1A1A".into() } else { "#EDE9E2".into() }
+    }
+
+    // ------------------------------------------------------------------ play
+
+    /// Whether the page's motion is playing or paused in Play (feature-motion §3).
+    pub(super) fn playing(&self) -> bool {
+        self.play.borrow().is_some()
+    }
+
+    /// The page's clocks for Play, with the shown pictures that animate themselves touched (they
+    /// repaint every frame), and whether there are any.
+    fn play_clocks(&self) -> (Clocks, bool) {
+        let scene = self.doc.scene.borrow();
+        let page = self.page.borrow().clone();
+        let mut clocks = Clocks::new(&scene, &page);
+        let moving = self.painter.moving_srcs();
+        let mut pictures = false;
+        if !moving.is_empty() {
+            let mut stack = vec![page];
+            while let Some(id) = stack.pop() {
+                let Some(n) = scene.node(&id).filter(|n| !n.is_hidden()) else {
+                    continue;
+                };
+                if n.kind == NodeKind::Image && n.src.as_deref().is_some_and(|s| moving.contains(s)) {
+                    clocks.touch(&scene, &id);
+                    pictures = true;
+                }
+                stack.extend(scene.children(&id).iter().cloned());
+            }
+        }
+        (clocks, pictures)
+    }
+
+    /// The Play key shows while something on the page moves, or Play runs.
+    fn refresh_play_key(&self) {
+        let shows = self.playing() || {
+            let (clocks, pictures) = self.play_clocks();
+            !clocks.is_empty() || pictures
+        };
+        if self.play_key.is_visible() != shows {
+            self.play_key.set_visible(shows);
+        }
+    }
+
+    /// Ctrl+P and the Play key: start Play, or end it.
+    pub(super) fn toggle_play(&self) {
+        if self.playing() {
+            self.stop_play();
+        } else {
+            self.start_play();
+        }
+    }
+
+    /// Play the page's motion from its start: every clock at 0 together, on the canvas's frame
+    /// clock. Typing and any drag end first; Play edits nothing.
+    pub(super) fn start_play(&self) {
+        if self.playing() {
+            return;
+        }
+        super::tools::finish_vector(self, false);
+        self.end_edit(true);
+        self.cancel_gesture();
+        let (clocks, pictures) = self.play_clocks();
+        if clocks.is_empty() && !pictures {
+            self.toast("Nothing on this page moves yet");
+            return;
+        }
+        let posing = Rc::new(Posing { poses: HashMap::new(), clocks: Rc::new(clocks) });
+        *self.play.borrow_mut() = Some(Play { tick: None, timing: Timing::default(), t_ms: 0.0, posing, pictures, ended: false, labelled: f64::NEG_INFINITY });
+        self.hover.borrow_mut().take();
+        self.run_play();
+        self.show_play(true);
+        self.content.borrow_mut().take();
+        self.canvas.queue_draw();
+    }
+
+    /// Run the clock from where it is shown: a tick callback each frame (the frame clock, never
+    /// a timer), and the pictures that animate themselves.
+    fn run_play(&self) {
+        let weak = self.me.clone();
+        let tick = self.canvas.add_tick_callback(move |_, clock| {
+            let Some(b) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            b.play_tick(clock.frame_time());
+            glib::ControlFlow::Continue
+        });
+        match self.play.borrow_mut().as_mut() {
+            Some(p) => {
+                p.timing.resume();
+                p.tick = Some(tick);
+            }
+            None => return tick.remove(),
+        }
+        if let Some(clock) = self.canvas.frame_clock() {
+            self.painter.play_pictures(&clock);
+        }
+        self.show_time(true);
+    }
+
+    fn play_tick(&self, frame_us: i64) {
+        let t = match self.play.borrow_mut().as_mut() {
+            Some(p) => p.timing.at(frame_us),
+            None => return,
+        };
+        self.play_frame(t);
+    }
+
+    /// Show the frame at `t_ms` (the poses are taken as it draws). Past the end of a motion that
+    /// does not loop, with no picture animating itself, Play holds the end and pauses there, so a
+    /// finished animation asks for no more frames.
+    fn play_frame(&self, t_ms: f64) {
+        let end = {
+            let mut play = self.play.borrow_mut();
+            let Some(p) = play.as_mut() else {
+                return;
+            };
+            let (span, looped) = play_span(&p.posing.clocks);
+            let end = ends(t_ms, span, looped, p.pictures);
+            p.t_ms = if end { span } else { t_ms.max(0.0) };
+            p.ended = end;
+            end
+        };
+        if end {
+            self.pause_play();
+        }
+        // Not `invalidate`: layout stands, and the chrome has nothing new to show.
+        self.content.borrow_mut().take();
+        self.canvas.queue_draw();
+        self.show_time(false);
+    }
+
+    /// Hold Play where it is: the clock and the animated pictures stop until it resumes.
+    pub(super) fn pause_play(&self) {
+        let tick = {
+            let mut play = self.play.borrow_mut();
+            let Some(p) = play.as_mut() else {
+                return;
+            };
+            let at = p.t_ms;
+            p.timing.pause(at);
+            p.tick.take()
+        };
+        let Some(tick) = tick else {
+            return;
+        };
+        tick.remove();
+        self.painter.pause_pictures();
+        self.show_time(true);
+    }
+
+    /// Go on from where Play was paused; from the start once it has ended.
+    pub(super) fn resume_play(&self) {
+        {
+            let mut play = self.play.borrow_mut();
+            let Some(p) = play.as_mut().filter(|p| p.tick.is_none()) else {
+                return;
+            };
+            if p.ended {
+                p.ended = false;
+                p.t_ms = 0.0;
+                p.timing.seek(0.0);
+            }
+        }
+        self.run_play();
+        self.content.borrow_mut().take();
+        self.canvas.queue_draw();
+    }
+
+    /// A paused frame at `ms` into the page's motion (the scrubber). Pictures that animate
+    /// themselves cannot be sought, so they stay where they were.
+    pub(super) fn seek(&self, ms: f64) {
+        self.pause_play();
+        {
+            let mut play = self.play.borrow_mut();
+            let Some(p) = play.as_mut() else {
+                return;
+            };
+            let ms = if ms.is_finite() { ms.max(0.0) } else { 0.0 };
+            p.t_ms = ms;
+            p.timing.seek(ms);
+            p.ended = false;
+        }
+        self.content.borrow_mut().take();
+        self.canvas.queue_draw();
+        self.show_time(true);
+    }
+
+    /// End Play: the page shows at rest again, its pictures at their first frame.
+    pub(super) fn stop_play(&self) {
+        let Some(play) = self.play.borrow_mut().take() else {
+            return;
+        };
+        if let Some(tick) = play.tick {
+            tick.remove();
+        }
+        self.painter.stop_pictures();
+        self.painter.clear_stills();
+        self.show_play(false);
+        self.content.borrow_mut().take();
+        self.canvas.queue_draw();
+        self.overlay.queue_allocate();
+        self.schedule_chrome();
+    }
+
+    /// The scene, the layout or the pictures changed while Play runs: its clocks again from the
+    /// page as it is (the pictures kept of what rests go with them), at the same time. Nothing
+    /// left to play ends it.
+    fn refresh_play(&self) {
+        if !self.playing() {
+            return;
+        }
+        let (clocks, pictures) = self.play_clocks();
+        if clocks.is_empty() && !pictures {
+            self.stop_play();
+            return;
+        }
+        let running = {
+            let mut play = self.play.borrow_mut();
+            let Some(p) = play.as_mut() else {
+                return;
+            };
+            p.posing = Rc::new(Posing { poses: HashMap::new(), clocks: Rc::new(clocks) });
+            p.pictures = pictures;
+            p.tick.is_some()
+        };
+        // A picture that animates itself may have loaded since.
+        if let Some(clock) = self.canvas.frame_clock().filter(|_| running) {
+            self.painter.play_pictures(&clock);
+        }
+        self.show_time(true);
+    }
+
+    /// The time bar and the Play key as Play starts (`on`) or ends.
+    fn show_play(&self, on: bool) {
+        self.timebar.root.set_visible(on);
+        // The toast rises above the bar while it shows.
+        self.toast.set_margin_bottom(if on { 68 } else { 16 });
+        let (icon, tip) = if on { ("stop", "Stop playing (Esc)") } else { ("play", PLAY_TIP) };
+        self.play_key.set_child(Some(&crate::icons::image(icon, 16)));
+        self.play_key.set_tooltip_text(Some(tip));
+        self.play_key.update_property(&[gtk::accessible::Property::Label(tip)]);
+        self.refresh_play_key();
+        self.show_time(true);
+    }
+
+    /// The time bar: the time (at most every 100 ms unless `now`), the scrubber every frame, and
+    /// the pause key as paused, playing or ended.
+    fn show_time(&self, now: bool) {
+        let mut play = self.play.borrow_mut();
+        let Some(p) = play.as_mut() else {
+            return;
+        };
+        let (span, looped) = play_span(&p.posing.clocks);
+        let shown = if span > 0.0 { motion::local_time(p.t_ms, span, looped) } else { p.t_ms };
+        let bar = &self.timebar;
+        if span > 0.0 {
+            let adjust = bar.scrub.adjustment();
+            if adjust.upper() != span {
+                adjust.set_upper(span);
+            }
+            bar.scrub.set_value(shown);
+        }
+        bar.scrub.set_visible(span > 0.0);
+        if now || (p.t_ms - p.labelled).abs() >= 100.0 {
+            p.labelled = p.t_ms;
+            bar.time.set_text(&time_text(shown, span));
+        }
+        if now {
+            let (icon, tip) = match (p.tick.is_some(), p.ended) {
+                (true, _) => ("pause", "Pause"),
+                (false, true) => ("resume", "Play again"),
+                (false, false) => ("play", "Play"),
+            };
+            bar.pause.set_child(Some(&crate::icons::image(icon, 16)));
+            bar.pause.set_tooltip_text(Some(tip));
+        }
+    }
+
+    /// The Play key, the time bar's keys and scrubber, and a pause when the canvas is hidden.
+    fn wire_play(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        self.play_key.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.toggle_play();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.timebar.pause.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                let running = b.play.borrow().as_ref().is_some_and(|p| p.tick.is_some());
+                if running {
+                    b.pause_play();
+                } else {
+                    b.resume_play();
+                }
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.timebar.restart.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.seek(0.0);
+                b.resume_play();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.timebar.stop.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.stop_play();
+            }
+        });
+        // Only the person's drags and keys: the bar sets the value every frame itself.
+        let weak = Rc::downgrade(self);
+        self.timebar.scrub.connect_change_value(move |_, _, ms| {
+            if let Some(b) = weak.upgrade() {
+                b.seek(ms);
+            }
+            glib::Propagation::Proceed
+        });
+        // Hidden (another view, a minimised window), Play holds: nothing ticks behind it.
+        let weak = Rc::downgrade(self);
+        self.canvas.connect_unmap(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.pause_play();
+            }
+        });
+        keep_canvas_focus(self.timebar.root.upcast_ref());
+        self.timebar.scrub.set_focus_on_click(false);
     }
 
     // ------------------------------------------------------------------ chrome
@@ -1571,11 +2392,14 @@ impl Board {
         let typing = self.context.borrow().as_ref().is_some_and(|bar| self.busy_in(bar));
         if !picking && !typing && self.edit.borrow().is_none() && matches!(*self.gesture.borrow(), Gesture::Idle) {
             self.rebuild_context();
+        } else if self.edit.borrow().is_some() {
+            self.refresh_context_values();
         }
         self.refresh_inspector_values();
         if let Some(layers) = self.layers.borrow().as_ref() {
             layers.refresh();
         }
+        self.refresh_play_key();
         let page = self.page_name(&self.page.borrow());
         self.page_label.set_text(&page);
         // The whole name, which the key cuts short.
@@ -1654,7 +2478,10 @@ impl Board {
         if tool != Tool::Vector {
             super::tools::finish_vector(self, false);
         }
-        self.tool.set(tool);
+        // Another tool lets go of the lock on the last one.
+        if self.tool.replace(tool) != tool {
+            self.tool_lock.set(false);
+        }
         for (t, key) in self.tool_keys.borrow().iter() {
             key.set_active(*t == tool);
         }
@@ -1663,17 +2490,41 @@ impl Board {
         let pens = matches!(tool, Tool::Pen | Tool::Vector | Tool::Highlighter | Tool::Eraser);
         self.pen_key.set_active(pens);
         if shapes {
-            self.shape_key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
             tip(&self.shape_key, &tool.tip());
         }
         if pens {
-            self.pen_key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
             tip(&self.pen_key, &tool.tip());
         }
+        self.show_tool_lock();
         if tool != Tool::Select {
             self.end_edit(true);
         }
         super::tools::update_cursor(self, None);
+    }
+
+    /// Keep the tool on hand after it makes something, or let it go back to Move after each
+    /// (a double click on its key; I-16).
+    pub(super) fn toggle_tool_lock(&self) {
+        let locked = !self.tool_lock.get() && self.tool.get() != Tool::Select && self.tool.get() != Tool::Hand;
+        self.tool_lock.set(locked);
+        self.show_tool_lock();
+        if locked {
+            self.toast(&format!("{} stays on until you pick another tool", self.tool.get().caption()));
+        }
+    }
+
+    /// Each tool key's glyph, the tool on hand's with a lock while it is kept.
+    fn show_tool_lock(&self) {
+        let (tool, locked) = (self.tool.get(), self.tool_lock.get());
+        for (t, key) in self.tool_keys.borrow().iter() {
+            key.set_child(Some(&tool_glyph(*t, locked && *t == tool)));
+        }
+        if tool.is_shape() {
+            self.shape_key.set_child(Some(&tool_glyph(tool, locked)));
+        }
+        if matches!(tool, Tool::Pen | Tool::Vector | Tool::Highlighter | Tool::Eraser) {
+            self.pen_key.set_child(Some(&tool_glyph(tool, locked)));
+        }
     }
 
     fn build_dock(self: &Rc<Self>, dock: &gtk::Box) {
@@ -1714,6 +2565,7 @@ impl Board {
         let pages_popover = gtk::Popover::new();
         pages_popover.add_css_class("design-menu");
         page_key.set_popover(Some(&pages_popover));
+        *self.pages_popover.borrow_mut() = Some(pages_popover.clone());
         let weak = Rc::downgrade(self);
         pages_popover.connect_show(move |pop| {
             if let Some(b) = weak.upgrade() {
@@ -1748,6 +2600,7 @@ impl Board {
                 key.set_active(true);
             }
         });
+        self.lock_on_double_click(&self.shape_key);
         dock.append(&self.shape_key);
         dock.append(&self.tool_menu(&Tool::SHAPES));
         for tool in [Tool::Text, Tool::Sticky] {
@@ -1769,6 +2622,7 @@ impl Board {
                 key.set_active(true);
             }
         });
+        self.lock_on_double_click(&self.pen_key);
         dock.append(&self.pen_key);
         dock.append(&self.tool_menu(&[Tool::Pen, Tool::Vector, Tool::Highlighter, Tool::Eraser]));
         let icon_key = gtk::MenuButton::new();
@@ -1782,19 +2636,31 @@ impl Board {
         let weak = Rc::downgrade(self);
         picker.connect_show(move |pop| {
             if let Some(b) = weak.upgrade() {
-                let target = b.selected().into_iter().find(|id| b.doc.scene.borrow().node(id).is_some_and(|n| n.kind == NodeKind::Icon));
-                pop.set_child(Some(&super::icons::picker(&b, pop, target)));
+                // The dock key and K place a new icon; replacing one is the toolbar's (TM-73).
+                pop.set_child(Some(&super::icons::picker(&b, pop, None)));
             }
         });
         dock.append(&icon_key);
-        let image_key = gtk::Button::new();
+        // A file from this computer is one click into its popover, and still Ctrl+Shift+K; the
+        // rest of it is stock photos (pictures-SPEC-v2 §13.2).
+        let image_key = gtk::MenuButton::new();
         image_key.add_css_class("design-tool");
         image_key.set_child(Some(&glyphs::image("image", 16)));
-        tip(&image_key, "Place an image (Ctrl+Shift+K)");
+        tip(&image_key, "Place an image or a stock photo");
+        image_key.set_widget_name("design-image-key");
+        let picker = gtk::Popover::new();
+        picker.add_css_class("design-menu");
+        image_key.set_popover(Some(&picker));
         let weak = Rc::downgrade(self);
-        image_key.connect_clicked(move |_| {
+        picker.connect_show(move |pop| {
             if let Some(b) = weak.upgrade() {
-                super::assets::choose_images(&b);
+                pop.set_child(Some(&super::pictures::picker(&b, pop)));
+            }
+        });
+        let weak = Rc::downgrade(self);
+        picker.connect_closed(move |pop| {
+            if let Some(b) = weak.upgrade() {
+                super::pictures::closed(&b, pop);
             }
         });
         dock.append(&image_key);
@@ -1872,6 +2738,7 @@ impl Board {
         key.set_tooltip_text(Some(&tool.tip()));
         key.set_widget_name(&format!("design-tool-{}", tool.glyph()));
         key.update_property(&[gtk::accessible::Property::Label(tool.caption())]);
+        self.lock_on_double_click(&key);
         let weak = Rc::downgrade(self);
         key.connect_clicked(move |key| {
             if let Some(b) = weak.upgrade() {
@@ -1880,6 +2747,19 @@ impl Board {
             }
         });
         key
+    }
+
+    /// A double click on a tool key locks its tool on.
+    fn lock_on_double_click(self: &Rc<Self>, key: &gtk::ToggleButton) {
+        let clicks = gtk::GestureClick::new();
+        clicks.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(self);
+        clicks.connect_pressed(move |_, n, _, _| {
+            if let Some(b) = weak.upgrade().filter(|_| n == 2) {
+                b.toggle_tool_lock();
+            }
+        });
+        key.add_controller(clicks);
     }
 
     /// A narrow chevron key whose menu lists `tools`.
@@ -1927,8 +2807,13 @@ impl Board {
                 let p = pop.downgrade();
                 swatch.connect_clicked(move |_| {
                     if let Some(b) = weak.upgrade() {
-                        *b.pen.borrow_mut() = color.to_string();
-                        b.set_tool(Tool::Pen);
+                        // The drawing tool on hand takes it; any other picks the pen.
+                        let tool = match b.tool.get() {
+                            t @ (Tool::Pen | Tool::Highlighter | Tool::Vector) => t,
+                            _ => Tool::Pen,
+                        };
+                        b.pens.borrow_mut().insert(tool, color.to_string());
+                        b.set_tool(tool);
                     }
                     if let Some(p) = p.upgrade() {
                         p.popdown();
@@ -1972,6 +2857,8 @@ impl Board {
         section.append(Some("Export page as PNG (2×)…"), Some("design.export-page"));
         section.append(Some("Export page as SVG…"), Some("design.export-page-svg"));
         section.append(Some("Export page as PDF…"), Some("design.export-page-pdf"));
+        section.append(Some("Export page as animation (APNG)…"), Some("design.export-page-apng"));
+        section.append(Some("Export page as PNG frames…"), Some("design.export-page-frames"));
         menu.append_section(None, &section);
         menu.append_section(None, &export_menu());
         let section = gio::Menu::new();
@@ -2073,6 +2960,10 @@ impl Board {
     }
 
     pub(super) fn link_session(&self, session: Option<String>) {
+        // The terminal it already belongs to: nothing to write (TM-58).
+        if session == self.doc.session() {
+            return;
+        }
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
@@ -2083,7 +2974,7 @@ impl Board {
             match ui.call("design.update", json!({"design_id": id, "session": session})).await {
                 Ok(v) => {
                     if let Ok(row) = serde_json::from_value(v) {
-                        *doc.design.borrow_mut() = row;
+                        doc.adopt(row);
                     }
                     if let Some(b) = weak.upgrade() {
                         b.design_changed();
@@ -2111,9 +3002,9 @@ impl Board {
         type Group<'a> = (&'a str, &'a [(&'a str, &'a str)]);
         let tools: Group = ("Tools", &[("V", "Move"), ("H or Space", "Hand"), ("F", "Frame"), ("R / O", "Rectangle / ellipse"), ("Shift R / Shift S", "Triangle / star"), ("K", "Icon"), ("E", "Eraser"), ("L / Shift L", "Line / arrow"), ("T", "Text"), ("S", "Sticky note"), ("P / Shift P", "Pen / highlighter"), ("B", "Vector pen: click points, close on the first")]);
         let text: Group = ("Text", &[("Esc or Ctrl Enter", "Finish typing"), ("Ctrl B / I / U", "Bold / italic / underline")]);
-        let view: Group = ("View", &[("Ctrl scroll / pinch", "Zoom at the pointer"), ("Ctrl − / Ctrl =", "Zoom out / in"), ("Shift 1", "Zoom to fit"), ("Shift 2", "Zoom to selection"), ("Shift 0 or Ctrl 0", "Zoom to 100%"), ("Alt 1", "Pages and layers"), ("Ctrl .", "Inspector")]);
-        let selection: Group = ("Selection", &[("Click", "Select what is under the pointer"), ("Esc", "Select the parent"), ("Enter", "Edit text, or select inside"), ("Tab / Shift Tab", "Next / previous layer"), ("Shift click", "Add or remove"), ("Ctrl A", "Select all"), ("Alt drag", "Duplicate while moving")]);
-        let edit: Group = ("Edit", &[("Ctrl Z / Ctrl Shift Z", "Undo / redo"), ("Ctrl C / X / V", "Copy / cut / paste"), ("Ctrl D", "Duplicate"), ("Delete / Backspace", "Delete"), ("Ctrl G / Ctrl Shift G", "Group / ungroup"), ("Ctrl Alt G", "Frame selection"), ("Ctrl ] / Ctrl [", "Forward / backward"), ("Shift H / Shift V", "Flip horizontally / vertically"), ("Ctrl Alt C / V", "Copy / paste style"), ("Alt A / D / W / S", "Align left / right / top / bottom"), ("Alt H / Alt V", "Align centres / middles"), ("Ctrl Shift L / H", "Lock / hide"), ("Ctrl Shift K", "Place an image"), ("Ctrl Enter", "Ask the agent"), ("Arrows", "Nudge 1 px (Shift: 10)")]);
+        let view: Group = ("View", &[("Ctrl scroll / pinch", "Zoom at the pointer"), ("Alt scroll", "Scroll a scrolling frame"), ("Ctrl − / Ctrl =", "Zoom out / in"), ("Shift 1", "Zoom to fit"), ("Shift 2", "Zoom to selection"), ("Shift 0 or Ctrl 0", "Zoom to 100%"), ("Alt 1", "Pages and layers"), ("Ctrl .", "Inspector"), ("Ctrl P", "Play the page's motion; Esc stops")]);
+        let selection: Group = ("Selection", &[("Click", "Select what is under the pointer"), ("Esc", "Select the parent"), ("Enter", "Edit text, or select inside"), ("Tab / Shift Tab", "Next / previous layer"), ("Shift click", "Add or remove"), ("Ctrl A", "Select all"), ("Alt drag", "Duplicate while moving"), ("Alt while dragging", "No snapping"), ("Alt drag a handle", "Resize from the centre"), ("Shift drag a handle", "Keep proportions")]);
+        let edit: Group = ("Edit", &[("Ctrl Z / Ctrl Shift Z", "Undo / redo"), ("Ctrl C / X / V", "Copy / cut / paste"), ("Ctrl D", "Duplicate"), ("Delete / Backspace", "Delete"), ("Ctrl G / Ctrl Shift G", "Group / ungroup"), ("Ctrl Alt G", "Frame selection"), ("Ctrl ] / Ctrl [", "Forward / backward"), ("Ctrl Shift ] / [", "Bring to front / send to back"), ("Shift H / Shift V", "Flip horizontally / vertically"), ("Ctrl Alt C / V", "Copy / paste style"), ("Alt A / D / W / S", "Align left / right / top / bottom"), ("Alt H / Alt V", "Align centres / middles"), ("Ctrl Shift L / H", "Lock / hide"), ("Ctrl Shift K", "Place an image"), ("Ctrl Enter", "Ask the agent"), ("Arrows", "Nudge 1 px (Shift: 10)")]);
         // Two columns, each group under the last, so a longer group never runs into the next.
         for (col, groups) in [[tools, text, view].as_slice(), &[selection, edit]].iter().enumerate() {
             let x = col as i32 * 2;
@@ -2140,8 +3031,21 @@ impl Board {
                 let Some(r) = self.edit_rect() else {
                     return Some(gdk::Rectangle::new(-10_000, -10_000, 10, 10));
                 };
-                let r = self.screen(&r);
-                return Some(gdk::Rectangle::new(r.x.floor() as i32, r.y.floor() as i32, r.w.ceil().max(4.0) as i32 + 2, r.h.ceil().max(4.0) as i32));
+                let wraps = edit.view.wrap_mode() != gtk::WrapMode::None;
+                let (x, y, w, h, left, top) = editor_box(&self.screen(&r), wraps);
+                // The words start where the canvas draws them, not at the whole pixel before,
+                // and wrap at the canvas's width (TM-32, E-text-14).
+                // Set after this layout pass, not during it.
+                if edit.view.left_margin() != left || edit.view.top_margin() != top {
+                    let view = edit.view.downgrade();
+                    glib::idle_add_local_once(move || {
+                        if let Some(view) = view.upgrade() {
+                            view.set_left_margin(left);
+                            view.set_top_margin(top);
+                        }
+                    });
+                }
+                return Some(gdk::Rectangle::new(x, y, w, h));
             }
         }
         let context = self.context.borrow().clone()?;
@@ -2153,7 +3057,7 @@ impl Board {
         // Out of sight while a gesture runs or nothing is selected; an overlay child given no
         // place would cover the whole canvas.
         let away = gdk::Rectangle::new(-10_000, -10_000, w, h);
-        if self.selection.borrow().is_empty() || !matches!(*self.gesture.borrow(), Gesture::Idle) {
+        if self.selection.borrow().is_empty() || !matches!(*self.gesture.borrow(), Gesture::Idle) || self.playing() {
             return Some(away);
         }
         let Some(b) = self.selection_bounds() else {
@@ -2161,6 +3065,11 @@ impl Board {
         };
         let s = self.screen(&b);
         let (cw, ch) = self.size.get();
+        // Scrolled out of sight, the selection takes its toolbar with it rather than leave it
+        // over what is on show (E-board-4); it comes back with the selection.
+        if !s.intersects(&Rect::new(0.0, 0.0, cw, ch)) {
+            return Some(away);
+        }
         // Between the layers panel and the inspector when they show and the bar fits there; it
         // sat over their own controls otherwise. Too narrow for both, it keeps clear of what it can.
         let inspector = self.inspector_scroll.is_visible().then(|| f64::from(self.inspector_scroll.width().max(INSPECTOR_W as i32)) + 12.0);
@@ -2210,6 +3119,9 @@ impl Board {
             let weak = Rc::downgrade(self);
             action.connect_activate(move |_, _| {
                 if let Some(b) = weak.upgrade() {
+                    // A menu or action in the middle of a drag puts the drag back first, so the
+                    // release does not overwrite what it did (TM-43).
+                    b.cancel_gesture();
                     f(&b);
                 }
             });
@@ -2220,6 +3132,7 @@ impl Board {
         add("cut", |b| b.cut());
         add("copy", |b| b.copy());
         add("paste", |b| b.paste());
+        add("paste-here", |b| b.paste_to(b.menu_at.take()));
         add("duplicate", |b| b.duplicate());
         add("delete", |b| b.delete_selection());
         add("group", |b| b.group(NodeKind::Group));
@@ -2239,19 +3152,23 @@ impl Board {
             b.fit(r, false);
         });
         add("zoom-selection", |b| {
-            let r = b.selection_bounds().or_else(|| b.page_bounds());
+            let r = b.selection_painted().or_else(|| b.page_bounds());
             b.fit(r, true);
         });
         add("zoom-50", |b| b.zoom_to(0.5));
         add("zoom-100", |b| b.zoom_to(1.0));
         add("zoom-200", |b| b.zoom_to(2.0));
-        use super::export::{export_selection, Format};
+        use super::export::{export_animation, export_frames, export_selection, Format};
         add("export", |b| export_selection(b, false, Format::Png(2.0)));
         add("export-svg", |b| export_selection(b, false, Format::Svg));
         add("export-pdf", |b| export_selection(b, false, Format::Pdf));
         add("export-page", |b| export_selection(b, true, Format::Png(2.0)));
         add("export-page-svg", |b| export_selection(b, true, Format::Svg));
         add("export-page-pdf", |b| export_selection(b, true, Format::Pdf));
+        add("export-apng", |b| export_animation(b, false));
+        add("export-frames", |b| export_frames(b, false));
+        add("export-page-apng", |b| export_animation(b, true));
+        add("export-page-frames", |b| export_frames(b, true));
         add("flip-h", |b| b.flip(true));
         add("flip-v", |b| b.flip(false));
         add("copy-style", |b| b.copy_style());
@@ -2260,19 +3177,18 @@ impl Board {
         add("rename", |b| b.rename_design());
         add("duplicate-design", super::duplicate_design);
         add("delete-design", super::delete_design);
-        add("pop-out", |b| {
-            if let Some(ui) = b.ui.upgrade() {
-                super::window::pop_out(&ui, b.doc.clone());
-                if let Some(back) = b.back.borrow().clone() {
-                    back();
-                }
-            }
-        });
+        add("pop-out", |b| b.pop_out());
         add("add-page", |b| b.add_page());
+        add("play", |b| b.toggle_play());
     }
 
     fn refresh_actions(&self) {
         let has = !self.selection.borrow().is_empty();
+        // The animation entries wait for something that moves (feature-motion §3).
+        let (moves, page_moves) = {
+            let (scene, page) = (self.doc.scene.borrow(), self.page.borrow());
+            (has && super::export::moves(&scene, &page, &self.selection.borrow()), super::export::moves(&scene, &page, &[]))
+        };
         for (name, on) in [
             ("undo", self.doc.can_undo()),
             ("redo", self.doc.can_redo()),
@@ -2291,6 +3207,10 @@ impl Board {
             ("export", has),
             ("export-svg", has),
             ("export-pdf", has),
+            ("export-apng", moves),
+            ("export-frames", moves),
+            ("export-page-apng", page_moves),
+            ("export-page-frames", page_moves),
             ("flip-h", has),
             ("flip-v", has),
             ("copy-style", has),
@@ -2302,77 +3222,198 @@ impl Board {
         }
     }
 
-    /// The newest change `agent` made to this design that is still standing: an audited
-    /// `design.apply` with its undo kept and not undone yet.
-    async fn agent_change(ui: &Rc<Ui>, design: i64, project: i64, agent: &str) -> Option<i64> {
-        let listed = ui
-            .call("audit.list", json!({"project_id": project, "actor": format!("agent:{agent}"), "op_prefix": "design.apply", "limit": 500}))
-            .await
-            .ok()?;
-        let mut rows = crate::app::rows(&listed, "rows");
-        rows.sort_by_key(|r| std::cmp::Reverse(r["id"].as_i64().unwrap_or(0)));
-        rows.into_iter()
-            .find(|r| {
-                r["kind"] == "ok"
-                    && r["undone_by"].is_null()
-                    && r["undo_op"]["payload"]["design_id"].as_i64() == Some(design)
-            })
-            .and_then(|r| r["id"].as_i64())
+    /// The newest change `agent` made to this design (TM-11): audited `design.apply` rows of
+    /// the project, read back 500 at a time until one of this design turns up, at most five
+    /// times (E-ask-8: an agent busy elsewhere pushes it past one page).
+    async fn agent_change(ui: &Rc<Ui>, design: i64, project: i64, agent: &str) -> AgentChange {
+        let mut until: Option<(Value, i64)> = None;
+        for _ in 0..AGENT_PAGES {
+            let mut ask = json!({"project_id": project, "actor": format!("agent:{agent}"), "op_prefix": "design.apply", "limit": AGENT_PAGE});
+            if let Some((ts, _)) = &until {
+                ask["until"] = ts.clone();
+            }
+            let Ok(listed) = ui.call("audit.list", ask).await else {
+                return AgentChange::None;
+            };
+            let mut rows = crate::app::rows(&listed, "rows");
+            if let Some((_, below)) = &until {
+                rows.retain(|r| r["id"].as_i64().is_some_and(|id| id < *below));
+            }
+            if let Some(found) = pick_agent_change(&rows, design) {
+                return found;
+            }
+            match rows.iter().filter_map(|r| Some((r["ts"].clone(), r["id"].as_i64()?))).min_by_key(|(_, id)| *id) {
+                Some(oldest) if crate::app::rows(&listed, "rows").len() >= AGENT_PAGE as usize => until = Some(oldest),
+                _ => return AgentChange::None,
+            }
+        }
+        AgentChange::None
     }
 
-    /// Revert the last change the agent named by the status made, through `audit.undo`: the
-    /// person's veto over what an agent drew. Each press undoes one more of its changes.
-    pub(super) fn undo_agent(&self) {
-        let (Some(ui), Some(agent)) = (self.ui.upgrade(), self.agent_last.borrow().clone()) else {
+    /// Show Undo agent for `agent`'s newest change still standing, as found: the key when it
+    /// can be undone, the reason when it is too large to (I-7). For a board opening on a design
+    /// an agent edited last (E-ask-9).
+    fn offer_agent_undo(&self, agent: String) {
+        let Some(ui) = self.ui.upgrade() else {
             return;
         };
         let design = self.doc.id;
         let project = self.doc.design.borrow().project_id;
         let weak = self.me.clone();
         glib::spawn_future_local(async move {
-            let Some(audit) = Self::agent_change(&ui, design, project, &agent).await else {
-                if let Some(b) = weak.upgrade() {
-                    b.agent_undo.set_visible(false);
-                    b.toast(&format!("Nothing of {agent}'s left to undo here"));
-                }
-                return;
-            };
-            let undone = ui.call("audit.undo", json!({"audit_id": audit})).await;
-            let more = Self::agent_change(&ui, design, project, &agent).await.is_some();
+            let found = Self::agent_change(&ui, design, project, &agent).await;
             let Some(b) = weak.upgrade() else {
                 return;
             };
+            // An agent's change heard meanwhile has set the key already.
+            if b.agent_last.borrow().as_ref().is_some_and(|a| *a != agent) {
+                return;
+            }
+            match found {
+                AgentChange::Undoable(_) => {
+                    b.set_status(&format!("Last edited by {agent}"), None);
+                    *b.agent_last.borrow_mut() = Some(agent.clone());
+                    b.agent_undo.set_tooltip_text(Some(&format!("Undo {agent}'s last change to this design")));
+                    b.agent_undo.set_visible(true);
+                }
+                AgentChange::TooLarge => {
+                    b.set_status(&format!("Last edited by {agent}"), None);
+                    b.agent_undo.set_tooltip_text(Some(&too_large(&agent)));
+                }
+                AgentChange::None => {}
+            }
+        });
+    }
+
+    /// Revert the last change the agent named by the status made, through `audit.undo`: the
+    /// person's veto over what an agent drew. Each press undoes one more of its changes, and a
+    /// press while one is on its way is dropped (B80). A change the person edited since is
+    /// kept, with what was edited named; a second press on it within ten seconds undoes it
+    /// anyway. A change too large to have kept its undo is said to be, and nothing older is
+    /// undone in its place (TM-11).
+    pub(super) fn undo_agent(&self) {
+        let (Some(ui), Some(agent)) = (self.ui.upgrade(), self.agent_last.borrow().clone()) else {
+            return;
+        };
+        if self.agent_undoing.replace(true) {
+            return;
+        }
+        self.agent_undo.set_sensitive(false);
+        let design = self.doc.id;
+        let project = self.doc.design.borrow().project_id;
+        let weak = self.me.clone();
+        glib::spawn_future_local(async move {
+            let found = Self::agent_change(&ui, design, project, &agent).await;
+            let audit = match found {
+                AgentChange::Undoable(audit) => audit,
+                other => {
+                    if let Some(b) = weak.upgrade() {
+                        b.agent_undoing.set(false);
+                        b.agent_undo.set_sensitive(true);
+                        b.agent_undo.set_visible(false);
+                        b.toast(&match other {
+                            AgentChange::TooLarge => too_large(&agent),
+                            _ => format!("Nothing of {agent}'s left to undo here"),
+                        });
+                    }
+                    return;
+                }
+            };
+            let now = glib::monotonic_time();
+            let force = weak.upgrade().is_some_and(|b| b.agent_force.take().is_some_and(|(id, at)| id == audit && now - at < FORCE_US));
+            let mut ask = json!({"audit_id": audit});
+            if force {
+                ask["force"] = json!(true);
+            }
+            let undone = ui.call("audit.undo", ask).await;
+            let more = Self::agent_change(&ui, design, project, &agent).await;
+            let Some(b) = weak.upgrade() else {
+                return;
+            };
+            b.agent_undoing.set(false);
+            b.agent_undo.set_sensitive(true);
             match undone {
                 Ok(_) => {
                     b.set_status(&format!("Undid {agent}'s change"), None);
-                    b.agent_undo.set_visible(more);
+                    b.agent_undo.set_visible(more != AgentChange::None);
+                }
+                Err(crate::client::Error::Bus(e)) if e.code == "audit.stale" => {
+                    let what = e.details.as_ref().map(|d| b.conflict_names(d)).unwrap_or_default();
+                    let what = if what.is_empty() { String::new() } else { format!(": {what}") };
+                    b.toast(&format!("{agent}'s change was edited since{what}. Press Undo again to undo it anyway."));
+                    b.agent_force.set(Some((audit, glib::monotonic_time())));
+                }
+                // Undone already (from another window, or by the agent): nothing to say.
+                Err(crate::client::Error::Bus(e)) if e.code == "audit.not_undoable" => {
+                    b.agent_undo.set_visible(more != AgentChange::None);
                 }
                 Err(e) => b.toast(&format!("Could not undo {agent}'s change: {e}")),
             }
         });
     }
 
+    /// The layers an `audit.stale` names (`details.conflicts`), as the canvas calls them, with
+    /// the fields edited since: "Button (fill), Title and 2 more".
+    fn conflict_names(&self, details: &Value) -> String {
+        let scene = self.doc.scene.borrow();
+        let named: Vec<String> = details["conflicts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|c| {
+                let id = c["id"].as_str()?;
+                let name = scene.node(id).map_or_else(|| id.to_string(), display_name);
+                let fields: Vec<&str> = c["fields"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+                Some(if fields.is_empty() { name } else { format!("{name} ({})", fields.join(", ")) })
+            })
+            .collect();
+        match named.len() {
+            0..=3 => named.join(", "),
+            n => format!("{} and {} more", named[..3].join(", "), n - 3),
+        }
+    }
+
+    /// Undo the last step. A drag under way is put back first, as Esc does, so the step's
+    /// inverse lands on what the engine holds and the release has nothing left to send (B11).
     pub(super) fn undo(&self) {
+        self.cancel_gesture();
         self.end_edit(true);
         self.doc.undo(self.selection.borrow().clone());
     }
 
     pub(super) fn redo(&self) {
+        self.cancel_gesture();
         self.end_edit(true);
         self.doc.redo(self.selection.borrow().clone());
+    }
+
+    /// Put back what a gesture under way has previewed and end it.
+    pub(super) fn cancel_gesture(&self) {
+        if !matches!(*self.gesture.borrow(), Gesture::Idle | Gesture::Pan { .. }) {
+            super::tools::cancel(self);
+        }
     }
 
     pub(super) fn delete_selection(&self) {
         let ids = self.selected();
         // A text being typed for the first time is not on the engine yet: its edit drops it.
-        let fresh = self.edit.borrow().as_ref().filter(|e| e.created).map(|e| e.id.clone());
-        if fresh.is_some_and(|f| ids.contains(&f)) {
-            self.end_edit(false);
+        // One typed into that was there is sent first, so undo brings back its words (TM-45).
+        let editing = self.edit.borrow().as_ref().map(|e| (e.id.clone(), e.created));
+        match editing {
+            Some((id, true)) if ids.contains(&id) => self.end_edit(false),
+            Some((id, false)) if ids.contains(&id) => self.end_edit(true),
+            _ => {}
         }
         let ids = self.selected();
         let placed = self.placed();
         let scene = self.doc.scene.borrow();
         let ids: Vec<String> = ids.into_iter().filter(|id| scene.node(id).is_some_and(|n| n.kind != NodeKind::Page)).collect();
+        // A locked layer stays (B16): said so, and the selection kept, when nothing else goes.
+        if !ids.is_empty() && edit::unlocked(&scene, ids.clone()).is_empty() {
+            drop(scene);
+            self.toast("Unlock the layer to delete it");
+            return;
+        }
         // Connectors attached to what goes let go where they are drawn, rather than dangle.
         let ops = edit::delete(&scene, &placed, &ids);
         drop(scene);
@@ -2383,7 +3424,8 @@ impl Board {
 
     pub(super) fn duplicate(&self) {
         let ids = self.selected();
-        let (ops, roots) = edit::duplicate(&mut self.doc.scene.borrow_mut(), &ids, 16.0);
+        let placed = self.placed();
+        let (ops, roots) = edit::duplicate(&mut self.doc.scene.borrow_mut(), &placed, &ids, 16.0);
         if self.commit(ops) {
             self.select(roots);
         }
@@ -2392,14 +3434,27 @@ impl Board {
     /// Mirror the selection left to right (`horizontal`) or top to bottom.
     pub(super) fn flip(&self, horizontal: bool) {
         let placed = self.placed();
-        let ops = relay_client::design::flip::flip(&self.doc.scene.borrow(), &placed, &self.selection.borrow(), horizontal);
+        let ops = relay_client::design::flip::flip(&self.doc.scene.borrow(), &placed, &*self.painter, &self.selection.borrow(), horizontal);
         self.commit(ops);
     }
 
-    /// Keep the first selected layer's style, to paste on others.
+    /// Keep a selected layer's style, to paste on others: the one clicked last, else the
+    /// topmost (E-board-14). With it, the fill and corner radius it shows, for a paste onto a
+    /// kind whose own default differs (TM-48).
     pub(super) fn copy_style(&self) {
-        let first = self.selected().into_iter().next();
-        let style = first.and_then(|id| self.doc.scene.borrow().node(&id).map(relay_client::design::flip::style_of));
+        let last = self.selection.borrow().last().cloned().filter(|id| self.doc.scene.borrow().node(id).is_some());
+        let Some(id) = last.or_else(|| self.selected().pop()) else {
+            return;
+        };
+        let scene = self.doc.scene.borrow();
+        let style = relay_client::design::flip::style_of(&scene, &id).map(|mut style| {
+            if let Some(n) = scene.node(&id) {
+                style.insert(SHOWN_FILL.into(), fill_of(n).map_or(Value::Null, Value::from));
+                style.insert(SHOWN_RADIUS.into(), json!(shapes::radius(n)));
+            }
+            style
+        });
+        drop(scene);
         if style.is_some() {
             *self.style_clip.borrow_mut() = style;
             self.refresh_actions();
@@ -2413,7 +3468,10 @@ impl Board {
             self.toast("Copy a style first (Ctrl+Alt+C)");
             return;
         };
-        let ops = relay_client::design::flip::paste_style(&self.doc.scene.borrow(), &self.selected(), &style);
+        let scene = self.doc.scene.borrow();
+        let mut ops = relay_client::design::flip::paste_style(&scene, &self.selected(), &style);
+        keep_shown_defaults(&mut ops, &style, |id| scene.node(id).map(|n| n.kind));
+        drop(scene);
         self.commit(ops);
     }
 
@@ -2425,22 +3483,37 @@ impl Board {
 
     /// Copy the selection and take it away.
     pub(super) fn cut(&self) {
+        // The words typed so far are what is cut (TM-45).
+        self.end_edit(true);
         if let Some(count) = self.copy_quietly() {
             self.delete_selection();
             self.toast(&format!("Cut {count} {}", if count == 1 { "layer" } else { "layers" }));
         }
     }
 
-    /// Put the selection on the clipboard; how many layers that was.
+    /// Put the selection on the clipboard; how many layers that was. It goes twice: as it
+    /// draws (`baked`: its style laid under it and its colour names as colours), for another
+    /// design, and as stored (`linked`), naming this design's colours and styles, for a paste
+    /// back into it.
     fn copy_quietly(&self) -> Option<usize> {
-        let nodes = edit::gather(&self.doc.scene.borrow(), &self.selection.borrow());
-        if nodes.is_empty() {
+        let placed = self.placed();
+        let scene = self.doc.scene.borrow();
+        let linked = edit::gather(&scene, &placed, &self.selection.borrow());
+        if linked.is_empty() {
             return None;
         }
+        let nodes = edit::baked(&scene, &linked);
+        drop(scene);
         let texts: Vec<String> = nodes.iter().filter_map(|n| n.text.clone()).collect();
-        let bytes = serde_json::to_vec(&json!({"relay_design": 1, "nodes": nodes})).unwrap_or_default();
+        let clip = json!({
+            "relay_design": 1,
+            "design": self.doc.id,
+            "nodes": written(&nodes),
+            "linked": written(&linked),
+        });
+        let bytes = serde_json::to_vec(&clip).unwrap_or_default();
         *self.clip.borrow_mut() = nodes;
-        CLIP.with(|c| *c.borrow_mut() = self.clip.borrow().clone());
+        CLIP.with(|c| *c.borrow_mut() = clip);
         let providers = [
             gdk::ContentProvider::for_bytes(MIME, &glib::Bytes::from_owned(bytes)),
             gdk::ContentProvider::for_value(&texts.join("\n").to_value()),
@@ -2454,12 +3527,18 @@ impl Board {
     }
 
     pub(super) fn paste(&self) {
+        self.paste_to(None);
+    }
+
+    /// Paste the clipboard: layers copied on a canvas, a picture, files or words; at page point
+    /// `at` (the context menu's), inside the frame under it, or where pastes go.
+    pub(super) fn paste_to(&self, at: Option<(f64, f64)>) {
         let clipboard = self.canvas.clipboard();
         let formats = clipboard.formats();
         let weak = self.me.clone();
         if formats.contain_mime_type(MIME) && clipboard.is_local() {
-            let nodes = CLIP.with(|c| c.borrow().clone());
-            self.paste_nodes(nodes);
+            let clip = CLIP.with(|c| c.borrow().clone());
+            self.paste_nodes(self.clip_nodes(&clip), at);
             return;
         }
         if formats.contain_mime_type(MIME) {
@@ -2474,12 +3553,23 @@ impl Board {
                         _ => break,
                     }
                 }
-                let nodes = serde_json::from_slice::<Value>(&bytes)
-                    .ok()
-                    .and_then(|v| serde_json::from_value::<Vec<Node>>(v["nodes"].clone()).ok())
-                    .unwrap_or_default();
+                let clip = serde_json::from_slice::<Value>(&bytes).unwrap_or_default();
                 if let Some(b) = weak.upgrade() {
-                    b.paste_nodes(nodes);
+                    b.paste_nodes(b.clip_nodes(&clip), at);
+                }
+            });
+            return;
+        }
+        // Files copied in the file manager: placed as a drop places them (I-16).
+        if formats.contains_type(gdk::FileList::static_type()) {
+            glib::spawn_future_local(async move {
+                let Ok(value) = clipboard.read_value_future(gdk::FileList::static_type(), glib::Priority::DEFAULT).await else {
+                    return;
+                };
+                let paths: Vec<std::path::PathBuf> =
+                    value.get::<gdk::FileList>().map(|f| f.files().iter().filter_map(gio::prelude::FileExt::path).collect()).unwrap_or_default();
+                if let Some(b) = weak.upgrade().filter(|_| !paths.is_empty()) {
+                    super::assets::place_files(&b, paths, at);
                 }
             });
             return;
@@ -2488,7 +3578,7 @@ impl Board {
             glib::spawn_future_local(async move {
                 if let Ok(Some(texture)) = clipboard.read_texture_future().await {
                     if let Some(b) = weak.upgrade() {
-                        super::assets::place_texture(&b, texture, None);
+                        super::assets::place_texture(&b, texture, at);
                     }
                 }
             });
@@ -2497,7 +3587,7 @@ impl Board {
         glib::spawn_future_local(async move {
             if let Ok(Some(text)) = clipboard.read_text_future().await {
                 if let Some(b) = weak.upgrade() {
-                    b.paste_text(text.trim_end());
+                    b.paste_text(text.trim_end(), at);
                 }
             }
         });
@@ -2521,20 +3611,39 @@ impl Board {
         self.page.borrow().clone()
     }
 
-    fn paste_nodes(&self, nodes: Vec<Node>) {
+    /// The layers a clipboard holds for this design: as stored, naming its colours and styles,
+    /// when they were copied from it and it still holds every name they use; else as they drew.
+    fn clip_nodes(&self, clip: &Value) -> Vec<Node> {
+        clip_nodes(clip, self.doc.id, self.doc.scene.borrow().styles())
+    }
+
+    fn paste_nodes(&self, nodes: Vec<Node>, at: Option<(f64, f64)>) {
         if nodes.is_empty() {
             return;
         }
-        let target = self.paste_target();
-        let placed = self.placed();
         let roots: Vec<&Node> = nodes.iter().filter(|n| n.parent.as_deref().is_none_or(|p| !nodes.iter().any(|o| o.id == p))).collect();
+        let mut target = match at {
+            Some(p) => super::tools::container_at(self, p),
+            None => self.paste_target(),
+        };
+        // Pasting a copied frame with it still selected puts the copy beside it, not inside
+        // it (TM-41).
+        if let Some(root) = roots.iter().find(|n| n.id == target) {
+            target = root.parent.clone().filter(|p| self.doc.scene.borrow().node(p).is_some()).unwrap_or_else(|| self.page.borrow().clone());
+        }
+        let placed = self.placed();
         let Some(min_x) = roots.iter().map(|n| n.x).reduce(f64::min) else {
             return;
         };
         let min_y = roots.iter().map(|n| n.y).fold(f64::INFINITY, f64::min);
         let same = roots.iter().all(|n| n.parent.as_deref() == Some(target.as_str()))
             && roots.iter().all(|n| self.doc.scene.borrow().node(&n.id).is_some());
-        let (dx, dy) = if same {
+        let (dx, dy) = if let Some(p) = at {
+            // Their top left at the point (E-board-15), in the container's coordinates.
+            let origin = self.origin_of(&target);
+            let (lx, ly) = shapes::to_local(&self.doc.scene.borrow(), &placed, &target, p.0, p.1);
+            ((lx - origin.x - min_x).round(), (ly - origin.y - min_y).round())
+        } else if same {
             (16.0, 16.0)
         } else if target == *self.page.borrow() {
             // Centre of the view.
@@ -2553,18 +3662,30 @@ impl Board {
         }
     }
 
-    fn paste_text(&self, text: &str) {
-        if text.is_empty() {
+    fn paste_text(&self, text: &str, at: Option<(f64, f64)>) {
+        // Only spaces or zero-width characters: a text that shows nothing (B42).
+        if !relay_client::design::names::visible(text) {
             return;
         }
-        let target = self.paste_target();
+        // Cut at a text's most, without splitting what is drawn as one character, and said so
+        // rather than losing the rest without a word (B102).
+        let max = relay_bus::design::MAX_TEXT;
+        let (text, cut) = relay_client::design::names::cut_text(text, max);
+        if cut {
+            self.toast(&format!("Pasted the first {} characters: a text holds at most {max}", text.chars().count()));
+        }
+        let target = match at {
+            Some(p) => super::tools::container_at(self, p),
+            None => self.paste_target(),
+        };
         let (w, h) = self.size.get();
-        let (cx, cy) = self.to_page(w / 2.0, h / 2.0);
+        let (cx, cy) = at.unwrap_or_else(|| self.to_page(w / 2.0, h / 2.0));
+        let (cx, cy) = shapes::to_local(&self.doc.scene.borrow(), &self.placed(), &target, cx, cy);
         let origin = self.origin_of(&target);
         let mut n = Node::new(NodeKind::Text);
         n.id = self.doc.scene.borrow_mut().fresh_id(NodeKind::Text);
         n.parent = Some(target);
-        n.text = Some(text.chars().take(relay_bus::design::MAX_TEXT).collect());
+        n.text = Some(text.clone());
         n.x = (cx - origin.x).round();
         n.y = (cy - origin.y).round();
         if text.chars().count() > 60 {
@@ -2612,6 +3733,8 @@ impl Board {
     }
 
     pub(super) fn toggle_flag(&self, flag: &str) {
+        // Hidden or locked, a layer is typed into no more (TM-45).
+        self.end_edit(true);
         let ids = self.selected();
         let scene = self.doc.scene.borrow();
         let on = ids.iter().any(|id| {
@@ -2672,22 +3795,37 @@ impl Board {
         pop.add_css_class("design-menu");
         pop.set_parent(&self.title);
         let entry = gtk::Entry::new();
-        entry.set_text(&self.doc.title());
+        let shown = relay_bus::design::strip_controls(&self.doc.title(), false).into_owned();
+        entry.set_text(&shown);
         entry.set_width_chars(32);
         pop.set_child(Some(&entry));
-        let weak = self.me.clone();
+        // Enter, or a click elsewhere that closes it, renames the design, as the inspector's
+        // name field does on leaving it (B88); Esc closes it with the title as it was.
+        let cancel = Rc::new(Cell::new(false));
+        let keys = gtk::EventControllerKey::new();
+        let c = cancel.clone();
+        keys.connect_key_pressed(move |_, key, _, _| {
+            if key == gdk::Key::Escape {
+                c.set(true);
+            }
+            glib::Propagation::Proceed
+        });
+        entry.add_controller(keys);
         let p = pop.downgrade();
-        entry.connect_activate(move |entry| {
-            let title = entry.text().trim().to_string();
+        entry.connect_activate(move |_| {
             if let Some(p) = p.upgrade() {
                 p.popdown();
             }
-            let Some(b) = weak.upgrade() else {
+        });
+        let weak = self.me.clone();
+        let e = entry.downgrade();
+        pop.connect_closed(move |p| {
+            let title = e.upgrade().filter(|_| !cancel.replace(true)).and_then(|e| title_set(&e.text(), &shown));
+            let p = p.clone();
+            glib::idle_add_local_once(move || p.unparent());
+            let (Some(b), Some(title)) = (weak.upgrade(), title) else {
                 return;
             };
-            if title.is_empty() || title == b.doc.title() {
-                return;
-            }
             let Some(ui) = b.ui.upgrade() else {
                 return;
             };
@@ -2695,8 +3833,10 @@ impl Board {
             glib::spawn_future_local(async move {
                 match ui.call("design.update", json!({"design_id": id, "title": title})).await {
                     Ok(v) => {
+                        // Our own write: the doc keeps its rev when it is the one write since,
+                        // rather than read the whole design again (B83).
                         if let Ok(row) = serde_json::from_value(v) {
-                            *b.doc.design.borrow_mut() = row;
+                            b.doc.adopt(row);
                         }
                         b.design_changed();
                         super::gallery_changed(&ui);
@@ -2705,15 +3845,23 @@ impl Board {
                 }
             });
         });
-        pop.connect_closed(|p| p.unparent());
         pop.popup();
         entry.grab_focus();
     }
 }
 
+/// The title a rename sends for what was typed, against the title shown: trimmed, without
+/// control characters (a pasted line break or NUL, which the engine refuses, B43); `None` when
+/// it is empty or unchanged.
+fn title_set(typed: &str, shown: &str) -> Option<String> {
+    let plain = relay_bus::design::strip_controls(typed, false);
+    let title = plain.trim();
+    (!title.is_empty() && title != shown.trim()).then(|| title.to_string())
+}
+
 thread_local! {
     /// The nodes last copied in this process, for a paste whose clipboard is our own.
-    static CLIP: RefCell<Vec<Node>> = const { RefCell::new(Vec::new()) };
+    static CLIP: RefCell<Value> = const { RefCell::new(Value::Null) };
     /// Whether the inspector and the pages and layers panel show, kept for the session from
     /// one design (and window) to the next.
     static INSPECTOR_ON: Cell<bool> = const { Cell::new(true) };
@@ -2777,12 +3925,9 @@ pub fn handle_point(s: &Rect, h: Handle) -> (f64, f64) {
     (x, y)
 }
 
-/// A size as the pill shows it: whole pixels, or one decimal under 10.
+/// A size as the pill shows it: up to two decimals, as the number fields show it (B103).
 pub fn fmt(v: f64) -> String {
-    // Up to two decimals, as typed: 13.5 stays 13.5 and 1.25 stays 1.25.
-    let text = format!("{:.2}", (v * 100.0).round() / 100.0);
-    let text = text.trim_end_matches('0').trim_end_matches('.');
-    if text == "-0" { "0".into() } else { text.into() }
+    relay_client::design::number::fmt(v)
 }
 
 /// A round colour key; `None` shows the automatic (checkered) swatch.
@@ -2827,22 +3972,9 @@ pub fn swatch_button(color: Option<&str>, tooltip: &str) -> gtk::Button {
     swatch
 }
 
-#[allow(dead_code)]
+/// What a node of `kind` is called on the canvas (`names::kind_caption`).
 pub fn kind_caption(kind: NodeKind) -> &'static str {
-    match kind {
-        NodeKind::Page => "Page",
-        NodeKind::Frame => "Frame",
-        NodeKind::Group => "Group",
-        NodeKind::Rect => "Rectangle",
-        NodeKind::Ellipse => "Ellipse",
-        NodeKind::Line => "Line",
-        NodeKind::Text => "Text",
-        NodeKind::Sticky => "Sticky",
-        NodeKind::Path => "Drawing",
-        NodeKind::Image => "Image",
-        NodeKind::Polygon => "Polygon",
-        NodeKind::Icon => "Icon",
-    }
+    relay_client::design::names::kind_caption(kind)
 }
 
 pub fn kind_glyph(kind: NodeKind) -> &'static str {
@@ -2868,20 +4000,335 @@ pub fn free_name(base: &str, taken: &[String]) -> String {
     (1..).map(|n| format!("{base} {n}")).find(|name| !taken.contains(name)).unwrap_or_default()
 }
 
-/// A node's name as the layers and the breadcrumb show it.
+/// A node's name as the breadcrumb, Ask and export show it, never blank: its name when it shows
+/// anything, else its text's first line that does, else what it draws (B42, E-board-24).
 pub fn display_name(n: &Node) -> String {
-    if let Some(name) = n.name.as_deref().filter(|s| !s.is_empty()) {
-        return name.to_string();
+    relay_client::design::names::display_name(n)
+}
+
+/// Whether a line is reshaped by dragging its ends: a connector, or a straight open line. A
+/// vector path (more than two points) or a closed shape gets the box's handles instead, which
+/// scale its points (I-16).
+pub fn ends_dragged(n: &Node) -> bool {
+    n.kind == NodeKind::Line
+        && (n.from.is_some() || n.to.is_some() || (n.closed != Some(true) && n.points.as_ref().is_none_or(|p| p.len() <= 2)))
+}
+
+/// A tool's glyph for its key; locked on, with a small lock in its corner.
+fn tool_glyph(tool: Tool, locked: bool) -> gtk::Widget {
+    let glyph = glyphs::image(tool.glyph(), 16);
+    if !locked {
+        return glyph.upcast();
     }
-    if let Some(text) = n.text.as_deref().filter(|t| !t.trim().is_empty()) {
-        let first = text.lines().next().unwrap_or("");
-        let mut line: String = first.chars().take(40).collect();
-        if line.len() < first.len() {
-            line.push('…');
+    let stack = gtk::Overlay::new();
+    stack.set_child(Some(&glyph));
+    let lock = glyphs::image("lock", 8);
+    lock.set_halign(gtk::Align::End);
+    lock.set_valign(gtk::Align::End);
+    stack.add_overlay(&lock);
+    stack.upcast()
+}
+
+/// A drag's last update: its screen point, its offset from the press, and the modifiers held.
+pub type DragAt = (f64, f64, f64, f64, gdk::ModifierType);
+
+/// What a board shows: what `Board::state` takes and `Board::restore` puts back.
+#[derive(Debug, Clone)]
+pub struct BoardState {
+    pub page: String,
+    pub cam: Camera,
+    pub cams: HashMap<String, Camera>,
+    pub selection: Vec<String>,
+    pub layers_open: bool,
+    pub inspector_open: bool,
+}
+
+/// Where each design's page and camera are kept when its board closes, by design id.
+const VIEWS: &str = "native.design.views";
+
+/// The setting a board's page and camera are kept as.
+fn view_value(page: &str, cam: Camera) -> Value {
+    json!({"page": page, "x": cam.x, "y": cam.y, "zoom": cam.zoom})
+}
+
+/// A kept page and camera, when it reads.
+fn read_view(v: &Value) -> Option<(String, Camera)> {
+    let page = v["page"].as_str()?.to_string();
+    let (x, y, zoom) = (v["x"].as_f64()?, v["y"].as_f64()?, v["zoom"].as_f64()?);
+    (x.is_finite() && y.is_finite() && zoom.is_finite() && zoom > 0.0).then_some((page, Camera { x, y, zoom }))
+}
+
+impl Drop for Board {
+    /// Keep the page and camera it was left at, for the next time the design opens (I-15).
+    fn drop(&mut self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        if self.size.get().0 <= 0.0 {
+            return;
         }
-        return line;
+        let value = view_value(&self.page.borrow(), self.cam.get());
+        let path = format!("{VIEWS}.{}", self.doc.id);
+        glib::spawn_future_local(async move {
+            let _ = ui.call("settings.set", json!({"path": path, "value": value})).await;
+        });
     }
-    kind_caption(n.kind).to_string()
+}
+
+/// The text editor's place over screen box `s` (the words' box at the zoom): whole pixels from
+/// the one at or before its corner, with the fraction before the words as margins so they start
+/// where the canvas draws them; a wrapping text exactly as wide as the canvas wraps it, a
+/// hugging one with room for the caret. `(x, y, w, h, left, top)`.
+fn editor_box(s: &Rect, wraps: bool) -> (i32, i32, i32, i32, i32, i32) {
+    let (x0, y0) = (s.x.floor(), s.y.floor());
+    let (left, top) = ((s.x - x0).round() as i32, (s.y - y0).round() as i32);
+    let w = if wraps { left + s.w.round().max(4.0) as i32 } else { ((s.right()).ceil() - x0).max(4.0) as i32 + 2 };
+    let h = ((s.bottom()).ceil() - y0).max(4.0) as i32 + top;
+    (x0 as i32, y0 as i32, w, h, left, top)
+}
+
+/// The keys a copied style carries besides its fields, which `flip::paste_style` passes over:
+/// the fill and corner radius its layer showed.
+const SHOWN_FILL: &str = "_fill";
+const SHOWN_RADIUS: &str = "_radius";
+
+/// A pasted style's `fill: null` or `radius: null` means "its kind's default", which on another
+/// kind is another look (a white frame's style turning a rect grey, a rect's square corners
+/// rounding on a sticky): there it writes what the copied layer showed (TM-48). A style with
+/// a named style of its own keeps the nulls, which let that style show.
+fn keep_shown_defaults(ops: &mut [NodeOp], style: &Map<String, Value>, kind_of: impl Fn(&str) -> Option<NodeKind>) {
+    if !style.get("style").unwrap_or(&Value::Null).is_null() {
+        return;
+    }
+    let from: Option<NodeKind> = style.get("kind").cloned().and_then(|k| serde_json::from_value(k).ok());
+    let Some(from) = from else {
+        return;
+    };
+    for op in ops.iter_mut() {
+        let NodeOp::Update { id, set } = op else {
+            continue;
+        };
+        let Some(kind) = kind_of(id).filter(|k| *k != from) else {
+            continue;
+        };
+        let bare = |k: NodeKind| fill_of(&Node::new(k));
+        if set.get("fill").is_some_and(Value::is_null) && bare(kind) != bare(from) {
+            if let Some(shown) = style.get(SHOWN_FILL).filter(|v| v.is_string()) {
+                set.insert("fill".into(), shown.clone());
+            }
+        }
+        if set.get("radius").is_some_and(Value::is_null) && shapes::default_radius(kind) != shapes::default_radius(from) {
+            if let Some(shown) = style.get(SHOWN_RADIUS).and_then(Value::as_f64) {
+                set.insert("radius".into(), json!(shown));
+            }
+        }
+    }
+}
+
+/// Nodes as JSON, as the engine writes them (`Node::to_map`: what this build cannot read kept).
+fn written(nodes: &[Node]) -> Value {
+    Value::Array(nodes.iter().map(|n| Value::Object(n.to_map())).collect())
+}
+
+/// The layers clipboard JSON `clip` holds for design `design`: its `linked` copy, as stored,
+/// when it was copied from that design and every colour and style its layers name is there
+/// still; else its `nodes`, as they drew. Each read as the engine reads a node.
+fn clip_nodes(clip: &Value, design: i64, styles: &relay_bus::design::Styles) -> Vec<Node> {
+    let read = |v: &Value| -> Option<Vec<Node>> { v.as_array()?.iter().map(|n| Node::read(n.clone()).ok()).collect() };
+    let linked = (clip["design"].as_i64() == Some(design)).then(|| read(&clip["linked"])).flatten();
+    match linked.filter(|nodes| nodes.iter().all(|n| styles.check(n).is_ok())) {
+        Some(nodes) => nodes,
+        None => read(&clip["nodes"]).unwrap_or_default(),
+    }
+}
+
+/// Whether layers `ids` show resize handles: one of them is neither locked (B16) nor a group,
+/// whose box is its children's and whose own size nothing reads (B90).
+pub(super) fn handled(scene: &Scene, ids: &[String]) -> bool {
+    ids.iter().any(|id| scene.node(id).is_some_and(|n| !n.is_locked() && n.kind != NodeKind::Group))
+}
+
+/// The marks of `n`'s pins, placed at `r` in a frame placed at `pr` (`px` page units to a screen
+/// pixel), as segments: from each edge it is pinned by to the frame's along its middle (both
+/// for left and right or scale), and an 8 px tick across the frame's middle line for center.
+fn pin_lines(n: &Node, r: &Rect, pr: &Rect, px: f64) -> Vec<((f64, f64), (f64, f64))> {
+    use relay_bus::design::Pin;
+    let (pin_x, pin_y) = n.pins();
+    let tick = 4.0 * px;
+    let mut lines = Vec::new();
+    match pin_x {
+        Pin::Center => lines.push(((pr.cx(), r.cy() - tick), (pr.cx(), r.cy() + tick))),
+        pin => {
+            if pin != Pin::End {
+                lines.push(((pr.x, r.cy()), (r.x, r.cy())));
+            }
+            if pin != Pin::Start {
+                lines.push(((r.right(), r.cy()), (pr.right(), r.cy())));
+            }
+        }
+    }
+    match pin_y {
+        Pin::Center => lines.push(((r.cx() - tick, pr.cy()), (r.cx() + tick, pr.cy()))),
+        pin => {
+            if pin != Pin::End {
+                lines.push(((r.cx(), pr.y), (r.cx(), r.y)));
+            }
+            if pin != Pin::Start {
+                lines.push(((r.cx(), r.bottom()), (r.cx(), pr.bottom())));
+            }
+        }
+    }
+    lines
+}
+
+/// Where a fit frames what it shows on a `w` by `h` canvas: below the dock along the top, which
+/// keeps the frame names in view, and between the layers panel's right edge `left` and the
+/// inspector's left edge `right` where they show; the whole width when that leaves too little.
+fn fit_area(w: f64, h: f64, left: Option<f64>, right: Option<f64>) -> Rect {
+    const TOP: f64 = 76.0;
+    let x0 = left.unwrap_or(0.0).clamp(0.0, w);
+    let x1 = right.unwrap_or(w).clamp(x0, w);
+    let (x0, x1) = if x1 - x0 < 240.0 { (0.0, w) } else { (x0, x1) };
+    Rect::new(x0, TOP, (x1 - x0).max(1.0), (h - TOP).max(1.0))
+}
+
+/// The insertion bar, in page coordinates (`px` page units to a screen pixel), for a place in
+/// frame `pr` laid out `mode`: 2 screen px centred just before child `next` at that place, or
+/// just after the `last` laid out when there is none, or inside the empty frame's start. A row's
+/// and a wrap's bar stand upright, a wrap's at its child's height; a column's lies across.
+fn insertion_bar(mode: Layout, pr: &Rect, next: Option<Rect>, last: Option<Rect>, px: f64) -> Rect {
+    let across = matches!(mode, Layout::Row | Layout::Wrap);
+    let at = match (next, last) {
+        (Some(k), _) => if across { k.x - 2.0 } else { k.y - 2.0 },
+        (None, Some(l)) => if across { l.right() + 2.0 } else { l.bottom() + 2.0 },
+        (None, None) => if across { pr.x + 8.0 } else { pr.y + 8.0 },
+    };
+    let beside = next.or(last).filter(|_| mode == Layout::Wrap);
+    match (across, beside) {
+        (true, Some(k)) => Rect::new(at - px, k.y, 2.0 * px, k.h),
+        (true, None) => Rect::new(at - px, pr.y + 4.0, 2.0 * px, pr.h - 8.0),
+        _ => Rect::new(pr.x + 4.0, at - px, pr.w - 8.0, 2.0 * px),
+    }
+}
+
+/// The name above a top-level frame, with a mark for the way it scrolls: ⇆ across, ⇅ down.
+fn frame_label(n: &Node) -> String {
+    let mark = match n.scroll {
+        Some(Scroll::X) => " ⇆",
+        Some(Scroll::Y) => " ⇅",
+        Some(Scroll::Both) => " ⇆⇅",
+        None => "",
+    };
+    format!("{}{mark}", display_name(n))
+}
+
+/// The wheel's `(dx, dy)` as a frame that scrolls `scroll` takes it: one that scrolls only
+/// across takes the wheel's turn (down) across, one that scrolls only down takes a sideways
+/// swipe down.
+pub(super) fn scroll_delta(scroll: Scroll, dx: f64, dy: f64) -> (f64, f64) {
+    let main = if dx.abs() > dy.abs() { dx } else { dy };
+    match scroll {
+        Scroll::X => (main, 0.0),
+        Scroll::Y => (0.0, main),
+        Scroll::Both => (dx, dy),
+    }
+}
+
+/// Where a frame placed at `r` and scrolled as `s` is scrolled to by `d` more: along the axes it
+/// scrolls, from its start to as far as its content passes its box.
+fn scroll_to(r: &Rect, s: &Scrolled, scroll: Scroll, d: (f64, f64)) -> (f64, f64) {
+    let along = |on: bool, at: f64, by: f64, room: f64| if on { (at + by).clamp(0.0, room.max(0.0)) } else { 0.0 };
+    (along(scroll.x(), s.offset.0, d.0, s.content.w - r.w), along(scroll.y(), s.offset.1, d.1, s.content.h - r.h))
+}
+
+/// The scrollbar thumbs of a frame placed at `r` and scrolled as `s`, in page coordinates
+/// (`px` page units to a screen pixel): 4 px bars 2 px inside the edges it scrolls past, only
+/// where its content overflows; each as long against the edge as the box is against the content,
+/// and as far along as it is scrolled.
+fn scroll_bars(r: &Rect, s: &Scrolled, scroll: Scroll, px: f64) -> Vec<Rect> {
+    let (thick, inset) = (4.0 * px, 2.0 * px);
+    let mut bars = Vec::new();
+    if scroll.x() && s.content.w > r.w + 0.5 {
+        let len = r.w * r.w / s.content.w;
+        bars.push(Rect::new(r.x + s.offset.0 / s.content.w * r.w, r.bottom() - inset - thick, len, thick));
+    }
+    if scroll.y() && s.content.h > r.h + 0.5 {
+        let len = r.h * r.h / s.content.h;
+        bars.push(Rect::new(r.right() - inset - thick, r.y + s.offset.1 / s.content.h * r.h, thick, len));
+    }
+    bars
+}
+
+/// Where layer `id` shows on the page, as a box: `shapes::shown_rect` (its drawing, turned by its
+/// own turn) carried out through each turned frame it is in.
+pub(super) fn shown_box(scene: &Scene, placed: &Placed, id: &str) -> Option<Rect> {
+    let r = shapes::shown_rect(scene, placed, id)?;
+    Some(shapes::turned_ancestors(scene, placed, id).iter().rev().fold(r, |b, &(cx, cy, d)| shapes::rotated_bounds_about(&b, d, cx, cy)))
+}
+
+/// Undo agent's audit pages: rows a page, and how many pages it reads back.
+const AGENT_PAGE: u32 = 500;
+const AGENT_PAGES: usize = 5;
+/// How long a second press undoes an agent's change edited since anyway, in microseconds.
+const FORCE_US: i64 = 10_000_000;
+
+/// What Undo agent finds of an agent's changes to a design.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AgentChange {
+    /// The newest one standing, by audit row: it can be undone.
+    Undoable(i64),
+    /// The newest one standing kept no undo: it was too large to (64 KiB).
+    TooLarge,
+    None,
+}
+
+/// The design an audited `design.apply` row wrote: its payload's, else its undo's, else its
+/// answer's (a payload too large to keep is stored as none).
+fn row_design(r: &Value) -> Option<i64> {
+    r["payload"]["design_id"]
+        .as_i64()
+        .or_else(|| r["undo_op"]["payload"]["design_id"].as_i64())
+        .or_else(|| r["result_summary"]["design_id"].as_i64())
+        .or_else(|| r["result_summary"]["design"]["id"].as_i64())
+}
+
+/// Among audit `rows`, the newest change of `design` still standing (applied, not undone), if
+/// any is there: undoable when it kept its undo, too large otherwise. Older changes are never
+/// offered in place of a newer one that cannot be undone (TM-11).
+pub(super) fn pick_agent_change(rows: &[Value], design: i64) -> Option<AgentChange> {
+    let newest = rows
+        .iter()
+        .filter(|r| r["kind"] == "ok" && r["undone_by"].is_null() && row_design(r) == Some(design) && changed_something(r))
+        .max_by_key(|r| r["id"].as_i64().unwrap_or(0))?;
+    Some(match (newest["undo_op"].is_object(), newest["id"].as_i64()) {
+        (true, Some(id)) => AgentChange::Undoable(id),
+        _ => AgentChange::TooLarge,
+    })
+}
+
+/// Whether an audited apply changed the design: a list that changed nothing is audited too,
+/// with no undo and its answer's `rev` its `prev_rev`, and is no change to offer.
+fn changed_something(r: &Value) -> bool {
+    let answer = &r["result_summary"];
+    r["undo_op"].is_object() || answer["rev"].is_null() || answer["rev"] != answer["prev_rev"]
+}
+
+/// What Undo agent says of a change it cannot undo for its size.
+fn too_large(agent: &str) -> String {
+    format!("{agent}'s last change is too large to undo here")
+}
+
+/// The frame names' grey on a ground of `luminance`: a dark one on a light page, the light one
+/// on a dark page, switching where the two read alike (E-board-1); 4.5:1 or better on white
+/// and on the canvas's own dark.
+fn label_ink(luminance: f64) -> gdk::RGBA {
+    if luminance > 0.19 { gdk::RGBA::new(0.33, 0.32, 0.3, 1.0) } else { gdk::RGBA::new(0.62, 0.6, 0.57, 1.0) }
+}
+
+/// How long a toast stays up for `text`: longer for more words, by characters rather than bytes
+/// (a CJK message is not three times as long), and never past about six seconds (B75).
+pub fn toast_ms(text: &str) -> u64 {
+    2600 + text.chars().count().min(120) as u64 * 30
 }
 
 /// A menu entry for `design.{action}` that shows its shortcut (`<Control>c`), as the notes'
@@ -2894,11 +4341,391 @@ pub(super) fn menu_item(caption: &str, action: &str, accel: Option<&str>) -> gio
     item
 }
 
-/// "Export selection as" PNG, SVG or PDF, for the menus that offer it.
+/// The Play key's tooltip while Play is off.
+const PLAY_TIP: &str = "Play the motion on this page (Ctrl+P)";
+
+/// Play under way: the clock, the frame shown and its poses. Never written to the design.
+struct Play {
+    /// The frame clock's callback while it runs; `None` while paused.
+    tick: Option<gtk::TickCallbackId>,
+    timing: Timing,
+    /// The time shown, in ms since every clock started.
+    t_ms: f64,
+    /// The poses of the frame shown (filled as it draws) and the page's clocks.
+    posing: Rc<Posing>,
+    /// A shown picture animates itself: Play then runs until it is stopped.
+    pictures: bool,
+    /// Paused at the end of a motion that does not loop.
+    ended: bool,
+    /// The time the time bar's words last showed.
+    labelled: f64,
+}
+
+/// Where Play is in time, from the frame clock's frame times (µs): GTK-free, so its rule is
+/// tested alone. While running, the time shown is `base_ms` plus the time since the first frame
+/// after it started; paused, `base_ms`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct Timing {
+    base_ms: f64,
+    from_us: Option<i64>,
+    running: bool,
+}
+
+impl Timing {
+    /// The time at a frame at `frame_us`.
+    fn at(&mut self, frame_us: i64) -> f64 {
+        if !self.running {
+            return self.base_ms;
+        }
+        let from = *self.from_us.get_or_insert(frame_us);
+        self.base_ms + (frame_us - from).max(0) as f64 / 1000.0
+    }
+
+    /// Hold at `at_ms`.
+    fn pause(&mut self, at_ms: f64) {
+        *self = Timing { base_ms: at_ms, from_us: None, running: false };
+    }
+
+    /// Run on from where it holds, counting from the next frame.
+    fn resume(&mut self) {
+        self.running = true;
+        self.from_us = None;
+    }
+
+    /// Show `ms` (and run on from it, if running).
+    fn seek(&mut self, ms: f64) {
+        self.base_ms = ms;
+        self.from_us = None;
+    }
+}
+
+/// The span Play runs over: its longest clock, and whether any clock loops (then it never ends,
+/// and the time shown starts again at the end).
+fn play_span(clocks: &Clocks) -> (f64, bool) {
+    (clocks.span().0, clocks.clocks().iter().any(|c| c.looped))
+}
+
+/// Whether a frame at `t_ms` ends Play: no clock loops, no shown picture animates itself, and
+/// the span has run.
+fn ends(t_ms: f64, span: f64, looped: bool, pictures: bool) -> bool {
+    !looped && !pictures && span > 0.0 && t_ms >= span
+}
+
+/// The time bar's words: "1.20 / 3.00 s", or the time alone when only pictures move.
+fn time_text(t_ms: f64, span_ms: f64) -> String {
+    if span_ms > 0.0 {
+        format!("{:.2} / {:.2} s", t_ms / 1000.0, span_ms / 1000.0)
+    } else {
+        format!("{:.2} s", t_ms / 1000.0)
+    }
+}
+
+/// The bar under the canvas while Play runs: start again, pause or play, the time, a scrubber
+/// and stop.
+struct TimeBar {
+    root: gtk::Box,
+    restart: gtk::Button,
+    pause: gtk::Button,
+    time: gtk::Label,
+    scrub: gtk::Scale,
+    stop: gtk::Button,
+}
+
+fn time_bar() -> TimeBar {
+    let root = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+    root.add_css_class("design-timebar");
+    root.set_widget_name("design-timebar");
+    root.set_halign(gtk::Align::Center);
+    root.set_valign(gtk::Align::End);
+    root.set_margin_bottom(12);
+    root.set_visible(false);
+    let restart = crate::app::icon_button("resume", "Start again");
+    let pause = crate::app::icon_button("pause", "Pause");
+    let time = label("0.00 s", "design-timebar-time");
+    time.set_xalign(0.5);
+    let scrub = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 10.0);
+    scrub.set_draw_value(false);
+    scrub.set_hexpand(true);
+    scrub.set_tooltip_text(Some("Drag to a moment of the motion"));
+    let stop = crate::app::icon_button("stop", "Stop playing (Esc)");
+    for w in [restart.upcast_ref::<gtk::Widget>(), pause.upcast_ref(), time.upcast_ref(), scrub.upcast_ref(), stop.upcast_ref()] {
+        w.set_valign(gtk::Align::Center);
+        root.append(w);
+    }
+    TimeBar { root, restart, pause, time, scrub, stop }
+}
+
+/// "Export selection as" PNG, SVG or PDF, or its motion as an animation or frames, for the
+/// menus that offer it.
 pub(super) fn export_menu() -> gio::Menu {
     let section = gio::Menu::new();
     section.append(Some("Export selection as PNG (2×)…"), Some("design.export"));
     section.append(Some("Export selection as SVG…"), Some("design.export-svg"));
     section.append(Some("Export selection as PDF…"), Some("design.export-pdf"));
+    section.append(Some("Export selection as animation (APNG)…"), Some("design.export-apng"));
+    section.append(Some("Export selection as PNG frames…"), Some("design.export-frames"));
     section
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(id: i64, design: i64, undo: bool) -> Value {
+        let undo_op = if undo { json!({"op": "design.apply", "payload": {"design_id": design}}) } else { Value::Null };
+        json!({"id": id, "kind": "ok", "undone_by": null, "payload": {"design_id": design}, "undo_op": undo_op,
+               "result_summary": {"design_id": design, "rev": id + 1, "prev_rev": id}})
+    }
+
+    #[test]
+    fn undo_agent_takes_the_newest_change_or_says_it_is_too_large() {
+        let rows = vec![row(3, 7, true), row(9, 8, true), row(5, 7, true)];
+        assert_eq!(pick_agent_change(&rows, 7), Some(AgentChange::Undoable(5)));
+        assert_eq!(pick_agent_change(&rows, 1), None, "none of this design on the page: read further");
+        // The newest kept no undo: an older one is not undone in its place (TM-11).
+        let rows = vec![row(3, 7, true), row(6, 7, false)];
+        assert_eq!(pick_agent_change(&rows, 7), Some(AgentChange::TooLarge));
+        // Undone, refused, or a list that changed nothing do not count.
+        let mut undone = row(8, 7, true);
+        undone["undone_by"] = json!(12);
+        let mut refused = row(9, 7, true);
+        refused["kind"] = json!("error");
+        let mut nothing = row(10, 7, false);
+        nothing["result_summary"]["rev"] = json!(10);
+        assert_eq!(pick_agent_change(&[row(3, 7, true), undone, refused, nothing], 7), Some(AgentChange::Undoable(3)));
+        // A payload too large to keep names its design in the undo.
+        let mut big = row(4, 7, true);
+        big["payload"] = Value::Null;
+        assert_eq!(pick_agent_change(&[big], 7), Some(AgentChange::Undoable(4)));
+    }
+
+    fn rect(id: &str, fill: &str) -> Node {
+        let mut n = Node::new(NodeKind::Rect);
+        n.id = id.into();
+        n.parent = Some("p1".into());
+        n.fill = Some(fill.into());
+        n
+    }
+
+    #[test]
+    fn a_paste_names_this_designs_colours_only_when_it_holds_them() {
+        let clip = json!({"relay_design": 1, "design": 4, "nodes": written(&[rect("a", "#FF0000")]), "linked": written(&[rect("a", "$brand")])});
+        let mut styles = relay_bus::design::Styles::default();
+        assert_eq!(clip_nodes(&clip, 4, &styles)[0].fill.as_deref(), Some("#FF0000"), "the name is gone: as it drew");
+        styles.colors.insert("brand".into(), "#FF0000".into());
+        assert_eq!(clip_nodes(&clip, 4, &styles)[0].fill.as_deref(), Some("$brand"), "same design: as stored");
+        assert_eq!(clip_nodes(&clip, 5, &styles)[0].fill.as_deref(), Some("#FF0000"), "another design: as it drew");
+        let old = json!({"relay_design": 1, "nodes": [{"id": "a", "kind": "rect", "parent": "p1"}]});
+        assert_eq!(clip_nodes(&old, 4, &styles).len(), 1, "an older clipboard reads");
+    }
+
+    #[test]
+    fn a_pasted_style_keeps_the_fill_and_corners_its_layer_showed() {
+        let mut frame = Node::new(NodeKind::Frame);
+        frame.id = "f".into();
+        let mut style = relay_client::design::flip::style_of(&Scene::new(vec![frame.clone()]), "f").unwrap();
+        style.insert(SHOWN_FILL.into(), json!("#FFFFFF"));
+        style.insert(SHOWN_RADIUS.into(), json!(0.0));
+        let set = |pairs: &[(&str, Value)]| pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect::<Map<String, Value>>();
+        let mut ops = vec![
+            NodeOp::Update { id: "r".into(), set: set(&[("fill", Value::Null)]) },
+            NodeOp::Update { id: "s".into(), set: set(&[("radius", Value::Null)]) },
+            NodeOp::Update { id: "g".into(), set: set(&[("fill", Value::Null)]) },
+        ];
+        let kinds = |id: &str| Some(match id { "r" => NodeKind::Rect, "s" => NodeKind::Sticky, _ => NodeKind::Frame });
+        keep_shown_defaults(&mut ops, &style, kinds);
+        let fill = |op: &NodeOp| match op { NodeOp::Update { set, .. } => set.clone(), _ => Map::new() };
+        assert_eq!(fill(&ops[0])["fill"], json!("#FFFFFF"), "a white frame's style on a rect is white");
+        assert_eq!(fill(&ops[1])["radius"], json!(0.0), "square corners stay square on a sticky");
+        assert_eq!(fill(&ops[2])["fill"], Value::Null, "the same kind keeps its default");
+    }
+
+    #[test]
+    fn the_editor_wraps_where_the_canvas_does() {
+        // A paragraph wrapped 120.4 px wide from x 10.6: the words start at 11 (a margin of 1
+        // on the pixel at 10), and wrap 120 px on.
+        assert_eq!(editor_box(&Rect::new(10.6, 20.2, 120.4, 40.0), true), (10, 20, 121, 41, 1, 0));
+        // Hugging: room for the caret past the last letter.
+        assert_eq!(editor_box(&Rect::new(10.0, 20.0, 50.0, 18.0), false), (10, 20, 52, 18, 0, 0));
+    }
+
+    #[test]
+    fn a_kept_view_reads_back() {
+        let cam = Camera { x: -120.5, y: 40.0, zoom: 2.0 };
+        let (page, back) = read_view(&view_value("p2", cam)).unwrap();
+        assert_eq!(page, "p2");
+        assert_eq!((back.x, back.y, back.zoom), (cam.x, cam.y, cam.zoom));
+        assert!(read_view(&json!({"page": "p2", "x": 0, "y": 0, "zoom": 0})).is_none());
+        assert!(read_view(&Value::Null).is_none());
+    }
+
+    #[test]
+    fn toast_time_counts_characters_and_is_capped() {
+        assert_eq!(toast_ms("中文消息"), toast_ms("abcd"));
+        assert!(toast_ms(&"x".repeat(5000)) <= 6200);
+        assert!(toast_ms("a longer message") > toast_ms("short"));
+    }
+
+    #[test]
+    fn a_title_is_sent_trimmed_plain_and_only_when_changed() {
+        assert_eq!(title_set("Home", "Home"), None);
+        assert_eq!(title_set("  Home ", "Home"), None);
+        assert_eq!(title_set("   ", "Home"), None);
+        assert_eq!(title_set("\u{0}", "Home"), None);
+        assert_eq!(title_set(" Hero\u{0}x\n", "Home"), Some("Herox".into()));
+        assert_eq!(title_set("Landing", "Home"), Some("Landing".into()));
+    }
+
+    #[test]
+    fn alt_wheel_scrolls_a_frame_within_its_content() {
+        // A 350 px carousel holding 804 px of cards.
+        let r = Rect::new(10.0, 20.0, 350.0, 200.0);
+        let s = Scrolled { offset: (0.0, 0.0), content: Rect::new(10.0, 20.0, 804.0, 200.0) };
+        assert_eq!(scroll_to(&r, &s, Scroll::X, (100.0, 0.0)), (100.0, 0.0));
+        assert_eq!(scroll_to(&r, &s, Scroll::X, (-40.0, 0.0)), (0.0, 0.0), "not before its start");
+        assert_eq!(scroll_to(&r, &s, Scroll::X, (9_000.0, 0.0)), (454.0, 0.0), "not past its last card");
+        assert_eq!(scroll_to(&r, &s, Scroll::Both, (0.0, 30.0)), (0.0, 0.0), "nothing below to scroll to");
+        assert_eq!(scroll_to(&r, &s, Scroll::Y, (100.0, 0.0)), (0.0, 0.0), "a feed does not scroll across");
+        // The wheel turned down scrolls a carousel across; a feed takes a sideways swipe down.
+        assert_eq!(scroll_delta(Scroll::X, 0.0, 48.0), (48.0, 0.0));
+        assert_eq!(scroll_delta(Scroll::Y, 30.0, 2.0), (0.0, 30.0));
+        assert_eq!(scroll_delta(Scroll::Both, 3.0, 4.0), (3.0, 4.0));
+    }
+
+    #[test]
+    fn a_scrollbar_is_as_long_as_the_box_against_its_content() {
+        let r = Rect::new(0.0, 0.0, 400.0, 300.0);
+        let s = Scrolled { offset: (200.0, 0.0), content: Rect::new(0.0, 0.0, 800.0, 300.0) };
+        let bars = scroll_bars(&r, &s, Scroll::Both, 1.0);
+        assert_eq!(bars.len(), 1, "only across: the content fits down");
+        let bar = bars[0];
+        assert_eq!((bar.w, bar.h), (200.0, 4.0), "400² / 800");
+        assert_eq!(bar.x, 100.0, "200 of 800 along a 400 box");
+        assert_eq!(bar.bottom(), 298.0, "2 px inside the bottom edge");
+        assert_eq!(scroll_bars(&r, &s, Scroll::X, 0.5)[0].h, 2.0, "4 screen px at 200%");
+        let fits = Scrolled { offset: (0.0, 0.0), content: r };
+        assert!(scroll_bars(&r, &fits, Scroll::Both, 1.0).is_empty());
+    }
+
+    #[test]
+    fn a_frames_label_says_how_it_scrolls() {
+        let mut n = Node::new(NodeKind::Frame);
+        n.id = "f".into();
+        n.name = Some("Trails".into());
+        assert_eq!(frame_label(&n), "Trails");
+        n.scroll = Some(Scroll::X);
+        assert_eq!(frame_label(&n), "Trails ⇆");
+        n.scroll = Some(Scroll::Both);
+        assert_eq!(frame_label(&n), "Trails ⇆⇅");
+    }
+
+    #[test]
+    fn the_insertion_bar_sits_on_its_place_at_any_zoom_and_beside_a_wrapped_child() {
+        let pr = Rect::new(0.0, 0.0, 300.0, 200.0);
+        let k = Rect::new(100.0, 60.0, 40.0, 30.0);
+        // E-board-3: 2 screen px centred on the place, not 8 px off at 800%.
+        let bar = insertion_bar(Layout::Row, &pr, Some(k), None, 1.0 / 8.0);
+        assert_eq!((bar.cx(), bar.w * 8.0), (98.0, 2.0));
+        assert_eq!((bar.y, bar.h), (4.0, 192.0), "a row's spans the frame");
+        let bar = insertion_bar(Layout::Wrap, &pr, Some(k), None, 1.0);
+        assert_eq!((bar.cx(), bar.y, bar.h), (98.0, 60.0, 30.0), "a wrap's beside the child, its height");
+        let bar = insertion_bar(Layout::Wrap, &pr, None, Some(k), 1.0);
+        assert_eq!((bar.cx(), bar.y), (142.0, 60.0), "after the last on its line");
+        let bar = insertion_bar(Layout::Column, &pr, Some(k), None, 1.0);
+        assert_eq!((bar.cy(), bar.w), (58.0, 292.0));
+    }
+
+    #[test]
+    fn pin_marks_run_from_each_pinned_edge_to_the_frame() {
+        use relay_bus::design::{PinX, PinY};
+        let pr = Rect::new(0.0, 0.0, 300.0, 200.0);
+        let r = Rect::new(100.0, 50.0, 40.0, 20.0);
+        let mut n = Node::new(NodeKind::Rect);
+        n.pin_x = Some(PinX::Right);
+        n.pin_y = Some(PinY::Center);
+        let lines = pin_lines(&n, &r, &pr, 1.0);
+        assert_eq!(lines, [((140.0, 60.0), (300.0, 60.0)), ((116.0, 100.0), (124.0, 100.0))]);
+        n.pin_x = Some(PinX::LeftRight);
+        n.pin_y = Some(PinY::Top);
+        let lines = pin_lines(&n, &r, &pr, 1.0);
+        assert_eq!(lines, [((0.0, 60.0), (100.0, 60.0)), ((140.0, 60.0), (300.0, 60.0)), ((120.0, 0.0), (120.0, 50.0))]);
+    }
+
+    #[test]
+    fn plays_time_runs_from_its_first_frame_and_holds_while_paused() {
+        let mut t = Timing::default();
+        assert_eq!(t.at(5_000_000), 0.0, "stopped: where it was");
+        t.resume();
+        assert_eq!(t.at(5_000_000), 0.0, "the first frame after a start is its 0");
+        assert_eq!(t.at(5_500_000), 500.0);
+        assert_eq!(t.at(4_900_000), 0.0, "a frame time from before the start is the start");
+        let at = t.at(6_200_000);
+        t.pause(at);
+        assert_eq!((t.at(9_000_000), t.at(12_000_000)), (1200.0, 1200.0), "paused, it holds");
+        t.resume();
+        assert_eq!((t.at(20_000_000), t.at(20_016_000)), (1200.0, 1216.0), "and goes on from there");
+        t.seek(300.0);
+        assert_eq!((t.at(30_000_000), t.at(30_100_000)), (300.0, 400.0), "a seek while running runs on from it");
+        t.pause(2000.0);
+        t.seek(50.0);
+        assert_eq!(t.at(40_000_000), 50.0, "a seek while paused shows that moment");
+    }
+
+    #[test]
+    fn play_ends_only_after_a_motion_that_never_loops() {
+        assert!(ends(3000.0, 3000.0, false, false), "the end itself is the end");
+        assert!(ends(3016.0, 3000.0, false, false));
+        assert!(!ends(2990.0, 3000.0, false, false));
+        assert!(!ends(9000.0, 3000.0, true, false), "a loop plays on");
+        assert!(!ends(9000.0, 3000.0, false, true), "so does a picture that animates itself");
+        assert!(!ends(9000.0, 0.0, false, true), "pictures alone have no end");
+    }
+
+    #[test]
+    fn plays_time_reads_in_seconds() {
+        assert_eq!(time_text(1200.0, 3000.0), "1.20 / 3.00 s");
+        assert_eq!(time_text(0.0, 450.0), "0.00 / 0.45 s");
+        assert_eq!(time_text(65_432.0, 0.0), "65.43 s");
+    }
+
+    #[test]
+    fn the_span_loops_when_any_clock_does() {
+        use relay_bus::design::Motion;
+        let motion = |last: f64, looped: bool| -> Motion {
+            serde_json::from_value(json!({"loop": looped, "keys": [{"at_ms": 0, "opacity": 0}, {"at_ms": last, "opacity": 1}]})).unwrap()
+        };
+        let mut page = Node::new(NodeKind::Page);
+        page.id = "p".into();
+        let mut a = rect("a", "#FFFFFF");
+        a.parent = Some("p".into());
+        a.motion = Some(motion(800.0, false));
+        let mut f = Node::new(NodeKind::Frame);
+        (f.id, f.parent) = ("f".into(), Some("p".into()));
+        f.timeline = serde_json::from_value(json!({"duration_ms": 2000, "loop": false})).unwrap();
+        let mut b = rect("b", "#FFFFFF");
+        b.parent = Some("f".into());
+        b.motion = Some(motion(500.0, true));
+        let scene = Scene::new(vec![page.clone(), a.clone(), f.clone(), b.clone()]);
+        // The page's own clock loops by default; the frame's is told not to.
+        assert_eq!(play_span(&Clocks::new(&scene, "p")), (2000.0, true));
+        let mut page = page;
+        page.timeline = serde_json::from_value(json!({"loop": false})).unwrap();
+        let scene = Scene::new(vec![page, a, f, b]);
+        assert_eq!(play_span(&Clocks::new(&scene, "p")), (2000.0, false), "a looping motion on a clock that ends ends with it");
+    }
+
+    #[test]
+    fn fit_frames_between_the_panels_that_show() {
+        assert_eq!(fit_area(1200.0, 800.0, None, None), Rect::new(0.0, 76.0, 1200.0, 724.0));
+        // E-board-21: the layers panel's 260 px and the inspector's 256 px left out.
+        let area = fit_area(1200.0, 800.0, Some(280.0), Some(924.0));
+        assert_eq!((area.x, area.w), (280.0, 644.0));
+        let r = Rect::new(0.0, 0.0, 390.0, 844.0);
+        let mut cam = Camera::fit(&r, area.w, area.h, 56.0, 1.0);
+        cam.x -= area.x / cam.zoom;
+        cam.y -= area.y / cam.zoom;
+        let (sx, _) = cam.to_screen(r.cx(), r.cy());
+        assert!((sx - (280.0 + 644.0 / 2.0)).abs() < 1e-6, "centred between them: {sx}");
+        assert_eq!(fit_area(500.0, 800.0, Some(280.0), Some(220.0)).w, 500.0, "too narrow between them: the whole width");
+    }
 }

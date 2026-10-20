@@ -8,8 +8,9 @@ use gtk::{gdk, gio};
 use gtk4 as gtk;
 use relay_bus::design::{Node, NodeKind, NodeOp};
 use relay_bus::ops::design::AssetAddOut;
-use serde_json::{json, Map};
-use std::path::PathBuf;
+use relay_client::design::{names, shapes};
+use serde_json::{json, Map, Value};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 /// Pictures land no wider than this; a 4K screenshot would otherwise fill the canvas.
@@ -55,10 +56,13 @@ pub fn place_files(b: &Rc<Board>, paths: Vec<PathBuf>, at: Option<(f64, f64)>) {
     glib::spawn_future_local(async move {
         let mut placed = Vec::new();
         for path in paths {
-            match ui.call("design.asset.add", json!({"design_id": design, "path": path.to_string_lossy()})).await {
+            match add_asset(&ui, design, &path).await {
                 Ok(v) => {
                     if let Ok(out) = serde_json::from_value::<AssetAddOut>(v) {
-                        placed.push((out, path.file_stem().map(|s| s.to_string_lossy().to_string())));
+                        // A layer name the batch cannot refuse: no control characters, at most
+                        // MAX_NAME characters (B105).
+                        let name = path.file_stem().and_then(|s| names::layer_name(&s.to_string_lossy()));
+                        placed.push((out, name));
                     }
                 }
                 Err(e) => {
@@ -109,14 +113,22 @@ pub fn place_texture(b: &Rc<Board>, texture: gdk::Texture, at: Option<(f64, f64)
     });
 }
 
-fn add_images(b: &Rc<Board>, pictures: Vec<(AssetAddOut, Option<String>)>, at: Option<(f64, f64)>) {
+pub(super) fn add_images(b: &Rc<Board>, pictures: Vec<(AssetAddOut, Option<String>)>, at: Option<(f64, f64)>) {
     if pictures.is_empty() {
         return;
     }
-    let target = b.paste_target();
-    let origin = b.placed().rect(&target).unwrap_or_default();
+    // Dropped: into the frame under the drop, whatever is selected (B15); placed or pasted:
+    // where pastes go. Counted from the point its children count from, a group's own rather
+    // than its children's bounds (TM-71).
+    let target = match at {
+        Some(p) => super::tools::container_at(b, p),
+        None => b.paste_target(),
+    };
+    let origin = b.origin_of(&target);
     let (w, h) = b.size.get();
     let (mut x, y) = at.unwrap_or_else(|| b.to_page(w / 2.0, h / 2.0));
+    // A turned frame's children are placed in its turned coordinates (B12).
+    let local = |p: (f64, f64)| shapes::to_local(&b.doc.scene.borrow(), &b.placed(), &target, p.0, p.1);
     let mut ops = Vec::new();
     let mut ids = Vec::new();
     for (out, name) in pictures {
@@ -129,7 +141,7 @@ fn add_images(b: &Rc<Board>, pictures: Vec<(AssetAddOut, Option<String>)>, at: O
         n.src = Some(out.src);
         n.w = iw;
         n.h = ih;
-        let (cx, cy) = if at.is_some() { (x, y) } else { (x - iw / 2.0, y - ih / 2.0) };
+        let (cx, cy) = local(if at.is_some() { (x, y) } else { (x - iw / 2.0, y - ih / 2.0) });
         n.x = (cx - origin.x).round();
         n.y = (cy - origin.y).round();
         x += iw + 24.0;
@@ -139,6 +151,26 @@ fn add_images(b: &Rc<Board>, pictures: Vec<(AssetAddOut, Option<String>)>, at: O
     if b.commit(ops) {
         b.select(ids);
     }
+}
+
+/// Store the picture at `path` (`design.asset.add`). A path that is not UTF-8 (an old archive's
+/// Latin-1 name), which the bus cannot carry, goes by a private copy under a name of ours,
+/// rather than a mangled name the engine cannot find (B40).
+async fn add_asset(ui: &Rc<crate::app::Ui>, design: i64, path: &Path) -> Result<Value, String> {
+    if let Some(plain) = path.to_str() {
+        return ui.call("design.asset.add", json!({"design_id": design, "path": plain})).await.map_err(|e| e.to_string());
+    }
+    let ext = path.extension().map(|e| format!(".{}", e.to_string_lossy())).filter(|e| e.chars().all(|c| c == '.' || c.is_ascii_alphanumeric())).unwrap_or_default();
+    let copy = glib::user_runtime_dir().join(format!("relay-design-drop-{}{ext}", uuid::Uuid::new_v4()));
+    let (from, to) = (path.to_path_buf(), copy.clone());
+    ui.rt
+        .spawn_blocking(move || std::fs::copy(&from, &to))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r.map_err(|e| e.to_string()))?;
+    let out = ui.call("design.asset.add", json!({"design_id": design, "path": copy.to_string_lossy()})).await;
+    let _ = std::fs::remove_file(&copy);
+    out.map_err(|e| e.to_string())
 }
 
 /// Choose another picture for an image node, keeping its box.
@@ -157,7 +189,7 @@ pub fn replace_image(b: &Rc<Board>, id: &str) {
         let Some(ui) = b.ui.upgrade() else {
             return;
         };
-        match ui.call("design.asset.add", json!({"design_id": b.doc.id, "path": path.to_string_lossy()})).await {
+        match add_asset(&ui, b.doc.id, &path).await {
             Ok(v) => {
                 if let Ok(out) = serde_json::from_value::<AssetAddOut>(v) {
                     let mut set = Map::new();

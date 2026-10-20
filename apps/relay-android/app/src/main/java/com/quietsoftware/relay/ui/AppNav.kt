@@ -12,6 +12,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.quietsoftware.relay.ui.code.DesignPageScreen
 import com.quietsoftware.relay.ui.code.DesignScreen
 import com.quietsoftware.relay.ui.code.DesignsScreen
 import com.quietsoftware.relay.ui.code.FileScreen
@@ -113,6 +114,7 @@ private fun Destinations(nav: Nav, startRoute: String) {
         }
         composable("designs/{project}") { DesignsScreen(it.long("project") ?: 0, nav) }
         composable("design/{id}") { DesignScreen(it.long("id") ?: 0, nav) }
+        composable("design/{id}/page/{page}") { DesignPageScreen(it.long("id") ?: 0, it.str("page").orEmpty(), nav) }
         composable("threads") { ThreadsHome(nav) }
         composable("thread/{id}") { ThreadScreen(it.str("id").orEmpty(), nav) }
         composable("tally") { TallyScreen(nav) }

@@ -27,6 +27,7 @@ import com.quietsoftware.relay.core.sync.Optimistic
 import com.quietsoftware.relay.core.sync.OutboxEntry
 import com.quietsoftware.relay.core.sync.QueryKey
 import com.quietsoftware.relay.core.sync.Row
+import com.quietsoftware.relay.core.sync.rereadsOf
 import com.quietsoftware.relay.core.wire.BusError
 import com.quietsoftware.relay.core.wire.BusException
 import com.quietsoftware.relay.core.wire.PairLink
@@ -172,8 +173,9 @@ class Relay(
     /**
      * A query a screen shows: the cached answer first, then the PC's (or, with the PC away, the
      * server's copy's for a read it holds), read again whenever an event on either says that
-     * domain moved or the PC link comes back. Never errors with the PC away while there is a
-     * cached answer.
+     * domain moved or the PC link comes back. A burst of events while a read runs leaves one
+     * more read behind it, not one each ([rereadsOf]). Never errors with the PC away while there
+     * is a cached answer.
      */
     fun live(op: String, payload: JsonObject = JsonObject(emptyMap())): Flow<Live> = channelFlow {
         val key = QueryKey.of(op, payload)
@@ -189,7 +191,7 @@ class Relay(
             send(last)
         }
         read()
-        launch { hub.stale.filter { domain in it || "*" in it }.collect { read() } }
+        launch { hub.stale.rereadsOf(domain).collect { read() } }
         launch { hub.state.filter { it is LinkState.Online }.distinctUntilChanged().collect { if (!last.fresh) read() } }
         awaitClose()
     }.flowOn(Dispatchers.Default)

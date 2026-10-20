@@ -7,12 +7,13 @@ use super::board::{display_name, Board};
 use super::paint::STICKY_FILL;
 use super::glyphs;
 use super::tools::STICKY_COLORS;
-use super::widgets::{color_key, number};
+use super::widgets::{color_key, stored_number};
 use crate::app::label;
 use gtk::prelude::*;
 use gtk4 as gtk;
 use relay_bus::design::{Layout, NodeKind, TextAlign};
-use relay_client::design::edit::Align;
+use relay_client::design::edit::{self, Align};
+use relay_client::design::shapes;
 use serde_json::{json, Map, Value};
 use std::rc::Rc;
 
@@ -47,6 +48,7 @@ impl Board {
         if let Some(old) = self.context.borrow_mut().take() {
             self.overlay.remove_overlay(&old);
         }
+        self.context_values.borrow_mut().clear();
         let ids = self.selected();
         if ids.is_empty() {
             return;
@@ -123,10 +125,11 @@ impl Board {
             self.text_controls(&b, &bar, &nodes);
         } else if all(&[NodeKind::Line, NodeKind::Path]) {
             kind = "stroke";
-            // Closed, a free line is a shape of its own: it fills, and has no ends to route or
-            // put arrowheads on (routing it would open it and drop the fill).
-            let closed = nodes.iter().all(closed_shape);
-            if closed {
+            // Closed, a free line is a shape of its own: no ends to route or put arrowheads on
+            // (routing it would open it and drop the fill). One of three points or more fills,
+            // closed or not (B98).
+            let closed = nodes.iter().all(shapes::closed_shape);
+            if nodes.iter().all(shapes::fillable_line) {
                 let fill = same(nodes.iter().map(super::paint::fill_of)).flatten();
                 let weak = Rc::downgrade(&b);
                 bar.append(&color_key(&b, fill.as_deref(), "Fill", Some("None"), move |c| {
@@ -144,10 +147,14 @@ impl Board {
             }));
             let width = same(nodes.iter().map(|n| n.stroke_width.unwrap_or(2.0).to_bits())).map(f64::from_bits);
             let weak = Rc::downgrade(&b);
-            bar.append(&number("W", width, "Stroke weight", move |v| {
+            // The inspector's weight: its glyph, 0 to 1000 (E-board-6), and what was stored
+            // shown after it (B34).
+            bar.append(&stored_number("@stroke-width", width, "Stroke weight", move |v| {
+                let v = v.clamp(0.0, 1000.0);
                 if let Some(b) = weak.upgrade() {
-                    b.set_selected(set(&[("stroke_width", json!(v.clamp(0.5, 200.0)))]));
+                    b.set_selected(set(&[("stroke_width", json!(v))]));
                 }
+                v
             }));
             if all(&[NodeKind::Line]) && !closed {
                 // Straight, elbow, curve: one key that steps through them.
@@ -156,7 +163,7 @@ impl Board {
                 let (glyph, next, tip) = match route {
                     relay_bus::design::Route::Straight => ("line", "elbow", "Straight — make it an elbow"),
                     relay_bus::design::Route::Elbow => ("connector", "curve", "Elbow — make it a curve"),
-                    relay_bus::design::Route::Curve => ("rotate", "straight", "Curve — make it straight"),
+                    relay_bus::design::Route::Curve => ("curve", "straight", "Curve — make it straight"),
                 };
                 let key = gtk::Button::new();
                 key.add_css_class("design-context-key");
@@ -169,6 +176,9 @@ impl Board {
                     }
                 });
                 bar.append(&key);
+            }
+            // A pen path draws its arrowheads as a line does, so it gets the key too (B99).
+            if !closed {
                 let on = nodes.iter().all(|n| n.arrow_end == Some(true));
                 let arrow = gtk::ToggleButton::new();
                 arrow.add_css_class("design-context-key");
@@ -185,15 +195,19 @@ impl Board {
             }
         } else if nodes.len() == 1 || all(&[NodeKind::Frame, NodeKind::Rect, NodeKind::Ellipse, NodeKind::Image]) {
             kind = "shape";
-            let fillable = nodes.iter().all(|n| n.kind != NodeKind::Group);
-            if fillable {
+            // Only the keys every selected kind takes (FIELDS).
+            let takes = |field: &str| nodes.iter().all(|n| relay_bus::design::takes(n.kind, field));
+            if takes("fill") {
                 let fill = same(nodes.iter().map(super::paint::fill_of)).flatten();
                 let weak = Rc::downgrade(&b);
                 bar.append(&color_key(&b, fill.as_deref(), "Fill", Some("Automatic"), move |c| {
                     if let Some(b) = weak.upgrade() {
-                        b.set_selected(set(&[("fill", json!(c))]));
+                        // A gradient would cover the colour picked (TM-47).
+                        b.set_selected(set(&[("fill", json!(c)), ("gradient", Value::Null)]));
                     }
                 }));
+            }
+            if takes("stroke") {
                 let stroke = same(nodes.iter().map(|n| n.stroke.clone())).flatten();
                 let weak = Rc::downgrade(&b);
                 let key = color_key(&b, stroke.as_deref(), "Border", Some("None"), move |c| {
@@ -204,13 +218,17 @@ impl Board {
                 key.add_css_class("design-stroke-key");
                 bar.append(&key);
             }
-            if nodes.iter().all(|n| matches!(n.kind, NodeKind::Frame | NodeKind::Rect | NodeKind::Image)) {
-                let radius = same(nodes.iter().map(|n| n.radius.unwrap_or(0.0).to_bits())).map(f64::from_bits);
+            if takes("radius") {
+                // The radius it shows: per-corner radii's largest, a sticky's own 6 (TM-47).
+                let radius = same(nodes.iter().map(|n| shapes::radius(n).to_bits())).map(f64::from_bits);
                 let weak = Rc::downgrade(&b);
-                let field = number("@radius", radius, "Corner radius", move |v| {
+                let field = stored_number("@radius", radius, "Corner radius", move |v| {
+                    let v = v.max(0.0);
                     if let Some(b) = weak.upgrade() {
-                        b.set_selected(set(&[("radius", if v <= 0.0 { Value::Null } else { json!(v) })]));
+                        let ops = shapes::radius_ops(&b.doc.scene.borrow(), &b.selected(), v);
+                        b.commit(ops);
                     }
+                    v
                 });
                 bar.append(&field);
             }
@@ -219,11 +237,7 @@ impl Board {
                     let mode = one.layout.unwrap_or(Layout::None);
                     let key = gtk::Button::new();
                     key.add_css_class("design-context-key");
-                    let (glyph, tip, next) = match mode {
-                        Layout::None => ("free", "Auto layout: add (stack children in a column)", "column"),
-                        Layout::Column => ("column", "Auto layout: column — switch to a row", "row"),
-                        Layout::Row => ("row", "Auto layout: row — remove", "none"),
-                    };
+                    let (glyph, tip, next) = layout_key(mode);
                     key.set_child(Some(&glyphs::image(glyph, 16)));
                     super::widgets::tip(&key, tip);
                     let weak = Rc::downgrade(&b);
@@ -234,6 +248,16 @@ impl Board {
                     });
                     bar.append(&key);
                 }
+            }
+            // A shape's label gets the text keys too, once it has words or is being typed
+            // (E-text-6).
+            let editing = self.edit.borrow().as_ref().map(|e| e.id.clone());
+            let labelled = |n: &relay_bus::design::Node| {
+                n.text.as_deref().is_some_and(relay_client::design::names::visible) || editing.as_deref() == Some(n.id.as_str())
+            };
+            if takes("font_size") && nodes.iter().all(labelled) {
+                bar.append(&sep());
+                self.text_controls(&b, &bar, &nodes);
             }
         } else {
             kind = "align";
@@ -329,6 +353,18 @@ impl Board {
             self.context_compact.set(false);
         }
         self.overlay.queue_allocate();
+    }
+
+    /// Bring the toolbar's values up to date in place, as the selection is now: while a text is
+    /// typed, when the toolbar is not rebuilt (E-text-4).
+    pub(super) fn refresh_context_values(&self) {
+        let nodes: Vec<relay_bus::design::Node> = {
+            let scene = self.doc.scene.borrow();
+            self.selected().iter().filter_map(|id| scene.node(id).cloned()).collect()
+        };
+        for refresh in self.context_values.borrow().iter() {
+            refresh(&nodes);
+        }
     }
 
     /// Hide the toolbar's words (the parent's name, the style's, Ask's) and tighten its keys,
@@ -432,9 +468,22 @@ impl Board {
         style.set_popover(Some(&pop));
         bar.append(&style);
         let weak = Rc::downgrade(b);
-        bar.append(&number("", size, "Font size", move |v| {
+        // Captioned with its glyph, to scrub, as the inspector's is.
+        let size_field = stored_number("@text", size, "Font size", move |v| {
+            let v = v.clamp(1.0, 1000.0);
             if let Some(b) = weak.upgrade() {
-                b.set_selected(set(&[("font_size", json!(v.clamp(1.0, 1000.0)))]));
+                b.set_selected(set(&[("font_size", json!(v))]));
+            }
+            v
+        });
+        bar.append(&size_field);
+        // While a text is typed the toolbar is not rebuilt: these follow the scene in place
+        // (E-text-4).
+        let entry = size_field.last_child().and_downcast::<gtk::Entry>().map(|e| e.downgrade());
+        self.context_values.borrow_mut().push(Box::new(move |nodes| {
+            if let Some(e) = entry.as_ref().and_then(|e| e.upgrade()).filter(|e| !e.has_focus()) {
+                let size = same(nodes.iter().map(|n| super::paint::font_size(n).to_bits())).map(f64::from_bits);
+                e.set_text(&size.map(relay_client::design::number::fmt).unwrap_or_default());
             }
         }));
         let color = same(nodes.iter().map(|n| n.color.clone())).flatten();
@@ -487,7 +536,7 @@ impl Board {
             super::widgets::tip(&key, tip);
             key.set_active(on);
             let weak = Rc::downgrade(b);
-            key.connect_toggled(move |k| {
+            let handler = key.connect_toggled(move |k| {
                 if let Some(b) = weak.upgrade() {
                     let value = match (field, k.is_active()) {
                         (_, false) => Value::Null,
@@ -497,6 +546,20 @@ impl Board {
                     b.set_selected(set(&[(field, value)]));
                 }
             });
+            let k = key.downgrade();
+            self.context_values.borrow_mut().push(Box::new(move |nodes| {
+                if let Some(k) = k.upgrade() {
+                    let on = match field {
+                        "font_weight" => nodes.iter().all(|n| n.font_weight.unwrap_or(400) >= 600),
+                        "italic" => nodes.iter().all(|n| n.italic == Some(true)),
+                        "underline" => nodes.iter().all(|n| n.underline == Some(true)),
+                        _ => nodes.iter().all(|n| n.strike == Some(true)),
+                    };
+                    k.block_signal(&handler);
+                    k.set_active(on);
+                    k.unblock_signal(&handler);
+                }
+            }));
             bar.append(&key);
         }
         let align = same(nodes.iter().map(|n| n.align.unwrap_or(TextAlign::Left))).unwrap_or(TextAlign::Left);
@@ -518,39 +581,73 @@ impl Board {
         bar.append(&key);
     }
 
-    /// Turn auto layout on a frame to `mode` (`none`, `row` or `column`), padding it the first
-    /// time so its children do not touch its edges.
+    /// Turn auto layout on the selected frames to `mode` (`none`, `column`, `row` or `wrap`),
+    /// padding each the first time so its children do not touch its edges. Off, each child it
+    /// laid out keeps the box it shows, and the frame its size where it hugged them
+    /// (`edit::set_layout`, TM-8): `layout: null` alone dropped them at stale places.
     pub(super) fn set_layout(&self, mode: &str) {
+        let Some(mode) = layout_mode(mode) else {
+            return;
+        };
         let ids = self.selected();
-        let scene = self.doc.scene.borrow();
-        let ops = ids
-            .iter()
-            .filter_map(|id| scene.node(id).filter(|n| n.kind == NodeKind::Frame))
-            .map(|n| {
-                let mut s = set(&[("layout", if mode == "none" { Value::Null } else { json!(mode) })]);
-                if mode != "none" && n.layout.is_none() {
-                    if n.gap.is_none() {
-                        s.insert("gap".into(), json!(12));
-                    }
-                    if n.padding.is_none() {
-                        s.insert("padding".into(), json!([16]));
-                    }
-                }
-                relay_bus::design::NodeOp::Update { id: n.id.clone(), set: s }
-            })
-            .collect();
-        drop(scene);
+        let placed = self.placed();
+        let ops = edit::set_layout(&self.doc.scene.borrow(), &placed, &ids, Some(mode));
         self.commit(ops);
     }
 }
 
-/// A free line joined back to its start: no connector ends, no route.
+/// A free line joined back to its start: no connector ends, no route (`shapes::closed_shape`,
+/// which also asks for three points or more, B98).
+#[allow(dead_code)]
 pub(super) fn closed_shape(n: &relay_bus::design::Node) -> bool {
-    n.closed == Some(true) && n.route.is_none() && n.from.is_none() && n.to.is_none()
+    shapes::closed_shape(n)
+}
+
+/// A layout key's mode by its stored name; `none` is no layout.
+fn layout_mode(name: &str) -> Option<Layout> {
+    serde_json::from_value(json!(name)).ok()
+}
+
+/// A frame's layout key for its `mode`: its glyph, its tip and the mode a press turns on, round
+/// none, column, row and wrap.
+fn layout_key(mode: Layout) -> (&'static str, &'static str, &'static str) {
+    match mode {
+        Layout::None => ("free", "Auto layout: add (stack children in a column)", "column"),
+        Layout::Column => ("column", "Auto layout: column — switch to a row", "row"),
+        Layout::Row => ("row", "Auto layout: row — switch to wrap", "wrap"),
+        Layout::Wrap => ("wrap", "Auto layout: wrap — remove", "none"),
+    }
 }
 
 fn sep() -> gtk::Separator {
     let s = gtk::Separator::new(gtk::Orientation::Vertical);
     s.add_css_class("design-context-sep");
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_layout_key_goes_round_none_column_row_and_wrap() {
+        let mut mode = Layout::None;
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            let (glyph, _, next) = layout_key(mode);
+            assert!(glyphs::known(glyph), "{glyph} has its own glyph");
+            seen.push(glyph);
+            mode = layout_mode(next).expect("a stored layout name");
+        }
+        assert_eq!(seen, ["free", "column", "row", "wrap"]);
+        assert_eq!(mode, Layout::None, "wrap's press removes it");
+        assert!(layout_key(Layout::Wrap).1.ends_with("remove"));
+        assert_eq!(layout_mode("sideways"), None);
+    }
+
+    #[test]
+    fn a_curved_connector_has_its_own_glyph() {
+        assert!(glyphs::known("curve"));
+        assert_ne!(glyphs::geometry("curve"), glyphs::geometry("rotate"));
+    }
 }

@@ -213,7 +213,7 @@ class OutboxRunner(
             "git.push", "git.fetch", "git.pr.open", "integration.request", "device.build", "device.run",
             "app.backup.now", "skill.install", "provider.update", "guardrail.confirm" -> 300_000L
             "session.create", "session.spawn", "session.resume", "task.dispatch", "git.worktree.create", "avd.boot" -> 180_000L
-            "git.pr.list", "provider.refresh", "session.upload", "thread.upload", "thread.image" -> 120_000L
+            "git.pr.list", "provider.refresh", "session.upload", "thread.upload", "thread.image", "design.asset.get" -> 120_000L
             "file.search", "workspace.discover", "github.repo.list", "github.connect" -> 60_000L
             else -> 30_000L
         }

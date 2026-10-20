@@ -1,6 +1,6 @@
 ---
 name: design-canvas
-description: Draw and revise designs on Relay's design canvas with the design.* tools - the node model (pages, frames, groups, rects, ellipses, lines and arrows, text, stickies, pen paths, images), coordinates relative to the parent, auto layout (layout row or column, gap, padding, justify, items, w_sizing and h_sizing hug or fill) so screens lay themselves out without measuring text, choosing your own node ids so one design.apply builds a whole screen, revising exactly the layers a person selected and asked about, pictures through design.asset.add, reading validation errors, and the craft that makes a mockup look real. Use whenever a task asks to design, sketch, mock up, wireframe or diagram something, or a message starts with "[Relay design]".
+description: Draw, animate and revise designs on Relay's design canvas with the design.* tools - the node model (pages, frames, groups, rects, ellipses, lines and arrows, text, stickies, pen paths, images, icons), coordinates relative to the parent, auto layout (row, column or wrap, gap, padding, justify, items, hug or fill), pinning, absolute children, min and max sizes and scrolling frames, copies, named colours and styles, rings, glows, gradients and styled runs of text, motion (keyframes, easing, timelines), choosing your own node ids so one design.apply builds a whole screen, revising exactly the layers a person selected and asked about, looking at what you drew with design.render, reading validation errors and limits, and the craft that makes a mockup look real. Use whenever a task asks to design, sketch, mock up, wireframe, diagram or animate something, or a message starts with "[Relay design]".
 ---
 
 # Relay design canvas
@@ -18,66 +18,122 @@ the Design view.
 
 | Tool | Use |
 | --- | --- |
-| `design.list {project_id}` | The project's designs, newest change first. Yours carry your session name. |
-| `design.create {project_id, title}` | A new design with one empty page; answers `{design, nodes:[page]}`. Tied to your terminal. |
-| `design.get {design_id, page?}` | The design and every node (parents before children, siblings bottom to top). |
-| `design.apply {design_id, ops, base_rev?}` | Add, update, move, delete nodes. Answers the changed nodes and their ids. |
+| `design.list {project_id, session?}` | The project's designs, newest change first. Yours carry your session name. |
+| `design.create {project_id, title?}` | A new design with one empty page (`page-1`); answers `{design, nodes:[page]}`. Tied to your terminal. |
+| `design.get {design_id, page?, nodes?, since_rev?, pages_only?}` | The design and its nodes (parents before children, siblings bottom to top), plus `colors`, `styles` and picture `credits`. `page`: one page, by id or by a name no other page has. `nodes`: 1 to 500 ids and what is inside them. `since_rev`: only what changed after that rev (`nodes`, and `removed` ids). `pages_only`: the page list alone. |
+| `design.find {design_id, kind?, name?, text?, fill?, stroke?, color?, any_color?, font?, page?, inside?, with_nodes?}` | The ids of nodes that match every filter, in paint order; `with_nodes: true` adds the first 200 as stored. Use it instead of reading a whole design to find a colour, a word or a kind. |
+| `design.fonts {name?}` | The font families the desktop app can draw. |
+| `design.apply {design_id, ops, base_rev?, lenient?, reply?}` | Add, update, move, copy, delete nodes; name colours and styles. Answers `{rev, prev_rev, ids, removed_count, audit_id}`, with `rebased`, `copied`, `skipped` and `warnings` when there are any. |
+| `design.render {design_id, page?, nodes?, at_ms? or frames?, …}` | A picture of a page or some nodes, and every node's laid-out box. See "Check what you drew". |
 | `design.update {design_id, title?}` | Rename the design. |
-| `design.asset.add {design_id, path}` | Store a PNG/JPEG/GIF/WebP/SVG; answers `{src, w, h}` for an image node. |
+| `design.asset.add {design_id, path}` | Store a PNG/JPEG/GIF/WebP/SVG (a file up to 20 MiB, or `bytes_b64` up to 1 MiB); answers `{src, w, h}` for an image node. |
+| `design.duplicate`, `design.delete`, `design.restore` | Copy a design, or move it to the deleted ones and back. Delete only when the person asked. |
+
+**Photos.** Stock photographs come through `design.picture.search` / `thumb` / `add`, only in a
+project where the Pictures plugin is on: load the `design-pictures` skill. A stored photo keeps its
+credit (`design.get` answers `credits`); name the credits in your reply.
 
 ## Nodes
 
 Every node has `kind` and (except pages) `parent`. **`x`/`y` are relative to the parent's top-left**,
-so moving a frame moves what is in it. Children paint in order: later ones on top.
+so moving a frame moves what is in it. Children paint in order: later ones on top. A page is dark
+by default (`#1E1D1B`, the canvas colour): put light screens in a frame (white by default).
 
 | kind | for | key fields |
 | --- | --- | --- |
-| `page` | a sheet; its `fill` is the canvas colour | `name` |
-| `frame` | artboards, cards, buttons, rows: a box that clips and can lay out children | `w h fill radius stroke shadow layout gap padding justify items clip` |
-| `group` | nodes moved together; paints nothing | children at offsets from the group |
-| `rect`, `ellipse` | shapes, avatars, dividers, icons; an ellipse with `arc` is a pie, donut or gauge | `w h fill stroke stroke_width radius`, `arc: {start, sweep, inner}` |
+| `page` | a sheet; its `fill` is the canvas colour | `name`, `fill`, `timeline` |
+| `frame` | artboards, cards, buttons, rows: a box that clips and can lay out children | `w h fill radius stroke shadow layout gap row_gap padding justify items clip scroll` |
+| `group` | nodes moved together; paints nothing; its box is its children's | children at offsets from the group |
+| `rect`, `ellipse` | shapes, avatars, dividers; an ellipse with `arc` is a pie, donut, ring or gauge | `w h fill stroke stroke_width radius`, `arc: {start, sweep, inner, cap}` |
 | `line` | lines and arrows; with `closed` (and `fill`) a shape of your own | `points: [[x,y],…]` relative to `x/y`, `stroke`, `stroke_width`, `arrow_end`, `arrow_start`, `closed`, `smooth`, `fill` |
-| `text` | words | `text font font_size font_weight color align line_height letter_spacing italic underline text_case` |
+| `text` | words | `text font font_size font_weight color align line_height letter_spacing italic underline strike text_case runs max_lines` |
 | `sticky` | a note card | `text`, `fill` (paper), `w h` |
 | `path` | a freehand stroke | `points`, `stroke`, `stroke_width` |
-| `image` | a picture | `src` from `design.asset.add`, `w h`, `fit: cover|contain|stretch`, `radius` |
-| `polygon` | triangles, diamonds, hexagons, stars, flowchart decisions | `sides` (3 triangle, 4 diamond, 6 hexagon…), `star` (inner ratio, e.g. 0.4), `fill`, `stroke`, `text` |
-| `icon` | interface icons in mockups | `icon` (home, search, settings, user, bell, mail, heart, star, plus, check, x, chevron-*, arrow-*, menu, more-horizontal, trash, edit, copy, calendar, clock, image, file, folder, shopping-cart, credit-card, globe, map-pin, phone, message, send, filter, sliders, grid, list, play, pause, refresh, lock, eye, info, alert, help, sun, moon, wifi, battery, terminal, code, zap, cloud, git-branch, bar-chart…), `stroke` (its colour), `w h` (24 is the native size) |
+| `image` | a picture | `src` from `design.asset.add`, `w h` (both needed), `fit: cover|contain|stretch`, `radius` |
+| `polygon` | triangles, diamonds, hexagons, stars, flowchart decisions | `sides` (3 triangle, 4 diamond, 6 hexagon…, 3 to 24), `star` (inner ratio 0.05 to 0.95, e.g. 0.4; **a star with no `sides` has 5 points**), `fill`, `stroke`, `text` |
+| `icon` | interface icons in mockups | `icon` (a name below), `stroke` (its colour), `w h` (24 is the native size, which an icon added without one gets) |
 
-Any node can also take `rotation` (degrees clockwise about its centre), `opacity`, `blur` (px),
-`shadow`, and a shape `gradient` instead of `fill`:
+Icons are outline icons on a 24-unit grid, drawn at the smaller of `w` and `h`, stroke 2 px unless
+set. A name not in this list is refused: home, search, settings, user, users, bell, mail, heart,
+star, plus, minus, x, check, chevron-left, chevron-right, chevron-up, chevron-down, arrow-left,
+arrow-right, arrow-up, arrow-down, menu, more-horizontal, more-vertical, trash, edit, copy,
+download, upload, share, link, lock, unlock, eye, eye-off, calendar, clock, camera, image, file,
+folder, shopping-cart, credit-card, globe, map-pin, phone, message, send, filter, sliders, grid,
+list, play, pause, refresh, log-out, bookmark, info, alert, help, sun, moon, wifi, battery,
+terminal, code, zap, cloud, git-branch, bar-chart.
+
+**A kind refuses fields that are not its own**, naming the kinds that use it: `radius: ellipse
+nodes do not use it (it is for frame, rect, sticky, image)`. `null` always clears a field, on any
+kind (it never refuses), so an update can drop a stale one. A page takes no `style`, `motion`,
+`opacity`, `pin_*` or `absolute`; only a frame or page takes `timeline`; only a frame takes
+`scroll`, `layout`, `gap` and `clip`; `padding` is for frames and the labels of rect, ellipse and
+polygon.
+
+Any node but a page can also take `rotation` (degrees clockwise about its centre, ±3600; **not a
+`line`: its turn is its points**), `opacity`, `blur` (0 to 200 px), `blend` and a shape `gradient`
+instead of `fill`:
 `{"kind": "linear", "angle": 135, "stops": [{"at": 0, "color": "#4C9DFF"}, {"at": 1, "color": "#A178FF"}]}`
-(`angle` reads as CSS: 180 top to bottom; `"kind": "radial"` from the centre). Rects, frames and
-images take `radii: [tl, tr, br, bl]` for different corners; any stroke takes `dash` (`[6, 4]`
-dashed, `[0, 4]` dotted). A `rect`, `ellipse` or `polygon` with `text` shows it centred inside: a
-labelled box for a diagram.
+(2 to 8 stops; `angle` reads as CSS: 180 top to bottom; `"radial"` from the centre; `"conic"` round
+the centre, clockwise from `angle`, 0 the top). Rects, frames, stickies and images take
+`radii: [tl, tr, br, bl]` for different corners; any stroke takes `dash`: `[6, 4]` dashed, `[0, 4]`
+dotted (a dot needs `stroke_cap` round or square). A `rect`, `ellipse` or `polygon` with `text`
+shows it centred inside: a labelled box for a diagram.
+
+**Colours** are `#RGB`, `#RRGGBB` or `#RRGGBBAA` (`#00000000` is transparent), or a `$name` the
+design names (see Reuse). Defaults: a frame is white, a rect, ellipse or polygon `#D9D9D9`, a
+sticky `#FFE58A`; a border or outline is 1 px and drawn only when you set `stroke`, a line, path or
+icon 2 px; text is 16 px, weight 400, **dark on a light ground and light on a dark one** unless you
+set `color`.
+
+**Fonts.** `Geist` (400, 500, 600 and 700 draw), `Geist Mono` (400, 500) and `Sora` (600 only, a
+display face) are always there, so the ramp's 700 titles use Geist. `font_weight` takes 1 to 1000
+and the nearest face the family has is drawn. Any other family must be on the desktop
+(`design.fonts`); one that is not draws in a fallback face and the reply warns.
 
 More you can reach for:
 
-- **Arcs**: `"arc": {"start": 0, "sweep": 270, "inner": 0.62}` on an ellipse — `start` and
-  `sweep` in degrees clockwise from the top, `inner` the hole as a fraction of the radius. A
-  progress ring is two of them: a full ring in a muted colour, the progress on top.
+- **Arcs and progress rings**: `"arc": {"start": 0, "sweep": 252, "inner": 0.82, "cap": "round"}`
+  on an ellipse: `start` and `sweep` in degrees clockwise from the top, `inner` the hole as a
+  fraction of the radius, `cap` `butt` (default), `round` or `square` for the ends of a ring
+  segment (needs `inner` above 0 and `sweep` under 360). For a gradient ring add a conic
+  `gradient` with `"angle": 350`, a little before `arc.start`, so the round start cap takes the
+  first colour, not the last. A progress ring is two ellipses: a full ring in a muted colour, the
+  progress on top.
 - **Your own shapes**: a `line` with three or more `points`, `"closed": true` and a `fill`;
   `"smooth": true` curves through the points (blobs, waves, chart areas).
+- **Strokes**: `stroke_cap` (`butt`, `round`, `square`; a solid line or path is round by default,
+  dashes butt) and `stroke_join` (`miter`, `round`, `bevel`; ellipse, polygon, line, path).
+  `stroke_gradient` (shaped like `gradient`) paints along the stroke, even with no `stroke`.
+- **Shadows and glow.** Frame, rect, ellipse, polygon, sticky and image take `shadow` (outer, or
+  `"inset": true` inside the edge) or `shadows`, a list of 1 to 8 painted in order (give one field
+  or the other; blur 0 to 200). **Text, line, path and icon cast an outer shadow only, without
+  `spread`** (inset or spread is refused); with x and y 0 it is a glow:
+  `"shadows": [{"blur": 4, "color": "#4AF0FFCC"}, {"blur": 18, "color": "#4AF0FF66"}]`. A group and
+  a page cast none.
+- **Runs**: parts of a text in a style of their own: `"text": "8.4 km", "runs": [{"start": 3,
+  "end": 6, "font_size": 14, "color": "#8C877F"}]`. 1 to 64, in order, not overlapping, counted in
+  characters (`end` not included), each setting `color`, `font`, `font_size`, `font_weight`,
+  `italic`, `underline`, `strike` or `rise` (px above the baseline). Changing `text` means sending
+  `runs` (or `null`) with it.
+- **`max_lines`** (1 to 1000) cuts a text after that many lines with "…". It needs a width to wrap
+  at: a sticky, a shape's label, or a text with a fixed `w` or `w_sizing: "fill"`; a hugging text is
+  refused.
+- **Label padding**: on a rect, ellipse or polygon, `padding` is the label's inset (default
+  `[0, 12]`, less on a narrow shape): `"text": "Continue", "padding": [8, 24]`.
 - **Blend**: `"blend": "multiply"` (also `screen`, `overlay`, `darken`, `lighten`, `color_dodge`,
   `color_burn`, `hard_light`, `soft_light`, `difference`, `exclusion`, `hue`, `saturation`,
   `color`, `luminosity`) mixes a node with what is under it in the same parent.
-- **Inner shadow**: `"shadow": {"x": 0, "y": 2, "blur": 6, "color": "#00000040", "inset": true}`
-  — pressed buttons, wells, inputs.
 - **Text case**: `"text_case": "upper"` (or `lower`, `title`) draws the letters so while the words
   stay as written: eyebrow labels, overlines.
 - **Flip**: `"flip_x": true` / `"flip_y": true` mirrors a polygon, image or icon.
-- `line_height` is a multiple of the font size: `1.0` for tight display type, `1.4`–`1.5` for body.
+- `line_height` is a multiple of the font size (0.1 to 10, default 1.3): `1.0` for tight display
+  type, `1.4`–`1.5` for body.
 
-**Connectors.** A `line` with `from` and `to` (node ids) runs from one node's edge to the other's
-and follows them when they move — `points` are not needed. `route` is `straight` (default),
+**Connectors.** A `line` with `from` and `to` (node ids on its page) runs from one node's edge to
+the other's and follows them when they move — `points` are not needed. `route` is `straight` (default),
 `elbow` (right angles) or `curve`; `arrow_end: true` puts a head on it:
 `{"op":"add","node":{"parent":"page-1","kind":"line","from":"start","to":"decide","route":"elbow","arrow_end":true}}`.
 Build flowcharts this way: boxes and diamonds with `text`, connectors between them.
-
-Colours are `#RRGGBB` or `#RRGGBBAA` (`#00000000` is transparent). Defaults: a frame is white, a
-shape `#D9D9D9`, a sticky yellow; text is 16 px Geist 400, dark on a light ground and light on a
-dark one unless you set `color`. Fonts always present: `Geist`, `Geist Mono`, `Sora`.
 
 ## Auto layout: let screens lay themselves out
 
@@ -88,14 +144,60 @@ You cannot measure text, so never stack things by guessing `y` values. Put them 
 - `justify` along the direction: `start` (default), `center`, `end`, `space_between`.
 - `items` across it: `start` (default), `center`, `end`, `stretch`.
 - On a child: `w_sizing` / `h_sizing` of `fixed` (its `w`/`h`), `hug` (shrink to content: text's
-  words, a laid-out frame's children) or `fill` (take the room left, or the full depth across).
+  words, a laid-out frame's children; only a text, a sticky or a frame hugs) or `fill` (take the
+  room left, or the full depth across).
 - A text with no `w` hugs its words; give it `w_sizing: "fill"` in a column to wrap at the column's
   width. A laid-out frame with `h_sizing: "hug"` grows with its children.
-- Children of a laid-out frame ignore their own `x`/`y`.
+- Children of a laid-out frame ignore their own `x`/`y` (unless `absolute`, below). A group in a
+  layout takes its children's bounds.
+- **`layout: "wrap"`** is a row that starts a new line when the next child would pass the frame's
+  width: chips and tags. `gap` along a line, `row_gap` between lines (default `gap`); a frame that
+  hugs its width wraps only at its `max_w`; `fill` takes the room left in its line.
+- **Bounds**: `min_w`, `max_w`, `min_h`, `max_h` limit whatever decides a size (hug, fill, stretch,
+  a pin): a button `min_w: 120`, a chat bubble text `w_sizing: "hug", max_w: 260` (it wraps there).
+  A fixed `w` must already lie between its bounds.
+- **Turning layout off** (`layout: null`) leaves each child at its *stored* `x/y/w/h`, not where
+  the layout drew it: send each child's placed `x/y/w/h` (and `fixed` sizing) in the same
+  `design.apply`. The `design.render` boxes give the placed values (`rx`, `ry`, `w`, `h`).
+
+## Pinning, absolute children and scrolling
+
+A child's `x/y/w/h` are its box while its parent frame is at its **stored** `w`/`h`; `pin_x` /
+`pin_y` say how it follows when the parent is another size. Only a child that is free in its frame
+(the frame has no auto layout, or the child is `absolute`) is pinned; children of a page or group
+never are.
+
+| pin | follows the parent by |
+| --- | --- |
+| `pin_x`: `left` (default), `right`, `center` | keeping its distance from that edge, or from the centre line |
+| `pin_x`: `left_right` | keeping both distances: its width stretches (needs a fixed width) |
+| `pin_x`: `scale` | keeping its place and width as fractions of the parent's |
+| `pin_y`: `top` (default), `bottom`, `center`, `top_bottom`, `scale` | the same, for height |
+
+- **Resize a frame and its pinned children follow in the same apply**: when an `update` changes a
+  frame's stored `w` or `h`, each pinned free or absolute child moves on every axis your list did
+  not set on that child itself (x/y you give in that list are read against the new size). Each
+  follow is part of the same undo step.
+- A tab bar in a 390×844 screen: `{"parent":"screen","kind":"frame","name":"Tab bar","x":0,"y":764,"w":390,"h":80,"pin_x":"left_right","pin_y":"bottom"}`;
+  update the screen to `h: 700` and the bar stays at the bottom, 390 wide. A floating button:
+  `"pin_x": "right", "pin_y": "bottom"`.
+- A frame with no stored `w` (it fills or hugs) reads pins against 0: a right-pinned child's `x`
+  counts from the right edge (`x: -40, w: 24` sits 16 px in).
+- **`absolute: true`** takes a child of a laid-out frame out of the flow: it keeps its own `x/y`
+  from the frame's top-left corner (padding ignored), takes no room, is not counted when the frame
+  hugs, and can be pinned (a close icon: `absolute: true, pin_x: "right", x: -40`). It cannot
+  `fill`: pin it `left_right` instead.
+- A pin that cannot work is refused naming the field: a stretching pin on a line, path or group,
+  or on a node whose size is not fixed.
+- **`scroll: "x" | "y" | "both"`** on a frame: what overflows is clipped (`clip: false` is
+  refused), and every still picture, export and `design.render` shows the start. A carousel is a
+  `layout: "row"` frame with `scroll: "x"`, a fixed `w` and fixed-width cards, the next card
+  peeking in. The scrolling axis needs a fixed or `fill` size, not `hug`. `design.render` does not
+  flag the scrolled-away part as overflow.
 
 ## Ids: build a screen in one call
 
-Give nodes your own ids (letters, digits, `- _ . :`), then later edits in the same list can use them
+Give nodes your own ids (letters, digits, `- _ . :`, at most 64), then later edits in the same list can use them
 as `parent`. Use readable, stable ids — the person's selection and your next revision name them.
 Send **one screen or component per `design.apply`** (tens to a few hundred edits): the person sees
 it arrive piece by piece, each piece is one undo step, and the engine stays responsive.
@@ -122,26 +224,195 @@ it arrive piece by piece, each piece is one undo step, and the engine stays resp
 ]}
 ```
 
+## Reuse: copies, colours and styles
+
+**`copy`** `{"op":"copy","id":"card","as":"card-2","dx":360}` copies a node and everything inside
+it as one edit (`parent`, `index`, `dx`, `dy` optional; a page copies as a new page, the way to
+make a variant). The copy is `as` (or an assigned id, answered in `ids`), and `copied` in the reply
+maps each new root to the node it copied. Nodes inside take ids from it: an id starting with the
+copied id and `-`, `_`, `.` or `:` has that start swapped (`card-title` becomes `card-2-title`), any
+other gets the copy's id and `:` in front (`text-14` becomes `card-2:text-14`), so later edits of
+the same list can name them. **A connector inside the copy joins the copies of its ends; an end
+outside the copy is let go**: the line stays drawn where it was, attached to nothing at that end.
+`dx`/`dy` add to the copy's stored `x/y`, which a laid-out parent ignores.
+
+**Colours and styles** keep a design consistent and restylable. **Name the palette first**, then
+the type ramp and component looks, before the nodes that use them (a `$name` or `style` the design
+lacks is refused):
+
+```json
+{"op":"color","name":"ink","value":"#141414"},
+{"op":"style","name":"title","set":{"font":"Geist","font_size":30,"font_weight":700,"color":"$ink"}},
+{"op":"style","name":"card","set":{"fill":"#FFFFFF","radius":16,"shadow":{"y":4,"blur":16,"color":"#0000001F"}}},
+{"op":"add","node":{"id":"card","parent":"page-1","kind":"frame","style":"card","w":320,"h_sizing":"hug","layout":"column","gap":8,"padding":[16]}},
+{"op":"add","node":{"id":"card-title","parent":"card","kind":"text","style":"title","text":"Plan"}},
+{"op":"copy","id":"card","as":"card-2","dx":360},
+{"op":"update","id":"card-2-title","set":{"text":"Usage"}}
+```
+
+- `color` `{name, value}` names a colour (`#RGB`, `#RRGGBB` or `#RRGGBBAA`); any colour field of a
+  node or style takes it as `"$ink"`, including gradient stops, shadows and runs. Naming it again
+  changes it everywhere it is used. Motion keys take literal colours only.
+- `style` `{name, set}` names a look: `set` takes the style fields (fill, gradient, stroke,
+  stroke_width, dash, radius, radii, shadow, shadows, opacity, blur, blend, color, font, font_size,
+  font_weight, italic, underline, strike, align, line_height, letter_spacing, text_case,
+  stroke_cap, stroke_join, stroke_gradient); `null` takes a field out of the style. A node takes
+  it with `"style": "card"`: each style field the node does not set itself applies (a node's own
+  field wins), and changing the style restyles every node that names it.
+- `delete_style` `{name}` removes a colour or style; what used it keeps its look (the values are
+  written into it). Colours and styles share one namespace: names are 1 to 64 id characters, at
+  most 256 together. `design.get` answers `colors` and `styles`.
+
+## Motion
+
+When asked to animate, make something move, or make a motion piece, give layers `motion` and the
+artboard a `timeline`. Never draw a still of a motion request. A layer's own fields are its look
+**at rest** (the canvas until Play, exports, `design.render` without `at_ms`): build the finished
+design first, then say how it gets there. Any node but a page moves.
+
+- `motion.keys`: 2 to 64 keys in time order, each `{"at_ms": …}` plus what it sets. Times are
+  **milliseconds** (half a second is 500; the last key must be at 50 or later, none past 600000).
+- **Moves**, from where layout puts it, so they work inside auto-layout frames: `dx`, `dy` (px),
+  `rotate` (degrees added), `scale`, `scale_x`, `scale_y` (0 to 100), about `origin`. **Looks**,
+  shown instead of the node's own: `opacity`, `fill`, `stroke`, `color` (literal colours), `blur`,
+  `sweep` (an ellipse's arc: a ring that fills), `angle` (a gradient's), `trim` (0 to 1 of a line or
+  path drawn on).
+- Before its first key a property holds that key's value (that is how a delay is written), after
+  its last it holds that one's. Between two keys it is eased.
+- `ease`, on the motion or on a key (the move that starts at that key): `linear`, `ease`
+  (default), `ease_in` (departures), `ease_out` (arrivals), `ease_in_out`, `overshoot` (goes a
+  little past and settles: pops), `hold` (jumps at the next key: blinks).
+- `origin: [0.5, 1]` turns and scales about the bottom middle (fractions of the box; default the
+  centre); `loop: true` plays the layer's keys again from 0 every last-key ms (spinners, pulses).
+- `timeline` `{"duration_ms": 3000, "loop": true}` on a frame or page is the clock for the motion
+  inside it, the nearest one up the tree (default: as long as the latest key, looping; `loop:
+  false` holds the last frame).
+
+```json
+{"op":"update","id":"hero","set":{"timeline":{"duration_ms":3000}}},
+{"op":"update","id":"hero-title","set":{"motion":{"ease":"ease_out","keys":[
+  {"at_ms":0,"dy":24,"opacity":0},{"at_ms":500,"dy":0,"opacity":1}]}}},
+{"op":"update","id":"hero-cta","set":{"motion":{"ease":"overshoot","keys":[
+  {"at_ms":300,"scale":0.6,"opacity":0},{"at_ms":700,"scale":1,"opacity":1}]}}},
+{"op":"update","id":"ring","set":{"motion":{"keys":[{"at_ms":0,"sweep":0},{"at_ms":1200,"sweep":270}]}}},
+{"op":"update","id":"loader","set":{"motion":{"ease":"linear","loop":true,"keys":[
+  {"at_ms":0,"rotate":0},{"at_ms":1000,"rotate":360}]}}}
+```
+
+`sweep` is for an ellipse, `trim` for a line or path. **Check it:** `design.render {"design_id": 12,
+"nodes": ["hero"], "frames": 6}` returns a contact sheet; look at it before you answer. If nothing
+in scope moves, the reply warns and gives one picture at rest.
+
+## Replies, revs and collisions
+
+- A `design.apply` answers short: `ids` (each edit's node id, in order; an add's assigned one too),
+  `rev` (the design's rev now) and `prev_rev`. Ask for `reply: "full"` only if you need the nodes as
+  stored.
+- Pass `base_rev` every time: the rev you read, then the `rev` each reply gives. The engine refuses
+  (`design.stale`) only when a node your list changes, moves or deletes (or one inside a node it
+  deletes) changed after that rev; otherwise it applies on top and says `rebased: true`. Adds and
+  colour or style edits never collide. A `prev_rev` that is not the rev you last saw means someone
+  else changed the design in between.
+- On `design.stale`, read only what changed: `design.get {design_id, since_rev: <your base_rev>}`
+  (`details.conflicts` names the nodes), redo the edits that touch them, and send again with the
+  new `rev`. `since_rev` reaches back 1000 revs; older is `design.since_too_old`: read it whole.
+- Read `warnings` (a font the desktop lacks, a rule a lenient list let through) and `skipped`
+  (what did not apply, and why: `missing`, `changed`, `fields`, …).
+- **`lenient: true`** is for replaying an undo or a list built from an old read: an edit whose node
+  or parent is gone, or that would overwrite a change since your `base_rev`, is skipped and listed
+  in `skipped`, and a rule a strict list would refuse (a field the kind does not take, a key that is
+  no field) is applied as written with a warning instead of refusing the list. The default,
+  strict, refuses and teaches: prefer it. A list that applies nothing changes nothing.
+
 ## Revising: change exactly what was asked
 
-A request from the board reads like `[Relay design] "Settings" (design_id 12, page "Page 1").
-Selected: save-button (frame "Button"). Picture of it: /…/ab12….png. Request: make it green.`
+A request from the board is one line:
 
-1. Look at the picture (it is a PNG path you can read) and `design.get` the design (or `page`).
+`[Relay design] "Settings" (design_id 12, page "Flows" (page-7)). Selected: save-button (frame "Button"). Picture of it: "/…/ab12….png". Request: make it green — read it with design.get {"design_id":12,"nodes":["save-button"]} and change it with design.apply.`
+
+- `page "Flows" (page-7)` is the page's name and its **id**: `page` in `design.get` and
+  `design.render` takes the id, or the name when no other page has it.
+- With nothing selected it says `Nothing selected; picture of the whole page page-7: "….png".` and
+  the read is `design.get {"design_id":12,"page":"page-7"}` (also used when more than 500 layers are
+  selected). Past 8 selected layers the first 8 are named, the rest listed by id.
+- The picture path is quoted: it is a PNG you can read. If it could not be attached the prompt says
+  `(A picture was requested but could not be attached: …)`.
+- If what was asked about moves, the picture is a **contact sheet of 6 frames** and the prompt gives
+  their times (`It moves: the picture is a contact sheet of 6 frames at 0, 600, … ms, left to right
+  then down`); with no sheet it says to use `design.render` with `frames` or `at_ms`.
+- If you were busy when the person pressed Send, the request reached you as **priority mail**, which
+  you read with your next tool call; at your prompt it was typed in.
+
+1. Look at the picture and read the selection (`nodes`) or the page as the prompt says.
 2. Change those layers with `update`: `{"op":"update","id":"save-button","set":{"fill":"#2EC469"}}`.
    `set` takes any node field except `id`, `kind` and `parent`; `null` puts a field back to default.
 3. `move` reparents or reorders: `{"op":"move","id":"x","parent":"card","index":0}` (index 0 is the
-   bottom / first in a layout; no index puts it last / on top).
-4. Keep ids and the person's layers; don't delete and re-add what an `update` can change. One
-   request → one `design.apply`, so one Ctrl+Z undoes it.
-5. Pass `base_rev` (the `rev` you read) when your edit assumes nothing changed since; a
-   `design.stale` refusal means read again first.
+   bottom / first in a layout; no index puts it last / on top). `"keep_position": true` keeps the
+   node where it is drawn on the page, rewriting `x/y` for the new parent; it is refused
+   (`design.position`) when it or a parent on either side is placed by auto layout, since that
+   place is not stored.
+4. Keep ids and the person's layers; don't delete and re-add what an `update` can change.
+5. Pass `base_rev`; on `design.stale` read `since_rev` and redo only what collided.
+6. Look at what you changed (next section), then say what you did.
+
+**Undo.** One request → one `design.apply`, so the person's **Undo <agent>** button on the board
+(after you change a design) takes it back in one press, each press one more of your changes; if they
+edited what you changed since, it asks for a second press. **Ctrl+Z undoes only the person's own
+edits**, never yours. A change whose undo is over 256 KiB (deleting thousands of layers) has no
+undo: keep each apply to one screen.
+
+**On the canvas** the person scrolls a `scroll` frame with Alt+wheel (view only, never stored). A
+vector path (a `line` with points) turns by rewriting its `points` about the middle of their box,
+since a `line` takes no `rotation`; a `path` node takes `rotation`.
+
+## Check what you drew
+
+You cannot measure text, and `design.get` reads hugged text as `w 0, h 0`. After you draw or change
+a screen, **look at it**: `design.render {"design_id": 12, "page": "page-7", "nodes": ["login"]}`.
+
+- `png.path` is a picture of the page, or of `nodes` (the outermost of up to 200, on one page); the
+  MCP tool shows it to you as an image. `png: false` gives boxes and issues alone; `scale` 0.25 to
+  2 and `max_side` 64 to 2560 (default 1568) bound its size.
+- `area` is the page rectangle pictured: picture pixel (u, v) is page point (`area.x + u/scale`,
+  `area.y + v/scale`).
+- `boxes.rows` are `["id","kind","parent","x","y","w","h","rx","ry","rot"]` for every visible node,
+  laid out, hugged text measured: x, y, w, h in page px, rx, ry from the parent's origin. At most
+  `boxes_limit` rows (default 200, most 500); `boxes.total` counts all, `boxes.hidden` the hidden.
+- `issues` (worst first, at most 100; `issue_count` counts all) name layout problems by `code`:
+  `overflow` (a child past its frame's padding), `overlap` (siblings laid over each other in a
+  layout), `text_overlap`, `clipped` (cut off by a clipping frame), `contrast` (words too faint on
+  what they sit on). Fix them and render again. Read `warnings` too.
+- Motion: `at_ms` (0 to 600000) pictures one time, `frames` (2 to 24) a contact sheet labelled by
+  `times_ms`; not both (`design.render.args`).
+- It is drawn by Relay's desktop app. **`design.render.no_renderer`** means none is open: tell the
+  person to open Relay, carry on without sizes (never guess them) and say you could not look. The
+  other refusals say what to do: `busy` (try again in a few seconds), `timeout` and
+  `renderer_gone` (once more, then say so), `args` (an option out of range). An open board shows a
+  note that you looked. `base_rev` refuses a picture of a design that moved on (`design.stale`).
 
 ## Errors
 
-A refusal names the edit and the field: `ops[3] update "hero": fill: "red" is not #RGB, #RRGGBB or
-#RRGGBBAA`. Nothing in that list was applied; fix that edit and send the list again. A design holds
-at most 5000 nodes; one `design.apply` carries at most 2000 edits.
+A refusal names the edit and the field: `ops[3] update "hero": fill: "red" is not #RGB, #RRGGBB,
+#RRGGBBAA or a $name colour`. A misnamed field, id or page gets a suggestion (`"fil" is not a node
+field; did you mean "fill"?`, `did you mean "card-title"?`). Nothing in a refused list was applied;
+fix that edit and send the list again. `details` carries `{index, id, field}`.
+
+| code | meaning |
+| --- | --- |
+| `design.node_invalid` | a field's value or kind rule; the message says which |
+| `design.node_not_found`, `design.page_not_found` | an id the design lacks (the message names the nearest) |
+| `design.node_exists`, `design.parent`, `design.cycle`, `design.too_deep` | an id taken; a parent that is gone or holds nothing; a move into itself; nesting past 64 |
+| `design.style_not_found`, `design.style_invalid`, `design.style_exists` | a `$name` or style the design lacks; a bad colour; a name taken |
+| `design.position` | `keep_position` where a place is laid out |
+| `design.stale` | a node you write changed since `base_rev`; read `since_rev` |
+| `design.too_large` | a limit below |
+| `design.asset_not_found` | an image `src` that `design.asset.add` did not store |
+
+**Limits:** 5000 nodes, 1536 KiB of node JSON (as `design.get` returns it) and 64 levels of nesting
+per design; 2000 edits per `design.apply`; 256 named colours and styles; 10000 characters per text;
+4000 points per line or path; ids 64 characters, names and fonts 200; 1 to 8 shadows, 1 to 64 runs,
+2 to 64 motion keys, 2 to 8 gradient stops; coordinates and sizes within ±1,000,000. A connector's
+`from` and `to` are nodes on its own page; an image's `src` is one `design.asset.add` returned.
 
 ## Make it look real
 
@@ -152,8 +423,9 @@ at most 5000 nodes; one `design.apply` carries at most 2000 edits.
   and buttons, consistent across a screen.
 - **Type**: one ramp — 32–40/700 titles, 20–24/600 headings, 15–16/400 body, 12–13/500 captions;
   line height 1.2 for headings, 1.4–1.5 for body; slight negative tracking on large titles.
-- **Colour**: a neutral ground, one accent used for one job (the primary action), text contrast of
-  at least 4.5:1; check dark variants separately.
+- **Colour**: name the palette (`color`) and the type ramp (`style`) first and restyle by changing
+  those. A neutral ground, one accent used for one job (the primary action), text contrast of at
+  least 4.5:1 (`design.render` flags `contrast`); check dark variants separately.
 - **Content**: real, specific copy from the product — names, numbers, states — never lorem ipsum.
   Show states that matter (empty, error, loading) as their own frames when asked about a flow.
 - **Structure**: a frame per component (card, row, button) so the person can select and restyle it;

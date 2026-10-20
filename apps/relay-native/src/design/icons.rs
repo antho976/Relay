@@ -66,12 +66,13 @@ pub fn picker(b: &Rc<Board>, pop: &gtk::Popover, target: Option<String>) -> gtk:
     let keys = Rc::new(keys);
     let k = keys.clone();
     search.connect_search_changed(move |s| {
-        let q = s.text().to_lowercase();
+        let q = s.text();
         let mut any = false;
         for (name, key) in k.iter() {
             if let Some(cell) = key.parent() {
-                cell.set_visible(name.contains(&q));
-                any |= name.contains(&q);
+                let shown = matches(name, &q);
+                cell.set_visible(shown);
+                any |= shown;
             }
         }
         nothing.set_visible(!any);
@@ -91,6 +92,35 @@ pub fn picker(b: &Rc<Board>, pop: &gtk::Popover, target: Option<String>) -> gtk:
     });
     body.set_size_request(320, -1);
     body.upcast()
+}
+
+/// Words a person may look for an icon by, and the icon each finds (E-board-8).
+const SYNONYMS: &[(&str, &str)] = &[
+    ("close", "x"), ("cancel", "x"), ("cross", "x"), ("delete", "trash"), ("remove", "trash"), ("bin", "trash"),
+    ("gear", "settings"), ("cog", "settings"), ("preferences", "settings"), ("find", "search"), ("magnifier", "search"),
+    ("house", "home"), ("person", "user"), ("profile", "user"), ("account", "user"), ("people", "users"), ("team", "users"),
+    ("notification", "bell"), ("email", "mail"), ("envelope", "mail"), ("like", "heart"), ("favourite", "star"),
+    ("favorite", "star"), ("add", "plus"), ("new", "plus"), ("tick", "check"), ("done", "check"), ("ok", "check"),
+    ("back", "arrow-left"), ("next", "arrow-right"), ("forward", "arrow-right"), ("hamburger", "menu"),
+    ("pencil", "edit"), ("write", "edit"), ("duplicate", "copy"), ("photo", "image"), ("picture", "image"),
+    ("cart", "shopping-cart"), ("basket", "shopping-cart"), ("payment", "credit-card"), ("location", "map-pin"),
+    ("place", "map-pin"), ("chat", "message"), ("comment", "message"), ("reload", "refresh"), ("sync", "refresh"),
+    ("logout", "log-out"), ("warning", "alert"), ("error", "alert"), ("question", "help"),
+    ("chart", "bar-chart"), ("graph", "bar-chart"), ("stats", "bar-chart"), ("dark", "moon"), ("light", "sun"),
+    ("visible", "eye"), ("hidden", "eye-off"), ("private", "lock"), ("time", "clock"), ("date", "calendar"),
+    ("document", "file"), ("directory", "folder"), ("world", "globe"), ("web", "globe"), ("call", "phone"),
+    ("lightning", "zap"), ("power", "zap"), ("branch", "git-branch"), ("console", "terminal"),
+];
+
+/// Whether icon `name` answers search `query`: each word of it (split on spaces and hyphens, any
+/// case) is part of one of the name's hyphen-separated words, or starts a word that stands for
+/// the icon (`close` finds `x`, `del` finds `trash`). No words shows every icon.
+pub(super) fn matches(name: &str, query: &str) -> bool {
+    let query = query.to_lowercase();
+    query.split(|c: char| c.is_whitespace() || c == '-').filter(|word| !word.is_empty()).all(|word| {
+        name.split('-').any(|part| part.contains(word))
+            || SYNONYMS.iter().any(|(synonym, icon)| *icon == name && word.len() >= 2 && synonym.starts_with(word))
+    })
 }
 
 pub(super) fn choose(b: &Rc<Board>, name: &str, target: Option<&str>) {
@@ -115,5 +145,33 @@ pub(super) fn choose(b: &Rc<Board>, name: &str, target: Option<&str>) {
     let id = n.id.clone();
     if b.commit(vec![NodeOp::Add { node: n, index: None }]) {
         b.select(vec![id]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn found(query: &str) -> Vec<&'static str> {
+        ICONS.iter().copied().filter(|name| matches(name, query)).collect()
+    }
+
+    #[test]
+    fn icon_search_takes_words_in_any_order_and_synonyms() {
+        assert_eq!(found("arrow right"), ["arrow-right"]);
+        assert_eq!(found("right arrow"), ["arrow-right"]);
+        assert_eq!(found("Arrow-Right"), ["arrow-right"]);
+        assert_eq!(found("close"), ["x"]);
+        assert_eq!(found("delete"), ["trash"]);
+        assert_eq!(found("del"), ["trash"], "a synonym is found as it is typed");
+        assert_eq!(found("gear"), ["settings"]);
+        assert!(found("right").contains(&"chevron-right") && found("right").contains(&"arrow-right"));
+        assert_eq!(found("eye off"), ["eye-off"]);
+        assert_eq!(found("  "), ICONS, "no words shows them all");
+        assert!(found("zebra").is_empty());
+        // Every synonym names an icon of the set.
+        for (word, icon) in SYNONYMS {
+            assert!(ICONS.contains(icon), "{word} names {icon}, not in the set");
+        }
     }
 }

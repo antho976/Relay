@@ -15,6 +15,7 @@ each half, and where the next audit should look first.
 | Compare | `scripts/perf/compare.py <old run> <new run>` | trusts instruction counts and breakdowns over absolute times |
 | Native client | `scripts/perf/native-baseline.py` | every page against a disposable engine: CPU at startup and at rest, wakeups, RSS, `perf` profile per page, `GDK_DEBUG=frames` log |
 | Readings | `BASELINE-<date>.md`, `FIXES-<date>.md`, `runs/<date>/` | the format every new reading follows (see the plugin's `perf-audit` templates); `ATTRIBUTION-2026-10-14.md` is the first with CPU counts and sampled attribution: six leads, all fixed (two in part) |
+| Design rows and their ratchet | `perf.rs` rows `op.design.*` and `path.design.*`, `scripts/perf/ratchet.py` (ceilings in `ratchet.json`), `scripts/perf/design-scale.py` | the design engine and the canvas's scene at 500 to 5,000 nodes: instruction counts, a ceiling per row, the native client's CPU per edit (`DESIGN-2026-10-20-scale.md`) |
 | In-process lock budget | `engine.rs`: a handler holding the store lock ≥ 16 ms logs "store lock over budget" | read the log after any scenario run |
 
 **Tools the full run wants** on the measuring machine: `valgrind` (callgrind pass; the 2026-10-07
@@ -73,6 +74,10 @@ debug = "line-tables-only"
 | Native cold start | launch → first frame → connected and interactive | first frame ≤ 500 ms, interactive ≤ 1 s | per-page CPU in `runs/*/native/` |
 | Engine start | `relay serve` → socket answering | ≤ 20 ms on a populated store | 4.6 ms |
 | At rest, N quiet sessions | 30 s idle | **0 % CPU, 0 wakeups** in engine *and* client | engine 0/0 (2026-09-19); client not yet zero (§5) |
+| Agent edits a design | `design.apply` → the reply, and the open board repainted | engine lock ≤ 16 ms for a list; an edit of one node does not grow with the design | one node: 0.43 M instructions, 0.04 ms at 500, 2,000 and 5,000 nodes; the largest lists (group of 1,999 of 4,998 siblings 29.8 ms, delete of 4,998 42.0 ms) are linear in the list and still over 16 ms (`DESIGN-2026-10-20-scale.md`) |
+| Another window's edit reaches an open board | `design.changed` → board repainted | the client's main thread inside a frame | 4.4 ms at 1,721 nodes, 10.7 ms at 4,903 (was 16.2 and 40.4); nothing at rest (`DESIGN-2026-10-20-scale.md`) |
+| An agent renders a page | `design.render` → PNG, boxes and issues in the agent's hands (the desktop app draws; BUS.md §6.2) | each main-thread step (layout, boxes, content, paint) under 8 ms on the 1,721-node fixture at scale 1; the whole answer under 1 s at p95 (render-SPEC-v2 §9) | 1,721 nodes, dev profile: `render-paint` median 7.5 ms, p95 8.4–9.4 ms (just over), every other step under 3 ms at p95; the reply in about 50 ms with encode (31 ms) off the main thread (`DESIGN-2026-10-20-smoke.md`; `RELAY_DESIGN_TRACE=1` prints each step) |
+| A frame of Play | frame clock tick → the page repainted with its movers posed | the frame's build under 8.3 ms at p95 (120 Hz) | 1,721 nodes, 50 movers: median 0.09–0.13 ms, p95 0.14–0.15 ms, against a whole rebuild at rest of 1.5–1.6 ms; the first frame costs a rebuild, once (`DESIGN-2026-10-20-play.md`) |
 | Phone cold start | tap → start screen with cached data | TTID ≤ 1 s mid-range | not measured (no Macrobenchmark yet) |
 | Phone reconnect | link up → replica current | no visible stall; UI never blocked | not measured |
 
@@ -124,6 +129,25 @@ Keep `--no-lockscreen` (a locked virtual session never delivers frame callbacks)
 `GDK_DEBUG=frames` (frame log), the GTK Inspector's frame timings and recorder, `sysprof` with GTK
 marks, `perf record -g -p <pid>` at rest and during a scripted interaction, and wakeups from
 `/proc/<pid>/status` over 30 s.
+
+**Design canvas** — three instruments, each in `DESIGN-2026-10-20-scale.md` or `-play.md`:
+
+- *Engine and scene rows*: `perf run 'op.design*' 'path.design*' --counters` (add `--sql` for every
+  statement's text, count and SQLite time). The rows are 37: one-node edits, a 1,000-edit batch and its
+  undo, subtree deletes, group and ungroup of 1,999 of 4,998 siblings, `design.get`, and the canvas's
+  commit and reread at 1,721 and 4,903 nodes. Compare instruction counts; three runs of one build agree
+  within 0.7 %, and the load does not move them.
+- *The ratchet*: `python3 scripts/perf/ratchet.py` takes three runs of those rows and fails when a
+  row's median is over its ceiling in `scripts/perf/ratchet.json` by more than 1.5 %; `--lower` writes
+  every row that came under, `--reset` sets all after a new toolchain. A ceiling is raised only by
+  hand, with the reason in the commit. It needs the CPU's counters (`perf_event_paranoid` ≤ 2 and a
+  PMU), which CI's virtual machines lack, so run it before merging a change to the design engine or
+  the scene; it is not a CI job.
+- *The client*: `scripts/perf/design-scale.py` (CPU per edit, gallery alone and board open, 1,721
+  and 4,903 nodes) and `RELAY_DESIGN_TRACE=1` (`DESIGN_TRACE` lines for layout, content, draw,
+  reread, commit, `play_frame` and a render's steps), both inside `kwin_wayland --virtual`. A frame of
+  Play is also an ignored test, `a_play_frame_builds_within_its_budget` in `paint.rs`, which fails over
+  8.3 ms at p95 and needs a display, so CI does not run it.
 
 **Android** — no SDK in agent sessions: a change under `apps/relay-android` is written, not built,
 and the summary says so. `:core` is plain JVM, so its terminal parser, replica and outbox rules can be
@@ -222,7 +246,8 @@ several may turn out to be cheap enough not to matter. File paths are current as
 ## 6. Guardrails
 
 What exists: the harness and its readings, the "store lock over budget" log, `path.*.during_*`
-scenarios. What does not yet: a **ratchet in CI**. `ci.yml` runs no benchmark. The next step after
+scenarios, and a local ratchet on the design rows (§4, `scripts/perf/ratchet.py`). What does not
+yet: a **ratchet in CI**. `ci.yml` runs no benchmark, and the design ratchet needs the CPU's counters. The next step after
 the audit is a small deterministic gate — instruction counts (gungraun or the harness under
 callgrind) for the hot ops (`session.list`, `task.list`, `session.input`, `session.scrollback`
 tail, `file.tree`, engine startup), with a checked-in baseline lowered when it drops, run on the

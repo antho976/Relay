@@ -34,6 +34,8 @@ pub fn geometry(name: &str) -> &'static str {
         "row" => r##"<rect x="2" y="5" width="3.5" height="6" rx="1"/><rect x="6.25" y="5" width="3.5" height="6" rx="1"/><rect x="10.5" y="5" width="3.5" height="6" rx="1"/>"##,
         "column" => r##"<rect x="5" y="2" width="6" height="3.5" rx="1"/><rect x="5" y="6.25" width="6" height="3.5" rx="1"/><rect x="5" y="10.5" width="6" height="3.5" rx="1"/>"##,
         "free" => r##"<rect x="2.5" y="2.5" width="5" height="4" rx="1"/><rect x="8.5" y="9.5" width="5" height="4" rx="1"/>"##,
+        // Two rows, the second shorter: a row that breaks onto a new line.
+        "wrap" => r##"<rect x="2" y="3" width="3.5" height="4" rx="1"/><rect x="6.25" y="3" width="3.5" height="4" rx="1"/><rect x="10.5" y="3" width="3.5" height="4" rx="1"/><rect x="2" y="9" width="3.5" height="4" rx="1"/><rect x="6.25" y="9" width="3.5" height="4" rx="1"/>"##,
         "lock" => r##"<rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>"##,
         "unlock" => r##"<rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 4.9-.7"/>"##,
         "eye" => r##"<path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/>"##,
@@ -54,6 +56,8 @@ pub fn geometry(name: &str) -> &'static str {
         "icon" => r##"<circle cx="8" cy="8" r="6"/><path d="M5.5 9.5s.9 1.5 2.5 1.5 2.5-1.5 2.5-1.5M6 6.3h.01M10 6.3h.01"/>"##,
         "connector" => r##"<rect x="1.5" y="2.5" width="5" height="4" rx="1"/><rect x="9.5" y="9.5" width="5" height="4" rx="1"/><path d="M4 6.5v5h5.5"/>"##,
         "eraser" => r##"<path d="M6 13.5h7.5M3.3 10.3l6.5-6.6a1.4 1.4 0 0 1 2 0l1.5 1.5a1.4 1.4 0 0 1 0 2L7 13.5H5.4z"/><path d="M6.5 7l3.5 3.5"/>"##,
+        // An S between two dots: a connector routed as a curve (E-board-5).
+        "curve" => r##"<path d="M3.5 12.5C3.5 7 12.5 9 12.5 3.5"/><circle cx="3.5" cy="12.5" r="1.2"/><circle cx="12.5" cy="3.5" r="1.2"/>"##,
         "rotate" => r##"<path d="M13 8a5 5 0 1 1-1.5-3.5"/><path d="M12 2v3h-3"/>"##,
         "gradient" => r##"<rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M2.5 9.5l7-7M5.5 13.5l8-8M9.5 13.5l4-4"/>"##,
         "dash-solid" => r##"<path d="M2 8h12"/>"##,

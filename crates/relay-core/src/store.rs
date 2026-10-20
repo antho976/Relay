@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 /// The schema version this build knows. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: i64 = 29;
+pub const SCHEMA_VERSION: i64 = 30;
 
 /// Numbered migrations; index 0 brings a fresh DB to `user_version = 1`.
 pub const MIGRATIONS: &[&str] = &[
@@ -469,6 +469,29 @@ pub const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE sessions ADD COLUMN use_api_key INTEGER NOT NULL DEFAULT 0;
     "#,
+    // v30 - design canvases, round two (BUS.md §10.18). A design's named colours and styles, one
+    // JSON object read whole by design.get and rewritten whole by an apply that changes them; the
+    // rev at which each node row was last written, and the ids removed in the last 1000 revs
+    // (design.apply's base_rev, design.get's since_rev); and `bytes` recounted to hold each node
+    // as design.get returns it (its id, its parent and 21 bytes of JSON around them, besides its
+    // body), so the size cap keeps a design.get under the clients' 2 MiB line (B60). Rows written
+    // before take their design's rev now: they read as changed for any older base_rev. Removals
+    // are on record from `tracked_from`: a since_rev before it is design.since_too_old.
+    r#"
+    ALTER TABLE designs ADD COLUMN styles TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE designs ADD COLUMN tracked_from INTEGER NOT NULL DEFAULT 0;
+    UPDATE designs SET tracked_from = rev;
+    ALTER TABLE design_nodes ADD COLUMN rev INTEGER NOT NULL DEFAULT 0;
+    UPDATE design_nodes SET rev = (SELECT rev FROM designs WHERE designs.id = design_nodes.design_id);
+    CREATE INDEX design_nodes_rev ON design_nodes(design_id, rev);
+    CREATE TABLE design_removed (
+      design_id INTEGER NOT NULL REFERENCES designs(id) ON DELETE CASCADE,
+      node_id TEXT NOT NULL, rev INTEGER NOT NULL,
+      PRIMARY KEY (design_id, node_id)
+    ) WITHOUT ROWID;
+    UPDATE designs SET bytes = (SELECT COALESCE(SUM(length(CAST(body AS BLOB)) + length(CAST(node_id AS BLOB))
+      + COALESCE(length(CAST(parent_id AS BLOB)), 0) + 21), 0) FROM design_nodes WHERE design_nodes.design_id = designs.id);
+    "#,
 ];
 
 pub struct Store {
@@ -621,11 +644,38 @@ impl Store {
         }
     }
 
+    /// Where `design.render` writes the pictures it answers with, beside the store: the newest
+    /// few, each named by its render id. Per instance, and on disk rather than in the runtime dir
+    /// (tmpfs), since they can add up to more than a little memory.
+    pub fn design_renders_dir(&self) -> PathBuf {
+        match self.path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+            Some(dir) => dir.join("design-renders"),
+            None => std::env::temp_dir().join(format!("relay-design-renders-{}", std::process::id())),
+        }
+    }
+
+    /// Where the Pictures plugin keeps the search results' thumbnails it fetched, beside the
+    /// store: a cache, swept of what has not been looked at for a week.
+    pub fn picture_cache_dir(&self) -> PathBuf {
+        match self.path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+            Some(dir) => dir.join("picture-cache"),
+            None => std::env::temp_dir().join(format!("relay-picture-cache-{}", std::process::id())),
+        }
+    }
+
     /// Copy the live database (SQLite online backup) into `backups/`, keep the newest
     /// [`KEEP_BACKUPS`] (and what [`prune_backups`] keeps past them). Returns the new file. Takes the store lock one step at a time, so other
     /// requests run between steps rather than waiting out the whole copy — do not call from
     /// inside a handler, which already holds it; use [`Store::backup_with`] there.
     pub fn backup(&self, reason: &str) -> Result<PathBuf> {
+        Ok(self.backup_then(reason, |_| Ok(()))?.0)
+    }
+
+    /// [`Store::backup`], and `at_end` read through the store's connection in the same hold of
+    /// the lock as the copy's last step and its finish, so what it reads is exactly what the copy
+    /// holds: a write made through this connection between two steps is in the copy (SQLite
+    /// updates the pages already copied), and only one made after `at_end` is missing from it.
+    pub fn backup_then<T>(&self, reason: &str, at_end: impl FnOnce(&Connection) -> Result<T>) -> Result<(PathBuf, T)> {
         let dir = self.backup_dir();
         let dest = backup_dest(&dir, reason)?;
         let mut out = Connection::open(&dest)?;
@@ -641,12 +691,18 @@ impl Store {
             let src: &Connection = unsafe { &*(&*guard as *const Connection) };
             let backup = rusqlite::backup::Backup::new(src, &mut out)?;
             drop(guard);
-            let copied = (|| -> Result<()> {
+            // The lock of the last step, still held: nothing is written between it, `at_end` and
+            // the finish.
+            let last = (|| -> Result<MutexGuard<'_, Connection>> {
                 let mut busy = 0;
                 loop {
-                    let step = { let _guard = self.lock(); backup.step(BACKUP_STEP_PAGES)? };
+                    let guard = self.lock();
+                    let step = backup.step(BACKUP_STEP_PAGES)?;
+                    if step == rusqlite::backup::StepResult::Done {
+                        return Ok(guard);
+                    }
+                    drop(guard);
                     match step {
-                        rusqlite::backup::StepResult::Done => return Ok(()),
                         rusqlite::backup::StepResult::More => busy = 0,
                         _ => {
                             busy += 1;
@@ -654,24 +710,36 @@ impl Store {
                             std::thread::sleep(std::time::Duration::from_millis(10));
                         }
                     }
+                    #[cfg(test)]
+                    seam::BETWEEN_STEPS.with_borrow_mut(|hook| if let Some(hook) = hook { hook(&self.lock()) });
                     // Not `yield_now`: the store mutex is not fair, and a loop that re-locks at once
                     // wins it back before a woken waiter runs, so a request waited out several
                     // batches (14 ms behind a 64 MB copy). A millisecond off the lock hands it over.
                     std::thread::sleep(BACKUP_STEP_PAUSE);
                 }
             })();
-            let _guard = self.lock();
+            let (guard, copied) = match last {
+                Ok(guard) => {
+                    let read = at_end(&guard);
+                    (guard, read)
+                }
+                Err(error) => (self.lock(), Err(error)),
+            };
             drop(backup);
+            drop(guard);
             copied
         };
         drop(out);
-        if let Err(error) = copied {
-            let _ = std::fs::remove_file(&dest);
-            return Err(error);
-        }
+        let read = match copied {
+            Ok(read) => read,
+            Err(error) => {
+                let _ = std::fs::remove_file(&dest);
+                return Err(error);
+            }
+        };
         let live = live_projects(&self.lock());
         prune_backups(&dir, live.as_ref())?;
-        Ok(dest)
+        Ok((dest, read))
     }
 
     /// Same, using a connection the caller already holds (a handler's transaction).
@@ -777,10 +845,25 @@ fn prune_backups(dir: &Path, live: Option<&std::collections::HashSet<i64>>) -> R
         let count = seen.entry(backup.reason.clone()).or_default();
         *count += 1;
         if *count > KEEP_BACKUPS && !only_copy {
-            let _ = std::fs::remove_file(&backup.path);
+            let _ = remove_backup(&backup.path);
         }
     }
     Ok(())
+}
+
+/// Delete backup `path` and the `-wal` and `-shm` files beside it: a backup is a copy of a store
+/// in WAL mode, so reading it (as [`backup_projects`] does) leaves them, which a read-only
+/// connection cannot clear.
+pub(crate) fn remove_backup(path: &Path) -> std::io::Result<()> {
+    for side in ["-wal", "-shm"] {
+        let mut name = path.as_os_str().to_owned();
+        name.push(side);
+        match std::fs::remove_file(&name) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
+    }
+    std::fs::remove_file(path)
 }
 
 /// The ids of the projects the store holds; `None` when they cannot be read.
@@ -865,4 +948,80 @@ fn list_backups(dir: &Path) -> Result<Vec<BackupInfo>> {
     // not sort in time order (`…21Z` would sort after `…21.5Z`).
     v.sort_by_cached_key(|b| std::cmp::Reverse((b.created_at.parse::<jiff::Timestamp>().ok(), b.created_at.clone())));
     Ok(v)
+}
+
+/// Test seams of [`Store::backup_then`].
+#[cfg(test)]
+pub(crate) mod seam {
+    use std::cell::RefCell;
+
+    pub(crate) type Hook = Box<dyn FnMut(&rusqlite::Connection)>;
+
+    thread_local! {
+        /// Run on the backing-up thread between two steps of a copy, with the store locked: a
+        /// request landing mid-copy.
+        pub(crate) static BETWEEN_STEPS: RefCell<Option<Hook>> = const { RefCell::new(None) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A store of more than one step of pages, so a copy of it has a between.
+    pub(crate) fn ballast(store: &Store) {
+        store.lock().execute_batch("CREATE TABLE ballast(b BLOB); INSERT INTO ballast VALUES (zeroblob(6000000));").unwrap();
+    }
+
+    fn audit_row(conn: &Connection, op: &str) -> i64 {
+        conn.execute(
+            "INSERT INTO audit (ts, req_id, actor, op, kind, payload_hash) VALUES ('2026-10-20T00:00:00Z', lower(hex(randomblob(16))), 'user', ?1, 'ok', 'h')",
+            [op],
+        ).unwrap();
+        conn.last_insert_rowid()
+    }
+
+    /// B68: what `at_end` reads is what the copy holds. A write made through the store's
+    /// connection while the copy runs is in it (SQLite updates the pages already copied), and
+    /// below what `at_end` reads; one made after is in neither.
+    #[test]
+    fn a_backup_holds_what_was_written_during_it_and_its_end_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("store.db"), true).unwrap();
+        ballast(&store);
+        let before = audit_row(&store.lock(), "notes.create");
+        let during = std::rc::Rc::new(std::cell::Cell::new(0));
+        let seen = during.clone();
+        seam::BETWEEN_STEPS.set(Some(Box::new(move |conn: &Connection| {
+            if seen.get() == 0 { seen.set(audit_row(conn, "task.update")); }
+        })));
+        let (path, mark) = store.backup_then("test", |conn| Ok(conn.query_row("SELECT MAX(id) FROM audit", [], |r| r.get::<_, i64>(0))?)).unwrap();
+        seam::BETWEEN_STEPS.set(None);
+        let after = audit_row(&store.lock(), "task.update");
+        assert!(during.get() > before, "the copy had a between");
+        assert_eq!(mark, during.get(), "the end reads the write made during the copy");
+        let copy = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let ids: Vec<i64> = copy.prepare("SELECT id FROM audit ORDER BY id").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        assert_eq!(ids, vec![before, during.get()], "the copy holds the write made during it, not the one after");
+        assert!(after > mark);
+        let blob: i64 = copy.query_row("SELECT length(b) FROM ballast", [], |r| r.get(0)).unwrap();
+        assert_eq!(blob, 6_000_000, "the copy is whole");
+    }
+
+    /// A backup is a copy of a store in WAL mode: reading it leaves a `-wal` and a `-shm` beside
+    /// it, which go when it is pruned.
+    #[test]
+    fn a_pruned_backup_takes_the_files_a_read_of_it_left() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("store.db"), true).unwrap();
+        let first = store.backup("manual").unwrap();
+        Connection::open_with_flags(&first, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap().query_row("SELECT COUNT(*) FROM audit", [], |r| r.get::<_, i64>(0)).unwrap();
+        let sides = |path: &Path| ["-wal", "-shm"].map(|side| { let mut name = path.as_os_str().to_owned(); name.push(side); PathBuf::from(name) });
+        assert!(sides(&first).iter().any(|side| side.exists()), "a read leaves its files: {:?}", std::fs::read_dir(dir.path().join("backups")).unwrap().flatten().map(|e| e.file_name()).collect::<Vec<_>>());
+        for _ in 0..KEEP_BACKUPS {
+            store.backup("manual").unwrap();
+        }
+        assert!(!first.exists(), "the oldest past {KEEP_BACKUPS} is pruned");
+        assert!(sides(&first).iter().all(|side| !side.exists()), "and what a read of it left");
+    }
 }

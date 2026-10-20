@@ -409,8 +409,8 @@ pub fn validate_config(cfg: &GuardrailConfig) -> Result<(), BusError> {
 
 // ---------------------------------------------------------------- authorization
 
-/// Layer 2 allowlist + own-session/task scope (BUS.md §9.1). Layer 1 is registry metadata
-/// and runs immediately before this in the engine.
+/// Layer 2 allowlist + own-session/task scope, the plugin layer, then layer 3 (BUS.md §9.1).
+/// Layer 1 is registry metadata and runs immediately before this in the engine.
 pub fn authorize(
     conn: &Connection,
     session_id: Id,
@@ -423,14 +423,25 @@ pub fn authorize(
 
     if let Some(name) = payload.get("session").and_then(Value::as_str) {
         let own = name == session.name;
-        // Reads reach any session in the caller's own project — the same boundary
-        // `session.list` draws. Private surfaces (scrollback, brief) narrow it again in the
-        // handler; mutations remain own-session, or the PAIR partner, only (D106).
-        let project_read = entry.meta.kind == OpKind::Query
-            && sessions::by_name(conn, name).is_ok_and(|peer| peer.session.project_id == session.project_id);
         let pair_read = entry.meta.kind == OpKind::Query && session.pair_with.as_deref() == Some(name);
-        if !own && !pair_read && !project_read {
-            return Err(BusError::not_own("session"));
+        if !own && !pair_read {
+            // A name that is no live session of this project is a typo or a stale name, not a
+            // permission problem, and is answered as one; another project's sessions are not
+            // this agent's to know of, so they are not found here either (E-agent-2).
+            let here = match sessions::by_name(conn, name) {
+                Ok(peer) => peer.session.project_id == session.project_id,
+                Err(err) if err.code == "session.not_found" => false,
+                Err(err) => return Err(err),
+            };
+            if !here {
+                return Err(no_such_session(conn, session.project_id, name));
+            }
+            // Reads reach any session in the caller's own project — the same boundary
+            // `session.list` draws. Private surfaces (scrollback, brief) narrow it again in the
+            // handler; mutations remain own-session, or the PAIR partner, only (D106).
+            if entry.meta.kind != OpKind::Query {
+                return Err(BusError::not_own("session"));
+            }
         }
     }
     if let Some(task_id) = payload.get("task_id").and_then(Value::as_i64) {
@@ -441,6 +452,14 @@ pub fn authorize(
             .map_err(crate::engine::internal)?;
         if !assigned {
             return Err(BusError::not_own("task"));
+        }
+    }
+    // The plugin layer, for queries and mutations alike. Only an op a plugin brings reads the
+    // switch, so every other request skips the query.
+    if entry.meta.plugin.is_some() {
+        let on = crate::plugins::enabled_ids(conn, session.project_id).bus()?;
+        if let Some(plugin) = plugin_layer(entry, &on) {
+            return Err(plugin_off(plugin));
         }
     }
     if entry.meta.kind == OpKind::Query {
@@ -473,6 +492,21 @@ pub fn authorize(
             .with_hint(format!("enable {} for this session deliberately", hatch.option()));
     }
     Err(err)
+}
+
+/// `session.not_found` for a `session` an agent named that is no live session of its project,
+/// with the nearest name among that project's live sessions, so the refusal reads as the slip it
+/// usually is. Never names a session of another project. Runs on the refusal path only.
+fn no_such_session(conn: &Connection, project_id: Id, name: &str) -> BusError {
+    let names: Vec<String> = conn
+        .prepare_cached("SELECT name FROM sessions WHERE project_id=?1 AND state != 'closed' ORDER BY id")
+        .and_then(|mut stmt| stmt.query_map([project_id], |row| row.get(0))?.collect())
+        .unwrap_or_default();
+    let hint = match relay_bus::design::nearest(name, names.iter().map(String::as_str)) {
+        Some(near) => format!("did you mean {near:?}?"),
+        None => "session.list names this project's live sessions".to_string(),
+    };
+    BusError::not_found("session.not_found", format!("no live session named {name:?} in this project")).with_hint(hint)
 }
 
 /// The two deliberate per-session escape hatches from a role's allowlist (BUS.md §9.1).
@@ -522,14 +556,33 @@ fn layer3(cfg: &GuardrailConfig, session: &Session, op: &str) -> Result<Option<H
     }
 }
 
-/// All three gating layers, answered for one op without calling it (BUS.md §9.1). This is
+/// The plugin layer (BUS.md §9.1): an op a plugin brings exists for an agent only in a project
+/// with that plugin on. The plugin it lacks, if any, given the ids on for the session's project
+/// (`plugins::enabled_ids`). [`authorize`] and [`callability`] both answer from this, as from
+/// `layer3`, so discovery and execution cannot disagree (D104).
+fn plugin_layer(entry: &OpEntry, plugins_on: &[String]) -> Option<&'static str> {
+    entry.meta.plugin.filter(|plugin| !plugins_on.iter().any(|id| id == plugin))
+}
+
+/// `refused` / `plugin.off`: the op's plugin is off in the agent's project. Only the person
+/// switches a plugin on (`plugin.enable` is theirs), so the hint says to ask.
+fn plugin_off(plugin: &str) -> BusError {
+    let name = crate::plugins::get(plugin).map_or(plugin, |found| found.manifest.name.as_str());
+    BusError::refused("plugin.off", format!("{name} is off for this project"))
+        .with_details(json!({"plugin": plugin}))
+        .with_hint(format!("ask the person to switch on {name} for this project under Plugins, or do without it"))
+}
+
+/// All the gating layers, answered for one op without calling it (BUS.md §9.1). This is
 /// the single source `bus.ops`, `relay ops --mine`, the MCP tool list and `session.bootstrap`
 /// all read, so discovery can never again promise more than execution delivers (D104).
+/// `plugins_on` holds the plugin ids on for the session's project (empty without a session).
 pub fn callability(
     entry: &OpEntry,
     actor: &Actor,
     session: Option<&Session>,
     cfg: Option<&GuardrailConfig>,
+    plugins_on: &[String],
 ) -> (Callable, String) {
     // Layer 1: registry metadata.
     if !entry.meta.actors.admits(actor) {
@@ -538,6 +591,10 @@ pub fn callability(
     let Some(session) = session else {
         return (Callable::Yes, if actor.is_agent() { "agent".into() } else { "user".into() });
     };
+    // The plugin layer: an op a plugin brings, where that plugin is off.
+    if let Some(plugin) = plugin_layer(entry, plugins_on) {
+        return (Callable::No, format!("plugin:{plugin} is off for this project"));
+    }
     let role = sessions::role_str(session.role);
     // Layer 2: row scope. An op that names a session or a task only ever acts on this one.
     let scoped = Registry::global().payload_has(entry.name, "session")

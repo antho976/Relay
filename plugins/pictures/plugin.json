@@ -1,0 +1,12 @@
+{
+  "id": "pictures",
+  "name": "Pictures",
+  "version": "1.0.0",
+  "category": "Design",
+  "summary": "Real photographs for designs: an agent or you searches free stock photos (Openverse, or Pexels with your key) and places one, with its photographer and licence kept.",
+  "description": "Turn it on for a project whose designs need real photographs. Agents there get the design-pictures skill, this plugin's rules in their brief, and the design.picture tools; you get Stock photo in the Design view's image key. Only the search words leave this machine, to Openverse or Pexels. A placed photo keeps its credit beside the file. Switching it off takes the tools from agents and the search from the Design view; photos already placed stay, with their credit.",
+  "instructions": "instructions.md",
+  "docs": [
+    "README.md"
+  ]
+}

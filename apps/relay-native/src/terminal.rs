@@ -5,7 +5,7 @@ use serde_json::json;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::time::Duration;
 use tokio::runtime::Handle;
 use vte4::prelude::*;
@@ -122,6 +122,62 @@ thread_local! {
     /// for the same PTY (project switch, reconnect) restores what its catch-up tail no longer
     /// carries. A GUI restart starts empty: only the engine could know those (RA-242).
     static MODES: RefCell<HashMap<String, (u64, Modes)>> = RefCell::default();
+    /// Every pane by its session's name, registered as it is built and gone with it: what Ask
+    /// reads an agent's prompt from (TM-20) and the Show terminal key focuses (TM-1).
+    static PANES: RefCell<HashMap<String, Weak<Pane>>> = RefCell::default();
+}
+
+/// The pane showing session `name`, if one is built.
+pub fn pane_of(name: &str) -> Option<Rc<Pane>> {
+    PANES.with(|panes| panes.borrow().get(name).and_then(Weak::upgrade))
+}
+
+/// The glyphs an agent's input line starts with: Claude Code's `>` (`❯` in some themes) and
+/// Codex's `›`.
+const PROMPT_GLYPHS: [char; 3] = ['>', '❯', '›'];
+
+/// Space and the box drawing a TUI frames its input with (`│ > … │`).
+fn frame_char(c: char) -> bool {
+    c.is_whitespace() || ('\u{2500}'..='\u{257f}').contains(&c)
+}
+
+/// What follows a row's prompt glyph, its frame and spaces trimmed; `None` for a row that does
+/// not start with one.
+fn after_glyph(row: &str) -> Option<&str> {
+    row.trim_start_matches(frame_char).strip_prefix(PROMPT_GLYPHS).map(|rest| rest.trim_matches(frame_char))
+}
+
+/// The text of the row session `name`'s agent types on: the cursor's row, or, for a TUI that
+/// parks its cursor under its frame, the nearest row above it on the screen that starts with a
+/// prompt glyph. `None` when no pane is attached to the session, so its screen is not current.
+pub fn prompt_row(name: &str) -> Option<String> {
+    let pane = pane_of(name).filter(|pane| pane.is_ready())?;
+    let terminal = &pane.terminal;
+    let (_, cursor) = terminal.cursor_position();
+    let cols = terminal.column_count();
+    let row = |at: libc::c_long| -> String {
+        let (text, _) = terminal.text_range_format(vte4::Format::Text, at, 0, at, cols);
+        text.map(|t| t.trim_end_matches(['\n', '\r']).to_string()).unwrap_or_default()
+    };
+    let at_cursor = row(cursor);
+    if after_glyph(&at_cursor).is_some() {
+        return Some(at_cursor);
+    }
+    let top = (cursor - terminal.row_count() + 1).max(0);
+    Some((top..cursor).rev().map(row).find(|r| after_glyph(r).is_some()).unwrap_or(at_cursor))
+}
+
+/// Whether an agent's input `row` (from [`prompt_row`]) holds nothing typed, so a prompt put
+/// there is not merged into half-written text or read after a leading `/` or `!` (TM-20). For
+/// Claude, nothing but space after its `>`, box drawing aside; its dimmed `Try "…"` hint on an
+/// empty prompt counts as nothing, since the screen's text cannot tell it from typing. For a
+/// provider whose marker is not known, only a row blank once one prompt glyph is trimmed.
+pub fn prompt_line_empty(row: &str, provider: &str) -> bool {
+    match after_glyph(row) {
+        Some(rest) if provider == "claude" => rest.is_empty() || rest.starts_with("Try \""),
+        Some(rest) => rest.is_empty(),
+        None => row.trim_matches(frame_char).is_empty(),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -428,6 +484,7 @@ impl Pane {
             budget: Cell::new(FRAME_BYTES),
             pace: RefCell::default(),
         });
+        PANES.with(|panes| panes.borrow_mut().insert(name.to_string(), Rc::downgrade(&pane)));
 
         // Keystrokes are queued while a write is in flight and do not depend on the output
         // attachment, so typing while the pane (re)attaches still reaches the PTY. What cannot be
@@ -910,9 +967,41 @@ impl Pane {
     }
 }
 
+impl Drop for Pane {
+    /// Out of the registry, unless a newer pane for the same session has taken its place.
+    fn drop(&mut self) {
+        let me: *const Pane = self;
+        let _ = PANES.try_with(|panes| {
+            let mut panes = panes.borrow_mut();
+            if panes.get(&self.name).is_some_and(|pane| pane.as_ptr() == me || pane.strong_count() == 0) {
+                panes.remove(&self.name);
+            }
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_prompt_with_text_after_its_marker_is_not_empty() {
+        // TM-20: Claude Code's input row, framed or bare.
+        assert!(prompt_line_empty("│ >                                   │", "claude"));
+        assert!(prompt_line_empty("> ", "claude"));
+        assert!(prompt_line_empty("❯\u{a0}", "claude"));
+        assert!(!prompt_line_empty("│ > fix the hea                       │", "claude"));
+        assert!(!prompt_line_empty("> /compact", "claude"));
+        // Its hint on an empty prompt is not typing.
+        assert!(prompt_line_empty("│ > Try \"refactor <filepath>\"         │", "claude"));
+        // A blank row is empty for anyone; a row of text with no marker is not.
+        assert!(prompt_line_empty("", "claude") && prompt_line_empty("   ", "codex"));
+        assert!(!prompt_line_empty("  ? for shortcuts", "claude"));
+        // A provider whose marker is not known: blank after one glyph, nothing else.
+        assert!(prompt_line_empty("› ", "codex"));
+        assert!(!prompt_line_empty("› Explain this codebase", "codex"));
+        assert!(!prompt_line_empty("$ ls", "gemini"));
+    }
     #[test]
     fn the_feed_budget_follows_the_frames_cost() {
         let frame = 16_667;

@@ -437,6 +437,53 @@ mod tests {
     }
 
     #[test]
+    fn the_pictures_plugin_is_bundled_and_complete() {
+        let plugin = get(relay_bus::ops::picture::PLUGIN).expect("pictures is bundled");
+        assert_eq!(plugin.manifest.name, "Pictures");
+        assert!(!plugin.instructions().is_empty());
+        assert!(!plugin.manifest.docs.is_empty());
+        for doc in &plugin.manifest.docs {
+            assert!(plugin.file(doc).is_some(), "manifest names a missing doc {doc}");
+        }
+        // Its tools are engine ops, gated by the switch: no server, no suggestion, no checkout rule.
+        assert!(plugin.manifest.mcp_servers.is_empty());
+        assert!(plugin.manifest.detect.is_empty());
+        assert_eq!(plugin.manifest.default_checkout, None);
+        let skills: Vec<&str> = plugin.skills.iter().map(|skill| skill.dir.as_str()).collect();
+        assert_eq!(skills, ["design-pictures"]);
+        let skill = &plugin.skills[0];
+        assert_eq!(frontmatter(&skill.body, "name").as_deref(), Some(skill.dir.as_str()));
+        assert!(!skill.description.is_empty());
+        assert_eq!(crate::skills::folder_name(&skill.dir), skill.dir, "not provider-safe");
+        assert!(plugin.instructions().contains("`design-pictures`"), "the rules name the skill");
+        // The skill teaches every op the plugin brings, and what to do where it is off (Codex
+        // registers a plugin's skills for the whole machine).
+        let brought: Vec<&str> = relay_bus::registry::Registry::global().entries().iter()
+            .filter(|entry| entry.meta.plugin == Some(plugin.id()))
+            .map(|entry| entry.name)
+            .collect();
+        assert_eq!(brought.len(), 3, "{brought:?}");
+        for op in brought {
+            assert!(skill.body.contains(&format!("`{op} ")), "the skill does not show {op}");
+        }
+        assert!(skill.body.contains("`plugin.off`") && skill.body.contains("can_call"));
+    }
+
+    /// pictures-SPEC-v2 §4: the plugin layer gates an op on the plugin its registry entry names,
+    /// so that name must be one `plugin.enable` takes, or the op could never be switched on.
+    #[test]
+    fn every_plugin_op_names_a_bundled_plugin() {
+        let mut brought = 0;
+        for entry in relay_bus::registry::Registry::global().entries() {
+            if let Some(plugin) = entry.meta.plugin {
+                assert!(get(plugin).is_some(), "{} comes with {plugin}, which is not bundled", entry.name);
+                brought += 1;
+            }
+        }
+        assert!(brought > 0);
+    }
+
+    #[test]
     fn no_two_bundled_plugins_share_a_skill_folder() {
         let mut seen = std::collections::BTreeMap::new();
         for plugin in all() {

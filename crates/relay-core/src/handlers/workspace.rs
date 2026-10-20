@@ -213,28 +213,34 @@ pub fn register(e: &mut Engine) {
         if !p.discard_changes.unwrap_or(false) {
             super::session::refuse_dirty(&doomed)?;
         }
-        let backup = if projects.is_empty() { None } else { backup_before(ctx, "workspace-remove")? };
+        // The closes' unlocked half (hooks undone) before the backup, so what an agent wrote
+        // meanwhile is in it; what one writes after its copy ends is caught by the mark (B68).
         let mut closes = Vec::new();
         for (id, _, open) in &scopes {
             closes.push((*id, prepare_closes(ctx, open)?));
         }
-        Ok(WorkspaceRemoval { closes, backup, approved: doomed.into_iter().map(|(wt, _)| wt).collect() })
+        let agents = scopes.iter().any(|(_, _, open)| !open.is_empty());
+        let (backup, mark) = if projects.is_empty() { (None, None) } else { backup_before(ctx, "workspace-remove", agents)? };
+        Ok(WorkspaceRemoval { closes, backup, mark, approved: doomed.into_iter().map(|(wt, _)| wt).collect() })
     }, |ctx: &mut Ctx, p, staged| {
-        let WorkspaceRemoval { mut closes, backup, approved } = staged;
-        let projects = workspace_scope(ctx.tx(), p.workspace_id, p.force.unwrap_or(false))?;
-        let n = projects.len();
-        let mut sessions_closed = 0;
-        for id in projects {
-            let prepared = closes.iter().position(|(project, _)| *project == id).map(|i| closes.swap_remove(i).1).unwrap_or_default();
-            let out = remove_project(ctx, id, true, p.remove_worktrees.unwrap_or(false), p.discard_changes.unwrap_or(false), &approved, prepared, None)?;
-            sessions_closed += out.sessions_closed;
-        }
-        // The workspace's own guardrail layer goes with it, or the next workspace given this
-        // id would inherit it.
-        crate::handlers::settings::delete_under(ctx.tx(), &format!("guardrails.workspaces.{}", p.workspace_id))?;
-        ctx.tx().execute("DELETE FROM workspaces WHERE id = ?1", [p.workspace_id]).bus()?;
-        ctx.emit("workspace.deleted", json!({ "id": p.workspace_id, "backup": backup }));
-        Ok(WsRemoveOut { projects_removed: n as i64, sessions_closed })
+        let WorkspaceRemoval { mut closes, backup, mark, approved } = staged;
+        let discard = backup.clone();
+        (|| -> Result<WsRemoveOut, BusError> {
+            let projects = workspace_scope(ctx.tx(), p.workspace_id, p.force.unwrap_or(false))?;
+            let n = projects.len();
+            let mut sessions_closed = 0;
+            for id in projects {
+                let prepared = closes.iter().position(|(project, _)| *project == id).map(|i| closes.swap_remove(i).1).unwrap_or_default();
+                let out = remove_project(ctx, id, true, p.remove_worktrees.unwrap_or(false), p.discard_changes.unwrap_or(false), &approved, prepared, None, mark)?;
+                sessions_closed += out.sessions_closed;
+            }
+            // The workspace's own guardrail layer goes with it, or the next workspace given this
+            // id would inherit it.
+            crate::handlers::settings::delete_under(ctx.tx(), &format!("guardrails.workspaces.{}", p.workspace_id))?;
+            ctx.tx().execute("DELETE FROM workspaces WHERE id = ?1", [p.workspace_id]).bus()?;
+            ctx.emit("workspace.deleted", json!({ "id": p.workspace_id, "backup": backup }));
+            Ok(WsRemoveOut { projects_removed: n as i64, sessions_closed })
+        })().inspect_err(|_| discard_backup(discard))
     });
 
     e.register::<ProjectAdd>(|ctx: &mut Ctx, p| {
@@ -423,10 +429,14 @@ pub fn register(e: &mut Engine) {
         if !p.discard_changes.unwrap_or(false) {
             super::session::refuse_dirty(&doomed)?;
         }
-        let backup = backup_before(ctx, "project-remove")?;
-        Ok(ProjectRemoval { closes: prepare_closes(ctx, &open)?, backup, approved: doomed.into_iter().map(|(wt, _)| wt).collect() })
+        // The closes' unlocked half first, then the backup: B68, as workspace.remove.
+        let closes = prepare_closes(ctx, &open)?;
+        let (backup, mark) = backup_before(ctx, "project-remove", !open.is_empty())?;
+        Ok(ProjectRemoval { closes, backup, mark, approved: doomed.into_iter().map(|(wt, _)| wt).collect() })
     }, |ctx: &mut Ctx, p, staged| {
-        remove_project(ctx, p.project_id, p.force.unwrap_or(false), p.remove_worktrees.unwrap_or(false), p.discard_changes.unwrap_or(false), &staged.approved, staged.closes, staged.backup)
+        let backup = staged.backup.clone();
+        remove_project(ctx, p.project_id, p.force.unwrap_or(false), p.remove_worktrees.unwrap_or(false), p.discard_changes.unwrap_or(false), &staged.approved, staged.closes, staged.backup, staged.mark)
+            .inspect_err(|_| discard_backup(backup))
     });
     e.register::<ProjectRemovePreview>(|ctx, p| {
         let projects: Vec<Id> = match (p.project_id, p.workspace_id) {
@@ -579,8 +589,14 @@ pub fn register(e: &mut Engine) {
             return Err(BusError::not_found("project.not_in_backup", format!("{} holds no project {}", path.display(), p.project_id)));
         }
         RESTORED.iter().map(|&(part, table, sql)| -> Result<Copied, BusError> {
-            // A backup from before a table existed has none of its rows to bring back.
-            let held: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)", [table], |r| r.get(0)).bus()?;
+            // A backup from before a table existed has none of its rows to bring back, nor one from
+            // before a table its select reads (design_removed's rows are found through designs').
+            let reads = std::iter::once(table).chain(sql.split("FROM ").skip(1)
+                .filter_map(|rest| rest.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).next()));
+            let mut held = true;
+            for read in reads {
+                held &= conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)", [read], |r| r.get::<_, bool>(0)).bus()?;
+            }
             if !held {
                 return Ok(Copied { part, table, columns: Vec::new(), rows: Vec::new() });
             }
@@ -616,6 +632,7 @@ const RESTORED: &[(&str, &str, &str)] = &[
     ("notes", "notes", "SELECT * FROM notes WHERE project_id = ?1"),
     ("designs", "designs", "SELECT * FROM designs WHERE project_id = ?1"),
     ("design_nodes", "design_nodes", "SELECT * FROM design_nodes WHERE design_id IN (SELECT id FROM designs WHERE project_id = ?1)"),
+    ("design_removed", "design_removed", "SELECT * FROM design_removed WHERE design_id IN (SELECT id FROM designs WHERE project_id = ?1)"),
     ("notifications", "notifications", "SELECT * FROM notifications WHERE project_id = ?1"),
     ("file_trash", "file_trash", "SELECT * FROM file_trash WHERE project_id = ?1"),
     ("ui_layouts", "ui_layouts", "SELECT * FROM ui_layouts WHERE project_id = ?1"),
@@ -744,6 +761,23 @@ fn restore_project(ctx: &mut Ctx, project_id: Id, copied: Vec<Copied>) -> Result
         let mut stmt = ctx.tx().prepare_cached(sql).bus()?;
         if sql.contains("?1") { stmt.execute([project_id]) } else { stmt.execute([]) }.bus()?;
     }
+    // A design from a backup older than v30 counted its size without its ids, and its rows carry
+    // no rev (0): count it again, as every write keeps it now (B60), and date the rows at their
+    // design's rev, so since_rev and base_rev see them as they are (W20). Its removals before
+    // then are not on record, so a since_rev before that rev is too old.
+    let designs: Vec<Id> = {
+        let mut stmt = ctx.tx().prepare_cached("SELECT id FROM designs WHERE project_id = ?1").bus()?;
+        let rows = stmt.query_map([project_id], |r| r.get(0)).bus()?.collect::<rusqlite::Result<Vec<_>>>();
+        rows.bus()?
+    };
+    for design in designs {
+        super::design::recount_bytes(ctx.tx(), design)?;
+        let undated = ctx.tx().prepare_cached("UPDATE design_nodes SET rev = (SELECT rev FROM designs WHERE id = ?1) WHERE design_id = ?1 AND rev = 0").bus()?
+            .execute([design]).bus()?;
+        if undated > 0 {
+            ctx.tx().prepare_cached("UPDATE designs SET tracked_from = rev WHERE id = ?1").bus()?.execute([design]).bus()?;
+        }
+    }
     // Keep the high-water marks past the restored ids, whatever the backup predates.
     for (key, id) in [("ids.projects", project_id), ("ids.workspaces", workspace)] {
         ctx.tx().prepare_cached("INSERT INTO meta(key, value) VALUES (?1, ?2)
@@ -767,6 +801,8 @@ fn restore_project(ctx: &mut Ctx, project_id: Id, copied: Vec<Copied>) -> Result
 struct ProjectRemoval {
     closes: Vec<(String, Prepared)>,
     backup: Option<String>,
+    /// What the backup holds ([`changed_since`]); none without a backup.
+    mark: Option<Mark>,
     approved: Vec<PathBuf>,
 }
 
@@ -774,7 +810,17 @@ struct ProjectRemoval {
 struct WorkspaceRemoval {
     closes: Vec<(Id, Vec<(String, Prepared)>)>,
     backup: Option<String>,
+    mark: Option<Mark>,
     approved: Vec<PathBuf>,
+}
+
+/// What a removal's backup holds, carried to its transaction (B68).
+#[derive(Clone, Copy)]
+struct Mark {
+    /// The audit's newest row as the copy ended: a write past it is not in the copy.
+    audit: Id,
+    /// Whether the removal closes agents, whose hooks its unlocked half has already taken down.
+    agents: bool,
 }
 
 /// The Relay-pool checkouts of `open` sessions, each once with the sessions on it: what
@@ -875,24 +921,79 @@ fn prepare_closes(ctx: &Unlocked, open: &[(String, String)]) -> Result<Vec<(Stri
 }
 
 /// A copy of the store, taken before a removal deletes a project's board, notes and modules
-/// for good; `app.backup.list` lists it. Its path rides on the `*.deleted` event.
-fn backup_before(ctx: &Unlocked, reason: &str) -> Result<Option<String>, BusError> {
+/// for good; `app.backup.list` lists it. Its path rides on the `*.deleted` event. With it, the
+/// audit's newest row as the copy ended, read in the same hold of the lock as its last step: a
+/// write made while the copy ran is in it, and a project with a write past the mark lacks that
+/// write in the copy, which the removal refuses ([`changed_since`], B68).
+fn backup_before(ctx: &Unlocked, reason: &str, agents: bool) -> Result<(Option<String>, Option<Mark>), BusError> {
     let store = &ctx.engine().store;
     if store.path() == Path::new(":memory:") {
-        return Ok(None);
+        return Ok((None, None));
     }
     // Not through `ctx.read`: a copy of the whole store under the lock stalled every request for
     // as long as the file took to copy (142-453 ms on a 260 MB store, BASELINE-2026-10-14 §1.1).
-    ctx.backup_store(reason).map(|path| Some(path.display().to_string())).map_err(|error| {
+    let (path, audit) = ctx.backup_store_then(reason, |conn| Ok(audit_mark(conn)?)).map_err(|error| {
         BusError::unavailable("project.backup_failed", format!("backing up the store before the removal: {error}"))
-            .with_hint("nothing was removed; free space for the store's backups/ directory and try again")
-    })
+            .with_hint(format!("{}; free space for the store's backups/ directory and try again", nothing_removed(agents)))
+    })?;
+    #[cfg(test)]
+    seam::AFTER_BACKUP.with_borrow_mut(|hook| if let Some(hook) = hook { hook(ctx.engine()) });
+    Ok((Some(path.display().to_string()), Some(Mark { audit, agents })))
 }
+
+/// What a refused removal left behind: nothing removed, but the closes' unlocked half has run,
+/// so when there were agents their hooks are already undone.
+fn nothing_removed(agents: bool) -> &'static str {
+    if agents { "nothing was removed, though its agents' hooks were taken down" } else { "nothing was removed" }
+}
+
+/// A refused removal's backup: nothing was removed, so it is a copy of a store that still holds
+/// everything, and only crowds out older backups. Deleted off the store lock (a removal's
+/// transaction is refusing as this runs).
+fn discard_backup(backup: Option<String>) {
+    if let Some(path) = backup {
+        let gone = move || if let Err(error) = crate::store::remove_backup(Path::new(&path)) {
+            tracing::warn!(%path, %error, "could not remove a refused removal's backup");
+        };
+        if let Err(error) = std::thread::Builder::new().name("backup-discard".into()).spawn(gone) {
+            tracing::warn!(%error, "could not remove a refused removal's backup");
+        }
+    }
+}
+
+/// The audit's newest row.
+fn audit_mark(conn: &Connection) -> rusqlite::Result<Id> {
+    conn.prepare_cached("SELECT COALESCE(MAX(id), 0) FROM audit")?.query_row([], |r| r.get(0))
+}
+
+/// Whether project `project_id` took a write after audit row `mark`, which its removal backup
+/// lacks (B68): an agent still running once the copy ended (they stop only once the removal
+/// commits) can finish a `task.update` or a `design.apply` before the removal's transaction
+/// opens, which the removal would then delete for good. Only audited writes are seen, which
+/// every op that changes what `project.restore` brings back is; a hook's report (one per agent
+/// tool call) and the mailbox (never restored) are left out.
+pub(crate) fn changed_since(conn: &Connection, mark: Id, project_id: Id) -> Result<bool, BusError> {
+    conn.prepare_cached(CHANGED_SINCE).bus()?.query_row(params![mark, project_id], |r| r.get(0)).bus()
+}
+
+/// `+project_id`: the rows past the mark by rowid, a few seconds' worth, never the project's
+/// whole history through audit_project_ts, which the transaction would hold the store for.
+const CHANGED_SINCE: &str = "SELECT EXISTS(SELECT 1 FROM audit WHERE id > ?1 AND +project_id = ?2 AND kind = 'ok'
+    AND op NOT IN ('guardrail.gate', 'session.report', 'usage.report') AND op NOT LIKE 'mailbox.%')";
 
 /// `project.remove`'s transaction, also run once per project by `workspace.remove`.
 #[allow(clippy::too_many_arguments)]
-fn remove_project(ctx: &mut Ctx, project_id: Id, force: bool, remove_worktrees: bool, discard: bool, approved: &[PathBuf], mut closes: Vec<(String, Prepared)>, backup: Option<String>) -> Result<ProjectRemoveOut, BusError> {
+fn remove_project(ctx: &mut Ctx, project_id: Id, force: bool, remove_worktrees: bool, discard: bool, approved: &[PathBuf], mut closes: Vec<(String, Prepared)>, backup: Option<String>, mark: Option<Mark>) -> Result<ProjectRemoveOut, BusError> {
     let (pr, open, live_runs) = removal_scope(ctx.tx(), project_id, force)?;
+    // Before anything is closed or deleted: a write the backup missed (B68). No second backup
+    // here: this transaction holds the store for writing, which a backup cannot copy.
+    if let Some(mark) = mark {
+        if changed_since(ctx.tx(), mark.audit, pr.id)? {
+            return Err(BusError::conflict("project.changed", format!("project {} changed after its backup was taken", pr.id))
+                .with_details(json!({ "project_id": pr.id }))
+                .with_hint(format!("{}; remove it again", nothing_removed(mark.agents))));
+        }
+    }
     // `force` closes through `session.close` itself, so every teardown rule holds: scrollback
     // saved, claims released, holds expired, hooks uninstalled. Each close keeps its worktree,
     // which also defers the agent's kill until the store unlocks; deleting checkouts (build
@@ -991,6 +1092,14 @@ fn remove_project(ctx: &mut Ctx, project_id: Id, force: bool, remove_worktrees: 
         ctx.invoke_registered("device.run.stop", json!({ "run_id": run }))?;
     }
 
+    // Every design, deleted or not, is announced deleted once the project is gone (B67): a
+    // board or window showing one closes, as on design.purge. project.restore brings them back
+    // with the same ids.
+    let designs: Vec<Id> = {
+        let mut stmt = ctx.tx().prepare_cached("SELECT id FROM designs WHERE project_id = ?1 ORDER BY id").bus()?;
+        let rows = stmt.query_map([pr.id], |r| r.get(0)).bus()?.collect::<rusqlite::Result<Vec<_>>>();
+        rows.bus()?
+    };
     // `project.remove` forgets Relay metadata only. Audit rows deliberately remain as the
     // immutable history, while every FK-owned row is removed in dependency order.
     for sql in [
@@ -1008,6 +1117,7 @@ fn remove_project(ctx: &mut Ctx, project_id: Id, force: bool, remove_worktrees: 
         "DELETE FROM labels WHERE project_id=?1",
         "DELETE FROM modules WHERE project_id=?1",
         "DELETE FROM notes WHERE project_id=?1",
+        "DELETE FROM design_removed WHERE design_id IN (SELECT id FROM designs WHERE project_id=?1)",
         "DELETE FROM design_nodes WHERE design_id IN (SELECT id FROM designs WHERE project_id=?1)",
         "DELETE FROM designs WHERE project_id=?1",
         "DELETE FROM notifications WHERE project_id=?1",
@@ -1031,6 +1141,9 @@ fn remove_project(ctx: &mut Ctx, project_id: Id, force: bool, remove_worktrees: 
         params![ctx.now, pr.id]).bus()?;
     ctx.tx().execute("DELETE FROM projects WHERE id = ?1", [pr.id]).bus()?;
     ctx.set_project(pr.id);
+    for id in designs {
+        ctx.emit("design.deleted", json!({ "id": id, "project_id": pr.id }));
+    }
     ctx.emit("project.deleted", json!({ "id": pr.id, "backup": backup }));
     Ok(ProjectRemoveOut { sessions_closed: open.len() as i64, runs_stopped: live_runs.len() as i64 })
 }
@@ -1123,9 +1236,144 @@ fn plausible_branch(name: &str) -> bool {
         && !name.chars().any(|c| c.is_ascii_control() || c == ' ' || "~^:?*[\\".contains(c))
 }
 
+/// Test seams of the removals.
+#[cfg(test)]
+mod seam {
+    use std::cell::RefCell;
+
+    pub(super) type Hook = Box<dyn FnMut(&crate::engine::Engine)>;
+
+    thread_local! {
+        /// Run on the removing thread once its backup is taken, before its transaction opens: a
+        /// request landing between the two.
+        pub(super) static AFTER_BACKUP: RefCell<Option<Hook>> = const { RefCell::new(None) };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::Door;
+    use relay_bus::{Actor, Request};
+    use std::sync::Arc;
+
+    fn call(engine: &Engine, op: &str, payload: serde_json::Value) -> Result<serde_json::Value, BusError> {
+        engine.dispatch(Request::new(Actor::User, op, payload), Door::InProcess).into_result()
+    }
+
+    /// An engine on a store on disk, with workspace 1 holding project 1 (one commit), and the
+    /// store's backups folder.
+    fn removal_fixture() -> (tempfile::TempDir, Arc<Engine>, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let (ws, repo) = (root.join("ws"), root.join("ws/app"));
+        fs::create_dir_all(&repo).unwrap();
+        for args in [&["init", "-q", "-b", "main"][..], &["commit", "-q", "--allow-empty", "-m", "init"]] {
+            let out = Command::new("git").arg("-C").arg(&repo).args(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"])
+                .args(args).output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        let store = crate::Store::open(&root.join("store/store.db"), false).unwrap();
+        let backups = store.backup_dir();
+        let engine = Engine::new(crate::Instance::Test, store);
+        call(&engine, "workspace.create", json!({ "path": ws })).unwrap();
+        call(&engine, "project.add", json!({ "workspace_id": 1, "path": repo })).unwrap();
+        (dir, engine, backups)
+    }
+
+    /// The removal backups in `dir`, with the `-wal` and `-shm` a read of one leaves when `sides`.
+    fn removal_backups(dir: &Path, sides: bool) -> Vec<PathBuf> {
+        fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path())
+            .filter(|path| path.to_string_lossy().contains("-remove.db") && (sides || path.extension().is_some_and(|ext| ext == "db"))).collect()
+    }
+
+    /// Waits for a refused removal's backup to be deleted, sides and all.
+    fn discarded(dir: &Path) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !removal_backups(dir, true).is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        removal_backups(dir, true).is_empty()
+    }
+
+    fn audited(engine: &Engine, op: &str, project: Id) {
+        engine.store.lock().execute(
+            "INSERT INTO audit (ts, req_id, actor, op, kind, project_id, payload_hash)
+             VALUES ('2026-10-20T00:00:00Z', lower(hex(randomblob(16))), 'user', ?1, 'ok', ?2, 'h')",
+            params![op, project],
+        ).unwrap();
+    }
+
+    /// B68: a write made while the removal's backup is copied is in the copy (SQLite updates the
+    /// pages already copied), so it refuses nothing; the mark is read where the copy ends.
+    #[test]
+    fn a_write_made_while_the_backup_is_copied_is_in_it_and_the_removal_goes_ahead() {
+        let (_dir, engine, backups) = removal_fixture();
+        // More than one step of pages, so the copy has a between.
+        engine.store.lock().execute_batch("CREATE TABLE ballast(b BLOB); INSERT INTO ballast VALUES (zeroblob(6000000));").unwrap();
+        let written = std::rc::Rc::new(std::cell::Cell::new(false));
+        let mid = written.clone();
+        crate::store::seam::BETWEEN_STEPS.set(Some(Box::new(move |conn: &Connection| {
+            if !mid.replace(true) {
+                conn.execute(
+                    "INSERT INTO audit (ts, req_id, actor, op, kind, project_id, payload_hash)
+                     VALUES ('2026-10-20T00:00:00Z', 'mid-copy', 'user', 'task.update', 'ok', 1, 'h')", [],
+                ).unwrap();
+            }
+        })));
+        let removed = call(&engine, "project.remove", json!({ "project_id": 1 }));
+        crate::store::seam::BETWEEN_STEPS.set(None);
+        assert!(written.get(), "the copy had a between");
+        removed.unwrap();
+        let copies = removal_backups(&backups, false);
+        assert_eq!(copies.len(), 1);
+        let copy = Connection::open_with_flags(&copies[0], rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let held: i64 = copy.query_row("SELECT COUNT(*) FROM audit WHERE req_id = 'mid-copy'", [], |r| r.get(0)).unwrap();
+        assert_eq!(held, 1, "the write made during the copy is in it");
+    }
+
+    /// B68: a write landing after the copy ended, before the removal's transaction, refuses the
+    /// removal with nothing removed; its hint says the agents' hooks are already down, and the
+    /// copy, of a store that still holds everything, is deleted. Removed again, it goes.
+    #[test]
+    fn a_write_after_the_backup_refuses_the_removal_and_says_the_hooks_are_down() {
+        let (_dir, engine, backups) = removal_fixture();
+        // An open session: an agent the removal closes.
+        call(&engine, "session.create", json!({ "project_id": 1, "provider": "claude" })).unwrap();
+        seam::AFTER_BACKUP.set(Some(Box::new(|engine: &Engine| {
+            engine.dispatch(Request::new(Actor::User, "task.create", json!({ "project_id": 1, "title": "late" })), Door::InProcess)
+                .into_result().unwrap();
+        })));
+        let refused = call(&engine, "project.remove", json!({ "project_id": 1, "force": true }));
+        seam::AFTER_BACKUP.set(None);
+        let error = refused.unwrap_err();
+        assert_eq!(error.code, "project.changed");
+        let hint = error.hint.unwrap_or_default();
+        assert!(hint.contains("hooks were taken down") && hint.contains("remove it again"), "{hint}");
+        let tasks = call(&engine, "task.list", json!({ "project_id": 1 })).unwrap();
+        assert!(tasks.to_string().contains("late"), "nothing was removed: {tasks}");
+        assert!(discarded(&backups), "the refused removal's copy is deleted: {:?}", removal_backups(&backups, true));
+
+        call(&engine, "project.remove", json!({ "project_id": 1, "force": true })).unwrap();
+        assert!(call(&engine, "project.get", json!({ "project_id": 1 })).is_err());
+        assert_eq!(removal_backups(&backups, false).len(), 1);
+    }
+
+    /// The same through workspace.remove, with no agents: the hint says only that nothing was
+    /// removed.
+    #[test]
+    fn a_workspace_whose_project_was_written_after_the_backup_is_kept() {
+        let (_dir, engine, backups) = removal_fixture();
+        seam::AFTER_BACKUP.set(Some(Box::new(|engine: &Engine| audited(engine, "notes.create", 1))));
+        let refused = call(&engine, "workspace.remove", json!({ "workspace_id": 1, "force": true }));
+        seam::AFTER_BACKUP.set(None);
+        let error = refused.unwrap_err();
+        assert_eq!(error.code, "project.changed");
+        assert_eq!(error.hint.as_deref(), Some("nothing was removed; remove it again"));
+        call(&engine, "project.get", json!({ "project_id": 1 })).unwrap();
+        assert!(discarded(&backups), "the refused removal's copy is deleted: {:?}", removal_backups(&backups, true));
+        call(&engine, "workspace.remove", json!({ "workspace_id": 1, "force": true })).unwrap();
+    }
 
     #[test]
     fn a_head_naming_an_option_is_not_taken_as_the_base_branch() {
@@ -1141,6 +1389,38 @@ mod tests {
         assert_eq!(head("ref: refs/heads/a..b\n"), "main");
         assert_eq!(head("ref: refs/heads/has space\n"), "main");
         assert_eq!(head("0123456789abcdef0123456789abcdef01234567\n"), "main");
+    }
+
+    /// B68: a write to a project after a removal's backup began is seen, for that project
+    /// alone; refusals, a hook's reports and the mailbox are not writes the backup could miss.
+    #[test]
+    fn a_write_past_the_mark_is_seen_for_its_project_alone() {
+        let store = crate::Store::open_memory().unwrap();
+        let conn = store.lock();
+        let row = |op: &str, kind: &str, project: Option<Id>| {
+            conn.execute(
+                "INSERT INTO audit (ts, req_id, actor, op, kind, project_id, payload_hash)
+                 VALUES ('2026-10-20T00:00:00Z', lower(hex(randomblob(16))), 'user', ?1, ?2, ?3, 'h')",
+                params![op, kind, project],
+            ).unwrap();
+        };
+        assert_eq!(audit_mark(&conn).unwrap(), 0, "an empty audit");
+        row("notes.create", "ok", Some(1));
+        let mark = audit_mark(&conn).unwrap();
+        assert!(!changed_since(&conn, mark, 1).unwrap(), "what the backup holds");
+        for (op, kind) in [("guardrail.gate", "ok"), ("session.report", "ok"), ("usage.report", "ok"), ("mailbox.send", "ok"), ("task.update", "refused")] {
+            row(op, kind, Some(1));
+        }
+        row("notes.create", "ok", Some(2));
+        row("settings.set", "ok", None);
+        assert!(!changed_since(&conn, mark, 1).unwrap());
+        row("task.update", "ok", Some(1));
+        assert!(changed_since(&conn, mark, 1).unwrap());
+        assert!(changed_since(&conn, mark, 2).unwrap());
+        assert!(!changed_since(&conn, mark, 3).unwrap());
+        let plan: Vec<String> = conn.prepare(&format!("EXPLAIN QUERY PLAN {CHANGED_SINCE}")).unwrap()
+            .query_map(params![mark, 1], |r| r.get(3)).unwrap().map(Result::unwrap).collect();
+        assert!(plan.iter().any(|step| step.contains("INTEGER PRIMARY KEY (rowid>?)")), "only the rows past the mark: {plan:?}");
     }
 
     #[test]

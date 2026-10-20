@@ -131,8 +131,7 @@ the active exceptions (revoked on the PC) and its form says of each field whethe
 inherited (`guardrail.config.layers`). A plugin or a skill opens to a read-only page; Git's
 **Clean merged** names the branches it will delete before it does (`git.branch.clean_merged`, a dry
 run first); Files moves a file, lists what was trashed with **Restore**, and finds in a file; and
-Design lists a project's canvases and draws each page as an outline (text, pictures and the
-contents of auto-layout frames are drawn on the PC only).
+Design lists a project's canvases and draws their pages as the PC does, read only (next section).
 
 ## Threads on the phone
 
@@ -175,6 +174,51 @@ rest days among the workouts by month; its Lifts are grouped moving up, holding 
 lift opens its own page. Each page has the desktop's Ask keys, and a bill, an entry, an account or
 a holding opens to the question it asks; asking starts a new thread with those words.
 
+## Design on the phone
+
+Design is read only. **Design** in a project lists its canvases (`design.list`, the deleted ones
+apart) as the gallery's cards do: title, the terminal it belongs to with its lamp or "Project only",
+when it last changed and by whom, its pages and its layers. A design opens to its page, one at a time
+(`design.get` with `pages_only` for the page chips, then with `page`; a PC too old for the flag is read
+whole), drawn on a canvas under the chips with the page's top-level frames listed by name and size.
+It reads again when the design changes, so an agent's drawing shows while the screen stays open. A tap
+opens the page full screen: fitted, pinched up to 8 times, panned, a double tap fits it again.
+
+What it draws is what the PC draws at rest, by ports of the PC's rules rather than a second
+design (`apps/relay-android/core/.../core/design/`, drawn by `ui/code/DesignCanvas.kt`): auto
+layout in rows, columns and wraps, hugging text and stickies, pins, absolute children, min and max
+sizes and scrolling frames (each at its start); every kind (frames, groups, rectangles, ellipses with
+arcs, polygons and stars, lines and connectors in their routes, pen paths, stickies, icons, text with its runs, and
+pictures) with fills, linear, radial and conic gradients, strokes with dashes and ends, per-corner
+radii, inner and drop shadows, opacity, blend modes, rotation and flips; and a design's named colours
+and styles, resolved as the PC resolves them. Words are set by Compose in the fonts the app carries (Geist,
+Geist Mono, Sora, Fira Sans, Fira Sans Condensed, Fira Mono; any other family is the phone's sans
+serif), so a line may break a word earlier or later than on the PC. Pictures are read with
+`design.asset.get` in pieces of at most 3 MiB, kept on the phone (64 MiB, the least recently drawn
+going first), decoded to at most 2,048 px on a side and shown as a placeholder until they arrive; two
+are read at a time.
+
+What it leaves out, said in a line under each page ("Not drawn on the phone: …") and never silently:
+
+- a layer's blur, and the glow a text, line, path or icon casts as a shadow (other layers' shadows are drawn);
+- SVG pictures (the phone has no SVG decoder and does not read them), shown as a placeholder;
+- motion: a layer that moves is drawn at rest, and the line says the PC plays it;
+- layers of a kind, and the contents of a frame with an auto layout, from a newer Relay, and layers
+  nested more than 64 deep. A node whose fields a newer Relay wrote that this phone cannot read is
+  left out or drawn without that field, and the screen says how many.
+
+It does not edit, ask, restore, delete for good or export; a stock photo's credit is read but no
+screen shows it; and Play, the inspector and the time bar are the PC's.
+
+Two tests tie it to the PC. `crates/relay-client/tests/phone_fixtures.rs` lays out every case of
+`core/src/test/resources/design/layout-cases.json` with the PC's own code and holds the icon set
+(`core/src/main/resources/design/icons.json`) to the PC's, name for name; `DesignLayoutTest` and
+`DesignShapesTest` hold the Kotlin port to the same file. `crates/relay-bus/tests/phone_fixture.rs`
+fails when a node gains a field, kind or enum value that `get-reply.json` does not use. So a change
+to the PC's layout, shapes or node model fails `cargo test` until the fixture says what it does, and
+the changed fixture fails here until the port follows: **a rule changed on one side is changed on
+the other in the same piece of work.**
+
 ## On the phone itself
 
 - **Notifications** say when an agent is held by a guardrail, blocked, or done. A held command's
@@ -206,8 +250,8 @@ panel and the Undo of an entry a thread added or changed, and its Redo (`money.s
 Activity), Arbiter's reads, a proposal's answer and its halt and restart keys, Avex's reads, a
 task's comments and Reopen (`task.comment`, `task.unapprove`), the guardrail form's layers and the
 active exceptions (`guardrail.config.layers`, `guardrail.requests.list`), a skill's page
-(`skill.get`), Files' Move and trash (`file.move`, `file.trash.list`) and the design gallery
-(`design.list`, `design.get`). A phone still cannot add, import, reset or replace
+(`skill.get`), Files' Move and trash (`file.move`, `file.trash.list`) and the design canvases
+(`design.list`, `design.get`, and `design.asset.get` for their pictures). A phone still cannot add, import, reset or replace
 the ledger except through Tally's sync.
 
 ## Building and installing

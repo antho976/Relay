@@ -262,8 +262,10 @@ fn deleting_a_shape_frees_the_connectors_attached_to_it() {
     assert!(joined.get("from").is_none() && joined["to"] == "b", "{joined}");
     // From a's centre (110, 110) to b's (310, 120), counted from the line's own (100, 100).
     assert_eq!(joined["points"], json!([[10.0, 10.0], [210.0, 20.0]]));
+    // TM-60: one drawn with points of its own is drawn again from the stored centres, b's
+    // (310, 120) to where a was (110, 110), not along a route it was first given.
     let drawn = find("drawn");
-    assert!(drawn["from"] == "b" && drawn.get("to").is_none() && drawn["points"] == json!([[0.0, 0.0], [5.0, 5.0]]), "{drawn}");
+    assert!(drawn["from"] == "b" && drawn.get("to").is_none() && drawn["points"] == json!([[310.0, 120.0], [110.0, 110.0]]), "{drawn}");
     assert_eq!(find("other"), before.as_array().unwrap().iter().find(|n| n["id"] == "other").unwrap().clone(), "not attached to it");
     let changed: Vec<String> = ids(&out["nodes"]);
     assert!(changed.contains(&"joined".to_string()) && changed.contains(&"drawn".to_string()), "the answer carries them: {changed:?}");
@@ -276,16 +278,17 @@ fn deleting_a_shape_frees_the_connectors_attached_to_it() {
     assert_eq!(nodes(&e, id), before, "the undo attaches them again");
 }
 
+/// An add-only list sent against an older rev writes no node that changed since, so it applies
+/// on top (W6); `design_revs.rs` holds the refusals of a list that does write one.
 #[test]
-fn a_stale_base_rev_is_refused_with_the_current_one() {
+fn an_add_only_list_against_an_older_rev_applies() {
     let (e, _root) = project();
     let id = create(&e);
     let ops = json!([{"op": "add", "node": {"parent": "page-1", "kind": "rect"}}]);
     ok(&e, "design.apply", json!({"design_id": id, "ops": ops, "base_rev": 1}));
-    let refused = call(&e, "design.apply", json!({"design_id": id, "ops": ops, "base_rev": 1}));
-    let error = err(&refused);
-    assert_eq!(error.code, "design.stale");
-    assert_eq!(error.details.as_ref().unwrap()["rev"], 2);
+    let again = ok(&e, "design.apply", json!({"design_id": id, "ops": ops, "base_rev": 1}));
+    assert_eq!((again["rev"].as_i64(), again["prev_rev"].as_i64(), again["rebased"].clone()), (Some(3), Some(2), json!(true)));
+    assert_eq!(nodes(&e, id).as_array().unwrap().len(), 3);
     assert_eq!(code(call(&e, "design.apply", json!({"design_id": id, "ops": []}))), "design.ops");
 }
 
@@ -362,7 +365,7 @@ fn agents_tag_their_own_terminal_and_the_person_any_of_the_project() {
     let mine = ok_as(&e, agent.clone(), "design.create", json!({"title": "Mine"}))["design"].clone();
     assert_eq!((mine["session"].as_str(), mine["created_by"].as_str(), mine["project_id"].as_i64()), (Some(a.as_str()), Some(a.as_str()), Some(1)));
     let id = mine["id"].as_i64().unwrap();
-    let out = ok_as(&e, agent.clone(), "design.apply", json!({"design_id": id, "ops": [{"op": "add", "node": {"parent": "page-1", "kind": "text", "text": "hi"}}]}));
+    let out = ok_as(&e, agent.clone(), "design.apply", json!({"design_id": id, "ops": [{"op": "add", "node": {"parent": "page-1", "kind": "text", "text": "hi"}}], "reply": "full"}));
     assert_eq!(out["design"]["updated_by"], a.as_str());
     assert_eq!(code(call_as(&e, agent.clone(), "design.create", json!({"session": b}))), "actor.scope");
     assert_eq!(code(call_as(&e, agent.clone(), "design.update", json!({"design_id": id, "session": b}))), "actor.scope");

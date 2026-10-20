@@ -9,3 +9,9 @@ publish.workspace = true
 [dependencies]
 relay-bus.workspace = true
 serde_json.workspace = true
+# An animated PNG's chunk checksums (client-motion's apng.rs).
+crc32fast = "1"
+# Text as the canvas edits it, in composed characters (client-text).
+unicode-normalization = "0.1"
+# The scene's and layout's maps (TM-80: client-scene, client-layout).
+rustc-hash = "2"

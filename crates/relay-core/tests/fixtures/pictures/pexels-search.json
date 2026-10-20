@@ -1,0 +1,98 @@
+{
+ "_fixture": "Synthetic, written from the documented fields (pexels.com/api/documentation, read 2026-10-19); no live Pexels answer was saved.",
+ "total_results": 8000,
+ "page": 1,
+ "per_page": 4,
+ "photos": [
+  {
+   "id": 2014422,
+   "width": 3024,
+   "height": 3780,
+   "url": "https://www.pexels.com/photo/green-plants-on-a-kitchen-shelf-2014422/",
+   "photographer": "Ana Sample",
+   "photographer_url": "https://www.pexels.com/@ana-sample",
+   "photographer_id": 1001,
+   "avg_color": "#7E7B6F",
+   "src": {
+    "original": "https://images.pexels.com/photos/2014422/pexels-photo-2014422.jpeg",
+    "large2x": "https://images.pexels.com/photos/2014422/pexels-photo-2014422.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+    "large": "https://images.pexels.com/photos/2014422/pexels-photo-2014422.jpeg?auto=compress&cs=tinysrgb&h=650&w=940",
+    "medium": "https://images.pexels.com/photos/2014422/pexels-photo-2014422.jpeg?auto=compress&cs=tinysrgb&h=350",
+    "small": "https://images.pexels.com/photos/2014422/pexels-photo-2014422.jpeg?auto=compress&cs=tinysrgb&h=130",
+    "portrait": "https://images.pexels.com/photos/2014422/pexels-photo-2014422.jpeg?auto=compress&cs=tinysrgb&fit=crop&h=1200&w=800",
+    "landscape": "https://images.pexels.com/photos/2014422/pexels-photo-2014422.jpeg?auto=compress&cs=tinysrgb&fit=crop&h=627&w=1200",
+    "tiny": "https://images.pexels.com/photos/2014422/pexels-photo-2014422.jpeg?auto=compress&cs=tinysrgb&dpr=1&fit=crop&h=200&w=280"
+   },
+   "liked": false,
+   "alt": "Green plants on a kitchen shelf"
+  },
+  {
+   "id": 1080721,
+   "width": 5472,
+   "height": 3648,
+   "url": "https://www.pexels.com/photo/sunlit-kitchen-with-plants-1080721/",
+   "photographer": "Jon Fixture",
+   "photographer_url": "https://www.pexels.com/@jon-fixture",
+   "photographer_id": 1002,
+   "avg_color": "#7E7B6F",
+   "src": {
+    "original": "https://images.pexels.com/photos/1080721/pexels-photo-1080721.jpeg",
+    "large2x": "https://images.pexels.com/photos/1080721/pexels-photo-1080721.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+    "large": "https://images.pexels.com/photos/1080721/pexels-photo-1080721.jpeg?auto=compress&cs=tinysrgb&h=650&w=940",
+    "medium": "https://images.pexels.com/photos/1080721/pexels-photo-1080721.jpeg?auto=compress&cs=tinysrgb&h=350",
+    "small": "https://images.pexels.com/photos/1080721/pexels-photo-1080721.jpeg?auto=compress&cs=tinysrgb&h=130",
+    "portrait": "https://images.pexels.com/photos/1080721/pexels-photo-1080721.jpeg?auto=compress&cs=tinysrgb&fit=crop&h=1200&w=800",
+    "landscape": "https://images.pexels.com/photos/1080721/pexels-photo-1080721.jpeg?auto=compress&cs=tinysrgb&fit=crop&h=627&w=1200",
+    "tiny": "https://images.pexels.com/photos/1080721/pexels-photo-1080721.jpeg?auto=compress&cs=tinysrgb&dpr=1&fit=crop&h=200&w=280"
+   },
+   "liked": false,
+   "alt": "Sunlit kitchen with plants"
+  },
+  {
+   "id": 2062426,
+   "width": 4000,
+   "height": 6000,
+   "url": "https://www.pexels.com/photo/-2062426/",
+   "photographer": "Lee Example",
+   "photographer_url": "https://www.pexels.com/@lee-example",
+   "photographer_id": 1003,
+   "avg_color": "#7E7B6F",
+   "src": {
+    "original": "https://images.pexels.com/photos/2062426/pexels-photo-2062426.jpeg",
+    "large2x": "https://images.pexels.com/photos/2062426/pexels-photo-2062426.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+    "large": "https://images.pexels.com/photos/2062426/pexels-photo-2062426.jpeg?auto=compress&cs=tinysrgb&h=650&w=940",
+    "medium": "https://images.pexels.com/photos/2062426/pexels-photo-2062426.jpeg?auto=compress&cs=tinysrgb&h=350",
+    "small": "https://images.pexels.com/photos/2062426/pexels-photo-2062426.jpeg?auto=compress&cs=tinysrgb&h=130",
+    "portrait": "https://images.pexels.com/photos/2062426/pexels-photo-2062426.jpeg?auto=compress&cs=tinysrgb&fit=crop&h=1200&w=800",
+    "landscape": "https://images.pexels.com/photos/2062426/pexels-photo-2062426.jpeg?auto=compress&cs=tinysrgb&fit=crop&h=627&w=1200",
+    "tiny": "https://images.pexels.com/photos/2062426/pexels-photo-2062426.jpeg?auto=compress&cs=tinysrgb&dpr=1&fit=crop&h=200&w=280"
+   },
+   "liked": false,
+   "alt": ""
+  },
+  {
+   "_fixture": "synthetic: its large2x is on another host, so it must be dropped",
+   "id": 3214751,
+   "width": 4000,
+   "height": 3000,
+   "url": "https://www.pexels.com/photo/white-kitchen-counter-3214751/",
+   "photographer": "Max Synthetic",
+   "photographer_url": "https://www.pexels.com/@max-synthetic",
+   "photographer_id": 1004,
+   "avg_color": "#7E7B6F",
+   "src": {
+    "original": "https://images.pexels.com/photos/3214751/pexels-photo-3214751.jpeg",
+    "large2x": "https://cdn.example.com/photos/3214751/pexels-photo-3214751.jpeg?dpr=2&h=650&w=940",
+    "large": "https://images.pexels.com/photos/3214751/pexels-photo-3214751.jpeg?auto=compress&cs=tinysrgb&h=650&w=940",
+    "medium": "https://images.pexels.com/photos/3214751/pexels-photo-3214751.jpeg?auto=compress&cs=tinysrgb&h=350",
+    "small": "https://images.pexels.com/photos/3214751/pexels-photo-3214751.jpeg?auto=compress&cs=tinysrgb&h=130",
+    "portrait": "https://images.pexels.com/photos/3214751/pexels-photo-3214751.jpeg?auto=compress&cs=tinysrgb&fit=crop&h=1200&w=800",
+    "landscape": "https://images.pexels.com/photos/3214751/pexels-photo-3214751.jpeg?auto=compress&cs=tinysrgb&fit=crop&h=627&w=1200",
+    "tiny": "https://images.pexels.com/photos/3214751/pexels-photo-3214751.jpeg?auto=compress&cs=tinysrgb&dpr=1&fit=crop&h=200&w=280"
+   },
+   "liked": false,
+   "alt": "White kitchen counter"
+  }
+ ],
+ "next_page": "https://api.pexels.com/v1/search/?page=2&per_page=4&query=kitchen+plants"
+}

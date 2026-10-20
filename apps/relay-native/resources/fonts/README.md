@@ -20,7 +20,7 @@ fontsource CDN build of [Sora](https://github.com/sora-xor/sora-font) under the 
 License (`sora-LICENSE`). Its family is already `Sora`, so it is unchanged. Only the start screen
 (`start.rs`) uses it.
 
-`geist-*` are Geist (400, 500, 600) and Geist Mono (400, 500), Latin, from the fontsource CDN build
+`geist-*` are Geist (400, 500, 600, 700) and Geist Mono (400, 500), Latin, from the fontsource CDN build
 of [Geist](https://github.com/vercel/geist-font) under the SIL Open Font License
 (`geist-LICENSE`). Each already names its base family (`Geist`, `Geist Mono`) and is unchanged.
 Geist is the interface's face and Geist Mono its figures, keycaps and code; the terminals keep

@@ -9,6 +9,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -146,6 +147,32 @@ class ScreensTest {
                 transcript,
                 System.currentTimeMillis(),
             )
+            // A design as the PC gave it: the phone's design.get fixture, every kind and field the PC has.
+            val designs = """{"designs":[
+                {"id":1,"project_id":1,"title":"Phone fixture","session":"brisk-otter","rev":42,"pages":1,"nodes":42,"updated_by":"brisk-otter","updated_at":"2026-10-09T21:00:00Z"},
+                {"id":2,"project_id":1,"title":"Onboarding","rev":7,"pages":3,"nodes":58,"updated_by":"user","updated_at":"2026-10-08T12:00:00Z"},
+                {"id":3,"project_id":1,"title":"Old logo","rev":3,"pages":1,"nodes":4,"updated_by":"user","updated_at":"2026-10-01T12:00:00Z","deleted_at":"2026-10-07T09:00:00Z"}
+            ]}"""
+            relay.hub.store.putQuery(
+                com.quietsoftware.relay.core.sync.QueryKey.of("design.list", kotlinx.serialization.json.buildJsonObject {
+                    put("project_id", kotlinx.serialization.json.JsonPrimitive(1)); put("include_deleted", kotlinx.serialization.json.JsonPrimitive(true))
+                }),
+                designs,
+                System.currentTimeMillis(),
+            )
+            // The :core module's test resources, from this module's directory (Gradle's working one).
+            val reply = java.io.File("../core/src/test/resources/design/get-reply.json").readText()
+            // The design screen reads its pages alone, then a page; an older PC's whole read too.
+            val keys = listOf(
+                kotlinx.serialization.json.buildJsonObject { put("design_id", kotlinx.serialization.json.JsonPrimitive(1)) },
+                kotlinx.serialization.json.buildJsonObject {
+                    put("design_id", kotlinx.serialization.json.JsonPrimitive(1)); put("pages_only", kotlinx.serialization.json.JsonPrimitive(true))
+                },
+                kotlinx.serialization.json.buildJsonObject {
+                    put("design_id", kotlinx.serialization.json.JsonPrimitive(1)); put("page", kotlinx.serialization.json.JsonPrimitive("page-1"))
+                },
+            )
+            for (key in keys) relay.hub.store.putQuery(com.quietsoftware.relay.core.sync.QueryKey.of("design.get", key), reply, System.currentTimeMillis())
         }
         shell = ShellModel(relay, settings)
     }
@@ -167,6 +194,32 @@ class ScreensTest {
             }
         }
         compose.mainClock.advanceTimeBy(2_500)
+        compose.onRoot().captureRoboImage("src/test/screenshots/$name.png", OPTIONS)
+    }
+
+    /** [route] once [text] shows: for a screen whose content is worked out off the main thread, as a design's drawing is. */
+    private fun shootWhenShown(name: String, route: String, text: String) {
+        compose.mainClock.autoAdvance = false
+        compose.setContent {
+            val controller = rememberNavController()
+            val nav = remember { Nav(controller, shell) }
+            RelayTheme(Palette.Matte) {
+                CompositionLocalProvider(LocalNav provides nav) {
+                    Box(Modifier.fillMaxSize()) {
+                        AppNav(nav, route)
+                        HoldTray(shell, onOpen = {})
+                    }
+                }
+            }
+        }
+        val until = System.currentTimeMillis() + 30_000
+        while (compose.onAllNodesWithText(text).fetchSemanticsNodes().isEmpty()) {
+            check(System.currentTimeMillis() < until) { "$text never showed on $route" }
+            compose.mainClock.advanceTimeBy(100)
+            compose.waitForIdle()
+            Thread.sleep(20)
+        }
+        compose.mainClock.advanceTimeBy(500)
         compose.onRoot().captureRoboImage("src/test/screenshots/$name.png", OPTIONS)
     }
 
@@ -219,6 +272,11 @@ class ScreensTest {
     @Test fun avex() = shoot("avex", "avex")
     @Test fun pcTools() = shoot("pc-tools", "pc-tools")
     @Test fun addProject() = shoot("add-project", "add-project")
+    @Test fun designs() = shoot("designs", "designs/1")
+    /** A design drawn as the PC draws it, from the fixture: every kind, laid out, its words set, pictures as placeholders. */
+    @Test fun design() = shootWhenShown("design", "design/1", "Settings")
+    /** A page full screen, fitted, from the same fixture. */
+    @Test fun designPage() = shootWhenShown("design-page", "design/1/page/page-1", "Mobile")
     @Test fun share() = shoot("share", "share?text=Crash%20in%20the%20login%20flow%0Asteps%20to%20reproduce")
 
     private companion object {

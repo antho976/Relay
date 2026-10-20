@@ -1,39 +1,75 @@
-//! Where every node of a page lands: auto layout, hugging text and stickies that grow to their
-//! words. The canvas measures text (Pango); this decides everything else, so a frame an agent
-//! wrote as `layout: column` lays out the same on every redraw.
+//! Where every node of a page lands: auto layout (row, column and wrap), hugging text, stickies
+//! that grow to their words, groups as big as their children, pins, absolute children, min and
+//! max sizes, and scrolling frames. The canvas measures text (Pango); this decides everything
+//! else, so a frame an agent wrote as `layout: column` lays out the same on every redraw.
+//!
+//! A pass works top down: a node's size first (once a pass, however many ancestors ask), then
+//! its box, then its children's. Sizes stay within `MAX_COORD` and boxes within
+//! [`PLACED_LIMIT`], so whatever an agent nests or lines up, paint (in `f32`), hit testing and
+//! Pango agree on where it is.
 
 use super::geom::Rect;
 use super::scene::Scene;
-use relay_bus::design::{Items, Justify, Layout, Node, NodeKind, Sizing};
+use relay_bus::design::{follow_axis, Items, Justify, Layout, Node, NodeKind, Pin, Sizing, MAX_COORD};
+use rustc_hash::FxHashMap;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::hash::BuildHasher;
+use std::ops::Range;
+
+/// How far from the page's origin a box is placed, either way: 2^22 px, where an `f32` still
+/// holds half a pixel. Paint draws in `f32` and hit testing works in `f64`, so a box an agent
+/// nested or lined up past it is placed at it, and both agree where it is (B110). A box's size
+/// stops at twice this.
+pub const PLACED_LIMIT: f64 = 4_194_304.0;
 
 /// Inner margin of a sticky's text.
 pub const STICKY_PAD: f64 = 16.0;
 /// Size a sticky starts at.
 pub const STICKY_SIZE: f64 = 200.0;
+/// Slack when a wrap line is checked for room, so a line that fits exactly is not broken by
+/// rounding.
+const SLACK: f64 = 1e-6;
 
 /// Measures a text or sticky's words: their size when wrapped at `wrap` px (or unwrapped).
 pub trait Measure {
     fn measure(&self, node: &Node, wrap: Option<f64>) -> (f64, f64);
 }
 
-/// The width rule a node follows when it names none: a text without a width hugs its words.
+/// The width rule a node follows when it names none: a text without a width hugs its words
+/// (`Node::w_rule`, which the engine shares).
 pub fn w_sizing(n: &Node) -> Sizing {
-    n.w_sizing.unwrap_or(if n.kind == NodeKind::Text && n.w <= 0.0 { Sizing::Hug } else { Sizing::Fixed })
+    n.w_rule()
 }
 
-/// The height rule a node follows when it names none: a text hugs its lines.
+/// The height rule a node follows when it names none: a text hugs its lines (`Node::h_rule`).
 pub fn h_sizing(n: &Node) -> Sizing {
-    n.h_sizing.unwrap_or(if n.kind == NodeKind::Text { Sizing::Hug } else { Sizing::Fixed })
+    n.h_rule()
 }
 
 /// Every placed node's box in page coordinates.
 #[derive(Debug, Default, Clone)]
 pub struct Placed {
-    pub rects: HashMap<String, Rect>,
+    pub rects: FxHashMap<String, Rect>,
     /// Where a group's children count their `x`/`y` from: its parent's origin plus its own
     /// `x`/`y` (or where a layout put it). Its box in `rects` is its children's bounds instead.
-    pub origins: HashMap<String, (f64, f64)>,
+    pub origins: FxHashMap<String, (f64, f64)>,
+    /// Where a scrolled frame's children count their `x`/`y` from: its corner less its offset.
+    /// Only frames scrolled away from the start.
+    pub content_origin: FxHashMap<String, (f64, f64)>,
+    /// Every scrolling frame placed, scrolled or not.
+    pub scrolls: FxHashMap<String, Scrolled>,
+    /// The width a hugging text was wrapped at because a column stretched it: [`wrap_width`]
+    /// alone would draw it on one line (TM-7). Read through [`Placed::wrap_width`].
+    pub wraps: FxHashMap<String, f64>,
+}
+
+/// A scrolling frame as placed: how far its content is scrolled, and the box its content spans
+/// from the frame's corner (at least the frame), unscrolled, in page coordinates.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Scrolled {
+    pub offset: (f64, f64),
+    pub content: Rect,
 }
 
 impl Placed {
@@ -41,277 +77,701 @@ impl Placed {
         self.rects.get(id).copied()
     }
 
-    /// The page point `id`'s children count their `x`/`y` from, which is also where its own
-    /// `x`/`y` put it: a group's own point (not its children's bounds), any other node's box
-    /// corner, `(0, 0)` for what is not placed (a page).
+    /// The page point `id`'s children count their `x`/`y` from: a scrolled frame's content
+    /// corner, a group's own point (not its children's bounds), any other node's box corner,
+    /// `(0, 0)` for what is not placed (a page).
     pub fn origin(&self, id: &str) -> (f64, f64) {
+        self.content_origin.get(id).copied().unwrap_or_else(|| self.point(id))
+    }
+
+    /// The page point `id`'s own `x`/`y` put it at: a group's own point, any other node's box
+    /// corner, `(0, 0)` for what is not placed. Unlike [`Placed::origin`], a scrolled frame's
+    /// own corner.
+    pub fn point(&self, id: &str) -> (f64, f64) {
         self.origins.get(id).copied().or_else(|| self.rect(id).map(|r| (r.x, r.y))).unwrap_or((0.0, 0.0))
+    }
+
+    /// Where a text's or sticky's words wrap in its placed box `rect`: the width layout
+    /// measured them at, so paint and the text editor wrap them as layout did.
+    pub fn wrap_width(&self, n: &Node, rect: &Rect) -> Option<f64> {
+        self.wraps.get(n.id.as_str()).copied().or_else(|| wrap_width(n, rect))
     }
 }
 
-/// Where a text's words wrap, given its placed box: `None` while it hugs them.
+/// Where a text's words wrap, given its placed box: `None` while it hugs them, unless a min or
+/// max width bounds it (it was measured at its box then). A hugging text a column stretches
+/// wraps too, which only [`Placed::wrap_width`] knows.
 pub fn wrap_width(n: &Node, rect: &Rect) -> Option<f64> {
     match n.kind {
         NodeKind::Sticky => Some((rect.w - 2.0 * STICKY_PAD).max(1.0)),
-        NodeKind::Text if w_sizing(n) != Sizing::Hug => Some(rect.w.max(1.0)),
+        NodeKind::Text if w_sizing(n) != Sizing::Hug || n.min_w.is_some() || n.max_w.is_some() => Some(rect.w.max(1.0)),
         _ => None,
     }
 }
 
+/// A node's own size wherever it is, laid out or hidden (layout places neither a hidden node
+/// nor anything inside one): as a page sizes a free child, a hugging text its measured words,
+/// a group its shown children's bounds. Flip mirrors a hidden layer with it (B22).
+pub fn natural_size(scene: &Scene, id: &str, measure: &dyn Measure) -> (f64, f64) {
+    let Some(n) = scene.node(id) else {
+        return (0.0, 0.0);
+    };
+    Pass::new(scene, measure, &|_| None).size(&n.id, None)
+}
+
+/// How a frame is drawn against how it is stored, which is what its pinned children follow:
+/// its stored `w`/`h` and its placed size. They differ when a layout fills, stretches or hugs
+/// it, or a min or max bounds it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fit {
+    pub stored: (f64, f64),
+    pub placed: (f64, f64),
+}
+
+/// The fit pinned children of `parent` follow: `None` for a page, a group (pins do not reach
+/// through one) or what is not placed.
+pub fn fit_of(scene: &Scene, placed: &Placed, parent: &str) -> Option<Fit> {
+    let p = scene.node(parent).filter(|p| p.kind == NodeKind::Frame)?;
+    let r = placed.rect(parent)?;
+    Some(Fit { stored: (p.w, p.h), placed: (r.w, r.h) })
+}
+
+/// The stored `x`/`y`/`w`/`h` that put `n` at `rel` (its placed box less its parent's origin)
+/// in a parent drawn as `fit`: where it sits while the parent is at its stored size. `rel`
+/// itself with no fit, or for a node pinned left and top.
+pub fn unpinned(n: &Node, fit: Option<Fit>, rel: Rect) -> Rect {
+    let Some(fit) = fit else {
+        return rel;
+    };
+    let (px, py) = n.pins();
+    let (x, w) = follow_axis(px, rel.x, rel.w, fit.placed.0, fit.stored.0);
+    let (y, h) = follow_axis(py, rel.y, rel.h, fit.placed.1, fit.stored.1);
+    Rect::new(x, y, w, h)
+}
+
+/// How far `n`'s stored `x`/`y` move for it to show `dx`/`dy` further in a parent drawn as
+/// `fit`: as far, except along a `scale` pin, which moves `stored / placed` as far.
+pub fn stored_shift(n: &Node, fit: Option<Fit>, dx: f64, dy: f64) -> (f64, f64) {
+    let Some(fit) = fit else {
+        return (dx, dy);
+    };
+    let (px, py) = n.pins();
+    let along = |pin: Pin, d: f64, stored: f64, placed: f64| {
+        if pin == Pin::Scale && stored > 0.0 && placed > 0.0 {
+            d * stored / placed
+        } else {
+            d
+        }
+    };
+    (along(px, dx, fit.stored.0, fit.placed.0), along(py, dy, fit.stored.1, fit.placed.1))
+}
+
+/// Whether `id` is placed by its parent's auto layout, so its own `x`/`y` mean nothing: the
+/// parent lays out its children and `id` is not `absolute`.
+pub fn is_laid(scene: &Scene, id: &str) -> bool {
+    scene.node(id).is_some_and(|n| !n.is_absolute())
+        && scene.parent(id).and_then(|p| scene.node(p)).is_some_and(|p| p.layout_mode() != Layout::None)
+}
+
+/// The lines a wrap layout breaks children `widths` wide into, `gap` apart: a new line when the
+/// next would pass `room`; a child wider than `room` sits alone on its line; with no `room`, one
+/// line.
+pub fn break_lines(widths: &[f64], room: Option<f64>, gap: f64) -> Vec<Range<usize>> {
+    let mut lines = Vec::new();
+    let (mut start, mut used) = (0, 0.0);
+    for (i, &w) in widths.iter().enumerate() {
+        if i > start && room.is_some_and(|room| used + gap + w > room + SLACK) {
+            lines.push(start..i);
+            (start, used) = (i, w);
+        } else {
+            used += if i > start { gap + w } else { w };
+        }
+    }
+    if start < widths.len() {
+        lines.push(start..widths.len());
+    }
+    lines
+}
+
+/// Where children of `parent` dropped at page point `p` go, as the index `move` takes: among
+/// all its children but `moving`, hidden ones included (the engine counts them, B20), the place
+/// of the first one the layout shows after `p`: right of it in a row, below it in a column, on
+/// a later line or right of it on the same line in a wrap. Hidden and absolute children are
+/// passed over; with none after `p`, or a parent without auto layout, the end.
+pub fn drop_index(scene: &Scene, placed: &Placed, parent: &str, moving: &[String], p: (f64, f64)) -> u32 {
+    let mode = scene.node(parent).map_or(Layout::None, Node::layout_mode);
+    let rest: Vec<&String> = scene.children(parent).iter().filter(|c| !moving.contains(c)).collect();
+    for (i, c) in rest.iter().enumerate() {
+        if scene.node(c).is_some_and(Node::is_absolute) {
+            continue;
+        }
+        let Some(r) = placed.rect(c) else {
+            continue;
+        };
+        let after = match mode {
+            Layout::Row => p.0 < r.cx(),
+            Layout::Column => p.1 < r.cy(),
+            Layout::Wrap => p.1 < r.y || (p.1 <= r.bottom() && p.0 < r.cx()),
+            Layout::None => false,
+        };
+        if after {
+            return i as u32;
+        }
+    }
+    rest.len() as u32
+}
+
+/// A size asked of a pass: the node, and the width offered it (only a filling one reads it).
+type SizeKey<'a> = (&'a str, Option<u64>);
+
+/// One `place`: the scene, the measure, what is placed so far, and every size already worked
+/// out. A size depends only on the node, the width offered it and the scene, none of which
+/// change during a pass, so each is measured once however many ancestors ask (B45).
 struct Pass<'a> {
     scene: &'a Scene,
     measure: &'a dyn Measure,
+    /// How far the canvas has scrolled a frame (none for a still picture).
+    offsets: &'a dyn Fn(&str) -> Option<(f64, f64)>,
     placed: Placed,
+    sizes: RefCell<FxHashMap<SizeKey<'a>, (f64, f64)>>,
+    /// Each group's children's bounds, worked out once a pass.
+    bounds: RefCell<FxHashMap<&'a str, Option<Rect>>>,
 }
 
-/// Place every node of `page`.
+/// Place every node of `page`, every scrolling frame at its start: the design as a still
+/// picture shows it (export, thumbnails, `design.render`).
 pub fn place(scene: &Scene, page: &str, measure: &dyn Measure) -> Placed {
-    let mut pass = Pass { scene, measure, placed: Placed::default() };
+    run(scene, page, measure, &|_| None)
+}
+
+/// Place every node of `page` with scrolling frames scrolled by `offsets` (the canvas's view,
+/// frame id to `(x, y)` px), each held within what its content overflows. The offsets are view
+/// state: layout is otherwise the same, and children move with their frame's content.
+pub fn place_scrolled<S: BuildHasher>(scene: &Scene, page: &str, measure: &dyn Measure, offsets: &HashMap<String, (f64, f64), S>) -> Placed {
+    run(scene, page, measure, &|id| offsets.get(id).copied())
+}
+
+fn run(scene: &Scene, page: &str, measure: &dyn Measure, offsets: &dyn Fn(&str) -> Option<(f64, f64)>) -> Placed {
+    let mut pass = Pass::new(scene, measure, offsets);
     pass.placed.rects.insert(page.to_string(), Rect::default());
     for child in scene.children(page) {
-        pass.free_child(child, 0.0, 0.0);
+        pass.free_child(child, (0.0, 0.0), None);
     }
     pass.placed
 }
 
-impl Pass<'_> {
-    fn visible(&self, id: &str) -> Option<&Node> {
+impl<'a> Pass<'a> {
+    fn new(scene: &'a Scene, measure: &'a dyn Measure, offsets: &'a dyn Fn(&str) -> Option<(f64, f64)>) -> Self {
+        Pass { scene, measure, offsets, placed: Placed::default(), sizes: RefCell::default(), bounds: RefCell::default() }
+    }
+
+    fn visible(&self, id: &str) -> Option<&'a Node> {
         self.scene.node(id).filter(|n| !n.is_hidden())
     }
 
+    /// The children `id` lays out: those shown and not `absolute`.
+    fn flow(&self, id: &str) -> Vec<&'a str> {
+        self.scene.children(id).iter().filter(|c| self.visible(c).is_some_and(|n| !n.is_absolute())).map(String::as_str).collect()
+    }
+
     /// A node's own size, given the width a laid-out parent offers it.
-    fn size(&self, id: &str, offered_w: Option<f64>) -> (f64, f64) {
+    fn size(&self, id: &'a str, offered: Option<f64>) -> (f64, f64) {
+        self.size_as(id, offered, false)
+    }
+
+    /// A node's size when a column stretches it `width` wide: as a filling width reads it,
+    /// whatever its own width rule, keeping its height rule (B23).
+    fn stretched(&self, id: &'a str, width: f64) -> (f64, f64) {
+        self.size_as(id, Some(width), true)
+    }
+
+    /// A node's size, worked out once a pass.
+    fn size_as(&self, id: &'a str, offered: Option<f64>, fill: bool) -> (f64, f64) {
         let Some(n) = self.scene.node(id) else {
             return (0.0, 0.0);
         };
-        let (ws, hs) = (w_sizing(n), h_sizing(n));
-        let fill_w = |own: f64| if ws == Sizing::Fill { offered_w.unwrap_or(own) } else { own };
-        match n.kind {
-            NodeKind::Text => {
-                // A filling text that no width is offered yet (a row shares its room only after
-                // measuring) measures unwrapped; the row wraps it once it has its share.
-                let fill_wrap = offered_w.or((n.w > 0.0).then_some(n.w));
-                let wrap = match ws {
-                    Sizing::Hug => None,
-                    Sizing::Fixed => Some(n.w),
-                    Sizing::Fill => fill_wrap,
-                };
-                let (mw, mh) = self.measure.measure(n, wrap);
-                let w = match ws {
-                    Sizing::Hug => mw,
-                    Sizing::Fixed => n.w,
-                    Sizing::Fill => fill_wrap.unwrap_or(mw),
-                };
-                (w, if hs == Sizing::Hug { mh } else { n.h })
+        let ws = if fill { Sizing::Fill } else { w_sizing(n) };
+        // Only a filling width reads what is offered: every other offer is the same question.
+        let offered = offered.filter(|_| ws == Sizing::Fill);
+        let key = (id, offered.map(f64::to_bits));
+        if let Some(size) = self.sizes.borrow().get(&key) {
+            return *size;
+        }
+        let size = self.size_of(n, ws, offered);
+        self.sizes.borrow_mut().insert(key, size);
+        size
+    }
+
+    /// A node's size under width rule `ws`, offered `offered` px across: its kind's rule, then
+    /// its min and max, and no more than `MAX_COORD` (B111: however many children a frame hugs,
+    /// what it offers a text to wrap at stays within what Pango's 32-bit units hold).
+    fn size_of(&self, n: &'a Node, ws: Sizing, offered: Option<f64>) -> (f64, f64) {
+        let (w, h) = match n.kind {
+            // A group is as big as its children, whatever its own `w`/`h` or sizing say (B2).
+            NodeKind::Group => return self.group_bounds(n).map_or((0.0, 0.0), |b| (b.w, b.h)),
+            NodeKind::Text => self.text_size(n, ws, offered),
+            NodeKind::Sticky => self.sticky_size(n, ws, offered),
+            NodeKind::Frame if n.layout_mode() != Layout::None => self.frame_size(n, ws, offered),
+            // A filling width takes what is offered; nothing offers one outside a layout.
+            _ => (if ws == Sizing::Fill { offered.unwrap_or(n.w) } else { n.w }, n.h),
+        };
+        (n.clamp_w(w).clamp(0.0, MAX_COORD), n.clamp_h(h).clamp(0.0, MAX_COORD))
+    }
+
+    /// A text's words measured wrapped at `wrap` px (never past `MAX_COORD`), or unwrapped.
+    fn words(&self, n: &Node, wrap: Option<f64>) -> (f64, f64) {
+        self.measure.measure(n, wrap.map(|w| w.min(MAX_COORD)))
+    }
+
+    /// A text: its words wrapped at its width (unwrapped while it hugs them, up to `max_w`), as
+    /// tall as its lines unless its height is its own.
+    fn text_size(&self, n: &Node, ws: Sizing, offered: Option<f64>) -> (f64, f64) {
+        let (w, lines) = match ws {
+            Sizing::Hug => {
+                let (mw, mh) = self.words(n, None);
+                match n.max_w.filter(|max| mw > *max) {
+                    // Past its widest it wraps there: a chat bubble's text.
+                    Some(max) => (max, self.words(n, Some(max)).1),
+                    None => (mw, mh),
+                }
             }
-            NodeKind::Sticky => {
-                let w = fill_w(if n.w > 0.0 { n.w } else { STICKY_SIZE });
-                let (_, mh) = self.measure.measure(n, Some((w - 2.0 * STICKY_PAD).max(1.0)));
-                let h = if n.h > 0.0 { n.h } else { STICKY_SIZE };
-                (w, h.max(mh + 2.0 * STICKY_PAD))
+            Sizing::Fixed => {
+                let w = n.clamp_w(n.w);
+                (w, self.words(n, Some(w)).1)
             }
-            NodeKind::Frame if n.layout_mode() != Layout::None => {
-                let [pt, pr, pb, pl] = n.padding_edges();
-                let inner_w = match ws {
-                    Sizing::Fixed => Some(n.w - pl - pr),
-                    Sizing::Fill => offered_w.map(|w| w - pl - pr),
-                    Sizing::Hug => None,
-                };
-                let row = n.layout_mode() == Layout::Row;
-                let gap = n.gap.unwrap_or(0.0);
-                let visible: Vec<&String> = self.scene.children(id).iter().filter(|c| self.visible(c).is_some()).collect();
-                let gaps = gap * visible.len().saturating_sub(1) as f64;
-                let stretch = n.items == Some(Items::Stretch);
-                let fills = |c: &str| {
-                    self.scene.node(c).is_some_and(|k| {
-                        if row { w_sizing(k) == Sizing::Fill } else { w_sizing(k) == Sizing::Fill || (stretch && k.kind == NodeKind::Text) }
-                    })
-                };
-                // A row with a known width shares what is left among its filling children before
-                // measuring them, so a filling text is measured wrapped at its share.
-                let share = match (row, inner_w) {
-                    (true, Some(inner)) => {
-                        let fixed: f64 = visible.iter().filter(|c| !fills(c)).map(|c| self.size(c, None).0).sum();
-                        let count = visible.iter().filter(|c| fills(c)).count().max(1) as f64;
-                        Some(((inner - fixed - gaps) / count).max(0.0))
-                    }
-                    _ => None,
-                };
-                let kids: Vec<(f64, f64)> = visible
-                    .iter()
-                    .map(|c| match (row, fills(c)) {
-                        (true, true) => self.size(c, share),
-                        (true, false) => self.size(c, None),
-                        (false, true) => {
-                            let mut probe = self.size(c, inner_w);
-                            if stretch && w_sizing(self.scene.node(c).expect("visible")) != Sizing::Fill {
-                                probe = self.stretched(c, inner_w);
-                            }
-                            probe
-                        }
-                        (false, false) => self.size(c, inner_w),
-                    })
-                    .collect();
-                let (content_w, content_h) = if row {
-                    (kids.iter().map(|k| k.0).sum::<f64>() + gaps, kids.iter().map(|k| k.1).fold(0.0, f64::max))
-                } else {
-                    (kids.iter().map(|k| k.0).fold(0.0, f64::max), kids.iter().map(|k| k.1).sum::<f64>() + gaps)
-                };
-                let w = if ws == Sizing::Hug { content_w + pl + pr } else { fill_w(n.w) };
-                let h = if hs == Sizing::Hug { content_h + pt + pb } else { n.h };
-                (w.max(0.0), h.max(0.0))
+            // A filling text that no width is offered yet (a row shares its room only after
+            // measuring) measures at its own `w`, or unwrapped; the row wraps it at its share.
+            Sizing::Fill => match offered.or((n.w > 0.0).then_some(n.w)).map(|w| n.clamp_w(w)) {
+                Some(w) => (w, self.words(n, Some(w)).1),
+                None => self.words(n, None),
+            },
+        };
+        (w, if h_sizing(n) == Sizing::Hug { lines } else { n.h })
+    }
+
+    /// A sticky: as wide as it says (or as it fills, or its words while it hugs), and as tall
+    /// as it says, growing to fit its words; hugging, exactly as tall as they are (B119).
+    fn sticky_size(&self, n: &Node, ws: Sizing, offered: Option<f64>) -> (f64, f64) {
+        let pad = 2.0 * STICKY_PAD;
+        let own = if n.w > 0.0 { n.w } else { STICKY_SIZE };
+        let w = n.clamp_w(match ws {
+            Sizing::Fill => offered.unwrap_or(own),
+            Sizing::Hug => self.words(n, None).0 + pad,
+            Sizing::Fixed => own,
+        });
+        let words = self.words(n, Some((w - pad).max(1.0))).1 + pad;
+        let h = if h_sizing(n) == Sizing::Hug { words } else { (if n.h > 0.0 { n.h } else { STICKY_SIZE }).max(words) };
+        (w, h)
+    }
+
+    /// A laid-out frame: its width first (its own, what is offered, or what its children take
+    /// while it hugs, within its min and max), then its children laid at that width, its
+    /// height hugging what they take.
+    fn frame_size(&self, n: &'a Node, ws: Sizing, offered: Option<f64>) -> (f64, f64) {
+        let (hug_w, hug_h) = (ws == Sizing::Hug, h_sizing(n) == Sizing::Hug);
+        let own = match ws {
+            Sizing::Fixed => Some(n.w),
+            Sizing::Fill => offered.or((n.w > 0.0).then_some(n.w)),
+            Sizing::Hug => None,
+        };
+        if !hug_w && !hug_h {
+            // A box of its own size: what is inside does not change it.
+            return (own.unwrap_or(n.w), n.h);
+        }
+        let [pt, pr, pb, pl] = n.padding_edges();
+        let inner = |w: f64| (w - pl - pr).max(0.0);
+        // A wrap that hugs its width breaks its lines at its max_w (one line without).
+        let room = own.or(n.max_w.filter(|_| n.layout_mode() == Layout::Wrap));
+        let (content_w, mut content_h) = self.content(n, room.map(|w| inner(n.clamp_w(w))));
+        let mut w = own.unwrap_or(n.w);
+        if hug_w {
+            let hugged = content_w + pl + pr;
+            w = n.clamp_w(hugged).min(MAX_COORD);
+            if w != hugged {
+                // Past its min or max it is laid out again at the width it takes, so what wraps
+                // or fills in it reflows there and its height follows.
+                content_h = self.content(n, Some(inner(w))).1;
             }
-            _ => (fill_w(n.w), n.h),
+        }
+        (w, if hug_h { content_h + pt + pb } else { n.h })
+    }
+
+    /// What a laid-out frame's children take across and down when laid in `room` px of inner
+    /// width (none while the frame hugs it).
+    fn content(&self, n: &'a Node, room: Option<f64>) -> (f64, f64) {
+        let kids = self.flow(&n.id);
+        let gap = n.gap.unwrap_or(0.0);
+        if n.layout_mode() == Layout::Wrap {
+            let lines = self.wrap_lines(n, &kids, room);
+            let wide = lines.iter().map(|l| l.along).fold(0.0, f64::max);
+            let rows = n.row_gap.unwrap_or(gap) * lines.len().saturating_sub(1) as f64;
+            return (wide.max(0.0), (lines.iter().map(|l| l.depth).sum::<f64>() + rows).max(0.0));
+        }
+        let row = n.layout_mode() == Layout::Row;
+        let (main, cross) = if row { (room, None) } else { (None, room) };
+        let slots = self.line_sizes(&kids, main, cross, row, n.items.unwrap_or(Items::Start), gap);
+        let along = (slots.iter().map(|s| s.main).sum::<f64>() + gap * slots.len().saturating_sub(1) as f64).max(0.0);
+        let across = slots.iter().map(|s| s.cross).fold(0.0, f64::max);
+        if row {
+            (along, across)
+        } else {
+            (across, along)
         }
     }
 
-    /// A text stretched across a column: measured wrapped at the column's width.
-    fn stretched(&self, id: &str, inner_w: Option<f64>) -> (f64, f64) {
-        let (Some(n), Some(w)) = (self.scene.node(id), inner_w) else {
-            return self.size(id, inner_w);
-        };
-        let mut probe = n.clone();
-        probe.w = w;
-        probe.w_sizing = Some(Sizing::Fixed);
-        (w, self.size_of_probe(&probe))
+    /// A wrap layout's lines in `room` px (none: one line). Children break onto lines by what
+    /// a row measures them at (a filling one by its own `w`, within its min and max, which
+    /// makes `min_w` and `fill` a grid that reflows), then each line is laid as a row: fills
+    /// share its room, and it is as tall as its tallest child, stretched ones taking that.
+    fn wrap_lines(&self, n: &Node, kids: &[&'a str], room: Option<f64>) -> Vec<Line> {
+        let scene = self.scene;
+        let (gap, items) = (n.gap.unwrap_or(0.0), n.items.unwrap_or(Items::Start));
+        let basis: Vec<f64> = kids
+            .iter()
+            .map(|&c| match scene.node(c) {
+                Some(k) if k.kind != NodeKind::Group && w_sizing(k) == Sizing::Fill => k.clamp_w(k.w),
+                _ => self.size(c, None).0,
+            })
+            .collect();
+        break_lines(&basis, room, gap)
+            .into_iter()
+            .map(|range| {
+                let line = &kids[range.clone()];
+                let mut slots = self.line_sizes(line, room, None, true, items, gap);
+                let depth = slots.iter().map(|s| s.cross).fold(0.0, f64::max);
+                for (s, &c) in slots.iter_mut().zip(line).filter(|(s, _)| s.stretch) {
+                    s.cross = scene.node(c).map_or(depth, |k| k.clamp_h(depth));
+                }
+                let along = slots.iter().map(|s| s.main).sum::<f64>() + gap * (line.len() - 1) as f64;
+                Line { range, slots, along, depth }
+            })
+            .collect()
     }
 
-    /// A child of a page, group or frame without layout: at its own `x`/`y`.
-    fn free_child(&mut self, id: &str, origin_x: f64, origin_y: f64) {
+    /// One line of auto layout: each child's length along it and depth across. Filling
+    /// children share what `main` leaves, each within its min and max; stretched ones take
+    /// `cross`, measured at it across a column (B23); a group does neither (B2). Without
+    /// `main` or `cross` (a frame that hugs), each takes its own.
+    fn line_sizes(&self, kids: &[&'a str], main: Option<f64>, cross: Option<f64>, row: bool, items: Items, gap: f64) -> Vec<Slot> {
+        let scene = self.scene;
+        let mut slots: Vec<Slot> = kids
+            .iter()
+            .map(|&c| {
+                let k = scene.node(c).expect("laid children exist");
+                let (main_rule, cross_rule) = if row { (w_sizing(k), h_sizing(k)) } else { (h_sizing(k), w_sizing(k)) };
+                let group = k.kind == NodeKind::Group;
+                let stretch = !group && (cross_rule == Sizing::Fill || items == Items::Stretch);
+                let (w, h) = match (row, cross) {
+                    (true, _) => self.size(c, None),
+                    (false, Some(room)) if stretch => self.stretched(c, room),
+                    (false, room) => self.size(c, room),
+                };
+                let (along, mut across) = if row { (w, h) } else { (h, w) };
+                if let (true, true, Some(room)) = (row, stretch, cross) {
+                    across = k.clamp_h(room);
+                }
+                Slot { main: along, cross: across, fill: !group && main_rule == Sizing::Fill, stretch }
+            })
+            .collect();
+        let fills: Vec<usize> = (0..slots.len()).filter(|&i| slots[i].fill).collect();
+        let Some(room) = main.filter(|_| !fills.is_empty()) else {
+            return slots;
+        };
+        let taken: f64 = slots.iter().filter(|s| !s.fill).map(|s| s.main).sum();
+        let gaps = gap * (slots.len() - 1) as f64;
+        let bounds: Vec<(Option<f64>, Option<f64>)> = fills
+            .iter()
+            .map(|&i| scene.node(kids[i]).map_or((None, None), |k| if row { (k.min_w, k.max_w) } else { (k.min_h, k.max_h) }))
+            .collect();
+        for (&i, share) in fills.iter().zip(shares(room - taken - gaps, &bounds)) {
+            slots[i].main = share;
+            if row {
+                // A filling text wraps at its share, a filling frame lays out at it: their
+                // height follows, unless the row stretches them.
+                let h = self.size(kids[i], Some(share)).1;
+                if !(slots[i].stretch && cross.is_some()) {
+                    slots[i].cross = h;
+                }
+            }
+        }
+        slots
+    }
+
+    /// A group's children's bounds from its own point, shown children only (`None` with none
+    /// shown): each child's box at its `x`/`y`, a child group's own bounds where it sits.
+    fn group_bounds(&self, g: &'a Node) -> Option<Rect> {
+        if let Some(bounds) = self.bounds.borrow().get(g.id.as_str()) {
+            return *bounds;
+        }
+        let mut bounds: Option<Rect> = None;
+        for c in self.scene.children(&g.id) {
+            let Some(k) = self.visible(c) else {
+                continue;
+            };
+            let r = if k.kind == NodeKind::Group {
+                let Some(inner) = self.group_bounds(k) else {
+                    continue;
+                };
+                inner.translate(k.x, k.y)
+            } else {
+                let (w, h) = self.size(c, None);
+                Rect::new(k.x, k.y, w, h)
+            };
+            bounds = Some(bounds.map_or(r, |b| b.union(&r)));
+        }
+        self.bounds.borrow_mut().insert(g.id.as_str(), bounds);
+        bounds
+    }
+
+    /// A child of a page, group or free frame, or an absolute one of a laid-out frame: at its
+    /// own `x`/`y` from `origin` (a group: its children's bounds where they sit), carried by its
+    /// pins when its frame is drawn at another size than it stores (`fit`).
+    fn free_child(&mut self, id: &'a str, origin: (f64, f64), fit: Option<Fit>) {
         let Some(n) = self.visible(id) else {
             return;
         };
-        let (x, y) = (origin_x + n.x, origin_y + n.y);
-        let (w, h) = self.size(id, None);
-        self.arrange(id, Rect::new(x, y, w, h));
+        let fit = fit.filter(|_| n.is_pinned());
+        let (pin_x, pin_y) = n.pins();
+        if n.kind == NodeKind::Group {
+            // A group's size is its children's: a pin only moves it (validate keeps stretching
+            // pins off groups).
+            let b = self.group_bounds(n).unwrap_or_default();
+            let (x, y) = fit.map_or((n.x, n.y), |f| {
+                (follow_axis(pin_x, n.x, b.w, f.stored.0, f.placed.0).0, follow_axis(pin_y, n.y, b.h, f.stored.1, f.placed.1).0)
+            });
+            self.arrange(id, Rect::new(origin.0 + x + b.x, origin.1 + y + b.y, b.w, b.h));
+            return;
+        }
+        let (mut w, mut h) = self.size(id, None);
+        let (mut x, mut y) = (n.x, n.y);
+        if let Some(f) = fit {
+            let (fx, fw) = follow_axis(pin_x, x, w, f.stored.0, f.placed.0);
+            x = fx;
+            let fw = if pin_x.stretches() { n.clamp_w(fw).min(MAX_COORD) } else { w };
+            if fw != w {
+                // Stretched wider or narrower, its words or children reflow there and its
+                // height follows.
+                (w, h) = (fw, self.stretched(id, fw).1);
+            }
+            let (fy, fh) = follow_axis(pin_y, y, h, f.stored.1, f.placed.1);
+            y = fy;
+            if pin_y.stretches() {
+                h = n.clamp_h(fh).min(MAX_COORD);
+            }
+        }
+        self.arrange(id, Rect::new(origin.0 + x, origin.1 + y, w, h));
     }
 
-    fn arrange(&mut self, id: &str, rect: Rect) {
-        let Some(n) = self.scene.node(id) else {
+    /// Places `id` at `rect` (a group: where its children's bounds land), then what is inside
+    /// it.
+    fn arrange(&mut self, id: &'a str, rect: Rect) {
+        let scene = self.scene;
+        let Some(n) = scene.node(id) else {
             return;
         };
-        let children: Vec<String> = self.scene.children(id).to_vec();
+        // Its children are placed from where it is placed, so paint and hit agree on them too.
+        let rect = bounded(rect);
+        let children = scene.children(id);
         match (n.kind, n.layout_mode()) {
             (NodeKind::Group, _) => {
-                self.placed.origins.insert(id.to_string(), (rect.x, rect.y));
-                for child in &children {
-                    self.free_child(child, rect.x, rect.y);
+                // `rect` is where its children's bounds land, freely or in a layout's slot (B2):
+                // they count from there less where their bounds start.
+                let b = self.group_bounds(n).unwrap_or_default();
+                let (ox, oy) = (limit(rect.x - b.x), limit(rect.y - b.y));
+                self.placed.origins.insert(id.to_string(), (ox, oy));
+                for child in children {
+                    self.free_child(child, (ox, oy), None);
                 }
                 let bounds = Rect::bounds(children.iter().filter_map(|c| self.placed.rects.get(c)));
-                self.placed.rects.insert(id.to_string(), bounds.unwrap_or(Rect::new(rect.x, rect.y, 0.0, 0.0)));
+                self.placed.rects.insert(id.to_string(), bounds.unwrap_or(Rect::new(ox, oy, 0.0, 0.0)));
             }
             (_, Layout::None) => {
                 self.placed.rects.insert(id.to_string(), rect);
-                for child in &children {
-                    self.free_child(child, rect.x, rect.y);
+                let fit = (n.kind == NodeKind::Frame).then_some(Fit { stored: (n.w, n.h), placed: (rect.w, rect.h) });
+                for child in children {
+                    self.free_child(child, (rect.x, rect.y), fit);
                 }
+                self.scroll(n, rect);
             }
-            (_, mode) => {
+            _ => {
                 self.placed.rects.insert(id.to_string(), rect);
-                self.lay_out(n, &children, rect, mode == Layout::Row);
+                self.lay_out(n, rect);
+                // Absolute children after the flow, from the frame's corner (not its padding),
+                // in no one's way.
+                let fit = Some(Fit { stored: (n.w, n.h), placed: (rect.w, rect.h) });
+                for child in children.iter().filter(|c| scene.node(c).is_some_and(Node::is_absolute)) {
+                    self.free_child(child, (rect.x, rect.y), fit);
+                }
+                self.scroll(n, rect);
             }
         }
     }
 
-    /// Auto layout: children one after another along the frame's direction.
-    fn lay_out(&mut self, frame: &Node, children: &[String], rect: Rect, row: bool) {
-        let [pt, pr, pb, pl] = frame.padding_edges();
-        let inner = Rect::new(rect.x + pl, rect.y + pt, (rect.w - pl - pr).max(0.0), (rect.h - pt - pb).max(0.0));
-        let (inner_main, inner_cross) = if row { (inner.w, inner.h) } else { (inner.h, inner.w) };
-        let kids: Vec<&String> = children.iter().filter(|c| self.visible(c).is_some()).collect();
-        if kids.is_empty() {
+    /// A scrolling frame, its children placed: the box its content spans (to its furthest
+    /// child, and a laid-out frame's padding after its flow), and its children moved by the
+    /// offset asked for, held within what overflows (feature-layout 2.5).
+    fn scroll(&mut self, n: &'a Node, rect: Rect) {
+        let Some(scroll) = n.scroll.filter(|_| n.kind == NodeKind::Frame) else {
+            return;
+        };
+        let laid = n.layout_mode() != Layout::None;
+        let [_, pr, pb, _] = if laid { n.padding_edges() } else { [0.0; 4] };
+        let scene = self.scene;
+        let (mut right, mut bottom) = (rect.right(), rect.bottom());
+        for c in scene.children(&n.id) {
+            let Some(r) = self.placed.rect(c) else {
+                continue;
+            };
+            let pad = laid && !scene.node(c).is_some_and(Node::is_absolute);
+            right = right.max(r.right() + if pad { pr } else { 0.0 });
+            bottom = bottom.max(r.bottom() + if pad { pb } else { 0.0 });
+        }
+        let content = Rect::new(rect.x, rect.y, right - rect.x, bottom - rect.y);
+        let want = (self.offsets)(&n.id).unwrap_or((0.0, 0.0));
+        let within = |want: f64, scrolls: bool, room: f64| if scrolls && want.is_finite() { want.clamp(0.0, room.max(0.0)) } else { 0.0 };
+        let offset = (within(want.0, scroll.x(), content.w - rect.w), within(want.1, scroll.y(), content.h - rect.h));
+        self.placed.scrolls.insert(n.id.clone(), Scrolled { offset, content });
+        if offset == (0.0, 0.0) {
             return;
         }
-        let items = frame.items.unwrap_or(Items::Start);
+        let (dx, dy) = (-offset.0, -offset.1);
+        for d in scene.subtree(&n.id).iter().skip(1) {
+            if let Some(r) = self.placed.rects.get_mut(d) {
+                *r = bounded(r.translate(dx, dy));
+            }
+            for o in [self.placed.origins.get_mut(d), self.placed.content_origin.get_mut(d)].into_iter().flatten() {
+                *o = (limit(o.0 + dx), limit(o.1 + dy));
+            }
+            if let Some(s) = self.placed.scrolls.get_mut(d) {
+                s.content = s.content.translate(dx, dy);
+            }
+        }
+        self.placed.content_origin.insert(n.id.clone(), (limit(rect.x + dx), limit(rect.y + dy)));
+    }
+
+    /// Auto layout: children one after another along the frame's direction, inside its
+    /// padding.
+    fn lay_out(&mut self, frame: &'a Node, rect: Rect) {
+        let [pt, pr, pb, pl] = frame.padding_edges();
+        let inner = Rect::new(rect.x + pl, rect.y + pt, (rect.w - pl - pr).max(0.0), (rect.h - pt - pb).max(0.0));
+        let kids = self.flow(&frame.id);
+        if frame.layout_mode() == Layout::Wrap {
+            // Lines from the top, `row_gap` apart (default `gap`), each placed as a row.
+            let row_gap = frame.row_gap.unwrap_or(frame.gap.unwrap_or(0.0));
+            let mut at = 0.0;
+            for line in self.wrap_lines(frame, &kids, Some(inner.w)) {
+                let band = Rect::new(inner.x, inner.y + at, inner.w, line.depth);
+                self.place_line(frame, &kids[line.range], &line.slots, band, true);
+                at += line.depth + row_gap;
+            }
+            return;
+        }
+        let row = frame.layout_mode() == Layout::Row;
+        let (main, cross) = if row { (inner.w, inner.h) } else { (inner.h, inner.w) };
+        let slots = self.line_sizes(&kids, Some(main), Some(cross), row, frame.items.unwrap_or(Items::Start), frame.gap.unwrap_or(0.0));
+        self.place_line(frame, &kids, &slots, inner, row);
+    }
+
+    /// Places one line's children in `inner`: `justify` along it, `items` across.
+    fn place_line(&mut self, frame: &Node, kids: &[&'a str], slots: &[Slot], inner: Rect, row: bool) {
+        let (length, depth) = if row { (inner.w, inner.h) } else { (inner.h, inner.w) };
         let mut gap = frame.gap.unwrap_or(0.0);
-        let mut sizes: Vec<(f64, f64, bool, bool)> = kids
-            .iter()
-            .map(|c| {
-                let n = self.scene.node(c).expect("visible");
-                let (main_rule, cross_rule) = if row { (w_sizing(n), h_sizing(n)) } else { (h_sizing(n), w_sizing(n)) };
-                let stretch = cross_rule == Sizing::Fill || items == Items::Stretch;
-                let (w, h) = self.size(c, if row { None } else { Some(inner.w) });
-                let (main, cross) = if row { (w, h) } else { (h, w) };
-                (main, if stretch { inner_cross } else { cross }, main_rule == Sizing::Fill, stretch)
-            })
-            .collect();
-        let fills = sizes.iter().filter(|s| s.2).count();
-        let fixed: f64 = sizes.iter().filter(|s| !s.2).map(|s| s.0).sum();
-        let gaps = gap * (kids.len() - 1) as f64;
-        if fills > 0 {
-            let share = ((inner_main - fixed - gaps) / fills as f64).max(0.0);
-            for s in sizes.iter_mut().filter(|s| s.2) {
-                s.0 = share;
-            }
-        }
-        // A text whose width a row or a stretch changed wraps anew: its height follows.
-        for (i, c) in kids.iter().enumerate() {
-            let n = self.scene.node(c).expect("visible");
-            let sticky = n.kind == NodeKind::Sticky;
-            if !sticky && n.kind != NodeKind::Text {
-                continue;
-            }
-            let resized = if row { sizes[i].2 } else { sizes[i].3 };
-            let wraps = sticky || w_sizing(n) != Sizing::Hug || resized;
-            if wraps && (sticky || h_sizing(n) == Sizing::Hug) {
-                let mut probe = n.clone();
-                probe.w = if row { sizes[i].0 } else { sizes[i].1 };
-                probe.w_sizing = Some(Sizing::Fixed);
-                let h = self.size_of_probe(&probe);
-                if !row {
-                    sizes[i].0 = h;
-                } else if !sizes[i].3 {
-                    sizes[i].1 = h;
-                }
-            }
-        }
-        let used: f64 = sizes.iter().map(|s| s.0).sum::<f64>() + gaps;
-        let free = inner_main - used;
+        let free = length - slots.iter().map(|s| s.main).sum::<f64>() - gap * slots.len().saturating_sub(1) as f64;
         let mut at = match frame.justify.unwrap_or(Justify::Start) {
             Justify::Start => 0.0,
             Justify::Center => free / 2.0,
             Justify::End => free,
             Justify::SpaceBetween => {
-                if kids.len() > 1 && fills == 0 {
-                    gap += free / (kids.len() - 1) as f64;
+                // What does not fit overflows from the start, as in CSS, rather than overlapping
+                // (B114); a gap of its own still applies.
+                if slots.len() > 1 && !slots.iter().any(|s| s.fill) {
+                    gap += free.max(0.0) / (slots.len() - 1) as f64;
                 }
                 0.0
             }
         };
-        for (c, (main, cross, _, _)) in kids.iter().zip(sizes) {
+        let items = frame.items.unwrap_or(Items::Start);
+        for (&c, s) in kids.iter().zip(slots) {
             let offset = match items {
                 Items::Start | Items::Stretch => 0.0,
-                Items::Center => (inner_cross - cross) / 2.0,
-                Items::End => inner_cross - cross,
+                Items::Center => (depth - s.cross) / 2.0,
+                Items::End => depth - s.cross,
             };
             let r = if row {
-                Rect::new(inner.x + at, inner.y + offset, main, cross)
+                Rect::new(inner.x + at, inner.y + offset, s.main, s.cross)
             } else {
-                Rect::new(inner.x + offset, inner.y + at, cross, main)
+                Rect::new(inner.x + offset, inner.y + at, s.cross, s.main)
             };
-            self.arrange(c, r);
-            at += main + gap;
-        }
-    }
-
-    /// The height a text or sticky takes at the probe's fixed width.
-    fn size_of_probe(&self, probe: &Node) -> f64 {
-        match probe.kind {
-            NodeKind::Sticky => {
-                let (_, mh) = self.measure.measure(probe, Some((probe.w - 2.0 * STICKY_PAD).max(1.0)));
-                let h = if probe.h > 0.0 { probe.h } else { STICKY_SIZE };
-                h.max(mh + 2.0 * STICKY_PAD)
+            if !row && s.stretch && self.scene.node(c).is_some_and(|k| k.kind == NodeKind::Text && w_sizing(k) == Sizing::Hug) {
+                // A hugging text the column stretched was measured wrapped at its width.
+                self.placed.wraps.insert(c.to_string(), s.cross);
             }
-            _ => self.measure.measure(probe, Some(probe.w)).1,
+            self.arrange(c, r);
+            at += s.main + gap;
         }
     }
+}
+
+/// `v` within [`PLACED_LIMIT`] of the page's origin.
+fn limit(v: f64) -> f64 {
+    v.clamp(-PLACED_LIMIT, PLACED_LIMIT)
+}
+
+/// `r` placed within [`PLACED_LIMIT`].
+fn bounded(r: Rect) -> Rect {
+    Rect::new(limit(r.x), limit(r.y), r.w.clamp(0.0, 2.0 * PLACED_LIMIT), r.h.clamp(0.0, 2.0 * PLACED_LIMIT))
+}
+
+/// One child's place in a line of auto layout: its length along the line and depth across,
+/// whether it fills along it and whether it stretches across.
+#[derive(Debug, Clone, Copy)]
+struct Slot {
+    main: f64,
+    cross: f64,
+    fill: bool,
+    stretch: bool,
+}
+
+/// One line of a wrap layout: which children, their slots, how long it is and how deep.
+struct Line {
+    range: Range<usize>,
+    slots: Vec<Slot>,
+    along: f64,
+    depth: f64,
+}
+
+/// Equal shares of `room` (none below 0) for filling children bounded by `bounds` (min, max).
+/// A share a bound changes is kept at the bound and the others share what is left, the way CSS
+/// resolves flexible lengths: when the bounds would add room in all, those held to a minimum are
+/// kept first, when they would take it, those held to a maximum.
+fn shares(room: f64, bounds: &[(Option<f64>, Option<f64>)]) -> Vec<f64> {
+    let clamp = |v: f64, (lo, hi): (Option<f64>, Option<f64>)| {
+        let v = hi.map_or(v, |hi| v.min(hi));
+        lo.map_or(v, |lo| v.max(lo))
+    };
+    let mut kept: Vec<Option<f64>> = vec![None; bounds.len()];
+    loop {
+        let open: Vec<usize> = (0..bounds.len()).filter(|&i| kept[i].is_none()).collect();
+        if open.is_empty() {
+            break;
+        }
+        let each = ((room - kept.iter().flatten().sum::<f64>()) / open.len() as f64).max(0.0);
+        let pull: f64 = open.iter().map(|&i| clamp(each, bounds[i]) - each).sum();
+        for &i in &open {
+            let bound = clamp(each, bounds[i]);
+            if pull == 0.0 || (pull > 0.0 && bound > each) || (pull < 0.0 && bound < each) {
+                kept[i] = Some(if pull == 0.0 { each } else { bound });
+            }
+        }
+    }
+    kept.into_iter().map(|s| s.unwrap_or(0.0)).collect()
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::design::scene::tests::node;
-    use relay_bus::design::NodeKind as K;
+    use relay_bus::design::{NodeKind as K, NodeOp, PinX, PinY, Scroll};
 
     /// 8 px per character, 20 px a line, wrapping whole characters.
     pub(crate) struct Mono;
@@ -468,5 +928,772 @@ pub(crate) mod tests {
         assert_eq!((p.origin("g"), p.origin("g2"), p.origin("p1")), ((100.0, 100.0), (120.0, 130.0), (0.0, 0.0)));
         // 168 px of text width holds 21 characters a line: 10 lines, 200 + 32 > 200.
         assert_eq!(p.rect("s"), Some(Rect::new(0.0, 0.0, 200.0, 232.0)));
+    }
+
+    /// A group the column lays out, holding r1 [0,0,50,30] and r2 [60,10,40,40] shifted by
+    /// `(dx, dy)`, then a 80×20 rect.
+    fn grouped(dx: f64, dy: f64) -> Scene {
+        let mut col = node("col", Some("p1"), K::Frame, [0.0, 0.0, 200.0, 0.0]);
+        col.layout = Some(Layout::Column);
+        col.gap = Some(10.0);
+        col.h_sizing = Some(Sizing::Hug);
+        Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            col,
+            node("g", Some("col"), K::Group, [999.0, 999.0, 0.0, 0.0]),
+            node("r1", Some("g"), K::Rect, [dx, dy, 50.0, 30.0]),
+            node("r2", Some("g"), K::Rect, [60.0 + dx, 10.0 + dy, 40.0, 40.0]),
+            node("next", Some("col"), K::Rect, [0.0, 0.0, 80.0, 20.0]),
+        ])
+    }
+
+    /// B2: a group in auto layout took no room (its stored 0×0), so the next sibling landed on
+    /// its children; it takes their bounds.
+    #[test]
+    fn a_group_in_a_column_takes_its_bounds_and_pushes_the_next_sibling_down() {
+        let p = place(&grouped(0.0, 0.0), "p1", &Mono);
+        assert_eq!(p.rect("g"), Some(Rect::new(0.0, 0.0, 100.0, 50.0)));
+        assert_eq!(p.rect("next").unwrap().y, 60.0);
+        assert_eq!(p.rect("col").unwrap().h, 80.0);
+        assert_eq!((p.origin("g"), p.rect("r2")), ((0.0, 0.0), Some(Rect::new(60.0, 10.0, 40.0, 40.0))));
+    }
+
+    /// B2, B90: children that start off the group's point (20 px in, or 10 px left of it)
+    /// still land in its slot, the group's point moving so they do.
+    #[test]
+    fn a_group_whose_children_start_off_its_point_lands_in_its_slot() {
+        let p = place(&grouped(20.0, 20.0), "p1", &Mono);
+        assert_eq!(p.rect("g"), Some(Rect::new(0.0, 0.0, 100.0, 50.0)));
+        assert_eq!((p.origin("g"), p.rect("r1").unwrap().x), ((-20.0, -20.0), 0.0));
+        let p = place(&grouped(-10.0, 0.0), "p1", &Mono);
+        assert_eq!(p.rect("g"), Some(Rect::new(0.0, 0.0, 100.0, 50.0)));
+        assert_eq!(p.origin("g"), (10.0, 0.0));
+        assert_eq!(p.rect("next").unwrap().y, 60.0);
+    }
+
+    /// A group neither fills a row nor stretches across it, whatever sizing it stores: it is as
+    /// big as its children, in a group of its own too.
+    #[test]
+    fn a_group_neither_fills_nor_stretches() {
+        let mut bar = node("bar", Some("p1"), K::Frame, [0.0, 0.0, 300.0, 100.0]);
+        bar.layout = Some(Layout::Row);
+        bar.items = Some(Items::Stretch);
+        let mut g = node("g", Some("bar"), K::Group, [0.0, 0.0, 0.0, 0.0]);
+        g.w_sizing = Some(Sizing::Fill);
+        let s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            bar,
+            g,
+            node("inner", Some("g"), K::Group, [5.0, 5.0, 0.0, 0.0]),
+            node("dot", Some("inner"), K::Ellipse, [10.0, 0.0, 20.0, 20.0]),
+            node("after", Some("bar"), K::Rect, [0.0, 0.0, 30.0, 30.0]),
+        ]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(p.rect("g"), Some(Rect::new(0.0, 0.0, 20.0, 20.0)));
+        assert_eq!(p.rect("dot"), Some(Rect::new(0.0, 0.0, 20.0, 20.0)));
+        assert_eq!(p.rect("after"), Some(Rect::new(20.0, 0.0, 30.0, 100.0)));
+    }
+
+    /// B23: a stretched child was measured at its own width but laid out at the column's, so a
+    /// fixed-height text reported its words' height and a stretched hugging frame its unwrapped
+    /// height. Stretch is one rule now: filling the column's width, keeping its height rule.
+    #[test]
+    fn a_fixed_height_text_keeps_its_height_under_stretch() {
+        let mut col = node("col", Some("p1"), K::Frame, [0.0, 0.0, 100.0, 0.0]);
+        col.layout = Some(Layout::Column);
+        col.h_sizing = Some(Sizing::Hug);
+        col.items = Some(Items::Stretch);
+        let mut t = text("t", "col", "Hi");
+        t.h_sizing = Some(Sizing::Fixed);
+        t.h = 40.0;
+        let s = Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), col, t]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(p.rect("t"), Some(Rect::new(0.0, 0.0, 100.0, 40.0)));
+        assert_eq!(p.rect("col").unwrap().h, 40.0);
+    }
+
+    #[test]
+    fn a_stretched_hugging_frame_measures_at_the_column_width() {
+        let mut outer = node("outer", Some("p1"), K::Frame, [0.0, 0.0, 200.0, 0.0]);
+        outer.layout = Some(Layout::Column);
+        outer.h_sizing = Some(Sizing::Hug);
+        outer.items = Some(Items::Stretch);
+        let mut card = node("card", Some("outer"), K::Frame, [0.0; 4]);
+        card.layout = Some(Layout::Column);
+        card.h_sizing = Some(Sizing::Hug);
+        let mut words = text("words", "card", "abcdefghijklmnopqrstuvwxyz0123"); // 240 px
+        words.w_sizing = Some(Sizing::Fill);
+        let mut caption = text("caption", "outer", "abcdefghijklmnopqrstuvwxyz0123"); // hugs: 240 px
+        caption.hidden = Some(true);
+        let s = Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), outer, card, words, caption]);
+        let p = place(&s, "p1", &Mono);
+        // 25 characters a line in 200 px: two lines.
+        assert_eq!(p.rect("card"), Some(Rect::new(0.0, 0.0, 200.0, 40.0)));
+        assert_eq!(p.rect("words"), Some(Rect::new(0.0, 0.0, 200.0, 40.0)));
+        assert_eq!(p.rect("outer").unwrap().h, 40.0);
+    }
+
+    /// A hugging text a column stretches wraps at the column's width, and the column holds its
+    /// lines.
+    #[test]
+    fn a_stretched_hugging_text_wraps_at_the_column_width() {
+        let mut card = node("card", Some("p1"), K::Frame, [0.0, 0.0, 200.0, 0.0]);
+        card.layout = Some(Layout::Column);
+        card.h_sizing = Some(Sizing::Hug);
+        card.items = Some(Items::Stretch);
+        card.padding = Some(vec![10.0]);
+        let s = Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), card, text("t", "card", "abcdefghijklmnopqrstuvwxyz0123")]);
+        let p = place(&s, "p1", &Mono);
+        // 180 px holds 22 characters a line: two lines.
+        assert_eq!(p.rect("t"), Some(Rect::new(10.0, 10.0, 180.0, 40.0)));
+        assert_eq!(p.rect("card").unwrap().h, 60.0);
+    }
+
+    /// B114: space_between with children wider than the row overlapped them; they overflow
+    /// from the start instead.
+    #[test]
+    fn space_between_overflows_instead_of_overlapping() {
+        let mut bar = node("bar", Some("p1"), K::Frame, [0.0, 0.0, 100.0, 10.0]);
+        bar.layout = Some(Layout::Row);
+        bar.justify = Some(Justify::SpaceBetween);
+        let s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            bar,
+            node("a", Some("bar"), K::Rect, [0.0, 0.0, 60.0, 10.0]),
+            node("b", Some("bar"), K::Rect, [0.0, 0.0, 60.0, 10.0]),
+        ]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!((p.rect("a").unwrap().x, p.rect("b").unwrap().x), (0.0, 60.0));
+    }
+
+    /// B119: a sticky's height filling a column took its word height instead of its share, and
+    /// hugging changed nothing; hugging is exactly its words now.
+    #[test]
+    fn a_filling_sticky_takes_its_share_of_a_column() {
+        let mut col = node("col", Some("p1"), K::Frame, [0.0, 0.0, 200.0, 400.0]);
+        col.layout = Some(Layout::Column);
+        let mut sticky = node("s", Some("col"), K::Sticky, [0.0, 0.0, 200.0, 0.0]);
+        sticky.text = Some("hi".into());
+        sticky.h_sizing = Some(Sizing::Fill);
+        let mut hugs = node("hug", Some("p1"), K::Sticky, [300.0, 0.0, 200.0, 0.0]);
+        hugs.text = Some("hi".into());
+        hugs.h_sizing = Some(Sizing::Hug);
+        let mut wide = node("wide", Some("p1"), K::Sticky, [600.0, 0.0, 0.0, 0.0]);
+        wide.text = Some("hello".into());
+        wide.w_sizing = Some(Sizing::Hug);
+        let s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            col,
+            node("top", Some("col"), K::Rect, [0.0, 0.0, 200.0, 100.0]),
+            sticky,
+            hugs,
+            wide,
+        ]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(p.rect("s"), Some(Rect::new(0.0, 100.0, 200.0, 300.0)));
+        assert_eq!(p.rect("hug").unwrap().h, 52.0);
+        // Hugging its width: its words and the margins, as tall as it says or its words.
+        assert_eq!(p.rect("wide"), Some(Rect::new(600.0, 0.0, 72.0, 200.0)));
+    }
+
+    /// Min and max bound every size layout works out: a hug, a fill share (the others share
+    /// what a bounded one leaves), a stretch.
+    #[test]
+    fn min_and_max_bound_hug_and_fill() {
+        let mut bar = node("bar", Some("p1"), K::Frame, [0.0, 0.0, 300.0, 40.0]);
+        bar.layout = Some(Layout::Row);
+        bar.items = Some(Items::Stretch);
+        let mut a = node("a", Some("bar"), K::Rect, [0.0, 0.0, 10.0, 10.0]);
+        a.w_sizing = Some(Sizing::Fill);
+        a.max_w = Some(50.0);
+        a.max_h = Some(30.0);
+        let mut b = node("b", Some("bar"), K::Rect, [0.0, 0.0, 10.0, 10.0]);
+        b.w_sizing = Some(Sizing::Fill);
+        let mut chip = node("chip", Some("p1"), K::Frame, [0.0, 100.0, 0.0, 0.0]);
+        chip.layout = Some(Layout::Row);
+        chip.w_sizing = Some(Sizing::Hug);
+        chip.h_sizing = Some(Sizing::Hug);
+        chip.min_w = Some(100.0);
+        chip.max_h = Some(15.0);
+        let s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            bar,
+            a,
+            b,
+            chip,
+            node("dot", Some("chip"), K::Ellipse, [0.0, 0.0, 30.0, 20.0]),
+        ]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(p.rect("a"), Some(Rect::new(0.0, 0.0, 50.0, 30.0)));
+        assert_eq!(p.rect("b"), Some(Rect::new(50.0, 0.0, 250.0, 40.0)));
+        assert_eq!(p.rect("chip"), Some(Rect::new(0.0, 100.0, 100.0, 15.0)));
+    }
+
+    /// Fill shares resolve as CSS does: a bound that would add room in all keeps its minimum
+    /// first, one that would take room keeps its maximum first.
+    #[test]
+    fn shares_keep_bounded_children_and_share_the_rest() {
+        assert_eq!(shares(300.0, &[(None, Some(50.0)), (None, None)]), vec![50.0, 250.0]);
+        assert_eq!(shares(100.0, &[(None, Some(30.0)), (Some(90.0), None)]), vec![10.0, 90.0]);
+        assert_eq!(shares(100.0, &[(Some(80.0), None), (Some(80.0), None)]), vec![80.0, 80.0]);
+        assert_eq!(shares(-20.0, &[(None, None), (Some(5.0), None)]), vec![0.0, 5.0]);
+        assert_eq!(shares(90.0, &[(None, None); 3]), vec![30.0; 3]);
+        assert!(shares(10.0, &[]).is_empty());
+    }
+
+    /// A hugging text past its max_w wraps there, and one short of its min_w is that wide.
+    #[test]
+    fn a_hugging_text_wraps_at_max_w() {
+        let mut bubble = text("bubble", "p1", "abcdefghijklmnopqrstuvwxy"); // 200 px
+        bubble.max_w = Some(100.0);
+        let mut short = text("short", "p1", "Hi");
+        short.min_w = Some(60.0);
+        let s = Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), bubble, short]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(p.rect("bubble"), Some(Rect::new(0.0, 0.0, 100.0, 60.0)));
+        assert_eq!(p.rect("short"), Some(Rect::new(0.0, 0.0, 60.0, 20.0)));
+    }
+
+    /// A hugging frame past its max_w is laid out at it: a filling text in it wraps there, and
+    /// the frame's height follows.
+    #[test]
+    fn a_hugging_frame_past_max_w_lays_out_at_max_w() {
+        let mut card = node("card", Some("p1"), K::Frame, [0.0; 4]);
+        card.layout = Some(Layout::Column);
+        card.w_sizing = Some(Sizing::Hug);
+        card.h_sizing = Some(Sizing::Hug);
+        card.max_w = Some(120.0);
+        let mut words = text("words", "card", "abcdefghijklmnopqrstuvwxy"); // 200 px
+        words.w_sizing = Some(Sizing::Fill);
+        let s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            card,
+            node("bar", Some("card"), K::Rect, [0.0, 0.0, 200.0, 10.0]),
+            words,
+        ]);
+        let p = place(&s, "p1", &Mono);
+        // 120 px holds 15 characters a line: two lines.
+        assert_eq!(p.rect("words"), Some(Rect::new(0.0, 10.0, 120.0, 40.0)));
+        assert_eq!(p.rect("card"), Some(Rect::new(0.0, 0.0, 120.0, 50.0)));
+    }
+
+    /// A 400 px column holding a header that fills its width but stores `stored_w`, height 60,
+    /// with `kids` in the header.
+    fn header(stored_w: f64, kids: Vec<Node>) -> Scene {
+        let mut screen = node("screen", Some("p1"), K::Frame, [0.0, 0.0, 400.0, 800.0]);
+        screen.layout = Some(Layout::Column);
+        let mut head = node("head", Some("screen"), K::Frame, [0.0, 0.0, stored_w, 60.0]);
+        head.w_sizing = Some(Sizing::Fill);
+        let mut nodes = vec![node("p1", None, K::Page, [0.0; 4]), screen, head];
+        nodes.extend(kids);
+        Scene::new(nodes)
+    }
+
+    fn pinned(id: &str, rect: [f64; 4], pin: PinX) -> Node {
+        let mut n = node(id, Some("head"), K::Rect, rect);
+        n.pin_x = Some(pin);
+        n
+    }
+
+    /// A header filling a 400 px screen but stored 300 wide: its right, centre, stretching
+    /// and scaled children follow it; the others stay where they are.
+    fn pinned_header() -> Scene {
+        header(300.0, vec![
+            pinned("right", [260.0, 10.0, 24.0, 24.0], PinX::Right),
+            pinned("centre", [140.0, 10.0, 20.0, 20.0], PinX::Center),
+            pinned("bar", [10.0, 50.0, 280.0, 4.0], PinX::LeftRight),
+            pinned("half", [30.0, 0.0, 60.0, 10.0], PinX::Scale),
+            node("left", Some("head"), K::Rect, [5.0, 5.0, 10.0, 10.0]),
+        ])
+    }
+
+    #[test]
+    fn a_filling_header_moves_its_right_and_centre_pins() {
+        let s = pinned_header();
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(p.rect("head"), Some(Rect::new(0.0, 0.0, 400.0, 60.0)));
+        assert_eq!(p.rect("right"), Some(Rect::new(360.0, 10.0, 24.0, 24.0)));
+        assert_eq!(p.rect("centre"), Some(Rect::new(190.0, 10.0, 20.0, 20.0)));
+        assert_eq!(p.rect("bar"), Some(Rect::new(10.0, 50.0, 380.0, 4.0)));
+        assert_eq!(p.rect("half"), Some(Rect::new(40.0, 0.0, 80.0, 10.0)));
+        assert_eq!(p.rect("left"), Some(Rect::new(5.0, 5.0, 10.0, 10.0)));
+    }
+
+    /// Read back against the header's fit, each placed box is its stored one; a drag along a
+    /// scale pin moves the stored `x` less than it shows.
+    #[test]
+    fn unpinned_reads_a_placed_box_back_to_stored() {
+        let s = pinned_header();
+        let p = place(&s, "p1", &Mono);
+        let fit = fit_of(&s, &p, "head");
+        assert_eq!(fit, Some(Fit { stored: (300.0, 60.0), placed: (400.0, 60.0) }));
+        for id in ["right", "centre", "bar", "half", "left"] {
+            let n = s.node(id).unwrap();
+            assert_eq!(unpinned(n, fit, p.rect(id).unwrap()), Rect::new(n.x, n.y, n.w, n.h), "{id}");
+        }
+        assert_eq!(stored_shift(s.node("half").unwrap(), fit, 40.0, 8.0), (30.0, 8.0));
+        assert_eq!(stored_shift(s.node("right").unwrap(), fit, 40.0, 8.0), (40.0, 8.0));
+        assert_eq!((fit_of(&s, &p, "p1"), fit_of(&s, &p, "nope")), (None, None));
+    }
+
+    /// A parent with no stored width: pins count from 0, so a right pin's `x` is from the right
+    /// edge and a scale does nothing.
+    #[test]
+    fn scale_from_a_parent_of_no_size_does_nothing() {
+        let s = header(0.0, vec![
+            pinned("half", [10.0, 0.0, 20.0, 10.0], PinX::Scale),
+            pinned("close", [-40.0, 8.0, 24.0, 24.0], PinX::Right),
+        ]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(p.rect("half"), Some(Rect::new(10.0, 0.0, 20.0, 10.0)));
+        assert_eq!(p.rect("close"), Some(Rect::new(360.0, 8.0, 24.0, 24.0)));
+    }
+
+    /// Pins act only in a frame: children of a page or a group stay at their `x`/`y`.
+    #[test]
+    fn pins_in_a_page_or_group_change_nothing() {
+        let mut free = node("free", Some("p1"), K::Rect, [10.0, 10.0, 20.0, 20.0]);
+        free.pin_x = Some(PinX::Right);
+        let mut inside = node("inside", Some("g"), K::Rect, [5.0, 5.0, 20.0, 20.0]);
+        inside.pin_y = Some(PinY::Bottom);
+        let s = Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), free, node("g", Some("p1"), K::Group, [100.0, 0.0, 0.0, 0.0]), inside]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!((p.rect("free"), p.rect("inside")), (Some(Rect::new(10.0, 10.0, 20.0, 20.0)), Some(Rect::new(105.0, 5.0, 20.0, 20.0))));
+    }
+
+    /// An absolute child of a hugging column keeps its own place from the frame's corner and
+    /// neither pushes its siblings nor grows the frame.
+    #[test]
+    fn an_absolute_child_keeps_its_place_and_takes_no_room() {
+        let mut card = node("card", Some("p1"), K::Frame, [100.0, 50.0, 0.0, 0.0]);
+        card.layout = Some(Layout::Column);
+        card.gap = Some(10.0);
+        card.padding = Some(vec![20.0]);
+        card.w_sizing = Some(Sizing::Hug);
+        card.h_sizing = Some(Sizing::Hug);
+        let mut badge = node("badge", Some("card"), K::Ellipse, [150.0, -8.0, 16.0, 16.0]);
+        badge.absolute = Some(true);
+        let s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            card,
+            text("t1", "card", "Title"),
+            badge,
+            node("r", Some("card"), K::Rect, [999.0, 999.0, 120.0, 30.0]),
+        ]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(p.rect("t1"), Some(Rect::new(120.0, 70.0, 40.0, 20.0)));
+        assert_eq!(p.rect("r"), Some(Rect::new(120.0, 100.0, 120.0, 30.0)));
+        assert_eq!(p.rect("card"), Some(Rect::new(100.0, 50.0, 160.0, 100.0)));
+        assert_eq!(p.rect("badge"), Some(Rect::new(250.0, 42.0, 16.0, 16.0)));
+    }
+
+    /// Laid: in auto layout and not absolute. A group's and a page's children are not.
+    #[test]
+    fn is_laid_means_the_layout_places_it() {
+        let mut row = node("row", Some("p1"), K::Frame, [0.0, 0.0, 100.0, 100.0]);
+        row.layout = Some(Layout::Row);
+        let mut badge = node("badge", Some("row"), K::Rect, [0.0; 4]);
+        badge.absolute = Some(true);
+        let s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            row,
+            node("cell", Some("row"), K::Rect, [0.0; 4]),
+            badge,
+            node("g", Some("p1"), K::Group, [0.0; 4]),
+            node("in", Some("g"), K::Rect, [0.0; 4]),
+        ]);
+        let laid: Vec<bool> = ["cell", "badge", "row", "in", "g", "p1", "nope"].iter().map(|id| is_laid(&s, id)).collect();
+        assert_eq!(laid, [true, false, false, false, false, false, false]);
+        assert_eq!(fit_of(&s, &place(&s, "p1", &Mono), "g"), None);
+    }
+
+    /// An absolute badge pinned right of a row that hugs its label, stored with no width: its
+    /// `x` counts from the right edge however wide the label makes the row.
+    #[test]
+    fn an_absolute_badge_pinned_right_of_a_hugging_row() {
+        let mut tab = node("tab", Some("p1"), K::Frame, [0.0, 0.0, 0.0, 40.0]);
+        tab.layout = Some(Layout::Row);
+        tab.w_sizing = Some(Sizing::Hug);
+        tab.items = Some(Items::Center);
+        tab.padding = Some(vec![0.0, 12.0]);
+        let mut badge = node("badge", Some("tab"), K::Ellipse, [-20.0, -6.0, 16.0, 16.0]);
+        badge.absolute = Some(true);
+        badge.pin_x = Some(PinX::Right);
+        let s = Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), tab, text("label", "tab", "Inbox"), badge]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(p.rect("tab"), Some(Rect::new(0.0, 0.0, 64.0, 40.0)));
+        assert_eq!(p.rect("label"), Some(Rect::new(12.0, 10.0, 40.0, 20.0)));
+        assert_eq!(p.rect("badge"), Some(Rect::new(44.0, -6.0, 16.0, 16.0)));
+    }
+
+    /// A text pinned left and right in a panel drawn 100 px wider than it stores is 100 px
+    /// wider, and its words rewrap there.
+    #[test]
+    fn a_left_right_text_rewraps_at_its_stretched_width() {
+        let mut col = node("col", Some("p1"), K::Frame, [0.0, 0.0, 300.0, 400.0]);
+        col.layout = Some(Layout::Column);
+        let mut panel = node("panel", Some("col"), K::Frame, [0.0, 0.0, 200.0, 100.0]);
+        panel.w_sizing = Some(Sizing::Fill);
+        let mut words = text("words", "panel", "abcdefghijklmnopqrstuvwxyz0123"); // 240 px
+        [words.x, words.y, words.w] = [10.0, 10.0, 180.0];
+        words.pin_x = Some(PinX::LeftRight);
+        let s = Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), col, panel, words]);
+        let p = place(&s, "p1", &Mono);
+        // Stored, 180 px wraps it on two lines; at 280 px it takes one.
+        assert_eq!(p.rect("words"), Some(Rect::new(10.0, 10.0, 280.0, 20.0)));
+        assert_eq!(wrap_width(s.node("words").unwrap(), &p.rect("words").unwrap()), Some(280.0));
+    }
+
+    #[test]
+    fn break_lines_puts_an_overwide_child_alone() {
+        assert_eq!(break_lines(&[50.0, 200.0, 30.0, 30.0], Some(100.0), 10.0), vec![0..1, 1..2, 2..4]);
+        assert_eq!(break_lines(&[50.0, 40.0], Some(100.0), 10.0), vec![0..2], "an exact fit stays on one line");
+        assert_eq!(break_lines(&[50.0, 41.0], Some(100.0), 10.0), vec![0..1, 1..2]);
+        assert_eq!(break_lines(&[500.0, 500.0], None, 10.0), vec![0..2]);
+        assert_eq!(break_lines(&[], Some(10.0), 0.0), Vec::<Range<usize>>::new());
+    }
+
+    /// A wrap frame `w` wide (0: hugging) holding `count` chips 60×20.
+    fn chips(w: f64, count: usize) -> (Node, Vec<Node>) {
+        let mut tags = node("tags", Some("p1"), K::Frame, [0.0, 0.0, w, 0.0]);
+        tags.layout = Some(Layout::Wrap);
+        tags.gap = Some(10.0);
+        tags.h_sizing = Some(Sizing::Hug);
+        if w == 0.0 {
+            tags.w_sizing = Some(Sizing::Hug);
+        }
+        let kids = (0..count).map(|i| node(&format!("c{i}"), Some("tags"), K::Rect, [0.0, 0.0, 60.0, 20.0])).collect();
+        (tags, kids)
+    }
+
+    fn scene_of(frame: Node, kids: Vec<Node>) -> Scene {
+        let mut nodes = vec![node("p1", None, K::Page, [0.0; 4]), frame];
+        nodes.extend(kids);
+        Scene::new(nodes)
+    }
+
+    #[test]
+    fn wrap_breaks_lines_and_hugs_their_height() {
+        let (mut tags, kids) = chips(200.0, 5);
+        tags.row_gap = Some(5.0);
+        let p = place(&scene_of(tags, kids), "p1", &Mono);
+        // 60 + 10 + 60 + 10 + 60 fills 200 exactly: three a line.
+        let at: Vec<(f64, f64)> = (0..5).map(|i| p.rect(&format!("c{i}")).map(|r| (r.x, r.y)).unwrap()).collect();
+        assert_eq!(at, [(0.0, 0.0), (70.0, 0.0), (140.0, 0.0), (0.0, 25.0), (70.0, 25.0)]);
+        assert_eq!(p.rect("tags"), Some(Rect::new(0.0, 0.0, 200.0, 45.0)));
+    }
+
+    /// A wrap that hugs its width breaks at its max_w (in its padding), else keeps one line.
+    #[test]
+    fn a_hugging_wrap_breaks_at_max_w() {
+        let (mut tags, kids) = chips(0.0, 5);
+        tags.max_w = Some(150.0);
+        tags.padding = Some(vec![10.0]);
+        let p = place(&scene_of(tags, kids.clone()), "p1", &Mono);
+        // 130 px inside: two a line, three lines 10 apart.
+        assert_eq!(p.rect("tags"), Some(Rect::new(0.0, 0.0, 150.0, 100.0)));
+        assert_eq!(p.rect("c4"), Some(Rect::new(10.0, 70.0, 60.0, 20.0)));
+        let (tags, kids) = chips(0.0, 5);
+        let p = place(&scene_of(tags, kids), "p1", &Mono);
+        assert_eq!(p.rect("tags"), Some(Rect::new(0.0, 0.0, 340.0, 20.0)));
+    }
+
+    /// Filling children break by their own width (min_w makes a grid) and share their line's
+    /// room; a filling text wraps at its share.
+    #[test]
+    fn wrap_fill_children_share_their_line() {
+        let mut grid = node("grid", Some("p1"), K::Frame, [0.0, 0.0, 300.0, 0.0]);
+        grid.layout = Some(Layout::Wrap);
+        grid.gap = Some(10.0);
+        grid.h_sizing = Some(Sizing::Hug);
+        let card = |id: &str| {
+            let mut c = node(id, Some("grid"), K::Rect, [0.0, 0.0, 0.0, 50.0]);
+            c.w_sizing = Some(Sizing::Fill);
+            c.min_w = Some(120.0);
+            c
+        };
+        let mut caption = text("caption", "grid", "abcdefghijklmnopqrstuvwxyz0123"); // 240 px
+        caption.w_sizing = Some(Sizing::Fill);
+        caption.w = 100.0;
+        let s = scene_of(grid, vec![card("a"), card("b"), card("c"), caption]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(p.rect("a"), Some(Rect::new(0.0, 0.0, 145.0, 50.0)));
+        assert_eq!(p.rect("b"), Some(Rect::new(155.0, 0.0, 145.0, 50.0)));
+        // "c" (120) and the caption (100) share the second line: 145 each.
+        assert_eq!(p.rect("c"), Some(Rect::new(0.0, 60.0, 145.0, 50.0)));
+        // 145 px holds 18 characters a line: two lines.
+        assert_eq!(p.rect("caption"), Some(Rect::new(155.0, 60.0, 145.0, 40.0)));
+        assert_eq!(p.rect("grid").unwrap().h, 110.0);
+    }
+
+    #[test]
+    fn justify_and_items_apply_per_wrap_line() {
+        let mut bar = node("bar", Some("p1"), K::Frame, [0.0, 0.0, 200.0, 100.0]);
+        bar.layout = Some(Layout::Wrap);
+        bar.justify = Some(Justify::Center);
+        bar.items = Some(Items::Center);
+        let mut tall = node("tall", Some("bar"), K::Rect, [0.0, 0.0, 80.0, 30.0]);
+        tall.h_sizing = Some(Sizing::Fill);
+        let s = scene_of(bar, vec![
+            node("a", Some("bar"), K::Rect, [0.0, 0.0, 80.0, 20.0]),
+            node("b", Some("bar"), K::Rect, [0.0, 0.0, 80.0, 40.0]),
+            node("c", Some("bar"), K::Rect, [0.0, 0.0, 100.0, 10.0]),
+            tall,
+        ]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(p.rect("a"), Some(Rect::new(20.0, 10.0, 80.0, 20.0)));
+        assert_eq!(p.rect("b"), Some(Rect::new(100.0, 0.0, 80.0, 40.0)));
+        // The second line is as tall as its tallest, and a filling height takes all of it.
+        assert_eq!(p.rect("c"), Some(Rect::new(10.0, 50.0, 100.0, 10.0)));
+        assert_eq!(p.rect("tall"), Some(Rect::new(110.0, 40.0, 80.0, 30.0)));
+    }
+
+    /// B20: a drop index counted only the shown siblings, but the engine's `move` counts every
+    /// sibling: hidden ones before the drop count, absolute ones are passed over.
+    #[test]
+    fn drop_index_in_row_column_and_wrap_with_absolute_and_hidden_siblings() {
+        let mut col = node("col", Some("p1"), K::Frame, [0.0, 0.0, 100.0, 80.0]);
+        col.layout = Some(Layout::Column);
+        let mut hidden = node("h", Some("col"), K::Rect, [0.0, 0.0, 100.0, 20.0]);
+        hidden.hidden = Some(true);
+        let mut s = scene_of(col, vec![
+            hidden,
+            node("a", Some("col"), K::Rect, [0.0, 0.0, 100.0, 20.0]),
+            node("b", Some("col"), K::Rect, [0.0, 0.0, 100.0, 20.0]),
+            node("c", Some("col"), K::Rect, [0.0, 0.0, 100.0, 20.0]),
+        ]);
+        let p = place(&s, "p1", &Mono);
+        let moving = ["a".to_string()];
+        // Between b (centre 30) and c (centre 50): before c, which is third of [h, b, c].
+        let at = drop_index(&s, &p, "col", &moving, (50.0, 40.0));
+        assert_eq!(at, 2);
+        s.apply(&NodeOp::Move { id: "a".into(), parent: None, index: Some(at), keep_position: None }).unwrap();
+        assert_eq!(s.children("col"), ["h", "b", "a", "c"]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(drop_index(&s, &p, "col", &["c".into()], (50.0, 0.0)), 1, "before b, the first shown");
+        assert_eq!(drop_index(&s, &p, "col", &["c".into()], (50.0, 79.0)), 3, "the end");
+        // A row reads across, and an absolute child is in no one's way.
+        let mut row = node("row", Some("p1"), K::Frame, [0.0, 0.0, 300.0, 20.0]);
+        row.layout = Some(Layout::Row);
+        let mut badge = node("badge", Some("row"), K::Rect, [0.0, 0.0, 300.0, 20.0]);
+        badge.absolute = Some(true);
+        let s = scene_of(row, vec![
+            badge,
+            node("x", Some("row"), K::Rect, [0.0, 0.0, 100.0, 20.0]),
+            node("y", Some("row"), K::Rect, [0.0, 0.0, 100.0, 20.0]),
+        ]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(drop_index(&s, &p, "row", &[], (120.0, 10.0)), 2);
+        assert_eq!(drop_index(&s, &p, "row", &[], (10.0, 10.0)), 1);
+        // A wrap: a later line, or left of the centre on the same line.
+        let (tags, kids) = chips(200.0, 5);
+        let s = scene_of(tags, kids);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(drop_index(&s, &p, "tags", &[], (190.0, 10.0)), 3, "end of the first line");
+        assert_eq!(drop_index(&s, &p, "tags", &[], (10.0, 35.0)), 3, "start of the second");
+        assert_eq!(drop_index(&s, &p, "tags", &[], (110.0, 35.0)), 5);
+        assert_eq!(drop_index(&s, &p, "p1", &[], (0.0, 0.0)), 1, "a page keeps no order: the end");
+    }
+
+    /// A 200 px carousel (a row scrolling across, 10 px padding and gaps) holding three cards
+    /// 100 wide, the first holding a group, the second a scrolling list of its own.
+    fn carousel() -> Scene {
+        let mut strip = node("strip", Some("p1"), K::Frame, [0.0, 0.0, 200.0, 100.0]);
+        strip.layout = Some(Layout::Row);
+        strip.scroll = Some(Scroll::X);
+        strip.padding = Some(vec![0.0, 10.0]);
+        strip.gap = Some(10.0);
+        let mut list = node("c1", Some("strip"), K::Frame, [0.0, 0.0, 100.0, 100.0]);
+        list.scroll = Some(Scroll::Y);
+        Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            strip,
+            node("c0", Some("strip"), K::Frame, [0.0, 0.0, 100.0, 100.0]),
+            node("g", Some("c0"), K::Group, [10.0, 10.0, 0.0, 0.0]),
+            node("dot", Some("g"), K::Ellipse, [0.0, 0.0, 10.0, 10.0]),
+            list,
+            node("item", Some("c1"), K::Rect, [0.0, 80.0, 100.0, 60.0]),
+            node("c2", Some("strip"), K::Frame, [0.0, 0.0, 100.0, 100.0]),
+        ])
+    }
+
+    /// A still picture shows a scrolling frame's start; the canvas's offset moves its content
+    /// (nested groups and scrolling frames too), held within what overflows.
+    #[test]
+    fn a_scrolled_frame_shifts_its_content_and_clamps_the_offset() {
+        let s = carousel();
+        let still = place(&s, "p1", &Mono);
+        assert_eq!(still.scrolls.get("strip"), Some(&Scrolled { offset: (0.0, 0.0), content: Rect::new(0.0, 0.0, 340.0, 100.0) }));
+        assert_eq!(still.scrolls.get("c1"), Some(&Scrolled { offset: (0.0, 0.0), content: Rect::new(120.0, 0.0, 100.0, 140.0) }));
+        assert_eq!((still.rect("c0").unwrap().x, still.origin("strip"), still.point("strip")), (10.0, (0.0, 0.0), (0.0, 0.0)));
+        assert_eq!(place_scrolled(&s, "p1", &Mono, &HashMap::<String, (f64, f64)>::new()).rects, still.rects);
+        let offsets = HashMap::from([("strip".to_string(), (500.0, 30.0)), ("c1".to_string(), (0.0, 25.0))]);
+        let p = place_scrolled(&s, "p1", &Mono, &offsets);
+        // Across only, up to 340 - 200.
+        assert_eq!(p.scrolls["strip"].offset, (140.0, 0.0));
+        assert_eq!(p.rect("strip"), Some(Rect::new(0.0, 0.0, 200.0, 100.0)));
+        assert_eq!(p.rect("c0"), Some(Rect::new(-130.0, 0.0, 100.0, 100.0)));
+        assert_eq!((p.origin("strip"), p.point("strip")), ((-140.0, 0.0), (0.0, 0.0)));
+        assert_eq!((p.origin("g"), p.rect("dot")), ((-120.0, 10.0), Some(Rect::new(-120.0, 10.0, 10.0, 10.0))));
+        // The list inside scrolls down 25 of its 40 px of overflow, and moves with the strip.
+        assert_eq!(p.scrolls["c1"], Scrolled { offset: (0.0, 25.0), content: Rect::new(-20.0, 0.0, 100.0, 140.0) });
+        assert_eq!((p.rect("item"), p.origin("c1"), p.point("c1")), (Some(Rect::new(-20.0, 55.0, 100.0, 60.0)), (-20.0, -25.0), (-20.0, 0.0)));
+        let wild = HashMap::from([("strip".to_string(), (f64::NAN, 0.0)), ("c2".to_string(), (50.0, 50.0))]);
+        assert_eq!(place_scrolled(&s, "p1", &Mono, &wild).rects, still.rects, "nothing to scroll, or no number");
+    }
+
+    /// B110: 20 frames nested each 1,000,000 px in put the last past 2^24, where `f32` paint and
+    /// `f64` hit testing drift apart; boxes stop at PLACED_LIMIT, which `f32` holds exactly, and
+    /// a click there still finds what is drawn there.
+    #[test]
+    fn deep_offsets_stop_at_the_placed_limit() {
+        let mut nodes = vec![node("p1", None, K::Page, [0.0; 4])];
+        for i in 0..20 {
+            let parent = if i == 0 { "p1".to_string() } else { format!("f{}", i - 1) };
+            let mut f = node(&format!("f{i}"), Some(&parent), K::Frame, [1_000_000.0, 0.0, 100.0, 100.0]);
+            f.clip = Some(false);
+            nodes.push(f);
+        }
+        nodes.push(node("r", Some("f19"), K::Rect, [0.0, 0.0, 10.0, 10.0]));
+        let s = Scene::new(nodes);
+        let p = place(&s, "p1", &Mono);
+        let r = p.rect("r").unwrap();
+        assert_eq!(r, Rect::new(PLACED_LIMIT, 0.0, 10.0, 10.0));
+        assert!(((r.x as f32) as f64 - r.x).abs() <= 0.5);
+        let chain = crate::design::hit::chain(&s, &p, "p1", r.cx(), r.cy(), 0.0);
+        assert_eq!(chain.last().map(String::as_str), Some("r"));
+        // A row hugging 20 children a million px wide: it hugs no more than MAX_COORD, and
+        // every child is placed within the limit.
+        let mut row = node("row", Some("p1"), K::Frame, [0.0, 0.0, 0.0, 10.0]);
+        row.layout = Some(Layout::Row);
+        row.w_sizing = Some(Sizing::Hug);
+        let kids = (0..20).map(|i| node(&format!("k{i}"), Some("row"), K::Rect, [0.0, 0.0, 1_000_000.0, 10.0])).collect();
+        let p = place(&scene_of(row, kids), "p1", &Mono);
+        assert_eq!(p.rect("row").unwrap().w, MAX_COORD);
+        assert!((0..20).all(|i| p.rect(&format!("k{i}")).unwrap().x <= PLACED_LIMIT));
+        assert_eq!(p.rect("k19").unwrap().x, PLACED_LIMIT);
+    }
+
+    /// Mono, keeping the widest wrap it is asked for.
+    struct Widest(std::cell::Cell<f64>);
+    impl Measure for Widest {
+        fn measure(&self, n: &Node, wrap: Option<f64>) -> (f64, f64) {
+            self.0.set(self.0.get().max(wrap.unwrap_or(0.0)));
+            Mono.measure(n, wrap)
+        }
+    }
+
+    /// B111: a frame hugging children several million px wide offered that width to a filling
+    /// text, past the 2,097,151 px Pango's 32-bit units hold, and a column of tall texts hugged
+    /// past MAX_COORD; both stop at MAX_COORD.
+    #[test]
+    fn hugs_and_wraps_stay_within_max_coord() {
+        let mut outer = node("outer", Some("p1"), K::Frame, [0.0; 4]);
+        outer.layout = Some(Layout::Column);
+        outer.w_sizing = Some(Sizing::Hug);
+        outer.h_sizing = Some(Sizing::Hug);
+        outer.items = Some(Items::Stretch);
+        let mut row = node("row", Some("outer"), K::Frame, [0.0, 0.0, 0.0, 10.0]);
+        row.layout = Some(Layout::Row);
+        row.w_sizing = Some(Sizing::Hug);
+        let mut words = text("words", "outer", "abc");
+        words.w_sizing = Some(Sizing::Fill);
+        let mut nodes = vec![node("p1", None, K::Page, [0.0; 4]), outer, row, words];
+        nodes.extend((0..3).map(|i| node(&format!("wide{i}"), Some("row"), K::Rect, [0.0, 0.0, 1_000_000.0, 10.0])));
+        for i in 0..20 {
+            let mut tall = text(&format!("tall{i}"), "outer", "Hi");
+            tall.h_sizing = Some(Sizing::Fixed);
+            tall.h = 1_000_000.0;
+            nodes.push(tall);
+        }
+        let widest = Widest(Default::default());
+        let p = place(&Scene::new(nodes), "p1", &widest);
+        assert_eq!(widest.0.get(), MAX_COORD);
+        assert_eq!(p.rect("outer").map(|r| (r.w, r.h)), Some((MAX_COORD, MAX_COORD)));
+        assert_eq!(p.rect("words").unwrap().w, MAX_COORD);
+    }
+
+    /// TM-7: a hugging text a column stretches is laid out wrapped at the column's width, but
+    /// wrap_width (what paint and the editor read) said it hugs, so it was drawn on one line.
+    #[test]
+    fn a_stretched_hugging_text_is_drawn_wrapped_where_it_was_measured() {
+        let mut card = node("card", Some("p1"), K::Frame, [0.0, 0.0, 200.0, 0.0]);
+        card.layout = Some(Layout::Column);
+        card.h_sizing = Some(Sizing::Hug);
+        card.items = Some(Items::Stretch);
+        card.padding = Some(vec![10.0]);
+        let mut bubble = text("bubble", "p1", "abcdefghijklmnopqrstuvwxy");
+        bubble.max_w = Some(100.0);
+        let s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            card,
+            text("caption", "card", "A hugging caption long enough to wrap"),
+            text("free", "p1", "Hi"),
+            bubble,
+        ]);
+        let p = place(&s, "p1", &Mono);
+        let caption = s.node("caption").unwrap();
+        let r = p.rect("caption").unwrap();
+        assert_eq!(p.wrap_width(caption, &r), Some(180.0));
+        assert_eq!(r.h, Mono.measure(caption, Some(180.0)).1);
+        assert_eq!(wrap_width(caption, &r), None, "the free rule cannot know");
+        // Elsewhere the free rule: a hugging text unwrapped, one held to max_w at its box.
+        let free = s.node("free").unwrap();
+        assert_eq!(p.wrap_width(free, &p.rect("free").unwrap()), None);
+        let bubble = s.node("bubble").unwrap();
+        assert_eq!(p.wrap_width(bubble, &p.rect("bubble").unwrap()), Some(100.0));
+    }
+
+    /// B22: layout places no hidden node, so flip had no box for one; natural_size is its own
+    /// size wherever it is.
+    #[test]
+    fn natural_size_measures_what_layout_does_not_place() {
+        let mut hid = text("hid", "p1", "Hello");
+        hid.hidden = Some(true);
+        let mut g = node("g", Some("p1"), K::Group, [100.0, 0.0, 0.0, 0.0]);
+        g.hidden = Some(true);
+        let s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            hid,
+            g,
+            node("r1", Some("g"), K::Rect, [0.0, 0.0, 50.0, 30.0]),
+            node("r2", Some("g"), K::Rect, [60.0, 10.0, 40.0, 40.0]),
+        ]);
+        let p = place(&s, "p1", &Mono);
+        assert!(p.rect("hid").is_none() && p.rect("g").is_none() && p.rect("r1").is_none());
+        assert_eq!(natural_size(&s, "hid", &Mono), (40.0, 20.0));
+        assert_eq!(natural_size(&s, "g", &Mono), (100.0, 50.0));
+        assert_eq!(natural_size(&s, "r2", &Mono), (40.0, 40.0));
+        assert_eq!(natural_size(&s, "nope", &Mono), (0.0, 0.0));
+    }
+
+    /// Mono, counting what it is asked.
+    pub(crate) struct Counted(pub(crate) std::cell::Cell<usize>);
+    impl Measure for Counted {
+        fn measure(&self, n: &Node, wrap: Option<f64>) -> (f64, f64) {
+            self.0.set(self.0.get() + 1);
+            Mono.measure(n, wrap)
+        }
+    }
+
+    /// B45: each row of a chain measured its children twice, so a text 20 rows down was measured
+    /// about 2^20 times; a pass now asks each size once.
+    #[test]
+    fn a_deep_chain_of_rows_measures_each_text_once() {
+        let mut nodes = vec![node("p1", None, K::Page, [0.0; 4])];
+        for i in 0..20 {
+            let parent = if i == 0 { "p1".to_string() } else { format!("r{}", i - 1) };
+            let mut row = node(&format!("r{i}"), Some(&parent), K::Frame, [0.0, 0.0, 1000.0, 50.0]);
+            row.layout = Some(Layout::Row);
+            row.w_sizing = Some(Sizing::Fixed);
+            nodes.push(row);
+        }
+        nodes.push(text("leaf", "r19", "Hi"));
+        let s = Scene::new(nodes);
+        let counted = Counted(Default::default());
+        let p = place(&s, "p1", &counted);
+        assert!(counted.0.get() <= 2, "{} measures", counted.0.get());
+        assert_eq!(p.rect("leaf"), Some(Rect::new(0.0, 0.0, 16.0, 20.0)));
+        assert_eq!(p.rect("r19"), place(&s, "p1", &Mono).rect("r19"));
     }
 }

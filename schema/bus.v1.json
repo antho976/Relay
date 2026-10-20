@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 332,
+  "op_count": 343,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -2114,7 +2114,7 @@
       }
     },
     "session.input": {
-      "summary": "Text to the PTY",
+      "summary": "Text to the PTY, as keys or as one paste",
       "kind": "mutation",
       "audit": "agent_only",
       "undo": "none",
@@ -6254,7 +6254,7 @@
       }
     },
     "design.get": {
-      "summary": "A design and all its nodes (or one page's)",
+      "summary": "A design and its nodes: all, one page's (by id or name), the pages alone, some nodes with what is inside them, or only what changed since a rev",
       "kind": "query",
       "audit": "never",
       "undo": "none",
@@ -6312,7 +6312,7 @@
       }
     },
     "design.duplicate": {
-      "summary": "Copy a design, every page and node, under a new title",
+      "summary": "Copy a design, every page and node, under a new title; an agent's copy is tied to its own terminal",
       "kind": "mutation",
       "audit": "always",
       "undo": "inverse",
@@ -6392,7 +6392,7 @@
       }
     },
     "design.apply": {
-      "summary": "Add, change, move or delete a design's nodes in one all-or-none list, only when the person asked for it; returns what changed and its undo",
+      "summary": "Add, change, move, copy or delete a design's nodes and name its colours and styles, in one all-or-none list of up to 2000 edits, only when the person asked for it (a design holds at most 5000 nodes and 1536 KiB; an id an edit adds can be a parent later in the list); returns the new rev and each edit's node id; see the result with design.render",
       "kind": "mutation",
       "audit": "always",
       "undo": "inverse",
@@ -6411,6 +6411,42 @@
         "$ref": "#/$defs/DesignApplyOut"
       }
     },
+    "design.find": {
+      "summary": "Find a design's nodes by kind, name, words, colour or font; returns their ids in paint order",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignFindIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignFindOut"
+      }
+    },
+    "design.fonts": {
+      "summary": "The font families Relay's desktop app can draw a design's text in",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignFontsIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignFontsOut"
+      }
+    },
     "design.asset.add": {
       "summary": "Store a picture for a design's image nodes; returns the src to give them",
       "kind": "mutation",
@@ -6427,6 +6463,168 @@
       },
       "result": {
         "$ref": "#/$defs/DesignAssetAddOut"
+      }
+    },
+    "design.asset.get": {
+      "summary": "A picture an image node shows, in pieces of at most 3 MiB, to draw it where its file is out of reach",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignAssetGetIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignAssetGetOut"
+      }
+    },
+    "design.render": {
+      "summary": "See a design: a PNG of a page or some of its nodes (shown to you as an image), at rest, at a time of its motion or as a contact sheet of frames, and every node's laid-out box in page px, hugged text measured, with layout issues; drawn by Relay's desktop app, which must be open",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "socket_only",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignRenderIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignRenderOut"
+      }
+    },
+    "design.render.serve": {
+      "summary": "The desktop app offers to draw designs for agents on this connection, until it closes",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "socket_only",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignRenderServeIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "design.render.answer": {
+      "summary": "The desktop app's answer to one design.render request",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignRenderAnswerIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignRenderAnswerOut"
+      }
+    },
+    "design.picture.search": {
+      "summary": "Search free stock photos for a design (Openverse; Pexels with the person's key); answers ids for design.picture.add",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignPictureSearchIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignPictureSearchOut"
+      }
+    },
+    "design.picture.thumb": {
+      "summary": "A search result's small preview, to look at before choosing; through MCP the picture comes with the answer",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignPictureThumbIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignPictureThumbOut"
+      }
+    },
+    "design.picture.add": {
+      "summary": "Store a photo from design.picture.search for a design, with its credit; answers the src for an image node, as design.asset.add does",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignPictureAddIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignPictureAddOut"
+      }
+    },
+    "design.picture.key_set": {
+      "summary": "Check a Pexels API key with Pexels and keep it in the system keyring",
+      "kind": "mutation",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignPictureKeySetIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignPictureKeyOut"
+      }
+    },
+    "design.picture.key_remove": {
+      "summary": "Forget the saved Pexels key",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignPictureKeyOut"
       }
     }
   },
@@ -12030,6 +12228,11 @@
         },
         "data": {
           "type": "string"
+        },
+        "paste": {
+          "type": "boolean",
+          "description": "Deliver `data` as one paste, not as keys: wrapped in bracketed paste (its ESC bytes\ndropped) when the terminal asked for it (DECSET 2004), else with its line breaks as\nspaces. Either way no line break in it sends it, and the program reads it as text.",
+          "default": false
         }
       },
       "required": [
@@ -25116,7 +25319,35 @@
             "string",
             "null"
           ],
-          "description": "Only this page and what is on it."
+          "description": "Only this page and what is on it: its id, or its name when no other page has that name."
+        },
+        "pages_only": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Only the pages themselves (with `page`, that one), without what is on them: the design's\npage list, to read one page at a time. Not with `nodes` or `since_rev`."
+        },
+        "nodes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Only these nodes (1 to 500 ids) and what is inside them.",
+          "minItems": 1,
+          "maxItems": 500
+        },
+        "since_rev": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "Only what changed after this rev (0 to the design's rev): `nodes` are those added,\nchanged or moved since, in this answer's usual order, each with its place in `indexes`,\nand `removed` the ids gone since. It reaches back 1000 revs (older is\ndesign.since_too_old: read it whole). With `page` or `nodes`, what changed in what they\nname, a changed node with what is inside it (unless it is the page or a node named), and\nin `left` what changed outside them.",
+          "minimum": 0
         }
       },
       "required": [
@@ -25139,6 +25370,56 @@
         "assets_dir": {
           "type": "string",
           "description": "Where an image's `src` is, on this machine."
+        },
+        "removed": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "With `since_rev`: the ids removed since, in the order they went (everything a delete took\nis listed)."
+        },
+        "indexes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "description": "With `since_rev`: each of `nodes`' place among its siblings now, in the same order: 0 at\nthe bottom, as an add's or a move's `index` counts it."
+        },
+        "left": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "With `since_rev`: the ids changed since that this answer leaves out, with what is inside\nthem: with `page` or `nodes`, those outside what it takes now (each may have moved out),\nand any this Relay cannot read. None was removed: drop any you hold."
+        },
+        "colors": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The design's named colours, by name: a node's colour field takes one as `$name` (a\n`color` edit names one). Always whole."
+        },
+        "styles": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/DesignStyle"
+          },
+          "description": "The design's named styles, by name: a node takes one with `style` (a `style` edit names\none). Always whole."
+        },
+        "credits": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/DesignPictureCredit"
+          },
+          "description": "Where each picture came from, by `src`, for those stored with a credit\n(design.picture.add): at most 128 of them."
         }
       },
       "required": [
@@ -25153,45 +25434,62 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "Unique in the design: letters, digits, `-`, `_`, `.` or `:`, at most 64. Give your own\n(`\"hero\"`, `\"hero-title\"`) to refer to it later in the same `design.apply`; left out,\nthe engine assigns one."
+          "description": "Unique in the design: letters, digits, `-`, `_`, `.` or `:`, at most 64. Give your own\n(`\"hero\"`, `\"hero-title\"`) to refer to it later in the same `design.apply`; left out,\nthe engine assigns one.",
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
         },
         "parent": {
           "type": [
             "string",
             "null"
           ],
-          "description": "The page, frame or group this node sits in. Required for everything but a page."
+          "description": "The page, frame or group this node sits in. Required for everything but a page.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
         },
         "kind": {
-          "$ref": "#/$defs/DesignNodeKind"
+          "$ref": "#/$defs/DesignNodeKind",
+          "description": "What the node is; it decides which fields it draws (see each kind). Fixed once added:\ndelete it and add another to change it."
         },
         "name": {
           "type": [
             "string",
             "null"
           ],
-          "description": "Shown in the layer list and above a frame on the canvas."
+          "description": "Shown in the layer list and above a frame on the canvas; at most 200 characters.",
+          "maxLength": 200
         },
         "x": {
           "type": "number",
           "format": "double",
-          "description": "Left edge, relative to the parent's top-left corner.",
+          "description": "Left edge in px, relative to the parent's top-left corner, within ±1000000.",
+          "minimum": -1000000.0,
+          "maximum": 1000000.0,
           "default": 0.0
         },
         "y": {
           "type": "number",
           "format": "double",
-          "description": "Top edge, relative to the parent's top-left corner.",
+          "description": "Top edge in px, relative to the parent's top-left corner, within ±1000000.",
+          "minimum": -1000000.0,
+          "maximum": 1000000.0,
           "default": 0.0
         },
         "w": {
           "type": "number",
           "format": "double",
+          "description": "Width in px, 0 to 1000000 (`width` is read as `w`). A text with no `w` hugs its words; a\nrect, ellipse, polygon or frame added without one is 100 wide, an icon 24 (within\n`min_w`/`max_w`); an image needs the `w` `design.asset.add` answered; a line's follows its\npoints. In a laid-out frame `w_sizing` hug or fill replaces it.",
+          "minimum": 0,
+          "maximum": 1000000.0,
           "default": 0.0
         },
         "h": {
           "type": "number",
           "format": "double",
+          "description": "Height in px, 0 to 1000000 (`height` is read as `h`). A text hugs its lines whatever `h`\nsays, unless `h_sizing` is fixed; a sticky grows past it to fit its words. A shape, frame\nor icon added without one gets a default as with `w`, and an image needs its `h`.",
+          "minimum": 0,
+          "maximum": 1000000.0,
           "default": 0.0
         },
         "fill": {
@@ -25199,21 +25497,24 @@
             "string",
             "null"
           ],
-          "description": "Background: `#RRGGBB` or `#RRGGBBAA`. A page's fill is the canvas colour; a text's\ncolour is `color`, not this."
+          "description": "Background: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour the design names (a\n`color` edit names one). Default: a frame `#FFFFFF`, a rect, ellipse or polygon\n`#D9D9D9`, a sticky `#FFE58A`, a page `#1E1D1B` (the canvas colour); a text, line or path\npaints none unless given one (a text's is a box behind its words, a line's or path's of\nthree points or more fills inside them). A text's letters are `color`."
         },
         "stroke": {
           "type": [
             "string",
             "null"
           ],
-          "description": "Outline colour; drawn `stroke_width` wide (default 1) inside the edge."
+          "description": "Outline colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour. A box's border\n(frame, rect, sticky, image) and an ellipse's or polygon's outline are drawn only when set,\ninside the edge; a line or path defaults to `#8C8C8C`; an icon is drawn in it (default: its\n`color`, else dark on a light ground and light on a dark one)."
         },
         "stroke_width": {
           "type": [
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "description": "In px, 0 to 1000. Default 1 for a border or outline, 2 for a line, path or icon (an\nicon's is in its 24-unit grid).",
+          "minimum": 0,
+          "maximum": 1000
         },
         "radius": {
           "type": [
@@ -25221,7 +25522,9 @@
             "null"
           ],
           "format": "double",
-          "description": "Corner radius of a frame, rect, sticky or image."
+          "description": "Corner radius of a frame, rect, sticky or image, in px (default 0; `radii` sets each\ncorner).",
+          "minimum": 0,
+          "maximum": 1000000.0
         },
         "opacity": {
           "type": [
@@ -25229,7 +25532,9 @@
             "null"
           ],
           "format": "double",
-          "description": "0 to 1, of the node and everything in it."
+          "description": "0 to 1 (default 1), of the node and everything in it.",
+          "minimum": 0,
+          "maximum": 1
         },
         "shadow": {
           "anyOf": [
@@ -25240,48 +25545,52 @@
               "type": "null"
             }
           ],
-          "description": "A drop shadow under a frame, rect, ellipse, sticky or image."
+          "description": "A shadow under a frame, rect, ellipse, polygon, sticky or image, or with `inset` inside its\nedge; a text, line, path or icon casts an outer one only, without spread (a glow when `x`\nand `y` are 0). A sticky casts a soft one of its own unless given one. `x`, `y` and `spread`\nwithin ±10000 px, `blur` 0 to 200. One shadow; `shadows` holds several (give one field or\nthe other)."
         },
         "clip": {
           "type": [
             "boolean",
             "null"
           ],
-          "description": "Whether a frame hides what overflows it (default true)."
+          "description": "Whether a frame hides what overflows it (default true; a scrolling frame always does)."
         },
         "hidden": {
           "type": [
             "boolean",
             "null"
-          ]
+          ],
+          "description": "Not drawn, not hit and left out of auto layout, with everything inside it (default\nfalse)."
         },
         "locked": {
           "type": [
             "boolean",
             "null"
           ],
-          "description": "Locked nodes cannot be selected or moved on the canvas."
+          "description": "Locked nodes cannot be selected or moved on the canvas (default false); edits still change\nthem."
         },
         "text": {
           "type": [
             "string",
             "null"
           ],
-          "description": "The words of a text or sticky. Newlines break lines."
+          "description": "The words of a text or sticky, or a centred label on a rect, ellipse or polygon; at most\n10000 characters. Newlines break lines.",
+          "maxLength": 10000
         },
         "color": {
           "type": [
             "string",
             "null"
           ],
-          "description": "Text colour (default `#1A1A1A`): `#RRGGBB` or `#RRGGBBAA`."
+          "description": "Colour of the letters of a text, sticky or label, and of an icon without a `stroke`:\n`#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour (default: dark on a light ground,\nlight on a dark one)."
         },
         "font": {
           "type": [
             "string",
             "null"
           ],
-          "description": "Font family (default `Geist`; `Geist Mono` and `Sora` are always there)."
+          "description": "Font family of a text, sticky or label (default `Geist`; `Geist Mono` and `Sora` are\nalways there; `design.fonts` lists the rest). A family the desktop app lacks is drawn in\na fallback face, and the reply warns.",
+          "minLength": 1,
+          "maxLength": 200
         },
         "font_size": {
           "type": [
@@ -25289,7 +25598,9 @@
             "null"
           ],
           "format": "double",
-          "description": "In px (default 16)."
+          "description": "Letter size of a text, sticky or label in px, 1 to 1000 (default 16).",
+          "minimum": 1,
+          "maximum": 1000
         },
         "font_weight": {
           "type": [
@@ -25297,27 +25608,30 @@
             "null"
           ],
           "format": "uint16",
-          "minimum": 0,
-          "maximum": 65535,
-          "description": "100 to 900 (default 400; 600 is semibold, 700 bold)."
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "1 to 1000 (default 400; 600 is semibold, 700 bold); the nearest face the family has is\ndrawn."
         },
         "italic": {
           "type": [
             "boolean",
             "null"
-          ]
+          ],
+          "description": "A text's or label's letters slanted (default false)."
         },
         "underline": {
           "type": [
             "boolean",
             "null"
-          ]
+          ],
+          "description": "A text's or label's letters underlined (default false)."
         },
         "strike": {
           "type": [
             "boolean",
             "null"
-          ]
+          ],
+          "description": "A line through a text's or label's letters (default false)."
         },
         "align": {
           "anyOf": [
@@ -25327,7 +25641,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "A text's lines across its box: `left` (the default; `center` for a label), `center` or\n`right`."
         },
         "line_height": {
           "type": [
@@ -25335,7 +25650,9 @@
             "null"
           ],
           "format": "double",
-          "description": "Line height as a multiple of the font size (default 1.3)."
+          "description": "Line height as a multiple of the font size, 0.1 to 10 (default 1.3).",
+          "minimum": 0.1,
+          "maximum": 10
         },
         "letter_spacing": {
           "type": [
@@ -25343,7 +25660,9 @@
             "null"
           ],
           "format": "double",
-          "description": "Extra space between letters, in px."
+          "description": "Extra space between letters, in px, -100 to 1000 (default 0).",
+          "minimum": -100,
+          "maximum": 1000
         },
         "w_sizing": {
           "anyOf": [
@@ -25354,7 +25673,7 @@
               "type": "null"
             }
           ],
-          "description": "Width rule (default `fixed`; a text `hug`s its words until given a width, then wraps)."
+          "description": "Width rule (default `fixed`: its `w`; a text without a `w` hugs its words). `hug`\nshrinks a text or sticky to its words and a laid-out frame to its children (nothing else\nhugs); `fill` takes the room a laid-out parent leaves along its direction, or its inner\nwidth across it."
         },
         "h_sizing": {
           "anyOf": [
@@ -25365,7 +25684,7 @@
               "type": "null"
             }
           ],
-          "description": "Height rule (default `fixed`; a text `hug`s its lines)."
+          "description": "Height rule (default `fixed`; a text hugs its lines). A sticky's fixed `h` is a minimum\nthat grows to fit its words, and `hug` makes it exactly as tall as they are, as a text's\n(only a text, a sticky or a frame hugs).\n`fill` takes the room a laid-out parent leaves along its direction, or its inner height\nacross it."
         },
         "layout": {
           "anyOf": [
@@ -25376,7 +25695,7 @@
               "type": "null"
             }
           ],
-          "description": "A frame's auto layout: `row` or `column` places its children one after another, `gap`\napart inside `padding`, ignoring their `x`/`y`. Default `none`."
+          "description": "A frame's auto layout: `row` or `column` places its children one after another, `gap`\napart inside `padding`, ignoring their `x`/`y` (an `absolute` child keeps its own); `wrap`\nis a row that starts a new line when the next child would pass the frame's width. Default\n`none`."
         },
         "gap": {
           "type": [
@@ -25384,7 +25703,9 @@
             "null"
           ],
           "format": "double",
-          "description": "Space between laid-out children, in px."
+          "description": "Space between laid-out children along a row, column or wrap line, in px, -10000 to 10000\n(default 0); negative overlaps them.",
+          "minimum": -10000,
+          "maximum": 10000
         },
         "padding": {
           "type": [
@@ -25393,9 +25714,13 @@
           ],
           "items": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "minimum": 0,
+            "maximum": 10000
           },
-          "description": "Inner space of a laid-out frame in CSS order: `[all]`, `[vertical, horizontal]` or\n`[top, right, bottom, left]`."
+          "description": "Inner space in px, each 0 to 10000, in CSS order: `[all]`, `[vertical, horizontal]` or\n`[top, right, bottom, left]`. A laid-out frame's around its children, a rect's,\nellipse's or polygon's around its label (default `[0, 12]`).",
+          "minItems": 1,
+          "maxItems": 4
         },
         "justify": {
           "anyOf": [
@@ -25405,7 +25730,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Where a laid-out frame puts its children along its direction (default `start`)."
         },
         "items": {
           "anyOf": [
@@ -25415,7 +25741,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Where a laid-out frame puts its children across it (default `start`; `stretch` gives each\nthe frame's inner depth)."
         },
         "points": {
           "type": [
@@ -25426,31 +25753,36 @@
             "type": "array",
             "items": {
               "type": "number",
-              "format": "double"
+              "format": "double",
+              "minimum": -1000000.0,
+              "maximum": 1000000.0
             },
             "minItems": 2,
             "maxItems": 2
           },
-          "description": "A line's or path's points, relative to the node's `x`/`y`."
+          "description": "A line's or path's points in px, relative to the node's `x`/`y`: at most 4000, each\nwithin ±1000000.",
+          "maxItems": 4000
         },
         "arrow_start": {
           "type": [
             "boolean",
             "null"
-          ]
+          ],
+          "description": "A head at a line's or path's first point (default false)."
         },
         "arrow_end": {
           "type": [
             "boolean",
             "null"
-          ]
+          ],
+          "description": "A head at a line's or path's last point (default false)."
         },
         "src": {
           "type": [
             "string",
             "null"
           ],
-          "description": "An image's picture: the `src` `design.asset.add` returned."
+          "description": "An image's picture: the `src` `design.asset.add` returned. It must be stored\n(`design.asset_not_found` otherwise)."
         },
         "fit": {
           "anyOf": [
@@ -25460,7 +25792,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "How an image fills its box (default `cover`)."
         },
         "rotation": {
           "type": [
@@ -25468,7 +25801,9 @@
             "null"
           ],
           "format": "double",
-          "description": "Clockwise turn in degrees about the node's centre."
+          "description": "Clockwise turn in degrees about the node's centre, within ±3600.",
+          "minimum": -3600,
+          "maximum": 3600
         },
         "sides": {
           "type": [
@@ -25476,9 +25811,9 @@
             "null"
           ],
           "format": "uint8",
-          "minimum": 0,
-          "maximum": 255,
-          "description": "A polygon's corners (3 to 24, default 3), or a star's points."
+          "minimum": 3,
+          "maximum": 24,
+          "description": "A polygon's corners, or a star's points: 3 to 24 (default 3, or 5 points for a star)."
         },
         "star": {
           "type": [
@@ -25486,7 +25821,9 @@
             "null"
           ],
           "format": "double",
-          "description": "Makes a polygon a star: its inner points at this fraction of the outer (0.05 to 0.95;\n0.4 is a classic star)."
+          "description": "Makes a polygon a star: its inner points at this fraction of the outer (0.05 to 0.95;\n0.4 is a classic star).",
+          "minimum": 0.05,
+          "maximum": 0.95
         },
         "gradient": {
           "anyOf": [
@@ -25506,11 +25843,13 @@
           ],
           "items": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "minimum": 0,
+            "maximum": 1000000.0
           },
           "minItems": 4,
           "maxItems": 4,
-          "description": "Corner radii top-left, top-right, bottom-right, bottom-left, instead of `radius`."
+          "description": "Corner radii in px, top-left, top-right, bottom-right, bottom-left, instead of `radius`."
         },
         "dash": {
           "type": [
@@ -25519,9 +25858,13 @@
           ],
           "items": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "minimum": 0,
+            "maximum": 1000
           },
-          "description": "The stroke's dash pattern in px: `[6, 4]` dashes, `[1, 4]` dots. Absent is solid."
+          "description": "The stroke's dash pattern in px, 1 to 8 lengths from 0 to 1000, not all 0: `[6, 4]`\ndashes, `[0, 4]` round dots. Absent is solid.",
+          "minItems": 1,
+          "maxItems": 8
         },
         "blur": {
           "type": [
@@ -25529,28 +25872,109 @@
             "null"
           ],
           "format": "double",
-          "description": "Blur of the whole node, in px."
+          "description": "Blur of the whole node, in px, 0 to 200.",
+          "minimum": 0,
+          "maximum": 200
         },
         "icon": {
           "type": [
             "string",
             "null"
           ],
-          "description": "An icon node's icon: one of the names in the `ICONS` list (home, search, settings,\nuser, bell, mail, heart, star, plus, check, x, chevron-*, arrow-*, menu, trash, edit,\ncalendar, clock, image, file, folder, shopping-cart, credit-card, globe, map-pin, phone,\nmessage, send, filter, sliders, grid, list, play, pause, refresh, lock, eye, info,\nalert, help, sun, moon, wifi, battery, terminal, code, zap, cloud, bar-chart…)."
+          "enum": [
+            "home",
+            "search",
+            "settings",
+            "user",
+            "users",
+            "bell",
+            "mail",
+            "heart",
+            "star",
+            "plus",
+            "minus",
+            "x",
+            "check",
+            "chevron-left",
+            "chevron-right",
+            "chevron-up",
+            "chevron-down",
+            "arrow-left",
+            "arrow-right",
+            "arrow-up",
+            "arrow-down",
+            "menu",
+            "more-horizontal",
+            "more-vertical",
+            "trash",
+            "edit",
+            "copy",
+            "download",
+            "upload",
+            "share",
+            "link",
+            "lock",
+            "unlock",
+            "eye",
+            "eye-off",
+            "calendar",
+            "clock",
+            "camera",
+            "image",
+            "file",
+            "folder",
+            "shopping-cart",
+            "credit-card",
+            "globe",
+            "map-pin",
+            "phone",
+            "message",
+            "send",
+            "filter",
+            "sliders",
+            "grid",
+            "list",
+            "play",
+            "pause",
+            "refresh",
+            "log-out",
+            "bookmark",
+            "info",
+            "alert",
+            "help",
+            "sun",
+            "moon",
+            "wifi",
+            "battery",
+            "terminal",
+            "code",
+            "zap",
+            "cloud",
+            "git-branch",
+            "bar-chart",
+            null
+          ],
+          "description": "An icon node's icon, one of these outline icons, drawn on a 24-unit grid scaled to the\nsmaller of `w` and `h` (24 is its natural size)."
         },
         "from": {
           "type": [
             "string",
             "null"
           ],
-          "description": "A connector's start: the node it is attached to. The line then runs from that node's\nedge and follows it when it moves; `points` are only where it was last drawn."
+          "description": "A connector's start: a node on the same page, not the line itself or a page. The line\nthen runs from that node's edge and follows it when it moves; `points` are only where it\nwas last drawn.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
         },
         "to": {
           "type": [
             "string",
             "null"
           ],
-          "description": "A connector's end: the node it is attached to."
+          "description": "A connector's end: a node on the same page, not the line itself or a page.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
         },
         "route": {
           "anyOf": [
@@ -25582,14 +26006,14 @@
             "boolean",
             "null"
           ],
-          "description": "Mirrors a polygon, image or icon left to right (a line or path is flipped by its\n`points`, a box by its corners)."
+          "description": "Mirrors a polygon, image or icon left to right. Other kinds ignore it: a line or path is\nflipped by its points, a box by where it sits; text is never mirrored, and a flipped\nframe's words still read left to right."
         },
         "flip_y": {
           "type": [
             "boolean",
             "null"
           ],
-          "description": "Mirrors a polygon, image or icon top to bottom."
+          "description": "Mirrors a polygon, image or icon top to bottom (other kinds as `flip_x`)."
         },
         "arc": {
           "anyOf": [
@@ -25622,24 +26046,217 @@
               "type": "null"
             }
           ],
-          "description": "Draws a text's or label's letters upper, lower or title case."
+          "description": "Draws a text's, sticky's or label's letters upper, lower or title case; the stored words\nkeep theirs."
+        },
+        "pin_x": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignPinX"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How it follows its parent's width: `left` (the default), `right`, `left_right` (its width\nstretches), `center` or `scale`. Its `x`/`w` are where it sits while the parent is at its\nstored `w`; a parent resized, or drawn wider or narrower (fill, stretch, hug), carries it\nalong. Only a child free in a frame (one without auto layout, or `absolute`) is pinned. A\nstretching pin needs a fixed width (a text, a `w`); a line, path or group cannot stretch."
+        },
+        "pin_y": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignPinY"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How it follows its parent's height: `top` (the default), `bottom`, `top_bottom` (its\nheight stretches), `center` or `scale`, as `pin_x` (a text needs `h_sizing: fixed` to\nstretch)."
+        },
+        "absolute": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "In a frame with auto layout: keeps its own `x`/`y` from the frame's top-left, takes no\nroom and is not counted when the frame hugs (a badge on a card); pin it to stick to an\nedge. Elsewhere it changes nothing. Default false."
+        },
+        "min_w": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Smallest width in px, 0 to 1000000, whatever decides it (hug, fill, stretch, a pin). A\nfixed `w` must lie between `min_w` and `max_w`.",
+          "minimum": 0,
+          "maximum": 1000000.0
+        },
+        "max_w": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Largest width in px, 0 to 1000000, whatever decides it; a hugging text wraps at it, and so\ndoes a hugging `wrap` frame.",
+          "minimum": 0,
+          "maximum": 1000000.0
+        },
+        "min_h": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Smallest height in px, 0 to 1000000, whatever decides it. A fixed `h` must lie between\n`min_h` and `max_h`.",
+          "minimum": 0,
+          "maximum": 1000000.0
+        },
+        "max_h": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Largest height in px, 0 to 1000000, whatever decides it.",
+          "minimum": 0,
+          "maximum": 1000000.0
+        },
+        "row_gap": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Space between the lines of a `wrap` layout, in px, -10000 to 10000 (default: `gap`).",
+          "minimum": -10000,
+          "maximum": 10000
+        },
+        "scroll": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignScroll"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A frame whose content scrolls that way (`x`, `y` or `both`): what overflows is clipped, a\nstill picture shows the start, and the canvas scrolls it with Alt+wheel. Children keep\ntheir sizes, so a row of fixed-width cards overflows into a carousel. The scrolling axis\nneeds a fixed or fill size."
+        },
+        "stroke_cap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignStrokeCap"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How a stroke's ends are drawn: `butt` (flat at the point), `round` or `square` (half the\nweight past it). Default: `round` for a solid line or path, `butt` for dashes, `round`\nfor dots (`butt` would draw nothing of a dot). On a closed outline (a box, an ellipse, a\npolygon) only its dashes have ends."
+        },
+        "stroke_join": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignStrokeJoin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the stroke of an ellipse, polygon, line or path turns its corners: `miter` (sharp),\n`round` (the default) or `bevel`."
+        },
+        "stroke_gradient": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignGradient"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A gradient painted along the stroke instead of `stroke`'s colour, over the stroke's own\nbounds (a box's border, a line's path); it draws the stroke even when `stroke` is unset."
+        },
+        "shadows": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignShadow"
+          },
+          "description": "Several shadows instead of `shadow`, 1 to 8, painted in order (the last on top). A glow\nis a shadow with no offset: `{\"blur\": 16, \"color\": \"#4AF0FF99\"}`. A text, line, path or\nicon casts outer ones only, without spread. Give `shadow` or `shadows`, not both.",
+          "minItems": 1,
+          "maxItems": 8
+        },
+        "runs": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignTextRun"
+          },
+          "description": "Parts of `text` styled on their own, 1 to 64, in order and not overlapping, counted in\ncharacters (`end` not included); a field a run leaves out is the node's:\n`\"text\": \"8.4 km\", \"runs\": [{\"start\": 3, \"end\": 6, \"font_size\": 14, \"color\": \"#8C877F\"}]`.\nA change of `text` sends `runs` (or `null`) with it.",
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "max_lines": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "Most lines shown, 1 to 1000; the rest is cut and the last line shown ends in \"…\". The\nwords need a width to wrap at: a sticky, a shape's label, or a text whose width is fixed\nor fills."
+        },
+        "style": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A named style of the design (a `style` edit makes one; `design.get` lists them): each of\nits fields this node does not set itself applies to it, so changing the style restyles\nevery node that names it.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "motion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignMotion"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How it moves when the design plays (any node but a page): 2 to 64 keys in time order on the\nclock of the nearest frame or page with a `timeline` (itself included), else its page's. Its own fields are its\nlook at rest, which whatever does not play shows (the canvas until Play, exports,\n`design.render` without `at_ms`). `dx`, `dy`, `rotate` and the scales move it from where\nlayout puts it; `opacity`, `fill`, `stroke`, `color`, `blur`, `sweep`, `angle` and `trim`\nshow their value instead of its own. Times are milliseconds:\n`{\"ease\": \"ease_out\", \"keys\": [{\"at_ms\": 0, \"dy\": 24, \"opacity\": 0}, {\"at_ms\": 500, \"dy\": 0, \"opacity\": 1}]}`."
+        },
+        "timeline": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignTimeline"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A frame's or page's clock for the motion inside it: `{\"duration_ms\": 3000, \"loop\": true}`\n(default: as long as the latest key, looping). A nested timeline keeps its own time."
+        },
+        "width": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000.0,
+          "description": "`w` by another name: give one or the other."
+        },
+        "height": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000.0,
+          "description": "`h` by another name: give one or the other."
         }
       },
       "required": [
         "kind"
       ],
-      "description": "One node of a design. Every field but `kind` is optional on input; an absent style field\ntakes the kind's default (a white frame, a grey rect, dark 16px Geist text, a yellow sticky)."
+      "description": "One node of a design. Every field but `kind` is optional on input; an absent style field\ntakes the kind's default (a white frame, a grey rect, Geist text at 16px, dark on a light\nground and light on a dark one, a yellow sticky)."
     },
     "DesignNodeKind": {
       "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "rect",
-            "ellipse",
-            "text"
-          ]
-        },
         {
           "type": "string",
           "const": "page",
@@ -25653,17 +26270,32 @@
         {
           "type": "string",
           "const": "group",
-          "description": "Nodes moved together; it paints nothing itself."
+          "description": "Nodes moved together; it paints nothing itself, and its box is its children's."
+        },
+        {
+          "type": "string",
+          "const": "rect",
+          "description": "A box: `fill`, a border (`stroke`), corners (`radius`) and a centred label (`text`)."
+        },
+        {
+          "type": "string",
+          "const": "ellipse",
+          "description": "An oval filling its box (`arc` draws part of one), with a centred label (`text`)."
         },
         {
           "type": "string",
           "const": "line",
-          "description": "A straight line through `points`; `arrow_start`/`arrow_end` put heads on it."
+          "description": "A line through `points`, or a connector between two nodes (`from`, `to`);\n`arrow_start`/`arrow_end` put heads on it."
+        },
+        {
+          "type": "string",
+          "const": "text",
+          "description": "Words (`text`), as wide as they are until given a width, then wrapped to it."
         },
         {
           "type": "string",
           "const": "sticky",
-          "description": "A note card: `fill` paper with `text` on it."
+          "description": "A note card: `fill` paper with `text` on it, growing to fit its words."
         },
         {
           "type": "string",
@@ -25678,12 +26310,12 @@
         {
           "type": "string",
           "const": "polygon",
-          "description": "A regular polygon (`sides`: 3 a triangle, 4 a diamond, 6 a hexagon…) or, with `star`, a\nstar of `sides` points. Its first point is at the top centre."
+          "description": "A regular polygon (`sides`: 3 a triangle, 4 a diamond, 6 a hexagon…) or, with `star`, a\nstar of `sides` points (5 when `sides` is left out). Its first point is at the top centre."
         },
         {
           "type": "string",
           "const": "icon",
-          "description": "An interface icon from Relay's set (`icon`, one of [`ICONS`]), drawn in `stroke`."
+          "description": "An interface icon from Relay's set, named by `icon` (one of the names listed for `icon`),\ndrawn in `stroke`."
         }
       ]
     },
@@ -25694,26 +26326,38 @@
         "x": {
           "type": "number",
           "format": "double",
+          "description": "Offset right, in px (default 0).",
+          "minimum": -10000,
+          "maximum": 10000,
           "default": 0.0
         },
         "y": {
           "type": "number",
           "format": "double",
+          "description": "Offset down, in px (default 0).",
+          "minimum": -10000,
+          "maximum": 10000,
           "default": 0.0
         },
         "blur": {
           "type": "number",
           "format": "double",
+          "description": "Softness in px, 0 to 200 (default 0, a hard edge).",
+          "minimum": 0,
+          "maximum": 200.0,
           "default": 0.0
         },
         "spread": {
           "type": "number",
           "format": "double",
+          "description": "How far it reaches past the edge before it blurs, in px (default 0).",
+          "minimum": -10000,
+          "maximum": 10000,
           "default": 0.0
         },
         "color": {
           "type": "string",
-          "description": "`#RRGGBB` or `#RRGGBBAA`."
+          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour."
         },
         "inset": {
           "type": "boolean",
@@ -25742,12 +26386,12 @@
         {
           "type": "string",
           "const": "hug",
-          "description": "Shrink to the content: a text's words, or a laid-out frame's children and padding."
+          "description": "Shrink to the content: a text's or sticky's words, or a laid-out frame's children and\npadding."
         },
         {
           "type": "string",
           "const": "fill",
-          "description": "Stretch to the room left in a laid-out parent (along its axis), or to its full depth\n(across it)."
+          "description": "Stretch to the room left in a laid-out parent (along its axis; in a `wrap` layout, the\nroom left in its line), or to its full depth (across it)."
         }
       ],
       "description": "How a node's width or height is decided."
@@ -25768,6 +26412,11 @@
           "type": "string",
           "const": "column",
           "description": "Top to bottom, `gap` apart."
+        },
+        {
+          "type": "string",
+          "const": "wrap",
+          "description": "Left to right like a row, starting a new line when the next child would pass the\nframe's inner width; `gap` apart along a line, `row_gap` between lines. A frame that hugs\nits width wraps only at `max_w`."
         }
       ],
       "description": "The direction a frame lays its children out in."
@@ -25834,14 +26483,16 @@
             "null"
           ],
           "format": "double",
-          "description": "Direction of a linear gradient in degrees, as CSS reads it: 180 (the default) runs top\nto bottom, 90 left to right."
+          "description": "Linear: its direction in degrees as CSS reads it, 180 (the default) top to bottom, 90 left\nto right. Conic: where the first stop sits, in degrees clockwise from the top (default 0).\nRadial: unused."
         },
         "stops": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/DesignGradientStop"
           },
-          "description": "2 to 8 colours along it."
+          "description": "2 to 8 colours along it.",
+          "minItems": 2,
+          "maxItems": 8
         }
       },
       "required": [
@@ -25861,6 +26512,11 @@
           "type": "string",
           "const": "radial",
           "description": "From the centre out to the box's edges."
+        },
+        {
+          "type": "string",
+          "const": "conic",
+          "description": "Round the centre, clockwise from `angle` (default 0, the top), as CSS\n`conic-gradient(from …)`."
         }
       ]
     },
@@ -25871,11 +26527,13 @@
         "at": {
           "type": "number",
           "format": "double",
-          "description": "0 at the start, 1 at the end."
+          "description": "0 at the start, 1 at the end.",
+          "minimum": 0,
+          "maximum": 1
         },
         "color": {
           "type": "string",
-          "description": "`#RRGGBB` or `#RRGGBBAA`."
+          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour."
         }
       },
       "required": [
@@ -25911,23 +26569,60 @@
         "start": {
           "type": "number",
           "format": "double",
-          "description": "Where it starts, in degrees clockwise from the top (default 0).",
+          "description": "Where it starts, in degrees clockwise from the top (default 0), within ±3600.",
+          "minimum": -3600,
+          "maximum": 3600,
           "default": 0.0
         },
         "sweep": {
           "type": "number",
           "format": "double",
-          "description": "How far round it goes, in degrees clockwise (default 360, the whole ellipse).",
+          "description": "How far round it goes, in degrees clockwise (default 360, the whole ellipse), within ±360.",
+          "minimum": -360,
+          "maximum": 360,
           "default": 360.0
         },
         "inner": {
           "type": "number",
           "format": "double",
-          "description": "The hole in the middle as a fraction of the radius: 0 (the default) a pie, 0.6 a donut.",
+          "description": "The hole in the middle as a fraction of the radius, from 0 (the default, a pie) to below\n1: 0.6 a donut.",
+          "minimum": 0,
           "default": 0.0
+        },
+        "cap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignStrokeCap"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The ends of a ring segment (`inner` above 0, `sweep` under 360): `butt` (flat, the\ndefault), `round` (a progress ring's rounded ends) or `square`. Each end reaches half the\nring's thickness past `start` and `start + sweep`."
         }
       },
       "description": "Part of an ellipse: a pie, a donut or a ring segment."
+    },
+    "DesignStrokeCap": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "round"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "butt",
+          "description": "Flat at the point."
+        },
+        {
+          "type": "string",
+          "const": "square",
+          "description": "Square, half the weight past the point."
+        }
+      ],
+      "description": "How a stroke's ends are drawn."
     },
     "DesignBlend": {
       "type": "string",
@@ -25963,10 +26658,796 @@
         {
           "type": "string",
           "const": "title",
-          "description": "The first letter of each word upper case."
+          "description": "The first letter of each word in capitals: after a space or any punctuation (`Well-Known`,\n`And/Or`), not after an apostrophe inside a word (`Don't`)."
         }
       ],
-      "description": "How a text's letters are cased when drawn; the stored words keep theirs."
+      "description": "How a text's letters are cased when drawn; the stored words keep theirs. Upper and lower use\nUnicode's default case mapping, one letter at a time (no language's own rules)."
+    },
+    "DesignPinX": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "left",
+          "description": "Keeps its distance from the parent's left edge (the default)."
+        },
+        {
+          "type": "string",
+          "const": "right",
+          "description": "Keeps its distance from the parent's right edge."
+        },
+        {
+          "type": "string",
+          "const": "left_right",
+          "description": "Keeps both distances: its width stretches with the parent's."
+        },
+        {
+          "type": "string",
+          "const": "center",
+          "description": "Keeps its offset from the parent's centre line."
+        },
+        {
+          "type": "string",
+          "const": "scale",
+          "description": "Keeps its place and width as fractions of the parent's width."
+        }
+      ],
+      "description": "How a child follows its parent's width when the parent is resized, or drawn wider or narrower\nthan its stored `w`."
+    },
+    "DesignPinY": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "top",
+          "description": "Keeps its distance from the parent's top edge (the default)."
+        },
+        {
+          "type": "string",
+          "const": "bottom",
+          "description": "Keeps its distance from the parent's bottom edge."
+        },
+        {
+          "type": "string",
+          "const": "top_bottom",
+          "description": "Keeps both distances: its height stretches with the parent's."
+        },
+        {
+          "type": "string",
+          "const": "center",
+          "description": "Keeps its offset from the parent's middle."
+        },
+        {
+          "type": "string",
+          "const": "scale",
+          "description": "Keeps its place and height as fractions of the parent's height."
+        }
+      ],
+      "description": "How a child follows its parent's height, as `pin_x` does its width."
+    },
+    "DesignScroll": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "both"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "x",
+          "description": "Across: a carousel."
+        },
+        {
+          "type": "string",
+          "const": "y",
+          "description": "Down: a feed."
+        }
+      ],
+      "description": "Which way a frame's content scrolls."
+    },
+    "DesignStrokeJoin": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "round"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "miter",
+          "description": "Sharp."
+        },
+        {
+          "type": "string",
+          "const": "bevel",
+          "description": "Cut off."
+        }
+      ],
+      "description": "How a stroke turns its corners."
+    },
+    "DesignTextRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Its first character, from 0."
+        },
+        "end": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1,
+          "description": "The character after its last: above `start`, at most the text's length."
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its letters' colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour."
+        },
+        "font": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its font family.",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "font_size": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Its letter size in px, 1 to 1000; it also sets its line's height (`line_height` times it).",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "font_weight": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "1 to 1000 (700 is bold)."
+        },
+        "italic": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "underline": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "strike": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "rise": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Px above the baseline (negative below), -1000 to 1000: a superscript, a raised unit.",
+          "minimum": -1000,
+          "maximum": 1000
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "description": "One stretch of a text in a style of its own: characters `start` to `end` of `text` (counted\nin characters, `end` not included). A field it leaves out is the node's."
+    },
+    "DesignMotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "keys": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignKey"
+          },
+          "description": "2 to 64 keys in time order, the last at 50 ms or later.",
+          "minItems": 2,
+          "maxItems": 64
+        },
+        "ease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignEase"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Ease of every move whose key names none (default `ease`)."
+        },
+        "origin": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double",
+            "minimum": -10.0,
+            "maximum": 10.0
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "The point it turns and scales about, as fractions of its box, each within ±10: `[0.5, 0.5]`\n(the default) the centre, `[0.5, 1]` the bottom middle, `[0, 0]` the top left."
+        },
+        "loop": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Plays its keys again from 0 every last-key ms, whatever its timeline does: spinners,\npulses (default false)."
+        }
+      },
+      "required": [
+        "keys"
+      ],
+      "description": "How a node moves when its design plays."
+    },
+    "DesignKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "at_ms": {
+          "type": "number",
+          "format": "double",
+          "description": "Milliseconds from the start of the timeline, 0 to 600000 (half a second is 500).",
+          "minimum": 0,
+          "maximum": 600000.0
+        },
+        "ease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignEase"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the move from this key to the next eases (default: the motion's `ease`)."
+        },
+        "dx": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Moved right by this many px from where it sits (negative: left), within ±1000000.",
+          "minimum": -1000000.0,
+          "maximum": 1000000.0
+        },
+        "dy": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Moved down by this many px from where it sits (negative: up), within ±1000000.",
+          "minimum": -1000000.0,
+          "maximum": 1000000.0
+        },
+        "rotate": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Degrees clockwise added to its own rotation, about `origin`, within ±3600.",
+          "minimum": -3600.0,
+          "maximum": 3600.0
+        },
+        "scale": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Size multiplier about `origin`, both ways, 0 to 100 (1 as drawn).",
+          "minimum": 0,
+          "maximum": 100.0
+        },
+        "scale_x": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Width multiplier about `origin`, times `scale`, 0 to 100.",
+          "minimum": 0,
+          "maximum": 100.0
+        },
+        "scale_y": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Height multiplier about `origin`, times `scale`, 0 to 100.",
+          "minimum": 0,
+          "maximum": 100.0
+        },
+        "opacity": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "0 to 1, shown instead of its own opacity.",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "fill": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Shown instead of its fill and gradient: `#RGB`, `#RRGGBB` or `#RRGGBBAA` (a key takes no\n`$name` colour)."
+        },
+        "stroke": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Shown instead of its stroke colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`."
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Shown instead of its text colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`."
+        },
+        "blur": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Layer blur in px, 0 to 200, instead of its own.",
+          "minimum": 0,
+          "maximum": 200
+        },
+        "sweep": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "An ellipse's arc sweep in degrees, -360 to 360, instead of its own (a whole ellipse sweeps\nfrom the top): a ring that fills.",
+          "minimum": -360,
+          "maximum": 360
+        },
+        "angle": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "A linear or conic gradient's angle in degrees, within ±3600, instead of its own (and the\nstroke gradient's); nothing without one.",
+          "minimum": -3600.0,
+          "maximum": 3600.0
+        },
+        "trim": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "How much of a line's or path's stroke is drawn from its start, 0 to 1: drawing on.",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "required": [
+        "at_ms"
+      ],
+      "description": "One moment of a node's motion: how it looks `at_ms` into its timeline. A key names only what\nit sets; between two keys that set a property it is interpolated, before the first that sets\nit the property holds that key's value, after the last that key's."
+    },
+    "DesignEase": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "linear"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "ease",
+          "description": "CSS `ease`, cubic-bezier(0.25, 0.1, 0.25, 1): the default."
+        },
+        {
+          "type": "string",
+          "const": "ease_in",
+          "description": "cubic-bezier(0.42, 0, 1, 1): departures."
+        },
+        {
+          "type": "string",
+          "const": "ease_out",
+          "description": "cubic-bezier(0, 0, 0.58, 1): arrivals."
+        },
+        {
+          "type": "string",
+          "const": "ease_in_out",
+          "description": "cubic-bezier(0.42, 0, 0.58, 1)."
+        },
+        {
+          "type": "string",
+          "const": "overshoot",
+          "description": "cubic-bezier(0.34, 1.56, 0.64, 1): goes a little past and settles; pops and bounces."
+        },
+        {
+          "type": "string",
+          "const": "hold",
+          "description": "Holds the key's values until the next key, then jumps: blinks, frame by frame."
+        }
+      ],
+      "description": "How a move speeds up and slows down between two keys, as CSS names them."
+    },
+    "DesignTimeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "duration_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Its length in ms, 50 to 600000; default the latest key of the motion it clocks.",
+          "minimum": 50.0,
+          "maximum": 600000.0
+        },
+        "loop": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Starts again when it ends (default true); false holds the last frame."
+        }
+      },
+      "description": "A frame's or page's clock for the motion inside it."
+    },
+    "DesignStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fill": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour."
+        },
+        "gradient": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignGradient"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stroke": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour."
+        },
+        "stroke_width": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "dash": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "minItems": 1,
+          "maxItems": 8
+        },
+        "radius": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": 0,
+          "maximum": 1000000.0
+        },
+        "radii": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double",
+            "minimum": 0,
+            "maximum": 1000000.0
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "shadow": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignShadow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shadows": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignShadow"
+          },
+          "minItems": 1,
+          "maxItems": 8
+        },
+        "opacity": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "blur": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": 0,
+          "maximum": 200
+        },
+        "blend": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignBlend"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour."
+        },
+        "font": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "font_size": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "font_weight": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "italic": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "underline": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "strike": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "align": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignTextAlign"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "line_height": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": 0.1,
+          "maximum": 10
+        },
+        "letter_spacing": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": -100,
+          "maximum": 1000
+        },
+        "text_case": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignTextCase"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stroke_cap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignStrokeCap"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stroke_join": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignStrokeJoin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stroke_gradient": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignGradient"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "description": "A named look nodes share: any of the style fields, each as a node holds it (a colour may be a\n`$name`). A node takes each field it does not set itself; `fill` and `gradient` count as one\nfield, and so do `radius` and `radii`, `shadow` and `shadows`, `stroke` and `stroke_gradient`."
+    },
+    "DesignPictureCredit": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/DesignPictureSource"
+        },
+        "id": {
+          "type": "string",
+          "description": "The id design.picture.search gave it."
+        },
+        "title": {
+          "type": "string"
+        },
+        "creator": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "creator_url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "https only."
+        },
+        "licence": {
+          "type": "string"
+        },
+        "licence_url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "https only."
+        },
+        "source_url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The photo's page, https only."
+        },
+        "attribution": {
+          "type": "string",
+          "description": "One sentence naming its title, creator, source and licence."
+        },
+        "caption": {
+          "type": "string",
+          "description": "The line to put under the photo."
+        }
+      },
+      "required": [
+        "source",
+        "id",
+        "title",
+        "licence",
+        "attribution",
+        "caption"
+      ]
+    },
+    "DesignPictureSource": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "openverse",
+          "description": "Openverse's openly licensed photos; needs no key."
+        },
+        {
+          "type": "string",
+          "const": "pexels",
+          "description": "Pexels; needs the key the person saved."
+        }
+      ],
+      "description": "Where a stock photo comes from."
     },
     "DesignCreateIn": {
       "type": "object",
@@ -26068,7 +27549,9 @@
           "items": {
             "$ref": "#/$defs/DesignNodeOp"
           },
-          "description": "Run in order, all or none."
+          "description": "Run in order, all or none: 1 to 2000 edits. A design holds at most 5000 nodes, 1536 KiB of\nthem as design.get returns them (ids, parents and its named colours and styles counted)\nand 64 levels of nesting. A node an edit adds can be the parent of a later one. An edit\nthat does not read is refused by its index and the key at fault (`ops[3] update \"hero\":\nset: …`).",
+          "minItems": 1,
+          "maxItems": 2000
         },
         "base_rev": {
           "type": [
@@ -26076,14 +27559,37 @@
             "null"
           ],
           "format": "int64",
-          "description": "Refuse (`design.stale`) unless the design is still at this `rev`."
+          "description": "The rev your edits were made against: the one you read, or the last reply's `rev`. The list\nis refused (`design.stale`, with `details.conflicts`) only when a node it changes, moves or\ndeletes, or one inside a node it deletes, changed after this rev; changes elsewhere do not\nstop it, and the reply says `rebased: true`."
         },
         "lenient": {
           "type": [
             "boolean",
             "null"
           ],
-          "description": "Skip an edit of a node that no longer exists, instead of refusing the whole list:\nfor an undo that may race someone else's delete."
+          "description": "Replay an undo (an `inverse` a reply gave): skip an edit whose node or parent is gone,\nwhose node this Relay cannot read, or that would overwrite a change made since (`expect`),\nand put back what was stored even where a new edit's rules would refuse it, instead of\nrefusing the whole list. `skipped` says which and why. A list that applies nothing changes\nnothing: no new rev, no event and no undo. An agent's list holds at most 2000 edits,\nlenient or not."
+        },
+        "reply": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignReply"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`short` (an agent's default) or `full` (the person's clients' default)."
+        },
+        "expect": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignExpect"
+          },
+          "description": "What the nodes must still hold: the `expect` a full reply gave with its `inverse`, sent\nback with that undo by the person's clients. An edit that would overwrite a change made\nsince is refused (`design.stale`), or skipped when lenient.",
+          "default": null,
+          "x-unit": "omit"
         }
       },
       "required": [
@@ -26125,11 +27631,93 @@
           "additionalProperties": false,
           "properties": {
             "id": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
             },
             "set": {
               "type": "object",
-              "additionalProperties": true
+              "description": "Node fields to change, each with a value as an add takes it; null puts the field back to its default. Not id, kind or parent (move changes the parent).",
+              "propertyNames": {
+                "enum": [
+                  "name",
+                  "x",
+                  "y",
+                  "w",
+                  "h",
+                  "fill",
+                  "stroke",
+                  "stroke_width",
+                  "radius",
+                  "opacity",
+                  "shadow",
+                  "clip",
+                  "hidden",
+                  "locked",
+                  "text",
+                  "color",
+                  "font",
+                  "font_size",
+                  "font_weight",
+                  "italic",
+                  "underline",
+                  "strike",
+                  "align",
+                  "line_height",
+                  "letter_spacing",
+                  "w_sizing",
+                  "h_sizing",
+                  "layout",
+                  "gap",
+                  "padding",
+                  "justify",
+                  "items",
+                  "points",
+                  "arrow_start",
+                  "arrow_end",
+                  "src",
+                  "fit",
+                  "rotation",
+                  "sides",
+                  "star",
+                  "gradient",
+                  "radii",
+                  "dash",
+                  "blur",
+                  "icon",
+                  "from",
+                  "to",
+                  "route",
+                  "closed",
+                  "smooth",
+                  "flip_x",
+                  "flip_y",
+                  "arc",
+                  "blend",
+                  "text_case",
+                  "pin_x",
+                  "pin_y",
+                  "absolute",
+                  "min_w",
+                  "max_w",
+                  "min_h",
+                  "max_h",
+                  "row_gap",
+                  "scroll",
+                  "stroke_cap",
+                  "stroke_join",
+                  "stroke_gradient",
+                  "shadows",
+                  "runs",
+                  "max_lines",
+                  "style",
+                  "motion",
+                  "timeline",
+                  "width",
+                  "height"
+                ]
+              }
             },
             "op": {
               "type": "string",
@@ -26148,14 +27736,20 @@
           "additionalProperties": false,
           "properties": {
             "id": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
             },
             "parent": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "The new parent; absent keeps the current one."
+              "description": "The new parent; absent keeps the current one.",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
             },
             "index": {
               "type": [
@@ -26165,6 +27759,13 @@
               "format": "uint32",
               "minimum": 0,
               "description": "0 at the bottom; absent puts it on top."
+            },
+            "keep_position": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Keep it where it is on the page: its `x`/`y` are rewritten for the new parent from the\nstored offsets up both parents' chains. Refused (`design.position`) when it or a parent\non either side is placed by auto layout, since that place is not stored. Default false:\n`x`/`y` stay as they are, relative to the new parent."
             },
             "op": {
               "type": "string",
@@ -26182,7 +27783,10 @@
           "additionalProperties": false,
           "properties": {
             "id": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
             },
             "op": {
               "type": "string",
@@ -26194,57 +27798,644 @@
             "id"
           ],
           "description": "Delete a node and everything inside it. A design keeps at least one page."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "as": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The copy's id; left out, the engine assigns one.",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "parent": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The page, frame or group to put the copy in; absent, the original's. A page's copy\ntakes none.",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "index": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Its place among the parent's children, 0 at the bottom; absent puts it on top."
+            },
+            "dx": {
+              "type": "number",
+              "format": "double",
+              "description": "Added to the copy's `x`, in px (default 0).",
+              "minimum": -1000000.0,
+              "maximum": 1000000.0
+            },
+            "dy": {
+              "type": "number",
+              "format": "double",
+              "description": "Added to the copy's `y`, in px (default 0).",
+              "minimum": -1000000.0,
+              "maximum": 1000000.0
+            },
+            "op": {
+              "type": "string",
+              "const": "copy"
+            }
+          },
+          "required": [
+            "op",
+            "id"
+          ],
+          "description": "Copy a node and everything inside it, as one edit (a page copies as a new page). The\ncopy's id is `as` (left out, the engine assigns one); each node inside takes an id made\nfrom it: one starting with the copied node's id and `-`, `_`, `.` or `:` has that start\nswapped for the copy's (`card-title` becomes `card-2-title`), any other gets the copy's id\nand `:` in front (`text-14` becomes `card-2:text-14`), so later edits of the same list can\nname them. A connector inside joins the copies of its ends; one attached to a node outside\nthe copy lets go of that end, staying where it is drawn."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "1 to 64 letters, digits, `-`, `_`, `.` or `:`; one namespace with the styles.",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "value": {
+              "type": "string",
+              "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA` (not another `$name`)."
+            },
+            "op": {
+              "type": "string",
+              "const": "color"
+            }
+          },
+          "required": [
+            "op",
+            "name",
+            "value"
+          ],
+          "description": "Name a colour that any colour field of a node, or of a style, takes as `$name`. Naming it\nagain changes it wherever it is used."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "1 to 64 letters, digits, `-`, `_`, `.` or `:`; one namespace with the colours.",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "set": {
+              "type": "object",
+              "description": "Style fields to set, each with a value as a node takes it; null takes the field out of the style.",
+              "propertyNames": {
+                "enum": [
+                  "fill",
+                  "gradient",
+                  "stroke",
+                  "stroke_width",
+                  "dash",
+                  "radius",
+                  "radii",
+                  "shadow",
+                  "shadows",
+                  "opacity",
+                  "blur",
+                  "blend",
+                  "color",
+                  "font",
+                  "font_size",
+                  "font_weight",
+                  "italic",
+                  "underline",
+                  "strike",
+                  "align",
+                  "line_height",
+                  "letter_spacing",
+                  "text_case",
+                  "stroke_cap",
+                  "stroke_join",
+                  "stroke_gradient"
+                ]
+              }
+            },
+            "op": {
+              "type": "string",
+              "const": "style"
+            }
+          },
+          "required": [
+            "op",
+            "name",
+            "set"
+          ],
+          "description": "Name a style, or change one: each key of `set` is a style field (fill, gradient, stroke,\nstroke_width, dash, radius, radii, shadow, shadows, opacity, blur, blend, color, font,\nfont_size, font_weight, italic, underline, strike, align, line_height, letter_spacing,\ntext_case, stroke_cap, stroke_join, stroke_gradient) with a value as a node takes it;\n`null` takes it out of the style. A node names it with `style`."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "op": {
+              "type": "string",
+              "const": "delete_style"
+            }
+          },
+          "required": [
+            "op",
+            "name"
+          ],
+          "description": "Take a named colour or style out of the design. What used it keeps its look: the colour,\nor the style's fields a node did not set itself, are written into it."
         }
       ],
       "description": "One edit of a design. `design.apply` runs a list of them in order, all or none."
     },
+    "DesignReply": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "short",
+          "description": "The rev, each edit's node id, how many nodes went, the audit row, and what was skipped or\nwarned of."
+        },
+        {
+          "type": "string",
+          "const": "full",
+          "description": "Also the design row, each node touched as stored, the removed ids, the edits that undo\nthe list and what that undo expects to find."
+        }
+      ],
+      "description": "What `design.apply` answers with."
+    },
+    "DesignExpect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "set": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true,
+          "description": "Field values it must hold, as an update's `set` writes them (`null`: the field unset)."
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The parent it must sit in. Not used for pages.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "within": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "The ids it may hold: anything else inside it (added since) is a conflict. An undo that\ndeletes it sends this."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "description": "What a node must still hold for a `design.apply` to go ahead as sent. The person's clients send\nthe `expect` a full reply gave them with the undo of that list, and the values their own scene\nshowed with an ordinary edit."
+    },
     "DesignApplyOut": {
       "type": "object",
       "properties": {
-        "design": {
-          "$ref": "#/$defs/Design"
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "rev": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The design's rev now: the next `base_rev`, and the one design.render pictures. Unchanged\nwhen nothing applied."
         },
         "prev_rev": {
           "type": "integer",
           "format": "int64",
           "description": "The `rev` before these edits: when it is not the one you last read, someone else\nchanged the design in between; read it again with `design.get`."
         },
-        "nodes": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/DesignNode"
-          },
-          "description": "Each node an edit added, changed or moved, as stored now."
-        },
-        "removed": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "The ids deleted, with everything that was inside them."
+        "rebased": {
+          "type": "boolean",
+          "description": "`base_rev` was behind, but nothing this list writes had changed since: it applied on top."
         },
         "ids": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "For each edit, the id of the node it acted on (an `add`'s assigned id); empty for one\nskipped by `lenient`."
+          "description": "For each edit, the id of the node it acted on (an add's or a copy's assigned id; a\ncolour's or style's name); \"\" for one skipped."
+        },
+        "removed_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How many nodes are gone, everything inside deleted nodes included."
+        },
+        "audit_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "The audit row of this change: audit.get shows it with its undo, and the person can undo it\nfrom the board or the audit log. Absent when nothing applied."
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignConflict"
+          },
+          "description": "Edits (or fields of one) not applied, and why: at most 100, a warning counts the rest."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What applied but may not be what you meant (a font the desktop lacks, a written rule a\nlenient list let through), each saying what to do: at most 20."
+        },
+        "copied": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Each copy edit's new node and the node it copied (`{\"card-2\": \"card\"}`). The nodes inside\na copy take ids by copy's rule (`card-title` becomes `card-2-title`)."
+        },
+        "design": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Design"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Full only: the design row."
+        },
+        "nodes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignNode"
+          },
+          "description": "Full only: each node an edit added, changed or moved, as stored now. Left out (with\n`reread`) when the answer would be too large."
+        },
+        "removed": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Full only: the ids deleted, with everything that was inside them."
         },
         "inverse": {
-          "type": "array",
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "$ref": "#/$defs/DesignNodeOp"
           },
-          "description": "The edits that undo these, in the order to apply them."
+          "description": "Full only: the edits that undo these, in the order to apply them, sent `lenient` with\n`expect`. Absent when too large to send (a warning says the step cannot be undone)."
+        },
+        "expect": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignExpect"
+          },
+          "description": "Full only: what the undo expects to find; send it with `inverse`.",
+          "x-unit": "omit"
+        },
+        "colors": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Full only, when an edit of the list changed them: the design's named colours, whole."
+        },
+        "styles": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/DesignStyle"
+          },
+          "description": "Full only, when an edit of the list changed them: the design's named styles, whole."
+        },
+        "reread": {
+          "type": "boolean",
+          "description": "Full only: `nodes` (and perhaps `inverse`) were left out to keep the answer under the\nclients' 2 MiB line; read the design again."
         }
       },
       "required": [
-        "design",
+        "design_id",
+        "rev",
         "prev_rev",
-        "nodes",
-        "removed",
         "ids",
-        "inverse"
+        "removed_count"
+      ]
+    },
+    "DesignConflict": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The edit's index in `ops`, when one edit is to blame."
+        },
+        "id": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/DesignConflictReason"
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "For `fields`: the fields that hold other values now (a skipped update dropped these and\napplied the rest)."
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "For `inside`: the nodes added inside it since, at most 20."
+        },
+        "rev": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "For `changed`, and a `missing` found among the removals: the rev it changed or went at."
+        }
+      },
+      "required": [
+        "id",
+        "reason"
+      ],
+      "description": "One node an edit could not act on as sent: in `design.stale`'s and `audit.stale`'s\n`details.conflicts`, and in a lenient reply's `skipped`."
+    },
+    "DesignConflictReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "missing",
+          "description": "The node is gone."
+        },
+        {
+          "type": "string",
+          "const": "no_parent",
+          "description": "Its parent is gone."
+        },
+        {
+          "type": "string",
+          "const": "parent_skipped",
+          "description": "Its parent's add was skipped, so it was too."
+        },
+        {
+          "type": "string",
+          "const": "fields",
+          "description": "`fields` hold other values than expected."
+        },
+        {
+          "type": "string",
+          "const": "parent",
+          "description": "It sits in another parent than expected."
+        },
+        {
+          "type": "string",
+          "const": "inside",
+          "description": "It holds nodes added or changed since (`ids`); deleting it would take them."
+        },
+        {
+          "type": "string",
+          "const": "exists",
+          "description": "An undo would add it back, but its id is taken."
+        },
+        {
+          "type": "string",
+          "const": "changed",
+          "description": "It changed after `base_rev` (at `rev`)."
+        },
+        {
+          "type": "string",
+          "const": "too_deep",
+          "description": "Adding it would nest it more than 64 deep."
+        },
+        {
+          "type": "string",
+          "const": "unreadable",
+          "description": "It is of a kind this Relay cannot read, so it is left as it is."
+        }
+      ],
+      "description": "Why an edit did not go ahead as sent."
+    },
+    "DesignFindIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "page": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Only on this page: its id, or its name when no other page has that name."
+        },
+        "inside": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Only inside this node (not the node itself)."
+        },
+        "kind": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignNodeKind"
+          },
+          "description": "Any of these kinds."
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Words in its name, any case.",
+          "minLength": 1
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Words in its text, any case.",
+          "minLength": 1
+        },
+        "fill": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its fill as drawn (a `$name` colour or a style gives one too). `#RGB` or `#RRGGBB` matches\nany alpha; `#RRGGBBAA` matches exactly."
+        },
+        "stroke": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its stroke as drawn, compared the same way."
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its text colour (`color`) as drawn, compared the same way."
+        },
+        "any_color": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "This colour anywhere: fill, stroke, text colour, a shadow, a gradient's or stroke\ngradient's stop, or a run of its text."
+        },
+        "font": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its font family (or a run's), any case.",
+          "minLength": 1
+        },
+        "with_nodes": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Also return the matching nodes as stored: the first 200, up to 512 KiB."
+        }
+      },
+      "required": [
+        "design_id"
+      ]
+    },
+    "DesignFindOut": {
+      "type": "object",
+      "properties": {
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Every match, in design.get's order. With no filter, every node but the pages."
+        },
+        "nodes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignNode"
+          },
+          "description": "With `with_nodes`: the first matches as stored."
+        },
+        "cut": {
+          "type": "boolean",
+          "description": "With `with_nodes`: true when `nodes` stops before `ids` does."
+        }
+      },
+      "required": [
+        "ids"
+      ]
+    },
+    "DesignFontsIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Only families whose name holds these words, any case."
+        }
+      }
+    },
+    "DesignFontsOut": {
+      "type": "object",
+      "properties": {
+        "families": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Families a design's text can be drawn in, sorted. Geist, Geist Mono and Sora are always\nthere."
+        },
+        "complete": {
+          "type": "boolean",
+          "description": "false when no desktop app has reported its fonts: only those three are known."
+        }
+      },
+      "required": [
+        "families",
+        "complete"
       ]
     },
     "DesignAssetAddIn": {
@@ -26260,7 +28451,7 @@
             "string",
             "null"
           ],
-          "description": "A PNG, JPEG, GIF, WebP or SVG file on this machine, copied in."
+          "description": "An absolute path to a PNG, JPEG, GIF, WebP or SVG file on this machine, at most 20 MiB,\ncopied in."
         },
         "bytes_b64": {
           "type": [
@@ -26289,7 +28480,7 @@
           "type": "integer",
           "format": "uint32",
           "minimum": 0,
-          "description": "Its natural size in px (an SVG's declared size, or 300 by 150)."
+          "description": "Its natural size in px: an SVG's width and height, the missing one taken from its\nviewBox's aspect, else the viewBox's size, else 300 by 150."
         },
         "h": {
           "type": "integer",
@@ -26302,6 +28493,799 @@
         "path",
         "w",
         "h"
+      ]
+    },
+    "DesignAssetGetIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "src": {
+          "type": "string",
+          "description": "An image node's `src`, as `design.asset.add` gave it."
+        },
+        "offset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Where this piece starts, in bytes (default 0): the `next` of the piece before."
+        }
+      },
+      "required": [
+        "design_id",
+        "src"
+      ]
+    },
+    "DesignAssetGetOut": {
+      "type": "object",
+      "properties": {
+        "media_type": {
+          "type": "string",
+          "description": "`image/png`, `image/jpeg`, `image/gif`, `image/webp` or `image/svg+xml`, from its name."
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The whole picture's length in bytes."
+        },
+        "bytes_b64": {
+          "type": "string",
+          "description": "This piece, base64: at most 3 MiB decoded."
+        },
+        "next": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Where the next piece starts; null on the last."
+        }
+      },
+      "required": [
+        "media_type",
+        "size",
+        "bytes_b64"
+      ]
+    },
+    "DesignRenderIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "page": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The page to picture: its id, or its name when no other page has that name. Default: the\ndesign's first page; with `nodes`, the page they are on."
+        },
+        "nodes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Picture and measure only these nodes (the outermost of them) and what is inside them.\nAt most 200, all on one page.",
+          "maxItems": 200
+        },
+        "png": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "A picture as well as the boxes. Default true; false gives the boxes and issues alone."
+        },
+        "scale": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Picture pixels per page px, 0.25 to 2. Default 1. Lowered to fit `max_side` and 4\nmegapixels.",
+          "minimum": 0.25,
+          "maximum": 2.0
+        },
+        "max_side": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 64,
+          "description": "The picture's longer side at most, 64 to 2560 px. Default 1568.",
+          "maximum": 2560
+        },
+        "boxes_limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Box rows in the answer, 0 to 500. Default 200. `boxes.total` counts every box.",
+          "maximum": 500
+        },
+        "base_rev": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "Refuse (`design.stale`) unless the design is still at this `rev`: the `rev` your last\ndesign.apply answered."
+        },
+        "timeout_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 2000,
+          "description": "How long to wait for the desktop app, 2000 to 60000 ms. Default 20000.",
+          "maximum": 60000
+        },
+        "at_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Picture it at this time of its motion, in ms from the start (0 to 600000), each node posed\non its own timeline. Default: at rest, as stored. Not with `frames`.",
+          "minimum": 0,
+          "maximum": 600000.0
+        },
+        "frames": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 2,
+          "maximum": 24,
+          "description": "A contact sheet of this many frames (2 to 24), evenly spaced over the longest timeline in\nscope, each labelled with its time (`times_ms`). Not with `at_ms`."
+        }
+      },
+      "required": [
+        "design_id"
+      ]
+    },
+    "DesignRenderOut": {
+      "type": "object",
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "rev": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The rev the picture and the boxes show."
+        },
+        "page": {
+          "type": "string",
+          "description": "The page's id."
+        },
+        "area": {
+          "$ref": "#/$defs/DesignRenderRect",
+          "description": "The page rectangle pictured, in page px: the page's content with 32 px around it, or the\nnodes' painted bounds, widened to whole px. Picture pixel (u, v) is page point\n(x + u / scale, y + v / scale); on a contact sheet, in each cell."
+        },
+        "scale": {
+          "type": "number",
+          "format": "double",
+          "description": "Picture pixels per page px, after the size limits."
+        },
+        "png": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignRenderPng"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent with `png: false`, or when nothing in scope is visible (a warning says which)."
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignRenderIssue"
+          },
+          "description": "Layout problems, worst first, at most 100."
+        },
+        "issue_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Every problem found, listed or not."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What to know that is not an error, at most 20; each says what to do next."
+        },
+        "boxes": {
+          "$ref": "#/$defs/DesignRenderBoxes"
+        },
+        "timings_ms": {
+          "$ref": "#/$defs/DesignRenderTimings"
+        },
+        "times_ms": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "description": "A contact sheet's frame times in ms, in reading order; empty for one picture."
+        }
+      },
+      "required": [
+        "design_id",
+        "rev",
+        "page",
+        "area",
+        "scale",
+        "issues",
+        "issue_count",
+        "warnings",
+        "boxes",
+        "timings_ms"
+      ]
+    },
+    "DesignRenderRect": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number",
+          "format": "double"
+        },
+        "y": {
+          "type": "number",
+          "format": "double"
+        },
+        "w": {
+          "type": "number",
+          "format": "double"
+        },
+        "h": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ]
+    },
+    "DesignRenderPng": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "The PNG on this machine. The newest 32 renders are kept, none older than an hour once a\nnewer one is written."
+        },
+        "w": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "h": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "path",
+        "w",
+        "h"
+      ]
+    },
+    "DesignRenderIssue": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "overflow, overlap, text_overlap, clipped or contrast."
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "ids",
+        "message"
+      ]
+    },
+    "DesignRenderBoxes": {
+      "type": "object",
+      "properties": {
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Always [\"id\",\"kind\",\"parent\",\"x\",\"y\",\"w\",\"h\",\"rx\",\"ry\",\"rot\"]."
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": true
+          },
+          "description": "One row per visible node in scope, in design.get's order (parents before children,\nsiblings bottom to top). x, y, w, h: the laid-out box in page px, hugged text measured.\nrx, ry: its corner from the parent's origin. rot: degrees as stored (boxes are unrotated).\nAt rest, whatever `at_ms` asked."
+        },
+        "total": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Visible nodes in scope, listed or not."
+        },
+        "hidden": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Nodes in scope that are hidden, so have no box."
+        }
+      },
+      "required": [
+        "fields",
+        "rows",
+        "total",
+        "hidden"
+      ]
+    },
+    "DesignRenderTimings": {
+      "type": "object",
+      "properties": {
+        "read": {
+          "type": "number",
+          "format": "double"
+        },
+        "layout": {
+          "type": "number",
+          "format": "double"
+        },
+        "paint": {
+          "type": "number",
+          "format": "double"
+        },
+        "encode": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "read",
+        "layout",
+        "paint",
+        "encode"
+      ]
+    },
+    "DesignRenderServeIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fonts": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": "The font families this app can draw, at most 2000, each 1 to 200 characters: what\ndesign.fonts answers and design.apply's font warnings read.",
+          "maxItems": 2000
+        }
+      }
+    },
+    "DesignRenderAnswerIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "render_id": {
+          "type": "string",
+          "description": "The request's `render_id`."
+        },
+        "drawn": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignRenderDrawn"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What was drawn. Exactly one of `drawn` and `error`."
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignRenderFailure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "render_id"
+      ]
+    },
+    "DesignRenderDrawn": {
+      "type": "object",
+      "properties": {
+        "rev": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "area": {
+          "$ref": "#/$defs/DesignRenderRect"
+        },
+        "scale": {
+          "type": "number",
+          "format": "double"
+        },
+        "png_b64": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The PNG, base64, at most 4 MiB decoded. Absent without a picture."
+        },
+        "boxes": {
+          "$ref": "#/$defs/DesignRenderBoxes"
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignRenderIssue"
+          }
+        },
+        "issue_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "timings_ms": {
+          "$ref": "#/$defs/DesignRenderTimings"
+        },
+        "times_ms": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "description": "A contact sheet's frame times in ms, in reading order (at most 24); empty for one\npicture."
+        }
+      },
+      "required": [
+        "rev",
+        "area",
+        "scale",
+        "boxes",
+        "issues",
+        "issue_count",
+        "warnings",
+        "timings_ms"
+      ]
+    },
+    "DesignRenderFailure": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "DesignRenderAnswerOut": {
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "type": "boolean",
+          "description": "Whether a render was still waiting for this answer (it then got it, drawn or refused)."
+        }
+      },
+      "required": [
+        "accepted"
+      ]
+    },
+    "DesignPictureSearchIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "query": {
+          "type": "string",
+          "description": "Two to four concrete nouns (\"sunlit kitchen plants\"); at most 200 characters.",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignPictureSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default openverse (no key). pexels needs the key the person saved."
+        },
+        "orientation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignPictureOrientation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "page": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1,
+          "description": "1 to 10; default 1.",
+          "maximum": 10
+        },
+        "count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1,
+          "description": "1 to 20; default 12; larger asks are cut to 20."
+        }
+      },
+      "required": [
+        "design_id",
+        "query"
+      ]
+    },
+    "DesignPictureOrientation": {
+      "type": "string",
+      "enum": [
+        "landscape",
+        "portrait",
+        "square"
+      ],
+      "description": "A photo's shape, to search for."
+    },
+    "DesignPictureSearchOut": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/DesignPictureSource"
+        },
+        "page": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "has_more": {
+          "type": "boolean",
+          "description": "Whether `page + 1` would answer (never past page 10)."
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignPictureHit"
+          }
+        }
+      },
+      "required": [
+        "source",
+        "page",
+        "has_more",
+        "results"
+      ]
+    },
+    "DesignPictureHit": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "`openverse:<uuid>` or `pexels:<digits>`: pass it to design.picture.add or .thumb."
+        },
+        "title": {
+          "type": "string",
+          "description": "May be empty; at most 200 characters."
+        },
+        "creator": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "licence": {
+          "type": "string",
+          "description": "\"CC BY 2.0\", \"CC BY-SA 4.0\", \"CC0\", \"Public domain\" or \"Pexels License\"."
+        },
+        "w": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The original's size in px, for its shape."
+        },
+        "h": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "licence",
+        "w",
+        "h"
+      ]
+    },
+    "DesignPictureThumbIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "id": {
+          "type": "string",
+          "description": "An id design.picture.search gave."
+        }
+      },
+      "required": [
+        "design_id",
+        "id"
+      ]
+    },
+    "DesignPictureThumbOut": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "A small JPEG, PNG, WebP or GIF on this machine. Through `relay mcp` the picture itself is\nattached to the answer; otherwise read the file."
+        },
+        "w": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "h": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "path",
+        "w",
+        "h"
+      ]
+    },
+    "DesignPictureAddIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "id": {
+          "type": "string",
+          "description": "An id design.picture.search gave."
+        }
+      },
+      "required": [
+        "design_id",
+        "id"
+      ]
+    },
+    "DesignPictureAddOut": {
+      "type": "object",
+      "properties": {
+        "src": {
+          "type": "string",
+          "description": "What an image node's `src` names."
+        },
+        "path": {
+          "type": "string"
+        },
+        "w": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The stored picture's size in px: give an image node this `w` and `h`."
+        },
+        "h": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "credit": {
+          "$ref": "#/$defs/DesignPictureCredit",
+          "description": "Where it came from and the line to put under it; design.get's `credits` keeps it by `src`."
+        }
+      },
+      "required": [
+        "src",
+        "path",
+        "w",
+        "h",
+        "credit"
+      ]
+    },
+    "DesignPictureKeySetIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "The Pexels API key (pexels.com/api).",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "key"
+      ]
+    },
+    "DesignPictureKeyOut": {
+      "type": "object",
+      "properties": {
+        "saved": {
+          "type": "boolean",
+          "description": "Whether a key is saved now."
+        }
+      },
+      "required": [
+        "saved"
       ]
     }
   }

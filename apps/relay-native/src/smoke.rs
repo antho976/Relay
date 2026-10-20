@@ -1301,12 +1301,20 @@ fn capture(ui: Rc<Ui>, path: String, fixture: bool) {
             }
             println!("Start screen dismiss verified");
         }
-        ui.window.close();
-        assert!(
-            !ui.window.is_visible(),
-            "Native close blocked: {}",
-            ui.notice.text()
-        );
+        close_when_saved(ui.clone(), 0);
         glib::ControlFlow::Break
     });
+}
+
+/// Close the window as a person would: a close blocked because design edits are still on their
+/// way ("Close again in a moment", a capture taken mid-edit commits its words) is tried again,
+/// for two seconds at most. Any other block fails the capture.
+fn close_when_saved(ui: Rc<Ui>, tries: u32) {
+    ui.window.close();
+    if !ui.window.is_visible() {
+        return;
+    }
+    let said = ui.notice.text();
+    assert!(tries < 40 && said.contains("still saving"), "Native close blocked: {said}");
+    glib::timeout_add_local_once(Duration::from_millis(50), move || close_when_saved(ui, tries + 1));
 }

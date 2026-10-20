@@ -43,6 +43,45 @@ pub struct Confirm {
     pub payload: Value,
 }
 
+/// The most of a `bus.schema` refusal's reason kept, in bytes: the longest a `design.apply` edit
+/// is explained in (an id of 64 characters included) fits whole, and a value echoed back does not
+/// fill an agent's context.
+pub const SCHEMA_WHY_MAX: usize = 300;
+
+/// `why` as text, cut at `max` bytes on a character boundary with "…". Written into a string
+/// that stops growing at `max`, so a 2 MB echo is never formatted whole.
+fn clipped(why: &impl std::fmt::Display, max: usize) -> String {
+    struct Clip {
+        text: String,
+        max: usize,
+        cut: bool,
+    }
+    impl std::fmt::Write for Clip {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            if self.cut {
+                return Ok(());
+            }
+            if self.text.len() + s.len() <= self.max {
+                self.text.push_str(s);
+                return Ok(());
+            }
+            let mut end = self.max - self.text.len();
+            while !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            self.text.push_str(&s[..end]);
+            self.cut = true;
+            Ok(())
+        }
+    }
+    let mut clip = Clip { text: String::new(), max, cut: false };
+    let _ = std::fmt::write(&mut clip, format_args!("{why}"));
+    if clip.cut {
+        clip.text.push('…');
+    }
+    clip.text
+}
+
 // No `deny_unknown_fields` here or on `Confirm`: clients ignore unknown fields (BUS.md §12).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, thiserror::Error)]
 #[error("{kind:?} {code}: {message}")]
@@ -106,10 +145,13 @@ impl BusError {
         Self::invalid("bus.unknown_op", format!("unknown op {op:?}"))
             .with_hint("call bus.ops to list what exists")
     }
-    /// `invalid` / `bus.schema` — payload failed validation.
+    /// `invalid` / `bus.schema` — payload failed validation. The reason is clipped at
+    /// [`SCHEMA_WHY_MAX`] bytes: serde echoes the value it could not read, and a list sent as one
+    /// string came back whole, escaped twice (TM-6). The hint names the op an agent can call, and
+    /// the command for a shell.
     pub fn schema(op: &str, why: impl std::fmt::Display) -> Self {
-        Self::invalid("bus.schema", format!("payload for {op} does not match its schema: {why}"))
-            .with_hint(format!("relay schema {op}"))
+        Self::invalid("bus.schema", format!("payload for {op} does not match its schema: {}", clipped(&why, SCHEMA_WHY_MAX)))
+            .with_hint(format!("bus.schema {{\"op\":\"{op}\"}} (CLI: relay schema {op})"))
     }
     /// `invalid` / `bus.actor`.
     pub fn actor(why: impl Into<String>) -> Self {
@@ -136,5 +178,46 @@ impl BusError {
     /// `refused` / `actor.scope` — an agent reaching for something that isn't its own.
     pub fn not_own(what: &str) -> Self {
         Self::refused("actor.scope", format!("agents may only act on their own {what}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// TM-6: a 40 KB list sent as one string was echoed back whole, escaped twice.
+    #[test]
+    fn a_schema_refusal_clips_what_it_echoes() {
+        let list = format!("[{}]", "{\"op\": \"add\", \"node\": {\"kind\": \"rect\"}}, ".repeat(1000));
+        assert!(list.len() > 40_000);
+        let serde = serde_json::from_value::<Vec<u8>>(serde_json::Value::String(list)).unwrap_err();
+        let error = BusError::schema("design.apply", serde);
+        assert!(error.message.len() <= SCHEMA_WHY_MAX + 100, "{} bytes", error.message.len());
+        assert!(error.message.starts_with("payload for design.apply does not match its schema: invalid type: string \"[{"));
+        assert!(error.message.ends_with('…'));
+        // A reason that fits is left whole.
+        let short = BusError::schema("task.get", "missing field `task_id`");
+        assert_eq!(short.message, "payload for task.get does not match its schema: missing field `task_id`");
+    }
+
+    #[test]
+    fn clipping_keeps_whole_characters() {
+        assert_eq!(clipped(&"abc", 3), "abc");
+        assert_eq!(clipped(&"abcd", 3), "abc…");
+        // "é" is two bytes: a cut inside it backs off to before it.
+        assert_eq!(clipped(&"abé", 3), "ab…");
+        assert_eq!(clipped(&format_args!("{}{}", "ab", "éé"), 5), "abé…");
+        let long = "日本語".repeat(200);
+        let cut = clipped(&long, SCHEMA_WHY_MAX);
+        assert!(cut.len() <= SCHEMA_WHY_MAX + '…'.len_utf8() && cut.ends_with('…'));
+    }
+
+    /// E-agent-1: the hint names what an MCP agent can call, then the shell's command.
+    #[test]
+    fn the_schema_hint_names_the_op_first() {
+        let error = BusError::schema("design.apply", "ops[0]: …");
+        assert_eq!(error.hint.as_deref(), Some("bus.schema {\"op\":\"design.apply\"} (CLI: relay schema design.apply)"));
+        let hint: serde_json::Value = serde_json::from_str(error.hint.unwrap().split(" (CLI").next().unwrap().strip_prefix("bus.schema ").unwrap()).unwrap();
+        assert_eq!(hint, serde_json::json!({"op": "design.apply"}), "the payload is JSON an agent can send as it is");
     }
 }

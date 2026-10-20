@@ -1,14 +1,15 @@
 //! What is under the pointer. The canvas picks from the chain this returns: the deepest node
 //! is what a click selects, its ancestors are the breadcrumb.
 
-use super::geom::{segment_distance, Rect};
+use super::geom::{quads_overlap, segment_distance, Rect};
 use super::layout::Placed;
 use super::scene::Scene;
 use super::shapes;
 use relay_bus::design::{Node, NodeKind};
 
 /// Whether `(x, y)` is on `n`'s own shape (not its children), within `slop` page pixels for
-/// thin strokes.
+/// thin strokes: a box with its rounded corners, an ellipse's drawn slice, a polygon, a line's
+/// or path's stroke as it is drawn with its arrowheads.
 pub fn on_shape(scene: &Scene, placed: &Placed, n: &Node, rect: &Rect, x: f64, y: f64, slop: f64) -> bool {
     match n.kind {
         NodeKind::Polygon => shapes::inside(&shapes::node_polygon(n, rect), x, y) || {
@@ -16,11 +17,11 @@ pub fn on_shape(scene: &Scene, placed: &Placed, n: &Node, rect: &Rect, x: f64, y
             let closed: Vec<_> = pts.iter().chain(pts.first()).copied().collect();
             closed.windows(2).any(|w| segment_distance(x, y, w[0], w[1]) <= slop)
         },
-        NodeKind::Line if n.from.is_some() || n.to.is_some() || n.route.is_some() => {
+        NodeKind::Line if shapes::routed(n) => {
             let (pts, curved) = shapes::line_points(scene, placed, n);
             let pts = if curved { shapes::flatten_curve(&pts) } else { pts };
             let reach = n.stroke_width.unwrap_or(2.0) / 2.0 + slop;
-            pts.windows(2).any(|w| segment_distance(x, y, w[0], w[1]) <= reach)
+            pts.windows(2).any(|w| segment_distance(x, y, w[0], w[1]) <= reach) || on_heads(scene, placed, n, rect, x, y, slop)
         }
         NodeKind::Page | NodeKind::Group => false,
         // Only what is drawn: an arc's slice, not its missing part or its hole.
@@ -36,11 +37,25 @@ pub fn on_shape(scene: &Scene, placed: &Placed, n: &Node, rect: &Rect, x: f64, y
             }
             let outline = shapes::stroke_outline(n, rect);
             // A filled or closed one is a shape: its inside counts.
-            let solid = points.len() > 2 && (n.closed == Some(true) || n.fill.is_some() || n.gradient.is_some());
-            (solid && shapes::inside(&outline, x, y)) || outline.windows(2).any(|w| segment_distance(x, y, w[0], w[1]) <= reach)
+            let solid = shapes::closed_shape(n) || (shapes::fillable_line(n) && (n.fill.is_some() || n.gradient.is_some()));
+            (solid && shapes::inside(&outline, x, y))
+                || outline.windows(2).any(|w| segment_distance(x, y, w[0], w[1]) <= reach)
+                || on_heads(scene, placed, n, rect, x, y, slop)
         }
-        _ => rect.inflate(slop.min(rect.w.min(rect.h) / 4.0).max(0.0)).contains(x, y),
+        _ => {
+            // Thin boxes keep a target of about twice the slop across; small ones a quarter of
+            // their side, so neighbours stay apart.
+            let pad = |side: f64| slop.min(side / 4.0).max(slop - side / 2.0).max(0.0);
+            shapes::in_rounded_box(rect, shapes::corner_radii(n, rect), x, y, pad(rect.w), pad(rect.h))
+        }
     }
+}
+
+/// Whether `(x, y)` is on one of `n`'s arrowheads, or within `slop` of one.
+fn on_heads(scene: &Scene, placed: &Placed, n: &Node, rect: &Rect, x: f64, y: f64, slop: f64) -> bool {
+    shapes::arrowheads(scene, placed, n, rect)
+        .iter()
+        .any(|t| shapes::inside(t, x, y) || (0..3).any(|i| segment_distance(x, y, t[i], t[(i + 1) % 3]) <= slop))
 }
 
 /// The nodes under `(x, y)` on `page`, outermost first and deepest last: `[frame, card,
@@ -64,7 +79,8 @@ fn descend(scene: &Scene, placed: &Placed, parent: &str, x: f64, y: f64, slop: f
         let turn = shapes::rotation(n);
         let (x, y) = if turn != 0.0 { shapes::rotate(x, y, rect.cx(), rect.cy(), -turn) } else { (x, y) };
         let clips = n.kind == NodeKind::Frame && n.clip != Some(false);
-        if n.kind.holds_children() && (!clips || rect.contains(x, y)) {
+        // A clipping frame hides what passes its rounded corners too.
+        if n.kind.holds_children() && (!clips || shapes::in_rounded_box(&rect, shapes::corner_radii(n, &rect), x, y, 0.0, 0.0)) {
             out.push(id.clone());
             if descend(scene, placed, id, x, y, slop, out) {
                 if n.is_locked() {
@@ -87,15 +103,25 @@ fn descend(scene: &Scene, placed: &Placed, parent: &str, x: f64, y: f64, slop: f
     false
 }
 
-/// The children of `parent` a marquee over `area` takes: those it touches.
+/// The children of `parent` a marquee over `area` (a page rectangle) takes: those it touches as
+/// they are drawn. The area is carried into `parent`'s coordinates through every turn above it
+/// (a turned artboard's children are picked where they show), and each child is its drawn box (a
+/// line's or path's points) turned by its own turn.
 pub fn marquee(scene: &Scene, placed: &Placed, parent: &str, area: &Rect) -> Vec<String> {
+    let area = area.corners().map(|(x, y)| shapes::to_local(scene, placed, parent, x, y));
     scene
         .children(parent)
         .iter()
         .filter(|id| scene.node(id).is_some_and(|n| !n.is_hidden() && !n.is_locked()))
         .filter(|id| {
-            let turn = scene.node(id).map_or(0.0, shapes::rotation);
-            placed.rect(id).is_some_and(|r| area.intersects(&shapes::rotated_bounds(&r, turn)))
+            let (Some(n), Some(r)) = (scene.node(id), placed.rect(id)) else {
+                return false;
+            };
+            let Some(drawn) = shapes::drawn_box(scene, placed, n) else {
+                return false;
+            };
+            let turn = shapes::rotation(n);
+            quads_overlap(&area, &drawn.corners().map(|(x, y)| if turn == 0.0 { (x, y) } else { shapes::rotate(x, y, r.cx(), r.cy(), turn) }))
         })
         .cloned()
         .collect()
@@ -106,7 +132,7 @@ mod tests {
     use super::*;
     use crate::design::layout::{place, tests::Mono};
     use crate::design::scene::tests::{node, sample};
-    use relay_bus::design::NodeKind as K;
+    use relay_bus::design::{Node, NodeKind as K};
 
     #[test]
     fn closed_paths_hit_inside_and_arcs_only_where_drawn() {
@@ -119,7 +145,7 @@ mod tests {
         shape.closed = Some(true);
         assert!(on_shape(&s, &p, &shape, &r, 50.0, 30.0, 1.0));
         let mut ring = node("e", Some("p1"), K::Ellipse, [0.0, 0.0, 100.0, 100.0]);
-        ring.arc = Some(relay_bus::design::Arc { start: 0.0, sweep: 360.0, inner: 0.5 });
+        ring.arc = Some(relay_bus::design::Arc { start: 0.0, sweep: 360.0, inner: 0.5, cap: None });
         assert!(!on_shape(&s, &p, &ring, &r, 50.0, 50.0, 0.0), "the hole is not the ring");
         assert!(on_shape(&s, &p, &ring, &r, 50.0, 10.0, 0.0));
     }
@@ -174,5 +200,111 @@ mod tests {
         let area = Rect::new(-10.0, -10.0, 30.0, 30.0);
         assert_eq!(marquee(&s, &p, "p1", &area), ["f"]);
         assert_eq!(marquee(&s, &p, "f", &area), Vec::<String>::new());
+    }
+
+    /// One page holding `nodes`, placed.
+    fn page(nodes: Vec<Node>) -> (Scene, Placed) {
+        let s = Scene::new(std::iter::once(node("p1", None, K::Page, [0.0; 4])).chain(nodes).collect());
+        let p = place(&s, "p1", &Mono);
+        (s, p)
+    }
+
+    #[test]
+    fn thin_boxes_keep_a_reachable_edge() {
+        // B115: a zero-width box was reachable only on its exact edge, a 1 px divider by a
+        // quarter of a pixel.
+        let hit = |n: &Node, x: f64, y: f64, slop: f64| {
+            let (s, p) = page(vec![n.clone()]);
+            on_shape(&s, &p, n, &p.rect(&n.id).unwrap(), x, y, slop)
+        };
+        let bare = node("z", Some("p1"), K::Rect, [100.0, 0.0, 0.0, 50.0]);
+        assert!(hit(&bare, 101.5, 25.0, 2.0));
+        assert!(!hit(&bare, 103.0, 25.0, 2.0));
+        let divider = node("d", Some("p1"), K::Rect, [0.0, 200.0, 200.0, 1.0]);
+        assert!(hit(&divider, 100.0, 204.0, 4.0), "3.5 px of slop below a 1 px divider");
+        assert!(!hit(&divider, 100.0, 206.0, 4.0));
+        let small = node("s", Some("p1"), K::Rect, [0.0, 0.0, 8.0, 8.0]);
+        assert!(!hit(&small, 11.0, 4.0, 4.0), "a small box keeps its quarter-side pad");
+    }
+
+    #[test]
+    fn rounded_corners_are_hit_only_where_drawn() {
+        // B116: the empty part of a rounded corner selected the box, and a rounded frame's
+        // clip let a child be clicked where it is clipped away.
+        let mut pill = node("r", Some("p1"), K::Rect, [0.0, 0.0, 160.0, 40.0]);
+        pill.radius = Some(20.0);
+        let (s, p) = page(vec![pill.clone()]);
+        let r = p.rect("r").unwrap();
+        assert!(!on_shape(&s, &p, &pill, &r, 3.0, 3.0, 0.0));
+        assert!(on_shape(&s, &p, &pill, &r, 20.0, 1.0, 0.0));
+        assert!(on_shape(&s, &p, &pill, &r, 80.0, 20.0, 0.0));
+        pill.radius = None;
+        pill.radii = Some([0.0, 20.0, 0.0, 0.0]);
+        assert!(on_shape(&s, &p, &pill, &r, 3.0, 3.0, 0.0));
+        assert!(!on_shape(&s, &p, &pill, &r, 157.0, 3.0, 0.0));
+        let mut f = node("f", Some("p1"), K::Frame, [0.0, 0.0, 100.0, 100.0]);
+        f.radius = Some(30.0);
+        let (s, p) = page(vec![f, node("c", Some("f"), K::Rect, [0.0, 0.0, 20.0, 20.0])]);
+        assert!(chain(&s, &p, "p1", 2.0, 2.0, 0.0).is_empty());
+        assert_eq!(chain(&s, &p, "p1", 15.0, 15.0, 0.0), ["f", "c"]);
+    }
+
+    #[test]
+    fn a_marquee_in_a_turned_artboard_takes_what_it_shows() {
+        // B117: the marquee compared page space with the children's unturned boxes.
+        let mut f = node("f", Some("p1"), K::Frame, [0.0, 0.0, 200.0, 100.0]);
+        f.rotation = Some(90.0);
+        let (s, p) = page(vec![f, node("c", Some("f"), K::Rect, [150.0, 40.0, 20.0, 20.0])]);
+        // c's centre (160, 50) is drawn at (100, 110).
+        assert_eq!(marquee(&s, &p, "f", &Rect::new(85.0, 95.0, 30.0, 30.0)), ["c"]);
+        assert!(marquee(&s, &p, "f", &Rect::new(150.0, 40.0, 20.0, 20.0)).is_empty(), "where c would be unturned");
+    }
+
+    #[test]
+    fn a_marquee_takes_a_line_by_its_points() {
+        // B3: a line written without w/h has a 0x0 box at its origin; a marquee across its
+        // middle missed it.
+        let mut line = node("ln", Some("p1"), K::Line, [100.0, 100.0, 0.0, 0.0]);
+        line.points = Some(vec![[0.0, 0.0], [300.0, -50.0]]);
+        let (s, p) = page(vec![line]);
+        assert_eq!(marquee(&s, &p, "p1", &Rect::new(240.0, 70.0, 20.0, 10.0)), ["ln"]);
+        assert!(marquee(&s, &p, "p1", &Rect::new(90.0, 110.0, 20.0, 20.0)).is_empty());
+    }
+
+    #[test]
+    fn a_sparse_path_is_hit_on_its_drawn_curve() {
+        // B118: the path was hit on its raw polyline while it is painted as quadratics through
+        // the midpoints of its points.
+        let mut v = node("v", Some("p1"), K::Path, [0.0, 0.0, 100.0, 100.0]);
+        v.points = Some(vec![[0.0, 0.0], [50.0, 100.0], [100.0, 0.0]]);
+        v.stroke_width = Some(2.0);
+        let (s, p) = page(vec![v.clone()]);
+        let r = p.rect("v").unwrap();
+        // The drawn curve passes (43.75, 62.5) and peaks near y 66.7; the corner at (50, 100)
+        // is 33 px from any ink.
+        assert!(on_shape(&s, &p, &v, &r, 43.75, 62.5, 1.0));
+        assert!(!on_shape(&s, &p, &v, &r, 50.0, 99.0, 1.0));
+        let outline = shapes::stroke_outline(&v, &r);
+        assert_eq!((outline.first(), outline.last()), (Some(&(0.0, 0.0)), Some(&(100.0, 0.0))));
+    }
+
+    #[test]
+    fn arrowheads_are_hit_where_drawn() {
+        // B121: an arrowhead's wings reach past the stroke's hit reach.
+        let mut line = node("ln", Some("p1"), K::Line, [200.0, 200.0, 100.0, 0.0]);
+        line.points = Some(vec![[0.0, 0.0], [100.0, 0.0]]);
+        line.stroke_width = Some(10.0);
+        line.arrow_end = Some(true);
+        let (s, p) = page(vec![line.clone()]);
+        assert_eq!(chain(&s, &p, "p1", 275.0, 210.0, 0.0), ["ln"], "inside the head, 10 px off the stroke");
+        assert!(chain(&s, &p, "p1", 210.0, 210.0, 0.0).is_empty());
+        line.arrow_end = None;
+        let (s, p) = page(vec![line]);
+        assert!(chain(&s, &p, "p1", 275.0, 210.0, 0.0).is_empty());
+        // A connector's head too.
+        let mut c = node("c", Some("p1"), K::Line, [0.0; 4]);
+        (c.from, c.to, c.stroke_width, c.arrow_end) = (Some("a".into()), Some("b".into()), Some(10.0), Some(true));
+        let (s, p) = page(vec![node("a", Some("p1"), K::Rect, [0.0, 0.0, 100.0, 100.0]), node("b", Some("p1"), K::Rect, [300.0, 0.0, 100.0, 100.0]), c]);
+        assert_eq!(chain(&s, &p, "p1", 280.0, 60.0, 0.0), ["c"]);
     }
 }

@@ -291,22 +291,14 @@ fn attachments_dir(worktree: &Path) -> Result<PathBuf, BusError> {
     Ok(dir)
 }
 
-/// Write `bytes` as `name` in `dir` unless it is there already (a name is its content's hash),
-/// through a temporary file renamed into place, so the agent never reads half a picture.
+/// Write `bytes` as `name` in `dir` unless a whole copy is there already (a name is its content's
+/// hash), durably and through a temporary file renamed into place (B51, [`crate::picture::keep`]),
+/// so the agent never reads half a picture, and one a crash cut short is written again. What
+/// sits at the name without being the picture, a link the agent planted included, is replaced,
+/// never written through.
 fn store_upload(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), BusError> {
-    use std::io::Write as _;
-    let path = dir.join(name);
-    let present = || fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file());
-    if present() {
-        return Ok(());
-    }
-    let mut tmp = tempfile::NamedTempFile::new_in(dir).bus()?;
-    tmp.write_all(bytes).bus()?;
-    match tmp.persist_noclobber(&path) {
-        Ok(_) => Ok(()),
-        Err(_) if present() => Ok(()),
-        Err(error) => Err(crate::engine::internal(error.error)),
-    }
+    crate::picture::keep(dir, name, bytes).map_err(crate::engine::internal)?;
+    Ok(())
 }
 
 /// [`assert_own`] with PAIR reads allowed, for a handler with no transaction: one short read
@@ -951,11 +943,13 @@ fn prepare_launch(engine: &Engine, plan: LaunchPlan) -> Result<PreparedLaunch, B
         &instructions,
         "session.role_instructions_write_failed",
     )?;
+    let assets = engine.store.design_assets_dir();
     let mut args = match kind {
         LaunchKind::Fresh => crate::providers::driver(row.session.provider).args(
             &row.session,
             crate::providers::Launch::Fresh,
             Some(&brief_compact),
+            Some(&assets),
         ),
         LaunchKind::Resume => crate::providers::driver(row.session.provider).args(
             &row.session,
@@ -963,6 +957,7 @@ fn prepare_launch(engine: &Engine, plan: LaunchPlan) -> Result<PreparedLaunch, B
                 provider_ref: row.session.provider_ref.as_deref().filter(|value| crate::providers::is_provider_ref(value)),
             },
             Some(&brief_compact),
+            Some(&assets),
         ),
     };
     if row.session.provider == Provider::Codex {
@@ -2297,7 +2292,7 @@ pub fn register(e: &mut Engine) {
     // claimed from the PTY rather than read from the row (RA-646).
     e.register_staged::<Input, _>(|ctx, p| {
         let (id, pty) = live_pty(ctx, &p.session)?;
-        Ok((id, crate::engine::write_input(&pty, &p.data)?))
+        Ok((id, crate::engine::write_input(&pty, &p.data, p.paste)?))
     }, |ctx: &mut Ctx, _p, (id, edge): (Id, bool)| {
         if edge && ctx.tx().execute("UPDATE sessions SET state='running',updated_at=?1 WHERE id=?2 AND state='idle'", params![ctx.now, id]).bus()? > 0 {
             let updated = sessions::by_id(ctx.tx(), id)?.ok_or_else(|| BusError::internal("session vanished"))?;
