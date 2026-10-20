@@ -193,6 +193,12 @@ struct Paint<'a> {
     /// Every node of the page, the page first, in paint order (`design.get`'s).
     order: Vec<String>,
     at: FxHashMap<String, usize>,
+    /// Each node of `order`'s parent there (the page's own is the page).
+    up: Vec<usize>,
+    /// Each node's opacity, and how much of what it draws shows through its own opacity and its
+    /// ancestors' (none inside a clear one), as the painter fades a node with what is inside it.
+    opacity: Vec<f64>,
+    seen: Vec<f64>,
     /// Whether each node of `order` is drawn through a turn, its own or an ancestor's.
     turned: Vec<bool>,
     /// The nodes in scope.
@@ -200,9 +206,9 @@ struct Paint<'a> {
     grounds: Grounds,
 }
 
-/// The nodes a text can sit on (not a text, line, path, icon or group; placed, and not clear),
-/// by where they are drawn on the page, so the ground under a text is looked for among those
-/// around its centre, not among everything painted before it.
+/// The nodes a text can sit on (not a text, line, path, icon or group; placed, and neither clear
+/// nor inside a clear one), by where they are drawn on the page, so the ground under a text is
+/// looked for among those around its centre, not among everything painted before it.
 #[derive(Default)]
 struct Grounds {
     /// Each [`CELL`]-sized square of the page, with the grounds drawn over it, in paint order.
@@ -215,14 +221,14 @@ const CELL: f64 = 256.0;
 const MAX_CELLS: i64 = 64;
 
 impl Grounds {
-    fn new(scene: &Scene, placed: &Placed, order: &[String], turned: &[bool]) -> Grounds {
+    fn new(scene: &Scene, placed: &Placed, order: &[String], turned: &[bool], seen: &[f64]) -> Grounds {
         let mut grounds = Grounds::default();
         for (i, id) in order.iter().enumerate().skip(1) {
-            let Some(n) = scene.node(id).filter(|n| !matches!(n.kind, NodeKind::Text | NodeKind::Line | NodeKind::Path | NodeKind::Icon | NodeKind::Group)) else {
+            if seen[i] <= 0.0 || scene.node(id).is_none_or(|n| matches!(n.kind, NodeKind::Text | NodeKind::Line | NodeKind::Path | NodeKind::Icon | NodeKind::Group)) {
                 continue;
-            };
+            }
             let drawn = if turned[i] { shapes::visual(scene, placed, id).map(|(r, turn)| shapes::rotated_bounds(&r, turn)) } else { placed.rect(id) };
-            let Some(b) = drawn.filter(|_| n.opacity.is_none_or(|o| o > 0.0)) else { continue };
+            let Some(b) = drawn else { continue };
             let (x0, y0, x1, y1) = (cell(b.x), cell(b.y), cell(b.right()), cell(b.bottom()));
             if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) > MAX_CELLS {
                 grounds.wide.push(i);
@@ -267,25 +273,36 @@ fn cell(v: f64) -> i64 {
 /// - `clipped`: a free child of a clipping frame (any child of one without layout, an absolute
 ///   one of one with layout) whose box passes the frame's box, except along its scroll axis.
 /// - `contrast`: a text's or a labelled shape's words, or one of its runs in its own colour,
-///   below 4.5:1 (3:1 at 24 px, or 18.66 px from weight 700) on the ground under its centre:
-///   the nearest node painted before it there that is not a text, line, path, icon or group
-///   and is at least half opaque, with what is fainter laid over it, else the page's fill. On a
-///   picture, or with a colour that does not read, there is no check.
+///   below 4.5:1 (3:1 at 24 px, or 18.66 px from weight 700) on what is drawn under their
+///   centre. Both colours there are worked out as the painter lays them down: each node's
+///   ground in paint order, a node with an opacity faded together with what is inside it, so
+///   a faded card fades its words and its fill alike. The ground the message names is the
+///   nearest node painted there (the text itself when it paints a ground) that is not a text,
+///   line, path, icon or group and is at least half opaque beside the words, else the page. A
+///   picture over that ground, or a colour over it that does not parse, leaves nothing to
+///   check; under it, it is passed over. Nodes are read as drawn (`Scene::node`): a `$name`
+///   is the colour it names, and one the design does not hold leaves the kind's default.
 ///
 /// An issue names a node in scope first; the frame, the sibling or the ground it names next
 /// may lie outside.
 pub fn issues(scene: &Scene, placed: &Placed, measure: &dyn Measure, page: &str, ids: &[String]) -> (Vec<RenderIssue>, u32) {
     let order = scene.subtree(page);
     let at: FxHashMap<String, usize> = order.iter().enumerate().map(|(i, id)| (id.clone(), i)).collect();
-    let mut turned = vec![false; order.len()];
+    let n = order.len();
+    let (mut up, mut opacity, mut seen, mut turned) = (vec![0; n], vec![1.0; n], vec![1.0; n], vec![false; n]);
+    // Parents come before their children, so each is done before its children read it.
     for (i, id) in order.iter().enumerate() {
-        let own = scene.node(id).is_some_and(|n| shapes::rotation(n) != 0.0);
-        turned[i] = own || scene.parent(id).and_then(|p| at.get(p)).is_some_and(|&p| turned[p]);
+        let node = scene.node(id);
+        let parent = scene.parent(id).and_then(|p| at.get(p)).copied().filter(|&p| p < i);
+        up[i] = parent.unwrap_or(0);
+        opacity[i] = node.and_then(|n| n.opacity).unwrap_or(1.0).clamp(0.0, 1.0);
+        seen[i] = opacity[i] * parent.map_or(1.0, |p| seen[p]);
+        turned[i] = node.is_some_and(|n| shapes::rotation(n) != 0.0) || parent.is_some_and(|p| turned[p]);
     }
     let inside = scope(scene, page, ids);
     let wanted = inside.iter().cloned().collect();
-    let grounds = Grounds::new(scene, placed, &order, &turned);
-    let paint = Paint { scene, placed, measure, order, at, turned, wanted, grounds };
+    let grounds = Grounds::new(scene, placed, &order, &turned, &seen);
+    let paint = Paint { scene, placed, measure, order, at, up, opacity, seen, turned, wanted, grounds };
     let mut found = Vec::new();
     for parent in &paint.order {
         if paint.scene.children(parent).iter().any(|c| paint.wanted.contains(c)) {
@@ -313,7 +330,30 @@ impl Paint<'_> {
 
     /// Whether `id` or an ancestor is wholly clear, so nothing of it is seen.
     fn clear(&self, id: &str) -> bool {
-        std::iter::once(id).chain(self.scene.ancestors(id)).filter_map(|a| self.scene.node(a)).any(|n| n.opacity.is_some_and(|o| o <= 0.0))
+        self.at.get(id).is_none_or(|&i| self.seen[i] <= 0.0)
+    }
+
+    /// Node `i` of `order` and its ancestors, the page first.
+    fn chain(&self, i: usize) -> Vec<usize> {
+        let mut out = vec![i];
+        let mut at = i;
+        while at != 0 {
+            at = self.up[at];
+            out.push(at);
+        }
+        out.reverse();
+        out
+    }
+
+    /// How much node `i`'s own opacity and its ancestors' fade it beside a node whose `chain`
+    /// is `mine`: a layer both are inside fades them alike, so it is left out.
+    fn apart(&self, mut i: usize, mine: &[usize]) -> f64 {
+        let mut o = 1.0;
+        while !mine.contains(&i) {
+            o *= self.opacity[i];
+            i = self.up[i];
+        }
+        o
     }
 
     /// The issues among `parent`'s children.
@@ -427,10 +467,12 @@ impl Paint<'_> {
             return None;
         }
         let r = self.placed.rect(id)?;
-        let (ground, bg) = self.ground(n, &r)?;
+        let (ground, under, mine) = self.under_words(n, &r)?;
+        let ground = &self.order[ground];
+        let bg = under.clone().color();
         let own = text_color(self.scene, n);
         let (size, weight) = (n.font_size.unwrap_or(16.0), n.font_weight.unwrap_or(400));
-        let fade = n.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
+        let fade = mine.last().map_or(1.0, |&i| self.seen[i]);
         let runs = n.runs.as_deref().unwrap_or(&[]);
         let len = words.chars().count() as u32;
         let covered: u32 = runs.iter().map(|run| run.end.min(len).saturating_sub(run.start.min(len))).sum();
@@ -444,31 +486,35 @@ impl Paint<'_> {
             .into_iter()
             .chain(parts)
             .filter_map(|(chars, color, size, weight)| {
-                let [r, g, b, a] = parse_color(color)?;
-                let fg = [r, g, b, (f64::from(a) * fade).round() as u8];
+                let ink = parse_color(color)?;
+                let mut drawn = under.clone();
+                drawn.lay(&mine, &self.opacity, ink);
+                let fg = drawn.color();
                 let ratio = contrast(&hex(fg), &hex(bg));
                 let needs = if size >= 24.0 || (size >= 18.66 && weight >= 700) { LARGE_NEEDS } else { TEXT_NEEDS };
-                (ratio < needs).then_some((ratio / needs, chars, fg, ratio, needs))
+                (ratio < needs).then_some((ratio / needs, chars, ink, fg, ratio, needs))
             })
             .min_by(|a, b| a.0.total_cmp(&b.0))?;
-        let (_, chars, fg, ratio, needs) = worst;
+        let (_, chars, ink, fg, ratio, needs) = worst;
         let what = match chars {
             Some((start, end)) => format!("{id}, characters {start} to {end}"),
             None => id.to_string(),
         };
         let faded = if fade < 1.0 { format!(" at {}% opacity", (fade * 100.0).round()) } else { String::new() };
-        let fg = hex([fg[0], fg[1], fg[2], 255]);
-        let message = format!("{what}: {fg}{faded} on {} ({ground}) is {}:1; text this size needs {}:1", hex(bg), short(ratio), fmt(needs));
+        let drawn = if fade < 1.0 || ink[3] < 255 { format!(" (drawn {})", hex(fg)) } else { String::new() };
+        let message = format!("{what}: {}{faded}{drawn} on {} ({ground}) is {}:1; text this size needs {}:1", hex(ink), hex(bg), short(ratio), fmt(needs));
         let ids = if ground == id { vec![id.to_string()] } else { vec![id.to_string(), ground.clone()] };
-        Some(Found { code: Code::Contrast, at: (self.at(id), self.at(&ground)), ids, message })
+        Some(Found { code: Code::Contrast, at: (self.at(id), self.at(ground)), ids, message })
     }
 
-    /// The ground under the centre of `n` (placed at `r`) and its colour, opaque: the nearest
-    /// node painted before it there (itself first, when it paints a ground of its own) that is
-    /// not a text, line, path, icon or group and whose ground is at least half opaque, with the
-    /// fainter grounds above it laid over; else the page and its fill. `None` on a picture or a
-    /// colour that does not read.
-    fn ground(&self, n: &Node, r: &Rect) -> Option<(String, [u8; 4])> {
+    /// What is drawn under the centre of `n` (placed at `r`) before its words, with the ground
+    /// they are read on and `n`'s [`Paint::chain`], to lay its words down with. Every node
+    /// painted before it there that is not a text, line, path, icon or group (itself first, when
+    /// it paints a ground of its own) is laid down, down to the first that hides what is under
+    /// it, on the page's fill. The ground is the nearest of them whose colour is at least half
+    /// opaque beside the words ([`Paint::apart`]), else the page. `None` when a picture, or a
+    /// colour that does not parse, is nearer than the ground; one under it is passed over.
+    fn under_words(&self, n: &Node, r: &Rect) -> Option<(usize, Stack, Vec<usize>)> {
         let parent = n.parent.as_deref().unwrap_or_default();
         let centre = if self.turned.get(self.at(parent)).copied().unwrap_or(false) {
             shapes::to_page_pt(self.scene, self.placed, parent, r.cx(), r.cy())
@@ -476,46 +522,96 @@ impl Paint<'_> {
             (r.cx(), r.cy())
         };
         let from = self.at.get(&n.id).copied()?;
+        let mine = self.chain(from);
         let own = ground_of(n).is_some().then_some(from);
-        let mut fainter: Vec<([u8; 4], f64)> = Vec::new();
+        let (mut ground, mut laid) = (None, Vec::new());
         for i in own.into_iter().chain(self.grounds.under(centre, from)) {
             let id = &self.order[i];
-            let Some(c) = self.scene.node(id) else { continue };
-            let opacity = c.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
-            let Some(cr) = self.placed.rect(id).filter(|_| opacity > 0.0) else { continue };
+            let (Some(c), Some(cr)) = (self.scene.node(id), self.placed.rect(id)) else { continue };
             let (x, y) = if self.turned[i] { shapes::to_local(self.scene, self.placed, id, centre.0, centre.1) } else { centre };
             if !cr.contains(x, y) {
                 continue;
             }
-            if c.kind == NodeKind::Image {
-                return None;
+            let color = match c.kind {
+                NodeKind::Image => None,
+                _ => match ground_of(c) {
+                    Some(g) => parse_color(&g),
+                    None => continue,
+                },
+            };
+            let Some(color) = color else {
+                // Nothing can be said over it; under the ground it is passed over.
+                ground?;
+                continue;
+            };
+            laid.push((i, color));
+            if ground.is_none() && f64::from(color[3]) / 255.0 * self.apart(i, &mine) >= 0.5 {
+                ground = Some(i);
             }
-            let Some(ground) = ground_of(c) else { continue };
-            let color = parse_color(&ground)?;
-            let alpha = f64::from(color[3]) / 255.0 * opacity;
-            if alpha >= 0.5 {
-                return Some((id.clone(), laid(color, &fainter)));
-            }
-            if alpha > 0.0 {
-                fainter.push((color, alpha));
+            if color[3] == 255 && self.seen[i] >= 1.0 {
+                break;
             }
         }
-        let page = self.order.first()?;
-        let fill = self.scene.node(page).and_then(fill_of).unwrap_or_else(|| CANVAS.into());
-        Some((page.clone(), laid(parse_color(&fill)?, &fainter)))
+        let page = self.scene.node(self.order.first()?).and_then(fill_of).unwrap_or_else(|| CANVAS.into());
+        let mut under = Stack::new(parse_color(&page)?);
+        for (i, color) in laid.into_iter().rev() {
+            under.lay(&self.chain(i), &self.opacity, color);
+        }
+        Some((ground.unwrap_or(0), under, mine))
     }
 }
 
-/// `ground` made opaque with the fainter grounds above it, nearest first, laid over it.
-fn laid(ground: [u8; 4], fainter: &[([u8; 4], f64)]) -> [u8; 4] {
-    let mut at = [ground[0], ground[1], ground[2]].map(f64::from);
-    for (c, a) in fainter.iter().rev() {
-        for k in 0..3 {
-            at[k] = f64::from(c[k]) * a + at[k] * (1.0 - a);
+/// One point of the page as the painter lays it down: on the page's fill, the layers open there,
+/// outermost first, each a node of `order`, its opacity and what is drawn in it so far
+/// (premultiplied red, green, blue and alpha, 0 to 1). A layer is laid down on the one under it
+/// at its opacity when it closes, so a node and what is inside it fade together.
+#[derive(Clone)]
+struct Stack(Vec<(usize, f64, [f64; 4])>);
+
+impl Stack {
+    fn new([r, g, b, _]: [u8; 4]) -> Stack {
+        let [r, g, b] = [r, g, b].map(|c| f64::from(c) / 255.0);
+        Stack(vec![(usize::MAX, 1.0, [r, g, b, 1.0])])
+    }
+
+    /// Lay `color` down in the layer of the last of `chain` (a node and its ancestors, the
+    /// page first; `opacity` each node's), closing the layers it is not inside and opening
+    /// those of its own.
+    fn lay(&mut self, chain: &[usize], opacity: &[f64], color: [u8; 4]) {
+        let keep = self.0[1..].iter().zip(chain).take_while(|(open, i)| open.0 == **i).count();
+        while self.0.len() > keep + 1 {
+            self.close();
+        }
+        self.0.extend(chain[keep..].iter().map(|&i| (i, opacity[i], [0.0; 4])));
+        let a = f64::from(color[3]) / 255.0;
+        let [r, g, b] = [color[0], color[1], color[2]].map(|c| f64::from(c) / 255.0 * a);
+        if let Some(top) = self.0.last_mut() {
+            top.2 = over([r, g, b, a], top.2);
         }
     }
-    let [r, g, b] = at.map(|v| v.round().clamp(0.0, 255.0) as u8);
-    [r, g, b, 255]
+
+    /// Lay the top layer down on the one under it, at its opacity.
+    fn close(&mut self) {
+        if let [.., under, (_, o, px)] = self.0.as_mut_slice() {
+            under.2 = over(px.map(|v| v * *o), under.2);
+            self.0.pop();
+        }
+    }
+
+    /// The colour drawn there once every layer is laid down, opaque.
+    fn color(mut self) -> [u8; 4] {
+        while self.0.len() > 1 {
+            self.close();
+        }
+        let [r, g, b, _] = self.0[0].2;
+        let [r, g, b] = [r, g, b].map(|v| (v * 255.0).round().clamp(0.0, 255.0) as u8);
+        [r, g, b, 255]
+    }
+}
+
+/// Premultiplied `top` laid over `under`.
+fn over(top: [f64; 4], under: [f64; 4]) -> [f64; 4] {
+    [0, 1, 2, 3].map(|k| top[k] + under[k] * (1.0 - top[3]))
 }
 
 /// Which side of `r` passes `[left, right, top, bottom]` furthest, by more than [`SLACK`]: the
@@ -560,7 +656,14 @@ mod tests {
     use relay_bus::design::{NodeKind as K, Scroll, Sizing, Styles, TextRun};
 
     fn page(nodes: Vec<Node>) -> (Scene, Placed) {
-        let s = Scene::new(std::iter::once(node("p1", None, K::Page, [0.0; 4])).chain(nodes).collect());
+        filled_page(None, nodes)
+    }
+
+    /// `nodes` on a page filled `fill` (none: the canvas).
+    fn filled_page(fill: Option<&str>, nodes: Vec<Node>) -> (Scene, Placed) {
+        let mut p1 = node("p1", None, K::Page, [0.0; 4]);
+        p1.fill = fill.map(String::from);
+        let s = Scene::new(std::iter::once(p1).chain(nodes).collect());
         let p = place(&s, "p1", &Mono);
         (s, p)
     }
@@ -983,10 +1086,57 @@ mod tests {
         (faded.color, faded.opacity) = (Some("#1A1A1A".into()), Some(0.4));
         let (s, p) = on_ground("#FFFFFF", faded.clone());
         let found = all_issues(&s, &p);
-        assert!(found.0[0].message.starts_with("faded: #1A1A1A at 40% opacity on #FFFFFF (email) is 2."), "{:?}", found.0);
+        assert!(found.0[0].message.starts_with("faded: #1A1A1A at 40% opacity (drawn #A3A3A3) on #FFFFFF (email) is 2.52:1"), "{:?}", found.0);
         faded.opacity = Some(0.0);
-        let (s, p) = on_ground("#FFFFFF", faded);
+        let (s, p) = on_ground("#FFFFFF", faded.clone());
         assert!(all_issues(&s, &p).0.is_empty(), "a clear text is not read");
+        (faded.opacity, faded.color) = (None, Some("#00000080".into()));
+        let (s, p) = on_ground("#FFFFFF", faded);
+        assert!(all_issues(&s, &p).0[0].message.starts_with("faded: #00000080 (drawn #7F7F7F) on #FFFFFF (email)"), "{:?}", all_issues(&s, &p).0);
+    }
+
+    #[test]
+    fn contrast_counts_the_opacity_of_what_holds_the_words_and_their_ground() {
+        let white = Some("#FFFFFF");
+        let ink = |id: &str, parent: &str, color: &str| {
+            let mut t = text(id, parent, [10.0, 40.0, 0.0, 0.0], "Words");
+            t.color = Some(color.into());
+            t
+        };
+        // A disabled card: black words on its white fill, both drawn at 30% on a white page.
+        let mut card = node("card", Some("p1"), K::Frame, [0.0, 0.0, 300.0, 100.0]);
+        (card.fill, card.opacity) = (Some("#FFFFFF".into()), Some(0.3));
+        let (s, p) = filled_page(white, vec![card.clone(), ink("label", "card", "#000000")]);
+        let found = all_issues(&s, &p);
+        assert_eq!(codes(&found), [("contrast", vec!["label", "card"])]);
+        assert!(found.0[0].message.starts_with("label: #000000 at 30% opacity (drawn #B3B3B3) on #FFFFFF (card) is 2.09:1"), "{}", found.0[0].message);
+        // A group fades what is inside it too.
+        let mut off = node("off", Some("p1"), K::Group, [0.0, 0.0, 0.0, 0.0]);
+        off.opacity = Some(0.5);
+        let (s, p) = filled_page(white, vec![off, ink("label", "off", "#000000")]);
+        assert!(all_issues(&s, &p).0[0].message.starts_with("label: #000000 at 50% opacity (drawn #808080) on #FFFFFF (p1)"), "{:?}", all_issues(&s, &p).0);
+        // Faded together, a dark card and its white words both show the white page through:
+        // the words stay white and the card turns grey, 4.29:1 rather than white on #222222.
+        (card.fill, card.opacity) = (Some("#222222".into()), Some(0.6));
+        let (s, p) = filled_page(white, vec![card, ink("label", "card", "#FFFFFF")]);
+        assert_eq!(all_issues(&s, &p).0[0].message, "label: #FFFFFF at 60% opacity (drawn #FFFFFF) on #7A7A7A (card) is 4.29:1; text this size needs 4.5:1");
+        // A sheet in a faded overlay the words are not in is a faint ground, not a solid one:
+        // white words read on it, and grey words are read on the page it lets through.
+        let mut overlay = node("overlay", Some("p1"), K::Frame, [0.0, 0.0, 300.0, 100.0]);
+        (overlay.fill, overlay.opacity) = (Some("#00000000".into()), Some(0.3));
+        let sheet = |fill: &str| {
+            let mut n = node("sheet", Some("overlay"), K::Rect, [0.0, 0.0, 300.0, 100.0]);
+            n.fill = Some(fill.into());
+            n
+        };
+        let (s, p) = page(vec![overlay.clone(), sheet("#FFFFFF"), ink("note", "p1", "#FFFFFF")]);
+        assert!(all_issues(&s, &p).0.is_empty(), "{:?}", all_issues(&s, &p).0);
+        let (s, p) = page(vec![overlay.clone(), sheet("#FFFFFF"), ink("note", "p1", "#999999")]);
+        assert_eq!(codes(&all_issues(&s, &p)), [("contrast", vec!["note", "p1"])]);
+        // Nothing inside a clear frame is under anything.
+        overlay.opacity = Some(0.0);
+        let (s, p) = filled_page(white, vec![overlay, sheet("#000000"), ink("note", "p1", "#111111")]);
+        assert!(all_issues(&s, &p).0.is_empty(), "{:?}", all_issues(&s, &p).0);
     }
 
     #[test]
