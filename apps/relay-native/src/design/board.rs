@@ -253,6 +253,8 @@ pub struct Board {
     /// The frame whose coordinates the guides are in, a turned one's; the page's when none.
     pub(super) guides_in: RefCell<Option<String>>,
     pub(super) space: Cell<bool>,
+    /// Shift is held, as the keys and the pointer last told.
+    pub(super) shift_held: Cell<bool>,
     pub(super) pointer: Cell<(f64, f64)>,
     /// The drag under way's last update (screen point, offset, modifiers), which auto-pan
     /// runs again as the camera moves under a still pointer.
@@ -546,6 +548,7 @@ impl Board {
             guides: RefCell::default(),
             guides_in: RefCell::default(),
             space: Cell::new(false),
+            shift_held: Cell::new(false),
             pointer: Cell::new((0.0, 0.0)),
             drag_at: Cell::new(None),
             autopan: Cell::new(false),
@@ -963,12 +966,16 @@ impl Board {
 
     fn fit_cam(&self, r: Option<Rect>, closer: bool) -> Camera {
         let (w, h) = self.size.get();
-        // The dock sits over the top left: fit below it, and keep the frame names in view.
-        let top = 76.0;
+        // Clear of the layers panel on the left and the inspector on the right where they show
+        // (E-board-21), 8 px from each.
+        let layers = self.layers_panel.reveals_child().then(|| f64::from(self.layers_panel.width()) + 12.0 + 8.0);
+        let inspector = self.inspector_scroll.is_visible().then(|| w - f64::from(self.inspector_scroll.width().max(INSPECTOR_W as i32)) - 12.0 - 8.0);
+        let area = fit_area(w, h, layers, inspector);
         match r {
             Some(r) => {
-                let mut cam = Camera::fit(&r, w, (h - top).max(1.0), 56.0, if closer { 4.0 } else { 1.0 });
-                cam.y -= top / cam.zoom;
+                let mut cam = Camera::fit(&r, area.w, area.h, 56.0, if closer { 4.0 } else { 1.0 });
+                cam.x -= area.x / cam.zoom;
+                cam.y -= area.y / cam.zoom;
                 cam
             }
             None => Camera { x: -w / 2.0, y: -h / 2.0, zoom: 1.0 },
@@ -1857,7 +1864,14 @@ impl Board {
         let rubber = gsk::PathBuilder::new();
         let last = screen[screen.len() - 1];
         rubber.move_to(last.0 as f32, last.1 as f32);
-        let to = if closing { first } else { pointer };
+        // With Shift, at 45° steps from the last point, where the click would put it (E-board-2).
+        let to = if closing {
+            first
+        } else if self.shift_held.get() {
+            super::tools::constrain45(last, pointer)
+        } else {
+            pointer
+        };
         rubber.line_to(to.0 as f32, to.1 as f32);
         let dashed = gsk::Stroke::new(1.0);
         dashed.set_dash(&[4.0, 3.0]);
@@ -2717,6 +2731,9 @@ impl Board {
             let weak = Rc::downgrade(self);
             action.connect_activate(move |_, _| {
                 if let Some(b) = weak.upgrade() {
+                    // A menu or action in the middle of a drag puts the drag back first, so the
+                    // release does not overwrite what it did (TM-43).
+                    b.cancel_gesture();
                     f(&b);
                 }
             });
@@ -3762,6 +3779,17 @@ fn pin_lines(n: &Node, r: &Rect, pr: &Rect, px: f64) -> Vec<((f64, f64), (f64, f
     lines
 }
 
+/// Where a fit frames what it shows on a `w` by `h` canvas: below the dock along the top, which
+/// keeps the frame names in view, and between the layers panel's right edge `left` and the
+/// inspector's left edge `right` where they show; the whole width when that leaves too little.
+fn fit_area(w: f64, h: f64, left: Option<f64>, right: Option<f64>) -> Rect {
+    const TOP: f64 = 76.0;
+    let x0 = left.unwrap_or(0.0).clamp(0.0, w);
+    let x1 = right.unwrap_or(w).clamp(x0, w);
+    let (x0, x1) = if x1 - x0 < 240.0 { (0.0, w) } else { (x0, x1) };
+    Rect::new(x0, TOP, (x1 - x0).max(1.0), (h - TOP).max(1.0))
+}
+
 /// The insertion bar, in page coordinates (`px` page units to a screen pixel), for a place in
 /// frame `pr` laid out `mode`: 2 screen px centred just before child `next` at that place, or
 /// just after the `last` laid out when there is none, or inside the empty frame's start. A row's
@@ -4102,5 +4130,20 @@ mod tests {
         n.pin_y = Some(PinY::Top);
         let lines = pin_lines(&n, &r, &pr, 1.0);
         assert_eq!(lines, [((0.0, 60.0), (100.0, 60.0)), ((140.0, 60.0), (300.0, 60.0)), ((120.0, 0.0), (120.0, 50.0))]);
+    }
+
+    #[test]
+    fn fit_frames_between_the_panels_that_show() {
+        assert_eq!(fit_area(1200.0, 800.0, None, None), Rect::new(0.0, 76.0, 1200.0, 724.0));
+        // E-board-21: the layers panel's 260 px and the inspector's 256 px left out.
+        let area = fit_area(1200.0, 800.0, Some(280.0), Some(924.0));
+        assert_eq!((area.x, area.w), (280.0, 644.0));
+        let r = Rect::new(0.0, 0.0, 390.0, 844.0);
+        let mut cam = Camera::fit(&r, area.w, area.h, 56.0, 1.0);
+        cam.x -= area.x / cam.zoom;
+        cam.y -= area.y / cam.zoom;
+        let (sx, _) = cam.to_screen(r.cx(), r.cy());
+        assert!((sx - (280.0 + 644.0 / 2.0)).abs() < 1e-6, "centred between them: {sx}");
+        assert_eq!(fit_area(500.0, 800.0, Some(280.0), Some(220.0)).w, 500.0, "too narrow between them: the whole width");
     }
 }

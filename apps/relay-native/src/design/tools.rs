@@ -56,7 +56,7 @@ pub fn install(b: &Rc<Board>) {
             cancel(&b);
         }
     });
-    canvas.add_controller(drag);
+    canvas.add_controller(drag.clone());
 
     // The middle button pans whatever the tool.
     let pan = gtk::GestureDrag::new();
@@ -88,6 +88,9 @@ pub fn install(b: &Rc<Board>) {
             if matches!(*b.gesture.borrow(), Gesture::Pan { .. }) {
                 *b.gesture.borrow_mut() = Gesture::Idle;
                 update_cursor(&b, None);
+                // The selection's toolbar, away while the press lasted, comes back (TM-38).
+                b.overlay.queue_allocate();
+                b.schedule_chrome();
             }
         }
     });
@@ -105,8 +108,9 @@ pub fn install(b: &Rc<Board>) {
 
     let motion = gtk::EventControllerMotion::new();
     let weak = Rc::downgrade(b);
-    motion.connect_motion(move |_, x, y| {
+    motion.connect_motion(move |c, x, y| {
         if let Some(b) = weak.upgrade() {
+            b.shift_held.set(shift(c.current_event_state()));
             hover(&b, x, y);
         }
     });
@@ -132,7 +136,16 @@ pub fn install(b: &Rc<Board>) {
         glib::Propagation::Stop
     });
     canvas.add_controller(scroll);
-    canvas.add_controller(zoom_gesture(b));
+    // A pinch is not a drag as well: its first finger's drag is put back and let go (E-board-20).
+    let pinch = zoom_gesture(b);
+    let weak = Rc::downgrade(b);
+    pinch.connect_begin(move |_, _| {
+        if let Some(b) = weak.upgrade() {
+            b.cancel_gesture();
+        }
+        drag.set_state(gtk::EventSequenceState::Denied);
+    });
+    canvas.add_controller(pinch);
 
     // Over the text being typed, the wheel, a pinch and the middle button move the camera as
     // they do over the canvas (TM-77): the editor, a sibling of the canvas in the overlay,
@@ -206,11 +219,13 @@ pub fn install(b: &Rc<Board>) {
         let Some(b) = weak.upgrade() else {
             return glib::Propagation::Proceed;
         };
+        held_shift(&b, key, true);
         key_pressed(&b, c, key, code, mods)
     });
     let weak = Rc::downgrade(b);
     keys.connect_key_released(move |_, key, _, _| {
         if let Some(b) = weak.upgrade() {
+            held_shift(&b, key, false);
             if key == gdk::Key::space {
                 b.space.set(false);
                 update_cursor(&b, None);
@@ -269,6 +284,14 @@ pub fn install(b: &Rc<Board>) {
         true
     });
     canvas.add_controller(drop);
+}
+
+/// Shift pressed or let go: the vector pen's rubber line keeps to 45° while it is held, as its
+/// click will (E-board-2).
+fn held_shift(b: &Board, key: gdk::Key, down: bool) {
+    if matches!(key, gdk::Key::Shift_L | gdk::Key::Shift_R) && b.shift_held.replace(down) != down && b.vector.borrow().is_some() {
+        b.canvas.queue_draw();
+    }
 }
 
 /// How far a frame the camera moves, in screen pixels, with the pointer at `(x, y)` near an
@@ -1035,7 +1058,7 @@ fn update(b: &Rc<Board>, x: f64, y: f64, dx: f64, dy: f64, mods: gdk::ModifierTy
     }
 }
 
-fn constrain45(a: (f64, f64), p: (f64, f64)) -> (f64, f64) {
+pub(super) fn constrain45(a: (f64, f64), p: (f64, f64)) -> (f64, f64) {
     let (dx, dy) = (p.0 - a.0, p.1 - a.1);
     let len = (dx * dx + dy * dy).sqrt();
     let angle = dy.atan2(dx);
@@ -1513,6 +1536,9 @@ fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
     let gesture = std::mem::replace(&mut *b.gesture.borrow_mut(), Gesture::Idle);
     b.guides.borrow_mut().clear();
     b.guides_in.borrow_mut().take();
+    // The selection's toolbar, away while the press lasted, comes back whatever it was (TM-38).
+    b.overlay.queue_allocate();
+    b.schedule_chrome();
     match gesture {
         Gesture::Idle => {}
         Gesture::Pan { .. } => update_cursor(b, None),
@@ -1894,6 +1920,7 @@ pub(super) fn cancel(b: &Board) {
     b.drag_at.set(None);
     b.doc.set_hold(false);
     b.invalidate();
+    b.overlay.queue_allocate();
     update_cursor(b, None);
 }
 
@@ -2069,6 +2096,14 @@ fn key_pressed(
     if key == Key::space && !ctrl {
         if !b.space.replace(true) {
             update_cursor(b, Some("grab"));
+        }
+        return stop;
+    }
+    // In the middle of a drag only Esc acts, putting it back: a shortcut would act on what the
+    // drag previews and the release then overwrite it (TM-43).
+    if !matches!(*b.gesture.borrow(), Gesture::Idle) {
+        if key == Key::Escape {
+            cancel(b);
         }
         return stop;
     }
