@@ -88,11 +88,24 @@ fn stretched(scene: &Scene, id: &str) -> (bool, bool) {
 /// What [`settle`] does with a size its node's own rule would not give it out of a layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Sizes {
-    /// Fixed at the size shown: a fill, and a hug of what no longer measures it.
+    /// Fixed at the size shown: a fill, and a hug of what no longer measures it. For a node
+    /// leaving the auto layout that sized it.
     Freeze,
     /// Written as `w`/`h` with each rule kept where it reads them out of a layout (a fill, a
-    /// frame hugging with no layout of its own), so a copy laid out again still fills.
+    /// frame hugging with no layout of its own), so a copy laid out again still fills. For a
+    /// copy, and for a node no layout placed, which shows its stored size already.
     Carry,
+}
+
+/// How `id` keeps its size as it leaves its parent: fixed where its parent laid it out, its own
+/// rules kept otherwise (a fill or a hug out of a layout reads its stored size, so fixing it
+/// changes nothing drawn and only loses what it does in a layout it meets later).
+fn leaving(scene: &Scene, id: &str) -> Sizes {
+    if is_laid(scene, id) {
+        Sizes::Freeze
+    } else {
+        Sizes::Carry
+    }
 }
 
 /// The fields that put `n` (as stored) at `rel` out of any auto layout (TM-8): `rel` is the box
@@ -137,12 +150,13 @@ fn settle(n: &Node, rel: Rect, fit: Option<Fit>, stretched: (bool, bool), sizes:
 /// The update that keeps `id` where and as big as it shows (TM-8) once it sits out of any auto
 /// layout, in a parent whose children count from page point `origin` and which is drawn as `fit`:
 /// a node leaving its layout, a layout turned off, a frame ungrouped. Its box as placed, written
-/// through the parent's pins, with each size a fill or a hug gave it fixed, but a text's, a
-/// sticky's or a laid-out frame's hug, which measures what it holds wherever it is. `None` for a
-/// node not placed (hidden): nothing shows where it would be.
+/// through the parent's pins, with each size a fill or a hug gave it fixed where its parent laid
+/// it out, but a text's, a sticky's or a laid-out frame's hug, which measures what it holds
+/// wherever it is; a node no layout placed keeps its rules ([`leaving`]). `None` for a node not
+/// placed (hidden): nothing shows where it would be.
 pub fn freeze(scene: &Scene, placed: &Placed, id: &str, origin: (f64, f64), fit: Option<Fit>) -> Option<Map<String, Value>> {
     let n = scene.stored(id)?;
-    Some(settle(n, shown(placed, id, origin)?, fit, stretched(scene, id), Sizes::Freeze))
+    Some(settle(n, shown(placed, id, origin)?, fit, stretched(scene, id), leaving(scene, id)))
 }
 
 /// Fresh ids for every node of `nodes`, keyed by the old.
@@ -569,7 +583,7 @@ fn ungroup_one(scene: &Scene, placed: &Placed, id: &str, going: &HashSet<String>
                     rel = rel.translate(to.0 - centre.0, to.1 - centre.1);
                 }
                 let mut s = match shown {
-                    Some(_) if free => settle(c, rel, fit, stretched(scene, child), Sizes::Freeze),
+                    Some(_) if free => settle(c, rel, fit, stretched(scene, child), leaving(scene, child)),
                     _ => {
                         let r = if free { unpinned(c, fit, rel) } else { rel };
                         set(&[("x", json!(coord(r.x))), ("y", json!(coord(r.y)))])
@@ -658,7 +672,7 @@ pub fn reparent(scene: &Scene, placed: &Placed, id: &str, parent: &str, index: O
     let s = match placed.rect(id) {
         Some(r) => {
             let rel = Rect::new(at.0 + ox - r.x - origin.0, at.1 + oy - r.y - origin.1, r.w, r.h);
-            settle(n, rel, fit_of(scene, placed, parent), stretched(scene, id), Sizes::Freeze)
+            settle(n, rel, fit_of(scene, placed, parent), stretched(scene, id), leaving(scene, id))
         }
         None => set(&[("x", json!(coord(at.0 - origin.0))), ("y", json!(coord(at.1 - origin.1)))]),
     };
@@ -1995,6 +2009,49 @@ mod tests {
         kept(&before, &after, &["f", "r", "t", "hug"]);
         // The hugging text the column stretched wraps at the width it was given.
         assert_eq!(s.node("hug").unwrap().w_sizing, Some(Sizing::Fixed));
+    }
+
+    /// TM-8 fixes a fill or a hug only on what leaves an auto layout: a node no layout placed
+    /// keeps its own rules, read as its stored size out of a layout anyway, when its group goes,
+    /// it changes parent or it is framed, so it still fills or hugs in a layout it meets later.
+    #[test]
+    fn a_free_node_keeps_its_size_rules_when_it_changes_parent() {
+        let rules = |s: &Scene| {
+            let (f, h) = (s.node("f").unwrap(), s.node("h").unwrap());
+            (f.w_sizing, h.h_sizing)
+        };
+        let free = || {
+            let mut fill = node("f", Some("g"), K::Rect, [0.0, 0.0, 100.0, 20.0]);
+            fill.w_sizing = Some(Sizing::Fill);
+            let mut hug = node("h", Some("g"), K::Frame, [0.0, 40.0, 80.0, 30.0]);
+            hug.h_sizing = Some(Sizing::Hug);
+            Scene::new(vec![
+                node("p1", None, K::Page, [0.0; 4]),
+                node("g", Some("p1"), K::Group, [10.0, 10.0, 0.0, 0.0]),
+                fill,
+                hug,
+                node("dest", Some("p1"), K::Frame, [300.0, 0.0, 200.0, 200.0]),
+            ])
+        };
+        let want = (Some(Sizing::Fill), Some(Sizing::Hug));
+        let mut s = free();
+        let before = place(&s, "p1", &Mono);
+        let (ops, _) = ungroup(&s, &before, "g").unwrap();
+        run(&mut s, &ops);
+        kept(&before, &place(&s, "p1", &Mono), &["f", "h"]);
+        assert_eq!(rules(&s), want, "ungrouped");
+        let mut s = free();
+        let at = |id: &str| before.rect(id).map(|r| (r.x, r.y)).unwrap();
+        let mut ops = reparent(&s, &before, "f", "dest", None, at("f"));
+        ops.extend(reparent(&s, &before, "h", "dest", None, at("h")));
+        run(&mut s, &ops);
+        kept(&before, &place(&s, "p1", &Mono), &["f", "h"]);
+        assert_eq!(rules(&s), want, "moved into a frame");
+        let mut s = free();
+        let (ops, _) = group(&mut s, &before, &ids(&["f", "h"]), K::Frame).unwrap();
+        run(&mut s, &ops);
+        kept(&before, &place(&s, "p1", &Mono), &["f", "h"]);
+        assert_eq!(rules(&s), want, "framed");
     }
 
     /// TM-8: a frame made of a column's children keeps each one's box.
