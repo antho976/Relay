@@ -26,7 +26,6 @@ import com.tally.app.ui.common.Dates
 import com.tally.app.ui.common.LocalMoney
 import com.tally.app.ui.common.refusalLine
 import com.tally.app.ui.kit.AccountBadge
-import com.tally.app.ui.kit.Balance
 import com.tally.app.ui.kit.ConfirmDialog
 import com.tally.app.ui.kit.DetailPage
 import com.tally.app.ui.kit.Empty
@@ -64,7 +63,11 @@ fun AccountsRoute(nav: AppNav) {
     AccountsScreen(s, open = { nav.transactions(accountId = it) }, add = { nav.accountEdit() }, transfer = { nav.entry(type = com.tally.core.TxType.TRANSFER) })
 }
 
-/** Where the money sits: net worth, held against owed, and every account with its share. */
+/**
+ * Where the money goes from: this month's spending from each account first, since Tally tracks
+ * spending. A balance shows only for an account given one to start from, and always in words
+ * ("holds", "owes"), never as a negative figure.
+ */
 @Composable
 fun AccountsScreen(s: AccountsState, open: (Long) -> Unit, add: () -> Unit, transfer: () -> Unit) {
     val c = Tally.colors
@@ -79,37 +82,52 @@ fun AccountsScreen(s: AccountsState, open: (Long) -> Unit, add: () -> Unit, tran
     ) {
         if (!s.loaded) return@SpacePage
         if (s.active.isEmpty() && s.archived.isEmpty()) {
-            Slab { Empty("bank", "No accounts yet", "An account is where money sits: a chequing account, a card, cash. Entries come out of one.") { Key("Add an account", add, glyph = "plus") } }
+            Slab { Empty("bank", "No accounts yet", "An account is what you pay with: a chequing account, a card, cash. Each entry says which one.") { Key("Add an account", add, glyph = "plus") } }
             return@SpacePage
         }
         Slab(Modifier.fillMaxWidth(), padding = PaddingValues(16.dp), spacing = 6.dp) {
-            Eyebrow("Net worth")
-            T(fmt.formatWhole(s.net), style = Tally.type.hero, color = if (s.net < 0) c.heldText else c.ink, maxLines = 1)
+            Eyebrow("Spent this month")
+            T(fmt.formatWhole(s.monthSpent), style = Tally.type.hero, color = c.ink, maxLines = 1)
             T(
-                (if (s.sinceOpening >= 0) "Up " else "Down ") + fmt.formatWhole(kotlin.math.abs(s.sinceOpening)) + " since the accounts opened",
+                s.topSpender?.let { top ->
+                    if (top.spentShare >= .999f) "All of it from " + top.account.name
+                    else Math.round(top.spentShare * 100f).toString() + "% of it from " + top.account.name
+                } ?: "Nothing spent from your accounts yet this month",
                 style = Tally.type.caption,
-                color = if (s.sinceOpening >= 0) c.liveText else c.heldText,
+                color = c.ink3,
             )
         }
-        StatGrid(
-            listOf(
-                { m -> Stat("Held", fmt.formatWhole(s.held), m, glyph = "wallet", sub = s.largest?.let { "Most in " + it.account.name }) },
-                { m -> Stat("Owed", fmt.formatWhole(s.owed), m, glyph = "card", figureColor = if (s.owed > 0) c.heldText else c.ink, sub = s.busiest?.let { "Busiest: " + it.account.name }) },
-            ),
-        )
+        if (s.anyTracked) {
+            val held = s.largest?.takeIf { it.tracked }?.let { "Most in " + it.account.name } ?: "In the accounts with a balance"
+            // Owed shows only when something is: a card at zero is not news.
+            if (s.trackedOwed > 0) {
+                StatGrid(
+                    listOf(
+                        { m -> Stat("Held", fmt.formatWhole(s.trackedHeld), m, glyph = "wallet", sub = held) },
+                        { m -> Stat("Owed", fmt.formatWhole(s.trackedOwed), m, glyph = "card", sub = "On cards and below zero") },
+                    ),
+                )
+            } else {
+                Stat("Held", fmt.formatWhole(s.trackedHeld), Modifier.fillMaxWidth(), glyph = "wallet", sub = held)
+            }
+        }
         Panel("Accounts", glyph = "bank", subtitle = s.defaultName?.let { "New entries start in $it" }) {
-            s.active.forEach { line -> AccountLineRow(line, onClick = { open(line.account.id) }) }
+            s.active.forEach { line -> AccountLineRow(line, fmt, onClick = { open(line.account.id) }) }
         }
         if (s.archived.isNotEmpty()) {
             Panel("Archived", glyph = "save") {
-                s.archived.forEach { line -> AccountLineRow(line, onClick = { open(line.account.id) }) }
+                s.archived.forEach { line -> AccountLineRow(line, fmt, onClick = { open(line.account.id) }) }
             }
+        }
+        if (!s.anyTracked && s.active.isNotEmpty()) {
+            T("Tally counts what you spend from each account. Give one its balance in its settings and Tally keeps what it holds as well.", Modifier.padding(horizontal = 4.dp), Tally.type.caption, c.ink3)
         }
     }
 }
 
+/** One account: what it paid out this month and its share of the month, over its kind and, when it tracks one, its balance in words. */
 @Composable
-private fun AccountLineRow(line: AccountLine, onClick: () -> Unit) {
+private fun AccountLineRow(line: AccountLine, fmt: com.tally.core.MoneyFormatter, onClick: () -> Unit) {
     val c = Tally.colors
     val a = line.account
     ListRow(onClick = onClick, padding = PaddingValues(horizontal = 4.dp, vertical = 10.dp)) {
@@ -117,15 +135,10 @@ private fun AccountLineRow(line: AccountLine, onClick: () -> Unit) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 T(a.name, Modifier.weight(1f), Tally.type.ui, c.ink, maxLines = 1)
-                Balance(a.balance)
+                if (!a.archived) T(fmt.formatWhole(line.spent), style = Tally.type.amount, color = if (line.spent > 0) c.ink else c.ink3, maxLines = 1)
             }
-            if (!a.archived) Meter(line.share, color = if (a.balance < 0) c.held else c.ink3, height = 3.dp)
-            T(
-                listOfNotNull(typeLabel(a.type), if (line.isDefault) "default" else null, a.valuedOn?.let { "valued " + Dates.monthShort(it) + " " + it.dayOfMonth }, shareLine(line)).joinToString(" · "),
-                style = Tally.type.caption,
-                color = c.ink3,
-                maxLines = 1,
-            )
+            if (!a.archived) Meter(line.spentShare, color = c.ink3, height = 3.dp)
+            T(accountCaption(line, fmt), style = Tally.type.caption, color = c.ink3, maxLines = 1)
         }
     }
 }
@@ -195,7 +208,10 @@ fun AccountEditScreen(s: AccountEditState, a: AccountEditActions) {
     DetailPage(
         if (s.isNew) "New account" else s.storedName.ifBlank { "Account" },
         a.back,
-        subtitle = if (s.isNew) null else "Balance " + fmt.format(s.balance) + " · " + Copy.plural(s.entryCount, "entry", "entries"),
+        subtitle = if (s.isNew) null else listOfNotNull(
+            if ((s.draft.opening ?: 0L) != 0L || s.values.isNotEmpty()) balanceWords(s.draft.type, s.balance, fmt).replaceFirstChar { it.uppercase() } else null,
+            Copy.plural(s.entryCount, "entry", "entries"),
+        ).joinToString(" · "),
         actions = {
             if (!s.isNew) {
                 IconKey("list", a.entries, label = "Its entries")

@@ -133,6 +133,13 @@ interface TransactionDao {
     )
     fun observeDailyExpense(start: LocalDate, end: LocalDate): Flow<List<DayTotal>>
 
+    /** What each account paid out over a stretch: Accounts leads with it. */
+    @Query(
+        """SELECT accountId, SUM(amount) AS total, COUNT(*) AS count FROM transactions
+           WHERE type = 'EXPENSE' AND date >= :start AND date < :end GROUP BY accountId"""
+    )
+    fun observeSpendByAccount(start: LocalDate, end: LocalDate): Flow<List<AccountTotal>>
+
     @Query(
         """SELECT type, SUM(amount) AS total FROM transactions
            WHERE type != 'TRANSFER' AND date >= :start AND date < :end GROUP BY type"""
@@ -524,7 +531,9 @@ data class IdUid(val id: Long, val uid: String)
 
 /**
  * What the PC sync reads and writes (data/sync/LedgerSync.kt). The `since` reads include rows
- * stamped exactly at the watermark: sending one twice is harmless, missing one is not.
+ * stamped exactly at the watermark: sending one twice is harmless, missing one is not. No local
+ * edit is stamped under the watermark, whatever the clock says: the triggers hold every stamp at
+ * the floor ([setFloor], SyncSchema), which is the watermark.
  */
 @Dao
 interface SyncDao {
@@ -653,6 +662,11 @@ interface SyncDao {
     @Query("DELETE FROM recurring") suspend fun wipeRecurring()
     @Query("DELETE FROM categories") suspend fun wipeCategories()
     @Query("DELETE FROM accounts") suspend fun wipeAccounts()
+
+    /** The floor the triggers hold every local stamp at (SyncSchema); null before a sync ever set one. */
+    @Query("SELECT value FROM sync_state WHERE `key` = 'floor'") suspend fun floor(): Long?
+    /** Only through LedgerSync.mark, which never lowers it. */
+    @Query("INSERT OR REPLACE INTO sync_state (`key`, value) VALUES ('floor', :at)") suspend fun setFloor(at: Long)
 
     /** While set, local-edit triggers stand aside (SyncSchema). Only inside the apply transaction. */
     @Query("INSERT OR REPLACE INTO sync_state (`key`, value) VALUES ('applying', 1)") suspend fun beginApplying()

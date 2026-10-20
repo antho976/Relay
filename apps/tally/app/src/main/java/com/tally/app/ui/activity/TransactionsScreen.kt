@@ -38,6 +38,7 @@ import com.tally.app.ui.kit.Stat
 import com.tally.app.ui.kit.StatGrid
 import com.tally.app.ui.kit.T
 import com.tally.app.ui.nav.AppNav
+import com.tally.app.ui.plan.paceDays
 import com.tally.app.ui.plan.paceTone
 import com.tally.app.ui.theme.Tally
 import com.tally.core.Copy
@@ -97,12 +98,28 @@ fun TransactionsScreen(
                 Slab(Modifier.fillMaxWidth(), padding = PaddingValues(16.dp), spacing = 6.dp) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         if (s.isAccount) AccountBadge(s.accountType, size = 40.dp) else CategoryBadge(s.icon, s.color, size = 40.dp)
+                        // An account reads what it holds only when it was given a balance to start
+                        // from; otherwise what it paid out this month. Never a negative figure.
+                        val holds = s.isAccount && s.tracksBalance
                         Column(Modifier.weight(1f)) {
-                            Eyebrow(if (s.isAccount) "Balance" else Dates.period(s.period, s.today))
+                            Eyebrow(
+                                when {
+                                    !holds -> if (s.isAccount) "Out in " + Dates.period(s.period, s.today) else Dates.period(s.period, s.today)
+                                    s.balance >= 0 -> "Balance"
+                                    s.accountType == com.tally.core.AccountType.CREDIT -> "Owed"
+                                    else -> "Below zero"
+                                },
+                            )
                             T(
-                                fmt.format(if (s.isAccount) s.balance else s.periodTotal),
+                                fmt.format(
+                                    when {
+                                        holds -> kotlin.math.abs(s.balance)
+                                        s.isAccount -> s.flows.moneyOut
+                                        else -> s.periodTotal
+                                    },
+                                ),
                                 style = Tally.type.hero.copy(fontSize = androidx.compose.ui.unit.TextUnit(32f, androidx.compose.ui.unit.TextUnitType.Sp)),
-                                color = if (s.isAccount && s.balance < 0) c.heldText else c.ink,
+                                color = if (holds && s.balance < 0 && s.accountType != com.tally.core.AccountType.CREDIT) c.heldText else c.ink,
                                 maxLines = 1,
                             )
                         }
@@ -110,7 +127,7 @@ fun TransactionsScreen(
                     val r = s.reading
                     if (!s.isAccount && r != null) {
                         PaceMeter(r.spentFraction, r.paceFraction, height = 8.dp)
-                        T(Copy.ofBudget(r.spent, r.budget, fmt) + " · " + Copy.daysLine(r), style = Tally.type.caption, color = paceTone(r))
+                        T(Copy.ofBudget(r.spent, r.budget, fmt) + " · " + paceDays(r), style = Tally.type.caption, color = paceTone(r))
                     } else if (!s.isAccount && s.categoryKind == com.tally.core.CategoryKind.EXPENSE) {
                         T("No budget · tap to set one", Modifier.padding(top = 2.dp).then(Modifier), Tally.type.caption, c.ink3)
                         com.tally.app.ui.kit.Key("Set a budget", budget, compact = true, glyph = "pie")
@@ -118,7 +135,11 @@ fun TransactionsScreen(
                 }
                 val stats: List<@Composable (Modifier) -> Unit> = if (s.isAccount) listOf(
                         { m -> Stat("In this month", fmt.formatWhole(s.flows.moneyIn), m, glyph = "money-in", sub = Copy.plural(s.flows.inCount, "entry", "entries")) },
-                        { m -> Stat("Out this month", fmt.formatWhole(s.flows.moneyOut), m, glyph = "money-out", sub = Copy.plural(s.flows.outCount, "entry", "entries")) },
+                        if (s.tracksBalance) {
+                            { m -> Stat("Out this month", fmt.formatWhole(s.flows.moneyOut), m, glyph = "money-out", sub = Copy.plural(s.flows.outCount, "entry", "entries")) }
+                        } else {
+                            { m -> Stat("Entries this month", (s.flows.inCount + s.flows.outCount).toString(), m, glyph = "list", sub = Copy.plural(s.flows.outCount, "payment") + " out") }
+                        },
                     ) else listOf(
                         { m -> Stat("This month", fmt.formatWhole(s.periodTotal), m, glyph = "calendar", sub = Copy.plural(s.periodCount, "entry", "entries")) },
                         { m -> Stat("Last month", fmt.formatWhole(s.lastPeriodTotal), m, glyph = "history", sub = Copy.versusLastLine(s.periodTotal, s.lastPeriodSameDay, fmt)) },

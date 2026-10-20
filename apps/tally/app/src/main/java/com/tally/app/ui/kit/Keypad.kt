@@ -16,6 +16,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tally.app.ui.theme.Tally
@@ -24,26 +26,27 @@ import com.tally.app.ui.theme.Tally
 data class GridKey(val label: String, val backspace: Boolean = false, val press: () -> Unit)
 
 /**
- * Relay's keypad: slab keys with an edge, Geist figures, 48dp rows; a null cell keeps the grid's
- * columns (a currency without minor units has no separator).
+ * Relay's keypad: slab keys with an edge, Geist figures, 48dp rows ([keyHeight] lowers them to the
+ * 44dp floor where the pad shares the screen); a null cell keeps the grid's columns (a currency
+ * without minor units has no separator).
  */
 @Composable
-fun KeyGrid(rows: List<List<GridKey?>>, modifier: Modifier = Modifier) {
+fun KeyGrid(rows: List<List<GridKey?>>, modifier: Modifier = Modifier, keyHeight: Dp = 48.dp, gap: Dp = 6.dp) {
     val c = Tally.colors
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(gap)) {
         rows.forEach { row ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
                 row.forEach { key ->
                     if (key == null) {
-                        Box(Modifier.weight(1f).height(48.dp))
+                        Box(Modifier.weight(1f).height(keyHeight))
                     } else {
                         Box(
-                            Modifier.weight(1f).height(48.dp).clip(Radii.key).background(c.slab).border(1.dp, c.edge, Radii.key)
+                            Modifier.weight(1f).height(keyHeight).clip(Radii.key).background(c.slab).border(1.dp, c.edge, Radii.key)
                                 .clickable(role = Role.Button, onClick = key.press)
                                 .semantics { contentDescription = if (key.backspace) "Delete" else key.label },
                             contentAlignment = Alignment.Center,
                         ) {
-                            if (key.backspace) Glyph("arrow-left", 18.dp, c.ink2) else T(key.label, style = Tally.type.title.copy(fontSize = 20.sp), color = c.ink)
+                            if (key.backspace) Glyph("arrow-left", 18.dp, c.ink2) else T(key.label, style = Tally.type.title.copy(fontSize = 20.sp, fontWeight = FontWeight.Medium), color = c.ink)
                         }
                     }
                 }

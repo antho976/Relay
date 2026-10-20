@@ -121,6 +121,8 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         val currencyAt = longPreferencesKey("currency_at")
         val monthStartAt = longPreferencesKey("month_start_day_at")
         val weekMondayAt = longPreferencesKey("week_starts_monday_at")
+        // The last PC sync's watermark: no synced setting is stamped under it (raiseSyncFloor).
+        val syncFloor = longPreferencesKey("sync_floor")
     }
 
     val settings: Flow<Settings> = store.data
@@ -189,10 +191,20 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
 
     /**
      * A change here is newer than the one it replaces even when this phone's clock runs behind
-     * the PC's that stamped it: `max(now, previous + 1)`, as every ledger row is stamped.
+     * the PC's that stamped it: `max(now, previous + 1)`, as every ledger row is stamped. Nor is
+     * it older than the last sync's watermark, or that sync's successor would not send it.
      */
     private fun MutablePreferences.stamp(key: Preferences.Key<Long>) {
-        this[key] = maxOf(System.currentTimeMillis(), (this[key] ?: 0L) + 1)
+        this[key] = maxOf(System.currentTimeMillis(), (this[key] ?: 0L) + 1, this[Keys.syncFloor] ?: 0L)
+    }
+
+    /**
+     * Holds every later stamp at or above [watermark], the one a PC sync just took (PcSync): a
+     * setting changed after it, with the clock set back since, is still sent by the next sync.
+     * It never comes down; the ledger's rows have the same floor (LedgerSync.mark).
+     */
+    suspend fun raiseSyncFloor(watermark: Long) = store.edit {
+        if (watermark > (it[Keys.syncFloor] ?: 0L)) it[Keys.syncFloor] = watermark
     }
     suspend fun setAccent(accent: Accent) = store.edit { it[Keys.accent] = accent.key }
     suspend fun setAccentEnabled(enabled: Boolean) = store.edit { it[Keys.accentEnabled] = enabled }

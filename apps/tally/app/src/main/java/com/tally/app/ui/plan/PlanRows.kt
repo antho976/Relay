@@ -30,12 +30,28 @@ import com.tally.core.PaceStatus
 import com.tally.core.TxType
 import java.time.LocalDate
 
-/** The colour a reading's words take: amber over pace, red over budget, quiet otherwise. */
+/**
+ * True once spending has used the whole limit. Tally then speaks of the limit (reached, and by how
+ * much past it), never of a negative room.
+ */
+fun limitReached(r: PaceReading): Boolean = r.budget > 0 && r.remaining <= 0
+
+/** The colour a reading's words take: amber over pace, red once the limit is reached, quiet otherwise. */
 @Composable
-fun paceTone(r: PaceReading): Color = when (r.status) {
-    PaceStatus.OVER_BUDGET -> Tally.colors.heldText
-    PaceStatus.OVER_PACE -> Tally.colors.waiting
+fun paceTone(r: PaceReading): Color = when {
+    limitReached(r) -> Tally.colors.heldText
+    r.status == PaceStatus.OVER_PACE -> Tally.colors.waiting
     else -> Tally.colors.ink3
+}
+
+/** The pace in days, or that the limit is reached: [Copy.daysLine] in the words of a limit. */
+fun paceDays(r: PaceReading): String = if (limitReached(r)) "Limit reached" else Copy.daysLine(r)
+
+/** A budget's verdict in words: what is left and the pace, or that its limit is reached and by how much. */
+fun budgetWords(r: PaceReading, fmt: com.tally.core.MoneyFormatter): String = when {
+    !limitReached(r) -> fmt.formatWhole(r.remaining) + " left · " + Copy.paceLine(r, fmt).lowercase()
+    r.remaining == 0L -> "Limit reached"
+    else -> "Limit reached · " + fmt.formatWhole(-r.remaining) + " over"
 }
 
 /** One budget: its category, the pace meter, what was spent of what, and the verdict. */
@@ -51,11 +67,7 @@ fun BudgetRow(name: String, icon: String?, color: Int?, reading: PaceReading, on
                 T(Copy.ofBudget(reading.spent, reading.budget, fmt), style = Tally.type.amount, color = c.ink2, maxLines = 1)
             }
             PaceMeter(reading.spentFraction, reading.paceFraction)
-            val words = when (reading.status) {
-                PaceStatus.OVER_BUDGET -> fmt.formatWhole(-reading.remaining) + " over"
-                else -> fmt.formatWhole(reading.remaining) + " left · " + Copy.paceLine(reading, fmt).lowercase()
-            }
-            T(words, style = Tally.type.caption, color = paceTone(reading), maxLines = 1)
+            T(budgetWords(reading, fmt), style = Tally.type.caption, color = paceTone(reading), maxLines = 1)
         }
     }
 }

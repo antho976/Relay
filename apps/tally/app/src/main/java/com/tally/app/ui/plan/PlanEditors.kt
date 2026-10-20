@@ -139,7 +139,7 @@ fun BudgetEditScreen(s: BudgetEditState, back: () -> Unit, key: (PadKey) -> Unit
         }
         if (s.input.minor > 0) {
             PaceMeter(s.reading.spentFraction, s.reading.paceFraction, height = 8.dp)
-            T(Copy.ofBudget(s.reading.spent, s.reading.budget, fmt) + " so far · " + Copy.daysLine(s.reading), style = Tally.type.caption, color = paceTone(s.reading))
+            T(Copy.ofBudget(s.reading.spent, s.reading.budget, fmt) + " so far · " + paceDays(s.reading), style = Tally.type.caption, color = paceTone(s.reading))
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             s.suggestAverage?.let { Pill("Average " + fmt.formatWhole(it), glyph = "sparkle", onClick = { fill(it) }) }
@@ -240,9 +240,7 @@ fun BillEditScreen(s: BillEditState, a: BillEditActions) {
             Labelled("To") { PickField(s.toAccountName ?: "Pick an account", s.toAccountName != null) { picking = "to" } }
         } else {
             Labelled("Category") {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    s.categories.forEach { cat -> Pill(cat.name, selected = cat.id == d.categoryId, onClick = { a.category(cat.id) }, dot = categoryColor(cat.color)) }
-                }
+                com.tally.app.ui.common.CategoryGrid(s.categories, d.categoryId, onPick = a.category)
             }
         }
         Labelled("How often") {

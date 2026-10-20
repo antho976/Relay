@@ -111,6 +111,17 @@ object SyncTables {
 
     fun isDerived(uid: String): Boolean = DERIVED.any { uid.startsWith(it) }
 
+    /**
+     * How far ahead of this clock a stamp from the PC may be (docs/MONEY.md, "Sync"). A clock a few
+     * hours fast is ordinary; a stamp days ahead, or near the end of a Long, is a broken clock or a
+     * forged change: no edit here could outrank it, and an edit's `+ 1` past a Long overflows.
+     * relay_money's `STAMP_AHEAD_MS`.
+     */
+    const val STAMP_AHEAD_MS = 24L * 60 * 60 * 1000
+
+    /** A stamp this ledger takes: 0 (an older ledger's settings) to a day ahead of [now]. relay_money's `stamp_ok`. */
+    fun stampOk(at: Long, now: Long): Boolean = at >= 0 && at <= now + STAMP_AHEAD_MS
+
     /** The Room table a wire table is kept in; only contributions are named differently. */
     fun room(table: String): String = if (table == CONTRIBUTIONS) "goal_contributions" else table
 
@@ -132,8 +143,11 @@ class LedgerSync @Inject constructor(private val db: TallyDatabase) {
 
     /**
      * Every row stamped at or after [since], and every tombstone, in the order the PC applies
-     * them. [since] null is everything there is (a first sync), with no tombstones: the PC is
-     * replaced by what is here.
+     * them. [since] null is everything there is (a first sync, or a replace the person asked
+     * for), with the tombstones of derived uids only: a random uid is this phone's own and the
+     * server was never told of it, but the server may hold a derived one of its own, the same bill
+     * posted or the same line imported, and the tombstone keeps it from coming back there
+     * (SyncTables.DERIVED).
      */
     suspend fun collect(since: Long?): List<Change> = db.withTransaction {
         val from = since ?: Long.MIN_VALUE
@@ -157,16 +171,40 @@ class LedgerSync @Inject constructor(private val db: TallyDatabase) {
         dao.pricesSince(from).forEach { p -> p.change(securities)?.let { out += it } }
         dao.fxRatesSince(from).forEach { out += it.change() }
         dao.roomFactsSince(from).forEach { out += it.change() }
-        if (since != null) dao.tombstonesSince(since).forEach { out += it.change() }
+        val buried = if (since != null) dao.tombstonesSince(since) else dao.tombstones().filter { SyncTables.isDerived(it.uid) }
+        buried.forEach { out += it.change() }
         out.sortedBy { SyncTables.order(it.table) }
     }
 
-    /** Merges the PC's [changes] in one transaction. Settings are the caller's (they live in DataStore). */
-    suspend fun apply(changes: List<Change>): Applied = db.withTransaction {
+    /**
+     * Takes the watermark of a sync starting at [now], before anything is read: the floor every
+     * local stamp is held at from here on (SyncSchema) is raised to [now], and never comes down.
+     * Returns the watermark, which is the floor: above [now] when an earlier sync ran with the
+     * clock ahead. An edit made after this is stamped at or after it whatever the clock says, so
+     * the next sync, reading from it, sends that edit.
+     */
+    suspend fun mark(now: Long): Long = db.withTransaction {
+        val floor = maxOf(now, dao.floor() ?: Long.MIN_VALUE)
+        dao.setFloor(floor)
+        floor
+    }
+
+    /** A watermark was taken here before ([mark]); false on a ledger last synced by a build without one. */
+    suspend fun marked(): Boolean = dao.floor() != null
+
+    /**
+     * Merges the PC's [changes] in one transaction. Settings are the caller's (they live in DataStore).
+     * A change stamped outside [SyncTables.stampOk] at [now] is skipped, and the rest goes on.
+     */
+    suspend fun apply(changes: List<Change>, now: Long = System.currentTimeMillis()): Applied = db.withTransaction {
         dao.beginApplying()
         var applied = 0
         var skipped = 0
         for (c in changes.sortedBy { SyncTables.order(it.table) }) {
+            if (!SyncTables.stampOk(c.updatedAt, now)) {
+                skipped++
+                continue
+            }
             val took = when (c.table) {
                 SyncTables.ACCOUNTS -> applyAccount(c)
                 SyncTables.CATEGORIES -> applyCategory(c)
@@ -195,16 +233,16 @@ class LedgerSync @Inject constructor(private val db: TallyDatabase) {
      * every row here goes, the PC's arrive with their own stamps and uids, and no tombstone is
      * left for what was removed, since the PC never had those rows in this ledger.
      */
-    suspend fun replaceWith(changes: List<Change>): Applied = db.withTransaction {
+    suspend fun replaceWith(changes: List<Change>, now: Long = System.currentTimeMillis()): Applied = db.withTransaction {
         dao.beginApplying()
         dao.wipeLedger()
         dao.clearTombstones()
         dao.endApplying()
-        val applied = apply(changes.filter { !it.deleted })
+        val applied = apply(changes.filter { !it.deleted }, now)
         dao.clearTombstones()
         // A derived row deleted on the PC stays deleted here: the poster skips a deleted bill's
         // date, and an import a deleted line.
-        changes.filter { it.deleted && SyncTables.isDerived(it.uid) }
+        changes.filter { it.deleted && SyncTables.isDerived(it.uid) && SyncTables.stampOk(it.updatedAt, now) }
             .forEach { dao.insertTombstone(TombstoneEntity(SyncTables.room(it.table), it.uid, it.updatedAt)) }
         applied
     }

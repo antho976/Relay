@@ -35,6 +35,8 @@ data class AccountShare(
 
 @Immutable
 data class WorthReading(
+    /** Some open account was given a balance to start from; without one, worth is spending read as debt, and the lens stays hidden. */
+    val tracked: Boolean = false,
     /** What the open accounts held at the close of the period picked. */
     val worth: Long = 0,
     /** What they held the day before it began. */

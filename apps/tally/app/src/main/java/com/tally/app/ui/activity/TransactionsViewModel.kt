@@ -83,6 +83,8 @@ data class TransactionsState(
     val entryCount: Int = 0,
     val balance: Long = 0,
     val openingBalance: Long = 0,
+    /** The account was given a balance to start from (see tracksBalance); otherwise only its spending reads. */
+    val tracksBalance: Boolean = false,
     /** The category's standing monthly budget; null without one (and always for income). */
     val budget: Long? = null,
     val reading: PaceReading? = null,
@@ -137,6 +139,7 @@ class TransactionsViewModel @Inject constructor(
         val entryCount: Int = 0,
         val balance: Long = 0,
         val openingBalance: Long = 0,
+        val tracksBalance: Boolean = false,
     )
 
     private data class Figures(
@@ -170,6 +173,7 @@ class TransactionsViewModel @Inject constructor(
                     entryCount = a.entryCount,
                     balance = a.balance,
                     openingBalance = a.openingBalance,
+                    tracksBalance = com.tally.app.ui.accounts.tracksBalance(a),
                 )
             }
         }
@@ -252,6 +256,7 @@ class TransactionsViewModel @Inject constructor(
             entryCount = s?.entryCount ?: 0,
             balance = s?.balance ?: 0L,
             openingBalance = s?.openingBalance ?: 0L,
+            tracksBalance = s?.tracksBalance ?: false,
             budget = f.budget,
             reading = f.reading,
             periodTotal = f.periodTotal,

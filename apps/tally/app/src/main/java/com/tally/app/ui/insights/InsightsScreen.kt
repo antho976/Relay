@@ -63,7 +63,7 @@ fun InsightsRoute(nav: AppNav, delete: (Long) -> Unit) {
     )
 }
 
-/** Where the month's money went and how it moved, read four ways: the month, the trend, the calendar, what you are worth. */
+/** Where the month's money went and how it moved: the month, the trend, the calendar, and what you are worth once an account keeps a balance. */
 @Composable
 fun InsightsScreen(
     s: InsightsState,
@@ -85,9 +85,13 @@ fun InsightsScreen(
             IconKey("chevron-right", next, enabled = s.isCurrentPeriod.not(), label = "Later month")
         },
     ) {
-        Segmented(InsightsLens.entries.map { it to it.label }, lens, { lens = it }, Modifier.fillMaxWidth(), fill = true)
+        // Worth reads only when some account keeps a balance: Tally tracks spending, and a worth
+        // built from spending alone would read as a debt that is not there.
+        val lenses = InsightsLens.entries.filter { it != InsightsLens.WORTH || s.worth.tracked }
+        val shown = if (lens in lenses) lens else InsightsLens.MONTH
+        Segmented(lenses.map { it to it.label }, shown, { lens = it }, Modifier.fillMaxWidth(), fill = true)
         if (!s.loaded) return@SpacePage
-        when (lens) {
+        when (shown) {
             InsightsLens.MONTH -> MonthLens(s, category, entry, delete)
             InsightsLens.TREND -> TrendLens(s, showPeriod)
             InsightsLens.CALENDAR -> CalendarLens(s, entry, delete)

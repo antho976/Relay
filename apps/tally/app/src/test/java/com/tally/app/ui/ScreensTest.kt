@@ -79,7 +79,7 @@ class ScreensTest {
 
     @Test fun overview() {
         compose.shoot("overview") { OverviewScreen(home(), OverviewActions()) }
-        compose.onNodeWithText("Left this month").assertExists()
+        compose.onNodeWithText("Left this month", ignoreCase = true).assertExists()
         compose.onNodeWithText("Rent").assertExists()
     }
 
@@ -113,14 +113,32 @@ class ScreensTest {
             today = Fixtures.TODAY,
             period = period,
             loaded = true,
-            categories = listOf(groceries, dining),
+            categories = listOf(groceries, dining) + Fixtures.categories.drop(2),
             accounts = Fixtures.accounts,
             category = groceries,
             account = Fixtures.accounts[1],
+            month = com.tally.app.ui.entry.MonthReading(43_050, 10),
+            budget = 60_000,
             leftAfter = 157_530,
         )
         compose.shoot("entry") { EntryScreen(state, EntryActions()) }
         compose.onNodeWithText("Groceries").assertExists()
+        compose.onNodeWithText("$430 of $600 in Groceries this month, $170 left").assertExists()
+    }
+
+    @Test fun entryEditorAtTwiceTheFont() {
+        val state = EntryState(
+            draft = EntryDraft(date = Fixtures.TODAY, amount = AmountInput("12.5"), accountId = 2, categoryId = 1, categoryChosen = true),
+            today = Fixtures.TODAY,
+            period = period,
+            loaded = true,
+            categories = Fixtures.categories,
+            accounts = Fixtures.accounts,
+            category = Fixtures.categories.first(),
+            account = Fixtures.accounts[1],
+            leftAfter = 157_530,
+        )
+        compose.shoot("entry-200", fontScale = 2f) { EntryScreen(state, EntryActions()) }
     }
 
     @Test fun budgets() {
@@ -138,12 +156,39 @@ class ScreensTest {
             ),
         )
         compose.shoot("budgets") { BudgetsScreen(state, edit = {}, applySuggestions = {}, add = {}) }
-        compose.onNodeWithText("Monthly budget").assertExists()
+        compose.onNodeWithText("Monthly budget", ignoreCase = true).assertExists()
     }
 
     @Test fun accounts() {
-        compose.shoot("accounts") { AccountsScreen(buildAccountsState(Fixtures.accounts, 1, 120), open = {}, add = {}, transfer = {}) }
-        compose.onNodeWithText("Net worth").assertExists()
+        val spent = mapOf(1L to 64_000L, 2L to 41_220L, 4L to 2_400L)
+        compose.shoot("accounts") { AccountsScreen(buildAccountsState(Fixtures.accounts, 1, 120, spent), open = {}, add = {}, transfer = {}) }
+        compose.onNodeWithText("Spent this month", ignoreCase = true).assertExists()
+    }
+
+    @Test fun overviewPastTheLimit() {
+        val over = home().copy(spent = 312_000, reading = PaceReading(300_000, 312_000, period.days, elapsed))
+        compose.shoot("overview-over") { OverviewScreen(over, OverviewActions()) }
+        compose.onNodeWithText("Limit reached", ignoreCase = true).assertExists()
+        compose.onNodeWithText("$120 past your $3,000 limit").assertExists()
+    }
+
+    @Test fun entryEditorEditingWithItsBill() {
+        val groceries = Fixtures.categories.first()
+        val state = EntryState(
+            draft = EntryDraft(id = 9, date = Fixtures.TODAY, amount = AmountInput("1450"), accountId = 2, categoryId = 1, categoryChosen = true, note = "Rent", recurringId = 3),
+            today = Fixtures.TODAY,
+            period = period,
+            loaded = true,
+            categories = Fixtures.categories,
+            accounts = Fixtures.accounts,
+            category = groceries,
+            account = Fixtures.accounts[1],
+            leftAfter = -3_100,
+            bill = com.tally.app.ui.entry.LinkedBill(3, com.tally.core.Frequency.MONTHLY, 1, Fixtures.TODAY.plusMonths(1), active = true, autoPost = true),
+        )
+        compose.shoot("entry-edit") { EntryScreen(state, EntryActions()) }
+        compose.onNodeWithText("Repeats every month").assertExists()
+        compose.onNodeWithText("Over this month's limit by $31").assertExists()
     }
 
     @Test fun syncWaitingOnDiscord() {

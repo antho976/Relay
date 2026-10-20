@@ -64,9 +64,6 @@ data class EntryState(
     val category: CategoryEntity? = null,
     val account: AccountBalance? = null,
     val toAccount: AccountBalance? = null,
-    /** [account]'s balance once this is saved. */
-    val accountAfter: Long? = null,
-    val toAccountAfter: Long? = null,
     /** The picked category over [period], this entry included. */
     val month: MonthReading = MonthReading(),
     /** The picked expense category's monthly budget, when it has one. */
@@ -77,6 +74,10 @@ data class EntryState(
     val quickPicks: List<QuickPick> = emptyList(),
     /** What the month's budget has left once this expense is in; null without a budget, or for income or a transfer. */
     val leftAfter: Long? = null,
+    /** The month's spending once this expense is in; null for income or a transfer. */
+    val spentAfter: Long? = null,
+    /** The bill this entry already belongs to, when it was posted by one or made to repeat. */
+    val bill: LinkedBill? = null,
     /** The keypad's decimals, so a quick pick's amount types as the owner would type it. */
     val digits: Int = 2,
 ) {
@@ -85,19 +86,21 @@ data class EntryState(
     val canSave: Boolean get() = problem == null
     val sameAccount: Boolean
         get() = draft.type == TxType.TRANSFER && draft.accountId != null && draft.accountId == draft.toAccountId
+    /** Repeat can be switched on: the entry is not already a bill's. */
+    val canRepeat: Boolean get() = bill == null
 }
 
-/**
- * The add / edit entry editor, the app's hot path. The draft lives here in one [MutableStateFlow];
- * the state folds it with the lists and readings. A new entry opens on the default account,
- * today, and the category it was opened for (if any).
- */
 /** How far back the grid's order and the quick picks look. */
 internal const val USE_DAYS = 90L
 
 /** How many quick picks the editor offers. */
 internal const val QUICK_PICKS = 6
 
+/**
+ * The add / edit entry editor, the app's hot path. The draft lives here in one [MutableStateFlow];
+ * the state folds it with the lists and readings. A new entry opens on the default account,
+ * today, and the category it was opened for (if any).
+ */
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class EntryViewModel @Inject constructor(
@@ -140,6 +143,11 @@ class EntryViewModel @Inject constructor(
     /** One write per visit: a double tap on Save must not log the purchase twice. */
     private var busy = false
 
+    /** The owner's money format, read once the editor opens, for the notice a save leaves. */
+    private var money = MoneyFormatter("CAD", Locale.getDefault())
+
+    private fun fmt(): MoneyFormatter = money
+
     private data class MonthKey(val type: TxType, val period: BudgetPeriod)
     private data class MonthTotals(val key: MonthKey, val byCategory: Map<Long, CategoryTotal>)
 
@@ -174,7 +182,15 @@ class EntryViewModel @Inject constructor(
     }
 
     /** How often each category was used in the last [USE_DAYS] days, for the grid's order, and the quick picks. */
-    private data class Habits(val uses: Map<Long, Int> = emptyMap(), val picks: List<QuickPick> = emptyList(), val periodSpent: Long = 0L)
+    private data class Habits(
+        val type: TxType = TxType.TRANSFER,
+        val uses: Map<Long, Int> = emptyMap(),
+        val picks: List<QuickPick> = emptyList(),
+        val periodSpent: Long = 0L,
+    )
+
+    /** The grid's order as first read for each type this visit; see [heldOrder]. */
+    private var heldUses: Map<TxType, Map<Long, Int>> = emptyMap()
 
     private val habits: Flow<Habits> = combine(draft, settings.settings) { d, s -> d.type to s.periodFor(d.date) }
         .distinctUntilChanged()
@@ -189,6 +205,7 @@ class EntryViewModel @Inject constructor(
                     ledger.typeTotals(period.start, period.endExclusive),
                 ) { uses, picks, totals ->
                     Habits(
+                        type = type,
                         uses = uses.mapNotNull { u -> u.categoryId?.let { it to u.count } }.toMap(),
                         picks = picks,
                         periodSpent = totals.firstOrNull { it.type == TxType.EXPENSE }?.total ?: 0L,
@@ -197,12 +214,12 @@ class EntryViewModel @Inject constructor(
             }
         }
 
-    private data class Frame(val inputs: Inputs, val habits: Habits)
+    private data class Frame(val inputs: Inputs, val habits: Habits, val bills: List<RecurringEntity>)
 
-    private val frame: Flow<Frame> = combine(inputs, habits) { i, h -> Frame(i, h) }
+    private val frame: Flow<Frame> = combine(inputs, habits, plan.recurring()) { i, h, b -> Frame(i, h, b.map { it.recurring }) }
 
     val state: StateFlow<EntryState> = combine(frame, monthTotals, plan.budgets(), suggestions, ready) { f, m, budgets, suggested, isReady ->
-        buildState(f.inputs, m, budgets, suggested, isReady, f.habits)
+        buildState(f.inputs, m, budgets, suggested, isReady, f.habits, f.bills)
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
@@ -216,8 +233,11 @@ class EntryViewModel @Inject constructor(
         suggested: List<String>,
         isReady: Boolean,
         h: Habits,
+        bills: List<RecurringEntity>,
     ): EntryState {
-        val kindCategories = byUse(categoriesFor(i.draft.type, i.categories, i.draft.categoryId), h.uses)
+        if (h.type == i.draft.type) heldUses = heldOrder(heldUses, h.type, h.uses)
+        val order = heldUses[i.draft.type] ?: if (h.type == i.draft.type) h.uses else emptyMap()
+        val kindCategories = byUse(categoriesFor(i.draft.type, i.categories, i.draft.categoryId), order)
         val d = resolveDraft(i.draft, kindCategories, i.accounts, i.defaultAccountId)
         val account = i.accounts.firstOrNull { it.id == d.accountId }
         val toAccount = if (d.type == TxType.TRANSFER) i.accounts.firstOrNull { it.id == d.toAccountId } else null
@@ -244,17 +264,19 @@ class EntryViewModel @Inject constructor(
             category = category,
             account = account,
             toAccount = toAccount,
-            accountAfter = account?.let { balanceAfter(it.id, it.balance, i.original, d) },
-            toAccountAfter = toAccount?.let { balanceAfter(it.id, it.balance, i.original, d) },
             month = month,
             budget = budget,
             repeatNext = firstRepeatDate(d.date, d.frequency, today),
             quickPicks = if (d.amount.minor == 0L && d.note.isBlank()) h.picks else emptyList(),
-            leftAfter = if (d.type == TxType.EXPENSE) {
+            leftAfter = if (d.type == TxType.EXPENSE && h.type == d.type) {
                 budgets.firstOrNull { it.categoryId == BudgetEntity.OVERALL }?.amount?.let { overall ->
                     leftAfter(overall, h.periodSpent, i.original, d, m.key.period)
                 }
             } else null,
+            spentAfter = if (d.type == TxType.EXPENSE && h.type == d.type) spentAfter(h.periodSpent, i.original, d, m.key.period) else null,
+            bill = d.recurringId?.let { id -> bills.firstOrNull { it.id == id } }?.let {
+                LinkedBill(it.id, it.frequency, it.interval, it.nextDate, it.active, it.autoPost)
+            },
             digits = d.amount.fractionDigits,
         )
     }
@@ -264,8 +286,9 @@ class EntryViewModel @Inject constructor(
             // A draft kept before the process died wins over the stored entry: it is what was typed.
             val kept = savedStateHandle.savedDraft(SavedEntry.serializer())?.toDraft()
             val s = settings.current()
+            money = MoneyFormatter(s.currency, Locale.getDefault())
             // The keypad works in the owner's currency's minor units (0 digits for JPY).
-            val digits = MoneyFormatter(s.currency, Locale.getDefault()).fractionDigits
+            val digits = money.fractionDigits
             val stored = if (argId != 0L) ledger.transaction(argId) else null
             if (stored != null) {
                 original.value = stored
@@ -362,10 +385,15 @@ class EntryViewModel @Inject constructor(
         busy = true
         val categoryName = s.category?.name
         val stored = original.value
+        val makeBill = makesBill(d, s.bill)
+        val notice = savedNotice(d.type, categoryName, s.leftAfter, fmt())
+        val ledgerRepo = ledger
+        val planRepo = plan
         viewModelScope.launch {
             val from = d.accountId ?: return@launch
             var recurringId = d.recurringId
-            if (d.id == 0L && d.repeat) {
+            var madeBill: Long? = null
+            if (makeBill) {
                 val next = firstRepeatDate(d.date, d.frequency, clock.today())
                 val bill = RecurringEntity(
                     name = repeatName(d.note, categoryName, d.type),
@@ -385,9 +413,16 @@ class EntryViewModel @Inject constructor(
                 val saved = plan.recurringItem(billId)
                 if (saved != null && saved.nextDate != next) plan.saveRecurring(saved.copy(nextDate = next))
                 recurringId = billId
+                madeBill = billId
             }
             val row = d.toEntity(stored, recurringId) ?: return@launch
-            ledger.save(row)
+            val id = ledger.save(row)
+            // Undo takes the save back whole: a new entry goes, an edit returns to what was stored,
+            // and a bill this save made goes with it. It holds the repositories, never this ViewModel.
+            notices.showUndo(notice) {
+                if (stored != null) ledgerRepo.save(stored) else ledgerRepo.delete(id)
+                madeBill?.let { planRepo.deleteRecurring(it) }
+            }
             if (andNew) {
                 draft.update { next ->
                     EntryDraft(
@@ -398,7 +433,6 @@ class EntryViewModel @Inject constructor(
                         amount = AmountInput(fractionDigits = next.amount.fractionDigits),
                     )
                 }
-                notices.show(savedLine(row.type, s.category?.name) + " · ready for the next")
                 busy = false
             } else {
                 finished.send(Unit)

@@ -17,6 +17,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
@@ -169,46 +170,44 @@ class RelaySync @Inject constructor(
 
     /**
      * One exchange on an admitted connection: send, receive, merge, remember where it stands.
-     * The watermark is taken before anything is read, so an edit made while the sync runs is sent
-     * next time rather than lost. The first sync, and the first after an update that reads new
-     * tables, asks from cursor 0: it is the merge, newest stamp winning, that leaves every row
-     * that is already the same as it is.
+     * The watermark is taken before anything is read, and no edit made after it is stamped under
+     * it (LedgerSync.mark, SettingsRepository.raiseSyncFloor), so an edit made while the sync runs,
+     * or after it with the clock set back, is sent next time rather than lost. The first sync, and
+     * the first after an update that reads new tables, asks from cursor 0: it is the merge, newest
+     * stamp winning, that leaves every row that is already the same as it is.
      */
     private suspend fun exchange(session: RelaySession, prefs: SyncPrefs): SyncOutcome {
         val started = System.currentTimeMillis()
         return try {
             val first = !prefs.replaced
             val replace = prefs.replaceNext
-            val since = if (first || replace) null else prefs.watermark
+            // A watermark ahead of the clock, left by a build that did not hold stamps at it: the
+            // last sync ran with the clock fast, and what was edited once it was set back sits
+            // under the watermark. Everything goes, once; the server keeps whichever side is newer.
+            val behind = !first && !replace && !ledger.marked() && prefs.watermark > started
+            val watermark = mark(started)
+            val since = if (first || replace) null else if (behind) 0L else prefs.watermark
             val rows = ledger.collect(since)
             val local = settingsChanges(since) + rows
-            var cursor = if (first || replace || prefs.catchingUp) 0L else prefs.cursor
+            val cursor = if (first || replace || prefs.catchingUp) 0L else prefs.cursor
             // A merge or a replace starts a new relationship with the server's ledger: no generation.
-            var generation = if (first || replace) null else prefs.generation
-            val received = ArrayList<Change>()
-            // Batched, so a ledger of years stays under the door's message size. Only the first
-            // batch replaces; the rest add to what it put there. Tables stay in order across them.
-            val batches = local.chunked(BATCH).ifEmpty { listOf(emptyList()) }
-            for ((i, batch) in batches.withIndex()) {
-                val result = try {
-                    session.request("money.sync", payload(replace && i == 0, cursor, generation, batch))
-                } catch (e: RelayFailure) {
-                    // The server's ledger was restored, erased or replaced since: take it whole.
-                    if (e.code == STALE) return takeWhole(session, TOOK_SERVER_LEDGER)
-                    throw e
-                }
-                cursor = result.cursor()
-                generation = result.generation() ?: generation
-                (result["changes"] as? JsonArray)?.forEach { c -> Change.fromJson(c)?.let { received += it } }
+            val generation = if (first || replace) null else prefs.generation
+            val answer = try {
+                send(session, replace, cursor, generation, local)
+            } catch (e: RelayFailure) {
+                // The server's ledger was restored, erased or replaced since: take it whole.
+                if (e.code == STALE) return takeWhole(session, TOOK_SERVER_LEDGER)
+                throw e
             }
-            val (ledgerRows, settingRows) = received.partition { it.table != SyncTables.SETTINGS }
+            val (ledgerRows, settingRows) = answer.changes.partition { it.table != SyncTables.SETTINGS }
             val applied = ledger.apply(ledgerRows)
             // A phone with nothing in it yet takes the server's settings whatever their stamps:
             // its own are only the defaults it was installed with.
             val taken = applySettings(settingRows, whole = first && rows.isEmpty())
-            // The server has every tombstone from before this sync began.
-            ledger.pruneTombstones(started)
-            store.recordSuccess(System.currentTimeMillis(), cursor, generation, started, local.size, applied.applied + taken)
+            // The server has every tombstone from before this sync began: one made since is
+            // stamped at the watermark or after.
+            ledger.pruneTombstones(watermark)
+            store.recordSuccess(System.currentTimeMillis(), answer.cursor, answer.generation, watermark, local.size, applied.applied + taken)
             SyncOutcome.Done(sent = local.size, received = applied.applied + taken)
         } catch (e: CancellationException) {
             throw e
@@ -225,27 +224,86 @@ class RelaySync @Inject constructor(
      * Takes the server's ledger whole, keeping its stamps, and merges from there: after the server
      * refused to merge (`money.sync_stale`: its ledger was restored, erased or replaced, or its file
      * was lost), or because the person asked. What changed here since the last sync is not sent:
-     * the latest wholesale act wins.
+     * the latest wholesale act wins. Merging goes on from a watermark taken before the server is
+     * asked: an edit made once its ledger is in place is stamped at or after it, and a row of the
+     * server's stamped there too goes back once, which is harmless.
      */
     private suspend fun takeWhole(session: RelaySession, note: String): SyncOutcome {
-        val result = session.request("money.sync", payload(replace = false, since = 0L, generation = null, changes = emptyList()))
-        val cursor = result.cursor()
-        val generation = result.generation()
-        val received = (result["changes"] as? JsonArray)?.mapNotNull { Change.fromJson(it) }.orEmpty()
-        val (rows, settingRows) = received.partition { it.table != SyncTables.SETTINGS }
+        val watermark = mark(System.currentTimeMillis())
+        val answer = send(session, replace = false, since = 0L, generation = null, changes = emptyList())
+        val (rows, settingRows) = answer.changes.partition { it.table != SyncTables.SETTINGS }
         val applied = ledger.replaceWith(rows)
         val taken = applySettings(settingRows, whole = true)
-        val now = System.currentTimeMillis()
-        store.recordSuccess(now, cursor, generation, now, 0, applied.applied + taken, note = note)
+        store.recordSuccess(System.currentTimeMillis(), answer.cursor, answer.generation, watermark, 0, applied.applied + taken, note = note)
         return SyncOutcome.Done(sent = 0, received = applied.applied + taken)
     }
 
-    private fun payload(replace: Boolean, since: Long, generation: String?, changes: List<Change>) = buildJsonObject {
+    /**
+     * The watermark of a sync starting at [now], with every later stamp, the ledger's and the
+     * synced settings', held at or above it: [now], or the last sync's when the clock was ahead then.
+     */
+    private suspend fun mark(now: Long): Long {
+        val watermark = ledger.mark(now)
+        settings.raiseSyncFloor(watermark)
+        return watermark
+    }
+
+    /** Where the server stands after a [send], and what it answered with. */
+    private class Answer(val cursor: Long, val generation: String?, val changes: List<Change>)
+
+    /**
+     * One `money.sync` of [changes], and the server's answer to it whole. The changes go in
+     * batches, so a ledger of years stays under the door's message size: only the first batch
+     * replaces, the rest add to what it put there, tables in order across them. The answer is
+     * asked for in pages ([PAGE] changes at most, while the server says `more`), so a ledger of
+     * tens of thousands of rows never has to fit the one line the rendezvous carries to this
+     * phone (RelayV4 docs/MONEY.md, "Sync"). A row edited while the pages are read comes again,
+     * newer: the newest of each is kept, and what the server hands back exactly as this phone
+     * sent it is no news. A server from before pages refuses `limit` (`bus.schema`) before
+     * applying anything, and is asked again, whole, as before.
+     */
+    private suspend fun send(session: RelaySession, replace: Boolean, since: Long, generation: String?, changes: List<Change>): Answer {
+        val sent = changes.associate { (it.table to it.uid) to it.updatedAt }
+        val newest = LinkedHashMap<Pair<String, String>, Change>()
+        val batches = changes.chunked(BATCH)
+        var cursor = since
+        var gen = generation
+        var paged = true
+        var i = 0
+        while (true) {
+            val batch = batches.getOrElse(i) { emptyList() }
+            val first = i == 0
+            val result = try {
+                session.request("money.sync", payload(replace && first, cursor, gen, batch, if (paged) PAGE else null))
+            } catch (e: RelayFailure) {
+                if (!paged || e.code != SCHEMA) throw e
+                paged = false
+                session.request("money.sync", payload(replace && first, cursor, gen, batch, limit = null))
+            }
+            val next = result.cursor()
+            val more = paged && (result["more"] as? JsonPrimitive)?.booleanOrNull == true
+            if (more && next <= cursor) throw RelayFailure("Your server's answer did not read")
+            cursor = next
+            gen = result.generation() ?: gen
+            (result["changes"] as? JsonArray)?.forEach { json ->
+                val c = Change.fromJson(json) ?: return@forEach
+                val key = c.table to c.uid
+                if (sent[key] == c.updatedAt) return@forEach
+                if ((newest[key]?.updatedAt ?: Long.MIN_VALUE) < c.updatedAt) newest[key] = c
+            }
+            i++
+            if (!more && i >= batches.size) break
+        }
+        return Answer(cursor, gen, newest.values.toList())
+    }
+
+    private fun payload(replace: Boolean, since: Long, generation: String?, changes: List<Change>, limit: Int?) = buildJsonObject {
         put("device", deviceName.take(64))
         put("replace", replace)
         put("since", since)
         if (generation != null) put("generation", generation)
         put("changes", JsonArray(changes.map { it.toJson() }))
+        if (limit != null) put("limit", limit)
     }
 
     private fun JsonElement?.cursor(): Long =
@@ -256,10 +314,16 @@ class RelaySync @Inject constructor(
 
     private operator fun JsonElement?.get(key: String): JsonElement? = (this as? JsonObject)?.get(key)
 
-    /** The server's settings; [whole] takes them whatever their stamps. */
-    private suspend fun applySettings(rows: List<Change>, whole: Boolean): Int = rows.count { c ->
-        val value = (c.row["value"] as? JsonPrimitive)?.contentOrNull
-        !c.deleted && value != null && settings.applySynced(c.uid, value, c.updatedAt, force = whole)
+    /**
+     * The server's settings; [whole] takes them whatever their stamps, but never one stamped
+     * outside [SyncTables.stampOk].
+     */
+    private suspend fun applySettings(rows: List<Change>, whole: Boolean): Int {
+        val now = System.currentTimeMillis()
+        return rows.count { c ->
+            val value = (c.row["value"] as? JsonPrimitive)?.contentOrNull
+            !c.deleted && value != null && SyncTables.stampOk(c.updatedAt, now) && settings.applySynced(c.uid, value, c.updatedAt, force = whole)
+        }
     }
 
     /** The synced settings changed since [since] (all of them on a first sync), as Relay keeps them. */
@@ -272,6 +336,15 @@ class RelaySync @Inject constructor(
     companion object {
         /** Changes per request: a few hundred kilobytes, far under the door's 8 MiB message. */
         const val BATCH = 1_500
+
+        /**
+         * Changes per answer at most, as Relay's own cloud link asks: far under the 15 MiB line the
+         * rendezvous carries to a phone.
+         */
+        const val PAGE = 2_000
+
+        /** A server from before pages refuses a field it does not know with this, `limit` included. */
+        const val SCHEMA = "bus.schema"
 
         /** The server's ledger is not the one this phone last merged with (docs/MONEY.md, "Generation"). */
         const val STALE = "money.sync_stale"
