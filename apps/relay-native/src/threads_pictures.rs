@@ -2,10 +2,11 @@
 //! their messages show.
 //!
 //! A picture is chosen, pasted or dropped, made fit to send on a worker thread ([`prepare`]: at
-//! most 2048 pixels on its long side and 4 MiB, as PNG for a screenshot and JPEG for a photo; one
-//! that fits already goes as it is), and goes up at once (`thread.upload`), so sending only names
-//! it. In the message box it is a chip ([`Attached`]): its thumbnail, a spinner while it goes up, a
-//! red mark and the reason when it was refused, and a key that takes it out.
+//! most 2000 pixels on its long side and 4 MiB, as PNG for a screenshot and JPEG for a photo; one
+//! that fits already goes as it is; one pasted is taken from its pixels, [`prepare_pasted`]), and
+//! goes up at once (`thread.upload`), so sending only names it. In the message box it is a chip
+//! ([`Attached`]): its thumbnail, a spinner while it goes up, a red mark and the reason when it was
+//! refused, and a key that takes it out.
 //!
 //! A message's pictures are read back by id (`thread.image`) as thumbnails kept in memory, so a
 //! redraw or a scroll does not read them again ([`thumbnail`]); a click opens one larger in a
@@ -20,9 +21,10 @@ use gtk::{gdk, gio};
 use gtk4 as gtk;
 use serde_json::{json, Value};
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::{Duration, SystemTime};
 
 /// What `thread.upload` takes; the chooser offers these.
 pub(super) const MEDIA_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -30,8 +32,9 @@ pub(super) const MEDIA_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif
 pub(super) const SUFFIXES: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
 /// Pictures in one message.
 pub(super) const MAX_PICTURES: usize = 4;
-/// The longest side a picture goes up at, as the phone sends one to an agent (`Attach.kt`).
-const MAX_SIDE: u32 = 2048;
+/// The longest side a picture goes up at. Past 20 pictures in a request (each turn sends the thread's
+/// earlier ones again) the API refuses any side longer than 2000 pixels.
+const MAX_SIDE: u32 = 2000;
 /// The most `thread.upload` takes, decoded.
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 /// A file past this is not read at all.
@@ -48,6 +51,16 @@ const CHIP: i32 = 56;
 /// What a model on this PC says to a picture.
 pub(super) const LOCAL_CANNOT: &str = "This model on your PC cannot read pictures: choose a Claude model";
 const NOT_A_PICTURE: &str = "This is not a PNG, JPEG, GIF or WebP picture";
+/// What a picture says once the engine has let it go.
+const EXPIRED: &str = "Not sent within a day, so Relay let it go: add it again";
+/// How long the engine keeps a picture no message carries (`threads::images::UNSENT`).
+const UNSENT: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Whether a picture that went up at `up_at` has been let go by `now`; one with no time, put back
+/// from a sent message, is carried by it.
+fn expired(up_at: Option<SystemTime>, now: SystemTime) -> bool {
+    up_at.and_then(|at| now.duration_since(at).ok()).is_some_and(|age| age >= UNSENT)
+}
 
 /// A picture on its way into the message box.
 pub(super) enum Source {
@@ -76,6 +89,7 @@ pub(super) fn is_picture(path: &Path) -> bool {
 pub(super) fn said(e: &Error) -> String {
     match e {
         Error::Bus(b) if b.code == "thread.images_unsupported" => LOCAL_CANNOT.to_string(),
+        Error::Bus(b) if b.code == "thread.image_unknown" => EXPIRED.to_string(),
         Error::Bus(b) if b.code == "bus.unknown_op" => String::from("This engine does not handle pictures yet: update Relay's engine"),
         Error::Bus(b) => b.message.clone(),
         e => e.to_string(),
@@ -173,6 +187,11 @@ fn decode(bytes: &[u8], edge: u32) -> Result<Pixbuf, String> {
     Ok(pixbuf.apply_embedded_orientation().unwrap_or(pixbuf))
 }
 
+/// Whether this PC has a loader for `media_type`: WebP's comes in a package of its own.
+fn can_draw(media_type: &str) -> bool {
+    Pixbuf::formats().iter().any(|format| format.mime_types().iter().any(|m| m == media_type))
+}
+
 /// `pixbuf` no larger than `edge` on its long side.
 fn scaled(pixbuf: &Pixbuf, edge: u32) -> Pixbuf {
     let long = pixbuf.width().max(pixbuf.height()).max(1);
@@ -189,11 +208,24 @@ fn scaled(pixbuf: &Pixbuf, edge: u32) -> Pixbuf {
 /// fits; else as a JPEG, any transparency on white.
 fn encode(pixbuf: &Pixbuf, from: &str) -> Result<(Vec<u8>, &'static str), String> {
     if matches!(from, "image/png" | "image/gif") || pixbuf.has_alpha() {
-        let png = pixbuf.save_to_bufferv("png", &[]).map_err(|e| e.to_string())?;
+        let png = png(pixbuf);
         if png.len() <= MAX_BYTES {
             return Ok((png, "image/png"));
         }
     }
+    jpeg(pixbuf)
+}
+
+/// `pixbuf` as PNG, by GDK's own writer: about four times quicker than gdk-pixbuf's at its default
+/// (68 ms against 261 for a 1600x1200 photo), for a file about 1.5 % larger.
+fn png(pixbuf: &Pixbuf) -> Vec<u8> {
+    let format = if pixbuf.has_alpha() { gdk::MemoryFormat::R8g8b8a8 } else { gdk::MemoryFormat::R8g8b8 };
+    let stride = pixbuf.rowstride().max(0) as usize;
+    gdk::MemoryTexture::new(pixbuf.width(), pixbuf.height(), format, &pixbuf.read_pixel_bytes(), stride).save_to_png_bytes().to_vec()
+}
+
+/// `pixbuf` as a JPEG within [`MAX_BYTES`], any transparency on white.
+fn jpeg(pixbuf: &Pixbuf) -> Result<(Vec<u8>, &'static str), String> {
     let flat = if pixbuf.has_alpha() {
         pixbuf.composite_color_simple(pixbuf.width(), pixbuf.height(), InterpType::Nearest, 255, 8, 0xffffff, 0xffffff).unwrap_or_else(|| pixbuf.clone())
     } else {
@@ -251,8 +283,8 @@ fn prepare(bytes: Vec<u8>) -> Result<Prepared, String> {
     let pixbuf = match decode(&bytes, MAX_SIDE) {
         Ok(pixbuf) => pixbuf,
         // One this PC cannot draw (a WebP without its loader) still goes when it needs no
-        // redrawing; its chip has no thumbnail.
-        Err(_) if !redraw => return Ok(Prepared { bytes, media_type, thumb: None }),
+        // redrawing; its chip has no thumbnail. One it can draw but not read is damaged.
+        Err(_) if !redraw && !can_draw(media_type) => return Ok(Prepared { bytes, media_type, thumb: None }),
         Err(why) => return Err(format!("It could not be read: {why}")),
     };
     let thumb = Some(Raw::of(&scaled(&pixbuf, THUMB_EDGE)));
@@ -261,6 +293,43 @@ fn prepare(bytes: Vec<u8>) -> Result<Prepared, String> {
     }
     let (bytes, media_type) = encode(&pixbuf, media_type)?;
     Ok(Prepared { bytes, media_type, thumb })
+}
+
+/// Make a pasted or dragged-in picture fit to send (on a worker thread). It comes decoded, so its
+/// pixels are taken as they are, at most [`MAX_SIDE`] on the long side, rather than written out as
+/// a PNG at full size and read back.
+fn prepare_pasted(texture: &gdk::Texture) -> Result<Prepared, String> {
+    let (width, height) = (texture.width(), texture.height());
+    if (width.max(0) as u64).saturating_mul(height.max(0) as u64) > MAX_PIXELS {
+        return Err(String::from("It is larger than 100 megapixels"));
+    }
+    let download = |format: gdk::MemoryFormat| {
+        let mut downloader = gdk::TextureDownloader::new(texture);
+        downloader.set_format(format);
+        downloader.download_bytes()
+    };
+    // RGBA, unless every pixel is opaque: a PNG then carries no alpha, and a JPEG may serve.
+    let (mut bytes, mut stride) = download(gdk::MemoryFormat::R8g8b8a8);
+    let alpha = bytes.chunks_exact(stride).any(|row| row[..width as usize * 4].as_chunks::<4>().0.iter().any(|px| px[3] != 255));
+    if !alpha {
+        (bytes, stride) = download(gdk::MemoryFormat::R8g8b8);
+    }
+    let full = Pixbuf::from_bytes(&bytes, gtk::gdk_pixbuf::Colorspace::Rgb, alpha, 8, width, height, stride as i32);
+    let pixbuf = scaled(&full, MAX_SIDE);
+    let thumb = Some(Raw::of(&scaled(&pixbuf, THUMB_EDGE)));
+    let (bytes, media_type) = encode_pasted(&pixbuf)?;
+    Ok(Prepared { bytes, media_type, thumb })
+}
+
+/// A pasted picture's bytes: PNG when it packs as a screenshot does, under a byte a pixel, which
+/// keeps its text sharp, or when it has transparency, if that fits; else a JPEG, as a photo goes.
+fn encode_pasted(pixbuf: &Pixbuf) -> Result<(Vec<u8>, &'static str), String> {
+    let png = png(pixbuf);
+    let pixels = (pixbuf.width().max(0) as usize) * (pixbuf.height().max(0) as usize);
+    if png.len() <= MAX_BYTES && (pixbuf.has_alpha() || png.len() <= pixels) {
+        return Ok((png, "image/png"));
+    }
+    jpeg(pixbuf)
 }
 
 /// Read a chosen or dropped file and make it fit to send (on a worker thread).
@@ -298,6 +367,9 @@ pub(super) struct Attached {
     name: String,
     upload: RefCell<Upload>,
     thumb: RefCell<Option<gdk::Texture>>,
+    /// When it went up, by the wall clock the engine's sweep keeps; none when a sent message
+    /// carries it.
+    up_at: Cell<Option<SystemTime>>,
 }
 
 impl Attached {
@@ -345,7 +417,7 @@ impl Attached {
         key.update_property(&[gtk::accessible::Property::Label("Remove this picture")]);
         key.connect_clicked(move |_| remove(serial));
         root.add_overlay(&key);
-        let me = Rc::new(Attached { serial, root, face, picture, glyph, state, name, upload: RefCell::new(Upload::Going), thumb: RefCell::default() });
+        let me = Rc::new(Attached { serial, root, face, picture, glyph, state, name, upload: RefCell::new(Upload::Going), thumb: RefCell::default(), up_at: Cell::new(None) });
         me.show_state();
         me
     }
@@ -358,7 +430,7 @@ impl Attached {
         glib::spawn_future_local(async move {
             let prepared = gio::spawn_blocking(move || match source {
                 Source::Path(path) => prepare_file(&path),
-                Source::Texture(texture) => prepare(texture.save_to_png_bytes().to_vec()),
+                Source::Texture(texture) => prepare_pasted(&texture),
             })
             .await
             .unwrap_or_else(|_| Err(String::from("It could not be read")));
@@ -381,6 +453,7 @@ impl Attached {
                     if let Some(thumb) = chip.thumb.borrow().clone() {
                         remember(key(&answer["image"]["id"]), Ok(thumb));
                     }
+                    chip.up_at.set(Some(SystemTime::now()));
                     Upload::Ready(answer["image"].clone())
                 }
                 Ok(_) => Upload::Refused(String::from("The engine did not keep it")),
@@ -431,6 +504,18 @@ impl Attached {
         match &*self.upload.borrow() {
             Upload::Refused(why) => Some(why.clone()),
             _ => None,
+        }
+    }
+
+    /// A send refused for a picture the engine no longer holds: each one here that went up a day
+    /// ago or more was let go unsent, and says so, rather than failing every send the same way.
+    pub(super) fn expire(e: &Error, attached: &[Rc<Attached>]) {
+        if !matches!(e, Error::Bus(b) if b.code == "thread.image_unknown") {
+            return;
+        }
+        let now = SystemTime::now();
+        for chip in attached.iter().filter(|chip| expired(chip.up_at.get(), now)) {
+            chip.finish(Upload::Refused(String::from(EXPIRED)));
         }
     }
 
@@ -491,22 +576,68 @@ impl Attached {
     }
 }
 
+/// Thumbnails kept by id, at most `limit` of them. Each carries when it was last asked for, and past
+/// the limit the one asked for longest ago goes: a thread drawn whole asks oldest first, so it keeps
+/// its newest pictures, the ones on screen, whatever order their reads finish in.
+struct Kept<V> {
+    limit: usize,
+    clock: u64,
+    entries: HashMap<String, (u64, V)>,
+}
+
+impl<V: Clone> Kept<V> {
+    fn new(limit: usize) -> Self {
+        Kept { limit, clock: 0, entries: HashMap::new() }
+    }
+
+    /// Picture `key` is asked for now: the time it is asked at, and its thumbnail if kept.
+    fn ask(&mut self, key: &str) -> (u64, Option<V>) {
+        self.clock += 1;
+        let now = self.clock;
+        (now, self.entries.get_mut(key).map(|(at, v)| {
+            *at = now;
+            v.clone()
+        }))
+    }
+
+    fn peek(&self, key: &str) -> Option<V> {
+        self.entries.get(key).map(|(_, v)| v.clone())
+    }
+
+    /// Keep `value` for `key`, asked for at `at`; past the limit, the one asked for longest ago goes,
+    /// which may be this one.
+    fn keep(&mut self, key: String, at: u64, value: V) {
+        self.entries.insert(key, (at, value));
+        while self.entries.len() > self.limit {
+            let Some(oldest) = self.entries.iter().min_by_key(|(_, (at, _))| *at).map(|(k, _)| k.clone()) else { break };
+            self.entries.remove(&oldest);
+        }
+    }
+}
+
+impl<V: Clone> Default for Kept<V> {
+    fn default() -> Self {
+        Kept::new(KEPT)
+    }
+}
+
 /// What a read of a picture by id gave: its texture, or why not.
 type Read = Result<gdk::Texture, String>;
 type Waiting = Vec<Box<dyn FnOnce(&Read)>>;
 
-/// Thumbnails read by id, the oldest first in `order`, and those being read with who waits.
+/// Thumbnails read by id, and those being read: when each was last asked for, and who waits.
 #[derive(Default)]
 struct Seen {
-    order: VecDeque<String>,
-    kept: HashMap<String, Read>,
-    waiting: HashMap<String, Waiting>,
+    kept: Kept<Read>,
+    waiting: HashMap<String, (u64, Waiting)>,
     /// Pictures asked for and not yet being read, the newest asked last: a thread drawn whole asks
     /// for its newest pictures last, and those are the ones in view, so they are read first.
     asked: Vec<Value>,
     /// How many are being read: at most [`READING`], so a thread of many pictures does not open a
     /// connection for each at once.
     reading: usize,
+    /// Reading starts on the next idle, once the drawing that asks has asked for all it shows.
+    starting: bool,
 }
 
 /// Thumbnails read at once.
@@ -514,6 +645,26 @@ const READING: usize = 2;
 
 thread_local! {
     static SEEN: RefCell<Seen> = RefCell::default();
+    /// The thumbnails read, by key, while a measurement watches (`scripts/perf/thumbs-reopen.py`).
+    static READS: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+}
+
+/// Start (`true`) or stop recording the thumbnails read; what was recorded since the last call.
+pub(crate) fn watch_reads(on: bool) -> Vec<String> {
+    READS.with(|r| std::mem::replace(&mut *r.borrow_mut(), on.then(Vec::new))).unwrap_or_default()
+}
+
+/// Whether a thumbnail is being read or waits to be.
+pub(crate) fn reading() -> bool {
+    SEEN.with(|seen| {
+        let seen = seen.borrow();
+        seen.reading > 0 || !seen.asked.is_empty()
+    })
+}
+
+/// The widget name of a message's picture, for finding which show.
+pub(crate) fn picture_name(id: &Value) -> String {
+    format!("thread-picture-{}", key(id))
 }
 
 /// A picture's id as a key: the engine's id, whatever its JSON kind.
@@ -523,20 +674,14 @@ fn key(id: &Value) -> String {
 
 fn remember(key: String, read: Read) {
     SEEN.with(|seen| {
-        let seen = &mut *seen.borrow_mut();
-        if seen.kept.insert(key.clone(), read).is_none() {
-            seen.order.push_back(key);
-        }
-        while seen.order.len() > KEPT {
-            if let Some(oldest) = seen.order.pop_front() {
-                seen.kept.remove(&oldest);
-            }
-        }
+        let kept = &mut seen.borrow_mut().kept;
+        let (at, _) = kept.ask(&key);
+        kept.keep(key, at, read);
     });
 }
 
 fn cached(id: &Value) -> Option<Read> {
-    SEEN.with(|seen| seen.borrow().kept.get(&key(id)).cloned())
+    SEEN.with(|seen| seen.borrow().kept.peek(&key(id)))
 }
 
 /// Read picture `id` (`thread.image`) no larger than `edge`: its texture or why not, and whether
@@ -563,14 +708,16 @@ async fn read_picture(ui: &Rc<Ui>, id: &Value, edge: u32) -> (Read, bool) {
 /// Picture `id`'s thumbnail, for `then`: from memory when it was read, else read once however
 /// many ask for it meanwhile.
 pub(super) fn thumbnail(ui: &Rc<Ui>, id: &Value, then: impl FnOnce(&Read) + 'static) {
-    if let Some(read) = cached(id) {
+    let key = key(id);
+    let (at, kept) = SEEN.with(|seen| seen.borrow_mut().kept.ask(&key));
+    if let Some(read) = kept {
         then(&read);
         return;
     }
-    let key = key(id);
     let first = SEEN.with(|seen| {
         let mut seen = seen.borrow_mut();
-        let waiting = seen.waiting.entry(key.clone()).or_default();
+        let (asked_at, waiting) = seen.waiting.entry(key).or_default();
+        *asked_at = at;
         waiting.push(Box::new(then));
         waiting.len() == 1
     });
@@ -578,7 +725,20 @@ pub(super) fn thumbnail(ui: &Rc<Ui>, id: &Value, then: impl FnOnce(&Read) + 'sta
         return;
     }
     SEEN.with(|seen| seen.borrow_mut().asked.push(id.clone()));
-    read_asked(ui);
+    start_reading(ui);
+}
+
+/// Start reading on the next idle, once the drawing that asks has asked for all it shows: the
+/// newest are asked for last and read first, and the first reads are theirs too.
+fn start_reading(ui: &Rc<Ui>) {
+    if SEEN.with(|seen| std::mem::replace(&mut seen.borrow_mut().starting, true)) {
+        return;
+    }
+    let ui = ui.clone();
+    glib::idle_add_local_once(move || {
+        SEEN.with(|seen| seen.borrow_mut().starting = false);
+        read_asked(&ui);
+    });
 }
 
 /// Start reading the pictures asked for, the newest first, while fewer than [`READING`] are.
@@ -594,19 +754,25 @@ fn read_asked(ui: &Rc<Ui>) {
             Some(id)
         });
         let Some(id) = next else { return };
+        READS.with(|r| {
+            if let Some(log) = r.borrow_mut().as_mut() {
+                log.push(key(&id));
+            }
+        });
         let ui = ui.clone();
         glib::spawn_future_local(async move {
             let key = key(&id);
             let (read, keep) = read_picture(&ui, &id, THUMB_EDGE).await;
-            if keep {
-                remember(key.clone(), read.clone());
-            }
             let waiting = SEEN.with(|seen| {
                 let mut seen = seen.borrow_mut();
                 seen.reading = seen.reading.saturating_sub(1);
-                seen.waiting.remove(&key)
+                let (at, waiting) = seen.waiting.remove(&key).unwrap_or_default();
+                if keep {
+                    seen.kept.keep(key.clone(), at, read.clone());
+                }
+                waiting
             });
-            for then in waiting.unwrap_or_default() {
+            for then in waiting {
                 then(&read);
             }
             read_asked(&ui);
@@ -654,6 +820,7 @@ fn message_picture(ui: &Rc<Ui>, image: &Value, most: (f64, f64)) -> gtk::Button 
     let (width, height) = (image["width"].as_i64().unwrap_or(0), image["height"].as_i64().unwrap_or(0));
     let (w, h) = shown_size(width, height, most);
     let key = gtk::Button::new();
+    key.set_widget_name(&picture_name(&image["id"]));
     key.add_css_class("threads-user-picture");
     key.set_overflow(gtk::Overflow::Hidden);
     let frame = gtk::Overlay::new();
@@ -807,20 +974,31 @@ mod tests {
     }
 
     #[test]
+    fn a_damaged_picture_stays_here() {
+        // Cut short: its header reads, its pixels do not. The API would refuse it, and a thread
+        // resumed with it in its history would go on failing.
+        let mut cut = png(300, 200, false);
+        cut.truncate(cut.len() / 2);
+        let refused = prepare(cut).err().unwrap_or_default();
+        assert!(refused.starts_with("It could not be read"), "{refused}");
+        assert!(can_draw("image/png") && can_draw("image/jpeg"));
+    }
+
+    #[test]
     fn a_picture_that_fits_goes_as_it_is_and_a_long_one_is_shrunk() {
-        assert!(!redrawn(2048, 1536, MAX_BYTES, true));
-        assert!(redrawn(2049, 10, 100, true));
+        assert!(!redrawn(2000, 1500, MAX_BYTES, true));
+        assert!(redrawn(2001, 10, 100, true));
         assert!(redrawn(800, 600, MAX_BYTES + 1, true));
         assert!(redrawn(800, 600, 100, false), "a sideways photo is turned upright");
         let small = png(300, 200, false);
         let kept = prepare(small.clone()).unwrap();
         assert_eq!(kept.bytes, small);
         assert_eq!(kept.media_type, "image/png");
-        // A screenshot stays PNG, at most 2048 on its long side; its thumbnail is smaller still.
+        // A screenshot stays PNG, at most 2000 on its long side; its thumbnail is smaller still.
         let long = prepare(png(5000, 100, true)).unwrap();
         assert_eq!(long.media_type, "image/png");
         let pixbuf = decode(&long.bytes, 10_000).unwrap();
-        assert_eq!((pixbuf.width(), pixbuf.height()), (2048, 41));
+        assert_eq!((pixbuf.width(), pixbuf.height()), (2000, 40));
         let thumb = long.thumb.unwrap();
         assert_eq!(thumb.width, THUMB_EDGE as i32);
     }
@@ -834,7 +1012,7 @@ mod tests {
         assert_eq!(sent.media_type, "image/jpeg");
         assert!(sent.bytes.len() <= MAX_BYTES);
         let back = decode(&sent.bytes, 10_000).unwrap();
-        assert_eq!((back.width(), back.height()), (2048, 1365));
+        assert_eq!((back.width(), back.height()), (2000, 1333));
     }
 
     #[test]
@@ -874,5 +1052,115 @@ mod tests {
         assert_eq!(said(&other), "A picture may be at most 4 MiB.");
         assert_eq!(key(&json!(12)), "12");
         assert_eq!(key(&json!("a1b2")), "a1b2");
+    }
+
+    #[test]
+    fn a_reopened_thread_keeps_the_pictures_on_screen() {
+        // A thread of 120 pictures is drawn whole: it asks for them oldest first, and the misses
+        // are read newest first (those are on screen). Then it is drawn again, and again.
+        let open = |kept: &mut Kept<u32>| -> Vec<u32> {
+            let asked: Vec<(u32, u64, bool)> = (0..120).map(|n| {
+                let (at, hit) = kept.ask(&n.to_string());
+                (n, at, hit.is_some())
+            }).collect();
+            let mut read = Vec::new();
+            for (n, at, _) in asked.iter().rev().filter(|(_, _, hit)| !hit) {
+                kept.keep(n.to_string(), *at, *n);
+                read.push(*n);
+            }
+            read
+        };
+        let mut kept = Kept::new(KEPT);
+        assert_eq!(open(&mut kept).len(), 120);
+        for _ in 0..3 {
+            // Only those past the limit at the top of the thread are read again; the newest stay.
+            let again = open(&mut kept);
+            assert_eq!(again.len(), 120 - KEPT);
+            assert!(again.iter().all(|n| *n < (120 - KEPT) as u32), "read again: {again:?}");
+        }
+    }
+
+    /// Deterministic pixels: a photo's (gradients under fine noise, which PNG cannot pack) or a
+    /// screenshot's (flat panels, lines of text-like dashes).
+    fn pasted(width: i32, height: i32, photo: bool) -> gdk::Texture {
+        let mut seed = 0x2545_f491_u32;
+        let mut pixels = Vec::with_capacity((width * height * 3) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                let rgb = if photo {
+                    let n = (seed & 31) as i32 - 16;
+                    [(x * 200 / width + 30 + n).clamp(0, 255), (y * 180 / height + 40 + n).clamp(0, 255), ((x + y) * 120 / (width + height) + 60 + n).clamp(0, 255)]
+                } else if (y / 18) % 3 == 1 && (x % 240) < 180 && (x / 7 + y) % 5 != 0 && x > 300 {
+                    [40, 40, 44]
+                } else if x < 280 {
+                    [235, 236, 240]
+                } else {
+                    [255, 255, 255]
+                };
+                pixels.extend(rgb.map(|c| c as u8));
+            }
+        }
+        gdk::MemoryTexture::new(width, height, gdk::MemoryFormat::R8g8b8, &glib::Bytes::from_owned(pixels), (width * 3) as usize).upcast()
+    }
+
+    #[test]
+    fn a_pasted_photo_goes_as_jpeg_and_a_screenshot_as_png() {
+        let photo = prepare_pasted(&pasted(1600, 1200, true)).unwrap();
+        assert_eq!(photo.media_type, "image/jpeg");
+        let shot = prepare_pasted(&pasted(2560, 1440, false)).unwrap();
+        assert_eq!(shot.media_type, "image/png");
+        let back = decode(&shot.bytes, 10_000).unwrap();
+        assert_eq!((back.width(), back.height()), (2000, 1125));
+        // A picture with transparency keeps it.
+        let mut pixels = vec![0_u8; 64 * 48 * 4];
+        for (i, px) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            *px = [200, 40, 40, if i % 2 == 0 { 255 } else { 0 }];
+        }
+        let clear: gdk::Texture = gdk::MemoryTexture::new(64, 48, gdk::MemoryFormat::R8g8b8a8, &glib::Bytes::from_owned(pixels), 64 * 4).upcast();
+        let kept = prepare_pasted(&clear).unwrap();
+        assert_eq!(kept.media_type, "image/png");
+        assert!(decode(&kept.bytes, 10_000).unwrap().has_alpha());
+    }
+
+    /// `cargo test -p relay-native paste_cost -- --ignored --nocapture`: what a pasted picture costs
+    /// to make fit, and what goes up. RELAY_PASTE_FILES=a.jpg,b.png adds pictures from disk.
+    #[test]
+    #[ignore]
+    fn paste_cost() {
+        let mut inputs: Vec<(String, gdk::Texture)> = [("photo 4032x3024", 4032, 3024, true), ("photo 1600x1200", 1600, 1200, true), ("screenshot 2560x1440", 2560, 1440, false)]
+            .into_iter()
+            .map(|(name, w, h, photo)| (name.to_string(), pasted(w, h, photo)))
+            .collect();
+        for path in std::env::var("RELAY_PASTE_FILES").unwrap_or_default().split(',').filter(|p| !p.is_empty()) {
+            let texture = gdk::Texture::from_filename(path).unwrap();
+            inputs.push((format!("{} {}x{}", Path::new(path).file_name().unwrap().to_string_lossy(), texture.width(), texture.height()), texture));
+        }
+        for (name, texture) in &inputs {
+            let mut times = Vec::new();
+            let mut sent = (0, "");
+            for _ in 0..5 {
+                let t = std::time::Instant::now();
+                let p = prepare_pasted(texture).unwrap();
+                times.push(t.elapsed().as_secs_f64() * 1000.0);
+                sent = (p.bytes.len() / 1024, p.media_type);
+            }
+            times.sort_by(f64::total_cmp);
+            println!("PASTE {name}: {:.0} ms [{:.0}-{:.0}] sends {} KB {}", times[2], times[0], times[4], sent.0, sent.1);
+        }
+    }
+
+    #[test]
+    fn a_picture_left_unsent_a_day_is_let_go() {
+        let gone = Error::Bus(Box::new(relay_bus::BusError::invalid("thread.image_unknown", "No picture 3fa2")));
+        assert_eq!(said(&gone), EXPIRED);
+        let now = SystemTime::now();
+        let ago = |hours: u64| Some(now - Duration::from_secs(hours * 60 * 60));
+        assert!(expired(ago(24), now) && expired(ago(30), now));
+        assert!(!expired(ago(23), now));
+        // One put back from a sent message is carried by it, and never let go.
+        assert!(!expired(None, now));
     }
 }

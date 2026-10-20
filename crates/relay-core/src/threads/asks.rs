@@ -6,7 +6,9 @@
 //! It lives in `threads.db`, tied to the assistant thread whose agent sent it (`Ctx::thread`, set
 //! by the socket door from the process that connected). It is checked when it is made: each op on
 //! the list, no flag that throws work away or widens what a session may do ([`REFUSED_FLAGS`]),
-//! at most [`MAX_STEPS`] steps. The op checks its own payload when it runs.
+//! at any depth of the payload, at most [`MAX_STEPS`] steps. A `session.close` that leaves
+//! `remove_worktree` out keeps the checkout, where the op itself would remove it ([`kept`]). The
+//! op checks its own payload when it runs.
 //!
 //! Approving claims the ask (`pending` → `running`) in the answer's transaction, so a second
 //! answer is refused, then runs the steps once, in order, as the person, each its own request
@@ -47,8 +49,9 @@ pub const ASKABLE: &[&str] = &[
     "project.add",
 ];
 
-/// Payload fields an ask may not set to `true`: deleting uncommitted work or a worktree, and
-/// widening what a session may do or what it bills.
+/// Payload fields an ask may not set to `true`, at any depth (a `task.dispatch` carries a whole
+/// `session.create` in `create`): deleting uncommitted work or a worktree, and widening what a
+/// session may do or what it bills.
 const REFUSED_FLAGS: &[&str] = &["discard_changes", "remove_worktree", "remove_worktrees", "force", "bus_writes", "allow_ui", "use_api_key"];
 
 /// The most steps one ask may hold.
@@ -174,6 +177,28 @@ pub fn list(engine: &Engine, thread: Id, pending: bool) -> Result<Vec<AskView>, 
     with_db(engine, |db| db.asks(thread, pending))
 }
 
+/// The first of [`REFUSED_FLAGS`] that `value` sets to anything but `false`, at any depth.
+fn refused_flag(value: &Value) -> Option<&'static str> {
+    match value {
+        Value::Object(fields) => REFUSED_FLAGS.iter().copied()
+            .find(|flag| fields.get(*flag).is_some_and(|v| v != &Value::Bool(false)))
+            .or_else(|| fields.values().find_map(refused_flag)),
+        Value::Array(items) => items.iter().find_map(refused_flag),
+        _ => None,
+    }
+}
+
+/// Steps as asked, with what they leave out filled the way that keeps work: `session.close`
+/// removes the checkout unless told not to, and removing one is never the assistant's to ask.
+fn kept(mut steps: Vec<AskStep>) -> Vec<AskStep> {
+    for step in steps.iter_mut().filter(|step| step.op == "session.close") {
+        if let Some(fields) = step.payload.as_object_mut() {
+            fields.entry("remove_worktree").or_insert(Value::Bool(false));
+        }
+    }
+    steps
+}
+
 /// Steps as asked, checked: each op on [`ASKABLE`] with an object payload that sets no
 /// [`REFUSED_FLAGS`], at least one and at most [`MAX_STEPS`].
 pub fn checked(steps: &[AskStep]) -> Result<(), BusError> {
@@ -186,10 +211,10 @@ pub fn checked(steps: &[AskStep]) -> Result<(), BusError> {
             return Err(BusError::refused("thread.ask_op", format!("Step {n}: {} is not something the assistant may ask for", step.op))
                 .with_hint(format!("an ask runs one of {}; the rest the person does themselves", ASKABLE.join(", "))));
         }
-        let Some(payload) = step.payload.as_object() else {
+        if !step.payload.is_object() {
             return Err(invalid(format!("Step {n}: the payload is an object, the op's own")));
-        };
-        if let Some(flag) = REFUSED_FLAGS.iter().find(|flag| payload.get(**flag).is_some_and(|v| v != &Value::Bool(false))) {
+        }
+        if let Some(flag) = refused_flag(&step.payload) {
             return Err(BusError::refused("thread.ask_flag", format!("Step {n}: an ask may not set {flag}"))
                 .with_hint("deleting work, and widening what a session may do or what it bills, stay the person's"));
         }
@@ -249,6 +274,7 @@ pub fn ask(engine: &Engine, thread: Id, steps: Vec<AskStep>, why: &str, now: &st
     if why.is_empty() || why.chars().count() > MAX_WHY {
         return Err(invalid(format!("Say why in 1 to {MAX_WHY} characters")));
     }
+    let steps = kept(steps);
     checked(&steps)?;
     let stored = serde_json::to_string(&steps).map_err(|e| BusError::internal(e.to_string()))?;
     let summary = summary(&steps);
@@ -296,12 +322,7 @@ fn run(engine: &Engine, steps: &[AskStep]) -> (&'static str, String, Vec<Value>)
     let mut made: Option<String> = None;
     let mut done = Vec::new();
     for (at, step) in steps.iter().enumerate() {
-        let mut payload = step.payload.clone();
-        if let (Some(name), Some(fields)) = (&made, payload.as_object_mut()) {
-            if step.op.starts_with("session.") && !fields.contains_key("session") {
-                fields.insert("session".into(), json!(name));
-            }
-        }
+        let payload = filled(step, &made);
         let answer = engine.dispatch(Request::new(Actor::User, step.op.clone(), payload), crate::engine::Door::InProcess).into_result();
         match answer {
             Ok(result) => {
@@ -322,6 +343,18 @@ fn run(engine: &Engine, steps: &[AskStep]) -> (&'static str, String, Vec<Value>)
         outcome = first.to_uppercase() + &outcome[1..];
     }
     ("approved", format!("{outcome}: done."), results)
+}
+
+/// `step`'s payload to run: a `session.*` step that names no session acts on the one the last
+/// `session.create` made. A create takes no `session`, and a second one makes its own.
+fn filled(step: &AskStep, made: &Option<String>) -> Value {
+    let mut payload = step.payload.clone();
+    if let (Some(name), Some(fields)) = (made, payload.as_object_mut()) {
+        if step.op.starts_with("session.") && step.op != "session.create" && !fields.contains_key("session") {
+            fields.insert("session".into(), json!(name));
+        }
+    }
+    payload
 }
 
 /// `payload` with the session a `session.create` made named in it, for the words of what ran.
@@ -378,6 +411,43 @@ mod tests {
             assert_eq!(refused.code, "thread.ask_flag", "{flag}");
         }
         assert_eq!(checked(&[step("session.park", json!("calm-otter"))]).unwrap_err().code, "thread.invalid");
+    }
+
+    /// `task.dispatch` takes a whole `session.create` in `create`, and runs it as written.
+    #[test]
+    fn a_flag_nested_in_a_payload_is_refused_too() {
+        for flag in ["bus_writes", "allow_ui", "use_api_key"] {
+            let dispatch = step("task.dispatch", json!({"task_id": 12, "fanout": true, "create": {"project_id": 1, "provider": "claude", flag: true}}));
+            assert_eq!(checked(&[dispatch]).unwrap_err().code, "thread.ask_flag", "{flag}");
+        }
+        let listed = step("task.update", json!({"task_id": 1, "steps": [{"force": "yes"}]}));
+        assert_eq!(checked(&[listed]).unwrap_err().code, "thread.ask_flag");
+        assert!(checked(&[step("task.dispatch", json!({"task_id": 12, "create": {"project_id": 1, "provider": "claude", "bus_writes": false}}))]).is_ok());
+    }
+
+    /// `session.close` removes the checkout unless told not to; an ask never does.
+    #[test]
+    fn a_close_keeps_its_checkout_unless_the_ask_says_otherwise() {
+        let steps = kept(vec![
+            step("session.close", json!({"session": "calm-otter"})),
+            step("session.close", json!({"session": "brisk-otter", "remove_worktree": true})),
+            step("session.park", json!({"session": "calm-otter"})),
+        ]);
+        assert_eq!(steps[0].payload, json!({"session": "calm-otter", "remove_worktree": false}));
+        assert_eq!(checked(&steps[1..2]).unwrap_err().code, "thread.ask_flag", "asking to remove it is still refused");
+        assert_eq!(steps[2].payload, json!({"session": "calm-otter"}));
+    }
+
+    /// "Launch a builder and a reviewer": each start acts on the session the create before it made,
+    /// and the second create makes its own instead of being handed the first one's name.
+    #[test]
+    fn a_step_acts_on_the_session_made_before_it_and_a_create_on_none() {
+        let made = Some("calm-otter".to_string());
+        assert_eq!(filled(&step("session.spawn", json!({"prompt": "Go"})), &made), json!({"prompt": "Go", "session": "calm-otter"}));
+        assert_eq!(filled(&step("session.spawn", json!({"session": "brisk-otter"})), &made), json!({"session": "brisk-otter"}));
+        assert_eq!(filled(&step("session.create", json!({"project_id": 1, "provider": "claude"})), &made), json!({"project_id": 1, "provider": "claude"}));
+        assert_eq!(filled(&step("task.create", json!({"title": "T"})), &made), json!({"title": "T"}));
+        assert_eq!(filled(&step("session.spawn", json!({})), &None), json!({}));
     }
 
     #[test]

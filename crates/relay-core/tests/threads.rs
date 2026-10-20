@@ -502,12 +502,13 @@ fn engine_at(root: &Path) -> std::sync::Arc<Engine> {
     Engine::new(relay_core::Instance::Test, relay_core::Store::open(&root.join("store.db"), false).unwrap())
 }
 
-/// A PNG's signature and header, `w` by `h`, and `pad` bytes after: all Relay reads of one.
+/// A PNG's signature and header, `w` by `h`, `pad` bytes after and its end: all Relay reads of one.
 fn png(w: u32, h: u32, pad: usize) -> Vec<u8> {
     let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
     bytes.extend(w.to_be_bytes());
     bytes.extend(h.to_be_bytes());
     bytes.resize(bytes.len() + pad, 0);
+    bytes.extend(b"\0\0\0\0IEND\xAE\x42\x60\x82");
     bytes
 }
 
@@ -546,7 +547,7 @@ fn a_picture_is_uploaded_only_when_its_kind_and_size_can_be_read_and_reads_back(
     let called_jpeg = ok(&engine, "thread.upload", json!({"media_type": "image/jpeg", "bytes_b64": b64(&bytes)}));
     assert_eq!(called_jpeg["image"]["media_type"], "image/png");
     // At most 4 MiB, decoded.
-    let most = upload(&engine, &png(1, 1, (4 << 20) - 24));
+    let most = upload(&engine, &png(1, 1, (4 << 20) - 24 - 12));
     assert_eq!(most["bytes"], 4 << 20);
 
     let refused = |media_type: &str, encoded: String| refused_upload(&engine, media_type, encoded);
@@ -555,6 +556,7 @@ fn a_picture_is_uploaded_only_when_its_kind_and_size_can_be_read_and_reads_back(
     assert_eq!(refused("image/png", b64(b"<svg width='1' height='1'/>")), "thread.upload", "an SVG is no picture a model reads");
     assert_eq!(refused("image/png", b64(b"just some text")), "thread.upload");
     assert_eq!(refused("image/png", b64(&bytes[..20])), "thread.upload", "a header cut short has no size");
+    assert_eq!(refused("image/png", b64(&bytes[..bytes.len() - 12])), "thread.upload", "a picture cut short of its end, which the API refuses");
     assert_eq!(refused("image/png", "not base64!".into()), "thread.upload");
     let over = call(&engine, "thread.upload", json!({"media_type": "image/png", "bytes_b64": b64(&png(1, 1, 4 << 20))})).error.unwrap();
     assert_eq!((over.code.as_str(), over.message.as_str()), ("thread.upload", "the picture is over 4 MiB"));
@@ -650,7 +652,7 @@ fn deleting_a_thread_removes_the_pictures_no_other_thread_carries() {
     ok(&engine, "thread.image", json!({"id": shared["id"]}));
     ok(&engine, "thread.delete", json!({"id": second["id"]}));
     assert!(!picture_file(root.path(), &shared).exists());
-    // An upload not yet sent is no thread's: it waits for its message, or its day.
+    // An upload not yet sent is no thread's: it waits for its message, or its week.
     assert!(picture_file(root.path(), &kept).is_file());
     ok(&engine, "thread.image", json!({"id": kept["id"]}));
 }

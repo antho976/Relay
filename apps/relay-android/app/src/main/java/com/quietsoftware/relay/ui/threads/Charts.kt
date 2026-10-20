@@ -55,7 +55,7 @@ import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Fence
 import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.T
-import com.quietsoftware.relay.ui.kit.ago
+import com.quietsoftware.relay.ui.kit.staleText
 import com.quietsoftware.relay.ui.theme.Fonts
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.flow.flowOf
@@ -242,11 +242,18 @@ internal fun readWritten(d: JsonObject, money: Money): Numbers {
 internal fun decimal(e: JsonElement?, digits: Int): Long? {
     val p = e as? JsonPrimitive ?: return null
     if (p is JsonNull) return null
-    return runCatching { p.content.trim().toBigDecimal().movePointRight(digits).setScale(0, RoundingMode.HALF_EVEN).longValueExact() }.getOrNull()
+    val d = runCatching { p.content.trim().toBigDecimal() }.getOrNull() ?: return null
+    // Its digits before the point once moved, which an exponent ("1e100000000") can make
+    // enormous: past a Long's 19 it is too large, below the last place it is 0, both said without
+    // working the number out, which would hold the screen for as long as it took.
+    val whole = d.precision() - d.scale() + digits
+    if (whole > 19) return null
+    if (whole < 0) return 0L
+    return runCatching { d.movePointRight(digits).setScale(0, RoundingMode.HALF_EVEN).longValueExact() }.getOrNull()
 }
 
 /** Closes in hundredths, buys and sells at their bar. */
-private fun readPrice(v: JsonObject): Numbers {
+internal fun readPrice(v: JsonObject): Numbers {
     val candles = v.objs("candles")
     val quote = v.str("product").substringAfter('-', "")
     val closes = candles.map { ((it.d("close") ?: 0.0) * 100).roundToLong() }
@@ -377,10 +384,13 @@ internal fun Series.title(): String = name.ifBlank { "Total" }.let { if (project
 /** How strong a projected series' bars and key are against the drawn ones. */
 private const val PROJECTED_ALPHA = .45f
 
-/** What group [j] holds, newest series first: "Groceries $412.30 · Dining $96.00"; a series with no value there is left out. */
-private fun Numbers.parts(j: Int, between: String = "  ·  "): String =
+/**
+ * What group [j] holds, newest series first: "Groceries $412.30 · Dining $96.00"; a series with no
+ * value there is left out. A lone series goes unnamed, unless it is a projection, which says so.
+ */
+internal fun Numbers.parts(j: Int, between: String = "  ·  "): String =
     series.asReversed().mapNotNull { s -> s.values.getOrNull(j)?.let { v -> s to v } }.joinToString(between) { (s, v) ->
-        if (series.size == 1 || (s.name.isBlank() && !s.projected)) fmt.format(v) else "${s.title()} ${fmt.format(v)}"
+        if (!s.projected && (series.size == 1 || s.name.isBlank())) fmt.format(v) else "${s.title()} ${fmt.format(v)}"
     }
 
 /** What a tapped group holds, under its name in full. */
@@ -609,19 +619,22 @@ private fun Donut(data: Numbers) {
     }
 }
 
+/** Where a chart's numbers come from: the reply, the PC just now, or a copy and how old it is. */
+internal fun footNote(spec: ChartSpec, live: RelayData.Live): String = when {
+    spec.data != null -> "Claude's numbers from this reply, not Tally's: it does not redraw"
+    live.result != null && !live.fresh -> staleText(live.at, live.cloud)
+    spec.gym != null -> "From Avex's last export, redraws when a newer one comes in"
+    spec.price != null -> "Live from Arbiter, redraws when it trades"
+    else -> "Live from Tally, redraws when the ledger changes"
+}
+
 /** Where the numbers come from and how fresh they are, and the newest series' total. */
 @Composable
 private fun Foot(spec: ChartSpec, live: RelayData.Live, data: Numbers?) {
     val c = Relay.colors
     val asked = spec.data == null
     val stale = asked && live.result != null && !live.fresh
-    val note = when {
-        !asked -> "Claude's numbers from this reply, not Tally's: it does not redraw"
-        stale -> "Saved on this phone · ${ago(live.at)}"
-        spec.gym != null -> "From Avex's last export, redraws when a newer one comes in"
-        spec.price != null -> "Live from Arbiter, redraws when it trades"
-        else -> "Live from Tally, redraws when the ledger changes"
-    }
+    val note = footNote(spec, live)
     // The figure says what it is: the newest series' name, or "Total". A reply's own numbers
     // have none: summed, a projection or a balance over months says nothing.
     val total = data?.takeIf { asked && spec.kind != ChartKind.Donut && it.series.isNotEmpty() }?.let { d ->

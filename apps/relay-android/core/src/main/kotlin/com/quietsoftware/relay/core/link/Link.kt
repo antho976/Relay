@@ -5,9 +5,12 @@ import com.quietsoftware.relay.core.wire.Greeting
 import com.quietsoftware.relay.core.wire.Route
 import com.quietsoftware.relay.core.wire.Wire
 import com.quietsoftware.relay.core.wire.orderRoutes
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,7 +24,7 @@ sealed interface LinkState {
     /** No PC is paired. */
     data object Unpaired : LinkState
 
-    /** The person pressed Disconnect; nothing dials until they connect again. */
+    /** The person pressed Disconnect, or the link is not wanted yet; nothing dials until it is started. */
     data object Stopped : LinkState
 
     data class Connecting(val attempt: Int) : LinkState
@@ -43,7 +46,8 @@ sealed interface LinkState {
  * (direct first), proves the token, subscribes, keeps the session alive with `bus.ping`, and
  * redials with backoff when it drops. Everything that talks to the PC goes through [session].
  * [ops] is the kind of door it must reach: a PC's, or the server's copy for the second link
- * ([com.quietsoftware.relay.core.Hub.cloud]).
+ * ([com.quietsoftware.relay.core.Hub.cloud]), which waits [Stopped][LinkState.Stopped] until it
+ * is started ([wantedAtFirst] false): a [kick] alone never dials it.
  */
 class Link(
     private val scope: CoroutineScope,
@@ -51,6 +55,7 @@ class Link(
     private val profiles: ProfileSource,
     private val now: () -> Long = System::currentTimeMillis,
     private val ops: String = Wire.OPS_PC,
+    wantedAtFirst: Boolean = true,
 ) {
     /** Where the paired PC's profile lives. The app persists it; tests keep it in memory. */
     interface ProfileSource {
@@ -63,7 +68,7 @@ class Link(
     /** Called with each new session, before anyone else sees it: subscribe, resync, flush. */
     var onSession: suspend (BusSession) -> Unit = {}
 
-    private val _state = MutableStateFlow<LinkState>(LinkState.Connecting(0))
+    private val _state = MutableStateFlow<LinkState>(if (wantedAtFirst) LinkState.Connecting(0) else LinkState.Stopped)
     val state: StateFlow<LinkState> = _state.asStateFlow()
 
     private val _session = MutableStateFlow<BusSession?>(null)
@@ -71,7 +76,7 @@ class Link(
 
     private val wake = Channel<Unit>(Channel.CONFLATED)
     private var loop: Job? = null
-    @Volatile private var wanted = true
+    @Volatile private var wanted = wantedAtFirst
 
     fun start() {
         wanted = true
@@ -88,14 +93,14 @@ class Link(
         start()
     }
 
-    /** Disconnect and stay disconnected until [start]. */
+    /** Disconnect and stay disconnected until [start]. A refused credential still says so. */
     fun stop() {
         wanted = false
         loop?.cancel()
         loop = null
         _session.value?.close()
         _session.value = null
-        _state.value = LinkState.Stopped
+        if (_state.value !is LinkState.Revoked) _state.value = LinkState.Stopped
     }
 
     /** Drop the current session and dial again, e.g. after the profile's routes changed. */
@@ -125,35 +130,45 @@ class Link(
                 backoff = waitOut(refusal?.text ?: "The PC did not answer", backoff)
                 continue
             }
-            val welcome = Handshake.prove(greeted, profile.device, profile.token, ops).getOrElse { e ->
-                val refusal = (e as? RefusalException)?.refusal
-                // Neither a forgotten credential nor the wrong kind of door gets better by dialing again.
-                if (refusal is Refusal.Unpaired || refusal is Refusal.WrongDoor) {
-                    _state.value = LinkState.Revoked(refusal.text)
-                    wanted = false
-                    return
+            // Stopped before the session is handed over, this closes what it opened: the door may
+            // have let this phone in already, and an open socket would keep that door open.
+            var opened: BusSession? = null
+            val session = try {
+                val welcome = Handshake.prove(greeted, profile.device, profile.token, ops).getOrElse { e ->
+                    val refusal = (e as? RefusalException)?.refusal
+                    // Neither a forgotten credential nor the wrong kind of door gets better by dialing again.
+                    if (refusal is Refusal.Unpaired || refusal is Refusal.WrongDoor) {
+                        _state.value = LinkState.Revoked(refusal.text)
+                        wanted = false
+                        return
+                    }
+                    backoff = waitOut(refusal?.text ?: "The PC did not let this phone in", backoff)
+                    continue
                 }
-                backoff = waitOut(refusal?.text ?: "The PC did not let this phone in", backoff)
-                continue
-            }
-            check(welcome.ok)
-            val greeting = greeted.greeting.admittedBy(welcome)
-            val session = BusSession(greeted.socket, greeted.route, greeting, profile.device, scope)
-            profiles.connected(profile, greeted.route, greeting)
-            val starting = greeting.engine == "stopped" || greeting.engine == "starting"
-            if (starting) _state.value = LinkState.Starting(greeted.route, greeting)
-            // The first request waits for the engine when the door had to start it.
-            val ready = runCatching {
-                session.result("bus.ping", JsonObject(emptyMap()), timeoutMs = if (starting) ENGINE_START_TIMEOUT_MS else BusSession.DEFAULT_TIMEOUT_MS)
-            }
-            if (ready.isFailure) {
-                session.close()
-                backoff = waitOut("The PC's engine did not answer", backoff)
-                continue
+                check(welcome.ok)
+                val greeting = greeted.greeting.admittedBy(welcome)
+                val session = BusSession(greeted.socket, greeted.route, greeting, profile.device, scope).also { opened = it }
+                profiles.connected(profile, greeted.route, greeting)
+                val starting = greeting.engine == "stopped" || greeting.engine == "starting"
+                if (starting) _state.value = LinkState.Starting(greeted.route, greeting)
+                // The first request waits for the engine when the door had to start it.
+                val ready = runCatching {
+                    session.result("bus.ping", JsonObject(emptyMap()), timeoutMs = if (starting) ENGINE_START_TIMEOUT_MS else BusSession.DEFAULT_TIMEOUT_MS)
+                }
+                ready.exceptionOrNull()?.let { if (it is CancellationException) throw it }
+                if (ready.isFailure) {
+                    session.close()
+                    backoff = waitOut("The PC's engine did not answer", backoff)
+                    continue
+                }
+                session
+            } catch (e: CancellationException) {
+                opened?.close() ?: greeted.socket.close()
+                throw e
             }
             // The session is usable before anyone is told the link is up.
             _session.value = session
-            _state.value = LinkState.Online(greeted.route, greeting)
+            _state.value = LinkState.Online(greeted.route, session.greeting)
             val began = now()
             runCatching { onSession(session) }
             keepAlive(session)
@@ -190,6 +205,8 @@ class Link(
     }
 
     private suspend fun waitOut(reason: String, backoff: Long): Long {
+        // Stopped meanwhile: the state stop() set stands.
+        currentCoroutineContext().ensureActive()
         _state.value = LinkState.Offline(reason, now() + backoff)
         select {
             wake.onReceive { }

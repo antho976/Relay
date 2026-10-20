@@ -605,15 +605,22 @@ elsewhere. `crates/relay-core/src/threads/images.rs`; the ops are in `crates/rel
 - **Uploading:** `thread.upload {media_type, bytes_b64}` → `{image: {id, media_type, width,
   height, bytes}}`. It takes a PNG, JPEG, GIF or WebP whose size can be read from its header
   (`crate::picture`, the reader `session.upload` and `design.asset.add` use), at most 4 MiB
-  decoded (a door takes 8 MiB in one message). The bytes decide its `media_type`; any other is
-  refused with `thread.upload`. The id is 32 lowercase hex characters. It is the person's alone,
+  decoded (a door takes 8 MiB in one message), that runs to its format's end (`picture::whole`:
+  PNG's IEND, JPEG's end of image after its scan, GIF's trailer, WebP's RIFF size) and is at most
+  8000 px a side, since the API refuses a picture cut short or larger and the thread it went to
+  could not be answered again. The bytes decide its `media_type`; any other is refused with
+  `thread.upload`. The id is 32 lowercase hex characters. It is the person's alone,
   and only file work: it is staged, so nothing of it holds the store's lock.
 - **Where they live:** `threads/images/<id>.<ext>` beside `threads.db`, written 0600 and renamed
   into place. `threads.db` version 4 keeps each picture's row (`image`) and which messages carry it
   (`message_image`).
 - **Sending:** `thread.send {id, text, images?}` and `thread.create {text?, images?, model?,
   effort?}` take at most 4 ids (`thread.invalid` past that). The text may be empty beside a
-  picture, but not both empty. An id never uploaded, or swept, is `thread.image_unknown`. A thread
+  picture, but not both empty. An id never uploaded, or swept (also one swept between the lookup
+  and the message being stored, which then is not), is `thread.image_unknown`. A thread carries at
+  most 20 pictures and 20 MiB of them (`images::THREAD_MAX`, `THREAD_BYTES`; `thread.images_full`
+  past that): every turn resends the whole conversation, and the API refuses a request over 32 MB,
+  or with a picture over 2000 px a side once it holds more than 20. A thread
   created with pictures and no words is named "Picture" (or "2 pictures"). The stored body is
   `{"text", "images": [{"id", "media_type", "width", "height"}]}`; `images` is absent when there
   are none.
@@ -634,7 +641,7 @@ elsewhere. `crates/relay-core/src/threads/images.rs`; the ops are in `crates/rel
   instructions.
 - **Drawing them:** `thread.image {id}` → `{media_type, bytes_b64}`, an unlocked query;
   `thread.image_not_found` for an id it does not know.
-- **Going:** an upload no message carries is removed a day after it was made, swept whenever
+- **Going:** an upload no message carries is removed a week after it was made, swept whenever
   another is uploaded (with any file a cut-short write left without a row). Deleting a thread
   removes the pictures its messages carried that no other message does, after the handler. The
   phone may call both ops (`PHONE_OPS`).
@@ -671,7 +678,11 @@ user-only op with its own payload, among `session.create`, `.spawn`, `.resume`, 
 `notes.create`, `.update`, `workspace.create` and `project.add`. A step after `session.create`
 that leaves `session` out acts on the session it made, so "launch a builder" is one card.
 Refused when asked: any other op (`thread.ask_op`), and `discard_changes`, `remove_worktree(s)`,
-`force`, `bus_writes`, `allow_ui` or `use_api_key` set (`thread.ask_flag`). Guardrail answers,
+`force`, `bus_writes`, `allow_ui` or `use_api_key` set (`thread.ask_flag`), at any depth of the
+payload, since `task.dispatch` carries a whole `session.create` in `create`. A `session.close`
+that leaves `remove_worktree` out is stored with it `false`: the op removes the checkout by
+default, and an ask never does. A second `session.create` in one ask makes its own session; the
+steps after it act on that one. Guardrail answers,
 settings, removing anything, Git, files, money, keys and pairing are neither free nor askable.
 Only an assistant thread's own agent asks (`thread.not_agent`, `thread.not_assistant`).
 

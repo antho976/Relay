@@ -1,5 +1,6 @@
 package com.quietsoftware.relay.ui.pages
 
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -20,6 +21,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -327,9 +329,15 @@ fun NoteScreen(id: String?, projectId: Long?, nav: Nav) {
         )
     }
 
+    var madeAt by remember { mutableLongStateOf(0L) }
+
     // File > Create task from note (doc.rs `to_task`): the whole note becomes a Backlog task that
-    // remembers its note, which lists it from then on.
+    // remembers its note, which lists it from then on. It is queued at once, so a second tap just
+    // after is the same tap again, not a second task.
     fun toTask(n: Note) {
+        val now = SystemClock.uptimeMillis()
+        if (madeAt > 0 && now - madeAt < 1_500) return
+        madeAt = now
         val p = n.projectId.takeIf { it > 0 } ?: pid ?: return
         val name = n.title?.trim()?.takeIf { it.isNotEmpty() } ?: plainLines(n.body).firstOrNull()?.take(60) ?: "Untitled"
         val text = n.body.trim()

@@ -5,7 +5,7 @@ use crate::sessions;
 use relay_bus::envelope::Actor;
 use relay_bus::error::BusError;
 use relay_bus::ops::session::{
-    BootstrapGuardrails, BootstrapOut, BootstrapPair, BootstrapTask, BriefOut, BriefParts,
+    BootstrapBaseSync, BootstrapGuardrails, BootstrapOut, BootstrapPair, BootstrapTask, BriefOut, BriefParts,
 };
 use relay_bus::registry::{Callable, Registry};
 use relay_bus::types::{Id, Peer};
@@ -467,6 +467,7 @@ pub fn bootstrap(
     conn: &Connection,
     session_name: &str,
     engine: &crate::engine::Engine,
+    base_sync: Option<BootstrapBaseSync>,
 ) -> Result<BootstrapOut, BusError> {
     let row = sessions::by_name(conn, session_name)?;
     let session = &row.session;
@@ -568,6 +569,7 @@ pub fn bootstrap(
         worktree: session.worktree.clone(),
         branch: session.branch.clone(),
         module,
+        base_sync,
         task,
         tasks,
         pair,

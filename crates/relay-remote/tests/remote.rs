@@ -1057,11 +1057,20 @@ async fn a_running_link_merges_as_soon_as_the_cloud_copy_takes_a_change() {
     assert_eq!(uploaded["ok"], true, "{uploaded}");
     within(Duration::from_secs(10), || at_the_pc(&pc, "gym.summary", json!({}))["imported"]["exported_at"] == "2026-10-08 21:14").await;
 
-    // Its own rounds wake nothing: once quiet, cloud.json's last round stays put.
-    let quiet = relay_remote::cloud::Link::load(&link_path).unwrap().unwrap().last_ok;
+    // Its own rounds wake nothing: once quiet, cloud.json's last round stays put. The round that
+    // brought the export home writes its `last_ok` after the PC has the export, so quiet is read
+    // once that write has landed: a mark that holds for a second, longer than a round settles.
+    let last_ok = || relay_remote::cloud::Link::load(&link_path).unwrap().unwrap().last_ok;
+    let mut quiet = last_ok();
+    for _ in 0..10 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let now = last_ok();
+        if now == quiet { break; }
+        quiet = now;
+    }
     assert_ne!(quiet, settled, "the rounds ran");
     tokio::time::sleep(Duration::from_secs(3)).await;
-    assert_eq!(relay_remote::cloud::Link::load(&link_path).unwrap().unwrap().last_ok, quiet, "the link woke itself");
+    assert_eq!(last_ok(), quiet, "the link woke itself");
 
     link.abort();
     tunnel.abort();

@@ -13,12 +13,16 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -189,9 +193,12 @@ private fun ExtensionBody(
     }
 }
 
-/** A row of the list: its words open what it is (as the desktop's cards do), its switch turns it on for the project. */
+/**
+ * A row of the list: its words open what it is (as the desktop's cards do), its switch turns it
+ * on for the project. The switch is named for what it turns on, and takes a finger's height.
+ */
 @Composable
-private fun ExtensionSwitch(title: String, detail: String, checked: Boolean, enabled: Boolean, onOpen: () -> Unit, onChange: (Boolean) -> Unit) {
+internal fun ExtensionSwitch(title: String, detail: String, checked: Boolean, enabled: Boolean, onOpen: () -> Unit, onChange: (Boolean) -> Unit) {
     val c = Relay.colors
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Row(
@@ -206,6 +213,11 @@ private fun ExtensionSwitch(title: String, detail: String, checked: Boolean, ena
             Glyph("chevron-right", 14.dp, c.ink3)
         }
         Spacer(Modifier.width(12.dp))
-        Toggle(checked, onChange, enabled = enabled)
+        Box(
+            Modifier.heightIn(min = TOUCH)
+                .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChange)
+                .semantics { contentDescription = title },
+            contentAlignment = Alignment.Center,
+        ) { Toggle(checked, null, enabled = enabled) }
     }
 }

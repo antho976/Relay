@@ -13,11 +13,12 @@
 //!
 //! The sweep runs on the retention timer (`purge::spawn_timer`), a minute after a session closes,
 //! and on `app.reconcile`:
-//! - a linked checkout whose sessions are all closed loses the build output git ignores
-//!   ([`worktree::ignored_build_dirs`]); so does one in an agent-made area no session owns
-//!   (`.claude/worktrees/`, Relay's own areas) once nothing was built there for [`UNOWNED_IDLE`].
-//!   The checkout, its changes and its branch stay: those are `session.close`'s and branch
-//!   cleanup's to decide.
+//! - a checkout in an agent-made area (`.claude/worktrees/`, Relay's own areas) whose sessions
+//!   are all closed loses the build output git ignores ([`worktree::ignored_build_dirs`]); so
+//!   does one there that no session owns, once nothing was built in it for [`UNOWNED_IDLE`]. A
+//!   checkout the user made elsewhere keeps its builds even after a session worked in it, as
+//!   `session.close` keeps the checkout itself. The checkout, its changes and its branch stay:
+//!   those are `session.close`'s and branch cleanup's to decide.
 //! - a checkout a live session owns, and the primary, keep their builds, but only the [`KEEP`]
 //!   newest test executables of each name ([`trim`]).
 //! - a closed session's scratch directory goes.
@@ -28,6 +29,8 @@
 //! Nothing is touched while someone works there: no purge while any process's cwd is inside the
 //! checkout, no trim while cargo or rustc runs in it or a test executable of it is running — a
 //! test run executes the binaries it judged fresh, and the trim must not take one from under it.
+//! A first pass over large builds takes minutes, so the process table is read again for every
+//! checkout, and the store is asked again just before a purge whether a session opened there.
 
 use crate::engine::Engine;
 use crate::worktree;
@@ -46,7 +49,16 @@ pub const UNOWNED_IDLE: Duration = Duration::from_secs(24 * 60 * 60);
 /// How long after a close its sweep waits: the agent is killed after the close commits.
 const AFTER_CLOSE: Duration = Duration::from_secs(60);
 
-/// What the store knows, read in one short lock.
+/// What the store holds, read in one short lock: paths as written, resolved by [`Rows::resolve`]
+/// once the lock is released, since resolving one is a filesystem call per component.
+#[derive(Debug, Default)]
+pub struct Rows {
+    repos: Vec<PathBuf>,
+    /// (worktree, closed, claude, provider_ref) for every session row.
+    sessions: Vec<(String, bool, bool, Option<String>)>,
+}
+
+/// What the store knows, its paths resolved.
 #[derive(Debug, Default)]
 pub struct Known {
     pub repos: Vec<PathBuf>,
@@ -70,31 +82,44 @@ pub struct Swept {
     pub freed: u64,
 }
 
-pub fn known(conn: &Connection) -> rusqlite::Result<Known> {
-    let mut known = Known {
-        repos: conn.prepare_cached("SELECT path FROM projects")?
-            .query_map([], |r| r.get::<_, String>(0))?
-            .map(|path| path.map(PathBuf::from))
-            .collect::<rusqlite::Result<_>>()?,
-        ..Default::default()
-    };
-    let mut live_refs = HashSet::new();
-    let mut closed_refs = HashSet::new();
+pub fn known(conn: &Connection) -> rusqlite::Result<Rows> {
+    let repos = conn.prepare_cached("SELECT path FROM projects")?
+        .query_map([], |r| r.get::<_, String>(0))?
+        .map(|path| path.map(PathBuf::from))
+        .collect::<rusqlite::Result<_>>()?;
     let mut statement = conn.prepare_cached("SELECT worktree, state = 'closed', provider = 'claude', provider_ref FROM sessions")?;
-    let rows = statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?, r.get::<_, bool>(2)?, r.get::<_, Option<String>>(3)?)))?;
-    for row in rows {
-        let (worktree, closed, claude, provider_ref) = row?;
-        if !worktree.is_empty() {
-            let worktree = canon(Path::new(&worktree));
-            if closed { known.closed.insert(worktree); } else { known.live.insert(worktree); }
+    let sessions = statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?, r.get::<_, bool>(2)?, r.get::<_, Option<String>>(3)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(Rows { repos, sessions })
+}
+
+impl Rows {
+    /// Resolve the paths: call it with no store lock held.
+    pub fn resolve(self) -> Known {
+        let mut known = Known { repos: self.repos, ..Default::default() };
+        let mut live_refs = HashSet::new();
+        let mut closed_refs = HashSet::new();
+        for (worktree, closed, claude, provider_ref) in self.sessions {
+            if !worktree.is_empty() {
+                let worktree = canon(Path::new(&worktree));
+                if closed { known.closed.insert(worktree); } else { known.live.insert(worktree); }
+            }
+            if let Some(id) = provider_ref.filter(|id| claude && is_uuid(id)) {
+                if closed { closed_refs.insert(id); } else { live_refs.insert(id); }
+            }
         }
-        if let Some(id) = provider_ref.filter(|id| claude && is_uuid(id)) {
-            if closed { closed_refs.insert(id); } else { live_refs.insert(id); }
-        }
+        known.closed.retain(|wt| !known.live.contains(wt));
+        known.dead_refs = closed_refs.difference(&live_refs).cloned().collect();
+        known
     }
-    known.closed.retain(|wt| !known.live.contains(wt));
-    known.dead_refs = closed_refs.difference(&live_refs).cloned().collect();
-    Ok(known)
+}
+
+/// The checkouts sessions that are not closed work in, now: the purge's last question to the
+/// store, asked in one short read for the checkout about to lose its build.
+fn live_now(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    conn.prepare_cached("SELECT worktree FROM sessions WHERE state != 'closed' AND worktree != ''")?
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect()
 }
 
 /// Claude Code's scratch space: `<os tmpdir>/claude-<uid>/`.
@@ -105,9 +130,10 @@ pub fn scratch_root() -> PathBuf {
 }
 
 /// One pass over every project's checkouts and the scratch root. Filesystem and `/proc` work
-/// only: call it with no store lock held. `stop` is asked between checkouts.
-pub fn sweep(known: &Known, scratch: &Path, now: SystemTime, stop: &dyn Fn() -> bool) -> Swept {
-    let procs = Procs::read();
+/// only: call it with no store lock held. `stop` is asked between checkouts, and `live` just
+/// before a purge, with the store as it is then: whether a session that is not closed works in
+/// that checkout now. A failed read should answer that one does.
+pub fn sweep(known: &Known, scratch: &Path, now: SystemTime, stop: &dyn Fn() -> bool, live: &dyn Fn(&Path) -> bool) -> Swept {
     let mut out = Swept::default();
     for repo in &known.repos {
         let Ok(checkouts) = worktree::list_with_dirty(repo, false) else { continue };
@@ -115,27 +141,24 @@ pub fn sweep(known: &Known, scratch: &Path, now: SystemTime, stop: &dyn Fn() -> 
             if stop() { return out; }
             let path = PathBuf::from(&checkout.path);
             if index == 0 || known.live.contains(&path) {
-                if !procs.building_in(&path) {
+                if !Procs::read().building_in(&path) {
                     let (count, freed) = trim(&path.join("target"));
                     out.trimmed += count;
                     out.freed += freed;
                 }
                 continue;
             }
-            let idle = if known.closed.contains(&path) {
-                Duration::ZERO
-            } else if agent_area(repo, &path) {
-                UNOWNED_IDLE
-            } else {
-                // A checkout the user made elsewhere is theirs to clean.
-                continue;
-            };
-            if procs.inside(&path) { continue; }
+            // A checkout the user made elsewhere is theirs to clean, even one a session worked in.
+            if !agent_area(repo, &path) { continue; }
+            let idle = if known.closed.contains(&path) { Duration::ZERO } else { UNOWNED_IDLE };
             let dirs = worktree::ignored_build_dirs(&path);
             if dirs.is_empty() || last_build(&dirs).is_some_and(|built| now.duration_since(built).unwrap_or_default() < idle) { continue; }
+            let sizes: Vec<u64> = dirs.iter().map(|dir| worktree::dir_size(dir)).collect();
+            // Asked after the walk, which can take minutes on a large build: a session opened
+            // or a build started meanwhile keeps it.
+            if Procs::read().inside(&path) || live(&path) { continue; }
             let mut freed = 0;
-            for dir in &dirs {
-                let size = worktree::dir_size(dir);
+            for (dir, size) in dirs.iter().zip(sizes) {
                 if std::fs::remove_dir_all(dir).is_ok() { freed += size; }
             }
             if freed > 0 {
@@ -180,8 +203,12 @@ pub fn trim(target: &Path) -> (usize, u64) {
     use std::os::unix::fs::PermissionsExt;
     let mut removed = 0;
     let mut freed = 0;
+    // A `target` or profile that is a link leads to a build other checkouts may be running from,
+    // which `building_in` cannot see: the purge does not follow one either (RA-347).
+    if !is_dir(target) { return (0, 0); }
     for profile in std::fs::read_dir(target).into_iter().flatten().flatten() {
         let deps = profile.path().join("deps");
+        if !is_dir(&profile.path()) || !is_dir(&deps) { continue; }
         let mut groups: HashMap<String, Vec<(SystemTime, PathBuf, u64)>> = HashMap::new();
         for entry in std::fs::read_dir(&deps).into_iter().flatten().flatten() {
             let Ok(meta) = entry.metadata() else { continue };
@@ -298,13 +325,21 @@ pub fn run(engine: &Engine) -> Option<Swept> {
     let mut total = Swept::default();
     loop {
         AGAIN.store(false, Ordering::Release);
-        let known = {
+        let rows = {
             let conn = engine.store.lock();
             known(&conn)
         };
-        match known {
-            Ok(known) => {
-                let swept = sweep(&known, &scratch_root(), SystemTime::now(), &|| engine.is_quitting());
+        let live = |path: &Path| {
+            let rows = {
+                let conn = engine.store.lock();
+                live_now(&conn)
+            };
+            rows.map_or(true, |rows| rows.iter().any(|wt| canon(Path::new(wt)) == path))
+        };
+        match rows {
+            Ok(rows) => {
+                let known = rows.resolve();
+                let swept = sweep(&known, &scratch_root(), SystemTime::now(), &|| engine.is_quitting(), &live);
                 total.purged.extend(swept.purged);
                 total.trimmed += swept.trimmed;
                 total.scratch.extend(swept.scratch);
@@ -698,6 +733,22 @@ mod tests {
     }
 
     #[test]
+    fn a_trim_never_follows_a_link_to_a_build_elsewhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = dir.path().join("shared-target");
+        builds(&shared);
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::os::unix::fs::symlink(&shared, wt.join("target")).unwrap();
+        assert_eq!(trim(&wt.join("target")), (0, 0));
+        let other = dir.path().join("other");
+        std::fs::create_dir_all(other.join("target")).unwrap();
+        std::os::unix::fs::symlink(shared.join("debug"), other.join("target/debug")).unwrap();
+        assert_eq!(trim(&other.join("target")), (0, 0), "nor a profile that is a link");
+        assert_eq!(names(&shared.join("debug/deps")).iter().filter(|n| n.starts_with("store-") && !n.ends_with(".d")).count(), 5);
+    }
+
+    #[test]
     fn only_a_closed_sessions_scratch_goes_read_only_fixtures_included() {
         let root = tempfile::tempdir().unwrap();
         let slug = root.path().join("-home-me-repo--relay-worktrees-a");
@@ -756,7 +807,7 @@ mod tests {
         session("codex", "/w/repo/.relay/worktrees/codex", "codex", "closed", Some("12345678-1234-4234-8234-123456789012"));
         session("odd", "", "claude", "closed", Some("../../etc"));
 
-        let known = known(&conn).unwrap();
+        let known = known(&conn).unwrap().resolve();
         assert_eq!(known.repos, vec![PathBuf::from("/w/repo")]);
         let closed: HashSet<PathBuf> = ["/w/repo/.relay/worktrees/gone", "/w/repo/.relay/worktrees/codex"].into_iter().map(PathBuf::from).collect();
         assert_eq!(known.closed, closed);
@@ -806,13 +857,15 @@ mod tests {
             age(wt, ago(2 * 24 * 60 * 60));
         }
 
+        // A session worked in the user's own checkout and closed: `session.close` keeps a checkout
+        // outside the pool, and its builds stay with it.
         let known = Known {
             repos: vec![repo.clone()],
             live: [live.clone()].into_iter().collect(),
-            closed: [closed.clone()].into_iter().collect(),
+            closed: [closed.clone(), users.clone()].into_iter().collect(),
             dead_refs: HashSet::new(),
         };
-        let swept = sweep(&known, &dir.path().join("no-scratch"), SystemTime::now(), &|| false);
+        let swept = sweep(&known, &dir.path().join("no-scratch"), SystemTime::now(), &|| false, &|_| false);
 
         let mut purged = swept.purged.clone();
         purged.sort();
@@ -835,11 +888,39 @@ mod tests {
         assert_eq!(swept.trimmed, 4);
         assert!(swept.freed >= 4 * 1000);
 
-        let again = sweep(&known, &dir.path().join("no-scratch"), SystemTime::now(), &|| false);
+        let again = sweep(&known, &dir.path().join("no-scratch"), SystemTime::now(), &|| false, &|_| false);
         assert!(again.purged.is_empty() && again.trimmed == 0, "{again:?}");
-        let stopped = sweep(&Known { closed: [recent.clone()].into_iter().collect(), ..known }, &dir.path().join("no-scratch"), SystemTime::now(), &|| true);
+        let stopped = sweep(&Known { closed: [recent.clone()].into_iter().collect(), ..known }, &dir.path().join("no-scratch"), SystemTime::now(), &|| true, &|_| false);
         assert!(stopped.purged.is_empty(), "a quitting engine stops the sweep");
         assert!(recent.join("target").is_dir());
+    }
+
+    /// The snapshot is from the start of a pass that can take minutes: a session opened on a
+    /// closed checkout since then keeps its build.
+    #[test]
+    fn a_session_opened_during_the_pass_keeps_its_checkouts_build() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("repo")).unwrap();
+        let repo = canon(&dir.path().join("repo"));
+        git(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join(".gitignore"), "target/\n").unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-q", "-m", "init"]);
+        let path = repo.join(".relay/worktrees/reopened");
+        git(&repo, &["worktree", "add", "-q", "-b", "reopened", path.to_str().unwrap()]);
+        builds(&path.join("target"));
+        let path = canon(&path);
+        let known = Known { repos: vec![repo.clone()], closed: [path.clone()].into_iter().collect(), ..Default::default() };
+        let asked = std::cell::RefCell::new(Vec::new());
+        let swept = sweep(&known, &dir.path().join("no-scratch"), SystemTime::now(), &|| false, &|wt| {
+            asked.borrow_mut().push(wt.to_path_buf());
+            true
+        });
+        assert!(swept.purged.is_empty(), "{swept:?}");
+        assert_eq!(asked.into_inner(), vec![path.clone()], "the store is asked about the checkout it would purge");
+        assert!(path.join("target/debug/deps").is_dir());
+        let swept = sweep(&known, &dir.path().join("no-scratch"), SystemTime::now(), &|| false, &|_| false);
+        assert_eq!(swept.purged, vec![path.clone()]);
     }
 
     #[test]

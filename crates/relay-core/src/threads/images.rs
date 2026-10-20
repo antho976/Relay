@@ -22,8 +22,15 @@ use std::time::{Duration, SystemTime};
 
 /// The most pictures one message carries.
 pub const MAX: usize = 4;
-/// How long an upload no message carries is kept.
-pub const UNSENT: Duration = Duration::from_secs(24 * 60 * 60);
+/// The most pictures, and bytes of them, one thread carries. Every turn hands the model the whole
+/// conversation, pictures and all, and the API refuses a request of more than 32 MB (these, in
+/// base64, come to 27 MB), or a picture over 2000 px a side once a request holds more than 20.
+/// A refused request is refused again on every later turn.
+pub const THREAD_MAX: usize = 20;
+pub const THREAD_BYTES: u64 = 20 << 20;
+/// How long an upload no message carries is kept: a week, so a draft kept that long, or a message
+/// a phone queued while the PC was away, still finds its pictures.
+pub const UNSENT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 pub(super) const SCHEMA: &str = "
 CREATE TABLE image (
@@ -89,13 +96,31 @@ impl ThreadStore {
         self.conn.prepare_cached("SELECT id, media_type, width, height, bytes FROM image WHERE id = ?1")?.query_row([id], row).optional()
     }
 
-    /// Mark message `message` as carrying `images`.
-    pub(super) fn carry(&self, message: Id, images: &[ImageView]) -> rusqlite::Result<()> {
-        let mut stmt = self.conn.prepare_cached("INSERT OR IGNORE INTO message_image (message_id, image_id) VALUES (?1, ?2)")?;
+    /// Mark message `message` as carrying `images`; the first of them that is gone (swept as
+    /// unsent since it was looked up) when one is, and the caller rolls the message back.
+    pub(super) fn carry(&self, message: Id, images: &[ImageView]) -> rusqlite::Result<Option<String>> {
+        let mut stmt = self.conn.prepare_cached("INSERT OR IGNORE INTO message_image (message_id, image_id) SELECT ?1, id FROM image WHERE id = ?2")?;
         for image in images {
-            stmt.execute(params![message, image.id])?;
+            if stmt.execute(params![message, image.id])? == 0 {
+                return Ok(Some(image.id.clone()));
+            }
         }
-        Ok(())
+        Ok(None)
+    }
+
+    /// How many pictures thread `id`'s messages carry, and their bytes, counting `adding` too
+    /// where none of them carries it yet.
+    fn carried_size(&self, id: Id, adding: &[ImageView]) -> rusqlite::Result<(usize, u64)> {
+        let carried: HashSet<String> = self.carried_by(id)?.into_iter().collect();
+        let mut count = carried.len();
+        let mut bytes: u64 = self.conn
+            .prepare_cached("SELECT COALESCE(SUM(bytes), 0) FROM image WHERE id IN (SELECT DISTINCT mi.image_id FROM message_image mi JOIN message m ON m.id = mi.message_id WHERE m.thread_id = ?1)")?
+            .query_row([id], |r| r.get::<_, i64>(0))?.max(0) as u64;
+        for image in adding.iter().filter(|image| !carried.contains(&image.id)) {
+            count += 1;
+            bytes += image.bytes;
+        }
+        Ok((count, bytes))
     }
 
     /// The pictures thread `id`'s messages carry.
@@ -158,6 +183,13 @@ pub fn upload(engine: &Engine, media_type: &str, bytes_b64: &str, now: &str) -> 
     let bytes = crate::picture::decode_upload(bytes_b64, "thread.upload")?;
     // The bytes decide what it is: a model is told the type its bytes are.
     let picture = crate::picture::raster(&bytes).ok_or_else(|| upload_error("not a PNG, JPEG, GIF or WebP picture whose size can be read"))?;
+    if !crate::picture::whole(&bytes, &picture) {
+        return Err(upload_error("The picture is cut short: it ends before its image does").with_hint("copy or save it again, whole"));
+    }
+    if picture.w.max(picture.h) > crate::picture::MAX_SIDE {
+        return Err(upload_error(&format!("The picture is {} by {} px; a model takes at most {} px a side", picture.w, picture.h, crate::picture::MAX_SIDE))
+            .with_hint("send it smaller"));
+    }
     sweep(engine, now);
     let image = ImageView {
         id: uuid::Uuid::new_v4().simple().to_string(),
@@ -182,7 +214,7 @@ pub fn upload(engine: &Engine, media_type: &str, bytes_b64: &str, now: &str) -> 
 fn sweep(engine: &Engine, now: &str) {
     let cutoff = now.parse::<jiff::Timestamp>().ok()
         .and_then(|now| now.checked_sub(jiff::SignedDuration::from_secs(UNSENT.as_secs() as i64)).ok())
-        .map_or_else(|| crate::time::days_ago(1), crate::time::stamp);
+        .map_or_else(|| crate::time::days_ago(7), crate::time::stamp);
     match with_db(engine, |db| db.forget_unsent(&cutoff)) {
         Ok(gone) => remove(&gone.iter().map(|image| path(engine, image)).collect::<Vec<_>>()),
         Err(e) => tracing::warn!("sweeping unsent thread pictures failed: {}", e.message),
@@ -232,10 +264,23 @@ pub fn readable(model: Option<&str>) -> Result<(), BusError> {
     Ok(())
 }
 
+/// Whether thread `id` has room for `adding` beside the pictures it already carries
+/// ([`THREAD_MAX`], [`THREAD_BYTES`]).
+pub fn room(engine: &Engine, id: Id, adding: &[ImageView]) -> Result<(), BusError> {
+    let (count, bytes) = with_db(engine, |db| db.carried_size(id, adding))?;
+    if count > THREAD_MAX || bytes > THREAD_BYTES {
+        return Err(BusError::refused("thread.images_full", format!(
+            "A thread carries at most {THREAD_MAX} pictures and {} MiB of them, and this one would carry {count} and {:.1} MiB",
+            THREAD_BYTES >> 20, bytes as f64 / f64::from(1 << 20),
+        )).with_hint("start a new thread for these pictures, or send the words alone"));
+    }
+    Ok(())
+}
+
 /// The uploads `ids` name, each one known.
 pub fn find(engine: &Engine, ids: &[String]) -> Result<Vec<ImageView>, BusError> {
     let unknown = |id: &str| {
-        BusError::invalid("thread.image_unknown", format!("No picture {id}")).with_hint("upload it with thread.upload first; one never sent is removed after a day")
+        BusError::invalid("thread.image_unknown", format!("No picture {id}")).with_hint("upload it with thread.upload first; one never sent is removed after a week")
     };
     ids.iter().map(|id| {
         if !valid_id(id) {
@@ -278,7 +323,27 @@ mod tests {
         let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
         bytes.extend(w.to_be_bytes());
         bytes.extend(h.to_be_bytes());
+        bytes.extend(IEND);
         base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    const IEND: &[u8] = b"\0\0\0\0IEND\xAE\x42\x60\x82";
+
+    #[test]
+    fn a_picture_cut_short_or_too_large_is_refused() {
+        use base64::Engine as _;
+        let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
+        let now = crate::time::now();
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let whole = base64::engine::general_purpose::STANDARD.decode(png(4, 3)).unwrap();
+        let cut = &whole[..whole.len() - IEND.len()];
+        let refused = upload(&engine, "image/png", &b64(cut), &now).unwrap_err();
+        assert_eq!(refused.code, "thread.upload");
+        assert!(refused.message.contains("cut short"), "{}", refused.message);
+        assert!(upload(&engine, "image/png", &png(4, 3), &now).is_ok());
+        let wide = upload(&engine, "image/png", &png(8001, 3), &now).unwrap_err();
+        assert!(wide.message.contains("8001 by 3 px"), "{}", wide.message);
+        assert!(upload(&engine, "image/png", &png(8000, 3), &now).is_ok());
     }
 
     fn file_of(engine: &Engine, image: &ImageView) -> PathBuf {
@@ -286,15 +351,17 @@ mod tests {
     }
 
     #[test]
-    fn an_upload_never_sent_goes_after_a_day_and_a_sent_one_stays() {
+    fn an_upload_never_sent_goes_after_a_week_and_a_sent_one_stays() {
         let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
         let now = crate::time::now();
-        let two_days_ago = crate::time::days_ago(2);
-        let unsent = upload(&engine, "image/png", &png(4, 3), &two_days_ago).unwrap();
-        let sent = upload(&engine, "image/png", &png(5, 3), &two_days_ago).unwrap();
-        let thread = super::super::create(&engine, super::super::MONEY, "Receipts", None, None, &two_days_ago).unwrap().id;
-        super::super::post(&engine, thread, "", std::slice::from_ref(&sent), &two_days_ago).unwrap();
-        // A file left with no row by a write cut short, a day and more ago, and one just now.
+        let eight_days_ago = crate::time::days_ago(8);
+        let unsent = upload(&engine, "image/png", &png(4, 3), &eight_days_ago).unwrap();
+        let sent = upload(&engine, "image/png", &png(5, 3), &eight_days_ago).unwrap();
+        // A draft's picture, or a queued message's, two days on.
+        let waiting = upload(&engine, "image/png", &png(7, 3), &crate::time::days_ago(2)).unwrap();
+        let thread = super::super::create(&engine, super::super::MONEY, "Receipts", None, None, &eight_days_ago).unwrap().id;
+        super::super::post(&engine, thread, "", std::slice::from_ref(&sent), &eight_days_ago).unwrap();
+        // A file left with no row by a write cut short, a week and more ago, and one just now.
         let stray = dir(&engine).join(format!("{}.png", "0".repeat(32)));
         let fresh = dir(&engine).join(format!("{}.png", "1".repeat(32)));
         for file in [&stray, &fresh] {
@@ -305,10 +372,11 @@ mod tests {
         assert!(file_of(&engine, &unsent).is_file());
 
         let next = upload(&engine, "image/png", &png(6, 3), &now).unwrap();
-        assert!(!file_of(&engine, &unsent).exists(), "unsent for two days");
+        assert!(!file_of(&engine, &unsent).exists(), "unsent for eight days");
+        assert!(file_of(&engine, &waiting).is_file(), "unsent for two days is still waiting");
         assert!(with_db(&engine, |db| db.image(&unsent.id)).unwrap().is_none());
         assert!(file_of(&engine, &sent).is_file() && file_of(&engine, &next).is_file());
-        assert!(!stray.exists() && fresh.exists(), "a stray file goes only once it is a day old");
+        assert!(!stray.exists() && fresh.exists(), "a stray file goes only once it is a week old");
         std::fs::remove_file(&fresh).unwrap();
         assert!(find(&engine, std::slice::from_ref(&unsent.id)).is_err() && find(&engine, std::slice::from_ref(&sent.id)).is_ok());
     }

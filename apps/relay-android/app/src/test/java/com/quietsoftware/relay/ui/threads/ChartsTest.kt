@@ -1,6 +1,9 @@
 package com.quietsoftware.relay.ui.threads
 
+import com.quietsoftware.relay.data.Relay as RelayData
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -30,6 +33,18 @@ class ChartsTest {
         assertEquals(listOf(1000L, null, null, null, 0L, null), n.series.single().values)
     }
 
+    @Test(timeout = 2_000)
+    fun anExponentTooLargeOrTooSmallIsAnsweredWithoutWorkingItOut() {
+        assertNull(decimal(JsonPrimitive("1e100000000"), 2))
+        assertNull(decimal(JsonPrimitive("-1E100000000"), 2))
+        assertEquals(0L, decimal(JsonPrimitive("1e-100000000"), 2))
+        assertEquals(0L, decimal(JsonPrimitive("0.004"), 2))
+        assertEquals(1L, decimal(JsonPrimitive("0.006"), 2))
+        assertEquals(92_233_720_368_547_758L, decimal(JsonPrimitive("922337203685477.58"), 2))
+        assertNull(decimal(JsonPrimitive("92233720368547758.08"), 2))
+        assertEquals(150L, decimal(JsonPrimitive("1.5e0"), 2))
+    }
+
     @Test
     fun aUnitCountsInTenthsOfIt() {
         val kg = readWritten(data("""{"labels": ["Mon", "Tue"], "series": [{"name": "Weight", "values": [80.2, "81"]}], "unit": "kg"}"""), cad)
@@ -52,6 +67,36 @@ class ChartsTest {
         assertEquals("Balance", n.series[0].title())
         assertEquals("Balance (projected)", n.series[1].title())
         assertEquals("Total (projected)", Series("", emptyList(), projected = true).title())
+    }
+
+    @Test
+    fun aPriceLineIsOneSeriesOfClosesWithItsTradesAtTheirBar() {
+        val n = readPrice(data("""{"product": "BTC-USD", "candles": [{"start": 1760000000, "close": 61234.5}, {"start": 1760003600, "close": "61300"}], "markers": [{"at": 1760003700, "price": 61290.25, "side": "buy"}]}"""))
+        val line = n.series.single()
+        assertEquals("BTC-USD", line.name)
+        assertEquals(listOf(6123450L, 6130000L), line.values)
+        assertFalse(line.projected)
+        assertEquals(listOf(2), n.known)
+        assertEquals(listOf(Triple(1, 6129025L, true)), n.marks)
+        assertFalse(n.fromZero)
+    }
+
+    @Test
+    fun aLoneProjectionReadsAsOneWhenTapped() {
+        val alone = readWritten(data("""{"labels": ["Mar", "Apr"], "series": [{"name": "Balance", "values": [6000, 6600], "projected": true}]}"""), cad)
+        assertEquals("Balance (projected) $6,600.00", alone.parts(1, ", "))
+        val actual = readWritten(data("""{"labels": ["Mar", "Apr"], "series": [{"name": "Balance", "values": [6000, 6600]}]}"""), cad)
+        assertEquals("$6,600.00", actual.parts(1, ", "))
+    }
+
+    @Test
+    fun aChartSaysWhichCopyItsNumbersCameFrom() {
+        val spec = chartSpec("""{"type": "bar", "title": "Spending", "query": {"measure": "spending"}}""")!!
+        val at = System.currentTimeMillis()
+        val read = JsonObject(emptyMap())
+        assertEquals("From your server's copy · just now", footNote(spec, RelayData.Live(read, at, fresh = false, cloud = true)))
+        assertEquals("Saved on this phone · just now", footNote(spec, RelayData.Live(read, at, fresh = false)))
+        assertEquals("Live from Tally, redraws when the ledger changes", footNote(spec, RelayData.Live(read, at, fresh = true)))
     }
 
     @Test

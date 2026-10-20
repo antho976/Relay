@@ -124,9 +124,28 @@ result!(#[schemars(rename = "SessionBootstrapGuardrails")] BootstrapGuardrails {
     /// exception and wait for the answer.
     pub exceptions: String,
 });
+result!(#[schemars(rename = "SessionBootstrapBaseSync")] BootstrapBaseSync {
+    /// What the counts are against: the base's remote-tracking branch (`origin/main`) or the
+    /// local base, whichever is further ahead; the remote one when they have diverged.
+    pub base: String,
+    pub head: String,
+    /// Commits on `base` this checkout's HEAD does not have: what to bring in before starting.
+    pub behind: i64,
+    /// Commits on this checkout's HEAD that `base` does not have.
+    pub ahead: i64,
+    /// Seconds since the repository last fetched; absent when it never has. The counts are only
+    /// as fresh as that fetch.
+    pub fetched_secs_ago: Option<u64>,
+    /// What to do about it, in a sentence or two.
+    pub hint: String,
+});
 result!(#[schemars(rename = "SessionBootstrapOut")] BootstrapOut {
     pub session: String, pub role: Role, pub project_id: Id, pub project: String, pub base_branch: String,
     pub worktree: String, pub branch: String, pub module: Option<String>,
+    /// How this checkout stands against the freshest base, read from the refs on disk at this
+    /// call rather than at launch; absent when the checkout or the base cannot be read.
+    #[serde(default)]
+    pub base_sync: Option<BootstrapBaseSync>,
     /// Current task retained for older clients and one-task agents.
     pub task: Option<BootstrapTask>,
     /// Current task followed by every queued or in-review task attached to this session.

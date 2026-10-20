@@ -177,7 +177,9 @@ Change = { table, uid, updated_at, deleted, row }
   merge. Tally says so on its pairing page before the first sync runs.
   Before a replace erases a ledger that holds anything but categories, the PC (or a cloud copy,
   docs/CLOUD.md) copies it whole to `money-backups/money-<time>-<n>.db` beside `money.db`: a
-  0700 folder, 0600 files, the newest ten kept. A copy that cannot be written refuses the replace
+  0700 folder, 0600 files, the newest ten kept and the first of each of the last fourteen days, so
+  a burst of replaces from one leaked credential cannot push out the copy from before it (names
+  carry the time to the millisecond, so they sort as made). A copy that cannot be written refuses the replace
   (`money.invalid`) and nothing is erased. To go back to one, stop Relay and put it in place of
   `money.db`.
 - A large first sync may come in batches: the first carries `replace: true`, the rest

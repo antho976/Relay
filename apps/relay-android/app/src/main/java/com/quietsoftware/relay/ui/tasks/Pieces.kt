@@ -216,10 +216,26 @@ internal class TaskOps(private val nav: Nav) {
  */
 internal suspend fun approvalUndo(nav: Nav, num: Long): JsonObject? {
     val got = nav.relay.call("task.activity", buildJsonObject { put("task_id", num); put("limit", 100) }) as? JsonObject ?: return null
-    // Newest first: the first approval is the one that put the task in Done.
-    val row = got.arr("history").firstNotNullOfOrNull { h -> (h as? JsonObject)?.takeIf { it.s("op") == "task.approve" && it.s("kind") == "ok" } } ?: return null
-    if (row.l("undone_by") != null) return null
-    return row.o("undo_op")?.takeIf { it.s("op") == "task.unapprove" }?.o("payload")
+    return approvalUndoIn(got.arr("history"))
+}
+
+/**
+ * The inverse of the approval that put a task in Done, from its [history] newest first. None when
+ * that approval was undone, on the PC (`undone_by`) or from here (a `task.unapprove` after it,
+ * which marks nothing), or when a move put the task in Done since: an older approval's inverse
+ * would take its column, slot and state back, and drop a commit link made after it.
+ */
+internal fun approvalUndoIn(history: List<JsonElement>): JsonObject? {
+    for (h in history) {
+        val row = h as? JsonObject ?: continue
+        if (row.s("kind") != "ok") continue
+        when (row.s("op")) {
+            "task.unapprove" -> return null
+            "task.move" -> if (row.o("payload")?.s("column") == "done") return null
+            "task.approve" -> return if (row.l("undone_by") != null) null else row.o("undo_op")?.takeIf { it.s("op") == "task.unapprove" }?.o("payload")
+        }
+    }
+    return null
 }
 
 /**

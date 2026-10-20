@@ -41,17 +41,37 @@ const QUOTE_TTL: i64 = 10;
 const PRODUCTS_TTL: i64 = 3600;
 /// Balances and fees are re-read this often while anything is live.
 const ACCOUNT_TTL: i64 = 300;
+/// A keyring that could not be read is asked again after this, seconds: often enough to pick
+/// the key up once it is unlocked, not so often that a locked one prompts or times out each pass.
+const KEY_RETRY: i64 = 60;
 /// A scheduled buy missed by more than this (the app was closed) is skipped, not caught up.
 const SCHEDULE_GRACE: i64 = 3600;
+/// An order sent with no answer is sent again for this long, seconds; once Coinbase still has no
+/// order with its id after it, it was never placed.
+const UNANSWERED: i64 = 60;
+/// How far before an order's own time a lookup by its id starts: the PC's clock and Coinbase's
+/// may differ.
+const LOOKUP_SLACK: i64 = 300;
+/// How long an order Coinbase calls done waits for the rest of its fills, seconds, before it is
+/// closed with what the book has: far past any lag in Coinbase's fill list.
+const FILLS_WAIT: i64 = 600;
+/// An order sent less than this long ago may still be waiting for create's answer (preview and
+/// create may each take the client's 15-second timeout): the runner leaves it to the call that
+/// sent it.
+const CREATE_WAIT: i64 = 30;
 
 #[derive(Default)]
 pub struct Desk {
     book: Mutex<Option<Book>>,
     /// The client for the saved key: `None` not yet loaded, `Some(None)` no key.
     keyed: Mutex<Option<Option<Arc<dyn Exchange>>>>,
+    /// When the keyring last failed to answer, Unix seconds: nothing is cached for it.
+    key_failed_at: Mutex<Option<i64>>,
     public: Mutex<Option<Arc<dyn Exchange>>>,
     /// Tests put a fake exchange here; it then serves both the market and the account.
     fake: Mutex<Option<Arc<dyn Exchange>>>,
+    /// Tests: the fake serves no account, as when the key cannot be read.
+    fake_keyless: Mutex<bool>,
     pub(crate) trade: Mutex<()>,
     quotes: Mutex<HashMap<String, Quote>>,
     /// Each product's price from the last product list: what [`last_price`] falls back on. Kept
@@ -79,6 +99,7 @@ pub fn ex(e: ExchangeError) -> BusError {
         ExchangeError::RateLimited => BusError::unavailable("arbiter.rate_limited", "Coinbase asked to slow down; try again in a moment"),
         ExchangeError::Unreachable(m) => BusError::unavailable("arbiter.unreachable", format!("Coinbase could not be reached: {m}")),
         ExchangeError::Malformed(m) => BusError::unavailable("arbiter.malformed", format!("Coinbase's answer could not be read: {m}")),
+        ExchangeError::Duplicate(m) => BusError::conflict("arbiter.duplicate_order", format!("Coinbase already has this order: {m}")),
     }
 }
 
@@ -100,6 +121,11 @@ pub fn with_book<T>(engine: &Engine, f: impl FnOnce(&mut Book) -> book::Result<T
 /// Serve every exchange call from `fake` (tests).
 pub fn set_fake_exchange(engine: &Engine, fake: Arc<dyn Exchange>) {
     *lock(&engine.arbiter.fake) = Some(fake);
+}
+
+/// Tests: whether the fake exchange serves the account too, as a key that can be read does.
+pub fn set_fake_key(engine: &Engine, readable: bool) {
+    *lock(&engine.arbiter.fake_keyless) = !readable;
 }
 
 /// Public market data: needs no key.
@@ -153,19 +179,56 @@ fn keyring(cmd: &mut Command) -> Result<String, BusError> {
     }
 }
 
-fn load_key(engine: &Engine) -> Option<Credentials> {
+/// What a keyring lookup answered: the secret, `None` when none is stored (`secret-tool` exits 1
+/// and says nothing), or why the keyring could not be read (it says so on stderr). A silent exit
+/// is also how a dismissed unlock prompt can end, so while the book still records a key
+/// (`key_saved`) it is a failure, asked again later, not "no key" kept until Relay restarts.
+fn looked_up(out: &std::process::Output, key_saved: bool) -> Result<Option<String>, BusError> {
+    if out.status.success() {
+        return Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()));
+    }
+    let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if out.stdout.is_empty() && err.is_empty() {
+        if key_saved {
+            return Err(BusError::unavailable("arbiter.keyring", "The keyring did not give back the Coinbase key Arbiter saved; it may be locked").with_hint("unlock your desktop keyring"));
+        }
+        return Ok(None);
+    }
+    Err(BusError::unavailable("arbiter.keyring", err).with_hint("unlock your desktop keyring"))
+}
+
+/// The saved key: `None` when none is saved (or what is saved cannot be a key), an error when the
+/// keyring could not be read, which says nothing about whether a key is saved.
+fn load_key(engine: &Engine) -> Result<Option<Credentials>, BusError> {
     if in_memory(engine) {
-        return None;
+        return Ok(None);
     }
     let body = if engine.instance == Instance::Test {
-        std::fs::read_to_string(test_key_file(engine)).ok()?
+        match std::fs::read_to_string(test_key_file(engine)) {
+            Ok(body) => body,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(BusError::unavailable("arbiter.keyring", e.to_string())),
+        }
     } else {
         let mut cmd = Command::new("secret-tool");
         cmd.args(["lookup", "application", "Relay", "purpose", "arbiter-coinbase"]);
-        keyring(&mut cmd).ok()?
+        let key_saved = with_book(engine, |b| b.connection()).is_ok_and(|c| !matches!(c.state.as_str(), "none" | ""));
+        match crate::proc::output_with_timeout(&mut cmd, Duration::from_secs(30)) {
+            Ok(Some(out)) => match looked_up(&out, key_saved)? {
+                Some(body) => body,
+                None => return Ok(None),
+            },
+            Ok(None) => return Err(BusError::unavailable("arbiter.keyring", "The system keyring did not answer within 30 seconds")),
+            // Without the tool no key can have been saved: `store_key` uses it too.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(BusError::unavailable("arbiter.keyring", e.to_string())),
+        }
     };
-    let v: serde_json::Value = serde_json::from_str(body.trim()).ok()?;
-    Credentials::parse(v["key_name"].as_str()?, v["private_key"].as_str()?).ok()
+    let parse = || {
+        let v: serde_json::Value = serde_json::from_str(body.trim()).ok()?;
+        Credentials::parse(v["key_name"].as_str()?, v["private_key"].as_str()?).ok()
+    };
+    Ok(parse())
 }
 
 pub fn forget_key(engine: &Engine) -> Result<(), BusError> {
@@ -182,15 +245,39 @@ pub fn forget_key(engine: &Engine) -> Result<(), BusError> {
     keyring(&mut cmd).map(|_| ())
 }
 
-/// The account client for the saved key, loaded from the keyring once.
+/// The account client for the saved key, loaded from the keyring once it answers: a key saved,
+/// or none, is kept; a keyring that could not be read (locked, or the lookup timing out) is asked
+/// again on a call [`KEY_RETRY`] later.
 pub fn account(engine: &Engine) -> Option<Arc<dyn Exchange>> {
+    account_asking(engine, false)
+}
+
+/// [`account`], asking the keyring now even within [`KEY_RETRY`] of a failure: for what the
+/// person starts (the kill switch, Refresh), which must not wait out a keyring they just unlocked.
+pub fn account_now(engine: &Engine) -> Option<Arc<dyn Exchange>> {
+    account_asking(engine, true)
+}
+
+fn account_asking(engine: &Engine, now: bool) -> Option<Arc<dyn Exchange>> {
     if let Some(f) = lock(&engine.arbiter.fake).clone() {
-        return Some(f);
+        return (!*lock(&engine.arbiter.fake_keyless)).then_some(f);
     }
     let mut slot = lock(&engine.arbiter.keyed);
     if slot.is_none() {
-        let client = load_key(engine).and_then(|c| Coinbase::with_key(&c).ok()).map(|c| Arc::new(c) as Arc<dyn Exchange>);
-        *slot = Some(client);
+        let mut failed = lock(&engine.arbiter.key_failed_at);
+        if !now && failed.is_some_and(|at| book::now() - at < KEY_RETRY) {
+            return None;
+        }
+        match load_key(engine) {
+            Ok(creds) => {
+                *slot = Some(creds.and_then(|c| Coinbase::with_key(&c).ok()).map(|c| Arc::new(c) as Arc<dyn Exchange>));
+                *failed = None;
+            }
+            Err(_) => {
+                *failed = Some(book::now());
+                return None;
+            }
+        }
     }
     slot.clone().flatten()
 }
@@ -241,7 +328,8 @@ pub fn set_key(engine: &Engine, key_name: &str, private_key: &str) -> Result<Con
     with_book(engine, |b| b.connection())
 }
 
-/// Reads permissions, fees and balances, and values the balances in the home currency.
+/// Reads permissions, fees and balances, and values the balances in the home currency. `force`
+/// is the person asking (Refresh, a key just set): the keyring is asked now, too.
 pub fn refresh_account(engine: &Engine, force: bool) -> Result<Connection, BusError> {
     let now = book::now();
     {
@@ -251,7 +339,7 @@ pub fn refresh_account(engine: &Engine, force: bool) -> Result<Connection, BusEr
         }
         *at = now;
     }
-    let Some(client) = account(engine) else {
+    let Some(client) = account_asking(engine, force) else {
         return with_book(engine, |b| b.connection());
     };
     let mut conn = with_book(engine, |b| b.connection())?;
@@ -415,15 +503,19 @@ fn situation_for<'a>(engine: &Engine, s: &'a StrategyRec, product: Option<&'a Pr
     let (pos, exposure, loss_all, n, n_all, halted_all) = with_book(engine, |b| {
         let pos = b.position(s.id, s.venue)?;
         let mut exposure = Decimal::ZERO;
-        let mut pnl_all = Decimal::ZERO;
         for other in b.strategies()?.iter().filter(|o| o.venue == s.venue) {
-            let p = b.position(other.id, s.venue)?;
-            exposure += p.cost;
-            pnl_all += p.realized_today + p.open_pnl(last_price(engine, &other.product), taker).min(Decimal::ZERO);
+            exposure += b.position(other.id, s.venue)?.cost;
+        }
+        // Holdings come from fills, and a market buy is usually still pending when it is placed:
+        // two strategies due in the same pass would each pass the Arbiter-wide limit alone. What
+        // other strategies' open buys will still spend counts too (this one's own open order
+        // already stops it placing another).
+        for o in b.open_orders(None)?.iter().filter(|o| o.venue == s.venue && o.side == Side::Buy && o.strategy_id != Some(s.id)) {
+            exposure += still_to_spend(o, last_price(engine, &o.product));
         }
         let n = b.orders_since(Some(s.id), s.venue, now - 3600)?;
         let n_all = b.orders_since(None, s.venue, now - 3600)?;
-        Ok((pos, exposure, (-pnl_all).max(Decimal::ZERO), n, n_all, b.halted()?.is_some()))
+        Ok((pos, exposure, venue_loss(engine, b, s.venue, taker)?, n, n_all, b.halted()?.is_some()))
     })?;
     let price = q.map(|q| q.bid);
     let loss = (-(pos.realized_today + pos.open_pnl(price, taker).min(Decimal::ZERO))).max(Decimal::ZERO);
@@ -445,6 +537,18 @@ fn situation_for<'a>(engine: &Engine, s: &'a StrategyRec, product: Option<&'a Pr
         all_halted: halted_all,
     };
     Ok((sit, pos))
+}
+
+/// What an open buy will still spend: its quote amount, else its size at its limit price, else at
+/// `last`; less what has filled, which its strategy's holding already counts.
+fn still_to_spend(o: &OrderView, last: Option<f64>) -> Decimal {
+    let price = o.limit_price.or_else(|| last.and_then(Decimal::from_f64));
+    let whole = match (o.quote_size, o.base_size, price) {
+        (Some(q), _, _) => q,
+        (None, Some(b), Some(p)) => b * p,
+        _ => Decimal::ZERO,
+    };
+    (whole - o.filled_base * o.average_price.or(price).unwrap_or_default()).max(Decimal::ZERO)
 }
 
 /// Runs the gate for an intent on `s`, without placing anything: what a proposal checks first.
@@ -529,15 +633,21 @@ pub fn execute(engine: &Engine, strategy_id: i64, intent: &Intent, why: &str) ->
             };
             match place_live(client.as_ref(), &req) {
                 Ok(order) => with_book(engine, |b| b.update_order(id, &order))?,
-                // Nothing is known about whether it arrived: the order stays pending and the
-                // runner asks again with the same client_order_id, which cannot place it twice.
-                Err(ExchangeError::Unreachable(m)) => with_book(engine, |b| b.log(Some(s.id), "error", &format!("{what}: Coinbase did not answer ({m}); will check again."), Some(id)).map(|_| ()))?,
-                Err(e) => with_book(engine, |b| {
+                // Nothing is known about whether it arrived: create timed out, its answer could not
+                // be read, or Coinbase says it has this id already. The order stays pending, and the
+                // runner looks it up by its client_order_id before it sends it again or gives up.
+                Err((sent, e)) if matches!(e, ExchangeError::Unreachable(_)) || sent && matches!(e, ExchangeError::Malformed(_) | ExchangeError::Duplicate(_)) => {
+                    with_book(engine, |b| b.log(Some(s.id), "error", &format!("{what}: no answer from Coinbase ({e}); will look it up."), Some(id)).map(|_| ()))?;
+                    if matches!(e, ExchangeError::Duplicate(_)) {
+                        remember_duplicate(engine, id, Some(s.id))?;
+                    }
+                }
+                Err((_, e)) => with_book(engine, |b| {
                     b.fail_order(id, &e.to_string())?;
                     b.log(Some(s.id), "error", &format!("{what} failed: {e}"), Some(id)).map(|_| ())
                 })?,
             }
-            let _ = reconcile_order(engine, id);
+            let _ = reconcile_order(engine, id, true);
             if req.side == Side::Buy {
                 if let Ok(q) = quote(engine, &req.product) {
                     with_book(engine, |b| b.set_peak(s.id, Some(q.ask)))?;
@@ -560,25 +670,89 @@ fn resting(req: &OrderRequest) -> ExchangeOrder {
     }
 }
 
-/// Preview, then place. The preview's refusals stop it before anything is sent.
-fn place_live(client: &dyn Exchange, req: &OrderRequest) -> exchange::Result<ExchangeOrder> {
-    let preview = client.preview(req)?;
+/// Preview, then place. The preview's refusals stop it before anything is sent. An error says
+/// whether create was sent: only then may Coinbase have the order.
+fn place_live(client: &dyn Exchange, req: &OrderRequest) -> Result<ExchangeOrder, (bool, ExchangeError)> {
+    let preview = client.preview(req).map_err(|e| (false, e))?;
     if !preview.errors.is_empty() {
-        return Err(ExchangeError::Refused(preview.errors.join("; ")));
+        return Err((false, ExchangeError::Refused(preview.errors.join("; "))));
     }
-    client.place(req, preview.preview_id.as_deref())
+    client.place(req, preview.preview_id.as_deref()).map_err(|e| (true, e))
 }
 
-/// Brings one order up to date with its venue: status and fills.
-pub fn reconcile_order(engine: &Engine, id: i64) -> Result<(), BusError> {
-    let o = with_book(engine, |b| b.order(id))?;
+fn request_of(o: &OrderView) -> OrderRequest {
+    OrderRequest { client_order_id: o.client_order_id.clone(), product: o.product.clone(), side: o.side, quote_size: o.quote_size, base_size: o.base_size, limit_price: o.limit_price }
+}
+
+/// When the order was recorded, just before it was sent, Unix seconds.
+fn created_at(o: &OrderView) -> i64 {
+    jiff::Timestamp::from_str(&o.created_at).map(|t| t.as_second()).unwrap_or(0)
+}
+
+/// Coinbase's order sent with this one's client_order_id, if it has one: the lookup for an order
+/// whose answer never came back. Coinbase made it, if at all, between when it was recorded and the
+/// last resend a minute later; the window is that, with clock slack either side.
+fn find_live(client: &dyn Exchange, o: &OrderView) -> Result<Option<ExchangeOrder>, BusError> {
+    let at = created_at(o);
+    client.find_order(&o.product, &o.client_order_id, at - LOOKUP_SLACK, at + UNANSWERED + LOOKUP_SLACK).map_err(ex)
+}
+
+/// Coinbase answered a create with "duplicate": it has this order, whatever its order list shows.
+/// Kept on the row, so the order is never failed as never placed, and told once.
+fn remember_duplicate(engine: &Engine, id: i64, strategy: Option<i64>) -> Result<(), BusError> {
+    with_book(engine, |b| {
+        if b.mark_exchange_has(id)? {
+            b.log(strategy, "error", "Coinbase says it already has this order but does not list it yet: it stays pending until Coinbase shows it. Check the Coinbase app.", Some(id))?;
+        }
+        Ok(())
+    })
+}
+
+/// An order sent with no answer read back (create timed out or answered unreadably, or Relay
+/// stopped in between): Coinbase may have it or not, so it is looked up first. Found, it is
+/// returned, to be reconciled as any known order. Not found, it is sent again with the same
+/// client_order_id, which cannot place it twice, for a minute, unless a halt came since (the
+/// person's own sell excepted, as the gate excepts it); after that it was never placed and is
+/// failed. A lookup that fails leaves it pending, unchanged. One Coinbase called a duplicate is
+/// neither sent again nor failed: it exists, and it waits for a lookup to show it.
+fn reconcile_unanswered(engine: &Engine, client: &dyn Exchange, o: &OrderView) -> Result<Option<ExchangeOrder>, BusError> {
+    if let Some(found) = find_live(client, o)? {
+        return Ok(Some(found));
+    }
+    if with_book(engine, |b| b.exchange_has(o.id))? {
+        return Ok(None);
+    }
+    if book::now() - created_at(o) >= UNANSWERED {
+        with_book(engine, |b| {
+            b.fail_order(o.id, "Coinbase has no order with this id a minute after it was sent: it was never placed.")?;
+            b.log(o.strategy_id, "error", "An order Coinbase never answered is not on Coinbase a minute later: it was never placed.", Some(o.id)).map(|_| ())
+        })?;
+        return Ok(None);
+    }
+    let halted = with_book(engine, |b| Ok(b.halted()?.is_some() || o.strategy_id.is_some_and(|sid| b.strategy(sid).is_ok_and(|s| s.state == RunState::Halted))))?;
+    if !halted || o.source == Source::Person && o.side == Side::Sell {
+        // Any refusal here leaves it pending: a duplicate means Coinbase has it after all, which
+        // is kept; anything else is decided by the lookups until the minute ends.
+        match client.place(&request_of(o), None) {
+            Ok(order) => with_book(engine, |b| b.update_order(o.id, &order))?,
+            Err(ExchangeError::Duplicate(_)) => remember_duplicate(engine, o.id, o.strategy_id)?,
+            Err(_) => {}
+        }
+    }
+    Ok(None)
+}
+
+/// Brings one order up to date with its venue: status and fills. `turn_held` says the caller
+/// holds [`Desk::trade`], as `execute` does straight after sending.
+pub fn reconcile_order(engine: &Engine, id: i64, turn_held: bool) -> Result<(), BusError> {
+    let mut o = with_book(engine, |b| b.order(id))?;
     if o.status.is_done() {
         return Ok(());
     }
     match o.venue {
         Venue::Paper => {
             let Some(sid) = o.strategy_id else { return Ok(()) };
-            let req = OrderRequest { client_order_id: o.client_order_id.clone(), product: o.product.clone(), side: o.side, quote_size: o.quote_size, base_size: o.base_size, limit_price: o.limit_price };
+            let req = request_of(&o);
             let q = quote(engine, &o.product)?;
             let global = with_book(engine, |b| b.global_limits())?;
             if let Some((order, fill)) = paper::try_fill(&req, &q, &fees(engine), global.slippage_pct, book::now()) {
@@ -593,30 +767,38 @@ pub fn reconcile_order(engine: &Engine, id: i64) -> Result<(), BusError> {
         }
         Venue::Live => {
             let Some(client) = account(engine) else { return Ok(()) };
-            let Some(eid) = o.exchange_order_id.clone() else {
-                // Sent, but no answer came: ask again with the same id (the exchange returns the
-                // order it has), for a minute; after that, say so plainly.
-                let age = book::now() - jiff::Timestamp::from_str(&o.created_at).map(|t| t.as_second()).unwrap_or(0);
-                if age < 60 {
-                    let req = OrderRequest { client_order_id: o.client_order_id.clone(), product: o.product.clone(), side: o.side, quote_size: o.quote_size, base_size: o.base_size, limit_price: o.limit_price };
-                    if let Ok(order) = client.place(&req, None) {
-                        with_book(engine, |b| b.update_order(id, &order))?;
-                    }
-                } else {
-                    with_book(engine, |b| {
-                        b.fail_order(id, "Coinbase never confirmed it. Check the Coinbase app: if it shows this order, it is real.")?;
-                        b.log(o.strategy_id, "error", "An order was never confirmed by Coinbase; check the Coinbase app.", Some(id)).map(|_| ())
-                    })?;
-                }
+            // An order with no answer is decided in the trade turn, as the call that sent it and
+            // the kill switch are: a resend is never in flight while a halt looks the order up and
+            // closes it, nor sent while the first create still waits for its answer. It is read
+            // again in the turn, which the call that sent it may have answered meanwhile.
+            let unanswered = o.exchange_order_id.is_none() && !turn_held;
+            if unanswered && book::now() - created_at(&o) < CREATE_WAIT {
                 return Ok(());
+            }
+            let _turn = unanswered.then(|| lock(&engine.arbiter.trade));
+            if unanswered {
+                o = with_book(engine, |b| b.order(id))?;
+                if o.status.is_done() {
+                    return Ok(());
+                }
+            }
+            let order = match o.exchange_order_id.clone() {
+                Some(eid) => client.order(&eid).map_err(ex)?,
+                None => match reconcile_unanswered(engine, client.as_ref(), &o)? {
+                    Some(found) => found,
+                    None => return Ok(()),
+                },
             };
-            let order = client.order(&eid).map_err(ex)?;
+            let eid = order.order_id.clone();
             book_live_fills(engine, client.as_ref(), &o, &eid, &order)?;
+            let done_there = order.status.is_done();
+            let order = settled(engine, &o, order)?;
             with_book(engine, |b| b.update_order(id, &order))?;
-            if !order.status.is_done() {
+            if !done_there {
                 if let Some(sid) = o.strategy_id {
                     if stale_limit(engine, sid, &o) {
-                        cancel_one(engine, &o, "it did not fill within a bar")?;
+                        // Read again: an order just found by its id has that id now.
+                        cancel_one(engine, &with_book(engine, |b| b.order(id))?, "it did not fill within a bar")?;
                     }
                 }
             }
@@ -631,8 +813,42 @@ fn stale_limit(engine: &Engine, sid: i64, o: &OrderView) -> bool {
         return false;
     }
     let bar = with_book(engine, |b| b.strategy(sid)).map(|s| s.granularity.seconds()).unwrap_or(3600);
-    let created = jiff::Timestamp::from_str(&o.created_at).map(|t| t.as_second()).unwrap_or(0);
-    book::now() - created > bar
+    book::now() - created_at(o) > bar
+}
+
+/// What a live order's record says once its fills are booked: the exchange's answer, except that
+/// an order the exchange calls done with fills still missing from the book stays open, so the
+/// next pass books the rest (fills can lag the order's status, and a done order is never read
+/// again). A booked fill is rounded to the base increment, so a shortfall within one increment a
+/// fill is rounding, not a fill to wait for. The wait is bounded: [`FILLS_WAIT`] after Coinbase
+/// first called it done, a shortfall is not lag (a size reported with less precision, a
+/// correction, an increment that changed), and an order held open for good would stop its
+/// strategy's exits and every switch. It closes with what the book has, and says so.
+fn settled(engine: &Engine, o: &OrderView, mut order: ExchangeOrder) -> Result<ExchangeOrder, BusError> {
+    if !order.status.is_done() || order.filled_size <= Decimal::ZERO {
+        return Ok(order);
+    }
+    let now = book::now();
+    let (booked, since) = with_book(engine, |b| {
+        let (booked, n) = b.booked_fills(o.id)?;
+        let step = b.cached_product(&o.product)?.map(|p| p.base_increment).filter(|i| *i > Decimal::ZERO).unwrap_or(Decimal::new(1, 8));
+        let short = order.filled_size - booked > step * Decimal::from(n);
+        Ok((booked, if short { Some(b.fills_short_since(o.id, now)?) } else { None }))
+    })?;
+    match since {
+        None => {}
+        Some(at) if now - at < FILLS_WAIT => order.status = OrderStatus::Open,
+        Some(_) => {
+            let base = o.product.split_once('-').map_or(o.product.as_str(), |(b, _)| b);
+            let text = format!(
+                "Coinbase reports {} {base} filled, but lists fills for only {}: closed with what was booked after waiting {} minutes for the rest. Check the Coinbase app.",
+                order.filled_size.normalize(), booked.normalize(), FILLS_WAIT / 60
+            );
+            with_book(engine, |b| b.log(o.strategy_id, "error", &text, Some(o.id)))?;
+            order.reason = Some(text);
+        }
+    }
+    Ok(order)
 }
 
 /// Books a live order's fills the exchange reports and the book does not have yet.
@@ -649,24 +865,52 @@ fn book_live_fills(engine: &Engine, client: &dyn Exchange, o: &OrderView, eid: &
     Ok(())
 }
 
+/// Cancels an order. A live one is cancelled on Coinbase or not at all: without the key, or with
+/// Coinbase not answering, it stays open and the error says so (the kill switch lists it). Only
+/// an order Coinbase says it has no record of is cancelled here alone.
 fn cancel_one(engine: &Engine, o: &OrderView, why: &str) -> Result<(), BusError> {
     if o.venue == Venue::Live {
-        if let (Some(client), Some(eid)) = (account(engine), o.exchange_order_id.as_ref()) {
-            client.cancel(std::slice::from_ref(eid)).map_err(ex)?;
-            // A cancel races the order's fills: it may have filled, wholly or in part, since the
-            // last pass, and the exchange answers a filled order's cancel as done. Book what the
-            // exchange says it did; a cancel still queued stays open for the next pass.
-            let mut order = client.order(eid).map_err(ex)?;
-            book_live_fills(engine, client.as_ref(), o, eid, &order)?;
-            if order.status == OrderStatus::Cancelled && order.reason.is_none() {
-                order.reason = Some(why.to_string());
-            }
-            return with_book(engine, |b| {
-                b.update_order(o.id, &order)?;
-                b.log(o.strategy_id, "cancel", &format!("Cancelled an order: {why}."), Some(o.id)).map(|_| ())
-            });
+        let client = account(engine).ok_or_else(|| {
+            BusError::unavailable("arbiter.no_key", "The Coinbase key could not be read, so the order was not cancelled on Coinbase; it stays open")
+                .with_hint("unlock your desktop keyring, then halt again")
+        })?;
+        let eid = match o.exchange_order_id.clone() {
+            Some(eid) => eid,
+            // Sent with no answer read back: Coinbase may have it under its client_order_id.
+            None => match find_live(client.as_ref(), o)? {
+                Some(found) => found.order_id,
+                // Coinbase may not list an order it took moments ago, so within the minute "not
+                // listed" says nothing: it stays pending, and the runner, which does not send it
+                // again while halted, settles it once the minute is up.
+                None if book::now() - created_at(o) < UNANSWERED => {
+                    return Err(BusError::unavailable("arbiter.unconfirmed", "Coinbase does not list this order yet, so it was not cancelled: it stays pending, is not sent again while halted, and is settled within a minute"));
+                }
+                None if with_book(engine, |b| b.exchange_has(o.id))? => {
+                    return Err(BusError::unavailable("arbiter.unconfirmed", "Coinbase says it has this order but does not list it, so it could not be cancelled: cancel it in the Coinbase app"));
+                }
+                None => return cancel_here(engine, o, &format!("{why} (Coinbase has no record of it)")),
+            },
+        };
+        client.cancel(std::slice::from_ref(&eid)).map_err(ex)?;
+        // A cancel races the order's fills: it may have filled, wholly or in part, since the
+        // last pass, and the exchange answers a filled order's cancel as done. Book what the
+        // exchange says it did; a cancel still queued stays open for the next pass.
+        let order = client.order(&eid).map_err(ex)?;
+        book_live_fills(engine, client.as_ref(), o, &eid, &order)?;
+        let mut order = settled(engine, o, order)?;
+        if order.status == OrderStatus::Cancelled && order.reason.is_none() {
+            order.reason = Some(why.to_string());
         }
+        return with_book(engine, |b| {
+            b.update_order(o.id, &order)?;
+            b.log(o.strategy_id, "cancel", &format!("Cancelled an order: {why}."), Some(o.id)).map(|_| ())
+        });
     }
+    cancel_here(engine, o, why)
+}
+
+/// Marks an order cancelled in the book only: a paper order, or a live one Coinbase never had.
+fn cancel_here(engine: &Engine, o: &OrderView, why: &str) -> Result<(), BusError> {
     let x = ExchangeOrder {
         order_id: o.exchange_order_id.clone().unwrap_or_default(),
         client_order_id: o.client_order_id.clone(),
@@ -727,8 +971,11 @@ pub fn route(engine: &Engine, strategy_id: i64, intent: &Intent, why: &str, thre
     Ok(Outcome::Proposed(Box::new(with_book(engine, |b| b.proposal(id))?.0)))
 }
 
-/// Approves or dismisses a proposal. An approved order passes the gate again, now.
+/// Approves or dismisses a proposal. An approved order passes the gate again, now, and only on
+/// the venue and product it was asked for; an approved change only onto the strategy it was made
+/// from. A card past its time is expired, whether or not the runner has been by since.
 pub fn resolve(engine: &Engine, id: i64, approve: bool, draft_hash: Option<&str>) -> Result<ProposalView, BusError> {
+    with_book(engine, |b| b.expire_proposals(book::now()))?;
     let (p, cause) = with_book(engine, |b| b.proposal(id))?;
     if p.status != "pending" {
         return Err(BusError::conflict("arbiter.answered", format!("That proposal is already {}", p.status)));
@@ -742,9 +989,17 @@ pub fn resolve(engine: &Engine, id: i64, approve: bool, draft_hash: Option<&str>
             let sid = p.strategy_id.ok_or_else(|| BusError::invalid("arbiter.invalid", "The proposal names no strategy"))?;
             // The card said which venue it was for; `execute` uses the strategy's venue now. A
             // card asked on paper must never become a real order because the strategy went live.
-            let venue = with_book(engine, |b| b.strategy(sid))?.venue;
-            if p.venue.is_some_and(|v| v != venue) {
-                let text = format!("The strategy has switched to {} since this was asked; nothing was placed.", venue.as_str());
+            // Nor may a card for one product be placed on a strategy that trades another now: the
+            // gate checks the product against the card's own.
+            let s = with_book(engine, |b| b.strategy(sid))?;
+            let changed = if p.venue.is_some_and(|v| v != s.venue) {
+                Some(format!("The strategy has switched to {} since this was asked; nothing was placed.", s.venue.as_str()))
+            } else if p.product.as_deref().is_some_and(|x| x != s.product) {
+                Some(format!("The strategy trades {} now; nothing was placed.", s.product))
+            } else {
+                None
+            };
+            if let Some(text) = changed {
                 with_book(engine, |b| b.resolve_proposal(id, "failed", Some(&text)))?;
                 return Ok(with_book(engine, |b| b.proposal(id))?.0);
             }
@@ -772,7 +1027,15 @@ pub fn resolve(engine: &Engine, id: i64, approve: bool, draft_hash: Option<&str>
                 return Err(BusError::conflict("arbiter.changed_since", "The proposal is not the one shown; reopen it"));
             }
             let result = with_book(engine, |b| match p.strategy_id {
-                Some(sid) => b.save_strategy(sid, &draft).map(|_| sid),
+                Some(sid) => {
+                    // The draft carries the rule and limits as they were when it was asked: saved
+                    // over a strategy changed since, it would put back what the person changed.
+                    let now = book::strategy_hash(&b.strategy(sid)?);
+                    if b.proposal_based_on(id)?.is_some_and(|h| h != now) {
+                        return Err(BookError::Invalid("The strategy has changed since this was asked, so nothing was saved: ask again for a change to it as it is now.".into()));
+                    }
+                    b.save_strategy(sid, &draft).map(|_| sid)
+                }
                 None => b.create_strategy(&draft),
             });
             match result {
@@ -801,6 +1064,11 @@ pub fn halt(engine: &Engine, strategy: Option<i64>, reason: &str) -> Result<(u32
         }
     }
     let open = with_book(engine, |b| b.open_orders(strategy))?;
+    // The person pressed it, perhaps just after unlocking the keyring: ask it now, not after the
+    // retry wait, so every live cancel below has the key if it can be read at all.
+    if open.iter().any(|o| o.venue == Venue::Live) {
+        let _ = account_now(engine);
+    }
     let (mut cancelled, mut failed) = (0, Vec::new());
     for o in open {
         match cancel_one(engine, &o, "halted") {
@@ -821,7 +1089,7 @@ pub fn pass(engine: &Engine) -> bool {
     let mut errors: Vec<String> = Vec::new();
     let _ = with_book(engine, |b| b.expire_proposals(now));
     for o in with_book(engine, |b| b.open_orders(None)).unwrap_or_default() {
-        if let Err(e) = reconcile_order(engine, o.id) {
+        if let Err(e) = reconcile_order(engine, o.id, false) {
             errors.push(e.message);
         }
     }
@@ -855,43 +1123,58 @@ fn fingerprint(engine: &Engine) -> (i64, i64, String) {
     .unwrap_or_default()
 }
 
-/// What every strategy together has lost today at the last prices: what Arbiter's daily loss
-/// limit weighs.
-fn loss_today_all(engine: &Engine) -> Result<Decimal, BusError> {
+/// What every strategy together has lost on `venue` today at the last prices: realized, plus
+/// what holdings there are down. Each venue is weighed on its own, so paper's gains never offset
+/// a real loss; a strategy that has moved off the venue since still counts what it made there.
+/// What the gate and Arbiter's daily loss limit weigh.
+fn venue_loss(engine: &Engine, b: &Book, venue: Venue, taker: Decimal) -> book::Result<Decimal> {
+    let mut pnl = Decimal::ZERO;
+    for s in b.strategies()? {
+        let p = b.position(s.id, venue)?;
+        pnl += p.realized_today + p.open_pnl(last_price(engine, &s.product), taker).min(Decimal::ZERO);
+    }
+    Ok((-pnl).max(Decimal::ZERO))
+}
+
+/// The first venue whose loss today is at or past Arbiter's daily limit, live weighed first.
+fn venue_past(engine: &Engine, limit: Decimal) -> Result<Option<Venue>, BusError> {
     let taker = fees(engine).taker;
     with_book(engine, |b| {
-        let mut pnl = Decimal::ZERO;
-        for s in b.strategies()? {
-            let p = b.position(s.id, s.venue)?;
-            pnl += p.realized_today + p.open_pnl(last_price(engine, &s.product), taker).min(Decimal::ZERO);
+        for venue in [Venue::Live, Venue::Paper] {
+            if venue_loss(engine, b, venue, taker)? >= limit {
+                return Ok(Some(venue));
+            }
         }
-        Ok((-pnl).max(Decimal::ZERO))
+        Ok(None)
     })
 }
 
+/// Arbiter's daily loss limit: either venue past it halts everything, as the kill switch does,
+/// so a day lost on paper stops live trading too.
 fn global_loss(engine: &Engine) -> Result<(), BusError> {
     let g = with_book(engine, |b| b.global_limits())?;
     let Some(limit) = g.daily_loss else { return Ok(()) };
-    if loss_today_all(engine)? >= limit {
-        halt(engine, None, &format!("Arbiter's daily loss limit of {} reached", limit.normalize()))?;
+    if let Some(venue) = venue_past(engine, limit)? {
+        halt(engine, None, &format!("Arbiter's daily loss limit of {} reached on {}", limit.normalize(), venue.as_str()))?;
     }
     Ok(())
 }
 
 /// Refuses to lift a halt the runner's next pass would only put back: today's loss still at or
-/// past the daily limit, Arbiter's (no `strategy`) or the strategy's own. No network: the last
-/// prices, as the meters read them.
+/// past the daily limit, Arbiter's on either venue (no `strategy`) or the strategy's own. No
+/// network: the last prices, as the meters read them.
 pub fn check_restart(engine: &Engine, strategy: Option<i64>) -> Result<(), BusError> {
-    let past = |limit: Decimal, currency: &str, own: bool| -> Result<(), BusError> {
+    let past = |limit: Decimal, currency: &str, own: bool, on: &str| -> Result<(), BusError> {
         let (whose, raise) = if own { ("its", "raise it under Limits on its page") } else { ("the", "raise it in Settings") };
-        Err(BusError::refused("arbiter.daily_loss", format!("Today's loss is still past {whose} daily limit of {} {currency}: {raise}, or restart tomorrow", limit.normalize())))
+        Err(BusError::refused("arbiter.daily_loss", format!("Today's loss{on} is still past {whose} daily limit of {} {currency}: {raise}, or restart tomorrow", limit.normalize())))
     };
     match strategy {
         None => {
             let (g, home) = with_book(engine, |b| Ok((b.global_limits()?, b.home()?)))?;
-            match g.daily_loss {
-                Some(limit) if loss_today_all(engine)? >= limit => past(limit, &home, false),
-                _ => Ok(()),
+            let Some(limit) = g.daily_loss else { return Ok(()) };
+            match venue_past(engine, limit)? {
+                Some(venue) => past(limit, &home, false, &format!(" on {}", venue.as_str())),
+                None => Ok(()),
             }
         }
         Some(id) => {
@@ -902,7 +1185,7 @@ pub fn check_restart(engine: &Engine, strategy: Option<i64>) -> Result<(), BusEr
             let read = lock(&engine.arbiter.quotes).get(&s.product).filter(|q| book::now() - q.at <= 300).map(|q| q.bid);
             let bid = read.or_else(|| last_price(engine, &s.product));
             let loss = (-(pos.realized_today + pos.open_pnl(bid, fees(engine).taker).min(Decimal::ZERO))).max(Decimal::ZERO);
-            if loss >= limit { past(limit, s.product.split_once('-').map_or("", |(_, q)| q), true) } else { Ok(()) }
+            if loss >= limit { past(limit, s.product.split_once('-').map_or("", |(_, q)| q), true, "") } else { Ok(()) }
         }
     }
 }
@@ -1052,4 +1335,62 @@ pub fn spawn_runner(engine: &Arc<Engine>) {
 
 fn store_has_book(engine: &Engine) -> bool {
     !in_memory(engine) && engine.store.path().with_file_name("arbiter.db").exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    /// A throwaway P-256 key made for tests; it has never been near an exchange.
+    const KEY: &str = "-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEICr3hFJQLruuvjzXzQvrZyWUlBfa0SdE9HtDCMhP7NYqoAoGCCqGSM49
+AwEHoUQDQgAEIgIeCM0SMcTdKeIUVa5s6GrENsIc3sFPBcefipt5Ciw6PtUG6nMV
+TsGghZLrhr8kSV5nZX8i1b+Q+3+QzuY0wQ==
+-----END EC PRIVATE KEY-----";
+
+    #[test]
+    fn a_keyring_that_could_not_be_read_is_asked_again_and_no_key_stays_known() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::new(Instance::Test, crate::Store::open(&dir.path().join("store.db"), false).unwrap());
+        // No key saved: that is known, and kept.
+        assert!(account(&engine).is_none());
+        assert!(matches!(*lock(&engine.arbiter.keyed), Some(None)));
+        *lock(&engine.arbiter.keyed) = None;
+        // The keyring cannot be read (here the key's file is a folder): nothing is kept.
+        std::fs::create_dir(test_key_file(&engine)).unwrap();
+        assert!(account(&engine).is_none());
+        assert!(lock(&engine.arbiter.keyed).is_none());
+        // A key is there now: within the minute the keyring is not asked again, after it it is.
+        std::fs::remove_dir(test_key_file(&engine)).unwrap();
+        store_key(&engine, &Credentials::parse("organizations/o/apiKeys/k1", KEY).unwrap()).unwrap();
+        assert!(account(&engine).is_none());
+        *lock(&engine.arbiter.key_failed_at) = Some(book::now() - KEY_RETRY);
+        assert!(account(&engine).is_some());
+    }
+
+    #[test]
+    fn what_the_person_starts_asks_the_keyring_now_not_after_the_retry_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::new(Instance::Test, crate::Store::open(&dir.path().join("store.db"), false).unwrap());
+        std::fs::create_dir(test_key_file(&engine)).unwrap();
+        assert!(account(&engine).is_none());
+        // Unlocked a moment later: the runner waits out the minute, the kill switch does not.
+        std::fs::remove_dir(test_key_file(&engine)).unwrap();
+        store_key(&engine, &Credentials::parse("organizations/o/apiKeys/k1", KEY).unwrap()).unwrap();
+        assert!(account(&engine).is_none());
+        assert!(account_now(&engine).is_some());
+        assert!(account(&engine).is_some());
+    }
+
+    #[test]
+    fn a_lookup_that_says_nothing_is_no_key_and_one_that_says_why_is_a_failure() {
+        let out = |code: i32, stdout: &str, stderr: &str| std::process::Output { status: std::process::ExitStatus::from_raw(code << 8), stdout: stdout.into(), stderr: stderr.into() };
+        assert_eq!(looked_up(&out(0, "{}", ""), true).unwrap().as_deref(), Some("{}"));
+        assert_eq!(looked_up(&out(1, "", ""), false).unwrap(), None);
+        // Silent, while the book records a key: a dismissed unlock prompt, not "no key".
+        assert_eq!(looked_up(&out(1, "", ""), true).unwrap_err().code, "arbiter.keyring");
+        let locked = looked_up(&out(1, "", "Cannot get secret of a locked object\n"), false).unwrap_err();
+        assert_eq!((locked.code.as_str(), locked.message.as_str()), ("arbiter.keyring", "Cannot get secret of a locked object"));
+    }
 }

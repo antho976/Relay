@@ -1762,6 +1762,44 @@ pub fn drift(root: &Path, base: &str) -> Result<DriftOut, BusError> {
     Ok(DriftOut { base: name, head: tip.to_string(), worktrees })
 }
 
+/// A fetch older than this is worth repeating before trusting a count against it.
+const STALE_FETCH_SECS: u64 = 3600;
+
+/// How long ago the repository last fetched, from `FETCH_HEAD`; `None` when it never has.
+fn fetch_age(repo: &gix::Repository) -> Option<std::time::Duration> {
+    std::fs::metadata(repo.common_dir().join("FETCH_HEAD")).ok()?.modified().ok()?.elapsed().ok()
+}
+
+/// How `checkout` stands against the freshest `base` at this moment, from the refs on disk:
+/// `session.bootstrap`'s `base_sync`. The brief's counts are a snapshot from launch, and a
+/// session may sit for hours before its first turn while the base moves on.
+pub fn base_sync(checkout: &Path, base: &str) -> Option<relay_bus::ops::session::BootstrapBaseSync> {
+    let repo = gix::open(checkout).ok()?;
+    let (name, tip) = freshest_base(&repo, base).ok()?;
+    let head = repo.head_id().ok()?.detach();
+    let (ahead, behind) = divergence(&repo, head, tip)?;
+    let fetched_secs_ago = fetch_age(&repo).map(|age| age.as_secs());
+    let commits = |n: i64| if n == 1 { "1 commit".to_string() } else { format!("{n} commits") };
+    let mut hint = match (behind, ahead) {
+        (0, _) => format!("Up to date with {name}."),
+        (behind, 0) => format!(
+            "This checkout is {} behind {name}. Bring it up to date before starting: `git merge --ff-only {name}` \
+             (uncommitted changes carry over, or git refuses and names the files).",
+            commits(behind)
+        ),
+        (behind, ahead) => format!(
+            "This branch is {} behind {name} and has {} of its own. Merge {name} into it before starting.",
+            commits(behind), commits(ahead)
+        ),
+    };
+    if fetched_secs_ago.is_none_or(|secs| secs > STALE_FETCH_SECS) {
+        hint.push_str(" The last fetch is over an hour old, or never happened: `git fetch` first for a current count.");
+    }
+    Some(relay_bus::ops::session::BootstrapBaseSync {
+        base: name, head: tip.to_string(), behind, ahead, fetched_secs_ago, hint,
+    })
+}
+
 /// Cached Git context only: generating a brief must never make a network request.
 pub fn briefing_state(root: &Path, branch: &str, base: &str) -> String {
     let Ok(repo) = gix::open(root) else {
@@ -1779,10 +1817,7 @@ pub fn briefing_state(root: &Path, branch: &str, base: &str) -> String {
             .ok()
             .and_then(|remote| divergence(&repo, local.detach(), remote.detach()))
     });
-    let fetched = std::fs::metadata(repo.common_dir().join("FETCH_HEAD"))
-        .ok()
-        .and_then(|meta| meta.modified().ok())
-        .and_then(|time| time.elapsed().ok())
+    let fetched = fetch_age(&repo)
         .map(|age| {
             format!(
                 "FETCH_HEAD updated {}s ago; cached snapshot, not proof of a successful fetch",

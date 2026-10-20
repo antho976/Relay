@@ -1,0 +1,16 @@
+{"thread": 1, "other": 2, "messages": 60, "pictures": 120}
+THUMBS cold reads=120 on_screen=8 on_screen_read=8 shown_ms=187.7
+THUMBS away reads=0 on_screen=0 on_screen_read=0 shown_ms=-1.0
+THUMBS reopen reads=24 on_screen=8 on_screen_read=0 shown_ms=18.8
+THUMBS cold reads=120 on_screen=8 on_screen_read=8 shown_ms=186.2
+THUMBS away reads=0 on_screen=0 on_screen_read=0 shown_ms=-1.0
+THUMBS reopen reads=24 on_screen=8 on_screen_read=0 shown_ms=18.6
+THUMBS cold reads=120 on_screen=8 on_screen_read=8 shown_ms=189.2
+THUMBS away reads=0 on_screen=0 on_screen_read=0 shown_ms=-1.0
+THUMBS reopen reads=24 on_screen=8 on_screen_read=0 shown_ms=18.2
+THUMBS cold reads=120 on_screen=8 on_screen_read=8 shown_ms=179.2
+THUMBS away reads=0 on_screen=0 on_screen_read=0 shown_ms=-1.0
+THUMBS reopen reads=24 on_screen=8 on_screen_read=0 shown_ms=18.0
+THUMBS cold reads=120 on_screen=8 on_screen_read=8 shown_ms=166.0
+THUMBS away reads=0 on_screen=0 on_screen_read=0 shown_ms=-1.0
+THUMBS reopen reads=24 on_screen=8 on_screen_read=0 shown_ms=25.3

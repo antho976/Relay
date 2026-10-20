@@ -452,16 +452,18 @@ pub fn register(e: &mut Engine) {
             if p.why.trim().is_empty() {
                 return Err(BusError::invalid("arbiter.invalid", "Say why, in a sentence the person reads on the card"));
             }
-            let (title, changes, kind) = match p.strategy_id {
+            // A change card keeps what the strategy was when it was made: approving it later must
+            // not put back a limit or rule the person changed in between.
+            let (title, changes, kind, based_on) = match p.strategy_id {
                 Some(id) => {
                     let s = with_book(engine, |b| b.strategy(id))?;
                     let changes = book::changes(&s.draft(), &p.draft);
                     if changes.is_empty() {
                         return Err(BusError::invalid("arbiter.invalid", "That is the strategy as it already is"));
                     }
-                    (format!("Change \"{}\" to version {}", s.name, s.version + 1), changes, "change")
+                    (format!("Change \"{}\" to version {}", s.name, s.version + 1), changes, "change", Some(book::strategy_hash(&s)))
                 }
-                None => (format!("New strategy \"{}\"", p.draft.name.trim()), rules::describe(&p.draft.rule, &p.draft.product, p.draft.granularity), "new_strategy"),
+                None => (format!("New strategy \"{}\"", p.draft.name.trim()), rules::describe(&p.draft.rule, &p.draft.product, p.draft.granularity), "new_strategy", None),
             };
             let new = book::NewProposal {
                 kind: kind.into(),
@@ -472,6 +474,7 @@ pub fn register(e: &mut Engine) {
                 draft: Some(p.draft.clone()),
                 changes,
                 thread_id: p.thread_id,
+                based_on,
                 ..Default::default()
             };
             let id = with_book(engine, |b| b.add_proposal(&new))?;

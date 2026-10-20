@@ -22,6 +22,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.quietsoftware.relay.core.model.decodeAs
@@ -251,8 +253,8 @@ fun FindBar(
             IconKey("close", onClose, label = "Close")
         }
         Row(Modifier.padding(top = 2.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Pill("Aa", selected = matchCase, onClick = onCase)
-            Pill(".*", selected = regex, onClick = onRegex)
+            Pill("Aa", Modifier.semantics { contentDescription = "Match case" }, selected = matchCase, onClick = onCase)
+            Pill(".*", Modifier.semantics { contentDescription = "Regular expression" }, selected = regex, onClick = onRegex)
         }
     }
 }

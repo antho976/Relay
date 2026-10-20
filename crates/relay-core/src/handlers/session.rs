@@ -1659,13 +1659,19 @@ pub fn register(e: &mut Engine) {
         ctx.read(|conn| crate::awareness::brief(conn, &p.session, Some(ctx.engine()), &git))
     });
 
-    e.register::<Bootstrap>(|ctx, _| {
+    // Unlocked for `base_sync`: a rev walk over the refs on disk that nothing in the store waits on.
+    e.register_unlocked::<Bootstrap>(|ctx, _| {
         let session_id = ctx
             .actor_session_id()
             .ok_or_else(|| BusError::actor("session.bootstrap requires a bound agent session"))?;
-        let row = sessions::by_id(ctx.tx(), session_id)?
-            .ok_or_else(|| BusError::actor("bound session vanished"))?;
-        crate::awareness::bootstrap(ctx.tx(), &row.session.name, ctx.engine())
+        let (name, worktree, base) = ctx.read(|conn| {
+            let row = sessions::by_id(conn, session_id)?
+                .ok_or_else(|| BusError::actor("bound session vanished"))?;
+            let project = crate::handlers::workspace::get_project(conn, row.session.project_id)?;
+            Ok((row.session.name, row.session.worktree, project.base_branch))
+        })?;
+        let base_sync = crate::handlers::git::base_sync(Path::new(&worktree), &base);
+        ctx.read(|conn| crate::awareness::bootstrap(conn, &name, ctx.engine(), base_sync))
     });
 
     // Staged (D149) for the per-task caps and the branch re-check (BUS.md §9.2, RA-109):

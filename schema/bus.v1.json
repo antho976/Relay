@@ -11864,6 +11864,18 @@
             "null"
           ]
         },
+        "base_sync": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionBootstrapBaseSync"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How this checkout stands against the freshest base, read from the refs on disk at this\ncall rather than at launch; absent when the checkout or the base cannot be read.",
+          "default": null
+        },
         "task": {
           "anyOf": [
             {
@@ -11944,6 +11956,48 @@
         "discovery",
         "comms",
         "guardrails"
+      ]
+    },
+    "SessionBootstrapBaseSync": {
+      "type": "object",
+      "properties": {
+        "base": {
+          "type": "string",
+          "description": "What the counts are against: the base's remote-tracking branch (`origin/main`) or the\nlocal base, whichever is further ahead; the remote one when they have diverged."
+        },
+        "head": {
+          "type": "string"
+        },
+        "behind": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Commits on `base` this checkout's HEAD does not have: what to bring in before starting."
+        },
+        "ahead": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Commits on this checkout's HEAD that `base` does not have."
+        },
+        "fetched_secs_ago": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Seconds since the repository last fetched; absent when it never has. The counts are only\nas fresh as that fetch."
+        },
+        "hint": {
+          "type": "string",
+          "description": "What to do about it, in a sentence or two."
+        }
+      },
+      "required": [
+        "base",
+        "head",
+        "behind",
+        "ahead",
+        "hint"
       ]
     },
     "SessionBootstrapTask": {
