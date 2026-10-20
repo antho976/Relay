@@ -55,6 +55,18 @@ class ChartsTest {
     }
 
     @Test
+    fun aPriceLineIsOneSeriesOfClosesWithItsTradesAtTheirBar() {
+        val n = readPrice(data("""{"product": "BTC-USD", "candles": [{"start": 1760000000, "close": 61234.5}, {"start": 1760003600, "close": "61300"}], "markers": [{"at": 1760003700, "price": 61290.25, "side": "buy"}]}"""))
+        val line = n.series.single()
+        assertEquals("BTC-USD", line.name)
+        assertEquals(listOf(6123450L, 6130000L), line.values)
+        assertFalse(line.projected)
+        assertEquals(listOf(2), n.known)
+        assertEquals(listOf(Triple(1, 6129025L, true)), n.marks)
+        assertFalse(n.fromZero)
+    }
+
+    @Test
     fun aChartBlockWithItsOwnNumbersIsOneToDraw() {
         val spec = chartSpec("""{"type": "line", "title": "The next six months", "data": {"labels": ["Nov"], "series": [{"name": "Savings", "values": [1.5]}]}}""")
         assertNotNull(spec?.data)

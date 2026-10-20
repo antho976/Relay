@@ -1032,7 +1032,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                         slow -> Empty("threads", "Could not read this conversation", "The PC did not send its messages.") {
                             Key("Try again", {
                                 tries++
-                                num?.let { nav.relay.hub.syncer.schedule(setOf(Fetch.Thread(it))) }
+                                num?.let { scope.launch { nav.relay.hub.syncer.schedule(setOf(Fetch.Thread(it))) } }
                             }, glyph = "refresh")
                         }
                         else -> T("Reading the conversation…", style = Relay.type.caption, color = c.ink3)
