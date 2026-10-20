@@ -1,18 +1,41 @@
 //! Pages and layers. The layer list is the page's tree, top layer first as design tools show
 //! it, folded to what you opened plus the way down to the selection. It is a recycling list
-//! view: a design of thousands of layers builds rows only for those on screen.
+//! view: a design of thousands of layers builds rows only for those on screen. A row is dragged
+//! to restack its layer, or onto a frame or group to put it inside.
 
-use super::board::{display_name, kind_glyph, Board};
+use super::board::{kind_glyph, Board};
 use super::glyphs;
 use super::widgets::{color_key, tip};
 use crate::app::label;
 use gtk::prelude::*;
 use gtk4 as gtk;
 use relay_bus::design::{NodeKind, NodeOp};
+use relay_client::design::edit;
+use relay_client::design::names::{copy_name, display_name};
 use serde_json::{json, Map, Value};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::{Rc, Weak};
+
+/// A layer row's indent at `depth` (a page's children are 0 deep): 14 px a level for the first
+/// six, then 4, at most 108 px, so a deep nest keeps room for its names and never widens the
+/// panel (B92).
+fn indent_px(depth: u32) -> i32 {
+    let d = depth as i32;
+    d.min(6) * 14 + (d - 6).clamp(0, 6) * 4
+}
+
+/// What a name typed into a rename popover writes over `shown`, the name it showed: nothing
+/// when unchanged (a text keeps following its words, a page its place's name), a cleared name
+/// when emptied, else the name trimmed.
+fn rename_set(text: &str, shown: &str) -> Option<Value> {
+    let text = text.trim();
+    match text {
+        _ if text == shown.trim() => None,
+        "" => Some(Value::Null),
+        _ => Some(json!(text)),
+    }
+}
 
 #[derive(Clone)]
 struct Row {
@@ -26,9 +49,14 @@ pub struct Layers {
     pub root: gtk::Box,
     board: Weak<Board>,
     pages: gtk::Box,
+    /// The pages and names the page rows were built for: while they stay, a page switch only
+    /// relights the rows, so a row's double-click (rename) lands on the row it started on (B52).
+    page_sig: RefCell<Vec<(String, String)>>,
     model: gtk::StringList,
     rows: RefCell<Vec<Row>>,
     open: RefCell<HashSet<String>>,
+    /// Said in place of the list when the page has nothing on it.
+    empty: gtk::Label,
 }
 
 impl Layers {
@@ -59,15 +87,23 @@ impl Layers {
         let scroll = gtk::ScrolledWindow::new();
         scroll.set_child(Some(&view));
         scroll.set_vexpand(true);
-        scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
+        // A row too wide is cut, not the panel widened over the canvas (B92).
+        scroll.set_hscrollbar_policy(gtk::PolicyType::External);
         root.append(&scroll);
+        let empty = label("Nothing on this page yet: draw with the tools above, or ask an agent.", "design-note");
+        empty.set_wrap(true);
+        empty.add_css_class("design-layers-empty");
+        empty.set_visible(false);
+        root.append(&empty);
         let layers = Rc::new(Layers {
             root,
             board: Rc::downgrade(b),
             pages,
+            page_sig: RefCell::default(),
             model,
             rows: RefCell::default(),
             open: RefCell::default(),
+            empty,
         });
 
         factory.connect_setup(|_, item| {
@@ -164,7 +200,7 @@ impl Layers {
         let [indent, disclose, glyph, name, eye, lock] = parts.as_slice() else {
             return;
         };
-        indent.set_size_request(row.depth as i32 * 14, -1);
+        indent.set_size_request(indent_px(row.depth), -1);
         let disclose = disclose.clone().downcast::<gtk::Button>().expect("button");
         disclose.set_child(row.folder.then(|| crate::icons::image(if row.open { "chevron-down" } else { "chevron-right" }, 10)).as_ref());
         disclose.set_sensitive(row.folder);
@@ -178,17 +214,23 @@ impl Layers {
             glyph.remove(&c);
         }
         glyph.append(&glyphs::image(kind_glyph(n.kind), 14));
-        // The whole name under the pointer, where the row cuts it short.
+        // The whole name under the pointer, where the row cuts it short; never blank (B42), and
+        // how deep it sits where the indent stops growing.
         let shown = display_name(&n);
         let name = name.clone().downcast::<gtk::Label>().expect("label");
         name.set_text(&shown);
-        name.set_tooltip_text(Some(&shown));
+        name.set_tooltip_text(Some(&if row.depth > 6 { format!("{shown} · level {}", row.depth + 1) } else { shown.clone() }));
         let eye = eye.clone().downcast::<gtk::Button>().expect("button");
         eye.set_child(Some(&glyphs::image(if n.is_hidden() { "eye-off" } else { "eye" }, 14)));
-        tip(&eye, if n.is_hidden() { "Show" } else { "Hide" });
+        let show = if n.is_hidden() { "Show" } else { "Hide" };
+        tip(&eye, show);
+        // A screen reader hears which layer the key is for, row after row (B106).
+        eye.update_property(&[gtk::accessible::Property::Label(&format!("{show} {shown}"))]);
         let lock = lock.clone().downcast::<gtk::Button>().expect("button");
         lock.set_child(Some(&glyphs::image(if n.is_locked() { "lock" } else { "unlock" }, 14)));
-        tip(&lock, if n.is_locked() { "Unlock" } else { "Lock" });
+        let locking = if n.is_locked() { "Unlock" } else { "Lock" };
+        tip(&lock, locking);
+        lock.update_property(&[gtk::accessible::Property::Label(&format!("{locking} {shown}"))]);
         if n.is_locked() {
             lock.add_css_class("on");
         } else {
@@ -237,12 +279,20 @@ impl Layers {
                     let mut set = Map::new();
                     set.insert(flag.into(), if on { json!(true) } else { Value::Null });
                     b.commit(vec![NodeOp::Update { id: row.id.clone(), set }]);
+                    // A layer hidden from its row leaves the selection, with what is in it, as
+                    // Hide does on the canvas (TM-67): no handles round what cannot be seen.
+                    if on && flag == "hidden" {
+                        let scene = b.doc.scene.borrow();
+                        let kept: Vec<String> = b.selection.borrow().iter().filter(|s| **s != row.id && !scene.is_inside(s, &row.id)).cloned().collect();
+                        drop(scene);
+                        b.select(kept);
+                    }
                 });
             }
             let click = gtk::GestureClick::new();
             let weak = Rc::downgrade(self);
             let item_ref = item.downgrade();
-            click.connect_pressed(move |g, n_press, _, _| {
+            click.connect_pressed(move |g, n_press, x, y| {
                 let (Some(l), Some(item)) = (weak.upgrade(), item_ref.upgrade()) else {
                     return;
                 };
@@ -252,6 +302,11 @@ impl Layers {
                 let Some(row) = l.rows.borrow().get(item.position() as usize).cloned() else {
                     return;
                 };
+                // The eye, the lock and the disclosure are keys of their own, not the row (TM-67).
+                let on_key = g.widget().and_then(|w| w.pick(x, y, gtk::PickFlags::DEFAULT)).is_some_and(|w| w.is::<gtk::Button>() || w.ancestor(gtk::Button::static_type()).is_some());
+                if on_key {
+                    return;
+                }
                 if n_press == 2 {
                     if let Some(w) = item.child() {
                         rename_node(&b, &row.id, Some(&w));
@@ -263,6 +318,11 @@ impl Layers {
                 if let Some(i) = sel.iter().position(|s| *s == row.id) {
                     sel.remove(i);
                 } else {
+                    // Not with what holds it or what it holds, as a Shift-click on the canvas
+                    // (E-board-13): a frame and its child selected together move twice.
+                    let scene = b.doc.scene.borrow();
+                    sel.retain(|s| !scene.is_inside(s, &row.id) && !scene.is_inside(&row.id, s));
+                    drop(scene);
                     sel.push(row.id.clone());
                 }
                 // The canvas keeps its shortcuts (Delete, arrows, V…) after a row is picked:
@@ -279,7 +339,73 @@ impl Layers {
                 });
             });
             widget.add_controller(click);
+            // Drag a row to restack its layer, or onto a frame or group to put it inside (I-16).
+            let drag = gtk::DragSource::new();
+            drag.set_actions(gtk::gdk::DragAction::MOVE);
+            let weak = Rc::downgrade(self);
+            let item_ref = item.downgrade();
+            drag.connect_prepare(move |_, _, _| {
+                let (l, item) = (weak.upgrade()?, item_ref.upgrade()?);
+                let row = l.rows.borrow().get(item.position() as usize).cloned()?;
+                Some(gtk::gdk::ContentProvider::for_value(&row.id.to_value()))
+            });
+            widget.add_controller(drag);
+            let drop = gtk::DropTarget::new(glib::Type::STRING, gtk::gdk::DragAction::MOVE);
+            let weak = Rc::downgrade(self);
+            let item_ref = item.downgrade();
+            drop.connect_drop(move |t, value, _, y| {
+                let (Some(l), Some(item), Ok(dragged)) = (weak.upgrade(), item_ref.upgrade(), value.get::<String>()) else {
+                    return false;
+                };
+                let Some(row) = l.rows.borrow().get(item.position() as usize).cloned() else {
+                    return false;
+                };
+                let height = t.widget().map_or(1, |w| w.height()).max(1) as f64;
+                l.drop_layer(&dragged, &row.id, y / height)
+            });
+            widget.add_controller(drop);
         }
+    }
+
+    /// Put layer `id` where it was dropped on row `target`, `at` down that row (0 its top, 1 its
+    /// bottom): in front of it on the row's upper half, behind it on the lower, and inside it on
+    /// its middle when it is a frame or group, as the top layer there. One step, which keeps the
+    /// layer where it shows when it changes parent. A locked layer stays, and nothing goes into
+    /// itself or what it holds.
+    fn drop_layer(&self, id: &str, target: &str, at: f64) -> bool {
+        let Some(b) = self.board.upgrade() else {
+            return false;
+        };
+        let placed = b.placed();
+        let scene = b.doc.scene.borrow();
+        let (Some(n), Some(t)) = (scene.node(id), scene.node(target)) else {
+            return false;
+        };
+        if id == target || n.is_locked() || scene.is_inside(target, id) {
+            return false;
+        }
+        let into = t.kind.holds_children() && (0.3..0.7).contains(&at);
+        // Where it goes among the new parent's children (bottom to top), counted with it there.
+        let (parent, point) = if into {
+            (target.to_string(), scene.children(target).len())
+        } else {
+            let (Some(parent), Some(i)) = (t.parent.clone(), scene.index(target)) else {
+                return false;
+            };
+            // Rows run top layer first: above a row is in front of its layer.
+            (parent, if at < 0.5 { i + 1 } else { i })
+        };
+        let ops = match scene.index(id).filter(|_| scene.parent(id) == Some(parent.as_str())) {
+            // Among its own siblings, counted without it (`edit::reorder`).
+            Some(own) => edit::reorder(&scene, &parent, &[id.to_string()], (point - usize::from(own < point)) as u32),
+            None => {
+                let from = n.parent.as_deref().map_or((0.0, 0.0), |p| placed.origin(p));
+                let shows = placed.rect(id).map_or((from.0 + n.x, from.1 + n.y), |r| (r.x, r.y));
+                edit::reparent(&scene, &placed, id, &parent, Some(point as u32), shows)
+            }
+        };
+        drop(scene);
+        !ops.is_empty() && b.commit(ops)
     }
 
     /// Rebuild the rows from the scene: the page's tree, top layer first.
@@ -317,6 +443,7 @@ impl Layers {
         drop(open);
         drop(scene);
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        self.empty.set_visible(rows.is_empty());
         *self.rows.borrow_mut() = rows.clone();
         self.model.splice(0, self.model.n_items(), &ids);
     }
@@ -325,19 +452,47 @@ impl Layers {
         self.refresh();
     }
 
+    /// The page rows as the design has them. The same pages under the same names keep their
+    /// rows, only relit for the page on show, so the second press of a double-click lands on
+    /// the gesture that had the first and renames (B52).
     pub fn pages_changed(&self) {
         let Some(b) = self.board.upgrade() else {
             return;
         };
-        while let Some(c) = self.pages.first_child() {
-            self.pages.remove(&c);
-        }
         let pages = b.doc.scene.borrow().pages().to_vec();
         let current = b.page.borrow().clone();
-        for page in pages {
-            self.pages.append(&page_row(&b, &page, page == current, None));
+        let sig: Vec<(String, String)> = pages.iter().map(|p| (p.clone(), b.page_name(p))).collect();
+        if *self.page_sig.borrow() == sig {
+            let mut child = self.pages.first_child();
+            for (page, _) in &sig {
+                let Some(row) = child else {
+                    break;
+                };
+                light_page_row(&row, *page == current);
+                child = row.next_sibling();
+            }
+        } else {
+            while let Some(c) = self.pages.first_child() {
+                self.pages.remove(&c);
+            }
+            for page in &pages {
+                self.pages.append(&page_row(&b, page, *page == current, None));
+            }
+            *self.page_sig.borrow_mut() = sig;
         }
         self.refresh();
+    }
+}
+
+/// A page row lit, with its check, as the page on show, or not.
+fn light_page_row(row: &gtk::Widget, current: bool) {
+    if current {
+        row.add_css_class("selected");
+    } else {
+        row.remove_css_class("selected");
+    }
+    if let Some(check) = row.last_child() {
+        check.set_visible(current);
     }
 }
 
@@ -359,9 +514,10 @@ fn page_row(b: &Rc<Board>, page: &str, current: bool, pop: Option<&gtk::Popover>
     name.set_hexpand(true);
     name.set_ellipsize(gtk::pango::EllipsizeMode::End);
     row.append(&name);
-    if current {
-        row.append(&crate::icons::image("check", 12));
-    }
+    // Always there, shown on the page on show: a page switch relights the rows in place.
+    let check = crate::icons::image("check", 12);
+    check.set_visible(current);
+    row.append(&check);
     let click = gtk::GestureClick::new();
     let weak = Rc::downgrade(b);
     let id = page.to_string();
@@ -377,8 +533,10 @@ fn page_row(b: &Rc<Board>, page: &str, current: bool, pop: Option<&gtk::Popover>
             }
             return;
         }
+        // The dock's list stays open on the page already shown, so a double-click renames it.
+        let showing = *b.page.borrow() == id;
         b.set_page(&id);
-        if let Some(p) = p.as_ref().and_then(|p| p.upgrade()) {
+        if let Some(p) = p.as_ref().and_then(|p| p.upgrade()).filter(|_| !showing) {
             p.popdown();
         }
         let layers = b.layers.borrow().clone();
@@ -422,17 +580,25 @@ fn page_menu(b: &Rc<Board>, page: &str, anchor: &gtk::Widget) {
         }
     });
     list.append(&rename);
+    // The dock's pages list this row sits in, if it does: closed once a page is added or gone,
+    // rather than left open on rows of pages that changed (TM-69).
+    let pages_list = anchor.ancestor(gtk::Popover::static_type()).and_downcast::<gtk::Popover>().map(|p| p.downgrade());
     let duplicate = gtk::Button::with_label("Duplicate page");
     duplicate.add_css_class("design-menu-row");
     let weak = Rc::downgrade(b);
     let id = page.to_string();
     let p = pop.downgrade();
+    let list_pop = pages_list.clone();
     duplicate.connect_clicked(move |_| {
         if let Some(p) = p.upgrade() {
             p.popdown();
         }
         if let Some(b) = weak.upgrade() {
-            duplicate_page(&b, &id);
+            if duplicate_page(&b, &id) {
+                if let Some(l) = list_pop.as_ref().and_then(|l| l.upgrade()) {
+                    l.popdown();
+                }
+            }
         }
     });
     list.append(&duplicate);
@@ -448,15 +614,10 @@ fn page_menu(b: &Rc<Board>, page: &str, anchor: &gtk::Widget) {
                 p.popdown();
             }
             if let Some(b) = weak.upgrade() {
-                // Away from it only when it is the page on show.
-                let next = b.doc.scene.borrow().pages().iter().find(|p| **p != id).cloned();
-                if let Some(next) = next.filter(|_| *b.page.borrow() == id) {
-                    b.set_page(&next);
-                }
-                b.commit(vec![NodeOp::Delete { id: id.clone() }]);
-                b.toast("Page deleted · Ctrl+Z brings it back");
-                if let Some(l) = b.layers.borrow().as_ref() {
-                    l.pages_changed();
+                if delete_page(&b, &id) {
+                    if let Some(l) = pages_list.as_ref().and_then(|l| l.upgrade()) {
+                        l.popdown();
+                    }
                 }
             }
         });
@@ -470,9 +631,41 @@ fn page_menu(b: &Rc<Board>, page: &str, anchor: &gtk::Widget) {
     pop.popup();
 }
 
-fn duplicate_page(b: &Rc<Board>, page: &str) {
+/// Delete `page`, going to another first when it is the one on show (which ends a text typed on
+/// it). A connector elsewhere attached to what the page holds lets go where it is drawn
+/// (`edit::delete`, B26). Said only when it was deleted (B89): refused (the page gone meanwhile,
+/// or the last one), the board says why and goes back to the page it showed.
+fn delete_page(b: &Rc<Board>, page: &str) -> bool {
+    let was = b.page.borrow().clone();
+    let next = b.doc.scene.borrow().pages().iter().find(|p| *p != page).cloned();
+    if let Some(next) = next.filter(|_| was == page) {
+        b.set_page(&next);
+    }
+    let placed = b.placed();
     let scene = b.doc.scene.borrow();
-    let nodes: Vec<_> = scene.subtree(page).iter().filter_map(|id| scene.node(id).cloned()).collect();
+    let mut ops = edit::delete(&scene, &placed, &[page.to_string()]);
+    // A locked page goes too: the menu asked for it by name.
+    if !ops.iter().any(|op| matches!(op, NodeOp::Delete { id } if id == page)) {
+        ops.push(NodeOp::Delete { id: page.to_string() });
+    }
+    drop(scene);
+    let deleted = b.commit(ops);
+    if deleted {
+        b.toast("Page deleted · Ctrl+Z brings it back");
+    } else if b.doc.scene.borrow().node(&was).is_some() {
+        b.set_page(&was);
+    }
+    if let Some(l) = b.layers.borrow().as_ref() {
+        l.pages_changed();
+    }
+    deleted
+}
+
+/// A copy of `page` and all it holds after it, as stored (named colours and styles kept), named
+/// "<name> copy" within the length a name may have (TM-63); the board then shows it.
+fn duplicate_page(b: &Rc<Board>, page: &str) -> bool {
+    let scene = b.doc.scene.borrow();
+    let nodes: Vec<_> = scene.subtree(page).iter().filter_map(|id| scene.stored(id).cloned()).collect();
     drop(scene);
     let mut ops = Vec::new();
     let mut fresh = std::collections::HashMap::new();
@@ -491,19 +684,21 @@ fn duplicate_page(b: &Rc<Board>, page: &str) {
         copy.from = n.from.as_ref().map(|e| fresh.get(e).cloned().unwrap_or_else(|| e.clone()));
         copy.to = n.to.as_ref().map(|e| fresh.get(e).cloned().unwrap_or_else(|| e.clone()));
         if n.kind == NodeKind::Page {
-            copy.name = Some(format!("{} copy", b.page_name(page)));
+            copy.name = Some(copy_name(&b.page_name(page)));
             ops.push(NodeOp::Add { node: copy, index });
         } else {
             ops.push(NodeOp::Add { node: copy, index: None });
         }
     }
     let new_page = fresh[page].clone();
-    if b.commit(ops) {
+    let made = b.commit(ops);
+    if made {
         b.set_page(&new_page);
         if let Some(l) = b.layers.borrow().as_ref() {
             l.pages_changed();
         }
     }
+    made
 }
 
 /// The pages popover of the dock: every page, a new one, and this page's canvas colour.
@@ -578,34 +773,68 @@ pub fn rename_node(b: &Rc<Board>, id: &str, anchor: Option<&gtk::Widget>) {
     entry.set_text(&shown);
     entry.set_width_chars(24);
     pop.set_child(Some(&entry));
-    let weak = Rc::downgrade(b);
-    let id = id.to_string();
+    // Enter, or a click elsewhere that closes it, names the node, as leaving the inspector's
+    // name field does (B88); Esc closes it with the name as it was.
+    let cancel = Rc::new(Cell::new(false));
+    let keys = gtk::EventControllerKey::new();
+    let c = cancel.clone();
+    keys.connect_key_pressed(move |_, key, _, _| {
+        if key == gtk::gdk::Key::Escape {
+            c.set(true);
+        }
+        glib::Propagation::Proceed
+    });
+    entry.add_controller(keys);
     let p = pop.downgrade();
-    entry.connect_activate(move |e| {
+    entry.connect_activate(move |_| {
         if let Some(p) = p.upgrade() {
             p.popdown();
         }
-        let Some(b) = weak.upgrade() else {
-            return;
-        };
-        let text = e.text().trim().to_string();
-        // Unchanged, the shown name is not written: a text keeps following its words, and a
-        // page keeps its place's name.
-        if text == shown.trim() {
-            return;
-        }
-        let mut set = Map::new();
-        set.insert("name".into(), if text.is_empty() { Value::Null } else { json!(text) });
-        b.commit(vec![NodeOp::Update { id: id.clone(), set }]);
-        let layers = b.layers.borrow().clone();
-        if let Some(l) = layers {
-            l.pages_changed();
-        }
     });
-    pop.connect_closed(|p| {
-        let p = p.clone();
-        glib::idle_add_local_once(move || p.unparent());
+    let weak = Rc::downgrade(b);
+    let id = id.to_string();
+    let e = entry.downgrade();
+    pop.connect_closed(move |p| {
+        let set = e.upgrade().filter(|_| !cancel.replace(true)).and_then(|e| rename_set(&e.text(), &shown));
+        let (p, weak, id) = (p.clone(), weak.clone(), id.clone());
+        // After the popover has closed: the rename can rebuild the row it hangs from.
+        glib::idle_add_local_once(move || {
+            if let (Some(b), Some(name)) = (weak.upgrade(), set) {
+                let mut set = Map::new();
+                set.insert("name".into(), name);
+                b.commit(vec![NodeOp::Update { id, set }]);
+                let layers = b.layers.borrow().clone();
+                if let Some(l) = layers {
+                    l.pages_changed();
+                }
+            }
+            p.unparent();
+        });
     });
     pop.popup();
     entry.grab_focus();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_deep_nest_keeps_its_indent_in_the_panel() {
+        assert_eq!(indent_px(0), 0);
+        assert_eq!(indent_px(1), 14);
+        assert_eq!(indent_px(6), 84);
+        assert_eq!(indent_px(7), 88);
+        assert_eq!(indent_px(12), 108);
+        assert_eq!(indent_px(40), 108);
+    }
+
+    #[test]
+    fn a_rename_writes_only_a_change() {
+        assert_eq!(rename_set("A", "A"), None);
+        assert_eq!(rename_set(" A ", "A"), None);
+        assert_eq!(rename_set("", "A"), Some(Value::Null));
+        assert_eq!(rename_set("   ", "A"), Some(Value::Null));
+        assert_eq!(rename_set(" B ", "A"), Some(json!("B")));
+    }
 }
