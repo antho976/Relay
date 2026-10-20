@@ -2393,14 +2393,14 @@ impl Board {
     /// Mirror the selection left to right (`horizontal`) or top to bottom.
     pub(super) fn flip(&self, horizontal: bool) {
         let placed = self.placed();
-        let ops = relay_client::design::flip::flip(&self.doc.scene.borrow(), &placed, &self.selection.borrow(), horizontal);
+        let ops = relay_client::design::flip::flip(&self.doc.scene.borrow(), &placed, &*self.painter, &self.selection.borrow(), horizontal);
         self.commit(ops);
     }
 
     /// Keep the first selected layer's style, to paste on others.
     pub(super) fn copy_style(&self) {
         let first = self.selected().into_iter().next();
-        let style = first.and_then(|id| self.doc.scene.borrow().node(&id).map(relay_client::design::flip::style_of));
+        let style = first.and_then(|id| relay_client::design::flip::style_of(&self.doc.scene.borrow(), &id));
         if style.is_some() {
             *self.style_clip.borrow_mut() = style;
             self.refresh_actions();
