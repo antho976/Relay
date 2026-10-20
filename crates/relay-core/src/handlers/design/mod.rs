@@ -238,7 +238,7 @@ pub fn register(e: &mut Engine) {
         ctx.set_undo("design.delete", json!({"design_id": id}), None);
         emit_design(ctx, &design)?;
         let assets_dir = ctx.engine().store.design_assets_dir().display().to_string();
-        Ok(GetOut { design, nodes: vec![page], assets_dir, removed: None, indexes: None, colors: BTreeMap::new(), styles: BTreeMap::new(), credits: BTreeMap::new() })
+        Ok(GetOut { design, nodes: vec![page], assets_dir, removed: None, indexes: None, left: Vec::new(), colors: BTreeMap::new(), styles: BTreeMap::new(), credits: BTreeMap::new() })
     });
     e.register::<Update>(|ctx: &mut Ctx, p| {
         let before = live_design(ctx.tx(), p.design_id)?;

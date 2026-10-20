@@ -288,11 +288,38 @@ fn get_nodes_returns_subtrees_and_suggests_unknown_ids() {
     let gone = rev(&e, id);
     let error = get_refused(&e, json!({"design_id": id, "nodes": ["chip"]}));
     assert_eq!(error.message, format!("nodes: \"chip\" is not in the design (removed at rev {gone})"));
-    // Since a rev before it went, a removed node is the answer: it is in `removed`, after the
-    // removals in the order they went, the changed nodes the read does not take (the line that
-    // let go of the chip), which a reader holding them drops.
+    // Since a rev before it went, a removed node is the answer: it is in `removed`, with the
+    // rest of what went. The line that let go of the chip changed and is not in what the read
+    // takes: it is in `left`, not removed.
     let since = get(&e, json!({"design_id": id, "nodes": ["chip", "card"], "since_rev": gone - 1}));
-    assert_eq!((since["nodes"].clone(), strings(&since["removed"])), (json!([]), vec!["chip".to_string(), "side".to_string(), "link".to_string()]));
+    assert_eq!((since["nodes"].clone(), strings(&since["removed"]), strings(&since["left"])),
+        (json!([]), vec!["chip".to_string(), "side".to_string()], vec!["link".to_string()]));
+}
+
+/// W20: cut to a page or to nodes, a since_rev read lists in `removed` only what was removed. A
+/// node changed outside what it reads, or moved out of it, is in `left` with what is inside it;
+/// a whole read has no `left` (it leaves out only what this build cannot read).
+#[test]
+fn a_cut_delta_lists_what_left_it_apart_from_what_was_removed() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    let base = rev(&e, id);
+    apply(&e, id, json!([
+        {"op": "update", "id": "note", "set": {"text": "elsewhere"}},
+        {"op": "move", "id": "side", "parent": "page-2"},
+        {"op": "delete", "id": "photo"},
+    ]));
+    let page = get(&e, json!({"design_id": id, "page": "Page 1", "since_rev": base}));
+    // The line let go of the chip, which went to another page with its frame.
+    assert_eq!(ids(&page["nodes"]), ["link"]);
+    assert_eq!(strings(&page["removed"]), ["photo"]);
+    assert_eq!(strings(&page["left"]), ["note", "side", "chip"]);
+    let some = get(&e, json!({"design_id": id, "nodes": ["card"], "since_rev": base}));
+    assert_eq!((ids(&some["nodes"]), strings(&some["removed"])), (Vec::<String>::new(), vec!["photo".to_string()]));
+    assert_eq!(strings(&some["left"]), ["link", "note", "side", "chip"]);
+    let whole = get(&e, json!({"design_id": id, "since_rev": base}));
+    assert_eq!((ids(&whole["nodes"]), strings(&whole["removed"])), (vec!["link", "note", "side"].into_iter().map(String::from).collect::<Vec<_>>(), vec!["photo".to_string()]));
+    assert!(whole.get("left").is_none(), "{whole}");
 }
 
 /// A duplicate starts its own history at rev 1, its rows with it: since_rev 0 reads every node
@@ -342,12 +369,15 @@ fn scene_of(out: &GetOut) -> Scene {
     Scene::new(out.nodes.clone())
 }
 
-/// `base` patched with a since_rev read, as the canvas brings its scene up to date (TM-80).
+/// `base` patched with a since_rev read, as the canvas brings its scene up to date (TM-80): what
+/// was removed and what left the read go, what changed comes in.
 fn patched(base: &Scene, delta: GetOut) -> Scene {
     let indexes = delta.indexes.expect("a since_rev read places its nodes");
     assert_eq!(indexes.len(), delta.nodes.len());
     let mut scene = base.clone();
-    scene.patch(delta.nodes.into_iter().zip(indexes).collect(), &delta.removed.expect("a since_rev read lists removals"))
+    let mut gone = delta.removed.expect("a since_rev read lists removals");
+    gone.extend(delta.left);
+    scene.patch(delta.nodes.into_iter().zip(indexes).collect(), &gone)
         .unwrap_or_else(|why| panic!("the delta does not fit the scene: {why}"));
     scene
 }
@@ -394,7 +424,7 @@ fn a_whole_read_plus_what_changed_since_is_a_whole_read() {
     assert_eq!(kept.len(), history().len() + 1);
 }
 
-/// A reader of some nodes, holding them by id: dropping what a since_rev read removes and
+/// A reader of some nodes, holding them by id: dropping what a since_rev read removes or says left
 /// putting in what it answers gives what a whole read of those nodes gives, as nodes move in
 /// and out of them with what they hold.
 #[test]
@@ -419,7 +449,7 @@ fn a_read_of_some_nodes_plus_what_changed_since_is_a_read_of_them() {
         for (at, then) in &kept {
             let delta = read(Some(*at));
             let mut held = then.clone();
-            for gone in delta.removed.as_deref().unwrap_or_default() {
+            for gone in delta.removed.as_deref().unwrap_or_default().iter().chain(&delta.left) {
                 held.remove(gone);
             }
             held.extend(by_id(&delta.nodes));

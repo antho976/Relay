@@ -78,7 +78,7 @@ struct Read {
     /// With `since_rev`: the rows a reader that held the read at that rev drops: each written
     /// since that the answer leaves out (outside what it reads now, or a row this build cannot
     /// read), and what is inside such a node that the read does not take.
-    dropped: Vec<String>,
+    left: Vec<String>,
 }
 
 /// Whether the `kind` at column `i` is one this build knows, read without copying it out.
@@ -97,7 +97,7 @@ fn known_kind(r: &rusqlite::Row, i: usize) -> rusqlite::Result<bool> {
 /// among the siblings a read answers (a row of a kind this build does not know is not one).
 /// Cut to a page or to nodes, a node written since comes with what is inside it (it may have
 /// moved in, and what it holds with it), unless it is the page or a node named, which cannot
-/// have; and a row written since that is no longer in what the read takes is `dropped` (it may
+/// have; and a row written since that is no longer in what the read takes is `left` (it may
 /// have moved out) with what is inside it that the read does not take. A body a delta did not
 /// copy is not parsed, so an unchanged row of a known kind that does not read is not seen to be
 /// left out.
@@ -154,12 +154,12 @@ fn ordered(design: Id, rows: Vec<Raw>, scope: &Scope) -> Result<Read, BusError> 
     let n = rows.len();
     // Per row: on the page read; inside a node named; kept (both, as the read asks, and
     // readable: a reader holds it, sent or not); left out, with what is inside it; in a delta cut
-    // to a page or nodes, sent whole with what it holds; and in a delta, dropped with what is
+    // to a page or nodes, sent whole with what it holds; and in a delta, in `left` with what is
     // inside it that the read does not keep.
     let (mut on_page, mut within, mut kept) = (vec![false; n], vec![false; n], vec![false; n]);
     let (mut left_out, mut whole, mut dropping) = (vec![false; n], vec![false; n], vec![false; n]);
     let mut rows: Vec<Option<Raw>> = rows.into_iter().map(Some).collect();
-    let mut read = Read { nodes: Vec::with_capacity(order.len()), indexes: Vec::new(), dropped: Vec::new() };
+    let mut read = Read { nodes: Vec::with_capacity(order.len()), indexes: Vec::new(), left: Vec::new() };
     for (i, up) in order {
         let Some(Raw { id, parent, known, changed, body, .. }) = rows[i].take() else { continue };
         let named = scope.named.as_ref().is_some_and(|named| named.contains(id.as_str()));
@@ -174,7 +174,7 @@ fn ordered(design: Id, rows: Vec<Raw>, scope: &Scope) -> Result<Read, BusError> 
         // it holds; the page or a node named cannot have.
         whole[i] = sent || (scope.delta && scope.cut() && changed && up.is_some() && !named);
         if taken && !left_out[i] && (!scope.delta || changed || sent) {
-            // As `node_of` reads a row, keeping the id for a delta's `dropped` should it not read.
+            // As `node_of` reads a row, keeping the id for a delta's `left` should it not read.
             match body.as_deref().map(Node::read_str) {
                 Some(Ok(mut node)) => {
                     (node.id, node.parent) = (id, parent);
@@ -196,7 +196,7 @@ fn ordered(design: Id, rows: Vec<Raw>, scope: &Scope) -> Result<Read, BusError> 
         // moves nowhere: what is on another one was never in a page's read.
         if scope.delta && (changed || (drops && !kept[i])) {
             dropping[i] = up.is_some();
-            read.dropped.push(id);
+            read.left.push(id);
         }
     }
     Ok(read)
@@ -375,13 +375,9 @@ pub(super) fn register(e: &mut Engine) {
             delta: p.since_rev.is_some(),
         };
         let read = ordered(design.id, rows, &scope)?;
-        let removed = removed.map(|mut removed| {
-            removed.extend(read.dropped);
-            removed
-        });
         let indexes = scope.delta.then_some(read.indexes);
         let assets_dir = ctx.engine().store.design_assets_dir().display().to_string();
-        Ok(GetOut { design, nodes: read.nodes, assets_dir, removed, indexes, colors: BTreeMap::new(), styles: BTreeMap::new(), credits: BTreeMap::new() })
+        Ok(GetOut { design, nodes: read.nodes, assets_dir, removed, indexes, left: read.left, colors: BTreeMap::new(), styles: BTreeMap::new(), credits: BTreeMap::new() })
     });
 }
 
