@@ -117,7 +117,9 @@ fn copies(
         if n.kind == NodeKind::Page {
             continue;
         }
-        let mut copy = n.clone();
+        // A fresh add, held to what its kind uses: a stale field or one a newer build wrote
+        // stays with the original.
+        let mut copy = n.without_foreign();
         rewire(scene, &by_id, fresh, &mut copy);
         copy.id = fresh[&n.id].clone();
         let root = n.parent.as_deref().is_none_or(|p| !by_id.contains_key(p));
@@ -507,6 +509,23 @@ mod tests {
         assert_eq!(s.children(copy).len(), 2);
         let n = s.node(copy).unwrap();
         assert_eq!((n.x, n.y, n.parent.as_deref()), (10.0, 10.0, Some("p1")));
+    }
+
+    /// A copy is a fresh add: what the original's kind does not use, or a newer build wrote,
+    /// stays behind, so the copy passes a strict list.
+    #[test]
+    fn a_copy_leaves_stale_fields_behind() {
+        let mut s = sample();
+        let legacy = Node::read(json!({"id": "g", "parent": "p1", "kind": "group", "future": 1,
+            "shadow": {"blur": 4, "color": "#000"}})).unwrap();
+        s.apply(&NodeOp::Add { node: legacy, index: None }).unwrap();
+        s.apply(&NodeOp::Add { node: node("in", Some("g"), K::Rect, [0.0, 0.0, 5.0, 5.0]), index: None }).unwrap();
+        let (ops, roots) = duplicate(&mut s, &["g".into()], 10.0);
+        run(&mut s, &ops);
+        let copy = s.node(&roots[0]).unwrap();
+        assert_eq!((copy.shadow.clone(), copy.extra.len(), copy.x), (None, 0, 10.0));
+        assert_eq!(s.children(&roots[0]).len(), 1);
+        assert!(s.node("g").unwrap().shadow.is_some(), "the original keeps it");
     }
 
     #[test]

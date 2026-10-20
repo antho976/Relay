@@ -17,14 +17,15 @@ pub trait Measure {
     fn measure(&self, node: &Node, wrap: Option<f64>) -> (f64, f64);
 }
 
-/// The width rule a node follows when it names none: a text without a width hugs its words.
+/// The width rule a node follows when it names none: a text without a width hugs its words
+/// (`Node::w_rule`, which the engine shares).
 pub fn w_sizing(n: &Node) -> Sizing {
-    n.w_sizing.unwrap_or(if n.kind == NodeKind::Text && n.w <= 0.0 { Sizing::Hug } else { Sizing::Fixed })
+    n.w_rule()
 }
 
-/// The height rule a node follows when it names none: a text hugs its lines.
+/// The height rule a node follows when it names none: a text hugs its lines (`Node::h_rule`).
 pub fn h_sizing(n: &Node) -> Sizing {
-    n.h_sizing.unwrap_or(if n.kind == NodeKind::Text { Sizing::Hug } else { Sizing::Fixed })
+    n.h_rule()
 }
 
 /// Every placed node's box in page coordinates.

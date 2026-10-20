@@ -131,8 +131,14 @@ impl Doc {
     }
 
     /// Run `ops` on the scene now and send them. One call is one undo step, which puts
-    /// `selection` back when it is undone.
-    pub fn commit(self: &Rc<Self>, ops: Vec<NodeOp>, selection: Vec<String>) -> bool {
+    /// `selection` back when it is undone. They are first fitted to what each node's kind uses
+    /// (`Scene::fit`), so a one-for-all edit of a mixed selection never sends what the engine's
+    /// strict list refuses.
+    pub fn commit(self: &Rc<Self>, mut ops: Vec<NodeOp>, selection: Vec<String>) -> bool {
+        if ops.is_empty() {
+            return true;
+        }
+        self.scene.borrow().fit(&mut ops);
         if ops.is_empty() {
             return true;
         }
