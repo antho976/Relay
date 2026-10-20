@@ -811,7 +811,8 @@ fn move_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
             _ => Vec::new(),
         };
         b.doc.set_hold(true);
-        let (ops, roots) = edit::duplicate(&mut b.doc.scene.borrow_mut(), &ids, 0.0);
+        let placed = b.placed();
+        let (ops, roots) = edit::duplicate(&mut b.doc.scene.borrow_mut(), &placed, &ids, 0.0);
         let shown = b.doc.scene.borrow_mut().apply_all(&ops);
         if shown.is_ok() {
             b.invalidate();
@@ -1842,7 +1843,8 @@ fn select_sibling(b: &Board, dir: i32) {
 
 impl Board {
     pub(super) fn nudge(&self, dx: f64, dy: f64) {
-        let ops = edit::nudge(&self.doc.scene.borrow(), &self.selection.borrow(), dx, dy);
+        let placed = self.placed();
+        let ops = edit::nudge(&self.doc.scene.borrow(), &placed, &self.selection.borrow(), dx, dy);
         self.commit(ops);
     }
 
