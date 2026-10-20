@@ -763,18 +763,18 @@ fn release(scene: &Scene, placed: &Placed, doomed: &HashSet<String>) -> Vec<Node
 }
 
 /// A free line's box and points from where its points are on the page, its box counted from page
-/// point `origin`: at their least corner, as big as they spread, each point from there. Every
-/// value within what `validate` takes (B70): a line more than a million pixels across is cut
-/// short there.
+/// point `origin`: at their least corner, as big as they spread, each point from there, in whole
+/// pixels. Every value within what `validate` takes (B70): a line drawn more than a million
+/// pixels from `origin` moves in as a whole to there, and one more than a million pixels across
+/// is cut short there. Its points still start at 0, 0 and its `w`/`h` are their extent, the box
+/// a strict list fits a free line to (`Node::contain_points`), which then moves nothing.
 fn line_box(pts: &[(f64, f64)], origin: (f64, f64)) -> (Rect, Vec<[f64; 2]>) {
-    let least = |a: fn(&(f64, f64)) -> f64| pts.iter().map(a).fold(f64::INFINITY, f64::min);
-    let (x, y) = (coord(least(|p| p.0) - origin.0), coord(least(|p| p.1) - origin.1));
-    let points: Vec<[f64; 2]> = pts.iter().map(|p| [coord(p.0 - origin.0 - x), coord(p.1 - origin.1 - y)]).collect();
-    let spread = |a: usize| {
-        let (lo, hi) = points.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p[a]), hi.max(p[a])));
-        (hi - lo).clamp(0.0, MAX_COORD)
-    };
-    (Rect::new(x, y, spread(0), spread(1)), points)
+    let rel: Vec<(f64, f64)> = pts.iter().map(|p| ((p.0 - origin.0).round(), (p.1 - origin.1).round())).collect();
+    let least = |a: fn(&(f64, f64)) -> f64| rel.iter().map(a).fold(f64::INFINITY, f64::min);
+    let (lx, ly) = (least(|p| p.0), least(|p| p.1));
+    let points: Vec<[f64; 2]> = rel.iter().map(|p| [(p.0 - lx).min(MAX_COORD), (p.1 - ly).min(MAX_COORD)]).collect();
+    let spread = |a: usize| points.iter().map(|p| p[a]).fold(0.0, f64::max);
+    (Rect::new(coord(lx), coord(ly), spread(0), spread(1)), points)
 }
 
 /// The update that frees a connector's `from` and/or `to` where the line is drawn now, its box
@@ -1463,6 +1463,32 @@ mod tests {
         let ops = delete(&s2, &Placed::default(), &ids(&["c"]));
         run(&mut s2, &ops);
         assert!(s2.node("link").unwrap().points.iter().flatten().flatten().all(|v| v.abs() <= MAX_COORD));
+    }
+
+    /// B70: a connector freed where it is drawn more than a million pixels from its parent's
+    /// origin moves in as a whole: its points start at 0, 0 and its box is their extent, as a
+    /// strict list fits a free line's box (`contain_points` leaves it be), every value in reach.
+    #[test]
+    fn a_connector_freed_far_away_keeps_its_points_from_its_corner() {
+        let mut link = node("link", Some("p1"), K::Line, [0.0; 4]);
+        (link.from, link.to) = (Some("a".into()), Some("b".into()));
+        let mut s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            node("g", Some("p1"), K::Group, [-900_000.0, 0.0, 0.0, 0.0]),
+            node("a", Some("g"), K::Rect, [-900_000.0, 0.0, 10.0, 10.0]),
+            node("b", Some("g"), K::Rect, [-700_000.0, 50.0, 10.0, 10.0]),
+            link,
+        ]);
+        let placed = place(&s, "p1", &Mono);
+        let ops = delete(&s, &placed, &ids(&["g"]));
+        run(&mut s, &ops);
+        let mut link = s.node("link").unwrap().clone();
+        assert_eq!((link.from.as_deref(), link.to.as_deref()), (None, None));
+        let pts = link.points.clone().unwrap();
+        let least = |a: usize| pts.iter().map(|p| p[a]).fold(f64::INFINITY, f64::min);
+        assert_eq!((least(0), least(1), link.x), (0.0, 0.0, -MAX_COORD), "{pts:?}");
+        assert!((link.w - 199_990.0).abs() <= 1.0 && (link.h - 50.0).abs() <= 1.0, "{link:?}");
+        assert!(!link.contain_points(), "already fitted: {link:?}");
     }
 
     /// B112: ungrouping a group a connector is attached to lets the connector go where it is
