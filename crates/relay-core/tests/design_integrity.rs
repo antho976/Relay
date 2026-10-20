@@ -382,6 +382,39 @@ fn a_move_to_another_page_lets_go_of_the_ends_it_parts() {
     counted(&e, id);
 }
 
+/// B6: a node carried to another page inside what a move took there stays carried when a later
+/// edit of the list takes it out: the ends it parts, at either end of a line, let go all the same.
+#[test]
+fn a_node_taken_out_of_a_carried_subtree_still_lets_go() {
+    let (e, _root) = project();
+    let id = connected(&e);
+    apply(&e, id, json!([{"op": "add", "node": {"id": "inner", "parent": "card", "kind": "line", "points": [[0, 0], [5, 5]], "to": "b"}}]));
+    let before = nodes(&e, id);
+    let out = apply(&e, id, json!([
+        {"op": "move", "id": "card", "parent": "page-2"},
+        {"op": "move", "id": "card-title", "parent": "page-2"},
+        {"op": "move", "id": "inner", "parent": "page-2"},
+    ]));
+    let got = nodes(&e, id);
+    // From the title's stored centre, now (10, 10) on page-2, to b's (410, 120), from (100, 100).
+    let joined = find(&got, "joined");
+    assert!(joined.get("from").is_none() && joined["to"] == "b", "{joined}");
+    assert_eq!(joined["points"], json!([[-90.0, -90.0], [310.0, 20.0]]));
+    let inner = find(&got, "inner");
+    assert!(inner.get("to").is_none() && inner["points"] == json!([[0.0, 0.0], [5.0, 5.0]]), "{inner}");
+    counted(&e, id);
+    lenient(&e, id, out["inverse"].clone());
+    assert_eq!(nodes(&e, id), before, "the undo attaches them again");
+    counted(&e, id);
+
+    // Taken back to the line's page, the title parts nothing.
+    let out = apply(&e, id, json!([{"op": "move", "id": "card", "parent": "page-2"}, {"op": "move", "id": "card-title", "parent": "page-1"}]));
+    assert_eq!(find(&nodes(&e, id), "joined"), find(&before, "joined"));
+    lenient(&e, id, out["inverse"].clone());
+    assert_eq!(nodes(&e, id), before);
+    counted(&e, id);
+}
+
 /// B59: past the last edit that could shrink it, a list that has taken the design over its size
 /// only grows, so it is refused at the edit that took it over, before the rest is written; a list
 /// that deletes enough later on applies.

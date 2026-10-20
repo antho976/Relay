@@ -98,7 +98,8 @@ pub(super) struct Run<'a> {
     pub(super) refs: Vec<Ref>,
     /// Each node the list deleted, with what was inside it, and the last edit that did.
     pub(super) removed_at: HashMap<String, usize>,
-    /// Each node the list moved to another page, and the last edit that did (B6).
+    /// Each node the list moved to another page, and the last edit that did (B6); a node a later
+    /// edit took out of one so moved, with that one's edit, since its own move crossed nothing.
     pub(super) crossed: HashMap<String, usize>,
     /// Where pictures are stored: an image's `src` names a file in it (B6).
     pub(super) assets: PathBuf,
@@ -520,7 +521,7 @@ impl Run<'_> {
                 return Ok(None);
             }
         };
-        let mut crossed = false;
+        let mut crossed = None;
         let to = if kind == NodeKind::Page {
             if parent.is_some() {
                 return Err(self.fail_on("parent", ErrorKind::Invalid, "design.parent", "a page sits in no parent; a move only reorders it among the pages"));
@@ -557,10 +558,12 @@ impl Run<'_> {
                         return Ok(None);
                     }
                 }
-                // B6: carried to another page, it parts the connectors between it and its page.
+                // B6: carried to another page, it parts the connectors between it and its page;
+                // taken out of a node an earlier edit carried there, it stays carried as of then.
+                let carried = self.chain(&id).skip(1).filter_map(|up| self.crossed.get(up).copied()).max();
                 crossed = match (here, there) {
-                    (Some((_, was)), Some((_, will))) => was != will,
-                    _ => true,
+                    (Some((_, was)), Some((_, will))) if was == will => carried,
+                    _ => Some(self.at),
                 };
             }
             Some(to)
@@ -576,8 +579,9 @@ impl Run<'_> {
         if to.is_some() {
             self.parents.insert(id.clone(), to.clone());
         }
-        if crossed {
-            self.crossed.insert(id.clone(), self.at);
+        if let Some(at) = crossed {
+            let last = self.crossed.entry(id.clone()).or_insert(at);
+            *last = (*last).max(at);
         }
         self.inverse.push(vec![NodeOp::Move { id: id.clone(), parent: from, index: Some(old_index), keep_position: None }]);
         Ok(Some(id))
