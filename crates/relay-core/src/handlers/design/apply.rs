@@ -3,7 +3,7 @@
 use super::{body_of, emit_design, kind_of, live_design, node_of};
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project};
-use relay_bus::design::{Node, NodeKind, NodeOp, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
+use relay_bus::design::{details, field_of, label, Node, NodeKind, NodeOp, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{Apply, ApplyOut};
 use relay_bus::types::{Design, Id};
@@ -38,17 +38,6 @@ pub(super) struct Stored {
     pub(super) body: String,
 }
 
-/// Where edit `at` of a `design.apply` stands, for its refusals: `ops[3] update "hero"`.
-fn label(at: usize, op: &NodeOp) -> String {
-    match op {
-        NodeOp::Add { node, .. } if node.id.is_empty() => format!("ops[{at}] add {}", node.kind.name()),
-        NodeOp::Add { node, .. } => format!("ops[{at}] add {:?}", node.id),
-        NodeOp::Update { id, .. } => format!("ops[{at}] update {id:?}"),
-        NodeOp::Move { id, .. } => format!("ops[{at}] move {id:?}"),
-        NodeOp::Delete { id } => format!("ops[{at}] delete {id:?}"),
-    }
-}
-
 /// One `design.apply` under way: the design's counters as its edits change them, and what the
 /// answer reports. Every edit reads and writes the transaction, so the next one sees it.
 pub(super) struct Run<'a> {
@@ -64,9 +53,11 @@ pub(super) struct Run<'a> {
     pub(super) nodes: i64,
     pub(super) bytes: i64,
     pub(super) next_node: i64,
-    /// The edit under way: its index and [`label`].
+    /// The edit under way: its index, [`label`] and the node it names (none for an add that
+    /// leaves its id to the engine).
     pub(super) at: usize,
     pub(super) label: String,
+    pub(super) target: Option<String>,
     /// Nodes an edit added, changed or moved, in the order first touched.
     pub(super) touched: Vec<String>,
     pub(super) seen: HashSet<String>,
@@ -85,8 +76,17 @@ const TOP_ORD: &str = "SELECT ord FROM design_nodes WHERE design_id = ?1 AND par
     ORDER BY ord DESC, node_id DESC LIMIT 1";
 
 impl Run<'_> {
+    /// The refusal of the edit under way: `ops[3] update "hero": fill: …`, with `details` naming
+    /// the edit and, when the reason starts with one, the field (I-2).
     pub(super) fn fail(&self, kind: ErrorKind, code: &str, why: impl std::fmt::Display) -> BusError {
-        BusError::new(kind, code, format!("{}: {why}", self.label)).with_details(json!({"op": self.at}))
+        let why = why.to_string();
+        BusError::new(kind, code, format!("{}: {why}", self.label)).with_details(details(self.at, self.target.as_deref(), field_of(&why)))
+    }
+
+    /// [`Run::fail`] naming `field` where the reason does not start with it.
+    pub(super) fn fail_on(&self, field: &str, kind: ErrorKind, code: &str, why: impl std::fmt::Display) -> BusError {
+        let why = why.to_string();
+        BusError::new(kind, code, format!("{}: {why}", self.label)).with_details(details(self.at, self.target.as_deref(), Some(field)))
     }
 
     /// The node an edit names is not there: skipped when lenient, else refused.
@@ -250,7 +250,7 @@ impl Run<'_> {
         if node.id.is_empty() {
             node.id = self.assign(node.kind)?;
         } else if self.meta(&node.id)?.is_some() {
-            return Err(self.fail(ErrorKind::Conflict, "design.node_exists", format!("{:?} is already in the design", node.id))
+            return Err(self.fail_on("id", ErrorKind::Conflict, "design.node_exists", format!("{:?} is already in the design", node.id))
                 .with_hint("update or move that node, or leave the id out to have one assigned"));
         }
         if self.nodes >= MAX_NODES as i64 {
@@ -297,13 +297,13 @@ impl Run<'_> {
         };
         let to = if kind == NodeKind::Page {
             if parent.is_some() {
-                return Err(self.fail(ErrorKind::Invalid, "design.parent", "a page sits in no parent; a move only reorders it among the pages"));
+                return Err(self.fail_on("parent", ErrorKind::Invalid, "design.parent", "a page sits in no parent; a move only reorders it among the pages"));
             }
             None
         } else {
             let to = parent.or_else(|| from.clone()).unwrap_or_default();
             if to == id {
-                return Err(self.fail(ErrorKind::Invalid, "design.cycle", "a node cannot sit inside itself"));
+                return Err(self.fail_on("parent", ErrorKind::Invalid, "design.cycle", "a node cannot sit inside itself"));
             }
             if !self.container(&to)? {
                 return Ok(None);
@@ -313,7 +313,7 @@ impl Run<'_> {
                 let mut up = self.meta(&to)?.and_then(|(parent, _, _)| parent);
                 while let Some(ancestor) = up {
                     if ancestor == id {
-                        return Err(self.fail(ErrorKind::Invalid, "design.cycle", format!("{to:?} is inside {id:?}")));
+                        return Err(self.fail_on("parent", ErrorKind::Invalid, "design.cycle", format!("{to:?} is inside {id:?}")));
                     }
                     up = self.meta(&ancestor)?.and_then(|(parent, _, _)| parent);
                 }
@@ -494,6 +494,7 @@ pub(super) fn register(e: &mut Engine) {
             next_node,
             at: 0,
             label: String::new(),
+            target: None,
             touched: Vec::new(),
             seen: HashSet::new(),
             removed: Vec::new(),
@@ -502,6 +503,7 @@ pub(super) fn register(e: &mut Engine) {
         };
         for (at, op) in p.ops.into_iter().enumerate() {
             (run.at, run.label) = (at, label(at, &op));
+            run.target = Some(op.target()).filter(|id| !id.is_empty()).map(str::to_string);
             let id = match op {
                 NodeOp::Add { node, index } => run.add(node, index)?,
                 NodeOp::Update { id, set } => run.update(id, set)?,

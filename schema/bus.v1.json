@@ -6392,7 +6392,7 @@
       }
     },
     "design.apply": {
-      "summary": "Add, change, move or delete a design's nodes in one all-or-none list, only when the person asked for it; returns what changed and its undo",
+      "summary": "Add, change, move or delete a design's nodes in one all-or-none list of up to 2000 edits, only when the person asked for it (a design holds at most 5000 nodes and 1536 KiB; an id an edit adds can be a parent later in the list); returns what changed and its undo",
       "kind": "mutation",
       "audit": "always",
       "undo": "inverse",
@@ -25099,45 +25099,62 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "Unique in the design: letters, digits, `-`, `_`, `.` or `:`, at most 64. Give your own\n(`\"hero\"`, `\"hero-title\"`) to refer to it later in the same `design.apply`; left out,\nthe engine assigns one."
+          "description": "Unique in the design: letters, digits, `-`, `_`, `.` or `:`, at most 64. Give your own\n(`\"hero\"`, `\"hero-title\"`) to refer to it later in the same `design.apply`; left out,\nthe engine assigns one.",
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
         },
         "parent": {
           "type": [
             "string",
             "null"
           ],
-          "description": "The page, frame or group this node sits in. Required for everything but a page."
+          "description": "The page, frame or group this node sits in. Required for everything but a page.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
         },
         "kind": {
-          "$ref": "#/$defs/DesignNodeKind"
+          "$ref": "#/$defs/DesignNodeKind",
+          "description": "What the node is; it decides which fields it draws (see each kind). Fixed once added:\ndelete it and add another to change it."
         },
         "name": {
           "type": [
             "string",
             "null"
           ],
-          "description": "Shown in the layer list and above a frame on the canvas."
+          "description": "Shown in the layer list and above a frame on the canvas; at most 200 characters.",
+          "maxLength": 200
         },
         "x": {
           "type": "number",
           "format": "double",
-          "description": "Left edge, relative to the parent's top-left corner.",
+          "description": "Left edge in px, relative to the parent's top-left corner, within ±1000000.",
+          "minimum": -1000000.0,
+          "maximum": 1000000.0,
           "default": 0.0
         },
         "y": {
           "type": "number",
           "format": "double",
-          "description": "Top edge, relative to the parent's top-left corner.",
+          "description": "Top edge in px, relative to the parent's top-left corner, within ±1000000.",
+          "minimum": -1000000.0,
+          "maximum": 1000000.0,
           "default": 0.0
         },
         "w": {
           "type": "number",
           "format": "double",
+          "description": "Width in px, 0 to 1000000 (`width` is read as `w`). A text with no `w` hugs its words.\nIn a laid-out frame `w_sizing` hug or fill replaces it.",
+          "minimum": 0,
+          "maximum": 1000000.0,
           "default": 0.0
         },
         "h": {
           "type": "number",
           "format": "double",
+          "description": "Height in px, 0 to 1000000 (`height` is read as `h`). A text hugs its lines whatever `h`\nsays, unless `h_sizing` is fixed; a sticky grows past it to fit its words.",
+          "minimum": 0,
+          "maximum": 1000000.0,
           "default": 0.0
         },
         "fill": {
@@ -25145,21 +25162,24 @@
             "string",
             "null"
           ],
-          "description": "Background: `#RRGGBB` or `#RRGGBBAA`. A page's fill is the canvas colour; a text's\ncolour is `color`, not this."
+          "description": "Background: `#RGB`, `#RRGGBB` or `#RRGGBBAA`. Default: a frame `#FFFFFF`, a rect,\nellipse or polygon `#D9D9D9`, a sticky `#FFE58A`, a page `#1E1D1B` (the canvas colour); a\ntext, line or path paints none unless given one (a text's is a box behind its words, a\nline's or path's of three points or more fills inside them). A text's letters are `color`."
         },
         "stroke": {
           "type": [
             "string",
             "null"
           ],
-          "description": "Outline colour; drawn `stroke_width` wide (default 1) inside the edge."
+          "description": "Outline colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`. A box's border (frame, rect, sticky,\nimage) and an ellipse's or polygon's outline are drawn only when set, inside the edge; a\nline or path defaults to `#8C8C8C`; an icon is drawn in it (default: its `color`, else dark\non a light ground and light on a dark one)."
         },
         "stroke_width": {
           "type": [
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "description": "In px, 0 to 1000. Default 1 for a border or outline, 2 for a line, path or icon (an\nicon's is in its 24-unit grid).",
+          "minimum": 0,
+          "maximum": 1000
         },
         "radius": {
           "type": [
@@ -25167,7 +25187,9 @@
             "null"
           ],
           "format": "double",
-          "description": "Corner radius of a frame, rect, sticky or image."
+          "description": "Corner radius of a frame, rect, sticky or image, in px (default 0; `radii` sets each\ncorner).",
+          "minimum": 0,
+          "maximum": 1000000.0
         },
         "opacity": {
           "type": [
@@ -25175,7 +25197,9 @@
             "null"
           ],
           "format": "double",
-          "description": "0 to 1, of the node and everything in it."
+          "description": "0 to 1 (default 1), of the node and everything in it.",
+          "minimum": 0,
+          "maximum": 1
         },
         "shadow": {
           "anyOf": [
@@ -25186,7 +25210,7 @@
               "type": "null"
             }
           ],
-          "description": "A drop shadow under a frame, rect, ellipse, sticky or image."
+          "description": "A shadow under a frame, rect, ellipse, polygon, sticky or image, or with `inset` inside its\nedge; a text, line, path or icon casts an outer one only, without spread (a glow when `x`\nand `y` are 0). A sticky casts a soft one of its own unless given one. `x`, `y` and `spread`\nwithin ±10000 px, `blur` 0 to 200."
         },
         "clip": {
           "type": [
@@ -25199,35 +25223,39 @@
           "type": [
             "boolean",
             "null"
-          ]
+          ],
+          "description": "Not drawn, not hit and left out of auto layout, with everything inside it (default\nfalse)."
         },
         "locked": {
           "type": [
             "boolean",
             "null"
           ],
-          "description": "Locked nodes cannot be selected or moved on the canvas."
+          "description": "Locked nodes cannot be selected or moved on the canvas (default false); edits still change\nthem."
         },
         "text": {
           "type": [
             "string",
             "null"
           ],
-          "description": "The words of a text or sticky. Newlines break lines."
+          "description": "The words of a text or sticky, or a centred label on a rect, ellipse or polygon; at most\n10000 characters. Newlines break lines.",
+          "maxLength": 10000
         },
         "color": {
           "type": [
             "string",
             "null"
           ],
-          "description": "Text colour (default `#1A1A1A`): `#RRGGBB` or `#RRGGBBAA`."
+          "description": "Colour of the letters of a text, sticky or label, and of an icon without a `stroke`:\n`#RGB`, `#RRGGBB` or `#RRGGBBAA` (default: dark on a light ground, light on a dark one)."
         },
         "font": {
           "type": [
             "string",
             "null"
           ],
-          "description": "Font family (default `Geist`; `Geist Mono` and `Sora` are always there)."
+          "description": "Font family of a text, sticky or label (default `Geist`; `Geist Mono` and `Sora` are\nalways there; `design.fonts` lists the rest). A family the desktop app lacks is drawn in\na fallback face, and the reply warns.",
+          "minLength": 1,
+          "maxLength": 200
         },
         "font_size": {
           "type": [
@@ -25235,7 +25263,9 @@
             "null"
           ],
           "format": "double",
-          "description": "In px (default 16)."
+          "description": "Letter size of a text, sticky or label in px, 1 to 1000 (default 16).",
+          "minimum": 1,
+          "maximum": 1000
         },
         "font_weight": {
           "type": [
@@ -25243,27 +25273,30 @@
             "null"
           ],
           "format": "uint16",
-          "minimum": 0,
-          "maximum": 65535,
-          "description": "100 to 900 (default 400; 600 is semibold, 700 bold)."
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "1 to 1000 (default 400; 600 is semibold, 700 bold); the nearest face the family has is\ndrawn."
         },
         "italic": {
           "type": [
             "boolean",
             "null"
-          ]
+          ],
+          "description": "A text's or label's letters slanted (default false)."
         },
         "underline": {
           "type": [
             "boolean",
             "null"
-          ]
+          ],
+          "description": "A text's or label's letters underlined (default false)."
         },
         "strike": {
           "type": [
             "boolean",
             "null"
-          ]
+          ],
+          "description": "A line through a text's or label's letters (default false)."
         },
         "align": {
           "anyOf": [
@@ -25273,7 +25306,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "A text's lines across its box: `left` (the default; `center` for a label), `center` or\n`right`."
         },
         "line_height": {
           "type": [
@@ -25281,7 +25315,9 @@
             "null"
           ],
           "format": "double",
-          "description": "Line height as a multiple of the font size (default 1.3)."
+          "description": "Line height as a multiple of the font size, 0.1 to 10 (default 1.3).",
+          "minimum": 0.1,
+          "maximum": 10
         },
         "letter_spacing": {
           "type": [
@@ -25289,7 +25325,9 @@
             "null"
           ],
           "format": "double",
-          "description": "Extra space between letters, in px."
+          "description": "Extra space between letters, in px, -100 to 1000 (default 0).",
+          "minimum": -100,
+          "maximum": 1000
         },
         "w_sizing": {
           "anyOf": [
@@ -25300,7 +25338,7 @@
               "type": "null"
             }
           ],
-          "description": "Width rule (default `fixed`; a text `hug`s its words until given a width, then wraps)."
+          "description": "Width rule (default `fixed`: its `w`; a text without a `w` hugs its words). `hug`\nshrinks a text or sticky to its words and a laid-out frame to its children; `fill` takes\nthe room a laid-out parent leaves along its direction, or its inner width across it."
         },
         "h_sizing": {
           "anyOf": [
@@ -25311,7 +25349,7 @@
               "type": "null"
             }
           ],
-          "description": "Height rule (default `fixed`; a text `hug`s its lines)."
+          "description": "Height rule (default `fixed`; a text hugs its lines). A sticky's fixed `h` is a minimum\nthat grows to fit its words, and `hug` makes it exactly as tall as they are, as a text's.\n`fill` takes the room a laid-out parent leaves along its direction, or its inner height\nacross it."
         },
         "layout": {
           "anyOf": [
@@ -25330,7 +25368,9 @@
             "null"
           ],
           "format": "double",
-          "description": "Space between laid-out children, in px."
+          "description": "Space between laid-out children, in px, -10000 to 10000 (default 0); negative overlaps\nthem.",
+          "minimum": -10000,
+          "maximum": 10000
         },
         "padding": {
           "type": [
@@ -25339,9 +25379,13 @@
           ],
           "items": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "minimum": 0,
+            "maximum": 10000
           },
-          "description": "Inner space of a laid-out frame in CSS order: `[all]`, `[vertical, horizontal]` or\n`[top, right, bottom, left]`."
+          "description": "Inner space in px, each 0 to 10000, in CSS order: `[all]`, `[vertical, horizontal]` or\n`[top, right, bottom, left]`. A laid-out frame's around its children, a rect's,\nellipse's or polygon's around its label (default `[0, 12]`).",
+          "minItems": 1,
+          "maxItems": 4
         },
         "justify": {
           "anyOf": [
@@ -25351,7 +25395,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Where a laid-out frame puts its children along its direction (default `start`)."
         },
         "items": {
           "anyOf": [
@@ -25361,7 +25406,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Where a laid-out frame puts its children across it (default `start`; `stretch` gives each\nthe frame's inner depth)."
         },
         "points": {
           "type": [
@@ -25372,31 +25418,36 @@
             "type": "array",
             "items": {
               "type": "number",
-              "format": "double"
+              "format": "double",
+              "minimum": -1000000.0,
+              "maximum": 1000000.0
             },
             "minItems": 2,
             "maxItems": 2
           },
-          "description": "A line's or path's points, relative to the node's `x`/`y`."
+          "description": "A line's or path's points in px, relative to the node's `x`/`y`: at most 4000, each\nwithin ±1000000.",
+          "maxItems": 4000
         },
         "arrow_start": {
           "type": [
             "boolean",
             "null"
-          ]
+          ],
+          "description": "A head at a line's or path's first point (default false)."
         },
         "arrow_end": {
           "type": [
             "boolean",
             "null"
-          ]
+          ],
+          "description": "A head at a line's or path's last point (default false)."
         },
         "src": {
           "type": [
             "string",
             "null"
           ],
-          "description": "An image's picture: the `src` `design.asset.add` returned."
+          "description": "An image's picture: the `src` `design.asset.add` returned. It must be stored\n(`design.asset_not_found` otherwise)."
         },
         "fit": {
           "anyOf": [
@@ -25406,7 +25457,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "How an image fills its box (default `cover`)."
         },
         "rotation": {
           "type": [
@@ -25414,7 +25466,9 @@
             "null"
           ],
           "format": "double",
-          "description": "Clockwise turn in degrees about the node's centre."
+          "description": "Clockwise turn in degrees about the node's centre, within ±3600.",
+          "minimum": -3600,
+          "maximum": 3600
         },
         "sides": {
           "type": [
@@ -25422,9 +25476,9 @@
             "null"
           ],
           "format": "uint8",
-          "minimum": 0,
-          "maximum": 255,
-          "description": "A polygon's corners (3 to 24, default 3), or a star's points."
+          "minimum": 3,
+          "maximum": 24,
+          "description": "A polygon's corners, or a star's points: 3 to 24 (default 3, or 5 points for a star)."
         },
         "star": {
           "type": [
@@ -25432,7 +25486,9 @@
             "null"
           ],
           "format": "double",
-          "description": "Makes a polygon a star: its inner points at this fraction of the outer (0.05 to 0.95;\n0.4 is a classic star)."
+          "description": "Makes a polygon a star: its inner points at this fraction of the outer (0.05 to 0.95;\n0.4 is a classic star).",
+          "minimum": 0.05,
+          "maximum": 0.95
         },
         "gradient": {
           "anyOf": [
@@ -25452,11 +25508,13 @@
           ],
           "items": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "minimum": 0,
+            "maximum": 1000000.0
           },
           "minItems": 4,
           "maxItems": 4,
-          "description": "Corner radii top-left, top-right, bottom-right, bottom-left, instead of `radius`."
+          "description": "Corner radii in px, top-left, top-right, bottom-right, bottom-left, instead of `radius`."
         },
         "dash": {
           "type": [
@@ -25465,9 +25523,13 @@
           ],
           "items": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "minimum": 0,
+            "maximum": 1000
           },
-          "description": "The stroke's dash pattern in px: `[6, 4]` dashes, `[1, 4]` dots. Absent is solid."
+          "description": "The stroke's dash pattern in px, 1 to 8 lengths from 0 to 1000, not all 0: `[6, 4]`\ndashes, `[0, 4]` round dots. Absent is solid.",
+          "minItems": 1,
+          "maxItems": 8
         },
         "blur": {
           "type": [
@@ -25475,28 +25537,109 @@
             "null"
           ],
           "format": "double",
-          "description": "Blur of the whole node, in px."
+          "description": "Blur of the whole node, in px, 0 to 200.",
+          "minimum": 0,
+          "maximum": 200
         },
         "icon": {
           "type": [
             "string",
             "null"
           ],
-          "description": "An icon node's icon: one of the names in the `ICONS` list (home, search, settings,\nuser, bell, mail, heart, star, plus, check, x, chevron-*, arrow-*, menu, trash, edit,\ncalendar, clock, image, file, folder, shopping-cart, credit-card, globe, map-pin, phone,\nmessage, send, filter, sliders, grid, list, play, pause, refresh, lock, eye, info,\nalert, help, sun, moon, wifi, battery, terminal, code, zap, cloud, bar-chart…)."
+          "enum": [
+            "home",
+            "search",
+            "settings",
+            "user",
+            "users",
+            "bell",
+            "mail",
+            "heart",
+            "star",
+            "plus",
+            "minus",
+            "x",
+            "check",
+            "chevron-left",
+            "chevron-right",
+            "chevron-up",
+            "chevron-down",
+            "arrow-left",
+            "arrow-right",
+            "arrow-up",
+            "arrow-down",
+            "menu",
+            "more-horizontal",
+            "more-vertical",
+            "trash",
+            "edit",
+            "copy",
+            "download",
+            "upload",
+            "share",
+            "link",
+            "lock",
+            "unlock",
+            "eye",
+            "eye-off",
+            "calendar",
+            "clock",
+            "camera",
+            "image",
+            "file",
+            "folder",
+            "shopping-cart",
+            "credit-card",
+            "globe",
+            "map-pin",
+            "phone",
+            "message",
+            "send",
+            "filter",
+            "sliders",
+            "grid",
+            "list",
+            "play",
+            "pause",
+            "refresh",
+            "log-out",
+            "bookmark",
+            "info",
+            "alert",
+            "help",
+            "sun",
+            "moon",
+            "wifi",
+            "battery",
+            "terminal",
+            "code",
+            "zap",
+            "cloud",
+            "git-branch",
+            "bar-chart",
+            null
+          ],
+          "description": "An icon node's icon, one of these outline icons, drawn on a 24-unit grid scaled to the\nsmaller of `w` and `h` (24 is its natural size)."
         },
         "from": {
           "type": [
             "string",
             "null"
           ],
-          "description": "A connector's start: the node it is attached to. The line then runs from that node's\nedge and follows it when it moves; `points` are only where it was last drawn."
+          "description": "A connector's start: a node on the same page, not the line itself or a page. The line\nthen runs from that node's edge and follows it when it moves; `points` are only where it\nwas last drawn.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
         },
         "to": {
           "type": [
             "string",
             "null"
           ],
-          "description": "A connector's end: the node it is attached to."
+          "description": "A connector's end: a node on the same page, not the line itself or a page.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
         },
         "route": {
           "anyOf": [
@@ -25528,14 +25671,14 @@
             "boolean",
             "null"
           ],
-          "description": "Mirrors a polygon, image or icon left to right (a line or path is flipped by its\n`points`, a box by its corners)."
+          "description": "Mirrors a polygon, image or icon left to right. Other kinds ignore it: a line or path is\nflipped by its points, a box by where it sits; text is never mirrored, and a flipped\nframe's words still read left to right."
         },
         "flip_y": {
           "type": [
             "boolean",
             "null"
           ],
-          "description": "Mirrors a polygon, image or icon top to bottom."
+          "description": "Mirrors a polygon, image or icon top to bottom (other kinds as `flip_x`)."
         },
         "arc": {
           "anyOf": [
@@ -25568,24 +25711,28 @@
               "type": "null"
             }
           ],
-          "description": "Draws a text's or label's letters upper, lower or title case."
+          "description": "Draws a text's, sticky's or label's letters upper, lower or title case; the stored words\nkeep theirs."
+        },
+        "width": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000.0,
+          "description": "`w` by another name: give one or the other."
+        },
+        "height": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000.0,
+          "description": "`h` by another name: give one or the other."
         }
       },
       "required": [
         "kind"
       ],
-      "description": "One node of a design. Every field but `kind` is optional on input; an absent style field\ntakes the kind's default (a white frame, a grey rect, dark 16px Geist text, a yellow sticky)."
+      "description": "One node of a design. Every field but `kind` is optional on input; an absent style field\ntakes the kind's default (a white frame, a grey rect, Geist text at 16px, dark on a light\nground and light on a dark one, a yellow sticky)."
     },
     "DesignNodeKind": {
       "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "rect",
-            "ellipse",
-            "text"
-          ]
-        },
         {
           "type": "string",
           "const": "page",
@@ -25599,17 +25746,32 @@
         {
           "type": "string",
           "const": "group",
-          "description": "Nodes moved together; it paints nothing itself."
+          "description": "Nodes moved together; it paints nothing itself, and its box is its children's."
+        },
+        {
+          "type": "string",
+          "const": "rect",
+          "description": "A box: `fill`, a border (`stroke`), corners (`radius`) and a centred label (`text`)."
+        },
+        {
+          "type": "string",
+          "const": "ellipse",
+          "description": "An oval filling its box (`arc` draws part of one), with a centred label (`text`)."
         },
         {
           "type": "string",
           "const": "line",
-          "description": "A straight line through `points`; `arrow_start`/`arrow_end` put heads on it."
+          "description": "A line through `points`, or a connector between two nodes (`from`, `to`);\n`arrow_start`/`arrow_end` put heads on it."
+        },
+        {
+          "type": "string",
+          "const": "text",
+          "description": "Words (`text`), as wide as they are until given a width, then wrapped to it."
         },
         {
           "type": "string",
           "const": "sticky",
-          "description": "A note card: `fill` paper with `text` on it."
+          "description": "A note card: `fill` paper with `text` on it, growing to fit its words."
         },
         {
           "type": "string",
@@ -25624,12 +25786,12 @@
         {
           "type": "string",
           "const": "polygon",
-          "description": "A regular polygon (`sides`: 3 a triangle, 4 a diamond, 6 a hexagon…) or, with `star`, a\nstar of `sides` points. Its first point is at the top centre."
+          "description": "A regular polygon (`sides`: 3 a triangle, 4 a diamond, 6 a hexagon…) or, with `star`, a\nstar of `sides` points (5 when `sides` is left out). Its first point is at the top centre."
         },
         {
           "type": "string",
           "const": "icon",
-          "description": "An interface icon from Relay's set (`icon`, one of [`ICONS`]), drawn in `stroke`."
+          "description": "An interface icon from Relay's set, named by `icon` (one of the names listed for `icon`),\ndrawn in `stroke`."
         }
       ]
     },
@@ -25640,26 +25802,38 @@
         "x": {
           "type": "number",
           "format": "double",
+          "description": "Offset right, in px (default 0).",
+          "minimum": -10000,
+          "maximum": 10000,
           "default": 0.0
         },
         "y": {
           "type": "number",
           "format": "double",
+          "description": "Offset down, in px (default 0).",
+          "minimum": -10000,
+          "maximum": 10000,
           "default": 0.0
         },
         "blur": {
           "type": "number",
           "format": "double",
+          "description": "Softness in px, 0 to 200 (default 0, a hard edge).",
+          "minimum": 0,
+          "maximum": 200.0,
           "default": 0.0
         },
         "spread": {
           "type": "number",
           "format": "double",
+          "description": "How far it reaches past the edge before it blurs, in px (default 0).",
+          "minimum": -10000,
+          "maximum": 10000,
           "default": 0.0
         },
         "color": {
           "type": "string",
-          "description": "`#RRGGBB` or `#RRGGBBAA`."
+          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`."
         },
         "inset": {
           "type": "boolean",
@@ -25688,7 +25862,7 @@
         {
           "type": "string",
           "const": "hug",
-          "description": "Shrink to the content: a text's words, or a laid-out frame's children and padding."
+          "description": "Shrink to the content: a text's or sticky's words, or a laid-out frame's children and\npadding."
         },
         {
           "type": "string",
@@ -25787,7 +25961,9 @@
           "items": {
             "$ref": "#/$defs/DesignGradientStop"
           },
-          "description": "2 to 8 colours along it."
+          "description": "2 to 8 colours along it.",
+          "minItems": 2,
+          "maxItems": 8
         }
       },
       "required": [
@@ -25817,11 +25993,13 @@
         "at": {
           "type": "number",
           "format": "double",
-          "description": "0 at the start, 1 at the end."
+          "description": "0 at the start, 1 at the end.",
+          "minimum": 0,
+          "maximum": 1
         },
         "color": {
           "type": "string",
-          "description": "`#RRGGBB` or `#RRGGBBAA`."
+          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`."
         }
       },
       "required": [
@@ -25857,19 +26035,24 @@
         "start": {
           "type": "number",
           "format": "double",
-          "description": "Where it starts, in degrees clockwise from the top (default 0).",
+          "description": "Where it starts, in degrees clockwise from the top (default 0), within ±3600.",
+          "minimum": -3600,
+          "maximum": 3600,
           "default": 0.0
         },
         "sweep": {
           "type": "number",
           "format": "double",
-          "description": "How far round it goes, in degrees clockwise (default 360, the whole ellipse).",
+          "description": "How far round it goes, in degrees clockwise (default 360, the whole ellipse), within ±360.",
+          "minimum": -360,
+          "maximum": 360,
           "default": 360.0
         },
         "inner": {
           "type": "number",
           "format": "double",
-          "description": "The hole in the middle as a fraction of the radius: 0 (the default) a pie, 0.6 a donut.",
+          "description": "The hole in the middle as a fraction of the radius, from 0 (the default, a pie) to below\n1: 0.6 a donut.",
+          "minimum": 0,
           "default": 0.0
         }
       },
@@ -25909,10 +26092,10 @@
         {
           "type": "string",
           "const": "title",
-          "description": "The first letter of each word upper case."
+          "description": "The first letter of each word in capitals: after a space or any punctuation (`Well-Known`,\n`And/Or`), not after an apostrophe inside a word (`Don't`)."
         }
       ],
-      "description": "How a text's letters are cased when drawn; the stored words keep theirs."
+      "description": "How a text's letters are cased when drawn; the stored words keep theirs. Upper and lower use\nUnicode's default case mapping, one letter at a time (no language's own rules)."
     },
     "DesignCreateIn": {
       "type": "object",
@@ -26014,7 +26197,9 @@
           "items": {
             "$ref": "#/$defs/DesignNodeOp"
           },
-          "description": "Run in order, all or none."
+          "description": "Run in order, all or none: 1 to 2000 edits. A design holds at most 5000 nodes, 1536 KiB of\nnode JSON and 64 levels of nesting. A node an edit adds can be the parent of a later one.\nAn edit that does not read is refused by its index and the key at fault (`ops[3] update\n\"hero\": set: …`).",
+          "minItems": 1,
+          "maxItems": 2000
         },
         "base_rev": {
           "type": [
@@ -26071,11 +26256,75 @@
           "additionalProperties": false,
           "properties": {
             "id": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
             },
             "set": {
               "type": "object",
-              "additionalProperties": true
+              "description": "Node fields to change, each with a value as an add takes it; null puts the field back to its default. Not id, kind or parent (move changes the parent).",
+              "propertyNames": {
+                "enum": [
+                  "name",
+                  "x",
+                  "y",
+                  "w",
+                  "h",
+                  "fill",
+                  "stroke",
+                  "stroke_width",
+                  "radius",
+                  "opacity",
+                  "shadow",
+                  "clip",
+                  "hidden",
+                  "locked",
+                  "text",
+                  "color",
+                  "font",
+                  "font_size",
+                  "font_weight",
+                  "italic",
+                  "underline",
+                  "strike",
+                  "align",
+                  "line_height",
+                  "letter_spacing",
+                  "w_sizing",
+                  "h_sizing",
+                  "layout",
+                  "gap",
+                  "padding",
+                  "justify",
+                  "items",
+                  "points",
+                  "arrow_start",
+                  "arrow_end",
+                  "src",
+                  "fit",
+                  "rotation",
+                  "sides",
+                  "star",
+                  "gradient",
+                  "radii",
+                  "dash",
+                  "blur",
+                  "icon",
+                  "from",
+                  "to",
+                  "route",
+                  "closed",
+                  "smooth",
+                  "flip_x",
+                  "flip_y",
+                  "arc",
+                  "blend",
+                  "text_case",
+                  "width",
+                  "height"
+                ]
+              }
             },
             "op": {
               "type": "string",
@@ -26094,14 +26343,20 @@
           "additionalProperties": false,
           "properties": {
             "id": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
             },
             "parent": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "The new parent; absent keeps the current one."
+              "description": "The new parent; absent keeps the current one.",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
             },
             "index": {
               "type": [
@@ -26128,7 +26383,10 @@
           "additionalProperties": false,
           "properties": {
             "id": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
             },
             "op": {
               "type": "string",

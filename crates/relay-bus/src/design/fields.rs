@@ -8,6 +8,7 @@
 //! was there. The canvas fits what it writes with [`fit_written`] first, so it never sends what
 //! a strict list refuses.
 
+use super::hints::{bad_value, not_a_field};
 use super::read::probe;
 use super::{canonical_key, Node, NodeKind, NodeOp, MAX_SHADOW_BLUR};
 use serde::ser::{self, Impossible, Serialize, SerializeStruct, Serializer};
@@ -145,18 +146,14 @@ fn foreign(kind: NodeKind, field: &str) -> Option<String> {
     })
 }
 
-/// The refusal of a key no node field has.
-pub(crate) fn not_a_field(key: &str) -> String {
-    format!("{key}: not a node field; design.get lists a node's fields")
-}
-
-/// Why a node holds `key` in `extra`: a name no field has, or a field whose value does not read.
+/// Why a node holds `key` in `extra`: a name no field has (with the field meant, when the hints
+/// know it or one is close), or a field whose value does not read (with what it takes).
 fn unreadable(kind: NodeKind, key: &str, value: &Value) -> String {
     if field_kinds(key).is_none() {
         return not_a_field(key);
     }
     match probe(kind, key, value) {
-        Err(why) => format!("{key}: {why}"),
+        Err(why) => bad_value(key, value, &why),
         // It reads alone: it was set aside because the other spelling of the size came too.
         Ok(()) => {
             let field = canonical_key(key);
@@ -498,7 +495,9 @@ mod tests {
     #[test]
     fn every_field_has_a_kinds_row() {
         let schema = serde_json::to_value(schemars::schema_for!(Node)).unwrap();
-        let mut fields: Vec<&str> = schema["properties"].as_object().unwrap().keys().map(String::as_str).collect();
+        // `width` and `height` are `w` and `h` by their other names.
+        let mut fields: Vec<&str> = schema["properties"].as_object().unwrap().keys().map(String::as_str)
+            .filter(|key| !matches!(*key, "width" | "height")).collect();
         let mut rows: Vec<&str> = FIELDS.iter().map(|row| row.0).collect();
         fields.sort_unstable();
         rows.sort_unstable();
@@ -519,6 +518,135 @@ mod tests {
         let keys = present(&full);
         assert_eq!(keys.len(), FIELDS.len(), "{keys:?}");
         assert!(keys.iter().all(|k| field_kinds(k).is_some()));
+    }
+
+    /// A body of `kind` with what the kind needs to validate, and `field` set to `value`.
+    fn body_of(kind: NodeKind, field: &str, value: Value) -> Value {
+        let mut body = match kind {
+            NodeKind::Page => json!({"kind": "page"}),
+            NodeKind::Line => json!({"kind": "line", "parent": "p", "points": [[0, 0], [9, 9]]}),
+            NodeKind::Path => json!({"kind": "path", "parent": "p", "points": [[0, 0]]}),
+            NodeKind::Image => json!({"kind": "image", "parent": "p", "src": "0123456789abcdef0123.png"}),
+            NodeKind::Icon => json!({"kind": "icon", "parent": "p", "icon": "home"}),
+            kind => json!({"kind": kind.name(), "parent": "p"}),
+        };
+        body[field] = value;
+        body
+    }
+
+    /// What a strict list takes: it reads, validates and keeps the written rules.
+    fn written(body: Value) -> bool {
+        Node::read(body).is_ok_and(|n| n.validate().is_ok() && n.check_new().is_ok())
+    }
+
+    fn number(v: f64, integer: bool) -> Value {
+        if integer { json!(v as i64) } else { json!(v) }
+    }
+
+    /// The bounds `property` states, each with a step past it: `[(value, accepted)]`.
+    fn bounds(property: &Value) -> Vec<(f64, bool)> {
+        let step = if property["type"].to_string().contains("integer") { 1.0 } else { 0.001 };
+        let mut cases = Vec::new();
+        if let Some(lo) = property["minimum"].as_f64() {
+            cases.extend([(lo, true), (lo - step, false)]);
+        }
+        if let Some(hi) = property["maximum"].as_f64() {
+            cases.extend([(hi, true), (hi + step, false)]);
+        }
+        cases
+    }
+
+    /// E-agent-3: every range, length and count the node schema states is the one the rules hold
+    /// a written node to: each bound is accepted and a step past it refused. A field added with a
+    /// schema range is checked here without a new line.
+    #[test]
+    fn the_schema_states_the_rules_ranges() {
+        let schema = serde_json::to_value(schemars::schema_for!(Node)).unwrap();
+        let mut checked = Vec::new();
+        for (field, kinds, _) in FIELDS {
+            let property = &schema["properties"][field];
+            let kind = kinds.iter().find(|k| *k != NodeKind::Page).unwrap_or(NodeKind::Page);
+            let integer = property["type"].to_string().contains("integer");
+            for (v, ok) in bounds(property) {
+                assert_eq!(written(body_of(kind, field, number(v, integer))), ok, "{field} = {v}");
+                checked.push(*field);
+            }
+            if let Some(max) = property["maxLength"].as_u64() {
+                assert!(written(body_of(kind, field, json!("a".repeat(max as usize)))), "{field}: {max} characters");
+                assert!(!written(body_of(kind, field, json!("a".repeat(max as usize + 1)))), "{field}: {max} + 1 characters");
+                checked.push(*field);
+            }
+            if property["minLength"].as_u64() == Some(1) {
+                assert!(!written(body_of(kind, field, json!(""))), "{field}: empty");
+            }
+            if let Some(pattern) = property["pattern"].as_str() {
+                assert_eq!(pattern, crate::design::ID_PATTERN);
+                assert!(!written(body_of(kind, field, json!("a b"))), "{field}: a space");
+            }
+            // A list: its count, and the range of what it holds.
+            let filler = |v: Value| match *field {
+                "dash" => json!([v, 4]),
+                "radii" => json!([v, 1, 1, 1]),
+                "points" => json!([[v, 0], [0, 0]]),
+                _ => json!([v]),
+            };
+            let items = if *field == "points" { &property["items"]["items"] } else { &property["items"] };
+            for (v, ok) in bounds(items) {
+                assert_eq!(written(body_of(kind, field, filler(json!(v)))), ok, "{field} holding {v}");
+                checked.push(*field);
+            }
+            let count = |n: u64| Value::Array(vec![if *field == "points" { json!([1, 1]) } else { json!(1) }; n as usize]);
+            if let Some(min) = property["minItems"].as_u64() {
+                assert!(written(body_of(kind, field, count(min))), "{field}: {min} of them");
+                assert!(!written(body_of(kind, field, count(min - 1))), "{field}: {} of them", min - 1);
+            }
+            if let Some(max) = property["maxItems"].as_u64() {
+                assert!(written(body_of(kind, field, count(max))), "{field}: {max} of them");
+                assert!(!written(body_of(kind, field, count(max + 1))), "{field}: {} of them", max + 1);
+                checked.push(*field);
+            }
+        }
+        for field in ["x", "w", "stroke_width", "opacity", "font_size", "font_weight", "line_height", "letter_spacing", "gap", "rotation",
+            "sides", "star", "blur", "radius", "name", "text", "font", "id", "padding", "dash", "radii", "points"] {
+            assert!(checked.contains(&field), "{field} states no range");
+        }
+        // The nested objects: a shadow, a gradient's stops, an arc.
+        let defs = &schema["$defs"];
+        type Wrap = fn(&str, Value) -> Value;
+        let nested: [(&str, &str, Wrap); 3] = [
+            ("DesignShadow", "shadow", |key, v| { let mut s = json!({"color": "#000"}); s[key] = v; s }),
+            ("DesignGradientStop", "gradient", |key, v| { let mut s = json!({"at": 0, "color": "#000"}); s[key] = v; json!({"stops": [s, {"at": 1, "color": "#fff"}]}) }),
+            ("DesignArc", "arc", |key, v| { let mut a = json!({}); a[key] = v; a }),
+        ];
+        for (def, field, wrap) in nested {
+            let kind = field_kinds(field).unwrap().iter().next().unwrap();
+            let mut seen = 0;
+            for (key, property) in defs[def]["properties"].as_object().unwrap() {
+                for (v, ok) in bounds(property) {
+                    assert_eq!(written(body_of(kind, field, wrap(key, json!(v)))), ok, "{field}.{key} = {v}");
+                    seen += 1;
+                }
+            }
+            assert!(seen >= 2, "{def} states no range");
+        }
+        let stops = &defs["DesignGradient"]["properties"]["stops"];
+        let stop = |n: u64| json!({"stops": vec![json!({"at": 0.5, "color": "#000"}); n as usize]});
+        for (n, ok) in [(stops["minItems"].as_u64().unwrap(), true), (stops["maxItems"].as_u64().unwrap(), true)] {
+            assert_eq!(written(body_of(NodeKind::Rect, "gradient", stop(n))), ok);
+            assert!(!written(body_of(NodeKind::Rect, "gradient", stop(if n == 2 { 1 } else { n + 1 }))), "{n} stops");
+        }
+        // The aliases state the size's own range.
+        assert_eq!((&schema["properties"]["width"]["maximum"], &schema["properties"]["height"]["minimum"]),
+            (&schema["properties"]["w"]["maximum"], &schema["properties"]["h"]["minimum"]));
+    }
+
+    /// E-agent-4: the icon list in the schema is the whole list that validates.
+    #[test]
+    fn the_schema_lists_every_icon() {
+        let schema = serde_json::to_value(schemars::schema_for!(Node)).unwrap();
+        let listed: Vec<&str> = schema["properties"]["icon"]["enum"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert_eq!(listed, crate::design::ICONS);
+        assert!(!schema.to_string().contains("[`ICONS`]"), "a rustdoc link leaked into the schema");
     }
 
     /// B43: control characters are refused in a name, font or text a caller writes (a text keeps
