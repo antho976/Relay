@@ -14,6 +14,11 @@ button.design-chip:hover { background: @glass_hover; border-color: @glass_line_h
 button.design-chip.selected { background: @glass_selected; border-color: @glass_line_hover; color: @ink; }
 .design-chip-count { color: @faint; font-family: 'Geist Mono'; font-size: 11.5px; }
 button.design-chip.selected .design-chip-count { color: @secondary; }
+/* The chips wrap in a flow; the flow's own slots draw nothing. */
+.design-chip-flow > flowboxchild { padding: 0; margin: 0; background: transparent; border: 0; box-shadow: none; }
+menubutton.design-chip-more > button { min-height: 28px; padding: 0 11px; border-radius: 999px; border: 1px dashed @glass_line; background: transparent; color: @secondary; font-weight: 500; }
+menubutton.design-chip-more > button:hover { background: @glass_hover; border-color: @glass_line_hover; color: @ink; }
+.design-pending { margin-top: 56px; }
 .design-grid > flowboxchild { padding: 0; background: transparent; }
 .design-card { padding: 0; }
 .design-thumb { border-radius: 12px; border: 1px solid @glass_edge; background: @glass_card; transition: border-color 140ms ease-out, box-shadow 140ms ease-out; }
