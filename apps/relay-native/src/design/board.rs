@@ -11,7 +11,7 @@ use crate::app::{label, Ui};
 use gtk::prelude::*;
 use gtk::{gdk, gio, graphene, gsk, pango};
 use gtk4 as gtk;
-use relay_bus::design::{Node, NodeKind, NodeOp, Scroll};
+use relay_bus::design::{Layout, Node, NodeKind, NodeOp, Scroll};
 use relay_client::design::{bounds, edit, shapes};
 use relay_client::design::geom::step_zoom;
 use relay_client::design::layout::{self, Placed, Scrolled};
@@ -184,13 +184,22 @@ pub enum Gesture {
         /// so the copy and its move are one undo step.
         copies: Vec<NodeOp>,
         moved: bool,
-        /// A container the nodes would land in, when it is not their parent.
+        /// A container the nodes would land in, when it is not their parent, and the place they
+        /// would take there when it lays out its children.
         target: Option<String>,
+        into: Option<u32>,
         /// In an auto-layout parent: the place the node would take.
         reorder: Option<(String, u32)>,
         /// The node to select if the press ends as a click.
         click: Option<String>,
         at: (f64, f64),
+        /// How far the free ones show moved, snapped, in their parent's coordinates.
+        shown: (f64, f64),
+        /// Alt drag: the layers copied, selected again if Esc drops the copies (E-board-11).
+        sources: Vec<String>,
+        /// What the laid-out ones paint, drawn under the pointer as they are dragged: their
+        /// layout keeps them in place until the drop (E-board-10).
+        ghost: Option<gsk::RenderNode>,
     },
     /// `bounds` and the pointer are in `frame`'s coordinates when one node drawn turned is
     /// resized (its parent's; B12), else on the page; `turn` is that node's own.
@@ -241,6 +250,8 @@ pub struct Board {
     pub(super) tool_lock: Cell<bool>,
     pub(super) gesture: RefCell<Gesture>,
     pub(super) guides: RefCell<Vec<Guide>>,
+    /// The frame whose coordinates the guides are in, a turned one's; the page's when none.
+    pub(super) guides_in: RefCell<Option<String>>,
     pub(super) space: Cell<bool>,
     pub(super) pointer: Cell<(f64, f64)>,
     /// The drag under way's last update (screen point, offset, modifiers), which auto-pan
@@ -533,6 +544,7 @@ impl Board {
             tool_lock: Cell::new(false),
             gesture: RefCell::new(Gesture::Idle),
             guides: RefCell::default(),
+            guides_in: RefCell::default(),
             space: Cell::new(false),
             pointer: Cell::new((0.0, 0.0)),
             drag_at: Cell::new(None),
@@ -1584,11 +1596,23 @@ impl Board {
         }
         self.scrollbars(snap, scene, placed);
         let gesture = self.gesture.borrow();
-        // Where a dragged node would land.
-        if let Gesture::Move { target: Some(t), moved: true, .. } = &*gesture {
-            if let Some(r) = placed.rect(t) {
-                self.outline(snap, &self.screen(&r), SELECT, 2.0);
+        // Where a dragged node would land, and its place there in a layout.
+        if let Gesture::Move { target: Some(t), into, moved: true, ids, .. } = &*gesture {
+            self.outline_node(snap, scene, placed, t, 2.0);
+            if let Some(index) = into {
+                self.insertion(snap, scene, placed, t, *index as usize, ids);
             }
+        }
+        // Laid-out layers dragged: what they paint, under the pointer (E-board-10).
+        if let Gesture::Move { ghost: Some(ghost), moved: true, start, at, .. } = &*gesture {
+            let cam = self.cam.get();
+            snap.save();
+            snap.scale(cam.zoom as f32, cam.zoom as f32);
+            snap.translate(&graphene::Point::new((at.0 - start.0 - cam.x) as f32, (at.1 - start.1 - cam.y) as f32));
+            snap.push_opacity(0.6);
+            snap.append_node(ghost);
+            snap.pop();
+            snap.restore();
         }
         if let Gesture::Move { reorder: Some((parent, index)), moved: true, ids, .. } = &*gesture {
             self.insertion(snap, scene, placed, parent, *index as usize, ids);
@@ -1639,11 +1663,25 @@ impl Board {
                 }
             }
         }
-        // Guides.
+        if editing.is_none() && matches!(*gesture, Gesture::Idle | Gesture::Resize { .. }) {
+            self.pin_marks(snap, scene, placed);
+        }
+        // Guides; inside a turned frame, turned with it.
+        let guides_in = self.guides_in.borrow().clone();
         for g in self.guides.borrow().iter() {
             let c = rgba(GUIDE);
             let cam = self.cam.get();
-            if g.vertical {
+            if let Some(f) = &guides_in {
+                let ends = if g.vertical { [(g.at, g.from), (g.at, g.to)] } else { [(g.from, g.at), (g.to, g.at)] };
+                let [a, z] = ends.map(|(x, y)| {
+                    let (x, y) = shapes::to_page_pt(scene, placed, f, x, y);
+                    cam.to_screen(x, y)
+                });
+                let pb = gsk::PathBuilder::new();
+                pb.move_to(a.0 as f32, a.1 as f32);
+                pb.line_to(z.0 as f32, z.1 as f32);
+                snap.append_stroke(&pb.to_path(), &gsk::Stroke::new(1.0), &c);
+            } else if g.vertical {
                 let (x, y0) = cam.to_screen(g.at, g.from);
                 let (_, y1) = cam.to_screen(g.at, g.to);
                 snap.append_color(&c, &graphene::Rect::new(x.round() as f32 - 0.5, y0 as f32, 1.0, (y1 - y0) as f32));
@@ -1720,6 +1758,37 @@ impl Board {
             }
             _ => {}
         }
+    }
+
+    /// How the one selected layer is pinned in its frame: a dashed line from each pinned edge to
+    /// the frame's, and a tick on the frame's middle for a centred axis (feature-layout §3.5).
+    fn pin_marks(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed) {
+        let selection = self.selection.borrow();
+        let [id] = selection.as_slice() else {
+            return;
+        };
+        let Some(n) = scene.node(id).filter(|n| n.is_pinned() && !layout::is_laid(scene, id)) else {
+            return;
+        };
+        let Some(parent) = scene.parent(id).filter(|p| scene.node(p).is_some_and(|p| p.kind == NodeKind::Frame)) else {
+            return;
+        };
+        let (Some(r), Some(pr)) = (placed.rect(id), placed.rect(parent)) else {
+            return;
+        };
+        let cam = self.cam.get();
+        let pb = gsk::PathBuilder::new();
+        for (a, z) in pin_lines(n, &r, &pr, 1.0 / cam.zoom) {
+            let [a, z] = [a, z].map(|(x, y)| {
+                let (x, y) = shapes::to_page_pt(scene, placed, parent, x, y);
+                cam.to_screen(x, y)
+            });
+            pb.move_to(a.0 as f32, a.1 as f32);
+            pb.line_to(z.0 as f32, z.1 as f32);
+        }
+        let stroke = gsk::Stroke::new(1.0);
+        stroke.set_dash(&[3.0, 2.0]);
+        snap.append_stroke(&pb.to_path(), &stroke, &rgba(SELECT));
     }
 
     /// The overlay scrollbars of the scrolling frames under the pointer, selected or holding the
@@ -1801,30 +1870,23 @@ impl Board {
         }
     }
 
-    /// Where a reorder would put the dragged children: a bar before the child at `index` among
-    /// the others (hidden ones counted, as the engine counts them: B20), or after the last shown.
+    /// Where a reorder or a drop would put the dragged children: a bar before the child at
+    /// `index` among the others (hidden ones counted, as the engine counts them: B20), or after
+    /// the last shown; in a wrap, beside that child at its height.
     fn insertion(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, parent: &str, index: usize, moving: &[String]) {
         let Some(p) = scene.node(parent) else {
             return;
         };
-        let row = p.layout_mode() == relay_bus::design::Layout::Row;
-        let rest: Vec<&String> = scene.children(parent).iter().filter(|c| !moving.contains(c)).collect();
         let Some(pr) = placed.rect(parent) else {
             return;
         };
-        let next = rest.iter().skip(index).find_map(|c| placed.rect(c));
-        let last = rest.iter().rev().find_map(|c| placed.rect(c));
-        let at = match (next, last) {
-            (Some(k), _) => if row { k.x - 2.0 } else { k.y - 2.0 },
-            (None, Some(l)) => if row { l.right() + 2.0 } else { l.bottom() + 2.0 },
-            (None, None) => if row { pr.x + 8.0 } else { pr.y + 8.0 },
-        };
-        let r = if row {
-            Rect::new(at - 1.0, pr.y + 4.0, 2.0 / self.cam.get().zoom, pr.h - 8.0)
-        } else {
-            Rect::new(pr.x + 4.0, at - 1.0, pr.w - 8.0, 2.0 / self.cam.get().zoom)
-        };
-        let s = self.screen(&r);
+        let rest: Vec<&String> = scene.children(parent).iter().filter(|c| !moving.contains(c)).collect();
+        // What the layout places: neither hidden (no box) nor absolute.
+        let laid = |c: &&String| scene.node(c).is_some_and(|n| !n.is_absolute()).then(|| placed.rect(c)).flatten();
+        let next = rest.iter().skip(index).find_map(laid);
+        let last = rest.iter().rev().find_map(laid);
+        let bar = insertion_bar(p.layout_mode(), &pr, next, last, 1.0 / self.cam.get().zoom);
+        let s = self.screen(&bar);
         snap.append_color(&rgba(SELECT), &grect(&Rect::new(s.x, s.y, s.w.max(2.0), s.h.max(2.0))));
     }
 
@@ -3661,12 +3723,62 @@ fn clip_nodes(clip: &Value, design: i64, styles: &relay_bus::design::Styles) -> 
     }
 }
 
-/// Where layer `id` shows on the page, as a box: `shapes::shown_rect` (its drawing, turned by its
-/// own turn) carried out through each turned frame it is in.
 /// Whether layers `ids` show resize handles: one of them is neither locked (B16) nor a group,
 /// whose box is its children's and whose own size nothing reads (B90).
 pub(super) fn handled(scene: &Scene, ids: &[String]) -> bool {
     ids.iter().any(|id| scene.node(id).is_some_and(|n| !n.is_locked() && n.kind != NodeKind::Group))
+}
+
+/// The marks of `n`'s pins, placed at `r` in a frame placed at `pr` (`px` page units to a screen
+/// pixel), as segments: from each edge it is pinned by to the frame's along its middle (both
+/// for left and right or scale), and an 8 px tick across the frame's middle line for center.
+fn pin_lines(n: &Node, r: &Rect, pr: &Rect, px: f64) -> Vec<((f64, f64), (f64, f64))> {
+    use relay_bus::design::Pin;
+    let (pin_x, pin_y) = n.pins();
+    let tick = 4.0 * px;
+    let mut lines = Vec::new();
+    match pin_x {
+        Pin::Center => lines.push(((pr.cx(), r.cy() - tick), (pr.cx(), r.cy() + tick))),
+        pin => {
+            if pin != Pin::End {
+                lines.push(((pr.x, r.cy()), (r.x, r.cy())));
+            }
+            if pin != Pin::Start {
+                lines.push(((r.right(), r.cy()), (pr.right(), r.cy())));
+            }
+        }
+    }
+    match pin_y {
+        Pin::Center => lines.push(((r.cx() - tick, pr.cy()), (r.cx() + tick, pr.cy()))),
+        pin => {
+            if pin != Pin::End {
+                lines.push(((r.cx(), pr.y), (r.cx(), r.y)));
+            }
+            if pin != Pin::Start {
+                lines.push(((r.cx(), r.bottom()), (r.cx(), pr.bottom())));
+            }
+        }
+    }
+    lines
+}
+
+/// The insertion bar, in page coordinates (`px` page units to a screen pixel), for a place in
+/// frame `pr` laid out `mode`: 2 screen px centred just before child `next` at that place, or
+/// just after the `last` laid out when there is none, or inside the empty frame's start. A row's
+/// and a wrap's bar stand upright, a wrap's at its child's height; a column's lies across.
+fn insertion_bar(mode: Layout, pr: &Rect, next: Option<Rect>, last: Option<Rect>, px: f64) -> Rect {
+    let across = matches!(mode, Layout::Row | Layout::Wrap);
+    let at = match (next, last) {
+        (Some(k), _) => if across { k.x - 2.0 } else { k.y - 2.0 },
+        (None, Some(l)) => if across { l.right() + 2.0 } else { l.bottom() + 2.0 },
+        (None, None) => if across { pr.x + 8.0 } else { pr.y + 8.0 },
+    };
+    let beside = next.or(last).filter(|_| mode == Layout::Wrap);
+    match (across, beside) {
+        (true, Some(k)) => Rect::new(at - px, k.y, 2.0 * px, k.h),
+        (true, None) => Rect::new(at - px, pr.y + 4.0, 2.0 * px, pr.h - 8.0),
+        _ => Rect::new(pr.x + 4.0, at - px, pr.w - 8.0, 2.0 * px),
+    }
 }
 
 /// The name above a top-level frame, with a mark for the way it scrolls: ⇆ across, ⇅ down.
@@ -3717,6 +3829,8 @@ fn scroll_bars(r: &Rect, s: &Scrolled, scroll: Scroll, px: f64) -> Vec<Rect> {
     bars
 }
 
+/// Where layer `id` shows on the page, as a box: `shapes::shown_rect` (its drawing, turned by its
+/// own turn) carried out through each turned frame it is in.
 pub(super) fn shown_box(scene: &Scene, placed: &Placed, id: &str) -> Option<Rect> {
     let r = shapes::shown_rect(scene, placed, id)?;
     Some(shapes::turned_ancestors(scene, placed, id).iter().rev().fold(r, |b, &(cx, cy, d)| shapes::rotated_bounds_about(&b, d, cx, cy)))
@@ -3956,5 +4070,37 @@ mod tests {
         assert_eq!(frame_label(&n), "Trails ⇆");
         n.scroll = Some(Scroll::Both);
         assert_eq!(frame_label(&n), "Trails ⇆⇅");
+    }
+
+    #[test]
+    fn the_insertion_bar_sits_on_its_place_at_any_zoom_and_beside_a_wrapped_child() {
+        let pr = Rect::new(0.0, 0.0, 300.0, 200.0);
+        let k = Rect::new(100.0, 60.0, 40.0, 30.0);
+        // E-board-3: 2 screen px centred on the place, not 8 px off at 800%.
+        let bar = insertion_bar(Layout::Row, &pr, Some(k), None, 1.0 / 8.0);
+        assert_eq!((bar.cx(), bar.w * 8.0), (98.0, 2.0));
+        assert_eq!((bar.y, bar.h), (4.0, 192.0), "a row's spans the frame");
+        let bar = insertion_bar(Layout::Wrap, &pr, Some(k), None, 1.0);
+        assert_eq!((bar.cx(), bar.y, bar.h), (98.0, 60.0, 30.0), "a wrap's beside the child, its height");
+        let bar = insertion_bar(Layout::Wrap, &pr, None, Some(k), 1.0);
+        assert_eq!((bar.cx(), bar.y), (142.0, 60.0), "after the last on its line");
+        let bar = insertion_bar(Layout::Column, &pr, Some(k), None, 1.0);
+        assert_eq!((bar.cy(), bar.w), (58.0, 292.0));
+    }
+
+    #[test]
+    fn pin_marks_run_from_each_pinned_edge_to_the_frame() {
+        use relay_bus::design::{PinX, PinY};
+        let pr = Rect::new(0.0, 0.0, 300.0, 200.0);
+        let r = Rect::new(100.0, 50.0, 40.0, 20.0);
+        let mut n = Node::new(NodeKind::Rect);
+        n.pin_x = Some(PinX::Right);
+        n.pin_y = Some(PinY::Center);
+        let lines = pin_lines(&n, &r, &pr, 1.0);
+        assert_eq!(lines, [((140.0, 60.0), (300.0, 60.0)), ((116.0, 100.0), (124.0, 100.0))]);
+        n.pin_x = Some(PinX::LeftRight);
+        n.pin_y = Some(PinY::Top);
+        let lines = pin_lines(&n, &r, &pr, 1.0);
+        assert_eq!(lines, [((0.0, 60.0), (100.0, 60.0)), ((140.0, 60.0), (300.0, 60.0)), ((120.0, 0.0), (120.0, 50.0))]);
     }
 }

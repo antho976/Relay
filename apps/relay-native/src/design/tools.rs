@@ -895,9 +895,13 @@ fn start_move(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType, click: Opti
         copies: Vec::new(),
         moved: false,
         target: None,
+        into: None,
         reorder: None,
         click,
         at: p,
+        shown: (0.0, 0.0),
+        sources: Vec::new(),
+        ghost: None,
     };
 }
 
@@ -1056,8 +1060,8 @@ fn move_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
             b.invalidate();
             let placed = b.placed();
             let scene = b.doc.scene.borrow();
-            if let Gesture::Move { ids, orig, rects, dup, copies, .. } = &mut *b.gesture.borrow_mut() {
-                *ids = roots.clone();
+            if let Gesture::Move { ids, orig, rects, dup, copies, sources, .. } = &mut *b.gesture.borrow_mut() {
+                *sources = std::mem::replace(ids, roots.clone());
                 *orig = roots.iter().filter_map(|id| scene.node(id).map(|n| (id.clone(), n.x, n.y))).collect();
                 *rects = roots.iter().filter_map(|id| shapes::shown_rect(&scene, &placed, id)).collect();
                 *dup = false;
@@ -1070,18 +1074,28 @@ fn move_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
     b.doc.set_hold(true);
     let placed = b.placed();
     let zoom = b.cam.get().zoom;
-    let (ids, start, orig, rects, copied) = match &mut *b.gesture.borrow_mut() {
-        Gesture::Move { ids, start, orig, rects, moved, at, copies, dup, .. } => {
+    let (ids, start, orig, rects, copied, ghosted) = match &mut *b.gesture.borrow_mut() {
+        Gesture::Move { ids, start, orig, rects, moved, at, copies, dup, ghost, .. } => {
             *moved = true;
             *at = p;
-            (ids.clone(), *start, orig.clone(), rects.clone(), !copies.is_empty() || *dup)
+            (ids.clone(), *start, orig.clone(), rects.clone(), !copies.is_empty() || *dup, ghost.is_some())
         }
         _ => return,
     };
     let scene_ref = b.doc.scene.borrow();
     let parent = ids.first().and_then(|id| scene_ref.parent(id)).map(str::to_string).unwrap_or_default();
+    // Laid-out layers stay in their layout until the drop; an absolute one moves as a free one.
+    let laid: Vec<&String> = ids.iter().filter(|id| layout::is_laid(&scene_ref, id)).collect();
+    let ghost = (!laid.is_empty() && !ghosted).then(|| {
+        let snap = gtk::Snapshot::new();
+        for id in &laid {
+            b.painter.paint(&snap, &scene_ref, &placed, id, None);
+        }
+        snap.to_node()
+    })
+    .flatten();
     // In a turned frame the nodes move in its turned coordinates: the pointer is taken there
-    // (B12), and snapping, whose guides are drawn on the page, is off.
+    // (B12), and they snap there, the guides drawn turned with it.
     let turned = !shapes::turned_ancestors(&scene_ref, &placed, &parent).is_empty() || scene_ref.node(&parent).is_some_and(|n| shapes::rotation(n) != 0.0);
     let local = |q: (f64, f64)| if turned { shapes::to_local(&scene_ref, &placed, &parent, q.0, q.1) } else { q };
     let (from, to) = (local(start), local(p));
@@ -1098,23 +1112,26 @@ fn move_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
             free_x = false;
         }
     }
-    let laid = edit::lays_out(&scene_ref, &parent);
     let parent_rect = placed.rect(&parent);
     // Children of an auto-layout frame, still inside it: reorder them, as one block (B18), to
     // the index the engine reads, hidden siblings counted (B20).
     let siblings = ids.iter().all(|id| scene_ref.parent(id) == Some(parent.as_str()));
-    if laid && siblings && !ids.is_empty() && parent_rect.is_some_and(|r| r.contains(to.0, to.1)) {
+    if laid.len() == ids.len() && siblings && !ids.is_empty() && parent_rect.is_some_and(|r| r.contains(to.0, to.1)) {
         let index = layout::drop_index(&scene_ref, &placed, &parent, &ids, to);
         drop(scene_ref);
-        if let Gesture::Move { reorder, target, .. } = &mut *b.gesture.borrow_mut() {
+        if let Gesture::Move { reorder, target, into, ghost: g, .. } = &mut *b.gesture.borrow_mut() {
             *reorder = Some((parent, index));
-            *target = None;
+            (*target, *into) = (None, None);
+            if ghost.is_some() {
+                *g = ghost;
+            }
         }
         b.guides.borrow_mut().clear();
         b.canvas.queue_draw();
         return;
     }
-    // Snap the moving box to its neighbours and its parent, as they show (B13).
+    // Snap the moving box to its neighbours and its parent, as they show (B13): in the parent's
+    // coordinates, which the boxes are in, turned or not.
     let moving = Rect::bounds(rects.iter()).unwrap_or_default().translate(dx, dy);
     let view = b.cam.get().visible(b.size.get().0, b.size.get().1);
     let mut others: Vec<Rect> = scene_ref
@@ -1123,7 +1140,7 @@ fn move_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
         .filter(|c| !ids.contains(c))
         .filter(|c| scene_ref.node(c).is_some_and(|n| !n.is_hidden()))
         .filter_map(|c| shapes::shown_rect(&scene_ref, &placed, c))
-        .filter(|r| r.intersects(&view))
+        .filter(|r| turned || r.intersects(&view))
         .collect();
     if let Some(pr) = parent_rect.filter(|_| scene_ref.node(&parent).is_some_and(|n| n.kind != NodeKind::Page)) {
         others.push(pr);
@@ -1138,18 +1155,15 @@ fn move_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
     };
     // Alt held for a duplicate drag still snaps; Alt pressed during a plain drag turns it off
     // (TM-72).
-    let (sx, sy, guides) = if turned || (alt(mods) && !copied) {
-        (0.0, 0.0, Vec::new())
-    } else {
-        snap::snap(&moving, &others, edges, SNAP / zoom)
-    };
+    let (sx, sy, guides) = if alt(mods) && !copied { (0.0, 0.0, Vec::new()) } else { snap::snap(&moving, &others, edges, SNAP / zoom) };
     if free_x {
         dx += sx;
     }
     if free_y {
         dy += sy;
     }
-    // Where it would land: the deepest frame under the pointer that is not one of them.
+    // Where it would land: the deepest frame under the pointer that is not one of them, and
+    // the place there when it lays its children out (its own coordinates, turned or not).
     let page = b.page.borrow().clone();
     let chain = hit::chain(&scene_ref, &placed, &page, p.0, p.1, 0.0);
     let landing = chain
@@ -1161,27 +1175,75 @@ fn move_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
         })
         .cloned()
         .unwrap_or(page);
-    let target = if landing != parent { Some(landing) } else { None };
+    let into = edit::lays_out(&scene_ref, &landing).then(|| {
+        let at = shapes::to_local(&scene_ref, &placed, &landing, p.0, p.1);
+        layout::drop_index(&scene_ref, &placed, &landing, &ids, at)
+    });
+    let target = (landing != parent).then_some(landing);
+    // The free ones show where they go: a `scale` pin's stored x/y move as far as shown, scaled
+    // to the parent's stored size.
+    let fit = layout::fit_of(&scene_ref, &placed, &parent);
     let free: Vec<(String, f64, f64)> = orig
         .into_iter()
-        .filter(|(id, _, _)| scene_ref.parent(id).is_some_and(|p| !edit::lays_out(&scene_ref, p)))
+        .filter(|(id, _, _)| !layout::is_laid(&scene_ref, id))
+        .map(|(id, ox, oy)| {
+            let (sx, sy) = scene_ref.node(&id).map_or((dx, dy), |n| layout::stored_shift(n, fit, dx, dy));
+            (id, ox + sx, oy + sy)
+        })
         .collect();
     drop(scene_ref);
     {
         let mut scene = b.doc.scene.borrow_mut();
-        for (id, ox, oy) in &free {
+        for (id, x, y) in &free {
             if let Some(n) = scene.node_mut(id) {
-                n.x = (ox + dx).round();
-                n.y = (oy + dy).round();
+                n.x = x.round();
+                n.y = y.round();
             }
         }
     }
-    if let Gesture::Move { target: t, reorder, .. } = &mut *b.gesture.borrow_mut() {
+    if let Gesture::Move { target: t, into: i, reorder, shown, ghost: g, .. } = &mut *b.gesture.borrow_mut() {
         *t = target;
+        *i = into.filter(|_| t.is_some());
         *reorder = None;
+        *shown = (dx, dy);
+        if ghost.is_some() {
+            *g = ghost;
+        }
     }
     *b.guides.borrow_mut() = guides;
+    *b.guides_in.borrow_mut() = turned.then_some(parent);
     b.invalidate();
+}
+
+/// The edits that drop `id` into `target` at `index`: a free layer dragged `shown` in its
+/// parent's coordinates (its preview, snapped), a laid-out one `page` on the page (shown only
+/// as a ghost). Its centre lands where it was dropped, through the turns of the frames it
+/// leaves and enters, and its turn on screen stays: a layer dropped into a frame turned 90°
+/// is turned back 90° in it (`edit::reparent` counts in unturned page points).
+fn drop_into(scene: &relay_client::design::Scene, placed: &layout::Placed, id: &str, target: &str, index: Option<u32>, page: (f64, f64), shown: (f64, f64)) -> Vec<NodeOp> {
+    let (Some(n), Some(r)) = (scene.node(id), placed.rect(id)) else {
+        return edit::reparent(scene, placed, id, target, index, page);
+    };
+    let parent = scene.parent(id).unwrap_or_default();
+    let centre = if layout::is_laid(scene, id) {
+        let v = shapes::visual(scene, placed, id).map_or(r, |(v, _)| v);
+        (v.cx() + page.0, v.cy() + page.1)
+    } else {
+        shapes::to_page_pt(scene, placed, parent, r.cx() + shown.0, r.cy() + shown.1)
+    };
+    let (lx, ly) = shapes::to_local(scene, placed, target, centre.0, centre.1);
+    let mut ops = edit::reparent(scene, placed, id, target, index, (lx - r.w / 2.0, ly - r.h / 2.0));
+    // The turn of a frame and those it is in.
+    let turn_of = |f: &str| shapes::turned_ancestors(scene, placed, f).iter().map(|t| t.2).sum::<f64>() + scene.node(f).map_or(0.0, shapes::rotation);
+    let change = turn_of(parent) - turn_of(target);
+    // A line's own turn is not drawn (B99): its points are what show.
+    if change.abs() > 1e-9 && n.kind != NodeKind::Line {
+        let turn = ((((shapes::rotation(n) + change + 180.0).rem_euclid(360.0) - 180.0) * 10.0).round()) / 10.0;
+        let mut set = Map::new();
+        set.insert("rotation".into(), if turn.abs() < 0.05 { Value::Null } else { json!(turn) });
+        ops.push(NodeOp::Update { id: id.to_string(), set });
+    }
+    ops
 }
 
 fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
@@ -1270,6 +1332,7 @@ fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
     preview_followers(&mut scene, follow, &selected);
     drop(scene);
     *b.guides.borrow_mut() = guides;
+    b.guides_in.borrow_mut().take();
     b.invalidate();
 }
 
@@ -1449,6 +1512,7 @@ fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
     b.drag_at.set(None);
     let gesture = std::mem::replace(&mut *b.gesture.borrow_mut(), Gesture::Idle);
     b.guides.borrow_mut().clear();
+    b.guides_in.borrow_mut().take();
     match gesture {
         Gesture::Idle => {}
         Gesture::Pan { .. } => update_cursor(b, None),
@@ -1462,7 +1526,7 @@ fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
             }
             b.canvas.queue_draw();
         }
-        Gesture::Move { ids, orig, moved, target, reorder, click, at, start, copies, .. } => {
+        Gesture::Move { ids, orig, moved, target, reorder, click, at, start, copies, shown, .. } => {
             if !moved {
                 if !copies.is_empty() {
                     let gone: Vec<NodeOp> = ids.iter().map(|id| NodeOp::Delete { id: id.clone() }).collect();
@@ -1493,24 +1557,19 @@ fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
             b.invalidate();
             let placed_before = b.placed();
             let scene = b.doc.scene.borrow();
-            let delta = |id: &str| -> (f64, f64) {
-                let free = scene.parent(id).is_some_and(|p| !edit::lays_out(&scene, p));
-                match (free, orig.iter().find(|o| o.0 == id), finals.iter().find(|f| f.0 == id)) {
-                    (true, Some(o), Some(f)) => (f.1 - o.1, f.2 - o.2),
-                    _ => (at.0 - start.0, at.1 - start.1),
-                }
-            };
             let mut ops = Vec::new();
             if let Some((parent, index)) = reorder {
                 ops.extend(edit::reorder(&scene, &parent, &ids, index));
             } else if let Some(t) = target {
-                // Into an auto layout at the place under the pointer, hidden children counted as
-                // the engine counts them (B20), one after another in the order they paint (B18).
-                let index = edit::lays_out(&scene, &t).then(|| layout::drop_index(&scene, &placed_before, &t, &ids, at));
+                // Into an auto layout at the place under the pointer (in its own coordinates,
+                // turned or not), hidden children counted as the engine counts them (B20), one
+                // after another in the order they paint (B18, TM-62).
+                let index = edit::lays_out(&scene, &t).then(|| {
+                    let at = shapes::to_local(&scene, &placed_before, &t, at.0, at.1);
+                    layout::drop_index(&scene, &placed_before, &t, &ids, at)
+                });
                 for (k, id) in ids.iter().enumerate() {
-                    let r = placed_before.rect(id).unwrap_or_default();
-                    let (dx, dy) = delta(id);
-                    ops.extend(edit::reparent(&scene, &placed_before, id, &t, index.map(|i| i + k as u32), (r.x + dx, r.y + dy)));
+                    ops.extend(drop_into(&scene, &placed_before, id, &t, index.map(|i| i + k as u32), (at.0 - start.0, at.1 - start.1), shown));
                 }
             } else {
                 for (id, ox, oy) in &orig {
@@ -1791,11 +1850,12 @@ pub(super) fn cancel(b: &Board) {
     {
         let mut scene = b.doc.scene.borrow_mut();
         match &gesture {
-            // Copies an Alt drag only showed simply go.
-            Gesture::Move { ids, copies, .. } if !copies.is_empty() => {
+            // Copies an Alt drag only showed simply go, and what was copied is selected again
+            // (E-board-11).
+            Gesture::Move { ids, copies, sources, .. } if !copies.is_empty() => {
                 let gone: Vec<NodeOp> = ids.iter().map(|id| NodeOp::Delete { id: id.clone() }).collect();
                 let _ = scene.apply_all(&gone);
-                b.selection.borrow_mut().clear();
+                *b.selection.borrow_mut() = sources.clone();
             }
             Gesture::Move { orig, .. } => {
                 for (id, x, y) in orig {
@@ -1830,6 +1890,7 @@ pub(super) fn cancel(b: &Board) {
         }
     }
     b.guides.borrow_mut().clear();
+    b.guides_in.borrow_mut().take();
     b.drag_at.set(None);
     b.doc.set_hold(false);
     b.invalidate();
@@ -2548,6 +2609,43 @@ mod tests {
         for id in ["key", "g", "dot"] {
             assert_eq!(at(&sent, id), at(&preview, id), "{id}");
         }
+    }
+
+    #[test]
+    fn several_dropped_into_a_layout_keep_their_order() {
+        // TM-62: three page layers, in paint order, dropped at the row's start.
+        let mut row = node("row", Some("p1"), NodeKind::Frame, [0.0, 0.0, 400.0, 100.0]);
+        row.layout = Some(Layout::Row);
+        let mut scene = page(vec![row, node("old", Some("row"), NodeKind::Rect, [0.0, 0.0, 40.0, 40.0])]
+            .into_iter()
+            .chain(["a", "b", "c"].map(|id| node(id, Some("p1"), NodeKind::Rect, [500.0, 0.0, 20.0, 20.0])))
+            .collect());
+        let placed = place(&scene, "p1", &NoWords);
+        let ops: Vec<NodeOp> = ["a", "b", "c"].iter().enumerate().flat_map(|(k, id)| drop_into(&scene, &placed, id, "row", Some(k as u32), (-480.0, 0.0), (-480.0, 0.0))).collect();
+        scene.apply_all(&ops).unwrap();
+        assert_eq!(scene.children("row"), ["a", "b", "c", "old"]);
+    }
+
+    #[test]
+    fn a_layer_dropped_into_a_turned_frame_lands_where_it_was_dropped_and_keeps_its_turn() {
+        let mut f = node("f", Some("p1"), NodeKind::Frame, [0.0, 0.0, 200.0, 100.0]);
+        f.rotation = Some(90.0);
+        let mut scene = page(vec![f, node("r", Some("p1"), NodeKind::Rect, [300.0, 40.0, 20.0, 20.0])]);
+        let placed = place(&scene, "p1", &NoWords);
+        // Dragged 150 left, its centre over the frame at (160, 50) on the page.
+        let ops = drop_into(&scene, &placed, "r", "f", None, (-150.0, 0.0), (-150.0, 0.0));
+        scene.apply_all(&ops).unwrap();
+        let placed = place(&scene, "p1", &NoWords);
+        let (shown, turn) = shapes::visual(&scene, &placed, "r").unwrap();
+        assert!((shown.cx() - 160.0).abs() < 0.6 && (shown.cy() - 50.0).abs() < 0.6, "{shown:?}");
+        assert!(turn.rem_euclid(360.0).abs() < 0.1, "upright on screen: {turn}");
+        assert_eq!(scene.node("r").unwrap().rotation, Some(-90.0));
+        // Unturned frames: it lands at its box moved by the drag, as before.
+        let mut scene = page(vec![node("g", Some("p1"), NodeKind::Frame, [0.0, 0.0, 200.0, 100.0]), node("q", Some("p1"), NodeKind::Rect, [300.0, 40.0, 20.0, 20.0])]);
+        let placed = place(&scene, "p1", &NoWords);
+        scene.apply_all(&drop_into(&scene, &placed, "q", "g", None, (0.0, 0.0), (-250.0, 10.0))).unwrap();
+        let q = scene.node("q").unwrap();
+        assert_eq!((q.x, q.y, q.rotation), (50.0, 50.0, None));
     }
 
     #[test]
