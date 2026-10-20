@@ -189,6 +189,8 @@ struct Fixture {
     baseline: Baseline,
     /// One line per call the engine made to a host tool the fixture stands in for.
     host_log: PathBuf,
+    /// The design rows' own engine and designs, built the first time one of them runs.
+    designs: std::sync::OnceLock<Designs>,
 }
 
 /// What [`Fixture::reset`] puts back between cases, so a case measures the fixture and not the
@@ -403,6 +405,7 @@ impl Fixture {
             settle: Mutex::new(Vec::new()),
             baseline: Baseline::default(),
             host_log,
+            designs: std::sync::OnceLock::new(),
         };
         fx.populate();
         fx.baseline = fx.snapshot();
@@ -426,6 +429,9 @@ impl Fixture {
     }
     fn agent(&self) -> Actor {
         Actor::agent(self.builder.clone())
+    }
+    fn designs(&self) -> &Designs {
+        self.designs.get_or_init(|| Designs::build(&self.root))
     }
     fn next(&self) -> usize {
         self.counter.fetch_add(1, Ordering::Relaxed)
@@ -465,6 +471,9 @@ impl Fixture {
         for (actor, op, payload) in pending {
             let _ = self.call(actor, op, payload);
         }
+        if let Some(designs) = self.designs.get() {
+            designs.drain();
+        }
     }
     fn snapshot(&self) -> Baseline {
         let store = self.root.join("baseline.db");
@@ -489,6 +498,9 @@ impl Fixture {
     /// everything a case opened has been closed by its cleanup before this runs.
     fn reset(&self) {
         self.drain_cleanup();
+        if let Some(designs) = self.designs.get() {
+            designs.reset();
+        }
         let base = &self.baseline;
         self.engine.store.lock().restore(rusqlite::MAIN_DB, &base.store, None::<fn(rusqlite::backup::Progress)>).unwrap();
         // Worktrees a case left (a kept session checkout, an integration) before the branches
@@ -1586,7 +1598,410 @@ fn cases() -> Vec<Case> {
             Outcome::res(relay_core::guardrail::config(&conn, Some(1)).map_err(|e| e.code), |_| 0)
         })
     });
+    design_cases(&mut c);
     c
+}
+
+// ------------------------------------------------------------------ design rows
+
+/// The design rows' fixture (W44, B58, B85, TM-80): an engine of its own, so the designs' rows
+/// (some 19,000 nodes) never sit in the store the other rows measure, with one project and these
+/// designs, put back to how they were built before each case as [`Fixture::reset`] does:
+///
+/// - `500`, `2000`, `5000`: a page and frames of 49 children each (one in three a text), to
+///   that many nodes; frame `f0`'s children are pinned to its right and bottom edges.
+/// - `1721`, `4903`: `scripts/design-smoke.py perf`'s design (phone artboards in auto layout, a
+///   title and ten rows of a text and a toggle each), with 40 and 114 artboards: the sizes the
+///   2026-10-16 reading and teal-moose's TM-80 measured.
+/// - `siblings`: a page and 4,998 top-level nodes, one in five an empty frame (B58).
+struct Designs {
+    engine: Arc<Engine>,
+    snapshot: PathBuf,
+    ids: std::collections::BTreeMap<&'static str, i64>,
+    /// `design.apply` payloads that put a measured edit back, sent uncounted before the next
+    /// iteration.
+    cleanup: Mutex<Vec<Value>>,
+    /// The scenes the client rows hold between iterations, by name, with the rev each matches.
+    scenes: Mutex<std::collections::HashMap<String, (relay_client::design::Scene, i64)>>,
+}
+
+const PAGE: &str = "page-1";
+
+/// Frame `f{k}` of a grid design and its children, as adds.
+fn grid_frame(k: usize, children: usize, pinned: bool) -> Vec<Value> {
+    let f = format!("f{k}");
+    let mut ops = vec![json!({"op": "add", "node": {"id": f, "parent": PAGE, "kind": "frame", "x": k % 100 * 1300, "y": k / 100 * 1000, "w": 1200, "h": 900}})];
+    ops.extend((0..children).map(|i| {
+        let mut node = json!({"id": format!("{f}-{i}"), "parent": f, "kind": if i % 3 == 0 { "text" } else { "rect" },
+            "x": i * 3, "y": i * 2, "w": 40, "h": 20, "fill": "#336699"});
+        if i % 3 == 0 {
+            node["text"] = json!("Label");
+        }
+        if pinned {
+            node["pin_x"] = json!("right");
+            node["pin_y"] = json!("bottom");
+        }
+        json!({"op": "add", "node": node})
+    }));
+    ops
+}
+
+/// A grid design of `n` nodes, its page included.
+fn grid(n: usize) -> Vec<Value> {
+    let mut ops = Vec::new();
+    let mut k = 0;
+    while 1 + ops.len() < n {
+        let children = (n - 1 - ops.len() - 1).min(49);
+        ops.extend(grid_frame(k, children, k == 0));
+        k += 1;
+    }
+    ops
+}
+
+/// `design-smoke.py perf`'s design with `boards` artboards: 1 + 43 × `boards` nodes.
+fn smoke(boards: usize) -> Vec<Value> {
+    let add = |node: Value| json!({"op": "add", "node": node});
+    let mut ops = Vec::new();
+    for a in 0..boards {
+        let ab = format!("a{a}");
+        ops.push(add(json!({"id": ab, "parent": PAGE, "kind": "frame", "name": format!("Screen {}", a + 1), "x": (a % 8) * 470, "y": (a / 8) * 924,
+            "w": 390, "h": 844, "fill": "#F4F2EE", "layout": "column", "gap": 12, "padding": [48, 20]})));
+        ops.push(add(json!({"id": format!("{ab}-t"), "parent": ab, "kind": "text", "text": format!("Screen {}", a + 1), "font_size": 28, "font_weight": 700})));
+        ops.push(add(json!({"id": format!("{ab}-l"), "parent": ab, "kind": "frame", "fill": "#FFFFFF", "radius": 14, "layout": "column", "padding": [4, 14],
+            "w_sizing": "fill", "h_sizing": "hug"})));
+        for r in 0..10 {
+            let row = format!("{ab}-r{r}");
+            ops.push(add(json!({"id": row, "parent": format!("{ab}-l"), "kind": "frame", "fill": "#00000000", "layout": "row", "items": "center",
+                "justify": "space_between", "padding": [12, 0], "w_sizing": "fill", "h_sizing": "hug"})));
+            ops.push(add(json!({"id": format!("{row}-x"), "parent": row, "kind": "text", "text": format!("Setting number {}", r + 1), "font_size": 15})));
+            ops.push(add(json!({"id": format!("{row}-s"), "parent": row, "kind": "frame", "w": 46, "h": 28, "radius": 14, "fill": "#2EC469",
+                "layout": "row", "padding": [3], "justify": "end"})));
+            ops.push(add(json!({"id": format!("{row}-k"), "parent": format!("{row}-s"), "kind": "ellipse", "w": 22, "h": 22, "fill": "#FFFFFF"})));
+        }
+    }
+    ops
+}
+
+fn siblings() -> Vec<Value> {
+    (0..4_998).map(|i| json!({"op": "add", "node": {
+        "id": format!("s{i}"), "parent": PAGE, "kind": if i % 5 == 0 { "frame" } else { "rect" }, "x": i, "w": 40, "h": 20, "fill": "#336699",
+    }})).collect()
+}
+
+/// The undo of an applied list, as the canvas sends it: its inverse, lenient, with what it
+/// expects to find.
+fn undo_of(design: i64, out: &Value) -> Value {
+    json!({"design_id": design, "ops": out["inverse"], "lenient": true, "expect": out["expect"]})
+}
+
+/// What a client holds after reading `design.get`'s answer off the socket: the engine's bytes,
+/// parsed, then decoded (`ui.call` and `decode` in the native client).
+fn over_the_wire(result: &Value) -> relay_bus::ops::design::GetOut {
+    let bytes = serde_json::to_vec(result).unwrap();
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    serde_json::from_value(value).unwrap()
+}
+
+impl Designs {
+    fn build(root: &Path) -> Designs {
+        let repo = root.join("design-ws").join("designs");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("README.md"), "# designs\n").unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-qm", "designs"]);
+        let store = Store::open(&root.join("design-store").join("store.db"), false).unwrap();
+        let engine = Engine::new(Instance::Test, store);
+        let mut d = Designs { engine, snapshot: root.join("design-baseline.db"), ids: Default::default(), cleanup: Mutex::new(Vec::new()), scenes: Mutex::new(Default::default()) };
+        let ws = d.call("workspace.create", json!({"path": root.join("design-ws")}));
+        d.call("project.add", json!({"workspace_id": Fixture::id(&ws), "path": repo}));
+        for (name, ops) in [("500", grid(500)), ("2000", grid(2_000)), ("5000", grid(5_000)), ("1721", smoke(40)), ("4903", smoke(114)), ("siblings", siblings())] {
+            let made = d.call("design.create", json!({"project_id": 1, "title": format!("perf {name}")}));
+            let id = made["design"]["id"].as_i64().unwrap();
+            assert_eq!(made["nodes"][0]["id"], PAGE);
+            for chunk in ops.chunks(relay_bus::design::MAX_OPS) {
+                d.apply(id, chunk.to_vec());
+            }
+            d.ids.insert(name, id);
+        }
+        d.engine.store.lock().backup(rusqlite::MAIN_DB, &d.snapshot, None).unwrap();
+        d
+    }
+
+    fn call(&self, op: &str, payload: Value) -> Value {
+        match self.engine.dispatch(Request::new(Actor::User, op, payload), Door::InProcess).into_result() {
+            Ok(v) => v,
+            Err(e) => panic!("design fixture: {op} failed: {} {}", e.code, e.message),
+        }
+    }
+
+    fn apply(&self, design: i64, ops: Vec<Value>) -> Value {
+        self.call("design.apply", json!({"design_id": design, "ops": ops}))
+    }
+
+    fn id(&self, name: &str) -> i64 {
+        self.ids[name]
+    }
+
+    fn rev(&self, design: i64) -> i64 {
+        self.call("design.get", json!({"design_id": design, "pages_only": true}))["design"]["rev"].as_i64().unwrap()
+    }
+
+    /// Put back what a measured edit did, before the next iteration.
+    fn later(&self, payload: Value) {
+        self.cleanup.lock().unwrap().push(payload);
+    }
+
+    fn drain(&self) {
+        let pending: Vec<Value> = std::mem::take(&mut *self.cleanup.lock().unwrap());
+        for payload in pending {
+            self.call("design.apply", payload);
+        }
+    }
+
+    fn reset(&self) {
+        self.drain();
+        self.engine.store.lock().restore(rusqlite::MAIN_DB, &self.snapshot, None::<fn(rusqlite::backup::Progress)>).unwrap();
+        self.scenes.lock().unwrap().clear();
+    }
+
+    /// The scene `key` holds of design `name`, read whole when it has none or the engine's
+    /// copy is not the one it matches (the store was put back since).
+    fn scene_in_step(&self, key: &str, name: &str) {
+        let design = self.id(name);
+        let rev = self.rev(design);
+        let mut scenes = self.scenes.lock().unwrap();
+        if scenes.get(key).is_none_or(|(_, at)| *at != rev) {
+            let got = over_the_wire(&self.call("design.get", json!({"design_id": design})));
+            let styles = relay_bus::design::Styles { colors: got.colors, styles: got.styles };
+            scenes.insert(key.to_string(), (relay_client::design::Scene::new(got.nodes).with_styles(styles), got.design.rev));
+        }
+    }
+}
+
+/// A `design.apply` measured as the person's canvas sends it (the user, a full answer), with
+/// `prepare` run uncounted first: it may change the design, and answers the payload. `undo`
+/// puts the measured edit back afterwards, uncounted.
+fn design_apply(cases: &mut Vec<Case>, name: &str, cost: Cost, undo: bool, prepare: impl Fn(&Fixture, &Designs) -> Value + 'static) {
+    cases.push(Case {
+        name: format!("op.design.{name}"),
+        op: Some("design.apply".into()),
+        cost,
+        prepare: Box::new(move |fx| {
+            let d = fx.designs();
+            let payload = prepare(fx, d);
+            let design = payload["design_id"].as_i64().unwrap();
+            let engine = d.engine.clone();
+            let fx = fx.clone();
+            Box::new(move || {
+                let resp = engine.dispatch(Request::new(Actor::User, "design.apply", payload), Door::InProcess);
+                if undo {
+                    if let Some(out) = resp.result.as_ref().filter(|_| resp.ok) {
+                        fx.designs().later(undo_of(design, out));
+                    }
+                }
+                Outcome::of(resp)
+            })
+        }),
+    });
+}
+
+fn design_cases(c: &mut Vec<Case>) {
+    use Cost::*;
+    for (n, name) in [(500usize, "500"), (2_000, "2000"), (5_000, "5000")] {
+        let frames = n.div_ceil(50);
+        design_apply(c, &format!("apply.update.{name}"), Mid, false, move |fx, d| {
+            let fill = if fx.next() % 2 == 0 { "#FF5C5C" } else { "#2EC469" };
+            json!({"design_id": d.id(name), "ops": [{"op": "update", "id": format!("f{}-7", frames / 2), "set": {"fill": fill}}]})
+        });
+        // The design holds `n` nodes once the node is in: it is taken out first, uncounted.
+        design_apply(c, &format!("apply.add.{name}"), Mid, false, move |_, d| {
+            d.apply(d.id(name), vec![json!({"op": "delete", "id": "f1-48"})]);
+            json!({"design_id": d.id(name), "ops": [grid_frame(1, 49, false)[49].clone()]})
+        });
+        design_apply(c, &format!("apply.move.{name}"), Mid, true, move |_, d| {
+            json!({"design_id": d.id(name), "ops": [{"op": "move", "id": "f1-10", "parent": "f2", "index": 5}]})
+        });
+        design_apply(c, &format!("apply.delete_subtree.{name}"), Mid, true, move |_, d| {
+            json!({"design_id": d.id(name), "ops": [{"op": "delete", "id": "f2"}]})
+        });
+        // 20 frames of 49 children. Under the cap, new ones, deleted afterwards; at it, the
+        // design's last 20 whole frames, taken out first, uncounted, and put back by the batch.
+        let room = n + 1_000 <= relay_bus::design::MAX_NODES;
+        let last = (n - 1) / 50;
+        let batch = move |d: &Designs| -> Vec<Value> {
+            if room {
+                (0..20).flat_map(|k| grid_frame(1_000 + k, 49, false)).collect()
+            } else {
+                let ops: Vec<Value> = (last - 20..last).map(|k| json!({"op": "delete", "id": format!("f{k}")})).collect();
+                d.apply(d.id(name), ops);
+                (last - 20..last).flat_map(|k| grid_frame(k, 49, false)).collect()
+            }
+        };
+        design_apply(c, &format!("apply.batch_1000.{name}"), Heavy, room, move |_, d| json!({"design_id": d.id(name), "ops": batch(d)}));
+        design_apply(c, &format!("apply.undo_1000_adds.{name}"), Heavy, false, move |_, d| {
+            let out = d.apply(d.id(name), batch(d));
+            if !room {
+                d.later(json!({"design_id": d.id(name), "ops": (last - 20..last).flat_map(|k| grid_frame(k, 49, false)).collect::<Vec<_>>()}));
+            }
+            undo_of(d.id(name), &out)
+        });
+        // engine-pins: a frame resized, its 49 children pinned to its right and bottom edges
+        // (each follows: 49 more updates), and the same resize of a frame whose children are not.
+        for (row, frame) in [("apply.resize", "f1"), ("apply.resize_pinned", "f0")] {
+            design_apply(c, &format!("{row}.{name}"), Mid, false, move |fx, d| {
+                let w = if fx.next() % 2 == 0 { 1260 } else { 1200 };
+                json!({"design_id": d.id(name), "ops": [{"op": "update", "id": frame, "set": {"w": w, "h": w - 300}}]})
+            });
+        }
+        c.push(Case {
+            name: format!("op.design.get.{name}"),
+            op: Some("design.get".into()),
+            cost: Mid,
+            prepare: Box::new(move |fx| {
+                let d = fx.designs();
+                let req = Request::new(Actor::User, "design.get", json!({"design_id": d.id(name)}));
+                let engine = d.engine.clone();
+                Box::new(move || Outcome::of(engine.dispatch(req, Door::InProcess)))
+            }),
+        });
+    }
+
+    // B58: 1,999 of 4,998 siblings into a new group (2,000 edits, the most a list takes) and out
+    // again where they were, and every top-level node deleted and undone.
+    let group = |_: &Designs| -> Vec<Value> {
+        let mut ops = vec![json!({"op": "add", "node": {"id": "g", "parent": PAGE, "kind": "group"}, "index": 1_000})];
+        ops.extend((1_000..2_999).map(|i| json!({"op": "move", "id": format!("s{i}"), "parent": "g"})));
+        ops
+    };
+    let ungroup = || -> Vec<Value> {
+        let mut ops: Vec<Value> = (1_000..2_999).map(|i| json!({"op": "move", "id": format!("s{i}"), "parent": PAGE, "index": i})).collect();
+        ops.push(json!({"op": "delete", "id": "g"}));
+        ops
+    };
+    design_apply(c, "apply.group_1999_of_4998", Heavy, true, move |_, d| json!({"design_id": d.id("siblings"), "ops": group(d)}));
+    // Each goes back to its own place, and the group is deleted: the design is as it was.
+    design_apply(c, "apply.ungroup_1999_of_4998", Heavy, false, move |_, d| {
+        d.apply(d.id("siblings"), group(d));
+        json!({"design_id": d.id("siblings"), "ops": ungroup()})
+    });
+    let everything = || -> Vec<Value> { (0..4_998).map(|i| json!({"op": "delete", "id": format!("s{i}")})).collect() };
+    design_apply(c, "apply.delete_all_4998", Heavy, true, move |_, d| json!({"design_id": d.id("siblings"), "ops": everything(), "lenient": true}));
+    design_apply(c, "apply.undo_delete_all_4998", Heavy, false, move |_, d| {
+        let out = d.call("design.apply", json!({"design_id": d.id("siblings"), "ops": everything(), "lenient": true}));
+        undo_of(d.id("siblings"), &out)
+    });
+
+    // B85 and TM-80: what the client does with a design of 1,721 and of 4,903 nodes. A commit
+    // (one edit of the toggle's fill: fit, expectations, and the scene's all-or-none apply, which
+    // clones the scene); a reread after another window's edit of one text, of what changed since
+    // (design.get since_rev, the wire, decoding, the scene cloned and patched) and whole (the
+    // read, the wire, decoding, Scene::new). The native client's diff of the old scene and the
+    // new one is not here: it lives in relay-native, which needs GTK.
+    for name in ["1721", "4903"] {
+        path_case(c, &format!("design.commit.{name}"), Mid, move |fx| {
+            let d = fx.designs();
+            let key = format!("commit {name}");
+            if !d.scenes.lock().unwrap().contains_key(&key) {
+                d.scene_in_step(&key, name);
+            }
+            let fill = if fx.next() % 2 == 0 { "#FF5C5C" } else { "#2EC469" };
+            let set = json!({"fill": fill}).as_object().unwrap().clone();
+            let fx = fx.clone();
+            Box::new(move || {
+                let d = fx.designs();
+                let mut scenes = d.scenes.lock().unwrap();
+                let scene = &mut scenes.get_mut(&key).unwrap().0;
+                let mut ops = vec![relay_bus::design::NodeOp::Update { id: "a3-r4-s".into(), set }];
+                scene.fit(&mut ops);
+                let expect = relay_client::design::edit::expect_for(scene, &ops);
+                match scene.apply_effective(ops) {
+                    Ok(kept) => Outcome::plain(kept.len() + expect.len()),
+                    Err(e) => Outcome { ok: false, code: Some(e), result: None, bytes: 0, overlap: None },
+                }
+            })
+        });
+        path_case(c, &format!("design.reread_delta.{name}"), Mid, move |fx| {
+            let d = fx.designs();
+            let key = format!("reread {name}");
+            d.scene_in_step(&key, name);
+            let design = d.id(name);
+            d.apply(design, vec![json!({"op": "update", "id": "a3-r4-x", "set": {"text": format!("Changed {}", fx.next())}})]);
+            let fx = fx.clone();
+            Box::new(move || {
+                let d = fx.designs();
+                let mut scenes = d.scenes.lock().unwrap();
+                let (held, since) = scenes.get_mut(&key).unwrap();
+                let resp = d.engine.dispatch(Request::new(Actor::User, "design.get", json!({"design_id": design, "since_rev": *since})), Door::InProcess);
+                let got = over_the_wire(resp.result.as_ref().unwrap());
+                let mut gone = got.removed.unwrap_or_default();
+                gone.extend(got.left);
+                let mut scene = held.clone();
+                scene.set_styles(relay_bus::design::Styles { colors: got.colors, styles: got.styles });
+                let patched = scene.patch(got.nodes.into_iter().zip(got.indexes.unwrap_or_default()).collect(), &gone);
+                *since = got.design.rev;
+                *held = scene;
+                Outcome::res(patched, |_| held.len())
+            })
+        });
+        path_case(c, &format!("design.reread_whole.{name}"), Mid, move |fx| {
+            let d = fx.designs();
+            let design = d.id(name);
+            d.apply(design, vec![json!({"op": "update", "id": "a3-r4-x", "set": {"text": format!("Changed {}", fx.next())}})]);
+            let engine = d.engine.clone();
+            Box::new(move || {
+                let resp = engine.dispatch(Request::new(Actor::User, "design.get", json!({"design_id": design})), Door::InProcess);
+                let got = over_the_wire(resp.result.as_ref().unwrap());
+                let styles = relay_bus::design::Styles { colors: got.colors, styles: got.styles };
+                let scene = relay_client::design::Scene::new(got.nodes).with_styles(styles);
+                Outcome::plain(scene.len())
+            })
+        });
+    }
+}
+
+// ------------------------------------------------------------------ SQL statements
+
+/// `--sql`: every statement the stores run inside a measured region, by its text, with how many
+/// times it ran and SQLite's own time for it (`sqlite3_trace_v2`, `SQLITE_TRACE_PROFILE`). The
+/// count is deterministic; the time says which statement to look at (perf-sqlite §8).
+static SQL_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static SQL_SEEN: Mutex<Option<std::collections::HashMap<String, (u64, u64)>>> = Mutex::new(None);
+
+unsafe extern "C" fn sql_profiled(_mask: std::ffi::c_uint, _ctx: *mut std::ffi::c_void, stmt: *mut std::ffi::c_void, ns: *mut std::ffi::c_void) -> std::ffi::c_int {
+    if !SQL_ON.load(Ordering::Relaxed) {
+        return 0;
+    }
+    let text = unsafe { rusqlite::ffi::sqlite3_sql(stmt.cast()) };
+    if text.is_null() {
+        return 0;
+    }
+    let text = unsafe { std::ffi::CStr::from_ptr(text) }.to_string_lossy().split_whitespace().collect::<Vec<_>>().join(" ");
+    let ns = unsafe { *(ns as *const i64) } as u64;
+    let mut seen = SQL_SEEN.lock().unwrap();
+    let entry = seen.get_or_insert_with(Default::default).entry(text).or_default();
+    entry.0 += 1;
+    entry.1 += ns;
+    0
+}
+
+/// Report every statement `engine`'s store runs while [`SQL_ON`] is set.
+fn sql_trace(engine: &Engine) {
+    let conn = engine.store.lock();
+    unsafe { rusqlite::ffi::sqlite3_trace_v2(conn.handle(), rusqlite::ffi::SQLITE_TRACE_PROFILE, Some(sql_profiled), std::ptr::null_mut()) };
+}
+
+/// The statements counted since the last call, most time first, per iteration.
+fn sql_summary(iters: usize) -> Value {
+    let seen = SQL_SEEN.lock().unwrap().take().unwrap_or_default();
+    let mut rows: Vec<(String, (u64, u64))> = seen.into_iter().collect();
+    rows.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+    let n = iters.max(1) as u64;
+    let total: u64 = rows.iter().map(|(_, (count, _))| count).sum();
+    json!({
+        "statements_per_iter": total / n,
+        "top": rows.iter().take(12).map(|(text, (count, ns))| json!({"sql": text, "per_iter": count / n, "ns_per_iter": ns / n})).collect::<Vec<_>>(),
+    })
 }
 
 // ------------------------------------------------------------------ measuring
@@ -1880,6 +2295,13 @@ fn run_case(fx: &Arc<Fixture>, case: &Case, iters: usize, warmup: usize, opts: &
         let _ = work();
     }
     fx.drain_cleanup();
+    if opts.sql {
+        sql_trace(&fx.engine);
+        if let Some(designs) = fx.designs.get() {
+            sql_trace(&designs.engine);
+        }
+        SQL_SEEN.lock().unwrap().take();
+    }
     let mut stats = Stats::default();
     let rss_before = rss_kb();
     let threads_before = thread_count();
@@ -1914,11 +2336,13 @@ fn run_case(fx: &Arc<Fixture>, case: &Case, iters: usize, warmup: usize, opts: &
         if counters.is_some() {
             Counters::on();
         }
+        SQL_ON.store(opts.sql, Ordering::Relaxed);
         let m0 = monotonic_ns();
         let t0 = Instant::now();
         let out = perf_measured(work);
         let wall = t0.elapsed();
         let m1 = monotonic_ns();
+        SQL_ON.store(false, Ordering::Relaxed);
         if counters.is_some() {
             Counters::off();
         }
@@ -1955,6 +2379,7 @@ fn run_case(fx: &Arc<Fixture>, case: &Case, iters: usize, warmup: usize, opts: &
     let elapsed = started.elapsed();
     perf_ctl(&opts.perf_ctl, "disable");
     let strace = strace.map(|s| strace_stop(s, iters));
+    let sql = opts.sql.then(|| sql_summary(iters));
     let counters = counters.map(|c| {
         let [user, children, kernel] = counted;
         json!({
@@ -2002,6 +2427,7 @@ fn run_case(fx: &Arc<Fixture>, case: &Case, iters: usize, warmup: usize, opts: &
         "rows": rows,
         "strace": strace,
         "counters": counters,
+        "sql": sql,
     })
 }
 
@@ -2049,6 +2475,7 @@ struct Opts {
     callgrind: bool,
     strace: bool,
     counters: bool,
+    sql: bool,
     /// Where to append each measured region's CLOCK_MONOTONIC bounds, `name start_ns end_ns pid
     /// last_pid` per line: `perf record -k CLOCK_MONOTONIC` stamps its samples on the same clock,
     /// so `scripts/perf/baseline.py` keeps only the samples taken inside a region, tells this
@@ -2072,7 +2499,7 @@ fn perf_ctl(ctl: &Option<(PathBuf, PathBuf)>, cmd: &str) {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: perf list\n       perf run [FILTER...] [--iters N] [--warmup N] [--iters-div N] [--scale N] [--out FILE] [--callgrind] [--strace] [--counters] [--marks FILE] [--perf-ctl CTL,ACK] [--iters-file FILE] [--keep]\n       perf soak [--ops N] [--scale N] [--out FILE]");
+    eprintln!("usage: perf list\n       perf run [FILTER...] [--iters N] [--warmup N] [--iters-div N] [--scale N] [--out FILE] [--callgrind] [--strace] [--counters] [--sql] [--marks FILE] [--perf-ctl CTL,ACK] [--iters-file FILE] [--keep]\n       perf soak [--ops N] [--scale N] [--out FILE]");
     std::process::exit(2)
 }
 
@@ -2088,7 +2515,7 @@ fn main() {
     let mut ops = 20_000usize;
     let mut keep = false;
     let mut iters_for = std::collections::HashMap::new();
-    let mut opts = Opts { callgrind: false, strace: false, counters: false, marks: None, perf_ctl: None };
+    let mut opts = Opts { callgrind: false, strace: false, counters: false, sql: false, marks: None, perf_ctl: None };
     let mut it = args[1..].iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -2101,6 +2528,7 @@ fn main() {
             "--callgrind" => opts.callgrind = true,
             "--strace" => opts.strace = true,
             "--counters" => opts.counters = true,
+            "--sql" => opts.sql = true,
             "--marks" => opts.marks = it.next().map(PathBuf::from),
             "--perf-ctl" => opts.perf_ctl = it.next().and_then(|v| v.split_once(',')).map(|(c, a)| (PathBuf::from(c), PathBuf::from(a))),
             "--keep" => keep = true,
