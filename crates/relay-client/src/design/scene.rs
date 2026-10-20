@@ -594,53 +594,120 @@ impl Scene {
     }
 
     /// Bring the scene up to a read of what changed since it matched the engine (TM-80:
-    /// `design.get` with `since_rev`): `upserts` are the changed nodes as stored, in
-    /// `design.get`'s order, and `removed` the ids gone since. A changed node is put in place and
-    /// drawn again; removed ids are dropped, and only their parents' children lists change.
+    /// `design.get` with `since_rev`), so that it holds what [`Scene::new`] of a whole read
+    /// would. `upserts` are the nodes added, changed or moved since, as stored, in `design.get`'s
+    /// order, each with its place among its siblings as they are now (0 at the bottom: how many
+    /// paint below it, as the engine's `index_of` counts); `removed` are the ids gone since. Each
+    /// is put in its place and drawn again, and only the children lists that nodes leave, join
+    /// or are removed from change.
     ///
-    /// Such a read carries no sibling order, so a node is only patched where its place is known:
-    /// one the scene holds, under the same parent, whose body changed. A new node, one under
-    /// another parent, one whose body is as the scene holds it (so it moved among its siblings,
-    /// or was taken out and put back), or a delta that does not fit the scene (a removed node
-    /// whose child stays) is refused, the scene as it was: read the design whole. One case it
-    /// cannot see: a node moved among its siblings and changed in the same read keeps its old
-    /// place until the next whole read.
-    pub fn patch(&mut self, upserts: Vec<Node>, removed: &[String]) -> Result<(), String> {
+    /// The place is what lets a patch follow a move: a node moved among its siblings and changed
+    /// in the same read looks, without it, like one only changed, and keeps a z-order the engine
+    /// no longer has. design.get's since_rev answer does not carry it yet; until it does, read
+    /// the design whole. A delta that does not fit the scene (a removed node whose child stays, a
+    /// parent neither holds, a node inside itself, two nodes in one place, a place past the
+    /// end) is refused, the scene as it was: read the design whole.
+    pub fn patch(&mut self, upserts: Vec<(Node, u32)>, removed: &[String]) -> Result<(), String> {
         let gone: FxHashSet<&str> = removed.iter().map(String::as_str).filter(|id| self.nodes.contains_key(*id)).collect();
+        let mut changed: FxHashMap<&str, &Node> = FxHashMap::default();
+        for (node, _) in &upserts {
+            if gone.contains(node.id.as_str()) {
+                return Err(format!("{} is both changed and removed", node.id));
+            }
+            if changed.insert(&node.id, node).is_some() {
+                return Err(format!("{} is changed twice", node.id));
+            }
+        }
+        let stays = |id: &str| !gone.contains(id) && !changed.contains_key(id);
+        // A node's parent and kind once patched; None for one the scene will not hold.
+        let after = |id: &str| match changed.get(id).copied() {
+            Some(n) => Some((n.parent.as_deref(), n.kind)),
+            None if gone.contains(id) => None,
+            None => self.nodes.get(id).map(|n| (n.parent.as_deref(), n.kind)),
+        };
         for id in &gone {
-            if let Some(kid) = self.children(id).iter().find(|kid| !gone.contains(kid.as_str())) {
+            if let Some(kid) = self.children(id).iter().find(|kid| stays(kid)) {
                 return Err(format!("{kid} would be left without its parent {id}"));
             }
         }
-        for node in &upserts {
-            let id = &node.id;
-            if gone.contains(id.as_str()) {
-                return Err(format!("{id} is both changed and removed"));
+        // Every changed node sits in something the patched scene holds that holds children, and
+        // not inside itself; the walk up is bounded, so a delta that makes a loop is refused.
+        let bound = self.nodes.len() + upserts.len();
+        for (node, _) in &upserts {
+            let id = node.id.as_str();
+            if !node.kind.holds_children() {
+                if let Some(kid) = self.children(id).iter().find(|kid| stays(kid)) {
+                    return Err(format!("{kid} would sit in {id}, a {}, which holds nothing", node.kind.name()));
+                }
             }
-            let Some(mine) = self.stored(id) else {
-                return Err(format!("{id} is new: where it sits among its siblings is not known"));
-            };
-            if mine.parent != node.parent || mine.kind != node.kind {
-                return Err(format!("{id} moved to another parent or was made again"));
-            }
-            if mine == node {
-                return Err(format!("{id} is unchanged, so it moved among its siblings"));
+            let mut at = node.parent.as_deref();
+            for step in 0.. {
+                let Some(p) = at else { break };
+                let (up, kind) = after(p).ok_or_else(|| format!("{id} would sit in {p}, which is not in the design"))?;
+                if step == 0 && !kind.holds_children() {
+                    return Err(format!("{id} would sit in {p}, a {}, which holds nothing", kind.name()));
+                }
+                if p == id {
+                    return Err(format!("{id} would sit inside itself"));
+                }
+                if step > bound {
+                    return Err(format!("the parents above {id} would go round in a loop"));
+                }
+                at = up;
             }
         }
-        let mut parents: FxHashSet<String> = FxHashSet::default();
-        for id in &gone {
-            if let Some(node) = self.nodes.remove(*id) {
-                parents.insert(node.parent.unwrap_or_default());
+        // Each list a node joins: the places in it are distinct and within it.
+        let mut places: FxHashMap<&str, Vec<(u32, &str)>> = FxHashMap::default();
+        for (node, index) in &upserts {
+            places.entry(node.parent.as_deref().unwrap_or(ROOT)).or_default().push((*index, &node.id));
+        }
+        for (parent, placed) in &mut places {
+            placed.sort_unstable();
+            let total = self.children(parent).iter().filter(|c| stays(c)).count() + placed.len();
+            if let Some(pair) = placed.windows(2).find(|pair| pair[0].0 == pair[1].0) {
+                return Err(format!("{} and {} would both sit at {} among their siblings", pair[0].1, pair[1].1, pair[0].0));
             }
+            if let Some((index, id)) = placed.last().filter(|(index, _)| *index as usize >= total) {
+                return Err(format!("{id} would sit at {index} among {total} siblings"));
+            }
+        }
+        // The lists nodes leave or join, made again: what stays, in its order, and each node that
+        // joins at its place. Placed in rising order, each place is at most the list's length so
+        // far, since the places are distinct and below the list's final length.
+        let mut lists: FxHashSet<String> = places.keys().map(|p| p.to_string()).collect();
+        for id in gone.iter().copied().chain(changed.keys().copied()) {
+            if let Some(node) = self.nodes.get(id) {
+                lists.insert(node.parent.clone().unwrap_or_default());
+            }
+        }
+        for key in lists {
+            let old = self.children.remove(&key).unwrap_or_default();
+            if gone.contains(key.as_str()) {
+                continue;
+            }
+            let placed = places.get(key.as_str()).map(Vec::as_slice).unwrap_or_default();
+            let mut kept = old.into_iter().filter(|c| stays(c));
+            let mut list = Vec::with_capacity(kept.size_hint().1.unwrap_or(0) + placed.len());
+            let mut next = placed.iter().peekable();
+            loop {
+                match next.next_if(|(index, _)| *index as usize == list.len()) {
+                    Some((_, id)) => list.push(id.to_string()),
+                    None => match kept.next() {
+                        Some(id) => list.push(id),
+                        None => break,
+                    },
+                }
+            }
+            if !list.is_empty() {
+                self.children.insert(key, list);
+            }
+        }
+        for id in &gone {
+            self.nodes.remove(*id);
             self.stored.remove(*id);
             self.children.remove(*id);
         }
-        for parent in &parents {
-            if let Some(list) = self.children.get_mut(parent) {
-                list.retain(|c| !gone.contains(c.as_str()));
-            }
-        }
-        for node in upserts {
+        for (node, _) in upserts {
             self.put(node);
         }
         Ok(())
@@ -1137,9 +1204,10 @@ pub(crate) mod tests {
     }
 
     /// What `design.get` with since_rev answers after `ops`, as the engine writes revs: every
-    /// node added, changed, moved or detached since, as stored and in its order, and the ids
-    /// removed (those added again are not).
-    fn changes(base: &Scene, ops: &[NodeOp]) -> (Scene, Vec<Node>, Vec<String>) {
+    /// node added, changed, moved or detached since, as stored, in its order and with its place
+    /// among its siblings, and the ids removed (those added again are not). A move bumps only the
+    /// rev of the node it moves, so its siblings are not in the answer.
+    fn changes(base: &Scene, ops: &[NodeOp]) -> (Vec<(Node, u32)>, Vec<String>, Scene) {
         let mut after = base.clone();
         let mut changed: FxHashSet<String> = FxHashSet::default();
         let mut removed: Vec<String> = Vec::new();
@@ -1160,69 +1228,96 @@ pub(crate) mod tests {
                 changed.insert(id.clone());
             }
         }
-        let upserts = after.to_nodes().into_iter().filter(|n| changed.contains(&n.id)).collect();
-        (after, upserts, removed)
+        let upserts = after.to_nodes().into_iter().filter(|n| changed.contains(&n.id)).map(|n| {
+            let index = after.index(&n.id).unwrap() as u32;
+            (n, index)
+        });
+        (upserts.collect(), removed, after)
     }
 
-    /// Patch `base` with what changed in `ops`: either it gives what a whole read builds, or it
-    /// is refused and `base` is as it was. Whether it patched.
-    fn patches(base: &Scene, ops: &[NodeOp]) -> bool {
-        let (after, upserts, removed) = changes(base, ops);
+    /// TM-80: patching `base` with what changed in `ops` gives what a whole read of the result
+    /// builds: the same nodes, stored and drawn, and every children list in the same order.
+    fn patches(base: &Scene, ops: &[NodeOp]) {
+        let (upserts, removed, after) = changes(base, ops);
         let whole = Scene::new(after.to_nodes()).with_styles(after.styles().clone());
         let mut patched = base.clone();
-        match patched.patch(upserts, &removed) {
-            Ok(()) => {
-                patched.set_styles(after.styles().clone());
-                same(&patched, &whole);
-                true
-            }
-            Err(_) => {
-                same(&patched, base);
-                false
-            }
-        }
+        patched.patch(upserts, &removed).unwrap_or_else(|e| panic!("{ops:?}: {e}"));
+        patched.set_styles(after.styles().clone());
+        same(&patched, &whole);
     }
 
-    /// TM-80: a read of what changed patches the scene into what a whole read builds, or is
-    /// refused where a delta cannot say where a node sits.
+    /// TM-80: a read of what changed, each node with its place among its siblings, patches the
+    /// scene into what a whole read builds, whatever the edits were; a delta that does not fit
+    /// the scene is refused and leaves it as it was.
     #[test]
     fn a_read_of_what_changed_patches_the_scene_as_a_whole_read_builds_it() {
         let base = styled();
         let to = |id: &str, parent: Option<&str>, index: Option<u32>| NodeOp::Move { id: id.into(), parent: parent.map(Into::into), index, keep_position: None };
-        let patched: &[&[NodeOp]] = &[
+        let add = |n: Node, index: Option<u32>| NodeOp::Add { node: n, index };
+        let delete = |id: &str| NodeOp::Delete { id: id.into() };
+        let mut e = node("e", Some("a"), NodeKind::Rect, [0.0, 0.0, 5.0, 5.0]);
+        e.fill = Some("#000000".into());
+        let mut d = base.stored("d").unwrap().clone();
+        let d_again = d.clone();
+        d.opacity = Some(0.5);
+        let ring = node("b", Some("a"), NodeKind::Ellipse, [0.0, 0.0, 8.0, 8.0]);
+        let page = node("p2", None, NodeKind::Page, [0.0; 4]);
+        let on_page = node("r", Some("p2"), NodeKind::Rect, [1.0, 1.0, 4.0, 4.0]);
+        let group = node("g", Some("a"), NodeKind::Group, [0.0; 4]);
+        let in_group = node("h", Some("g"), NodeKind::Rect, [0.0; 4]);
+        let lists: &[&[NodeOp]] = &[
             &[update("c", json!({"text": "Hello"}))],
             &[update("b", json!({"x": 20, "style": null})), update("d", json!({"fill": "#123456"}))],
-            &[NodeOp::Delete { id: "a".into() }],
-            &[NodeOp::Delete { id: "c".into() }, update("b", json!({"opacity": 0.5}))],
+            &[delete("a")],
+            &[delete("c"), update("b", json!({"opacity": 0.5}))],
             &[NodeOp::Color { name: "accent".into(), value: "#ff0000".into() }],
             &[NodeOp::Style { name: "card".into(), set: set(json!({"radius": 2})) }, update("d", json!({"style": "card"}))],
             &[NodeOp::DeleteStyle { name: "card".into() }, NodeOp::DeleteStyle { name: "accent".into() }],
             &[],
-        ];
-        for ops in patched {
-            assert!(patches(&base, ops), "{ops:?}");
-        }
-        // Where a node sits among its siblings the delta does not say: read it whole.
-        let mut e = node("e", Some("a"), NodeKind::Rect, [0.0, 0.0, 5.0, 5.0]);
-        e.fill = Some("#000000".into());
-        let refused: &[&[NodeOp]] = &[
-            &[NodeOp::Add { node: e, index: Some(0) }],
+            // What the delta alone cannot place: adds, moves and reorders.
+            &[add(e.clone(), Some(0))],
             &[to("b", Some("p1"), None)],
             &[to("b", None, Some(1))],
             &[update("b", json!({"x": 11})), update("b", json!({"x": 10}))],
-            &[NodeOp::Delete { id: "d".into() }, NodeOp::Add { node: base.stored("d").unwrap().clone(), index: Some(0) }],
+            &[delete("d"), add(d_again, Some(0))],
+            // A move among its siblings and a change in the same read: b goes to the top of a.
+            &[to("b", None, None), update("b", json!({"x": 20}))],
+            &[delete("d"), add(d, Some(0))],
+            &[delete("b"), add(ring, Some(1))],
+            &[to("b", Some("p1"), Some(0)), delete("a")],
+            &[to("d", Some("p1"), Some(0)), to("b", Some("p1"), Some(1)), update("c", json!({"text": "Hey"}))],
+            &[add(page, Some(0)), add(on_page, None), to("a", Some("p2"), Some(0))],
+            &[add(group.clone(), Some(1)), add(in_group, None), to("c", Some("g"), Some(0)), add(e, Some(3))],
+            &[NodeOp::DeleteStyle { name: "card".into() }, to("b", None, None)],
         ];
-        for ops in refused {
-            assert!(!patches(&base, ops), "{ops:?}");
+        for ops in lists {
+            patches(&base, ops);
         }
-        // And a delta that does not fit the scene is refused, the scene as it was.
-        let mut s = base.clone();
-        assert_eq!(s.patch(Vec::new(), &["a".into()]).unwrap_err(), "b would be left without its parent a");
-        let mut gone = base.stored("b").unwrap().clone();
-        gone.x = 3.0;
-        assert!(s.patch(vec![gone], &["a".into(), "b".into(), "c".into()]).is_err());
-        same(&s, &base);
+        // A delta that does not fit the scene is refused, the scene as it was.
+        let held = |id: &str| base.stored(id).unwrap().clone();
+        let with = |id: &str, f: &dyn Fn(&mut Node)| {
+            let mut n = held(id);
+            f(&mut n);
+            n
+        };
+        let unfit: Vec<(Vec<(Node, u32)>, Vec<String>, &str)> = vec![
+            (vec![], vec!["a".into()], "b would be left without its parent a"),
+            (vec![(with("b", &|n| n.x = 3.0), 0)], vec!["a".into(), "b".into(), "c".into()], "b is both changed and removed"),
+            (vec![(held("b"), 0), (held("b"), 0)], vec![], "b is changed twice"),
+            (vec![(with("b", &|n| n.parent = Some("nope".into())), 0)], vec![], "b would sit in nope, which is not in the design"),
+            (vec![(with("c", &|n| n.parent = Some("b".into())), 0)], vec![], "c would sit in b, a rect, which holds nothing"),
+            (vec![(group.clone(), 0), (with("a", &|n| n.parent = Some("g".into())), 0)], vec![], "g would sit inside itself"),
+            (vec![(with("a", &|n| n.kind = NodeKind::Rect), 0)], vec![], "b would sit in a, a rect, which holds nothing"),
+            (vec![(held("b"), 2)], vec![], "b would sit at 2 among 2 siblings"),
+            (vec![(held("b"), 1), (held("c"), 1)], vec![], "b and c would both sit at 1 among their siblings"),
+        ];
+        for (upserts, removed, why) in unfit {
+            let mut s = base.clone();
+            assert_eq!(s.patch(upserts, &removed).unwrap_err(), why);
+            same(&s, &base);
+        }
         // Ids removed that it never held are nothing to it.
+        let mut s = base.clone();
         s.patch(Vec::new(), &["never".into()]).unwrap();
         same(&s, &base);
     }
