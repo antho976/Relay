@@ -171,9 +171,9 @@ pub fn effective_shadows(n: &Node) -> Vec<Shadow> {
         .collect()
 }
 
-/// How far `n`'s outer shadows reach past what casts them, whatever its turn: the largest of
-/// twice the blur (capped at 200, as paint draws it), the spread past the edge and the offset's
-/// length.
+/// How far `n`'s outer shadows reach past what casts them, whatever its turn: for each outer
+/// shadow, twice its blur (capped at 200, as paint draws it) plus its spread past the edge plus
+/// its offset's length; the largest of these.
 pub fn shadow_reach(n: &Node) -> f64 {
     effective_shadows(n)
         .iter()
@@ -1177,6 +1177,7 @@ mod tests {
         assert!(near(pts[0], (100.0, 50.0)) && near(pts[1], (100.0, 400.0)), "{pts:?}");
         assert_eq!(crate::design::hit::chain(&s, &p, "p1", 100.0, 49.8, 0.5).last().map(String::as_str), Some("k"));
     }
+
     #[test]
     fn a_connector_inside_a_turned_frame_is_drawn_in_its_coordinates() {
         // Both ends and the line in one turned frame: the points come back in the frame's own
