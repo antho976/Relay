@@ -535,13 +535,14 @@ pub fn bootstrap(
     let assignment = row.launch_prompt.clone().filter(|text| first_launch(&row) && !text.trim().is_empty());
 
     let cfg = crate::guardrail::config(conn, Some(session.project_id))?;
+    let plugins_on = crate::plugins::enabled_ids(conn, session.project_id).bus()?;
     let actor = Actor::Agent(session.name.clone());
     let can_call = Registry::global()
         .entries()
         .iter()
         .filter(|entry| engine.is_implemented(entry.name))
         .filter(|entry| {
-            crate::guardrail::callability(entry, &actor, Some(session), Some(&cfg)).0
+            crate::guardrail::callability(entry, &actor, Some(session), Some(&cfg), &plugins_on).0
                 != Callable::No
         })
         .map(|entry| entry.name.to_string())
