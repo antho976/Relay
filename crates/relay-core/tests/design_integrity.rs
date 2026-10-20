@@ -135,26 +135,37 @@ fn nesting_stops_at_64_and_names_the_chain() {
 }
 
 /// W14 on a design nested deeper before the limit (rows another build wrote): it still reads and
-/// can be edited and flattened, but nothing is put deeper in it.
+/// can be edited and flattened, but nothing is put deeper in it, however deep it already sits.
 #[test]
 fn a_legacy_chain_past_the_limit_can_be_flattened_but_not_deepened() {
     let (e, _root) = project();
     let id = create(&e);
+    // A chain l1 … l90, longer than a walk up the design looks (MAX_DEPTH + 6), and a leaf
+    // hanging from l72, 73 deep.
+    let long = MAX_DEPTH + 26;
     {
         let store = e.store.lock();
-        for i in 1..=MAX_DEPTH + 4 {
-            let parent = if i == 1 { "page-1".to_string() } else { format!("l{}", i - 1) };
-            store.execute("INSERT INTO design_nodes(design_id, node_id, parent_id, kind, ord, body) VALUES (?1, ?2, ?3, 'frame', 1.0, ?4)",
-                params![id, format!("l{i}"), parent, r#"{"kind":"frame","x":0.0,"y":0.0,"w":10.0,"h":10.0}"#]).unwrap();
+        let chain = (1..=long).map(|i| (format!("l{i}"), if i == 1 { "page-1".to_string() } else { format!("l{}", i - 1) }, "frame"));
+        for (node, parent, kind) in chain.chain([("leaf".to_string(), "l72".to_string(), "rect")]) {
+            store.execute("INSERT INTO design_nodes(design_id, node_id, parent_id, kind, ord, body) VALUES (?1, ?2, ?3, ?4, 1.0, ?5)",
+                params![id, node, parent, kind, format!(r#"{{"kind":"{kind}","x":0.0,"y":0.0,"w":10.0,"h":10.0}}"#)]).unwrap();
         }
-        store.execute("UPDATE designs SET nodes = nodes + ?2 WHERE id = ?1", params![id, (MAX_DEPTH + 4) as i64]).unwrap();
+        store.execute("UPDATE designs SET nodes = nodes + ?2 WHERE id = ?1", params![id, (long + 1) as i64]).unwrap();
         recount_bytes(&store, id).unwrap();
     }
-    assert_eq!(nodes(&e, id).as_array().unwrap().len(), MAX_DEPTH + 5);
-    let deepest = format!("l{}", MAX_DEPTH + 4);
+    assert_eq!(nodes(&e, id).as_array().unwrap().len(), long + 2);
+    let deepest = format!("l{long}");
     apply(&e, id, json!([{"op": "update", "id": deepest, "set": {"fill": "#ffffff"}}]));
     assert_eq!(refusal(&e, id, json!([{"op": "add", "node": {"parent": deepest, "kind": "rect"}}])).code, "design.too_deep");
     assert_eq!(refusal(&e, id, json!([{"op": "add", "node": {"parent": "l64", "kind": "rect"}}])).code, "design.too_deep");
+    // Both past where a walk looks, the leaf's place and the one it would take are counted to
+    // the page: from 73 deep to 91 is deeper, refused; to 72 is not.
+    let error = refusal(&e, id, json!([{"op": "move", "id": "leaf", "parent": deepest}]));
+    assert_eq!(error.code, "design.too_deep");
+    assert!(error.message.starts_with("ops[0] move \"leaf\": it would sit more than 70 deep"), "{}", error.message);
+    apply(&e, id, json!([{"op": "move", "id": "leaf", "parent": "l71"}]));
+    assert_eq!(find(&nodes(&e, id), "leaf")["parent"], "l71");
+    assert_eq!(refusal(&e, id, json!([{"op": "move", "id": "leaf", "parent": "l72"}])).code, "design.too_deep", "73 is deeper than 72");
     // Moved within the chain, but no deeper than it was: the 66th level up to the 65th.
     apply(&e, id, json!([{"op": "move", "id": "l66", "parent": "l64"}]));
     // Moved up out of it: it and what it holds now fit.

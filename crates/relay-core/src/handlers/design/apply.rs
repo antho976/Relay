@@ -119,6 +119,14 @@ const ANCESTORS: &str = "WITH RECURSIVE up(node_id, parent_id, d) AS (
         SELECT n.node_id, n.parent_id, up.d + 1 FROM up JOIN design_nodes n ON n.design_id = ?1 AND n.node_id = up.parent_id
         WHERE up.d < ?3)
     SELECT node_id, parent_id FROM up";
+/// How many ancestors node `?2` has, counted to its page as far as `?3` levels up: none when its
+/// chain does not reach a page by then.
+const DEPTH: &str = "WITH RECURSIVE up(parent_id, d) AS (
+        SELECT parent_id, 0 FROM design_nodes WHERE design_id = ?1 AND node_id = ?2
+        UNION ALL
+        SELECT n.parent_id, up.d + 1 FROM up JOIN design_nodes n ON n.design_id = ?1 AND n.node_id = up.parent_id
+        WHERE up.d < ?3)
+    SELECT MAX(d) FROM up WHERE parent_id IS NULL";
 /// How many levels below node `?2` the deepest node inside it sits, counted as far as `?3`.
 const HEIGHT: &str = "WITH RECURSIVE down(node_id, d) AS (
         SELECT ?2, 0
@@ -239,6 +247,15 @@ impl Run<'_> {
         }
         let (depth, top) = self.chain(id).enumerate().last().unwrap_or((0, id));
         Ok(matches!(self.parents.get(top), Some(None)).then(|| (depth, top.to_string())))
+    }
+
+    /// How many ancestors node `id` has however deep it sits, for a node past WALK (a chain
+    /// another build nested): one query up its whole chain, bounded by MAX_NODES. `None` when it
+    /// does not reach a page.
+    fn full_depth(&self, id: &str) -> Result<Option<usize>, BusError> {
+        let depth: Option<i64> = self.tx.prepare_cached(DEPTH).bus()?
+            .query_row(params![self.design, id, MAX_NODES as i64], |r| r.get(0)).bus()?;
+        Ok(depth.map(|depth| depth as usize))
     }
 
     /// How many levels below node `id` the deepest node inside it sits, counted as far as WALK.
@@ -550,7 +567,13 @@ impl Run<'_> {
                 let deeper = match (&here, &there) {
                     (Some((now, _)), Some((above, _))) => above + 1 > *now,
                     (Some(_), None) => true,
-                    (None, _) => false,
+                    // It sits past WALK and goes where a walk reaches a page: no deeper than it was.
+                    (None, Some(_)) => false,
+                    // Both past it: each counted to its page.
+                    (None, None) => match (self.full_depth(&id)?, self.full_depth(&to)?) {
+                        (Some(now), Some(above)) => above + 1 > now,
+                        _ => true,
+                    },
                 };
                 if deeper {
                     let height = self.height(&id)?;
