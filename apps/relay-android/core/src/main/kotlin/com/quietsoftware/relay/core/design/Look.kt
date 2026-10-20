@@ -2,6 +2,7 @@ package com.quietsoftware.relay.core.design
 
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
@@ -228,11 +229,12 @@ fun fitRect(fit: String?, r: Rect, naturalW: Double, naturalH: Double): Rect {
 }
 
 /**
- * A box's corner radii, top-left, top-right, bottom-right, bottom-left (paint.rs `outline`):
- * `radii`, else `radius`, else 6 for a sticky, each at most half the shorter side. An ellipse is
- * an oval instead.
+ * A box's corner radii, top-left, top-right, bottom-right, bottom-left (shapes.rs
+ * `corner_radii`): `radii`, else `radius`, else 6 for a sticky, each at most half the shorter
+ * side; all 0 for a kind whose box is not rounded (only a rect, frame, sticky or image is).
  */
 fun cornerRadii(n: DesignNode, r: Rect): DoubleArray {
+    if (n.kind !in ROUNDED) return DoubleArray(4)
     fun cap(v: Double) = max(min(min(v, r.w / 2), r.h / 2), 0.0)
     val radii = n.radii?.takeIf { it.size == 4 }
     return if (radii != null) {
@@ -254,16 +256,26 @@ fun paddingEdges(n: DesignNode): DoubleArray = when (val p = n.padding) {
     }
 }
 
-/** Where a rect's, ellipse's or polygon's label sits inside its box, top, right, bottom, left: `padding`, else 12 px at the sides (design.rs `label_inset`). */
-fun labelInset(n: DesignNode): DoubleArray = if (n.padding != null) paddingEdges(n) else doubleArrayOf(0.0, 12.0, 0.0, 12.0)
+private val ROUNDED = setOf("rect", "frame", "sticky", "image")
 
 /**
- * A shape's label box (feature-drawing §6.1 `shape_text_box`): inside [r] by [labelInset], as
- * wide as that leaves (at least 1), as tall as [height] measures its words at that width, centred
- * down the inset box.
+ * Where a rect's, ellipse's or polygon's label sits inside its box [width] wide (as placed), top,
+ * right, bottom, left: `padding`, else 12 px at the sides, less on a narrow shape (an eighth of
+ * its width), so a small badge keeps room for its words (design.rs `label_inset`, E-text-12).
+ */
+fun labelInset(n: DesignNode, width: Double): DoubleArray {
+    if (n.padding != null) return paddingEdges(n)
+    val side = max(min(12.0, width / 8.0), 0.0)
+    return doubleArrayOf(0.0, side, 0.0, side)
+}
+
+/**
+ * A shape's label box (shapes.rs `label_box`): inside [r] by [labelInset] at its width, as wide
+ * as that leaves (at least 1), as tall as [height] measures its words at that width, centred down
+ * the inset box. It may be taller than the shape.
  */
 fun labelBox(n: DesignNode, r: Rect, height: (wrap: Double) -> Double): Rect {
-    val (t, rt, b, l) = labelInset(n)
+    val (t, rt, b, l) = labelInset(n, r.w)
     val inner = Rect(r.x + l, r.y + t, max(r.w - l - rt, 1.0), max(r.h - t - b, 0.0))
     val h = height(inner.w)
     return Rect(inner.x, inner.cy - h / 2, inner.w, h)
@@ -307,9 +319,11 @@ fun castsOuterOnly(kind: String): Boolean = kind == "text" || kind == "line" || 
  * The shadows a node casts, in paint order (shapes.rs `effective_shadows`, MODEL-SPEC §1 #13):
  * `shadows`, else `shadow`, without the ones whose colour is fully transparent (a sticky with
  * one such shadow casts nothing, B37); a sticky naming none casts [STICKY_SHADOW]; a text, line,
- * path or icon casts outer ones only, without spread, whatever is stored or its style lays under.
+ * path or icon casts outer ones only, without spread, whatever is stored or its style lays under;
+ * a kind that draws no shadow (a group, a page) casts none, whatever an older build stored.
  */
 fun effectiveShadows(n: DesignNode): List<DesignShadow> {
+    if (!takesStyle(n.kind, "shadow")) return emptyList()
     val named = n.shadows ?: listOfNotNull(n.shadow)
     if (named.isEmpty()) return if (n.kind == "sticky") listOf(STICKY_SHADOW) else emptyList()
     val shown = named.filter { s -> parseColor(s.color)?.let(::alphaOf) != 0 }
@@ -317,9 +331,16 @@ fun effectiveShadows(n: DesignNode): List<DesignShadow> {
     return shown.filter { !it.inset }.map { if (it.spread != 0.0) it.copy(spread = 0.0) else it }
 }
 
-/** How far past its box a node's outer shadows reach: the largest `blur × 2 + spread + max(|x|, |y|)` (feature-drawing §5.3 `shadow_reach`). */
-fun shadowReach(n: DesignNode): Double =
-    effectiveShadows(n).filter { !it.inset }.maxOfOrNull { it.blur * 2 + max(it.spread, 0.0) + max(abs(it.x), abs(it.y)) } ?: 0.0
+/** The blur a shadow is drawn with at most (design.rs `MAX_SHADOW_BLUR`). */
+const val MAX_SHADOW_BLUR = 200.0
+
+/**
+ * How far past what casts them a node's outer shadows reach, whatever its turn: the largest
+ * `blur × 2` (the blur capped at [MAX_SHADOW_BLUR], as it is drawn) `+ spread` past the edge `+`
+ * the offset's length (shapes.rs `shadow_reach`).
+ */
+fun shadowReach(n: DesignNode): Double = effectiveShadows(n).filter { !it.inset }
+    .fold(0.0) { most, s -> max(most, s.blur.coerceIn(0.0, MAX_SHADOW_BLUR) * 2.0 + max(s.spread, 0.0) + hypot(s.x, s.y)) }
 
 /** How far past its box a node may paint: its shadows, its stroke and its blur (an arc's caps are the shape's to add). */
 fun reach(n: DesignNode): Double = shadowReach(n) + strokeWidth(n) + 2 * (n.blur ?: 0.0)

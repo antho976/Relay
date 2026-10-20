@@ -147,21 +147,39 @@ class DesignLookTest {
         assertArrayEquals(doubleArrayOf(6.0, 6.0, 6.0, 6.0), cornerRadii(node("s", "sticky"), r), 0.0)
         assertArrayEquals(doubleArrayOf(0.0, 0.0, 0.0, 0.0), cornerRadii(node("a", "rect"), r), 0.0)
         assertArrayEquals(doubleArrayOf(4.0, 20.0, 0.0, 8.0), cornerRadii(node("a", "rect").copy(radius = 3.0, radii = listOf(4.0, 90.0, 0.0, 8.0)), r), 0.0)
+        // Only a rect, frame, sticky or image has rounded corners, as shapes.rs `corner_radii` says:
+        // a connector meets an ellipse's or a polygon's own outline, never a stored radius.
+        for (kind in listOf("ellipse", "polygon", "text", "icon")) {
+            assertArrayEquals(kind, DoubleArray(4), cornerRadii(node("a", kind).copy(radius = 10.0), r), 0.0)
+        }
+        assertArrayEquals(doubleArrayOf(10.0, 10.0, 10.0, 10.0), cornerRadii(node("i", "image").copy(radius = 10.0), r), 0.0)
     }
 
     @Test
     fun `a shape's label sits inside its padding`() {
         val r = Rect(10.0, 20.0, 100.0, 60.0)
         val rect = node("a", "rect")
-        assertArrayEquals(doubleArrayOf(0.0, 12.0, 0.0, 12.0), labelInset(rect), 0.0)
-        assertArrayEquals(doubleArrayOf(4.0, 4.0, 4.0, 4.0), labelInset(rect.copy(padding = listOf(4.0))), 0.0)
-        assertArrayEquals(doubleArrayOf(2.0, 6.0, 2.0, 6.0), labelInset(rect.copy(padding = listOf(2.0, 6.0))), 0.0)
-        assertArrayEquals(doubleArrayOf(1.0, 2.0, 3.0, 4.0), labelInset(rect.copy(padding = listOf(1.0, 2.0, 3.0, 4.0))), 0.0)
+        assertArrayEquals(doubleArrayOf(0.0, 12.0, 0.0, 12.0), labelInset(rect, 100.0), 0.0)
+        assertArrayEquals(doubleArrayOf(4.0, 4.0, 4.0, 4.0), labelInset(rect.copy(padding = listOf(4.0)), 100.0), 0.0)
+        assertArrayEquals(doubleArrayOf(2.0, 6.0, 2.0, 6.0), labelInset(rect.copy(padding = listOf(2.0, 6.0)), 100.0), 0.0)
+        assertArrayEquals(doubleArrayOf(1.0, 2.0, 3.0, 4.0), labelInset(rect.copy(padding = listOf(1.0, 2.0, 3.0, 4.0)), 100.0), 0.0)
         var wrapped = 0.0
         assertEquals(Rect(22.0, 40.0, 76.0, 20.0), labelBox(rect, r) { wrapped = it; 20.0 })
         assertEquals(76.0, wrapped, 0.0)
         // Inset 10 at the top and 30 at the bottom: centred in what is left.
         assertEquals(Rect(14.0, 35.0, 92.0, 10.0), labelBox(rect.copy(padding = listOf(10.0, 4.0, 30.0, 4.0)), r) { 10.0 })
+    }
+
+    /** E-text-12, as the PC has it: 12 px at the sides took most of a small badge; an eighth of its width there. */
+    @Test
+    fun `a narrow shape's label keeps room for its words`() {
+        val badge = node("b", "rect")
+        assertArrayEquals(doubleArrayOf(0.0, 5.0, 0.0, 5.0), labelInset(badge, 40.0), 0.0)
+        assertArrayEquals(doubleArrayOf(0.0, 0.0, 0.0, 0.0), labelInset(badge, -8.0), 0.0)
+        val box = labelBox(badge, Rect(0.0, 0.0, 40.0, 20.0)) { 20.0 }
+        assertEquals(Rect(5.0, 0.0, 30.0, 20.0), box)
+        // A padding of its own is kept, however narrow.
+        assertArrayEquals(doubleArrayOf(0.0, 12.0, 0.0, 12.0), labelInset(badge.copy(padding = listOf(0.0, 12.0)), 40.0), 0.0)
     }
 
     @Test
@@ -203,6 +221,23 @@ class DesignLookTest {
         assertEquals(8.0 + 2.0 + 2.0, shadowReach(node("r", "rect").copy(shadows = listOf(inner, drop.copy(spread = 2.0)))), 0.0)
         assertEquals(10.0 * 2 + 3.0, shadowReach(node("s", "sticky")), 0.0)
         assertEquals(23.0 + 1.0 + 8.0, reach(node("s", "sticky").copy(blur = 4.0)), 0.0)
+    }
+
+    /**
+     * As shapes.rs `shadow_reach`: an offset counts by its length (a shadow 30 across and 40 down
+     * reaches 50 past the corner, not 40), a blur by at most 200, as it is drawn; and a group or
+     * page casts nothing, whatever an older build stored on it.
+     */
+    @Test
+    fun `a shadow reaches as far as the PC draws it`() {
+        val far = DesignShadow(x = 30.0, y = 40.0, color = "#000")
+        assertEquals(50.0, shadowReach(node("r", "rect").copy(shadow = far)), 1e-9)
+        assertEquals(50.0, shadowReach(node("r", "rect").copy(shadow = far.copy(spread = -4.0))), 1e-9)
+        assertEquals(400.0, shadowReach(node("r", "rect").copy(shadow = DesignShadow(blur = 300.0, color = "#000"))), 0.0)
+        for (kind in listOf("group", "page")) {
+            assertEquals(kind, emptyList<DesignShadow>(), effectiveShadows(node("g", kind).copy(shadow = far)))
+            assertEquals(kind, 0.0, shadowReach(node("g", kind).copy(shadow = far)), 0.0)
+        }
     }
 
     /** B57: a star without `sides` has 5 points on the phone, as on the PC and as the field's doc says. */
