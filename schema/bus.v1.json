@@ -25287,7 +25287,7 @@
             "null"
           ],
           "format": "int64",
-          "description": "Only what changed after this rev (0 to the design's rev): `nodes` are those added,\nchanged or moved since, in this answer's usual order, and `removed` the ids gone since.\nIt reaches back 1000 revs (older is design.since_too_old: read it whole). With `nodes`,\nonly what changed inside them.",
+          "description": "Only what changed after this rev (0 to the design's rev): `nodes` are those added,\nchanged or moved since, in this answer's usual order, each with its place in `indexes`,\nand `removed` the ids gone since. It reaches back 1000 revs (older is\ndesign.since_too_old: read it whole). With `page` or `nodes`, what changed in what they\nname, a changed node with what is inside it (unless it is the page or a node named).",
           "minimum": 0
         }
       },
@@ -25320,7 +25320,19 @@
           "items": {
             "type": "string"
           },
-          "description": "With `since_rev`: the ids removed since."
+          "description": "With `since_rev`: the ids to drop: those removed since (everything a delete took is\nlisted), then, with `page` or `nodes`, those changed since that are not in what they\nname (they may have moved out), with what is inside them."
+        },
+        "indexes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "description": "With `since_rev`: each of `nodes`' place among its siblings now, in the same order: 0 at\nthe bottom, as an add's or a move's `index` counts it."
         },
         "colors": {
           "type": "object",

@@ -1,5 +1,6 @@
 //! `design.apply`: a list of node edits run in order against the request's transaction.
 
+use super::revs;
 use super::{body_of, emit_design, kind_of, live_design, node_of, row_bytes};
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project};
@@ -1008,6 +1009,9 @@ pub(super) fn register(e: &mut Engine) {
         ctx.tx().prepare_cached(
             "UPDATE designs SET rev = rev + 1, pages = ?2, nodes = ?3, bytes = ?4, next_node = ?5, updated_by = ?6, updated_at = ?7 WHERE id = ?1",
         ).bus()?.execute(params![design.id, run.pages, run.nodes, run.bytes, run.next_node, by, ctx.now]).bus()?;
+        if !run.removed.is_empty() {
+            revs::prune(ctx.tx(), design.id, run.rev)?;
+        }
         let mut nodes = Vec::with_capacity(run.touched.len());
         for id in std::mem::take(&mut run.touched) {
             if let Some(row) = run.row(&id)? {

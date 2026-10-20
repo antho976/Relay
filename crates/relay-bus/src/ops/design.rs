@@ -51,9 +51,10 @@ payload!(#[schemars(rename = "DesignGetIn")] GetIn {
     #[schemars(length(min = 1, max = GET_NODES_MAX))]
     pub nodes: Option<Vec<String>>,
     /// Only what changed after this rev (0 to the design's rev): `nodes` are those added,
-    /// changed or moved since, in this answer's usual order, and `removed` the ids gone since.
-    /// It reaches back 1000 revs (older is design.since_too_old: read it whole). With `nodes`,
-    /// only what changed inside them.
+    /// changed or moved since, in this answer's usual order, each with its place in `indexes`,
+    /// and `removed` the ids gone since. It reaches back 1000 revs (older is
+    /// design.since_too_old: read it whole). With `page` or `nodes`, what changed in what they
+    /// name, a changed node with what is inside it (unless it is the page or a node named).
     #[schemars(range(min = 0))]
     pub since_rev: Option<i64>,
 });
@@ -65,9 +66,15 @@ result!(#[schemars(rename = "DesignGetOut")] GetOut {
     pub nodes: Vec<Node>,
     /// Where an image's `src` is, on this machine.
     pub assets_dir: String,
-    /// With `since_rev`: the ids removed since.
+    /// With `since_rev`: the ids to drop: those removed since (everything a delete took is
+    /// listed), then, with `page` or `nodes`, those changed since that are not in what they
+    /// name (they may have moved out), with what is inside them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub removed: Option<Vec<String>>,
+    /// With `since_rev`: each of `nodes`' place among its siblings now, in the same order: 0 at
+    /// the bottom, as an add's or a move's `index` counts it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexes: Option<Vec<u32>>,
     /// The design's named colours, by name: a node's colour field takes one as `$name` (a
     /// `color` edit names one). Always whole.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
