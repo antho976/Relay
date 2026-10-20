@@ -834,6 +834,22 @@ impl Board {
         });
         if let Some(entry) = field.last_child().and_downcast::<gtk::Entry>() {
             entry.set_placeholder_text(Some(if nodes.iter().all(|n| n.max_lines.is_none()) { "All" } else { "Mixed" }));
+            // Emptied and entered, it shows every line again.
+            let keys = gtk::EventControllerKey::new();
+            keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let (weak, e) = (Rc::downgrade(b), entry.downgrade());
+            let set_any = nodes.iter().any(|n| n.max_lines.is_some());
+            keys.connect_key_pressed(move |_, key, _, _| {
+                let enter = matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter);
+                match (weak.upgrade(), e.upgrade()) {
+                    (Some(b), Some(e)) if enter && set_any && e.text().trim().is_empty() => {
+                        b.set_max_lines(None);
+                        glib::Propagation::Stop
+                    }
+                    _ => glib::Propagation::Proceed,
+                }
+            });
+            entry.add_controller(keys);
         }
         field.set_hexpand(true);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
