@@ -212,3 +212,19 @@ window.design-window { padding: 0; margin: 0; border: 0; box-shadow: none; backg
 .design-timebar button:hover { background: @wash_solid; color: @ink; }
 .design-timebar-time { min-width: 96px; margin: 0 4px; font-family: 'Geist Mono'; font-size: 11.5px; color: @ink; }
 .design-timebar scale { min-width: 220px; margin: 0 6px; }
+
+/* Stock photos: the image key's picker, and a photo's credit in the inspector. */
+.design-picture-picker { padding: 4px; }
+.design-picture-status { color: @secondary; font-size: 12px; }
+.design-picture-picker flowboxchild { padding: 0; }
+button.design-picture-cell { padding: 4px; border: 0; border-radius: 9px; background: transparent; }
+button.design-picture-cell:hover { background: @wash_solid; }
+.design-picture-thumb { border-radius: 6px; background: @wash_solid; }
+.design-picture-title { color: @ink; font-size: 12px; }
+.design-picture-meta { color: @faint; font-size: 11px; }
+.design-picture-footer button.link { padding: 0 4px; border: 0; background: transparent; box-shadow: none; color: @secondary; font-size: 11.5px; }
+.design-picture-footer button.link:hover { color: @ink; }
+.design-picture-key { padding-top: 4px; }
+.design-credit-title { color: @ink; font-weight: 600; }
+.design-credit-meta { color: @secondary; font-size: 12px; }
+button.design-credit-key { min-height: 28px; padding: 0 6px; border-radius: 8px; font-size: 12px; }

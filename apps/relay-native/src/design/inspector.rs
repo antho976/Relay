@@ -1,6 +1,6 @@
 //! The inspector: every property of the selection, grouped as design tools group them —
-//! position and size, auto layout, type, fill, stroke, corners, shadow, opacity, picture and
-//! export. It shows while something is selected and the inspector key is on; values that
+//! position and size, auto layout, type, fill, stroke, corners, shadow, opacity, picture (with a
+//! stock photo's credit) and export. It shows while something is selected and the inspector key is on; values that
 //! differ across a multiple selection show empty, and setting one sets it on all. A section
 //! shows only where every selected node takes its fields (`relay_bus::design::takes`), and a
 //! number field shows what was stored, not what was typed (B34).
@@ -14,6 +14,7 @@ use glib::translate::IntoGlib;
 use gtk::prelude::*;
 use gtk4 as gtk;
 use relay_bus::design::{parse_color, takes, Blend, ImageFit, Items, Justify, Layout, Node, NodeKind, NodeOp, Shadow, Sizing, TextAlign, TextCase, MAX_SHADOWS};
+use relay_bus::ops::picture::PictureCredit;
 use relay_client::design::names::{display_name, name_key, node_caption};
 use relay_client::design::geom::Rect;
 use relay_client::design::{color, edit, layout, shapes, Scene};
@@ -843,6 +844,11 @@ impl Board {
                 }
             });
             sec.append(&replace);
+            // Where a stock photo came from (pictures-SPEC-v2 §13.3).
+            let credit = first.src.as_deref().and_then(|src| self.doc.credits.borrow().get(src).cloned());
+            if let Some(credit) = credit {
+                credit_block(&b, &section(body, "Credit"), &first.id, &credit);
+            }
         }
 
         // Shadow and opacity.
@@ -1523,6 +1529,68 @@ fn sizing_name(s: Sizing) -> &'static str {
         Sizing::Hug => "hug",
         Sizing::Fill => "fill",
     }
+}
+
+/// A stock photo's credit: its title, creator and licence (text from another website, so set as
+/// text, never markup), and the keys to copy it, open its page and put its caption under it.
+fn credit_block(b: &Rc<Board>, sec: &gtk::Box, id: &str, credit: &PictureCredit) {
+    let title = label(if credit.title.trim().is_empty() { "Untitled photo" } else { &credit.title }, "design-credit-title");
+    let mut lines = vec![title];
+    if let Some(creator) = credit.creator.as_deref().filter(|c| !c.trim().is_empty()) {
+        lines.push(label(&format!("by {creator}"), "design-credit-meta"));
+    }
+    lines.push(label(&credit.licence, "design-credit-meta"));
+    for l in lines {
+        l.set_wrap(true);
+        l.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        l.set_max_width_chars(28);
+        sec.append(&l);
+    }
+    let keys = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    keys.set_homogeneous(true);
+    let copy = gtk::Button::with_label("Copy credit");
+    copy.add_css_class("design-credit-key");
+    copy.set_tooltip_text(Some(&credit.attribution));
+    let (weak, attribution) = (Rc::downgrade(b), credit.attribution.clone());
+    copy.connect_clicked(move |key| {
+        key.clipboard().set_text(&attribution);
+        if let Some(b) = weak.upgrade() {
+            b.toast("Credit copied");
+        }
+    });
+    keys.append(&copy);
+    if let Some(url) = credit.source_url.clone() {
+        let open = gtk::Button::with_label("Open photo page");
+        open.add_css_class("design-credit-key");
+        open.set_tooltip_text(Some(&url));
+        let weak = Rc::downgrade(b);
+        open.connect_clicked(move |_| {
+            let Some(b) = weak.upgrade() else {
+                return;
+            };
+            let window = b.root.root().and_downcast::<gtk::Window>();
+            let shown = Rc::downgrade(&b);
+            gtk::UriLauncher::new(&url).launch(window.as_ref(), gtk::gio::Cancellable::NONE, move |result| {
+                if let (Err(error), Some(b)) = (result, shown.upgrade()) {
+                    if !error.matches(gtk::DialogError::Dismissed) {
+                        b.toast(&format!("Could not open the photo's page: {}", error.message()));
+                    }
+                }
+            });
+        });
+        keys.append(&open);
+    }
+    sec.append(&keys);
+    let caption = gtk::Button::with_label("Add caption");
+    caption.add_css_class("quiet");
+    caption.set_tooltip_text(Some(&format!("Put “{}” under the photo", credit.caption)));
+    let (weak, id) = (Rc::downgrade(b), id.to_string());
+    caption.connect_clicked(move |_| {
+        if let Some(b) = weak.upgrade() {
+            super::pictures::add_caption(&b, &id);
+        }
+    });
+    sec.append(&caption);
 }
 
 /// A titled group of the inspector.
