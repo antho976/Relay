@@ -254,8 +254,9 @@ impl Doc {
                             // Left out of an answer too large to send: read the design again.
                             None => doc.stale.set(true),
                         }
-                        // An answer too large to carry its undo keeps none for this step.
-                        if let Some(inverse) = out.inverse {
+                        // An answer too large to carry its undo keeps none for this step, nor
+                        // does an edit that changed nothing (its inverse is empty).
+                        if let Some(inverse) = out.inverse.filter(|inverse| !inverse.is_empty()) {
                             let target = match undoing {
                                 Some(true) => &doc.redo,
                                 _ => &doc.undo,
