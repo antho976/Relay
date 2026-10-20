@@ -17,7 +17,7 @@ object DesignIcons {
     /** Every icon's name, in the PC's order (design.rs `ICONS`). */
     val names: List<String> get() = paths.keys.toList()
 
-    /** An icon's path data; null for a name not in the set, which draws nothing (the PC's rule). */
+    /** An icon's path data; null for a name not in the set, which draws a grey tile in its box (the PC's rule, paint.rs `icon`). */
     fun path(name: String?): String? = name?.let { paths[it] }
 
     private fun load(): Map<String, String> {
