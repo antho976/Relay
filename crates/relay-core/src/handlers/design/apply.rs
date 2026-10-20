@@ -275,7 +275,7 @@ impl Run<'_> {
     /// Learn where node `id` sits: its chain up to its page (or WALK levels) into `parents`.
     /// A node the list has not seen is read alone when its parent has been (a leaf it added,
     /// most often), and with the rest of its chain in one query when not.
-    fn learn(&mut self, id: &str) -> Result<(), BusError> {
+    pub(super) fn learn(&mut self, id: &str) -> Result<(), BusError> {
         let mut at = id.to_string();
         for _ in 0..=WALK {
             let parent = match self.parents.get(&at) {
@@ -301,7 +301,7 @@ impl Run<'_> {
     }
 
     /// Node `id` and its ancestors as `parents` knows them, nearest first, at most WALK + 1.
-    fn chain<'s>(&'s self, id: &'s str) -> impl Iterator<Item = &'s str> + 's {
+    pub(super) fn chain<'s>(&'s self, id: &'s str) -> impl Iterator<Item = &'s str> + 's {
         std::iter::successors(Some(id), |at| self.parents.get(*at)?.as_deref()).take(WALK + 1)
     }
 
@@ -802,24 +802,8 @@ impl Run<'_> {
                 .with_hint("add another page first, or delete the design"));
         }
         let index = self.index_of(root.parent.as_deref(), &id, root.ord)?;
-        // The subtree, each parent before its children and siblings bottom to top: the order
-        // its undo adds them back in, so each lands where it was.
-        let mut doomed = vec![(id, root)];
-        let mut next = 0;
-        let mut children = self.tx
-            .prepare_cached("SELECT node_id, kind, ord, body FROM design_nodes WHERE design_id = ?1 AND parent_id = ?2 ORDER BY ord, node_id").bus()?;
-        while next < doomed.len() {
-            if matches!(doomed[next].1.kind, Ok(kind) if kind.holds_children()) {
-                let parent = doomed[next].0.clone();
-                let found = children.query_map(params![self.design, parent], |r| Ok((r.get(0)?, r.get::<_, String>(1)?, r.get(2)?, r.get(3)?))).bus()?
-                    .collect::<rusqlite::Result<Vec<(String, String, f64, String)>>>().bus()?;
-                for (child, kind, ord, body) in found {
-                    doomed.push((child, Stored { parent: Some(parent.clone()), kind: row_kind(kind), ord, body }));
-                }
-            }
-            next += 1;
-        }
-        drop(children);
+        // Its undo adds them back in this order, so each lands where it was.
+        let doomed = self.subtree_rows(id, root)?;
         // Every node of it is read before any goes: the undo re-adds each, and a node this build
         // cannot read could not be put back, so a subtree holding one is not deleted.
         let mut undo = Vec::with_capacity(doomed.len());
@@ -845,6 +829,27 @@ impl Run<'_> {
         let id = undo[0].target().to_string();
         self.inverse.push(undo);
         Ok(Some(id))
+    }
+
+    /// Node `id` (stored as `root`) and every node inside it, each parent before its children and
+    /// siblings bottom to top.
+    pub(super) fn subtree_rows(&self, id: String, root: Stored) -> Result<Vec<(String, Stored)>, BusError> {
+        let mut rows = vec![(id, root)];
+        let mut next = 0;
+        let mut children = self.tx
+            .prepare_cached("SELECT node_id, kind, ord, body FROM design_nodes WHERE design_id = ?1 AND parent_id = ?2 ORDER BY ord, node_id").bus()?;
+        while next < rows.len() {
+            if matches!(rows[next].1.kind, Ok(kind) if kind.holds_children()) {
+                let parent = rows[next].0.clone();
+                let found = children.query_map(params![self.design, parent], |r| Ok((r.get(0)?, r.get::<_, String>(1)?, r.get(2)?, r.get(3)?))).bus()?
+                    .collect::<rusqlite::Result<Vec<(String, String, f64, String)>>>().bus()?;
+                for (child, kind, ord, body) in found {
+                    rows.push((child, Stored { parent: Some(parent.clone()), kind: row_kind(kind), ord, body }));
+                }
+            }
+            next += 1;
+        }
+        Ok(rows)
     }
 
     /// Node `id` as stored now, or as an edit of this list deleted it (its undo re-adds it).
@@ -878,6 +883,24 @@ impl Run<'_> {
     pub(super) fn free(&mut self, id: &str, ends: &[&str]) -> Result<(), BusError> {
         let Some(row) = self.row(id)? else { return Ok(()) };
         let Ok(node) = node_of(id.to_string(), row.parent, &row.body) else { return Ok(()) };
+        let set = self.letting_go(&node, ends)?;
+        // A line that cannot be freed (none should fail) keeps its attachment.
+        let Ok(mut next) = node.patched(&set) else { return Ok(()) };
+        let body = body_of(&mut next)?;
+        self.tx.prepare_cached("UPDATE design_nodes SET body = ?3, rev = ?4 WHERE design_id = ?1 AND node_id = ?2").bus()?
+            .execute(params![self.design, next.id, body, self.rev]).bus()?;
+        self.bytes += body.len() as i64 - row.body.len() as i64;
+        self.touch(&next.id);
+        let before = node.before(&set);
+        self.updated.entry(next.id.clone()).or_default().extend(before.keys().cloned());
+        self.inverse.push(vec![NodeOp::Update { id: next.id.clone(), set: before }]);
+        Ok(())
+    }
+
+    /// The update that lets connector `node`, as stored, go of its `ends` where it is drawn by
+    /// the stored boxes: each end `null`, and its points kept, or for one with fewer than two,
+    /// its ends' stored centres.
+    pub(super) fn letting_go(&self, node: &Node, ends: &[&str]) -> Result<Map<String, Value>, BusError> {
         let mut set: Map<String, Value> = ends.iter().map(|end| (end.to_string(), Value::Null)).collect();
         if node.points.as_ref().is_none_or(|p| p.len() < 2) {
             let centre = |b: Option<(f64, f64, f64, f64)>| b.map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0));
@@ -891,17 +914,7 @@ impl Run<'_> {
             };
             set.insert("points".into(), points);
         }
-        // A line that cannot be freed (none should fail) keeps its attachment.
-        let Ok(mut next) = node.patched(&set) else { return Ok(()) };
-        let body = body_of(&mut next)?;
-        self.tx.prepare_cached("UPDATE design_nodes SET body = ?3, rev = ?4 WHERE design_id = ?1 AND node_id = ?2").bus()?
-            .execute(params![self.design, next.id, body, self.rev]).bus()?;
-        self.bytes += body.len() as i64 - row.body.len() as i64;
-        self.touch(&next.id);
-        let before = node.before(&set);
-        self.updated.entry(next.id.clone()).or_default().extend(before.keys().cloned());
-        self.inverse.push(vec![NodeOp::Update { id: next.id.clone(), set: before }]);
-        Ok(())
+        Ok(set)
     }
 
     /// The last edit of this list that moved connector `line` or its `end`, or a node holding
