@@ -348,16 +348,33 @@ pub(super) fn container_at(b: &Board, p: (f64, f64)) -> String {
 }
 
 /// The node a connector's end attaches to under `p`: the deepest shape there that is not a
-/// line or the page itself.
+/// line or the page itself. A frame or a group holds on only along its border, so a line drawn
+/// across an artboard's empty middle stays free rather than joining the artboard (TM-35).
 fn attachable(b: &Board, p: (f64, f64)) -> Option<String> {
     let placed = b.placed();
     let scene = b.doc.scene.borrow();
     let page = b.page.borrow().clone();
+    let band = 6.0 / b.cam.get().zoom;
     let chain = hit::chain(&scene, &placed, &page, p.0, p.1, 2.0 / b.cam.get().zoom);
-    chain
-        .into_iter()
-        .rev()
-        .find(|id| scene.node(id).is_some_and(|n| !matches!(n.kind, NodeKind::Line | NodeKind::Path | NodeKind::Page)))
+    chain.into_iter().rev().find(|id| {
+        let local = scene.parent(id).map_or(p, |parent| shapes::to_local(&scene, &placed, parent, p.0, p.1));
+        scene.node(id).zip(placed.rect(id)).is_some_and(|(n, r)| attaches(n, &r, local, band))
+    })
+}
+
+/// Whether a connector's end at `p` (in the coordinates `n`'s box `r` is in) holds on to `n`:
+/// any shape but a line, a path or a page; a frame or group only within `band` of its border.
+fn attaches(n: &Node, r: &Rect, p: (f64, f64), band: f64) -> bool {
+    match n.kind {
+        NodeKind::Line | NodeKind::Path | NodeKind::Page => false,
+        NodeKind::Frame | NodeKind::Group => {
+            let (cx, cy) = (r.cx(), r.cy());
+            let (lx, ly) = shapes::rotate(p.0, p.1, cx, cy, -shapes::rotation(n));
+            let inner = Rect::new(r.x + band, r.y + band, (r.w - 2.0 * band).max(0.0), (r.h - 2.0 * band).max(0.0));
+            !(inner.w > 0.0 && inner.h > 0.0 && inner.contains(lx, ly))
+        }
+        _ => true,
+    }
 }
 
 /// Rub out what the eraser touches at `p`: pen strokes and lines, shown faint until it lets go.
@@ -2110,5 +2127,24 @@ impl Board {
             .collect();
         drop(scene);
         self.commit(ops);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_line_over_an_artboards_middle_stays_free() {
+        let mut frame = Node::new(NodeKind::Frame);
+        frame.id = "f".into();
+        let r = Rect::new(0.0, 0.0, 390.0, 844.0);
+        assert!(!attaches(&frame, &r, (200.0, 400.0), 6.0), "its empty middle");
+        assert!(attaches(&frame, &r, (2.0, 400.0), 6.0), "its border");
+        assert!(attaches(&frame, &r, (200.0, 841.0), 6.0), "its bottom edge");
+        let mut rect = Node::new(NodeKind::Rect);
+        rect.id = "r".into();
+        assert!(attaches(&rect, &Rect::new(0.0, 0.0, 100.0, 40.0), (50.0, 20.0), 6.0), "a shape anywhere");
+        assert!(!attaches(&Node::new(NodeKind::Line), &r, (2.0, 400.0), 6.0));
     }
 }

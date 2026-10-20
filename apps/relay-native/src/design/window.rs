@@ -64,10 +64,11 @@ pub(crate) fn open_with(ui: &Rc<Ui>, project: i64, id: i64, ready: impl FnOnce(&
 }
 
 /// The design on a board, popped out into a window: the same design, so its undo history comes
-/// along, whether the window opens now or was open already (B28).
-pub fn pop_out(ui: &Rc<Ui>, doc: Rc<Doc>) {
+/// along, whether the window opens now or was open already (B28); `ready` then puts back what
+/// the board showed (E-gallery-6).
+pub fn pop_out(ui: &Rc<Ui>, doc: Rc<Doc>, ready: impl FnOnce(&Rc<Board>) + 'static) {
     let project = doc.design.borrow().project_id;
-    open_doc(ui, project, doc.id, Some(doc.share()), None);
+    open_doc(ui, project, doc.id, Some(doc.share()), Some(Box::new(ready)));
 }
 
 fn open_doc(ui: &Rc<Ui>, project: i64, id: i64, doc: Option<Rc<Doc>>, ready: Option<Ready>) {

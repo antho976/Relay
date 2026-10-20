@@ -228,6 +228,8 @@ pub struct Board {
     pub(super) cams: RefCell<HashMap<String, Camera>>,
     pub(super) size: Cell<(f64, f64)>,
     fitted: Cell<bool>,
+    /// A view was put back (a pop-out's): the one kept in the settings does not replace it.
+    restored: Cell<bool>,
     pub(super) selection: RefCell<Vec<String>>,
     pub(super) hover: RefCell<Option<String>>,
     pub(super) tool: Cell<Tool>,
@@ -514,6 +516,7 @@ impl Board {
             cams: RefCell::default(),
             size: Cell::new((0.0, 0.0)),
             fitted: Cell::new(false),
+            restored: Cell::new(false),
             selection: RefCell::default(),
             hover: RefCell::default(),
             tool: Cell::new(Tool::Select),
@@ -632,13 +635,7 @@ impl Board {
         let weak = Rc::downgrade(&board);
         pop_out.connect_clicked(move |_| {
             if let Some(b) = weak.upgrade() {
-                if let Some(ui) = b.ui.upgrade() {
-                    b.end_edit(true);
-                    super::window::pop_out(&ui, b.doc.clone());
-                    if let Some(back) = b.back.borrow().clone() {
-                        back();
-                    }
-                }
+                b.pop_out();
             }
         });
         let weak = Rc::downgrade(&board);
@@ -687,12 +684,91 @@ impl Board {
         });
         board.design_changed();
         board.refresh_terminal_menu();
+        board.restore_view();
         // Opened on a design an agent changed last: its Undo is still offered (E-ask-9).
         let by = board.doc.design.borrow().updated_by.clone();
         if !by.is_empty() && by != "user" {
             board.offer_agent_undo(by);
         }
         board
+    }
+
+    /// What the board shows, to show it again elsewhere (E-gallery-6): its page, the camera on
+    /// each page, the selection and its panels.
+    pub(super) fn state(&self) -> BoardState {
+        let mut cams = self.cams.borrow().clone();
+        cams.insert(self.page.borrow().clone(), self.cam.get());
+        BoardState {
+            page: self.page.borrow().clone(),
+            cam: self.cam.get(),
+            cams,
+            selection: self.selection.borrow().clone(),
+            layers_open: self.layers_panel.reveals_child(),
+            inspector_open: self.inspector_key.is_active(),
+        }
+    }
+
+    /// Show `state` (once laid out): its page where it still is, its camera rather than a fit,
+    /// what of its selection is still there, and its panels.
+    pub(super) fn restore(&self, state: BoardState) {
+        let page_lives = self.doc.scene.borrow().node(&state.page).is_some_and(|n| n.kind == NodeKind::Page);
+        if !page_lives {
+            return;
+        }
+        self.fitted.set(true);
+        self.restored.set(true);
+        self.set_page(&state.page);
+        self.cams.borrow_mut().extend(state.cams);
+        self.set_cam(state.cam);
+        let ids: Vec<String> = {
+            let scene = self.doc.scene.borrow();
+            state.selection.into_iter().filter(|id| scene.page_of(id) == Some(state.page.as_str())).collect()
+        };
+        self.select(ids);
+        if let Some(key) = super::tools::find_named(self.overlay.upcast_ref(), "design-layers-key").and_downcast::<gtk::ToggleButton>() {
+            key.set_active(state.layers_open);
+        }
+        self.inspector_key.set_active(state.inspector_open);
+    }
+
+    /// Open the design in a window of its own, showing what this board shows, and leave the
+    /// Design view for the gallery.
+    fn pop_out(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        self.end_edit(true);
+        let state = self.state();
+        super::window::pop_out(&ui, self.doc.clone(), move |b| b.restore(state));
+        if let Some(back) = self.back.borrow().clone() {
+            back();
+        }
+    }
+
+    /// Show the page and camera this design was last left at, read from the settings (I-15),
+    /// unless the person has moved since it opened.
+    fn restore_view(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let (weak, id) = (self.me.clone(), self.doc.id);
+        glib::spawn_future_local(async move {
+            let Ok(got) = ui.call("settings.get", json!({"path": format!("{VIEWS}.{id}")})).await else {
+                return;
+            };
+            let Some(b) = weak.upgrade() else {
+                return;
+            };
+            let Some((page, cam)) = read_view(&got["value"]) else {
+                return;
+            };
+            let opened = *b.page.borrow() == b.doc.scene.borrow().pages().first().cloned().unwrap_or_default();
+            if opened && !b.restored.get() && b.selection.borrow().is_empty() && b.doc.scene.borrow().node(&page).is_some_and(|n| n.kind == NodeKind::Page) {
+                b.fitted.set(true);
+                b.set_page(&page);
+                b.set_cam(cam);
+            }
+        });
     }
 
     pub(super) fn me(&self) -> Rc<Board> {
@@ -2479,14 +2555,7 @@ impl Board {
         add("rename", |b| b.rename_design());
         add("duplicate-design", super::duplicate_design);
         add("delete-design", super::delete_design);
-        add("pop-out", |b| {
-            if let Some(ui) = b.ui.upgrade() {
-                super::window::pop_out(&ui, b.doc.clone());
-                if let Some(back) = b.back.borrow().clone() {
-                    back();
-                }
-            }
-        });
+        add("pop-out", |b| b.pop_out());
         add("add-page", |b| b.add_page());
     }
 
@@ -3305,6 +3374,49 @@ pub fn display_name(n: &Node) -> String {
     relay_client::design::names::display_name(n)
 }
 
+/// What a board shows: what `Board::state` takes and `Board::restore` puts back.
+#[derive(Debug, Clone)]
+pub struct BoardState {
+    pub page: String,
+    pub cam: Camera,
+    pub cams: HashMap<String, Camera>,
+    pub selection: Vec<String>,
+    pub layers_open: bool,
+    pub inspector_open: bool,
+}
+
+/// Where each design's page and camera are kept when its board closes, by design id.
+const VIEWS: &str = "native.design.views";
+
+/// The setting a board's page and camera are kept as.
+fn view_value(page: &str, cam: Camera) -> Value {
+    json!({"page": page, "x": cam.x, "y": cam.y, "zoom": cam.zoom})
+}
+
+/// A kept page and camera, when it reads.
+fn read_view(v: &Value) -> Option<(String, Camera)> {
+    let page = v["page"].as_str()?.to_string();
+    let (x, y, zoom) = (v["x"].as_f64()?, v["y"].as_f64()?, v["zoom"].as_f64()?);
+    (x.is_finite() && y.is_finite() && zoom.is_finite() && zoom > 0.0).then_some((page, Camera { x, y, zoom }))
+}
+
+impl Drop for Board {
+    /// Keep the page and camera it was left at, for the next time the design opens (I-15).
+    fn drop(&mut self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        if self.size.get().0 <= 0.0 {
+            return;
+        }
+        let value = view_value(&self.page.borrow(), self.cam.get());
+        let path = format!("{VIEWS}.{}", self.doc.id);
+        glib::spawn_future_local(async move {
+            let _ = ui.call("settings.set", json!({"path": path, "value": value})).await;
+        });
+    }
+}
+
 /// The text editor's place over screen box `s` (the words' box at the zoom): whole pixels from
 /// the one at or before its corner, with the fraction before the words as margins so they start
 /// where the canvas draws them; a wrapping text exactly as wide as the canvas wraps it, a
@@ -3543,6 +3655,16 @@ mod tests {
         assert_eq!(editor_box(&Rect::new(10.6, 20.2, 120.4, 40.0), true), (10, 20, 121, 41, 1, 0));
         // Hugging: room for the caret past the last letter.
         assert_eq!(editor_box(&Rect::new(10.0, 20.0, 50.0, 18.0), false), (10, 20, 52, 18, 0, 0));
+    }
+
+    #[test]
+    fn a_kept_view_reads_back() {
+        let cam = Camera { x: -120.5, y: 40.0, zoom: 2.0 };
+        let (page, back) = read_view(&view_value("p2", cam)).unwrap();
+        assert_eq!(page, "p2");
+        assert_eq!((back.x, back.y, back.zoom), (cam.x, cam.y, cam.zoom));
+        assert!(read_view(&json!({"page": "p2", "x": 0, "y": 0, "zoom": 0})).is_none());
+        assert!(read_view(&Value::Null).is_none());
     }
 
     #[test]
