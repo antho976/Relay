@@ -1,0 +1,20 @@
+{
+ "_fixture": "hand-made: a detail read of a photo whose licence allows no derivatives",
+ "id": "0b5c3a8e-5a8e-4c31-9d5a-111111111111",
+ "title": "Kitchen shelves",
+ "foreign_landing_url": "https://www.flickr.com/photos/fixture-creator/1111",
+ "url": "https://live.staticflickr.com/5252/5410474045_d19325dd38_b.jpg",
+ "creator": "fixture-creator",
+ "creator_url": "https://www.flickr.com/photos/fixture-creator",
+ "license": "by-nd",
+ "license_version": "2.0",
+ "license_url": "https://creativecommons.org/licenses/by-nd/2.0/",
+ "provider": "flickr",
+ "source": "flickr",
+ "attribution": "\"Kitchen shelves\" by fixture-creator is licensed under CC BY-ND 2.0.",
+ "mature": false,
+ "height": 768,
+ "width": 1024,
+ "thumbnail": "https://api.openverse.org/v1/images/0b5c3a8e-5a8e-4c31-9d5a-111111111111/thumb/",
+ "detail_url": "https://api.openverse.org/v1/images/0b5c3a8e-5a8e-4c31-9d5a-111111111111/"
+}
