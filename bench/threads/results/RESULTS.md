@@ -18,3 +18,8 @@ median per task-run.
 | 2026-10-16 | v2world-qwen35-4b-think512 | Qwen3.5-4B-Q8_0.gguf | v2 suite · thinking ≤512 | 0e5caa7 | 3 | 84 | 66.3% [60.2, 71.8] | 63.5% | 74.6% | 15.6 | 2026-10-16-v2-qwen35-4b-think512.json |
 | 2026-10-16 | v2world-qwen35-4b-nothink | Qwen3.5-4B-Q8_0.gguf | v2 suite · no thinking | 0e5caa7 | 3 | 84 | 57.9% [51.8, 63.9] | 55.6% | 65.1% | 6.0 | 2026-10-16-v2-qwen35-4b-nothink.json |
 | 2026-10-16 | v2world-qwen35-9b-think512 | Qwen3.5-9B-Q5_K_M.gguf | v2 suite · thinking ≤512 | 0e5caa7 | 3 | 84 | 72.2% [66.4, 77.4] | 67.7% | 85.7% | 12.1 | 2026-10-16-v2-qwen35-9b-think512.json |
+| 2026-10-19 | nemotron3-nano-4b-think512 | NVIDIA-Nemotron-3-Nano-4B-Q8_0.gguf | profile + thinking ≤512 | 0e5caa7 | 3 | 111 | 79.0% [74.3, 83.0] | 79.3% | 78.2% | 5.0 | 2026-10-19-nemotron3-nano-4b-think512.json |
+| 2026-10-19 | gemma4-e4b-think512 | gemma-4-E4B-it-Q8_0.gguf | profile + thinking ≤512 | 0e5caa7 | 3 | 111 | 94.9% [92.0, 96.8] | 94.7% | 95.4% | 6.0 | 2026-10-19-gemma4-e4b-think512.json |
+| 2026-10-19 | qwen38-4b-distill-think512 | Qwen3.8-4B-Distill-Q8_0.gguf | profile + thinking ≤512 | 0e5caa7 | 3 | 111 | 92.5% [89.2, 94.9] | 92.3% | 93.1% | 5.5 | 2026-10-19-qwen38-4b-distill-think512.json |
+| 2026-10-19 | v2world-qwen38-4b-distill-think512 | Qwen3.8-4B-Distill-Q8_0.gguf | v2 suite · thinking ≤512 | 0e5caa7 | 3 | 84 | 54.4% [48.2, 60.4] | 54.0% | 55.6% | 9.3 | 2026-10-19-v2-qwen38-4b-distill-think512.json |
+| 2026-10-19 | v2world-gemma4-e4b-think512 | gemma-4-E4B-it-Q8_0.gguf | v2 suite · thinking ≤512 | 0e5caa7 | 3 | 84 | 62.7% [56.6, 68.4] | 60.3% | 69.8% | 8.5 | 2026-10-19-v2-gemma4-e4b-think512.json |

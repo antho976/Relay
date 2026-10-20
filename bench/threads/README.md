@@ -57,6 +57,22 @@ v1 is saturated (98.2%) and stays as the regression guard; v2 is where a change 
 shows. Weakest for the 4B: dates and periods from the 15th (36%), questions on both apps (20%),
 refusals around the note that gives orders (44%), totals (57%).
 
+### Other 4B models (2026-10-19, relay `0e5caa7`, thinking ≤512, Q8_0, 3 runs)
+
+| Model | v1 | Δ vs Qwen3.5 4B | v2 | Δ vs Qwen3.5 4B |
+|---|---|---|---|---|
+| Gemma 4 E4B (`unsloth/gemma-4-E4B-it-GGUF`, one slot: 8.2 GB) | 94.9% [92.0, 96.8] | −3.3 [−6.3, −0.6] | 62.7% [56.6, 68.4] | −3.6 [−9.9, +2.8] |
+| Qwen3.8-4B-Distill (`empero-ai`, a community fine-tune of Qwen3.5 4B) | 92.5% [89.2, 94.9] | −5.7 [−8.4, −3.0] | 54.4% [48.2, 60.4] | −11.9 [−18.7, −5.2] |
+| Nemotron 3 Nano 4B (`unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF`) | 79.0% [74.3, 83.0] | −19.2 [−24.9, −13.8] | – | – |
+
+Δ is the bootstrap interval over tasks (`compare`). None beats Qwen3.5 4B. Gemma is closest and ties it
+on v2 overall, but loses on difficulty 3 (36.2% against 48.6%). The distill, trained on Qwen3.8 math
+and reasoning traces, lost the base model's habits: on v2, asking first 26.7% (73.3%), writes 56.7%
+(86.7%), difficulty 3 27.6%. Nemotron answers lookups well and fails what is not there (refusals 6/18)
+and stale data; v2 was not run. Its own template renders Claude Code's environment, a system message
+after the person's, as the last turn, which it then answers ("ready to help"):
+`templates/nemotron-3-nano.jinja` folds later system messages into the system prompt.
+
 ## Quick start
 
 ```fish
@@ -145,7 +161,9 @@ python3 bench/threads/bench.py run --gguf ~/models/NewModel-Q8_0.gguf --runs 3 -
 python3 bench/threads/bench.py run --gguf ~/models/X.gguf --template ~/templates/x-fixed.jinja
 ```
 
-then `compare` it with the baseline line of `RESULTS.md`.
+then `compare` it with the baseline line of `RESULTS.md`. A template that accepts a later system
+message can still answer it instead of the person: run `--suite smoke` first and read a reply.
+`templates/` keeps the fixed templates the results used.
 
 ## The GPU
 
@@ -376,4 +394,4 @@ nothing was logged since March.
 - `worlds/v2/`: the v2 world (`generate.py`, its output, `facts.json`, `WORLD.md`). `tasks/v2/`: its tasks.
 - `tasks/*.json`: the suite. `--suite all` (the default) is every file but `smoke.json`, a 10-task
   starter that exercises every kind of check and runs only when named (`--suite smoke`).
-- `variants.json`, `results/`, `tests/`.
+- `variants.json`, `results/`, `tests/`, `templates/` (chat templates fixed for a model, `--template`).
