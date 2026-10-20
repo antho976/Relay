@@ -158,21 +158,36 @@ pub fn clone_into(
     })
 }
 
-/// Every node of the selection's subtrees, parents first: what Copy puts on the clipboard.
+/// Every node of the selection's subtrees, parents first, as stored (their colour and style
+/// names kept): what Copy puts on the clipboard.
 pub fn gather(scene: &Scene, ids: &[String]) -> Vec<Node> {
     outermost(scene, ids)
         .iter()
         .flat_map(|id| scene.subtree(id))
-        .filter_map(|id| scene.node(&id).cloned())
+        .filter_map(|id| scene.stored(&id).cloned())
         .collect()
 }
 
-/// Duplicate the selection in place, each copy just above its original and `offset` away. One
-/// set of fresh ids covers the whole selection, so a connector between two duplicated nodes
-/// joins their copies.
+/// `nodes` as they draw, naming no colour or style: for another design, which may not hold the
+/// names this one does. Each takes its style laid under it and each `$name` as the colour it
+/// names (`Styles::resolve`), then lets go of the style's name.
+pub fn baked(scene: &Scene, nodes: &[Node]) -> Vec<Node> {
+    nodes
+        .iter()
+        .map(|n| {
+            let mut drawn = scene.styles().resolve(n);
+            drawn.style = None;
+            drawn
+        })
+        .collect()
+}
+
+/// Duplicate the selection in place, each copy just above its original and `offset` away, as
+/// stored (a copy names the colours and style its original names). One set of fresh ids covers
+/// the whole selection, so a connector between two duplicated nodes joins their copies.
 pub fn duplicate(scene: &mut Scene, ids: &[String], offset: f64) -> (Vec<NodeOp>, Vec<String>) {
     let roots: Vec<String> = outermost(scene, ids).into_iter().filter(|id| scene.parent(id).is_some()).collect();
-    let nodes: Vec<Node> = roots.iter().flat_map(|id| scene.subtree(id)).filter_map(|n| scene.node(&n).cloned()).collect();
+    let nodes: Vec<Node> = roots.iter().flat_map(|id| scene.subtree(id)).filter_map(|n| scene.stored(&n).cloned()).collect();
     let fresh = fresh_ids(scene, &nodes);
     // Copies already put in a parent, all below the next original there (roots run in paint
     // order): each later original sits that much higher.
@@ -491,7 +506,7 @@ pub fn restack(scene: &Scene, ids: &[String], up: bool, all: bool) -> Vec<NodeOp
 mod tests {
     use super::*;
     use crate::design::layout::{place, tests::Mono};
-    use crate::design::scene::tests::{node, sample};
+    use crate::design::scene::tests::{node, sample, styled};
     use relay_bus::design::NodeKind as K;
 
     fn run(scene: &mut Scene, ops: &[NodeOp]) {
@@ -526,6 +541,45 @@ mod tests {
         assert_eq!((copy.shadow.clone(), copy.extra.len(), copy.x), (None, 0, 10.0));
         assert_eq!(s.children(&roots[0]).len(), 1);
         assert!(s.node("g").unwrap().shadow.is_some(), "the original keeps it");
+    }
+
+    /// A duplicate and a copy name what their originals name: the colours and styles stay
+    /// linked in the same design.
+    #[test]
+    fn duplicate_keeps_style_links() {
+        let mut s = styled();
+        let (ops, roots) = duplicate(&mut s, &ids(&["a", "d"]), 10.0);
+        run(&mut s, &ops);
+        let (frame, ellipse) = (&roots[0], &roots[1]);
+        let b = s.children(frame)[0].clone();
+        assert_eq!(s.stored(&b).unwrap().style.as_deref(), Some("card"));
+        assert_eq!(s.stored(ellipse).unwrap().fill.as_deref(), Some("$accent"));
+        assert_eq!(s.node(ellipse).unwrap().fill.as_deref(), Some("#4C9DFF"), "and draws it");
+        let clip = gather(&s, &ids(&["b", "c"]));
+        assert_eq!(clip.iter().map(|n| n.style.as_deref()).collect::<Vec<_>>(), [Some("card"), Some("title")]);
+        assert_eq!(clip[0].fill, None, "the style's fill is not baked in");
+    }
+
+    /// Baked, a copy draws the same with no name left: what goes to another design.
+    #[test]
+    fn baked_copies_name_nothing() {
+        let s = styled();
+        let clip = gather(&s, &ids(&["a", "d"]));
+        let baked = baked(&s, &clip);
+        assert_eq!(baked.len(), clip.len());
+        for n in &baked {
+            assert!(n.names().is_empty(), "{} names {:?}", n.id, n.names());
+            let mut drawn = s.node(&n.id).unwrap().clone();
+            drawn.style = None;
+            assert_eq!(*n, drawn, "{} draws as it did", n.id);
+        }
+        let b = baked.iter().find(|n| n.id == "b").unwrap();
+        assert_eq!((b.fill.as_deref(), b.radius, b.stroke_width), (Some("#4C9DFF"), Some(12.0), Some(2.0)));
+        // Pasted into a design with no names, it draws as here.
+        let mut other = Scene::new(vec![node("q1", None, K::Page, [0.0; 4])]);
+        let (ops, roots) = clone_into(&mut other, &baked, "q1", None, 0.0, 0.0);
+        run(&mut other, &ops);
+        assert_eq!(other.node(&roots[1]).unwrap().fill.as_deref(), Some("#4C9DFF"));
     }
 
     #[test]
