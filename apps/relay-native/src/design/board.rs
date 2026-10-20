@@ -194,7 +194,9 @@ pub enum Gesture {
     },
     /// `bounds` and the pointer are in `frame`'s coordinates when one node drawn turned is
     /// resized (its parent's; B12), else on the page; `turn` is that node's own.
-    Resize { handle: Handle, bounds: Rect, orig: Vec<(String, Node, Rect)>, moved: bool, frame: Option<String>, turn: f64 },
+    /// `kept`: the pinned layers inside the frames resized, as they were, which the preview moves
+    /// as the follow rule will and puts back each update.
+    Resize { handle: Handle, bounds: Rect, orig: Vec<(String, Node, Rect)>, kept: Vec<Node>, moved: bool, frame: Option<String>, turn: f64 },
     Endpoint { id: String, which: usize, orig: Node, moved: bool },
     /// `from`/`to`: the nodes a line's ends attach to, a connector's.
     Create { tool: Tool, parent: String, a: (f64, f64), b: (f64, f64), from: Option<String>, to: Option<String> },
@@ -1598,8 +1600,9 @@ impl Board {
             for id in selection.iter() {
                 self.outline_node(snap, scene, placed, id, 1.0);
             }
-            // A locked layer shows it is selected, but has no handles to drag (B16).
-            let locked = selection.iter().all(|id| scene.node(id).is_none_or(Node::is_locked));
+            // A locked layer shows it is selected, but has no handles to drag (B16), nor does a
+            // group, whose box is its children's (B90).
+            let locked = !handled(scene, &selection);
             if let Some((_, r, turn)) = self.single_turn() {
                 // One turned node: its outline (drawn above) and handles turn with it.
                 let s = self.screen(&r);
@@ -1849,6 +1852,12 @@ impl Board {
         snap.translate(&graphene::Point::new((pill.x + 6.0) as f32, (pill.y + 2.0) as f32));
         snap.append_layout(&layout, &gdk::RGBA::WHITE);
         snap.restore();
+    }
+
+    /// Whether the selection has resize handles: something in it is neither locked (B16) nor a
+    /// group (B90).
+    pub(super) fn has_handles(&self) -> bool {
+        handled(&self.doc.scene.borrow(), &self.selection.borrow())
     }
 
     /// The one selected node when it is drawn turned, by its own turn or a frame's it is in:
@@ -3654,6 +3663,12 @@ fn clip_nodes(clip: &Value, design: i64, styles: &relay_bus::design::Styles) -> 
 
 /// Where layer `id` shows on the page, as a box: `shapes::shown_rect` (its drawing, turned by its
 /// own turn) carried out through each turned frame it is in.
+/// Whether layers `ids` show resize handles: one of them is neither locked (B16) nor a group,
+/// whose box is its children's and whose own size nothing reads (B90).
+pub(super) fn handled(scene: &Scene, ids: &[String]) -> bool {
+    ids.iter().any(|id| scene.node(id).is_some_and(|n| !n.is_locked() && n.kind != NodeKind::Group))
+}
+
 /// The name above a top-level frame, with a mark for the way it scrolls: ⇆ across, ⇅ down.
 fn frame_label(n: &Node) -> String {
     let mark = match n.scroll {

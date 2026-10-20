@@ -549,8 +549,8 @@ fn rotate_at(b: &Board, x: f64, y: f64) -> Option<String> {
 }
 
 fn handle_at(b: &Board, x: f64, y: f64) -> Option<Handle> {
-    // A locked layer has no handles (B16).
-    if b.selection.borrow().iter().all(|id| b.doc.scene.borrow().node(id).is_none_or(Node::is_locked)) {
+    // A locked layer has no handles (B16), nor a group, whose box is its children's (B90).
+    if !b.has_handles() {
         return None;
     }
     if let Some((_, r, turn)) = b.single_turn() {
@@ -789,8 +789,19 @@ fn begin_select(b: &Rc<Board>, x: f64, y: f64, p: (f64, f64), mods: gdk::Modifie
                 None => (b.selection_bounds(), None, 0.0),
             };
             if let (Some(bounds), false) = (bounds, orig.is_empty()) {
+                // The pinned layers inside each frame resized, which the preview moves as the
+                // follow rule will (feature-layout §3.5), as they were.
+                let kept = {
+                    let scene = b.doc.scene.borrow();
+                    orig.iter()
+                        .filter(|(_, n, _)| n.kind == NodeKind::Frame)
+                        .flat_map(|(id, _, _)| scene.subtree(id))
+                        .filter(|d| !orig.iter().any(|(o, _, _)| o == d))
+                        .filter_map(|d| scene.node(&d).filter(|n| n.is_pinned()).cloned())
+                        .collect()
+                };
                 b.doc.set_hold(true);
-                *b.gesture.borrow_mut() = Gesture::Resize { handle, bounds, orig, moved: false, frame, turn };
+                *b.gesture.borrow_mut() = Gesture::Resize { handle, bounds, orig, kept, moved: false, frame, turn };
                 return;
             }
         }
@@ -1174,13 +1185,22 @@ fn move_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
 }
 
 fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
-    let (handle, bounds, orig, frame, turn) = match &mut *b.gesture.borrow_mut() {
-        Gesture::Resize { handle, bounds, orig, moved, frame, turn } => {
+    let (handle, bounds, orig, kept, frame, turn) = match &mut *b.gesture.borrow_mut() {
+        Gesture::Resize { handle, bounds, orig, kept, moved, frame, turn } => {
             *moved = true;
-            (*handle, *bounds, orig.clone(), frame.clone(), *turn)
+            (*handle, *bounds, orig.clone(), kept.clone(), frame.clone(), *turn)
         }
         _ => return,
     };
+    // The pinned layers the last update moved go back first: what follows reads them as stored.
+    {
+        let mut scene = b.doc.scene.borrow_mut();
+        for k in &kept {
+            if let Some(n) = scene.node_mut(&k.id) {
+                n.clone_from(k);
+            }
+        }
+    }
     let zoom = b.cam.get().zoom;
     let placed = b.placed();
     // One node drawn turned resizes in its own frame: the pointer is taken into its parent's
@@ -1191,32 +1211,8 @@ fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
         None => p,
     };
     let p = if turn != 0.0 { shapes::rotate(p.0, p.1, bounds.cx(), bounds.cy(), -turn) } else { p };
-    let (mut x0, mut y0, mut x1, mut y1) = (bounds.x, bounds.y, bounds.right(), bounds.bottom());
     let centred = alt(mods);
-    if handle.left {
-        x0 = p.0;
-        if centred {
-            x1 = bounds.right() + (bounds.x - p.0);
-        }
-    }
-    if handle.right {
-        x1 = p.0;
-        if centred {
-            x0 = bounds.x - (p.0 - bounds.right());
-        }
-    }
-    if handle.top {
-        y0 = p.1;
-        if centred {
-            y1 = bounds.bottom() + (bounds.y - p.1);
-        }
-    }
-    if handle.bottom {
-        y1 = p.1;
-        if centred {
-            y0 = bounds.y - (p.1 - bounds.bottom());
-        }
-    }
+    let keep_ratio = shift(mods) || (orig.len() == 1 && orig[0].1.kind == NodeKind::Image);
     // Snap the dragged edges to the siblings as they show, those on show only (B13, TM-74).
     let page = b.page.borrow().clone();
     let parent = orig.first().and_then(|(id, _, _)| b.doc.scene.borrow().parent(id).map(str::to_string)).unwrap_or(page);
@@ -1232,7 +1228,7 @@ fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
             .filter(|r| r.intersects(&view))
             .collect()
     };
-    let moving = Rect::new(x0.min(x1), y0.min(y1), (x1 - x0).abs(), (y1 - y0).abs());
+    let moving = resize_box(&bounds, handle, p, (0.0, 0.0), centred, false);
     let edges = Edges {
         left: handle.left,
         center_x: false,
@@ -1242,67 +1238,211 @@ fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
         bottom: handle.bottom,
     };
     let (sx, sy, guides) = if turn != 0.0 || frame.is_some() { (0.0, 0.0, Vec::new()) } else { snap::snap(&moving, &others, edges, SNAP / zoom) };
-    if handle.left { x0 += sx } else if handle.right { x1 += sx }
-    if handle.top { y0 += sy } else if handle.bottom { y1 += sy }
-    let keep_ratio = shift(mods) || (orig.len() == 1 && orig[0].1.kind == NodeKind::Image && !shift(mods));
-    if keep_ratio && bounds.w > 0.0 && bounds.h > 0.0 && (handle.left || handle.right) && (handle.top || handle.bottom) {
-        let ratio = bounds.w / bounds.h;
-        let w = (x1 - x0).abs();
-        let h = (y1 - y0).abs();
-        if w / ratio > h {
-            let nh = w / ratio;
-            if handle.top { y0 = y1 - nh * (y1 - y0).signum() } else { y1 = y0 + nh * (y1 - y0).signum() }
-        } else {
-            let nw = h * ratio;
-            if handle.left { x0 = x1 - nw * (x1 - x0).signum() } else { x1 = x0 + nw * (x1 - x0).signum() }
-        }
-    }
-    let mut new = Rect::new(x0.min(x1), y0.min(y1), (x1 - x0).abs().max(1.0), (y1 - y0).abs().max(1.0));
+    let mut new = resize_box(&bounds, handle, p, (sx, sy), centred, keep_ratio);
     if turn != 0.0 {
         let (cx, cy) = shapes::rotate(new.cx(), new.cy(), bounds.cx(), bounds.cy(), turn);
         new = Rect::new(cx - new.w / 2.0, cy - new.h / 2.0, new.w, new.h);
     }
     let sx = new.w / bounds.w.max(1e-9);
     let sy = new.h / bounds.h.max(1e-9);
-    {
-        let mut scene = b.doc.scene.borrow_mut();
-        for (id, node, r) in &orig {
-            let nx = new.x + (r.x - bounds.x) * sx;
-            let ny = new.y + (r.y - bounds.y) * sy;
-            let (nw, nh) = ((r.w * sx).max(1.0), (r.h * sy).max(1.0));
-            // A line or path flat along an axis has no size there to scale: its box stays as
-            // flat as its points (B36).
-            let flat = |a: usize| {
-                matches!(node.kind, NodeKind::Line | NodeKind::Path)
-                    && node.points.as_ref().is_some_and(|pts| pts.iter().all(|q| (q[a] - pts[0][a]).abs() < 1e-9))
-            };
-            if let Some(n) = scene.node_mut(id) {
-                n.x = (node.x + (nx - r.x)).round();
-                n.y = (node.y + (ny - r.y)).round();
-                if (handle.left || handle.right) && flat(0) {
-                    n.w = node.w;
-                } else if handle.left || handle.right {
-                    n.w = nw.round();
-                    if n.kind == NodeKind::Text || layout::w_sizing(node) == Sizing::Hug {
-                        n.w_sizing = Some(Sizing::Fixed);
-                    }
-                }
-                if (handle.top || handle.bottom) && flat(1) {
-                    n.h = node.h;
-                } else if handle.top || handle.bottom {
-                    n.h = nh.round();
-                    if layout::h_sizing(node) == Sizing::Hug {
-                        n.h_sizing = Some(Sizing::Fixed);
-                    }
-                }
-                if let (Some(pts), true) = (&node.points, matches!(node.kind, NodeKind::Path | NodeKind::Line)) {
-                    n.points = Some(pts.iter().map(|q| [q[0] * sx, q[1] * sy]).collect());
-                }
+    let resized: Vec<(String, Node)> = {
+        let scene = b.doc.scene.borrow();
+        orig.iter()
+            .map(|(id, node, r)| {
+                let at = Rect::new(new.x + (r.x - bounds.x) * sx, new.y + (r.y - bounds.y) * sy, (r.w * sx).max(1.0), (r.h * sy).max(1.0));
+                (id.clone(), resized_node(&scene, &placed, node, r, at, handle, centred, (sx, sy)))
+            })
+            .collect()
+    };
+    let mut scene = b.doc.scene.borrow_mut();
+    let mut follow = Vec::new();
+    for (id, n) in resized {
+        let before = orig.iter().find(|(o, _, _)| *o == id).map(|(_, node, _)| (node.w, node.h));
+        if let Some(old) = before.filter(|old| n.kind == NodeKind::Frame && *old != (n.w, n.h)) {
+            follow.push((id.clone(), old, (n.w, n.h)));
+        }
+        if let Some(at) = scene.node_mut(&id) {
+            *at = n;
+        }
+    }
+    // Their pinned children follow, as the edit's own follow rule will move them.
+    let selected: Vec<String> = orig.iter().map(|(id, _, _)| id.clone()).collect();
+    preview_followers(&mut scene, follow, &selected);
+    drop(scene);
+    *b.guides.borrow_mut() = guides;
+    b.invalidate();
+}
+
+/// Where a resize handle drags `bounds` with the pointer at `p` (in the coordinates `bounds` is
+/// in), the dragged edges snapped by `snap`. With Alt (`centred`) the opposite edge moves as far
+/// the other way, snap included, so the centre stays. With `keep_ratio` (Shift, or a picture),
+/// a corner keeps the box's proportions, about the centre when centred; an edge handle sizes the
+/// other side to match, centred on the box's middle that way (TM-66).
+fn resize_box(bounds: &Rect, handle: Handle, p: (f64, f64), snap: (f64, f64), centred: bool, keep_ratio: bool) -> Rect {
+    let (mut x0, mut y0, mut x1, mut y1) = (bounds.x, bounds.y, bounds.right(), bounds.bottom());
+    if handle.left {
+        x0 = p.0 + snap.0;
+        if centred {
+            x1 = bounds.right() + (bounds.x - x0);
+        }
+    }
+    if handle.right {
+        x1 = p.0 + snap.0;
+        if centred {
+            x0 = bounds.x - (x1 - bounds.right());
+        }
+    }
+    if handle.top {
+        y0 = p.1 + snap.1;
+        if centred {
+            y1 = bounds.bottom() + (bounds.y - y0);
+        }
+    }
+    if handle.bottom {
+        y1 = p.1 + snap.1;
+        if centred {
+            y0 = bounds.y - (y1 - bounds.bottom());
+        }
+    }
+    let (across, down) = (handle.left || handle.right, handle.top || handle.bottom);
+    if keep_ratio && bounds.w > 0.0 && bounds.h > 0.0 {
+        let ratio = bounds.w / bounds.h;
+        let (cx, cy) = (bounds.cx(), bounds.cy());
+        let (w, h) = ((x1 - x0).abs(), (y1 - y0).abs());
+        // A side's sign: which way it was dragged past the other.
+        let (sw, sh) = (if x1 < x0 { -1.0 } else { 1.0 }, if y1 < y0 { -1.0 } else { 1.0 });
+        let (nw, nh) = match (across, down) {
+            (true, true) if w / ratio > h => (w, w / ratio),
+            (true, true) => (h * ratio, h),
+            (true, false) => (w, w / ratio),
+            (false, true) => (h * ratio, h),
+            (false, false) => (w, h),
+        };
+        if nw != w {
+            if centred || !across {
+                (x0, x1) = (cx - nw / 2.0, cx + nw / 2.0);
+            } else if handle.left {
+                x0 = x1 - nw * sw;
+            } else {
+                x1 = x0 + nw * sw;
+            }
+        }
+        if nh != h {
+            if centred || !down {
+                (y0, y1) = (cy - nh / 2.0, cy + nh / 2.0);
+            } else if handle.top {
+                y0 = y1 - nh * sh;
+            } else {
+                y1 = y0 + nh * sh;
             }
         }
     }
-    *b.guides.borrow_mut() = guides;
-    b.invalidate();
+    Rect::new(x0.min(x1), y0.min(y1), (x1 - x0).abs().max(1.0), (y1 - y0).abs().max(1.0))
+}
+
+/// The sizing rules a resize writes: a width dragged while it hugged its words, a text's, or
+/// filled its row is fixed, and so is a height that hugged or filled, so the size dragged to
+/// takes effect (B19: a filling child kept its share whatever was dragged).
+fn resize_rules(node: &Node, across: bool, down: bool) -> (Option<Sizing>, Option<Sizing>) {
+    let w = (across && (node.kind == NodeKind::Text || layout::w_sizing(node) != Sizing::Fixed)).then_some(Sizing::Fixed);
+    let h = (down && layout::h_sizing(node) != Sizing::Fixed).then_some(Sizing::Fixed);
+    (w, h)
+}
+
+/// `node`, placed at `r`, as a resize that shows it at `at` (in the same coordinates) stores it:
+/// its box through its parent's pins (`layout::unpinned`: a right-pinned child of a filling
+/// frame stores where it sits at the frame's stored width), each size dragged held within its
+/// min and max with the edge not dragged staying put, and the sizing rules that make it take
+/// effect. A laid-out child keeps its `x`/`y`, which its layout ignores. A group, whose box is
+/// its children's, only moves (B90); a flat line keeps its flat side (B36); a line's or path's
+/// points scale with the selection, `scale`.
+#[allow(clippy::too_many_arguments)]
+fn resized_node(scene: &relay_client::design::Scene, placed: &layout::Placed, node: &Node, r: &Rect, mut at: Rect, handle: Handle, centred: bool, scale: (f64, f64)) -> Node {
+    let mut n = node.clone();
+    let parent = scene.parent(&node.id).unwrap_or_default();
+    let laid = layout::is_laid(scene, &node.id);
+    let fit = if laid { None } else { layout::fit_of(scene, placed, parent) };
+    let (across, down) = (handle.left || handle.right, handle.top || handle.bottom);
+    if node.kind == NodeKind::Group {
+        let (dx, dy) = layout::stored_shift(node, fit, at.x - r.x, at.y - r.y);
+        if !laid {
+            n.x = (node.x + dx).round();
+            n.y = (node.y + dy).round();
+        }
+        return n;
+    }
+    let flat = |a: usize| {
+        matches!(node.kind, NodeKind::Line | NodeKind::Path) && node.points.as_ref().is_some_and(|pts| pts.iter().all(|q| (q[a] - pts[0][a]).abs() < 1e-9))
+    };
+    let (across, down) = (across && !flat(0), down && !flat(1));
+    // Within its min and max, the side not dragged (its middle, centred) where it was.
+    let held = |pos: f64, len: f64, bound: f64, start: bool| -> (f64, f64) {
+        if bound == len {
+            (pos, len)
+        } else if centred {
+            (pos + (len - bound) / 2.0, bound)
+        } else if start {
+            (pos + len - bound, bound)
+        } else {
+            (pos, bound)
+        }
+    };
+    if across {
+        (at.x, at.w) = held(at.x, at.w, node.clamp_w(at.w), handle.left);
+    }
+    if down {
+        (at.y, at.h) = held(at.y, at.h, node.clamp_h(at.h), handle.top);
+    }
+    let (ox, oy) = placed.origin(parent);
+    let stored = layout::unpinned(node, fit, Rect::new(at.x - ox, at.y - oy, at.w, at.h));
+    if !laid {
+        n.x = stored.x.round();
+        n.y = stored.y.round();
+    }
+    let (w_rule, h_rule) = resize_rules(node, across, down);
+    if across {
+        n.w = node.clamp_w(stored.w.round().max(1.0));
+        n.w_sizing = w_rule.or(n.w_sizing);
+    } else {
+        n.w = node.w;
+    }
+    if down {
+        n.h = node.clamp_h(stored.h.round().max(1.0));
+        n.h_sizing = h_rule.or(n.h_sizing);
+    } else {
+        n.h = node.h;
+    }
+    if let (Some(pts), true) = (&node.points, matches!(node.kind, NodeKind::Path | NodeKind::Line)) {
+        n.points = Some(pts.iter().map(|q| [q[0] * scale.0, q[1] * scale.1]).collect());
+    }
+    n
+}
+
+/// A frame a resize changes: its id, and its stored size before and after.
+type Resized = (String, (f64, f64), (f64, f64));
+
+/// Show the pinned children of each frame `resized` (id, stored size before, after) where the
+/// follow rule puts them (`Scene::followers`), level by level as the edit will once sent; the
+/// layers of `skip`, which the drag sizes itself, keep what it gives them.
+fn preview_followers(scene: &mut relay_client::design::Scene, resized: Vec<Resized>, skip: &[String]) {
+    let mut queue: std::collections::VecDeque<(Resized, usize)> = resized.into_iter().map(|r| (r, 0)).collect();
+    while let Some(((frame, old, new), level)) = queue.pop_front() {
+        if level >= relay_bus::design::MAX_DEPTH {
+            continue;
+        }
+        for (child, set) in scene.followers(&frame, old, new, |id, _| skip.iter().any(|s| s == id)) {
+            let Some(next) = scene.node(&child).and_then(|n| n.patched(&set).ok()) else {
+                continue;
+            };
+            let size = scene.node(&child).map(|n| (n.w, n.h)).unwrap_or_default();
+            if next.kind == NodeKind::Frame && (next.w, next.h) != size {
+                queue.push_back(((child.clone(), size, (next.w, next.h)), level + 1));
+            }
+            if let Some(n) = scene.node_mut(&child) {
+                *n = next;
+            }
+        }
+    }
 }
 
 fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
@@ -1397,16 +1537,18 @@ fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
             b.commit(ops);
             b.doc.set_hold(false);
         }
-        Gesture::Resize { orig, moved, .. } => {
+        Gesture::Resize { orig, kept, moved, .. } => {
             if moved {
                 let finals: Vec<(String, Node)> = {
                     let scene = b.doc.scene.borrow();
                     orig.iter().filter_map(|(id, _, _)| Some((id.clone(), scene.node(id)?.clone()))).collect()
                 };
+                // Back as stored, the followers the preview moved too: the edit's follow rule
+                // moves them again, here and on the engine alike.
                 {
                     let mut scene = b.doc.scene.borrow_mut();
-                    for (id, node, _) in &orig {
-                        if let Some(n) = scene.node_mut(id) {
+                    for node in orig.iter().map(|(_, node, _)| node).chain(&kept) {
+                        if let Some(n) = scene.node_mut(&node.id) {
                             *n = node.clone();
                         }
                     }
@@ -1663,9 +1805,9 @@ pub(super) fn cancel(b: &Board) {
                     }
                 }
             }
-            Gesture::Resize { orig, .. } => {
-                for (id, node, _) in orig {
-                    if let Some(n) = scene.node_mut(id) {
+            Gesture::Resize { orig, kept, .. } => {
+                for node in orig.iter().map(|(_, node, _)| node).chain(kept) {
+                    if let Some(n) = scene.node_mut(&node.id) {
                         *n = node.clone();
                     }
                 }
@@ -2255,6 +2397,171 @@ impl Board {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use relay_bus::design::{Layout, PinX};
+    use relay_client::design::layout::{place, Measure};
+    use relay_client::design::Scene;
+
+    /// No text here: nothing to measure.
+    struct NoWords;
+
+    impl Measure for NoWords {
+        fn measure(&self, _: &Node, _: Option<f64>) -> (f64, f64) {
+            (0.0, 0.0)
+        }
+    }
+
+    fn node(id: &str, parent: Option<&str>, kind: NodeKind, r: [f64; 4]) -> Node {
+        let mut n = Node::new(kind);
+        (n.id, n.parent, n.x, n.y, n.w, n.h) = (id.into(), parent.map(Into::into), r[0], r[1], r[2], r[3]);
+        n
+    }
+
+    fn page(nodes: Vec<Node>) -> Scene {
+        Scene::new(std::iter::once(node("p1", None, NodeKind::Page, [0.0; 4])).chain(nodes).collect())
+    }
+
+    const RIGHT: Handle = Handle { left: false, right: true, top: false, bottom: false };
+    const LEFT: Handle = Handle { left: true, right: false, top: false, bottom: false };
+    const BOTTOM_RIGHT: Handle = Handle { left: false, right: true, top: false, bottom: true };
+
+    /// `id` resized so its placed box shows `at`, sent and laid out again: what it stores and
+    /// where it is drawn.
+    fn resize_to(scene: &mut Scene, id: &str, at: Rect, handle: Handle) -> (Node, Rect) {
+        let placed = place(scene, "p1", &NoWords);
+        let before = scene.node(id).unwrap().clone();
+        let r = placed.rect(id).unwrap();
+        let after = resized_node(scene, &placed, &before, &r, at, handle, false, (1.0, 1.0));
+        if let Some(op) = diff_op(id, &before, &after) {
+            scene.apply_all(&[op]).unwrap();
+        }
+        (scene.node(id).unwrap().clone(), place(scene, "p1", &NoWords).rect(id).unwrap())
+    }
+
+    #[test]
+    fn a_centred_resize_keeps_its_centre_and_a_ratio_its_shape() {
+        let b = Rect::new(0.0, 0.0, 100.0, 100.0);
+        assert_eq!(resize_box(&b, BOTTOM_RIGHT, (150.0, 110.0), (0.0, 0.0), false, false), Rect::new(0.0, 0.0, 150.0, 110.0));
+        // TM-66: Alt+Shift on a corner by (+50, +10) keeps the centre at 50.
+        let r = resize_box(&b, BOTTOM_RIGHT, (150.0, 110.0), (0.0, 0.0), true, true);
+        assert_eq!((r.cx(), r.cy(), r.w, r.h), (50.0, 50.0, 200.0, 200.0));
+        // Shift on a corner alone grows from the opposite corner.
+        assert_eq!(resize_box(&b, BOTTOM_RIGHT, (150.0, 110.0), (0.0, 0.0), false, true), Rect::new(0.0, 0.0, 150.0, 150.0));
+        // An edge with the ratio kept: the other side follows, about the box's middle.
+        let r = resize_box(&b, RIGHT, (200.0, 30.0), (0.0, 0.0), false, true);
+        assert_eq!((r.x, r.w, r.h, r.cy()), (0.0, 200.0, 200.0, 50.0));
+        // Alt with a snap moves both edges by it, the centre staying.
+        let r = resize_box(&b, LEFT, (-20.0, 0.0), (3.0, 0.0), true, false);
+        assert_eq!((r.x, r.right(), r.cx()), (-17.0, 117.0, 50.0));
+        // Past the opposite edge it turns over rather than going negative.
+        let r = resize_box(&b, RIGHT, (-40.0, 0.0), (0.0, 0.0), false, false);
+        assert_eq!((r.x, r.w), (-40.0, 40.0));
+    }
+
+    #[test]
+    fn a_filling_child_takes_the_size_it_is_dragged_to() {
+        // B19: a row 300 wide holding a filling A and a fixed 100 B; A is drawn 200 wide.
+        let mut row = node("row", Some("p1"), NodeKind::Frame, [0.0, 0.0, 300.0, 100.0]);
+        row.layout = Some(Layout::Row);
+        row.gap = Some(0.0);
+        let mut a = node("a", Some("row"), NodeKind::Rect, [0.0, 0.0, 10.0, 40.0]);
+        a.w_sizing = Some(Sizing::Fill);
+        let mut scene = page(vec![row, a, node("b", Some("row"), NodeKind::Rect, [0.0, 0.0, 100.0, 40.0])]);
+        assert_eq!(place(&scene, "p1", &NoWords).rect("a").unwrap().w, 200.0);
+        let (a, shown) = resize_to(&mut scene, "a", Rect::new(0.0, 0.0, 50.0, 40.0), RIGHT);
+        assert_eq!((a.w, a.w_sizing, shown.w), (50.0, Some(Sizing::Fixed), 50.0));
+        assert_eq!(a.x, 0.0, "a laid-out child keeps the x its layout ignores");
+        // The same down a column that fills its height.
+        let mut col = node("col", Some("p1"), NodeKind::Frame, [400.0, 0.0, 100.0, 300.0]);
+        col.layout = Some(Layout::Column);
+        let mut c = node("c", Some("col"), NodeKind::Rect, [0.0, 0.0, 40.0, 10.0]);
+        c.h_sizing = Some(Sizing::Fill);
+        let mut scene = page(vec![col, c]);
+        let (c, shown) = resize_to(&mut scene, "c", Rect::new(400.0, 0.0, 40.0, 70.0), Handle { left: false, right: false, top: false, bottom: true });
+        assert_eq!((c.h, c.h_sizing, shown.h), (70.0, Some(Sizing::Fixed), 70.0));
+        assert_eq!(resize_rules(&node("t", None, NodeKind::Text, [0.0, 0.0, 80.0, 20.0]), true, false).0, Some(Sizing::Fixed));
+        assert_eq!(resize_rules(&node("r", None, NodeKind::Rect, [0.0, 0.0, 80.0, 20.0]), true, true), (None, None));
+    }
+
+    /// A row 400 wide whose one column fills it while storing 200: the column's pins act.
+    fn filling_column(child: Node) -> Scene {
+        let mut row = node("row", Some("p1"), NodeKind::Frame, [0.0, 0.0, 400.0, 100.0]);
+        row.layout = Some(Layout::Row);
+        let mut col = node("col", Some("row"), NodeKind::Frame, [0.0, 0.0, 200.0, 100.0]);
+        col.w_sizing = Some(Sizing::Fill);
+        page(vec![row, col, child])
+    }
+
+    #[test]
+    fn a_pinned_child_resizes_where_it_shows_and_stores_its_place_unpinned() {
+        let mut key = node("key", Some("col"), NodeKind::Rect, [150.0, 10.0, 40.0, 20.0]);
+        key.pin_x = Some(PinX::Right);
+        let mut scene = filling_column(key);
+        assert_eq!(place(&scene, "p1", &NoWords).rect("key").unwrap().x, 350.0);
+        let (key, shown) = resize_to(&mut scene, "key", Rect::new(350.0, 10.0, 60.0, 20.0), RIGHT);
+        assert_eq!((key.x, key.w), (150.0, 60.0), "stored against the column's stored width");
+        assert_eq!((shown.x, shown.w), (350.0, 60.0), "drawn where it was dragged");
+        // Stretched left and right, it stores the width less what the column adds.
+        let mut bar = node("bar", Some("col"), NodeKind::Rect, [10.0, 10.0, 40.0, 20.0]);
+        bar.pin_x = Some(PinX::LeftRight);
+        let mut scene = filling_column(bar);
+        assert_eq!(place(&scene, "p1", &NoWords).rect("bar").unwrap().w, 240.0);
+        let (bar, shown) = resize_to(&mut scene, "bar", Rect::new(10.0, 10.0, 260.0, 20.0), RIGHT);
+        assert_eq!((bar.w, shown.w), (60.0, 260.0));
+    }
+
+    #[test]
+    fn a_resize_stays_within_min_and_max_with_the_far_edge_still() {
+        let mut r = node("r", Some("p1"), NodeKind::Rect, [100.0, 0.0, 100.0, 40.0]);
+        r.max_w = Some(120.0);
+        r.min_h = Some(30.0);
+        let mut scene = page(vec![r]);
+        let (r, _) = resize_to(&mut scene, "r", Rect::new(0.0, 0.0, 200.0, 40.0), LEFT);
+        assert_eq!((r.x, r.w), (80.0, 120.0), "its right edge at 200 still");
+        let (r, _) = resize_to(&mut scene, "r", Rect::new(80.0, 0.0, 120.0, 5.0), Handle { left: false, right: false, top: false, bottom: true });
+        assert_eq!((r.y, r.h), (0.0, 30.0));
+    }
+
+    #[test]
+    fn a_frames_pinned_children_follow_the_preview_as_the_edit_moves_them() {
+        let f = node("f", Some("p1"), NodeKind::Frame, [0.0, 0.0, 200.0, 100.0]);
+        let mut key = node("key", Some("f"), NodeKind::Rect, [150.0, 0.0, 40.0, 20.0]);
+        key.pin_x = Some(PinX::Right);
+        let mut g = node("g", Some("f"), NodeKind::Frame, [10.0, 40.0, 180.0, 40.0]);
+        g.pin_x = Some(PinX::LeftRight);
+        let mut dot = node("dot", Some("g"), NodeKind::Rect, [100.0, 0.0, 20.0, 20.0]);
+        dot.pin_x = Some(PinX::Right);
+        let scene = page(vec![f, key, g, dot]);
+        let mut preview = scene.clone();
+        if let Some(f) = preview.node_mut("f") {
+            f.w = 300.0;
+        }
+        preview_followers(&mut preview, vec![("f".into(), (200.0, 100.0), (300.0, 100.0))], &["f".into()]);
+        let at = |s: &Scene, id: &str| s.node(id).map(|n| (n.x, n.w)).unwrap();
+        assert_eq!(at(&preview, "key"), (250.0, 40.0));
+        assert_eq!(at(&preview, "g"), (10.0, 280.0));
+        assert_eq!(at(&preview, "dot"), (200.0, 20.0), "a level down, against g's new width");
+        // The edit itself moves them the same way.
+        let mut sent = scene.clone();
+        let mut set = Map::new();
+        set.insert("w".into(), json!(300));
+        sent.apply_all(&[NodeOp::Update { id: "f".into(), set }]).unwrap();
+        for id in ["key", "g", "dot"] {
+            assert_eq!(at(&sent, id), at(&preview, id), "{id}");
+        }
+    }
+
+    #[test]
+    fn a_group_has_no_handles_and_only_moves_with_the_selection() {
+        let g = node("g", Some("p1"), NodeKind::Group, [10.0, 10.0, 0.0, 0.0]);
+        let scene = page(vec![g, node("in", Some("g"), NodeKind::Rect, [0.0, 0.0, 50.0, 50.0]), node("r", Some("p1"), NodeKind::Rect, [100.0, 0.0, 50.0, 50.0])]);
+        assert!(!super::super::board::handled(&scene, &["g".into()]), "a group alone: B90");
+        assert!(super::super::board::handled(&scene, &["g".into(), "r".into()]));
+        let placed = place(&scene, "p1", &NoWords);
+        let g = scene.node("g").unwrap();
+        let r = placed.rect("g").unwrap();
+        let moved = resized_node(&scene, &placed, g, &r, Rect::new(r.x + 5.0, r.y, r.w * 2.0, r.h), RIGHT, false, (2.0, 1.0));
+        assert_eq!((moved.x, moved.y, moved.w, moved.h), (15.0, 10.0, 0.0, 0.0), "its size stays its children's");
+    }
 
     #[test]
     fn a_drag_near_an_edge_pans_toward_it() {
