@@ -116,33 +116,46 @@ fn media_type(src: &str) -> &'static str {
     }
 }
 
+/// No stored picture `src`.
+fn missing(src: &str) -> BusError {
+    BusError::not_found("design.asset_not_found", format!("no picture {src} on this machine"))
+        .with_hint("design.asset.add stores it again from its file")
+}
+
+/// Why stored picture `src` could not be read, as the caller can act on it (TM-15, as
+/// [`read_error`]): gone is not found, one the engine may not read is refused, anything else is
+/// the caller's to look at, never an internal error.
+fn piece_error(src: &str, error: std::io::Error) -> BusError {
+    match error.kind() {
+        ErrorKind::NotFound => missing(src),
+        ErrorKind::PermissionDenied => BusError::refused("design.asset", format!("cannot read picture {src}: permission denied"))
+            .with_hint("make the store's design-assets folder readable by the Relay engine"),
+        _ => BusError::invalid("design.asset", format!("cannot read picture {src}: {error}")),
+    }
+}
+
 /// The piece of stored picture `src` that starts at `offset`: at most [`ASSET_PIECE`] bytes,
 /// and where the next one starts.
 fn read_piece(dir: &Path, src: &str, offset: u64) -> Result<AssetGetOut, BusError> {
-    let missing = || BusError::not_found("design.asset_not_found", format!("no picture {src} on this machine"))
-        .with_hint("design.asset.add stores it again from its file");
-    let mut file = match std::fs::File::open(dir.join(src)) {
-        Ok(file) => file,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Err(missing()),
-        Err(error) => return Err(crate::engine::internal(error)),
-    };
-    let meta = file.metadata().bus()?;
+    let unreadable = |error| piece_error(src, error);
+    let mut file = std::fs::File::open(dir.join(src)).map_err(unreadable)?;
+    let meta = file.metadata().map_err(unreadable)?;
     // An empty file at a picture's name is one a crash cut short: there is no picture to give.
     if !meta.is_file() || meta.len() == 0 {
-        return Err(missing());
+        return Err(missing(src));
     }
     let size = meta.len();
     if offset >= size {
         return Err(BusError::invalid("design.asset", format!("offset {offset} is at or past the end of {src} ({size} bytes)"))
             .with_hint("start at 0, then at each piece's next"));
     }
-    file.seek(SeekFrom::Start(offset)).bus()?;
+    file.seek(SeekFrom::Start(offset)).map_err(unreadable)?;
     let mut bytes = Vec::with_capacity((size - offset).min(ASSET_PIECE as u64) as usize);
-    file.take(ASSET_PIECE as u64).read_to_end(&mut bytes).bus()?;
+    file.take(ASSET_PIECE as u64).read_to_end(&mut bytes).map_err(unreadable)?;
     // A file that shrank under the read would otherwise answer an empty piece that names
     // itself as the next, forever.
     if bytes.is_empty() {
-        return Err(missing());
+        return Err(missing(src));
     }
     let end = offset + bytes.len() as u64;
     Ok(AssetGetOut {
@@ -227,6 +240,35 @@ mod tests {
             assert_eq!(media_type(src), media);
             assert_eq!(picture::raster_ext(media).unwrap_or("svg"), src.trim_start_matches("a."), "the names asset.add stores under");
         }
+    }
+
+    /// TM-15 for design.asset.get: a stored picture that cannot be read says why, as one
+    /// design.asset.add cannot read does, and is never an internal error.
+    #[test]
+    fn a_stored_picture_that_cannot_be_read_says_why() {
+        use relay_bus::error::ErrorKind as Kind;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let src = "0123456789abcdef0123456789abcdef.png";
+        let error = read_piece(&root, src, 0).unwrap_err();
+        assert_eq!((error.code.as_str(), error.kind), ("design.asset_not_found", Kind::NotFound));
+
+        std::fs::write(root.join(src), b"a picture").unwrap();
+        assert_eq!(read_piece(&root, src, 0).unwrap().size, 9);
+        std::fs::set_permissions(root.join(src), std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root reads it anyway; everyone else is refused.
+        if std::fs::File::open(root.join(src)).is_err() {
+            let error = read_piece(&root, src, 0).unwrap_err();
+            assert_eq!((error.code.as_str(), error.kind), ("design.asset", Kind::Refused), "{error:?}");
+            assert!(error.hint.is_some());
+        }
+        std::fs::set_permissions(root.join(src), std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        // Anything else, here a folder that is a file, is the caller's to look at.
+        let error = read_piece(&root.join(src), src, 0).unwrap_err();
+        assert_eq!((error.code.as_str(), error.kind), ("design.asset", Kind::Invalid), "{error:?}");
+        assert!(error.message.contains(src), "{}", error.message);
     }
 
     #[test]
