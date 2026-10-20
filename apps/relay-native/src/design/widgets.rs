@@ -8,7 +8,8 @@ use gtk::prelude::*;
 use gtk::gdk;
 use gtk4 as gtk;
 use relay_bus::design::parse_color;
-use std::cell::Cell;
+use relay_client::design::number::{eval, fmt};
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -78,9 +79,12 @@ pub fn color_key(
             grid.set_row_spacing(4);
             for c in colors {
                 let s = swatch_button(Some(c), c);
-                if current.as_deref().is_some_and(|cur| cur.eq_ignore_ascii_case(c)) {
+                // The colour in use, lit and said to be pressed to a screen reader (B106).
+                let chosen = current.as_deref().is_some_and(|cur| cur.eq_ignore_ascii_case(c));
+                if chosen {
                     s.add_css_class("chosen");
                 }
+                s.update_state(&[gtk::accessible::State::Pressed(pressed(chosen))]);
                 let pick = pick.clone();
                 let c = c.clone();
                 let p = pop.downgrade();
@@ -103,6 +107,8 @@ pub fn color_key(
         entry.set_width_chars(12);
         entry.set_hexpand(true);
         entry.add_css_class("design-hex");
+        // Marked while what it holds is no colour, until it is changed (E-board-17).
+        entry.connect_changed(|e| e.remove_css_class("error"));
         let pick2 = pick.clone();
         let p = pop.downgrade();
         entry.connect_activate(move |e| {
@@ -144,12 +150,22 @@ pub fn color_key(
 /// sideways to scrub (Shift: finer). Esc puts back what it showed. `None` shows an empty field
 /// (mixed values). A caption `@name` is a glyph.
 pub fn number(caption: &str, value: Option<f64>, tooltip: &str, commit: impl Fn(f64) + 'static) -> gtk::Box {
-    number_step(caption, value, 1.0, tooltip, commit)
+    stored_number_step(caption, value, 1.0, tooltip, move |v| {
+        commit(v);
+        v
+    })
+}
+
+/// `number`, whose `commit` answers the value it stored, in the field's own units (an opacity
+/// typed as 150 is kept as 100, an X of 10.5 as 11): the field shows that after Enter, a step,
+/// a scrub or leaving it, not what was typed (B34).
+pub fn stored_number(caption: &str, value: Option<f64>, tooltip: &str, commit: impl Fn(f64) -> f64 + 'static) -> gtk::Box {
+    stored_number_step(caption, value, 1.0, tooltip, commit)
 }
 
 /// What a field shows for the value it last sent.
 fn shown(last: &Cell<Option<f64>>) -> String {
-    last.get().map(super::board::fmt).unwrap_or_default()
+    last.get().map(fmt).unwrap_or_default()
 }
 
 /// A value without the float noise of adding tenths (1.3 + 0.1 is not 1.4000000000000001).
@@ -157,8 +173,43 @@ fn tidy(v: f64) -> f64 {
     (v * 1e6).round() / 1e6
 }
 
-/// `number`, stepping by `step`: a line height's 0.1, not a whole 1.
-pub fn number_step(caption: &str, value: Option<f64>, step: f64, tooltip: &str, commit: impl Fn(f64) + 'static) -> gtk::Box {
+/// Send `v` and keep what `commit` says it stored as the field's value: the text it shows now.
+fn settle(commit: &dyn Fn(f64) -> f64, last: &Cell<Option<f64>>, v: f64) -> String {
+    let stored = tidy(commit(v));
+    last.set(Some(stored));
+    fmt(stored)
+}
+
+/// What a scrub `dx` pixels from `from` comes to: a step a pixel on the field's steps, with
+/// `fine` a tenth of one on tenths. Under a pixel either way is no scrub (B39): a hand that
+/// came back, or a touchpad's jitter, leaves the value as it was.
+fn scrub_value(from: f64, dx: f64, step: f64, fine: bool) -> Option<f64> {
+    if dx.abs() < 1.0 {
+        return None;
+    }
+    let q = if fine { step / 10.0 } else { step };
+    Some(tidy(((from + dx * q) / q).round() * q))
+}
+
+/// What a field says when what was typed does not come to a number.
+const NOT_A_NUMBER: &str = "Not a number: try 24, 120+16 or 50%";
+
+/// Mark the field as holding what is not a number (red, its tooltip saying why, and invalid to
+/// a screen reader), or clear the mark back to its own tooltip.
+fn mark(row: &gtk::Box, entry: &gtk::Entry, tooltip: &str, bad: bool) {
+    if bad {
+        row.add_css_class("error");
+        row.set_tooltip_text(Some(NOT_A_NUMBER));
+    } else {
+        row.remove_css_class("error");
+        row.set_tooltip_text(Some(tooltip));
+    }
+    let state = if bad { gtk::AccessibleInvalidState::True } else { gtk::AccessibleInvalidState::False };
+    entry.update_state(&[gtk::accessible::State::Invalid(state)]);
+}
+
+/// `stored_number`, stepping by `step`: a line height's 0.1, not a whole 1.
+pub fn stored_number_step(caption: &str, value: Option<f64>, step: f64, tooltip: &str, commit: impl Fn(f64) -> f64 + 'static) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     row.add_css_class("design-number");
     row.set_tooltip_text(Some(tooltip));
@@ -175,55 +226,42 @@ pub fn number_step(caption: &str, value: Option<f64>, step: f64, tooltip: &str, 
     entry.set_width_chars(4);
     entry.set_max_width_chars(6);
     entry.set_hexpand(true);
-    entry.set_text(&value.map(super::board::fmt).unwrap_or_default());
+    entry.set_text(&value.map(fmt).unwrap_or_default());
     entry.set_placeholder_text(Some("Mixed"));
     entry.update_property(&[gtk::accessible::Property::Label(tooltip)]);
     row.append(&entry);
     // The value last sent (or shown): leaving the field sends only what was typed since,
     // not the field's rounded text of a value it never changed.
     let last = Rc::new(Cell::new(value));
-    let commit: Rc<dyn Fn(f64)> = {
-        let last = last.clone();
-        Rc::new(move |v: f64| {
-            last.set(Some(v));
-            commit(v);
-        })
-    };
+    let commit: Rc<dyn Fn(f64) -> f64> = Rc::new(commit);
+    let tooltip: Rc<str> = tooltip.into();
     // What does not come to a number is marked until it is changed.
-    let r = row.downgrade();
-    entry.connect_changed(move |_| {
-        if let Some(r) = r.upgrade() {
-            r.remove_css_class("error");
+    let (r, t) = (row.downgrade(), tooltip.clone());
+    entry.connect_changed(move |e| {
+        if let Some(r) = r.upgrade().filter(|r| r.has_css_class("error")) {
+            mark(&r, e, &t, false);
         }
     });
-    let c = commit.clone();
-    let l = last.clone();
-    let r = row.downgrade();
+    let (c, l, r) = (commit.clone(), last.clone(), row.downgrade());
     entry.connect_activate(move |e| {
         let text = e.text();
         if text == shown(&l) {
             return;
         }
         match eval(&text) {
-            Some(v) => {
-                if Some(v) != l.get() {
-                    c(v);
-                }
-                // What it came to, not "120+16".
-                e.set_text(&super::board::fmt(v));
-            }
+            // What it came to as stored, not "120+16" or a value past the field's range.
+            Some(v) if Some(v) != l.get() => e.set_text(&settle(&*c, &l, v)),
+            Some(v) => e.set_text(&fmt(v)),
             None if text.trim().is_empty() => e.set_text(&shown(&l)),
             None => {
                 if let Some(r) = r.upgrade() {
-                    r.add_css_class("error");
+                    mark(&r, e, &tooltip, true);
                 }
             }
         }
     });
     let keys = gtk::EventControllerKey::new();
-    let c = commit.clone();
-    let e = entry.downgrade();
-    let l = last.clone();
+    let (c, e, l) = (commit.clone(), entry.downgrade(), last.clone());
     keys.connect_key_pressed(move |_, key, _, mods| {
         let Some(e) = e.upgrade() else {
             return glib::Propagation::Proceed;
@@ -244,27 +282,19 @@ pub fn number_step(caption: &str, value: Option<f64>, step: f64, tooltip: &str, 
             return glib::Propagation::Stop;
         };
         let by = if mods.contains(gdk::ModifierType::SHIFT_MASK) { step * 10.0 } else { step };
-        let v = tidy(from + dir * by);
-        e.set_text(&super::board::fmt(v));
-        c(v);
+        e.set_text(&settle(&*c, &l, tidy(from + dir * by)));
         glib::Propagation::Stop
     });
     entry.add_controller(keys);
     let focus = gtk::EventControllerFocus::new();
-    let c = commit.clone();
-    let e = entry.downgrade();
-    let l = last.clone();
+    let (c, e, l) = (commit.clone(), entry.downgrade(), last.clone());
     focus.connect_leave(move |_| {
         if let Some(e) = e.upgrade() {
             let shown = shown(&l);
             if e.text() != shown {
                 match eval(&e.text()) {
-                    Some(v) => {
-                        if Some(v) != l.get() {
-                            c(v);
-                        }
-                        e.set_text(&super::board::fmt(v));
-                    }
+                    Some(v) if Some(v) != l.get() => e.set_text(&settle(&*c, &l, v)),
+                    Some(v) => e.set_text(&fmt(v)),
                     // Not a number: nothing is sent, and the field shows its value again.
                     None => e.set_text(&shown),
                 }
@@ -273,62 +303,38 @@ pub fn number_step(caption: &str, value: Option<f64>, step: f64, tooltip: &str, 
     });
     entry.add_controller(focus);
     let scrub = gtk::GestureDrag::new();
-    let start = Rc::new(Cell::new(None::<f64>));
-    let s = start.clone();
-    let e = entry.downgrade();
+    // Where the scrub started: the value, and the text the field showed then.
+    let start: Rc<RefCell<Option<(f64, String)>>> = Rc::default();
+    let (s, e) = (start.clone(), entry.downgrade());
     scrub.connect_drag_begin(move |_, _, _| {
         if let Some(e) = e.upgrade() {
-            s.set(eval(&e.text()));
+            *s.borrow_mut() = eval(&e.text()).map(|v| (v, e.text().to_string()));
         }
     });
-    let e = entry.downgrade();
-    let s = start.clone();
+    let (s, e) = (start.clone(), entry.downgrade());
     scrub.connect_drag_update(move |g, dx, _| {
         let fine = g.current_event_state().contains(gdk::ModifierType::SHIFT_MASK);
-        let Some(from) = s.get() else {
+        let (Some((from, text)), Some(e)) = (s.borrow().clone(), e.upgrade()) else {
             return;
         };
-        // A step a pixel, on the field's steps; with Shift a tenth of one, on tenths.
-        let q = if fine { step / 10.0 } else { step };
-        let v = tidy(((from + dx * q) / q).round() * q);
-        if let Some(e) = e.upgrade() {
-            e.set_text(&super::board::fmt(v));
-        }
+        // A preview only: a scrub back under a pixel shows what it started from again.
+        e.set_text(&scrub_value(from, dx, step, fine).map_or(text, fmt));
     });
-    let e = entry.downgrade();
-    scrub.connect_drag_end(move |_, dx, _| {
-        if dx.abs() < 1.0 || start.get().is_none() {
+    let (e, l) = (entry.downgrade(), last.clone());
+    scrub.connect_drag_end(move |g, dx, _| {
+        let fine = g.current_event_state().contains(gdk::ModifierType::SHIFT_MASK);
+        let (Some((from, text)), Some(e)) = (start.take(), e.upgrade()) else {
             return;
-        }
-        if let Some(v) = e.upgrade().and_then(|e| eval(&e.text())) {
-            commit(v);
+        };
+        // From where it started and how far it went, not the preview's rounded text.
+        match scrub_value(from, dx, step, fine) {
+            None => e.set_text(&text),
+            Some(v) if Some(v) == l.get() => e.set_text(&fmt(v)),
+            Some(v) => e.set_text(&settle(&*commit, &l, v)),
         }
     });
     cap.add_controller(scrub);
     row
-}
-
-/// A number, or simple arithmetic on one (`120+16`, `200/2`), as design tools accept; a unit
-/// typed after it (`24px`, `50%`, `45°`) is let be.
-pub fn eval(text: &str) -> Option<f64> {
-    let t = text.trim().trim_end_matches("px").trim_end_matches('%').trim_end_matches('°').trim();
-    if let Ok(v) = t.parse::<f64>() {
-        return v.is_finite().then_some(v);
-    }
-    for op in ['+', '*', '/', '-'] {
-        if let Some((i, _)) = t.char_indices().skip(1).find(|(_, c)| *c == op) {
-            let (a, b) = (t[..i].trim().parse::<f64>().ok()?, t[i + 1..].trim().parse::<f64>().ok()?);
-            let v = match op {
-                '+' => a + b,
-                '-' => a - b,
-                '*' => a * b,
-                _ if b != 0.0 => a / b,
-                _ => return None,
-            };
-            return v.is_finite().then_some(v);
-        }
-    }
-    None
 }
 
 /// A key's tooltip, and its name for a screen reader: the tooltip less a shortcut or an aside
@@ -337,6 +343,15 @@ pub fn tip(widget: &impl IsA<gtk::Widget>, text: &str) {
     widget.set_tooltip_text(Some(text));
     let name = text.rsplit_once(" (").filter(|(_, rest)| rest.ends_with(')')).map_or(text, |(name, _)| name);
     widget.as_ref().update_property(&[gtk::accessible::Property::Label(name)]);
+}
+
+/// A key's pressed state as a screen reader reads it.
+fn pressed(on: bool) -> gtk::AccessibleTristate {
+    if on {
+        gtk::AccessibleTristate::True
+    } else {
+        gtk::AccessibleTristate::False
+    }
 }
 
 /// A row of glyph keys of which one is lit.
@@ -354,9 +369,12 @@ pub fn segmented(choices: &[(&str, &str, &str)], current: Option<&str>, pick: im
             key.set_label(glyph);
         }
         self::tip(&key, tip);
-        if current == Some(*value) {
+        // The key lit is the one pressed, to a screen reader too (B106).
+        let on = current == Some(*value);
+        if on {
             key.add_css_class("selected");
         }
+        key.update_state(&[gtk::accessible::State::Pressed(pressed(on))]);
         let pick = pick.clone();
         let value = value.to_string();
         key.connect_clicked(move |_| pick(&value));
@@ -367,18 +385,36 @@ pub fn segmented(choices: &[(&str, &str, &str)], current: Option<&str>, pick: im
 
 #[cfg(test)]
 mod tests {
-    use super::eval;
+    use super::{scrub_value, settle};
+    use std::cell::Cell;
 
     #[test]
-    fn fields_take_arithmetic() {
-        assert_eq!(eval("12"), Some(12.0));
-        assert_eq!(eval("120+16"), Some(136.0));
-        assert_eq!(eval("200/2"), Some(100.0));
-        assert_eq!(eval("-8"), Some(-8.0));
-        assert_eq!(eval("10-4"), Some(6.0));
-        assert_eq!(eval("24px"), Some(24.0));
-        assert_eq!(eval("45°"), Some(45.0));
-        assert_eq!(eval("1/0"), None);
-        assert_eq!(eval("abc"), None);
+    fn a_field_shows_what_was_stored() {
+        // An opacity typed as 150 is kept as 100, and the field says so (B34).
+        let clamp = |v: f64| v.clamp(0.0, 100.0);
+        let last = Cell::new(Some(40.0));
+        assert_eq!(settle(&clamp, &last, 150.0), "100");
+        assert_eq!(last.get(), Some(100.0));
+        // A step down from there goes from what was stored, not from 150.
+        assert_eq!(settle(&clamp, &last, last.get().unwrap() - 1.0), "99");
+        assert_eq!(last.get(), Some(99.0));
+        // An X of 10.5 is placed at 11.
+        let round = |v: f64| v.round();
+        assert_eq!(settle(&round, &last, 10.5), "11");
+        // Tenths stay tenths.
+        assert_eq!(settle(&|v| v, &last, 1.3 + 0.1), "1.4");
+        assert_eq!(last.get(), Some(1.4));
+    }
+
+    #[test]
+    fn a_scrub_under_a_pixel_is_none() {
+        // A hand that came back, or a touchpad's jitter, scrubs nothing (B39).
+        assert_eq!(scrub_value(12.0, 0.6, 1.0, false), None);
+        assert_eq!(scrub_value(12.0, -0.9, 1.0, true), None);
+        assert_eq!(scrub_value(12.0, 5.0, 1.0, false), Some(17.0));
+        assert_eq!(scrub_value(12.0, -5.0, 1.0, false), Some(7.0));
+        assert_eq!(scrub_value(12.0, 3.0, 1.0, true), Some(12.3));
+        assert_eq!(scrub_value(1.3, 1.0, 0.1, false), Some(1.4));
+        assert_eq!(scrub_value(12.0, 1.4, 1.0, false), Some(13.0));
     }
 }

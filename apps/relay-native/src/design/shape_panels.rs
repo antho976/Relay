@@ -1,14 +1,18 @@
 //! The inspector's panels for the richer properties: a polygon's corners and star, an icon's
 //! choice and colour, a line's route and the shapes it is attached to, a path's closing and
-//! smoothing, an ellipse's arc, solid or gradient fills, per-corner radii and dashed strokes.
+//! smoothing, an ellipse's arc and its ends, solid or gradient fills and strokes, per-corner
+//! radii, dashed strokes and a stroke's ends and joins. Each field writes what the node holds
+//! when it commits, not what it held when the panel was built (TM-37).
 
-use super::board::{display_name, Board};
-use super::widgets::{color_key, number, segmented};
+use super::board::Board;
+use super::inspector::current;
+use super::widgets::{color_key, segmented, stored_number};
 use crate::app::label;
 use gtk::prelude::*;
 use gtk4 as gtk;
-use relay_bus::design::{GradientKind, Node, NodeKind, NodeOp, Route};
-use relay_client::design::shapes;
+use relay_bus::design::{takes, Gradient, GradientKind, Node, NodeKind, NodeOp, Route, StrokeCap, StrokeJoin};
+use relay_client::design::names::display_name;
+use relay_client::design::{color, shapes};
 use serde_json::{json, Map, Value};
 use std::rc::Rc;
 
@@ -28,10 +32,12 @@ pub fn polygon(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
     let star = n.star.is_some();
     let sides = n.sides.unwrap_or(if star { 5 } else { 3 }) as f64;
     let weak = Rc::downgrade(b);
-    let corners = number("@triangle", Some(sides), if star { "Points" } else { "Corners" }, move |v| {
+    let corners = stored_number("@triangle", Some(sides), if star { "Points" } else { "Corners" }, move |v| {
+        let v = v.round().clamp(3.0, 24.0);
         if let Some(b) = weak.upgrade() {
-            b.set_selected(set(&[("sides", json!(v.round().clamp(3.0, 24.0) as u8))]));
+            b.set_selected(set(&[("sides", json!(v as u8))]));
         }
+        v
     });
     let toggle = gtk::CheckButton::with_label("Star");
     toggle.set_active(star);
@@ -44,10 +50,12 @@ pub fn polygon(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
     sec.append(&pair(corners, toggle));
     if let Some(inner) = n.star {
         let weak = Rc::downgrade(b);
-        sec.append(&number("@star", Some((inner * 100.0).round()), "Inner points, % of the outer", move |v| {
+        sec.append(&stored_number("@star", Some((inner * 100.0).round()), "Inner points, % of the outer", move |v| {
+            let k = (v / 100.0).clamp(0.05, 0.95);
             if let Some(b) = weak.upgrade() {
-                b.set_selected(set(&[("star", json!((v / 100.0).clamp(0.05, 0.95)))]));
+                b.set_selected(set(&[("star", json!(k))]));
             }
+            k * 100.0
         }));
     }
 }
@@ -84,10 +92,12 @@ pub fn icon(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
         }
     });
     let weak = Rc::downgrade(b);
-    let weight = number("@stroke-width", Some(n.stroke_width.unwrap_or(2.0)), "Line weight (on the icon's 24-unit grid)", move |v| {
+    let weight = stored_number("@stroke-width", Some(n.stroke_width.unwrap_or(2.0)), "Line weight (on the icon's 24-unit grid)", move |v| {
+        let v = v.clamp(0.5, 6.0);
         if let Some(b) = weak.upgrade() {
-            b.set_selected(set(&[("stroke_width", json!(v.clamp(0.5, 6.0)))]));
+            b.set_selected(set(&[("stroke_width", json!(v))]));
         }
+        v
     });
     // The key with its value beside it, as Fill has it, not a lone dot centred in its half.
     let colour_cell = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -96,6 +106,8 @@ pub fn icon(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
     hex.set_ellipsize(gtk::pango::EllipsizeMode::End);
     colour_cell.append(&hex);
     sec.append(&pair(colour_cell, weight));
+    // An icon draws its dashes on its 24-unit grid (B96).
+    sec.append(&dash(b, std::slice::from_ref(n)));
 }
 
 pub fn connector(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
@@ -175,47 +187,117 @@ fn path_flags(b: &Rc<Board>, n: &Node, smooth: bool) -> gtk::Box {
     row
 }
 
-/// An ellipse's arc: where it starts, how far it goes and the hole in its middle, with the
-/// shapes people reach for.
+/// An ellipse's arc as it is now, the whole ellipse when it has none.
+fn arc_of(n: &Node) -> relay_bus::design::Arc {
+    n.arc.clone().unwrap_or(relay_bus::design::Arc { start: 0.0, sweep: 360.0, inner: 0.0, cap: None })
+}
+
+/// The arc an ellipse is given: none for the whole ellipse, and its ends' `cap` only on a ring
+/// segment (a hole and less than a whole turn), the one arc with ends to shape, so switching to
+/// a pie or a whole ring is never refused for a cap left behind.
+fn arc_value(a: &relay_bus::design::Arc) -> Value {
+    if a.sweep.abs() >= 360.0 && a.inner <= 0.0 {
+        return Value::Null;
+    }
+    let segment = a.inner > 0.0 && a.sweep.abs() < 360.0;
+    let mut v = json!({"start": a.start, "sweep": a.sweep, "inner": a.inner});
+    if let (true, Some(cap)) = (segment, a.cap.filter(|c| *c != StrokeCap::Butt)) {
+        v["cap"] = json!(cap);
+    }
+    v
+}
+
+/// An ellipse's arc: where it starts, how far it goes, the hole in its middle and, on a ring
+/// segment, how its ends are drawn, with the shapes people reach for.
 pub fn arc(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
-    let a = n.arc.clone().unwrap_or(relay_bus::design::Arc { start: 0.0, sweep: 360.0, inner: 0.0, cap: None });
+    let a = arc_of(n);
+    // Each change is made to the arc as it is when it is made (TM-37).
     let write = {
         let weak = Rc::downgrade(b);
-        Rc::new(move |start: f64, sweep: f64, inner: f64| {
+        let id = n.id.clone();
+        Rc::new(move |change: &dyn Fn(&mut relay_bus::design::Arc)| {
             if let Some(b) = weak.upgrade() {
-                let whole = sweep.abs() >= 360.0 && inner <= 0.0;
-                let v = if whole { Value::Null } else { json!({"start": start, "sweep": sweep, "inner": inner}) };
-                b.set_selected(set(&[("arc", v)]));
+                let mut a = current(&b, &id, |n| Some(arc_of(n))).unwrap_or_else(|| arc_of(&Node::new(NodeKind::Ellipse)));
+                change(&mut a);
+                b.set_selected(set(&[("arc", arc_value(&a))]));
             }
         })
     };
     let presets = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     presets.add_css_class("design-segmented");
-    for (caption, tip, start, sweep, inner) in [
-        ("Whole", "The whole ellipse", 0.0, 360.0, 0.0),
-        ("Pie", "A three-quarter pie", 0.0, 270.0, 0.0),
-        ("Donut", "A ring", 0.0, 360.0, 0.6),
-        ("Gauge", "A half ring, open at the bottom", 270.0, 180.0, 0.7),
+    let round = Some(StrokeCap::Round);
+    for (caption, tip, start, sweep, inner, cap) in [
+        ("Whole", "The whole ellipse", 0.0, 360.0, 0.0, None),
+        ("Pie", "A three-quarter pie", 0.0, 270.0, 0.0, None),
+        ("Donut", "A ring", 0.0, 360.0, 0.6, None),
+        ("Gauge", "A half ring, open at the bottom", 270.0, 180.0, 0.7, None),
+        ("Progress", "A progress ring with round ends", 0.0, 252.0, 0.82, round),
     ] {
         let key = gtk::Button::with_label(caption);
         key.add_css_class("quiet");
         key.set_tooltip_text(Some(tip));
-        if (a.start, a.sweep, a.inner) == (start, sweep, inner) {
+        let lit = (a.start, a.sweep, a.inner) == (start, sweep, inner) && a.cap.filter(|c| *c != StrokeCap::Butt) == cap;
+        if lit {
             key.add_css_class("selected");
         }
+        key.update_state(&[gtk::accessible::State::Pressed(if lit { gtk::AccessibleTristate::True } else { gtk::AccessibleTristate::False })]);
         let w = write.clone();
-        key.connect_clicked(move |_| w(start, sweep, inner));
+        key.connect_clicked(move |_| {
+            w(&|a| {
+                (a.start, a.sweep, a.inner, a.cap) = (start, sweep, inner, cap);
+            })
+        });
         presets.append(&key);
     }
     sec.append(&presets);
-    let (start, sweep, inner) = (a.start, a.sweep, a.inner);
     let w = write.clone();
-    let start_field = number("@rotate", Some(start), "Start, degrees clockwise from the top", move |v| w(v.rem_euclid(360.0), sweep, inner));
+    let start_field = stored_number("@rotate", Some(a.start), "Start, degrees clockwise from the top", move |v| {
+        let v = v.rem_euclid(360.0);
+        w(&|a| a.start = v);
+        v
+    });
     let w = write.clone();
-    let sweep_field = number("@arc", Some(sweep), "Sweep, degrees (negative runs anticlockwise)", move |v| w(start, v.clamp(-360.0, 360.0), inner));
+    let sweep_field = stored_number("@arc", Some(a.sweep), "Sweep, degrees (negative runs anticlockwise)", move |v| {
+        let v = v.clamp(-360.0, 360.0);
+        w(&|a| a.sweep = v);
+        v
+    });
     sec.append(&pair(start_field, sweep_field));
     let w = write.clone();
-    sec.append(&number("@ellipse", Some((inner * 100.0).round()), "Hole, % of the radius", move |v| w(start, sweep, (v / 100.0).clamp(0.0, 0.99))));
+    sec.append(&stored_number("@ellipse", Some((a.inner * 100.0).round()), "Hole, % of the radius", move |v| {
+        let k = (v / 100.0).clamp(0.0, 0.99);
+        w(&|a| a.inner = k);
+        k * 100.0
+    }));
+    // A ring segment's ends: flat, round (a progress ring's) or square.
+    if a.inner > 0.0 && a.sweep.abs() < 360.0 {
+        let current = match a.cap.unwrap_or(StrokeCap::Butt) {
+            StrokeCap::Butt => "butt",
+            StrokeCap::Round => "round",
+            StrokeCap::Square => "square",
+        };
+        let w = write.clone();
+        sec.append(&labelled(
+            "Ends",
+            segmented(&[("butt", "Flat", "Flat ends"), ("round", "Round", "Round ends"), ("square", "Square", "Square ends")], Some(current), move |v| {
+                let cap = match v {
+                    "round" => Some(StrokeCap::Round),
+                    "square" => Some(StrokeCap::Square),
+                    _ => None,
+                };
+                w(&|a| a.cap = cap);
+            }),
+        ));
+    }
+}
+
+fn labelled(caption: &str, widget: impl IsA<gtk::Widget>) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let l = label(caption, "design-row-caption");
+    l.set_hexpand(true);
+    row.append(&l);
+    row.append(&widget);
+    row
 }
 
 /// Free a connector's ends where they are drawn now: its points become its own again.
@@ -248,103 +330,173 @@ fn detach_line(b: &Board, id: &str) {
     }]);
 }
 
-/// Solid colour, or a linear or radial gradient with its angle and stops.
-pub fn fill(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
-    let mode = match n.gradient.as_ref().map(|g| g.kind) {
-        None => "solid",
-        // Conic shows as linear until native-panels gives it a segment.
-        Some(GradientKind::Linear | GradientKind::Conic) => "linear",
-        Some(GradientKind::Radial) => "radial",
-    };
-    let base = super::paint::fill_of(n).unwrap_or_else(|| "#4C9DFF".into());
-    let weak = Rc::downgrade(b);
-    let current = n.gradient.clone();
-    sec.append(&segmented(
-        &[("solid", "Solid", "One colour"), ("linear", "Linear", "Linear gradient"), ("radial", "Radial", "Radial gradient")],
-        Some(mode),
-        move |v| {
-            let Some(b) = weak.upgrade() else {
-                return;
-            };
-            let value = match v {
-                "solid" => Value::Null,
-                kind => {
-                    let mut g = current.clone().map(|g| serde_json::to_value(g).unwrap_or_default()).unwrap_or_else(|| {
-                        json!({"stops": [{"at": 0.0, "color": base.clone()}, {"at": 1.0, "color": "#A178FF"}]})
-                    });
-                    g["kind"] = json!(kind);
-                    if kind == "linear" && g.get("angle").is_none_or(Value::is_null) {
-                        g["angle"] = json!(180);
+/// Which of a node's paints a `paint` panel edits: its fill (`fill`, `gradient`) or its stroke
+/// (`stroke`, `stroke_gradient`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    Fill,
+    Stroke,
+}
+
+impl Slot {
+    /// Its solid colour's field and its gradient's.
+    fn fields(self) -> (&'static str, &'static str) {
+        match self {
+            Slot::Fill => ("fill", "gradient"),
+            Slot::Stroke => ("stroke", "stroke_gradient"),
+        }
+    }
+
+    fn gradient(self, n: &Node) -> Option<Gradient> {
+        match self {
+            Slot::Fill => n.gradient.clone(),
+            Slot::Stroke => n.stroke_gradient.clone(),
+        }
+    }
+
+    /// The colour it paints when solid, its kind's default when it names none.
+    fn colour(self, n: &Node) -> Option<String> {
+        match self {
+            Slot::Fill => color::fill_of(n),
+            Slot::Stroke => n.stroke.clone(),
+        }
+    }
+}
+
+/// The angle a gradient of `kind` starts at when it names none: a linear one runs top to
+/// bottom (180), a conic one starts at the top (0).
+fn default_angle(kind: GradientKind) -> Option<f64> {
+    match kind {
+        GradientKind::Linear => Some(180.0),
+        GradientKind::Conic => Some(0.0),
+        GradientKind::Radial => None,
+    }
+}
+
+/// A fill or a stroke: one colour, or a linear, radial or conic gradient with its angle and
+/// stops (where the node's kind takes one).
+pub fn paint(b: &Rc<Board>, sec: &gtk::Box, n: &Node, slot: Slot) {
+    let (solid, field) = slot.fields();
+    let gradient = slot.gradient(n);
+    let id = n.id.clone();
+    if takes(n.kind, field) {
+        let mode = match gradient.as_ref().map(|g| g.kind) {
+            None => "solid",
+            Some(GradientKind::Linear) => "linear",
+            Some(GradientKind::Radial) => "radial",
+            Some(GradientKind::Conic) => "conic",
+        };
+        let base = slot.colour(n).unwrap_or_else(|| "#4C9DFF".into());
+        let weak = Rc::downgrade(b);
+        let id = id.clone();
+        sec.append(&segmented(
+            &[("solid", "Solid", "One colour"), ("linear", "Linear", "Linear gradient"), ("radial", "Radial", "Radial gradient"), ("conic", "Conic", "Conic gradient, round the centre")],
+            Some(mode),
+            move |v| {
+                let Some(b) = weak.upgrade() else {
+                    return;
+                };
+                let value = match v {
+                    "solid" => Value::Null,
+                    kind => {
+                        let now = current(&b, &id, |n| slot.gradient(n));
+                        let mut g = now.map(|g| serde_json::to_value(g).unwrap_or_default()).unwrap_or_else(|| {
+                            json!({"stops": [{"at": 0.0, "color": base.clone()}, {"at": 1.0, "color": "#A178FF"}]})
+                        });
+                        // Each kind starts where it starts by default: a linear one's 180 would
+                        // start a conic one at the bottom.
+                        let kind_of = match kind {
+                            "radial" => GradientKind::Radial,
+                            "conic" => GradientKind::Conic,
+                            _ => GradientKind::Linear,
+                        };
+                        g["kind"] = json!(kind_of);
+                        match (default_angle(kind_of), g.as_object_mut()) {
+                            (Some(a), Some(o)) => o.insert("angle".into(), json!(a)),
+                            (None, Some(o)) => o.remove("angle"),
+                            _ => None,
+                        };
+                        g
                     }
-                    g
-                }
-            };
-            b.set_selected(set(&[("gradient", value)]));
-        },
-    ));
-    let Some(g) = n.gradient.clone() else {
-        let fill = super::paint::fill_of(n);
+                };
+                b.set_selected(set(&[(field, value)]));
+            },
+        ));
+    }
+    let Some(g) = gradient else {
+        let shown = slot.colour(n);
+        let lines = matches!(n.kind, NodeKind::Line | NodeKind::Path);
+        // A line or path fills with nothing until given a colour, and a text; a shape with its
+        // kind's. A line strokes in the default grey; a box has no border.
+        let clear = match slot {
+            Slot::Fill if lines || n.kind == NodeKind::Text => Some("None"),
+            Slot::Fill => Some("Automatic"),
+            Slot::Stroke if lines => None,
+            Slot::Stroke => Some("None"),
+        };
         let weak = Rc::downgrade(b);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        // A line or path fills with nothing until given a colour; a shape with its own.
-        let clear = if matches!(n.kind, NodeKind::Line | NodeKind::Path) { "None" } else { "Automatic" };
-        row.append(&color_key(b, fill.as_deref(), "Fill", Some(clear), move |c| {
+        let tooltip = if slot == Slot::Fill { "Fill" } else { "Colour" };
+        row.append(&color_key(b, shown.as_deref(), tooltip, clear, move |c| {
             if let Some(b) = weak.upgrade() {
-                b.set_selected(set(&[("fill", json!(c))]));
+                b.set_selected(set(&[(solid, json!(c))]));
             }
         }));
-        row.append(&label(fill.as_deref().unwrap_or("None"), "design-hex-caption"));
+        let caption = shown.as_deref().unwrap_or(if clear.is_none() { "Automatic" } else { "None" });
+        row.append(&label(caption, "design-hex-caption"));
         sec.append(&row);
         return;
     };
+    // Each change is made to the gradient as it is when it is made (TM-37): a stop's colour,
+    // then its place, keeps both.
     let write = {
         let weak = Rc::downgrade(b);
-        Rc::new(move |g: Value| {
-            if let Some(b) = weak.upgrade() {
-                b.set_selected(set(&[("gradient", g)]));
+        Rc::new(move |change: &dyn Fn(&mut Value)| {
+            let Some(b) = weak.upgrade() else {
+                return;
+            };
+            if let Some(g) = current(&b, &id, |n| slot.gradient(n)) {
+                let mut v = serde_json::to_value(g).unwrap_or_default();
+                change(&mut v);
+                b.set_selected(set(&[(field, v)]));
             }
         })
     };
-    let value = serde_json::to_value(&g).unwrap_or_default();
-    if g.kind == GradientKind::Linear {
+    if let Some(start) = default_angle(g.kind) {
+        let tip = if g.kind == GradientKind::Conic { "Start, degrees clockwise from the top" } else { "Angle: 180 runs top to bottom, 90 left to right" };
         let w = write.clone();
-        let v = value.clone();
-        sec.append(&number("@rotate", Some(g.angle.unwrap_or(180.0)), "Angle: 180 runs top to bottom, 90 left to right", move |a| {
-            let mut v = v.clone();
-            v["angle"] = json!(a.rem_euclid(360.0));
-            w(v);
+        sec.append(&stored_number("@rotate", Some(g.angle.unwrap_or(start)), tip, move |a| {
+            let a = a.rem_euclid(360.0);
+            w(&|v| v["angle"] = json!(a));
+            a
         }));
     }
     for (i, stop) in g.stops.iter().enumerate() {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let w = write.clone();
-        let v = value.clone();
         row.append(&color_key(b, Some(&stop.color), "Stop colour", None, move |c| {
             if let Some(c) = c {
-                let mut v = v.clone();
-                v["stops"][i]["color"] = json!(c);
-                w(v);
+                w(&|v| v["stops"][i]["color"] = json!(c));
             }
         }));
         let w = write.clone();
-        let v = value.clone();
-        let at = number("", Some((stop.at * 100.0).round()), "Where it sits, %", move |p| {
-            let mut v = v.clone();
-            v["stops"][i]["at"] = json!((p / 100.0).clamp(0.0, 1.0));
-            w(v);
+        // Captioned, so it scrubs as the other fields do (E-board-7).
+        let at = stored_number("%", Some((stop.at * 100.0).round()), "Where it sits, %", move |p| {
+            let at = (p / 100.0).clamp(0.0, 1.0);
+            w(&|v| v["stops"][i]["at"] = json!(at));
+            at * 100.0
         });
         at.set_hexpand(true);
         row.append(&at);
         if g.stops.len() > 2 {
             let remove = crate::app::icon_button("minus", "Remove this stop");
             let w = write.clone();
-            let v = value.clone();
             remove.connect_clicked(move |_| {
-                let mut v = v.clone();
-                if let Some(stops) = v["stops"].as_array_mut() {
-                    stops.remove(i);
-                }
-                w(v);
+                w(&|v| {
+                    if let Some(stops) = v["stops"].as_array_mut().filter(|s| s.len() > 2 && i < s.len()) {
+                        stops.remove(i);
+                    }
+                })
             });
             row.append(&remove);
         }
@@ -354,17 +506,75 @@ pub fn fill(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
         let add = gtk::Button::with_label("Add a stop");
         add.add_css_class("quiet");
         let w = write.clone();
-        let v = value.clone();
         add.connect_clicked(move |_| {
-            let mut v = v.clone();
-            if let Some(stops) = v["stops"].as_array_mut() {
-                let color = stops.last().map(|s| s["color"].clone()).unwrap_or(json!("#FFFFFF"));
-                stops.push(json!({"at": 1.0, "color": color}));
-            }
-            w(v);
+            w(&|v| {
+                if let Some(stops) = v["stops"].as_array_mut().filter(|s| s.len() < 8) {
+                    let color = stops.last().map(|s| s["color"].clone()).unwrap_or(json!("#FFFFFF"));
+                    stops.push(json!({"at": 1.0, "color": color}));
+                }
+            })
         });
         sec.append(&add);
     }
+}
+
+/// How a stroke's ends are drawn (butt, round or square), for lines and paths and dashed
+/// strokes, and its corners (mitred, round or bevelled) where every node takes them.
+pub fn caps(b: &Rc<Board>, sec: &gtk::Box, nodes: &[Node]) {
+    let all = |field: &str| nodes.iter().all(|n| takes(n.kind, field));
+    let lines = nodes.iter().all(|n| matches!(n.kind, NodeKind::Line | NodeKind::Path));
+    let dotted = |n: &Node| n.dash.as_ref().is_some_and(|d| d.first().is_some_and(|v| *v <= 0.0));
+    if all("stroke_cap") && (lines || nodes.iter().all(|n| n.dash.is_some())) {
+        // Today's ends where it names none: round dots, butt dashes, round solid strokes.
+        let cap = |n: &Node| match n.stroke_cap {
+            Some(c) => c,
+            None if dotted(n) => StrokeCap::Round,
+            None if n.dash.is_some() => StrokeCap::Butt,
+            None => StrokeCap::Round,
+        };
+        let current = same_str(nodes.iter().map(|n| match cap(n) {
+            StrokeCap::Butt => "butt",
+            StrokeCap::Round => "round",
+            StrokeCap::Square => "square",
+        }));
+        // Butt ends draw nothing of a dot's 0-length dashes.
+        let mut choices = Vec::new();
+        if !nodes.iter().any(dotted) {
+            choices.push(("butt", "Flat", "Flat ends, cut at the end"));
+        }
+        choices.extend([("round", "Round", "Round ends"), ("square", "Square", "Square ends, past the end")]);
+        let weak = Rc::downgrade(b);
+        sec.append(&labelled(
+            "Ends",
+            segmented(&choices, current, move |v| {
+                if let Some(b) = weak.upgrade() {
+                    b.set_selected(set(&[("stroke_cap", json!(v))]));
+                }
+            }),
+        ));
+    }
+    if all("stroke_join") {
+        let current = same_str(nodes.iter().map(|n| match n.stroke_join.unwrap_or(StrokeJoin::Round) {
+            StrokeJoin::Miter => "miter",
+            StrokeJoin::Round => "round",
+            StrokeJoin::Bevel => "bevel",
+        }));
+        let weak = Rc::downgrade(b);
+        sec.append(&labelled(
+            "Joins",
+            segmented(&[("miter", "Sharp", "Sharp corners"), ("round", "Round", "Round corners"), ("bevel", "Bevel", "Cut corners")], current, move |v| {
+                if let Some(b) = weak.upgrade() {
+                    b.set_selected(set(&[("stroke_join", if v == "round" { Value::Null } else { json!(v) })]));
+                }
+            }),
+        ));
+    }
+}
+
+/// The one value every item has, if they agree.
+fn same_str<'a>(mut values: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    let first = values.next()?;
+    values.all(|v| v == first).then_some(first)
 }
 
 /// Solid, dashed or dotted.
@@ -379,6 +589,8 @@ pub fn dash(b: &Rc<Board>, nodes: &[Node]) -> gtk::Box {
     // Gaps grow with the weight, so dots stay dots on a thick stroke.
     let lines = nodes.iter().all(|n| matches!(n.kind, NodeKind::Line | NodeKind::Path));
     let width = nodes.first().and_then(|n| n.stroke_width).unwrap_or(if lines { 2.0 } else { 1.0 });
+    // Butt ends draw nothing of a dot: dots take today's round ends back.
+    let butt = nodes.iter().any(|n| n.stroke_cap == Some(StrokeCap::Butt));
     segmented(
         &[("solid", "dash-solid", "Solid"), ("dashed", "dash", "Dashed"), ("dotted", "dots", "Dotted")],
         current,
@@ -389,7 +601,11 @@ pub fn dash(b: &Rc<Board>, nodes: &[Node]) -> gtk::Box {
                     "dotted" => json!([0, (width * 2.0).max(4.0).round()]),
                     _ => Value::Null,
                 };
-                b.set_selected(set(&[("dash", value)]));
+                let mut s = set(&[("dash", value)]);
+                if v == "dotted" && butt {
+                    s.insert("stroke_cap".into(), Value::Null);
+                }
+                b.set_selected(s);
             }
         },
     )
@@ -400,9 +616,11 @@ pub fn corners(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
     let toggle = gtk::CheckButton::with_label("Each corner on its own");
     toggle.set_active(n.radii.is_some());
     let weak = Rc::downgrade(b);
-    let radius = n.radius.unwrap_or(if n.kind == NodeKind::Sticky { 6.0 } else { 0.0 });
+    let id = n.id.clone();
     toggle.connect_toggled(move |c| {
         if let Some(b) = weak.upgrade() {
+            // Every corner at the radius it has now (a sticky's own 6, B35).
+            let radius = current(&b, &id, |n| Some(n.radius.unwrap_or(shapes::default_radius(n.kind)))).unwrap_or(0.0);
             let v = if c.is_active() { json!([radius, radius, radius, radius]) } else { Value::Null };
             b.set_selected(set(&[("radii", v)]));
         }
@@ -415,13 +633,42 @@ pub fn corners(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
     row.set_homogeneous(true);
     for (i, (cap, tip)) in [("TL", "Top left"), ("TR", "Top right"), ("BR", "Bottom right"), ("BL", "Bottom left")].into_iter().enumerate() {
         let weak = Rc::downgrade(b);
-        row.append(&number(cap, Some(radii[i]), tip, move |v| {
+        let id = n.id.clone();
+        row.append(&stored_number(cap, Some(radii[i]), tip, move |v| {
+            let v = v.max(0.0);
             if let Some(b) = weak.upgrade() {
-                let mut r = radii;
-                r[i] = v.max(0.0);
+                // The other corners as they are now (TM-37).
+                let mut r = current(&b, &id, |n| n.radii).unwrap_or(radii);
+                r[i] = v;
                 b.set_selected(set(&[("radii", json!(r))]));
             }
+            v
         }));
     }
     sec.append(&row);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_ring_segment_alone_keeps_its_ends() {
+        let arc = |start: f64, sweep: f64, inner: f64, cap: Option<StrokeCap>| relay_bus::design::Arc { start, sweep, inner, cap };
+        // A progress ring keeps its round ends.
+        assert_eq!(arc_value(&arc(0.0, 252.0, 0.82, Some(StrokeCap::Round))), json!({"start": 0.0, "sweep": 252.0, "inner": 0.82, "cap": "round"}));
+        // A pie or a whole ring has no ends: a cap left behind is not sent, so it is not refused.
+        assert_eq!(arc_value(&arc(0.0, 270.0, 0.0, Some(StrokeCap::Round))), json!({"start": 0.0, "sweep": 270.0, "inner": 0.0}));
+        assert_eq!(arc_value(&arc(0.0, 360.0, 0.6, Some(StrokeCap::Square))), json!({"start": 0.0, "sweep": 360.0, "inner": 0.6}));
+        // Flat ends are the default, and the whole ellipse is no arc at all.
+        assert_eq!(arc_value(&arc(90.0, 180.0, 0.5, Some(StrokeCap::Butt))), json!({"start": 90.0, "sweep": 180.0, "inner": 0.5}));
+        assert_eq!(arc_value(&arc(0.0, 360.0, 0.0, None)), Value::Null);
+    }
+
+    #[test]
+    fn each_gradient_starts_where_its_kind_does() {
+        assert_eq!(default_angle(GradientKind::Linear), Some(180.0));
+        assert_eq!(default_angle(GradientKind::Conic), Some(0.0));
+        assert_eq!(default_angle(GradientKind::Radial), None);
+    }
 }
