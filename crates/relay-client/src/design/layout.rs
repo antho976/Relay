@@ -7,6 +7,11 @@ use super::scene::Scene;
 use relay_bus::design::{follow_axis, Items, Justify, Layout, Node, NodeKind, Pin, Sizing, MAX_COORD};
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
+use std::ops::Range;
+
+/// Slack when a wrap line is checked for room, so a line that fits exactly is not broken by
+/// rounding.
+const SLACK: f64 = 1e-6;
 
 /// Inner margin of a sticky's text.
 pub const STICKY_PAD: f64 = 16.0;
@@ -112,6 +117,54 @@ pub fn stored_shift(n: &Node, fit: Option<Fit>, dx: f64, dy: f64) -> (f64, f64) 
 pub fn is_laid(scene: &Scene, id: &str) -> bool {
     scene.node(id).is_some_and(|n| !n.is_absolute())
         && scene.parent(id).and_then(|p| scene.node(p)).is_some_and(|p| p.layout_mode() != Layout::None)
+}
+
+/// The lines a wrap layout breaks children `widths` wide into, `gap` apart: a new line when the
+/// next would pass `room`; a child wider than `room` sits alone on its line; with no `room`, one
+/// line.
+pub fn break_lines(widths: &[f64], room: Option<f64>, gap: f64) -> Vec<Range<usize>> {
+    let mut lines = Vec::new();
+    let (mut start, mut used) = (0, 0.0);
+    for (i, &w) in widths.iter().enumerate() {
+        if i > start && room.is_some_and(|room| used + gap + w > room + SLACK) {
+            lines.push(start..i);
+            (start, used) = (i, w);
+        } else {
+            used += if i > start { gap + w } else { w };
+        }
+    }
+    if start < widths.len() {
+        lines.push(start..widths.len());
+    }
+    lines
+}
+
+/// Where children of `parent` dropped at page point `p` go, as the index `move` takes: among
+/// all its children but `moving`, hidden ones included (the engine counts them, B20), the place
+/// of the first one the layout shows after `p`: right of it in a row, below it in a column, on
+/// a later line or right of it on the same line in a wrap. Hidden and absolute children are
+/// passed over; with none after `p`, or a parent without auto layout, the end.
+pub fn drop_index(scene: &Scene, placed: &Placed, parent: &str, moving: &[String], p: (f64, f64)) -> u32 {
+    let mode = scene.node(parent).map_or(Layout::None, Node::layout_mode);
+    let rest: Vec<&String> = scene.children(parent).iter().filter(|c| !moving.contains(c)).collect();
+    for (i, c) in rest.iter().enumerate() {
+        if scene.node(c).is_some_and(Node::is_absolute) {
+            continue;
+        }
+        let Some(r) = placed.rect(c) else {
+            continue;
+        };
+        let after = match mode {
+            Layout::Row => p.0 < r.cx(),
+            Layout::Column => p.1 < r.cy(),
+            Layout::Wrap => p.1 < r.y || (p.1 <= r.bottom() && p.0 < r.cx()),
+            Layout::None => false,
+        };
+        if after {
+            return i as u32;
+        }
+    }
+    rest.len() as u32
 }
 
 /// A size asked of a pass: the node, and the width offered it (only a filling one reads it).
@@ -258,7 +311,9 @@ impl<'a> Pass<'a> {
         }
         let [pt, pr, pb, pl] = n.padding_edges();
         let inner = |w: f64| (w - pl - pr).max(0.0);
-        let (content_w, mut content_h) = self.content(n, own.map(|w| inner(n.clamp_w(w))));
+        // A wrap that hugs its width breaks its lines at its max_w (one line without).
+        let room = own.or(n.max_w.filter(|_| n.layout_mode() == Layout::Wrap));
+        let (content_w, mut content_h) = self.content(n, room.map(|w| inner(n.clamp_w(w))));
         let mut w = own.unwrap_or(n.w);
         if hug_w {
             let hugged = content_w + pl + pr;
@@ -276,8 +331,14 @@ impl<'a> Pass<'a> {
     /// width (none while the frame hugs it).
     fn content(&self, n: &'a Node, room: Option<f64>) -> (f64, f64) {
         let kids = self.flow(&n.id);
-        let row = n.layout_mode() == Layout::Row;
         let gap = n.gap.unwrap_or(0.0);
+        if n.layout_mode() == Layout::Wrap {
+            let lines = self.wrap_lines(n, &kids, room);
+            let wide = lines.iter().map(|l| l.along).fold(0.0, f64::max);
+            let rows = n.row_gap.unwrap_or(gap) * lines.len().saturating_sub(1) as f64;
+            return (wide.max(0.0), (lines.iter().map(|l| l.depth).sum::<f64>() + rows).max(0.0));
+        }
+        let row = n.layout_mode() == Layout::Row;
         let (main, cross) = if row { (room, None) } else { (None, room) };
         let slots = self.line_sizes(&kids, main, cross, row, n.items.unwrap_or(Items::Start), gap);
         let along = (slots.iter().map(|s| s.main).sum::<f64>() + gap * slots.len().saturating_sub(1) as f64).max(0.0);
@@ -287,6 +348,35 @@ impl<'a> Pass<'a> {
         } else {
             (across, along)
         }
+    }
+
+    /// A wrap layout's lines in `room` px (none: one line). Children break onto lines by what
+    /// a row measures them at (a filling one by its own `w`, within its min and max, which
+    /// makes `min_w` and `fill` a grid that reflows), then each line is laid as a row: fills
+    /// share its room, and it is as tall as its tallest child, stretched ones taking that.
+    fn wrap_lines(&self, n: &Node, kids: &[&'a str], room: Option<f64>) -> Vec<Line> {
+        let scene = self.scene;
+        let (gap, items) = (n.gap.unwrap_or(0.0), n.items.unwrap_or(Items::Start));
+        let basis: Vec<f64> = kids
+            .iter()
+            .map(|&c| match scene.node(c) {
+                Some(k) if k.kind != NodeKind::Group && w_sizing(k) == Sizing::Fill => k.clamp_w(k.w),
+                _ => self.size(c, None).0,
+            })
+            .collect();
+        break_lines(&basis, room, gap)
+            .into_iter()
+            .map(|range| {
+                let line = &kids[range.clone()];
+                let mut slots = self.line_sizes(line, room, None, true, items, gap);
+                let depth = slots.iter().map(|s| s.cross).fold(0.0, f64::max);
+                for (s, &c) in slots.iter_mut().zip(line).filter(|(s, _)| s.stretch) {
+                    s.cross = scene.node(c).map_or(depth, |k| k.clamp_h(depth));
+                }
+                let along = slots.iter().map(|s| s.main).sum::<f64>() + gap * (line.len() - 1) as f64;
+                Line { range, slots, along, depth }
+            })
+            .collect()
     }
 
     /// One line of auto layout: each child's length along it and depth across. Filling
@@ -448,6 +538,17 @@ impl<'a> Pass<'a> {
         let [pt, pr, pb, pl] = frame.padding_edges();
         let inner = Rect::new(rect.x + pl, rect.y + pt, (rect.w - pl - pr).max(0.0), (rect.h - pt - pb).max(0.0));
         let kids = self.flow(&frame.id);
+        if frame.layout_mode() == Layout::Wrap {
+            // Lines from the top, `row_gap` apart (default `gap`), each placed as a row.
+            let row_gap = frame.row_gap.unwrap_or(frame.gap.unwrap_or(0.0));
+            let mut at = 0.0;
+            for line in self.wrap_lines(frame, &kids, Some(inner.w)) {
+                let band = Rect::new(inner.x, inner.y + at, inner.w, line.depth);
+                self.place_line(frame, &kids[line.range], &line.slots, band, true);
+                at += line.depth + row_gap;
+            }
+            return;
+        }
         let row = frame.layout_mode() == Layout::Row;
         let (main, cross) = if row { (inner.w, inner.h) } else { (inner.h, inner.w) };
         let slots = self.line_sizes(&kids, Some(main), Some(cross), row, frame.items.unwrap_or(Items::Start), frame.gap.unwrap_or(0.0));
@@ -500,6 +601,14 @@ struct Slot {
     stretch: bool,
 }
 
+/// One line of a wrap layout: which children, their slots, how long it is and how deep.
+struct Line {
+    range: Range<usize>,
+    slots: Vec<Slot>,
+    along: f64,
+    depth: f64,
+}
+
 /// Equal shares of `room` (none below 0) for filling children bounded by `bounds` (min, max).
 /// A share a bound changes is kept at the bound and the others share what is left, the way CSS
 /// resolves flexible lengths: when the bounds would add room in all, those held to a minimum are
@@ -531,7 +640,7 @@ fn shares(room: f64, bounds: &[(Option<f64>, Option<f64>)]) -> Vec<f64> {
 pub(crate) mod tests {
     use super::*;
     use crate::design::scene::tests::node;
-    use relay_bus::design::{NodeKind as K, PinX, PinY};
+    use relay_bus::design::{NodeKind as K, NodeOp, PinX, PinY};
 
     /// 8 px per character, 20 px a line, wrapping whole characters.
     pub(crate) struct Mono;
@@ -1102,6 +1211,157 @@ pub(crate) mod tests {
         // Stored, 180 px wraps it on two lines; at 280 px it takes one.
         assert_eq!(p.rect("words"), Some(Rect::new(10.0, 10.0, 280.0, 20.0)));
         assert_eq!(wrap_width(s.node("words").unwrap(), &p.rect("words").unwrap()), Some(280.0));
+    }
+
+    #[test]
+    fn break_lines_puts_an_overwide_child_alone() {
+        assert_eq!(break_lines(&[50.0, 200.0, 30.0, 30.0], Some(100.0), 10.0), vec![0..1, 1..2, 2..4]);
+        assert_eq!(break_lines(&[50.0, 40.0], Some(100.0), 10.0), vec![0..2], "an exact fit stays on one line");
+        assert_eq!(break_lines(&[50.0, 41.0], Some(100.0), 10.0), vec![0..1, 1..2]);
+        assert_eq!(break_lines(&[500.0, 500.0], None, 10.0), vec![0..2]);
+        assert_eq!(break_lines(&[], Some(10.0), 0.0), Vec::<Range<usize>>::new());
+    }
+
+    /// A wrap frame `w` wide (0: hugging) holding `count` chips 60×20.
+    fn chips(w: f64, count: usize) -> (Node, Vec<Node>) {
+        let mut tags = node("tags", Some("p1"), K::Frame, [0.0, 0.0, w, 0.0]);
+        tags.layout = Some(Layout::Wrap);
+        tags.gap = Some(10.0);
+        tags.h_sizing = Some(Sizing::Hug);
+        if w == 0.0 {
+            tags.w_sizing = Some(Sizing::Hug);
+        }
+        let kids = (0..count).map(|i| node(&format!("c{i}"), Some("tags"), K::Rect, [0.0, 0.0, 60.0, 20.0])).collect();
+        (tags, kids)
+    }
+
+    fn scene_of(frame: Node, kids: Vec<Node>) -> Scene {
+        let mut nodes = vec![node("p1", None, K::Page, [0.0; 4]), frame];
+        nodes.extend(kids);
+        Scene::new(nodes)
+    }
+
+    #[test]
+    fn wrap_breaks_lines_and_hugs_their_height() {
+        let (mut tags, kids) = chips(200.0, 5);
+        tags.row_gap = Some(5.0);
+        let p = place(&scene_of(tags, kids), "p1", &Mono);
+        // 60 + 10 + 60 + 10 + 60 fills 200 exactly: three a line.
+        let at: Vec<(f64, f64)> = (0..5).map(|i| p.rect(&format!("c{i}")).map(|r| (r.x, r.y)).unwrap()).collect();
+        assert_eq!(at, [(0.0, 0.0), (70.0, 0.0), (140.0, 0.0), (0.0, 25.0), (70.0, 25.0)]);
+        assert_eq!(p.rect("tags"), Some(Rect::new(0.0, 0.0, 200.0, 45.0)));
+    }
+
+    /// A wrap that hugs its width breaks at its max_w (in its padding), else keeps one line.
+    #[test]
+    fn a_hugging_wrap_breaks_at_max_w() {
+        let (mut tags, kids) = chips(0.0, 5);
+        tags.max_w = Some(150.0);
+        tags.padding = Some(vec![10.0]);
+        let p = place(&scene_of(tags, kids.clone()), "p1", &Mono);
+        // 130 px inside: two a line, three lines 10 apart.
+        assert_eq!(p.rect("tags"), Some(Rect::new(0.0, 0.0, 150.0, 100.0)));
+        assert_eq!(p.rect("c4"), Some(Rect::new(10.0, 70.0, 60.0, 20.0)));
+        let (tags, kids) = chips(0.0, 5);
+        let p = place(&scene_of(tags, kids), "p1", &Mono);
+        assert_eq!(p.rect("tags"), Some(Rect::new(0.0, 0.0, 340.0, 20.0)));
+    }
+
+    /// Filling children break by their own width (min_w makes a grid) and share their line's
+    /// room; a filling text wraps at its share.
+    #[test]
+    fn wrap_fill_children_share_their_line() {
+        let mut grid = node("grid", Some("p1"), K::Frame, [0.0, 0.0, 300.0, 0.0]);
+        grid.layout = Some(Layout::Wrap);
+        grid.gap = Some(10.0);
+        grid.h_sizing = Some(Sizing::Hug);
+        let card = |id: &str| {
+            let mut c = node(id, Some("grid"), K::Rect, [0.0, 0.0, 0.0, 50.0]);
+            c.w_sizing = Some(Sizing::Fill);
+            c.min_w = Some(120.0);
+            c
+        };
+        let mut caption = text("caption", "grid", "abcdefghijklmnopqrstuvwxyz0123"); // 240 px
+        caption.w_sizing = Some(Sizing::Fill);
+        caption.w = 100.0;
+        let s = scene_of(grid, vec![card("a"), card("b"), card("c"), caption]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(p.rect("a"), Some(Rect::new(0.0, 0.0, 145.0, 50.0)));
+        assert_eq!(p.rect("b"), Some(Rect::new(155.0, 0.0, 145.0, 50.0)));
+        // "c" (120) and the caption (100) share the second line: 145 each.
+        assert_eq!(p.rect("c"), Some(Rect::new(0.0, 60.0, 145.0, 50.0)));
+        // 145 px holds 18 characters a line: two lines.
+        assert_eq!(p.rect("caption"), Some(Rect::new(155.0, 60.0, 145.0, 40.0)));
+        assert_eq!(p.rect("grid").unwrap().h, 110.0);
+    }
+
+    #[test]
+    fn justify_and_items_apply_per_wrap_line() {
+        let mut bar = node("bar", Some("p1"), K::Frame, [0.0, 0.0, 200.0, 100.0]);
+        bar.layout = Some(Layout::Wrap);
+        bar.justify = Some(Justify::Center);
+        bar.items = Some(Items::Center);
+        let mut tall = node("tall", Some("bar"), K::Rect, [0.0, 0.0, 80.0, 30.0]);
+        tall.h_sizing = Some(Sizing::Fill);
+        let s = scene_of(bar, vec![
+            node("a", Some("bar"), K::Rect, [0.0, 0.0, 80.0, 20.0]),
+            node("b", Some("bar"), K::Rect, [0.0, 0.0, 80.0, 40.0]),
+            node("c", Some("bar"), K::Rect, [0.0, 0.0, 100.0, 10.0]),
+            tall,
+        ]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(p.rect("a"), Some(Rect::new(20.0, 10.0, 80.0, 20.0)));
+        assert_eq!(p.rect("b"), Some(Rect::new(100.0, 0.0, 80.0, 40.0)));
+        // The second line is as tall as its tallest, and a filling height takes all of it.
+        assert_eq!(p.rect("c"), Some(Rect::new(10.0, 50.0, 100.0, 10.0)));
+        assert_eq!(p.rect("tall"), Some(Rect::new(110.0, 40.0, 80.0, 30.0)));
+    }
+
+    /// B20: a drop index counted only the shown siblings, but the engine's `move` counts every
+    /// sibling: hidden ones before the drop count, absolute ones are passed over.
+    #[test]
+    fn drop_index_in_row_column_and_wrap_with_absolute_and_hidden_siblings() {
+        let mut col = node("col", Some("p1"), K::Frame, [0.0, 0.0, 100.0, 80.0]);
+        col.layout = Some(Layout::Column);
+        let mut hidden = node("h", Some("col"), K::Rect, [0.0, 0.0, 100.0, 20.0]);
+        hidden.hidden = Some(true);
+        let mut s = scene_of(col, vec![
+            hidden,
+            node("a", Some("col"), K::Rect, [0.0, 0.0, 100.0, 20.0]),
+            node("b", Some("col"), K::Rect, [0.0, 0.0, 100.0, 20.0]),
+            node("c", Some("col"), K::Rect, [0.0, 0.0, 100.0, 20.0]),
+        ]);
+        let p = place(&s, "p1", &Mono);
+        let moving = ["a".to_string()];
+        // Between b (centre 30) and c (centre 50): before c, which is third of [h, b, c].
+        let at = drop_index(&s, &p, "col", &moving, (50.0, 40.0));
+        assert_eq!(at, 2);
+        s.apply(&NodeOp::Move { id: "a".into(), parent: None, index: Some(at), keep_position: None }).unwrap();
+        assert_eq!(s.children("col"), ["h", "b", "a", "c"]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(drop_index(&s, &p, "col", &["c".into()], (50.0, 0.0)), 1, "before b, the first shown");
+        assert_eq!(drop_index(&s, &p, "col", &["c".into()], (50.0, 79.0)), 3, "the end");
+        // A row reads across, and an absolute child is in no one's way.
+        let mut row = node("row", Some("p1"), K::Frame, [0.0, 0.0, 300.0, 20.0]);
+        row.layout = Some(Layout::Row);
+        let mut badge = node("badge", Some("row"), K::Rect, [0.0, 0.0, 300.0, 20.0]);
+        badge.absolute = Some(true);
+        let s = scene_of(row, vec![
+            badge,
+            node("x", Some("row"), K::Rect, [0.0, 0.0, 100.0, 20.0]),
+            node("y", Some("row"), K::Rect, [0.0, 0.0, 100.0, 20.0]),
+        ]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(drop_index(&s, &p, "row", &[], (120.0, 10.0)), 2);
+        assert_eq!(drop_index(&s, &p, "row", &[], (10.0, 10.0)), 1);
+        // A wrap: a later line, or left of the centre on the same line.
+        let (tags, kids) = chips(200.0, 5);
+        let s = scene_of(tags, kids);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(drop_index(&s, &p, "tags", &[], (190.0, 10.0)), 3, "end of the first line");
+        assert_eq!(drop_index(&s, &p, "tags", &[], (10.0, 35.0)), 3, "start of the second");
+        assert_eq!(drop_index(&s, &p, "tags", &[], (110.0, 35.0)), 5);
+        assert_eq!(drop_index(&s, &p, "p1", &[], (0.0, 0.0)), 1, "a page keeps no order: the end");
     }
 
     /// Mono, counting what it is asked.
