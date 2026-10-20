@@ -88,8 +88,9 @@ pub(super) struct Run<'a> {
     /// Each applied edit's undo, in edit order; a delete's is the whole subtree's re-adds.
     pub(super) inverse: Vec<Vec<NodeOp>>,
     /// Where nodes sit, as far as this list has looked: each node's parent, read a chain at a
-    /// time when first needed and kept as its adds, moves and deletes change them. Depths and
-    /// pages are read off it (W14, B6).
+    /// time when first needed (or whole, once a move to another page has the connectors' ends
+    /// placed) and kept as its adds, moves and deletes change them. Depths and pages are read
+    /// off it (W14, B6).
     pub(super) parents: HashMap<String, Option<String>>,
     /// The last node an add asked the depth of, and that depth: a list adds a node's children
     /// one after another. A move or a delete forgets it.
@@ -127,6 +128,8 @@ const DEPTH: &str = "WITH RECURSIVE up(parent_id, d) AS (
         SELECT n.parent_id, up.d + 1 FROM up JOIN design_nodes n ON n.design_id = ?1 AND n.node_id = up.parent_id
         WHERE up.d < ?3)
     SELECT MAX(d) FROM up WHERE parent_id IS NULL";
+/// Every node of the design and its parent, from the parent index alone.
+const PARENTS: &str = "SELECT node_id, parent_id FROM design_nodes WHERE design_id = ?1";
 /// How many levels below node `?2` the deepest node inside it sits, counted as far as `?3`.
 const HEIGHT: &str = "WITH RECURSIVE down(node_id, d) AS (
         SELECT ?2, 0
@@ -256,6 +259,17 @@ impl Run<'_> {
         let depth: Option<i64> = self.tx.prepare_cached(DEPTH).bus()?
             .query_row(params![self.design, id, MAX_NODES as i64], |r| r.get(0)).bus()?;
         Ok(depth.map(|depth| depth as usize))
+    }
+
+    /// Where every node of the design sits, read whole: what [`Run::release_ends`] places each
+    /// connector's ends by after a move to another page, one read rather than a chain per end.
+    fn learn_all(&mut self) -> Result<(), BusError> {
+        let rows: Vec<(String, Option<String>)> = self.tx.prepare_cached(PARENTS).bus()?
+            .query_map([self.design], |r| Ok((r.get(0)?, r.get(1)?))).bus()?
+            .collect::<rusqlite::Result<_>>().bus()?;
+        self.parents.reserve(rows.len().saturating_sub(self.parents.len()));
+        self.parents.extend(rows);
+        Ok(())
     }
 
     /// How many levels below node `id` the deepest node inside it sits, counted as far as WALK.
@@ -719,13 +733,15 @@ impl Run<'_> {
 
     /// The last edit of this list that moved connector `line` or its `end`, or a node holding
     /// either, to another page, when they now sit on different pages. `None` when they share a
-    /// page, or when the list moved neither: a connector it leaves alone keeps its ends.
-    fn parted_at(&mut self, line: &str, end: &str) -> Result<Option<usize>, BusError> {
-        let (Some((_, a)), Some((_, b))) = (self.place(line)?, self.place(end)?) else { return Ok(None) };
-        if a == b {
-            return Ok(None);
+    /// page, or when the list moved neither: a connector it leaves alone keeps its ends. Read off
+    /// `parents` alone, which holds the whole design by then ([`Run::learn_all`]).
+    fn parted_at(&self, line: &str, end: &str) -> Option<usize> {
+        let at = self.chain(line).chain(self.chain(end)).filter_map(|id| self.crossed.get(id).copied()).max()?;
+        let page = |id| self.chain(id).last().filter(|top| matches!(self.parents.get(*top), Some(None)));
+        match (page(line), page(end)) {
+            (Some(a), Some(b)) if a != b => Some(at),
+            _ => None,
         }
-        Ok(self.chain(line).chain(self.chain(end)).filter_map(|id| self.crossed.get(id).copied()).max())
     }
 
     /// Connectors attached to a node this list deleted let go of that end, so no line names a
@@ -747,6 +763,11 @@ impl Run<'_> {
                 AND (instr(body, '\"from\":') > 0 OR instr(body, '\"to\":') > 0)").bus()?
             .query_map([self.design], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).bus()?
             .collect::<rusqlite::Result<_>>().bus()?;
+        // After a move to another page each connector's ends are placed, so where every node sits
+        // is read in one query rather than a chain at a time (MODEL-SPEC §5 #5).
+        if !self.crossed.is_empty() && !attached.is_empty() {
+            self.learn_all()?;
+        }
         let mut releases = Vec::new();
         for (id, parent, body) in attached {
             // A row this build cannot read is left as it is (a newer build's own kind of line).
@@ -763,7 +784,7 @@ impl Run<'_> {
                 let parted = match self.removed_at.get(end) {
                     Some(&at) if self.meta(end)?.is_none() => Some(at),
                     _ if self.crossed.is_empty() => None,
-                    _ => self.parted_at(&node.id, end)?,
+                    _ => self.parted_at(&node.id, end),
                 };
                 let set = written.get(node.id.as_str()).and_then(|at| at[i]);
                 if parted.is_some_and(|parted| set.is_none_or(|set| set < parted)) {

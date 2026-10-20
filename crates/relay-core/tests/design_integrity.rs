@@ -485,3 +485,46 @@ fn an_undo_attaches_before_it_re_adds() {
     assert_eq!(nodes(&e, id), before);
     counted(&e, id);
 }
+
+/// Timings for `design.apply` on a design of 4,500 nodes holding 1,500 connectors: an update, a
+/// move into another parent on the same page, a delete (which reads every connector's ends) and a
+/// move to another page (which places them). Each list's undo runs after it, untimed, so every run
+/// starts from the same design. Run with
+/// `cargo test --release -p relay-core --test design_integrity -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn measure_apply_beside_1500_connectors() {
+    let (e, _root) = project();
+    let id = create(&e);
+    let n = 1_500;
+    // 1,500 cards on page-1, each holding a title, and a line from each title to the next card's.
+    apply(&e, id, json!([{"op": "add", "node": {"id": "page-2", "kind": "page", "name": "Page 2"}},
+        {"op": "add", "node": {"id": "spare", "parent": "page-1", "kind": "rect", "w": 10, "h": 10}}]));
+    for batch in (0..n).collect::<Vec<_>>().chunks(500) {
+        let ops: Vec<Value> = batch.iter().flat_map(|i| [
+            json!({"op": "add", "node": {"id": format!("c{i}"), "parent": "page-1", "kind": "frame", "x": i * 30, "y": 0, "w": 20, "h": 20}}),
+            json!({"op": "add", "node": {"id": format!("t{i}"), "parent": format!("c{i}"), "kind": "text", "text": "Card", "w": 20, "h": 10}}),
+        ]).collect();
+        apply(&e, id, Value::Array(ops));
+    }
+    let lines: Vec<Value> = (0..n).map(|i| json!({"op": "add", "node": {
+        "id": format!("l{i}"), "parent": "page-1", "kind": "line", "from": format!("t{i}"), "to": format!("t{}", (i + 1) % n)}})).collect();
+    apply(&e, id, Value::Array(lines));
+    assert_eq!(ok(&e, "design.get", json!({"design_id": id}))["design"]["nodes"], 3 * n + 3);
+    let median = |mut runs: Vec<std::time::Duration>| { runs.sort(); runs[runs.len() / 2] };
+    let time = |what: &str, ops: Value| {
+        let mut runs = Vec::new();
+        for k in 0..32 {
+            let started = std::time::Instant::now();
+            let out = apply(&e, id, ops.clone());
+            if k >= 2 { runs.push(started.elapsed()); }
+            lenient(&e, id, out["inverse"].clone());
+        }
+        println!("{what}: median {:?} of {}", median(runs.clone()), runs.len());
+    };
+    time("update", json!([{"op": "update", "id": "c0", "set": {"x": 5}}]));
+    time("move on the page", json!([{"op": "move", "id": "c0", "parent": "c1"}]));
+    time("delete", json!([{"op": "delete", "id": "spare"}]));
+    time("move to another page", json!([{"op": "move", "id": "c0", "parent": "page-2"}]));
+    counted(&e, id);
+}
