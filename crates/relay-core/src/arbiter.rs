@@ -713,8 +713,10 @@ pub fn reconcile_order(engine: &Engine, id: i64) -> Result<(), BusError> {
             };
             let eid = order.order_id.clone();
             book_live_fills(engine, client.as_ref(), &o, &eid, &order)?;
+            let done_there = order.status.is_done();
+            let order = settled(engine, &o, order)?;
             with_book(engine, |b| b.update_order(id, &order))?;
-            if !order.status.is_done() {
+            if !done_there {
                 if let Some(sid) = o.strategy_id {
                     if stale_limit(engine, sid, &o) {
                         // Read again: an order just found by its id has that id now.
@@ -734,6 +736,25 @@ fn stale_limit(engine: &Engine, sid: i64, o: &OrderView) -> bool {
     }
     let bar = with_book(engine, |b| b.strategy(sid)).map(|s| s.granularity.seconds()).unwrap_or(3600);
     book::now() - created_at(o) > bar
+}
+
+/// What a live order's record says once its fills are booked: the exchange's answer, except that
+/// an order the exchange calls done with fills still missing from the book stays open, so the
+/// next pass books the rest (fills can lag the order's status, and a done order is never read
+/// again). A booked fill is rounded to the base increment, so a shortfall within one increment a
+/// fill is rounding, not a fill to wait for.
+fn settled(engine: &Engine, o: &OrderView, mut order: ExchangeOrder) -> Result<ExchangeOrder, BusError> {
+    if !order.status.is_done() || order.filled_size <= Decimal::ZERO {
+        return Ok(order);
+    }
+    let (booked, n, step) = with_book(engine, |b| {
+        let (booked, n) = b.booked_fills(o.id)?;
+        Ok((booked, n, b.cached_product(&o.product)?.map(|p| p.base_increment).filter(|i| *i > Decimal::ZERO).unwrap_or(Decimal::new(1, 8))))
+    })?;
+    if order.filled_size - booked > step * Decimal::from(n) {
+        order.status = OrderStatus::Open;
+    }
+    Ok(order)
 }
 
 /// Books a live order's fills the exchange reports and the book does not have yet.
@@ -771,8 +792,9 @@ fn cancel_one(engine: &Engine, o: &OrderView, why: &str) -> Result<(), BusError>
         // A cancel races the order's fills: it may have filled, wholly or in part, since the
         // last pass, and the exchange answers a filled order's cancel as done. Book what the
         // exchange says it did; a cancel still queued stays open for the next pass.
-        let mut order = client.order(&eid).map_err(ex)?;
+        let order = client.order(&eid).map_err(ex)?;
         book_live_fills(engine, client.as_ref(), o, &eid, &order)?;
+        let mut order = settled(engine, o, order)?;
         if order.status == OrderStatus::Cancelled && order.reason.is_none() {
             order.reason = Some(why.to_string());
         }

@@ -37,6 +37,9 @@ struct Fake {
     drop_orders: Mutex<bool>,
     /// Looking an order up by its client_order_id fails.
     lookup_fails: Mutex<bool>,
+    /// The next this many reads of an order's fills answer none yet, though the order reads as
+    /// filled: fills lag the order's status.
+    fills_lag: Mutex<u32>,
 }
 
 impl Fake {
@@ -141,6 +144,11 @@ impl Account for Fake {
     }
     fn fills(&self, id: &str) -> Result<Vec<ExchangeFill>> {
         if *self.rest.lock().unwrap() {
+            return Ok(vec![]);
+        }
+        let mut lag = self.fills_lag.lock().unwrap();
+        if *lag > 0 {
+            *lag -= 1;
             return Ok(vec![]);
         }
         let p = Decimal::try_from(*self.price.lock().unwrap()).unwrap();
@@ -592,4 +600,31 @@ fn without_the_key_a_halt_leaves_a_live_order_open_and_says_so() {
     assert_eq!(ok(&engine, "arbiter.halt", json!({"reason": "testing"}))["cancelled"], 1);
     assert_eq!(last_order(&engine, id)["status"], "cancelled");
     assert_eq!(fake.cancelled.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn an_order_filled_before_its_fills_show_stays_open_until_they_are_booked() {
+    let (engine, fake) = setup();
+    let id = live_agent(&engine);
+    *fake.fills_lag.lock().unwrap() = 1;
+    // Coinbase says filled, but lists no fill yet: it is not closed with nothing booked.
+    agent_buy(&engine, id, "20");
+    let d = ok(&engine, "arbiter.strategy.get", json!({"id": id}));
+    assert_eq!((d["orders"][0]["status"].as_str(), d["row"]["held_base"].as_str()), (Some("open"), Some("0")), "{d:#}");
+    pass(&engine);
+    let d = ok(&engine, "arbiter.strategy.get", json!({"id": id}));
+    assert_eq!((d["orders"][0]["status"].as_str(), d["row"]["held_base"].as_str()), (Some("filled"), Some("0.5")), "{d:#}");
+
+    // The same when the kill switch's cancel finds it filled and its fill not listed yet.
+    let (engine, fake) = setup();
+    let id = live_agent(&engine);
+    *fake.rest.lock().unwrap() = true;
+    agent_buy(&engine, id, "20");
+    *fake.rest.lock().unwrap() = false;
+    *fake.fills_lag.lock().unwrap() = 1;
+    ok(&engine, "arbiter.halt", json!({"reason": "testing"}));
+    assert_eq!(last_order(&engine, id)["status"], "open");
+    pass(&engine);
+    let d = ok(&engine, "arbiter.strategy.get", json!({"id": id}));
+    assert_eq!((d["orders"][0]["status"].as_str(), d["row"]["held_base"].as_str()), (Some("filled"), Some("0.5")), "{d:#}");
 }

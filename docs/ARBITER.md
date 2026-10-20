@@ -196,7 +196,9 @@ Behind the `engine` feature:
   each pass first looks it up by its `client_order_id` (List Orders for its product, from a few
   minutes before it was sent). Found, it is reconciled like any other order. Not found, it is sent
   again under the same id for a minute, unless a halt came since; after that it is failed as never
-  placed. A lookup that fails decides nothing.
+  placed. A lookup that fails decides nothing. An order Coinbase calls filled or cancelled is
+  closed only once the book has its fills: they can lag the status, so until they show it stays
+  open and the next pass books the rest.
 - **A cancel** goes to Coinbase or nowhere. Without the key, or with Coinbase not answering, the
   order stays open and the kill switch lists it as not cancelled. An order with no answer is looked
   up first; only one Coinbase has no record of is cancelled in the book alone. A cancel reads the

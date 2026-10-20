@@ -680,6 +680,13 @@ impl Book {
         Ok(Some(self.conn.last_insert_rowid()))
     }
 
+    /// What the book has of one order's fills: their base amount and how many there are.
+    pub fn booked_fills(&self, order_id: i64) -> Result<(Decimal, u32)> {
+        let mut st = self.conn.prepare_cached("SELECT size FROM fills WHERE order_id = ?1")?;
+        let sizes = st.query_map([order_id], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok((sizes.iter().cloned().map(dec0).sum(), sizes.len() as u32))
+    }
+
     pub fn fills(&self, strategy: Option<i64>, limit: u32) -> Result<Vec<FillView>> {
         let cond = if strategy.is_some() { "f.strategy_id = ?1" } else { "?1 IS NULL" };
         let sql = format!(
