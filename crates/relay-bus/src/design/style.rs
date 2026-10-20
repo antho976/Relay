@@ -14,22 +14,23 @@
 //! with `fill`/`gradient`, `radius`/`radii`, `shadow`/`shadows` and `stroke`/`stroke_gradient`
 //! each counted as one field, so a node's own colour is never painted over by its style's
 //! gradient.
+//!
+//! A style another build stored is read whole, as a node is ([`Style::read`], [`read_styles`]):
+//! what this build cannot read waits in its `extra` and is written back as it was.
 
 use super::fields::{casts_outer_only, fit_shadow};
 use super::hints::bad_value;
 use super::{
-    field_hint, field_kinds, nearest, obj_opt, obj_vec_opt, object_only, parse_color, plain_label, takes, valid_id, Blend,
+    field_hint, field_kinds, nearest, obj_opt, obj_vec_opt, parse_color, plain_label, takes, valid_id, Blend,
     Gradient, Node, NodeKind, NodeOp, Shadow, StrokeCap, StrokeJoin, TextAlign, TextCase, TextRun, MAX_COORD, MAX_ID,
     MAX_NAME, MAX_SHADOWS, MAX_SHADOW_BLUR,
 };
 use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
-use serde::de::{DeserializeSeed, MapAccess, Visitor};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
-use std::marker::PhantomData;
 
 /// Most named colours and styles one design holds, together.
 pub const MAX_STYLES: usize = 256;
@@ -68,6 +69,10 @@ pub fn copy_id(from: &str, to: &str, id: &str) -> Option<String> {
 /// A named look nodes share: any of the style fields, each as a node holds it (a colour may be a
 /// `$name`). A node takes each field it does not set itself; `fill` and `gradient` count as one
 /// field, and so do `radius` and `radii`, `shadow` and `shadows`, `stroke` and `stroke_gradient`.
+///
+/// The derived `Deserialize` is strict, as a caller's `style` edit is held to it; a style a
+/// design stored or a reply carries is read by [`Style::read`] ([`read_styles`]), which keeps
+/// what this build cannot read in `extra`, and written by [`Style::to_map`] ([`write_styles`]).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(rename = "DesignStyle")]
@@ -139,10 +144,17 @@ pub struct Style {
     pub stroke_join: Option<StrokeJoin>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "obj_opt")]
     pub stroke_gradient: Option<Gradient>,
+    /// What a newer Relay stored in the style that this build cannot read (a field it does not
+    /// know, or a value it does not understand), kept aside and written back as it was, so an
+    /// older build's colour or style edit loses nothing of it (MODEL-SPEC §2.3, as a node's
+    /// `extra`). It is never laid under a node, detached or undone: those carry what this build
+    /// reads. Only [`Style::read`] fills it.
+    #[serde(skip)]
+    pub extra: Map<String, Value>,
 }
 
 /// A design's named colours and styles: one namespace, at most [`MAX_STYLES`] names together,
-/// stored as one JSON object and read whole.
+/// stored as one JSON object and read whole (each style by [`Style::read`]).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "DesignStyles")]
 pub struct Styles {
@@ -150,7 +162,12 @@ pub struct Styles {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub colors: BTreeMap<String, String>,
     /// Each style, by name.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "obj_map")]
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "read_styles",
+        serialize_with = "write_styles"
+    )]
     pub styles: BTreeMap<String, Style>,
 }
 
@@ -215,7 +232,7 @@ macro_rules! per_field {
             /// The style fields `node` sets itself, as a style: its own look, without what its
             /// style lays under it.
             pub fn of(node: &Node) -> Style {
-                Style { $($field: node.$field.clone()),* }
+                Style { $($field: node.$field.clone(),)* extra: Map::new() }
             }
 
             /// The fields it holds, as bits.
@@ -285,7 +302,7 @@ impl Style {
     /// and what a caller may write in a node: a font without control characters, `shadow` or
     /// `shadows` but not both, and each shadow's blur within 200. An inner shadow or a spread is
     /// accepted: a box draws it, and under a text, line, path or icon it lies as that node casts
-    /// a shadow ([`Style::for_kind`]).
+    /// a shadow, outer and without spread ([`Style::lay_under`]).
     pub fn validate(&self) -> Result<(), String> {
         let mut probe = Node::new(NodeKind::Rect);
         probe.parent = Some("style".into());
@@ -321,7 +338,7 @@ impl Style {
                 fields.insert(key.clone(), value.clone());
             }
         }
-        let style = serde_json::from_value::<Style>(Value::Object(fields)).map_err(|error| {
+        let mut style = serde_json::from_value::<Style>(Value::Object(fields)).map_err(|error| {
             // The fields held already read, so a value of `set` did not: name it.
             set.iter()
                 .filter(|(_, value)| !value.is_null())
@@ -333,17 +350,22 @@ impl Style {
                 .unwrap_or_else(|| error.to_string())
         })?;
         style.validate()?;
+        // What a newer Relay stored stays, unless `set` writes or clears that key.
+        style.extra = self.extra.clone();
+        style.extra.retain(|key, _| !set.contains_key(key));
         Ok(style)
     }
 
     /// The fields `set` would change, at their current values (`null` where absent): the `style`
-    /// edit that undoes it.
+    /// edit that undoes it. A value held in `extra` is `null` here: an undo carries what this
+    /// build reads.
     pub fn before(&self, set: &Map<String, Value>) -> Map<String, Value> {
         let current = self.to_set();
         set.keys().map(|key| (key.clone(), current.get(key).cloned().unwrap_or(Value::Null))).collect()
     }
 
-    /// Every field it holds, as the `set` of a `style` edit that makes it again.
+    /// Every field it holds that this build reads, as the `set` of a `style` edit that makes it
+    /// again (without `extra`).
     pub fn to_set(&self) -> Map<String, Value> {
         match serde_json::to_value(self) {
             Ok(Value::Object(fields)) => fields,
@@ -351,11 +373,50 @@ impl Style {
         }
     }
 
+    /// A style as a design stored it or a reply carries it, perhaps from a newer Relay: a key this
+    /// build cannot read (a field it does not know, or a value it does not understand, such as a
+    /// newer blend mode) is kept in `extra`. Fails only when it is not a JSON object (TM-16: a
+    /// list is never read field by field).
+    pub fn read(value: Value) -> Result<Style, String> {
+        // The fast path; else each key read alone, and the ones that do not read set aside.
+        match Style::deserialize(&value) {
+            Ok(style) if value.is_object() => return Ok(style),
+            _ => {}
+        }
+        let Value::Object(mut map) = value else { return Err("a style is a JSON object".into()) };
+        let mut extra = Map::new();
+        let keys: Vec<String> = map.keys().cloned().collect();
+        for key in keys {
+            let probe = Map::from_iter([(key.clone(), map[&key].clone())]);
+            if Style::deserialize(&Value::Object(probe)).is_err() {
+                if let Some(value) = map.remove(&key) {
+                    extra.insert(key, value);
+                }
+            }
+        }
+        let mut style = Style::deserialize(&Value::Object(map)).map_err(|e| e.to_string())?;
+        style.extra = extra;
+        Ok(style)
+    }
+
+    /// Its JSON as the design stores it: its fields, then each `extra` key no field already
+    /// wrote, so no key is written twice.
+    pub fn to_map(&self) -> Map<String, Value> {
+        let mut map = self.to_set();
+        for (key, value) in &self.extra {
+            if !map.contains_key(key) {
+                map.insert(key.clone(), value.clone());
+            }
+        }
+        map
+    }
+
     /// Lay it under `node`: each field it holds that the node's kind uses and the node does not
     /// set itself (`fill`/`gradient`, `radius`/`radii`, `shadow`/`shadows` and
     /// `stroke`/`stroke_gradient` counting as one field each; a key held in `extra` counts as
     /// set). A style's radius never lands on an ellipse, nor its stroke join on a box, nor its
-    /// inner shadow on a text ([`Style::for_kind`]).
+    /// inner shadow or spread on a text, line, path or icon, which casts outer shadows only and
+    /// without spread (MODEL-SPEC §1 #13).
     pub fn lay_under(&self, node: &mut Node) {
         let style = self.for_kind(node.kind);
         let bits = style.under(node);
@@ -709,8 +770,9 @@ impl Styles {
 
     /// Take colour or style `name` out. A colour is written into every style that names it.
     /// Answers what went and the edits that undo it so far, in the order they replay: the
-    /// re-create first, then each style patched back to name the colour again. The caller
-    /// detaches the nodes that use it ([`Styles::detach`]) and appends their undos.
+    /// re-create first (a style's with what this build reads of it), then each style patched back
+    /// to name the colour again. The caller detaches the nodes that use it ([`Styles::detach`])
+    /// and appends their undos.
     pub fn delete(&mut self, name: &str) -> Result<(Removed, Vec<NodeOp>), StyleError> {
         if let Some(style) = self.styles.remove(name) {
             let undo = vec![NodeOp::Style { name: name.into(), set: style.to_set() }];
@@ -823,31 +885,61 @@ pub(crate) fn style_set_schema(_: &mut SchemaGenerator) -> Schema {
     })
 }
 
-/// A map of styles, each read only from a JSON object (TM-16): serde would read an array field by
-/// field.
-fn obj_map<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<BTreeMap<String, T>, D::Error> {
-    struct Object<T>(PhantomData<T>);
-    impl<'de, T: Deserialize<'de>> DeserializeSeed<'de> for Object<T> {
-        type Value = T;
-        fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<T, D::Error> {
-            object_only(d)
+/// Styles by name, each by [`Style::read`]: an error names the style.
+fn read_each<E: de::Error>(styles: BTreeMap<String, Value>) -> Result<BTreeMap<String, Style>, E> {
+    styles
+        .into_iter()
+        .map(|(name, style)| match Style::read(style) {
+            Ok(style) => Ok((name, style)),
+            Err(why) => Err(E::custom(format!("styles.{name}: {why}"))),
+        })
+        .collect()
+}
+
+/// `deserialize_with` for a map of styles, as the design stores them or a reply carries them:
+/// each by [`Style::read`], so a style a newer Relay wrote reads and keeps what this build cannot
+/// read. One that is not a JSON object fails it (TM-16).
+pub fn read_styles<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<String, Style>, D::Error> {
+    read_each(BTreeMap::<String, Value>::deserialize(d)?)
+}
+
+/// [`read_styles`] for an optional map.
+pub fn read_styles_opt<'de, D: Deserializer<'de>>(d: D) -> Result<Option<BTreeMap<String, Style>>, D::Error> {
+    Option::<BTreeMap<String, Value>>::deserialize(d)?.map(read_each).transpose()
+}
+
+/// `serialize_with` for a map of styles: each by [`Style::to_map`], or the derived form when it
+/// holds no `extra`.
+pub fn write_styles<S: Serializer>(styles: &BTreeMap<String, Style>, s: S) -> Result<S::Ok, S::Error> {
+    s.collect_map(styles.iter().map(|(name, style)| (name, Written(style))))
+}
+
+/// [`write_styles`] for an optional map.
+pub fn write_styles_opt<S: Serializer>(styles: &Option<BTreeMap<String, Style>>, s: S) -> Result<S::Ok, S::Error> {
+    match styles {
+        Some(styles) => s.serialize_some(&All(styles)),
+        None => s.serialize_none(),
+    }
+}
+
+struct Written<'a>(&'a Style);
+
+impl Serialize for Written<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        if self.0.extra.is_empty() {
+            self.0.serialize(s)
+        } else {
+            self.0.to_map().serialize(s)
         }
     }
-    struct Objects<T>(PhantomData<T>);
-    impl<'de, T: Deserialize<'de>> Visitor<'de> for Objects<T> {
-        type Value = BTreeMap<String, T>;
-        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            f.write_str("an object of objects")
-        }
-        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<BTreeMap<String, T>, A::Error> {
-            let mut out = BTreeMap::new();
-            while let Some(name) = map.next_key::<String>()? {
-                out.insert(name, map.next_value_seed(Object(PhantomData))?);
-            }
-            Ok(out)
-        }
+}
+
+struct All<'a>(&'a BTreeMap<String, Style>);
+
+impl Serialize for All<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        write_styles(self.0, s)
     }
-    d.deserialize_map(Objects(PhantomData))
 }
 
 #[cfg(test)]
@@ -1435,5 +1527,71 @@ mod tests {
         assert_eq!(drawn.fill.as_deref(), Some("#FFFDF8"), "the style's fill shows");
         let drawn = styles.resolve(&node(json!({"parent": "p", "kind": "rect", "style": "card", "shadow": {"color": "$gone"}})));
         assert_eq!(drawn.shadows.map(|s| s.len()), Some(2), "the style's shadows show");
+    }
+
+    /// MODEL-SPEC §2.3 for styles: a style a newer Relay stored reads, what this build cannot read
+    /// waits in `extra`, and the design's styles are written back with it, so an older build's
+    /// colour or style edit neither fails to read the design nor loses what it holds.
+    #[test]
+    fn styles_from_a_newer_build_pass_through() {
+        let stored = json!({"colors": {"ink": "#141414"}, "styles": {
+            "card": {"radius": 12.0, "corner_smoothing": 0.6, "blend": "plus-lighter", "fill": "$ink"},
+            "title": {"font_size": 30.0}}});
+        let mut styles: Styles = serde_json::from_value(stored.clone()).unwrap();
+        let card = &styles.styles["card"];
+        assert_eq!((card.radius, card.fill.as_deref(), card.blend), (Some(12.0), Some("$ink"), None));
+        assert_eq!(Value::Object(card.extra.clone()), json!({"corner_smoothing": 0.6, "blend": "plus-lighter"}));
+        assert!(styles.styles["title"].extra.is_empty());
+        assert_eq!(serde_json::to_value(&styles).unwrap(), stored, "written back whole");
+        let text = serde_json::to_string(&styles).unwrap();
+        assert_eq!(text.matches("\"blend\"").count(), 1, "{text}");
+        assert_eq!(serde_json::from_str::<Styles>(&text).unwrap(), styles);
+
+        // What this build reads is the style; the rest is not laid or detached.
+        let n = node(json!({"parent": "p", "kind": "rect", "style": "card"}));
+        let drawn = styles.resolve(&n);
+        assert_eq!((drawn.radius, drawn.fill.as_deref(), drawn.blend), (Some(12.0), Some("#141414"), None));
+        let removed = Removed::Style(styles.styles["card"].clone());
+        assert_eq!(Value::Object(Styles::detach(&n, "card", &removed).unwrap()), json!({"style": null, "fill": "$ink", "radius": 12.0}));
+
+        // Edits keep it: a patch of other fields, and a colour written in; a field written over
+        // it replaces it.
+        styles.set_style("card", &set(json!({"radius": 16}))).unwrap();
+        styles.delete("ink").unwrap();
+        let card = &styles.styles["card"];
+        assert_eq!((card.radius, card.fill.as_deref(), card.extra.len()), (Some(16.0), Some("#141414"), 2));
+        let undo = styles.set_style("card", &set(json!({"blend": "multiply"}))).unwrap();
+        assert_eq!(undo, NodeOp::Style { name: "card".into(), set: set(json!({"blend": null})) }, "an undo holds what this build reads");
+        assert_eq!(Value::Object(styles.styles["card"].extra.clone()), json!({"corner_smoothing": 0.6}));
+        assert_eq!(serde_json::to_value(&styles).unwrap()["styles"]["card"]["blend"], "multiply");
+
+        // A caller's edit is still held to what this build reads, and the derived read is strict.
+        assert!(styles.set_style("card", &set(json!({"corner_smoothing": 1}))).unwrap_err().why.starts_with("corner_smoothing: not a style field"));
+        assert!(serde_json::from_value::<Style>(json!({"corner_smoothing": 1})).is_err());
+        // TM-16: a style that is not an object is not read field by field.
+        for bad in [json!({"styles": {"card": ["#fff"]}}), json!({"styles": {"card": 1}}), json!({"styles": []})] {
+            assert!(serde_json::from_value::<Styles>(bad.clone()).is_err(), "{bad}");
+        }
+    }
+
+    /// A reply's map of styles reads and writes as the design's do.
+    #[test]
+    fn a_reply_carries_styles_whole() {
+        #[derive(Serialize, Deserialize)]
+        struct Reply {
+            #[serde(default, serialize_with = "write_styles", deserialize_with = "read_styles")]
+            styles: BTreeMap<String, Style>,
+            #[serde(default, serialize_with = "write_styles_opt", deserialize_with = "read_styles_opt")]
+            changed: Option<BTreeMap<String, Style>>,
+        }
+        let raw = json!({"styles": {"card": {"radius": 4.0, "future": [1]}}, "changed": {"title": {"blend": "plus-lighter"}}});
+        let reply: Reply = serde_json::from_value(raw.clone()).unwrap();
+        assert_eq!(reply.styles["card"].radius, Some(4.0));
+        assert_eq!(reply.changed.as_ref().unwrap()["title"].extra.get("blend"), Some(&json!("plus-lighter")));
+        assert_eq!(serde_json::to_value(&reply).unwrap(), raw);
+        let none: Reply = serde_json::from_value(json!({"changed": null})).unwrap();
+        assert!(none.styles.is_empty() && none.changed.is_none());
+        assert_eq!(serde_json::to_value(&none).unwrap(), json!({"styles": {}, "changed": null}));
+        assert!(serde_json::from_value::<Reply>(json!({"styles": {"card": [4]}})).is_err());
     }
 }

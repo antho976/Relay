@@ -31,7 +31,10 @@ pub use hints::{
 };
 pub use pins::{follow_axis, page_point, Pin};
 pub use read::{read_node, read_nodes, read_nodes_opt, write_node, write_nodes, write_nodes_opt};
-pub use style::{color_ref, copy_id, Removed, Style, StyleError, Styles, MAX_STYLES, STYLE_FIELDS};
+pub use style::{
+    color_ref, copy_id, read_styles, read_styles_opt, write_styles, write_styles_opt, Removed, Style, StyleError, Styles,
+    MAX_STYLES, STYLE_FIELDS,
+};
 
 /// Most nodes one design holds.
 pub const MAX_NODES: usize = 5_000;
