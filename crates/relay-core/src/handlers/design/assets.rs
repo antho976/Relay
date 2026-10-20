@@ -96,11 +96,12 @@ fn decode_asset(encoded: &str) -> Result<Vec<u8>, BusError> {
     Ok(bytes)
 }
 
-/// Keep `bytes` as `src` in `dir`, made if missing (a name is its content's hash), durably:
-/// [`picture::keep`]. Slow for a large picture (it syncs it to disk): call it unlocked.
+/// Keep `bytes` as `src` in `dir`, made if missing (a name is its content's hash), durably and
+/// never removed from under this answer by the design-assets sweep: [`picture::keep_swept`].
+/// Slow for a large picture (it syncs it to disk): call it unlocked.
 pub(crate) fn store_asset(dir: &Path, src: &str, bytes: &[u8]) -> Result<(), BusError> {
     std::fs::create_dir_all(dir).bus()?;
-    picture::keep(dir, src, bytes).map_err(crate::engine::internal)?;
+    picture::keep_swept(dir, src, bytes, &crate::disk_sweep::ASSET_FILES).map_err(crate::engine::internal)?;
     Ok(())
 }
 

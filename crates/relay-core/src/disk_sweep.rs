@@ -364,6 +364,10 @@ const ASSET_TMP_STALE: Duration = Duration::from_secs(24 * 60 * 60);
 const AUDIT_BATCH: i64 = 256;
 /// One design-assets sweep at a time; a second waits and then finds little left to do.
 static ASSETS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// A design-assets file's last look and removal by the sweep, and its keeping by
+/// `design.asset.add` ([`crate::picture::keep_swept`]), one at a time: an add that dates a
+/// picture, or writes it anew, never falls between the sweep finding it old and removing it.
+pub(crate) static ASSET_FILES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Remove the pictures in `design-assets/` that nothing has named for an undo window
 /// (`undo.grace_days`, B66). A picture is named by its content and shared by every design, so no
@@ -424,14 +428,27 @@ fn sweep_assets(engine: &Engine, now: SystemTime) -> AssetsSwept {
             }
             continue;
         }
-        // Looked at again just before it goes: a design.asset.add since dated it now.
-        let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
-        if meta.is_file() && old(&meta, since) && std::fs::remove_file(&path).is_ok() {
-            out.freed += meta.len();
+        if let Some(bytes) = remove_unseen(&path, since) {
+            out.freed += bytes;
             out.removed.push(path);
         }
     }
     out
+}
+
+/// Remove `path` if it is still a file unseen since `since`, and say how big it was: looked at
+/// again just before it goes, under [`ASSET_FILES`], so a `design.asset.add` that has dated it
+/// now (or written it anew) since the sweep listed it keeps it.
+fn remove_unseen(path: &Path, since: SystemTime) -> Option<u64> {
+    let _files = ASSET_FILES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if !meta.is_file() || !meta.modified().is_ok_and(|at| at < since) {
+        return None;
+    }
+    #[cfg(test)]
+    seam::BEFORE_REMOVE.with_borrow_mut(|hook| if let Some(hook) = hook { hook(path) });
+    std::fs::remove_file(path).ok()?;
+    Some(meta.len())
 }
 
 /// Every picture name the store's designs, the undoable edits since `since` and the removal
@@ -572,6 +589,19 @@ fn is_dir(path: &Path) -> bool {
 /// (an empty string, `..`, a path) may pass for one.
 fn is_uuid(id: &str) -> bool {
     id.len() == 36 && id.bytes().enumerate().all(|(i, b)| if matches!(i, 8 | 13 | 18 | 23) { b == b'-' } else { b.is_ascii_hexdigit() })
+}
+
+/// Test seams of the design-assets sweep.
+#[cfg(test)]
+mod seam {
+    use std::cell::RefCell;
+
+    pub(super) type Hook = Box<dyn FnMut(&std::path::Path)>;
+
+    thread_local! {
+        /// Run on the sweeping thread between its last look at a picture and its removal.
+        pub(super) static BEFORE_REMOVE: RefCell<Option<Hook>> = const { RefCell::new(None) };
+    }
 }
 
 #[cfg(test)]
@@ -805,5 +835,35 @@ mod tests {
         let app = Procs(vec![("relay-native".into(), Some(PathBuf::from("/")), Some(wt.join("target/debug/relay-native")))]);
         assert!(!app.building_in(&wt), "the app run from target/debug does not stop a trim of deps");
         assert!(!app.inside(&wt));
+    }
+
+    /// B66: a design.asset.add of a picture the sweep has found old and is about to remove
+    /// leaves the picture there: it waits out the removal and writes it anew, rather than dating
+    /// the file and answering for it just before it goes.
+    #[test]
+    fn a_picture_kept_as_the_sweep_removes_it_is_there_after() {
+        let dir = tempfile::tempdir().unwrap();
+        let assets = canon(dir.path());
+        let name = "0123456789abcdef0123456789abcdef.png";
+        let bytes = b"a picture".to_vec();
+        let path = assets.join(name);
+        std::fs::write(&path, &bytes).unwrap();
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(ago(30 * 24 * 60 * 60)).unwrap();
+        let add = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let slot = add.clone();
+        let (dir_for, bytes_for) = (assets.clone(), bytes.clone());
+        seam::BEFORE_REMOVE.set(Some(Box::new(move |_: &Path| {
+            let (dir, bytes) = (dir_for.clone(), bytes_for.clone());
+            *slot.borrow_mut() = Some(std::thread::spawn(move || crate::picture::keep_swept(&dir, name, &bytes, &ASSET_FILES)));
+            // Long enough for an add that does not wait to finish first.
+            std::thread::sleep(Duration::from_millis(200));
+        })));
+        let removed = remove_unseen(&path, ago(7 * 24 * 60 * 60));
+        seam::BEFORE_REMOVE.set(None);
+        assert_eq!(removed, Some(bytes.len() as u64), "old and unnamed, it went");
+        let kept = add.borrow_mut().take().unwrap().join().unwrap().unwrap();
+        assert!(!kept, "the add found it gone and wrote it anew");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "the picture the add answered for is there");
+        assert_eq!(remove_unseen(&path, ago(7 * 24 * 60 * 60)), None, "and new, so the next sweep keeps it");
     }
 }

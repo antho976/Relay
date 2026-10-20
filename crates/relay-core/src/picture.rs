@@ -7,6 +7,7 @@ use relay_bus::error::BusError;
 use relay_bus::design::MAX_COORD;
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::Mutex;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Picture {
@@ -92,20 +93,50 @@ pub fn decode_upload(encoded: &str, code: &'static str) -> Result<Vec<u8>, BusEr
 /// a name every later add would trust. `true` when the copy was there already. Slow on a large
 /// picture: call it with the store unlocked.
 pub fn keep(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<bool> {
+    keep_in(dir, name, bytes, None)
+}
+
+/// [`keep`] in a folder a sweep removes from (`design-assets`, B66), where `files` is the lock
+/// the sweep holds for its last look at a file and its removal: dating the copy found whole,
+/// and renaming a new one into place, are done under it, so neither falls between the two and
+/// the picture this answers for is never removed right after.
+pub fn keep_swept(dir: &Path, name: &str, bytes: &[u8], files: &Mutex<()>) -> std::io::Result<bool> {
+    keep_in(dir, name, bytes, Some(files))
+}
+
+fn keep_in(dir: &Path, name: &str, bytes: &[u8], files: Option<&Mutex<()>>) -> std::io::Result<bool> {
+    let hold = || files.map(|files| files.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
     let path = dir.join(name);
     if let Some(file) = holding(&path, bytes) {
-        let _ = file.set_modified(std::time::SystemTime::now());
-        return Ok(true);
+        // Read with nothing held; dated under the lock only while it is still the file at the
+        // name, which a sweep may have removed meanwhile.
+        let _files = hold();
+        if same_file(&file, &path) {
+            let _ = file.set_modified(std::time::SystemTime::now());
+            return Ok(true);
+        }
     }
     let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
     tmp.write_all(bytes)?;
     tmp.as_file().sync_all()?;
     // A rename that replaces: the same name holds the same bytes, so a copy another request
     // stored meanwhile is replaced by an identical one, and a reader keeps the file it opened.
-    tmp.persist(&path).map_err(|error| error.error)?;
+    {
+        let _files = hold();
+        tmp.persist(&path).map_err(|error| error.error)?;
+    }
     // The rename itself through a crash; best effort, as the store's own files are.
     let _ = std::fs::File::open(dir).and_then(|dir| dir.sync_all());
     Ok(false)
+}
+
+/// Whether `path` still names the file `file` has open.
+fn same_file(file: &std::fs::File, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (file.metadata(), std::fs::symlink_metadata(path)) {
+        (Ok(open), Ok(named)) => open.dev() == named.dev() && open.ino() == named.ino(),
+        _ => false,
+    }
 }
 
 /// `path`, open, when it is a regular file holding exactly `bytes`. Opened without following a
