@@ -2,7 +2,7 @@
 //! their messages show.
 //!
 //! A picture is chosen, pasted or dropped, made fit to send on a worker thread ([`prepare`]: at
-//! most 2048 pixels on its long side and 4 MiB, as PNG for a screenshot and JPEG for a photo; one
+//! most 2000 pixels on its long side and 4 MiB, as PNG for a screenshot and JPEG for a photo; one
 //! that fits already goes as it is), and goes up at once (`thread.upload`), so sending only names
 //! it. In the message box it is a chip ([`Attached`]): its thumbnail, a spinner while it goes up, a
 //! red mark and the reason when it was refused, and a key that takes it out.
@@ -30,8 +30,9 @@ pub(super) const MEDIA_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif
 pub(super) const SUFFIXES: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
 /// Pictures in one message.
 pub(super) const MAX_PICTURES: usize = 4;
-/// The longest side a picture goes up at, as the phone sends one to an agent (`Attach.kt`).
-const MAX_SIDE: u32 = 2048;
+/// The longest side a picture goes up at. Past 20 pictures in a request (each turn sends the thread's
+/// earlier ones again) the API refuses any side longer than 2000 pixels.
+const MAX_SIDE: u32 = 2000;
 /// The most `thread.upload` takes, decoded.
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 /// A file past this is not read at all.
@@ -824,19 +825,19 @@ mod tests {
 
     #[test]
     fn a_picture_that_fits_goes_as_it_is_and_a_long_one_is_shrunk() {
-        assert!(!redrawn(2048, 1536, MAX_BYTES, true));
-        assert!(redrawn(2049, 10, 100, true));
+        assert!(!redrawn(2000, 1500, MAX_BYTES, true));
+        assert!(redrawn(2001, 10, 100, true));
         assert!(redrawn(800, 600, MAX_BYTES + 1, true));
         assert!(redrawn(800, 600, 100, false), "a sideways photo is turned upright");
         let small = png(300, 200, false);
         let kept = prepare(small.clone()).unwrap();
         assert_eq!(kept.bytes, small);
         assert_eq!(kept.media_type, "image/png");
-        // A screenshot stays PNG, at most 2048 on its long side; its thumbnail is smaller still.
+        // A screenshot stays PNG, at most 2000 on its long side; its thumbnail is smaller still.
         let long = prepare(png(5000, 100, true)).unwrap();
         assert_eq!(long.media_type, "image/png");
         let pixbuf = decode(&long.bytes, 10_000).unwrap();
-        assert_eq!((pixbuf.width(), pixbuf.height()), (2048, 41));
+        assert_eq!((pixbuf.width(), pixbuf.height()), (2000, 40));
         let thumb = long.thumb.unwrap();
         assert_eq!(thumb.width, THUMB_EDGE as i32);
     }
@@ -850,7 +851,7 @@ mod tests {
         assert_eq!(sent.media_type, "image/jpeg");
         assert!(sent.bytes.len() <= MAX_BYTES);
         let back = decode(&sent.bytes, 10_000).unwrap();
-        assert_eq!((back.width(), back.height()), (2048, 1365));
+        assert_eq!((back.width(), back.height()), (2000, 1333));
     }
 
     #[test]
