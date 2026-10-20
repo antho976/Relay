@@ -190,8 +190,9 @@ pub(crate) fn tool(name: &str, description: &str, properties: Value, required: &
     })
 }
 
-/// A plugin call's result as MCP content. `_images` (label and PNG path) become image content,
-/// up to [`MAX_IMAGES`]; `_cleanup` names a folder of them to delete once they are read.
+/// A plugin call's result as MCP content. `_images` (label and picture path) become image
+/// content of the type their bytes are, up to [`MAX_IMAGES`]; `_cleanup` names a folder of them
+/// to delete once they are read.
 pub(crate) fn tool_result(mut value: Value, is_error: bool) -> Value {
     let images = value.as_object_mut().and_then(|o| o.remove("_images")).and_then(|v| v.as_array().cloned()).unwrap_or_default();
     let cleanup = value.as_object_mut().and_then(|o| o.remove("_cleanup"));
@@ -199,12 +200,11 @@ pub(crate) fn tool_result(mut value: Value, is_error: bool) -> Value {
     let mut shown = Vec::new();
     for image in images.iter().take(MAX_IMAGES) {
         let Some(path) = image["path"].as_str() else { continue };
-        if let Ok(bytes) = std::fs::read(path) {
-            use base64::Engine as _;
-            content.push(json!({"type":"text","text":format!("Image: {}", image["label"].as_str().unwrap_or(""))}));
-            content.push(json!({"type":"image","data":base64::engine::general_purpose::STANDARD.encode(bytes),"mimeType":"image/png"}));
-            shown.push(image["label"].clone());
-        }
+        let Ok(bytes) = std::fs::read(path) else { continue };
+        let Some(media_type) = preview_type(&bytes, Path::new(path)) else { continue };
+        content.push(json!({"type":"text","text":format!("Image: {}", image["label"].as_str().unwrap_or(""))}));
+        content.push(image_content(&bytes, media_type));
+        shown.push(image["label"].clone());
     }
     if !images.is_empty() {
         value["images"] = json!({"shown": shown, "requested": images.len(), "limit": MAX_IMAGES});
@@ -219,6 +219,22 @@ pub(crate) fn tool_result(mut value: Value, is_error: bool) -> Value {
         result["structuredContent"] = value;
     }
     result
+}
+
+/// A plugin preview's media type, from its bytes (a capture may be a JPEG, whatever its name);
+/// from its name when its header is not one this side reads; `None` for what a model cannot be
+/// shown (SVG, EXR, text), which is then left out rather than sent under a type it is not (W73).
+fn preview_type(bytes: &[u8], path: &Path) -> Option<&'static str> {
+    match relay_core::picture::sniff(bytes) {
+        Some(picture) => (picture.ext != "svg").then(|| picture.media_type()),
+        None => match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+            "png" => Some("image/png"),
+            "jpg" | "jpeg" => Some("image/jpeg"),
+            "gif" => Some("image/gif"),
+            "webp" => Some("image/webp"),
+            _ => None,
+        },
+    }
 }
 
 /// Whether `dir` is a folder a plugin made for one call's images, so `_cleanup` may delete it: a
@@ -1403,6 +1419,35 @@ mod tests {
     /// A 1×1 PNG.
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\
         \0\0\0\nIDATx\x9cc\0\x01\0\0\x05\0\x01\r\n-\xb4\0\0\0\0IEND\xaeB`\x82";
+
+    /// The start of a 32×16 JPEG: as far as its frame header, which is what gives its type and size.
+    const JPEG: &[u8] = &[0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x10, 0x00, 0x20, 0x03, 0x01, 0x22, 0x00];
+
+    #[test]
+    fn a_plugin_preview_takes_its_type_from_its_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = |name: &str, bytes: &[u8]| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            json!({"label": name.split('.').next().unwrap(), "path": path})
+        };
+        let images = [
+            file("front.png", JPEG),
+            file("side.jpg", PNG),
+            // A header cut short: what its name says, as before.
+            file("top.png", b"\x89PNG"),
+            // What a model cannot be shown, whatever the name.
+            file("plan.png", b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"/>"),
+            file("notes.txt", b"hello"),
+            file("depth.exr", b"v/1\x01\0\0\0\0"),
+        ];
+        let result = tool_result(json!({"_images": images}), false);
+        let content = result["content"].as_array().unwrap();
+        let types: Vec<&str> = content.iter().filter(|c| c["type"] == "image").filter_map(|c| c["mimeType"].as_str()).collect();
+        assert_eq!(types, ["image/jpeg", "image/png", "image/png"]);
+        assert_eq!(decoded(&content[2]), JPEG);
+        assert_eq!(result["structuredContent"]["images"], json!({"shown": ["front", "side", "top"], "requested": 6, "limit": MAX_IMAGES}));
+    }
 
     fn decoded(block: &Value) -> Vec<u8> {
         use base64::Engine as _;
