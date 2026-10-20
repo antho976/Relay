@@ -333,8 +333,21 @@ fn show(open: bool) {
         load_local();
         if !a.loaded.replace(true) {
             load_newest();
+        } else {
+            resync();
         }
     }
+}
+
+/// Bring the conversation shown up to date with Relay's copy: what was said while the window
+/// heard no events (it reconnected, or fell behind), whether a reply still runs, and its asks.
+/// Without it a reply that ended unheard left the drawer working, its key a Stop, for good.
+pub fn resync() {
+    let Some(id) = the().and_then(|a| a.thread.get()) else { return };
+    glib::spawn_future_local(async move {
+        catch_up(id, false).await;
+        refresh_asks().await;
+    });
 }
 
 /// Open the newest assistant thread, if there is one.
@@ -442,7 +455,7 @@ fn send(text: &str) {
         }
         // A new thread's first message arrived as an event before its id was known here.
         if let Some(id) = a.thread.get() {
-            catch_up(id).await;
+            catch_up(id, true).await;
         }
     });
 }
@@ -457,8 +470,9 @@ fn stop() {
     });
 }
 
-/// Draw the messages stored after the newest one drawn.
-async fn catch_up(id: i64) {
+/// Draw the messages stored after the newest one drawn, going to the newest when `follow` and
+/// otherwise only if the reader was there.
+async fn catch_up(id: i64, follow: bool) {
     let Some(a) = the() else { return };
     let Some(ui) = a.ui.upgrade() else { return };
     let after = a.last.get();
@@ -469,7 +483,7 @@ async fn catch_up(id: i64) {
             }
             // Its `thread.changed` may have come before its id was known here.
             set_busy(&a, read["thread"]["working"] == true);
-            stick_to_bottom(&a, true);
+            stick_to_bottom(&a, follow);
         }
     }
 }

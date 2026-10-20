@@ -1671,6 +1671,7 @@ impl Ui {
                     ui.load_keybindings();
                     ui.restore_sidebar_width();
                     crate::money::startup(&ui);
+                    crate::assistant::resync();
                     if *ui.page.borrow() == "devices" {
                         // Its own future, as navigate() does: awaited here, more than 64 events
                         // ahead of its reply would fill the notice channel before anything
