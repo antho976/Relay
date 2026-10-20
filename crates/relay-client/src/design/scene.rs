@@ -25,6 +25,10 @@ pub struct Scene {
     /// The design's named colours and styles.
     styles: Styles,
     children: FxHashMap<String, Vec<String>>,
+    /// The ids a lenient edit left out as too deep, and those a later one put inside them: a
+    /// lenient edit naming one the scene does not hold, as its node or its parent, is skipped
+    /// too, as the engine's list skips an edit whose node or parent is gone (W14).
+    left_out: FxHashSet<String>,
     /// Makes this client's new ids unlike another's: eight random characters drawn when the
     /// scene was made.
     seed: String,
@@ -336,8 +340,9 @@ impl Scene {
 
     /// Run one edit as the engine runs a lenient list's (an undo or a redo replaying what was
     /// stored): the value rules only. What names a colour or style the design no longer holds is
-    /// taken out, an add or move past [`MAX_DEPTH`] is skipped, and a `delete_style` of a name
-    /// that is gone does nothing, as the engine skips them. On an error nothing changed.
+    /// taken out, an add or move past [`MAX_DEPTH`] is skipped (an add with what a later edit puts
+    /// inside it, moves there or changes in it), and a `delete_style` of a name that is gone does
+    /// nothing, as the engine skips them. On an error nothing changed.
     pub fn apply(&mut self, op: &NodeOp) -> Result<(), String> {
         self.run(op, false)
     }
@@ -350,9 +355,19 @@ impl Scene {
         self.run(op, true)
     }
 
+    /// Whether a lenient edit naming `id` is skipped: the scene does not hold it, because a
+    /// lenient add left it out as too deep (or what it sat in).
+    fn skips(&self, id: &str) -> bool {
+        !self.left_out.is_empty() && !self.nodes.contains_key(id) && self.left_out.contains(id)
+    }
+
     fn run(&mut self, op: &NodeOp, strict: bool) -> Result<(), String> {
         match op {
             NodeOp::Add { node, index } => {
+                if !strict && node.parent.as_deref().is_some_and(|p| self.skips(p)) {
+                    self.left_out.insert(node.id.clone());
+                    return Ok(());
+                }
                 if strict {
                     node.check_new().map_err(|e| format!("add {}: {e}", node.id))?;
                 }
@@ -369,11 +384,12 @@ impl Scene {
                 if let Some(parent) = &node.parent {
                     self.check_container(parent)?;
                     if self.depth(parent) + 1 > MAX_DEPTH {
-                        // A lenient list skips it, as the engine's does (too_deep).
-                        return match strict {
-                            true => Err(format!("add {}: {}", node.id, self.too_deep(parent, None))),
-                            false => Ok(()),
-                        };
+                        // A lenient list skips it, and what it holds, as the engine's does (W14).
+                        if !strict {
+                            self.left_out.insert(node.id.clone());
+                            return Ok(());
+                        }
+                        return Err(format!("add {}: {}", node.id, self.too_deep(parent, None)));
                     }
                 }
                 let mut node = node.clone();
@@ -389,6 +405,9 @@ impl Scene {
                 self.put(node);
             }
             NodeOp::Update { id, set } => {
+                if !strict && self.skips(id) {
+                    return Ok(());
+                }
                 let node = self.stored(id).ok_or_else(|| format!("update: no node {id}"))?;
                 let mut patched = node.patched(set).map_err(|e| format!("update {id}: {e}"))?;
                 if strict {
@@ -408,6 +427,9 @@ impl Scene {
                 // keeps its place is an agent's, which the engine runs and a reread brings here.
                 if *keep_position == Some(true) {
                     return Err(format!("move {id}: the canvas does not send keep_position"));
+                }
+                if !strict && (self.skips(id) || parent.as_deref().is_some_and(|p| self.skips(p))) {
+                    return Ok(());
                 }
                 let node = self.nodes.get(id).ok_or_else(|| format!("move: no node {id}"))?;
                 let old = node.parent.clone();
@@ -454,6 +476,9 @@ impl Scene {
             }
             NodeOp::DeleteStyle { name } => self.delete_style(name, strict)?,
             NodeOp::Delete { id } => {
+                if !strict && self.skips(id) {
+                    return Ok(());
+                }
                 let node = self.nodes.get(id).ok_or_else(|| format!("delete: no node {id}"))?;
                 if node.kind == NodeKind::Page && self.pages().len() <= 1 {
                     return Err("a design keeps at least one page".into());
@@ -1121,6 +1146,31 @@ pub(crate) mod tests {
         assert_eq!(legacy.children("p1"), ["x", "f1"]);
         let why = legacy.apply_all(&[add("y", "f4990")]).unwrap_err();
         assert!(why.starts_with("ops[0]: add y: it would sit 4991 deep (p1 › f1 › … › f4989 › f4990)"), "{why}");
+    }
+
+    /// W14: a replay skips an add past MAX_DEPTH and all the list does inside it, as the engine's
+    /// lenient list skips an edit whose parent or node is gone, so an undo or a redo that holds
+    /// one is not taken for a scene gone out of step.
+    #[test]
+    fn a_replay_skips_what_it_does_inside_an_add_too_deep() {
+        let add = |id: &str, parent: &str| NodeOp::Add { node: node(id, Some(parent), NodeKind::Frame, [0.0, 0.0, 10.0, 10.0]), index: None };
+        let to = |id: &str, parent: &str| NodeOp::Move { id: id.into(), parent: Some(parent.into()), index: None, keep_position: None };
+        let mut s = Scene::new(chain(MAX_DEPTH));
+        let replay = [add("g1", "f64"), add("g2", "g1"), add("g3", "g2"), update("g2", json!({"x": 4})), to("g3", "p1"),
+            to("f64", "g2"), NodeOp::Delete { id: "g1".into() }];
+        for op in &replay {
+            s.apply(op).unwrap_or_else(|e| panic!("{op:?}: {e}"));
+        }
+        assert_eq!((s.len(), s.parent("f64")), (MAX_DEPTH + 1, Some("f63")));
+        assert!(["g1", "g2", "g3"].iter().all(|id| s.node(id).is_none()));
+        // A new list is held to what the engine holds it to: there is no g1.
+        assert_eq!(s.apply_all(&[add("g4", "g1")]).unwrap_err(), "ops[0]: no parent g1");
+        // An id it holds is not skipped for having been left out once.
+        s.apply_all(&[add("g1", "p1")]).unwrap();
+        s.apply(&add("g2", "g1")).unwrap();
+        assert_eq!(s.parent("g2"), Some("g1"));
+        // Nor is one it never left out: that is a scene out of step.
+        assert_eq!(s.apply(&add("k", "nope")).unwrap_err(), "no parent nope");
     }
 
     /// B27: an answer to an earlier edit does not undo, here, a later edit still on its way.
