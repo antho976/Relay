@@ -1100,6 +1100,23 @@ fn an_op_a_plugin_brings_exists_only_where_it_is_on() {
     for op in ["design.picture.key_set", "design.picture.key_remove"] {
         assert!(!rows.iter().any(|row| row["name"] == op), "{op} is the person's alone");
     }
+    // Every op a plugin brings, whatever it is and however it is registered, where its plugin is
+    // off for this project (the fixture's has none on).
+    {
+        let conn = engine.store.lock();
+        let row = sessions::by_name(&conn, name).unwrap();
+        let cfg = guardrail::config(&conn, Some(1)).unwrap();
+        let brought: Vec<_> = Registry::global().entries().iter().filter(|entry| entry.meta.plugin.is_some()).collect();
+        assert!(brought.len() >= 3, "the Pictures ops carry their plugin");
+        for entry in brought {
+            let plugin = entry.meta.plugin.unwrap();
+            if entry.meta.actors.admits(&agent) {
+                assert_eq!(guardrail::callability(entry, &agent, Some(&row.session), Some(&cfg), &[]).0, Callable::No, "{}", entry.name);
+                let refused = guardrail::authorize(&conn, row.session.id, entry, &json!({})).unwrap_err();
+                assert_eq!((refused.code.as_str(), refused.details), ("plugin.off", Some(json!({"plugin": plugin}))), "{}", entry.name);
+            }
+        }
+    }
     let thumb = json!({"design_id": 1, "id": "nope"});
     let refused = call(engine, agent.clone(), "design.picture.thumb", thumb.clone());
     assert_eq!((error(&refused).code.as_str(), &error(&refused).details), ("plugin.off", &Some(json!({"plugin": "pictures"}))));
