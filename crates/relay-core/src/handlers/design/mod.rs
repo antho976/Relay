@@ -17,6 +17,7 @@ mod find;
 mod get;
 mod pins;
 pub(crate) mod render;
+mod revs;
 mod styles;
 
 use crate::engine::{Ctx, Engine, IntoBus};
@@ -79,6 +80,31 @@ fn live_design(conn: &Connection, id: Id) -> Result<Design, BusError> {
 fn emit_design(ctx: &mut Ctx, design: &Design) -> Result<(), BusError> {
     ctx.set_project(design.project_id);
     ctx.emit("design.changed", serde_json::to_value(design).bus()?);
+    Ok(())
+}
+
+/// Most ids each list of a `design.changed` from `design.apply` names (W21).
+const EVENT_IDS: usize = 100;
+
+/// `design.changed` for a `design.apply` (W21): the design row, and beside it the rev before the
+/// list (`prev_rev`), the ids it added, changed or moved (`touched`) and those it removed, at most
+/// 100 of each, with `all: true` when either was cut (`design.get` with `since_rev: prev_rev` then
+/// has them all).
+fn emit_applied<'a>(ctx: &mut Ctx, design: &Design, prev_rev: i64, touched: impl Iterator<Item = &'a str>, removed: &[String]) -> Result<(), BusError> {
+    let mut touched = touched;
+    let named: Vec<&str> = touched.by_ref().take(EVENT_IDS).collect();
+    let cut = touched.next().is_some() || removed.len() > EVENT_IDS;
+    let mut payload = serde_json::to_value(design).bus()?;
+    if let Some(row) = payload.as_object_mut() {
+        row.insert("prev_rev".into(), prev_rev.into());
+        row.insert("touched".into(), json!(named));
+        row.insert("removed".into(), json!(&removed[..removed.len().min(EVENT_IDS)]));
+        if cut {
+            row.insert("all".into(), true.into());
+        }
+    }
+    ctx.set_project(design.project_id);
+    ctx.emit("design.changed", payload);
     Ok(())
 }
 
@@ -212,7 +238,7 @@ pub fn register(e: &mut Engine) {
         ctx.set_undo("design.delete", json!({"design_id": id}), None);
         emit_design(ctx, &design)?;
         let assets_dir = ctx.engine().store.design_assets_dir().display().to_string();
-        Ok(GetOut { design, nodes: vec![page], assets_dir, removed: None, colors: BTreeMap::new(), styles: BTreeMap::new(), credits: BTreeMap::new() })
+        Ok(GetOut { design, nodes: vec![page], assets_dir, removed: None, indexes: None, left: Vec::new(), colors: BTreeMap::new(), styles: BTreeMap::new(), credits: BTreeMap::new() })
     });
     e.register::<Update>(|ctx: &mut Ctx, p| {
         let before = live_design(ctx.tx(), p.design_id)?;
@@ -225,11 +251,17 @@ pub fn register(e: &mut Engine) {
         let session = match p.session {
             None => before.session.clone(),
             Some(None) => None,
+            // Tied where it already is: nothing to check.
+            Some(Some(session)) if before.session.as_deref() == Some(session.as_str()) => Some(session),
             Some(Some(session)) => {
                 check_session(ctx, before.project_id, &session)?;
                 Some(session)
             }
         };
+        if title == before.title && session == before.session {
+            // TM-58: it is already so. No new rev, no undo and no event, so nothing redraws.
+            return Ok(before);
+        }
         ctx.tx().execute(
             "UPDATE designs SET title = ?2, session = ?3, rev = rev + 1, updated_by = ?4, updated_at = ?5 WHERE id = ?1",
             params![before.id, title, session, by, ctx.now],

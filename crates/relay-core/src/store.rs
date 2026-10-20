@@ -475,9 +475,12 @@ pub const MIGRATIONS: &[&str] = &[
     // (design.apply's base_rev, design.get's since_rev); and `bytes` recounted to hold each node
     // as design.get returns it (its id, its parent and 21 bytes of JSON around them, besides its
     // body), so the size cap keeps a design.get under the clients' 2 MiB line (B60). Rows written
-    // before take their design's rev now: they read as changed for any older base_rev.
+    // before take their design's rev now: they read as changed for any older base_rev. Removals
+    // are on record from `tracked_from`: a since_rev before it is design.since_too_old.
     r#"
     ALTER TABLE designs ADD COLUMN styles TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE designs ADD COLUMN tracked_from INTEGER NOT NULL DEFAULT 0;
+    UPDATE designs SET tracked_from = rev;
     ALTER TABLE design_nodes ADD COLUMN rev INTEGER NOT NULL DEFAULT 0;
     UPDATE design_nodes SET rev = (SELECT rev FROM designs WHERE designs.id = design_nodes.design_id);
     CREATE INDEX design_nodes_rev ON design_nodes(design_id, rev);

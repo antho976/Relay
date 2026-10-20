@@ -1,9 +1,10 @@
 //! `design.apply`: a list of node edits run in order against the request's transaction.
 
-use super::{body_of, emit_design, kind_of, live_design, node_of, row_bytes};
+use super::revs::{self, removed_rev};
+use super::{body_of, emit_applied, kind_of, live_design, node_of, row_bytes};
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project};
-use relay_bus::design::{details, field_of, label, nearest, Node, NodeKind, NodeOp, MAX_DEPTH, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
+use relay_bus::design::{details, field_of, label, nearest, Conflict, ConflictReason, Node, NodeKind, NodeOp, MAX_DEPTH, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{Apply, ApplyOut};
 use relay_bus::types::{Design, Id};
@@ -17,9 +18,11 @@ use std::path::PathBuf;
 const UNDO_KEPT: usize = 256 * 1024;
 /// Most `warnings` one answer carries.
 const MAX_WARNINGS: usize = 20;
+/// Most conflicts `skipped` lists; a warning counts the rest.
+const MAX_SKIPPED: usize = 100;
 /// How far a walk up or down a design goes: past MAX_DEPTH, so a design another build nested
 /// deeper is still measured, but never the whole of a chain gone wrong.
-const WALK: usize = MAX_DEPTH + 6;
+pub(super) const WALK: usize = MAX_DEPTH + 6;
 const TOO_LARGE_HINT: &str = "split it across designs, or keep long text and big paths out of it";
 
 /// A row's kind: `Err` holds the name of one this build does not know (a newer build's), whose
@@ -104,6 +107,19 @@ pub(super) struct Run<'a> {
     pub(super) crossed: HashMap<String, usize>,
     /// Where pictures are stored: an image's `src` names a file in it (B6).
     pub(super) assets: PathBuf,
+    /// W6: what changed since a lenient list's `base_rev`, by node: an edit of one is skipped
+    /// rather than overwrite that change ([`Run::stale`]). Empty for a strict list, which such a
+    /// change refuses before any edit runs.
+    pub(super) conflicts: HashMap<String, Vec<Conflict>>,
+    /// W6: the nodes whose delete a lenient list skipped for such a change: they and what is
+    /// inside them are still there, so an add of one of their ids is skipped with the delete.
+    pub(super) held: HashSet<String>,
+    /// The ids whose add a lenient list skipped: an add into one is skipped too
+    /// (`parent_skipped`), and so is a later edit of one, which meant the node not added.
+    pub(super) skipped_adds: HashSet<String>,
+    /// Edits not applied as sent, and why: the first [`MAX_SKIPPED`]; `skipped_total` counts all.
+    pub(super) skipped: Vec<Conflict>,
+    pub(super) skipped_total: usize,
 }
 
 const NODE_META: &str = "SELECT parent_id, kind, ord FROM design_nodes WHERE design_id = ?1 AND node_id = ?2";
@@ -158,8 +174,62 @@ impl Run<'_> {
         if self.lenient {
             return Ok(None);
         }
-        let hint = self.nearest_id(self.target.as_deref().unwrap_or_default())?;
-        Err(self.fail(ErrorKind::NotFound, "design.node_not_found", what).with_hint(hint))
+        let id = self.target.as_deref().unwrap_or_default();
+        let hint = self.nearest_id(id)?;
+        Err(self.fail(ErrorKind::NotFound, "design.node_not_found", format!("{what}{}", self.gone_note(id)?)).with_hint(hint))
+    }
+
+    /// W19: what a refusal adds about an id the design does not hold that an earlier list
+    /// removed (` (removed at rev 14)`, from the removals on record), or nothing. One this list
+    /// removed is not noted: its own edit did.
+    pub(super) fn gone_note(&self, id: &str) -> Result<String, BusError> {
+        Ok(match removed_rev(self.tx, self.design, id)? {
+            Some(rev) if rev < self.rev => format!(" (removed at rev {rev})"),
+            _ => String::new(),
+        })
+    }
+
+    /// W6: whether the edit under way, of node `id`, is skipped for a change made since a
+    /// lenient list's `base_rev`: the node changed or went, or (`deleting`) a node inside it
+    /// changed, which the delete would take; or this list's add of `id` was skipped, so what
+    /// holds the id is not the node it meant. Each skip is reported in `skipped`, at this edit.
+    pub(super) fn stale(&mut self, id: &str, deleting: bool) -> bool {
+        if self.skipped_adds.contains(id) {
+            self.skip(Conflict::new(Some(self.at as u32), id, ConflictReason::Exists));
+            return true;
+        }
+        let Some(found) = self.conflicts.get(id) else { return false };
+        let hits: Vec<Conflict> = found.iter()
+            .filter(|c| deleting || c.reason != ConflictReason::Inside)
+            .map(|c| Conflict { at: Some(self.at as u32), ..c.clone() })
+            .collect();
+        let skipped = !hits.is_empty();
+        for conflict in hits {
+            self.skip(conflict);
+        }
+        if skipped && deleting {
+            self.held.insert(id.to_string());
+        }
+        skipped
+    }
+
+    /// W6: whether node `id` is still in the design because a delete of it, or of a node it sits
+    /// in, was skipped for a change since `base_rev` ([`Run::held`]). Read on the way to a
+    /// refusal of a taken id only.
+    fn held_back(&mut self, id: &str) -> Result<bool, BusError> {
+        if self.held.is_empty() {
+            return Ok(false);
+        }
+        self.learn(id)?;
+        Ok(self.chain(id).any(|at| self.held.contains(at)))
+    }
+
+    /// Report an edit (or part of one) not applied as sent.
+    pub(super) fn skip(&mut self, conflict: Conflict) {
+        self.skipped_total += 1;
+        if self.skipped.len() < MAX_SKIPPED {
+            self.skipped.push(conflict);
+        }
     }
 
     /// W19: the hint for an id the design does not hold, the nearest one it does or where to
@@ -436,6 +506,22 @@ impl Run<'_> {
         Ok(below as u32)
     }
 
+    /// Whether a move of node `id` (at `ord`, `at` among its siblings) to `index` among the same
+    /// `parent`'s children leaves it where it is: that index, or the top when there is none or
+    /// it is past the end and nothing sits above it. As [`Run::slot`] places it.
+    fn in_place(&self, parent: Option<&str>, id: &str, ord: f64, at: u32, index: Option<u32>) -> Result<bool, BusError> {
+        if index == Some(at) {
+            return Ok(true);
+        }
+        if index.is_some_and(|index| index < at) {
+            return Ok(false);
+        }
+        let above: bool = self.tx.prepare_cached("SELECT EXISTS(SELECT 1 FROM design_nodes WHERE design_id = ?1 AND parent_id IS ?2
+            AND (ord > ?3 OR (ord = ?3 AND node_id > ?4)))").bus()?
+            .query_row(params![self.design, parent, ord, id], |r| r.get(0)).bus()?;
+        Ok(!above)
+    }
+
     /// `{kind}-{n}` from the design's counter, past any id already taken.
     pub(super) fn assign(&mut self, kind: NodeKind) -> Result<String, BusError> {
         loop {
@@ -453,7 +539,7 @@ impl Run<'_> {
     pub(super) fn container(&mut self, parent: &str) -> Result<bool, BusError> {
         match self.meta(parent)? {
             None if self.lenient => Ok(false),
-            None => Err(self.fail(ErrorKind::NotFound, "design.parent", format!("parent {parent:?} is not in the design"))
+            None => Err(self.fail(ErrorKind::NotFound, "design.parent", format!("parent {parent:?} is not in the design{}", self.gone_note(parent)?))
                 .with_hint(self.nearest_id(parent)?)),
             Some((_, Ok(kind), _)) if !kind.holds_children() => Err(self.fail(ErrorKind::Invalid, "design.parent",
                 format!("parent {parent:?} is a {}, which holds nothing; use a page, frame or group", kind.name()))),
@@ -473,6 +559,14 @@ impl Run<'_> {
             self.breach(why)?;
         }
         self.names_exist(&node)?;
+        if node.parent.as_ref().is_some_and(|parent| self.skipped_adds.contains(parent)) {
+            // W6: what it goes in was not added; neither is it.
+            self.skip(Conflict::new(Some(self.at as u32), node.id.clone(), ConflictReason::ParentSkipped));
+            if !node.id.is_empty() {
+                self.skipped_adds.insert(node.id);
+            }
+            return Ok(None);
+        }
         if let Some(parent) = node.parent.as_deref() {
             if !self.container(parent)? || !self.fits(parent, &node.id, 0)? {
                 return Ok(None);
@@ -481,6 +575,13 @@ impl Run<'_> {
         if node.id.is_empty() {
             node.id = self.assign(node.kind)?;
         } else if self.meta(&node.id)?.is_some() {
+            if self.lenient && self.held_back(&node.id)? {
+                // W6: this list's delete of it was skipped for a change since base_rev, so its
+                // id is still taken: the add goes with the delete.
+                self.skip(Conflict::new(Some(self.at as u32), node.id.clone(), ConflictReason::Exists));
+                self.skipped_adds.insert(node.id);
+                return Ok(None);
+            }
             return Err(self.fail_on("id", ErrorKind::Conflict, "design.node_exists", format!("{:?} is already in the design", node.id))
                 .with_hint("update or move that node, or leave the id out to have one assigned"));
         }
@@ -496,6 +597,9 @@ impl Run<'_> {
             self.tx.prepare_cached("DELETE FROM design_removed WHERE design_id = ?1 AND node_id = ?2").bus()?
                 .execute(params![self.design, node.id]).bus()?;
         }
+        // W6: a later edit of it edits the node this list added, whatever went on under its id
+        // since base_rev (revs::base_conflicts counts no edit after an add as a conflict).
+        self.conflicts.remove(&node.id);
         self.nodes += 1;
         self.pages += i64::from(node.kind == NodeKind::Page);
         self.bytes += row_bytes(&node.id, node.parent.as_deref(), &body);
@@ -520,6 +624,9 @@ impl Run<'_> {
     }
 
     pub(super) fn update(&mut self, id: String, set: Map<String, Value>) -> Result<Option<String>, BusError> {
+        if self.stale(&id, false) {
+            return Ok(None);
+        }
         let Some(row) = self.row(&id)? else { return self.missing("no such node") };
         let Some(node) = self.readable(&id, &row)? else { return Ok(None) };
         let mut next = node.patched(&set).map_err(|why| self.fail(ErrorKind::Invalid, "design.node_invalid", why))?;
@@ -528,11 +635,14 @@ impl Run<'_> {
         }
         self.names_exist(&next)?;
         let body = body_of(&mut next)?;
-        if body != row.body {
-            self.tx.prepare_cached("UPDATE design_nodes SET body = ?3, rev = ?4 WHERE design_id = ?1 AND node_id = ?2").bus()?
-                .execute(params![self.design, next.id, body, self.rev]).bus()?;
-            self.bytes += body.len() as i64 - row.body.len() as i64;
+        if body == row.body {
+            // TM-58: it already holds what was sent. Nothing is written or touched, and nothing
+            // needs undoing; a list of only such edits leaves the design at its rev.
+            return Ok(Some(next.id));
         }
+        self.tx.prepare_cached("UPDATE design_nodes SET body = ?3, rev = ?4 WHERE design_id = ?1 AND node_id = ?2").bus()?
+            .execute(params![self.design, next.id, body, self.rev]).bus()?;
+        self.bytes += body.len() as i64 - row.body.len() as i64;
         self.touch(&next.id);
         self.inverse.push(vec![NodeOp::Update { id: next.id.clone(), set: node.before(&set) }]);
         for field in ["from", "to", "src"] {
@@ -544,6 +654,9 @@ impl Run<'_> {
     }
 
     pub(super) fn move_(&mut self, id: String, parent: Option<String>, index: Option<u32>) -> Result<Option<String>, BusError> {
+        if self.stale(&id, false) {
+            return Ok(None);
+        }
         let Some((from, kind, ord)) = self.meta(&id)? else { return self.missing("no such node") };
         let kind = match kind {
             Ok(kind) => kind,
@@ -606,6 +719,11 @@ impl Run<'_> {
             Some(to)
         };
         let old_index = self.index_of(from.as_deref(), &id, ord)?;
+        if to == from && self.in_place(to.as_deref(), &id, ord, old_index, index)? {
+            // TM-58: it already sits where it was sent. Nothing is written or touched, and
+            // nothing needs undoing.
+            return Ok(Some(id));
+        }
         let ord = self.slot(to.as_deref(), index, Some(&id))?;
         self.tx.prepare_cached("UPDATE design_nodes SET parent_id = ?3, ord = ?4, rev = ?5 WHERE design_id = ?1 AND node_id = ?2").bus()?
             .execute(params![self.design, id, to, ord, self.rev]).bus()?;
@@ -625,6 +743,9 @@ impl Run<'_> {
     }
 
     pub(super) fn delete(&mut self, id: String) -> Result<Option<String>, BusError> {
+        if self.stale(&id, true) {
+            return Ok(None);
+        }
         let Some(root) = self.row(&id)? else { return self.missing("no such node") };
         if root.kind == Ok(NodeKind::Page) && self.pages <= 1 {
             return Err(self.fail(ErrorKind::Conflict, "design.last_page", "a design keeps at least one page")
@@ -809,8 +930,10 @@ impl Run<'_> {
             return connector("is this line itself".into());
         }
         let Some((_, page)) = self.place(end)? else {
-            let missing = !self.parents.contains_key(end);
-            return Ok(missing.then(|| (ErrorKind::NotFound, "design.node_not_found", "is not in the design".to_string())));
+            if self.parents.contains_key(end) {
+                return Ok(None);
+            }
+            return Ok(Some((ErrorKind::NotFound, "design.node_not_found", format!("is not in the design{}", self.gone_note(end)?))));
         };
         if page == end {
             return connector("is a page, not a node on one".into());
@@ -901,10 +1024,21 @@ pub(super) fn register(e: &mut Engine) {
         }
         let design = live_design(ctx.tx(), p.design_id)?;
         assert_actor_project(ctx, design.project_id)?;
-        if p.base_rev.is_some_and(|rev| rev != design.rev) {
-            return Err(BusError::conflict("design.stale", format!("design {} is at rev {}, not {}", design.id, design.rev, p.base_rev.unwrap_or_default()))
-                .with_details(json!({"rev": design.rev}))
-                .with_hint("read it again with design.get and redo the edits against what is there"));
+        // W6: a list sent against an older rev applies on top of what changed since, unless it
+        // writes a node that changed: refused, or when lenient, that node's edits skipped.
+        let (mut rebased, mut stale) = (false, HashMap::new());
+        if let Some(base) = p.base_rev.filter(|&base| base != design.rev) {
+            if base > design.rev {
+                return Err(revs::ahead(&design, base));
+            }
+            let conflicts = revs::base_conflicts(ctx.tx(), design.id, &p.ops, base)?;
+            if !conflicts.is_empty() && !lenient {
+                return Err(revs::stale(&design, base, &conflicts));
+            }
+            rebased = conflicts.is_empty();
+            for conflict in conflicts {
+                stale.entry(conflict.id.clone()).or_insert_with(Vec::new).push(conflict);
+            }
         }
         let by = actor_name(ctx)?;
         let (bytes, next_node): (i64, i64) = ctx.tx().prepare_cached("SELECT bytes, next_node FROM designs WHERE id = ?1").bus()?
@@ -938,6 +1072,11 @@ pub(super) fn register(e: &mut Engine) {
             removed_at: HashMap::new(),
             crossed: HashMap::new(),
             assets,
+            conflicts: stale,
+            held: HashSet::new(),
+            skipped_adds: HashSet::new(),
+            skipped: Vec::new(),
+            skipped_total: 0,
         };
         // B59: past the last edit that can make the design smaller (any but an add or a copy),
         // the list only grows it, so one over the cap by then is refused at the edit that took
@@ -977,9 +1116,41 @@ pub(super) fn register(e: &mut Engine) {
         if run.bytes > MAX_DESIGN_BYTES && run.bytes > bytes {
             return Err(run.too_large(false));
         }
+        if run.skipped_total > run.skipped.len() && run.warnings.len() < MAX_WARNINGS {
+            run.warnings.push(format!("{} more edits were skipped; skipped lists the first {MAX_SKIPPED}", run.skipped_total - run.skipped.len()));
+        }
+        let skipped = std::mem::take(&mut run.skipped);
+        let prev_rev = design.rev;
+        if run.inverse.is_empty() {
+            // TM-58, MODEL-SPEC §1 #20: every edit found what it sent already there, or was
+            // skipped. The design stays as it was: the same rev, no event and no undo.
+            return Ok(ApplyOut {
+                design_id: design.id,
+                rev: prev_rev,
+                prev_rev,
+                rebased,
+                ids: std::mem::take(&mut run.ids),
+                removed_count: 0,
+                audit_id: None,
+                skipped,
+                warnings: std::mem::take(&mut run.warnings),
+                copied: BTreeMap::new(),
+                design: Some(design),
+                nodes: Some(Vec::new()),
+                removed: Some(Vec::new()),
+                inverse: Some(Vec::new()),
+                expect: None,
+                colors: None,
+                styles: None,
+                reread: false,
+            });
+        }
         ctx.tx().prepare_cached(
             "UPDATE designs SET rev = rev + 1, pages = ?2, nodes = ?3, bytes = ?4, next_node = ?5, updated_by = ?6, updated_at = ?7 WHERE id = ?1",
         ).bus()?.execute(params![design.id, run.pages, run.nodes, run.bytes, run.next_node, by, ctx.now]).bus()?;
+        if !run.removed.is_empty() {
+            revs::prune(ctx.tx(), design.id, run.rev)?;
+        }
         let mut nodes = Vec::with_capacity(run.touched.len());
         for id in std::mem::take(&mut run.touched) {
             if let Some(row) = run.row(&id)? {
@@ -995,7 +1166,6 @@ pub(super) fn register(e: &mut Engine) {
         let ids = std::mem::take(&mut run.ids);
         let warnings = std::mem::take(&mut run.warnings);
         let (pages, count) = (run.pages, run.nodes);
-        let prev_rev = design.rev;
         let design = Design { rev: prev_rev + 1, pages, nodes: count, updated_by: by, updated_at: ctx.now.clone(), ..design };
         // The audit keeps the undo uncapped (payloads and results stop at 64 KiB): a big delete's
         // would store every node it took. Past UNDO_KEPT only the caller's copy, in the answer,
@@ -1004,17 +1174,17 @@ pub(super) fn register(e: &mut Engine) {
         if serde_json::to_vec(&undo).is_ok_and(|bytes| bytes.len() <= UNDO_KEPT) {
             ctx.set_undo("design.apply", undo, None);
         }
-        emit_design(ctx, &design)?;
+        emit_applied(ctx, &design, prev_rev, nodes.iter().map(|n| n.id.as_str()), &removed)?;
         // Every answer is full until engine-expect gives agents short ones (`reply`).
         Ok(ApplyOut {
             design_id: design.id,
             rev: design.rev,
             prev_rev,
-            rebased: false,
+            rebased,
             ids,
             removed_count: removed.len() as u32,
             audit_id: None,
-            skipped: Vec::new(),
+            skipped,
             warnings,
             copied: BTreeMap::new(),
             design: Some(design),

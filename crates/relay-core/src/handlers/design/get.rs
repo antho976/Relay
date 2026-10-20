@@ -1,40 +1,107 @@
 //! `design.get`: a design's rows copied out under the lock, ordered and parsed after it.
+//!
+//! A read can be cut to a page, to some nodes and what is inside them, and to what changed since
+//! a rev (`since_rev`, W20): every row is then still copied out for its place, but only the
+//! bodies of rows written since, so a reader that holds the design at that rev brings it up to
+//! now from a small answer.
 
-use super::{get_design, node_of};
+use super::revs::removed_rev;
+use super::{get_design, kind_of};
 use crate::engine::{Engine, IntoBus};
 use crate::handlers::notes::check_project;
-use relay_bus::design::{nearest, Node};
+use relay_bus::design::{nearest, Node, SINCE_WINDOW};
 use relay_bus::error::BusError;
-use relay_bus::ops::design::{Get, GetIn, GetOut};
-use relay_bus::types::Id;
-use std::collections::{BTreeMap, HashMap};
+use relay_bus::ops::design::{Get, GetIn, GetOut, GET_NODES_MAX};
+use relay_bus::types::{Design, Id};
+use rusqlite::params;
+use serde_json::json;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 
-/// Every row of a design.
+/// Every row of a design. A row of a kind this build does not know fails to parse, which is how a
+/// whole read leaves it out, so its `kind` is not read.
 const ROWS: &str = "SELECT node_id, parent_id, ord, body FROM design_nodes WHERE design_id = ?1";
 /// A design's pages alone (`pages_only`), found through `design_nodes_parent` without a pass
 /// over the rest of the design. The `ORDER BY` is what the index already gives, and what makes
 /// SQLite take it: without statistics it reckons `IS NULL` matches most rows and scans the
 /// design's whole primary key instead (5,000 rows, 1.5 MiB of bodies, under the store lock).
 const PAGE_ROWS: &str = "SELECT node_id, parent_id, ord, body FROM design_nodes WHERE design_id = ?1 AND parent_id IS NULL ORDER BY ord, node_id";
+/// Every row of a design, its kind (a body not copied cannot say it is one this build cannot
+/// read) and whether it was written after rev `?2`, with its body only where it was, where it is
+/// a page (a page is found by its name), or where `?3` asks for every body: a read cut to a page
+/// or to some nodes sends what is inside a changed node, which may have moved in from outside
+/// what it reads.
+const DELTA_ROWS: &str = "SELECT node_id, parent_id, ord, kind, rev > ?2, CASE WHEN ?3 OR rev > ?2 OR parent_id IS NULL THEN body END
+    FROM design_nodes WHERE design_id = ?1";
+/// The ids removed after rev `?2`, in the order they went.
+const REMOVED: &str = "SELECT node_id FROM design_removed WHERE design_id = ?1 AND rev > ?2 ORDER BY rev, node_id";
 
 /// Pages a `design.page_not_found` hint names before it counts the rest.
 const HINT_PAGES: usize = 20;
+/// Unknown ids a `design.node_not_found` for `nodes` lists in its details.
+const HINT_IDS: usize = 20;
 
 /// One node row as `design.get` copies it out under the lock; parsed once the lock is gone.
 struct Raw {
     id: String,
     parent: Option<String>,
     ord: f64,
-    body: String,
+    /// Of a kind this build knows: one it does not is a row it cannot read.
+    known: bool,
+    /// Written after `since_rev`; every row of a whole read.
+    changed: bool,
+    /// None where a `since_rev` read does not need it.
+    body: Option<String>,
+}
+
+/// What a read takes of a design's rows.
+struct Scope<'a> {
+    /// Only this page and what is on it: its id or the name it goes by.
+    page: Option<&'a str>,
+    /// Only these nodes and what is inside them.
+    named: Option<HashSet<&'a str>>,
+    /// Only what changed since a rev (`since_rev`).
+    delta: bool,
+}
+
+impl Scope<'_> {
+    fn cut(&self) -> bool {
+        self.page.is_some() || self.named.is_some()
+    }
+}
+
+/// What a read answers of the rows.
+struct Read {
+    nodes: Vec<Node>,
+    /// With `since_rev`: each node's index among its siblings now, in the order of `nodes`.
+    indexes: Vec<u32>,
+    /// With `since_rev`: the rows a reader that held the read at that rev drops: each written
+    /// since that the answer leaves out (outside what it reads now, or a row this build cannot
+    /// read), and what is inside such a node that the read does not take.
+    left: Vec<String>,
+}
+
+/// Whether the `kind` at column `i` is one this build knows, read without copying it out.
+fn known_kind(r: &rusqlite::Row, i: usize) -> rusqlite::Result<bool> {
+    let kind = r.get_ref(i)?.as_str()
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(i, rusqlite::types::Type::Text, Box::new(e)))?;
+    Ok(kind_of(kind).is_some())
 }
 
 /// `rows` in `design.get`'s order: the pages by `ord`, then each page's nodes in pre-order,
-/// siblings bottom to top. With `page`, that page and what is on it. A node whose parent is
-/// gone (none should be) is left out rather than shown nowhere; so is a row this build cannot
-/// read (a newer build's kind, a body that is not a node), with what is inside it, rather than
-/// failing the whole design (B61).
-fn ordered(design: Id, rows: Vec<Raw>, page: Option<&str>) -> Result<Vec<Node>, BusError> {
+/// siblings bottom to top, cut to the `scope`. A node whose parent is gone (none should be) is left
+/// out rather than shown nowhere; so is a row this build cannot read (a newer build's kind, a body
+/// that is not a node), with what is inside it, rather than failing the whole design (B61).
+///
+/// With `since_rev` (`scope.delta`) only the rows written since are answered, each with its index
+/// among the siblings a read answers (a row of a kind this build does not know is not one).
+/// Cut to a page or to nodes, a node written since comes with what is inside it (it may have
+/// moved in, and what it holds with it), unless it is the page or a node named, which cannot
+/// have; and a row written since that is no longer in what the read takes is `left` (it may
+/// have moved out) with what is inside it that the read does not take. A body a delta did not
+/// copy is not parsed, so an unchanged row of a known kind that does not read is not seen to be
+/// left out.
+fn ordered(design: Id, rows: Vec<Raw>, scope: &Scope) -> Result<Read, BusError> {
     let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
     let mut pages = Vec::new();
     for (i, row) in rows.iter().enumerate() {
@@ -46,16 +113,32 @@ fn ordered(design: Id, rows: Vec<Raw>, page: Option<&str>) -> Result<Vec<Node>, 
     let by_ord = |list: &mut Vec<usize>| list.sort_by(|&a, &b| rows[a].ord.total_cmp(&rows[b].ord).then_with(|| rows[a].id.cmp(&rows[b].id)));
     by_ord(&mut pages);
     children.values_mut().for_each(by_ord);
-    if let Some(wanted) = page {
+    // Each row's index among its siblings as a reader holds them, which is how an add or a move
+    // counts it but for rows of a kind this build does not know: no read answers those.
+    let mut place = vec![0u32; if scope.delta { rows.len() } else { 0 }];
+    if scope.delta {
+        for list in std::iter::once(&pages).chain(children.values()) {
+            for (k, &i) in list.iter().filter(|&&i| rows[i].known).enumerate() {
+                place[i] = k as u32;
+            }
+        }
+    }
+    let mut chosen = None;
+    if let Some(wanted) = scope.page {
         // A page by id costs nothing more; the pages' bodies are read for their names only when
         // no id matched.
         let id = if pages.iter().any(|&i| rows[i].id == wanted) {
             wanted.to_string()
         } else {
-            let named: Vec<(String, Option<String>)> = pages.iter().filter_map(|&i| named_page(&rows[i].id, &rows[i].body)).collect();
+            let named: Vec<(String, Option<String>)> = pages.iter()
+                .filter_map(|&i| named_page(&rows[i].id, rows[i].body.as_deref().unwrap_or_default())).collect();
             resolve_page(&named, wanted)?
         };
-        pages.retain(|&i| rows[i].id == id);
+        // A delta walks every page, to find what left this one.
+        if !scope.delta {
+            pages.retain(|&i| rows[i].id == id);
+        }
+        chosen = Some(id);
     }
     // Each row in order, with the row it sits in (none for a page).
     let mut order: Vec<(usize, Option<usize>)> = pages.iter().map(|&p| (p, None)).collect();
@@ -68,24 +151,55 @@ fn ordered(design: Id, rows: Vec<Raw>, page: Option<&str>) -> Result<Vec<Node>, 
         }
     }
     drop(children);
-    let mut left_out = vec![false; rows.len()];
+    let n = rows.len();
+    // Per row: on the page read; inside a node named; kept (both, as the read asks, and
+    // readable: a reader holds it, sent or not); left out, with what is inside it; in a delta cut
+    // to a page or nodes, sent whole with what it holds; and in a delta, in `left` with what is
+    // inside it that the read does not keep.
+    let (mut on_page, mut within, mut kept) = (vec![false; n], vec![false; n], vec![false; n]);
+    let (mut left_out, mut whole, mut dropping) = (vec![false; n], vec![false; n], vec![false; n]);
     let mut rows: Vec<Option<Raw>> = rows.into_iter().map(Some).collect();
-    let mut nodes = Vec::with_capacity(order.len());
+    let mut read = Read { nodes: Vec::with_capacity(order.len()), indexes: Vec::new(), left: Vec::new() };
     for (i, up) in order {
-        let Some(row) = rows[i].take() else { continue };
-        if up.is_some_and(|p| left_out[p]) {
-            left_out[i] = true;
-            continue;
-        }
-        match node_of(row.id, row.parent, &row.body) {
-            Ok(node) => nodes.push(node),
-            Err(error) => {
-                left_out[i] = true;
-                tracing::warn!(design, "design.get: {}; left out with what is inside it", error.message);
+        let Some(Raw { id, parent, known, changed, body, .. }) = rows[i].take() else { continue };
+        let named = scope.named.as_ref().is_some_and(|named| named.contains(id.as_str()));
+        let (page, inside, gone, sent, drops) = match up {
+            None => (chosen.as_deref().is_none_or(|chosen| chosen == id), named, false, false, false),
+            Some(p) => (on_page[p], named || within[p], left_out[p], kept[p] && whole[p], dropping[p]),
+        };
+        (on_page[i], within[i]) = (page, inside);
+        let taken = page && (scope.named.is_none() || inside);
+        left_out[i] = gone || !known;
+        // Cut to a page or to nodes, a node written since may have moved in from outside, with all
+        // it holds; the page or a node named cannot have.
+        whole[i] = sent || (scope.delta && scope.cut() && changed && up.is_some() && !named);
+        if taken && !left_out[i] && (!scope.delta || changed || sent) {
+            // As `node_of` reads a row, keeping the id for a delta's `left` should it not read.
+            match body.as_deref().map(Node::read_str) {
+                Some(Ok(mut node)) => {
+                    (node.id, node.parent) = (id, parent);
+                    read.nodes.push(node);
+                    if scope.delta {
+                        read.indexes.push(place[i]);
+                    }
+                    kept[i] = true;
+                    continue;
+                }
+                Some(Err(e)) => tracing::warn!(design, "design.get: node {id:?} cannot be read ({e}); left out with what is inside it"),
+                None => tracing::warn!(design, "design.get: node {id:?}'s body was not read; left out with what is inside it"),
             }
+            left_out[i] = true;
+        }
+        kept[i] = taken && !left_out[i];
+        // Written since and not sent: it went out of what the read takes, or cannot be read; so did
+        // what it holds, unless the read takes that by itself (a node named inside it). A page
+        // moves nowhere: what is on another one was never in a page's read.
+        if scope.delta && (changed || (drops && !kept[i])) {
+            dropping[i] = up.is_some();
+            read.left.push(id);
         }
     }
-    Ok(nodes)
+    Ok(read)
 }
 
 /// A page row as [`resolve_page`] takes it: its id and stored name, read as `design.get` reads the
@@ -169,22 +283,108 @@ fn check_pages_only(p: &GetIn) -> Result<bool, BusError> {
     }
 }
 
+/// `nodes` names 1 to [`GET_NODES_MAX`] ids, and `since_rev` is a rev: refused by name before
+/// the design is read.
+fn check_reach(p: &GetIn) -> Result<(), BusError> {
+    if let Some(nodes) = &p.nodes {
+        if nodes.is_empty() || nodes.len() > GET_NODES_MAX {
+            return Err(BusError::invalid("design.nodes", format!("nodes: give 1 to {GET_NODES_MAX} ids; this has {}", nodes.len()))
+                .with_hint("leave nodes out to read the whole design, or pass page to read one page"));
+        }
+    }
+    if p.since_rev.is_some_and(|since| since < 0) {
+        return Err(BusError::invalid("design.since_rev", "since_rev: a rev is 0 or more")
+            .with_hint("send the rev design.get or design.apply last answered with"));
+    }
+    Ok(())
+}
+
+/// `since_rev` is a rev of `design` that a read can still reach: not past its rev, and within the
+/// last [`SINCE_WINDOW`] revs, whose removals are on record, from `tracked_from` on (the rev a
+/// design held when its store began keeping them).
+fn check_since(design: &Design, tracked_from: i64, since: i64) -> Result<(), BusError> {
+    if since > design.rev {
+        return Err(BusError::invalid("design.since_rev", format!("since_rev: design {} is at rev {}; {since} is ahead of it", design.id, design.rev))
+            .with_hint("send the rev design.get or design.apply last answered with"));
+    }
+    if since < design.rev - SINCE_WINDOW || since < tracked_from {
+        let why = if since < tracked_from {
+            format!("since_rev: rev {since} is before rev {tracked_from}, when this design's removals began to be kept")
+        } else {
+            format!("since_rev: rev {since} is more than {SINCE_WINDOW} revs behind the design's ({}); what was removed that long ago is not kept", design.rev)
+        };
+        return Err(BusError::conflict("design.since_too_old", why)
+            .with_details(json!({"rev": design.rev}))
+            .with_hint("read it whole: design.get without since_rev"));
+    }
+    Ok(())
+}
+
+/// `design.node_not_found` for the ids of `nodes` the design does not hold (`unknown`, in the
+/// order named), with the nearest id it does hold and when the first was removed, if that is on
+/// record. Read on the way to the refusal only.
+fn unknown_nodes(conn: &rusqlite::Connection, design: Id, unknown: &[&str], ids: &[&str]) -> Result<BusError, BusError> {
+    let first = unknown[0];
+    let gone = removed_rev(conn, design, first)?.map(|rev| format!(" (removed at rev {rev})")).unwrap_or_default();
+    let more = match unknown.len() {
+        1 => String::new(),
+        n => format!(", nor are {} more of them", n - 1),
+    };
+    let hint = match nearest(first, ids.iter().copied()) {
+        Some(id) => format!("did you mean {id:?}?"),
+        None => "design.get lists the ids (pass page to read one page)".to_string(),
+    };
+    Ok(BusError::not_found("design.node_not_found", format!("nodes: {first:?} is not in the design{gone}{more}"))
+        .with_details(json!({"field": "nodes", "ids": &unknown[..unknown.len().min(HINT_IDS)]}))
+        .with_hint(hint))
+}
+
 pub(super) fn register(e: &mut Engine) {
     // Only copying the rows out holds the store; ordering and parsing them runs after.
     e.register_unlocked::<Get>(|ctx, p| {
         let pages_only = check_pages_only(&p)?;
+        check_reach(&p)?;
+        let cut = p.page.is_some() || p.nodes.is_some();
         let (session_id, agent) = (ctx.actor_session_id(), ctx.actor.is_agent());
-        let (design, rows) = ctx.read(|conn| {
+        let (design, rows, removed) = ctx.read(|conn| {
             let design = get_design(conn, p.design_id)?;
             check_project(conn, design.project_id, session_id, agent)?;
-            let mut stmt = conn.prepare_cached(if pages_only { PAGE_ROWS } else { ROWS }).bus()?;
-            let rows = stmt.query_map([design.id], |r| Ok(Raw { id: r.get(0)?, parent: r.get(1)?, ord: r.get(2)?, body: r.get(3)? })).bus()?
-                .collect::<rusqlite::Result<Vec<_>>>().bus()?;
-            Ok((design, rows))
+            let Some(since) = p.since_rev else {
+                let mut stmt = conn.prepare_cached(if pages_only { PAGE_ROWS } else { ROWS }).bus()?;
+                let rows = stmt.query_map([design.id], |r| Ok(Raw {
+                    id: r.get(0)?, parent: r.get(1)?, ord: r.get(2)?, known: true, changed: true, body: Some(r.get(3)?),
+                })).bus()?.collect::<rusqlite::Result<Vec<_>>>().bus()?;
+                return Ok((design, rows, None));
+            };
+            let tracked_from = conn.prepare_cached("SELECT tracked_from FROM designs WHERE id = ?1").bus()?
+                .query_row([design.id], |r| r.get(0)).bus()?;
+            check_since(&design, tracked_from, since)?;
+            let rows = conn.prepare_cached(DELTA_ROWS).bus()?
+                .query_map(params![design.id, since, cut], |r| Ok(Raw {
+                    id: r.get(0)?, parent: r.get(1)?, ord: r.get(2)?, known: known_kind(r, 3)?, changed: r.get(4)?, body: r.get(5)?,
+                })).bus()?.collect::<rusqlite::Result<Vec<_>>>().bus()?;
+            let removed: Vec<String> = conn.prepare_cached(REMOVED).bus()?
+                .query_map(params![design.id, since], |r| r.get(0)).bus()?.collect::<rusqlite::Result<_>>().bus()?;
+            Ok((design, rows, Some(removed)))
         })?;
-        let nodes = ordered(design.id, rows, p.page.as_deref())?;
+        if let Some(named) = &p.nodes {
+            // A node named that went since a `since_rev` is in `removed`: that is the answer.
+            let have: HashSet<&str> = rows.iter().map(|r| r.id.as_str()).chain(removed.iter().flatten().map(String::as_str)).collect();
+            let unknown: Vec<&str> = named.iter().map(String::as_str).filter(|id| !have.contains(id)).collect();
+            if !unknown.is_empty() {
+                let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+                return Err(ctx.read(|conn| unknown_nodes(conn, design.id, &unknown, &ids))?);
+            }
+        }
+        let scope = Scope {
+            page: p.page.as_deref(),
+            named: p.nodes.as_ref().map(|named| named.iter().map(String::as_str).collect()),
+            delta: p.since_rev.is_some(),
+        };
+        let read = ordered(design.id, rows, &scope)?;
+        let indexes = scope.delta.then_some(read.indexes);
         let assets_dir = ctx.engine().store.design_assets_dir().display().to_string();
-        Ok(GetOut { design, nodes, assets_dir, removed: None, colors: BTreeMap::new(), styles: BTreeMap::new(), credits: BTreeMap::new() })
+        Ok(GetOut { design, nodes: read.nodes, assets_dir, removed, indexes, left: read.left, colors: BTreeMap::new(), styles: BTreeMap::new(), credits: BTreeMap::new() })
     });
 }
 

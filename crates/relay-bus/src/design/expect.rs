@@ -48,7 +48,7 @@ pub enum ConflictReason {
     Fields,
     /// It sits in another parent than expected.
     Parent,
-    /// It holds nodes added since (`ids`); deleting it would take them.
+    /// It holds nodes added or changed since (`ids`); deleting it would take them.
     Inside,
     /// An undo would add it back, but its id is taken.
     Exists,
