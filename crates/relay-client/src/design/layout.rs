@@ -5,7 +5,8 @@
 use super::geom::Rect;
 use super::scene::Scene;
 use relay_bus::design::{Items, Justify, Layout, Node, NodeKind, Sizing};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
+use std::cell::RefCell;
 
 /// Inner margin of a sticky's text.
 pub const STICKY_PAD: f64 = 16.0;
@@ -31,10 +32,10 @@ pub fn h_sizing(n: &Node) -> Sizing {
 /// Every placed node's box in page coordinates.
 #[derive(Debug, Default, Clone)]
 pub struct Placed {
-    pub rects: HashMap<String, Rect>,
+    pub rects: FxHashMap<String, Rect>,
     /// Where a group's children count their `x`/`y` from: its parent's origin plus its own
     /// `x`/`y` (or where a layout put it). Its box in `rects` is its children's bounds instead.
-    pub origins: HashMap<String, (f64, f64)>,
+    pub origins: FxHashMap<String, (f64, f64)>,
 }
 
 impl Placed {
@@ -59,15 +60,22 @@ pub fn wrap_width(n: &Node, rect: &Rect) -> Option<f64> {
     }
 }
 
+/// A size asked of a pass: the node, and the width offered it (only a filling one reads it).
+type SizeKey<'a> = (&'a str, Option<u64>);
+
+/// One `place`: the scene, the measure, what is placed so far, and every size already worked
+/// out. A size depends only on the node, the width offered it and the scene, none of which
+/// change during a pass, so each is measured once however many ancestors ask (B45).
 struct Pass<'a> {
     scene: &'a Scene,
     measure: &'a dyn Measure,
     placed: Placed,
+    sizes: RefCell<FxHashMap<SizeKey<'a>, (f64, f64)>>,
 }
 
 /// Place every node of `page`.
 pub fn place(scene: &Scene, page: &str, measure: &dyn Measure) -> Placed {
-    let mut pass = Pass { scene, measure, placed: Placed::default() };
+    let mut pass = Pass::new(scene, measure);
     pass.placed.rects.insert(page.to_string(), Rect::default());
     for child in scene.children(page) {
         pass.free_child(child, 0.0, 0.0);
@@ -75,16 +83,32 @@ pub fn place(scene: &Scene, page: &str, measure: &dyn Measure) -> Placed {
     pass.placed
 }
 
-impl Pass<'_> {
-    fn visible(&self, id: &str) -> Option<&Node> {
+impl<'a> Pass<'a> {
+    fn new(scene: &'a Scene, measure: &'a dyn Measure) -> Self {
+        Pass { scene, measure, placed: Placed::default(), sizes: RefCell::default() }
+    }
+
+    fn visible(&self, id: &str) -> Option<&'a Node> {
         self.scene.node(id).filter(|n| !n.is_hidden())
     }
 
-    /// A node's own size, given the width a laid-out parent offers it.
-    fn size(&self, id: &str, offered_w: Option<f64>) -> (f64, f64) {
+    /// A node's own size, given the width a laid-out parent offers it: worked out once a pass.
+    fn size(&self, id: &'a str, offered_w: Option<f64>) -> (f64, f64) {
         let Some(n) = self.scene.node(id) else {
             return (0.0, 0.0);
         };
+        // Only a filling width reads what is offered: every other offer is the same question.
+        let offered_w = offered_w.filter(|_| w_sizing(n) == Sizing::Fill);
+        let key = (id, offered_w.map(f64::to_bits));
+        if let Some(size) = self.sizes.borrow().get(&key) {
+            return *size;
+        }
+        let size = self.size_of(n, offered_w);
+        self.sizes.borrow_mut().insert(key, size);
+        size
+    }
+
+    fn size_of(&self, n: &'a Node, offered_w: Option<f64>) -> (f64, f64) {
         let (ws, hs) = (w_sizing(n), h_sizing(n));
         let fill_w = |own: f64| if ws == Sizing::Fill { offered_w.unwrap_or(own) } else { own };
         match n.kind {
@@ -120,11 +144,13 @@ impl Pass<'_> {
                 };
                 let row = n.layout_mode() == Layout::Row;
                 let gap = n.gap.unwrap_or(0.0);
-                let visible: Vec<&String> = self.scene.children(id).iter().filter(|c| self.visible(c).is_some()).collect();
+                let scene = self.scene;
+                let visible: Vec<&'a str> =
+                    scene.children(&n.id).iter().filter(|c| self.visible(c).is_some()).map(String::as_str).collect();
                 let gaps = gap * visible.len().saturating_sub(1) as f64;
                 let stretch = n.items == Some(Items::Stretch);
                 let fills = |c: &str| {
-                    self.scene.node(c).is_some_and(|k| {
+                    scene.node(c).is_some_and(|k| {
                         if row { w_sizing(k) == Sizing::Fill } else { w_sizing(k) == Sizing::Fill || (stretch && k.kind == NodeKind::Text) }
                     })
                 };
@@ -140,12 +166,12 @@ impl Pass<'_> {
                 };
                 let kids: Vec<(f64, f64)> = visible
                     .iter()
-                    .map(|c| match (row, fills(c)) {
+                    .map(|&c| match (row, fills(c)) {
                         (true, true) => self.size(c, share),
                         (true, false) => self.size(c, None),
                         (false, true) => {
                             let mut probe = self.size(c, inner_w);
-                            if stretch && w_sizing(self.scene.node(c).expect("visible")) != Sizing::Fill {
+                            if stretch && w_sizing(scene.node(c).expect("visible")) != Sizing::Fill {
                                 probe = self.stretched(c, inner_w);
                             }
                             probe
@@ -167,7 +193,7 @@ impl Pass<'_> {
     }
 
     /// A text stretched across a column: measured wrapped at the column's width.
-    fn stretched(&self, id: &str, inner_w: Option<f64>) -> (f64, f64) {
+    fn stretched(&self, id: &'a str, inner_w: Option<f64>) -> (f64, f64) {
         let (Some(n), Some(w)) = (self.scene.node(id), inner_w) else {
             return self.size(id, inner_w);
         };
@@ -178,7 +204,7 @@ impl Pass<'_> {
     }
 
     /// A child of a page, group or frame without layout: at its own `x`/`y`.
-    fn free_child(&mut self, id: &str, origin_x: f64, origin_y: f64) {
+    fn free_child(&mut self, id: &'a str, origin_x: f64, origin_y: f64) {
         let Some(n) = self.visible(id) else {
             return;
         };
@@ -187,15 +213,16 @@ impl Pass<'_> {
         self.arrange(id, Rect::new(x, y, w, h));
     }
 
-    fn arrange(&mut self, id: &str, rect: Rect) {
-        let Some(n) = self.scene.node(id) else {
+    fn arrange(&mut self, id: &'a str, rect: Rect) {
+        let scene = self.scene;
+        let Some(n) = scene.node(id) else {
             return;
         };
-        let children: Vec<String> = self.scene.children(id).to_vec();
+        let children = scene.children(id);
         match (n.kind, n.layout_mode()) {
             (NodeKind::Group, _) => {
                 self.placed.origins.insert(id.to_string(), (rect.x, rect.y));
-                for child in &children {
+                for child in children {
                     self.free_child(child, rect.x, rect.y);
                 }
                 let bounds = Rect::bounds(children.iter().filter_map(|c| self.placed.rects.get(c)));
@@ -203,23 +230,23 @@ impl Pass<'_> {
             }
             (_, Layout::None) => {
                 self.placed.rects.insert(id.to_string(), rect);
-                for child in &children {
+                for child in children {
                     self.free_child(child, rect.x, rect.y);
                 }
             }
             (_, mode) => {
                 self.placed.rects.insert(id.to_string(), rect);
-                self.lay_out(n, &children, rect, mode == Layout::Row);
+                self.lay_out(n, children, rect, mode == Layout::Row);
             }
         }
     }
 
     /// Auto layout: children one after another along the frame's direction.
-    fn lay_out(&mut self, frame: &Node, children: &[String], rect: Rect, row: bool) {
+    fn lay_out(&mut self, frame: &Node, children: &'a [String], rect: Rect, row: bool) {
         let [pt, pr, pb, pl] = frame.padding_edges();
         let inner = Rect::new(rect.x + pl, rect.y + pt, (rect.w - pl - pr).max(0.0), (rect.h - pt - pb).max(0.0));
         let (inner_main, inner_cross) = if row { (inner.w, inner.h) } else { (inner.h, inner.w) };
-        let kids: Vec<&String> = children.iter().filter(|c| self.visible(c).is_some()).collect();
+        let kids: Vec<&'a str> = children.iter().filter(|c| self.visible(c).is_some()).map(String::as_str).collect();
         if kids.is_empty() {
             return;
         }
@@ -227,7 +254,7 @@ impl Pass<'_> {
         let mut gap = frame.gap.unwrap_or(0.0);
         let mut sizes: Vec<(f64, f64, bool, bool)> = kids
             .iter()
-            .map(|c| {
+            .map(|&c| {
                 let n = self.scene.node(c).expect("visible");
                 let (main_rule, cross_rule) = if row { (w_sizing(n), h_sizing(n)) } else { (h_sizing(n), w_sizing(n)) };
                 let stretch = cross_rule == Sizing::Fill || items == Items::Stretch;
@@ -246,7 +273,7 @@ impl Pass<'_> {
             }
         }
         // A text whose width a row or a stretch changed wraps anew: its height follows.
-        for (i, c) in kids.iter().enumerate() {
+        for (i, &c) in kids.iter().enumerate() {
             let n = self.scene.node(c).expect("visible");
             let sticky = n.kind == NodeKind::Sticky;
             if !sticky && n.kind != NodeKind::Text {
@@ -279,7 +306,7 @@ impl Pass<'_> {
                 0.0
             }
         };
-        for (c, (main, cross, _, _)) in kids.iter().zip(sizes) {
+        for (&c, (main, cross, _, _)) in kids.iter().zip(sizes) {
             let offset = match items {
                 Items::Start | Items::Stretch => 0.0,
                 Items::Center => (inner_cross - cross) / 2.0,
@@ -469,5 +496,35 @@ pub(crate) mod tests {
         assert_eq!((p.origin("g"), p.origin("g2"), p.origin("p1")), ((100.0, 100.0), (120.0, 130.0), (0.0, 0.0)));
         // 168 px of text width holds 21 characters a line: 10 lines, 200 + 32 > 200.
         assert_eq!(p.rect("s"), Some(Rect::new(0.0, 0.0, 200.0, 232.0)));
+    }
+
+    /// Mono, counting what it is asked.
+    pub(crate) struct Counted(pub(crate) std::cell::Cell<usize>);
+    impl Measure for Counted {
+        fn measure(&self, n: &Node, wrap: Option<f64>) -> (f64, f64) {
+            self.0.set(self.0.get() + 1);
+            Mono.measure(n, wrap)
+        }
+    }
+
+    /// B45: each row of a chain measured its children twice, so a text 20 rows down was measured
+    /// about 2^20 times; a pass now asks each size once.
+    #[test]
+    fn a_deep_chain_of_rows_measures_each_text_once() {
+        let mut nodes = vec![node("p1", None, K::Page, [0.0; 4])];
+        for i in 0..20 {
+            let parent = if i == 0 { "p1".to_string() } else { format!("r{}", i - 1) };
+            let mut row = node(&format!("r{i}"), Some(&parent), K::Frame, [0.0, 0.0, 1000.0, 50.0]);
+            row.layout = Some(Layout::Row);
+            row.w_sizing = Some(Sizing::Fixed);
+            nodes.push(row);
+        }
+        nodes.push(text("leaf", "r19", "Hi"));
+        let s = Scene::new(nodes);
+        let counted = Counted(Default::default());
+        let p = place(&s, "p1", &counted);
+        assert!(counted.0.get() <= 2, "{} measures", counted.0.get());
+        assert_eq!(p.rect("leaf"), Some(Rect::new(0.0, 0.0, 16.0, 20.0)));
+        assert_eq!(p.rect("r19"), place(&s, "p1", &Mono).rect("r19"));
     }
 }
