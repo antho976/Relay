@@ -7,9 +7,10 @@
 //! The phone runs a port of this file
 //! (`apps/relay-android/core/src/main/kotlin/com/quietsoftware/relay/core/design/Shapes.kt`):
 //! `node_polygon` (a star has 5 points unless it says), `arc` and `arc_ends`, `smooth_segments`,
-//! `path_segments`, `arrowheads`, `effective_shadows`, the edge points and `line_points`, an
-//! elbow between two overlapping spans running straight through the middle of the overlap. A
-//! change here changes it there in the same piece of work, with a case in
+//! `path_segments`, `arrowheads`, `effective_shadows`, the edge points and `line_points` (routed
+//! in the line's own coordinates, an elbow between two outlines whose spans as drawn overlap
+//! running straight through the middle of the overlap). A change here changes it there in the
+//! same piece of work, with a case in
 //! `apps/relay-android/core/src/test/resources/design/layout-cases.json`, which the Rust side
 //! runs too.
 
@@ -589,7 +590,7 @@ pub fn shown_rect(scene: &Scene, placed: &Placed, id: &str) -> Option<Rect> {
 /// Where the ray from `from` along `dir` (page coordinates) last leaves node `n`'s outline as it
 /// is drawn, with `r` its placed box and `(centre, turn)` its `page_frame`: its box with its
 /// rounded corners, its ellipse (an arc keeps the whole outline) or its polygon, turned. `None`
-/// when the ray misses it.
+/// when the ray misses it, so a point it gives is always on the outline.
 fn exit_point(n: &Node, r: &Rect, (centre, turn): ((f64, f64), f64), from: (f64, f64), dir: (f64, f64)) -> Option<(f64, f64)> {
     if dir == (0.0, 0.0) {
         return None;
@@ -601,7 +602,7 @@ fn exit_point(n: &Node, r: &Rect, (centre, turn): ((f64, f64), f64), from: (f64,
     let (hw, hh) = (r.w / 2.0, r.h / 2.0);
     let t = match n.kind {
         NodeKind::Ellipse => ellipse_exit(hw, hh, rel, d),
-        NodeKind::Polygon => polygon_exit(&node_polygon(n, &own), o, d).or_else(|| box_exit(hw, hh, [0.0; 4], rel, d)),
+        NodeKind::Polygon => polygon_exit(&node_polygon(n, &own), o, d),
         _ => box_exit(hw, hh, corner_radii(n, &own), rel, d),
     }?;
     let p = (o.0 + d.0 * t, o.1 + d.1 * t);
@@ -609,7 +610,8 @@ fn exit_point(n: &Node, r: &Rect, (centre, turn): ((f64, f64), f64), from: (f64,
 }
 
 /// How far along `d` the ray from `o` (both from a box's centre) leaves the box of half sizes
-/// `hw` by `hh` with corners rounded by `radii`.
+/// `hw` by `hh` with corners rounded by `radii`; `None` when it misses, a ray that crosses only
+/// the empty part of a rounded corner included.
 fn box_exit(hw: f64, hh: f64, radii: [f64; 4], o: (f64, f64), d: (f64, f64)) -> Option<f64> {
     let (mut near, mut far) = (f64::NEG_INFINITY, f64::INFINITY);
     for (o, d, half) in [(o.0, d.0, hw), (o.1, d.1, hh)] {
@@ -625,12 +627,31 @@ fn box_exit(hw: f64, hh: f64, radii: [f64; 4], o: (f64, f64), d: (f64, f64)) -> 
     if near > far || far < 0.0 {
         return None;
     }
-    // Leaving through a rounded corner: where the ray crosses the corner's circle instead.
+    // Leaving through a rounded corner: where the ray crosses the corner's circle instead. One
+    // that has been inside the outline crosses it; one that misses it never was.
     let p = (o.0 + d.0 * far, o.1 + d.1 * far);
     let corner = corners(&Rect::new(-hw, -hh, 2.0 * hw, 2.0 * hh), radii)
         .into_iter()
         .find(|&(c, (cx, cy), (sx, sy))| c > 0.0 && (p.0 - cx) * sx > 0.0 && (p.1 - cy) * sy > 0.0);
-    Some(corner.and_then(|(c, (cx, cy), _)| circle_exit((o.0 - cx, o.1 - cy), d, c)).unwrap_or(far))
+    match corner {
+        Some((c, (cx, cy), _)) => circle_exit((o.0 - cx, o.1 - cy), d, c),
+        None => Some(far),
+    }
+}
+
+/// How far `n`'s outline as drawn reaches along the unit direction `u` from its centre, unturned,
+/// with `r` its placed box: a polygon's farthest corner, an ellipse's edge (an arc keeps the
+/// whole outline), or a box's farthest corner circle (its rounded corners, a radius of 0 being
+/// the corner itself). The outline's span along `u` is `-reach(-u)` to `reach(u)`.
+fn reach_along(n: &Node, r: &Rect, u: (f64, f64)) -> f64 {
+    let (hw, hh) = (r.w / 2.0, r.h / 2.0);
+    let own = Rect::new(-hw, -hh, r.w, r.h);
+    let dot = |p: (f64, f64)| p.0 * u.0 + p.1 * u.1;
+    match n.kind {
+        NodeKind::Ellipse => (hw * u.0).hypot(hh * u.1),
+        NodeKind::Polygon => node_polygon(n, &own).into_iter().map(dot).fold(f64::NEG_INFINITY, f64::max),
+        _ => corners(&own, corner_radii(n, &own)).into_iter().map(|(c, centre, _)| dot(centre) + c).fold(f64::NEG_INFINITY, f64::max),
+    }
 }
 
 /// How far along `d` the ray from `o` (relative to a circle's centre) last crosses the circle of
@@ -691,10 +712,12 @@ pub fn attached_ends(scene: &Scene, placed: &Placed, n: &Node) -> (bool, bool) {
 /// node still on the page, from that node's outline as it is drawn, turned or not, a polygon's
 /// sides and a box's rounded corners included. Each attached end aims at the other end's
 /// centre. The ends are found on the page and given back through the line's own turns, so they
-/// meet the nodes wherever turned frames draw them. An elbow route adds its corners, except
-/// between two attached nodes beside each other whose spans overlap across the run, which it
-/// joins straight through the middle of the overlap (nor does it jog by under a pixel); a curve
-/// is `[start, control, control, end]` (`curved` says so).
+/// meet the nodes wherever turned frames draw them, and the route runs in the line's own
+/// coordinates, square to the frame it is drawn in. An elbow route adds its corners, except
+/// between two attached nodes beside each other whose outlines as drawn overlap across the run,
+/// which it joins straight through the middle of the overlap where that run meets both
+/// outlines (nor does it jog by under a pixel); a curve is `[start, control, control, end]`
+/// (`curved` says so).
 pub fn line_points(scene: &Scene, placed: &Placed, n: &Node) -> (Vec<(f64, f64)>, bool) {
     let r = placed.rect(&n.id).unwrap_or_default();
     let own: Vec<(f64, f64)> = n.points.as_deref().unwrap_or(&[]).iter().map(|p| (r.x + p[0], r.y + p[1])).collect();
@@ -706,40 +729,53 @@ pub fn line_points(scene: &Scene, placed: &Placed, n: &Node) -> (Vec<(f64, f64)>
     if from.is_none() && to.is_none() && route == Route::Straight {
         return (own, false);
     }
-    let turns = frame_turns(scene, placed, &n.id);
+    let mut a = own.first().copied().unwrap_or((r.x, r.y));
+    let mut b = own.last().copied().unwrap_or((r.right(), r.bottom()));
+    // The nodes it joins are met on the page; a line with no end attached needs no turn.
+    let turns = if from.is_some() || to.is_some() { frame_turns(scene, placed, &n.id) } else { Vec::new() };
+    let turned: f64 = turns.iter().map(|t| t.2).sum();
     let to_page = |p: (f64, f64)| turns.iter().rev().fold(p, |p, &(cx, cy, d)| rotate(p.0, p.1, cx, cy, d));
-    let mut a = to_page(own.first().copied().unwrap_or((r.x, r.y)));
-    let mut b = to_page(own.last().copied().unwrap_or((r.right(), r.bottom())));
+    let to_own = |p: (f64, f64)| turns.iter().fold(p, |p, &(cx, cy, d)| rotate(p.0, p.1, cx, cy, -d));
     // Each attached end aims at the other end's centre (or its free point).
-    let aim_a = to.map_or(b, |(_, _, (c, _))| c);
-    let aim_b = from.map_or(a, |(_, _, (c, _))| c);
+    let aim_a = to.map_or_else(|| to_page(b), |(_, _, (c, _))| c);
+    let aim_b = from.map_or_else(|| to_page(a), |(_, _, (c, _))| c);
     if let Some((m, mr, frame)) = from {
-        a = edge_point(m, &mr, frame, aim_a);
+        a = to_own(edge_point(m, &mr, frame, aim_a));
     }
     if let Some((m, mr, frame)) = to {
-        b = edge_point(m, &mr, frame, aim_b);
+        b = to_own(edge_point(m, &mr, frame, aim_b));
     }
-    let (pts, curved) = match route {
+    match route {
         Route::Straight => (vec![a, b], false),
         Route::Elbow => {
             let horizontal = (b.0 - a.0).abs() >= (b.1 - a.1).abs();
             let level = from.zip(to).and_then(|((fm, fr, ff), (tm, tr, tf))| {
-                // The spans the two nodes are drawn over, across the run.
-                let span = |r: &Rect, ((cx, cy), turn): ((f64, f64), f64)| {
-                    let b = rotated_bounds(&Rect::new(cx - r.w / 2.0, cy - r.h / 2.0, r.w, r.h), turn);
-                    if horizontal { (b.y, b.bottom()) } else { (b.x, b.right()) }
+                // The span each node's outline as drawn covers across the run, in the line's
+                // coordinates: the node is turned by its turn less the line's there.
+                let across = if horizontal { (0.0, 1.0) } else { (1.0, 0.0) };
+                let span = |m: &Node, r: &Rect, (c, turn): ((f64, f64), f64)| {
+                    let c = to_own(c);
+                    let mid = c.0 * across.0 + c.1 * across.1;
+                    let u = rotate(across.0, across.1, 0.0, 0.0, turned - turn);
+                    (mid - reach_along(m, r, (-u.0, -u.1)), mid + reach_along(m, r, u))
                 };
-                let ((f0, f1), (t0, t1)) = (span(&fr, ff), span(&tr, tf));
+                let ((f0, f1), (t0, t1)) = (span(fm, &fr, ff), span(tm, &tr, tf));
                 let (lo, hi) = (f0.max(t0), f1.min(t1));
                 if lo > hi {
                     return None;
                 }
                 let m = (lo + hi) / 2.0;
                 let along = if horizontal { ((b.0 - a.0).signum(), 0.0) } else { (0.0, (b.1 - a.1).signum()) };
-                let start = |c: (f64, f64)| if horizontal { (c.0, m) } else { (m, c.1) };
-                let a = exit_point(fm, &fr, ff, start(ff.0), along)?;
-                let b = exit_point(tm, &tr, tf, start(tf.0), (-along.0, -along.1))?;
-                Some(vec![a, b])
+                // Each end where the run at `m` last leaves its node, coming from behind it, so on
+                // the side facing the other; a run that misses an outline is not level.
+                let meet = |node: &Node, r: &Rect, frame: ((f64, f64), f64), way: f64| {
+                    let c = to_own(frame.0);
+                    let back = way * r.w.hypot(r.h);
+                    let start = if horizontal { (c.0 - along.0 * back, m) } else { (m, c.1 - along.1 * back) };
+                    let dir = rotate(way * along.0, way * along.1, 0.0, 0.0, turned);
+                    exit_point(node, r, frame, to_page(start), dir).map(to_own)
+                };
+                Some(vec![meet(fm, &fr, ff, 1.0)?, meet(tm, &tr, tf, -1.0)?])
             });
             let pts = level.unwrap_or_else(|| {
                 if (if horizontal { b.1 - a.1 } else { b.0 - a.0 }).abs() < 1.0 {
@@ -765,12 +801,7 @@ pub fn line_points(scene: &Scene, placed: &Placed, n: &Node) -> (Vec<(f64, f64)>
             };
             (vec![a, c1, c2, b], true)
         }
-    };
-    if turns.is_empty() {
-        return (pts, curved);
     }
-    let to_own = |p: (f64, f64)| turns.iter().fold(p, |p, &(cx, cy, d)| rotate(p.0, p.1, cx, cy, -d));
-    (pts.into_iter().map(to_own).collect(), curved)
 }
 
 /// Where a connector's end meets node `n` (placed at `r`, drawn at `frame`, its `page_frame`):
@@ -1185,6 +1216,80 @@ mod tests {
         (free.route, free.points) = (Some(Route::Elbow), Some(vec![[0.0, 0.0], [200.0, 0.5]]));
         let (s, p) = page(vec![free]);
         assert_eq!(line_points(&s, &p, s.node("c").unwrap()).0, [(0.0, 0.0), (200.0, 0.5)]);
+    }
+
+    #[test]
+    fn a_straight_elbow_meets_a_polygon_where_it_is_drawn() {
+        // The spans are the outlines', not the boxes': the triangle's base is at 75 and the box
+        // starts at 80, so the elbow keeps its corners and both its ends are on the triangle.
+        let mut c = connector("c", "p1", "a", "b");
+        c.route = Some(Route::Elbow);
+        let tri = node("a", Some("p1"), K::Polygon, [0.0, 0.0, 100.0, 100.0]);
+        let on_a = |s: &Scene, p: &Placed, pt: (f64, f64)| crate::design::hit::on_shape(s, p, s.node("a").unwrap(), &p.rect("a").unwrap(), pt.0, pt.1, 1.0);
+        let (s, p) = page(vec![tri.clone(), node("b", Some("p1"), K::Rect, [300.0, 80.0, 100.0, 100.0]), c.clone()]);
+        let pts = line_points(&s, &p, s.node("c").unwrap()).0;
+        assert!(pts.len() == 4 && on_a(&s, &p, pts[0]), "{pts:?}");
+        // Overlapping as drawn (40 to 75): straight through the middle, from the triangle's side.
+        let (s, p) = page(vec![tri.clone(), node("b", Some("p1"), K::Rect, [300.0, 40.0, 100.0, 100.0]), c.clone()]);
+        let pts = line_points(&s, &p, s.node("c").unwrap()).0;
+        assert!(pts.len() == 2 && near(pts[0], (50.0 + 43.30127018922193 * 57.5 / 75.0, 57.5)) && near(pts[1], (300.0, 57.5)), "{pts:?}");
+        // Turned upside down it is drawn from 25 to 100: a box above 20 does not overlap it.
+        let mut down = tri;
+        down.rotation = Some(180.0);
+        let (s, p) = page(vec![down.clone(), node("b", Some("p1"), K::Rect, [300.0, -20.0, 100.0, 40.0]), c.clone()]);
+        let pts = line_points(&s, &p, s.node("c").unwrap()).0;
+        assert!(pts.len() == 4 && on_a(&s, &p, rotate(pts[0].0, pts[0].1, 50.0, 50.0, -180.0)), "{pts:?}");
+        let (s, p) = page(vec![down, node("b", Some("p1"), K::Rect, [300.0, 80.0, 100.0, 100.0]), c.clone()]);
+        let pts = line_points(&s, &p, s.node("c").unwrap()).0;
+        assert!(pts.len() == 2 && near(pts[0], (50.0 + 43.30127018922193 * 10.0 / 75.0, 90.0)), "near its tip: {pts:?}");
+        // A star reaches 90.45 down, its points either side of its bottom notch.
+        let mut star = node("a", Some("p1"), K::Polygon, [0.0, 0.0, 100.0, 100.0]);
+        star.star = Some(0.4);
+        let (s, p) = page(vec![star.clone(), node("b", Some("p1"), K::Rect, [300.0, 92.0, 100.0, 100.0]), c.clone()]);
+        let pts = line_points(&s, &p, s.node("c").unwrap()).0;
+        assert!(pts.len() == 4 && on_a(&s, &p, pts[0]), "{pts:?}");
+        let (s, p) = page(vec![star, node("b", Some("p1"), K::Rect, [300.0, 80.0, 100.0, 100.0]), c]);
+        let pts = line_points(&s, &p, s.node("c").unwrap()).0;
+        assert!(pts.len() == 2 && on_a(&s, &p, pts[0]) && pts[0].0 > 50.0, "on the right point's far side: {pts:?}");
+    }
+
+    #[test]
+    fn a_ray_past_a_rounded_corner_misses_the_box() {
+        // Through the bottom-right corner's square, outside its circle: nothing drawn is there.
+        assert_eq!(box_exit(50.0, 50.0, [20.0; 4], (35.0, 60.0), (1.0, -1.0)), None);
+        assert_eq!(box_exit(50.0, 50.0, [0.0; 4], (35.0, 60.0), (1.0, -1.0)), Some(15.0), "a square corner is there");
+    }
+
+    #[test]
+    fn elbows_and_curves_run_square_to_the_frame_they_are_drawn_in() {
+        // A free elbow in a turned frame turns with it, as does one with a turn of its own.
+        let mut f = node("f", Some("p1"), K::Frame, [0.0, 0.0, 400.0, 300.0]);
+        f.rotation = Some(30.0);
+        let mut free = node("c", Some("f"), K::Line, [10.0, 10.0, 0.0, 0.0]);
+        (free.route, free.points) = (Some(Route::Elbow), Some(vec![[0.0, 0.0], [200.0, 100.0]]));
+        let square = [(10.0, 10.0), (110.0, 10.0), (110.0, 110.0), (210.0, 110.0)];
+        let same = |pts: &[(f64, f64)], want: &[(f64, f64)]| pts.len() == want.len() && pts.iter().zip(want).all(|(a, b)| near(*a, *b));
+        let (s, p) = page(vec![f.clone(), free.clone()]);
+        let pts = line_points(&s, &p, s.node("c").unwrap()).0;
+        assert!(same(&pts, &square), "{pts:?}");
+        let mut turned = free.clone();
+        (turned.parent, turned.rotation) = (Some("p1".into()), Some(30.0));
+        let (s, p) = page(vec![turned.clone()]);
+        assert!(same(&line_points(&s, &p, &turned).0, &square));
+        free.route = Some(Route::Curve);
+        let (s, p) = page(vec![f.clone(), free]);
+        let (pts, curved) = line_points(&s, &p, s.node("c").unwrap());
+        assert!(curved && same(&pts, &square), "{pts:?}");
+        // A connector between two children of the turned frame: square in the frame.
+        let mut c = connector("c", "f", "k", "k2");
+        c.route = Some(Route::Elbow);
+        let (s, p) = page(vec![f.clone(), node("k", Some("f"), K::Rect, [0.0, 0.0, 40.0, 40.0]), node("k2", Some("f"), K::Rect, [200.0, 150.0, 40.0, 40.0]), c.clone()]);
+        let pts = line_points(&s, &p, s.node("c").unwrap()).0;
+        assert!(same(&pts, &[(40.0, 35.0), (120.0, 35.0), (120.0, 155.0), (200.0, 155.0)]), "{pts:?}");
+        // Side by side in it, overlapping from 4 to 40: straight through 22.
+        let (s, p) = page(vec![f, node("k", Some("f"), K::Rect, [0.0, 0.0, 40.0, 40.0]), node("k2", Some("f"), K::Ellipse, [150.0, 4.0, 40.0, 40.0]), c]);
+        let pts = line_points(&s, &p, s.node("c").unwrap()).0;
+        assert!(pts.len() == 2 && near(pts[0], (40.0, 22.0)) && (pts[1].1 - 22.0).abs() < 1e-6, "{pts:?}");
     }
 
     #[test]
