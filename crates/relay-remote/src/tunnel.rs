@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -124,13 +124,17 @@ async fn dial(r: &Rendezvous) -> Result<Ws> {
     }
 }
 
-/// Every lane's task, aborted however `connect_once` ends.
+/// Every lane's task, aborted however `connect_once` ends, with its queue and the bytes it may have
+/// waiting.
 #[derive(Default)]
-struct Lanes(HashMap<String, (mpsc::Sender<String>, JoinHandle<()>)>);
+struct Lanes(HashMap<String, OpenLane>);
+
+/// A lane's queue, its task, and its share of the bytes waiting.
+type OpenLane = (mpsc::Sender<(String, Waiting)>, JoinHandle<()>, Arc<Semaphore>);
 
 impl Drop for Lanes {
     fn drop(&mut self) {
-        for (_, (_, task)) in self.0.drain() {
+        for (_, (_, task, _)) in self.0.drain() {
             task.abort();
         }
     }
@@ -139,6 +143,21 @@ impl Drop for Lanes {
 /// Requests from one phone waiting for its bridge. The shared loop never waits on a lane: a lane
 /// that lets this fill is closed, and the phone reconnects.
 const LANE_INBOUND: usize = 256;
+/// The bytes of them one lane, and every lane together, may have waiting. The count alone let a
+/// lane hold 256 lines of up to [`MAX_LANE_LINE`] each, gigabytes, while its bridge sat behind a
+/// slow request (a `money.sync` under the store's lock), and a lane is open to whoever joins the
+/// room, before any handshake: a lane past either is closed the same way.
+const LANE_INBOUND_BYTES: usize = 2 * MAX_LANE_LINE;
+const INBOUND_BYTES: usize = 4 * MAX_LANE_LINE;
+
+/// A waiting line's bytes, held against its lane's share and the total until its bridge takes it.
+type Waiting = (OwnedSemaphorePermit, OwnedSemaphorePermit);
+
+/// Room for a line of `bytes` in `lane`'s share and in `all`, or none.
+fn waiting(lane: &Arc<Semaphore>, all: &Arc<Semaphore>, bytes: usize) -> Option<Waiting> {
+    let n = u32::try_from(bytes.max(1)).ok()?;
+    Some((lane.clone().try_acquire_many_owned(n).ok()?, all.clone().try_acquire_many_owned(n).ok()?))
+}
 
 /// One connection's lifetime. `Ok` means the server closed cleanly; `connected` is set once the
 /// dial succeeded, whatever happens after.
@@ -163,6 +182,7 @@ pub async fn connect_once(ctx: Arc<Ctx>, rendezvous: &Rendezvous, connected: &At
     // However this ends — an error, the silence limit, a close — the writer and every lane go.
     let _writer = AbortOnDrop(writer.abort_handle());
     let mut lanes = Lanes::default();
+    let inbound = Arc::new(Semaphore::new(INBOUND_BYTES));
     let mut ping = tokio::time::interval(PING_EVERY);
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut last_heard = tokio::time::Instant::now();
@@ -194,7 +214,16 @@ pub async fn connect_once(ctx: Arc<Ctx>, rendezvous: &Rendezvous, connected: &At
         };
         match lane {
             Lane::Open { c } => {
-                let (in_tx, in_rx) = mpsc::channel::<String>(LANE_INBOUND);
+                let (in_tx, mut queued) = mpsc::channel::<(String, Waiting)>(LANE_INBOUND);
+                // The bridge takes one line at a time; a line's bytes count until it does.
+                let (to_bridge, in_rx) = mpsc::channel::<String>(1);
+                let hand_on = tokio::spawn(async move {
+                    while let Some((line, _waiting)) = queued.recv().await {
+                        if to_bridge.send(line).await.is_err() {
+                            break;
+                        }
+                    }
+                });
                 let (out_tx, mut out_rx) = mpsc::channel::<String>(bridge::OUTBOUND_QUEUE);
                 let ctx = ctx.clone();
                 let to_server = to_server.clone();
@@ -219,37 +248,42 @@ pub async fn connect_once(ctx: Arc<Ctx>, rendezvous: &Rendezvous, connected: &At
                             }
                         })
                     };
-                    // Aborting this lane must not leave the forwarder behind.
+                    // Aborting this lane must not leave the forwarder, or what hands lines on, behind.
                     let _forward_guard = AbortOnDrop(forward.abort_handle());
+                    let _hand_on_guard = AbortOnDrop(hand_on.abort_handle());
                     if let Err(e) = bridge::run(ctx, in_rx, out_tx, (), "rendezvous".to_string()).await {
                         tracing::debug!(lane = %id, error = %e, "lane ended");
                     }
                     let _ = forward.await;
                     let _ = to_server.send(Message::text(Lane::Close { c: id }.to_line())).await;
                 });
-                lanes.0.insert(c, (in_tx, task));
+                lanes.0.insert(c, (in_tx, task, Arc::new(Semaphore::new(LANE_INBOUND_BYTES))));
             }
             Lane::Data { c, l } => {
-                let Some((tx, _)) = lanes.0.get(&c) else { continue };
-                match tx.try_send(l) {
+                let Some((tx, _, share)) = lanes.0.get(&c) else { continue };
+                let sent = match waiting(share, &inbound, l.len()) {
+                    Some(held) => tx.try_send((l, held)).map_err(|e| matches!(e, mpsc::error::TrySendError::Closed(_))),
+                    None => Err(false),
+                };
+                match sent {
                     Ok(()) => {}
-                    Err(mpsc::error::TrySendError::Full(_)) => {
+                    Err(false) => {
                         // A lane whose bridge cannot keep up is closed rather than waited on:
                         // every other phone's lines go through this loop.
                         tracing::warn!(lane = %c, "lane fell behind; closing it");
-                        if let Some((_, task)) = lanes.0.remove(&c) {
+                        if let Some((_, task, _)) = lanes.0.remove(&c) {
                             task.abort();
                         }
                         let _ = to_server.try_send(Message::text(Lane::Close { c }.to_line()));
                     }
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                    Err(true) => {
                         lanes.0.remove(&c);
                     }
                 }
             }
             Lane::Close { c } => {
                 // The phone is gone; nothing it sent is still worth delivering.
-                if let Some((_, task)) = lanes.0.remove(&c) {
+                if let Some((_, task, _)) = lanes.0.remove(&c) {
                     task.abort();
                 }
             }
@@ -263,6 +297,25 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    /// A lane's waiting lines are bounded in bytes, its own and all lanes' together, and a line's
+    /// bytes come back once its bridge has taken it.
+    #[test]
+    fn waiting_lines_are_bounded_in_bytes_per_lane_and_in_all() {
+        let all = Arc::new(Semaphore::new(INBOUND_BYTES));
+        let (a, b) = (Arc::new(Semaphore::new(LANE_INBOUND_BYTES)), Arc::new(Semaphore::new(LANE_INBOUND_BYTES)));
+        let first = waiting(&a, &all, MAX_LANE_LINE).unwrap();
+        let second = waiting(&a, &all, MAX_LANE_LINE).unwrap();
+        assert!(waiting(&a, &all, 1).is_none(), "a lane holds two of the largest lines at most");
+        let others: Vec<Waiting> = (0..2).map(|_| waiting(&b, &all, MAX_LANE_LINE).unwrap()).collect();
+        let c = Arc::new(Semaphore::new(LANE_INBOUND_BYTES));
+        assert!(waiting(&c, &all, 1).is_none(), "every lane together holds four");
+        drop(first);
+        assert!(waiting(&a, &all, MAX_LANE_LINE).is_some(), "taken by its bridge, a line's bytes come back");
+        drop((second, others));
+        assert!(waiting(&c, &all, 0).is_some(), "an empty line still counts one byte");
+        assert!(waiting(&c, &all, usize::MAX).is_none());
+    }
 
     fn rendezvous(addr: std::net::SocketAddr) -> Rendezvous {
         let secret = "s3cret".to_string();
