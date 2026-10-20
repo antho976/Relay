@@ -11,9 +11,25 @@ use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::ops::Range;
 
+/// `v` within [`PLACED_LIMIT`] of the page's origin.
+fn limit(v: f64) -> f64 {
+    v.clamp(-PLACED_LIMIT, PLACED_LIMIT)
+}
+
+/// `r` placed within [`PLACED_LIMIT`].
+fn bounded(r: Rect) -> Rect {
+    Rect::new(limit(r.x), limit(r.y), r.w.clamp(0.0, 2.0 * PLACED_LIMIT), r.h.clamp(0.0, 2.0 * PLACED_LIMIT))
+}
+
 /// Slack when a wrap line is checked for room, so a line that fits exactly is not broken by
 /// rounding.
 const SLACK: f64 = 1e-6;
+
+/// How far from the page's origin a box is placed, either way: 2^22 px, where an `f32` still
+/// holds half a pixel. Paint draws in `f32` and hit testing works in `f64`, so a box an agent
+/// nested or lined up past it is placed at it, and both agree where it is (B110). A box's size
+/// stops at twice this.
+pub const PLACED_LIMIT: f64 = 4_194_304.0;
 
 /// Inner margin of a sticky's text.
 pub const STICKY_PAD: f64 = 16.0;
@@ -271,7 +287,8 @@ impl<'a> Pass<'a> {
     }
 
     /// A node's size under width rule `ws`, offered `offered` px across: its kind's rule, then
-    /// its min and max.
+    /// its min and max, and no more than `MAX_COORD` (B111: however many children a frame hugs,
+    /// what it offers a text to wrap at stays within what Pango's 32-bit units hold).
     fn size_of(&self, n: &'a Node, ws: Sizing, offered: Option<f64>) -> (f64, f64) {
         let (w, h) = match n.kind {
             // A group is as big as its children, whatever its own `w`/`h` or sizing say (B2).
@@ -282,12 +299,12 @@ impl<'a> Pass<'a> {
             // A filling width takes what is offered; nothing offers one outside a layout.
             _ => (if ws == Sizing::Fill { offered.unwrap_or(n.w) } else { n.w }, n.h),
         };
-        (n.clamp_w(w).max(0.0), n.clamp_h(h).max(0.0))
+        (n.clamp_w(w).clamp(0.0, MAX_COORD), n.clamp_h(h).clamp(0.0, MAX_COORD))
     }
 
-    /// A text's words measured wrapped at `wrap` px, or unwrapped.
+    /// A text's words measured wrapped at `wrap` px (never past `MAX_COORD`), or unwrapped.
     fn words(&self, n: &Node, wrap: Option<f64>) -> (f64, f64) {
-        self.measure.measure(n, wrap)
+        self.measure.measure(n, wrap.map(|w| w.min(MAX_COORD)))
     }
 
     /// A text: its words wrapped at its width (unwrapped while it hugs them, up to `max_w`), as
@@ -353,7 +370,7 @@ impl<'a> Pass<'a> {
         let mut w = own.unwrap_or(n.w);
         if hug_w {
             let hugged = content_w + pl + pr;
-            w = n.clamp_w(hugged);
+            w = n.clamp_w(hugged).min(MAX_COORD);
             if w != hugged {
                 // Past its min or max it is laid out again at the width it takes, so what wraps
                 // or fills in it reflows there and its height follows.
@@ -534,13 +551,15 @@ impl<'a> Pass<'a> {
         let Some(n) = scene.node(id) else {
             return;
         };
+        // Its children are placed from where it is placed, so paint and hit agree on them too.
+        let rect = bounded(rect);
         let children = scene.children(id);
         match (n.kind, n.layout_mode()) {
             (NodeKind::Group, _) => {
                 // `rect` is where its children's bounds land, freely or in a layout's slot (B2):
                 // they count from there less where their bounds start.
                 let b = self.group_bounds(n).unwrap_or_default();
-                let (ox, oy) = (rect.x - b.x, rect.y - b.y);
+                let (ox, oy) = (limit(rect.x - b.x), limit(rect.y - b.y));
                 self.placed.origins.insert(id.to_string(), (ox, oy));
                 for child in children {
                     self.free_child(child, (ox, oy), None);
@@ -600,16 +619,16 @@ impl<'a> Pass<'a> {
         let (dx, dy) = (-offset.0, -offset.1);
         for d in scene.subtree(&n.id).iter().skip(1) {
             if let Some(r) = self.placed.rects.get_mut(d) {
-                *r = r.translate(dx, dy);
+                *r = bounded(r.translate(dx, dy));
             }
             for o in [self.placed.origins.get_mut(d), self.placed.content_origin.get_mut(d)].into_iter().flatten() {
-                *o = (o.0 + dx, o.1 + dy);
+                *o = (limit(o.0 + dx), limit(o.1 + dy));
             }
             if let Some(s) = self.placed.scrolls.get_mut(d) {
                 s.content = s.content.translate(dx, dy);
             }
         }
-        self.placed.content_origin.insert(n.id.clone(), (rect.x + dx, rect.y + dy));
+        self.placed.content_origin.insert(n.id.clone(), (limit(rect.x + dx), limit(rect.y + dy)));
     }
 
     /// Auto layout: children one after another along the frame's direction, inside its
@@ -1489,6 +1508,77 @@ pub(crate) mod tests {
         assert_eq!((p.rect("item"), p.origin("c1"), p.point("c1")), (Some(Rect::new(-20.0, 55.0, 100.0, 60.0)), (-20.0, -25.0), (-20.0, 0.0)));
         let wild = HashMap::from([("strip".to_string(), (f64::NAN, 0.0)), ("c2".to_string(), (50.0, 50.0))]);
         assert_eq!(place_scrolled(&s, "p1", &Mono, &wild).rects, still.rects, "nothing to scroll, or no number");
+    }
+
+    /// B110: 20 frames nested each 1,000,000 px in put the last past 2^24, where `f32` paint and
+    /// `f64` hit testing drift apart; boxes stop at PLACED_LIMIT, which `f32` holds exactly, and
+    /// a click there still finds what is drawn there.
+    #[test]
+    fn deep_offsets_stop_at_the_placed_limit() {
+        let mut nodes = vec![node("p1", None, K::Page, [0.0; 4])];
+        for i in 0..20 {
+            let parent = if i == 0 { "p1".to_string() } else { format!("f{}", i - 1) };
+            let mut f = node(&format!("f{i}"), Some(&parent), K::Frame, [1_000_000.0, 0.0, 100.0, 100.0]);
+            f.clip = Some(false);
+            nodes.push(f);
+        }
+        nodes.push(node("r", Some("f19"), K::Rect, [0.0, 0.0, 10.0, 10.0]));
+        let s = Scene::new(nodes);
+        let p = place(&s, "p1", &Mono);
+        let r = p.rect("r").unwrap();
+        assert_eq!(r, Rect::new(PLACED_LIMIT, 0.0, 10.0, 10.0));
+        assert!(((r.x as f32) as f64 - r.x).abs() <= 0.5);
+        let chain = crate::design::hit::chain(&s, &p, "p1", r.cx(), r.cy(), 0.0);
+        assert_eq!(chain.last().map(String::as_str), Some("r"));
+        // A row hugging 20 children a million px wide: it hugs no more than MAX_COORD, and
+        // every child is placed within the limit.
+        let mut row = node("row", Some("p1"), K::Frame, [0.0, 0.0, 0.0, 10.0]);
+        row.layout = Some(Layout::Row);
+        row.w_sizing = Some(Sizing::Hug);
+        let kids = (0..20).map(|i| node(&format!("k{i}"), Some("row"), K::Rect, [0.0, 0.0, 1_000_000.0, 10.0])).collect();
+        let p = place(&scene_of(row, kids), "p1", &Mono);
+        assert_eq!(p.rect("row").unwrap().w, MAX_COORD);
+        assert!((0..20).all(|i| p.rect(&format!("k{i}")).unwrap().x <= PLACED_LIMIT));
+        assert_eq!(p.rect("k19").unwrap().x, PLACED_LIMIT);
+    }
+
+    /// Mono, keeping the widest wrap it is asked for.
+    struct Widest(std::cell::Cell<f64>);
+    impl Measure for Widest {
+        fn measure(&self, n: &Node, wrap: Option<f64>) -> (f64, f64) {
+            self.0.set(self.0.get().max(wrap.unwrap_or(0.0)));
+            Mono.measure(n, wrap)
+        }
+    }
+
+    /// B111: a frame hugging children several million px wide offered that width to a filling
+    /// text, past the 2,097,151 px Pango's 32-bit units hold, and a column of tall texts hugged
+    /// past MAX_COORD; both stop at MAX_COORD.
+    #[test]
+    fn hugs_and_wraps_stay_within_max_coord() {
+        let mut outer = node("outer", Some("p1"), K::Frame, [0.0; 4]);
+        outer.layout = Some(Layout::Column);
+        outer.w_sizing = Some(Sizing::Hug);
+        outer.h_sizing = Some(Sizing::Hug);
+        outer.items = Some(Items::Stretch);
+        let mut row = node("row", Some("outer"), K::Frame, [0.0, 0.0, 0.0, 10.0]);
+        row.layout = Some(Layout::Row);
+        row.w_sizing = Some(Sizing::Hug);
+        let mut words = text("words", "outer", "abc");
+        words.w_sizing = Some(Sizing::Fill);
+        let mut nodes = vec![node("p1", None, K::Page, [0.0; 4]), outer, row, words];
+        nodes.extend((0..3).map(|i| node(&format!("wide{i}"), Some("row"), K::Rect, [0.0, 0.0, 1_000_000.0, 10.0])));
+        for i in 0..20 {
+            let mut tall = text(&format!("tall{i}"), "outer", "Hi");
+            tall.h_sizing = Some(Sizing::Fixed);
+            tall.h = 1_000_000.0;
+            nodes.push(tall);
+        }
+        let widest = Widest(Default::default());
+        let p = place(&Scene::new(nodes), "p1", &widest);
+        assert_eq!(widest.0.get(), MAX_COORD);
+        assert_eq!(p.rect("outer").map(|r| (r.w, r.h)), Some((MAX_COORD, MAX_COORD)));
+        assert_eq!(p.rect("words").unwrap().w, MAX_COORD);
     }
 
     /// Mono, counting what it is asked.
