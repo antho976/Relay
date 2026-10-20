@@ -16,6 +16,9 @@ pub enum ExchangeError {
     Unreachable(String),
     /// An answer this client could not read.
     Malformed(String),
+    /// Create refused a `client_order_id` the exchange already has: the order exists, though this
+    /// answer does not say what became of it.
+    Duplicate(String),
 }
 
 impl fmt::Display for ExchangeError {
@@ -26,6 +29,7 @@ impl fmt::Display for ExchangeError {
             ExchangeError::RateLimited => write!(f, "The exchange asked to slow down"),
             ExchangeError::Unreachable(m) => write!(f, "The exchange could not be reached: {m}"),
             ExchangeError::Malformed(m) => write!(f, "The exchange's answer could not be read: {m}"),
+            ExchangeError::Duplicate(m) => write!(f, "The exchange already has this order: {m}"),
         }
     }
 }
@@ -54,9 +58,14 @@ pub trait Account: Send + Sync {
     fn balances(&self) -> Result<Vec<Balance>>;
     fn fees(&self) -> Result<Fees>;
     fn preview(&self, order: &OrderRequest) -> Result<Preview>;
-    /// Places the order. A repeated `client_order_id` returns the order already placed.
+    /// Places the order. A repeated `client_order_id` returns the order already placed, or
+    /// [`ExchangeError::Duplicate`] when the exchange only says it has one.
     fn place(&self, order: &OrderRequest, preview_id: Option<&str>) -> Result<ExchangeOrder>;
     fn order(&self, order_id: &str) -> Result<ExchangeOrder>;
+    /// The order placed with `client_order_id`, among `product`'s orders created since `since`
+    /// (Unix seconds), or `None` when the exchange has none. Reads only: what an order sent with
+    /// no answer is looked up by before it is sent again, failed or cancelled.
+    fn find_order(&self, product: &str, client_order_id: &str, since: i64) -> Result<Option<ExchangeOrder>>;
     fn fills(&self, order_id: &str) -> Result<Vec<ExchangeFill>>;
     fn cancel(&self, order_ids: &[String]) -> Result<()>;
 }

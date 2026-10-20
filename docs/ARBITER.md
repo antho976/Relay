@@ -190,10 +190,16 @@ Behind the `engine` feature:
 - **`execute`** is the only path an order takes. `route` sends an intent there, or turns it into a
   proposal when the mode says so. An intent the gate would refuse is refused at once, not
   proposed.
-- **Live orders** are previewed, then placed. When Coinbase does not answer, the order stays
-  pending; the runner asks again with the same id for a minute, then marks it unconfirmed and says
-  to check the Coinbase app. A cancel reads the order and its fills back from Coinbase, so a fill
-  that raced the kill switch is still booked.
+- **Live orders** are previewed, then placed. When no answer to create can be read (it timed out,
+  came back unreadable, or Coinbase says it has that id already), the order stays pending, and
+  each pass first looks it up by its `client_order_id` (List Orders for its product, from a few
+  minutes before it was sent). Found, it is reconciled like any other order. Not found, it is sent
+  again under the same id for a minute, unless a halt came since; after that it is failed as never
+  placed. A lookup that fails decides nothing.
+- **A cancel** goes to Coinbase or nowhere. Without the key, or with Coinbase not answering, the
+  order stays open and the kill switch lists it as not cancelled. An order with no answer is looked
+  up first; only one Coinbase has no record of is cancelled in the book alone. A cancel reads the
+  order and its fills back from Coinbase, so a fill that raced the kill switch is still booked.
 - **A proposal** is placed on the venue it was asked for, or not at all: a card asked on paper
   fails once the strategy has gone live.
 - **An exit that failed** (refused, unconfirmed, or filled in part) is tried again a minute later

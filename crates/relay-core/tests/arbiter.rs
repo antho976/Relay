@@ -7,8 +7,9 @@ use common::{call, code, engine, ok};
 use relay_arbiter::exchange::{Account, ExchangeError, Market, Result};
 use relay_arbiter::model::*;
 use relay_arbiter::Decimal;
-use relay_core::arbiter::{pass, set_fake_exchange};
+use relay_core::arbiter::{pass, set_fake_exchange, set_fake_key};
 use serde_json::{json, Value};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 const KEY: &str = "-----BEGIN EC PRIVATE KEY-----
@@ -29,6 +30,13 @@ struct Fake {
     refuse_sells: Mutex<bool>,
     /// Resting orders cancelled, by exchange id: they read back as cancelled.
     cancelled: Mutex<Vec<String>>,
+    /// Create takes the order, then its answer is lost to this error (a timeout, a body that
+    /// cannot be read).
+    lost: Mutex<Option<ExchangeError>>,
+    /// Create never reaches the exchange: it times out and nothing is placed.
+    drop_orders: Mutex<bool>,
+    /// Looking an order up by its client_order_id fails.
+    lookup_fails: Mutex<bool>,
 }
 
 impl Fake {
@@ -99,7 +107,17 @@ impl Account for Fake {
         if o.side == Side::Sell && *self.refuse_sells.lock().unwrap() {
             return Err(ExchangeError::Refused("INSUFFICIENT_FUND".into()));
         }
+        if *self.drop_orders.lock().unwrap() {
+            return Err(ExchangeError::Unreachable("the request timed out".into()));
+        }
+        // Coinbase refuses a client_order_id it already has.
+        if self.placed.lock().unwrap().iter().any(|p| p.client_order_id == o.client_order_id) {
+            return Err(ExchangeError::Duplicate(o.client_order_id.clone()));
+        }
         self.placed.lock().unwrap().push(o.clone());
+        if let Some(e) = self.lost.lock().unwrap().clone() {
+            return Err(e);
+        }
         Ok(ExchangeOrder { order_id: format!("x-{}", o.client_order_id), client_order_id: o.client_order_id.clone(), status: OrderStatus::Pending, filled_size: Decimal::ZERO, average_filled_price: Decimal::ZERO, total_fees: Decimal::ZERO, reason: None })
     }
     fn order(&self, id: &str) -> Result<ExchangeOrder> {
@@ -111,6 +129,15 @@ impl Account for Fake {
             return Ok(ExchangeOrder { order_id: id.into(), client_order_id: id.trim_start_matches("x-").into(), status: OrderStatus::Open, filled_size: Decimal::ZERO, average_filled_price: Decimal::ZERO, total_fees: Decimal::ZERO, reason: None });
         }
         Ok(ExchangeOrder { order_id: id.into(), client_order_id: id.trim_start_matches("x-").into(), status: OrderStatus::Filled, filled_size: Decimal::new(5, 1), average_filled_price: p, total_fees: Decimal::new(3, 1), reason: None })
+    }
+    fn find_order(&self, _: &str, cid: &str, _: i64) -> Result<Option<ExchangeOrder>> {
+        if *self.lookup_fails.lock().unwrap() {
+            return Err(ExchangeError::Unreachable("the request timed out".into()));
+        }
+        if !self.placed.lock().unwrap().iter().any(|p| p.client_order_id == cid) {
+            return Ok(None);
+        }
+        self.order(&format!("x-{cid}")).map(Some)
     }
     fn fills(&self, id: &str) -> Result<Vec<ExchangeFill>> {
         if *self.rest.lock().unwrap() {
@@ -146,6 +173,40 @@ fn setup() -> (Arc<relay_core::Engine>, Arc<Fake>) {
     let fake = Fake::new(100.0);
     set_fake_exchange(&engine, fake.clone());
     (engine, fake)
+}
+
+/// [`setup`] with the store, and so `arbiter.db`, in a folder on disk, where [`age_order`] can
+/// reach the book.
+fn setup_on_disk() -> (tempfile::TempDir, Arc<relay_core::Engine>, Arc<Fake>) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = relay_core::Store::open(&dir.path().join("store/store.db"), false).unwrap();
+    let engine = relay_core::Engine::new(relay_core::Instance::Test, store);
+    let fake = Fake::new(100.0);
+    set_fake_exchange(&engine, fake.clone());
+    (dir, engine, fake)
+}
+
+/// Moves an order's time back `secs`, as if it had been sent that long ago.
+fn age_order(dir: &Path, id: i64, secs: i64) {
+    let db = rusqlite::Connection::open(dir.join("store/arbiter.db")).unwrap();
+    db.execute("UPDATE orders SET created_at = created_at - ?2 WHERE id = ?1", rusqlite::params![id, secs]).unwrap();
+}
+
+/// A live strategy the AI may trade, on a connected key: what the order tests place through.
+fn live_agent(engine: &relay_core::Engine) -> i64 {
+    connect(engine);
+    let id = ok(engine, "arbiter.strategy.save", json!({"draft": draft("Agent", "20")}))["row"]["id"].as_i64().unwrap();
+    ok(engine, "arbiter.strategy.set", json!({"id": id, "mode": "agent", "venue": "live"}));
+    id
+}
+
+/// The AI buys `quote` for the strategy; each amount is its own decision.
+fn agent_buy(engine: &relay_core::Engine, id: i64, quote: &str) -> Value {
+    ok(engine, "arbiter.order.place", json!({"strategy_id": id, "side": "buy", "quote": quote, "why": "dip"}))
+}
+
+fn last_order(engine: &relay_core::Engine, id: i64) -> Value {
+    ok(engine, "arbiter.order.list", json!({"strategy_id": id}))["orders"][0].clone()
 }
 
 #[test]
@@ -424,4 +485,111 @@ fn a_strategy_past_its_own_daily_loss_waits_to_restart() {
     ok(&engine, "arbiter.limits.set", json!({"strategy_id": id, "limits": {"max_order": "50", "max_position": "200", "daily_loss": "40"}}));
     ok(&engine, "arbiter.restart", json!({"strategy_id": id}));
     assert_eq!(ok(&engine, "arbiter.strategy.get", json!({"id": id}))["row"]["state"], "running");
+}
+
+#[test]
+fn an_order_whose_answer_was_lost_is_found_by_its_id_and_booked() {
+    for lost in [ExchangeError::Unreachable("the request timed out".into()), ExchangeError::Malformed("expected value at line 1".into())] {
+        let (engine, fake) = setup();
+        let id = live_agent(&engine);
+        *fake.lost.lock().unwrap() = Some(lost.clone());
+        *fake.lookup_fails.lock().unwrap() = true;
+        // Coinbase took it, but no answer could be read: it stays pending, not failed.
+        let out = agent_buy(&engine, id, "20");
+        assert_eq!(out["order"]["status"], "pending", "{lost:?}: {out:#}");
+        assert!(out["order"]["exchange_order_id"].is_null());
+        // The next pass finds it by its client_order_id and books its fill; it is not sent twice.
+        *fake.lost.lock().unwrap() = None;
+        *fake.lookup_fails.lock().unwrap() = false;
+        pass(&engine);
+        let d = ok(&engine, "arbiter.strategy.get", json!({"id": id}));
+        assert_eq!(d["orders"][0]["status"], "filled", "{lost:?}: {d:#}");
+        assert!(d["orders"][0]["exchange_order_id"].as_str().unwrap().starts_with("x-"));
+        assert_eq!(d["row"]["held_base"], "0.5");
+        assert_eq!(fake.placed.lock().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn an_order_coinbase_never_got_is_sent_again_then_failed_after_a_minute() {
+    let (dir, engine, fake) = setup_on_disk();
+    let id = live_agent(&engine);
+    *fake.drop_orders.lock().unwrap() = true;
+    assert_eq!(agent_buy(&engine, id, "20")["order"]["status"], "pending");
+    // Within the minute it is sent again under the same id, and this time it arrives.
+    *fake.drop_orders.lock().unwrap() = false;
+    pass(&engine);
+    pass(&engine);
+    assert_eq!(last_order(&engine, id)["status"], "filled");
+    assert_eq!(fake.placed.lock().unwrap().len(), 1);
+
+    // One that never arrives: a minute on, Coinbase still has no order with its id.
+    *fake.drop_orders.lock().unwrap() = true;
+    let o = agent_buy(&engine, id, "21")["order"].clone();
+    assert_eq!(o["status"], "pending");
+    age_order(dir.path(), o["id"].as_i64().unwrap(), 120);
+    pass(&engine);
+    let o = last_order(&engine, id);
+    assert_eq!(o["status"], "failed", "{o:#}");
+    assert!(o["error"].as_str().unwrap().contains("no order with this id"), "{o:#}");
+    assert_eq!(fake.placed.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_halted_strategys_unanswered_order_is_not_sent_again_and_cancels_once_coinbase_answers() {
+    let (engine, fake) = setup();
+    let id = live_agent(&engine);
+    *fake.drop_orders.lock().unwrap() = true;
+    agent_buy(&engine, id, "20");
+    // The halt cannot ask Coinbase whether it has the order, so it does not call it cancelled.
+    *fake.lookup_fails.lock().unwrap() = true;
+    let h = ok(&engine, "arbiter.halt", json!({"strategy_id": id, "reason": "testing"}));
+    assert_eq!((h["cancelled"].as_u64(), h["failed"].as_array().unwrap().len()), (Some(0), 1), "{h:#}");
+    assert_eq!(last_order(&engine, id)["status"], "pending");
+    // Halted, it is looked up but never sent again.
+    *fake.drop_orders.lock().unwrap() = false;
+    *fake.lookup_fails.lock().unwrap() = false;
+    pass(&engine);
+    assert!(fake.placed.lock().unwrap().is_empty());
+    assert_eq!(last_order(&engine, id)["status"], "pending");
+    // Coinbase answers that it has no such order: only then is it cancelled here alone.
+    let h = ok(&engine, "arbiter.halt", json!({"strategy_id": id, "reason": "testing"}));
+    assert_eq!(h["cancelled"], 1, "{h:#}");
+    let o = last_order(&engine, id);
+    assert_eq!(o["status"], "cancelled");
+    assert!(o["error"].as_str().unwrap().contains("no record"), "{o:#}");
+}
+
+#[test]
+fn a_cancel_finds_an_unanswered_order_on_coinbase_and_cancels_it_there() {
+    let (engine, fake) = setup();
+    let id = live_agent(&engine);
+    *fake.rest.lock().unwrap() = true;
+    *fake.lost.lock().unwrap() = Some(ExchangeError::Unreachable("the request timed out".into()));
+    *fake.lookup_fails.lock().unwrap() = true;
+    agent_buy(&engine, id, "20");
+    assert!(last_order(&engine, id)["exchange_order_id"].is_null());
+    *fake.lookup_fails.lock().unwrap() = false;
+    ok(&engine, "arbiter.halt", json!({"reason": "testing"}));
+    let o = last_order(&engine, id);
+    assert_eq!(o["status"], "cancelled", "{o:#}");
+    assert_eq!(fake.cancelled.lock().unwrap().as_slice(), [o["exchange_order_id"].as_str().unwrap()]);
+}
+
+#[test]
+fn without_the_key_a_halt_leaves_a_live_order_open_and_says_so() {
+    let (engine, fake) = setup();
+    let id = live_agent(&engine);
+    *fake.rest.lock().unwrap() = true;
+    agent_buy(&engine, id, "20");
+    set_fake_key(&engine, false);
+    let h = ok(&engine, "arbiter.halt", json!({"reason": "testing"}));
+    assert_eq!((h["cancelled"].as_u64(), h["failed"].as_array().unwrap().len()), (Some(0), 1), "{h:#}");
+    assert_eq!(last_order(&engine, id)["status"], "open");
+    assert!(fake.cancelled.lock().unwrap().is_empty());
+    // With the key back, the kill switch cancels it on Coinbase.
+    set_fake_key(&engine, true);
+    assert_eq!(ok(&engine, "arbiter.halt", json!({"reason": "testing"}))["cancelled"], 1);
+    assert_eq!(last_order(&engine, id)["status"], "cancelled");
+    assert_eq!(fake.cancelled.lock().unwrap().len(), 1);
 }

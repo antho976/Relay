@@ -684,7 +684,8 @@ fn place_body(o: &OrderRequest, preview_id: Option<&str>) -> Result<Value> {
 
 /// The answer to create. `success` only means accepted: the order comes back `Pending` and its
 /// state is read with [`Account::order`]. A repeated `client_order_id` is answered by Coinbase
-/// with the order already placed, so it lands here as a success too.
+/// with the order already placed, so it lands here as a success too, or with
+/// `DUPLICATE_CLIENT_ORDER_ID`, which is [`ExchangeError::Duplicate`]: the order exists.
 fn parse_place(v: &Value, o: &OrderRequest) -> Result<ExchangeOrder> {
     if flag(&v["success"]) {
         let ok = &v["success_response"];
@@ -709,7 +710,7 @@ fn parse_place(v: &Value, o: &OrderRequest) -> Result<ExchangeOrder> {
     let duplicate = code.as_deref() == Some("DUPLICATE_CLIENT_ORDER_ID")
         || detail.as_deref().is_some_and(|d| d.to_ascii_lowercase().contains("duplicate"));
     if duplicate {
-        return Err(ExchangeError::Refused(format!("duplicate client order id {}: an order with it was already placed", o.client_order_id)));
+        return Err(ExchangeError::Duplicate(format!("an order with client order id {} was already placed", o.client_order_id)));
     }
     let reason = match (code, detail) {
         (Some(c), Some(d)) => format!("{} ({d})", reason_words(&c)),
@@ -732,8 +733,13 @@ fn order_status(s: &str) -> OrderStatus {
     }
 }
 
+/// Get Order's answer, which wraps the order in `order`.
 fn parse_order(v: &Value) -> Result<ExchangeOrder> {
-    let o = &v["order"];
+    order_fields(&v["order"])
+}
+
+/// One order object, as Get Order wraps it and List Orders lists it.
+fn order_fields(o: &Value) -> Result<ExchangeOrder> {
     let order_id = nonempty(&o["order_id"]).ok_or_else(|| malformed("order"))?;
     let reason = nonempty(&o["reject_message"])
         .or_else(|| nonempty(&o["reject_reason"]).filter(|r| r != "REJECT_REASON_UNSPECIFIED").map(|r| reason_words(&r)))
@@ -747,6 +753,17 @@ fn parse_order(v: &Value) -> Result<ExchangeOrder> {
         total_fees: dec(&o["total_fees"])?,
         reason,
     })
+}
+
+/// One page of List Orders: the order placed with `client_order_id`, when this page has it, and
+/// the cursor for the next page while `has_next` says there is one. Only the order asked for is
+/// read, so another order this client cannot read does not stop the lookup.
+fn find_in_orders(v: &Value, client_order_id: &str) -> Result<(Option<ExchangeOrder>, Option<String>)> {
+    let list = v["orders"].as_array().ok_or_else(|| malformed("orders"))?;
+    let found = list.iter().find(|o| text(&o["client_order_id"]) == client_order_id).map(order_fields).transpose()?;
+    // More pages with no cursor to them: not reading them could miss the order.
+    let next = if flag(&v["has_next"]) { Some(nonempty(&v["cursor"]).ok_or_else(|| malformed("cursor"))?) } else { None };
+    Ok((found, next))
 }
 
 /// One page of fills and the cursor for the next. `entry_id` is the fill's own id; `trade_id`
@@ -794,6 +811,7 @@ fn check_id(id: &str) -> Result<()> {
 // ---- The traits -------------------------------------------------------------------------------
 
 const PRODUCTS: &str = "/api/v3/brokerage/market/products";
+const ORDERS: &str = "/api/v3/brokerage/orders/historical";
 
 impl Market for Coinbase {
     fn products(&self) -> Result<Vec<Product>> {
@@ -876,7 +894,29 @@ impl Account for Coinbase {
         if order_id.is_empty() || !order_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
             return Err(ExchangeError::Refused(format!("{order_id:?} is not an order id")));
         }
-        parse_order(&self.get_signed(&format!("/api/v3/brokerage/orders/historical/{order_id}"), &[])?)
+        parse_order(&self.get_signed(&format!("{ORDERS}/{order_id}"), &[])?)
+    }
+
+    /// List Orders for the one product since `since`, every status, page by page until the order
+    /// turns up or the list ends. A list that does not end is an error, not "no such order".
+    fn find_order(&self, product: &str, client_order_id: &str, since: i64) -> Result<Option<ExchangeOrder>> {
+        check_id(product)?;
+        let start = jiff::Timestamp::from_second(since).map_err(|e| ExchangeError::Refused(e.to_string()))?.to_string();
+        let mut cursor: Option<String> = None;
+        for _ in 0..MAX_PAGES {
+            let mut q = vec![("product_ids", product), ("start_date", start.as_str()), ("limit", "100")];
+            if let Some(c) = &cursor {
+                q.push(("cursor", c));
+            }
+            let (found, next) = find_in_orders(&self.get_signed(&format!("{ORDERS}/batch"), &q)?, client_order_id)?;
+            match (found, next) {
+                (Some(o), _) => return Ok(Some(o)),
+                (None, None) => return Ok(None),
+                (None, Some(n)) if cursor.as_ref() != Some(&n) => cursor = Some(n),
+                (None, Some(_)) => return Err(ExchangeError::Malformed("the order list gave the same cursor twice".into())),
+            }
+        }
+        Err(ExchangeError::Malformed(format!("the order list ran past {MAX_PAGES} pages")))
     }
 
     fn fills(&self, order_id: &str) -> Result<Vec<ExchangeFill>> {
@@ -887,7 +927,7 @@ impl Account for Coinbase {
             if let Some(c) = &cursor {
                 q.push(("cursor", c));
             }
-            let (page, next) = parse_fills(&self.get_signed("/api/v3/brokerage/orders/historical/fills", &q)?)?;
+            let (page, next) = parse_fills(&self.get_signed(&format!("{ORDERS}/fills"), &q)?)?;
             let empty = page.is_empty();
             out.extend(page);
             match next {
@@ -1211,8 +1251,8 @@ MC4CAQAwBQYDK2VwBCIEINjXFvuxDstdwgWaOYAI7I3r1qbmuoq+7SNE9GeEB1fD
             "error_details": "", "preview_failure_reason": "UNKNOWN_PREVIEW_FAILURE_REASON", "new_order_failure_reason": "INSUFFICIENT_FUND"}});
         assert_eq!(parse_place(&funds, &market_buy()), Err(ExchangeError::Refused("not enough funds (Insufficient balance in source account)".into())));
         let dup = json!({"success": false, "error_response": {"error": "UNKNOWN_FAILURE_REASON", "new_order_failure_reason": "DUPLICATE_CLIENT_ORDER_ID"}});
-        let Err(ExchangeError::Refused(m)) = parse_place(&dup, &market_buy()) else { panic!() };
-        assert!(m.contains("duplicate") && m.contains("arb-7-1700003600"), "{m}");
+        let Err(ExchangeError::Duplicate(m)) = parse_place(&dup, &market_buy()) else { panic!() };
+        assert!(m.contains("already placed") && m.contains("arb-7-1700003600"), "{m}");
         let bare = json!({"success": false, "failure_reason": "UNKNOWN_FAILURE_REASON", "error_response": {}});
         assert!(matches!(parse_place(&bare, &market_buy()), Err(ExchangeError::Refused(_))));
     }
@@ -1240,6 +1280,39 @@ MC4CAQAwBQYDK2VwBCIEINjXFvuxDstdwgWaOYAI7I3r1qbmuoq+7SNE9GeEB1fD
             assert_eq!(order_status(s), want, "{s}");
         }
         assert!(matches!(parse_order(&json!({})), Err(ExchangeError::Malformed(_))));
+    }
+
+    #[test]
+    fn finds_an_order_by_its_client_order_id_in_a_page_of_orders() {
+        // List Orders (`GET /orders/historical/batch`): the same order objects Get Order wraps.
+        let v = json!({"orders": [
+            {"order_id": "0000-000000-000001", "product_id": "BTC-USD", "user_id": "2222-000000-000000",
+             "order_configuration": {"limit_limit_gtc": {"base_size": "0.001", "limit_price": "62100", "post_only": true}},
+             "side": "BUY", "client_order_id": "someone-else", "status": "OPEN", "time_in_force": "GOOD_UNTIL_CANCELLED",
+             "created_time": "2026-10-09T14:00:01Z", "completion_percentage": "0", "filled_size": "0", "average_filled_price": "0",
+             "number_of_fills": "0", "filled_value": "0", "pending_cancel": false, "size_in_quote": false, "total_fees": "0",
+             "order_type": "LIMIT", "reject_reason": "REJECT_REASON_UNSPECIFIED", "settled": false, "product_type": "SPOT",
+             "reject_message": "", "cancel_message": ""},
+            {"order_id": "0000-000000-000002", "product_id": "BTC-USD", "user_id": "2222-000000-000000",
+             "order_configuration": {"market_market_ioc": {"quote_size": "50"}}, "side": "BUY", "client_order_id": "arb-7-1700003600",
+             "status": "FILLED", "time_in_force": "IMMEDIATE_OR_CANCEL", "created_time": "2026-10-09T14:00:05Z",
+             "completion_percentage": "100", "filled_size": "0.0008", "average_filled_price": "62125.5", "fee": "",
+             "number_of_fills": "2", "filled_value": "49.70", "pending_cancel": false, "size_in_quote": true, "total_fees": "0.298",
+             "size_inclusive_of_fees": true, "total_value_after_fees": "50", "order_type": "MARKET",
+             "reject_reason": "REJECT_REASON_UNSPECIFIED", "settled": true, "product_type": "SPOT", "reject_message": "", "cancel_message": ""}
+        ], "sequence": "0", "has_next": true, "cursor": "789100"});
+        let (found, next) = find_in_orders(&v, "arb-7-1700003600").unwrap();
+        let o = found.unwrap();
+        assert_eq!((o.order_id.as_str(), o.client_order_id.as_str(), o.status), ("0000-000000-000002", "arb-7-1700003600", OrderStatus::Filled));
+        assert_eq!((o.filled_size, o.total_fees), (Decimal::new(8, 4), Decimal::new(298, 3)));
+        assert_eq!(next.as_deref(), Some("789100"));
+        // Not on this page, and the last page: Coinbase has no such order.
+        let last = json!({"orders": [v["orders"][0].clone()], "sequence": "0", "has_next": false, "cursor": ""});
+        assert_eq!(find_in_orders(&last, "arb-7-1700003600").unwrap(), (None, None));
+        // More pages and no cursor to them is not an answer.
+        let cut = json!({"orders": [], "has_next": true, "cursor": ""});
+        assert!(matches!(find_in_orders(&cut, "x"), Err(ExchangeError::Malformed(_))));
+        assert!(matches!(find_in_orders(&json!({}), "x"), Err(ExchangeError::Malformed(_))));
     }
 
     #[test]

@@ -43,6 +43,12 @@ const PRODUCTS_TTL: i64 = 3600;
 const ACCOUNT_TTL: i64 = 300;
 /// A scheduled buy missed by more than this (the app was closed) is skipped, not caught up.
 const SCHEDULE_GRACE: i64 = 3600;
+/// An order sent with no answer is sent again for this long, seconds; once Coinbase still has no
+/// order with its id after it, it was never placed.
+const UNANSWERED: i64 = 60;
+/// How far before an order's own time a lookup by its id starts: the PC's clock and Coinbase's
+/// may differ.
+const LOOKUP_SLACK: i64 = 300;
 
 #[derive(Default)]
 pub struct Desk {
@@ -52,6 +58,8 @@ pub struct Desk {
     public: Mutex<Option<Arc<dyn Exchange>>>,
     /// Tests put a fake exchange here; it then serves both the market and the account.
     fake: Mutex<Option<Arc<dyn Exchange>>>,
+    /// Tests: the fake serves no account, as when the key cannot be read.
+    fake_keyless: Mutex<bool>,
     pub(crate) trade: Mutex<()>,
     quotes: Mutex<HashMap<String, Quote>>,
     /// Each product's price from the last product list: what [`last_price`] falls back on. Kept
@@ -79,6 +87,7 @@ pub fn ex(e: ExchangeError) -> BusError {
         ExchangeError::RateLimited => BusError::unavailable("arbiter.rate_limited", "Coinbase asked to slow down; try again in a moment"),
         ExchangeError::Unreachable(m) => BusError::unavailable("arbiter.unreachable", format!("Coinbase could not be reached: {m}")),
         ExchangeError::Malformed(m) => BusError::unavailable("arbiter.malformed", format!("Coinbase's answer could not be read: {m}")),
+        ExchangeError::Duplicate(m) => BusError::conflict("arbiter.duplicate_order", format!("Coinbase already has this order: {m}")),
     }
 }
 
@@ -100,6 +109,11 @@ pub fn with_book<T>(engine: &Engine, f: impl FnOnce(&mut Book) -> book::Result<T
 /// Serve every exchange call from `fake` (tests).
 pub fn set_fake_exchange(engine: &Engine, fake: Arc<dyn Exchange>) {
     *lock(&engine.arbiter.fake) = Some(fake);
+}
+
+/// Tests: whether the fake exchange serves the account too, as a key that can be read does.
+pub fn set_fake_key(engine: &Engine, readable: bool) {
+    *lock(&engine.arbiter.fake_keyless) = !readable;
 }
 
 /// Public market data: needs no key.
@@ -185,7 +199,7 @@ pub fn forget_key(engine: &Engine) -> Result<(), BusError> {
 /// The account client for the saved key, loaded from the keyring once.
 pub fn account(engine: &Engine) -> Option<Arc<dyn Exchange>> {
     if let Some(f) = lock(&engine.arbiter.fake).clone() {
-        return Some(f);
+        return (!*lock(&engine.arbiter.fake_keyless)).then_some(f);
     }
     let mut slot = lock(&engine.arbiter.keyed);
     if slot.is_none() {
@@ -529,10 +543,13 @@ pub fn execute(engine: &Engine, strategy_id: i64, intent: &Intent, why: &str) ->
             };
             match place_live(client.as_ref(), &req) {
                 Ok(order) => with_book(engine, |b| b.update_order(id, &order))?,
-                // Nothing is known about whether it arrived: the order stays pending and the
-                // runner asks again with the same client_order_id, which cannot place it twice.
-                Err(ExchangeError::Unreachable(m)) => with_book(engine, |b| b.log(Some(s.id), "error", &format!("{what}: Coinbase did not answer ({m}); will check again."), Some(id)).map(|_| ()))?,
-                Err(e) => with_book(engine, |b| {
+                // Nothing is known about whether it arrived: create timed out, its answer could not
+                // be read, or Coinbase says it has this id already. The order stays pending, and the
+                // runner looks it up by its client_order_id before it sends it again or gives up.
+                Err((sent, e)) if matches!(e, ExchangeError::Unreachable(_)) || sent && matches!(e, ExchangeError::Malformed(_) | ExchangeError::Duplicate(_)) => {
+                    with_book(engine, |b| b.log(Some(s.id), "error", &format!("{what}: no answer from Coinbase ({e}); will look it up."), Some(id)).map(|_| ()))?
+                }
+                Err((_, e)) => with_book(engine, |b| {
                     b.fail_order(id, &e.to_string())?;
                     b.log(Some(s.id), "error", &format!("{what} failed: {e}"), Some(id)).map(|_| ())
                 })?,
@@ -560,13 +577,57 @@ fn resting(req: &OrderRequest) -> ExchangeOrder {
     }
 }
 
-/// Preview, then place. The preview's refusals stop it before anything is sent.
-fn place_live(client: &dyn Exchange, req: &OrderRequest) -> exchange::Result<ExchangeOrder> {
-    let preview = client.preview(req)?;
+/// Preview, then place. The preview's refusals stop it before anything is sent. An error says
+/// whether create was sent: only then may Coinbase have the order.
+fn place_live(client: &dyn Exchange, req: &OrderRequest) -> Result<ExchangeOrder, (bool, ExchangeError)> {
+    let preview = client.preview(req).map_err(|e| (false, e))?;
     if !preview.errors.is_empty() {
-        return Err(ExchangeError::Refused(preview.errors.join("; ")));
+        return Err((false, ExchangeError::Refused(preview.errors.join("; "))));
     }
-    client.place(req, preview.preview_id.as_deref())
+    client.place(req, preview.preview_id.as_deref()).map_err(|e| (true, e))
+}
+
+fn request_of(o: &OrderView) -> OrderRequest {
+    OrderRequest { client_order_id: o.client_order_id.clone(), product: o.product.clone(), side: o.side, quote_size: o.quote_size, base_size: o.base_size, limit_price: o.limit_price }
+}
+
+/// When the order was recorded, just before it was sent, Unix seconds.
+fn created_at(o: &OrderView) -> i64 {
+    jiff::Timestamp::from_str(&o.created_at).map(|t| t.as_second()).unwrap_or(0)
+}
+
+/// Coinbase's order sent with this one's client_order_id, if it has one: the lookup for an order
+/// whose answer never came back.
+fn find_live(client: &dyn Exchange, o: &OrderView) -> Result<Option<ExchangeOrder>, BusError> {
+    client.find_order(&o.product, &o.client_order_id, created_at(o) - LOOKUP_SLACK).map_err(ex)
+}
+
+/// An order sent with no answer read back (create timed out or answered unreadably, or Relay
+/// stopped in between): Coinbase may have it or not, so it is looked up first. Found, it is
+/// returned, to be reconciled as any known order. Not found, it is sent again with the same
+/// client_order_id, which cannot place it twice, for a minute, unless a halt came since (the
+/// person's own sell excepted, as the gate excepts it); after that it was never placed and is
+/// failed. A lookup that fails leaves it pending, unchanged.
+fn reconcile_unanswered(engine: &Engine, client: &dyn Exchange, o: &OrderView) -> Result<Option<ExchangeOrder>, BusError> {
+    if let Some(found) = find_live(client, o)? {
+        return Ok(Some(found));
+    }
+    if book::now() - created_at(o) >= UNANSWERED {
+        with_book(engine, |b| {
+            b.fail_order(o.id, "Coinbase has no order with this id a minute after it was sent: it was never placed.")?;
+            b.log(o.strategy_id, "error", "An order Coinbase never answered is not on Coinbase a minute later: it was never placed.", Some(o.id)).map(|_| ())
+        })?;
+        return Ok(None);
+    }
+    let halted = with_book(engine, |b| Ok(b.halted()?.is_some() || o.strategy_id.is_some_and(|sid| b.strategy(sid).is_ok_and(|s| s.state == RunState::Halted))))?;
+    if !halted || o.source == Source::Person && o.side == Side::Sell {
+        // Any refusal here leaves it pending: a duplicate means Coinbase has it after all, and
+        // the next lookup reads it; anything else is decided by the lookups until the minute ends.
+        if let Ok(order) = client.place(&request_of(o), None) {
+            with_book(engine, |b| b.update_order(o.id, &order))?;
+        }
+    }
+    Ok(None)
 }
 
 /// Brings one order up to date with its venue: status and fills.
@@ -578,7 +639,7 @@ pub fn reconcile_order(engine: &Engine, id: i64) -> Result<(), BusError> {
     match o.venue {
         Venue::Paper => {
             let Some(sid) = o.strategy_id else { return Ok(()) };
-            let req = OrderRequest { client_order_id: o.client_order_id.clone(), product: o.product.clone(), side: o.side, quote_size: o.quote_size, base_size: o.base_size, limit_price: o.limit_price };
+            let req = request_of(&o);
             let q = quote(engine, &o.product)?;
             let global = with_book(engine, |b| b.global_limits())?;
             if let Some((order, fill)) = paper::try_fill(&req, &q, &fees(engine), global.slippage_pct, book::now()) {
@@ -593,30 +654,21 @@ pub fn reconcile_order(engine: &Engine, id: i64) -> Result<(), BusError> {
         }
         Venue::Live => {
             let Some(client) = account(engine) else { return Ok(()) };
-            let Some(eid) = o.exchange_order_id.clone() else {
-                // Sent, but no answer came: ask again with the same id (the exchange returns the
-                // order it has), for a minute; after that, say so plainly.
-                let age = book::now() - jiff::Timestamp::from_str(&o.created_at).map(|t| t.as_second()).unwrap_or(0);
-                if age < 60 {
-                    let req = OrderRequest { client_order_id: o.client_order_id.clone(), product: o.product.clone(), side: o.side, quote_size: o.quote_size, base_size: o.base_size, limit_price: o.limit_price };
-                    if let Ok(order) = client.place(&req, None) {
-                        with_book(engine, |b| b.update_order(id, &order))?;
-                    }
-                } else {
-                    with_book(engine, |b| {
-                        b.fail_order(id, "Coinbase never confirmed it. Check the Coinbase app: if it shows this order, it is real.")?;
-                        b.log(o.strategy_id, "error", "An order was never confirmed by Coinbase; check the Coinbase app.", Some(id)).map(|_| ())
-                    })?;
-                }
-                return Ok(());
+            let order = match o.exchange_order_id.clone() {
+                Some(eid) => client.order(&eid).map_err(ex)?,
+                None => match reconcile_unanswered(engine, client.as_ref(), &o)? {
+                    Some(found) => found,
+                    None => return Ok(()),
+                },
             };
-            let order = client.order(&eid).map_err(ex)?;
+            let eid = order.order_id.clone();
             book_live_fills(engine, client.as_ref(), &o, &eid, &order)?;
             with_book(engine, |b| b.update_order(id, &order))?;
             if !order.status.is_done() {
                 if let Some(sid) = o.strategy_id {
                     if stale_limit(engine, sid, &o) {
-                        cancel_one(engine, &o, "it did not fill within a bar")?;
+                        // Read again: an order just found by its id has that id now.
+                        cancel_one(engine, &with_book(engine, |b| b.order(id))?, "it did not fill within a bar")?;
                     }
                 }
             }
@@ -631,8 +683,7 @@ fn stale_limit(engine: &Engine, sid: i64, o: &OrderView) -> bool {
         return false;
     }
     let bar = with_book(engine, |b| b.strategy(sid)).map(|s| s.granularity.seconds()).unwrap_or(3600);
-    let created = jiff::Timestamp::from_str(&o.created_at).map(|t| t.as_second()).unwrap_or(0);
-    book::now() - created > bar
+    book::now() - created_at(o) > bar
 }
 
 /// Books a live order's fills the exchange reports and the book does not have yet.
@@ -649,24 +700,42 @@ fn book_live_fills(engine: &Engine, client: &dyn Exchange, o: &OrderView, eid: &
     Ok(())
 }
 
+/// Cancels an order. A live one is cancelled on Coinbase or not at all: without the key, or with
+/// Coinbase not answering, it stays open and the error says so (the kill switch lists it). Only
+/// an order Coinbase says it has no record of is cancelled here alone.
 fn cancel_one(engine: &Engine, o: &OrderView, why: &str) -> Result<(), BusError> {
     if o.venue == Venue::Live {
-        if let (Some(client), Some(eid)) = (account(engine), o.exchange_order_id.as_ref()) {
-            client.cancel(std::slice::from_ref(eid)).map_err(ex)?;
-            // A cancel races the order's fills: it may have filled, wholly or in part, since the
-            // last pass, and the exchange answers a filled order's cancel as done. Book what the
-            // exchange says it did; a cancel still queued stays open for the next pass.
-            let mut order = client.order(eid).map_err(ex)?;
-            book_live_fills(engine, client.as_ref(), o, eid, &order)?;
-            if order.status == OrderStatus::Cancelled && order.reason.is_none() {
-                order.reason = Some(why.to_string());
-            }
-            return with_book(engine, |b| {
-                b.update_order(o.id, &order)?;
-                b.log(o.strategy_id, "cancel", &format!("Cancelled an order: {why}."), Some(o.id)).map(|_| ())
-            });
+        let client = account(engine).ok_or_else(|| {
+            BusError::unavailable("arbiter.no_key", "The Coinbase key could not be read, so the order was not cancelled on Coinbase; it stays open")
+                .with_hint("unlock your desktop keyring, then halt again")
+        })?;
+        let eid = match o.exchange_order_id.clone() {
+            Some(eid) => eid,
+            // Sent with no answer read back: Coinbase may have it under its client_order_id.
+            None => match find_live(client.as_ref(), o)? {
+                Some(found) => found.order_id,
+                None => return cancel_here(engine, o, &format!("{why} (Coinbase has no record of it)")),
+            },
+        };
+        client.cancel(std::slice::from_ref(&eid)).map_err(ex)?;
+        // A cancel races the order's fills: it may have filled, wholly or in part, since the
+        // last pass, and the exchange answers a filled order's cancel as done. Book what the
+        // exchange says it did; a cancel still queued stays open for the next pass.
+        let mut order = client.order(&eid).map_err(ex)?;
+        book_live_fills(engine, client.as_ref(), o, &eid, &order)?;
+        if order.status == OrderStatus::Cancelled && order.reason.is_none() {
+            order.reason = Some(why.to_string());
         }
+        return with_book(engine, |b| {
+            b.update_order(o.id, &order)?;
+            b.log(o.strategy_id, "cancel", &format!("Cancelled an order: {why}."), Some(o.id)).map(|_| ())
+        });
     }
+    cancel_here(engine, o, why)
+}
+
+/// Marks an order cancelled in the book only: a paper order, or a live one Coinbase never had.
+fn cancel_here(engine: &Engine, o: &OrderView, why: &str) -> Result<(), BusError> {
     let x = ExchangeOrder {
         order_id: o.exchange_order_id.clone().unwrap_or_default(),
         client_order_id: o.client_order_id.clone(),
