@@ -26029,7 +26029,7 @@
             "boolean",
             "null"
           ],
-          "description": "Skip an edit of a node that no longer exists, instead of refusing the whole list:\nfor an undo that may race someone else's delete."
+          "description": "Replay an undo: skip an edit of a node that no longer exists (or that this Relay cannot\nread), and put back what was stored even where a new edit's rules would refuse it,\ninstead of refusing the whole list. Only for an `inverse` an answer gave you."
         }
       },
       "required": [

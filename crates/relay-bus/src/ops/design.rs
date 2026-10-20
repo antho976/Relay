@@ -91,8 +91,9 @@ payload!(#[schemars(rename = "DesignApplyIn")] ApplyIn {
     pub ops: Vec<NodeOp>,
     /// Refuse (`design.stale`) unless the design is still at this `rev`.
     pub base_rev: Option<i64>,
-    /// Skip an edit of a node that no longer exists, instead of refusing the whole list:
-    /// for an undo that may race someone else's delete.
+    /// Replay an undo: skip an edit of a node that no longer exists (or that this Relay cannot
+    /// read), and put back what was stored even where a new edit's rules would refuse it,
+    /// instead of refusing the whole list. Only for an `inverse` an answer gave you.
     pub lenient: Option<bool>,
 });
 result!(#[schemars(rename = "DesignApplyOut")] ApplyOut {
