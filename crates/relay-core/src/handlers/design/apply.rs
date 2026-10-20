@@ -168,10 +168,13 @@ const DEPTH: &str = "WITH RECURSIVE up(parent_id, d) AS (
 /// Every node of the design and its parent, from the parent index alone.
 const PARENTS: &str = "SELECT node_id, parent_id FROM design_nodes WHERE design_id = ?1";
 /// How many levels below node `?2` the deepest node inside it sits, counted as far as `?3`.
+/// `CROSS JOIN` keeps `down` the outer loop, so each step looks its children up in the parent
+/// index: as a plain join the planner scanned every row of the design per step (B58: 250 µs a
+/// leaf at 5,000 nodes, and 1,999 of them in a group of 1,999).
 const HEIGHT: &str = "WITH RECURSIVE down(node_id, d) AS (
         SELECT ?2, 0
         UNION ALL
-        SELECT n.node_id, down.d + 1 FROM down JOIN design_nodes n ON n.design_id = ?1 AND n.parent_id = down.node_id
+        SELECT n.node_id, down.d + 1 FROM down CROSS JOIN design_nodes n ON n.design_id = ?1 AND n.parent_id = down.node_id
         WHERE down.d < ?3)
     SELECT MAX(d) FROM down";
 
