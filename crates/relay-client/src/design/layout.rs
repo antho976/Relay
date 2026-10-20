@@ -7,6 +7,8 @@ use super::scene::Scene;
 use relay_bus::design::{follow_axis, Items, Justify, Layout, Node, NodeKind, Pin, Sizing, MAX_COORD};
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::hash::BuildHasher;
 use std::ops::Range;
 
 /// Slack when a wrap line is checked for room, so a line that fits exactly is not broken by
@@ -41,6 +43,19 @@ pub struct Placed {
     /// Where a group's children count their `x`/`y` from: its parent's origin plus its own
     /// `x`/`y` (or where a layout put it). Its box in `rects` is its children's bounds instead.
     pub origins: FxHashMap<String, (f64, f64)>,
+    /// Where a scrolled frame's children count their `x`/`y` from: its corner less its offset.
+    /// Only frames scrolled away from the start.
+    pub content_origin: FxHashMap<String, (f64, f64)>,
+    /// Every scrolling frame placed, scrolled or not.
+    pub scrolls: FxHashMap<String, Scrolled>,
+}
+
+/// A scrolling frame as placed: how far its content is scrolled, and the box its content spans
+/// from the frame's corner (at least the frame), unscrolled, in page coordinates.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Scrolled {
+    pub offset: (f64, f64),
+    pub content: Rect,
 }
 
 impl Placed {
@@ -48,10 +63,17 @@ impl Placed {
         self.rects.get(id).copied()
     }
 
-    /// The page point `id`'s children count their `x`/`y` from, which is also where its own
-    /// `x`/`y` put it: a group's own point (not its children's bounds), any other node's box
-    /// corner, `(0, 0)` for what is not placed (a page).
+    /// The page point `id`'s children count their `x`/`y` from: a scrolled frame's content
+    /// corner, a group's own point (not its children's bounds), any other node's box corner,
+    /// `(0, 0)` for what is not placed (a page).
     pub fn origin(&self, id: &str) -> (f64, f64) {
+        self.content_origin.get(id).copied().unwrap_or_else(|| self.point(id))
+    }
+
+    /// The page point `id`'s own `x`/`y` put it at: a group's own point, any other node's box
+    /// corner, `(0, 0)` for what is not placed. Unlike [`Placed::origin`], a scrolled frame's
+    /// own corner.
+    pub fn point(&self, id: &str) -> (f64, f64) {
         self.origins.get(id).copied().or_else(|| self.rect(id).map(|r| (r.x, r.y))).unwrap_or((0.0, 0.0))
     }
 }
@@ -176,15 +198,29 @@ type SizeKey<'a> = (&'a str, Option<u64>);
 struct Pass<'a> {
     scene: &'a Scene,
     measure: &'a dyn Measure,
+    /// How far the canvas has scrolled a frame (none for a still picture).
+    offsets: &'a dyn Fn(&str) -> Option<(f64, f64)>,
     placed: Placed,
     sizes: RefCell<FxHashMap<SizeKey<'a>, (f64, f64)>>,
     /// Each group's children's bounds, worked out once a pass.
     bounds: RefCell<FxHashMap<&'a str, Option<Rect>>>,
 }
 
-/// Place every node of `page`.
+/// Place every node of `page`, every scrolling frame at its start: the design as a still
+/// picture shows it (export, thumbnails, `design.render`).
 pub fn place(scene: &Scene, page: &str, measure: &dyn Measure) -> Placed {
-    let mut pass = Pass::new(scene, measure);
+    run(scene, page, measure, &|_| None)
+}
+
+/// Place every node of `page` with scrolling frames scrolled by `offsets` (the canvas's view,
+/// frame id to `(x, y)` px), each held within what its content overflows. The offsets are view
+/// state: layout is otherwise the same, and children move with their frame's content.
+pub fn place_scrolled<S: BuildHasher>(scene: &Scene, page: &str, measure: &dyn Measure, offsets: &HashMap<String, (f64, f64), S>) -> Placed {
+    run(scene, page, measure, &|id| offsets.get(id).copied())
+}
+
+fn run(scene: &Scene, page: &str, measure: &dyn Measure, offsets: &dyn Fn(&str) -> Option<(f64, f64)>) -> Placed {
+    let mut pass = Pass::new(scene, measure, offsets);
     pass.placed.rects.insert(page.to_string(), Rect::default());
     for child in scene.children(page) {
         pass.free_child(child, (0.0, 0.0), None);
@@ -193,8 +229,8 @@ pub fn place(scene: &Scene, page: &str, measure: &dyn Measure) -> Placed {
 }
 
 impl<'a> Pass<'a> {
-    fn new(scene: &'a Scene, measure: &'a dyn Measure) -> Self {
-        Pass { scene, measure, placed: Placed::default(), sizes: RefCell::default(), bounds: RefCell::default() }
+    fn new(scene: &'a Scene, measure: &'a dyn Measure, offsets: &'a dyn Fn(&str) -> Option<(f64, f64)>) -> Self {
+        Pass { scene, measure, offsets, placed: Placed::default(), sizes: RefCell::default(), bounds: RefCell::default() }
     }
 
     fn visible(&self, id: &str) -> Option<&'a Node> {
@@ -518,6 +554,7 @@ impl<'a> Pass<'a> {
                 for child in children {
                     self.free_child(child, (rect.x, rect.y), fit);
                 }
+                self.scroll(n, rect);
             }
             _ => {
                 self.placed.rects.insert(id.to_string(), rect);
@@ -528,8 +565,51 @@ impl<'a> Pass<'a> {
                 for child in children.iter().filter(|c| scene.node(c).is_some_and(Node::is_absolute)) {
                     self.free_child(child, (rect.x, rect.y), fit);
                 }
+                self.scroll(n, rect);
             }
         }
+    }
+
+    /// A scrolling frame, its children placed: the box its content spans (to its furthest
+    /// child, and a laid-out frame's padding after its flow), and its children moved by the
+    /// offset asked for, held within what overflows (feature-layout 2.5).
+    fn scroll(&mut self, n: &'a Node, rect: Rect) {
+        let Some(scroll) = n.scroll.filter(|_| n.kind == NodeKind::Frame) else {
+            return;
+        };
+        let laid = n.layout_mode() != Layout::None;
+        let [_, pr, pb, _] = if laid { n.padding_edges() } else { [0.0; 4] };
+        let scene = self.scene;
+        let (mut right, mut bottom) = (rect.right(), rect.bottom());
+        for c in scene.children(&n.id) {
+            let Some(r) = self.placed.rect(c) else {
+                continue;
+            };
+            let pad = laid && !scene.node(c).is_some_and(Node::is_absolute);
+            right = right.max(r.right() + if pad { pr } else { 0.0 });
+            bottom = bottom.max(r.bottom() + if pad { pb } else { 0.0 });
+        }
+        let content = Rect::new(rect.x, rect.y, right - rect.x, bottom - rect.y);
+        let want = (self.offsets)(&n.id).unwrap_or((0.0, 0.0));
+        let within = |want: f64, scrolls: bool, room: f64| if scrolls && want.is_finite() { want.clamp(0.0, room.max(0.0)) } else { 0.0 };
+        let offset = (within(want.0, scroll.x(), content.w - rect.w), within(want.1, scroll.y(), content.h - rect.h));
+        self.placed.scrolls.insert(n.id.clone(), Scrolled { offset, content });
+        if offset == (0.0, 0.0) {
+            return;
+        }
+        let (dx, dy) = (-offset.0, -offset.1);
+        for d in scene.subtree(&n.id).iter().skip(1) {
+            if let Some(r) = self.placed.rects.get_mut(d) {
+                *r = r.translate(dx, dy);
+            }
+            for o in [self.placed.origins.get_mut(d), self.placed.content_origin.get_mut(d)].into_iter().flatten() {
+                *o = (o.0 + dx, o.1 + dy);
+            }
+            if let Some(s) = self.placed.scrolls.get_mut(d) {
+                s.content = s.content.translate(dx, dy);
+            }
+        }
+        self.placed.content_origin.insert(n.id.clone(), (rect.x + dx, rect.y + dy));
     }
 
     /// Auto layout: children one after another along the frame's direction, inside its
@@ -640,7 +720,7 @@ fn shares(room: f64, bounds: &[(Option<f64>, Option<f64>)]) -> Vec<f64> {
 pub(crate) mod tests {
     use super::*;
     use crate::design::scene::tests::node;
-    use relay_bus::design::{NodeKind as K, NodeOp, PinX, PinY};
+    use relay_bus::design::{NodeKind as K, NodeOp, PinX, PinY, Scroll};
 
     /// 8 px per character, 20 px a line, wrapping whole characters.
     pub(crate) struct Mono;
@@ -1362,6 +1442,53 @@ pub(crate) mod tests {
         assert_eq!(drop_index(&s, &p, "tags", &[], (10.0, 35.0)), 3, "start of the second");
         assert_eq!(drop_index(&s, &p, "tags", &[], (110.0, 35.0)), 5);
         assert_eq!(drop_index(&s, &p, "p1", &[], (0.0, 0.0)), 1, "a page keeps no order: the end");
+    }
+
+    /// A 200 px carousel (a row scrolling across, 10 px padding and gaps) holding three cards
+    /// 100 wide, the first holding a group, the second a scrolling list of its own.
+    fn carousel() -> Scene {
+        let mut strip = node("strip", Some("p1"), K::Frame, [0.0, 0.0, 200.0, 100.0]);
+        strip.layout = Some(Layout::Row);
+        strip.scroll = Some(Scroll::X);
+        strip.padding = Some(vec![0.0, 10.0]);
+        strip.gap = Some(10.0);
+        let mut list = node("c1", Some("strip"), K::Frame, [0.0, 0.0, 100.0, 100.0]);
+        list.scroll = Some(Scroll::Y);
+        Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            strip,
+            node("c0", Some("strip"), K::Frame, [0.0, 0.0, 100.0, 100.0]),
+            node("g", Some("c0"), K::Group, [10.0, 10.0, 0.0, 0.0]),
+            node("dot", Some("g"), K::Ellipse, [0.0, 0.0, 10.0, 10.0]),
+            list,
+            node("item", Some("c1"), K::Rect, [0.0, 80.0, 100.0, 60.0]),
+            node("c2", Some("strip"), K::Frame, [0.0, 0.0, 100.0, 100.0]),
+        ])
+    }
+
+    /// A still picture shows a scrolling frame's start; the canvas's offset moves its content
+    /// (nested groups and scrolling frames too), held within what overflows.
+    #[test]
+    fn a_scrolled_frame_shifts_its_content_and_clamps_the_offset() {
+        let s = carousel();
+        let still = place(&s, "p1", &Mono);
+        assert_eq!(still.scrolls.get("strip"), Some(&Scrolled { offset: (0.0, 0.0), content: Rect::new(0.0, 0.0, 340.0, 100.0) }));
+        assert_eq!(still.scrolls.get("c1"), Some(&Scrolled { offset: (0.0, 0.0), content: Rect::new(120.0, 0.0, 100.0, 140.0) }));
+        assert_eq!((still.rect("c0").unwrap().x, still.origin("strip"), still.point("strip")), (10.0, (0.0, 0.0), (0.0, 0.0)));
+        assert_eq!(place_scrolled(&s, "p1", &Mono, &HashMap::<String, (f64, f64)>::new()).rects, still.rects);
+        let offsets = HashMap::from([("strip".to_string(), (500.0, 30.0)), ("c1".to_string(), (0.0, 25.0))]);
+        let p = place_scrolled(&s, "p1", &Mono, &offsets);
+        // Across only, up to 340 - 200.
+        assert_eq!(p.scrolls["strip"].offset, (140.0, 0.0));
+        assert_eq!(p.rect("strip"), Some(Rect::new(0.0, 0.0, 200.0, 100.0)));
+        assert_eq!(p.rect("c0"), Some(Rect::new(-130.0, 0.0, 100.0, 100.0)));
+        assert_eq!((p.origin("strip"), p.point("strip")), ((-140.0, 0.0), (0.0, 0.0)));
+        assert_eq!((p.origin("g"), p.rect("dot")), ((-120.0, 10.0), Some(Rect::new(-120.0, 10.0, 10.0, 10.0))));
+        // The list inside scrolls down 25 of its 40 px of overflow, and moves with the strip.
+        assert_eq!(p.scrolls["c1"], Scrolled { offset: (0.0, 25.0), content: Rect::new(-20.0, 0.0, 100.0, 140.0) });
+        assert_eq!((p.rect("item"), p.origin("c1"), p.point("c1")), (Some(Rect::new(-20.0, 55.0, 100.0, 60.0)), (-20.0, -25.0), (-20.0, 0.0)));
+        let wild = HashMap::from([("strip".to_string(), (f64::NAN, 0.0)), ("c2".to_string(), (50.0, 50.0))]);
+        assert_eq!(place_scrolled(&s, "p1", &Mono, &wild).rects, still.rects, "nothing to scroll, or no number");
     }
 
     /// Mono, counting what it is asked.
