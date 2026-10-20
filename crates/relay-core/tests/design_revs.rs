@@ -610,6 +610,50 @@ fn a_lenient_list_skips_what_changed_since_its_base_rev() {
     assert_eq!(rev(&e, id), now);
 }
 
+/// A lenient list against an older rev that adds back a node removed since edits the node it
+/// added: only the edit before the add is skipped. One that deletes a node holding a change since
+/// and adds it back skips the add too (its id is still taken), what it adds into it, its later
+/// edits of it, and an add of a node still inside it; the rest applies and the change stays.
+#[test]
+fn a_lenient_list_edits_what_it_added_back() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    let base = rev(&e, id);
+    apply(&e, id, json!([{"op": "delete", "id": "chip"}, {"op": "update", "id": "dot", "set": {"fill": "#00ff00"}}]));
+    let lenient = |ops: Value| ok(&e, "design.apply", json!({"design_id": id, "base_rev": base, "lenient": true, "ops": ops}));
+    let applied = lenient(json!([
+        {"op": "update", "id": "chip", "set": {"x": 5}},
+        {"op": "add", "node": {"id": "chip", "parent": "side", "kind": "rect"}},
+        {"op": "update", "id": "chip", "set": {"x": 77}},
+    ]));
+    assert_eq!(applied["skipped"], json!([{"at": 0, "id": "chip", "reason": "missing", "rev": base + 1}]));
+    assert_eq!(strings(&applied["ids"]), ["", "chip", "chip"]);
+    assert_eq!(get(&e, json!({"design_id": id, "nodes": ["chip"]}))["nodes"][0]["x"], 77.0);
+    let applied = lenient(json!([
+        {"op": "delete", "id": "inner"},
+        {"op": "add", "node": {"id": "inner", "parent": "card", "kind": "group"}},
+        {"op": "add", "node": {"id": "spot", "parent": "inner", "kind": "rect"}},
+        {"op": "update", "id": "inner", "set": {"name": "Mine"}},
+        {"op": "add", "node": {"id": "dot", "parent": "page-1", "kind": "ellipse"}},
+        {"op": "update", "id": "photo", "set": {"fill": "#000000"}},
+    ]));
+    assert_eq!(applied["skipped"], json!([
+        {"at": 0, "id": "inner", "reason": "inside", "ids": ["dot"]},
+        {"at": 1, "id": "inner", "reason": "exists"},
+        {"at": 2, "id": "spot", "reason": "parent_skipped"},
+        {"at": 3, "id": "inner", "reason": "exists"},
+        {"at": 4, "id": "dot", "reason": "exists"},
+    ]));
+    assert_eq!(strings(&applied["ids"]), ["", "", "", "", "", "photo"]);
+    let card = get(&e, json!({"design_id": id, "nodes": ["card"]}))["nodes"].clone();
+    assert_eq!(ids(&card), ["card", "title", "photo", "inner", "dot"]);
+    let (inner, dot) = (&card[3], &card[4]);
+    assert_eq!((inner.get("name"), dot["fill"].clone()), (None, json!("#00ff00")), "the change since stays");
+    // Strict, the same list is refused for the delete alone.
+    let error = refused_at(&e, id, base, json!([{"op": "delete", "id": "inner"}, {"op": "add", "node": {"id": "inner", "parent": "card", "kind": "group"}}]));
+    assert_eq!(error.details.unwrap()["conflicts"], json!([{"at": 0, "id": "inner", "reason": "inside", "ids": ["dot"]}]));
+}
+
 // --- W19: when a missing id went --------------------------------------------------------------
 
 /// W19: a refusal naming an id the design no longer holds says at which rev it was removed: an

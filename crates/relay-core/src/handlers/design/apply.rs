@@ -111,6 +111,12 @@ pub(super) struct Run<'a> {
     /// rather than overwrite that change ([`Run::stale`]). Empty for a strict list, which such a
     /// change refuses before any edit runs.
     pub(super) conflicts: HashMap<String, Vec<Conflict>>,
+    /// W6: the nodes whose delete a lenient list skipped for such a change: they and what is
+    /// inside them are still there, so an add of one of their ids is skipped with the delete.
+    pub(super) held: HashSet<String>,
+    /// The ids whose add a lenient list skipped: an add into one is skipped too
+    /// (`parent_skipped`), and so is a later edit of one, which meant the node not added.
+    pub(super) skipped_adds: HashSet<String>,
     /// Edits not applied as sent, and why: the first [`MAX_SKIPPED`]; `skipped_total` counts all.
     pub(super) skipped: Vec<Conflict>,
     pub(super) skipped_total: usize,
@@ -185,8 +191,13 @@ impl Run<'_> {
 
     /// W6: whether the edit under way, of node `id`, is skipped for a change made since a
     /// lenient list's `base_rev`: the node changed or went, or (`deleting`) a node inside it
-    /// changed, which the delete would take. Each skip is reported in `skipped`, at this edit.
+    /// changed, which the delete would take; or this list's add of `id` was skipped, so what
+    /// holds the id is not the node it meant. Each skip is reported in `skipped`, at this edit.
     pub(super) fn stale(&mut self, id: &str, deleting: bool) -> bool {
+        if self.skipped_adds.contains(id) {
+            self.skip(Conflict::new(Some(self.at as u32), id, ConflictReason::Exists));
+            return true;
+        }
         let Some(found) = self.conflicts.get(id) else { return false };
         let hits: Vec<Conflict> = found.iter()
             .filter(|c| deleting || c.reason != ConflictReason::Inside)
@@ -196,7 +207,21 @@ impl Run<'_> {
         for conflict in hits {
             self.skip(conflict);
         }
+        if skipped && deleting {
+            self.held.insert(id.to_string());
+        }
         skipped
+    }
+
+    /// W6: whether node `id` is still in the design because a delete of it, or of a node it sits
+    /// in, was skipped for a change since `base_rev` ([`Run::held`]). Read on the way to a
+    /// refusal of a taken id only.
+    fn held_back(&mut self, id: &str) -> Result<bool, BusError> {
+        if self.held.is_empty() {
+            return Ok(false);
+        }
+        self.learn(id)?;
+        Ok(self.chain(id).any(|at| self.held.contains(at)))
     }
 
     /// Report an edit (or part of one) not applied as sent.
@@ -534,6 +559,14 @@ impl Run<'_> {
             self.breach(why)?;
         }
         self.names_exist(&node)?;
+        if node.parent.as_ref().is_some_and(|parent| self.skipped_adds.contains(parent)) {
+            // W6: what it goes in was not added; neither is it.
+            self.skip(Conflict::new(Some(self.at as u32), node.id.clone(), ConflictReason::ParentSkipped));
+            if !node.id.is_empty() {
+                self.skipped_adds.insert(node.id);
+            }
+            return Ok(None);
+        }
         if let Some(parent) = node.parent.as_deref() {
             if !self.container(parent)? || !self.fits(parent, &node.id, 0)? {
                 return Ok(None);
@@ -542,6 +575,13 @@ impl Run<'_> {
         if node.id.is_empty() {
             node.id = self.assign(node.kind)?;
         } else if self.meta(&node.id)?.is_some() {
+            if self.lenient && self.held_back(&node.id)? {
+                // W6: this list's delete of it was skipped for a change since base_rev, so its
+                // id is still taken: the add goes with the delete.
+                self.skip(Conflict::new(Some(self.at as u32), node.id.clone(), ConflictReason::Exists));
+                self.skipped_adds.insert(node.id);
+                return Ok(None);
+            }
             return Err(self.fail_on("id", ErrorKind::Conflict, "design.node_exists", format!("{:?} is already in the design", node.id))
                 .with_hint("update or move that node, or leave the id out to have one assigned"));
         }
@@ -557,6 +597,9 @@ impl Run<'_> {
             self.tx.prepare_cached("DELETE FROM design_removed WHERE design_id = ?1 AND node_id = ?2").bus()?
                 .execute(params![self.design, node.id]).bus()?;
         }
+        // W6: a later edit of it edits the node this list added, whatever went on under its id
+        // since base_rev (revs::base_conflicts counts no edit after an add as a conflict).
+        self.conflicts.remove(&node.id);
         self.nodes += 1;
         self.pages += i64::from(node.kind == NodeKind::Page);
         self.bytes += row_bytes(&node.id, node.parent.as_deref(), &body);
@@ -1030,6 +1073,8 @@ pub(super) fn register(e: &mut Engine) {
             crossed: HashMap::new(),
             assets,
             conflicts: stale,
+            held: HashSet::new(),
+            skipped_adds: HashSet::new(),
             skipped: Vec::new(),
             skipped_total: 0,
         };
