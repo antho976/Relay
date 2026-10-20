@@ -12,7 +12,12 @@
 
 mod apply;
 mod assets;
+mod expect;
+mod find;
 mod get;
+mod pins;
+mod render;
+mod styles;
 
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project, check_project};
@@ -311,6 +316,8 @@ pub fn register(e: &mut Engine) {
     });
     apply::register(e);
     assets::register(e);
+    find::register(e);
+    render::register(e);
 }
 
 #[cfg(test)]

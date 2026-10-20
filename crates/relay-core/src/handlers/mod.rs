@@ -20,6 +20,7 @@ pub mod thread;
 pub mod notes;
 pub mod notify;
 pub mod overlap;
+pub mod picture;
 pub mod provider;
 pub mod session;
 pub mod settings;
@@ -41,6 +42,7 @@ pub fn register_all(e: &mut Engine) {
     module::register(e);
     notes::register(e);
     design::register(e);
+    picture::register(e);
     overlap::register(e);
     provider::register(e);
     session::register(e);
