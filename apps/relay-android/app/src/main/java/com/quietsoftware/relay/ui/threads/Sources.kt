@@ -1551,9 +1551,19 @@ private fun AvexWorkouts(unit: String, missing: String) {
                 group.forEachIndexed { i, (row, workout) -> if (workout) WorkoutRow(row, unit, divider = i > 0) else CardioRow(row, divider = i > 0) }
             }
         }
-        if (list.size < total) Key("Show ${minOf(total - list.size, WORKOUTS_PAGE.toLong())} more", { shown += WORKOUTS_PAGE }, Modifier.fillMaxWidth(), kind = KeyKind.Quiet)
+        when (val more = moreWorkouts(shown, list.size, total)) {
+            null -> if (list.size < total) T("The newest $SESSIONS_MAX show here.", style = Relay.type.caption, color = c.ink3)
+            else -> Key("Show $more more", { shown += more }, Modifier.fillMaxWidth(), kind = KeyKind.Quiet)
+        }
     }
 }
+
+/** How many more workouts Show more reads: a page, as far as the PC reads at once (`gym.sessions` stops at [SESSIONS_MAX]); null when none can come. */
+internal fun moreWorkouts(shown: Int, listed: Int, total: Long): Int? =
+    minOf(total - listed, WORKOUTS_PAGE.toLong(), (SESSIONS_MAX - shown).toLong()).toInt().takeIf { listed < total && it > 0 }
+
+/** The most workouts `gym.sessions` reads at once (gym.rs). */
+private const val SESSIONS_MAX = 500
 
 /** A cardio or rest-day entry among the workouts (avex_pages.rs `cardio_row`): all there is of it, so it opens nothing. */
 @Composable
