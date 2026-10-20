@@ -69,10 +69,10 @@ pub fn copy_id(from: &str, to: &str, id: &str) -> Option<String> {
 /// A named look nodes share: any of the style fields, each as a node holds it (a colour may be a
 /// `$name`). A node takes each field it does not set itself; `fill` and `gradient` count as one
 /// field, and so do `radius` and `radii`, `shadow` and `shadows`, `stroke` and `stroke_gradient`.
-///
-/// The derived `Deserialize` is strict, as a caller's `style` edit is held to it; a style a
-/// design stored or a reply carries is read by [`Style::read`] ([`read_styles`]), which keeps
-/// what this build cannot read in `extra`, and written by [`Style::to_map`] ([`write_styles`]).
+// The derived `Deserialize` is strict, as a caller's `style` edit is held to it; a style a
+// design stored or a reply carries is read by `Style::read` (`read_styles`), which keeps what
+// this build cannot read in `extra`, and written by `Style::to_map` (`write_styles`). A plain
+// comment, so the schema agents read carries only the first paragraph.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(rename = "DesignStyle")]
