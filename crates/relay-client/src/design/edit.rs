@@ -7,7 +7,7 @@ use super::geom::Rect;
 use super::layout::{fit_of, is_laid, stored_shift, unpinned, Fit, Placed};
 use super::scene::Scene;
 use super::shapes;
-use relay_bus::design::{Items, Layout, Node, NodeKind, NodeOp, Sizing, MAX_COORD};
+use relay_bus::design::{Expect, Items, Layout, Node, NodeKind, NodeOp, Sizing, MAX_COORD};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 
@@ -882,6 +882,119 @@ pub fn restack(scene: &Scene, ids: &[String], up: bool, all: bool) -> Vec<NodeOp
     ops
 }
 
+/// Move `ids`, children of `parent`, to `index` among its children as one block, in the order
+/// they paint (B18: dragging several children of an auto layout). `index` counts the children
+/// without them, as `layout::drop_index` gives it. One `move` each, its index the place it takes
+/// once the moves before it have run, as the engine and [`Scene::apply`] read it, so the block
+/// keeps its order wherever it lands. A child of another parent is left out; a move that would
+/// leave a child where it is is not sent.
+pub fn reorder(scene: &Scene, parent: &str, ids: &[String], index: u32) -> Vec<NodeOp> {
+    let mut moving: Vec<&str> = ids.iter().map(String::as_str).filter(|id| scene.parent(id) == Some(parent)).collect();
+    moving.sort_by_key(|id| scene.index(id));
+    moving.dedup();
+    let rest: Vec<&str> = scene.children(parent).iter().map(String::as_str).filter(|c| !moving.contains(c)).collect();
+    let at = (index as usize).min(rest.len());
+    let mut order: Vec<&str> = scene.children(parent).iter().map(String::as_str).collect();
+    let mut ops = Vec::new();
+    for (k, id) in moving.iter().enumerate() {
+        // Right after what is to come before it: the child left before the block, or the one
+        // moved before it.
+        let after = if k == 0 { at.checked_sub(1).map(|i| rest[i]) } else { Some(moving[k - 1]) };
+        let Some(from) = order.iter().position(|c| c == id) else {
+            continue;
+        };
+        order.remove(from);
+        let to = after.and_then(|a| order.iter().position(|c| *c == a)).map_or(0, |i| i + 1);
+        order.insert(to, id);
+        if to != from {
+            ops.push(NodeOp::Move { id: id.to_string(), parent: Some(parent.to_string()), index: Some(to as u32), keep_position: None });
+        }
+    }
+    ops
+}
+
+/// The update that types a width (`axis` `"w"`) or a height (`"h"`) of `v` px into `n` (as
+/// stored), as the inspector's W and H fields do: a fixed size from now on, within its min and
+/// max. A line's or path's points scale along that axis from the least of them, so the drawing
+/// keeps to its box (B36); one flat along it (every point level there) has no size on that axis
+/// to scale, and gets none rather than a box it does not draw: `None`, nothing to send.
+pub fn size_set(n: &Node, axis: &str, v: f64) -> Option<Map<String, Value>> {
+    let (along, rule, v) = match axis {
+        "w" => (0, n.w_rule(), n.clamp_w(v)),
+        "h" => (1, n.h_rule(), n.clamp_h(v)),
+        _ => return None,
+    };
+    let v = v.clamp(0.0, MAX_COORD);
+    let mut s = Map::new();
+    if let Some(points) = n.points.as_ref().filter(|p| !p.is_empty() && matches!(n.kind, NodeKind::Line | NodeKind::Path)) {
+        let (lo, hi) = points.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p[along]), hi.max(p[along])));
+        if hi - lo <= 0.0 {
+            return None;
+        }
+        let k = v / (hi - lo);
+        let scaled: Vec<[f64; 2]> = points
+            .iter()
+            .map(|p| {
+                let mut q = *p;
+                q[along] = (lo + (p[along] - lo) * k).clamp(-MAX_COORD, MAX_COORD);
+                q
+            })
+            .collect();
+        s.insert("points".into(), json!(scaled));
+    }
+    s.insert(axis.into(), json!(v));
+    if rule != Sizing::Fixed {
+        s.insert(format!("{axis}_sizing"), json!("fixed"));
+    }
+    Some(s)
+}
+
+/// What `ops` expect to find, read from `scene` before they run (W8): for each node an update
+/// changes, the value it holds as stored for each field it sets (a later update of the same
+/// node adds only the fields an earlier one did not set), and for each node a move takes, the
+/// parent it sits in. A node the list adds expects nothing, nor does a page's place, nor a
+/// colour or style edit. The canvas sends them with the list; the engine refuses it
+/// (`design.stale`) when one changed meanwhile, so an agent's change to those fields is not
+/// overwritten by an edit made over an older read, while one to other fields lets it through.
+pub fn expect_for(scene: &Scene, ops: &[NodeOp]) -> Vec<Expect> {
+    let mut added: HashSet<&str> = HashSet::new();
+    let mut out: Vec<Expect> = Vec::new();
+    let mut at: HashMap<&str, usize> = HashMap::new();
+    for op in ops {
+        let (id, fields, moved) = match op {
+            NodeOp::Add { node, .. } => {
+                added.insert(&node.id);
+                continue;
+            }
+            NodeOp::Update { id, set } if !set.is_empty() => (id, Some(set), false),
+            NodeOp::Move { id, .. } => (id, None, true),
+            _ => continue,
+        };
+        let Some(n) = scene.stored(id).filter(|_| !added.contains(id.as_str())) else {
+            continue;
+        };
+        let parent = n.parent.clone().filter(|_| moved);
+        if fields.is_none() && parent.is_none() {
+            continue;
+        }
+        let i = *at.entry(id).or_insert_with(|| {
+            out.push(Expect { id: id.clone(), set: None, parent: None, within: None });
+            out.len() - 1
+        });
+        let e = &mut out[i];
+        if let Some(set) = fields {
+            let expected = e.set.get_or_insert_with(Map::new);
+            for (key, value) in n.before(set) {
+                expected.entry(key).or_insert(value);
+            }
+        }
+        if e.parent.is_none() {
+            e.parent = parent;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1394,6 +1507,96 @@ mod tests {
         let placed = place(&s, "p1", &Mono);
         let (ops, _) = ungroup(&s, &placed, "a").unwrap();
         assert!(ops.iter().all(|op| !matches!(op, NodeOp::Update { set, .. } if set.contains_key("opacity") || set.contains_key("rotation"))));
+    }
+
+    /// B18: several children of one auto layout dragged together move as a block, in order,
+    /// to the place `drop_index` gives without them.
+    #[test]
+    fn reorder_moves_several_children_as_a_block() {
+        let column = |kids: &[&str]| {
+            let mut col = node("col", Some("p1"), K::Frame, [0.0, 0.0, 100.0, 400.0]);
+            col.layout = Some(Layout::Column);
+            let mut nodes = vec![node("p1", None, K::Page, [0.0; 4]), col];
+            nodes.extend(kids.iter().map(|id| node(id, Some("col"), K::Rect, [0.0, 0.0, 100.0, 40.0])));
+            Scene::new(nodes)
+        };
+        let order = |s: &Scene| s.children("col").to_vec();
+        for (start, moving, index, want) in [
+            (["A", "B", "C", "D"], ["B", "C"], 2, ["A", "D", "B", "C"]),
+            // The case a loop giving each the same index gets wrong.
+            (["B", "C", "A", "D"], ["B", "C"], 2, ["A", "D", "B", "C"]),
+            (["A", "B", "C", "D"], ["A", "D"], 0, ["A", "D", "B", "C"]),
+            (["A", "B", "C", "D"], ["D", "A"], 9, ["B", "C", "A", "D"]),
+            (["A", "B", "C", "D"], ["C", "D"], 2, ["A", "B", "C", "D"]),
+        ] {
+            let mut s = column(&start);
+            let ops = reorder(&s, "col", &ids(&moving), index);
+            run(&mut s, &ops);
+            assert_eq!(order(&s), want, "{moving:?} to {index} from {start:?}");
+        }
+        assert!(reorder(&column(&["A", "B", "C", "D"]), "col", &ids(&["C", "D"]), 2).is_empty(), "already there");
+        // With drop_index: B and C dragged below D's middle land after it.
+        let s = column(&["A", "B", "C", "D"]);
+        let placed = place(&s, "p1", &Mono);
+        let index = crate::design::layout::drop_index(&s, &placed, "col", &ids(&["B", "C"]), (50.0, 150.0));
+        let mut s2 = s.clone();
+        run(&mut s2, &reorder(&s, "col", &ids(&["B", "C"]), index));
+        assert_eq!(order(&s2), ["A", "D", "B", "C"]);
+        // A child of another parent is left out.
+        assert!(reorder(&s, "col", &ids(&["p1"]), 0).is_empty());
+    }
+
+    /// B36: a typed height leaves a flat line flat (it has no height to give), a typed width
+    /// scales a line's points, and a path's from the least of them.
+    #[test]
+    fn a_typed_size_scales_points_and_leaves_a_flat_line_alone() {
+        let mut line = node("l", Some("p1"), K::Line, [0.0, 0.0, 120.0, 0.0]);
+        line.points = Some(vec![[0.0, 0.0], [120.0, 0.0]]);
+        assert_eq!(size_set(&line, "h", 50.0), None);
+        let s = size_set(&line, "w", 240.0).unwrap();
+        assert_eq!((s["w"].clone(), s["points"].clone()), (json!(240.0), json!([[0.0, 0.0], [240.0, 0.0]])));
+        assert!(!s.contains_key("w_sizing"), "a line's width is already its own");
+        let mut path = node("a", Some("p1"), K::Path, [0.0, 0.0, 30.0, 40.0]);
+        path.points = Some(vec![[0.0, 10.0], [30.0, 50.0], [15.0, 30.0]]);
+        let s = size_set(&path, "h", 80.0).unwrap();
+        assert_eq!(s["points"], json!([[0.0, 10.0], [30.0, 90.0], [15.0, 50.0]]));
+        // A box: a fixed size from now on, within its min and max.
+        let mut field = node("f", Some("p1"), K::Frame, [0.0, 0.0, 100.0, 40.0]);
+        field.w_sizing = Some(Sizing::Fill);
+        field.max_w = Some(300.0);
+        let s = size_set(&field, "w", 500.0).unwrap();
+        assert_eq!((s["w"].clone(), s["w_sizing"].clone()), (json!(300.0), json!("fixed")));
+        assert!(field.patched(&s).is_ok());
+        assert_eq!(size_set(&field, "x", 5.0), None);
+    }
+
+    /// W8: the fields an edit sets at the values the scene stores (the first update of a node
+    /// gives them; a later one adds its own), the parent of what it moves; nothing for what the
+    /// list adds, a page's place, or a colour.
+    #[test]
+    fn expect_for_records_what_the_scene_showed() {
+        let s = styled();
+        let mut e = node("e", Some("a"), K::Rect, [0.0, 0.0, 5.0, 5.0]);
+        e.fill = Some("#ff0000".into());
+        let ops = vec![
+            NodeOp::Update { id: "b".into(), set: set(&[("fill", json!("#00ff00"))]) },
+            NodeOp::Move { id: "d".into(), parent: Some("a".into()), index: None, keep_position: None },
+            NodeOp::Update { id: "b".into(), set: set(&[("fill", json!("#0000ff")), ("radius", json!(4)), ("width", json!(80))]) },
+            NodeOp::Update { id: "d".into(), set: set(&[("x", json!(1))]) },
+            NodeOp::Add { node: e, index: None },
+            NodeOp::Update { id: "e".into(), set: set(&[("x", json!(3))]) },
+            NodeOp::Move { id: "p1".into(), parent: None, index: Some(0), keep_position: None },
+            NodeOp::Update { id: "c".into(), set: Map::new() },
+            NodeOp::Color { name: "accent".into(), value: "#000000".into() },
+            NodeOp::Delete { id: "gone".into() },
+        ];
+        let want = json!([
+            // Stored, b names a style: its own fill is unset, whatever the style draws.
+            {"id": "b", "set": {"fill": null, "radius": null, "w": 50.0}},
+            {"id": "d", "set": {"x": 500.0}, "parent": "p1"},
+        ]);
+        assert_eq!(serde_json::to_value(expect_for(&s, &ops)).unwrap(), want);
+        assert!(expect_for(&s, &[]).is_empty());
     }
 
     #[test]
