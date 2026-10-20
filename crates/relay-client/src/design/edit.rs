@@ -150,12 +150,11 @@ fn fresh_ids(scene: &mut Scene, nodes: &[Node]) -> HashMap<String, String> {
     nodes.iter().map(|n| (n.id.clone(), scene.fresh_id(n.kind))).collect()
 }
 
-/// The page point a node's `x`/`y` put it at, read from the stored tree (no layout): `nodes`
-/// first, then the scene, if any.
-fn stored_point(scene: Option<&Scene>, nodes: &HashMap<&str, &Node>, id: &str) -> Option<(f64, f64)> {
+/// The page point a node's `x`/`y` put it at, read from the stored tree (no layout).
+fn stored_point(scene: &Scene, id: &str) -> Option<(f64, f64)> {
     let (mut x, mut y, mut at) = (0.0, 0.0, id);
-    for _ in 0..=scene.map_or(0, Scene::len) + nodes.len() {
-        let n = nodes.get(at).copied().or_else(|| scene?.node(at))?;
+    for _ in 0..=scene.len() {
+        let n = scene.node(at)?;
         (x, y) = (x + n.x, y + n.y);
         match n.parent.as_deref() {
             Some(parent) => at = parent,
@@ -170,22 +169,22 @@ fn stored_point(scene: Option<&Scene>, nodes: &HashMap<&str, &Node>, id: &str) -
 fn page_origin(scene: &Scene, placed: &Placed, id: &str) -> (f64, f64) {
     match placed.rect(id) {
         Some(_) => placed.origin(id),
-        None => stored_point(Some(scene), &HashMap::new(), id).unwrap_or_default(),
+        None => stored_point(scene, id).unwrap_or_default(),
     }
 }
 
 /// A connector's two ends relative to its own `x`/`y`, from the stored boxes of the nodes it is
-/// attached to (their centres): `nodes` first, then the scene, if any. For a line that has no
-/// points of its own to fall back on; each within what `validate` takes (B70), however far
-/// apart a design spreads them.
-fn stored_ends(scene: Option<&Scene>, nodes: &HashMap<&str, &Node>, line: &Node) -> Vec<[f64; 2]> {
+/// attached to (their centres), or its own box's corners where one is not in `scene`. For a
+/// line that has no points of its own to fall back on; each within what `validate` takes
+/// (B70), however far apart a design spreads them.
+fn stored_ends(scene: &Scene, line: &Node) -> Vec<[f64; 2]> {
     let centre = |end: &Option<String>| {
         let id = end.as_deref()?;
-        let n = nodes.get(id).copied().or_else(|| scene?.node(id))?;
-        let (x, y) = stored_point(scene, nodes, id)?;
+        let n = scene.node(id)?;
+        let (x, y) = stored_point(scene, id)?;
         Some((x + n.w / 2.0, y + n.h / 2.0))
     };
-    match (stored_point(scene, nodes, &line.id), centre(&line.from), centre(&line.to)) {
+    match (stored_point(scene, &line.id), centre(&line.from), centre(&line.to)) {
         (Some((ox, oy)), Some(a), Some(b)) => vec![[coord(a.0 - ox), coord(a.1 - oy)], [coord(b.0 - ox), coord(b.1 - oy)]],
         _ => vec![[0.0, 0.0], [line.w, line.h]],
     }
@@ -227,10 +226,10 @@ fn let_go_outside(scene: &Scene, placed: &Placed, nodes: &mut [Node]) -> HashSet
 
 /// A copied connector's ends: one attached to a node copied with it follows the copy. One
 /// attached to a node left behind was let go when the copy was taken ([`let_go_outside`]); a
-/// clipboard an older Relay wrote may still hold one, which lets go at its own points, or at its
-/// ends' stored centres among the copied nodes, never at a node of the design pasted into.
-fn rewire(nodes: &HashMap<&str, &Node>, fresh: &HashMap<String, String>, copy: &mut Node) {
-    let original = nodes.get(copy.id.as_str()).copied();
+/// clipboard an older Relay wrote may still hold one, which lets go at its own points, or, with
+/// none, at its own box's corners. Nothing tells where the node it named was: that node is not
+/// among the copied ones, and one of that id in the design pasted into is another node.
+fn rewire(fresh: &HashMap<String, String>, copy: &mut Node) {
     let mut freed = false;
     for end in [&mut copy.from, &mut copy.to] {
         if let Some(id) = end.take() {
@@ -241,7 +240,7 @@ fn rewire(nodes: &HashMap<&str, &Node>, fresh: &HashMap<String, String>, copy: &
         }
     }
     if freed && copy.points.as_ref().is_none_or(|p| p.len() < 2) {
-        copy.points = Some(original.map_or_else(|| vec![[0.0, 0.0], [copy.w, copy.h]], |o| stored_ends(None, nodes, o)));
+        copy.points = Some(vec![[0.0, 0.0], [copy.w, copy.h]]);
     }
 }
 
@@ -258,7 +257,7 @@ fn copies(nodes: &[Node], fresh: &HashMap<String, String>, mut place: impl FnMut
         // A fresh add, held to what its kind uses: a stale field or one a newer build wrote
         // stays with the original.
         let mut copy = n.without_foreign();
-        rewire(&by_id, fresh, &mut copy);
+        rewire(fresh, &mut copy);
         copy.id = fresh[&n.id].clone();
         let root = n.parent.as_deref().is_none_or(|p| !by_id.contains_key(p));
         if root {
@@ -742,7 +741,7 @@ fn let_go(scene: &Scene, placed: &Placed, n: &Node, from: bool, to: bool, origin
         // Not on the page shown: keep its own points, or take its ends' stored centres.
         _ if n.points.as_ref().is_some_and(|p| p.len() >= 2) => {}
         _ => {
-            s.insert("points".into(), json!(stored_ends(Some(scene), &HashMap::new(), n)));
+            s.insert("points".into(), json!(stored_ends(scene, n)));
         }
     }
     s
@@ -1271,10 +1270,17 @@ mod tests {
         (legacy.from, legacy.to) = (Some("x0".into()), Some("x1".into()));
         let mut other = connected();
         run(&mut other, &[NodeOp::Update { id: "x1".into(), set: set(&[("x", json!(900.0)), ("y", json!(900.0))]) }]);
-        let (ops, roots) = clone_into(&mut other, &[legacy], "p1", None, 0.0, 0.0);
+        let (ops, roots) = clone_into(&mut other, &[legacy.clone()], "p1", None, 0.0, 0.0);
         run(&mut other, &ops);
         let copy = other.node(&roots[0]).unwrap();
         assert_eq!((copy.from.as_deref(), copy.points.clone()), (None, Some(vec![[0.0, 0.0], [30.0, 0.0]])));
+        // One end copied with it: that end follows its copy, the other is its own box's corner.
+        let x0 = other.stored("x0").unwrap().clone();
+        let (ops, roots) = clone_into(&mut other, &[x0, legacy], "p1", None, 0.0, 0.0);
+        run(&mut other, &ops);
+        let copy = other.node(&roots[1]).unwrap();
+        let ends = (copy.from.as_ref(), copy.to.as_deref(), copy.points.clone());
+        assert_eq!(ends, (Some(&roots[0]), None, Some(vec![[0.0, 0.0], [30.0, 0.0]])));
     }
 
     /// B14: a selection across two frames is copied in page space, so pasted into one parent
