@@ -18,7 +18,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 /// Bumped with every entry appended to [`MIGRATIONS`]; every earlier version must stay openable.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 const MIGRATIONS: &[&str] = &[r"
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -71,7 +71,10 @@ CREATE TABLE candles (
 "ALTER TABLE proposals ADD COLUMN based_on TEXT;",
 // 3: when Coinbase was first seen calling an order done while the book had less of its fills, so
 // the wait for the rest is bounded.
-"ALTER TABLE orders ADD COLUMN short_since INTEGER;"];
+"ALTER TABLE orders ADD COLUMN short_since INTEGER;",
+// 4: Coinbase answered a create of this order with "duplicate": it has the order, whatever its
+// order list shows, so it is never failed as never placed.
+"ALTER TABLE orders ADD COLUMN exchange_has INTEGER NOT NULL DEFAULT 0;"];
 
 #[derive(Debug)]
 pub enum BookError {
@@ -697,6 +700,17 @@ impl Book {
             f.size.normalize().to_string(), f.fee.normalize().to_string(), text(pnl), trade_id, f.at
         ])?;
         Ok(Some(self.conn.last_insert_rowid()))
+    }
+
+    /// Marks that Coinbase said it has this order (a duplicate answer to create). Answers whether
+    /// it was not marked before, so it is told once.
+    pub fn mark_exchange_has(&self, id: i64) -> Result<bool> {
+        Ok(self.conn.prepare_cached("UPDATE orders SET exchange_has = 1 WHERE id = ?1 AND exchange_has = 0")?.execute([id])? > 0)
+    }
+
+    /// Whether Coinbase said it has this order, though no lookup has shown it.
+    pub fn exchange_has(&self, id: i64) -> Result<bool> {
+        Ok(self.conn.prepare_cached("SELECT exchange_has FROM orders WHERE id = ?1")?.query_row([id], |r| r.get::<_, i64>(0)).optional()?.is_some_and(|v| v != 0))
     }
 
     /// When Coinbase was first seen calling the order done while its fills fell short, Unix

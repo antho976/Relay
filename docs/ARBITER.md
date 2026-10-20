@@ -207,9 +207,11 @@ Behind the `engine` feature:
   product, from a few minutes before it was sent), in the trade turn the kill switch also takes,
   so a halt never decides while a resend is on its way. Found, it is reconciled like any other
   order. Not found, it is sent again under the same id for a minute, unless a halt came since;
-  after that it is failed as never placed. A lookup that fails decides nothing. A row the book
-  closed alone is reopened only by an answer from Coinbase that carries the order's id, which
-  proves it exists there; one Coinbase closed never reopens. An order Coinbase calls filled or cancelled is
+  after that it is failed as never placed. A lookup that fails decides nothing. An order Coinbase
+  answered with "duplicate" exists, whatever its list shows: it is kept pending, never failed as
+  never placed nor cancelled here alone, and the person is told to check the Coinbase app. A row
+  the book closed alone is reopened only by an answer from Coinbase that carries the order's id,
+  which proves it exists there; one Coinbase closed never reopens. An order Coinbase calls filled or cancelled is
   closed only once the book has its fills: they can lag the status, so until they show it stays
   open and the next pass books the rest. That wait ends ten minutes after Coinbase first called it
   done: a shortfall that long is not lag, and the order closes with what was booked, saying what

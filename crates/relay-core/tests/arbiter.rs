@@ -39,6 +39,8 @@ struct Fake {
     drop_orders: Mutex<bool>,
     /// Looking an order up by its client_order_id fails.
     lookup_fails: Mutex<bool>,
+    /// Looking an order up finds nothing, though create took it: Coinbase's list misses it.
+    unlisted: Mutex<bool>,
     /// The next this many reads of an order's fills answer none yet, though the order reads as
     /// filled: fills lag the order's status.
     fills_lag: Mutex<u32>,
@@ -160,7 +162,7 @@ impl Account for Fake {
         if *self.lookup_fails.lock().unwrap() {
             return Err(ExchangeError::Unreachable("the request timed out".into()));
         }
-        if !self.placed.lock().unwrap().iter().any(|p| p.client_order_id == cid) {
+        if *self.unlisted.lock().unwrap() || !self.placed.lock().unwrap().iter().any(|p| p.client_order_id == cid) {
             return Ok(None);
         }
         self.order(&format!("x-{cid}")).map(Some)
@@ -833,4 +835,30 @@ fn an_order_whose_fills_never_add_up_closes_with_what_was_booked_after_ten_minut
     assert_eq!((d["orders"][0]["status"].as_str(), d["row"]["held_base"].as_str()), (Some("filled"), Some("0")), "{d:#}");
     assert!(d["orders"][0]["error"].as_str().unwrap().contains("lists fills for only 0"), "{d:#}");
     assert!(d["decisions"].as_array().unwrap().iter().any(|x| x["text"].as_str().unwrap().starts_with("Coinbase reports 0.5 ETH filled")), "{d:#}");
+}
+
+#[test]
+fn an_order_coinbase_calls_a_duplicate_is_never_failed_as_never_placed() {
+    let (dir, engine, fake) = setup_on_disk();
+    let id = live_agent(&engine);
+    // Create took it but its answer was lost, and Coinbase's list does not show it: sent again,
+    // Coinbase answers that it has this id already.
+    *fake.lost.lock().unwrap() = Some(ExchangeError::Unreachable("the request timed out".into()));
+    *fake.unlisted.lock().unwrap() = true;
+    let oid = agent_buy(&engine, id, "20")["order"]["id"].as_i64().unwrap();
+    *fake.lost.lock().unwrap() = None;
+    // A minute on it is still not listed, yet it is not failed, and the person is told.
+    age_order(dir.path(), oid, 120);
+    pass(&engine);
+    let d = ok(&engine, "arbiter.strategy.get", json!({"id": id}));
+    assert_eq!(d["orders"][0]["status"], "pending", "{d:#}");
+    assert!(d["decisions"].as_array().unwrap().iter().any(|x| x["text"].as_str().unwrap().starts_with("Coinbase says it already has this order")), "{d:#}");
+    // Nor does a halt cancel it here alone.
+    let h = ok(&engine, "arbiter.halt", json!({"reason": "testing"}));
+    assert_eq!((h["cancelled"].as_u64(), h["failed"].as_array().unwrap().len()), (Some(0), 1), "{h:#}");
+    // Once Coinbase lists it, it is booked like any other.
+    *fake.unlisted.lock().unwrap() = false;
+    pass(&engine);
+    assert_eq!(last_order(&engine, id)["status"], "filled");
+    assert_eq!(fake.placed.lock().unwrap().len(), 1);
 }

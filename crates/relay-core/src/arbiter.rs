@@ -637,7 +637,10 @@ pub fn execute(engine: &Engine, strategy_id: i64, intent: &Intent, why: &str) ->
                 // be read, or Coinbase says it has this id already. The order stays pending, and the
                 // runner looks it up by its client_order_id before it sends it again or gives up.
                 Err((sent, e)) if matches!(e, ExchangeError::Unreachable(_)) || sent && matches!(e, ExchangeError::Malformed(_) | ExchangeError::Duplicate(_)) => {
-                    with_book(engine, |b| b.log(Some(s.id), "error", &format!("{what}: no answer from Coinbase ({e}); will look it up."), Some(id)).map(|_| ()))?
+                    with_book(engine, |b| b.log(Some(s.id), "error", &format!("{what}: no answer from Coinbase ({e}); will look it up."), Some(id)).map(|_| ()))?;
+                    if matches!(e, ExchangeError::Duplicate(_)) {
+                        remember_duplicate(engine, id, Some(s.id))?;
+                    }
                 }
                 Err((_, e)) => with_book(engine, |b| {
                     b.fail_order(id, &e.to_string())?;
@@ -692,15 +695,30 @@ fn find_live(client: &dyn Exchange, o: &OrderView) -> Result<Option<ExchangeOrde
     client.find_order(&o.product, &o.client_order_id, created_at(o) - LOOKUP_SLACK).map_err(ex)
 }
 
+/// Coinbase answered a create with "duplicate": it has this order, whatever its order list shows.
+/// Kept on the row, so the order is never failed as never placed, and told once.
+fn remember_duplicate(engine: &Engine, id: i64, strategy: Option<i64>) -> Result<(), BusError> {
+    with_book(engine, |b| {
+        if b.mark_exchange_has(id)? {
+            b.log(strategy, "error", "Coinbase says it already has this order but does not list it yet: it stays pending until Coinbase shows it. Check the Coinbase app.", Some(id))?;
+        }
+        Ok(())
+    })
+}
+
 /// An order sent with no answer read back (create timed out or answered unreadably, or Relay
 /// stopped in between): Coinbase may have it or not, so it is looked up first. Found, it is
 /// returned, to be reconciled as any known order. Not found, it is sent again with the same
 /// client_order_id, which cannot place it twice, for a minute, unless a halt came since (the
 /// person's own sell excepted, as the gate excepts it); after that it was never placed and is
-/// failed. A lookup that fails leaves it pending, unchanged.
+/// failed. A lookup that fails leaves it pending, unchanged. One Coinbase called a duplicate is
+/// neither sent again nor failed: it exists, and it waits for a lookup to show it.
 fn reconcile_unanswered(engine: &Engine, client: &dyn Exchange, o: &OrderView) -> Result<Option<ExchangeOrder>, BusError> {
     if let Some(found) = find_live(client, o)? {
         return Ok(Some(found));
+    }
+    if with_book(engine, |b| b.exchange_has(o.id))? {
+        return Ok(None);
     }
     if book::now() - created_at(o) >= UNANSWERED {
         with_book(engine, |b| {
@@ -711,10 +729,12 @@ fn reconcile_unanswered(engine: &Engine, client: &dyn Exchange, o: &OrderView) -
     }
     let halted = with_book(engine, |b| Ok(b.halted()?.is_some() || o.strategy_id.is_some_and(|sid| b.strategy(sid).is_ok_and(|s| s.state == RunState::Halted))))?;
     if !halted || o.source == Source::Person && o.side == Side::Sell {
-        // Any refusal here leaves it pending: a duplicate means Coinbase has it after all, and
-        // the next lookup reads it; anything else is decided by the lookups until the minute ends.
-        if let Ok(order) = client.place(&request_of(o), None) {
-            with_book(engine, |b| b.update_order(o.id, &order))?;
+        // Any refusal here leaves it pending: a duplicate means Coinbase has it after all, which
+        // is kept; anything else is decided by the lookups until the minute ends.
+        match client.place(&request_of(o), None) {
+            Ok(order) => with_book(engine, |b| b.update_order(o.id, &order))?,
+            Err(ExchangeError::Duplicate(_)) => remember_duplicate(engine, o.id, o.strategy_id)?,
+            Err(_) => {}
         }
     }
     Ok(None)
@@ -862,6 +882,9 @@ fn cancel_one(engine: &Engine, o: &OrderView, why: &str) -> Result<(), BusError>
                 // again while halted, settles it once the minute is up.
                 None if book::now() - created_at(o) < UNANSWERED => {
                     return Err(BusError::unavailable("arbiter.unconfirmed", "Coinbase does not list this order yet, so it was not cancelled: it stays pending, is not sent again while halted, and is settled within a minute"));
+                }
+                None if with_book(engine, |b| b.exchange_has(o.id))? => {
+                    return Err(BusError::unavailable("arbiter.unconfirmed", "Coinbase says it has this order but does not list it, so it could not be cancelled: cancel it in the Coinbase app"));
                 }
                 None => return cancel_here(engine, o, &format!("{why} (Coinbase has no record of it)")),
             },
