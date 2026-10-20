@@ -35,8 +35,9 @@ use gallery::{Filter, Gallery};
 use gtk::prelude::*;
 use gtk4 as gtk;
 use serde_json::{json, Value};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
+use std::time::Duration;
 
 /// The Design view of the main window: the gallery, or one design on the board.
 pub struct View {
@@ -44,7 +45,34 @@ pub struct View {
     gallery: Rc<Gallery>,
     host: gtk::Box,
     board: RefCell<Option<Rc<Board>>>,
+    opening: Opening,
 }
+
+/// Which open of the main view's board is the one asked for last (B79): an open that finishes
+/// after a newer one was asked for, or after the person went elsewhere, shows nothing.
+#[derive(Default)]
+struct Opening(Cell<u64>);
+
+impl Opening {
+    /// A new open; those before it no longer show what they open.
+    fn begin(&self) -> u64 {
+        self.cancel();
+        self.0.get()
+    }
+
+    /// Whether open `ticket` is still the one asked for.
+    fn current(&self, ticket: u64) -> bool {
+        self.0.get() == ticket
+    }
+
+    /// The person went elsewhere: no open under way shows its design.
+    fn cancel(&self) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+/// What runs once a board opened for it has its size (E-gallery-6).
+type Ready = Box<dyn FnOnce(&Rc<Board>)>;
 
 thread_local! {
     static VIEW: RefCell<Option<Rc<View>>> = const { RefCell::new(None) };
@@ -71,7 +99,7 @@ pub fn install(ui: &Rc<Ui>) {
     host.set_vexpand(true);
     root.add_named(&host, Some("board"));
     root.set_visible_child_name("gallery");
-    let view = Rc::new(View { root, gallery, host, board: RefCell::default() });
+    let view = Rc::new(View { root, gallery, host, board: RefCell::default(), opening: Opening::default() });
     let weak = Rc::downgrade(ui);
     *view.gallery.open.borrow_mut() = Some(Rc::new(move |id| {
         if let Some(ui) = weak.upgrade() {
@@ -88,6 +116,8 @@ pub fn install(ui: &Rc<Ui>) {
             }
         }
     });
+    // The design windows open when Relay last closed come back (I-15).
+    window::restore(ui);
 }
 
 /// The view came on screen, or its project changed: read the project's designs.
@@ -100,6 +130,8 @@ fn shown(ui: &Rc<Ui>) {
         view.gallery.project.set(project);
         *view.gallery.filter.borrow_mut() = Filter::All;
         view.gallery.reset();
+        // An open under way is of the project left (B79).
+        view.opening.cancel();
         close_board(&view);
     }
     view.gallery.refresh();
@@ -121,6 +153,7 @@ fn close_board(view: &View) {
 pub fn show(ui: &Rc<Ui>, terminal: Option<String>) {
     ui.navigate("design");
     if let Some(view) = view() {
+        view.opening.cancel();
         close_board(&view);
         *view.gallery.filter.borrow_mut() = match terminal {
             Some(t) => Filter::Terminal(t),
@@ -132,16 +165,39 @@ pub fn show(ui: &Rc<Ui>, terminal: Option<String>) {
 
 /// Open design `id` on the main view's board.
 pub fn open(ui: &Rc<Ui>, id: i64) {
+    open_on(ui, id, None);
+}
+
+/// Open design `id` on the main view's board and run `ready` with the board once it has its
+/// size, to put back what a board showed before (E-gallery-6).
+// native-canvas restores a board's camera and selection through it.
+#[allow(dead_code)]
+pub(crate) fn open_with(ui: &Rc<Ui>, id: i64, ready: impl FnOnce(&Rc<Board>) + 'static) {
+    open_on(ui, id, Some(Box::new(ready)));
+}
+
+fn open_on(ui: &Rc<Ui>, id: i64, ready: Option<Ready>) {
     let Some(view) = view() else {
         return;
     };
-    if view.board.borrow().as_ref().is_some_and(|b| b.doc.id == id) {
+    let shown = view.board.borrow().clone().filter(|b| b.doc.id == id);
+    if let Some(b) = shown {
+        // An open asked for before this one must not replace it when it lands.
+        view.opening.cancel();
         view.root.set_visible_child_name("board");
+        when_placed(&b, ready);
         return;
     }
+    let ticket = view.opening.begin();
     let ui = ui.clone();
     glib::spawn_future_local(async move {
-        let doc = match Doc::open(&ui, id).await {
+        let opened = Doc::open(&ui, id).await;
+        // A newer open, or the person leaving for the gallery or another project, made this
+        // one moot (B79).
+        if !view.opening.current(ticket) {
+            return;
+        }
+        let doc = match opened {
             Ok(doc) => doc,
             Err(e) => {
                 view.gallery.toast(&format!("Could not open the design: {e}"), None);
@@ -153,6 +209,7 @@ pub fn open(ui: &Rc<Ui>, id: i64) {
         let weak = Rc::downgrade(&view);
         *b.back.borrow_mut() = Some(Rc::new(move || {
             if let Some(view) = weak.upgrade() {
+                view.opening.cancel();
                 close_board(&view);
                 view.gallery.refresh();
             }
@@ -162,6 +219,25 @@ pub fn open(ui: &Rc<Ui>, id: i64) {
         *view.board.borrow_mut() = Some(b.clone());
         view.root.set_visible_child_name("board");
         b.canvas.grab_focus();
+        when_placed(&b, ready);
+    });
+}
+
+/// Run `ready` once `b` is laid out: on the frame after the one that gave it its size.
+pub(super) fn when_placed(b: &Rc<Board>, ready: Option<Ready>) {
+    let Some(ready) = ready else {
+        return;
+    };
+    let ready = Cell::new(Some(ready));
+    let weak = Rc::downgrade(b);
+    b.root.add_tick_callback(move |root, _| {
+        if root.width() <= 0 {
+            return glib::ControlFlow::Continue;
+        }
+        if let (Some(b), Some(ready)) = (weak.upgrade(), ready.take()) {
+            ready(&b);
+        }
+        glib::ControlFlow::Break
     });
 }
 
@@ -201,22 +277,64 @@ pub(crate) fn register(b: &Rc<Board>) {
     });
 }
 
+/// Every open board, the main view's and the windows'.
+fn boards() -> Vec<Rc<Board>> {
+    BOARDS.with(|list| {
+        let mut list = list.borrow_mut();
+        list.retain(|w| w.strong_count() > 0);
+        list.iter().filter_map(Weak::upgrade).collect()
+    })
+}
+
+/// TM-50: design `id` was deleted while words were being typed into it. Each board's edit ends
+/// without committing (into a design that takes no edits now) and its words go on the
+/// clipboard. Whether there were any.
+pub(super) fn rescue(ui: &Ui, id: i64) -> bool {
+    let mut typed = Vec::new();
+    for b in boards().iter().filter(|b| b.doc.id == id) {
+        let text = b.edit.borrow().as_ref().map(|e| {
+            let buffer = e.view.buffer();
+            buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string()
+        });
+        b.end_edit(false);
+        typed.extend(text.filter(|t| !t.trim().is_empty()));
+    }
+    if typed.is_empty() {
+        return false;
+    }
+    ui.window.clipboard().set_text(&typed.join("\n\n"));
+    true
+}
+
+/// What the person hears of design `title` deleted elsewhere: whether what they were typing
+/// went to the clipboard, and whether edits of theirs were still on their way (TM-50).
+fn deleted_note(title: &str, typed: bool, lost: bool) -> String {
+    let mut note = format!("“{title}” was deleted");
+    if lost {
+        note.push_str(" before your last changes were saved");
+    }
+    if typed {
+        note.push_str(". What you were typing is on the clipboard.");
+    }
+    note
+}
+
 /// `design.changed` / `design.deleted`, whatever project the main window shows: a design in a
 /// window keeps its own.
 pub fn event(ui: &Rc<Ui>, ev: &str, payload: &Value) {
     let id = payload["id"].as_i64().unwrap_or(0);
-    let boards: Vec<Rc<Board>> = BOARDS.with(|l| l.borrow().iter().filter_map(Weak::upgrade).collect());
-    for b in boards.iter().filter(|b| b.doc.id == id) {
-        if ev == "design.deleted" {
-            continue;
-        }
-        b.doc.event(payload);
-    }
-    if ev == "design.deleted" || payload["deleted_at"].is_string() {
+    let deleted = ev == "design.deleted" || payload["deleted_at"].is_string();
+    // Edits still on their way to a design deleted elsewhere go with it (TM-50).
+    let open = doc::find(id);
+    let lost = deleted && open.as_ref().is_some_and(|d| d.busy());
+    let title = open.map(|d| d.title()).or_else(|| payload["title"].as_str().map(String::from)).unwrap_or_default();
+    doc::event(ev, payload);
+    if deleted {
+        let typed = rescue(ui, id);
         window::close(id);
-        if let Some(view) = view() {
-            let open = view.board.borrow().as_ref().filter(|b| b.doc.id == id).map(|b| b.doc.title());
-            if let Some(title) = open {
+        let on_board = view().is_some_and(|view| view.board.borrow().as_ref().is_some_and(|b| b.doc.id == id));
+        match view().filter(|_| on_board) {
+            Some(view) => {
                 close_board(&view);
                 // Deleted elsewhere (another window, an agent): say so, and offer it back while
                 // it is only in Deleted.
@@ -228,8 +346,11 @@ pub fn event(ui: &Rc<Ui>, ev: &str, payload: &Value) {
                         }
                     }) as Rc<dyn Fn()>
                 });
-                view.gallery.toast_with(&format!("“{title}” was deleted"), "Restore", restore);
+                view.gallery.toast_with(&deleted_note(&title, typed, lost), "Restore", restore);
             }
+            // Only in a window, which has closed: the main window says what went with it.
+            None if typed || lost => ui.show_info(&deleted_note(&title, typed, lost)),
+            None => {}
         }
     }
     if let Some(view) = view() {
@@ -246,16 +367,27 @@ pub(crate) fn gallery_changed(_ui: &Rc<Ui>) {
     }
 }
 
+/// The copy opens where the person is: in a window of its own from a window (TM-49), else on
+/// the main view's board; either says so.
 fn duplicate_design(b: &Board) {
     let Some(ui) = b.ui.upgrade() else {
         return;
     };
-    let id = b.doc.id;
+    let (id, project, windowed) = (b.doc.id, b.doc.design.borrow().project_id, b.windowed);
+    let source = Rc::downgrade(&b.me());
     glib::spawn_future_local(async move {
         match ui.call("design.duplicate", json!({"design_id": id})).await {
             Ok(v) => {
-                if let Some(new) = v["id"].as_i64() {
-                    open(&ui, new);
+                let Some(new) = v["id"].as_i64() else {
+                    return;
+                };
+                if windowed {
+                    window::open(&ui, project, new);
+                    if let Some(b) = source.upgrade() {
+                        b.toast("Opened the copy in a new window");
+                    }
+                } else {
+                    open_on(&ui, new, Some(Box::new(|b: &Rc<Board>| b.toast("Opened the copy"))));
                 }
             }
             Err(e) => ui.show_error(&e.to_string()),
@@ -263,24 +395,94 @@ fn duplicate_design(b: &Board) {
     });
 }
 
-fn delete_design(b: &Board) {
-    let id = b.doc.id;
-    let title = b.doc.title();
-    if b.windowed {
-        if let Some(ui) = b.ui.upgrade() {
-            glib::spawn_future_local(async move {
-                // The window closes as the design goes; the main window says where it went.
-                match ui.call("design.delete", json!({"design_id": id})).await {
-                    Ok(_) => ui.show_info(&format!("Moved “{title}” to Deleted designs")),
-                    Err(e) => ui.show_error(&e.to_string()),
-                }
-            });
+/// Wait until what `doc` has queued is answered, at most five seconds.
+async fn drained(doc: &Doc) {
+    for _ in 0..100 {
+        if !doc.busy() {
+            return;
         }
+        glib::timeout_future(Duration::from_millis(50)).await;
+    }
+}
+
+/// TM-50: the words being typed go in, and the edits queued go out, before the design goes:
+/// sent after the delete, the engine would refuse them.
+fn delete_design(b: &Board) {
+    let Some(ui) = b.ui.upgrade() else {
+        return;
+    };
+    b.end_edit(true);
+    let doc = b.doc.clone();
+    let (id, title) = (doc.id, doc.title());
+    if b.windowed {
+        glib::spawn_future_local(async move {
+            drained(&doc).await;
+            // The window closes as the design goes; the main window says where it went.
+            match ui.call("design.delete", json!({"design_id": id})).await {
+                Ok(_) => ui.show_info(&format!("Moved “{title}” to Deleted designs")),
+                Err(e) => ui.show_error(&e.to_string()),
+            }
+        });
         return;
     }
     if let Some(view) = view() {
         close_board(&view);
-        view.gallery.delete(id, &title);
+        glib::spawn_future_local(async move {
+            drained(&doc).await;
+            view.gallery.delete(id, &title);
+        });
+    }
+}
+
+/// Relay is connected again: every open design is read again, since events were missed
+/// meanwhile and the engine may hold an older copy (a store restored), and the gallery too
+/// (TM-54).
+// app.rs's connect() calls it from native-render on (TM-54 part b).
+#[allow(dead_code)]
+pub(crate) fn reconnected(ui: &Rc<Ui>) {
+    doc::reread_all();
+    if let Some(view) = view().filter(|_| ui.editor.design_visible()) {
+        view.gallery.refresh();
+    }
+}
+
+/// Before the main window closes: every board's words in progress are committed, and while any
+/// design still has edits on their way, the refusal to show (TM-39).
+// app.rs's close_request calls it from native-render on (TM-39 part b).
+#[allow(dead_code)]
+pub(crate) fn unsaved() -> Option<String> {
+    let boards = boards();
+    for b in &boards {
+        b.end_edit(true);
+    }
+    boards.iter().any(|b| b.doc.busy()).then(|| "Designs are still saving. Close again in a moment.".to_string())
+}
+
+/// Every design window closed, each board's words in progress committed first: the main window
+/// is closing (TM-39).
+// app.rs's close_request calls it from native-render on (TM-39 part b).
+#[allow(dead_code)]
+pub(crate) fn close_windows() {
+    window::close_all();
+}
+
+/// `session.changed`: the lamp of each board whose design belongs to that terminal follows its
+/// state (E-ask-3).
+// app.rs routes session.changed here from native-render on (E-ask-3 part b).
+#[allow(dead_code)]
+pub(crate) fn session_changed(_ui: &Rc<Ui>, payload: &Value) {
+    let (Some(name), Some(state)) = (payload["name"].as_str(), payload["state"].as_str()) else {
+        return;
+    };
+    let project = payload["project_id"].as_i64();
+    for b in boards() {
+        let ours = {
+            let design = b.doc.design.borrow();
+            design.session.as_deref() == Some(name) && project.is_none_or(|p| p == design.project_id)
+        };
+        if ours {
+            b.set_lamp(state);
+        }
     }
 }
 
@@ -316,5 +518,35 @@ pub fn smoke_open(ui: &Rc<Ui>) {
 impl View {
     fn gallery_first(&self) -> Option<i64> {
         self.gallery.first()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// B79: of two opens under way, only the last asked for shows its design, and none does once
+    /// the person went elsewhere.
+    #[test]
+    fn only_the_last_open_asked_for_shows() {
+        let opening = Opening::default();
+        let a = opening.begin();
+        let b = opening.begin();
+        assert!(!opening.current(a) && opening.current(b), "A answering last does not replace B");
+        opening.cancel();
+        assert!(!opening.current(b), "back to the gallery, or another project");
+        assert!(opening.current(opening.begin()));
+    }
+
+    /// TM-50: what the person hears of a design deleted elsewhere.
+    #[test]
+    fn a_design_deleted_elsewhere_says_what_went_with_it() {
+        assert_eq!(deleted_note("Home", false, false), "“Home” was deleted");
+        assert_eq!(deleted_note("Home", true, false), "“Home” was deleted. What you were typing is on the clipboard.");
+        assert_eq!(deleted_note("Home", false, true), "“Home” was deleted before your last changes were saved");
+        assert_eq!(
+            deleted_note("Home", true, true),
+            "“Home” was deleted before your last changes were saved. What you were typing is on the clipboard."
+        );
     }
 }
