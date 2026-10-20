@@ -89,21 +89,42 @@ pub(super) fn probe(kind: NodeKind, key: &str, value: &Value) -> Result<(), Stri
     Node::deserialize(&Value::Object(probe)).map(drop).map_err(|e| e.to_string())
 }
 
+/// A node as it comes in: read directly when it reads (serde buffers it once and borrows from
+/// that), else kept as JSON for [`Node::read`]'s slow path. Going through a `Value` every time
+/// cost a 500-node `design.apply` 13% (docs/perf/DESIGN-2026-10-20-compat.md).
+#[derive(Deserialize)]
+#[serde(untagged)]
+// Read and taken apart at once; boxing the node would cost an allocation per node read.
+#[allow(clippy::large_enum_variant)]
+enum Incoming {
+    Node(Node),
+    Json(Value),
+}
+
+impl Incoming {
+    fn read(self) -> Result<Node, String> {
+        match self {
+            Incoming::Node(node) => Ok(node),
+            Incoming::Json(value) => Node::read(value),
+        }
+    }
+}
+
 /// `deserialize_with` for a node: [`Node::read`].
 pub fn read_node<'de, D: Deserializer<'de>>(d: D) -> Result<Node, D::Error> {
-    Node::read(Value::deserialize(d)?).map_err(de::Error::custom)
+    Incoming::deserialize(d)?.read().map_err(de::Error::custom)
 }
 
 /// `deserialize_with` for a reply's list of nodes, each by [`Node::read`]. A node of a kind this
 /// build does not know (a newer engine's) is left out, as the engine's `design.get` leaves out
 /// a row it cannot read, so an older client still opens the design.
 pub fn read_nodes<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Node>, D::Error> {
-    Ok(Vec::<Value>::deserialize(d)?.into_iter().filter_map(|v| Node::read(v).ok()).collect())
+    Ok(Vec::<Incoming>::deserialize(d)?.into_iter().filter_map(|n| n.read().ok()).collect())
 }
 
 /// [`read_nodes`] for an optional list.
 pub fn read_nodes_opt<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<Node>>, D::Error> {
-    Ok(Option::<Vec<Value>>::deserialize(d)?.map(|list| list.into_iter().filter_map(|v| Node::read(v).ok()).collect()))
+    Ok(Option::<Vec<Incoming>>::deserialize(d)?.map(|list| list.into_iter().filter_map(|n| n.read().ok()).collect()))
 }
 
 /// `serialize_with` for a node: [`Node::to_map`], or the derived form when it holds no `extra`.
