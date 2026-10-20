@@ -2,7 +2,7 @@
 //! engine runs them, so the canvas draws an edit at once and the engine's answer only confirms
 //! it. Children are kept bottom to top, as they paint.
 
-use relay_bus::design::{valid_id, Node, NodeKind, NodeOp, MAX_NODES};
+use relay_bus::design::{fit_written, valid_id, Node, NodeKind, NodeOp, MAX_NODES};
 use std::collections::HashMap;
 
 /// The key pages are listed under in `children`.
@@ -41,23 +41,6 @@ fn seed() -> String {
     h.write_u32(std::process::id());
     let digits = base36(h.finish() % 36u64.pow(8));
     format!("{digits:0>8}")
-}
-
-fn kind_name(kind: NodeKind) -> &'static str {
-    match kind {
-        NodeKind::Page => "page",
-        NodeKind::Frame => "frame",
-        NodeKind::Group => "group",
-        NodeKind::Rect => "rect",
-        NodeKind::Ellipse => "ellipse",
-        NodeKind::Line => "line",
-        NodeKind::Text => "text",
-        NodeKind::Sticky => "sticky",
-        NodeKind::Path => "path",
-        NodeKind::Image => "image",
-        NodeKind::Polygon => "polygon",
-        NodeKind::Icon => "icon",
-    }
 }
 
 fn insert_at(list: &mut Vec<String>, id: String, index: Option<u32>) {
@@ -183,14 +166,15 @@ impl Scene {
     pub fn fresh_id(&mut self, kind: NodeKind) -> String {
         loop {
             self.counter += 1;
-            let id = format!("{}-{}-{}", kind_name(kind), self.seed, base36(self.counter));
+            let id = format!("{}-{}-{}", kind.name(), self.seed, base36(self.counter));
             if !self.nodes.contains_key(&id) {
                 return id;
             }
         }
     }
 
-    /// Run one edit as the engine does; on an error nothing changed.
+    /// Run one edit as the engine runs a lenient list's (an undo or a redo replaying what was
+    /// stored): the value rules only. On an error nothing changed.
     pub fn apply(&mut self, op: &NodeOp) -> Result<(), String> {
         match op {
             NodeOp::Add { node, index } => {
@@ -258,14 +242,57 @@ impl Scene {
         Ok(())
     }
 
-    /// Run every edit, all or none.
+    /// Run one new edit as the engine runs a strict list's: [`Scene::apply`], and the rules on
+    /// what a caller writes (`Node::check_new`, `Node::check_update`), so the canvas refuses
+    /// exactly what the engine would. On an error nothing changed.
+    pub fn apply_strict(&mut self, op: &NodeOp) -> Result<(), String> {
+        match op {
+            NodeOp::Add { node, .. } => {
+                node.check_new().map_err(|e| format!("add {}: {e}", node.id))?;
+                self.apply(op)
+            }
+            NodeOp::Update { id, set } => {
+                let node = self.nodes.get(id).ok_or_else(|| format!("update: no node {id}"))?;
+                let patched = node.patched(set).map_err(|e| format!("update {id}: {e}"))?;
+                Node::check_update(node, set, &patched).map_err(|e| format!("update {id}: {e}"))?;
+                self.nodes.insert(id.clone(), patched);
+                Ok(())
+            }
+            NodeOp::Move { .. } | NodeOp::Delete { .. } => self.apply(op),
+        }
+    }
+
+    /// Run every edit of a new list, all or none, as a strict list ([`Scene::apply_strict`]).
     pub fn apply_all(&mut self, ops: &[NodeOp]) -> Result<(), String> {
         let mut trial = self.clone();
         for (i, op) in ops.iter().enumerate() {
-            trial.apply(op).map_err(|e| format!("ops[{i}]: {e}"))?;
+            trial.apply_strict(op).map_err(|e| format!("ops[{i}]: {e}"))?;
         }
         *self = trial;
         Ok(())
+    }
+
+    /// Fit edits about to be sent to what a strict list takes (`relay_bus::design::fit_written`),
+    /// each update read against its node's kind here or as an earlier add of the list made it;
+    /// an update left with nothing to set is dropped. Returns the keys taken out, as `id.key`.
+    pub fn fit(&self, ops: &mut Vec<NodeOp>) -> Vec<String> {
+        let mut added: HashMap<String, NodeKind> = HashMap::new();
+        let mut dropped = Vec::new();
+        ops.retain_mut(|op| {
+            let was_empty = matches!(op, NodeOp::Update { set, .. } if set.is_empty());
+            let target = op.target().to_string();
+            let keys = fit_written(op, |id| added.get(id).copied().or_else(|| self.nodes.get(id).map(|n| n.kind)));
+            dropped.extend(keys.into_iter().map(|key| format!("{target}.{key}")));
+            match op {
+                NodeOp::Add { node, .. } => {
+                    added.insert(node.id.clone(), node.kind);
+                    true
+                }
+                NodeOp::Update { set, .. } => was_empty || !set.is_empty(),
+                _ => true,
+            }
+        });
+        dropped
     }
 
     /// Take the engine's copy of a node that an edit of ours changed. Its place stays: the
@@ -281,7 +308,7 @@ impl Scene {
     fn check_container(&self, id: &str) -> Result<(), String> {
         match self.nodes.get(id) {
             Some(p) if p.kind.holds_children() => Ok(()),
-            Some(p) => Err(format!("a {} cannot hold other nodes", kind_name(p.kind))),
+            Some(p) => Err(format!("a {} cannot hold other nodes", p.kind.name())),
             None => Err(format!("no parent {id}")),
         }
     }
@@ -346,6 +373,45 @@ pub(crate) mod tests {
         ];
         assert!(s.apply_all(&ops).unwrap_err().starts_with("ops[1]"));
         assert_eq!(s.to_nodes(), before);
+    }
+
+    /// A new list is held to what the engine holds a strict one to; an undo's replay is not.
+    #[test]
+    fn new_edits_are_strict_and_replays_are_not() {
+        let mut s = sample();
+        let radius = json!({"radius": 4}).as_object().unwrap().clone();
+        let why = s.apply_all(&[NodeOp::Update { id: "d".into(), set: radius }]).unwrap_err();
+        assert!(why.starts_with("ops[0]: update d: radius: ellipse nodes do not use it"), "{why}");
+        let mut legacy = Node::read(json!({"id": "g", "parent": "p1", "kind": "group", "future": 1,
+            "shadow": {"blur": 4, "color": "#000"}})).unwrap();
+        let add = NodeOp::Add { node: legacy.clone(), index: None };
+        assert!(s.apply_all(std::slice::from_ref(&add)).unwrap_err().starts_with("ops[0]: add g: future: not a node field"));
+        // The undo of a delete puts it back as it was stored.
+        s.apply(&add).unwrap();
+        assert_eq!(s.node("g"), Some(&legacy));
+        // And it stays editable: a strict update checks only what it writes.
+        let x = json!({"x": 5}).as_object().unwrap().clone();
+        s.apply_all(&[NodeOp::Update { id: "g".into(), set: x }]).unwrap();
+        legacy.x = 5.0;
+        assert_eq!(s.node("g"), Some(&legacy));
+    }
+
+    /// What the canvas sends is fitted to the kinds of the nodes it writes, an add earlier in the
+    /// list included, and an update left with nothing goes.
+    #[test]
+    fn fit_drops_what_each_kind_does_not_use() {
+        let s = sample();
+        let mut ops = vec![
+            NodeOp::Update { id: "d".into(), set: json!({"radius": 4, "fill": "#fff"}).as_object().unwrap().clone() },
+            NodeOp::Add { node: node("img", Some("p1"), NodeKind::Image, [0.0, 0.0, 10.0, 10.0]), index: None },
+            NodeOp::Update { id: "img".into(), set: json!({"fill": "#fff"}).as_object().unwrap().clone() },
+            NodeOp::Update { id: "b".into(), set: Default::default() },
+            NodeOp::Delete { id: "c".into() },
+        ];
+        assert_eq!(s.fit(&mut ops), ["d.radius", "img.fill"]);
+        assert_eq!(ops.len(), 4, "{ops:?}");
+        assert!(matches!(&ops[0], NodeOp::Update { set, .. } if set.len() == 1 && set.contains_key("fill")));
+        assert!(matches!(&ops[2], NodeOp::Update { id, set } if id == "b" && set.is_empty()), "an empty update sent as such stays");
     }
 
     #[test]

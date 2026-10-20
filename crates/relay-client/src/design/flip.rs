@@ -9,7 +9,7 @@ use super::edit::{outermost, px};
 use super::layout::Placed;
 use super::scene::Scene;
 use super::geom::Rect;
-use relay_bus::design::{GradientKind, Node, NodeKind, NodeOp};
+use relay_bus::design::{takes, GradientKind, Node, NodeKind, NodeOp};
 use serde_json::{json, Map, Value};
 
 /// The edits that flip `ids` left to right (`horizontal`) or top to bottom.
@@ -154,7 +154,8 @@ fn holds_text(kind: NodeKind) -> bool {
 }
 
 /// The edits that give `ids` a copied `style`: its letters to whatever holds text, its paint
-/// to shapes from a shape and to texts from a text, its opacity, blur and blend to all.
+/// to shapes from a shape and to texts from a text, its opacity, blur and blend to all; each
+/// only where the node's kind uses the field (`takes`), so a mixed selection takes the paste.
 pub fn paste_style(scene: &Scene, ids: &[String], style: &Map<String, Value>) -> Vec<NodeOp> {
     let from: Option<NodeKind> = style.get("kind").cloned().and_then(|k| serde_json::from_value(k).ok());
     let from_text = from == Some(NodeKind::Text);
@@ -172,6 +173,7 @@ pub fn paste_style(scene: &Scene, ids: &[String], style: &Map<String, Value>) ->
             }
             let set: Map<String, Value> = keys
                 .into_iter()
+                .filter(|k| takes(n.kind, k))
                 .filter_map(|k| {
                     let want = style.get(k).cloned().unwrap_or(Value::Null);
                     let have = current.get(k).cloned().unwrap_or(Value::Null);
@@ -249,5 +251,25 @@ mod tests {
         let (r, t) = (s.node("r").unwrap(), s.node("t").unwrap());
         assert_eq!((r.fill.as_deref(), r.font_size, r.opacity), (Some("#FF0000"), Some(30.0), Some(0.5)));
         assert_eq!((t.fill.as_deref(), t.font_size, t.opacity), (None, Some(30.0), Some(0.5)), "a text takes no box paint from a shape");
+    }
+
+    /// Each node takes only the fields its kind uses, so a mixed selection takes the paste.
+    #[test]
+    fn style_skips_what_a_kind_does_not_use() {
+        let mut s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            node("e", Some("p1"), K::Ellipse, [0.0; 4]),
+            node("i", Some("p1"), K::Image, [0.0; 4]),
+            node("g", Some("p1"), K::Group, [0.0; 4]),
+        ]);
+        s.node_mut("i").unwrap().src = Some("0123456789abcdef0123.png".into());
+        let mut src = node("src", Some("p1"), K::Rect, [0.0; 4]);
+        (src.radius, src.fill, src.opacity) = (Some(12.0), Some("#FF0000".into()), Some(0.5));
+        let ops = paste_style(&s, &["e".into(), "i".into(), "g".into()], &style_of(&src));
+        applied(&mut s, &ops);
+        let (e, i, g) = (s.node("e").unwrap(), s.node("i").unwrap(), s.node("g").unwrap());
+        assert_eq!((e.radius, e.fill.as_deref(), e.opacity), (None, Some("#FF0000"), Some(0.5)));
+        assert_eq!((i.radius, i.fill.as_deref(), i.opacity), (Some(12.0), None, Some(0.5)));
+        assert_eq!((g.fill.as_deref(), g.opacity), (None, Some(0.5)));
     }
 }

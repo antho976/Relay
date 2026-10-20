@@ -26029,7 +26029,7 @@
             "boolean",
             "null"
           ],
-          "description": "Skip an edit of a node that no longer exists, instead of refusing the whole list:\nfor an undo that may race someone else's delete."
+          "description": "Replay an undo: skip an edit of a node that no longer exists (or that this Relay cannot\nread), and put back what was stored even where a new edit's rules would refuse it,\ninstead of refusing the whole list. Only for an `inverse` an answer gave you."
         }
       },
       "required": [
@@ -26182,6 +26182,13 @@
             "$ref": "#/$defs/DesignNodeOp"
           },
           "description": "The edits that undo these, in the order to apply them."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "For an agent, what a lenient list applied as written although a strict one would have\nrefused it, or skipped because this Relay cannot read the node: each edit's label and\nwhy (at most 20)."
         }
       },
       "required": [

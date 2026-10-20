@@ -1,0 +1,592 @@
+//! Which fields each kind of node uses (B8), and the rules on what a caller writes
+//! (MODEL-SPEC §2.7-§2.8).
+//!
+//! The table is read off what paint, layout and hit testing use. A strict list (every list but
+//! a lenient one) is held to it on what it writes: [`Node::check_new`] for an add,
+//! [`Node::check_update`] for an update. A node as stored is never held to it, so a stale field
+//! an earlier build accepted stays editable and an undo (a lenient list) puts back exactly what
+//! was there. The canvas fits what it writes with [`fit_written`] first, so it never sends what
+//! a strict list refuses.
+
+use super::read::probe;
+use super::{canonical_key, Node, NodeKind, NodeOp, MAX_SHADOW_BLUR};
+use serde::ser::{self, Impossible, Serialize, SerializeStruct, Serializer};
+use serde_json::{Map, Value};
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+/// A set of node kinds: bit `NodeKind as u16` for each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Kinds(u16);
+
+const P: u16 = 1 << NodeKind::Page as u16;
+const F: u16 = 1 << NodeKind::Frame as u16;
+const G: u16 = 1 << NodeKind::Group as u16;
+const R: u16 = 1 << NodeKind::Rect as u16;
+const E: u16 = 1 << NodeKind::Ellipse as u16;
+const L: u16 = 1 << NodeKind::Line as u16;
+const T: u16 = 1 << NodeKind::Text as u16;
+const S: u16 = 1 << NodeKind::Sticky as u16;
+const A: u16 = 1 << NodeKind::Path as u16;
+const I: u16 = 1 << NodeKind::Image as u16;
+const Y: u16 = 1 << NodeKind::Polygon as u16;
+const C: u16 = 1 << NodeKind::Icon as u16;
+const ALL: u16 = P | F | G | R | E | L | T | S | A | I | Y | C;
+
+impl Kinds {
+    pub const ALL: Kinds = Kinds(ALL);
+
+    pub fn has(self, kind: NodeKind) -> bool {
+        self.0 & (1 << kind as u16) != 0
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = NodeKind> {
+        NodeKind::ALL.into_iter().filter(move |k| self.has(*k))
+    }
+
+    /// `frame, rect, sticky, image`.
+    pub fn names(self) -> String {
+        self.iter().map(NodeKind::name).collect::<Vec<_>>().join(", ")
+    }
+}
+
+/// Every field of a node, the kinds that use it, and, where the usual sentence would mislead,
+/// the refusal to give instead. A field added to `Node` gets a row here
+/// (`every_field_has_a_kinds_row`).
+pub const FIELDS: &[(&str, Kinds, Option<&str>)] = &[
+    ("id", Kinds(ALL), None),
+    ("parent", Kinds(ALL), None),
+    ("kind", Kinds(ALL), None),
+    ("name", Kinds(ALL), None),
+    ("x", Kinds(ALL), None),
+    ("y", Kinds(ALL), None),
+    ("w", Kinds(ALL), None),
+    ("h", Kinds(ALL), None),
+    ("hidden", Kinds(ALL), None),
+    ("locked", Kinds(ALL), None),
+    ("opacity", Kinds(ALL & !P), None),
+    ("blur", Kinds(ALL & !P), None),
+    ("blend", Kinds(ALL & !P), None),
+    ("w_sizing", Kinds(ALL & !P), None),
+    ("h_sizing", Kinds(ALL & !P), None),
+    // B99: a line's turn is its points (its end handles are placed from them).
+    ("rotation", Kinds(ALL & !P & !L), Some("rotation: a page does not turn, and a line turns by its points: move them instead")),
+    ("fill", Kinds(P | F | R | E | Y | S | T | L | A), None),
+    ("gradient", Kinds(F | R | E | Y | S | L | A), None),
+    ("stroke", Kinds(F | R | E | Y | S | I | L | A | C), None),
+    ("stroke_width", Kinds(F | R | E | Y | S | I | L | A | C), None),
+    // B96: an icon draws its dash, in its 24-unit grid.
+    ("dash", Kinds(F | R | E | Y | S | I | L | A | C), None),
+    ("radius", Kinds(F | R | S | I), None),
+    ("radii", Kinds(F | R | S | I), None),
+    ("shadow", Kinds(F | R | E | Y | S | I | T | L | A | C), None),
+    ("clip", Kinds(F), None),
+    ("layout", Kinds(F), None),
+    ("gap", Kinds(F), None),
+    ("justify", Kinds(F), None),
+    ("items", Kinds(F), None),
+    ("padding", Kinds(F | R | E | Y), None),
+    ("text", Kinds(T | S | R | E | Y), None),
+    ("font", Kinds(T | S | R | E | Y), None),
+    ("font_size", Kinds(T | S | R | E | Y), None),
+    ("font_weight", Kinds(T | S | R | E | Y), None),
+    ("italic", Kinds(T | S | R | E | Y), None),
+    ("underline", Kinds(T | S | R | E | Y), None),
+    ("strike", Kinds(T | S | R | E | Y), None),
+    ("align", Kinds(T | S | R | E | Y), None),
+    ("line_height", Kinds(T | S | R | E | Y), None),
+    ("letter_spacing", Kinds(T | S | R | E | Y), None),
+    ("text_case", Kinds(T | S | R | E | Y), None),
+    ("color", Kinds(T | S | R | E | Y | C), None),
+    ("points", Kinds(L | A), None),
+    ("closed", Kinds(L | A), None),
+    ("arrow_start", Kinds(L | A), None),
+    ("arrow_end", Kinds(L | A), None),
+    ("smooth", Kinds(L), None),
+    ("from", Kinds(L), None),
+    ("to", Kinds(L), None),
+    ("route", Kinds(L), None),
+    ("src", Kinds(I), None),
+    ("fit", Kinds(I), None),
+    ("sides", Kinds(Y), None),
+    ("star", Kinds(Y), None),
+    ("icon", Kinds(C), None),
+    ("flip_x", Kinds(Y | I | C), None),
+    ("flip_y", Kinds(Y | I | C), None),
+    ("arc", Kinds(E), None),
+];
+
+fn table() -> &'static HashMap<&'static str, (Kinds, Option<&'static str>)> {
+    static TABLE: OnceLock<HashMap<&'static str, (Kinds, Option<&'static str>)>> = OnceLock::new();
+    TABLE.get_or_init(|| FIELDS.iter().map(|&(field, kinds, custom)| (field, (kinds, custom))).collect())
+}
+
+/// The kinds that use `field` (`width`/`height` are `w`/`h`); `None` when no node has it.
+pub fn field_kinds(field: &str) -> Option<Kinds> {
+    table().get(canonical_key(field)).map(|row| row.0)
+}
+
+/// Whether a `kind` node uses `field`; false for a name that is no field.
+pub fn takes(kind: NodeKind, field: &str) -> bool {
+    field_kinds(field).is_some_and(|kinds| kinds.has(kind))
+}
+
+/// Why a `kind` node may not be written `field`; `None` when it takes it, or when no node has
+/// it (the node then holds it in `extra`, which says why).
+fn foreign(kind: NodeKind, field: &str) -> Option<String> {
+    let (kinds, custom) = table().get(canonical_key(field))?;
+    if kinds.has(kind) {
+        return None;
+    }
+    Some(match custom {
+        Some(text) => (*text).to_string(),
+        None => format!("{field}: {} nodes do not use it (it is for {})", kind.name(), kinds.names()),
+    })
+}
+
+/// The refusal of a key no node field has.
+pub(crate) fn not_a_field(key: &str) -> String {
+    format!("{key}: not a node field; design.get lists a node's fields")
+}
+
+/// Why a node holds `key` in `extra`: a name no field has, or a field whose value does not read.
+fn unreadable(kind: NodeKind, key: &str, value: &Value) -> String {
+    if field_kinds(key).is_none() {
+        return not_a_field(key);
+    }
+    match probe(kind, key, value) {
+        Err(why) => format!("{key}: {why}"),
+        // It reads alone: it was set aside because the other spelling of the size came too.
+        Ok(()) => {
+            let field = canonical_key(key);
+            format!("{field}: give {field} or {key}, not both")
+        }
+    }
+}
+
+/// C0 controls and DEL (B43). A NUL panics a debug build's GTK setters and cuts the string short
+/// in release; the others draw as boxes.
+fn is_control(c: char) -> bool {
+    c < ' ' || c == '\u{7f}'
+}
+
+fn is_break(c: char) -> bool {
+    matches!(c, '\t' | '\n' | '\r')
+}
+
+/// A name, font or title as GTK can show it: no control characters (B43).
+pub fn plain_label(s: &str) -> bool {
+    !s.chars().any(is_control)
+}
+
+/// `s` without its control characters; with `keep_breaks`, a text's tabs and line breaks stay.
+pub fn strip_controls(s: &str, keep_breaks: bool) -> Cow<'_, str> {
+    let bad = |c: char| is_control(c) && !(keep_breaks && is_break(c));
+    if s.chars().any(bad) {
+        Cow::Owned(s.chars().filter(|c| !bad(*c)).collect())
+    } else {
+        Cow::Borrowed(s)
+    }
+}
+
+/// The written rules on one field's new value beyond its kind: no control characters in a name,
+/// font or text (B43), a shadow's blur within the node blur's cap (B72).
+fn written(n: &Node, field: &str) -> Result<(), String> {
+    match field {
+        "name" | "font" => {
+            let value = if field == "name" { &n.name } else { &n.font };
+            match value {
+                Some(s) if !plain_label(s) => Err(format!("{field}: no control characters")),
+                _ => Ok(()),
+            }
+        }
+        "text" => match &n.text {
+            Some(t) if t.chars().any(|c| is_control(c) && !is_break(c)) => {
+                Err("text: no control characters other than tab and newline".into())
+            }
+            _ => Ok(()),
+        },
+        "shadow" => match &n.shadow {
+            Some(s) if s.blur > MAX_SHADOW_BLUR => Err(format!("shadow.blur: {} is outside 0 to {MAX_SHADOW_BLUR}", s.blur)),
+            _ => Ok(()),
+        },
+        _ => Ok(()),
+    }
+}
+
+impl Node {
+    /// An add as a caller writes it, in a strict list: nothing in `extra`, every field one its
+    /// kind uses, and the written rules on each. The message starts with the field.
+    pub fn check_new(&self) -> Result<(), String> {
+        if let Some((key, value)) = self.extra.iter().next() {
+            return Err(unreadable(self.kind, key, value));
+        }
+        for field in present(self) {
+            if let Some(why) = foreign(self.kind, field) {
+                return Err(why);
+            }
+            written(self, field)?;
+        }
+        Ok(())
+    }
+
+    /// An update as a caller writes it, in a strict list, given the node `before` and `after`
+    /// `set`: each key with a value is a field `after`'s kind uses, that `after` could read, and
+    /// that keeps the written rules. A `null` is always accepted for a known field, whatever the
+    /// kind (it clears a stale value), and for a key the node holds in `extra` (it removes it);
+    /// for any other name it is refused, since it would do nothing and is usually a typo.
+    pub fn check_update(before: &Node, set: &Map<String, Value>, after: &Node) -> Result<(), String> {
+        for (key, value) in set {
+            let field = canonical_key(key);
+            if value.is_null() {
+                if field_kinds(field).is_none() && !before.extra.contains_key(field) {
+                    return Err(not_a_field(key));
+                }
+                continue;
+            }
+            if let Some(held) = after.extra.get(field) {
+                return Err(unreadable(after.kind, field, held));
+            }
+            if let Some(why) = foreign(after.kind, field) {
+                return Err(why);
+            }
+            written(after, field)?;
+        }
+        Ok(())
+    }
+
+    /// A copy for a fresh add (duplicate, paste): without `extra` or a field its kind does not
+    /// use, so it passes [`Node::check_new`]'s kind rule. Nothing else is changed.
+    pub fn without_foreign(&self) -> Node {
+        let mut copy = self.clone();
+        copy.extra.clear();
+        if present(&copy).into_iter().all(|field| takes(copy.kind, field)) {
+            return copy;
+        }
+        let mut fields = copy.to_map();
+        fields.retain(|field, _| takes(copy.kind, field));
+        Node::read(Value::Object(fields)).unwrap_or(copy)
+    }
+}
+
+/// Fit one edit the canvas is about to send to what a strict list takes (MODEL-SPEC §1 #33):
+/// drop the keys its node's kind does not use (a `null` stays: it clears a stale value), drop
+/// what the node holds in `extra` and keys no field has, take control characters out of a
+/// name, font or text, and bring a shadow's blur within its cap. `kind_of` names the kind of an
+/// updated node (`None` when unknown: only unknown keys go). Returns the keys dropped.
+pub fn fit_written(op: &mut NodeOp, kind_of: impl Fn(&str) -> Option<NodeKind>) -> Vec<String> {
+    let mut dropped = Vec::new();
+    match op {
+        NodeOp::Add { node, .. } => {
+            dropped.extend(node.extra.keys().cloned());
+            let foreign: Vec<&str> = present(node).into_iter().filter(|field| !takes(node.kind, field)).collect();
+            if !dropped.is_empty() || !foreign.is_empty() {
+                dropped.extend(foreign.into_iter().map(str::to_string));
+                *node = node.without_foreign();
+            }
+            for (value, keep_breaks) in [(&mut node.name, false), (&mut node.font, false), (&mut node.text, true)] {
+                if let Some(s) = value.as_mut() {
+                    if let Cow::Owned(clean) = strip_controls(s, keep_breaks) {
+                        *s = clean;
+                    }
+                }
+            }
+            if let Some(shadow) = node.shadow.as_mut() {
+                shadow.blur = shadow.blur.min(MAX_SHADOW_BLUR);
+            }
+        }
+        NodeOp::Update { id, set } => {
+            let kind = kind_of(id);
+            set.retain(|key, value| {
+                let keep = field_kinds(key).is_some_and(|kinds| value.is_null() || kind.is_none_or(|k| kinds.has(k)));
+                if !keep {
+                    dropped.push(key.clone());
+                }
+                keep
+            });
+            for (field, keep_breaks) in [("name", false), ("font", false), ("text", true)] {
+                if let Some(Value::String(s)) = set.get_mut(field) {
+                    if let Cow::Owned(clean) = strip_controls(s, keep_breaks) {
+                        *s = clean;
+                    }
+                }
+            }
+            if let Some(blur) = set.get_mut("shadow").and_then(|s| s.get_mut("blur")) {
+                if blur.as_f64().is_some_and(|b| b > MAX_SHADOW_BLUR) {
+                    *blur = Value::from(MAX_SHADOW_BLUR);
+                }
+            }
+        }
+        NodeOp::Move { .. } | NodeOp::Delete { .. } => {}
+    }
+    dropped
+}
+
+/// The fields `node` holds (those its `Serialize` writes), read off without writing a value.
+fn present(node: &Node) -> Vec<&'static str> {
+    let mut fields = Vec::with_capacity(16);
+    let _ = node.serialize(FieldNames(&mut fields));
+    fields
+}
+
+/// A serializer that only records a struct's field names.
+struct FieldNames<'a>(&'a mut Vec<&'static str>);
+
+type NoValue = Impossible<(), serde::de::value::Error>;
+
+fn not_a_struct<T>() -> Result<T, serde::de::value::Error> {
+    Err(ser::Error::custom("not a node"))
+}
+
+macro_rules! not_a_struct {
+    ($($method:ident($($arg:ty),*)),* $(,)?) => {
+        $(fn $method(self, $(_: $arg),*) -> Result<(), Self::Error> { not_a_struct() })*
+    };
+}
+
+impl Serializer for FieldNames<'_> {
+    type Ok = ();
+    type Error = serde::de::value::Error;
+    type SerializeSeq = NoValue;
+    type SerializeTuple = NoValue;
+    type SerializeTupleStruct = NoValue;
+    type SerializeTupleVariant = NoValue;
+    type SerializeMap = NoValue;
+    type SerializeStruct = Self;
+    type SerializeStructVariant = NoValue;
+
+    not_a_struct!(
+        serialize_bool(bool), serialize_i8(i8), serialize_i16(i16), serialize_i32(i32), serialize_i64(i64),
+        serialize_u8(u8), serialize_u16(u16), serialize_u32(u32), serialize_u64(u64), serialize_f32(f32),
+        serialize_f64(f64), serialize_char(char), serialize_str(&str), serialize_bytes(&[u8]), serialize_none(),
+        serialize_unit(), serialize_unit_struct(&'static str), serialize_unit_variant(&'static str, u32, &'static str),
+    );
+
+    fn serialize_some<V: ?Sized + Serialize>(self, _: &V) -> Result<(), Self::Error> {
+        not_a_struct()
+    }
+    fn serialize_newtype_struct<V: ?Sized + Serialize>(self, _: &'static str, _: &V) -> Result<(), Self::Error> {
+        not_a_struct()
+    }
+    fn serialize_newtype_variant<V: ?Sized + Serialize>(self, _: &'static str, _: u32, _: &'static str, _: &V) -> Result<(), Self::Error> {
+        not_a_struct()
+    }
+    fn serialize_seq(self, _: Option<usize>) -> Result<NoValue, Self::Error> {
+        not_a_struct()
+    }
+    fn serialize_tuple(self, _: usize) -> Result<NoValue, Self::Error> {
+        not_a_struct()
+    }
+    fn serialize_tuple_struct(self, _: &'static str, _: usize) -> Result<NoValue, Self::Error> {
+        not_a_struct()
+    }
+    fn serialize_tuple_variant(self, _: &'static str, _: u32, _: &'static str, _: usize) -> Result<NoValue, Self::Error> {
+        not_a_struct()
+    }
+    fn serialize_map(self, _: Option<usize>) -> Result<NoValue, Self::Error> {
+        not_a_struct()
+    }
+    fn serialize_struct_variant(self, _: &'static str, _: u32, _: &'static str, _: usize) -> Result<NoValue, Self::Error> {
+        not_a_struct()
+    }
+    fn serialize_struct(self, _: &'static str, _: usize) -> Result<Self, Self::Error> {
+        Ok(self)
+    }
+}
+
+impl SerializeStruct for FieldNames<'_> {
+    type Ok = ();
+    type Error = serde::de::value::Error;
+
+    fn serialize_field<V: ?Sized + Serialize>(&mut self, key: &'static str, _: &V) -> Result<(), Self::Error> {
+        self.0.push(key);
+        Ok(())
+    }
+
+    fn end(self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::design::Shadow;
+    use serde_json::json;
+
+    fn node(body: Value) -> Node {
+        let mut body = body;
+        body["parent"] = json!("p");
+        Node::read(body).unwrap()
+    }
+
+    fn set(v: Value) -> Map<String, Value> {
+        v.as_object().unwrap().clone()
+    }
+
+    /// B8: an add refuses a field its kind does not use, naming the field and the kinds that do.
+    #[test]
+    fn kinds_take_only_their_fields() {
+        for (kind, field, value) in [
+            ("ellipse", "radius", json!(4)),
+            ("group", "layout", json!("row")),
+            ("rect", "src", json!("0123456789abcdef0123.png")),
+            ("text", "gradient", json!({"stops": [{"at": 0, "color": "#fff"}, {"at": 1, "color": "#000"}]})),
+            ("group", "shadow", json!({"blur": 4, "color": "#000"})),
+            ("group", "padding", json!([4])),
+            ("rect", "flip_x", json!(true)),
+            ("rect", "arc", json!({"sweep": 90})),
+            ("rect", "sides", json!(5)),
+            ("image", "fill", json!("#fff")),
+            ("page", "opacity", json!(0.5)),
+        ] {
+            let why = node(json!({"kind": kind, field: value})).check_new().unwrap_err();
+            let kinds = field_kinds(field).unwrap().names();
+            assert_eq!(why, format!("{field}: {kind} nodes do not use it (it is for {kinds})"));
+        }
+        assert_eq!(node(json!({"kind": "ellipse", "radius": 4})).check_new().unwrap_err(),
+            "radius: ellipse nodes do not use it (it is for frame, rect, sticky, image)");
+        // B99: a line turns by its points; B96: an icon draws its dash.
+        assert!(node(json!({"kind": "line", "points": [[0, 0], [9, 9]], "rotation": 30})).check_new().unwrap_err()
+            .starts_with("rotation: a page does not turn, and a line turns by its points"));
+        for ok in [
+            json!({"kind": "text", "text": "Hi", "shadow": {"blur": 4, "color": "#000"}}),
+            json!({"kind": "line", "points": [[0, 0], [9, 9]], "shadow": {"blur": 4, "color": "#000"}}),
+            json!({"kind": "rect", "padding": [8, 24], "text": "Go"}),
+            json!({"kind": "icon", "icon": "home", "color": "#fff", "dash": [2, 3]}),
+            json!({"kind": "path", "points": [[0, 0]], "rotation": 30, "fill": "#fff"}),
+            json!({"kind": "page", "fill": "#fff", "name": "Page 1"}),
+        ] {
+            assert_eq!(node(ok.clone()).check_new(), Ok(()), "{ok}");
+        }
+        // An update refuses the same, but a null clears any known field.
+        let ellipse = node(json!({"kind": "ellipse"}));
+        let radius = set(json!({"radius": 4}));
+        let after = ellipse.patched(&radius).unwrap();
+        assert!(Node::check_update(&ellipse, &radius, &after).unwrap_err().starts_with("radius: ellipse nodes"));
+        let clear = set(json!({"radius": null, "src": null, "width": 20}));
+        assert_eq!(Node::check_update(&ellipse, &clear, &ellipse.patched(&clear).unwrap()), Ok(()));
+        // A null for a name no field has does nothing: refused as the typo it usually is.
+        let typo = set(json!({"fil": null}));
+        assert!(Node::check_update(&ellipse, &typo, &ellipse).unwrap_err().starts_with("fil: not a node field"));
+    }
+
+    /// A node as stored is never held to the written rules: legacy rows stay editable.
+    #[test]
+    fn stored_nodes_are_not_held_to_new_rules() {
+        let group = node(json!({"kind": "group", "shadow": {"blur": 400, "color": "#000"}, "name": "a\u{1}b", "future": 1}));
+        assert!(group.validate().is_ok());
+        let x = set(json!({"x": 1}));
+        let moved = group.patched(&x).unwrap();
+        assert_eq!(Node::check_update(&group, &x, &moved), Ok(()));
+        // A null for a key it holds in `extra` removes it.
+        let gone = set(json!({"future": null}));
+        let cleaned = group.patched(&gone).unwrap();
+        assert!(cleaned.extra.is_empty());
+        assert_eq!(Node::check_update(&group, &gone, &cleaned), Ok(()));
+        // A copy for a fresh add drops what the kind does not use and what this build cannot read.
+        let copy = group.without_foreign();
+        assert_eq!((copy.shadow.clone(), copy.extra.len(), copy.name.as_deref()), (None, 0, Some("a\u{1}b")));
+        assert_eq!(copy.without_foreign(), copy);
+        let r = node(json!({"kind": "rect", "fill": "#fff", "w": 5}));
+        assert_eq!(r.without_foreign(), r, "nothing to drop");
+    }
+
+    /// Every serialized field has a row and every row names a field: a field added to `Node`
+    /// without one fails here (the start of W45's parity table).
+    #[test]
+    fn every_field_has_a_kinds_row() {
+        let schema = serde_json::to_value(schemars::schema_for!(Node)).unwrap();
+        let mut fields: Vec<&str> = schema["properties"].as_object().unwrap().keys().map(String::as_str).collect();
+        let mut rows: Vec<&str> = FIELDS.iter().map(|row| row.0).collect();
+        fields.sort_unstable();
+        rows.sort_unstable();
+        assert_eq!(rows, fields);
+        // And a node with every field set serializes only keys with rows.
+        let full: Node = serde_json::from_str(r##"{
+            "id": "n", "parent": "p", "kind": "rect", "name": "n", "x": 1, "y": 1, "w": 1, "h": 1, "fill": "#fff",
+            "stroke": "#000", "stroke_width": 1, "radius": 1, "opacity": 1, "shadow": {"color": "#000"}, "clip": true,
+            "hidden": false, "locked": false, "text": "t", "color": "#000", "font": "Geist", "font_size": 9,
+            "font_weight": 400, "italic": true, "underline": true, "strike": true, "align": "left", "line_height": 1,
+            "letter_spacing": 0, "w_sizing": "fixed", "h_sizing": "fixed", "layout": "row", "gap": 1, "padding": [1],
+            "justify": "start", "items": "start", "points": [[0, 0]], "arrow_start": true, "arrow_end": true,
+            "src": "0123456789abcdef0123.png", "fit": "cover", "rotation": 1, "sides": 3, "star": 0.5,
+            "gradient": {"stops": []}, "radii": [1, 1, 1, 1], "dash": [1], "blur": 1, "icon": "home", "from": "a",
+            "to": "b", "route": "straight", "closed": true, "smooth": true, "flip_x": true, "flip_y": true,
+            "arc": {}, "blend": "normal", "text_case": "upper"
+        }"##).unwrap();
+        let keys = present(&full);
+        assert_eq!(keys.len(), FIELDS.len(), "{keys:?}");
+        assert!(keys.iter().all(|k| field_kinds(k).is_some()));
+    }
+
+    /// B43: control characters are refused in a name, font or text a caller writes (a text keeps
+    /// its tabs and line breaks), and taken out of what the canvas sends.
+    #[test]
+    fn control_characters_are_refused() {
+        for (field, value) in [("name", "a\u{0}b"), ("font", "Geist\u{1}"), ("text", "a\u{0}b"), ("text", "bell\u{7}"), ("name", "del\u{7f}")] {
+            let why = node(json!({"kind": "text", "text": "x", field: value})).check_new().unwrap_err();
+            assert!(why.starts_with(&format!("{field}: no control characters")), "{why}");
+            let t = node(json!({"kind": "text", "text": "x"}));
+            let s = set(json!({field: value}));
+            assert!(Node::check_update(&t, &s, &t.patched(&s).unwrap()).unwrap_err().starts_with(field));
+        }
+        assert_eq!(node(json!({"kind": "text", "text": "one\ntwo\tthree\r\n", "name": "Title · 2"})).check_new(), Ok(()));
+        assert!(plain_label("Héllo · wörld") && !plain_label("a\nb"));
+        assert_eq!(strip_controls("a\u{0}b\tc\nd\u{7f}", true), "ab\tc\nd");
+        assert_eq!(strip_controls("a\u{0}b\tc\nd", false), "abcd");
+        assert!(matches!(strip_controls("clean", false), Cow::Borrowed(_)));
+    }
+
+    /// B72: a written shadow's blur stops at the node blur's 200; one already stored is not refused.
+    #[test]
+    fn shadow_blur_is_capped_like_blur() {
+        for (blur, inset, ok) in [(201.0, false, false), (201.0, true, false), (200.0, false, true), (0.0, true, true)] {
+            let mut n = node(json!({"kind": "ellipse"}));
+            n.shadow = Some(Shadow { x: 0.0, y: 0.0, blur, spread: 5000.0, color: "#000".into(), inset });
+            assert!(n.validate().is_ok());
+            match n.check_new() {
+                Ok(()) => assert!(ok, "{blur}"),
+                Err(why) => assert!(!ok && why == format!("shadow.blur: {blur} is outside 0 to 200"), "{why}"),
+            }
+        }
+        let e = node(json!({"kind": "ellipse"}));
+        let s = set(json!({"shadow": {"blur": 300, "color": "#000"}}));
+        assert!(Node::check_update(&e, &s, &e.patched(&s).unwrap()).unwrap_err().starts_with("shadow.blur"));
+    }
+
+    /// What the canvas sends is fitted to what a strict list takes (MODEL-SPEC §1 #33).
+    #[test]
+    fn fit_written_sends_only_what_a_strict_list_takes() {
+        let kinds = |id: &str| match id {
+            "img" => Some(NodeKind::Image),
+            "t" => Some(NodeKind::Text),
+            _ => None,
+        };
+        // The context bar's fill on an image, one `set` for a mixed selection.
+        let mut op = NodeOp::Update { id: "img".into(), set: set(json!({"fill": "#fff", "opacity": 0.5, "radius": null, "fil": 1})) };
+        assert_eq!(fit_written(&mut op, kinds), ["fill", "fil"]);
+        assert_eq!(op, NodeOp::Update { id: "img".into(), set: set(json!({"opacity": 0.5, "radius": null})) });
+        // Text: control characters out, line breaks kept; a shadow's blur within its cap.
+        let mut op = NodeOp::Update { id: "t".into(), set: set(json!({"text": "a\u{0}b\nc", "name": "x\ty", "shadow": {"blur": 900, "color": "#000"}})) };
+        assert!(fit_written(&mut op, kinds).is_empty());
+        let NodeOp::Update { set: fitted, .. } = &op else { panic!() };
+        assert_eq!(Value::Object(fitted.clone()), json!({"text": "ab\nc", "name": "xy", "shadow": {"blur": 200.0, "color": "#000"}}));
+        // An unknown target keeps every known field.
+        let mut op = NodeOp::Update { id: "new".into(), set: set(json!({"fill": "#fff", "nope": 1})) };
+        assert_eq!(fit_written(&mut op, kinds), ["nope"]);
+        // An add: a legacy group duplicated as it was stored.
+        let legacy = node(json!({"id": "g", "kind": "group", "shadow": {"blur": 4, "color": "#000"}, "name": "g\u{0}", "future": 1}));
+        let mut op = NodeOp::Add { node: legacy, index: None };
+        let mut dropped = fit_written(&mut op, kinds);
+        dropped.sort();
+        assert_eq!(dropped, ["future", "shadow"]);
+        let NodeOp::Add { node: fitted, .. } = &op else { panic!() };
+        assert_eq!((fitted.name.as_deref(), fitted.shadow.clone(), fitted.extra.len()), (Some("g"), None, 0));
+        assert_eq!(fitted.check_new(), Ok(()));
+        // Moves and deletes are left alone.
+        let mut op = NodeOp::Delete { id: "img".into() };
+        assert!(fit_written(&mut op, kinds).is_empty());
+    }
+}
