@@ -244,6 +244,8 @@ pub struct Board {
     /// The colour picked for each drawing tool (pen, highlighter, vector pen); none is automatic.
     pub(super) pens: RefCell<HashMap<Tool, String>>,
     pub(super) clip: RefCell<Vec<Node>>,
+    /// Where the context menu was opened, on the page: its Paste puts things there (E-board-15).
+    pub(super) menu_at: Cell<Option<(f64, f64)>>,
     /// A copied style (Ctrl+Alt+C), to lay on other layers.
     pub(super) style_clip: RefCell<Option<serde_json::Map<String, Value>>>,
     /// The vector pen's path being placed: its parent and its points, in page coordinates.
@@ -522,6 +524,7 @@ impl Board {
             pens: RefCell::default(),
             clip: RefCell::default(),
             style_clip: RefCell::default(),
+            menu_at: Cell::new(None),
             vector: RefCell::default(),
             title,
             terminal,
@@ -2375,6 +2378,7 @@ impl Board {
         add("cut", |b| b.cut());
         add("copy", |b| b.copy());
         add("paste", |b| b.paste());
+        add("paste-here", |b| b.paste_to(b.menu_at.take()));
         add("duplicate", |b| b.duplicate());
         add("delete", |b| b.delete_selection());
         add("group", |b| b.group(NodeKind::Group));
@@ -2670,10 +2674,23 @@ impl Board {
         self.commit(ops);
     }
 
-    /// Keep the first selected layer's style, to paste on others.
+    /// Keep a selected layer's style, to paste on others: the one clicked last, else the
+    /// topmost (E-board-14). With it, the fill and corner radius it shows, for a paste onto a
+    /// kind whose own default differs (TM-48).
     pub(super) fn copy_style(&self) {
-        let first = self.selected().into_iter().next();
-        let style = first.and_then(|id| relay_client::design::flip::style_of(&self.doc.scene.borrow(), &id));
+        let last = self.selection.borrow().last().cloned().filter(|id| self.doc.scene.borrow().node(id).is_some());
+        let Some(id) = last.or_else(|| self.selected().pop()) else {
+            return;
+        };
+        let scene = self.doc.scene.borrow();
+        let style = relay_client::design::flip::style_of(&scene, &id).map(|mut style| {
+            if let Some(n) = scene.node(&id) {
+                style.insert(SHOWN_FILL.into(), fill_of(n).map_or(Value::Null, Value::from));
+                style.insert(SHOWN_RADIUS.into(), json!(shapes::radius(n)));
+            }
+            style
+        });
+        drop(scene);
         if style.is_some() {
             *self.style_clip.borrow_mut() = style;
             self.refresh_actions();
@@ -2687,7 +2704,10 @@ impl Board {
             self.toast("Copy a style first (Ctrl+Alt+C)");
             return;
         };
-        let ops = relay_client::design::flip::paste_style(&self.doc.scene.borrow(), &self.selected(), &style);
+        let scene = self.doc.scene.borrow();
+        let mut ops = relay_client::design::flip::paste_style(&scene, &self.selected(), &style);
+        keep_shown_defaults(&mut ops, &style, |id| scene.node(id).map(|n| n.kind));
+        drop(scene);
         self.commit(ops);
     }
 
@@ -2705,17 +2725,29 @@ impl Board {
         }
     }
 
-    /// Put the selection on the clipboard; how many layers that was.
+    /// Put the selection on the clipboard; how many layers that was. It goes twice: as it
+    /// draws (`baked`: its style laid under it and its colour names as colours), for another
+    /// design, and as stored (`linked`), naming this design's colours and styles, for a paste
+    /// back into it.
     fn copy_quietly(&self) -> Option<usize> {
         let placed = self.placed();
-        let nodes = edit::gather(&self.doc.scene.borrow(), &placed, &self.selection.borrow());
-        if nodes.is_empty() {
+        let scene = self.doc.scene.borrow();
+        let linked = edit::gather(&scene, &placed, &self.selection.borrow());
+        if linked.is_empty() {
             return None;
         }
+        let nodes = edit::baked(&scene, &linked);
+        drop(scene);
         let texts: Vec<String> = nodes.iter().filter_map(|n| n.text.clone()).collect();
-        let bytes = serde_json::to_vec(&json!({"relay_design": 1, "nodes": nodes})).unwrap_or_default();
+        let clip = json!({
+            "relay_design": 1,
+            "design": self.doc.id,
+            "nodes": written(&nodes),
+            "linked": written(&linked),
+        });
+        let bytes = serde_json::to_vec(&clip).unwrap_or_default();
         *self.clip.borrow_mut() = nodes;
-        CLIP.with(|c| *c.borrow_mut() = self.clip.borrow().clone());
+        CLIP.with(|c| *c.borrow_mut() = clip);
         let providers = [
             gdk::ContentProvider::for_bytes(MIME, &glib::Bytes::from_owned(bytes)),
             gdk::ContentProvider::for_value(&texts.join("\n").to_value()),
@@ -2729,12 +2761,18 @@ impl Board {
     }
 
     pub(super) fn paste(&self) {
+        self.paste_to(None);
+    }
+
+    /// Paste the clipboard: layers copied on a canvas, a picture, files or words; at page point
+    /// `at` (the context menu's), inside the frame under it, or where pastes go.
+    pub(super) fn paste_to(&self, at: Option<(f64, f64)>) {
         let clipboard = self.canvas.clipboard();
         let formats = clipboard.formats();
         let weak = self.me.clone();
         if formats.contain_mime_type(MIME) && clipboard.is_local() {
-            let nodes = CLIP.with(|c| c.borrow().clone());
-            self.paste_nodes(nodes);
+            let clip = CLIP.with(|c| c.borrow().clone());
+            self.paste_nodes(self.clip_nodes(&clip), at);
             return;
         }
         if formats.contain_mime_type(MIME) {
@@ -2749,12 +2787,23 @@ impl Board {
                         _ => break,
                     }
                 }
-                let nodes = serde_json::from_slice::<Value>(&bytes)
-                    .ok()
-                    .and_then(|v| serde_json::from_value::<Vec<Node>>(v["nodes"].clone()).ok())
-                    .unwrap_or_default();
+                let clip = serde_json::from_slice::<Value>(&bytes).unwrap_or_default();
                 if let Some(b) = weak.upgrade() {
-                    b.paste_nodes(nodes);
+                    b.paste_nodes(b.clip_nodes(&clip), at);
+                }
+            });
+            return;
+        }
+        // Files copied in the file manager: placed as a drop places them (I-16).
+        if formats.contains_type(gdk::FileList::static_type()) {
+            glib::spawn_future_local(async move {
+                let Ok(value) = clipboard.read_value_future(gdk::FileList::static_type(), glib::Priority::DEFAULT).await else {
+                    return;
+                };
+                let paths: Vec<std::path::PathBuf> =
+                    value.get::<gdk::FileList>().map(|f| f.files().iter().filter_map(gio::prelude::FileExt::path).collect()).unwrap_or_default();
+                if let Some(b) = weak.upgrade().filter(|_| !paths.is_empty()) {
+                    super::assets::place_files(&b, paths, at);
                 }
             });
             return;
@@ -2763,7 +2812,7 @@ impl Board {
             glib::spawn_future_local(async move {
                 if let Ok(Some(texture)) = clipboard.read_texture_future().await {
                     if let Some(b) = weak.upgrade() {
-                        super::assets::place_texture(&b, texture, None);
+                        super::assets::place_texture(&b, texture, at);
                     }
                 }
             });
@@ -2772,7 +2821,7 @@ impl Board {
         glib::spawn_future_local(async move {
             if let Ok(Some(text)) = clipboard.read_text_future().await {
                 if let Some(b) = weak.upgrade() {
-                    b.paste_text(text.trim_end());
+                    b.paste_text(text.trim_end(), at);
                 }
             }
         });
@@ -2796,20 +2845,39 @@ impl Board {
         self.page.borrow().clone()
     }
 
-    fn paste_nodes(&self, nodes: Vec<Node>) {
+    /// The layers a clipboard holds for this design: as stored, naming its colours and styles,
+    /// when they were copied from it and it still holds every name they use; else as they drew.
+    fn clip_nodes(&self, clip: &Value) -> Vec<Node> {
+        clip_nodes(clip, self.doc.id, self.doc.scene.borrow().styles())
+    }
+
+    fn paste_nodes(&self, nodes: Vec<Node>, at: Option<(f64, f64)>) {
         if nodes.is_empty() {
             return;
         }
-        let target = self.paste_target();
-        let placed = self.placed();
         let roots: Vec<&Node> = nodes.iter().filter(|n| n.parent.as_deref().is_none_or(|p| !nodes.iter().any(|o| o.id == p))).collect();
+        let mut target = match at {
+            Some(p) => super::tools::container_at(self, p),
+            None => self.paste_target(),
+        };
+        // Pasting a copied frame with it still selected puts the copy beside it, not inside
+        // it (TM-41).
+        if let Some(root) = roots.iter().find(|n| n.id == target) {
+            target = root.parent.clone().filter(|p| self.doc.scene.borrow().node(p).is_some()).unwrap_or_else(|| self.page.borrow().clone());
+        }
+        let placed = self.placed();
         let Some(min_x) = roots.iter().map(|n| n.x).reduce(f64::min) else {
             return;
         };
         let min_y = roots.iter().map(|n| n.y).fold(f64::INFINITY, f64::min);
         let same = roots.iter().all(|n| n.parent.as_deref() == Some(target.as_str()))
             && roots.iter().all(|n| self.doc.scene.borrow().node(&n.id).is_some());
-        let (dx, dy) = if same {
+        let (dx, dy) = if let Some(p) = at {
+            // Their top left at the point (E-board-15), in the container's coordinates.
+            let origin = self.origin_of(&target);
+            let (lx, ly) = shapes::to_local(&self.doc.scene.borrow(), &placed, &target, p.0, p.1);
+            ((lx - origin.x - min_x).round(), (ly - origin.y - min_y).round())
+        } else if same {
             (16.0, 16.0)
         } else if target == *self.page.borrow() {
             // Centre of the view.
@@ -2828,7 +2896,7 @@ impl Board {
         }
     }
 
-    fn paste_text(&self, text: &str) {
+    fn paste_text(&self, text: &str, at: Option<(f64, f64)>) {
         // Only spaces or zero-width characters: a text that shows nothing (B42).
         if !relay_client::design::names::visible(text) {
             return;
@@ -2840,9 +2908,13 @@ impl Board {
         if cut {
             self.toast(&format!("Pasted the first {} characters: a text holds at most {max}", text.chars().count()));
         }
-        let target = self.paste_target();
+        let target = match at {
+            Some(p) => super::tools::container_at(self, p),
+            None => self.paste_target(),
+        };
         let (w, h) = self.size.get();
-        let (cx, cy) = self.to_page(w / 2.0, h / 2.0);
+        let (cx, cy) = at.unwrap_or_else(|| self.to_page(w / 2.0, h / 2.0));
+        let (cx, cy) = shapes::to_local(&self.doc.scene.borrow(), &self.placed(), &target, cx, cy);
         let origin = self.origin_of(&target);
         let mut n = Node::new(NodeKind::Text);
         n.id = self.doc.scene.borrow_mut().fresh_id(NodeKind::Text);
@@ -3021,7 +3093,7 @@ fn title_set(typed: &str, shown: &str) -> Option<String> {
 
 thread_local! {
     /// The nodes last copied in this process, for a paste whose clipboard is our own.
-    static CLIP: RefCell<Vec<Node>> = const { RefCell::new(Vec::new()) };
+    static CLIP: RefCell<Value> = const { RefCell::new(Value::Null) };
     /// Whether the inspector and the pages and layers panel show, kept for the session from
     /// one design (and window) to the next.
     static INSPECTOR_ON: Cell<bool> = const { Cell::new(true) };
@@ -3166,6 +3238,61 @@ pub fn display_name(n: &Node) -> String {
     relay_client::design::names::display_name(n)
 }
 
+/// The keys a copied style carries besides its fields, which `flip::paste_style` passes over:
+/// the fill and corner radius its layer showed.
+const SHOWN_FILL: &str = "_fill";
+const SHOWN_RADIUS: &str = "_radius";
+
+/// A pasted style's `fill: null` or `radius: null` means "its kind's default", which on another
+/// kind is another look (a white frame's style turning a rect grey, a rect's square corners
+/// rounding on a sticky): there it writes what the copied layer showed (TM-48). A style with
+/// a named style of its own keeps the nulls, which let that style show.
+fn keep_shown_defaults(ops: &mut [NodeOp], style: &Map<String, Value>, kind_of: impl Fn(&str) -> Option<NodeKind>) {
+    if !style.get("style").unwrap_or(&Value::Null).is_null() {
+        return;
+    }
+    let from: Option<NodeKind> = style.get("kind").cloned().and_then(|k| serde_json::from_value(k).ok());
+    let Some(from) = from else {
+        return;
+    };
+    for op in ops.iter_mut() {
+        let NodeOp::Update { id, set } = op else {
+            continue;
+        };
+        let Some(kind) = kind_of(id).filter(|k| *k != from) else {
+            continue;
+        };
+        let bare = |k: NodeKind| fill_of(&Node::new(k));
+        if set.get("fill").is_some_and(Value::is_null) && bare(kind) != bare(from) {
+            if let Some(shown) = style.get(SHOWN_FILL).filter(|v| v.is_string()) {
+                set.insert("fill".into(), shown.clone());
+            }
+        }
+        if set.get("radius").is_some_and(Value::is_null) && shapes::default_radius(kind) != shapes::default_radius(from) {
+            if let Some(shown) = style.get(SHOWN_RADIUS).and_then(Value::as_f64) {
+                set.insert("radius".into(), json!(shown));
+            }
+        }
+    }
+}
+
+/// Nodes as JSON, as the engine writes them (`Node::to_map`: what this build cannot read kept).
+fn written(nodes: &[Node]) -> Value {
+    Value::Array(nodes.iter().map(|n| Value::Object(n.to_map())).collect())
+}
+
+/// The layers clipboard JSON `clip` holds for design `design`: its `linked` copy, as stored,
+/// when it was copied from that design and every colour and style its layers name is there
+/// still; else its `nodes`, as they drew. Each read as the engine reads a node.
+fn clip_nodes(clip: &Value, design: i64, styles: &relay_bus::design::Styles) -> Vec<Node> {
+    let read = |v: &Value| -> Option<Vec<Node>> { v.as_array()?.iter().map(|n| Node::read(n.clone()).ok()).collect() };
+    let linked = (clip["design"].as_i64() == Some(design)).then(|| read(&clip["linked"])).flatten();
+    match linked.filter(|nodes| nodes.iter().all(|n| styles.check(n).is_ok())) {
+        Some(nodes) => nodes,
+        None => read(&clip["nodes"]).unwrap_or_default(),
+    }
+}
+
 /// Where layer `id` shows on the page, as a box: `shapes::shown_rect` (its drawing, turned by its
 /// own turn) carried out through each turned frame it is in.
 pub(super) fn shown_box(scene: &Scene, placed: &Placed, id: &str) -> Option<Rect> {
@@ -3287,6 +3414,47 @@ mod tests {
         let mut big = row(4, 7, true);
         big["payload"] = Value::Null;
         assert_eq!(pick_agent_change(&[big], 7), Some(AgentChange::Undoable(4)));
+    }
+
+    fn rect(id: &str, fill: &str) -> Node {
+        let mut n = Node::new(NodeKind::Rect);
+        n.id = id.into();
+        n.parent = Some("p1".into());
+        n.fill = Some(fill.into());
+        n
+    }
+
+    #[test]
+    fn a_paste_names_this_designs_colours_only_when_it_holds_them() {
+        let clip = json!({"relay_design": 1, "design": 4, "nodes": written(&[rect("a", "#FF0000")]), "linked": written(&[rect("a", "$brand")])});
+        let mut styles = relay_bus::design::Styles::default();
+        assert_eq!(clip_nodes(&clip, 4, &styles)[0].fill.as_deref(), Some("#FF0000"), "the name is gone: as it drew");
+        styles.colors.insert("brand".into(), "#FF0000".into());
+        assert_eq!(clip_nodes(&clip, 4, &styles)[0].fill.as_deref(), Some("$brand"), "same design: as stored");
+        assert_eq!(clip_nodes(&clip, 5, &styles)[0].fill.as_deref(), Some("#FF0000"), "another design: as it drew");
+        let old = json!({"relay_design": 1, "nodes": [{"id": "a", "kind": "rect", "parent": "p1"}]});
+        assert_eq!(clip_nodes(&old, 4, &styles).len(), 1, "an older clipboard reads");
+    }
+
+    #[test]
+    fn a_pasted_style_keeps_the_fill_and_corners_its_layer_showed() {
+        let mut frame = Node::new(NodeKind::Frame);
+        frame.id = "f".into();
+        let mut style = relay_client::design::flip::style_of(&Scene::new(vec![frame.clone()]), "f").unwrap();
+        style.insert(SHOWN_FILL.into(), json!("#FFFFFF"));
+        style.insert(SHOWN_RADIUS.into(), json!(0.0));
+        let set = |pairs: &[(&str, Value)]| pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect::<Map<String, Value>>();
+        let mut ops = vec![
+            NodeOp::Update { id: "r".into(), set: set(&[("fill", Value::Null)]) },
+            NodeOp::Update { id: "s".into(), set: set(&[("radius", Value::Null)]) },
+            NodeOp::Update { id: "g".into(), set: set(&[("fill", Value::Null)]) },
+        ];
+        let kinds = |id: &str| Some(match id { "r" => NodeKind::Rect, "s" => NodeKind::Sticky, _ => NodeKind::Frame });
+        keep_shown_defaults(&mut ops, &style, kinds);
+        let fill = |op: &NodeOp| match op { NodeOp::Update { set, .. } => set.clone(), _ => Map::new() };
+        assert_eq!(fill(&ops[0])["fill"], json!("#FFFFFF"), "a white frame's style on a rect is white");
+        assert_eq!(fill(&ops[1])["radius"], json!(0.0), "square corners stay square on a sticky");
+        assert_eq!(fill(&ops[2])["fill"], Value::Null, "the same kind keeps its default");
     }
 
     #[test]

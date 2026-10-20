@@ -1541,6 +1541,7 @@ fn hover(b: &Rc<Board>, x: f64, y: f64) {
 
 fn context_menu(b: &Rc<Board>, x: f64, y: f64) {
     let p = b.to_page(x, y);
+    b.menu_at.set(Some(p));
     let placed = b.placed();
     let page = b.page.borrow().clone();
     let deep = hit::chain(&b.doc.scene.borrow(), &placed, &page, p.0, p.1, 4.0 / b.cam.get().zoom).last().cloned();
@@ -1561,7 +1562,7 @@ fn context_menu(b: &Rc<Board>, x: f64, y: f64) {
     menu.append_section(None, &section(&[
         item("Cut", "cut", Some("<Control>x")),
         item("Copy", "copy", Some("<Control>c")),
-        item("Paste", "paste", Some("<Control>v")),
+        item("Paste here", "paste-here", Some("<Control>v")),
         item("Duplicate", "duplicate", Some("<Control>d")),
         item("Delete", "delete", Some("Delete")),
     ]));
