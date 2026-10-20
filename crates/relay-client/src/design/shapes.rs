@@ -201,8 +201,10 @@ pub fn radius(n: &Node) -> f64 {
 }
 
 /// The edits that give `ids` corner radius `v` (0 or more) on every corner: `radius` null where
-/// `v` is the kind's default, so a sticky at 6 keeps its default and a sticky at 0 is written,
-/// and `radii` cleared. Nodes whose kind has no corners are left out.
+/// `v` is the kind's default and the node has no `style`, so an unstyled sticky at 6 keeps its
+/// default and a sticky at 0 is written, and `radii` cleared. A styled node is written `v`: its
+/// style lays its radius under a node that sets none, so null would hand the corners back to
+/// it. Nodes whose kind has no corners are left out.
 pub fn radius_ops(scene: &Scene, ids: &[String], v: f64) -> Vec<NodeOp> {
     let v = if v.is_finite() { v.clamp(0.0, MAX_COORD) } else { 0.0 };
     ids.iter()
@@ -210,7 +212,8 @@ pub fn radius_ops(scene: &Scene, ids: &[String], v: f64) -> Vec<NodeOp> {
         .filter(|n| takes(n.kind, "radius"))
         .map(|n| {
             let mut set = Map::new();
-            set.insert("radius".into(), if v == default_radius(n.kind) { Value::Null } else { json!(v) });
+            let default = n.style.is_none() && v == default_radius(n.kind);
+            set.insert("radius".into(), if default { Value::Null } else { json!(v) });
             set.insert("radii".into(), Value::Null);
             NodeOp::Update { id: n.id.clone(), set }
         })
@@ -1030,6 +1033,17 @@ mod tests {
         assert_eq!(sets(0.0), [("r".into(), json!({"radius": null, "radii": null})), ("s".into(), json!({"radius": 0.0, "radii": null}))], "an ellipse has no corners");
         assert_eq!(sets(6.0), [("r".into(), json!({"radius": 6.0, "radii": null})), ("s".into(), json!({"radius": null, "radii": null}))], "a sticky's 6 is its default");
         assert_eq!(sets(-3.0)[1].1, json!({"radius": 0.0, "radii": null}));
+        // A styled node's style lays its radius under one that sets none, so null would hand
+        // its corners back to the style: the value is written.
+        let mut styled = s.clone();
+        for id in ["r", "s"] {
+            styled.node_mut(id).unwrap().style = Some("card".into());
+        }
+        let ops = radius_ops(&styled, &ids, 0.0).into_iter().chain(radius_ops(&styled, &ids, 6.0)).map(|op| match op {
+            NodeOp::Update { set, .. } => Value::Object(set),
+            other => panic!("{other:?}"),
+        });
+        assert_eq!(ops.collect::<Vec<_>>(), [json!({"radius": 0.0, "radii": null}), json!({"radius": 0.0, "radii": null}), json!({"radius": 6.0, "radii": null}), json!({"radius": 6.0, "radii": null})]);
     }
 
     #[test]
