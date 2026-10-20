@@ -3,6 +3,9 @@
 //! page and the selected layers by id, with a picture of them, so the agent can read them with
 //! `design.get` and change them with `design.apply` while you watch.
 //!
+//! When what is asked about moves, the picture is a contact sheet of its motion, and the prompt
+//! says so with the frames' times (feature-motion §3).
+//!
 //! An agent at its prompt (idle) has the prompt typed in. One at work (running) gets it as
 //! priority mail, which it reads with its next tool call, rather than keystrokes queued behind
 //! its turn. One waiting on the person (blocked: a permission prompt or a question) or still
@@ -532,6 +535,9 @@ pub struct Prompt<'a> {
     /// The stored picture's path; `Err` with why one asked for could not be attached; `Ok(None)`
     /// when none was asked for.
     pub picture: Result<Option<&'a str>, &'a str>,
+    /// What is asked about moves: the times of the contact sheet's frames when the picture is
+    /// one, none when there is no sheet. `None` when it is still.
+    pub motion: Option<&'a [f64]>,
     pub request: &'a str,
 }
 
@@ -585,6 +591,9 @@ pub fn prompt(p: &Prompt) -> String {
     if let Err(why) = p.picture {
         out.push_str(&format!(" (A picture was requested but could not be attached: {}.)", clean(why)));
     }
+    if let Some(times) = p.motion {
+        out.push_str(&motion_note(times, picture.is_some()));
+    }
     let read = if ids.is_empty() || p.selected.len() > ids.len() {
         format!("{{\"design_id\":{design},\"page\":\"{page}\"}}")
     } else {
@@ -592,6 +601,18 @@ pub fn prompt(p: &Prompt) -> String {
     };
     out.push_str(&format!(" Request: {} — read it with design.get {read} and change it with design.apply.", clean_request(p.request)));
     out
+}
+
+/// What the prompt says of motion: the contact sheet's frames, or that it moves and how to see
+/// it when there is no sheet.
+fn motion_note(times: &[f64], sheet: bool) -> String {
+    let words: Vec<String> = times.iter().map(|t| format!("{}", t.round() as i64)).collect();
+    match words.as_slice() {
+        [many @ .., last] if sheet && !many.is_empty() => {
+            format!(" It moves: the picture is a contact sheet of {} frames at {} and {last} ms, left to right then down.", times.len(), many.join(", "))
+        }
+        _ => " It moves: design.render with \"frames\" shows its motion as a contact sheet, \"at_ms\" one moment of it.".to_string(),
+    }
 }
 
 /// Ask the design's terminal at once, with a picture: the smoke harness's `ask:` step. It
@@ -627,14 +648,25 @@ fn send_request(b: &Rc<Board>, session: String, request: String, with_picture: b
         return;
     };
     let ids = b.selected();
-    // On its real ground, sized for a model (TM-26, I-8); the encode and the write are off the
-    // main thread.
+    let moving = {
+        let scene = b.doc.scene.borrow();
+        export::moves(&scene, &b.page.borrow(), &ids)
+    };
+    // On its real ground, sized for a model (TM-26, I-8): a contact sheet of six frames when it
+    // moves. The encode and the write are off the main thread.
     let rendered = with_picture.then(|| {
-        export::extent(b, &ids).ok_or(export::Failure::Empty).and_then(|area| export::render(b, &ids, true, export::ask_scale(&area))).map_err(|e| match e {
+        let drawn = if moving {
+            export::contact_sheet(b, &ids, true, 4.0, export::ASK_SIDE, export::ASK_FRAMES).map(|(texture, times)| (texture, Some(times)))
+        } else {
+            export::extent(b, &ids).ok_or(export::Failure::Empty).and_then(|area| export::render(b, &ids, true, export::ask_scale(&area))).map(|(texture, _)| (texture, None))
+        };
+        drawn.map_err(|e| match e {
             export::Failure::Empty => "nothing chosen shows anything to picture",
             export::Failure::NoRenderer => "the canvas isn't ready to draw yet",
+            export::Failure::Still => "nothing chosen moves",
         })
     });
+    let sheet_times = rendered.as_ref().and_then(|r| r.as_ref().ok()).and_then(|(_, times)| times.clone());
     let selected: Vec<(String, String, String)> = {
         let scene = b.doc.scene.borrow();
         ids.iter().filter_map(|id| scene.node(id).map(|n| (id.clone(), n.kind.name().to_string(), display_name(n)))).collect()
@@ -676,6 +708,8 @@ fn send_request(b: &Rc<Board>, session: String, request: String, with_picture: b
             page_name: &page_name,
             selected: &selected,
             picture: picture.as_ref().map(Option::as_deref).map_err(String::as_str),
+            // The sheet's times once it is attached; else only that it moves.
+            motion: moving.then(|| if matches!(picture, Ok(Some(_))) { sheet_times.as_deref().unwrap_or_default() } else { &[][..] }),
             request: &request,
         });
         // Ok(true): sent whole; Ok(false): typed, but its Enter did not go.
@@ -737,7 +771,7 @@ mod tests {
     use super::*;
 
     fn ask<'a>(selected: &'a [(String, String, String)], picture: Result<Option<&'a str>, &'a str>, request: &'a str) -> String {
-        prompt(&Prompt { title: "Settings", design: 12, page: "page-7", page_name: "Flows", selected, picture, request })
+        prompt(&Prompt { title: "Settings", design: 12, page: "page-7", page_name: "Flows", selected, picture, motion: None, request })
     }
 
     fn layer(id: &str, kind: &str, name: &str) -> (String, String, String) {
@@ -771,6 +805,7 @@ mod tests {
             page_name: "P \"1\"\r",
             selected: &selected,
             picture: Ok(None),
+            motion: None,
             request: "one\u{3}\n\n\ttwo\u{9b}",
         });
         assert!(!p.chars().any(char::is_control), "{p:?}");
@@ -798,6 +833,31 @@ mod tests {
         assert!(p.contains("(A picture was requested but could not be attached: nothing chosen shows anything to picture.)"), "{p}");
         assert!(!p.contains("Picture of it"));
         assert!(!ask(&selected, Ok(None), "Fix it").contains("picture"));
+    }
+
+    #[test]
+    fn the_prompt_says_when_it_moves() {
+        // feature-motion §3: Ask attaches a contact sheet of what moves, and says how to read it.
+        let selected = [layer("hero", "frame", "Hero")];
+        let times = [0.0, 600.0, 1200.0, 1800.0, 2400.0, 3000.0];
+        let with = |picture, motion| prompt(&Prompt { title: "Settings", design: 12, page: "page-7", page_name: "Flows", selected: &selected, picture, motion, request: "Slower" });
+        let p = with(Ok(Some("/a/sheet.png")), Some(&times[..]));
+        assert!(p.contains("Picture of it: \"/a/sheet.png\"."), "{p}");
+        assert!(p.contains(" It moves: the picture is a contact sheet of 6 frames at 0, 600, 1200, 1800, 2400 and 3000 ms, left to right then down."), "{p}");
+        // The note comes before the request, which stays last.
+        assert!(p.find("It moves").unwrap() < p.find("Request: Slower").unwrap(), "{p}");
+        // Odd times are said to the ms.
+        let thirds = [0.0, 333.333_333, 666.666_667, 1000.0];
+        assert!(with(Ok(Some("/a/s.png")), Some(&thirds[..])).contains("4 frames at 0, 333, 667 and 1000 ms"));
+        // Moving with no sheet (none asked for, or it could not be drawn): how to see it.
+        for missing in [Ok(None), Err("the canvas isn't ready to draw yet")] {
+            let p = with(missing, Some(&[][..]));
+            assert!(p.contains("It moves: design.render with \"frames\""), "{p}");
+            assert!(!p.contains("contact sheet of"), "{p}");
+        }
+        // Still: not a word of motion.
+        assert!(!with(Ok(Some("/a/p.png")), None).contains("moves"));
+        assert!(!p.chars().any(char::is_control));
     }
 
     #[test]

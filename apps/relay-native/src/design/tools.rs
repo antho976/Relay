@@ -442,10 +442,23 @@ fn zoom_gesture(b: &Rc<Board>) -> gtk::GestureZoom {
 /// A whole pointer drag from page point `from` to `to`, as the pointer would make it: for the
 /// smoke harness's scripted runs (`drive.rs`). A drag of no length is a click.
 pub(super) fn simulate(b: &Rc<Board>, from: (f64, f64), to: (f64, f64), mods: gdk::ModifierType) {
+    press(b, from, mods);
+    release(b, from, to, mods);
+}
+
+/// The pointer pressed at page point `p`: the smoke's `press:` step, which with `release:` lets
+/// a press last frames, as a person's does (I-12).
+pub(super) fn press(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
+    let (x, y) = b.cam.get().to_screen(p.0, p.1);
+    begin(b, x, y, mods);
+}
+
+/// The pointer, pressed at page point `from`, moved to `to` in eight steps when that is
+/// elsewhere, and let go there.
+pub(super) fn release(b: &Rc<Board>, from: (f64, f64), to: (f64, f64), mods: gdk::ModifierType) {
     let cam = b.cam.get();
     let (x0, y0) = cam.to_screen(from.0, from.1);
     let (x1, y1) = cam.to_screen(to.0, to.1);
-    begin(b, x0, y0, mods);
     if (x1 - x0).abs() + (y1 - y0).abs() > 0.0 {
         for i in 1..=8 {
             let t = i as f64 / 8.0;

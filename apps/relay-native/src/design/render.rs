@@ -9,6 +9,11 @@
 //! a frame can paint between them; decoding, the PNG and base64 run off the main thread (§6.3).
 //! The job always reads the design afresh and draws with a painter of its own, never a board's
 //! (§6.4). An agent's render says so on every open board showing that design (decision 3).
+//!
+//! With `at_ms` the picture is posed at that time of the motion; with `frames` it is a contact
+//! sheet of that many frames over the span of what moves in scope, its times answered in
+//! `times_ms` (feature-motion §5). Both are drawn through export.rs's posing and sheet code, as
+//! the board's own exports are; the boxes and issues stay at rest.
 
 use super::export;
 use super::paint::Painter;
@@ -21,7 +26,7 @@ use gtk4 as gtk;
 use relay_bus::design::{NodeKind, Styles, MAX_NAME};
 use relay_bus::envelope::Event;
 use relay_bus::ops::design::{AnswerIn, GetOut, RenderBoxes, RenderDrawn, RenderFailure, RenderIssue, RenderRect, RenderRequest, RenderTimings, SERVE_FONTS_MAX};
-use relay_client::design::{boxes, layout, Scene};
+use relay_client::design::{boxes, layout, motion, Scene};
 use serde_json::json;
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
@@ -44,8 +49,6 @@ const RETRY_MOST: Duration = Duration::from_secs(30);
 const MAX_WARNINGS: usize = 20;
 const ISSUE_IDS: usize = 8;
 const NOTE_CHARS: usize = 300;
-/// Why a request for a time of the motion, or a contact sheet, has no picture yet.
-const NO_MOTION: &str = "this desktop app cannot play motion yet";
 
 thread_local! {
     /// The running lease; a new one replaces it.
@@ -207,9 +210,6 @@ fn ms(since: Instant) -> f64 {
 
 /// One request: what was drawn, or why not; `None` when its deadline passed on the way.
 async fn job(ui: &Rc<Ui>, client: &Client, req: &RenderRequest) -> Option<Result<RenderDrawn, RenderFailure>> {
-    if let Some(refused) = motion_refused(req) {
-        return Some(Err(refused));
-    }
     // R1, R2: a fresh read, decoded and built off the main thread.
     let started = Instant::now();
     let got = match client.request(&ui.rt, "design.get", json!({"design_id": req.design_id, "page": req.page})).await {
@@ -235,6 +235,8 @@ async fn job(ui: &Rc<Ui>, client: &Client, req: &RenderRequest) -> Option<Result
     // picture that failed is tried again next time.
     painter.retain(&scene);
     painter.retain_pictures(&scene, true);
+    // What a posed picture kept of the still layers is for its clocks alone.
+    painter.clear_stills();
     drawn
 }
 
@@ -266,7 +268,15 @@ async fn draw(ui: &Rc<Ui>, painter: &Rc<Painter>, req: &RenderRequest, scene: &S
     // R5: boxes, issues and the area; the area and the issues measure, so they stay here.
     yield_now().await;
     let t = Instant::now();
-    let area = export::area_of(painter, scene, &placed, page, &ids);
+    // The motion asked for: the clocks of the page's movers, and the times pictured (none: at
+    // rest). The area holds the movers wherever they are at those times.
+    let (clocks, times, note) = posed_times(req, scene, painter, page, &ids);
+    warnings.extend(note.map(str::to_string));
+    let sheet = req.frames.is_some() && !times.is_empty();
+    let area = match &clocks {
+        Some(clocks) => export::posed_area(&**painter, scene, &placed, page, &ids, clocks, &times),
+        None => export::area_of(painter, scene, &placed, page, &ids),
+    };
     let boxes = boxes::boxes(scene, &placed, page, &ids, req.boxes_limit as usize);
     let (issues, issue_count) = boxes::issues(scene, &placed, &**painter, page, &ids);
     trace("boxes", t);
@@ -274,15 +284,21 @@ async fn draw(ui: &Rc<Ui>, painter: &Rc<Painter>, req: &RenderRequest, scene: &S
     let Some(area) = area else {
         warnings.push(nothing_visible(&ids).to_string());
         let timings = RenderTimings { read, layout: layout_ms, paint: 0.0, encode: 0.0 };
-        return Some(Ok(shaped(rev, RenderRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }, req.scale, None, boxes, issues, issue_count, warnings, timings)));
+        return Some(Ok(shaped(rev, RenderRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }, req.scale, None, boxes, issues, issue_count, warnings, timings, Vec::new())));
     };
-    let mut scale = boxes::fit_scale(&area, req.scale, req.max_side, boxes::MAX_AREA_PX);
+    // A sheet's scale covers the whole sheet, its gutters and labels with it.
+    let fit = |want: f64| match sheet {
+        true => export::sheet_fit(&area, times.len(), want, req.max_side, boxes::MAX_AREA_PX).1,
+        false => boxes::fit_scale(&area, want, req.max_side, boxes::MAX_AREA_PX),
+    };
+    let mut scale = fit(req.scale);
     if scale < req.scale - 1e-9 {
         warnings.push(format!("drawn at {scale:.2}×, to fit max_side {} and 4 megapixels", req.max_side));
     }
     let mut timings = RenderTimings { read, layout: layout_ms, paint: 0.0, encode: 0.0 };
+    let times_ms = if sheet { times.clone() } else { Vec::new() };
     if !req.png {
-        return Some(Ok(shaped(rev, boxes::render_rect(&area), scale, None, boxes, issues, issue_count, warnings, timings)));
+        return Some(Ok(shaped(rev, boxes::render_rect(&area), scale, None, boxes, issues, issue_count, warnings, timings, times_ms)));
     }
     let mut png_b64 = None;
     for retry in [false, true] {
@@ -292,12 +308,43 @@ async fn draw(ui: &Rc<Ui>, painter: &Rc<Painter>, req: &RenderRequest, scene: &S
         }
         yield_now().await;
         let t = Instant::now();
-        let Some((node, area)) = export::picture_of(painter, scene, &placed, page, &ids, true, scale) else {
+        let drawn = match &clocks {
+            // A sheet's cells one at a time, each after a yield, so a frame can paint between.
+            Some(clocks) if sheet => {
+                let (layout, _) = export::sheet_fit(&area, times.len(), scale, req.max_side, boxes::MAX_AREA_PX);
+                let mut cells = Vec::with_capacity(times.len());
+                for at in &times {
+                    if expired(req, now_ms()) {
+                        return None;
+                    }
+                    let one = Instant::now();
+                    let posing = export::posing_at(scene, clocks, *at);
+                    cells.push(export::or_blank(export::picture_in(painter, scene, &placed, page, &ids, true, scale, &area, Some(posing))));
+                    timings.paint += ms(one);
+                    yield_now().await;
+                }
+                let one = Instant::now();
+                let node = export::sheet_node(&ui.window, &layout, &cells, &times, &export::sheet_ground(scene, page));
+                timings.paint += ms(one);
+                node.map(|node| (node, layout.size()))
+            }
+            Some(clocks) => {
+                let posing = export::posing_at(scene, clocks, times.first().copied().unwrap_or(0.0));
+                let node = export::picture_in(painter, scene, &placed, page, &ids, true, scale, &area, Some(posing));
+                timings.paint += ms(t);
+                node.map(|node| (node, boxes::picture_size(&area, scale)))
+            }
+            None => {
+                let node = export::picture_in(painter, scene, &placed, page, &ids, true, scale, &area, None);
+                timings.paint += ms(t);
+                node.map(|node| (node, boxes::picture_size(&area, scale)))
+            }
+        };
+        let Some((node, (w, h))) = drawn else {
             warnings.push(nothing_visible(&ids).to_string());
             break;
         };
         trace("content", t);
-        timings.paint += ms(t);
         // R7: drawn by the window's renderer, and downloaded here, so the worker does CPU work
         // only, whatever the renderer.
         if expired(req, now_ms()) {
@@ -308,7 +355,6 @@ async fn draw(ui: &Rc<Ui>, painter: &Rc<Painter>, req: &RenderRequest, scene: &S
         let Some(renderer) = ui.window.renderer() else {
             return Some(Err(RenderFailure { code: "design.render.no_surface".into(), message: "Relay's window has no renderer: it is not on screen".into() }));
         };
-        let (w, h) = boxes::picture_size(&area, scale);
         let texture = renderer.render_texture(&node, Some(&graphene::Rect::new(0.0, 0.0, w as f32, h as f32)));
         let downloader = gdk::TextureDownloader::new(&texture);
         let format = downloader.format();
@@ -333,17 +379,41 @@ async fn draw(ui: &Rc<Ui>, painter: &Rc<Painter>, req: &RenderRequest, scene: &S
         if retry {
             return Some(Err(failed(format!("the picture is {size} bytes as a PNG even at {scale:.2}×, over {} MiB", PNG_MAX >> 20))));
         }
-        scale = retry_scale(scale, size);
+        // A sheet's gutters and labels do not shrink with it: fit it again at the lower scale.
+        scale = fit(retry_scale(scale, size));
         warnings.push(format!("drawn at {scale:.2}×, as a PNG at most {} MiB", PNG_MAX >> 20));
     }
-    Some(Ok(shaped(rev, boxes::render_rect(&area), scale, png_b64, boxes, issues, issue_count, warnings, timings)))
+    Some(Ok(shaped(rev, boxes::render_rect(&area), scale, png_b64, boxes, issues, issue_count, warnings, timings, times_ms)))
 }
 
-/// A time of the motion or a contact sheet: refused until this app can pose a design
-/// (native-motion-export).
-fn motion_refused(req: &RenderRequest) -> Option<RenderFailure> {
-    (req.at_ms.is_some() || req.frames.is_some()).then(|| failed(NO_MOTION.into()))
+/// The clocks and times `req` pictures `ids` (none: the page) at, and a warning: at rest with
+/// neither `at_ms` nor `frames`; else the page's clocks and the times [`times_for`] the span of
+/// what moves in scope.
+fn posed_times(req: &RenderRequest, scene: &Scene, painter: &Painter, page: &str, ids: &[String]) -> (Option<Rc<motion::Clocks>>, Vec<f64>, Option<&'static str>) {
+    if req.at_ms.is_none() && req.frames.is_none() {
+        return (None, Vec::new(), None);
+    }
+    let clocks = export::clocks_of(painter, scene, page);
+    let (times, note) = times_for(req, export::span_of(scene, &clocks, page, ids).0);
+    (Some(clocks), times, note)
 }
+
+/// The times `req` pictures over a motion `span_ms` long: `at_ms` alone, or `frames` times
+/// evenly from its start to its end (`motion::sheet_times`); and a warning when nothing in
+/// scope moves, a sheet of which is one picture at rest (no times).
+fn times_for(req: &RenderRequest, span_ms: f64) -> (Vec<f64>, Option<&'static str>) {
+    let still = span_ms <= 0.0;
+    match (req.at_ms, req.frames) {
+        (Some(at), _) => (vec![at], still.then_some(STILL_AT)),
+        (None, Some(_)) if still => (Vec::new(), Some(STILL_SHEET)),
+        (None, Some(n)) => (motion::sheet_times(span_ms, n), None),
+        (None, None) => (Vec::new(), None),
+    }
+}
+
+/// The warnings for a time, or a contact sheet, of what does not move.
+const STILL_AT: &str = "nothing in scope moves, so at_ms shows it at rest; give it motion first";
+const STILL_SHEET: &str = "nothing in scope moves, so this is one picture at rest, not a contact sheet; give it motion first";
 
 /// The first of `nodes` the fresh read does not hold: removed after the engine's check.
 fn missing_node(scene: &Scene, nodes: &[String]) -> Option<RenderFailure> {
@@ -402,14 +472,14 @@ fn nothing_visible(ids: &[String]) -> &'static str {
 /// What was drawn, as the engine takes it: [`boxes::FIELDS`] rows, issues and warnings cut to
 /// what it lists.
 #[allow(clippy::too_many_arguments)]
-fn shaped(rev: i64, area: RenderRect, scale: f64, png_b64: Option<String>, boxes: RenderBoxes, issues: Vec<RenderIssue>, issue_count: u32, warnings: Vec<String>, timings_ms: RenderTimings) -> RenderDrawn {
+fn shaped(rev: i64, area: RenderRect, scale: f64, png_b64: Option<String>, boxes: RenderBoxes, issues: Vec<RenderIssue>, issue_count: u32, warnings: Vec<String>, timings_ms: RenderTimings, times_ms: Vec<f64>) -> RenderDrawn {
     let issues = issues
         .into_iter()
         .take(boxes::MAX_ISSUES)
         .map(|i| RenderIssue { code: i.code, ids: i.ids.into_iter().take(ISSUE_IDS).collect(), message: cut(i.message) })
         .collect();
     let warnings = warnings.into_iter().take(MAX_WARNINGS).map(cut).collect();
-    RenderDrawn { rev, area, scale, png_b64, boxes, issues, issue_count, warnings, timings_ms, times_ms: Vec::new() }
+    RenderDrawn { rev, area, scale, png_b64, boxes, issues, issue_count, warnings, timings_ms, times_ms }
 }
 
 /// `text` within `NOTE_CHARS` characters, an ellipsis last when it was longer.
@@ -499,7 +569,7 @@ mod tests {
         let warnings: Vec<String> = (0..25).map(|i| format!("warning {i} {}", "y".repeat(320))).collect();
         let timings = RenderTimings { read: 1.0, layout: 2.0, paint: 3.0, encode: 4.0 };
         let area = RenderRect { x: -32.0, y: -32.0, w: 864.0, h: 664.0 };
-        let drawn = shaped(7, area, 1.0, Some("iVBORw0KGgo=".into()), boxes, issues, 130, warnings, timings);
+        let drawn = shaped(7, area, 1.0, Some("iVBORw0KGgo=".into()), boxes, issues, 130, warnings, timings, Vec::new());
         assert_eq!(drawn.issues.len(), boxes::MAX_ISSUES);
         assert_eq!(drawn.issue_count, 130, "the count covers every issue found");
         assert!(drawn.issues.iter().all(|i| i.ids.len() == ISSUE_IDS && i.message.chars().count() == NOTE_CHARS));
@@ -519,9 +589,39 @@ mod tests {
         assert_eq!(refused["error"], json!({"code": "design.render.failed", "message": "no"}));
     }
 
+    /// feature-motion §5: a contact sheet answers its frames' times, as many as asked for, from
+    /// the start of the span to its end, within what the engine takes; a time of the motion is
+    /// one picture and carries none; what does not move is drawn at rest and says so.
+    #[test]
+    fn a_sheet_answers_its_times() {
+        let sheet = RenderRequest { frames: Some(6), ..request() };
+        let (times, note) = times_for(&sheet, 3000.0);
+        assert_eq!(times, [0.0, 600.0, 1200.0, 1800.0, 2400.0, 3000.0]);
+        assert_eq!(note, None);
+        for n in [2u8, 7, 24] {
+            let (times, _) = times_for(&RenderRequest { frames: Some(n), ..request() }, relay_bus::design::motion::MAX_MS);
+            assert_eq!(times.len(), usize::from(n), "the engine refuses more times than frames");
+            assert!(times.windows(2).all(|w| w[0] < w[1]) && times[0] == 0.0);
+            assert!(times.iter().all(|t| (0.0..=relay_bus::design::motion::MAX_MS).contains(t)), "{times:?}");
+        }
+        // At a time: one picture, posed then.
+        assert_eq!(times_for(&RenderRequest { at_ms: Some(450.0), ..request() }, 3000.0), (vec![450.0], None));
+        // Still: a sheet is one picture at rest, with no times; a time says it is at rest.
+        assert_eq!(times_for(&sheet, 0.0), (Vec::new(), Some(STILL_SHEET)));
+        assert_eq!(times_for(&RenderRequest { at_ms: Some(450.0), ..request() }, 0.0), (vec![450.0], Some(STILL_AT)));
+        assert_eq!(times_for(&request(), 3000.0), (Vec::new(), None));
+        // What goes to the engine.
+        let boxes = RenderBoxes { fields: boxes::FIELDS.map(String::from).to_vec(), rows: vec![], total: 0, hidden: 0 };
+        let timings = RenderTimings { read: 1.0, layout: 2.0, paint: 3.0, encode: 4.0 };
+        let area = RenderRect { x: 0.0, y: 0.0, w: 100.0, h: 50.0 };
+        let drawn = shaped(3, area, 1.0, None, boxes, Vec::new(), 0, Vec::new(), timings, times.clone());
+        let value = serde_json::to_value(answer_of("6f0c", Ok(drawn))).unwrap();
+        assert_eq!(value["drawn"]["times_ms"], json!([0.0, 600.0, 1200.0, 1800.0, 2400.0, 3000.0]));
+    }
+
     /// The app reports a failure under the codes the engine keeps (§6.6): a design or page gone
-    /// after the engine's check under its own, a node gone as node_not_found, motion and
-    /// anything else as design.render.failed.
+    /// after the engine's check under its own, a node gone as node_not_found, anything else as
+    /// design.render.failed.
     #[test]
     fn app_failures_use_the_listed_codes() {
         for code in ["design.not_found", "design.page_not_found"] {
@@ -535,10 +635,6 @@ mod tests {
         let scene = Scene::new(vec![node("p", None, NodeKind::Page), node("a", Some("p"), NodeKind::Rect)]);
         assert_eq!(missing_node(&scene, &["a".into()]), None);
         assert_eq!(missing_node(&scene, &["a".into(), "b".into()]).map(|f| f.code), Some("design.node_not_found".into()));
-        assert_eq!(motion_refused(&request()), None);
-        for posed in [RenderRequest { at_ms: Some(250.0), ..request() }, RenderRequest { frames: Some(4), ..request() }] {
-            assert_eq!(motion_refused(&posed), Some(failed(NO_MOTION.into())));
-        }
         let listed = ["design.render.no_surface", "design.render.failed", "design.not_found", "design.page_not_found", "design.node_not_found"];
         assert!(listed.contains(&failed(String::new()).code.as_str()));
     }

@@ -2842,6 +2842,8 @@ impl Board {
         section.append(Some("Export page as PNG (2×)…"), Some("design.export-page"));
         section.append(Some("Export page as SVG…"), Some("design.export-page-svg"));
         section.append(Some("Export page as PDF…"), Some("design.export-page-pdf"));
+        section.append(Some("Export page as animation (APNG)…"), Some("design.export-page-apng"));
+        section.append(Some("Export page as PNG frames…"), Some("design.export-page-frames"));
         menu.append_section(None, &section);
         menu.append_section(None, &export_menu());
         let section = gio::Menu::new();
@@ -3141,13 +3143,17 @@ impl Board {
         add("zoom-50", |b| b.zoom_to(0.5));
         add("zoom-100", |b| b.zoom_to(1.0));
         add("zoom-200", |b| b.zoom_to(2.0));
-        use super::export::{export_selection, Format};
+        use super::export::{export_animation, export_frames, export_selection, Format};
         add("export", |b| export_selection(b, false, Format::Png(2.0)));
         add("export-svg", |b| export_selection(b, false, Format::Svg));
         add("export-pdf", |b| export_selection(b, false, Format::Pdf));
         add("export-page", |b| export_selection(b, true, Format::Png(2.0)));
         add("export-page-svg", |b| export_selection(b, true, Format::Svg));
         add("export-page-pdf", |b| export_selection(b, true, Format::Pdf));
+        add("export-apng", |b| export_animation(b, false));
+        add("export-frames", |b| export_frames(b, false));
+        add("export-page-apng", |b| export_animation(b, true));
+        add("export-page-frames", |b| export_frames(b, true));
         add("flip-h", |b| b.flip(true));
         add("flip-v", |b| b.flip(false));
         add("copy-style", |b| b.copy_style());
@@ -3163,6 +3169,11 @@ impl Board {
 
     fn refresh_actions(&self) {
         let has = !self.selection.borrow().is_empty();
+        // The animation entries wait for something that moves (feature-motion §3).
+        let (moves, page_moves) = {
+            let (scene, page) = (self.doc.scene.borrow(), self.page.borrow());
+            (has && super::export::moves(&scene, &page, &self.selection.borrow()), super::export::moves(&scene, &page, &[]))
+        };
         for (name, on) in [
             ("undo", self.doc.can_undo()),
             ("redo", self.doc.can_redo()),
@@ -3181,6 +3192,10 @@ impl Board {
             ("export", has),
             ("export-svg", has),
             ("export-pdf", has),
+            ("export-apng", moves),
+            ("export-frames", moves),
+            ("export-page-apng", page_moves),
+            ("export-page-frames", page_moves),
             ("flip-h", has),
             ("flip-v", has),
             ("copy-style", has),
@@ -4425,12 +4440,15 @@ fn time_bar() -> TimeBar {
     TimeBar { root, restart, pause, time, scrub, stop }
 }
 
-/// "Export selection as" PNG, SVG or PDF, for the menus that offer it.
+/// "Export selection as" PNG, SVG or PDF, or its motion as an animation or frames, for the
+/// menus that offer it.
 pub(super) fn export_menu() -> gio::Menu {
     let section = gio::Menu::new();
     section.append(Some("Export selection as PNG (2×)…"), Some("design.export"));
     section.append(Some("Export selection as SVG…"), Some("design.export-svg"));
     section.append(Some("Export selection as PDF…"), Some("design.export-pdf"));
+    section.append(Some("Export selection as animation (APNG)…"), Some("design.export-apng"));
+    section.append(Some("Export selection as PNG frames…"), Some("design.export-frames"));
     section
 }
 
