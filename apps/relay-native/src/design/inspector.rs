@@ -78,6 +78,41 @@ fn write_shadows(list: &[Shadow]) -> Map<String, Value> {
     }
 }
 
+/// A shadow that draws nothing: how a node that casts one unless told says it casts none (B37).
+fn clear_shadow() -> Shadow {
+    Shadow { x: 0.0, y: 0.0, blur: 0.0, spread: 0.0, color: "#00000000".into(), inset: false }
+}
+
+/// Whether node `id` casts a shadow while it holds none of its own: a sticky its own, a layer
+/// whose style holds one that style's (`Style::lay_under` lays it under a node without one).
+fn casts_unless_told(scene: &Scene, id: &str) -> bool {
+    let Some(n) = scene.stored(id) else { return false };
+    if n.kind == NodeKind::Sticky {
+        return true;
+    }
+    let Some(style) = n.style.as_deref().and_then(|s| scene.styles().styles.get(s)) else { return false };
+    let mut bare = n.clone();
+    (bare.shadow, bare.shadows) = (None, None);
+    style.lay_under(&mut bare);
+    !bare.shadow_list().is_empty()
+}
+
+/// `write_shadows` for node `id`: none, on a node that casts its style's (or a sticky's own)
+/// unless told, is one clear shadow, since writing neither field would give that one back.
+fn write_shadows_on(scene: &Scene, id: &str, list: &[Shadow]) -> Map<String, Value> {
+    if list.is_empty() && casts_unless_told(scene, id) {
+        return write_shadows(&[clear_shadow()]);
+    }
+    write_shadows(list)
+}
+
+/// Whether Enter in the Lines field, holding `text`, shows every line again: it is empty, a
+/// limit is set (`set_any`), and it was emptied (`held`: it has held text since it was built),
+/// not a Mixed field left as it was.
+fn shows_every_line(set_any: bool, held: bool, text: &str) -> bool {
+    set_any && held && text.trim().is_empty()
+}
+
 /// Kinds that cast their shadows from what they draw (the letters, the stroke): outer only,
 /// without spread.
 fn glows(kind: NodeKind) -> bool {
@@ -1165,7 +1200,7 @@ impl Board {
         body.append(&labelled("Style", key));
     }
 
-    /// The most lines a text shows, the rest cut with "…"; empty shows them all.
+    /// The most lines a text shows, the rest cut with "…"; emptied, it shows them all.
     fn lines_row(&self, b: &Rc<Board>, nodes: &[Node]) -> gtk::Box {
         let value = same(nodes.iter().map(|n| n.max_lines)).flatten().map(f64::from);
         let weak = Rc::downgrade(b);
@@ -1178,7 +1213,11 @@ impl Board {
         });
         if let Some(entry) = field.last_child().and_downcast::<gtk::Entry>() {
             entry.set_placeholder_text(Some(if nodes.iter().all(|n| n.max_lines.is_none()) { "All" } else { "Mixed" }));
-            // Emptied and entered, it shows every line again.
+            // Emptied and entered, it shows every line again. A Mixed field is empty from the
+            // start: Enter there with nothing typed is no change, as in any number field.
+            let held = Rc::new(std::cell::Cell::new(!entry.text().is_empty()));
+            let h = held.clone();
+            entry.connect_changed(move |e| h.set(h.get() || !e.text().is_empty()));
             let keys = gtk::EventControllerKey::new();
             keys.set_propagation_phase(gtk::PropagationPhase::Capture);
             let (weak, e) = (Rc::downgrade(b), entry.downgrade());
@@ -1186,7 +1225,7 @@ impl Board {
             keys.connect_key_pressed(move |_, key, _, _| {
                 let enter = matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter);
                 match (weak.upgrade(), e.upgrade()) {
-                    (Some(b), Some(e)) if enter && set_any && e.text().trim().is_empty() => {
+                    (Some(b), Some(e)) if enter && shows_every_line(set_any, held.get(), &e.text()) => {
                         b.set_max_lines(None);
                         glib::Propagation::Stop
                     }
@@ -1318,8 +1357,8 @@ impl Board {
     }
 
     /// Give the selection a look from the Shadow section's keys: none (a sticky, which casts its
-    /// own unless told, is given a clear one, B37), a sticky's own, or one drop, inner or glow
-    /// shadow.
+    /// own unless told, or a layer whose style casts one, is given a clear one, B37), a sticky's
+    /// own, or one drop, inner or glow shadow.
     pub(super) fn set_shadow_look(&self, look: &str) {
         let scene = self.doc.scene.borrow();
         let ops: Vec<NodeOp> = self
@@ -1329,7 +1368,7 @@ impl Board {
             .filter(|n| takes(n.kind, "shadow"))
             .map(|n| {
                 let list = match look {
-                    "none" if n.kind == NodeKind::Sticky => vec![Shadow { x: 0.0, y: 0.0, blur: 0.0, spread: 0.0, color: "#00000000".into(), inset: false }],
+                    "none" => return NodeOp::Update { id: n.id.clone(), set: write_shadows_on(&scene, &n.id, &[]) },
                     "drop" => vec![Shadow { x: 0.0, y: 4.0, blur: 12.0, spread: 0.0, color: "#00000033".into(), inset: false }],
                     "inner" if !glows(n.kind) => vec![Shadow { x: 0.0, y: 2.0, blur: 6.0, spread: 0.0, color: "#00000040".into(), inset: true }],
                     "glow" => vec![glow_of(&scene, n)],
@@ -1342,7 +1381,8 @@ impl Board {
         self.commit(ops);
     }
 
-    /// Change each selected node's shadows as they are now (`shown_shadows`) with `change`.
+    /// Change each selected node's shadows as they are now (`shown_shadows`) with `change`: the
+    /// last taken off leaves it with none, not its style's.
     pub(super) fn edit_shadows(&self, change: impl Fn(&mut Vec<Shadow>)) {
         let ids: Vec<String> = self.selected().into_iter().filter(|id| self.doc.scene.borrow().node(id).is_some_and(|n| takes(n.kind, "shadow"))).collect();
         let ops: Vec<NodeOp> = ids
@@ -1350,7 +1390,8 @@ impl Board {
             .map(|id| {
                 let mut list = shown_shadows(self, &id);
                 change(&mut list);
-                NodeOp::Update { id, set: write_shadows(&list) }
+                let set = write_shadows_on(&self.doc.scene.borrow(), &id, &list);
+                NodeOp::Update { id, set }
             })
             .collect();
         self.commit(ops);
@@ -1707,7 +1748,7 @@ mod tests {
         let mut sticky = Node::new(NodeKind::Sticky);
         assert_eq!(shadow_look(&sticky), "default");
         // None is a clear shadow on a sticky, which draws nothing (B37).
-        sticky.shadow = Some(Shadow { x: 0.0, y: 0.0, blur: 0.0, spread: 0.0, color: "#00000000".into(), inset: false });
+        sticky.shadow = Some(clear_shadow());
         assert_eq!(shadow_look(&sticky), "none");
         let mut rect = Node::new(NodeKind::Rect);
         assert_eq!(shadow_look(&rect), "none");
@@ -1719,6 +1760,40 @@ mod tests {
             s.inset = false;
         }
         assert_eq!(shadow_look(&rect), "drop");
+    }
+
+    /// None on a layer whose style casts a shadow is a clear one of its own: neither field
+    /// written would lay the style's back under it. Elsewhere none is neither field.
+    #[test]
+    fn none_holds_a_styles_shadow_off() {
+        let shadow = Shadow { x: 0.0, y: 4.0, blur: 12.0, spread: 0.0, color: "#00000033".into(), inset: false };
+        let card = relay_bus::design::Style { shadow: Some(shadow), ..Default::default() };
+        let styles = relay_bus::design::Styles { styles: [("card".to_string(), card)].into(), ..Default::default() };
+        let node = |id: &str, kind: NodeKind, style: Option<&str>| {
+            let mut n = Node::new(kind);
+            (n.id, n.parent, n.style) = (id.into(), Some("p1".into()), style.map(Into::into));
+            n
+        };
+        let mut page = Node::new(NodeKind::Page);
+        page.id = "p1".into();
+        let scene = Scene::new(vec![page, node("styled", NodeKind::Rect, Some("card")), node("plain", NodeKind::Rect, None), node("note", NodeKind::Sticky, None)]).with_styles(styles);
+        assert!(casts_unless_told(&scene, "styled") && casts_unless_told(&scene, "note") && !casts_unless_told(&scene, "plain"));
+        let set = write_shadows_on(&scene, "styled", &[]);
+        assert_eq!((&set["shadow"]["color"], &set["shadows"]), (&json!("#00000000"), &Value::Null));
+        // Applied, the layer draws no shadow, and the section reads None.
+        let mut drawn = scene.clone();
+        drawn.apply_all(&[NodeOp::Update { id: "styled".into(), set }]).unwrap();
+        assert!(shapes::effective_shadows(drawn.node("styled").unwrap()).is_empty());
+        assert_eq!(shadow_look(drawn.node("styled").unwrap()), "none");
+        assert_eq!(write_shadows_on(&scene, "plain", &[]), write_shadows(&[]));
+    }
+
+    /// Enter in an untouched Mixed Lines field changes nothing; emptied, it shows every line.
+    #[test]
+    fn enter_in_an_untouched_mixed_lines_field_is_no_change() {
+        assert!(!shows_every_line(true, false, ""), "Mixed, nothing typed");
+        assert!(shows_every_line(true, true, " "), "a limit emptied");
+        assert!(!shows_every_line(true, true, "3") && !shows_every_line(false, true, ""));
     }
 
     #[test]
