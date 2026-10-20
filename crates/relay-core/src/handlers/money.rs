@@ -79,9 +79,11 @@ pub(crate) fn ledger<T>(engine: &Engine, f: impl FnOnce(&mut Ledger) -> Result<T
     f(slot.as_mut().expect("opened above")).map_err(bus)
 }
 
+/// The day a reading is for: the caller's, else this PC's. Within a few centuries of now, so the
+/// periods and bill horizons computed from it stay inside the calendar.
 fn today(day: Option<&str>) -> Result<jiff::civil::Date, BusError> {
     match day {
-        Some(d) => parse_date(d).ok_or_else(|| BusError::invalid("money.invalid", format!("Not a date: {d}"))),
+        Some(d) => parse_date(d).filter(|d| (1900..=2999).contains(&d.year())).ok_or_else(|| BusError::invalid("money.invalid", format!("Not a date: {d}"))),
         None => Ok(jiff::Zoned::now().date()),
     }
 }
@@ -192,7 +194,10 @@ fn fetch_usd_cad(curl: &Path) -> Result<Vec<(String, i64)>, String> {
 pub fn register(e: &mut Engine) {
     e.register_unlocked::<SummaryOp>(|ctx, p| {
         let day = today(p.today.as_deref())?;
-        let (posted, summary) = ledger(ctx.engine(), |l| Ok((l.post_due(day)?, l.summary(day, &Locale::from_env())?)))?;
+        // A reading for a later day is only a reading: bills are posted up to the real one, or a
+        // `today` a year on would post a year of them and move each bill's next date for good.
+        let due = day.min(jiff::Zoned::now().date());
+        let (posted, summary) = ledger(ctx.engine(), |l| Ok((l.post_due(due)?, l.summary(day, &Locale::from_env())?)))?;
         // Bills that came due are entries now; whoever else is drawing the ledger re-reads it.
         if posted > 0 {
             ctx.emit("money.changed", json!({"posted": posted}));
