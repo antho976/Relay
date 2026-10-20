@@ -657,7 +657,8 @@ impl Painter {
             NodeKind::Group => self.paint_children(snap, scene, placed, id, view, None),
             NodeKind::Frame => {
                 let rr = outline(n, &r);
-                self.shadow(snap, n, &rr);
+                let shadows = shapes::effective_shadows(n);
+                self.shadow(snap, &shadows, &rr);
                 if clips {
                     snap.push_rounded_clip(&rr);
                 }
@@ -665,7 +666,7 @@ impl Painter {
                 // both are the ground a blended child mixes with.
                 let ground = |s: &gtk::Snapshot| {
                     self.fill(s, n, &rr);
-                    self.inner_shadow(s, n, &rr);
+                    self.inner_shadow(s, &shadows, &rr);
                 };
                 self.paint_children(snap, scene, placed, id, view, Some(&ground));
                 if clips {
@@ -748,23 +749,24 @@ impl Painter {
 
     /// Shadow, fill (a colour or a gradient) and inner shadow, inside the rounded outline.
     fn box_paint(&self, snap: &gtk::Snapshot, n: &Node, rr: &gsk::RoundedRect) {
-        self.shadow(snap, n, rr);
+        let shadows = shapes::effective_shadows(n);
+        self.shadow(snap, &shadows, rr);
         self.fill(snap, n, rr);
-        self.inner_shadow(snap, n, rr);
+        self.inner_shadow(snap, &shadows, rr);
     }
 
-    /// The drop shadows under the rounded outline, in order (the last on top): the node's
+    /// The drop shadows under the rounded outline, in order (the last on top), of a node's
     /// effective shadows (`shapes::effective_shadows`: a sticky's own when it names none, none
     /// for one wholly clear, B37).
-    fn shadow(&self, snap: &gtk::Snapshot, n: &Node, rr: &gsk::RoundedRect) {
-        for s in shapes::effective_shadows(n).iter().filter(|s| !s.inset) {
+    fn shadow(&self, snap: &gtk::Snapshot, shadows: &[Shadow], rr: &gsk::RoundedRect) {
+        for s in shadows.iter().filter(|s| !s.inset) {
             snap.append_outset_shadow(rr, &rgba(&s.color), s.x as f32, s.y as f32, s.spread as f32, blur_of(s) as f32);
         }
     }
 
     /// The inner shadows inside the rounded outline, in order.
-    fn inner_shadow(&self, snap: &gtk::Snapshot, n: &Node, rr: &gsk::RoundedRect) {
-        for s in shapes::effective_shadows(n).iter().filter(|s| s.inset) {
+    fn inner_shadow(&self, snap: &gtk::Snapshot, shadows: &[Shadow], rr: &gsk::RoundedRect) {
+        for s in shadows.iter().filter(|s| s.inset) {
             snap.append_inset_shadow(rr, &rgba(&s.color), s.x as f32, s.y as f32, s.spread as f32, blur_of(s) as f32);
         }
     }
@@ -1023,7 +1025,8 @@ impl Painter {
     /// mirrors: its corners, shadows and border stay where they are drawn (B120).
     fn image(&self, snap: &gtk::Snapshot, n: &Node, r: &Rect) {
         let rr = outline(n, r);
-        self.shadow(snap, n, &rr);
+        let shadows = shapes::effective_shadows(n);
+        self.shadow(snap, &shadows, &rr);
         snap.push_rounded_clip(&rr);
         let picture = n.src.as_deref().map(|s| self.picture(s)).unwrap_or(Picture::Failed);
         let natural = match &picture {
@@ -1078,7 +1081,7 @@ impl Painter {
             }
         }
         snap.pop();
-        self.inner_shadow(snap, n, &rr);
+        self.inner_shadow(snap, &shadows, &rr);
         self.border(snap, n, r);
     }
 }
