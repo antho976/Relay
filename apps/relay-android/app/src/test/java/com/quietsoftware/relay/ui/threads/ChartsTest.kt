@@ -3,6 +3,7 @@ package com.quietsoftware.relay.ui.threads
 import com.quietsoftware.relay.data.Relay as RelayData
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -30,6 +31,18 @@ class ChartsTest {
     fun aMissingOrGarbagePointIsLeftOutNotDrawnAsZero() {
         val n = readWritten(data("""{"labels": ["a", "b", "c", "d", "e", "f"], "series": [{"name": "x", "values": [10, null, "abc", true, 0]}]}"""), cad)
         assertEquals(listOf(1000L, null, null, null, 0L, null), n.series.single().values)
+    }
+
+    @Test(timeout = 2_000)
+    fun anExponentTooLargeOrTooSmallIsAnsweredWithoutWorkingItOut() {
+        assertNull(decimal(JsonPrimitive("1e100000000"), 2))
+        assertNull(decimal(JsonPrimitive("-1E100000000"), 2))
+        assertEquals(0L, decimal(JsonPrimitive("1e-100000000"), 2))
+        assertEquals(0L, decimal(JsonPrimitive("0.004"), 2))
+        assertEquals(1L, decimal(JsonPrimitive("0.006"), 2))
+        assertEquals(92_233_720_368_547_758L, decimal(JsonPrimitive("922337203685477.58"), 2))
+        assertNull(decimal(JsonPrimitive("92233720368547758.08"), 2))
+        assertEquals(150L, decimal(JsonPrimitive("1.5e0"), 2))
     }
 
     @Test

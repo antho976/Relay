@@ -242,7 +242,14 @@ internal fun readWritten(d: JsonObject, money: Money): Numbers {
 internal fun decimal(e: JsonElement?, digits: Int): Long? {
     val p = e as? JsonPrimitive ?: return null
     if (p is JsonNull) return null
-    return runCatching { p.content.trim().toBigDecimal().movePointRight(digits).setScale(0, RoundingMode.HALF_EVEN).longValueExact() }.getOrNull()
+    val d = runCatching { p.content.trim().toBigDecimal() }.getOrNull() ?: return null
+    // Its digits before the point once moved, which an exponent ("1e100000000") can make
+    // enormous: past a Long's 19 it is too large, below the last place it is 0, both said without
+    // working the number out, which would hold the screen for as long as it took.
+    val whole = d.precision() - d.scale() + digits
+    if (whole > 19) return null
+    if (whole < 0) return 0L
+    return runCatching { d.movePointRight(digits).setScale(0, RoundingMode.HALF_EVEN).longValueExact() }.getOrNull()
 }
 
 /** Closes in hundredths, buys and sells at their bar. */
