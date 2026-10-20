@@ -443,6 +443,23 @@ pub fn group(scene: &mut Scene, placed: &Placed, ids: &[String], kind: NodeKind)
 /// each child's; and its blur, as each child's where it is more (blurring each one is not
 /// blurring them together, but it is the nearest a child can hold).
 pub fn ungroup(scene: &Scene, placed: &Placed, id: &str) -> Option<(Vec<NodeOp>, Vec<String>)> {
+    let going = HashSet::from([id.to_string()]);
+    let (more, kids) = ungroup_one(scene, placed, id, &going, scene.index(id)? as u32)?;
+    Some((release_outside(scene, placed, &going).into_iter().chain(more).collect(), kids))
+}
+
+/// [`release`] of each connector attached to one of `going`, the containers a list ungroups,
+/// but those inside one of them, which let go as their container moves them out
+/// ([`ungroup_one`]), in the one update that moves them.
+fn release_outside(scene: &Scene, placed: &Placed, going: &HashSet<String>) -> Vec<NodeOp> {
+    release(scene, placed, going).into_iter().filter(|op| scene.parent(op.target()).is_none_or(|p| !going.contains(p))).collect()
+}
+
+/// [`ungroup`] of `id`, one of `going`, all the containers one list ungroups, read from `scene`
+/// and `placed` as drawn before any of it: its children go into its parent from index `start`,
+/// and a connector among them lets go of an end attached to any of `going`. The connectors
+/// elsewhere are [`release_outside`]'s.
+fn ungroup_one(scene: &Scene, placed: &Placed, id: &str, going: &HashSet<String>, start: u32) -> Option<(Vec<NodeOp>, Vec<String>)> {
     let node = scene.stored(id)?;
     if !matches!(node.kind, NodeKind::Group | NodeKind::Frame) {
         return None;
@@ -459,15 +476,13 @@ pub fn ungroup(scene: &Scene, placed: &Placed, id: &str) -> Option<(Vec<NodeOp>,
     let turn = shapes::rotation(look).rem_euclid(360.0);
     let pivot = placed.rect(id).filter(|_| turn != 0.0).map(|r| (r.cx(), r.cy()));
     let (fade, blur) = (look.opacity.unwrap_or(1.0), look.blur.unwrap_or(0.0));
-    let start = scene.index(id)? as u32;
     let kids = scene.children(id).to_vec();
-    // A connector of its own lets go below, from where it will sit.
-    let mut ops: Vec<NodeOp> =
-        release(scene, placed, &HashSet::from([id.to_string()])).into_iter().filter(|op| scene.parent(op.target()) != Some(id)).collect();
+    let mut ops = Vec::new();
     for (index, child) in (start..).zip(&kids) {
         let (c, drawn) = (scene.stored(child)?, scene.node(child)?);
         let free = !joins || c.is_absolute();
-        let (from, to) = (c.from.as_deref() == Some(id), c.to.as_deref() == Some(id));
+        let gone = |end: &Option<String>| end.as_ref().is_some_and(|e| going.contains(e));
+        let (from, to) = (gone(&c.from), gone(&c.to));
         // A line freed of the container, or turned with it, is written from its points on the
         // page: as drawn for a connector, its own through its own turn for any other.
         let points = placed.rect(child).filter(|_| c.kind == NodeKind::Line).and_then(|r| {
@@ -558,19 +573,28 @@ pub fn ungroup(scene: &Scene, placed: &Placed, id: &str) -> Option<(Vec<NodeOp>,
 }
 
 /// Ungroup every group and frame among `ids` in one list: one inside another selected one goes
-/// with it, and each is ungrouped against the tree the ones before it left. Returns the edits
-/// and the children set free.
+/// with it. Each is worked out from the scene and `placed` as drawn before any of them, so a
+/// connector joining two of them lets go of both where it is drawn, in one update (B112); only
+/// the index its children take counts what the ones before it moved. Returns the edits and the
+/// children set free.
 pub fn ungroup_all(scene: &Scene, placed: &Placed, ids: &[String]) -> (Vec<NodeOp>, Vec<String>) {
     let groups: Vec<String> = ids
         .iter()
-        .filter(|id| scene.node(id).is_some_and(|n| matches!(n.kind, NodeKind::Group | NodeKind::Frame)))
+        .filter(|id| scene.node(id).is_some_and(|n| matches!(n.kind, NodeKind::Group | NodeKind::Frame) && n.parent.is_some()))
         .cloned()
         .collect();
+    let groups = outermost(scene, &groups);
+    let going: HashSet<String> = groups.iter().cloned().collect();
+    let mut ops = release_outside(scene, placed, &going);
+    // The tree as the edits so far leave it, for the index each one's children take. One that
+    // does not run is left out; a connector already let go of it stays where it was drawn.
     let mut trial = scene.clone();
-    let mut ops = Vec::new();
+    if trial.apply_all(&ops).is_err() {
+        return (Vec::new(), Vec::new());
+    }
     let mut kids = Vec::new();
-    for id in outermost(scene, &groups) {
-        let Some((more, freed)) = ungroup(&trial, placed, &id) else {
+    for id in &groups {
+        let Some((more, freed)) = trial.index(id).and_then(|start| ungroup_one(scene, placed, id, &going, start as u32)) else {
             continue;
         };
         if trial.apply_all(&more).is_ok() {
@@ -1945,5 +1969,44 @@ mod tests {
         for id in ["r", "r2", "r3"] {
             assert_eq!(after.rect(id), before.rect(id), "{id} stays put");
         }
+    }
+
+    /// B112 across one list: connectors joining two groups ungrouped together let go of both
+    /// where they are drawn, beside them or inside either, each written once from the scene as
+    /// it was drawn before any of them.
+    #[test]
+    fn ungrouping_two_joined_groups_lets_their_connectors_go_where_drawn() {
+        let line = |id: &str, parent: &str, from: &str, to: &str| {
+            let mut l = node(id, Some(parent), K::Line, [0.0; 4]);
+            (l.from, l.to) = (Some(from.into()), Some(to.into()));
+            l
+        };
+        let mut s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            node("g1", Some("p1"), K::Group, [0.0; 4]),
+            node("a", Some("g1"), K::Rect, [0.0, 0.0, 40.0, 30.0]),
+            node("g2", Some("p1"), K::Group, [200.0, 100.0, 0.0, 0.0]),
+            node("b", Some("g2"), K::Rect, [0.0, 0.0, 40.0, 30.0]),
+            node("c", Some("p1"), K::Rect, [0.0, 300.0, 40.0, 30.0]),
+            line("ln", "p1", "g1", "g2"),
+            line("in1", "g1", "g1", "g2"),
+            line("in2", "g2", "g1", "c"),
+            line("in3", "g1", "c", "g2"),
+        ]);
+        let lines = ["ln", "in1", "in2", "in3"];
+        let before = place(&s, "p1", &Mono);
+        let drawn = |s: &Scene, placed: &Placed, id: &str| shapes::line_points(s, placed, s.node(id).unwrap()).0;
+        let was: Vec<Vec<(f64, f64)>> = lines.iter().map(|id| drawn(&s, &before, id)).collect();
+        let (ops, kids) = ungroup_all(&s, &before, &ids(&["g1", "g2"]));
+        run(&mut s, &ops);
+        assert_eq!(kids, ["a", "in1", "in3", "b", "in2"]);
+        assert_eq!(s.children("p1"), ["a", "in1", "in3", "b", "in2", "c", "ln"]);
+        let after = place(&s, "p1", &Mono);
+        for (id, was) in lines.iter().zip(&was) {
+            near(&drawn(&s, &after, id), was);
+        }
+        let ends: Vec<(Option<&str>, Option<&str>)> = lines.iter().map(|id| s.node(id).unwrap()).map(|n| (n.from.as_deref(), n.to.as_deref())).collect();
+        assert_eq!(ends, [(None, None), (None, None), (None, Some("c")), (Some("c"), None)]);
+        kept(&before, &after, &["a", "b", "c"]);
     }
 }
