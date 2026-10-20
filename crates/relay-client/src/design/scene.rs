@@ -283,27 +283,23 @@ impl Scene {
     }
 
     /// The refusal of an add under `parent` (with `moved`, a move of that node there), worded as
-    /// the engine's `design.too_deep`: how deep it would sit and the chain it would sit in.
+    /// the engine's `design.too_deep`: how deep it, or the deepest node it holds, would sit, and
+    /// the chain it would hang from, page first and ending at `parent` in both forms, with
+    /// ` › id › …` after it when what the moved node holds is what goes too deep.
     fn too_deep(&self, parent: &str, moved: Option<&str>) -> String {
         let mut chain = self.ancestors(parent);
         chain.reverse();
         chain.push(parent);
-        let mut deep = chain.len();
-        let mut what = "it";
-        if let Some(id) = moved {
-            chain.push(id);
-            let below = self.levels_below(id, usize::MAX);
-            if below > 0 {
-                deep += below;
-                what = "what it holds";
-            }
-        }
+        let below = moved.map_or(0, |id| self.levels_below(id, usize::MAX));
+        let deep = chain.len() + below;
         let shown = match chain.len() {
             n if n > 5 => format!("{} › {} › … › {} › {}", chain[0], chain[1], chain[n - 2], chain[n - 1]),
             _ => chain.join(" › "),
         };
-        let more = if what == "it" { "" } else { " › …" };
-        format!("{what} would sit {deep} deep ({shown}{more}); a design nests at most {MAX_DEPTH} levels")
+        match moved {
+            Some(id) if below > 0 => format!("what it holds would sit {deep} deep ({shown} › {id} › …); a design nests at most {MAX_DEPTH} levels"),
+            _ => format!("it would sit {deep} deep ({shown}); a design nests at most {MAX_DEPTH} levels"),
+        }
     }
 
     /// `id` and everything inside it, each parent before its children, siblings bottom to top.
@@ -1139,12 +1135,24 @@ pub(crate) mod tests {
         // A replay skips it, as the engine's lenient list does.
         s.apply(&add("f65", "f64")).unwrap();
         assert!(s.node("f65").is_none());
-        // A move counts what the moved node holds.
+        // A move counts what the moved node holds. Both forms end the chain at the parent, as the
+        // add's does; the one for what it holds names the moved node after it.
         s.apply_all(&[add("g", "p1"), add("h", "g")]).unwrap();
         let why = s.apply_all(&[to("g", "f63")]).unwrap_err();
-        assert_eq!(why, "ops[0]: move g: what it holds would sit 65 deep (p1 › f1 › … › f63 › g › …); a design nests at most 64 levels");
+        assert_eq!(why, "ops[0]: move g: what it holds would sit 65 deep (p1 › f1 › … › f62 › f63 › g › …); a design nests at most 64 levels");
         let why = s.apply_all(&[to("h", "f64")]).unwrap_err();
-        assert_eq!(why, "ops[0]: move h: it would sit 65 deep (p1 › f1 › … › f64 › h); a design nests at most 64 levels");
+        assert_eq!(why, "ops[0]: move h: it would sit 65 deep (p1 › f1 › … › f63 › f64); a design nests at most 64 levels");
+        let why = s.apply_all(&[to("h", "p1"), to("h", "f64")]).unwrap_err();
+        assert_eq!(why, "ops[1]: move h: it would sit 65 deep (p1 › f1 › … › f63 › f64); a design nests at most 64 levels");
+        // A short chain is shown whole.
+        let mut short = Scene::new(chain(3));
+        short.apply_all(&[add("g", "p1"), add("h", "g")]).unwrap();
+        for i in 0..MAX_DEPTH - 2 {
+            let (id, parent) = (format!("k{i}"), if i == 0 { "h".to_string() } else { format!("k{}", i - 1) });
+            short.apply_all(&[add(&id, &parent)]).unwrap();
+        }
+        let why = short.apply_all(&[to("g", "f3")]).unwrap_err();
+        assert_eq!(why, "ops[0]: move g: what it holds would sit 67 deep (p1 › f1 › f2 › f3 › g › …); a design nests at most 64 levels");
         s.apply(&to("g", "f63")).unwrap();
         assert_eq!(s.parent("g"), Some("p1"));
         s.apply_all(&[to("g", "f62")]).unwrap();
