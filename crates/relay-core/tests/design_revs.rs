@@ -1,14 +1,16 @@
-//! Revisions (feature-agent-api W20; MODEL-SPEC §4; TM-58): every node row carries the rev that
-//! last wrote it and every id a delete took is on record for 1000 revs, so `design.get` answers
-//! only what changed since a rev, or some nodes and what is inside them; and an edit that changes
-//! nothing makes no rev, event or undo.
+//! Revisions (feature-agent-api W6, W19, W20; MODEL-SPEC §3.1-§3.2, §4; TM-58): every node row
+//! carries the rev that last wrote it and every id a delete took is on record for 1000 revs, so a
+//! `design.apply` sent against an older rev applies on top of what changed since unless it writes
+//! a node that changed; `design.get` answers only what changed since a rev, or some nodes and
+//! what is inside them; a refusal that names an id the design no longer holds says when it went;
+//! and an edit that changes nothing makes no rev, event or undo.
 
 mod common;
 
-use common::{call, committed_repo, engine_with_project, ok, refused};
+use common::{call, call_as, committed_repo, engine_with_project, ok, ok_as, refused};
 use relay_bus::design::{Node, SINCE_WINDOW};
 use relay_bus::ops::design::GetOut;
-use relay_bus::{BusError, ErrorKind, Event};
+use relay_bus::{Actor, BusError, ErrorKind, Event};
 use relay_client::design::scene::Scene;
 use relay_core::engine::Engine;
 use rusqlite::params;
@@ -31,6 +33,15 @@ fn create(e: &Engine) -> i64 {
 
 fn apply(e: &Engine, design: i64, ops: Value) -> Value {
     ok(e, "design.apply", json!({"design_id": design, "ops": ops}))
+}
+
+/// `design.apply` sent against `base_rev`.
+fn apply_at(e: &Engine, design: i64, base_rev: i64, ops: Value) -> Value {
+    ok(e, "design.apply", json!({"design_id": design, "ops": ops, "base_rev": base_rev}))
+}
+
+fn refused_at(e: &Engine, design: i64, base_rev: i64, ops: Value) -> BusError {
+    refused(call(e, "design.apply", json!({"design_id": design, "ops": ops, "base_rev": base_rev})))
 }
 
 fn get(e: &Engine, payload: Value) -> Value {
@@ -405,4 +416,251 @@ fn a_delta_places_nodes_among_the_siblings_a_read_answers() {
     assert_eq!(delta.indexes, Some(vec![0, 2]));
     let scene = patched(&scene_of(&base), delta);
     assert_eq!(scene.to_nodes(), scene_of(&read_out(get(&e, json!({"design_id": id})))).to_nodes());
+}
+
+// --- W6: base_rev ---------------------------------------------------------------------------
+
+/// A list sent against an older rev applies on top of what changed since when nothing it writes
+/// changed: adds, and an update and a move of nodes nobody touched since.
+#[test]
+fn a_stale_base_rev_applies_when_nothing_it_writes_changed() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    let base = rev(&e, id);
+    apply(&e, id, json!([{"op": "update", "id": "title", "set": {"text": "Hi"}}]));
+    let applied = apply_at(&e, id, base, json!([
+        {"op": "add", "node": {"id": "badge", "parent": "card", "kind": "rect", "w": 10, "h": 10}},
+        {"op": "update", "id": "photo", "set": {"fill": "#00ff00"}},
+        {"op": "move", "id": "chip", "parent": "card"},
+        {"op": "update", "id": "badge", "set": {"fill": "#0000ff"}},
+    ]));
+    assert_eq!((applied["rebased"].clone(), applied["rev"].as_i64(), applied["prev_rev"].as_i64()), (json!(true), Some(base + 2), Some(base + 1)));
+    let nodes = get(&e, json!({"design_id": id, "nodes": ["card"]}))["nodes"].clone();
+    assert!(ids(&nodes).contains(&"badge".to_string()) && ids(&nodes).contains(&"chip".to_string()));
+    // At the design's rev, or without one, nothing is rebased.
+    let at_rev = apply_at(&e, id, base + 2, json!([{"op": "update", "id": "photo", "set": {"fill": "#123456"}}]));
+    assert!(at_rev.get("rebased").is_none(), "{at_rev}");
+    // An add-only list, sent twice against the rev it read, applies twice (W6's add-only rule).
+    let ops = json!([{"op": "add", "node": {"parent": "page-1", "kind": "rect"}}]);
+    let now = rev(&e, id);
+    apply_at(&e, id, now, ops.clone());
+    assert_eq!(apply_at(&e, id, now, ops)["rebased"], true);
+}
+
+/// A list that writes a node changed since its base_rev is refused, naming each such node and
+/// how to redo it: an update or move target changed (`changed`, at the rev it was), a delete
+/// whose subtree holds a node changed since (`inside`, naming it), and nothing of it applies.
+#[test]
+fn a_stale_base_rev_names_each_node_changed_since() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    let base = rev(&e, id);
+    apply(&e, id, json!([{"op": "update", "id": "title", "set": {"text": "Hi"}}]));
+    apply(&e, id, json!([{"op": "update", "id": "dot", "set": {"fill": "#00ff00"}}, {"op": "move", "id": "chip", "index": 0}]));
+    let now = rev(&e, id);
+    let error = refused_at(&e, id, base, json!([
+        {"op": "add", "node": {"id": "badge", "parent": "page-1", "kind": "rect"}},
+        {"op": "update", "id": "title", "set": {"text": "Mine"}},
+        {"op": "move", "id": "chip", "parent": "page-1"},
+        {"op": "delete", "id": "inner"},
+        {"op": "update", "id": "photo", "set": {"fill": "#000000"}},
+        {"op": "update", "id": "title", "set": {"font_size": 30}},
+    ]));
+    assert_eq!((error.kind, error.code.as_str()), (ErrorKind::Conflict, "design.stale"));
+    assert_eq!(error.message, format!("design {id} is at rev {now}; since rev {base} other edits changed what this list writes: \
+        \"title\" (changed at rev {}), \"chip\" (changed at rev {now}), \"inner\" (holds \"dot\", changed since)", base + 1));
+    assert_eq!(error.hint.as_deref(), Some(format!("read what changed with design.get {{\"design_id\": {id}, \"since_rev\": {base}}}, \
+        redo the edits that touch it, and send them with base_rev {now}").as_str()));
+    let details = error.details.unwrap();
+    assert_eq!((details["rev"].as_i64(), details["base_rev"].as_i64()), (Some(now), Some(base)));
+    assert_eq!(details["conflicts"], json!([
+        {"at": 1, "id": "title", "reason": "changed", "rev": base + 1},
+        {"at": 2, "id": "chip", "reason": "changed", "rev": now},
+        {"at": 3, "id": "inner", "reason": "inside", "ids": ["dot"]},
+    ]));
+    assert!(details.get("more").is_none());
+    assert_eq!(rev(&e, id), now, "nothing applied");
+    assert!(!ids(&get(&e, json!({"design_id": id}))["nodes"]).contains(&"badge".to_string()));
+    // A deeper change counts too: what a delete would take, at any depth.
+    let error = refused_at(&e, id, base, json!([{"op": "delete", "id": "card"}]));
+    assert_eq!(error.details.unwrap()["conflicts"], json!([{"at": 0, "id": "card", "reason": "inside", "ids": ["dot", "title"]}]));
+    // A node the list added before it writes it never conflicts.
+    let applied = apply_at(&e, id, base, json!([
+        {"op": "add", "node": {"id": "title-2", "parent": "page-1", "kind": "text", "text": "Again"}},
+        {"op": "update", "id": "title-2", "set": {"text": "Again!"}},
+    ]));
+    assert_eq!(applied["rebased"], true);
+}
+
+/// More than 50 conflicts: the first 50 in details, `more` counting the rest; past the window
+/// the hint reads the design whole rather than what changed since.
+#[test]
+fn a_long_list_of_conflicts_is_cut_and_an_old_base_reads_the_design_whole() {
+    let (e, _root) = project();
+    let id = create(&e);
+    let adds: Vec<Value> = (0..60).map(|i| json!({"op": "add", "node": {"id": format!("r{i}"), "parent": "page-1", "kind": "rect"}})).collect();
+    apply(&e, id, Value::Array(adds));
+    let base = rev(&e, id);
+    let touch: Vec<Value> = (0..60).map(|i| json!({"op": "update", "id": format!("r{i}"), "set": {"x": 5}})).collect();
+    apply(&e, id, Value::Array(touch.clone()));
+    let error = refused_at(&e, id, base, Value::Array(touch.clone()));
+    assert!(error.message.ends_with(", and 55 more"), "{}", error.message);
+    let details = error.details.unwrap();
+    assert_eq!((details["conflicts"].as_array().unwrap().len(), details["more"].as_u64()), (50, Some(10)));
+    // Lenient, every edit is skipped: the first 100 listed, a warning counting the rest.
+    let twice: Vec<Value> = touch.iter().chain(&touch).cloned().collect();
+    let skipped = ok(&e, "design.apply", json!({"design_id": id, "base_rev": base, "lenient": true, "ops": twice}));
+    assert_eq!(skipped["skipped"].as_array().unwrap().len(), 100);
+    assert_eq!(skipped["skipped"][99], json!({"at": 99, "id": "r39", "reason": "changed", "rev": base + 1}));
+    assert_eq!(strings(&skipped["warnings"]), ["20 more edits were skipped; skipped lists the first 100"]);
+    assert_eq!(skipped["rev"].as_i64(), Some(base + 1));
+    age(&e, id, SINCE_WINDOW + 5);
+    let error = refused_at(&e, id, base, Value::Array(touch));
+    assert_eq!(error.hint.as_deref(), Some(format!("read it again with design.get, redo the edits that touch what changed, and send them with base_rev {}",
+        base + 1 + SINCE_WINDOW + 5).as_str()));
+}
+
+/// A node removed since base_rev is a conflict (`missing`, at the rev it went), not the bare
+/// "no such node" of an id never seen; a base_rev the design has not reached is refused.
+#[test]
+fn a_node_removed_since_base_rev_is_a_conflict() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    let base = rev(&e, id);
+    apply(&e, id, json!([{"op": "delete", "id": "side"}]));
+    let error = refused_at(&e, id, base, json!([{"op": "update", "id": "chip", "set": {"x": 1}}]));
+    assert_eq!(error.code, "design.stale");
+    assert_eq!(error.details.unwrap()["conflicts"], json!([{"at": 0, "id": "chip", "reason": "missing", "rev": base + 1}]));
+    assert!(error.message.ends_with("\"chip\" (removed at rev 3)"), "{}", error.message);
+    // Re-added since: it changed, at the rev it came back.
+    apply(&e, id, json!([{"op": "add", "node": {"id": "chip", "parent": "page-1", "kind": "rect"}}]));
+    let error = refused_at(&e, id, base, json!([{"op": "delete", "id": "chip"}]));
+    assert_eq!(error.details.unwrap()["conflicts"], json!([{"at": 0, "id": "chip", "reason": "changed", "rev": base + 2}]));
+    // Ahead of the design: no read gave it.
+    let error = refused_at(&e, id, base + 10, json!([{"op": "update", "id": "photo", "set": {"x": 1}}]));
+    assert_eq!((error.code.as_str(), error.message.clone()), ("design.stale", format!("design {id} is at rev {}; base_rev {} is ahead of it", base + 2, base + 10)));
+    assert_eq!(error.details.unwrap(), json!({"rev": base + 2, "base_rev": base + 10}));
+}
+
+/// A lenient list against an older rev skips just the edits of nodes changed or removed since
+/// (and a delete that would take a change with it), reports each in `skipped`, and applies the
+/// rest; one whose every edit is skipped changes nothing.
+#[test]
+fn a_lenient_list_skips_what_changed_since_its_base_rev() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    let base = rev(&e, id);
+    apply(&e, id, json!([{"op": "update", "id": "title", "set": {"text": "Hi"}}, {"op": "update", "id": "dot", "set": {"fill": "#00ff00"}},
+        {"op": "delete", "id": "note"}]));
+    let applied = ok(&e, "design.apply", json!({"design_id": id, "base_rev": base, "lenient": true, "ops": [
+        {"op": "update", "id": "title", "set": {"text": "Mine"}},
+        {"op": "update", "id": "photo", "set": {"fill": "#000000"}},
+        {"op": "move", "id": "inner", "index": 0},
+        {"op": "delete", "id": "inner"},
+        {"op": "update", "id": "note", "set": {"text": "x"}},
+    ]}));
+    assert_eq!(applied["skipped"], json!([
+        {"at": 0, "id": "title", "reason": "changed", "rev": base + 1},
+        {"at": 3, "id": "inner", "reason": "inside", "ids": ["dot"]},
+        {"at": 4, "id": "note", "reason": "missing", "rev": base + 1},
+    ]));
+    assert_eq!(strings(&applied["ids"]), ["", "photo", "inner", "", ""]);
+    assert!(applied.get("rebased").is_none(), "a list that skipped what changed did not apply on top of it");
+    let nodes = get(&e, json!({"design_id": id, "nodes": ["card"]}))["nodes"].clone();
+    let title = nodes.as_array().unwrap().iter().find(|n| n["id"] == "title").unwrap();
+    assert_eq!(title["text"], "Hi", "the later change stays");
+    assert_eq!(ids(&nodes), ["card", "inner", "dot", "title", "photo"], "the move applied, the delete did not");
+    // Every edit skipped: no rev, no event, no undo.
+    let now = rev(&e, id);
+    let mut rx = e.subscribe();
+    let applied = ok(&e, "design.apply", json!({"design_id": id, "base_rev": base, "lenient": true, "ops": [
+        {"op": "update", "id": "title", "set": {"text": "Mine"}}]}));
+    assert_eq!((applied["rev"].as_i64(), applied["prev_rev"].as_i64(), applied["skipped"].as_array().map(Vec::len)), (Some(now), Some(now), Some(1)));
+    assert!(changed_events(&mut rx).is_empty());
+    assert_eq!(rev(&e, id), now);
+}
+
+// --- W19: when a missing id went --------------------------------------------------------------
+
+/// W19: a refusal naming an id the design no longer holds says at which rev it was removed: an
+/// edit of it, a parent, and a connector end. One the list itself removed is not noted.
+#[test]
+fn a_removed_parent_says_when_it_went() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    apply(&e, id, json!([{"op": "delete", "id": "side"}]));
+    let gone = rev(&e, id);
+    let refusal = |ops: Value| refused(call(&e, "design.apply", json!({"design_id": id, "ops": ops})));
+    let error = refusal(json!([{"op": "update", "id": "chip", "set": {"x": 1}}]));
+    assert_eq!((error.code.as_str(), error.message.clone()), ("design.node_not_found", format!("ops[0] update \"chip\": no such node (removed at rev {gone})")));
+    let error = refusal(json!([{"op": "add", "node": {"parent": "side", "kind": "rect"}}]));
+    assert_eq!((error.code.as_str(), error.message.clone()), ("design.parent", format!("ops[0] add rect: parent \"side\" is not in the design (removed at rev {gone})")));
+    let error = refusal(json!([{"op": "update", "id": "link", "set": {"to": "chip"}}]));
+    assert_eq!((error.code.as_str(), error.message.clone()), ("design.node_not_found", format!("ops[0] update \"link\": to: \"chip\" is not in the design (removed at rev {gone})")));
+    // Removed by this list: its own edit says so.
+    let error = refusal(json!([{"op": "delete", "id": "photo"}, {"op": "update", "id": "photo", "set": {"x": 1}}]));
+    assert_eq!(error.message, "ops[1] update \"photo\": no such node");
+    // Never in it: no note.
+    let error = refusal(json!([{"op": "update", "id": "nowhere", "set": {"x": 1}}]));
+    assert_eq!(error.message, "ops[0] update \"nowhere\": no such node");
+}
+
+/// Agents read changes the same way, within their own project only.
+#[test]
+fn an_agent_reads_what_changed_since() {
+    let (e, _root) = project();
+    let name = ok(&e, "session.create", json!({"project_id": 1, "provider": "claude", "role": "builder"}))["name"].as_str().unwrap().to_string();
+    let agent = Actor::agent(&name);
+    let id = sample(&e);
+    let base = rev(&e, id);
+    ok_as(&e, agent.clone(), "design.apply", json!({"design_id": id, "ops": [{"op": "update", "id": "title", "set": {"text": "Hi"}}], "base_rev": base}));
+    let since = ok_as(&e, agent.clone(), "design.get", json!({"design_id": id, "since_rev": base}));
+    assert_eq!(ids(&since["nodes"]), ["title"]);
+    let unknown = refused(call_as(&e, agent, "design.get", json!({"design_id": 999, "since_rev": 0})));
+    assert_eq!(unknown.code, "design.not_found");
+}
+
+/// Timings for what a reader of the most a design holds reads after one edit (W20), whole and
+/// cut to a page, and for an edit sent against the rev before it, which applies on top (W6).
+/// Run with `cargo test --release -p relay-core --test design_revs -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn measure_since_rev_and_base_rev_on_5000() {
+    let (e, _root) = project();
+    let id = create(&e);
+    // Ten frames of 499 children, the last of 498: the page and 4,999 more.
+    for k in 0..10 {
+        let mut ops = vec![json!({"op": "add", "node": {"id": format!("f{k}"), "parent": "page-1", "kind": "frame", "w": 1200, "h": 900}})];
+        ops.extend((0..if k == 9 { 498 } else { 499 }).map(|i| json!({"op": "add", "node": {
+            "id": format!("f{k}-{i}"), "parent": format!("f{k}"), "kind": if i % 3 == 0 { "text" } else { "rect" },
+            "x": i * 3, "y": i * 2, "w": 40, "h": 20, "fill": "#336699", "text": if i % 3 == 0 { Some("Label") } else { None },
+        }})));
+        apply(&e, id, Value::Array(ops));
+    }
+    let median = |mut runs: Vec<std::time::Duration>| { runs.sort(); runs[runs.len() / 2] };
+    let (mut whole, mut paged, mut stale) = (Vec::new(), Vec::new(), Vec::new());
+    for n in 0..12 {
+        let at = apply(&e, id, json!([{"op": "update", "id": "f3-7", "set": {"x": n}}]))["rev"].as_i64().unwrap();
+        let started = std::time::Instant::now();
+        let got = get(&e, json!({"design_id": id, "since_rev": at - 1}));
+        let took = started.elapsed();
+        assert_eq!(got["nodes"].as_array().unwrap().len(), 1);
+        let started = std::time::Instant::now();
+        let got = get(&e, json!({"design_id": id, "page": "page-1", "since_rev": at - 1}));
+        let took_paged = started.elapsed();
+        assert_eq!(got["nodes"].as_array().unwrap().len(), 1);
+        let started = std::time::Instant::now();
+        let applied = apply_at(&e, id, at - 1, json!([{"op": "update", "id": "f5-9", "set": {"x": n}}]));
+        let took_stale = started.elapsed();
+        assert_eq!(applied["rebased"], true);
+        if n >= 2 {
+            whole.push(took);
+            paged.push(took_paged);
+            stale.push(took_stale);
+        }
+    }
+    assert_eq!(get(&e, json!({"design_id": id}))["nodes"].as_array().unwrap().len(), 5_000);
+    println!("design.get since_rev, 5,000 nodes, one changed: median {:?} of {}", median(whole.clone()), whole.len());
+    println!("design.get since_rev with page, 5,000 nodes, one changed: median {:?} of {}", median(paged.clone()), paged.len());
+    println!("design.apply, one update, base_rev one behind, 5,000 nodes: median {:?} of {}", median(stale.clone()), stale.len());
 }

@@ -1,10 +1,10 @@
 //! `design.apply`: a list of node edits run in order against the request's transaction.
 
-use super::revs;
+use super::revs::{self, removed_rev};
 use super::{body_of, emit_design, kind_of, live_design, node_of, row_bytes};
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project};
-use relay_bus::design::{details, field_of, label, nearest, Node, NodeKind, NodeOp, MAX_DEPTH, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
+use relay_bus::design::{details, field_of, label, nearest, Conflict, ConflictReason, Node, NodeKind, NodeOp, MAX_DEPTH, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{Apply, ApplyOut};
 use relay_bus::types::{Design, Id};
@@ -18,9 +18,11 @@ use std::path::PathBuf;
 const UNDO_KEPT: usize = 256 * 1024;
 /// Most `warnings` one answer carries.
 const MAX_WARNINGS: usize = 20;
+/// Most conflicts `skipped` lists; a warning counts the rest.
+const MAX_SKIPPED: usize = 100;
 /// How far a walk up or down a design goes: past MAX_DEPTH, so a design another build nested
 /// deeper is still measured, but never the whole of a chain gone wrong.
-const WALK: usize = MAX_DEPTH + 6;
+pub(super) const WALK: usize = MAX_DEPTH + 6;
 const TOO_LARGE_HINT: &str = "split it across designs, or keep long text and big paths out of it";
 
 /// A row's kind: `Err` holds the name of one this build does not know (a newer build's), whose
@@ -105,6 +107,13 @@ pub(super) struct Run<'a> {
     pub(super) crossed: HashMap<String, usize>,
     /// Where pictures are stored: an image's `src` names a file in it (B6).
     pub(super) assets: PathBuf,
+    /// W6: what changed since a lenient list's `base_rev`, by node: an edit of one is skipped
+    /// rather than overwrite that change ([`Run::stale`]). Empty for a strict list, which such a
+    /// change refuses before any edit runs.
+    pub(super) conflicts: HashMap<String, Vec<Conflict>>,
+    /// Edits not applied as sent, and why: the first [`MAX_SKIPPED`]; `skipped_total` counts all.
+    pub(super) skipped: Vec<Conflict>,
+    pub(super) skipped_total: usize,
 }
 
 const NODE_META: &str = "SELECT parent_id, kind, ord FROM design_nodes WHERE design_id = ?1 AND node_id = ?2";
@@ -159,8 +168,43 @@ impl Run<'_> {
         if self.lenient {
             return Ok(None);
         }
-        let hint = self.nearest_id(self.target.as_deref().unwrap_or_default())?;
-        Err(self.fail(ErrorKind::NotFound, "design.node_not_found", what).with_hint(hint))
+        let id = self.target.as_deref().unwrap_or_default();
+        let hint = self.nearest_id(id)?;
+        Err(self.fail(ErrorKind::NotFound, "design.node_not_found", format!("{what}{}", self.gone_note(id)?)).with_hint(hint))
+    }
+
+    /// W19: what a refusal adds about an id the design does not hold that an earlier list
+    /// removed (` (removed at rev 14)`, from the removals on record), or nothing. One this list
+    /// removed is not noted: its own edit did.
+    pub(super) fn gone_note(&self, id: &str) -> Result<String, BusError> {
+        Ok(match removed_rev(self.tx, self.design, id)? {
+            Some(rev) if rev < self.rev => format!(" (removed at rev {rev})"),
+            _ => String::new(),
+        })
+    }
+
+    /// W6: whether the edit under way, of node `id`, is skipped for a change made since a
+    /// lenient list's `base_rev`: the node changed or went, or (`deleting`) a node inside it
+    /// changed, which the delete would take. Each skip is reported in `skipped`, at this edit.
+    pub(super) fn stale(&mut self, id: &str, deleting: bool) -> bool {
+        let Some(found) = self.conflicts.get(id) else { return false };
+        let hits: Vec<Conflict> = found.iter()
+            .filter(|c| deleting || c.reason != ConflictReason::Inside)
+            .map(|c| Conflict { at: Some(self.at as u32), ..c.clone() })
+            .collect();
+        let skipped = !hits.is_empty();
+        for conflict in hits {
+            self.skip(conflict);
+        }
+        skipped
+    }
+
+    /// Report an edit (or part of one) not applied as sent.
+    pub(super) fn skip(&mut self, conflict: Conflict) {
+        self.skipped_total += 1;
+        if self.skipped.len() < MAX_SKIPPED {
+            self.skipped.push(conflict);
+        }
     }
 
     /// W19: the hint for an id the design does not hold, the nearest one it does or where to
@@ -454,7 +498,7 @@ impl Run<'_> {
     pub(super) fn container(&mut self, parent: &str) -> Result<bool, BusError> {
         match self.meta(parent)? {
             None if self.lenient => Ok(false),
-            None => Err(self.fail(ErrorKind::NotFound, "design.parent", format!("parent {parent:?} is not in the design"))
+            None => Err(self.fail(ErrorKind::NotFound, "design.parent", format!("parent {parent:?} is not in the design{}", self.gone_note(parent)?))
                 .with_hint(self.nearest_id(parent)?)),
             Some((_, Ok(kind), _)) if !kind.holds_children() => Err(self.fail(ErrorKind::Invalid, "design.parent",
                 format!("parent {parent:?} is a {}, which holds nothing; use a page, frame or group", kind.name()))),
@@ -521,6 +565,9 @@ impl Run<'_> {
     }
 
     pub(super) fn update(&mut self, id: String, set: Map<String, Value>) -> Result<Option<String>, BusError> {
+        if self.stale(&id, false) {
+            return Ok(None);
+        }
         let Some(row) = self.row(&id)? else { return self.missing("no such node") };
         let Some(node) = self.readable(&id, &row)? else { return Ok(None) };
         let mut next = node.patched(&set).map_err(|why| self.fail(ErrorKind::Invalid, "design.node_invalid", why))?;
@@ -548,6 +595,9 @@ impl Run<'_> {
     }
 
     pub(super) fn move_(&mut self, id: String, parent: Option<String>, index: Option<u32>) -> Result<Option<String>, BusError> {
+        if self.stale(&id, false) {
+            return Ok(None);
+        }
         let Some((from, kind, ord)) = self.meta(&id)? else { return self.missing("no such node") };
         let kind = match kind {
             Ok(kind) => kind,
@@ -629,6 +679,9 @@ impl Run<'_> {
     }
 
     pub(super) fn delete(&mut self, id: String) -> Result<Option<String>, BusError> {
+        if self.stale(&id, true) {
+            return Ok(None);
+        }
         let Some(root) = self.row(&id)? else { return self.missing("no such node") };
         if root.kind == Ok(NodeKind::Page) && self.pages <= 1 {
             return Err(self.fail(ErrorKind::Conflict, "design.last_page", "a design keeps at least one page")
@@ -813,8 +866,10 @@ impl Run<'_> {
             return connector("is this line itself".into());
         }
         let Some((_, page)) = self.place(end)? else {
-            let missing = !self.parents.contains_key(end);
-            return Ok(missing.then(|| (ErrorKind::NotFound, "design.node_not_found", "is not in the design".to_string())));
+            if self.parents.contains_key(end) {
+                return Ok(None);
+            }
+            return Ok(Some((ErrorKind::NotFound, "design.node_not_found", format!("is not in the design{}", self.gone_note(end)?))));
         };
         if page == end {
             return connector("is a page, not a node on one".into());
@@ -905,10 +960,21 @@ pub(super) fn register(e: &mut Engine) {
         }
         let design = live_design(ctx.tx(), p.design_id)?;
         assert_actor_project(ctx, design.project_id)?;
-        if p.base_rev.is_some_and(|rev| rev != design.rev) {
-            return Err(BusError::conflict("design.stale", format!("design {} is at rev {}, not {}", design.id, design.rev, p.base_rev.unwrap_or_default()))
-                .with_details(json!({"rev": design.rev}))
-                .with_hint("read it again with design.get and redo the edits against what is there"));
+        // W6: a list sent against an older rev applies on top of what changed since, unless it
+        // writes a node that changed: refused, or when lenient, that node's edits skipped.
+        let (mut rebased, mut stale) = (false, HashMap::new());
+        if let Some(base) = p.base_rev.filter(|&base| base != design.rev) {
+            if base > design.rev {
+                return Err(revs::ahead(&design, base));
+            }
+            let conflicts = revs::base_conflicts(ctx.tx(), design.id, &p.ops, base)?;
+            if !conflicts.is_empty() && !lenient {
+                return Err(revs::stale(&design, base, &conflicts));
+            }
+            rebased = conflicts.is_empty();
+            for conflict in conflicts {
+                stale.entry(conflict.id.clone()).or_insert_with(Vec::new).push(conflict);
+            }
         }
         let by = actor_name(ctx)?;
         let (bytes, next_node): (i64, i64) = ctx.tx().prepare_cached("SELECT bytes, next_node FROM designs WHERE id = ?1").bus()?
@@ -942,6 +1008,9 @@ pub(super) fn register(e: &mut Engine) {
             removed_at: HashMap::new(),
             crossed: HashMap::new(),
             assets,
+            conflicts: stale,
+            skipped: Vec::new(),
+            skipped_total: 0,
         };
         // B59: past the last edit that can make the design smaller (any but an add or a copy),
         // the list only grows it, so one over the cap by then is refused at the edit that took
@@ -981,6 +1050,10 @@ pub(super) fn register(e: &mut Engine) {
         if run.bytes > MAX_DESIGN_BYTES && run.bytes > bytes {
             return Err(run.too_large(false));
         }
+        if run.skipped_total > run.skipped.len() && run.warnings.len() < MAX_WARNINGS {
+            run.warnings.push(format!("{} more edits were skipped; skipped lists the first {MAX_SKIPPED}", run.skipped_total - run.skipped.len()));
+        }
+        let skipped = std::mem::take(&mut run.skipped);
         let prev_rev = design.rev;
         if run.inverse.is_empty() {
             // TM-58, MODEL-SPEC §1 #20: every edit found what it sent already there, or was
@@ -989,11 +1062,11 @@ pub(super) fn register(e: &mut Engine) {
                 design_id: design.id,
                 rev: prev_rev,
                 prev_rev,
-                rebased: false,
+                rebased,
                 ids: std::mem::take(&mut run.ids),
                 removed_count: 0,
                 audit_id: None,
-                skipped: Vec::new(),
+                skipped,
                 warnings: std::mem::take(&mut run.warnings),
                 copied: BTreeMap::new(),
                 design: Some(design),
@@ -1041,11 +1114,11 @@ pub(super) fn register(e: &mut Engine) {
             design_id: design.id,
             rev: design.rev,
             prev_rev,
-            rebased: false,
+            rebased,
             ids,
             removed_count: removed.len() as u32,
             audit_id: None,
-            skipped: Vec::new(),
+            skipped,
             warnings,
             copied: BTreeMap::new(),
             design: Some(design),

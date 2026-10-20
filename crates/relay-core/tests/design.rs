@@ -276,16 +276,17 @@ fn deleting_a_shape_frees_the_connectors_attached_to_it() {
     assert_eq!(nodes(&e, id), before, "the undo attaches them again");
 }
 
+/// An add-only list sent against an older rev writes no node that changed since, so it applies
+/// on top (W6); `design_revs.rs` holds the refusals of a list that does write one.
 #[test]
-fn a_stale_base_rev_is_refused_with_the_current_one() {
+fn an_add_only_list_against_an_older_rev_applies() {
     let (e, _root) = project();
     let id = create(&e);
     let ops = json!([{"op": "add", "node": {"parent": "page-1", "kind": "rect"}}]);
     ok(&e, "design.apply", json!({"design_id": id, "ops": ops, "base_rev": 1}));
-    let refused = call(&e, "design.apply", json!({"design_id": id, "ops": ops, "base_rev": 1}));
-    let error = err(&refused);
-    assert_eq!(error.code, "design.stale");
-    assert_eq!(error.details.as_ref().unwrap()["rev"], 2);
+    let again = ok(&e, "design.apply", json!({"design_id": id, "ops": ops, "base_rev": 1}));
+    assert_eq!((again["rev"].as_i64(), again["prev_rev"].as_i64(), again["rebased"].clone()), (Some(3), Some(2), json!(true)));
+    assert_eq!(nodes(&e, id).as_array().unwrap().len(), 3);
     assert_eq!(code(call(&e, "design.apply", json!({"design_id": id, "ops": []}))), "design.ops");
 }
 

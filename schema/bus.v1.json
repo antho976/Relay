@@ -28189,7 +28189,7 @@
         {
           "type": "string",
           "const": "inside",
-          "description": "It holds nodes added since (`ids`); deleting it would take them."
+          "description": "It holds nodes added or changed since (`ids`); deleting it would take them."
         },
         {
           "type": "string",
