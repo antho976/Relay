@@ -593,6 +593,59 @@ impl Scene {
         }
     }
 
+    /// Bring the scene up to a read of what changed since it matched the engine (TM-80:
+    /// `design.get` with `since_rev`): `upserts` are the changed nodes as stored, in
+    /// `design.get`'s order, and `removed` the ids gone since. A changed node is put in place and
+    /// drawn again; removed ids are dropped, and only their parents' children lists change.
+    ///
+    /// Such a read carries no sibling order, so a node is only patched where its place is known:
+    /// one the scene holds, under the same parent, whose body changed. A new node, one under
+    /// another parent, one whose body is as the scene holds it (so it moved among its siblings,
+    /// or was taken out and put back), or a delta that does not fit the scene (a removed node
+    /// whose child stays) is refused, the scene as it was: read the design whole. One case it
+    /// cannot see: a node moved among its siblings and changed in the same read keeps its old
+    /// place until the next whole read.
+    pub fn patch(&mut self, upserts: Vec<Node>, removed: &[String]) -> Result<(), String> {
+        let gone: FxHashSet<&str> = removed.iter().map(String::as_str).filter(|id| self.nodes.contains_key(*id)).collect();
+        for id in &gone {
+            if let Some(kid) = self.children(id).iter().find(|kid| !gone.contains(kid.as_str())) {
+                return Err(format!("{kid} would be left without its parent {id}"));
+            }
+        }
+        for node in &upserts {
+            let id = &node.id;
+            if gone.contains(id.as_str()) {
+                return Err(format!("{id} is both changed and removed"));
+            }
+            let Some(mine) = self.stored(id) else {
+                return Err(format!("{id} is new: where it sits among its siblings is not known"));
+            };
+            if mine.parent != node.parent || mine.kind != node.kind {
+                return Err(format!("{id} moved to another parent or was made again"));
+            }
+            if mine == node {
+                return Err(format!("{id} is unchanged, so it moved among its siblings"));
+            }
+        }
+        let mut parents: FxHashSet<String> = FxHashSet::default();
+        for id in &gone {
+            if let Some(node) = self.nodes.remove(*id) {
+                parents.insert(node.parent.unwrap_or_default());
+            }
+            self.stored.remove(*id);
+            self.children.remove(*id);
+        }
+        for parent in &parents {
+            if let Some(list) = self.children.get_mut(parent) {
+                list.retain(|c| !gone.contains(c.as_str()));
+            }
+        }
+        for node in upserts {
+            self.put(node);
+        }
+        Ok(())
+    }
+
     fn check_container(&self, id: &str) -> Result<(), String> {
         match self.nodes.get(id) {
             Some(p) if p.kind.holds_children() => Ok(()),
@@ -1081,5 +1134,96 @@ pub(crate) mod tests {
         assert!(s.apply_effective(vec![fill("d", "$accent")]).unwrap().is_empty());
         assert_eq!(s.apply_effective(vec![fill("d", "#4C9DFF")]).unwrap().len(), 1);
         assert_eq!(s.stored("d").unwrap().fill.as_deref(), Some("#4C9DFF"));
+    }
+
+    /// What `design.get` with since_rev answers after `ops`, as the engine writes revs: every
+    /// node added, changed, moved or detached since, as stored and in its order, and the ids
+    /// removed (those added again are not).
+    fn changes(base: &Scene, ops: &[NodeOp]) -> (Scene, Vec<Node>, Vec<String>) {
+        let mut after = base.clone();
+        let mut changed: FxHashSet<String> = FxHashSet::default();
+        let mut removed: Vec<String> = Vec::new();
+        for op in ops {
+            let old: FxHashMap<String, Node> = after.to_nodes().into_iter().map(|n| (n.id.clone(), n)).collect();
+            after.apply(op).unwrap();
+            for n in after.to_nodes() {
+                if old.get(&n.id) != Some(&n) {
+                    removed.retain(|id| *id != n.id);
+                    changed.insert(n.id);
+                }
+            }
+            for id in old.keys().filter(|id| after.stored(id).is_none()) {
+                changed.remove(id);
+                removed.push(id.clone());
+            }
+            if let NodeOp::Move { id, .. } = op {
+                changed.insert(id.clone());
+            }
+        }
+        let upserts = after.to_nodes().into_iter().filter(|n| changed.contains(&n.id)).collect();
+        (after, upserts, removed)
+    }
+
+    /// Patch `base` with what changed in `ops`: either it gives what a whole read builds, or it
+    /// is refused and `base` is as it was. Whether it patched.
+    fn patches(base: &Scene, ops: &[NodeOp]) -> bool {
+        let (after, upserts, removed) = changes(base, ops);
+        let whole = Scene::new(after.to_nodes()).with_styles(after.styles().clone());
+        let mut patched = base.clone();
+        match patched.patch(upserts, &removed) {
+            Ok(()) => {
+                patched.set_styles(after.styles().clone());
+                same(&patched, &whole);
+                true
+            }
+            Err(_) => {
+                same(&patched, base);
+                false
+            }
+        }
+    }
+
+    /// TM-80: a read of what changed patches the scene into what a whole read builds, or is
+    /// refused where a delta cannot say where a node sits.
+    #[test]
+    fn a_read_of_what_changed_patches_the_scene_as_a_whole_read_builds_it() {
+        let base = styled();
+        let to = |id: &str, parent: Option<&str>, index: Option<u32>| NodeOp::Move { id: id.into(), parent: parent.map(Into::into), index, keep_position: None };
+        let patched: &[&[NodeOp]] = &[
+            &[update("c", json!({"text": "Hello"}))],
+            &[update("b", json!({"x": 20, "style": null})), update("d", json!({"fill": "#123456"}))],
+            &[NodeOp::Delete { id: "a".into() }],
+            &[NodeOp::Delete { id: "c".into() }, update("b", json!({"opacity": 0.5}))],
+            &[NodeOp::Color { name: "accent".into(), value: "#ff0000".into() }],
+            &[NodeOp::Style { name: "card".into(), set: set(json!({"radius": 2})) }, update("d", json!({"style": "card"}))],
+            &[NodeOp::DeleteStyle { name: "card".into() }, NodeOp::DeleteStyle { name: "accent".into() }],
+            &[],
+        ];
+        for ops in patched {
+            assert!(patches(&base, ops), "{ops:?}");
+        }
+        // Where a node sits among its siblings the delta does not say: read it whole.
+        let mut e = node("e", Some("a"), NodeKind::Rect, [0.0, 0.0, 5.0, 5.0]);
+        e.fill = Some("#000000".into());
+        let refused: &[&[NodeOp]] = &[
+            &[NodeOp::Add { node: e, index: Some(0) }],
+            &[to("b", Some("p1"), None)],
+            &[to("b", None, Some(1))],
+            &[update("b", json!({"x": 11})), update("b", json!({"x": 10}))],
+            &[NodeOp::Delete { id: "d".into() }, NodeOp::Add { node: base.stored("d").unwrap().clone(), index: Some(0) }],
+        ];
+        for ops in refused {
+            assert!(!patches(&base, ops), "{ops:?}");
+        }
+        // And a delta that does not fit the scene is refused, the scene as it was.
+        let mut s = base.clone();
+        assert_eq!(s.patch(Vec::new(), &["a".into()]).unwrap_err(), "b would be left without its parent a");
+        let mut gone = base.stored("b").unwrap().clone();
+        gone.x = 3.0;
+        assert!(s.patch(vec![gone], &["a".into(), "b".into(), "c".into()]).is_err());
+        same(&s, &base);
+        // Ids removed that it never held are nothing to it.
+        s.patch(Vec::new(), &["never".into()]).unwrap();
+        same(&s, &base);
     }
 }
