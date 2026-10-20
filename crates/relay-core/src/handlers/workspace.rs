@@ -935,11 +935,13 @@ fn audit_mark(conn: &Connection) -> Result<Id, BusError> {
 /// what `project.restore` brings back is; a hook's report (one per agent tool call) and the
 /// mailbox (never restored) are left out.
 pub(crate) fn changed_since(conn: &Connection, mark: Id, project_id: Id) -> Result<bool, BusError> {
-    conn.prepare_cached(
-        "SELECT EXISTS(SELECT 1 FROM audit WHERE id > ?1 AND project_id = ?2 AND kind = 'ok'
-           AND op NOT IN ('guardrail.gate', 'session.report', 'usage.report') AND op NOT LIKE 'mailbox.%')",
-    ).bus()?.query_row(params![mark, project_id], |r| r.get(0)).bus()
+    conn.prepare_cached(CHANGED_SINCE).bus()?.query_row(params![mark, project_id], |r| r.get(0)).bus()
 }
+
+/// `+project_id`: the rows past the mark by rowid, a few seconds' worth, never the project's
+/// whole history through audit_project_ts, which the transaction would hold the store for.
+const CHANGED_SINCE: &str = "SELECT EXISTS(SELECT 1 FROM audit WHERE id > ?1 AND +project_id = ?2 AND kind = 'ok'
+    AND op NOT IN ('guardrail.gate', 'session.report', 'usage.report') AND op NOT LIKE 'mailbox.%')";
 
 /// `project.remove`'s transaction, also run once per project by `workspace.remove`.
 #[allow(clippy::too_many_arguments)]
@@ -1243,6 +1245,9 @@ mod tests {
         assert!(changed_since(&conn, mark, 1).unwrap());
         assert!(changed_since(&conn, mark, 2).unwrap());
         assert!(!changed_since(&conn, mark, 3).unwrap());
+        let plan: Vec<String> = conn.prepare(&format!("EXPLAIN QUERY PLAN {CHANGED_SINCE}")).unwrap()
+            .query_map(params![mark, 1], |r| r.get(3)).unwrap().map(Result::unwrap).collect();
+        assert!(plan.iter().any(|step| step.contains("INTEGER PRIMARY KEY (rowid>?)")), "only the rows past the mark: {plan:?}");
     }
 
     #[test]
