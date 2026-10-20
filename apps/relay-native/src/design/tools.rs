@@ -1842,7 +1842,8 @@ fn select_sibling(b: &Board, dir: i32) {
 
 impl Board {
     pub(super) fn nudge(&self, dx: f64, dy: f64) {
-        let ops = edit::nudge(&self.doc.scene.borrow(), &self.selection.borrow(), dx, dy);
+        let placed = self.placed();
+        let ops = edit::nudge(&self.doc.scene.borrow(), &placed, &self.selection.borrow(), dx, dy);
         self.commit(ops);
     }
 

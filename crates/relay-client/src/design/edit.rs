@@ -4,10 +4,10 @@
 //! sends them as one list, so one undo reverts the whole command.
 
 use super::geom::Rect;
-use super::layout::Placed;
+use super::layout::{fit_of, is_laid, stored_shift, unpinned, Fit, Placed};
 use super::scene::Scene;
 use super::shapes;
-use relay_bus::design::{Layout, Node, NodeKind, NodeOp};
+use relay_bus::design::{Items, Layout, Node, NodeKind, NodeOp, Sizing, MAX_COORD};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 
@@ -45,8 +45,94 @@ fn paint_key(scene: &Scene, id: &str) -> Vec<usize> {
 }
 
 /// Whether `parent` places its children itself (auto layout), so their `x`/`y` mean nothing.
+/// One `absolute` child it does not place: [`layout::is_laid`](super::layout::is_laid) asks of
+/// the child.
 pub fn lays_out(scene: &Scene, parent: &str) -> bool {
     scene.node(parent).is_some_and(|p| p.layout_mode() != Layout::None)
+}
+
+/// A position within what `validate` takes (±`MAX_COORD`), in whole pixels.
+fn coord(v: f64) -> f64 {
+    v.round().clamp(-MAX_COORD, MAX_COORD)
+}
+
+/// Where `id` shows: its own point (a group's, else its box's corner) less `origin`, and its
+/// box's size. `None` for what is not placed (hidden, or on another page).
+fn shown(placed: &Placed, id: &str, origin: (f64, f64)) -> Option<Rect> {
+    let r = placed.rect(id)?;
+    let (x, y) = placed.point(id);
+    Some(Rect::new(x - origin.0, y - origin.1, r.w, r.h))
+}
+
+/// The axes along which `id`'s parent stretches it across a line of its layout (`items:
+/// stretch`): a column's width, a row's or a wrap's height. Its size there is the line's, not
+/// what its own rule gives.
+fn stretched(scene: &Scene, id: &str) -> (bool, bool) {
+    let Some(p) = scene.parent(id).and_then(|p| scene.node(p)).filter(|_| is_laid(scene, id)) else {
+        return (false, false);
+    };
+    match (p.items, p.layout_mode()) {
+        (Some(Items::Stretch), Layout::Column) => (true, false),
+        (Some(Items::Stretch), Layout::Row | Layout::Wrap) => (false, true),
+        _ => (false, false),
+    }
+}
+
+/// What [`settle`] does with a size its node's own rule would not give it out of a layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sizes {
+    /// Fixed at the size shown: a fill, and a hug of what no longer measures it.
+    Freeze,
+}
+
+/// The fields that put `n` (as stored) at `rel` out of any auto layout (TM-8): `rel` is the box
+/// it shows, from its new parent's origin (a group's own point and its children's bounds' size),
+/// in a parent drawn as `fit`, through whose pins the stored box is worked out
+/// (`layout::unpinned`). `x`/`y` always, `w`/`h` where they change. An axis that fills or hugs
+/// is fixed at the size shown ([`Sizes`]), but a text's, a sticky's or a laid-out frame's hug,
+/// which measures what it holds wherever it is, unless the layout it leaves stretched it
+/// (`stretched`). A group's size is its children's and a line's or path's its points', so
+/// theirs stay as they are.
+fn settle(n: &Node, rel: Rect, fit: Option<Fit>, stretched: (bool, bool), sizes: Sizes) -> Map<String, Value> {
+    let r = unpinned(n, fit, rel);
+    let mut s = set(&[("x", json!(coord(r.x))), ("y", json!(coord(r.y)))]);
+    if matches!(n.kind, NodeKind::Group | NodeKind::Line | NodeKind::Path) {
+        return s;
+    }
+    let measures = matches!(n.kind, NodeKind::Text | NodeKind::Sticky) || n.layout_mode() != Layout::None;
+    let axes = [
+        ("w", "w_sizing", n.w, n.w_rule(), stretched.0, n.clamp_w(r.w.round())),
+        ("h", "h_sizing", n.h, n.h_rule(), stretched.1, n.clamp_h(r.h.round())),
+    ];
+    for (key, rule_key, stored, rule, stretched, size) in axes {
+        if rule == Sizing::Hug && measures && !stretched {
+            continue;
+        }
+        let size = size.clamp(0.0, MAX_COORD);
+        if size != stored {
+            s.insert(key.into(), json!(size));
+        }
+        let fixed = match rule {
+            Sizing::Fixed => false,
+            Sizing::Hug => sizes == Sizes::Freeze || measures,
+            Sizing::Fill => sizes == Sizes::Freeze,
+        };
+        if fixed {
+            s.insert(rule_key.into(), json!("fixed"));
+        }
+    }
+    s
+}
+
+/// The update that keeps `id` where and as big as it shows (TM-8) once it sits out of any auto
+/// layout, in a parent whose children count from page point `origin` and which is drawn as `fit`:
+/// a node leaving its layout, a layout turned off, a frame ungrouped. Its box as placed, written
+/// through the parent's pins, with each size a fill or a hug gave it fixed, but a text's, a
+/// sticky's or a laid-out frame's hug, which measures what it holds wherever it is. `None` for a
+/// node not placed (hidden): nothing shows where it would be.
+pub fn freeze(scene: &Scene, placed: &Placed, id: &str, origin: (f64, f64), fit: Option<Fit>) -> Option<Map<String, Value>> {
+    let n = scene.stored(id)?;
+    Some(settle(n, shown(placed, id, origin)?, fit, stretched(scene, id), Sizes::Freeze))
 }
 
 /// Fresh ids for every node of `nodes`, keyed by the old.
@@ -197,15 +283,16 @@ pub fn duplicate(scene: &mut Scene, ids: &[String], offset: f64) -> (Vec<NodeOp>
         let before = added.entry(parent.clone()).or_default();
         let index = scene.index(&n.id).map(|i| i as u32 + 1 + *before);
         *before += 1;
-        let shift = if lays_out(scene, &parent) { 0.0 } else { offset };
+        let shift = if is_laid(scene, &n.id) { 0.0 } else { offset };
         (parent, index, shift, shift)
     })
 }
 
 /// Group (or frame) the selection: a new group in the selection's common parent, at the top
-/// selected node's place, holding the nodes where they were. `None` when they do not share
-/// a parent, or for a group when the parent lays out its children (a group has no size of
-/// its own to be laid out by); a frame there is laid out like any child.
+/// selected node's place, holding the nodes where and as big as they showed ([`freeze`]: one
+/// the parent laid out keeps its box). `None` when they do not share a parent, or for a group
+/// when the parent lays out its children (a group has no size of its own to be laid out by); a
+/// frame there is laid out like any child.
 pub fn group(scene: &mut Scene, placed: &Placed, ids: &[String], kind: NodeKind) -> Option<(Vec<NodeOp>, String)> {
     let ids = outermost(scene, ids);
     let parent = scene.parent(ids.first()?)?.to_string();
@@ -233,43 +320,59 @@ pub fn group(scene: &mut Scene, placed: &Placed, ids: &[String], kind: NodeKind)
         g.clip = Some(false);
     }
     let mut ops = vec![NodeOp::Add { node: g.clone(), index: Some(top + 1) }];
+    // Its children count from its own point, which is its box's corner.
+    let inside = (origin.0 + g.x, origin.1 + g.y);
     for id in &ids {
         ops.push(NodeOp::Move { id: id.clone(), parent: Some(gid.clone()), index: None, keep_position: None });
-        let (x, y) = if laid {
-            let (x, y) = placed.origin(id);
-            (x - origin.0, y - origin.1)
-        } else {
-            (scene.node(id)?.x, scene.node(id)?.y)
+        let s = match freeze(scene, placed, id, inside, None) {
+            Some(s) => s,
+            // Hidden: where its own `x`/`y` put it, or the corner if the layout placed it.
+            None if laid => set(&[("x", px(0.0)), ("y", px(0.0))]),
+            None => set(&[("x", px(scene.stored(id)?.x - g.x)), ("y", px(scene.stored(id)?.y - g.y))]),
         };
-        ops.push(NodeOp::Update { id: id.clone(), set: set(&[("x", px(x - g.x)), ("y", px(y - g.y))]) });
+        ops.push(NodeOp::Update { id: id.clone(), set: s });
     }
     Some((ops, gid))
 }
 
-/// Ungroup a group or frame: its children take its place in its parent, where they showed.
+/// Ungroup a group or frame: its children take its place in its parent, where and as big as
+/// they showed ([`freeze`]: one the frame laid out keeps its box, a filling one its width),
+/// written through the parent's pins. Into a parent that lays them out they only move.
 pub fn ungroup(scene: &Scene, placed: &Placed, id: &str) -> Option<(Vec<NodeOp>, Vec<String>)> {
-    let node = scene.node(id)?;
+    let node = scene.stored(id)?;
     if !matches!(node.kind, NodeKind::Group | NodeKind::Frame) {
         return None;
     }
     let parent = node.parent.clone()?;
-    // A child of a group or a free frame sits at the container's `x`/`y` plus its own, hidden or
-    // not; one a frame lays out sits where the layout put it.
     let laid = lays_out(scene, id);
+    let joins = lays_out(scene, &parent);
     let origin = placed.origin(&parent);
+    let fit = fit_of(scene, placed, &parent);
+    // Where its children count from on the page: as placed, or (hidden) at its own `x`/`y`.
+    let inner = if placed.rect(id).is_some() { placed.origin(id) } else { (origin.0 + node.x, origin.1 + node.y) };
     let start = scene.index(id)? as u32;
     let mut ops = Vec::new();
     let kids = scene.children(id).to_vec();
     for (index, child) in (start..).zip(&kids) {
-        let c = scene.node(child)?;
-        let (x, y) = if laid {
-            let (x, y) = placed.origin(child);
-            (x - origin.0, y - origin.1)
-        } else {
-            (node.x + c.x, node.y + c.y)
+        let c = scene.stored(child)?;
+        let s = match shown(placed, child, origin) {
+            Some(rel) if joins && !c.is_absolute() => set(&[("x", json!(coord(rel.x))), ("y", json!(coord(rel.y)))]),
+            Some(rel) => settle(c, rel, fit, stretched(scene, child), Sizes::Freeze),
+            None => {
+                // Hidden: at its own `x`/`y` in a group or a free frame; in a laid-out frame,
+                // whose layout never read them, at its content corner (B113).
+                let (x, y) = if laid {
+                    let [top, _, _, left] = node.padding_edges();
+                    (inner.0 + left, inner.1 + top)
+                } else {
+                    (inner.0 + c.x, inner.1 + c.y)
+                };
+                let r = unpinned(c, fit.filter(|_| !joins), Rect::new(x - origin.0, y - origin.1, c.w, c.h));
+                set(&[("x", json!(coord(r.x))), ("y", json!(coord(r.y)))])
+            }
         };
         ops.push(NodeOp::Move { id: child.clone(), parent: Some(parent.clone()), index: Some(index), keep_position: None });
-        ops.push(NodeOp::Update { id: child.clone(), set: set(&[("x", px(x)), ("y", px(y))]) });
+        ops.push(NodeOp::Update { id: child.clone(), set: s });
     }
     ops.push(NodeOp::Delete { id: id.to_string() });
     Some((ops, kids))
@@ -300,16 +403,87 @@ pub fn ungroup_all(scene: &Scene, placed: &Placed, ids: &[String]) -> (Vec<NodeO
 }
 
 /// Put `id` into `parent` at `index` so it stays where it shows (`at` is where its placed box
-/// lands on the page).
+/// lands on the page) and as big ([`freeze`]: one leaving a layout keeps its box), written
+/// through `parent`'s pins. Into a parent that lays it out it only moves.
 pub fn reparent(scene: &Scene, placed: &Placed, id: &str, parent: &str, index: Option<u32>, at: (f64, f64)) -> Vec<NodeOp> {
+    let mut ops = vec![NodeOp::Move { id: id.to_string(), parent: Some(parent.to_string()), index, keep_position: None }];
+    let Some(n) = scene.stored(id).filter(|n| n.is_absolute() || !lays_out(scene, parent)) else {
+        return ops;
+    };
     let origin = placed.origin(parent);
     // A group's `x`/`y` is its own point, not its box (its children's bounds).
-    let (ox, oy) = placed.origin(id);
-    let (bx, by) = placed.rect(id).map_or((ox, oy), |r| (r.x, r.y));
-    let (x, y) = (at.0 + ox - bx, at.1 + oy - by);
-    let mut ops = vec![NodeOp::Move { id: id.to_string(), parent: Some(parent.to_string()), index, keep_position: None }];
-    if !lays_out(scene, parent) {
-        ops.push(NodeOp::Update { id: id.to_string(), set: set(&[("x", px(x - origin.0)), ("y", px(y - origin.1))]) });
+    let (ox, oy) = placed.point(id);
+    let s = match placed.rect(id) {
+        Some(r) => {
+            let rel = Rect::new(at.0 + ox - r.x - origin.0, at.1 + oy - r.y - origin.1, r.w, r.h);
+            settle(n, rel, fit_of(scene, placed, parent), stretched(scene, id), Sizes::Freeze)
+        }
+        None => set(&[("x", json!(coord(at.0 - origin.0))), ("y", json!(coord(at.1 - origin.1)))]),
+    };
+    ops.push(NodeOp::Update { id: id.to_string(), set: s });
+    ops
+}
+
+/// Turn auto layout on `frames` to `mode` (`None`: off), as the context bar's layout key does.
+/// On for the first time, a frame gets a 12 px gap and 16 px padding where it names none, so
+/// its children do not touch its edges. Off, each child it laid out keeps the box it shows
+/// ([`freeze`]: a filling one its width) and the frame its size where it hugged them (TM-8):
+/// `layout: null` alone drops them at their stale `x`/`y` and sizes, a filling child at its
+/// stored width, often 0, and a hugging frame at its stored size. A hidden child goes to the
+/// frame's content corner. A frame not placed (hidden) only loses its layout.
+pub fn set_layout(scene: &Scene, placed: &Placed, frames: &[String], mode: Option<Layout>) -> Vec<NodeOp> {
+    let mut ops = Vec::new();
+    for id in frames {
+        let Some(f) = scene.stored(id).filter(|f| f.kind == NodeKind::Frame) else {
+            continue;
+        };
+        if let Some(mode) = mode.filter(|m| *m != Layout::None) {
+            let mut s = set(&[("layout", json!(mode))]);
+            if f.layout.is_none() {
+                if f.gap.is_none() {
+                    s.insert("gap".into(), json!(12));
+                }
+                if f.padding.is_none() {
+                    s.insert("padding".into(), json!([16]));
+                }
+            }
+            ops.push(NodeOp::Update { id: id.clone(), set: s });
+            continue;
+        }
+        if f.layout.is_none() {
+            continue;
+        }
+        let mut s = set(&[("layout", Value::Null)]);
+        let Some(r) = placed.rect(id).filter(|_| f.layout_mode() != Layout::None) else {
+            ops.push(NodeOp::Update { id: id.clone(), set: s });
+            continue;
+        };
+        // Its size as stored from now on: a hug of its children is fixed at what it showed.
+        let mut stored = (f.w, f.h);
+        for (key, rule_key, rule, size, at) in [("w", "w_sizing", f.w_rule(), f.clamp_w(r.w.round()), &mut stored.0), ("h", "h_sizing", f.h_rule(), f.clamp_h(r.h.round()), &mut stored.1)] {
+            if rule == Sizing::Hug {
+                *at = size.clamp(0.0, MAX_COORD);
+                s.insert(key.into(), json!(*at));
+                s.insert(rule_key.into(), json!("fixed"));
+            }
+        }
+        ops.push(NodeOp::Update { id: id.clone(), set: s });
+        let origin = placed.origin(id);
+        let fit = Some(Fit { stored, placed: (r.w, r.h) });
+        let [top, _, _, left] = f.padding_edges();
+        for child in scene.children(id) {
+            let Some(c) = scene.stored(child).filter(|c| !c.is_absolute()) else {
+                continue;
+            };
+            let s = match shown(placed, child, origin) {
+                Some(rel) => settle(c, rel, fit, stretched(scene, child), Sizes::Freeze),
+                None => {
+                    let r = unpinned(c, fit, Rect::new(left, top, c.w, c.h));
+                    set(&[("x", json!(coord(r.x))), ("y", json!(coord(r.y)))])
+                }
+            };
+            ops.push(NodeOp::Update { id: child.clone(), set: s });
+        }
     }
     ops
 }
@@ -365,19 +539,22 @@ fn let_go(scene: &Scene, placed: &Placed, n: &Node, from: bool, to: bool) -> Map
     s
 }
 
-/// Move the selection by `(dx, dy)` page pixels. Nodes a parent lays out stay put.
-pub fn nudge(scene: &Scene, ids: &[String], dx: f64, dy: f64) -> Vec<NodeOp> {
+/// Move the selection by `(dx, dy)` page pixels, each node as far as it shows: along a `scale`
+/// pin its stored offset moves by the frame's stored size over its placed one
+/// (`layout::stored_shift`). A node its parent lays out stays put; an `absolute` one moves.
+pub fn nudge(scene: &Scene, placed: &Placed, ids: &[String], dx: f64, dy: f64) -> Vec<NodeOp> {
     outermost(scene, ids)
         .into_iter()
-        .filter(|id| scene.parent(id).is_some_and(|p| !lays_out(scene, p)))
+        .filter(|id| scene.parent(id).is_some() && !is_laid(scene, id))
         .filter_map(|id| {
-            let n = scene.node(&id)?;
+            let n = scene.stored(&id)?;
+            let (sx, sy) = stored_shift(n, n.parent.as_deref().and_then(|p| fit_of(scene, placed, p)), dx, dy);
             let mut s = Map::new();
             if dx != 0.0 {
-                s.insert("x".into(), px(n.x + dx));
+                s.insert("x".into(), json!(coord(n.x + sx)));
             }
             if dy != 0.0 {
-                s.insert("y".into(), px(n.y + dy));
+                s.insert("y".into(), json!(coord(n.y + sy)));
             }
             Some(NodeOp::Update { id, set: s })
         })
@@ -398,12 +575,10 @@ pub enum Align {
     DistributeY,
 }
 
-/// Align the selection to its own bounds (or one node to its parent).
+/// Align the selection to its own bounds (or one node to its parent). A node its parent lays
+/// out stays put; an `absolute` one moves.
 pub fn align(scene: &Scene, placed: &Placed, ids: &[String], how: Align) -> Vec<NodeOp> {
-    let ids: Vec<String> = outermost(scene, ids)
-        .into_iter()
-        .filter(|id| scene.parent(id).is_some_and(|p| !lays_out(scene, p)))
-        .collect();
+    let ids: Vec<String> = outermost(scene, ids).into_iter().filter(|id| scene.parent(id).is_some() && !is_laid(scene, id)).collect();
     let rects: Vec<(String, Rect)> = ids.iter().filter_map(|id| Some((id.clone(), placed.rect(id)?))).collect();
     let target = match rects.as_slice() {
         [] => return Vec::new(),
@@ -454,7 +629,7 @@ pub fn align(scene: &Scene, placed: &Placed, ids: &[String], how: Align) -> Vec<
     moves
         .into_iter()
         .filter(|(_, dx, dy)| dx.abs() > 1e-9 || dy.abs() > 1e-9)
-        .flat_map(|(id, dx, dy)| nudge(scene, &[id], dx, dy))
+        .flat_map(|(id, dx, dy)| nudge(scene, placed, &[id], dx, dy))
         .collect()
 }
 
@@ -507,7 +682,7 @@ mod tests {
     use super::*;
     use crate::design::layout::{place, tests::Mono};
     use crate::design::scene::tests::{node, sample, styled};
-    use relay_bus::design::NodeKind as K;
+    use relay_bus::design::{NodeKind as K, PinX};
 
     fn run(scene: &mut Scene, ops: &[NodeOp]) {
         scene.apply_all(ops).unwrap();
@@ -664,7 +839,8 @@ mod tests {
         let ops = restack(&s, &["b".into()], false, false);
         run(&mut s, &ops);
         assert_eq!(s.children("a"), ["b", "c"]);
-        let ops = nudge(&s, &["b".into()], 1.0, -10.0);
+        let placed = place(&s, "p1", &Mono);
+        let ops = nudge(&s, &placed, &["b".into()], 1.0, -10.0);
         run(&mut s, &ops);
         let b = s.node("b").unwrap();
         assert_eq!((b.x, b.y), (11.0, 0.0));
@@ -837,6 +1013,238 @@ mod tests {
         let ops = reparent(&s, &placed, "g2", "g3", None, at);
         run(&mut s, &ops);
         assert_eq!(place(&s, "p1", &Mono).rect("r"), placed.rect("r"));
+    }
+
+    /// SKILL.md's login screen: a 390 px column, padding 24 at the sides, holding a hugging
+    /// title, a filling paragraph, a filling field 52 high and a filling button that hugs its
+    /// label's height.
+    fn login() -> Scene {
+        let nodes: Vec<Node> = serde_json::from_value(json!([
+            {"id": "p1", "kind": "page"},
+            {"id": "login", "parent": "p1", "kind": "frame", "x": 0, "y": 0, "w": 390, "h": 844,
+                "layout": "column", "gap": 16, "padding": [72, 24, 32, 24]},
+            {"id": "login-title", "parent": "login", "kind": "text", "text": "Welcome back", "font_size": 30},
+            {"id": "login-hint", "parent": "login", "kind": "text", "w_sizing": "fill",
+                "text": "Sign in to pick up where your agents left off."},
+            {"id": "email", "parent": "login", "kind": "frame", "w_sizing": "fill", "h": 52, "layout": "row",
+                "items": "center", "padding": [0, 16]},
+            {"id": "email-text", "parent": "email", "kind": "text", "text": "you@example.com"},
+            {"id": "login-button", "parent": "login", "kind": "frame", "w_sizing": "fill", "h_sizing": "hug",
+                "layout": "row", "justify": "center", "padding": [16]},
+            {"id": "login-button-label", "parent": "login-button", "kind": "text", "text": "Continue"},
+        ]))
+        .unwrap();
+        Scene::new(nodes)
+    }
+
+    /// Each of `ids` is placed in `after` as in `before`.
+    fn kept(before: &Placed, after: &Placed, ids: &[&str]) {
+        for id in ids {
+            assert_eq!(after.rect(id), before.rect(id), "{id} keeps its box");
+        }
+    }
+
+    const LOGIN: [&str; 6] = ["login-title", "login-hint", "email", "email-text", "login-button", "login-button-label"];
+
+    /// TM-8: a filling field dragged out of its column keeps the width it showed.
+    #[test]
+    fn a_field_dragged_out_of_its_column_keeps_its_width() {
+        let mut s = login();
+        let before = place(&s, "p1", &Mono);
+        assert_eq!(before.rect("email").map(|r| (r.w, r.h)), Some((342.0, 52.0)));
+        let at = before.rect("email").map(|r| (r.x, r.y)).unwrap();
+        let ops = reparent(&s, &before, "email", "p1", None, at);
+        run(&mut s, &ops);
+        let after = place(&s, "p1", &Mono);
+        kept(&before, &after, &["email", "email-text"]);
+        let email = s.node("email").unwrap();
+        assert_eq!((email.w, email.w_sizing), (342.0, Some(Sizing::Fixed)));
+    }
+
+    /// TM-8: with its layout turned off, every child keeps the box the layout gave it; the
+    /// title and the button keep hugging what they hold.
+    #[test]
+    fn turning_layout_off_keeps_every_childs_box() {
+        let mut s = login();
+        let before = place(&s, "p1", &Mono);
+        let ops = set_layout(&s, &before, &ids(&["login"]), None);
+        run(&mut s, &ops);
+        assert_eq!(s.node("login").unwrap().layout, None);
+        let after = place(&s, "p1", &Mono);
+        kept(&before, &after, &LOGIN);
+        let (title, button) = (s.node("login-title").unwrap(), s.node("login-button").unwrap());
+        assert_eq!((title.w_rule(), button.h_rule(), button.w_rule()), (Sizing::Hug, Sizing::Hug, Sizing::Fixed));
+        // A frame that hugged its children keeps the size they gave it.
+        let mut s = login();
+        let ops = set_layout(&s, &before, &ids(&["login-button"]), None);
+        run(&mut s, &ops);
+        let after = place(&s, "p1", &Mono);
+        kept(&before, &after, &["login-button", "login-button-label"]);
+        assert_eq!(s.node("login-button").unwrap().h_sizing, Some(Sizing::Fixed));
+        // On again, a gap and padding come only the first time, where it names none.
+        let ops = set_layout(&s, &after, &ids(&["login-button", "email-text"]), Some(Layout::Column));
+        assert_eq!(ops.len(), 1, "a text has no layout");
+        assert!(matches!(&ops[0], NodeOp::Update { set, .. } if set.len() == 2 && set["gap"] == json!(12)), "it has padding: {ops:?}");
+        let ops = set_layout(&s, &after, &ids(&["email"]), Some(Layout::Column));
+        assert!(matches!(&ops[0], NodeOp::Update { set, .. } if set.len() == 1), "{ops:?}");
+        let ops = set_layout(&Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), node("f", Some("p1"), K::Frame, [0.0; 4])]), &after, &ids(&["f"]), Some(Layout::Wrap));
+        assert!(matches!(&ops[0], NodeOp::Update { set, .. } if set["layout"] == json!("wrap") && set["padding"] == json!([16])), "{ops:?}");
+    }
+
+    /// TM-8: ungrouping a column that stretches its children keeps their widths: a filling
+    /// frame, a stretched fixed rect and a filling paragraph.
+    #[test]
+    fn ungrouping_a_stretch_column_keeps_the_widths() {
+        let mut col = node("col", Some("p1"), K::Frame, [40.0, 40.0, 180.0, 300.0]);
+        col.layout = Some(Layout::Column);
+        col.items = Some(Items::Stretch);
+        let mut fill = node("f", Some("col"), K::Frame, [0.0, 0.0, 0.0, 20.0]);
+        fill.w_sizing = Some(Sizing::Fill);
+        let mut para = node("t", Some("col"), K::Text, [0.0; 4]);
+        para.w_sizing = Some(Sizing::Fill);
+        para.text = Some("a paragraph long enough to wrap twice".into());
+        let mut s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            col,
+            fill,
+            node("r", Some("col"), K::Rect, [0.0, 0.0, 20.0, 10.0]),
+            para,
+            node("hug", Some("col"), K::Text, [0.0; 4]),
+        ]);
+        let before = place(&s, "p1", &Mono);
+        for id in ["f", "r", "t", "hug"] {
+            assert_eq!(before.rect(id).unwrap().w, 180.0, "{id} is stretched");
+        }
+        let (ops, _) = ungroup(&s, &before, "col").unwrap();
+        run(&mut s, &ops);
+        let after = place(&s, "p1", &Mono);
+        kept(&before, &after, &["f", "r", "t", "hug"]);
+        // The hugging text the column stretched wraps at the width it was given.
+        assert_eq!(s.node("hug").unwrap().w_sizing, Some(Sizing::Fixed));
+    }
+
+    /// TM-8: a frame made of a column's children keeps each one's box.
+    #[test]
+    fn framing_laid_children_keeps_their_boxes() {
+        let mut s = login();
+        let before = place(&s, "p1", &Mono);
+        let (ops, fid) = group(&mut s, &before, &ids(&["login-hint", "email"]), K::Frame).unwrap();
+        run(&mut s, &ops);
+        let after = place(&s, "p1", &Mono);
+        for id in ["login-hint", "email"] {
+            assert_eq!(after.rect(id).map(|r| (r.w, r.h)), before.rect(id).map(|r| (r.w, r.h)), "{id}");
+        }
+        let f = after.rect(&fid).unwrap();
+        assert_eq!(after.rect("email").map(|r| (r.x - f.x, r.y - f.y)), Some((0.0, 56.0)), "where the column had put it");
+    }
+
+    /// B113: a hidden child of a laid-out frame, which the layout never placed, lands at the
+    /// frame's content corner, not at the page's origin.
+    #[test]
+    fn ungrouping_a_laid_out_frame_keeps_hidden_children_near_it() {
+        let mut col = node("col", Some("outer"), K::Frame, [100.0, 100.0, 200.0, 200.0]);
+        col.layout = Some(Layout::Column);
+        col.padding = Some(vec![8.0]);
+        let mut hidden = node("r2", Some("col"), K::Rect, [0.0, 0.0, 10.0, 10.0]);
+        hidden.hidden = Some(true);
+        let mut s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            node("outer", Some("p1"), K::Frame, [50.0, 50.0, 400.0, 400.0]),
+            col,
+            node("r1", Some("col"), K::Rect, [0.0, 0.0, 10.0, 10.0]),
+            hidden,
+        ]);
+        let before = place(&s, "p1", &Mono);
+        let (ops, _) = ungroup(&s, &before, "col").unwrap();
+        run(&mut s, &ops);
+        let after = place(&s, "p1", &Mono);
+        kept(&before, &after, &["r1"]);
+        let r2 = s.node("r2").unwrap();
+        assert_eq!((r2.parent.as_deref(), r2.x, r2.y), (Some("outer"), 108.0, 108.0));
+        // A hidden child of a group sits at the group's point plus its own.
+        let mut s = nested();
+        s.node_mut("r").unwrap().hidden = Some(true);
+        let placed = place(&s, "p1", &Mono);
+        let (ops, _) = ungroup(&s, &placed, "g2").unwrap();
+        run(&mut s, &ops);
+        assert_eq!(s.node("r").map(|r| (r.x, r.y)), Some((15.0, 15.0)));
+    }
+
+    /// A column whose card fills it: stored 200 wide, drawn 400, with a child pinned right.
+    fn filling_card() -> Scene {
+        let mut col = node("col", Some("p1"), K::Frame, [0.0, 0.0, 400.0, 300.0]);
+        col.layout = Some(Layout::Column);
+        let mut card = node("card", Some("col"), K::Frame, [0.0, 0.0, 200.0, 100.0]);
+        card.w_sizing = Some(Sizing::Fill);
+        let mut right = node("r", Some("p1"), K::Rect, [500.0, 0.0, 40.0, 20.0]);
+        right.pin_x = Some(PinX::Right);
+        let mut wide = node("s", Some("p1"), K::Rect, [500.0, 50.0, 300.0, 20.0]);
+        wide.pin_x = Some(PinX::LeftRight);
+        let mut scaled = node("k", Some("card"), K::Rect, [10.0, 10.0, 20.0, 20.0]);
+        scaled.pin_x = Some(PinX::Scale);
+        Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), col, card, scaled, right, wide])
+    }
+
+    #[test]
+    fn reparent_into_a_filling_frame_writes_stored_place_for_a_pinned_child() {
+        let mut s = filling_card();
+        let placed = place(&s, "p1", &Mono);
+        assert_eq!(placed.rect("card").map(|r| r.w), Some(400.0));
+        let mut ops = reparent(&s, &placed, "r", "card", None, (300.0, 10.0));
+        ops.extend(reparent(&s, &placed, "s", "card", None, (50.0, 50.0)));
+        run(&mut s, &ops);
+        // Stored as at the card's stored width: 200 to the left of where it shows.
+        assert_eq!(s.node("r").map(|r| (r.x, r.w)), Some((100.0, 40.0)));
+        assert_eq!(s.node("s").map(|r| (r.x, r.w)), Some((50.0, 100.0)));
+        let after = place(&s, "p1", &Mono);
+        assert_eq!(after.rect("r"), Some(Rect::new(300.0, 10.0, 40.0, 20.0)));
+        assert_eq!(after.rect("s"), Some(Rect::new(50.0, 50.0, 300.0, 20.0)));
+    }
+
+    #[test]
+    fn nudge_and_align_move_absolute_children_of_a_laid_frame() {
+        let mut s = filling_card();
+        let mut badge = node("badge", Some("col"), K::Rect, [10.0, 10.0, 20.0, 20.0]);
+        badge.absolute = Some(true);
+        s.apply(&NodeOp::Add { node: badge, index: None }).unwrap();
+        let placed = place(&s, "p1", &Mono);
+        let ops = nudge(&s, &placed, &ids(&["card", "badge"]), 5.0, 0.0);
+        assert!(matches!(&ops[..], [NodeOp::Update { id, set }] if id == "badge" && set["x"] == json!(15.0)), "{ops:?}");
+        // The card stays where its column put it; the badge, alone, aligns to its frame.
+        let ops = align(&s, &placed, &ids(&["card", "badge"]), Align::Left);
+        assert!(matches!(&ops[..], [NodeOp::Update { id, set }] if id == "badge" && set["x"] == json!(0.0)), "{ops:?}");
+        let ops = align(&s, &placed, &ids(&["badge"]), Align::Right);
+        run(&mut s, &ops);
+        assert_eq!(place(&s, "p1", &Mono).rect("badge").map(|r| r.right()), Some(400.0));
+        // Along a scale pin, the stored offset moves by the card's stored width over its drawn.
+        let ops = nudge(&s, &placed, &ids(&["k"]), 10.0, 0.0);
+        run(&mut s, &ops);
+        assert_eq!(s.node("k").unwrap().x, 15.0);
+        assert_eq!(place(&s, "p1", &Mono).rect("k").map(|r| r.x), placed.rect("k").map(|r| r.x + 10.0));
+    }
+
+    /// A hugging card with auto layout, holding an absolute badge pinned left and right: the
+    /// card is drawn wider than it stores, so the badge is too.
+    #[test]
+    fn ungroup_of_a_filling_frame_keeps_pinned_children_where_they_show() {
+        let mut card = node("card", Some("p1"), K::Frame, [20.0, 20.0, 100.0, 0.0]);
+        card.layout = Some(Layout::Column);
+        card.w_sizing = Some(Sizing::Hug);
+        card.h_sizing = Some(Sizing::Hug);
+        let mut badge = node("badge", Some("card"), K::Rect, [10.0, 5.0, 20.0, 10.0]);
+        badge.absolute = Some(true);
+        badge.pin_x = Some(PinX::LeftRight);
+        let mut s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            card,
+            node("r", Some("card"), K::Rect, [0.0, 0.0, 200.0, 50.0]),
+            badge,
+        ]);
+        let before = place(&s, "p1", &Mono);
+        assert_eq!(before.rect("badge").map(|r| r.w), Some(120.0));
+        let (ops, _) = ungroup(&s, &before, "card").unwrap();
+        run(&mut s, &ops);
+        kept(&before, &place(&s, "p1", &Mono), &["r", "badge"]);
     }
 
     #[test]
