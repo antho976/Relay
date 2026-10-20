@@ -182,20 +182,22 @@ impl Scene {
     }
 
     /// The nodes that name colour or style `name`, themselves or through their style, in
-    /// `design.get`'s order.
+    /// `design.get`'s order: the pages first, then what is on each page.
     pub fn users(&self, name: &str) -> Vec<String> {
         let hits: FxHashSet<&str> =
             self.stored.iter().filter(|(_, n)| names(&self.styles, n, name)).map(|(id, _)| id.as_str()).collect();
         if hits.is_empty() {
             return Vec::new();
         }
-        let mut out = Vec::with_capacity(hits.len());
-        let mut stack: Vec<&str> = self.pages().iter().rev().map(String::as_str).collect();
-        while let Some(at) = stack.pop() {
-            if hits.contains(at) {
-                out.push(at.to_string());
+        let mut out: Vec<String> = self.pages().iter().filter(|p| hits.contains(p.as_str())).cloned().collect();
+        for page in self.pages() {
+            let mut stack: Vec<&str> = self.children(page).iter().rev().map(String::as_str).collect();
+            while let Some(at) = stack.pop() {
+                if hits.contains(at) {
+                    out.push(at.to_string());
+                }
+                stack.extend(self.children(at).iter().rev().map(String::as_str));
             }
-            stack.extend(self.children(at).iter().rev().map(String::as_str));
         }
         out
     }
@@ -990,6 +992,15 @@ pub(crate) mod tests {
         let mut s = styled();
         assert_eq!(s.users("accent"), ["b", "d"], "b through its style, d itself");
         assert_eq!((s.users("card"), s.users("ink"), s.users("nope")), (vec!["b".to_string()], vec!["c".to_string()], vec![]));
+        // In design.get's order: every page first, then what is on each. A page takes a fill.
+        let mut two = s.clone();
+        let mut page = node("p2", None, NodeKind::Page, [0.0; 4]);
+        page.fill = Some("$accent".into());
+        let mut e = node("e", Some("p2"), NodeKind::Rect, [0.0, 0.0, 5.0, 5.0]);
+        e.fill = Some("$accent".into());
+        two.apply_all(&[NodeOp::Add { node: page, index: None }, NodeOp::Add { node: e, index: None }]).unwrap();
+        let read: Vec<String> = two.to_nodes().into_iter().filter(|n| names(two.styles(), n, "accent")).map(|n| n.id).collect();
+        assert_eq!((two.users("accent"), read), (vec!["p2".to_string(), "b".into(), "d".into(), "e".into()], vec!["p2".to_string(), "b".into(), "d".into(), "e".into()]));
         let stored = s.to_nodes();
         s.apply_all(&[NodeOp::Color { name: "accent".into(), value: "#ff0000".into() }]).unwrap();
         assert_eq!((s.node("b").unwrap().fill.as_deref(), s.node("d").unwrap().fill.as_deref()), (Some("#ff0000"), Some("#ff0000")));
