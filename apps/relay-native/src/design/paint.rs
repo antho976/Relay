@@ -402,6 +402,8 @@ impl Painter {
     }
 
     /// Whether any picture `scene` shows is still loading; asking starts the loads.
+    // The gallery waits on one page's now (E-export-9); kept for a job that draws every page.
+    #[allow(dead_code)]
     pub fn loading(&self, scene: &Scene) -> bool {
         let mut any = false;
         for page in scene.pages() {

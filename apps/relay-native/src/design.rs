@@ -31,7 +31,7 @@ mod window;
 use crate::app::Ui;
 use board::Board;
 use doc::Doc;
-use gallery::{Filter, Gallery};
+use gallery::{Filter, Gallery, Origin};
 use gtk::prelude::*;
 use gtk4 as gtk;
 use serde_json::{json, Value};
@@ -78,6 +78,8 @@ thread_local! {
     static VIEW: RefCell<Option<Rc<View>>> = const { RefCell::new(None) };
     /// Every open board, the main view's and the windows', for routing `design.changed`.
     static BOARDS: RefCell<Vec<Weak<Board>>> = const { RefCell::new(Vec::new()) };
+    /// A design.create is in flight: New waits for it (E-gallery-7).
+    static CREATING: Cell<bool> = const { Cell::new(false) };
 }
 
 fn view() -> Option<Rc<View>> {
@@ -127,14 +129,12 @@ fn shown(ui: &Rc<Ui>) {
     };
     let project = ui.project.get();
     if view.gallery.project.get() != project {
-        view.gallery.project.set(project);
-        *view.gallery.filter.borrow_mut() = Filter::All;
-        view.gallery.reset();
+        view.gallery.switch(project);
         // An open under way is of the project left (B79).
         view.opening.cancel();
         close_board(&view);
     }
-    view.gallery.refresh();
+    gallery_refresh(ui, &view, true);
     let board = view.board.borrow().clone();
     if let Some(b) = board {
         b.canvas.grab_focus();
@@ -145,8 +145,30 @@ fn close_board(view: &View) {
     if let Some(b) = view.board.borrow_mut().take() {
         b.end_edit(true);
         view.host.remove(&b.root);
+        // The gallery comes back before its pictures are drawn again (TM-80).
+        view.gallery.hold_thumbs(Duration::from_secs(1));
     }
     view.root.set_visible_child_name("gallery");
+}
+
+/// Whether the person sees the gallery: the Design view is up, and shows no board.
+fn gallery_on_screen(ui: &Ui, view: &View) -> bool {
+    ui.editor.design_visible() && view.root.visible_child_name().as_deref() == Some("gallery")
+}
+
+/// The gallery reads its designs again (with `sessions`, its terminals too) now if it is on
+/// screen, else when it next shows: nothing is read or drawn behind a board (B53, TM-80).
+fn gallery_refresh(ui: &Ui, view: &View, sessions: bool) {
+    match (gallery_on_screen(ui, view), sessions) {
+        (true, true) => view.gallery.refresh(),
+        (true, false) => view.gallery.refresh_designs(),
+        (false, _) => {
+            view.gallery.stale.set(true);
+            if sessions {
+                view.gallery.owe_sessions();
+            }
+        }
+    }
 }
 
 /// Show the Design view of the current project, filtered to `terminal`'s designs.
@@ -155,10 +177,12 @@ pub fn show(ui: &Rc<Ui>, terminal: Option<String>) {
     if let Some(view) = view() {
         view.opening.cancel();
         close_board(&view);
-        *view.gallery.filter.borrow_mut() = match terminal {
+        view.gallery.choose(match terminal {
             Some(t) => Filter::Terminal(t),
             None => Filter::All,
-        };
+        });
+        // Opened afresh: a search left from before would hide what was asked for (TM-52).
+        view.gallery.clear_search();
         view.gallery.refresh();
     }
 }
@@ -211,7 +235,7 @@ fn open_on(ui: &Rc<Ui>, id: i64, ready: Option<Ready>) {
             if let Some(view) = weak.upgrade() {
                 view.opening.cancel();
                 close_board(&view);
-                view.gallery.refresh();
+                view.gallery.refresh_designs();
             }
         }));
         view.host.append(&b.root);
@@ -246,6 +270,16 @@ pub fn create(ui: &Weak<Ui>, project: i64, session: Option<String>) {
     let Some(ui) = ui.upgrade() else {
         return;
     };
+    if CREATING.with(|c| c.replace(true)) {
+        return;
+    }
+    let creating = |on: bool| {
+        CREATING.with(|c| c.set(on));
+        if let Some(view) = view() {
+            view.gallery.set_creating(on);
+        }
+    };
+    creating(true);
     glib::spawn_future_local(async move {
         // The first name no design has: "Untitled design", then "Untitled design 2" and on.
         let taken = view().map(|v| v.gallery.titles()).unwrap_or_default();
@@ -253,7 +287,9 @@ pub fn create(ui: &Weak<Ui>, project: i64, session: Option<String>) {
             .map(|n| if n == 1 { "Untitled design".to_string() } else { format!("Untitled design {n}") })
             .find(|t| !taken.contains(t))
             .unwrap_or_default();
-        match ui.call("design.create", json!({"project_id": project, "title": title, "session": session})).await {
+        let made = ui.call("design.create", json!({"project_id": project, "title": title, "session": session})).await;
+        creating(false);
+        match made {
             Ok(v) => {
                 if let Some(id) = v["design"]["id"].as_i64() {
                     if ui.project.get() != project {
@@ -286,12 +322,18 @@ fn boards() -> Vec<Rc<Board>> {
     })
 }
 
+/// Every open board showing design `design_id`, the main view's and the windows' (the render job
+/// says on them that an agent looked at it).
+pub(crate) fn boards_showing(design_id: i64) -> Vec<Rc<Board>> {
+    boards().into_iter().filter(|b| b.doc.id == design_id).collect()
+}
+
 /// TM-50: design `id` was deleted while words were being typed into it. Each board's edit ends
 /// without committing (into a design that takes no edits now) and its words go on the
 /// clipboard. Whether there were any.
 pub(super) fn rescue(ui: &Ui, id: i64) -> bool {
     let mut typed = Vec::new();
-    for b in boards().iter().filter(|b| b.doc.id == id) {
+    for b in boards_showing(id) {
         let text = b.edit.borrow().as_ref().map(|e| {
             let buffer = e.view.buffer();
             buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string()
@@ -339,10 +381,11 @@ pub fn event(ui: &Rc<Ui>, ev: &str, payload: &Value) {
                 // Deleted elsewhere (another window, an agent): say so, and offer it back while
                 // it is only in Deleted.
                 let gallery = Rc::downgrade(&view.gallery);
+                // Restored, it opens on the board again (E-gallery-4).
                 let restore: Option<Rc<dyn Fn()>> = (ev != "design.deleted").then(|| {
                     Rc::new(move || {
                         if let Some(g) = gallery.upgrade() {
-                            g.restore(id);
+                            g.restore(id, Origin::Board);
                         }
                     }) as Rc<dyn Fn()>
                 });
@@ -353,17 +396,18 @@ pub fn event(ui: &Rc<Ui>, ev: &str, payload: &Value) {
             None => {}
         }
     }
+    // Only the designs: no terminal changed (TM-40).
     if let Some(view) = view() {
-        if payload["project_id"].as_i64() == Some(view.gallery.project.get()) && ui.editor.design_visible() {
-            view.gallery.refresh();
+        if payload["project_id"].as_i64() == Some(view.gallery.project.get()) {
+            gallery_refresh(ui, &view, false);
         }
     }
 }
 
 /// Something about a design changed from the board: the gallery reads again when it shows.
-pub(crate) fn gallery_changed(_ui: &Rc<Ui>) {
+pub(crate) fn gallery_changed(ui: &Rc<Ui>) {
     if let Some(view) = view() {
-        view.gallery.refresh();
+        gallery_refresh(ui, &view, false);
     }
 }
 
@@ -387,7 +431,9 @@ fn duplicate_design(b: &Board) {
                         b.toast("Opened the copy in a new window");
                     }
                 } else {
-                    open_on(&ui, new, Some(Box::new(|b: &Rc<Board>| b.toast("Opened the copy"))));
+                    // The board swaps to the copy, and says so by its name (E-gallery-5).
+                    let note = format!("Now editing the copy “{}”", crate::app::text(&v, "title"));
+                    open_on(&ui, new, Some(Box::new(move |b: &Rc<Board>| b.toast(&note))));
                 }
             }
             Err(e) => ui.show_error(&e.to_string()),
@@ -408,30 +454,22 @@ async fn drained(doc: &Doc) {
 /// TM-50: the words being typed go in, and the edits queued go out, before the design goes:
 /// sent after the delete, the engine would refuse them.
 fn delete_design(b: &Board) {
-    let Some(ui) = b.ui.upgrade() else {
-        return;
-    };
     b.end_edit(true);
     let doc = b.doc.clone();
-    let (id, title) = (doc.id, doc.title());
-    if b.windowed {
-        glib::spawn_future_local(async move {
-            drained(&doc).await;
-            // The window closes as the design goes; the main window says where it went.
-            match ui.call("design.delete", json!({"design_id": id})).await {
-                Ok(_) => ui.show_info(&format!("Moved “{title}” to Deleted designs")),
-                Err(e) => ui.show_error(&e.to_string()),
-            }
-        });
+    let (id, title, project) = (doc.id, doc.title(), doc.design.borrow().project_id);
+    let Some(view) = view() else {
         return;
-    }
-    if let Some(view) = view() {
+    };
+    // The window closes as the design goes; the main window says so, with an Undo that opens
+    // it in a window again (E-gallery-3, E-gallery-4).
+    let origin = if b.windowed { Origin::Window(project) } else { Origin::Board };
+    if !b.windowed {
         close_board(&view);
-        glib::spawn_future_local(async move {
-            drained(&doc).await;
-            view.gallery.delete(id, &title);
-        });
     }
+    glib::spawn_future_local(async move {
+        drained(&doc).await;
+        view.gallery.delete(id, &title, origin);
+    });
 }
 
 /// Relay is connected again: every open design is read again, since events were missed
@@ -441,8 +479,8 @@ fn delete_design(b: &Board) {
 #[allow(dead_code)]
 pub(crate) fn reconnected(ui: &Rc<Ui>) {
     doc::reread_all();
-    if let Some(view) = view().filter(|_| ui.editor.design_visible()) {
-        view.gallery.refresh();
+    if let Some(view) = view() {
+        gallery_refresh(ui, &view, true);
     }
 }
 
@@ -475,6 +513,9 @@ pub(crate) fn session_changed(_ui: &Rc<Ui>, payload: &Value) {
         return;
     };
     let project = payload["project_id"].as_i64();
+    if let Some(view) = view().filter(|v| project.is_none_or(|p| p == v.gallery.project.get())) {
+        view.gallery.session_changed(name, state);
+    }
     for b in boards() {
         let ours = {
             let design = b.doc.design.borrow();

@@ -14,6 +14,11 @@ button.design-chip:hover { background: @glass_hover; border-color: @glass_line_h
 button.design-chip.selected { background: @glass_selected; border-color: @glass_line_hover; color: @ink; }
 .design-chip-count { color: @faint; font-family: 'Geist Mono'; font-size: 11.5px; }
 button.design-chip.selected .design-chip-count { color: @secondary; }
+/* The chips wrap in a flow; the flow's own slots draw nothing. */
+.design-chip-flow > flowboxchild { padding: 0; margin: 0; background: transparent; border: 0; box-shadow: none; }
+menubutton.design-chip-more > button { min-height: 28px; padding: 0 11px; border-radius: 999px; border: 1px dashed @glass_line; background: transparent; color: @secondary; font-weight: 500; }
+menubutton.design-chip-more > button:hover { background: @glass_hover; border-color: @glass_line_hover; color: @ink; }
+.design-pending { margin-top: 56px; }
 .design-grid > flowboxchild { padding: 0; background: transparent; }
 .design-card { padding: 0; }
 .design-thumb { border-radius: 12px; border: 1px solid @glass_edge; background: @glass_card; transition: border-color 140ms ease-out, box-shadow 140ms ease-out; }
@@ -52,7 +57,9 @@ button.design-ask { background: @ink; border-color: @ink; color: @wall; font-wei
 button.design-ask:hover { background: white; border-color: white; }
 
 /* ---- Board: what floats over the canvas ---- */
-#design-canvas:focus-visible { outline: none; }
+/* The canvas reached from the keyboard: a quiet ring inside its edge, which the floating panels
+   cannot cover (B107). */
+#design-canvas:focus-visible { outline: 1px solid alpha(@line_focus, 0.55); outline-offset: -1px; }
 /* The page stack clears every scrolled window (theme.css); the inspector's is a floating card. */
 .design-dock, .design-context, .design-zoom, scrolledwindow.design-inspector, .page-stack scrolledwindow.design-inspector, .design-layers, .design-toast {
   background: @slab_solid; border: 1px solid @strong; box-shadow: 0 10px 28px alpha(black, 0.38), 0 1px 3px alpha(black, 0.3);
@@ -136,6 +143,9 @@ entry.design-name:hover { background: @glass_control; }
 .design-hex-caption { color: @secondary; font-family: 'Geist Mono'; font-size: 12px; }
 button.design-export-key { min-height: 28px; padding: 0 4px; border-radius: 8px; font-size: 12px; font-family: 'Geist Mono'; }
 .design-inspector checkbutton { font-size: 12.5px; color: @secondary; }
+/* Each of a node's shadows, ruled off from the one before. */
+.design-shadow-block { padding: 8px 0; }
+.design-shadow-block + .design-shadow-block { border-top: 1px solid @line_subtle; }
 
 /* Pages and layers. */
 .design-layers { border-radius: 14px; padding: 4px 0; }
@@ -151,11 +161,13 @@ label.design-layers-head { padding: 10px 14px 4px; }
 .design-layer:hover { background: @wash_solid; color: @ink; }
 .design-layer.selected { background: @glass_selected; color: @ink; }
 .design-layer.hidden { color: @ink_dim; }
-button.design-disclose { min-height: 20px; min-width: 16px; padding: 0; border: 0; background: transparent; color: @faint; }
-button.design-layer-key { min-height: 22px; min-width: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: @faint; opacity: 0; }
+/* Keys as tall as the row, so a click a little off the glyph still lands (E-board-9). */
+button.design-disclose { min-height: 28px; min-width: 24px; padding: 0; border: 0; background: transparent; color: @faint; }
+button.design-layer-key { min-height: 28px; min-width: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: @faint; opacity: 0; }
 .design-layer:hover button.design-layer-key, button.design-layer-key.on { opacity: 1; }
 .design-layer.hidden button.design-layer-eye { opacity: 1; }
 button.design-layer-key:hover { color: @ink; background: alpha(@ink, 0.08); }
+.design-layers-empty { padding: 8px 14px 12px; }
 
 /* The icon picker. */
 .design-icon-picker { padding: 4px; }
