@@ -213,20 +213,23 @@ pub fn register(e: &mut Engine) {
         if !p.discard_changes.unwrap_or(false) {
             super::session::refuse_dirty(&doomed)?;
         }
-        let backup = if projects.is_empty() { None } else { backup_before(ctx, "workspace-remove")? };
+        // The closes' unlocked half (hooks undone) before the backup, so what an agent wrote
+        // meanwhile is in it; what one writes after is caught by the mark (B68).
         let mut closes = Vec::new();
         for (id, _, open) in &scopes {
             closes.push((*id, prepare_closes(ctx, open)?));
         }
-        Ok(WorkspaceRemoval { closes, backup, approved: doomed.into_iter().map(|(wt, _)| wt).collect() })
+        let agents = scopes.iter().any(|(_, _, open)| !open.is_empty());
+        let (backup, mark) = if projects.is_empty() { (None, None) } else { backup_before(ctx, "workspace-remove", agents)? };
+        Ok(WorkspaceRemoval { closes, backup, mark, approved: doomed.into_iter().map(|(wt, _)| wt).collect() })
     }, |ctx: &mut Ctx, p, staged| {
-        let WorkspaceRemoval { mut closes, backup, approved } = staged;
+        let WorkspaceRemoval { mut closes, backup, mark, approved } = staged;
         let projects = workspace_scope(ctx.tx(), p.workspace_id, p.force.unwrap_or(false))?;
         let n = projects.len();
         let mut sessions_closed = 0;
         for id in projects {
             let prepared = closes.iter().position(|(project, _)| *project == id).map(|i| closes.swap_remove(i).1).unwrap_or_default();
-            let out = remove_project(ctx, id, true, p.remove_worktrees.unwrap_or(false), p.discard_changes.unwrap_or(false), &approved, prepared, None)?;
+            let out = remove_project(ctx, id, true, p.remove_worktrees.unwrap_or(false), p.discard_changes.unwrap_or(false), &approved, prepared, None, mark)?;
             sessions_closed += out.sessions_closed;
         }
         // The workspace's own guardrail layer goes with it, or the next workspace given this
@@ -423,10 +426,12 @@ pub fn register(e: &mut Engine) {
         if !p.discard_changes.unwrap_or(false) {
             super::session::refuse_dirty(&doomed)?;
         }
-        let backup = backup_before(ctx, "project-remove")?;
-        Ok(ProjectRemoval { closes: prepare_closes(ctx, &open)?, backup, approved: doomed.into_iter().map(|(wt, _)| wt).collect() })
+        // The closes' unlocked half first, then the backup: B68, as workspace.remove.
+        let closes = prepare_closes(ctx, &open)?;
+        let (backup, mark) = backup_before(ctx, "project-remove", !open.is_empty())?;
+        Ok(ProjectRemoval { closes, backup, mark, approved: doomed.into_iter().map(|(wt, _)| wt).collect() })
     }, |ctx: &mut Ctx, p, staged| {
-        remove_project(ctx, p.project_id, p.force.unwrap_or(false), p.remove_worktrees.unwrap_or(false), p.discard_changes.unwrap_or(false), &staged.approved, staged.closes, staged.backup)
+        remove_project(ctx, p.project_id, p.force.unwrap_or(false), p.remove_worktrees.unwrap_or(false), p.discard_changes.unwrap_or(false), &staged.approved, staged.closes, staged.backup, staged.mark)
     });
     e.register::<ProjectRemovePreview>(|ctx, p| {
         let projects: Vec<Id> = match (p.project_id, p.workspace_id) {
@@ -787,6 +792,8 @@ fn restore_project(ctx: &mut Ctx, project_id: Id, copied: Vec<Copied>) -> Result
 struct ProjectRemoval {
     closes: Vec<(String, Prepared)>,
     backup: Option<String>,
+    /// The audit's newest row when the backup began ([`changed_since`]); none without a backup.
+    mark: Option<Id>,
     approved: Vec<PathBuf>,
 }
 
@@ -794,6 +801,7 @@ struct ProjectRemoval {
 struct WorkspaceRemoval {
     closes: Vec<(Id, Vec<(String, Prepared)>)>,
     backup: Option<String>,
+    mark: Option<Id>,
     approved: Vec<PathBuf>,
 }
 
@@ -895,24 +903,57 @@ fn prepare_closes(ctx: &Unlocked, open: &[(String, String)]) -> Result<Vec<(Stri
 }
 
 /// A copy of the store, taken before a removal deletes a project's board, notes and modules
-/// for good; `app.backup.list` lists it. Its path rides on the `*.deleted` event.
-fn backup_before(ctx: &Unlocked, reason: &str) -> Result<Option<String>, BusError> {
+/// for good; `app.backup.list` lists it. Its path rides on the `*.deleted` event. With it, the
+/// audit's newest row as the copy began: a project with a write past it may lack that write in
+/// the copy, and the removal refuses it ([`changed_since`], B68).
+fn backup_before(ctx: &Unlocked, reason: &str, agents: bool) -> Result<(Option<String>, Option<Id>), BusError> {
     let store = &ctx.engine().store;
     if store.path() == Path::new(":memory:") {
-        return Ok(None);
+        return Ok((None, None));
     }
+    let mark = ctx.read(audit_mark)?;
     // Not through `ctx.read`: a copy of the whole store under the lock stalled every request for
     // as long as the file took to copy (142-453 ms on a 260 MB store, BASELINE-2026-10-14 §1.1).
-    ctx.backup_store(reason).map(|path| Some(path.display().to_string())).map_err(|error| {
+    let path = ctx.backup_store(reason).map_err(|error| {
+        // The closes' unlocked half ran first: the agents' hooks are already undone.
+        let removed = if agents { "nothing was removed, though its agents' hooks were taken down" } else { "nothing was removed" };
         BusError::unavailable("project.backup_failed", format!("backing up the store before the removal: {error}"))
-            .with_hint("nothing was removed; free space for the store's backups/ directory and try again")
-    })
+            .with_hint(format!("{removed}; free space for the store's backups/ directory and try again"))
+    })?;
+    Ok((Some(path.display().to_string()), Some(mark)))
+}
+
+/// The audit's newest row, read just before a removal's backup begins.
+fn audit_mark(conn: &Connection) -> Result<Id, BusError> {
+    conn.prepare_cached("SELECT COALESCE(MAX(id), 0) FROM audit").bus()?.query_row([], |r| r.get(0)).bus()
+}
+
+/// Whether project `project_id` took a write after audit row `mark` that its removal backup may
+/// lack (B68): an agent still running while the backup is taken (they stop only once the
+/// removal commits) can finish a `task.update` or a `design.apply` the backup missed, which the
+/// removal would then delete for good. Only audited writes are seen, which every op that changes
+/// what `project.restore` brings back is; a hook's report (one per agent tool call) and the
+/// mailbox (never restored) are left out.
+pub(crate) fn changed_since(conn: &Connection, mark: Id, project_id: Id) -> Result<bool, BusError> {
+    conn.prepare_cached(
+        "SELECT EXISTS(SELECT 1 FROM audit WHERE id > ?1 AND project_id = ?2 AND kind = 'ok'
+           AND op NOT IN ('guardrail.gate', 'session.report', 'usage.report') AND op NOT LIKE 'mailbox.%')",
+    ).bus()?.query_row(params![mark, project_id], |r| r.get(0)).bus()
 }
 
 /// `project.remove`'s transaction, also run once per project by `workspace.remove`.
 #[allow(clippy::too_many_arguments)]
-fn remove_project(ctx: &mut Ctx, project_id: Id, force: bool, remove_worktrees: bool, discard: bool, approved: &[PathBuf], mut closes: Vec<(String, Prepared)>, backup: Option<String>) -> Result<ProjectRemoveOut, BusError> {
+fn remove_project(ctx: &mut Ctx, project_id: Id, force: bool, remove_worktrees: bool, discard: bool, approved: &[PathBuf], mut closes: Vec<(String, Prepared)>, backup: Option<String>, mark: Option<Id>) -> Result<ProjectRemoveOut, BusError> {
     let (pr, open, live_runs) = removal_scope(ctx.tx(), project_id, force)?;
+    // Before anything is closed or deleted: a write the backup may have missed (B68). No second
+    // backup here: this transaction holds the store for writing, which a backup cannot copy.
+    if let Some(mark) = mark {
+        if changed_since(ctx.tx(), mark, pr.id)? {
+            return Err(BusError::conflict("project.changed", format!("project {} changed while its backup was taken", pr.id))
+                .with_details(json!({ "project_id": pr.id }))
+                .with_hint("nothing was removed; remove it again"));
+        }
+    }
     // `force` closes through `session.close` itself, so every teardown rule holds: scrollback
     // saved, claims released, holds expired, hooks uninstalled. Each close keeps its worktree,
     // which also defers the agent's kill until the store unlocks; deleting checkouts (build
@@ -1173,6 +1214,35 @@ mod tests {
         assert_eq!(head("ref: refs/heads/a..b\n"), "main");
         assert_eq!(head("ref: refs/heads/has space\n"), "main");
         assert_eq!(head("0123456789abcdef0123456789abcdef01234567\n"), "main");
+    }
+
+    /// B68: a write to a project after a removal's backup began is seen, for that project
+    /// alone; refusals, a hook's reports and the mailbox are not writes the backup could miss.
+    #[test]
+    fn a_write_past_the_mark_is_seen_for_its_project_alone() {
+        let store = crate::Store::open_memory().unwrap();
+        let conn = store.lock();
+        let row = |op: &str, kind: &str, project: Option<Id>| {
+            conn.execute(
+                "INSERT INTO audit (ts, req_id, actor, op, kind, project_id, payload_hash)
+                 VALUES ('2026-10-20T00:00:00Z', lower(hex(randomblob(16))), 'user', ?1, ?2, ?3, 'h')",
+                params![op, kind, project],
+            ).unwrap();
+        };
+        assert_eq!(audit_mark(&conn).unwrap(), 0, "an empty audit");
+        row("notes.create", "ok", Some(1));
+        let mark = audit_mark(&conn).unwrap();
+        assert!(!changed_since(&conn, mark, 1).unwrap(), "what the backup holds");
+        for (op, kind) in [("guardrail.gate", "ok"), ("session.report", "ok"), ("usage.report", "ok"), ("mailbox.send", "ok"), ("task.update", "refused")] {
+            row(op, kind, Some(1));
+        }
+        row("notes.create", "ok", Some(2));
+        row("settings.set", "ok", None);
+        assert!(!changed_since(&conn, mark, 1).unwrap());
+        row("task.update", "ok", Some(1));
+        assert!(changed_since(&conn, mark, 1).unwrap());
+        assert!(changed_since(&conn, mark, 2).unwrap());
+        assert!(!changed_since(&conn, mark, 3).unwrap());
     }
 
     #[test]
