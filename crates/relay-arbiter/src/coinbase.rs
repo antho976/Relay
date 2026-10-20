@@ -755,6 +755,18 @@ fn order_fields(o: &Value) -> Result<ExchangeOrder> {
     })
 }
 
+/// List Orders' query for one product's orders created in `[start, end)`, every status. Orders
+/// are listed by where they were placed, RETAIL_ADVANCED unless asked otherwise; the API's own
+/// orders are taken to be those (no documented value lists every source), and it is named here so
+/// the assumption is plain.
+fn orders_query<'a>(product: &'a str, start: &'a str, end: &'a str, cursor: Option<&'a str>) -> Vec<(&'static str, &'a str)> {
+    let mut q = vec![("product_ids", product), ("start_date", start), ("end_date", end), ("order_placement_source", "RETAIL_ADVANCED"), ("limit", "100")];
+    if let Some(c) = cursor {
+        q.push(("cursor", c));
+    }
+    q
+}
+
 /// One page of List Orders: the order placed with `client_order_id`, when this page has it, and
 /// the cursor for the next page while `has_next` says there is one. Only the order asked for is
 /// read, so another order this client cannot read does not stop the lookup.
@@ -897,17 +909,16 @@ impl Account for Coinbase {
         parse_order(&self.get_signed(&format!("{ORDERS}/{order_id}"), &[])?)
     }
 
-    /// List Orders for the one product since `since`, every status, page by page until the order
-    /// turns up or the list ends. A list that does not end is an error, not "no such order".
-    fn find_order(&self, product: &str, client_order_id: &str, since: i64) -> Result<Option<ExchangeOrder>> {
+    /// List Orders for the one product in `[from, to)`, every status, page by page until the order
+    /// turns up or the list ends. The window keeps a busy product's list short, however long the
+    /// order has waited; a list that does not end is an error, not "no such order".
+    fn find_order(&self, product: &str, client_order_id: &str, from: i64, to: i64) -> Result<Option<ExchangeOrder>> {
         check_id(product)?;
-        let start = jiff::Timestamp::from_second(since).map_err(|e| ExchangeError::Refused(e.to_string()))?.to_string();
+        let date = |at: i64| jiff::Timestamp::from_second(at).map(|t| t.to_string()).map_err(|e| ExchangeError::Refused(e.to_string()));
+        let (start, end) = (date(from)?, date(to)?);
         let mut cursor: Option<String> = None;
         for _ in 0..MAX_PAGES {
-            let mut q = vec![("product_ids", product), ("start_date", start.as_str()), ("limit", "100")];
-            if let Some(c) = &cursor {
-                q.push(("cursor", c));
-            }
+            let q = orders_query(product, &start, &end, cursor.as_deref());
             let (found, next) = find_in_orders(&self.get_signed(&format!("{ORDERS}/batch"), &q)?, client_order_id)?;
             match (found, next) {
                 (Some(o), _) => return Ok(Some(o)),
@@ -1301,6 +1312,9 @@ MC4CAQAwBQYDK2VwBCIEINjXFvuxDstdwgWaOYAI7I3r1qbmuoq+7SNE9GeEB1fD
              "size_inclusive_of_fees": true, "total_value_after_fees": "50", "order_type": "MARKET",
              "reject_reason": "REJECT_REASON_UNSPECIFIED", "settled": true, "product_type": "SPOT", "reject_message": "", "cancel_message": ""}
         ], "sequence": "0", "has_next": true, "cursor": "789100"});
+        let q = orders_query("BTC-USD", "2026-10-09T13:55:05Z", "2026-10-09T14:06:05Z", Some("789100"));
+        assert_eq!(q, [("product_ids", "BTC-USD"), ("start_date", "2026-10-09T13:55:05Z"), ("end_date", "2026-10-09T14:06:05Z"),
+            ("order_placement_source", "RETAIL_ADVANCED"), ("limit", "100"), ("cursor", "789100")]);
         let (found, next) = find_in_orders(&v, "arb-7-1700003600").unwrap();
         let o = found.unwrap();
         assert_eq!((o.order_id.as_str(), o.client_order_id.as_str(), o.status), ("0000-000000-000002", "arb-7-1700003600", OrderStatus::Filled));

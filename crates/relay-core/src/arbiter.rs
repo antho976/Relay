@@ -690,9 +690,11 @@ fn created_at(o: &OrderView) -> i64 {
 }
 
 /// Coinbase's order sent with this one's client_order_id, if it has one: the lookup for an order
-/// whose answer never came back.
+/// whose answer never came back. Coinbase made it, if at all, between when it was recorded and the
+/// last resend a minute later; the window is that, with clock slack either side.
 fn find_live(client: &dyn Exchange, o: &OrderView) -> Result<Option<ExchangeOrder>, BusError> {
-    client.find_order(&o.product, &o.client_order_id, created_at(o) - LOOKUP_SLACK).map_err(ex)
+    let at = created_at(o);
+    client.find_order(&o.product, &o.client_order_id, at - LOOKUP_SLACK, at + UNANSWERED + LOOKUP_SLACK).map_err(ex)
 }
 
 /// Coinbase answered a create with "duplicate": it has this order, whatever its order list shows.

@@ -62,10 +62,10 @@ pub trait Account: Send + Sync {
     /// [`ExchangeError::Duplicate`] when the exchange only says it has one.
     fn place(&self, order: &OrderRequest, preview_id: Option<&str>) -> Result<ExchangeOrder>;
     fn order(&self, order_id: &str) -> Result<ExchangeOrder>;
-    /// The order placed with `client_order_id`, among `product`'s orders created since `since`
+    /// The order placed with `client_order_id`, among `product`'s orders created in `[from, to)`
     /// (Unix seconds), or `None` when the exchange has none. Reads only: what an order sent with
     /// no answer is looked up by before it is sent again, failed or cancelled.
-    fn find_order(&self, product: &str, client_order_id: &str, since: i64) -> Result<Option<ExchangeOrder>>;
+    fn find_order(&self, product: &str, client_order_id: &str, from: i64, to: i64) -> Result<Option<ExchangeOrder>>;
     fn fills(&self, order_id: &str) -> Result<Vec<ExchangeFill>>;
     fn cancel(&self, order_ids: &[String]) -> Result<()>;
 }

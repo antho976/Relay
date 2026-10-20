@@ -158,7 +158,7 @@ impl Account for Fake {
         }
         Ok(ExchangeOrder { order_id: id.into(), client_order_id: id.trim_start_matches("x-").into(), status: OrderStatus::Filled, filled_size: Decimal::new(5, 1), average_filled_price: p, total_fees: Decimal::new(3, 1), reason: None })
     }
-    fn find_order(&self, _: &str, cid: &str, _: i64) -> Result<Option<ExchangeOrder>> {
+    fn find_order(&self, _: &str, cid: &str, _: i64, _: i64) -> Result<Option<ExchangeOrder>> {
         if *self.lookup_fails.lock().unwrap() {
             return Err(ExchangeError::Unreachable("the request timed out".into()));
         }
