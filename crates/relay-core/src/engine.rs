@@ -552,6 +552,9 @@ pub struct Engine {
     /// The desktop apps that offered to draw designs for `design.render`, and the renders
     /// waiting on them (`design_render`). Its own lock; never the store's.
     pub(crate) renders: crate::design_render::Renders,
+    /// What the Pictures plugin remembers between requests: the Pexels key's state, hits,
+    /// searches, cooldowns, the agents' allowance (`pictures`). Its own locks; never the store's.
+    pub(crate) pictures: crate::pictures::Desk,
     /// Which new worktrees are waiting on a build-seed copy or build (`build_seed`). Its own
     /// lock; never the store's.
     pub(crate) build_seeds: crate::build_seed::Seeds,
@@ -607,6 +610,7 @@ impl Engine {
                 resource_disk_refresh: std::sync::Mutex::new((false, None)),
                 device_leases: Default::default(),
                 renders: Default::default(),
+                pictures: Default::default(),
                 build_seeds: Default::default(),
                 skill_refresh: Default::default(),
                 money: Default::default(),
