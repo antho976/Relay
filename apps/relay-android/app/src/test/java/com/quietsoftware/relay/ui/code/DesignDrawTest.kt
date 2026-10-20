@@ -305,6 +305,44 @@ class DesignDrawTest {
         assertTrue(hex(round.rgb(30, 30)), round.near(30, 30, RED))
     }
 
+    /**
+     * A polygon's shadow with a spread is the shape grown or shrunk by it, blurred once, as the
+     * PC blurs it: the same as the shadow, with no spread, of a diamond that much larger or smaller.
+     */
+    @Test
+    fun `a shape's spread shadow is blurred once`() {
+        // A diamond 100 across about (120, 120); a spread of 10 moves its sides 10 px, its corners 10√2.
+        val corner = 10.0 * kotlin.math.sqrt(2.0)
+        fun diamond(grow: Double, shadow: DesignShadow) = page(
+            DesignNode(id = "d", kind = "polygon", x = 70.0 - grow, y = 70.0 - grow, w = 100.0 + 2 * grow, h = 100.0 + 2 * grow, fill = "#00000000", sides = 4, shadow = shadow),
+            fill = "#FFFFFF",
+        )
+        fun same(label: String, a: PagePlan, b: PagePlan) {
+            val x = draw(a)
+            val y = draw(b)
+            // Along the diagonal from the centre out through the middle of the top-left side.
+            for (t in 0..55 step 3) {
+                val p = 120 - t
+                assertTrue("$label at $t: ${hex(x.rgb(p, p))} against ${hex(y.rgb(p, p))}", x.near(p, p, y.rgb(p, p), slack = 4))
+            }
+        }
+        val soft = DesignShadow(blur = 20.0, color = "#000000")
+        same("drop -10", diamond(0.0, soft.copy(spread = -10.0)), diamond(-corner, soft))
+        same("drop 10", diamond(0.0, soft.copy(spread = 10.0)), diamond(corner, soft))
+        // An inner shadow is kept inside the shape, so only inside the smaller of the two is alike.
+        val inner = soft.copy(inset = true)
+        fun inside(label: String, a: PagePlan, b: PagePlan, upTo: Int) {
+            val x = draw(a)
+            val y = draw(b)
+            for (t in 0..upTo step 3) {
+                val p = 120 - t
+                assertTrue("$label at $t: ${hex(x.rgb(p, p))} against ${hex(y.rgb(p, p))}", x.near(p, p, y.rgb(p, p), slack = 4))
+            }
+        }
+        inside("inner 10", diamond(0.0, inner.copy(spread = 10.0)), diamond(-corner, inner), upTo = 16)
+        inside("inner -10", diamond(0.0, inner.copy(spread = -10.0)), diamond(corner, inner), upTo = 23)
+    }
+
     /** Words are set and drawn in their colour, a run in its own. */
     @Test
     fun `words are drawn, a run in its own colour`() {

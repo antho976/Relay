@@ -2,6 +2,7 @@ package com.quietsoftware.relay.ui.code
 
 import android.graphics.BlurMaskFilter
 import android.graphics.Matrix
+import android.graphics.Path.Op as PathOp
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.SweepGradient
@@ -45,6 +46,7 @@ import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toAndroidRectF
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalDensity
@@ -850,7 +852,7 @@ private class PagePainter(val plan: PagePlan, val hair: Float, val picture: (Str
             if (s.inset) continue
             val c = colorOrBlack(s.color).takeIf { it.alpha > 0f } ?: continue
             val cast = box.grown(s.spread).moved(s.x, s.y)
-            clipPath(box.path(), ClipOp.Difference) { blurred(cast.path(), c, blurOf(s)) }
+            clipPath(box.path(), ClipOp.Difference) { blurred(cast.path().asAndroidPath(), c, blurOf(s)) }
         }
     }
 
@@ -866,7 +868,7 @@ private class PagePainter(val plan: PagePlan, val hair: Float, val picture: (Str
                 addRect(around.g())
                 addPath(box.grown(-s.spread).moved(s.x, s.y).path())
             }
-            clipPath(box.path()) { blurred(shade, c, blur) }
+            clipPath(box.path()) { blurred(shade.asAndroidPath(), c, blur) }
         }
     }
 
@@ -895,59 +897,48 @@ private class PagePainter(val plan: PagePlan, val hair: Float, val picture: (Str
         }
     }
 
-    /** A drop shadow under the shape [path]: the shape moved by the offset, grown by a positive spread or less a band for a negative one, blurred (paint.rs `path_shadow`). */
+    /**
+     * A drop shadow under the shape [path] (paint.rs `path_shadow`): the shape moved by the
+     * offset, grown by a positive spread or less a band along its edge for a negative one, taken
+     * as one outline and blurred once, as the PC blurs the whole of it.
+     */
     fun DrawScope.pathShadow(path: Path, s: DesignShadow) {
         val c = colorOrBlack(s.color).takeIf { it.alpha > 0f } ?: return
-        val blur = blurOf(s)
-        val opaque = c.copy(alpha = 1f)
-        val around = Rect.from(path).inflate(blur * 2 + abs(s.spread) + 2)
-        translate(s.x.toFloat(), s.y.toFloat()) {
-            // Drawn whole, then see-through once, so where its pieces overlap is not darker.
-            layer(around, c.alpha) {
-                blurred(path, opaque, blur)
-                if (s.spread > 0.0) blurred(path, opaque, blur, stroke = 2 * s.spread)
-                if (s.spread < 0.0) blurred(path, opaque, blur, stroke = -2 * s.spread, erase = true)
-            }
+        val shape = path.asAndroidPath()
+        val cast = when {
+            s.spread > 0.0 -> joined(shape, band(shape, 2 * s.spread), PathOp.UNION)
+            s.spread < 0.0 -> joined(shape, band(shape, -2 * s.spread), PathOp.DIFFERENCE)
+            else -> shape
         }
+        translate(s.x.toFloat(), s.y.toFloat()) { blurred(cast, c, blurOf(s)) }
     }
 
-    /** An inner shadow inside the shape [path] (its box [r]): everything outside it, moved, its spread taken in, blurred, kept inside (paint.rs `path_inset_shadow`). */
+    /**
+     * An inner shadow inside the shape [path] (its box [r]; paint.rs `path_inset_shadow`):
+     * everything outside the shape, moved, the shape grown inwards by a positive spread (outwards
+     * by a negative one), taken as one outline, blurred once and kept inside.
+     */
     fun DrawScope.pathInsetShadow(path: Path, s: DesignShadow, r: Rect) {
         val c = colorOrBlack(s.color).takeIf { it.alpha > 0f } ?: return
         val blur = blurOf(s)
-        val opaque = c.copy(alpha = 1f)
         val around = r.inflate(max(abs(s.x), abs(s.y)) + blur * 2 + abs(s.spread) + 1)
-        val outside = Path().apply {
-            fillType = PathFillType.EvenOdd
-            addRect(around.g())
-            addPath(path)
-        }
+        val shape = path.asAndroidPath()
+        val hole = if (s.spread < 0.0) joined(shape, band(shape, -2 * s.spread), PathOp.UNION) else shape
+        val outside = joined(android.graphics.Path().apply { addRect(around.g().toAndroidRectF(), android.graphics.Path.Direction.CW) }, hole, PathOp.DIFFERENCE)
+        val shade = if (s.spread > 0.0) joined(outside, band(shape, 2 * s.spread), PathOp.UNION) else outside
         clipPath(path) {
-            translate(s.x.toFloat(), s.y.toFloat()) {
-                layer(around, c.alpha) {
-                    blurred(outside, opaque, blur)
-                    if (s.spread < 0.0) blurred(path, opaque, blur, stroke = -2 * s.spread, erase = true)
-                    if (s.spread > 0.0) blurred(path, opaque, blur, stroke = 2 * s.spread)
-                }
-            }
+            translate(s.x.toFloat(), s.y.toFloat()) { blurred(shade, c, blur) }
         }
     }
 
-    /** [path] filled (or stroked [stroke] wide) in [color], blurred by the PC's [blur]; [erase] takes it out of what is under it instead. */
-    fun DrawScope.blurred(path: Path, color: Color, blur: Double, stroke: Double? = null, erase: Boolean = false) {
+    /** [path] filled in [color], blurred by the PC's [blur]. */
+    fun DrawScope.blurred(path: android.graphics.Path, color: Color, blur: Double) {
         drawIntoCanvas { canvas ->
             val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
                 this.color = color.toArgb()
                 androidBlur(blur)?.let { maskFilter = BlurMaskFilter(it, BlurMaskFilter.Blur.NORMAL) }
-                if (stroke != null) {
-                    style = android.graphics.Paint.Style.STROKE
-                    strokeWidth = stroke.toFloat()
-                    // GSK's plain stroke, as the PC spreads a shape's shadow with.
-                    strokeJoin = android.graphics.Paint.Join.MITER
-                }
-                if (erase) blendMode = android.graphics.BlendMode.DST_OUT
             }
-            canvas.nativeCanvas.drawPath(path.asAndroidPath(), paint)
+            canvas.nativeCanvas.drawPath(path, paint)
         }
     }
 
@@ -1138,3 +1129,20 @@ private fun Rect.Companion.from(path: Path): Rect {
     val b = path.getBounds()
     return Rect(b.left.toDouble(), b.top.toDouble(), b.width.toDouble(), b.height.toDouble())
 }
+
+/**
+ * The band [width] wide along [path]'s edge, as an outline of its own: GSK's plain stroke (mitred,
+ * a miter limit of 4, butt ends), as the PC spreads a shape's shadow with.
+ */
+private fun band(path: android.graphics.Path, width: Double): android.graphics.Path = android.graphics.Path().also {
+    android.graphics.Paint().apply {
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = width.toFloat()
+        strokeJoin = android.graphics.Paint.Join.MITER
+        strokeMiter = 4f
+    }.getFillPath(path, it)
+}
+
+/** [a] and [b] taken together by [op] as one outline; [a] alone should Skia fail to (a shadow then drawn without its spread). */
+private fun joined(a: android.graphics.Path, b: android.graphics.Path, op: PathOp): android.graphics.Path =
+    android.graphics.Path().takeIf { it.op(a, b, op) } ?: a
