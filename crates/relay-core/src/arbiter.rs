@@ -180,13 +180,18 @@ fn keyring(cmd: &mut Command) -> Result<String, BusError> {
 }
 
 /// What a keyring lookup answered: the secret, `None` when none is stored (`secret-tool` exits 1
-/// and says nothing), or why the keyring could not be read (it says so on stderr).
-fn looked_up(out: &std::process::Output) -> Result<Option<String>, BusError> {
+/// and says nothing), or why the keyring could not be read (it says so on stderr). A silent exit
+/// is also how a dismissed unlock prompt can end, so while the book still records a key
+/// (`key_saved`) it is a failure, asked again later, not "no key" kept until Relay restarts.
+fn looked_up(out: &std::process::Output, key_saved: bool) -> Result<Option<String>, BusError> {
     if out.status.success() {
         return Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()));
     }
     let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if out.stdout.is_empty() && err.is_empty() {
+        if key_saved {
+            return Err(BusError::unavailable("arbiter.keyring", "The keyring did not give back the Coinbase key Arbiter saved; it may be locked").with_hint("unlock your desktop keyring"));
+        }
         return Ok(None);
     }
     Err(BusError::unavailable("arbiter.keyring", err).with_hint("unlock your desktop keyring"))
@@ -207,8 +212,9 @@ fn load_key(engine: &Engine) -> Result<Option<Credentials>, BusError> {
     } else {
         let mut cmd = Command::new("secret-tool");
         cmd.args(["lookup", "application", "Relay", "purpose", "arbiter-coinbase"]);
+        let key_saved = with_book(engine, |b| b.connection()).is_ok_and(|c| !matches!(c.state.as_str(), "none" | ""));
         match crate::proc::output_with_timeout(&mut cmd, Duration::from_secs(30)) {
-            Ok(Some(out)) => match looked_up(&out)? {
+            Ok(Some(out)) => match looked_up(&out, key_saved)? {
                 Some(body) => body,
                 None => return Ok(None),
             },
@@ -243,13 +249,23 @@ pub fn forget_key(engine: &Engine) -> Result<(), BusError> {
 /// or none, is kept; a keyring that could not be read (locked, or the lookup timing out) is asked
 /// again on a call [`KEY_RETRY`] later.
 pub fn account(engine: &Engine) -> Option<Arc<dyn Exchange>> {
+    account_asking(engine, false)
+}
+
+/// [`account`], asking the keyring now even within [`KEY_RETRY`] of a failure: for what the
+/// person starts (the kill switch, Refresh), which must not wait out a keyring they just unlocked.
+pub fn account_now(engine: &Engine) -> Option<Arc<dyn Exchange>> {
+    account_asking(engine, true)
+}
+
+fn account_asking(engine: &Engine, now: bool) -> Option<Arc<dyn Exchange>> {
     if let Some(f) = lock(&engine.arbiter.fake).clone() {
         return (!*lock(&engine.arbiter.fake_keyless)).then_some(f);
     }
     let mut slot = lock(&engine.arbiter.keyed);
     if slot.is_none() {
         let mut failed = lock(&engine.arbiter.key_failed_at);
-        if failed.is_some_and(|at| book::now() - at < KEY_RETRY) {
+        if !now && failed.is_some_and(|at| book::now() - at < KEY_RETRY) {
             return None;
         }
         match load_key(engine) {
@@ -312,7 +328,8 @@ pub fn set_key(engine: &Engine, key_name: &str, private_key: &str) -> Result<Con
     with_book(engine, |b| b.connection())
 }
 
-/// Reads permissions, fees and balances, and values the balances in the home currency.
+/// Reads permissions, fees and balances, and values the balances in the home currency. `force`
+/// is the person asking (Refresh, a key just set): the keyring is asked now, too.
 pub fn refresh_account(engine: &Engine, force: bool) -> Result<Connection, BusError> {
     let now = book::now();
     {
@@ -322,7 +339,7 @@ pub fn refresh_account(engine: &Engine, force: bool) -> Result<Connection, BusEr
         }
         *at = now;
     }
-    let Some(client) = account(engine) else {
+    let Some(client) = account_asking(engine, force) else {
         return with_book(engine, |b| b.connection());
     };
     let mut conn = with_book(engine, |b| b.connection())?;
@@ -1022,6 +1039,11 @@ pub fn halt(engine: &Engine, strategy: Option<i64>, reason: &str) -> Result<(u32
         }
     }
     let open = with_book(engine, |b| b.open_orders(strategy))?;
+    // The person pressed it, perhaps just after unlocking the keyring: ask it now, not after the
+    // retry wait, so every live cancel below has the key if it can be read at all.
+    if open.iter().any(|o| o.venue == Venue::Live) {
+        let _ = account_now(engine);
+    }
     let (mut cancelled, mut failed) = (0, Vec::new());
     for o in open {
         match cancel_one(engine, &o, "halted") {
@@ -1323,11 +1345,27 @@ TsGghZLrhr8kSV5nZX8i1b+Q+3+QzuY0wQ==
     }
 
     #[test]
+    fn what_the_person_starts_asks_the_keyring_now_not_after_the_retry_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::new(Instance::Test, crate::Store::open(&dir.path().join("store.db"), false).unwrap());
+        std::fs::create_dir(test_key_file(&engine)).unwrap();
+        assert!(account(&engine).is_none());
+        // Unlocked a moment later: the runner waits out the minute, the kill switch does not.
+        std::fs::remove_dir(test_key_file(&engine)).unwrap();
+        store_key(&engine, &Credentials::parse("organizations/o/apiKeys/k1", KEY).unwrap()).unwrap();
+        assert!(account(&engine).is_none());
+        assert!(account_now(&engine).is_some());
+        assert!(account(&engine).is_some());
+    }
+
+    #[test]
     fn a_lookup_that_says_nothing_is_no_key_and_one_that_says_why_is_a_failure() {
         let out = |code: i32, stdout: &str, stderr: &str| std::process::Output { status: std::process::ExitStatus::from_raw(code << 8), stdout: stdout.into(), stderr: stderr.into() };
-        assert_eq!(looked_up(&out(0, "{}", "")).unwrap().as_deref(), Some("{}"));
-        assert_eq!(looked_up(&out(1, "", "")).unwrap(), None);
-        let locked = looked_up(&out(1, "", "Cannot get secret of a locked object\n")).unwrap_err();
+        assert_eq!(looked_up(&out(0, "{}", ""), true).unwrap().as_deref(), Some("{}"));
+        assert_eq!(looked_up(&out(1, "", ""), false).unwrap(), None);
+        // Silent, while the book records a key: a dismissed unlock prompt, not "no key".
+        assert_eq!(looked_up(&out(1, "", ""), true).unwrap_err().code, "arbiter.keyring");
+        let locked = looked_up(&out(1, "", "Cannot get secret of a locked object\n"), false).unwrap_err();
         assert_eq!((locked.code.as_str(), locked.message.as_str()), ("arbiter.keyring", "Cannot get secret of a locked object"));
     }
 }
