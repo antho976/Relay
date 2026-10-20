@@ -3,9 +3,10 @@
 //!
 //! A picture is chosen, pasted or dropped, made fit to send on a worker thread ([`prepare`]: at
 //! most 2000 pixels on its long side and 4 MiB, as PNG for a screenshot and JPEG for a photo; one
-//! that fits already goes as it is), and goes up at once (`thread.upload`), so sending only names
-//! it. In the message box it is a chip ([`Attached`]): its thumbnail, a spinner while it goes up, a
-//! red mark and the reason when it was refused, and a key that takes it out.
+//! that fits already goes as it is; one pasted is taken from its pixels, [`prepare_pasted`]), and
+//! goes up at once (`thread.upload`), so sending only names it. In the message box it is a chip
+//! ([`Attached`]): its thumbnail, a spinner while it goes up, a red mark and the reason when it was
+//! refused, and a key that takes it out.
 //!
 //! A message's pictures are read back by id (`thread.image`) as thumbnails kept in memory, so a
 //! redraw or a scroll does not read them again ([`thumbnail`]); a click opens one larger in a
@@ -207,11 +208,24 @@ fn scaled(pixbuf: &Pixbuf, edge: u32) -> Pixbuf {
 /// fits; else as a JPEG, any transparency on white.
 fn encode(pixbuf: &Pixbuf, from: &str) -> Result<(Vec<u8>, &'static str), String> {
     if matches!(from, "image/png" | "image/gif") || pixbuf.has_alpha() {
-        let png = pixbuf.save_to_bufferv("png", &[]).map_err(|e| e.to_string())?;
+        let png = png(pixbuf);
         if png.len() <= MAX_BYTES {
             return Ok((png, "image/png"));
         }
     }
+    jpeg(pixbuf)
+}
+
+/// `pixbuf` as PNG, by GDK's own writer: about four times quicker than gdk-pixbuf's at its default
+/// (68 ms against 261 for a 1600x1200 photo), for a file about 1.5 % larger.
+fn png(pixbuf: &Pixbuf) -> Vec<u8> {
+    let format = if pixbuf.has_alpha() { gdk::MemoryFormat::R8g8b8a8 } else { gdk::MemoryFormat::R8g8b8 };
+    let stride = pixbuf.rowstride().max(0) as usize;
+    gdk::MemoryTexture::new(pixbuf.width(), pixbuf.height(), format, &pixbuf.read_pixel_bytes(), stride).save_to_png_bytes().to_vec()
+}
+
+/// `pixbuf` as a JPEG within [`MAX_BYTES`], any transparency on white.
+fn jpeg(pixbuf: &Pixbuf) -> Result<(Vec<u8>, &'static str), String> {
     let flat = if pixbuf.has_alpha() {
         pixbuf.composite_color_simple(pixbuf.width(), pixbuf.height(), InterpType::Nearest, 255, 8, 0xffffff, 0xffffff).unwrap_or_else(|| pixbuf.clone())
     } else {
@@ -279,6 +293,43 @@ fn prepare(bytes: Vec<u8>) -> Result<Prepared, String> {
     }
     let (bytes, media_type) = encode(&pixbuf, media_type)?;
     Ok(Prepared { bytes, media_type, thumb })
+}
+
+/// Make a pasted or dragged-in picture fit to send (on a worker thread). It comes decoded, so its
+/// pixels are taken as they are, at most [`MAX_SIDE`] on the long side, rather than written out as
+/// a PNG at full size and read back.
+fn prepare_pasted(texture: &gdk::Texture) -> Result<Prepared, String> {
+    let (width, height) = (texture.width(), texture.height());
+    if (width.max(0) as u64).saturating_mul(height.max(0) as u64) > MAX_PIXELS {
+        return Err(String::from("It is larger than 100 megapixels"));
+    }
+    let download = |format: gdk::MemoryFormat| {
+        let mut downloader = gdk::TextureDownloader::new(texture);
+        downloader.set_format(format);
+        downloader.download_bytes()
+    };
+    // RGBA, unless every pixel is opaque: a PNG then carries no alpha, and a JPEG may serve.
+    let (mut bytes, mut stride) = download(gdk::MemoryFormat::R8g8b8a8);
+    let alpha = bytes.chunks_exact(stride).any(|row| row[..width as usize * 4].as_chunks::<4>().0.iter().any(|px| px[3] != 255));
+    if !alpha {
+        (bytes, stride) = download(gdk::MemoryFormat::R8g8b8);
+    }
+    let full = Pixbuf::from_bytes(&bytes, gtk::gdk_pixbuf::Colorspace::Rgb, alpha, 8, width, height, stride as i32);
+    let pixbuf = scaled(&full, MAX_SIDE);
+    let thumb = Some(Raw::of(&scaled(&pixbuf, THUMB_EDGE)));
+    let (bytes, media_type) = encode_pasted(&pixbuf)?;
+    Ok(Prepared { bytes, media_type, thumb })
+}
+
+/// A pasted picture's bytes: PNG when it packs as a screenshot does, under a byte a pixel, which
+/// keeps its text sharp, or when it has transparency, if that fits; else a JPEG, as a photo goes.
+fn encode_pasted(pixbuf: &Pixbuf) -> Result<(Vec<u8>, &'static str), String> {
+    let png = png(pixbuf);
+    let pixels = (pixbuf.width().max(0) as usize) * (pixbuf.height().max(0) as usize);
+    if png.len() <= MAX_BYTES && (pixbuf.has_alpha() || png.len() <= pixels) {
+        return Ok((png, "image/png"));
+    }
+    jpeg(pixbuf)
 }
 
 /// Read a chosen or dropped file and make it fit to send (on a worker thread).
@@ -379,7 +430,7 @@ impl Attached {
         glib::spawn_future_local(async move {
             let prepared = gio::spawn_blocking(move || match source {
                 Source::Path(path) => prepare_file(&path),
-                Source::Texture(texture) => prepare(texture.save_to_png_bytes().to_vec()),
+                Source::Texture(texture) => prepare_pasted(&texture),
             })
             .await
             .unwrap_or_else(|_| Err(String::from("It could not be read")));
@@ -1026,6 +1077,78 @@ mod tests {
             let again = open(&mut kept);
             assert_eq!(again.len(), 120 - KEPT);
             assert!(again.iter().all(|n| *n < (120 - KEPT) as u32), "read again: {again:?}");
+        }
+    }
+
+    /// Deterministic pixels: a photo's (gradients under fine noise, which PNG cannot pack) or a
+    /// screenshot's (flat panels, lines of text-like dashes).
+    fn pasted(width: i32, height: i32, photo: bool) -> gdk::Texture {
+        let mut seed = 0x2545_f491_u32;
+        let mut pixels = Vec::with_capacity((width * height * 3) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                let rgb = if photo {
+                    let n = (seed & 31) as i32 - 16;
+                    [(x * 200 / width + 30 + n).clamp(0, 255), (y * 180 / height + 40 + n).clamp(0, 255), ((x + y) * 120 / (width + height) + 60 + n).clamp(0, 255)]
+                } else if (y / 18) % 3 == 1 && (x % 240) < 180 && (x / 7 + y) % 5 != 0 && x > 300 {
+                    [40, 40, 44]
+                } else if x < 280 {
+                    [235, 236, 240]
+                } else {
+                    [255, 255, 255]
+                };
+                pixels.extend(rgb.map(|c| c as u8));
+            }
+        }
+        gdk::MemoryTexture::new(width, height, gdk::MemoryFormat::R8g8b8, &glib::Bytes::from_owned(pixels), (width * 3) as usize).upcast()
+    }
+
+    #[test]
+    fn a_pasted_photo_goes_as_jpeg_and_a_screenshot_as_png() {
+        let photo = prepare_pasted(&pasted(1600, 1200, true)).unwrap();
+        assert_eq!(photo.media_type, "image/jpeg");
+        let shot = prepare_pasted(&pasted(2560, 1440, false)).unwrap();
+        assert_eq!(shot.media_type, "image/png");
+        let back = decode(&shot.bytes, 10_000).unwrap();
+        assert_eq!((back.width(), back.height()), (2000, 1125));
+        // A picture with transparency keeps it.
+        let mut pixels = vec![0_u8; 64 * 48 * 4];
+        for (i, px) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            *px = [200, 40, 40, if i % 2 == 0 { 255 } else { 0 }];
+        }
+        let clear: gdk::Texture = gdk::MemoryTexture::new(64, 48, gdk::MemoryFormat::R8g8b8a8, &glib::Bytes::from_owned(pixels), 64 * 4).upcast();
+        let kept = prepare_pasted(&clear).unwrap();
+        assert_eq!(kept.media_type, "image/png");
+        assert!(decode(&kept.bytes, 10_000).unwrap().has_alpha());
+    }
+
+    /// `cargo test -p relay-native paste_cost -- --ignored --nocapture`: what a pasted picture costs
+    /// to make fit, and what goes up. RELAY_PASTE_FILES=a.jpg,b.png adds pictures from disk.
+    #[test]
+    #[ignore]
+    fn paste_cost() {
+        let mut inputs: Vec<(String, gdk::Texture)> = [("photo 4032x3024", 4032, 3024, true), ("photo 1600x1200", 1600, 1200, true), ("screenshot 2560x1440", 2560, 1440, false)]
+            .into_iter()
+            .map(|(name, w, h, photo)| (name.to_string(), pasted(w, h, photo)))
+            .collect();
+        for path in std::env::var("RELAY_PASTE_FILES").unwrap_or_default().split(',').filter(|p| !p.is_empty()) {
+            let texture = gdk::Texture::from_filename(path).unwrap();
+            inputs.push((format!("{} {}x{}", Path::new(path).file_name().unwrap().to_string_lossy(), texture.width(), texture.height()), texture));
+        }
+        for (name, texture) in &inputs {
+            let mut times = Vec::new();
+            let mut sent = (0, "");
+            for _ in 0..5 {
+                let t = std::time::Instant::now();
+                let p = prepare_pasted(texture).unwrap();
+                times.push(t.elapsed().as_secs_f64() * 1000.0);
+                sent = (p.bytes.len() / 1024, p.media_type);
+            }
+            times.sort_by(f64::total_cmp);
+            println!("PASTE {name}: {:.0} ms [{:.0}-{:.0}] sends {} KB {}", times[2], times[0], times[4], sent.0, sent.1);
         }
     }
 
