@@ -64,6 +64,9 @@ pub struct Placed {
     pub content_origin: FxHashMap<String, (f64, f64)>,
     /// Every scrolling frame placed, scrolled or not.
     pub scrolls: FxHashMap<String, Scrolled>,
+    /// The width a hugging text was wrapped at because a column stretched it: [`wrap_width`]
+    /// alone would draw it on one line (TM-7). Read through [`Placed::wrap_width`].
+    pub wraps: FxHashMap<String, f64>,
 }
 
 /// A scrolling frame as placed: how far its content is scrolled, and the box its content spans
@@ -92,15 +95,33 @@ impl Placed {
     pub fn point(&self, id: &str) -> (f64, f64) {
         self.origins.get(id).copied().or_else(|| self.rect(id).map(|r| (r.x, r.y))).unwrap_or((0.0, 0.0))
     }
+
+    /// Where a text's or sticky's words wrap in its placed box `rect`: the width layout
+    /// measured them at, so paint and the text editor wrap them as layout did.
+    pub fn wrap_width(&self, n: &Node, rect: &Rect) -> Option<f64> {
+        self.wraps.get(n.id.as_str()).copied().or_else(|| wrap_width(n, rect))
+    }
 }
 
-/// Where a text's words wrap, given its placed box: `None` while it hugs them.
+/// Where a text's words wrap, given its placed box: `None` while it hugs them, unless a min or
+/// max width bounds it (it was measured at its box then). A hugging text a column stretches
+/// wraps too, which only [`Placed::wrap_width`] knows.
 pub fn wrap_width(n: &Node, rect: &Rect) -> Option<f64> {
     match n.kind {
         NodeKind::Sticky => Some((rect.w - 2.0 * STICKY_PAD).max(1.0)),
-        NodeKind::Text if w_sizing(n) != Sizing::Hug => Some(rect.w.max(1.0)),
+        NodeKind::Text if w_sizing(n) != Sizing::Hug || n.min_w.is_some() || n.max_w.is_some() => Some(rect.w.max(1.0)),
         _ => None,
     }
+}
+
+/// A node's own size wherever it is, laid out or hidden (layout places neither a hidden node
+/// nor anything inside one): as a page sizes a free child, a hugging text its measured words,
+/// a group its shown children's bounds. Flip mirrors a hidden layer with it (B22).
+pub fn natural_size(scene: &Scene, id: &str, measure: &dyn Measure) -> (f64, f64) {
+    let Some(n) = scene.node(id) else {
+        return (0.0, 0.0);
+    };
+    Pass::new(scene, measure, &|_| None).size(&n.id, None)
 }
 
 /// How a frame is drawn against how it is stored, which is what its pinned children follow:
@@ -684,6 +705,10 @@ impl<'a> Pass<'a> {
             } else {
                 Rect::new(inner.x + offset, inner.y + at, s.cross, s.main)
             };
+            if !row && s.stretch && self.scene.node(c).is_some_and(|k| k.kind == NodeKind::Text && w_sizing(k) == Sizing::Hug) {
+                // A hugging text the column stretched was measured wrapped at its width.
+                self.placed.wraps.insert(c.to_string(), s.cross);
+            }
             self.arrange(c, r);
             at += s.main + gap;
         }
@@ -1579,6 +1604,60 @@ pub(crate) mod tests {
         assert_eq!(widest.0.get(), MAX_COORD);
         assert_eq!(p.rect("outer").map(|r| (r.w, r.h)), Some((MAX_COORD, MAX_COORD)));
         assert_eq!(p.rect("words").unwrap().w, MAX_COORD);
+    }
+
+    /// TM-7: a hugging text a column stretches is laid out wrapped at the column's width, but
+    /// wrap_width (what paint and the editor read) said it hugs, so it was drawn on one line.
+    #[test]
+    fn a_stretched_hugging_text_is_drawn_wrapped_where_it_was_measured() {
+        let mut card = node("card", Some("p1"), K::Frame, [0.0, 0.0, 200.0, 0.0]);
+        card.layout = Some(Layout::Column);
+        card.h_sizing = Some(Sizing::Hug);
+        card.items = Some(Items::Stretch);
+        card.padding = Some(vec![10.0]);
+        let mut bubble = text("bubble", "p1", "abcdefghijklmnopqrstuvwxy");
+        bubble.max_w = Some(100.0);
+        let s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            card,
+            text("caption", "card", "A hugging caption long enough to wrap"),
+            text("free", "p1", "Hi"),
+            bubble,
+        ]);
+        let p = place(&s, "p1", &Mono);
+        let caption = s.node("caption").unwrap();
+        let r = p.rect("caption").unwrap();
+        assert_eq!(p.wrap_width(caption, &r), Some(180.0));
+        assert_eq!(r.h, Mono.measure(caption, Some(180.0)).1);
+        assert_eq!(wrap_width(caption, &r), None, "the free rule cannot know");
+        // Elsewhere the free rule: a hugging text unwrapped, one held to max_w at its box.
+        let free = s.node("free").unwrap();
+        assert_eq!(p.wrap_width(free, &p.rect("free").unwrap()), None);
+        let bubble = s.node("bubble").unwrap();
+        assert_eq!(p.wrap_width(bubble, &p.rect("bubble").unwrap()), Some(100.0));
+    }
+
+    /// B22: layout places no hidden node, so flip had no box for one; natural_size is its own
+    /// size wherever it is.
+    #[test]
+    fn natural_size_measures_what_layout_does_not_place() {
+        let mut hid = text("hid", "p1", "Hello");
+        hid.hidden = Some(true);
+        let mut g = node("g", Some("p1"), K::Group, [100.0, 0.0, 0.0, 0.0]);
+        g.hidden = Some(true);
+        let s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            hid,
+            g,
+            node("r1", Some("g"), K::Rect, [0.0, 0.0, 50.0, 30.0]),
+            node("r2", Some("g"), K::Rect, [60.0, 10.0, 40.0, 40.0]),
+        ]);
+        let p = place(&s, "p1", &Mono);
+        assert!(p.rect("hid").is_none() && p.rect("g").is_none() && p.rect("r1").is_none());
+        assert_eq!(natural_size(&s, "hid", &Mono), (40.0, 20.0));
+        assert_eq!(natural_size(&s, "g", &Mono), (100.0, 50.0));
+        assert_eq!(natural_size(&s, "r2", &Mono), (40.0, 40.0));
+        assert_eq!(natural_size(&s, "nope", &Mono), (0.0, 0.0));
     }
 
     /// Mono, counting what it is asked.
