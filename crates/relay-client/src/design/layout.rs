@@ -71,6 +71,8 @@ struct Pass<'a> {
     measure: &'a dyn Measure,
     placed: Placed,
     sizes: RefCell<FxHashMap<SizeKey<'a>, (f64, f64)>>,
+    /// Each group's children's bounds, worked out once a pass.
+    bounds: RefCell<FxHashMap<&'a str, Option<Rect>>>,
 }
 
 /// Place every node of `page`.
@@ -85,7 +87,7 @@ pub fn place(scene: &Scene, page: &str, measure: &dyn Measure) -> Placed {
 
 impl<'a> Pass<'a> {
     fn new(scene: &'a Scene, measure: &'a dyn Measure) -> Self {
-        Pass { scene, measure, placed: Placed::default(), sizes: RefCell::default() }
+        Pass { scene, measure, placed: Placed::default(), sizes: RefCell::default(), bounds: RefCell::default() }
     }
 
     fn visible(&self, id: &str) -> Option<&'a Node> {
@@ -112,6 +114,8 @@ impl<'a> Pass<'a> {
         let (ws, hs) = (w_sizing(n), h_sizing(n));
         let fill_w = |own: f64| if ws == Sizing::Fill { offered_w.unwrap_or(own) } else { own };
         match n.kind {
+            // A group is as big as its children, whatever its own `w`/`h` or sizing say (B2).
+            NodeKind::Group => self.group_bounds(n).map_or((0.0, 0.0), |b| (b.w, b.h)),
             NodeKind::Text => {
                 // A filling text that no width is offered yet (a row shares its room only after
                 // measuring) measures unwrapped; the row wraps it once it has its share.
@@ -151,7 +155,8 @@ impl<'a> Pass<'a> {
                 let stretch = n.items == Some(Items::Stretch);
                 let fills = |c: &str| {
                     scene.node(c).is_some_and(|k| {
-                        if row { w_sizing(k) == Sizing::Fill } else { w_sizing(k) == Sizing::Fill || (stretch && k.kind == NodeKind::Text) }
+                        k.kind != NodeKind::Group
+                            && if row { w_sizing(k) == Sizing::Fill } else { w_sizing(k) == Sizing::Fill || (stretch && k.kind == NodeKind::Text) }
                     })
                 };
                 // A row with a known width shares what is left among its filling children before
@@ -203,14 +208,47 @@ impl<'a> Pass<'a> {
         (w, self.size_of_probe(&probe))
     }
 
-    /// A child of a page, group or frame without layout: at its own `x`/`y`.
+    /// A group's children's bounds from its own point, shown children only (`None` with none
+    /// shown): each child's box at its `x`/`y`, a child group's own bounds where it sits.
+    fn group_bounds(&self, g: &'a Node) -> Option<Rect> {
+        if let Some(bounds) = self.bounds.borrow().get(g.id.as_str()) {
+            return *bounds;
+        }
+        let mut bounds: Option<Rect> = None;
+        for c in self.scene.children(&g.id) {
+            let Some(k) = self.visible(c) else {
+                continue;
+            };
+            let r = if k.kind == NodeKind::Group {
+                let Some(inner) = self.group_bounds(k) else {
+                    continue;
+                };
+                inner.translate(k.x, k.y)
+            } else {
+                let (w, h) = self.size(c, None);
+                Rect::new(k.x, k.y, w, h)
+            };
+            bounds = Some(bounds.map_or(r, |b| b.union(&r)));
+        }
+        self.bounds.borrow_mut().insert(g.id.as_str(), bounds);
+        bounds
+    }
+
+    /// A child of a page, group or frame without layout: at its own `x`/`y` (a group: its
+    /// children's bounds where they sit).
     fn free_child(&mut self, id: &'a str, origin_x: f64, origin_y: f64) {
         let Some(n) = self.visible(id) else {
             return;
         };
         let (x, y) = (origin_x + n.x, origin_y + n.y);
-        let (w, h) = self.size(id, None);
-        self.arrange(id, Rect::new(x, y, w, h));
+        let rect = if n.kind == NodeKind::Group {
+            let b = self.group_bounds(n).unwrap_or_default();
+            Rect::new(x + b.x, y + b.y, b.w, b.h)
+        } else {
+            let (w, h) = self.size(id, None);
+            Rect::new(x, y, w, h)
+        };
+        self.arrange(id, rect);
     }
 
     fn arrange(&mut self, id: &'a str, rect: Rect) {
@@ -221,12 +259,16 @@ impl<'a> Pass<'a> {
         let children = scene.children(id);
         match (n.kind, n.layout_mode()) {
             (NodeKind::Group, _) => {
-                self.placed.origins.insert(id.to_string(), (rect.x, rect.y));
+                // `rect` is where its children's bounds land, freely or in a layout's slot (B2):
+                // they count from there less where their bounds start.
+                let b = self.group_bounds(n).unwrap_or_default();
+                let (ox, oy) = (rect.x - b.x, rect.y - b.y);
+                self.placed.origins.insert(id.to_string(), (ox, oy));
                 for child in children {
-                    self.free_child(child, rect.x, rect.y);
+                    self.free_child(child, ox, oy);
                 }
                 let bounds = Rect::bounds(children.iter().filter_map(|c| self.placed.rects.get(c)));
-                self.placed.rects.insert(id.to_string(), bounds.unwrap_or(Rect::new(rect.x, rect.y, 0.0, 0.0)));
+                self.placed.rects.insert(id.to_string(), bounds.unwrap_or(Rect::new(ox, oy, 0.0, 0.0)));
             }
             (_, Layout::None) => {
                 self.placed.rects.insert(id.to_string(), rect);
@@ -257,10 +299,12 @@ impl<'a> Pass<'a> {
             .map(|&c| {
                 let n = self.scene.node(c).expect("visible");
                 let (main_rule, cross_rule) = if row { (w_sizing(n), h_sizing(n)) } else { (h_sizing(n), w_sizing(n)) };
-                let stretch = cross_rule == Sizing::Fill || items == Items::Stretch;
+                // A group takes its children's room: it neither fills nor stretches (B2).
+                let group = n.kind == NodeKind::Group;
+                let stretch = !group && (cross_rule == Sizing::Fill || items == Items::Stretch);
                 let (w, h) = self.size(c, if row { None } else { Some(inner.w) });
                 let (main, cross) = if row { (w, h) } else { (h, w) };
-                (main, if stretch { inner_cross } else { cross }, main_rule == Sizing::Fill, stretch)
+                (main, if stretch { inner_cross } else { cross }, !group && main_rule == Sizing::Fill, stretch)
             })
             .collect();
         let fills = sizes.iter().filter(|s| s.2).count();
@@ -496,6 +540,70 @@ pub(crate) mod tests {
         assert_eq!((p.origin("g"), p.origin("g2"), p.origin("p1")), ((100.0, 100.0), (120.0, 130.0), (0.0, 0.0)));
         // 168 px of text width holds 21 characters a line: 10 lines, 200 + 32 > 200.
         assert_eq!(p.rect("s"), Some(Rect::new(0.0, 0.0, 200.0, 232.0)));
+    }
+
+    /// A group the column lays out, holding r1 [0,0,50,30] and r2 [60,10,40,40] shifted by
+    /// `(dx, dy)`, then a 80×20 rect.
+    fn grouped(dx: f64, dy: f64) -> Scene {
+        let mut col = node("col", Some("p1"), K::Frame, [0.0, 0.0, 200.0, 0.0]);
+        col.layout = Some(Layout::Column);
+        col.gap = Some(10.0);
+        col.h_sizing = Some(Sizing::Hug);
+        Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            col,
+            node("g", Some("col"), K::Group, [999.0, 999.0, 0.0, 0.0]),
+            node("r1", Some("g"), K::Rect, [dx, dy, 50.0, 30.0]),
+            node("r2", Some("g"), K::Rect, [60.0 + dx, 10.0 + dy, 40.0, 40.0]),
+            node("next", Some("col"), K::Rect, [0.0, 0.0, 80.0, 20.0]),
+        ])
+    }
+
+    /// B2: a group in auto layout took no room (its stored 0×0), so the next sibling landed on
+    /// its children; it takes their bounds.
+    #[test]
+    fn a_group_in_a_column_takes_its_bounds_and_pushes_the_next_sibling_down() {
+        let p = place(&grouped(0.0, 0.0), "p1", &Mono);
+        assert_eq!(p.rect("g"), Some(Rect::new(0.0, 0.0, 100.0, 50.0)));
+        assert_eq!(p.rect("next").unwrap().y, 60.0);
+        assert_eq!(p.rect("col").unwrap().h, 80.0);
+        assert_eq!((p.origin("g"), p.rect("r2")), ((0.0, 0.0), Some(Rect::new(60.0, 10.0, 40.0, 40.0))));
+    }
+
+    /// B2, B90: children that start off the group's point (20 px in, or 10 px left of it)
+    /// still land in its slot, the group's point moving so they do.
+    #[test]
+    fn a_group_whose_children_start_off_its_point_lands_in_its_slot() {
+        let p = place(&grouped(20.0, 20.0), "p1", &Mono);
+        assert_eq!(p.rect("g"), Some(Rect::new(0.0, 0.0, 100.0, 50.0)));
+        assert_eq!((p.origin("g"), p.rect("r1").unwrap().x), ((-20.0, -20.0), 0.0));
+        let p = place(&grouped(-10.0, 0.0), "p1", &Mono);
+        assert_eq!(p.rect("g"), Some(Rect::new(0.0, 0.0, 100.0, 50.0)));
+        assert_eq!(p.origin("g"), (10.0, 0.0));
+        assert_eq!(p.rect("next").unwrap().y, 60.0);
+    }
+
+    /// A group neither fills a row nor stretches across it, whatever sizing it stores: it is as
+    /// big as its children, in a group of its own too.
+    #[test]
+    fn a_group_neither_fills_nor_stretches() {
+        let mut bar = node("bar", Some("p1"), K::Frame, [0.0, 0.0, 300.0, 100.0]);
+        bar.layout = Some(Layout::Row);
+        bar.items = Some(Items::Stretch);
+        let mut g = node("g", Some("bar"), K::Group, [0.0, 0.0, 0.0, 0.0]);
+        g.w_sizing = Some(Sizing::Fill);
+        let s = Scene::new(vec![
+            node("p1", None, K::Page, [0.0; 4]),
+            bar,
+            g,
+            node("inner", Some("g"), K::Group, [5.0, 5.0, 0.0, 0.0]),
+            node("dot", Some("inner"), K::Ellipse, [10.0, 0.0, 20.0, 20.0]),
+            node("after", Some("bar"), K::Rect, [0.0, 0.0, 30.0, 30.0]),
+        ]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(p.rect("g"), Some(Rect::new(0.0, 0.0, 20.0, 20.0)));
+        assert_eq!(p.rect("dot"), Some(Rect::new(0.0, 0.0, 20.0, 20.0)));
+        assert_eq!(p.rect("after"), Some(Rect::new(20.0, 0.0, 30.0, 100.0)));
     }
 
     /// Mono, counting what it is asked.
