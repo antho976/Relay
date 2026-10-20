@@ -207,7 +207,7 @@ pub fn strip_controls(s: &str, keep_breaks: bool) -> Cow<'_, str> {
 
 /// A text, line, path or icon casts its shadows round its letters or strokes: outer ones only,
 /// without spread (MODEL-SPEC §1 #13).
-fn casts_outer_only(kind: NodeKind) -> bool {
+pub(super) fn casts_outer_only(kind: NodeKind) -> bool {
     matches!(kind, NodeKind::Text | NodeKind::Line | NodeKind::Path | NodeKind::Icon)
 }
 
@@ -360,7 +360,7 @@ impl Node {
 
 /// A shadow written to a `kind` node, fitted to the written rules: its blur within the cap, and
 /// where only outer shadows are cast, no spread. False for an inner one there, which goes.
-fn fit_shadow(kind: NodeKind, s: &mut Shadow) -> bool {
+pub(super) fn fit_shadow(kind: NodeKind, s: &mut Shadow) -> bool {
     s.blur = s.blur.min(MAX_SHADOW_BLUR);
     if casts_outer_only(kind) {
         s.spread = 0.0;
