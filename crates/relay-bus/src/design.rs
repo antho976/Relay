@@ -843,6 +843,11 @@ pub struct Node {
     /// them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locked: Option<bool>,
+    /// Leaves it out of the layout and contrast checks (default false): design.render lists no
+    /// issue, and design.apply no contrast flag, that names it first. For words meant to be faint,
+    /// or set on what the check cannot see (a picture's colours); not to quiet a real problem.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip_checks: Option<bool>,
 
     /// The words of a text or sticky, or a centred label on a rect, ellipse or polygon; at most
     /// 10000 characters. Newlines break lines.
@@ -1422,6 +1427,7 @@ impl Node {
             shadows: None,
             runs: None,
             max_lines: None,
+            skip_checks: None,
             style: None,
             motion: None,
             timeline: None,

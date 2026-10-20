@@ -384,7 +384,10 @@ a screen, **look at it**: `design.render {"design_id": 12, "page": "page-7", "no
 - `issues` (worst first, at most 100; `issue_count` counts all) name layout problems by `code`:
   `overflow` (a child past its frame's padding), `overlap` (siblings laid over each other in a
   layout), `text_overlap`, `clipped` (cut off by a clipping frame), `contrast` (words too faint on
-  what they sit on). Fix them and render again. Read `warnings` too.
+  what is painted under their centre: through a ring's hole or past a round corner, not the shape's
+  box). Fix them and render again. Read `warnings` too. A node you mean to leave as it is (words
+  meant to be faint, a caption on a photo the check cannot read) takes `"skip_checks": true`, and
+  no issue names it first again; never use it to quiet a real problem.
 - Motion: `at_ms` (0 to 600000) pictures one time, `frames` (2 to 24) a contact sheet labelled by
   `times_ms`; not both (`design.render.args`).
 - It is drawn by Relay's desktop app. **`design.render.no_renderer`** means none is open: tell the

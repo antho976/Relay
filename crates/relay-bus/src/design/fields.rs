@@ -66,6 +66,7 @@ pub const FIELDS: &[(&str, Kinds, Option<&str>)] = &[
     ("h", Kinds(ALL), None),
     ("hidden", Kinds(ALL), None),
     ("locked", Kinds(ALL), None),
+    ("skip_checks", Kinds(ALL & !P), Some("skip_checks: a page is not checked; set it on what is on it")),
     ("opacity", Kinds(ALL & !P), None),
     ("blur", Kinds(ALL & !P), None),
     ("blend", Kinds(ALL & !P), None),
@@ -687,7 +688,7 @@ mod tests {
         let full: Node = serde_json::from_str(r##"{
             "id": "n", "parent": "p", "kind": "rect", "name": "n", "x": 1, "y": 1, "w": 1, "h": 1, "fill": "#fff",
             "stroke": "#000", "stroke_width": 1, "radius": 1, "opacity": 1, "shadow": {"color": "#000"}, "clip": true,
-            "hidden": false, "locked": false, "text": "t", "color": "#000", "font": "Geist", "font_size": 9,
+            "hidden": false, "locked": false, "skip_checks": true, "text": "t", "color": "#000", "font": "Geist", "font_size": 9,
             "font_weight": 400, "italic": true, "underline": true, "strike": true, "align": "left", "line_height": 1,
             "letter_spacing": 0, "w_sizing": "fixed", "h_sizing": "fixed", "layout": "row", "gap": 1, "padding": [1],
             "justify": "start", "items": "start", "points": [[0, 0]], "arrow_start": true, "arrow_end": true,

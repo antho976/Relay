@@ -11,6 +11,7 @@ use super::bounds::{painted_bounds, painted_bounds_in_page};
 use super::color::{contrast, fill_of, ground_of, text_color, CANVAS};
 use super::edit::outermost;
 use super::geom::Rect;
+use super::hit::on_shape;
 use super::layout::{Measure, Placed, STICKY_PAD};
 use super::scene::Scene;
 use super::shapes;
@@ -277,14 +278,15 @@ fn cell(v: f64) -> i64 {
 ///   centre. Both colours there are worked out as the painter lays them down: each node's
 ///   ground in paint order, a node with an opacity faded together with what is inside it, so
 ///   a faded card fades its words and its fill alike. The ground the message names is the
-///   nearest node painted there (the text itself when it paints a ground) that is not a text,
-///   line, path, icon or group and is at least half opaque beside the words, else the page. A
+///   nearest node whose shape is painted there (the text itself when it paints a ground: an
+///   ellipse's drawn slice, not a ring's hole; a box within its round corners) that is not a
+///   text, line, path, icon or group and is at least half opaque beside the words, else the page. A
 ///   picture over that ground, or a colour over it that does not parse, leaves nothing to
 ///   check; under it, it is passed over. Nodes are read as drawn (`Scene::node`): a `$name`
 ///   is the colour it names, and one the design does not hold leaves the kind's default.
 ///
 /// An issue names a node in scope first; the frame, the sibling or the ground it names next
-/// may lie outside.
+/// may lie outside. None names first a node that sets `skip_checks`.
 pub fn issues(scene: &Scene, placed: &Placed, measure: &dyn Measure, page: &str, ids: &[String]) -> (Vec<RenderIssue>, u32) {
     let order = scene.subtree(page);
     let at: FxHashMap<String, usize> = order.iter().enumerate().map(|(i, id)| (id.clone(), i)).collect();
@@ -310,6 +312,7 @@ pub fn issues(scene: &Scene, placed: &Placed, measure: &dyn Measure, page: &str,
         }
     }
     found.extend(inside.iter().filter_map(|id| paint.contrast(id)));
+    found.retain(|f| f.ids.first().and_then(|id| scene.node(id)).is_none_or(|n| n.skip_checks != Some(true)));
     found.sort_by_key(|f| (f.code, f.at));
     let count = u32::try_from(found.len()).unwrap_or(u32::MAX);
     let listed = found.into_iter().take(MAX_ISSUES).map(|f| RenderIssue { code: f.code.name().into(), ids: f.ids, message: f.message });
@@ -529,7 +532,9 @@ impl Paint<'_> {
             let id = &self.order[i];
             let (Some(c), Some(cr)) = (self.scene.node(id), self.placed.rect(id)) else { continue };
             let (x, y) = if self.turned[i] { shapes::to_local(self.scene, self.placed, id, centre.0, centre.1) } else { centre };
-            if !cr.contains(x, y) {
+            // What it paints, not its box: a ring's hole, a round corner or a pie's missing slice
+            // shows what is under it.
+            if !on_shape(self.scene, self.placed, c, &cr, x, y, 0.0) {
                 continue;
             }
             let color = match c.kind {
@@ -1039,6 +1044,55 @@ mod tests {
         let found = all_issues(&s, &p);
         assert_eq!(codes(&found), [("contrast", vec!["ink", "card"])]);
         assert!(found.0[0].message.contains("#222222 on #404040 (card)"), "{}", found.0[0].message);
+    }
+
+    /// Words in a progress ring's hole are read on what shows through it, not on the ring; the
+    /// ring's own label too. A box's round corner shows what is under it.
+    #[test]
+    fn contrast_reads_through_a_rings_hole_and_round_corners() {
+        let mut dark = node("screen", Some("p1"), K::Frame, [0.0, 0.0, 300.0, 300.0]);
+        dark.fill = Some("#101418".into());
+        let mut ring = node("ring", Some("screen"), K::Ellipse, [50.0, 50.0, 200.0, 200.0]);
+        (ring.fill, ring.arc) = (Some("#E8F0FF".into()), Some(relay_bus::design::Arc { start: 0.0, sweep: 250.0, inner: 0.8, cap: None }));
+        let mut pct = text("pct", "screen", [130.0, 140.0, 40.0, 20.0], "69%");
+        pct.color = Some("#FFFFFF".into());
+        let (s, p) = page(vec![dark.clone(), ring.clone(), pct.clone()]);
+        assert!(all_issues(&s, &p).0.is_empty(), "white on the dark screen: {:?}", all_issues(&s, &p).0);
+        // Dark words in the hole are flagged against the screen, not the light ring.
+        pct.color = Some("#30343A".into());
+        let (s, p) = page(vec![dark.clone(), ring.clone(), pct]);
+        assert_eq!(codes(&all_issues(&s, &p)), [("contrast", vec!["pct", "screen"])]);
+        // The ring's own label sits in its hole too.
+        let mut labelled = ring.clone();
+        (labelled.text, labelled.color) = (Some("69%".into()), Some("#FFFFFF".into()));
+        let (s, p) = page(vec![dark.clone(), labelled]);
+        assert!(all_issues(&s, &p).0.is_empty(), "{:?}", all_issues(&s, &p).0);
+        // A pie without a hole is under its words, where it is drawn.
+        let mut pie = ring;
+        pie.arc = Some(relay_bus::design::Arc { start: 0.0, sweep: 360.0, inner: 0.0, cap: None });
+        let mut ink = text("ink", "screen", [130.0, 140.0, 40.0, 20.0], "69%");
+        ink.color = Some("#FFFFFF".into());
+        let (s, p) = page(vec![dark.clone(), pie, ink.clone()]);
+        assert_eq!(codes(&all_issues(&s, &p)), [("contrast", vec!["ink", "ring"])]);
+        // A round corner leaves the screen showing at the box's very corner.
+        let mut pill = node("pill", Some("screen"), K::Rect, [0.0, 0.0, 40.0, 40.0]);
+        (pill.fill, pill.radius) = (Some("#FFFFFF".into()), Some(20.0));
+        let corner = text("corner", "screen", [0.0, 0.0, 4.0, 4.0], ".");
+        let (s, p) = page(vec![dark, pill, corner]);
+        assert!(all_issues(&s, &p).0.is_empty(), "{:?}", all_issues(&s, &p).0);
+    }
+
+    /// `skip_checks` drops the issues that name the node first, and only those.
+    #[test]
+    fn skip_checks_leaves_out_what_names_it_first() {
+        let card = node("card", Some("p1"), K::Rect, [0.0, 0.0, 300.0, 100.0]);
+        let mut faint = text("faint", "p1", [10.0, 40.0, 0.0, 0.0], "Name");
+        faint.skip_checks = Some(true);
+        let loud = text("loud", "p1", [10.0, 70.0, 0.0, 0.0], "Name");
+        let (s, p) = page(vec![card, faint, loud]);
+        let found = all_issues(&s, &p);
+        assert_eq!(codes(&found), [("contrast", vec!["loud", "card"])]);
+        assert_eq!(found.1, 1, "nor is it counted");
     }
 
     #[test]

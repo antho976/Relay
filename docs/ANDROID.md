@@ -191,7 +191,8 @@ sizes and scrolling frames (each at its start); every kind (frames, groups, rect
 arcs, polygons and stars, lines and connectors in their routes, pen paths, stickies, icons, text with its runs, and
 pictures) with fills, linear, radial and conic gradients, strokes with dashes and ends, per-corner
 radii, inner and drop shadows, opacity, blend modes, rotation and flips; and a design's named colours
-and styles, resolved as the PC resolves them. Words are set by Compose in the fonts the app carries (Geist,
+and styles, resolved as the PC resolves them (`skip_checks` changes nothing drawn: it is for the
+PC's checks). Words are set by Compose in the fonts the app carries (Geist,
 Geist Mono, Sora, Fira Sans, Fira Sans Condensed, Fira Mono; any other family is the phone's sans
 serif), so a line may break a word earlier or later than on the PC. Pictures are read with
 `design.asset.get` in pieces of at most 3 MiB, kept on the phone (64 MiB, the least recently drawn

@@ -129,6 +129,8 @@ data class DesignNode(
     val clip: Boolean? = null,
     val hidden: Boolean? = null,
     val locked: Boolean? = null,
+    /** The PC's layout and contrast checks pass over it; nothing drawn changes. */
+    @SerialName("skip_checks") val skipChecks: Boolean? = null,
     val text: String? = null,
     val color: String? = null,
     val font: String? = null,

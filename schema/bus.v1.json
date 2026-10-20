@@ -25568,6 +25568,13 @@
           ],
           "description": "Locked nodes cannot be selected or moved on the canvas (default false); edits still change\nthem."
         },
+        "skip_checks": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Leaves it out of the layout and contrast checks (default false): design.render lists no\nissue, and design.apply no contrast flag, that names it first. For words meant to be faint,\nor set on what the check cannot see (a picture's colours); not to quiet a real problem."
+        },
         "text": {
           "type": [
             "string",
@@ -27655,6 +27662,7 @@
                   "clip",
                   "hidden",
                   "locked",
+                  "skip_checks",
                   "text",
                   "color",
                   "font",
