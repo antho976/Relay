@@ -127,7 +127,7 @@ fn decimal_schema(unit: &str, nullable: bool, about: Option<&str>) -> Value {
 /// decimal places, for a reading that does not name its currency.
 pub fn to_agent(value: &mut Value, schema: &Value, ledger: u32) {
     let root = value.get("currency").and_then(Value::as_str).map_or(ledger, digits);
-    walk(value, schema, root, None, true, &mut |unit, v, places| {
+    walk(value, schema, schema, root, None, true, &mut |unit, v, places| {
         let shown = match (unit, &*v) {
             ("e8", Value::Number(n)) => n.as_i64().map(|n| trimmed(major_string(n, 8))),
             ("bps", Value::Number(n)) => n.as_i64().map(|n| major_string(n, 2)),
@@ -148,7 +148,7 @@ pub fn to_agent(value: &mut Value, schema: &Value, ledger: u32) {
 /// takes. Refuses one with more decimal places than its unit has.
 pub fn to_engine(value: &mut Value, schema: &Value, ledger: u32) -> Result<(), String> {
     let root = value.get("currency").and_then(Value::as_str).map_or(ledger, digits);
-    walk(value, schema, root, None, false, &mut |unit, v, places| {
+    walk(value, schema, schema, root, None, false, &mut |unit, v, places| {
         let places = match unit {
             "e8" => 8,
             u if u.starts_with("minor") => places,
@@ -171,8 +171,15 @@ type Apply<'a> = dyn FnMut(&str, &mut Value, u32) -> Result<(), String> + 'a;
 
 /// Visit each value whose schema has a unit, with the decimal places it is counted in.
 /// `siblings` is the object holding `value`, for a `minor:<field>` unit. On the way to a model
-/// (`agent`), fields are renamed and left out as [`agent_key`] says.
-fn walk(value: &mut Value, schema: &Value, root: u32, siblings: Option<&Map<String, Value>>, agent: bool, apply: &mut Apply) -> Result<(), String> {
+/// (`agent`), fields are renamed and left out as [`agent_key`] says. A type the schema names
+/// more than once is a `$ref` into `half`'s `$defs` (`bus.schema {op}` writes it once there).
+#[allow(clippy::too_many_arguments)]
+fn walk(value: &mut Value, schema: &Value, half: &Value, root: u32, siblings: Option<&Map<String, Value>>, agent: bool, apply: &mut Apply) -> Result<(), String> {
+    // A unit beside a reference is the field's own; else the type's.
+    let schema = match schema.get("x-unit") {
+        Some(_) => schema,
+        None => resolved(schema, half),
+    };
     if let Some(unit) = schema.get("x-unit").and_then(Value::as_str) {
         let places = unit.strip_prefix("minor:")
             .and_then(|field| siblings?.get(field)?.as_str())
@@ -189,17 +196,17 @@ fn walk(value: &mut Value, schema: &Value, root: u32, siblings: Option<&Map<Stri
             // of this object has one: a design.apply list (which carries an `omit`) is not copied
             // whole on its way to the engine.
             let reads_sibling = |key: &String| {
-                property(schema, key).and_then(|sub| sub.get("x-unit")).and_then(Value::as_str).is_some_and(|u| u.starts_with("minor:"))
+                property(schema, key, half, 0).and_then(|sub| sub.get("x-unit")).and_then(Value::as_str).is_some_and(|u| u.starts_with("minor:"))
             };
             let around = map.keys().any(reads_sibling).then(|| map.clone());
             let mut moves = Vec::new();
             for (key, field) in map.iter_mut() {
-                let Some(sub) = property(schema, key) else { continue };
+                let Some(sub) = property(schema, key, half, 0) else { continue };
                 // Nothing in a field whose schema has no unit is counted, renamed or left out.
-                if !has_units(sub) && sub.get("x-agent-name").is_none() {
+                if !units_in(sub, half, &mut Vec::new()) && sub.get("x-agent-name").is_none() {
                     continue;
                 }
-                walk(field, sub, root, around.as_ref(), agent, apply)?;
+                walk(field, sub, half, root, around.as_ref(), agent, apply)?;
                 let renamed = agent_key(key, sub);
                 if agent && renamed.as_deref() != Some(key.as_str()) {
                     moves.push((key.clone(), renamed));
@@ -212,22 +219,61 @@ fn walk(value: &mut Value, schema: &Value, root: u32, siblings: Option<&Map<Stri
             }
             Ok(())
         }
-        Value::Array(items) => match items_schema(schema) {
-            Some(sub) => items.iter_mut().try_for_each(|item| walk(item, sub, root, None, agent, apply)),
+        Value::Array(items) => match items_schema(schema, half, 0) {
+            Some(sub) => items.iter_mut().try_for_each(|item| walk(item, sub, half, root, None, agent, apply)),
             None => Ok(()),
         },
         _ => Ok(()),
     }
 }
 
-/// The schema of `key` in an object schema, looking into `anyOf`/`oneOf`/`allOf` branches.
-fn property<'a>(schema: &'a Value, key: &str) -> Option<&'a Value> {
-    schema.pointer(&format!("/properties/{}", key.replace('~', "~0").replace('/', "~1")))
-        .or_else(|| branches(schema).find_map(|b| property(b, key)))
+/// How far references and branches are followed: a type that holds itself stops there.
+const HOPS: u8 = 8;
+
+/// `schema` with its local reference (`#/$defs/…`) followed in `half`.
+fn resolved<'a>(mut schema: &'a Value, half: &'a Value) -> &'a Value {
+    for _ in 0..HOPS {
+        match schema.get("$ref").and_then(Value::as_str).and_then(|r| r.strip_prefix('#')).and_then(|at| half.pointer(at)) {
+            Some(target) => schema = target,
+            None => break,
+        }
+    }
+    schema
 }
 
-fn items_schema(schema: &Value) -> Option<&Value> {
-    schema.get("items").or_else(|| branches(schema).find_map(items_schema))
+/// Whether anything in `schema` carries a unit, through the references it makes into `half`.
+/// `seen` holds the references already followed, so a type that holds itself is read once.
+fn units_in<'a>(schema: &'a Value, half: &'a Value, seen: &mut Vec<&'a str>) -> bool {
+    match schema {
+        Value::Object(map) => {
+            if map.contains_key("x-unit") {
+                return true;
+            }
+            if let Some(at) = map.get("$ref").and_then(Value::as_str) {
+                if !seen.contains(&at) {
+                    seen.push(at);
+                    if at.strip_prefix('#').and_then(|at| half.pointer(at)).is_some_and(|target| units_in(target, half, seen)) {
+                        return true;
+                    }
+                }
+            }
+            map.values().any(|v| units_in(v, half, seen))
+        }
+        Value::Array(items) => items.iter().any(|v| units_in(v, half, seen)),
+        _ => false,
+    }
+}
+
+/// The schema of `key` in an object schema, looking into `anyOf`/`oneOf`/`allOf` branches.
+fn property<'a>(schema: &'a Value, key: &str, half: &'a Value, hops: u8) -> Option<&'a Value> {
+    let schema = resolved(schema, half);
+    schema.pointer(&format!("/properties/{}", key.replace('~', "~0").replace('/', "~1")))
+        .or_else(|| branches(schema).filter(|_| hops < HOPS).find_map(|b| property(b, key, half, hops + 1)))
+}
+
+fn items_schema<'a>(schema: &'a Value, half: &'a Value, hops: u8) -> Option<&'a Value> {
+    let schema = resolved(schema, half);
+    schema.get("items").or_else(|| branches(schema).filter(|_| hops < HOPS).find_map(|b| items_schema(b, half, hops + 1)))
 }
 
 fn branches(schema: &Value) -> impl Iterator<Item = &Value> {
@@ -465,6 +511,26 @@ mod tests {
         assert!(answer.get("expect").is_none(), "{answer}");
         assert_eq!(answer["inverse"][0]["set"]["fill"], "#000", "the rest as it came");
         assert!(agent_schema(&schema["result"])["properties"].get("expect").is_none());
+    }
+
+    /// `bus.schema {op}` writes a type a half names twice once, in its `$defs` (TM-3): an amount
+    /// inside one still reads in dollars, and the type's own `omit` still leaves a field out.
+    #[test]
+    fn an_amount_in_a_type_named_twice_still_converts() {
+        let result = &schema("thread.proposal.get")["result"];
+        let entry = &result["properties"]["items"]["items"]["properties"]["entry"];
+        assert!(entry.to_string().contains("\"$ref\":\"#/$defs/MoneyTx\""), "{entry}");
+        assert!(result["$defs"]["MoneyAccount"]["properties"]["balance"]["x-unit"] == "minor");
+        let mut view = json!({"id": 3, "currency": "CAD", "items": [
+            {"state": "same", "entry": {"id": 4, "uid": "d778", "amount": 1599}, "entry_after": {"id": 4, "amount": 2100}},
+            {"state": "changed", "account": {"id": 2, "balance": 100005}, "account_after": null},
+        ]});
+        to_agent(&mut view, result, 2);
+        assert_eq!((view["items"][0]["entry"]["amount"].clone(), view["items"][0]["entry_after"]["amount"].clone()), (json!("15.99"), json!("21.00")));
+        assert!(view["items"][0]["entry"].get("uid").is_none(), "{view}");
+        assert_eq!(view["items"][1]["account"]["balance"], "1000.05");
+        assert_eq!(view["items"][1]["account_after"], Value::Null);
+        assert_eq!(view["items"][0]["entry"]["id"], 4);
     }
 
     #[test]

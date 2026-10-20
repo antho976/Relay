@@ -943,11 +943,13 @@ fn prepare_launch(engine: &Engine, plan: LaunchPlan) -> Result<PreparedLaunch, B
         &instructions,
         "session.role_instructions_write_failed",
     )?;
+    let assets = engine.store.design_assets_dir();
     let mut args = match kind {
         LaunchKind::Fresh => crate::providers::driver(row.session.provider).args(
             &row.session,
             crate::providers::Launch::Fresh,
             Some(&brief_compact),
+            Some(&assets),
         ),
         LaunchKind::Resume => crate::providers::driver(row.session.provider).args(
             &row.session,
@@ -955,6 +957,7 @@ fn prepare_launch(engine: &Engine, plan: LaunchPlan) -> Result<PreparedLaunch, B
                 provider_ref: row.session.provider_ref.as_deref().filter(|value| crate::providers::is_provider_ref(value)),
             },
             Some(&brief_compact),
+            Some(&assets),
         ),
     };
     if row.session.provider == Provider::Codex {
