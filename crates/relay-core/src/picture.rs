@@ -1,9 +1,12 @@
 //! Pictures Relay takes in (`design.asset.add`, `session.upload`, `thread.upload`): a picture's
-//! format from its first bytes and its natural size from its header, without decoding it, and a
-//! picture sent as base64, decoded within what a door carries.
+//! format from its first bytes and its natural size from its header, without decoding it, a
+//! picture sent as base64, decoded within what a door carries, and a picture kept on disk under
+//! its content's name so that a crash never leaves half of one there.
 
 use relay_bus::error::BusError;
 use relay_bus::design::MAX_COORD;
+use std::io::{Read, Write};
+use std::path::Path;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Picture {
@@ -79,6 +82,44 @@ pub fn decode_upload(encoded: &str, code: &'static str) -> Result<Vec<u8>, BusEr
         return Err(too_big());
     }
     Ok(bytes)
+}
+
+/// Keep `bytes` as `dir/name`, where the name is made from their hash, durably (B51): a copy
+/// already there whole is left as it is, its time set to now (the design-assets sweep dates a
+/// picture's last use by it); anything else at the name, a copy a crash cut short or a link, is
+/// replaced through a temporary file synced to disk and renamed into place, then the directory
+/// is synced, so a reader never sees half a picture and a crash never leaves a short one behind
+/// a name every later add would trust. `true` when the copy was there already. Slow on a large
+/// picture: call it with the store unlocked.
+pub fn keep(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<bool> {
+    let path = dir.join(name);
+    if let Some(file) = holding(&path, bytes) {
+        let _ = file.set_modified(std::time::SystemTime::now());
+        return Ok(true);
+    }
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(bytes)?;
+    tmp.as_file().sync_all()?;
+    // A rename that replaces: the same name holds the same bytes, so a copy another request
+    // stored meanwhile is replaced by an identical one, and a reader keeps the file it opened.
+    tmp.persist(&path).map_err(|error| error.error)?;
+    // The rename itself through a crash; best effort, as the store's own files are.
+    let _ = std::fs::File::open(dir).and_then(|dir| dir.sync_all());
+    Ok(false)
+}
+
+/// `path`, open, when it is a regular file holding exactly `bytes`. Opened without following a
+/// link or waiting on a pipe: an agent owns the checkout its uploads go to.
+fn holding(path: &Path, bytes: &[u8]) -> Option<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.len() != bytes.len() as u64 {
+        return None;
+    }
+    let mut held = Vec::with_capacity(bytes.len());
+    (&file).take(bytes.len() as u64 + 1).read_to_end(&mut held).ok()?;
+    (held == bytes).then_some(file)
 }
 
 fn be16(b: &[u8], at: usize) -> Option<u32> {
@@ -277,6 +318,48 @@ mod tests {
         assert_eq!(sniff(&lossless), pic("webp", 100, 50));
         let extended = riff(b"VP8X", &[0, 0, 0, 0, 0xFF, 0x03, 0x00, 0xFF, 0x01, 0x00]);
         assert_eq!(sniff(&extended), pic("webp", 1024, 512));
+    }
+
+    /// B65's fix is in design.asset.add: the uploads a model reads keep the size a header
+    /// says, however large.
+    #[test]
+    fn a_raster_larger_than_a_node_is_sized_as_it_says() {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        png.extend(4_000_000_000u32.to_be_bytes());
+        png.extend(1u32.to_be_bytes());
+        assert_eq!(sniff(&png), pic("png", 4_000_000_000, 1));
+    }
+
+    /// B51: a copy a crash cut short is replaced, a whole one is kept and dated now, and what
+    /// sits at the name without being the picture (a link) is replaced, never written through.
+    #[test]
+    fn a_picture_is_kept_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let bytes = b"\x89PNG\r\n\x1a\n picture".to_vec();
+        assert!(!keep(dir.path(), "a.png", &bytes).unwrap(), "new");
+        let path = dir.path().join("a.png");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(946_684_800);
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(old).unwrap();
+        assert!(keep(dir.path(), "a.png", &bytes).unwrap(), "already there");
+        assert!(std::fs::metadata(&path).unwrap().modified().unwrap() > old, "seen now");
+
+        for torn in [&b""[..], &bytes[..5], &[0u8; 16][..]] {
+            std::fs::write(&path, torn).unwrap();
+            assert!(!keep(dir.path(), "a.png", &bytes).unwrap(), "{torn:?} is not the picture");
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::write(&elsewhere, &bytes).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+        assert!(!keep(dir.path(), "a.png", &bytes).unwrap(), "a link is not a copy");
+        assert!(!std::fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read(&elsewhere).unwrap(), bytes, "the link's target is untouched");
+        let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(left.len(), 2, "no temporary file stays: {left:?}");
     }
 
     #[test]
