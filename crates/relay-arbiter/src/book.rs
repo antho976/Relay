@@ -18,7 +18,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 /// Bumped with every entry appended to [`MIGRATIONS`]; every earlier version must stay openable.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 const MIGRATIONS: &[&str] = &[r"
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -68,7 +68,10 @@ CREATE TABLE candles (
 ",
 // 2: a change card keeps a hash of the strategy it was made from (see `strategy_hash`), so
 // approving it cannot put back what was changed since. NULL on older cards: no check.
-"ALTER TABLE proposals ADD COLUMN based_on TEXT;"];
+"ALTER TABLE proposals ADD COLUMN based_on TEXT;",
+// 3: when Coinbase was first seen calling an order done while the book had less of its fills, so
+// the wait for the rest is bounded.
+"ALTER TABLE orders ADD COLUMN short_since INTEGER;"];
 
 #[derive(Debug)]
 pub enum BookError {
@@ -694,6 +697,13 @@ impl Book {
             f.size.normalize().to_string(), f.fee.normalize().to_string(), text(pnl), trade_id, f.at
         ])?;
         Ok(Some(self.conn.last_insert_rowid()))
+    }
+
+    /// When Coinbase was first seen calling the order done while its fills fell short, Unix
+    /// seconds: `now` the first time it is asked, the same time after.
+    pub fn fills_short_since(&self, id: i64, now: i64) -> Result<i64> {
+        self.conn.prepare_cached("UPDATE orders SET short_since = COALESCE(short_since, ?2) WHERE id = ?1")?.execute(params![id, now])?;
+        Ok(self.conn.prepare_cached("SELECT short_since FROM orders WHERE id = ?1")?.query_row([id], |r| r.get::<_, Option<i64>>(0))?.unwrap_or(now))
     }
 
     /// What the book has of one order's fills: their base amount and how many there are.

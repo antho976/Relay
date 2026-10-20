@@ -209,7 +209,9 @@ Behind the `engine` feature:
   closed alone is reopened only by an answer from Coinbase that carries the order's id, which
   proves it exists there; one Coinbase closed never reopens. An order Coinbase calls filled or cancelled is
   closed only once the book has its fills: they can lag the status, so until they show it stays
-  open and the next pass books the rest.
+  open and the next pass books the rest. That wait ends ten minutes after Coinbase first called it
+  done: a shortfall that long is not lag, and the order closes with what was booked, saying what
+  Coinbase reported and what its fills came to.
 - **A cancel** goes to Coinbase or nowhere. Without the key, or with Coinbase not answering, the
   order stays open and the kill switch lists it as not cancelled. An order with no answer is looked
   up first. Within a minute of being sent, "not listed" says nothing (Coinbase may not list it

@@ -223,6 +223,12 @@ fn age_order(dir: &Path, id: i64, secs: i64) {
     db.execute("UPDATE orders SET created_at = created_at - ?2 WHERE id = ?1", rusqlite::params![id, secs]).unwrap();
 }
 
+/// Moves back when an order was first seen done with fills missing, as if `secs` had passed.
+fn age_shortfall(dir: &Path, id: i64, secs: i64) {
+    let db = rusqlite::Connection::open(dir.join("store/arbiter.db")).unwrap();
+    db.execute("UPDATE orders SET short_since = short_since - ?2 WHERE id = ?1", rusqlite::params![id, secs]).unwrap();
+}
+
 /// Moves a card's expiry back `secs`, as if it had been waiting that much longer.
 fn age_card(dir: &Path, id: i64, secs: i64) {
     let db = rusqlite::Connection::open(dir.join("store/arbiter.db")).unwrap();
@@ -809,4 +815,22 @@ fn a_halt_waits_for_a_resend_in_flight_and_cancels_what_it_placed() {
     let o = last_order(&engine, id);
     assert_eq!(o["status"], "cancelled", "{o:#}");
     assert_eq!(fake.cancelled.lock().unwrap().as_slice(), [o["exchange_order_id"].as_str().unwrap()]);
+}
+
+#[test]
+fn an_order_whose_fills_never_add_up_closes_with_what_was_booked_after_ten_minutes() {
+    let (dir, engine, fake) = setup_on_disk();
+    let id = live_agent(&engine);
+    *fake.fills_lag.lock().unwrap() = 1000;
+    let oid = agent_buy(&engine, id, "20")["order"]["id"].as_i64().unwrap();
+    pass(&engine);
+    assert_eq!(last_order(&engine, id)["status"], "open");
+    // Ten minutes after Coinbase first called it filled, its fill is still not listed: it is
+    // closed with what was booked, and the shortfall is told, rather than left open for good.
+    age_shortfall(dir.path(), oid, 601);
+    pass(&engine);
+    let d = ok(&engine, "arbiter.strategy.get", json!({"id": id}));
+    assert_eq!((d["orders"][0]["status"].as_str(), d["row"]["held_base"].as_str()), (Some("filled"), Some("0")), "{d:#}");
+    assert!(d["orders"][0]["error"].as_str().unwrap().contains("lists fills for only 0"), "{d:#}");
+    assert!(d["decisions"].as_array().unwrap().iter().any(|x| x["text"].as_str().unwrap().starts_with("Coinbase reports 0.5 ETH filled")), "{d:#}");
 }

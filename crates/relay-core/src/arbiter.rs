@@ -52,6 +52,9 @@ const UNANSWERED: i64 = 60;
 /// How far before an order's own time a lookup by its id starts: the PC's clock and Coinbase's
 /// may differ.
 const LOOKUP_SLACK: i64 = 300;
+/// How long an order Coinbase calls done waits for the rest of its fills, seconds, before it is
+/// closed with what the book has: far past any lag in Coinbase's fill list.
+const FILLS_WAIT: i64 = 600;
 /// An order sent less than this long ago may still be waiting for create's answer (preview and
 /// create may each take the client's 15-second timeout): the runner leaves it to the call that
 /// sent it.
@@ -778,17 +781,33 @@ fn stale_limit(engine: &Engine, sid: i64, o: &OrderView) -> bool {
 /// an order the exchange calls done with fills still missing from the book stays open, so the
 /// next pass books the rest (fills can lag the order's status, and a done order is never read
 /// again). A booked fill is rounded to the base increment, so a shortfall within one increment a
-/// fill is rounding, not a fill to wait for.
+/// fill is rounding, not a fill to wait for. The wait is bounded: [`FILLS_WAIT`] after Coinbase
+/// first called it done, a shortfall is not lag (a size reported with less precision, a
+/// correction, an increment that changed), and an order held open for good would stop its
+/// strategy's exits and every switch. It closes with what the book has, and says so.
 fn settled(engine: &Engine, o: &OrderView, mut order: ExchangeOrder) -> Result<ExchangeOrder, BusError> {
     if !order.status.is_done() || order.filled_size <= Decimal::ZERO {
         return Ok(order);
     }
-    let (booked, n, step) = with_book(engine, |b| {
+    let now = book::now();
+    let (booked, since) = with_book(engine, |b| {
         let (booked, n) = b.booked_fills(o.id)?;
-        Ok((booked, n, b.cached_product(&o.product)?.map(|p| p.base_increment).filter(|i| *i > Decimal::ZERO).unwrap_or(Decimal::new(1, 8))))
+        let step = b.cached_product(&o.product)?.map(|p| p.base_increment).filter(|i| *i > Decimal::ZERO).unwrap_or(Decimal::new(1, 8));
+        let short = order.filled_size - booked > step * Decimal::from(n);
+        Ok((booked, if short { Some(b.fills_short_since(o.id, now)?) } else { None }))
     })?;
-    if order.filled_size - booked > step * Decimal::from(n) {
-        order.status = OrderStatus::Open;
+    match since {
+        None => {}
+        Some(at) if now - at < FILLS_WAIT => order.status = OrderStatus::Open,
+        Some(_) => {
+            let base = o.product.split_once('-').map_or(o.product.as_str(), |(b, _)| b);
+            let text = format!(
+                "Coinbase reports {} {base} filled, but lists fills for only {}: closed with what was booked after waiting {} minutes for the rest. Check the Coinbase app.",
+                order.filled_size.normalize(), booked.normalize(), FILLS_WAIT / 60
+            );
+            with_book(engine, |b| b.log(o.strategy_id, "error", &text, Some(o.id)))?;
+            order.reason = Some(text);
+        }
     }
     Ok(order)
 }
