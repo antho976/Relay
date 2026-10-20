@@ -213,6 +213,12 @@ pub fn install(ui: &Rc<Ui>, key: &gtk::Button, host: &gtk::Overlay) {
     // Pressing the key leaves the keyboard where it was, for the drawer to give back on closing.
     key.set_focus_on_click(false);
     key.connect_clicked(|_| toggle());
+    // The key is the Dev space's: in Threads it hides, and the drawer closes with it.
+    key.connect_visible_notify(|key| {
+        if !key.is_visible() {
+            show(false);
+        }
+    });
     close.connect_clicked(|_| show(false));
     fresh.connect_clicked(|_| new_chat());
     // The key stops a reply while one runs; Enter only ever sends.
