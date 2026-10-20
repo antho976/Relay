@@ -454,3 +454,30 @@ fn an_export_writes_through_a_symlink_and_keeps_it() {
     std::os::unix::fs::symlink(&fifo, &to_pipe).unwrap();
     assert_eq!(code(call_as(&engine, Actor::User, "money.export", json!({"path": to_pipe}))), "money.path");
 }
+
+/// A reading for another day reads that day; it posts bills only up to the real one, and a day,
+/// an offset or an amount the calendar or the sums cannot hold is refused, never a panic.
+#[test]
+fn a_reading_for_a_later_day_posts_nothing_and_extremes_are_refused() {
+    let engine = engine();
+    ok(&engine, "money.sample", json!({}));
+    let entries = |engine: &std::sync::Arc<relay_core::engine::Engine>| {
+        ok(engine, "money.tx.list", json!({"period_offset": 0, "limit": 2000}))["transactions"].as_array().unwrap().len()
+    };
+    ok(&engine, "money.summary", json!({}));
+    let posted = entries(&engine);
+    let next_year = (jiff::Zoned::now().date().year() + 1).to_string() + "-06-01";
+    ok(&engine, "money.summary", json!({"today": next_year}));
+    assert_eq!(entries(&engine), posted, "a later day's reading posted its bills");
+    for today in ["9999-12-20", "0001-01-01"] {
+        assert_eq!(code(call_as(&engine, Actor::User, "money.summary", json!({"today": today}))), "money.invalid", "{today}");
+    }
+    for offset in [200_000, -200_000] {
+        ok(&engine, "money.tx.list", json!({"period_offset": offset}));
+        ok(&engine, "money.series", json!({"period_offset": offset}));
+    }
+    let account = ok(&engine, "money.lists", json!({}))["accounts"][0]["id"].clone();
+    let huge = call_as(&engine, Actor::User, "money.tx.add", json!({"type": "EXPENSE", "amount": i64::MAX - 1, "date": "2026-10-05", "account_id": account}));
+    assert_eq!(code(huge), "money.invalid");
+    ok(&engine, "money.summary", json!({}));
+}

@@ -304,6 +304,13 @@ type ReminderRow = (i64, String, i64, String, Option<String>);
 /// bill a year overdue. A longer backlog is paid over the passes that follow, never dropped.
 pub const CATCH_UP_LIMIT: usize = 60;
 
+/// The largest amount an entry may have, in minor units: ten integer digits with up to three
+/// decimals, as far as the keypad goes. A thousand of them still sum far inside an `i64`.
+pub const MAX_AMOUNT: i64 = 10_i64.pow(13) - 1;
+
+/// How many periods a reading may step from today's, either way: a century of months.
+pub const MAX_PERIOD_OFFSET: i64 = 1200;
+
 pub struct Ledger {
     pub(crate) conn: Connection,
     /// The file, for the snapshot a replace keeps beside it (`sync.rs`); `None` in memory.
@@ -527,7 +534,7 @@ impl Ledger {
     /// One budget period's entries, newest first, narrowed by a search over the note, the
     /// category and the account in any case and alphabet ([`text_match`]).
     pub fn tx_list(&self, q: &TxQuery, today: Date) -> Result<TxPage> {
-        let period = self.period(today)?.shift(q.period_offset.unwrap_or(0));
+        let period = self.period(today)?.shift(q.period_offset.unwrap_or(0).clamp(-MAX_PERIOD_OFFSET, MAX_PERIOD_OFFSET));
         let pattern = q.query.as_deref().map(text_match::contains_pattern).unwrap_or_default();
         let mut st = self.conn.prepare_cached(&format!(
             "{} WHERE t.deleted = 0 AND t.date >= ?1 AND t.date < ?2
@@ -550,7 +557,7 @@ impl Ledger {
     /// A chart's series (`crate::series`): spending, income or net over `q`'s budget periods.
     pub fn series(&self, q: &crate::series::SeriesQuery, today: Date) -> Result<crate::series::Series> {
         use crate::series::{bucket, period_count, Named, Row, Series};
-        let last = self.period(today)?.shift(q.period_offset.unwrap_or(0).min(0));
+        let last = self.period(today)?.shift(q.period_offset.unwrap_or(0).clamp(-MAX_PERIOD_OFFSET, 0));
         let count = period_count(q) as i64;
         let periods: Vec<BudgetPeriod> = (0..count).map(|i| last.shift(i - (count - 1))).collect();
         let categories: Vec<Named> = self.categories()?.into_iter().map(|c| Named { id: c.id, name: c.name, color: c.color }).collect();
@@ -590,6 +597,11 @@ impl Ledger {
     fn check_entry(&self, ty: TxType, amount: i64, date: &str, account: i64, to: Option<i64>, category: Option<i64>) -> Result<()> {
         if amount <= 0 {
             return invalid("An entry needs an amount above zero");
+        }
+        // No keypad reaches it (`AmountInput::MAX_INTEGER_DIGITS`, with three decimals at most);
+        // past it, the ledger's sums would overflow and every reading fail until it was deleted.
+        if amount > MAX_AMOUNT {
+            return invalid("That amount is larger than any entry the ledger keeps");
         }
         if parse_date(date).is_none() {
             return invalid(format!("Not a date: {date}"));

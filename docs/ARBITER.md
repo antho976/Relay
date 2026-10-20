@@ -55,7 +55,13 @@ training data. The guard against each is in the engine, not the prompt.
 
 **Paper or live** is a second switch on the same strategy. Paper reads real prices and balances
 and simulates fills (Coinbase has no paper trading; its sandbox returns canned replies). Going live
-shows the paper record and the limits in one confirmation; nothing else gates it.
+shows the paper record and the limits in one confirmation. Either way, the switch waits for an open
+order and for what the strategy holds on its venue to be sold: the runner exits and weighs a
+strategy on its own venue only, so a holding left behind would have no stop-loss, take-profit or
+trailing stop, count in no limit, and could not be sold from Arbiter. Dust below the product's
+smallest order, which no sell can take, does not count, here or when deleting a strategy. (It
+still blocks a change of product: a strategy's holding is read from all its fills on a venue, so
+the old product's dust would count in the new one's.)
 
 ## The risk gate
 
@@ -65,14 +71,18 @@ the exchange. It refuses rather than shrinks (a limit that resizes an order is n
 - the product exists, is tradable, and is on the strategy's list (an invented symbol stops here);
 - size rounded down to the product's increments and above its minimum;
 - a limit price within a band of the best bid/ask (default 2%);
-- the most per order, per product position, and total exposure;
+- the most per order, per product position, and total exposure: what every strategy on the venue
+  holds at cost, plus what other strategies' open buys will still spend, since a market buy is
+  usually still pending when the next strategy's turn comes;
 - the most orders per hour;
 - one open order per strategy: a second beside one still resting is refused, since the caps weigh
   only what has filled;
 - a cooldown after a losing trade;
 - the **daily loss limit**, per strategy and Arbiter-wide: it halts the strategy, or everything,
-  until Antho restarts it. A restart is refused while today's loss is still past the limit, which
-  would only halt it again. (A drawdown halt is not built yet.)
+  until Antho restarts it. Arbiter-wide, each venue's loss is weighed on its own, so paper's gains
+  never cover a real loss; either venue past the limit halts everything, a day lost on paper
+  stopping live trading too. A restart is refused while today's loss is still past the limit,
+  which would only halt it again. (A drawdown halt is not built yet.)
 
 **The kill switch** (sidebar, panel and command palette): cancel every open order and halt every
 strategy; flattening positions is a separate, confirmed step.
@@ -184,18 +194,47 @@ Behind the `engine` feature:
 **The engine, `crates/relay-core/src/arbiter.rs`.**
 - **The desk.** It holds:
   - the book behind its own mutex, never held across a network call;
-  - the key, cached after one `secret-tool` lookup;
+  - the key, cached once the keyring answers, a key or none (a keyring that could not be read,
+    locked or timing out, is asked again a minute later by the runner, and at once by the kill
+    switch and Refresh; a lookup that comes back empty while a key is on record is a keyring
+    that could not be read, not "no key");
   - quotes;
   - the trade mutex, which serializes the gate and the order being recorded.
 - **`execute`** is the only path an order takes. `route` sends an intent there, or turns it into a
   proposal when the mode says so. An intent the gate would refuse is refused at once, not
   proposed.
-- **Live orders** are previewed, then placed. When Coinbase does not answer, the order stays
-  pending; the runner asks again with the same id for a minute, then marks it unconfirmed and says
-  to check the Coinbase app. A cancel reads the order and its fills back from Coinbase, so a fill
-  that raced the kill switch is still booked.
-- **A proposal** is placed on the venue it was asked for, or not at all: a card asked on paper
-  fails once the strategy has gone live.
+- **Live orders** are previewed, then placed. When no answer to create can be read (it timed out,
+  came back unreadable, or Coinbase says it has that id already), the order stays pending:
+  - For its first 30 seconds the runner leaves it to the call that sent it, whose create may still
+    be waiting.
+  - After that, each pass looks it up by its `client_order_id`: List Orders for its product,
+    created from five minutes before it was sent to five after its last resend, placed through
+    Advanced Trade (as the API's own orders are taken to be). This runs in the trade turn the kill
+    switch also takes, so a halt never decides while a resend is on its way.
+  - Found, it is reconciled like any other order. Not found, it is sent again under the same id
+    for a minute, unless a halt came since; after that it is failed as never placed. A lookup
+    that fails decides nothing.
+  - An order Coinbase answered with "duplicate" exists, whatever its list shows: it is kept
+    pending, never failed as never placed nor cancelled here alone, and the person is told to
+    check the Coinbase app.
+  - A row the book closed alone is reopened only by an answer from Coinbase that carries the
+    order's id, which proves it exists there; one Coinbase closed never reopens.
+- **An order Coinbase calls filled or cancelled** is closed only once the book has its fills: they
+  can lag the status, so until they show it stays open and the next pass books the rest. That
+  wait ends ten minutes after Coinbase first called it done: a shortfall that long is not lag, and
+  the order closes with what was booked, saying what Coinbase reported and what its fills came to.
+- **A cancel** goes to Coinbase or nowhere. Without the key, or with Coinbase not answering, the
+  order stays open and the kill switch lists it as not cancelled. An order with no answer is looked
+  up first. Within a minute of being sent, "not listed" says nothing (Coinbase may not list it
+  yet), so it stays pending and the kill switch lists it; only one Coinbase still has no record of
+  after that is cancelled in the book alone. A cancel reads the
+  order and its fills back from Coinbase, so a fill that raced the kill switch is still booked.
+- **A proposal** is placed on the venue and product it was asked for, or not at all: a card asked
+  on paper fails once the strategy has gone live, and one asked for ETH once it trades SOL. A
+  proposed change applies only to the strategy as it was when the card was made (its name, rule,
+  limits, product and bars, hashed on the card): changed since, a rename included, approving it
+  fails rather than put back what was changed. A card past its time cannot be approved, whether or not the runner
+  has expired it yet.
 - **An exit that failed** (refused, unconfirmed, or filled in part) is tried again a minute later
   under a new cause, which names the holding as it is then; an expired card asks again, a dismissed
   one does not. The key's payload is never written to the audit log.

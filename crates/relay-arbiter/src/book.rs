@@ -18,7 +18,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 /// Bumped with every entry appended to [`MIGRATIONS`]; every earlier version must stay openable.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 4;
 
 const MIGRATIONS: &[&str] = &[r"
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -65,7 +65,16 @@ CREATE TABLE candles (
     product TEXT NOT NULL, granularity TEXT NOT NULL, start INTEGER NOT NULL,
     open REAL NOT NULL, high REAL NOT NULL, low REAL NOT NULL, close REAL NOT NULL, volume REAL NOT NULL,
     PRIMARY KEY (product, granularity, start)) WITHOUT ROWID;
-"];
+",
+// 2: a change card keeps a hash of the strategy it was made from (see `strategy_hash`), so
+// approving it cannot put back what was changed since. NULL on older cards: no check.
+"ALTER TABLE proposals ADD COLUMN based_on TEXT;",
+// 3: when Coinbase was first seen calling an order done while the book had less of its fills, so
+// the wait for the rest is bounded.
+"ALTER TABLE orders ADD COLUMN short_since INTEGER;",
+// 4: Coinbase answered a create of this order with "duplicate": it has the order, whatever its
+// order list shows, so it is never failed as never placed.
+"ALTER TABLE orders ADD COLUMN exchange_has INTEGER NOT NULL DEFAULT 0;"];
 
 #[derive(Debug)]
 pub enum BookError {
@@ -476,6 +485,12 @@ impl Book {
         if !self.open_orders(Some(id))?.is_empty() {
             return invalid("It has an order open: wait for it, or halt the strategy, before switching");
         }
+        // The runner weighs and exits a strategy on its venue only: a holding left on the old one
+        // would have no stop-loss, take-profit or trailing stop, count in no limit, and could not
+        // be sold from here. Dust no order can sell is not a holding to wait for.
+        if self.holds_sellable(id, s.venue, &s.product)? {
+            return invalid(format!("It still holds what it bought: sell it before switching to {}", venue.as_str()));
+        }
         if venue == Venue::Live && s.mode != Mode::Ask && s.limits.max_order.is_none() {
             return invalid("Before it trades real money on its own, give it a limit per order (or let every order ask)");
         }
@@ -510,7 +525,7 @@ impl Book {
             return invalid("Stop the strategy before deleting it");
         }
         for v in [Venue::Paper, Venue::Live] {
-            if self.position(id, v)?.base > Decimal::ZERO {
+            if self.holds_sellable(id, v, &s.product)? {
                 return invalid(format!("It still holds {} on {}: sell it first", s.product, v.as_str()));
             }
         }
@@ -520,6 +535,20 @@ impl Book {
         self.conn.prepare_cached("UPDATE strategies SET deleted = 1, state = 'stopped', updated_at = ?2 WHERE id = ?1")?.execute(params![id, now()])?;
         self.log(Some(id), "setting", &format!("Deleted \"{}\".", s.name), None)?;
         Ok(())
+    }
+
+    /// Whether the strategy holds anything on `venue` an order could sell: at least the product's
+    /// smallest order once floored to its increment, as the gate floors a sell. Less is dust that
+    /// no sell can take, so a guard waiting for the holding to be sold would wait for good. With
+    /// the product not cached, anything held counts.
+    pub fn holds_sellable(&self, id: i64, venue: Venue, product: &str) -> Result<bool> {
+        let base = self.position(id, venue)?.base;
+        if base <= Decimal::ZERO {
+            return Ok(false);
+        }
+        let Some(p) = self.cached_product(product)? else { return Ok(true) };
+        let sellable = if p.base_increment > Decimal::ZERO { (base / p.base_increment).trunc() * p.base_increment } else { base };
+        Ok(sellable > Decimal::ZERO && sellable >= p.base_min_size)
     }
 
     pub fn set_cursor(&self, id: i64, last_bar: Option<i64>, last_schedule: Option<i64>) -> Result<()> {
@@ -569,10 +598,17 @@ impl Book {
         Ok((self.conn.last_insert_rowid(), true))
     }
 
+    /// Writes what the exchange says of an order. A closed row is never reopened, with one
+    /// exception: a row the book closed alone (cancelled or failed with no exchange id, taken for
+    /// an order Coinbase never had) is reopened by an answer that carries an exchange id, which
+    /// proves the order exists there; left closed it would never be read again, and its fills
+    /// would never be booked. An order Coinbase itself closed never reopens there, so an answer
+    /// calling it open later is stale.
     pub fn update_order(&self, id: i64, x: &ExchangeOrder) -> Result<()> {
         self.conn.prepare_cached(
             "UPDATE orders SET status = ?2, filled_base = ?3, average_price = ?4, fees = ?5, exchange_order_id = COALESCE(NULLIF(?6, ''), exchange_order_id),
-             error = COALESCE(?7, error), updated_at = ?8 WHERE id = ?1",
+             error = COALESCE(?7, error), updated_at = ?8
+             WHERE id = ?1 AND (status IN ('pending', 'open') OR ?2 NOT IN ('pending', 'open') OR (exchange_order_id IS NULL AND ?6 != ''))",
         )?.execute(params![
             id, x.status.as_str(), x.filled_size.normalize().to_string(),
             (x.average_filled_price > Decimal::ZERO).then(|| x.average_filled_price.normalize().to_string()),
@@ -678,6 +714,31 @@ impl Book {
             f.size.normalize().to_string(), f.fee.normalize().to_string(), text(pnl), trade_id, f.at
         ])?;
         Ok(Some(self.conn.last_insert_rowid()))
+    }
+
+    /// Marks that Coinbase said it has this order (a duplicate answer to create). Answers whether
+    /// it was not marked before, so it is told once.
+    pub fn mark_exchange_has(&self, id: i64) -> Result<bool> {
+        Ok(self.conn.prepare_cached("UPDATE orders SET exchange_has = 1 WHERE id = ?1 AND exchange_has = 0")?.execute([id])? > 0)
+    }
+
+    /// Whether Coinbase said it has this order, though no lookup has shown it.
+    pub fn exchange_has(&self, id: i64) -> Result<bool> {
+        Ok(self.conn.prepare_cached("SELECT exchange_has FROM orders WHERE id = ?1")?.query_row([id], |r| r.get::<_, i64>(0)).optional()?.is_some_and(|v| v != 0))
+    }
+
+    /// When Coinbase was first seen calling the order done while its fills fell short, Unix
+    /// seconds: `now` the first time it is asked, the same time after.
+    pub fn fills_short_since(&self, id: i64, now: i64) -> Result<i64> {
+        self.conn.prepare_cached("UPDATE orders SET short_since = COALESCE(short_since, ?2) WHERE id = ?1")?.execute(params![id, now])?;
+        Ok(self.conn.prepare_cached("SELECT short_since FROM orders WHERE id = ?1")?.query_row([id], |r| r.get::<_, Option<i64>>(0))?.unwrap_or(now))
+    }
+
+    /// What the book has of one order's fills: their base amount and how many there are.
+    pub fn booked_fills(&self, order_id: i64) -> Result<(Decimal, u32)> {
+        let mut st = self.conn.prepare_cached("SELECT size FROM fills WHERE order_id = ?1")?;
+        let sizes = st.query_map([order_id], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok((sizes.iter().cloned().map(dec0).sum(), sizes.len() as u32))
     }
 
     pub fn fills(&self, strategy: Option<i64>, limit: u32) -> Result<Vec<FillView>> {
@@ -829,13 +890,13 @@ impl Book {
 
     pub fn add_proposal(&self, p: &NewProposal) -> Result<i64> {
         self.conn.prepare_cached(
-            "INSERT INTO proposals (kind, strategy_id, title, why, source, side, product, quote, base, is_limit, venue, draft, draft_hash, changes, thread_id, cause, created_at, expires_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            "INSERT INTO proposals (kind, strategy_id, title, why, source, side, product, quote, base, is_limit, venue, draft, draft_hash, changes, thread_id, cause, created_at, expires_at, based_on)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         )?.execute(params![
             p.kind, p.strategy_id, p.title, p.why, p.source.as_str(), p.side.map(Side::as_str), p.product, text(p.quote), text(p.base),
             p.limit, p.venue.map(Venue::as_str), p.draft.as_ref().map(|d| serde_json::to_string(d).unwrap_or_default()),
             p.draft.as_ref().map(draft_hash), serde_json::to_string(&p.changes).unwrap_or_default(), p.thread_id, p.cause,
-            now(), p.expires_at
+            now(), p.expires_at, p.based_on
         ])?;
         let id = self.conn.last_insert_rowid();
         self.log(p.strategy_id, "proposal", &format!("{} ({} asks: {})", p.title, p.source.as_str(), p.why), None)?;
@@ -844,6 +905,12 @@ impl Book {
 
     pub fn proposal(&self, id: i64) -> Result<(ProposalView, Option<String>)> {
         self.proposals_where("p.id = ?1", params![id], 1)?.pop().ok_or_else(|| BookError::NotFound(format!("There is no proposal {id}")))
+    }
+
+    /// The [`strategy_hash`] a change card was made from; `None` for a card made before it was
+    /// kept, or for another kind of card.
+    pub fn proposal_based_on(&self, id: i64) -> Result<Option<String>> {
+        Ok(self.conn.prepare_cached("SELECT based_on FROM proposals WHERE id = ?1")?.query_row([id], |r| r.get(0)).optional()?.flatten())
     }
 
     pub fn proposals(&self, pending_only: bool, limit: u32) -> Result<Vec<ProposalView>> {
@@ -1027,6 +1094,8 @@ pub struct NewProposal {
     pub thread_id: Option<i64>,
     pub cause: Option<String>,
     pub expires_at: Option<i64>,
+    /// A change card: the [`strategy_hash`] of the strategy it was made from.
+    pub based_on: Option<String>,
 }
 
 trait SourceStr {
@@ -1044,6 +1113,14 @@ pub fn draft_hash(d: &Draft) -> String {
     use sha2::{Digest, Sha256};
     let json = serde_json::to_string(d).unwrap_or_default();
     Sha256::digest(json.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+/// What a change card was made from: the strategy as a draft, name, product, bars, rule and
+/// limits, as the card's changes are read against it. Approving the card is refused when this
+/// has changed since: its draft carries the rest of the strategy as it was then, so saving it
+/// would put back a rename as surely as a limit.
+pub fn strategy_hash(s: &StrategyRec) -> String {
+    draft_hash(&s.draft())
 }
 
 fn opt_money(d: Option<Decimal>) -> String {
@@ -1188,6 +1265,39 @@ mod tests {
     }
 
     #[test]
+    fn dust_no_order_can_sell_does_not_hold_a_strategy_on_its_venue() {
+        let mut book = Book::open_in_memory().unwrap();
+        let eth = Product {
+            id: "ETH-CAD".into(), base: "ETH".into(), quote: "CAD".into(), base_increment: Decimal::new(1, 8),
+            quote_increment: Decimal::new(1, 2), price_increment: Decimal::new(1, 2), base_min_size: Decimal::new(1, 3),
+            quote_min_size: Decimal::ONE, price: None, change_24h: None, tradable: true, limit_only: false,
+        };
+        book.store_products(&[eth]).unwrap();
+        let filled = |book: &Book, id: i64| {
+            let x = ExchangeOrder { order_id: format!("p{id}"), client_order_id: String::new(), status: OrderStatus::Filled, filled_size: Decimal::ZERO, average_filled_price: Decimal::ZERO, total_fees: Decimal::ZERO, reason: None };
+            book.update_order(id, &x).unwrap();
+        };
+        // Bought 0.0105 and sold 0.01: 0.0005 is left, below the smallest order of 0.001.
+        let dusty = book.create_strategy(&draft()).unwrap();
+        let buy = order(&book, dusty, Side::Buy, "b1");
+        book.add_fill(buy, Venue::Paper, &fill("t1", 100, Decimal::new(105, 4), Decimal::ZERO, now())).unwrap();
+        filled(&book, buy);
+        let sell = order(&book, dusty, Side::Sell, "s1");
+        book.add_fill(sell, Venue::Paper, &fill("t2", 100, Decimal::new(1, 2), Decimal::ZERO, now())).unwrap();
+        filled(&book, sell);
+        assert_eq!(book.position(dusty, Venue::Paper).unwrap().base, Decimal::new(5, 4));
+        book.set_venue(dusty, Venue::Live).unwrap();
+        book.delete_strategy(dusty).unwrap();
+        // 0.002 can be sold: that holding is waited for.
+        let holding = book.create_strategy(&draft()).unwrap();
+        let buy = order(&book, holding, Side::Buy, "b2");
+        book.add_fill(buy, Venue::Paper, &fill("t3", 100, Decimal::new(2, 3), Decimal::ZERO, now())).unwrap();
+        filled(&book, buy);
+        assert!(book.set_venue(holding, Venue::Live).is_err());
+        assert!(book.delete_strategy(holding).is_err());
+    }
+
+    #[test]
     fn a_cause_asks_again_once_its_card_expired_but_not_once_dismissed() {
         let book = Book::open_in_memory().unwrap();
         let sid = book.create_strategy(&draft()).unwrap();
@@ -1211,6 +1321,26 @@ mod tests {
         assert_eq!(n, 1);
         assert!(last.is_some());
         assert_eq!(book.failed_sells_since(sid, Venue::Paper, now() + 10).unwrap().0, 0);
+    }
+
+    #[test]
+    fn a_closed_order_reopens_only_when_coinbase_shows_one_the_book_closed_alone() {
+        let book = Book::open_in_memory().unwrap();
+        let sid = book.create_strategy(&draft()).unwrap();
+        let x = |id: &str, status| ExchangeOrder { order_id: id.into(), client_order_id: "c".into(), status, filled_size: Decimal::ZERO, average_filled_price: Decimal::ZERO, total_fees: Decimal::ZERO, reason: None };
+        // Closed here alone, with no answer from Coinbase: an answer with an id proves it exists.
+        let alone = order(&book, sid, Side::Buy, "alone");
+        book.update_order(alone, &x("", OrderStatus::Cancelled)).unwrap();
+        book.update_order(alone, &x("", OrderStatus::Open)).unwrap();
+        assert_eq!(book.order(alone).unwrap().status, OrderStatus::Cancelled);
+        book.update_order(alone, &x("cb-1", OrderStatus::Pending)).unwrap();
+        let o = book.order(alone).unwrap();
+        assert_eq!((o.status, o.exchange_order_id.as_deref()), (OrderStatus::Pending, Some("cb-1")));
+        // Closed by Coinbase: a later answer calling it open is stale.
+        let there = order(&book, sid, Side::Buy, "there");
+        book.update_order(there, &x("cb-2", OrderStatus::Cancelled)).unwrap();
+        book.update_order(there, &x("cb-2", OrderStatus::Open)).unwrap();
+        assert_eq!(book.order(there).unwrap().status, OrderStatus::Cancelled);
     }
 
     #[test]
@@ -1258,6 +1388,33 @@ mod tests {
         assert_eq!(book.expire_proposals(now()).unwrap(), 1);
         assert_eq!(book.proposal(id).unwrap().0.status, "expired");
         assert!(book.resolve_proposal(id, "approved", None).is_err());
+    }
+
+    #[test]
+    fn a_version_1_book_opens_and_its_cards_carry_no_basis() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        conn.execute("INSERT INTO proposals (kind, strategy_id, title, why, source, created_at) VALUES ('change', 1, 'Change', 'why', 'agent', 0)", []).unwrap();
+        let book = Book::init(conn).unwrap();
+        assert_eq!(book.conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0)).unwrap(), SCHEMA_VERSION);
+        assert_eq!(book.proposal(1).unwrap().0.status, "pending");
+        assert_eq!(book.proposal_based_on(1).unwrap(), None);
+    }
+
+    #[test]
+    fn a_strategys_hash_follows_its_name_rule_and_limits() {
+        let book = Book::open_in_memory().unwrap();
+        let sid = book.create_strategy(&draft()).unwrap();
+        let first = strategy_hash(&book.strategy(sid).unwrap());
+        let mut d = draft();
+        d.name = "Renamed".into();
+        book.save_strategy(sid, &d).unwrap();
+        let renamed = strategy_hash(&book.strategy(sid).unwrap());
+        assert_ne!(renamed, first);
+        d.limits.max_position = Some(Decimal::new(100, 0));
+        book.set_strategy_limits(sid, &d.limits).unwrap();
+        assert_ne!(strategy_hash(&book.strategy(sid).unwrap()), renamed);
     }
 
     #[test]

@@ -19,7 +19,7 @@ use relay_bus::envelope::{Actor, Request, Response};
 use relay_money::views::{Change, SyncOut};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::Message;
@@ -128,6 +128,10 @@ pub struct Held {
     /// Live accounts and entries on each side then.
     pub pc_rows: usize,
     pub cloud_rows: usize,
+    /// Held changes rather than a replace ([`sweeping`]): how many of this PC's accounts and
+    /// entries they would delete or rewrite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lost: Option<usize>,
     /// The person's choice, which the next round carries out: `cloud` takes the cloud's ledger
     /// here, `pc` sends this PC's to the cloud in its place.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -136,6 +140,16 @@ pub struct Held {
 
 impl Held {
     fn refusal(&self) -> Fail {
+        if let Some(lost) = self.lost {
+            return Fail::Refused {
+                code: "cloud.changes_held".into(),
+                message: format!(
+                    "the cloud copy sent changes that would delete or rewrite {lost} of this PC's {} accounts and entries; they were not applied here. \
+                     `relay cloud accept cloud` takes the cloud's ledger here; `relay cloud accept pc` sends this PC's to the cloud instead",
+                    self.pc_rows
+                ),
+            };
+        }
         Fail::Refused {
             code: "cloud.replace_held".into(),
             message: format!(
@@ -713,12 +727,48 @@ async fn from_cloud(
     let ours = send(pc, cloud_name, false, &Side::default(), Vec::new()).await?;
     let (cloud_rows, pc_rows) = (weight(&whole.changes), weight(&ours.changes));
     if pc_rows > 0 && cloud_rows * 2 < pc_rows {
-        let held = Held { generation: whole.generation.clone(), pc_rows, cloud_rows, accept: None };
+        let held = Held { generation: whole.generation.clone(), pc_rows, cloud_rows, lost: None, accept: None };
         let refusal = held.refusal();
         link.held = Some(held);
         return Err(refusal);
     }
     replace(Whole::Cloud, pc, cloud, link, names, save, Some(whole)).await
+}
+
+/// Fewest of this PC's accounts and entries a round from the cloud must take away to be held.
+const SWEEP_MIN: usize = 20;
+
+/// Whether the cloud's `theirs` would delete or rewrite at least half of this PC's accounts and
+/// entries ([`SWEEP_MIN`] at least). A replace from scratch is held when it would leave this PC
+/// with too little ([`from_cloud`]), but the same loss sent as ordinary changes, a tombstone or a
+/// rewrite at a time, from any credential the cloud lets sync or from the server itself, passed
+/// unchecked and left no copy behind. No phone's own editing comes near it. Held, it waits on the
+/// same choice, since applying it would leave this PC's ledger the cloud's.
+async fn sweeping(pc: &mut impl Bus, cloud_name: &str, theirs: &SyncOut) -> std::result::Result<Option<Held>, Fail> {
+    let counted = |c: &&Change| c.table == "accounts" || c.table == "transactions";
+    if theirs.changes.iter().filter(counted).count() < SWEEP_MIN {
+        return Ok(None);
+    }
+    let ours = send(pc, cloud_name, false, &Side::default(), Vec::new()).await?;
+    let here: HashSet<(&str, &str)> = ours.changes.iter().filter(counted).filter(|c| !c.deleted).map(|c| (c.table.as_str(), c.uid.as_str())).collect();
+    let (mut lost, mut gone, mut new) = (0, 0, 0);
+    for c in theirs.changes.iter().filter(counted) {
+        match (here.contains(&(c.table.as_str(), c.uid.as_str())), c.deleted) {
+            (true, deleted) => {
+                lost += 1;
+                gone += usize::from(deleted);
+            }
+            (false, false) => new += 1,
+            (false, true) => {}
+        }
+    }
+    Ok((lost >= SWEEP_MIN && lost * 2 >= here.len()).then(|| Held {
+        generation: theirs.generation.clone(),
+        pc_rows: here.len(),
+        cloud_rows: here.len() - gone + new,
+        lost: Some(lost),
+        accept: None,
+    }))
 }
 
 /// Writes the person's choice for a replace the link holds ([`Held`]) into `cloud.json`, for the
@@ -760,6 +810,11 @@ pub async fn merge_money(
             }
         }
     }
+    // Changes held for the person ([`sweeping`]), now answered: carried out as the replace they
+    // amount to. Unanswered, the round goes on and holds them again.
+    if let Some(Held { lost: Some(_), accept: Some(choice), .. }) = link.held {
+        return replace(choice, pc, cloud, link, names, save, None).await;
+    }
     let mut report = Report::default();
     // This PC's changes since the last round.
     let ours = match send(pc, cloud_name, false, &link.pc, Vec::new()).await {
@@ -785,6 +840,11 @@ pub async fn merge_money(
             break;
         }
         let cloud_side = side_of(&theirs);
+        if let Some(held) = sweeping(pc, cloud_name, &theirs).await? {
+            let refusal = held.refusal();
+            link.held = Some(held);
+            return Err(refusal);
+        }
         let back = send(pc, cloud_name, false, &pc_side, theirs.changes).await?;
         report.to_pc += back.applied;
         // And this PC the cloud's; had that failed, the next round would ask the cloud again.
@@ -1432,6 +1492,45 @@ mod tests {
         assert_eq!(names(&pc.0).len(), 2);
     }
 
+    /// The same loss as an empty replace, sent as ordinary changes: tombstones from a credential
+    /// that leaked, or the server. Held; a few deletes, as a phone makes them, still go through.
+    #[tokio::test]
+    async fn changes_that_would_take_away_most_of_this_pcs_ledger_are_held() {
+        let (mut pc, mut cloud) = (Ledgered(Ledger::open_in_memory().unwrap()), Ledgered(Ledger::open_in_memory().unwrap()));
+        accounts(&mut pc.0, "Mine", 50);
+        let mut link = link();
+        merge(&mut pc, &mut cloud, &mut link).await;
+        assert_eq!(names(&cloud.0).len(), 50);
+        let tombstones = |cloud: &mut Ledgered, skip: usize, n: usize| -> Vec<Change> {
+            let rows = cloud.0.sync("probe", false, 0, None, &[], "t").unwrap().changes;
+            rows.into_iter().filter(|c| c.table == "accounts" && !c.deleted).skip(skip).take(n)
+                .map(|c| Change { updated_at: c.updated_at + 1, deleted: true, row: Default::default(), ..c }).collect()
+        };
+        let few = tombstones(&mut cloud, 0, 5);
+        cloud.0.sync("Pixel", false, 0, None, &few, "t").unwrap();
+        merge(&mut pc, &mut cloud, &mut link).await;
+        assert_eq!(names(&pc.0).len(), 45, "a phone's deletes reach this PC");
+
+        let most = tombstones(&mut cloud, 0, 30);
+        cloud.0.sync("Avex (S21)", false, 0, None, &most, "t").unwrap();
+        let held = merge_money(&mut pc, &mut cloud, &mut link, "PC (desk)", "Cloud (render)", &mut |_| Ok(())).await.unwrap_err();
+        assert!(held.is("cloud.changes_held"), "{held}");
+        assert!(held.to_string().contains("delete or rewrite 30 of this PC's 45"), "{held}");
+        assert_eq!(names(&pc.0).len(), 45, "this PC's ledger is as it was");
+        assert_eq!(link.held.as_ref().map(|h| (h.lost, h.cloud_rows)), Some((Some(30), 15)));
+        let again = merge_money(&mut pc, &mut cloud, &mut link, "PC (desk)", "Cloud (render)", &mut |_| Ok(())).await.unwrap_err();
+        assert!(again.is("cloud.changes_held"), "held until the person answers");
+
+        // The person keeps this PC's: it goes to the cloud whole, the deletes undone there.
+        link.held.as_mut().unwrap().accept = Some(Whole::Pc);
+        let r = merge(&mut pc, &mut cloud, &mut link).await;
+        assert_eq!((r.replaced_by, link.held.as_ref()), (Some("pc"), None));
+        assert_eq!(names(&cloud.0), names(&pc.0));
+        assert_eq!(names(&pc.0).len(), 45);
+        let quiet = merge(&mut pc, &mut cloud, &mut link).await;
+        assert_eq!((quiet.to_pc, quiet.to_cloud, quiet.replaced_by), (0, 0, None), "{quiet:?}");
+    }
+
     #[tokio::test]
     async fn a_held_replace_is_looked_at_afresh_once_the_cloud_is_replaced_again() {
         let (mut pc, mut cloud) = (Ledgered(Ledger::open_in_memory().unwrap()), Ledgered(Ledger::open_in_memory().unwrap()));
@@ -1450,7 +1549,7 @@ mod tests {
     #[test]
     fn a_held_link_says_so_and_reads_back() {
         let mut l = link();
-        l.held = Some(Held { generation: "g".into(), pc_rows: 50, cloud_rows: 0, accept: None });
+        l.held = Some(Held { generation: "g".into(), pc_rows: 50, cloud_rows: 0, lost: None, accept: None });
         let text = serde_json::to_string(&l).unwrap();
         assert!(text.contains(r#""held":{"generation":"g","pc_rows":50,"cloud_rows":0}"#), "{text}");
         assert_eq!(serde_json::from_str::<Link>(&text).unwrap(), l);

@@ -49,6 +49,61 @@ impl Picture {
     }
 }
 
+/// The longest side a model's API takes; it refuses a larger picture outright.
+pub const MAX_SIDE: u32 = 8000;
+
+/// Whether `bytes`, sniffed as `picture`, run to their format's end. A download or a copy cut
+/// short reads its size from the header like a whole one, and a model's API refuses it, so the
+/// thread it went to cannot be answered again.
+pub fn whole(bytes: &[u8], picture: &Picture) -> bool {
+    match picture.ext {
+        // The IEND chunk ends every PNG; a little may follow it.
+        "png" => within_tail(bytes, b"IEND\xAE\x42\x60\x82", 4096),
+        // The end of the image after the main image's scan: entropy-coded data never holds FF D9,
+        // and an EXIF thumbnail's own end comes before the scan. A motion photo's video follows it.
+        "jpg" => jpeg_scan(bytes).is_some_and(|scan| bytes[scan..].windows(2).any(|w| w == [0xFF, 0xD9])),
+        // The trailer, past any zero padding.
+        "gif" => bytes.iter().rev().find(|&&b| b != 0) == Some(&0x3B),
+        // The RIFF size counts every byte after its own eight.
+        "webp" => le32(bytes, 4).is_some_and(|size| bytes.len() as u64 >= u64::from(size) + 8),
+        _ => true,
+    }
+}
+
+fn within_tail(bytes: &[u8], marker: &[u8], tail: usize) -> bool {
+    bytes[bytes.len().saturating_sub(tail)..].windows(marker.len()).any(|w| w == marker)
+}
+
+/// Where the main image's entropy-coded data starts: past its start-of-scan segment, walking the
+/// segments before it as [`jpeg`] does.
+fn jpeg_scan(b: &[u8]) -> Option<usize> {
+    let mut at = 2;
+    loop {
+        if *b.get(at)? != 0xFF {
+            return None;
+        }
+        while *b.get(at)? == 0xFF {
+            at += 1;
+        }
+        let marker = b[at];
+        at += 1;
+        match marker {
+            0x01 | 0xD0..=0xD8 => continue,
+            0xD9 => return None,
+            _ => {
+                let len = be16(b, at)? as usize;
+                if len < 2 {
+                    return None;
+                }
+                at += len;
+                if marker == 0xDA {
+                    return (at <= b.len()).then_some(at);
+                }
+            }
+        }
+    }
+}
+
 /// The extension a raster of `media_type` is stored under; `None` for any other type.
 pub fn raster_ext(media_type: &str) -> Option<&'static str> {
     match media_type.trim().to_ascii_lowercase().as_str() {
@@ -277,6 +332,39 @@ mod tests {
         assert_eq!(sniff(&lossless), pic("webp", 100, 50));
         let extended = riff(b"VP8X", &[0, 0, 0, 0, 0xFF, 0x03, 0x00, 0xFF, 0x01, 0x00]);
         assert_eq!(sniff(&extended), pic("webp", 1024, 512));
+    }
+
+    #[test]
+    fn a_picture_is_whole_only_when_it_reaches_its_formats_end() {
+        let whole_of = |bytes: &[u8]| whole(bytes, &sniff(bytes).unwrap());
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        png.extend([0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0, 0, 0, 0, 0, 0, 0]);
+        assert!(!whole_of(&png), "no IEND");
+        png.extend(b"\0\0\0\0IEND\xAE\x42\x60\x82");
+        assert!(whole_of(&png));
+        assert!(whole_of(&[png.as_slice(), &[0; 100]].concat()), "a little after IEND");
+
+        // SOI; an APP1 holding a thumbnail with its own scan and end; SOF0; SOS; scan data, with
+        // a stuffed FF 00; then the end of the image.
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x0A, 0xFF, 0xD8, 0xFF, 0xDA, 0xFF, 0xD9, 0x00, 0x00];
+        jpeg.extend([0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x96, 0x01, 0x2C]);
+        jpeg.extend([0u8; 10]);
+        jpeg.extend([0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00]);
+        jpeg.extend([0x12, 0xFF, 0x00, 0x34, 0xFF, 0xD3, 0x56]);
+        assert_eq!(sniff(&jpeg), pic("jpg", 300, 150));
+        assert!(!whole_of(&jpeg), "cut short in the scan: the thumbnail's end does not count");
+        jpeg.extend([0xFF, 0xD9]);
+        assert!(whole_of(&jpeg));
+        assert!(whole_of(&[jpeg.as_slice(), &[0x66; 5000]].concat()), "a motion photo's video after the end");
+
+        let gif = [b"GIF89a".as_slice(), &[0x20, 0x01, 0x10, 0x00, 0x2C, 0x01]].concat();
+        assert!(!whole_of(&gif));
+        assert!(whole_of(&[gif.as_slice(), &[0x3B, 0, 0]].concat()), "the trailer, then padding");
+
+        let lossy = |size: u32, data: &[u8]| [b"RIFF".as_slice(), &size.to_le_bytes(), b"WEBPVP8 \0\0\0\0", data].concat();
+        let data = [0, 0, 0, 0x9D, 0x01, 0x2A, 0x90, 0x01, 0x2C, 0x01];
+        assert!(whole_of(&lossy(4 + 8 + data.len() as u32, &data)));
+        assert!(!whole_of(&lossy(4 + 8 + data.len() as u32 + 100, &data)), "a RIFF size past the bytes");
     }
 
     #[test]
