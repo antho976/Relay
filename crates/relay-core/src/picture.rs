@@ -1,9 +1,13 @@
 //! Pictures Relay takes in (`design.asset.add`, `session.upload`, `thread.upload`): a picture's
-//! format from its first bytes and its natural size from its header, without decoding it, and a
-//! picture sent as base64, decoded within what a door carries.
+//! format from its first bytes and its natural size from its header, without decoding it, a
+//! picture sent as base64, decoded within what a door carries, and a picture kept on disk under
+//! its content's name so that a crash never leaves half of one there.
 
 use relay_bus::error::BusError;
 use relay_bus::design::MAX_COORD;
+use std::io::{Read, Write};
+use std::path::Path;
+use std::sync::Mutex;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Picture {
@@ -81,6 +85,74 @@ pub fn decode_upload(encoded: &str, code: &'static str) -> Result<Vec<u8>, BusEr
     Ok(bytes)
 }
 
+/// Keep `bytes` as `dir/name`, where the name is made from their hash, durably (B51): a copy
+/// already there whole is left as it is, its time set to now (the design-assets sweep dates a
+/// picture's last use by it); anything else at the name, a copy a crash cut short or a link, is
+/// replaced through a temporary file synced to disk and renamed into place, then the directory
+/// is synced, so a reader never sees half a picture and a crash never leaves a short one behind
+/// a name every later add would trust. `true` when the copy was there already. Slow on a large
+/// picture: call it with the store unlocked.
+pub fn keep(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<bool> {
+    keep_in(dir, name, bytes, None)
+}
+
+/// [`keep`] in a folder a sweep removes from (`design-assets`, B66), where `files` is the lock
+/// the sweep holds for its last look at a file and its removal: dating the copy found whole,
+/// and renaming a new one into place, are done under it, so neither falls between the two and
+/// the picture this answers for is never removed right after.
+pub fn keep_swept(dir: &Path, name: &str, bytes: &[u8], files: &Mutex<()>) -> std::io::Result<bool> {
+    keep_in(dir, name, bytes, Some(files))
+}
+
+fn keep_in(dir: &Path, name: &str, bytes: &[u8], files: Option<&Mutex<()>>) -> std::io::Result<bool> {
+    let hold = || files.map(|files| files.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+    let path = dir.join(name);
+    if let Some(file) = holding(&path, bytes) {
+        // Read with nothing held; dated under the lock only while it is still the file at the
+        // name, which a sweep may have removed meanwhile.
+        let _files = hold();
+        if same_file(&file, &path) {
+            let _ = file.set_modified(std::time::SystemTime::now());
+            return Ok(true);
+        }
+    }
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(bytes)?;
+    tmp.as_file().sync_all()?;
+    // A rename that replaces: the same name holds the same bytes, so a copy another request
+    // stored meanwhile is replaced by an identical one, and a reader keeps the file it opened.
+    {
+        let _files = hold();
+        tmp.persist(&path).map_err(|error| error.error)?;
+    }
+    // The rename itself through a crash; best effort, as the store's own files are.
+    let _ = std::fs::File::open(dir).and_then(|dir| dir.sync_all());
+    Ok(false)
+}
+
+/// Whether `path` still names the file `file` has open.
+fn same_file(file: &std::fs::File, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (file.metadata(), std::fs::symlink_metadata(path)) {
+        (Ok(open), Ok(named)) => open.dev() == named.dev() && open.ino() == named.ino(),
+        _ => false,
+    }
+}
+
+/// `path`, open, when it is a regular file holding exactly `bytes`. Opened without following a
+/// link or waiting on a pipe: an agent owns the checkout its uploads go to.
+fn holding(path: &Path, bytes: &[u8]) -> Option<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.len() != bytes.len() as u64 {
+        return None;
+    }
+    let mut held = Vec::with_capacity(bytes.len());
+    (&file).take(bytes.len() as u64 + 1).read_to_end(&mut held).ok()?;
+    (held == bytes).then_some(file)
+}
+
 fn be16(b: &[u8], at: usize) -> Option<u32> {
     Some(u32::from(u16::from_be_bytes(b.get(at..at + 2)?.try_into().ok()?)))
 }
@@ -109,9 +181,12 @@ fn gif(b: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// The first frame header (SOF0 to SOF15, less the DHT, JPG and DAC markers that share
-/// the range), walking the segments before it.
+/// the range), walking the segments before it; its sides swapped when an Exif segment before it
+/// says the picture is shown turned a quarter (orientations 5 to 8, as a phone tags a portrait
+/// photo stored landscape), so the size is the one it is shown at (TM-24).
 fn jpeg(b: &[u8]) -> Option<(u32, u32)> {
     let mut at = 2;
+    let mut turned = false;
     loop {
         if *b.get(at)? != 0xFF {
             return None;
@@ -128,17 +203,55 @@ fn jpeg(b: &[u8]) -> Option<(u32, u32)> {
             0xD9 | 0xDA => return None,
             0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) => {
                 // length(2), precision(1), height(2), width(2)
-                return Some((be16(b, at + 5)?, be16(b, at + 3)?));
+                let (w, h) = (be16(b, at + 5)?, be16(b, at + 3)?);
+                return Some(if turned { (h, w) } else { (w, h) });
             }
             _ => {
                 let len = be16(b, at)? as usize;
                 if len < 2 {
                     return None;
                 }
+                if marker == 0xE1 {
+                    let segment = b.get(at + 2..(at + len).min(b.len())).unwrap_or_default();
+                    if let Some(orientation) = exif_orientation(segment) {
+                        turned = (5..=8).contains(&orientation);
+                    }
+                }
                 at += len;
             }
         }
     }
+}
+
+/// The orientation (tag 0x0112 of IFD0, 1 to 8) an APP1 segment's Exif data gives, if it is
+/// Exif and gives one.
+fn exif_orientation(segment: &[u8]) -> Option<u16> {
+    let tiff = segment.strip_prefix(b"Exif\0\0")?;
+    let big = match tiff.get(0..2)? {
+        b"MM" => true,
+        b"II" => false,
+        _ => return None,
+    };
+    let u16_at = |at: usize| -> Option<u16> {
+        let two: [u8; 2] = tiff.get(at..at.checked_add(2)?)?.try_into().ok()?;
+        Some(if big { u16::from_be_bytes(two) } else { u16::from_le_bytes(two) })
+    };
+    let u32_at = |at: usize| -> Option<u32> {
+        let four: [u8; 4] = tiff.get(at..at.checked_add(4)?)?.try_into().ok()?;
+        Some(if big { u32::from_be_bytes(four) } else { u32::from_le_bytes(four) })
+    };
+    if u16_at(2)? != 42 {
+        return None;
+    }
+    let ifd = u32_at(4)? as usize;
+    // 12 bytes an entry, after a count of them; a SHORT's value sits in the first two bytes of
+    // the entry's value field.
+    for entry in (0..u16_at(ifd)? as usize).map(|i| ifd + 2 + i * 12) {
+        if u16_at(entry)? == 0x0112 {
+            return (u16_at(entry + 2)? == 3).then(|| u16_at(entry + 8)).flatten();
+        }
+    }
+    None
 }
 
 /// The first chunk: lossy (`VP8 `), lossless (`VP8L`) or extended (`VP8X`, its canvas).
@@ -277,6 +390,90 @@ mod tests {
         assert_eq!(sniff(&lossless), pic("webp", 100, 50));
         let extended = riff(b"VP8X", &[0, 0, 0, 0, 0xFF, 0x03, 0x00, 0xFF, 0x01, 0x00]);
         assert_eq!(sniff(&extended), pic("webp", 1024, 512));
+    }
+
+    /// A JPEG of `w` by `h` stored, whose Exif says it is shown at `orientation`, in `order`'s
+    /// byte order (`II` or `MM`).
+    fn exif_jpeg(w: u16, h: u16, orientation: u16, order: &[u8; 2]) -> Vec<u8> {
+        let big = order == b"MM";
+        let n16 = |v: u16| if big { v.to_be_bytes() } else { v.to_le_bytes() };
+        let n32 = |v: u32| if big { v.to_be_bytes() } else { v.to_le_bytes() };
+        // The TIFF header, IFD0 at 8 with two entries (an ImageWidth first, so the walk steps
+        // over one), and no next IFD.
+        let entry = |tag: u16, value: u16| [n16(tag).as_slice(), &n16(3), &n32(1), &n16(value), &[0, 0]].concat();
+        let mut tiff = [order.as_slice(), &n16(42), &n32(8), &n16(2)].concat();
+        tiff.extend(entry(0x0100, w));
+        tiff.extend(entry(0x0112, orientation));
+        tiff.extend([0u8; 4]);
+        let app1 = [b"Exif\0\0".as_slice(), &tiff].concat();
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        jpeg.extend((app1.len() as u16 + 2).to_be_bytes());
+        jpeg.extend(app1);
+        jpeg.extend([0xFF, 0xC0, 0x00, 0x11, 0x08]);
+        jpeg.extend(h.to_be_bytes());
+        jpeg.extend(w.to_be_bytes());
+        jpeg
+    }
+
+    /// TM-24: a phone's portrait photo is stored landscape and tagged to be shown turned; its
+    /// size is the one it is shown at, as every viewer shows it.
+    #[test]
+    fn a_jpeg_turned_by_its_exif_is_sized_as_shown() {
+        for order in [b"II", b"MM"] {
+            assert_eq!(sniff(&exif_jpeg(200, 100, 6, order)), pic("jpg", 100, 200), "{order:?}");
+            assert_eq!(sniff(&exif_jpeg(200, 100, 8, order)), pic("jpg", 100, 200));
+            assert_eq!(sniff(&exif_jpeg(200, 100, 5, order)), pic("jpg", 100, 200), "turned and mirrored");
+            assert_eq!(sniff(&exif_jpeg(200, 100, 1, order)), pic("jpg", 200, 100), "upright");
+            assert_eq!(sniff(&exif_jpeg(200, 100, 3, order)), pic("jpg", 200, 100), "upside down keeps its sides");
+        }
+        // Exif cut short, or not Exif at all: the size as stored.
+        let mut cut = exif_jpeg(200, 100, 6, b"II");
+        cut[14] = b'X';
+        assert_eq!(sniff(&cut), pic("jpg", 200, 100), "a TIFF header that is not one");
+        assert_eq!(exif_orientation(b"Exif\0\0II*\0\x08\0\0\0\x05\0"), None, "entries past the end");
+        assert_eq!(exif_orientation(b"http://ns.adobe.com/xap/1.0/\0"), None);
+    }
+
+    /// B65's fix is in design.asset.add: the uploads a model reads keep the size a header
+    /// says, however large.
+    #[test]
+    fn a_raster_larger_than_a_node_is_sized_as_it_says() {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        png.extend(4_000_000_000u32.to_be_bytes());
+        png.extend(1u32.to_be_bytes());
+        assert_eq!(sniff(&png), pic("png", 4_000_000_000, 1));
+    }
+
+    /// B51: a copy a crash cut short is replaced, a whole one is kept and dated now, and what
+    /// sits at the name without being the picture (a link) is replaced, never written through.
+    #[test]
+    fn a_picture_is_kept_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let bytes = b"\x89PNG\r\n\x1a\n picture".to_vec();
+        assert!(!keep(dir.path(), "a.png", &bytes).unwrap(), "new");
+        let path = dir.path().join("a.png");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(946_684_800);
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(old).unwrap();
+        assert!(keep(dir.path(), "a.png", &bytes).unwrap(), "already there");
+        assert!(std::fs::metadata(&path).unwrap().modified().unwrap() > old, "seen now");
+
+        for torn in [&b""[..], &bytes[..5], &[0u8; 16][..]] {
+            std::fs::write(&path, torn).unwrap();
+            assert!(!keep(dir.path(), "a.png", &bytes).unwrap(), "{torn:?} is not the picture");
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::write(&elsewhere, &bytes).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+        assert!(!keep(dir.path(), "a.png", &bytes).unwrap(), "a link is not a copy");
+        assert!(!std::fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read(&elsewhere).unwrap(), bytes, "the link's target is untouched");
+        let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(left.len(), 2, "no temporary file stays: {left:?}");
     }
 
     #[test]

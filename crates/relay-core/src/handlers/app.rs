@@ -145,6 +145,11 @@ pub fn register(e: &mut Engine) {
         if !purged.actions.is_empty() {
             ctx.emit("notify.changed", json!({"purged": true}));
         }
+        // Each purged design, as design.purge announces one (W72): an open board or Deleted list
+        // lets go of it. The payload names its project; this request belongs to none.
+        for deleted in purged.deleted_designs() {
+            ctx.emit("design.deleted", deleted);
+        }
         let paths = purged.paths;
         ctx.after_commit(move |engine| {
             std::thread::Builder::new()
@@ -152,6 +157,8 @@ pub fn register(e: &mut Engine) {
                 .spawn(move || {
                     crate::background_priority();
                     crate::purge::remove_paths(&paths);
+                    // Pictures no design has named for an undo window (B66).
+                    crate::disk_sweep::sweep_design_assets(&engine);
                     crate::disk_sweep::run(&engine);
                 })
                 .ok();

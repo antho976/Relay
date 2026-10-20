@@ -291,22 +291,14 @@ fn attachments_dir(worktree: &Path) -> Result<PathBuf, BusError> {
     Ok(dir)
 }
 
-/// Write `bytes` as `name` in `dir` unless it is there already (a name is its content's hash),
-/// through a temporary file renamed into place, so the agent never reads half a picture.
+/// Write `bytes` as `name` in `dir` unless a whole copy is there already (a name is its content's
+/// hash), durably and through a temporary file renamed into place (B51, [`crate::picture::keep`]),
+/// so the agent never reads half a picture, and one a crash cut short is written again. What
+/// sits at the name without being the picture, a link the agent planted included, is replaced,
+/// never written through.
 fn store_upload(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), BusError> {
-    use std::io::Write as _;
-    let path = dir.join(name);
-    let present = || fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file());
-    if present() {
-        return Ok(());
-    }
-    let mut tmp = tempfile::NamedTempFile::new_in(dir).bus()?;
-    tmp.write_all(bytes).bus()?;
-    match tmp.persist_noclobber(&path) {
-        Ok(_) => Ok(()),
-        Err(_) if present() => Ok(()),
-        Err(error) => Err(crate::engine::internal(error.error)),
-    }
+    crate::picture::keep(dir, name, bytes).map_err(crate::engine::internal)?;
+    Ok(())
 }
 
 /// [`assert_own`] with PAIR reads allowed, for a handler with no transaction: one short read

@@ -214,9 +214,21 @@ impl Unlocked<'_> {
     /// batches instead of waiting out a copy of the whole file; nested inside a handler that
     /// already holds the lock it copies through that transaction.
     pub fn backup_store(&self, reason: &str) -> anyhow::Result<std::path::PathBuf> {
+        Ok(self.backup_store_then(reason, |_| Ok(()))?.0)
+    }
+    /// [`Unlocked::backup_store`], and `at_end` read in the same hold of the lock as the copy's
+    /// end ([`crate::store::Store::backup_then`]): what it reads is what the copy holds.
+    pub fn backup_store_then<T>(
+        &self,
+        reason: &str,
+        at_end: impl FnOnce(&rusqlite::Connection) -> anyhow::Result<T>,
+    ) -> anyhow::Result<(std::path::PathBuf, T)> {
         match self.held {
-            Some(conn) => self.engine.store.backup_with(conn, reason),
-            None => self.engine.store.backup(reason),
+            Some(conn) => {
+                let path = self.engine.store.backup_with(conn, reason)?;
+                Ok((path, at_end(conn)?))
+            }
+            None => self.engine.store.backup_then(reason, at_end),
         }
     }
     /// Take the store for one short read. Keep the closure to plain queries: whatever runs in
