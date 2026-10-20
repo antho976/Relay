@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{call, committed_repo, engine_with_project, ok, ok_as};
+use common::{call, committed_repo, engine_with_project, ok, ok_as, refused};
 use relay_bus::design::{MAX_DESIGN_BYTES, NODE_OVERHEAD};
 use relay_bus::Actor;
 use relay_core::engine::Engine;
@@ -305,6 +305,9 @@ fn a_v29_backup_restores_counted_and_dated() {
     let undated: i64 = e.store.lock().query_row("SELECT COUNT(*) FROM design_nodes WHERE design_id = ?1 AND rev != ?2", params![id, at], |r| r.get(0)).unwrap();
     assert_eq!(undated, 0, "every row at its design's rev");
     assert_eq!(ok(&e, "design.get", json!({"design_id": id}))["nodes"].as_array().unwrap().len(), 3);
+    // Its removals before the backup are not on record: a since_rev before it is too old.
+    assert_eq!(refused(call(&e, "design.get", json!({"design_id": id, "since_rev": at - 1}))).code, "design.since_too_old");
+    ok(&e, "design.get", json!({"design_id": id, "since_rev": at}));
     // And a v30 backup brings its rows' revs and its removals back as they were.
     let title_rev = row_rev(&e, id, "title");
     apply(&e, id, json!([{"op": "delete", "id": "title"}]));

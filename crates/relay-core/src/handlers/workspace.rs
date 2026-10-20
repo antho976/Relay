@@ -763,7 +763,8 @@ fn restore_project(ctx: &mut Ctx, project_id: Id, copied: Vec<Copied>) -> Result
     }
     // A design from a backup older than v30 counted its size without its ids, and its rows carry
     // no rev (0): count it again, as every write keeps it now (B60), and date the rows at their
-    // design's rev, so since_rev and base_rev see them as they are (W20).
+    // design's rev, so since_rev and base_rev see them as they are (W20). Its removals before
+    // then are not on record, so a since_rev before that rev is too old.
     let designs: Vec<Id> = {
         let mut stmt = ctx.tx().prepare_cached("SELECT id FROM designs WHERE project_id = ?1").bus()?;
         let rows = stmt.query_map([project_id], |r| r.get(0)).bus()?.collect::<rusqlite::Result<Vec<_>>>();
@@ -771,8 +772,11 @@ fn restore_project(ctx: &mut Ctx, project_id: Id, copied: Vec<Copied>) -> Result
     };
     for design in designs {
         super::design::recount_bytes(ctx.tx(), design)?;
-        ctx.tx().prepare_cached("UPDATE design_nodes SET rev = (SELECT rev FROM designs WHERE id = ?1) WHERE design_id = ?1 AND rev = 0").bus()?
+        let undated = ctx.tx().prepare_cached("UPDATE design_nodes SET rev = (SELECT rev FROM designs WHERE id = ?1) WHERE design_id = ?1 AND rev = 0").bus()?
             .execute([design]).bus()?;
+        if undated > 0 {
+            ctx.tx().prepare_cached("UPDATE designs SET tracked_from = rev WHERE id = ?1").bus()?.execute([design]).bus()?;
+        }
     }
     // Keep the high-water marks past the restored ids, whatever the backup predates.
     for (key, id) in [("ids.projects", project_id), ("ids.workspaces", workspace)] {
