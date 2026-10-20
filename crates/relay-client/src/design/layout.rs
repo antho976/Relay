@@ -1,6 +1,12 @@
-//! Where every node of a page lands: auto layout, hugging text and stickies that grow to their
-//! words. The canvas measures text (Pango); this decides everything else, so a frame an agent
-//! wrote as `layout: column` lays out the same on every redraw.
+//! Where every node of a page lands: auto layout (row, column and wrap), hugging text, stickies
+//! that grow to their words, groups as big as their children, pins, absolute children, min and
+//! max sizes, and scrolling frames. The canvas measures text (Pango); this decides everything
+//! else, so a frame an agent wrote as `layout: column` lays out the same on every redraw.
+//!
+//! A pass works top down: a node's size first (once a pass, however many ancestors ask), then
+//! its box, then its children's. Sizes stay within `MAX_COORD` and boxes within
+//! [`PLACED_LIMIT`], so whatever an agent nests or lines up, paint (in `f32`), hit testing and
+//! Pango agree on where it is.
 
 use super::geom::Rect;
 use super::scene::Scene;
@@ -10,20 +16,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::ops::Range;
-
-/// `v` within [`PLACED_LIMIT`] of the page's origin.
-fn limit(v: f64) -> f64 {
-    v.clamp(-PLACED_LIMIT, PLACED_LIMIT)
-}
-
-/// `r` placed within [`PLACED_LIMIT`].
-fn bounded(r: Rect) -> Rect {
-    Rect::new(limit(r.x), limit(r.y), r.w.clamp(0.0, 2.0 * PLACED_LIMIT), r.h.clamp(0.0, 2.0 * PLACED_LIMIT))
-}
-
-/// Slack when a wrap line is checked for room, so a line that fits exactly is not broken by
-/// rounding.
-const SLACK: f64 = 1e-6;
 
 /// How far from the page's origin a box is placed, either way: 2^22 px, where an `f32` still
 /// holds half a pixel. Paint draws in `f32` and hit testing works in `f64`, so a box an agent
@@ -35,6 +27,9 @@ pub const PLACED_LIMIT: f64 = 4_194_304.0;
 pub const STICKY_PAD: f64 = 16.0;
 /// Size a sticky starts at.
 pub const STICKY_SIZE: f64 = 200.0;
+/// Slack when a wrap line is checked for room, so a line that fits exactly is not broken by
+/// rounding.
+const SLACK: f64 = 1e-6;
 
 /// Measures a text or sticky's words: their size when wrapped at `wrap` px (or unwrapped).
 pub trait Measure {
@@ -567,6 +562,8 @@ impl<'a> Pass<'a> {
         self.arrange(id, Rect::new(origin.0 + x, origin.1 + y, w, h));
     }
 
+    /// Places `id` at `rect` (a group: where its children's bounds land), then what is inside
+    /// it.
     fn arrange(&mut self, id: &'a str, rect: Rect) {
         let scene = self.scene;
         let Some(n) = scene.node(id) else {
@@ -713,6 +710,16 @@ impl<'a> Pass<'a> {
             at += s.main + gap;
         }
     }
+}
+
+/// `v` within [`PLACED_LIMIT`] of the page's origin.
+fn limit(v: f64) -> f64 {
+    v.clamp(-PLACED_LIMIT, PLACED_LIMIT)
+}
+
+/// `r` placed within [`PLACED_LIMIT`].
+fn bounded(r: Rect) -> Rect {
+    Rect::new(limit(r.x), limit(r.y), r.w.clamp(0.0, 2.0 * PLACED_LIMIT), r.h.clamp(0.0, 2.0 * PLACED_LIMIT))
 }
 
 /// One child's place in a line of auto layout: its length along the line and depth across,
