@@ -268,12 +268,13 @@ fn session_visibility_stops_at_the_project_and_stops_consistently() {
     // Asking for someone else's project is refused rather than quietly answered.
     assert_eq!(refusal(&f.engine, f.me(), "session.list", json!({"project_id": 2})).code, "actor.scope");
 
-    // …and `session.get` admits exactly what `session.list` showed.
+    // …and `session.get` admits exactly what `session.list` showed: a session it did not list
+    // is not found here (E-agent-2), as a typo is.
     assert_eq!(ok(&f.engine, f.me(), "session.get", json!({"session": f.peer_name()}))["name"], f.peer_name());
     assert_eq!(
         refusal(&f.engine, f.me(), "session.get",
             json!({"session": f.outsider["name"].as_str().unwrap()})).code,
-        "actor.scope",
+        "session.not_found",
     );
 
     // The user still sees the whole fleet.

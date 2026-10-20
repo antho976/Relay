@@ -1109,3 +1109,52 @@ fn an_op_a_plugin_brings_exists_only_where_it_is_on() {
     let person = call(engine, Actor::User, "design.picture.thumb", thumb);
     assert_ne!(person.error.as_ref().map(|err| err.code.as_str()), Some("plugin.off"));
 }
+
+/// E-agent-2: a session name that is no live session of the agent's project is a typo or a stale
+/// name, and is answered as one, with the nearest name of that project; `actor.scope` is kept
+/// for a real session of the project that the agent may not act on.
+#[test]
+fn a_session_name_that_names_nobody_here_is_not_found_not_a_permission_problem() {
+    let fixture = Fixture::new();
+    let engine = &fixture.engine;
+    let me = fixture.session("builder", "claude");
+    let peer = fixture.session("builder", "codex");
+    let (me, peer) = (me["name"].as_str().unwrap(), peer["name"].as_str().unwrap());
+    let agent = Actor::agent(me);
+
+    let typo = call(engine, agent.clone(), "design.list", json!({"session": "typo"}));
+    let typo = error(&typo);
+    assert_eq!((typo.kind, typo.code.as_str()), (ErrorKind::NotFound, "session.not_found"), "{}", typo.message);
+    assert!(typo.message.contains("\"typo\"") && typo.message.contains("this project"), "{}", typo.message);
+    // A slip of one letter is pointed at the session it was meant to be.
+    let slip = format!("{}{}", &peer[..peer.len() - 1], if peer.ends_with('x') { 'y' } else { 'x' });
+    let slipped = call(engine, agent.clone(), "design.list", json!({"session": slip}));
+    assert_eq!(error(&slipped).code, "session.not_found");
+    assert_eq!(error(&slipped).hint.as_deref(), Some(format!("did you mean {peer:?}?").as_str()));
+    // A mutation naming nobody is a typo too, not a refusal to act on someone else.
+    let mutation = call(engine, agent.clone(), "session.intent", json!({"session": "typo", "text": "x"}));
+    assert_eq!(error(&mutation).code, "session.not_found");
+
+    // A real peer: reads reach it, writes stay the peer's own.
+    ok(engine, agent.clone(), "design.list", json!({"session": peer}));
+    let theirs = call(engine, agent.clone(), "session.intent", json!({"session": peer, "text": "x"}));
+    assert_eq!(error(&theirs).code, "actor.scope");
+    ok(engine, agent.clone(), "design.list", json!({"session": me}));
+
+    // Another project's session is not this agent's to know of: not found here, and no hint
+    // names it.
+    let other = fixture.repo.parent().unwrap().join("other");
+    committed_repo(&other, &[("README.md", "other\n")]);
+    ok(engine, Actor::User, "project.add", json!({"workspace_id": 1, "path": other}));
+    let outsider = ok(engine, Actor::User, "session.create", json!({"project_id": 2, "provider": "claude", "role": "builder"}));
+    let outsider = outsider["name"].as_str().unwrap();
+    for (op, payload) in [
+        ("design.list", json!({"session": outsider})),
+        ("session.intent", json!({"session": outsider, "text": "x"})),
+    ] {
+        let refused = call(engine, agent.clone(), op, payload);
+        let refused = error(&refused);
+        assert_eq!(refused.code, "session.not_found", "{op}");
+        assert!(!refused.hint.as_deref().unwrap_or("").contains(outsider), "{op}: {:?}", refused.hint);
+    }
+}

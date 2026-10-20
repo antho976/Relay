@@ -423,14 +423,25 @@ pub fn authorize(
 
     if let Some(name) = payload.get("session").and_then(Value::as_str) {
         let own = name == session.name;
-        // Reads reach any session in the caller's own project — the same boundary
-        // `session.list` draws. Private surfaces (scrollback, brief) narrow it again in the
-        // handler; mutations remain own-session, or the PAIR partner, only (D106).
-        let project_read = entry.meta.kind == OpKind::Query
-            && sessions::by_name(conn, name).is_ok_and(|peer| peer.session.project_id == session.project_id);
         let pair_read = entry.meta.kind == OpKind::Query && session.pair_with.as_deref() == Some(name);
-        if !own && !pair_read && !project_read {
-            return Err(BusError::not_own("session"));
+        if !own && !pair_read {
+            // A name that is no live session of this project is a typo or a stale name, not a
+            // permission problem, and is answered as one; another project's sessions are not
+            // this agent's to know of, so they are not found here either (E-agent-2).
+            let here = match sessions::by_name(conn, name) {
+                Ok(peer) => peer.session.project_id == session.project_id,
+                Err(err) if err.code == "session.not_found" => false,
+                Err(err) => return Err(err),
+            };
+            if !here {
+                return Err(no_such_session(conn, session.project_id, name));
+            }
+            // Reads reach any session in the caller's own project — the same boundary
+            // `session.list` draws. Private surfaces (scrollback, brief) narrow it again in the
+            // handler; mutations remain own-session, or the PAIR partner, only (D106).
+            if entry.meta.kind != OpKind::Query {
+                return Err(BusError::not_own("session"));
+            }
         }
     }
     if let Some(task_id) = payload.get("task_id").and_then(Value::as_i64) {
@@ -481,6 +492,21 @@ pub fn authorize(
             .with_hint(format!("enable {} for this session deliberately", hatch.option()));
     }
     Err(err)
+}
+
+/// `session.not_found` for a `session` an agent named that is no live session of its project,
+/// with the nearest name among that project's live sessions, so the refusal reads as the slip it
+/// usually is. Never names a session of another project. Runs on the refusal path only.
+fn no_such_session(conn: &Connection, project_id: Id, name: &str) -> BusError {
+    let names: Vec<String> = conn
+        .prepare_cached("SELECT name FROM sessions WHERE project_id=?1 AND state != 'closed' ORDER BY id")
+        .and_then(|mut stmt| stmt.query_map([project_id], |row| row.get(0))?.collect())
+        .unwrap_or_default();
+    let hint = match relay_bus::design::nearest(name, names.iter().map(String::as_str)) {
+        Some(near) => format!("did you mean {near:?}?"),
+        None => "session.list names this project's live sessions".to_string(),
+    };
+    BusError::not_found("session.not_found", format!("no live session named {name:?} in this project")).with_hint(hint)
 }
 
 /// The two deliberate per-session escape hatches from a role's allowlist (BUS.md §9.1).
