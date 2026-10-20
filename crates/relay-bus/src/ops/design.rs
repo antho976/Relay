@@ -9,7 +9,7 @@
 //! edits that undo it, so the canvas's undo and `audit.undo` revert exactly what was done.
 use crate::design::{Conflict, Expect, Node, NodeKind, NodeOp, Style, MAX_OPS};
 use crate::ops::picture::PictureCredit;
-use crate::registry::{Actors, OpEntry, OpMeta, Scope, Undo};
+use crate::registry::{Actors, Doors, OpEntry, OpMeta, Scope, Undo};
 use crate::types::{Design, Id};
 use crate::{op, Empty};
 use std::collections::BTreeMap;
@@ -334,6 +334,186 @@ op!(AssetGet, "design.asset.get", AssetGetIn => AssetGetOut,
     OpMeta::query(Scope::Project, 12, "A picture an image node shows, in pieces of at most 3 MiB, to draw it where its file is out of reach")
         .actors(Actors::UserOnly));
 
+/// `design.render`'s limits: a picture's scale, its longer side, the box rows, the wait, the
+/// nodes named, the frames of a contact sheet.
+pub const RENDER_SCALE_MIN: f64 = 0.25;
+pub const RENDER_SCALE_MAX: f64 = 2.0;
+pub const RENDER_SIDE_MIN: u32 = 64;
+pub const RENDER_SIDE_MAX: u32 = 2560;
+pub const RENDER_SIDE_DEFAULT: u32 = 1568;
+pub const RENDER_BOXES_MAX: u32 = 500;
+pub const RENDER_BOXES_DEFAULT: u32 = 200;
+pub const RENDER_TIMEOUT_MIN_MS: u64 = 2_000;
+pub const RENDER_TIMEOUT_MAX_MS: u64 = 60_000;
+pub const RENDER_TIMEOUT_DEFAULT_MS: u64 = 20_000;
+pub const RENDER_NODES_MAX: usize = 200;
+pub const RENDER_FRAMES_MIN: u8 = 2;
+pub const RENDER_FRAMES_MAX: u8 = 24;
+/// Most font families the desktop app reports with `design.render.serve`.
+pub const SERVE_FONTS_MAX: usize = 2_000;
+
+payload!(#[schemars(rename = "DesignRenderIn")] RenderIn {
+    pub design_id: Id,
+    /// The page to picture: its id, or its name when no other page has that name. Default: the
+    /// design's first page; with `nodes`, the page they are on.
+    pub page: Option<String>,
+    /// Picture and measure only these nodes (the outermost of them) and what is inside them.
+    /// At most 200, all on one page.
+    #[schemars(length(max = RENDER_NODES_MAX))]
+    pub nodes: Option<Vec<String>>,
+    /// A picture as well as the boxes. Default true; false gives the boxes and issues alone.
+    pub png: Option<bool>,
+    /// Picture pixels per page px, 0.25 to 2. Default 1. Lowered to fit `max_side` and 4
+    /// megapixels.
+    #[schemars(range(min = RENDER_SCALE_MIN, max = RENDER_SCALE_MAX))]
+    pub scale: Option<f64>,
+    /// The picture's longer side at most, 64 to 2560 px. Default 1568.
+    #[schemars(range(min = RENDER_SIDE_MIN, max = RENDER_SIDE_MAX))]
+    pub max_side: Option<u32>,
+    /// Box rows in the answer, 0 to 500. Default 200. `boxes.total` counts every box.
+    #[schemars(range(max = RENDER_BOXES_MAX))]
+    pub boxes_limit: Option<u32>,
+    /// Refuse (`design.stale`) unless the design is still at this `rev`: the `rev` your last
+    /// design.apply answered.
+    pub base_rev: Option<i64>,
+    /// How long to wait for the desktop app, 2000 to 60000 ms. Default 20000.
+    #[schemars(range(min = RENDER_TIMEOUT_MIN_MS, max = RENDER_TIMEOUT_MAX_MS))]
+    pub timeout_ms: Option<u64>,
+    /// Picture it at this time of its motion, in ms from the start (0 to 600000), each node posed
+    /// on its own timeline. Default: at rest, as stored. Not with `frames`.
+    #[schemars(range(min = 0, max = crate::design::motion::MAX_MS))]
+    pub at_ms: Option<f64>,
+    /// A contact sheet of this many frames (2 to 24), evenly spaced over the longest timeline in
+    /// scope, each labelled with its time (`times_ms`). Not with `at_ms`.
+    #[schemars(range(min = RENDER_FRAMES_MIN, max = RENDER_FRAMES_MAX))]
+    pub frames: Option<u8>,
+});
+result!(#[schemars(rename = "DesignRenderOut")] RenderOut {
+    pub design_id: Id,
+    /// The rev the picture and the boxes show.
+    pub rev: i64,
+    /// The page's id.
+    pub page: String,
+    /// The page rectangle pictured, in page px: the page's content with 32 px around it, or the
+    /// nodes' painted bounds, widened to whole px. Picture pixel (u, v) is page point
+    /// (x + u / scale, y + v / scale); on a contact sheet, in each cell.
+    pub area: RenderRect,
+    /// Picture pixels per page px, after the size limits.
+    pub scale: f64,
+    /// Absent with `png: false`, or when nothing in scope is visible (a warning says which).
+    pub png: Option<RenderPng>,
+    /// Layout problems, worst first, at most 100.
+    pub issues: Vec<RenderIssue>,
+    /// Every problem found, listed or not.
+    pub issue_count: u32,
+    /// What to know that is not an error, at most 20; each says what to do next.
+    pub warnings: Vec<String>,
+    pub boxes: RenderBoxes,
+    pub timings_ms: RenderTimings,
+    /// A contact sheet's frame times in ms, in reading order; empty for one picture.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub times_ms: Vec<f64>,
+});
+result!(#[schemars(rename = "DesignRenderRect")] RenderRect { pub x: f64, pub y: f64, pub w: f64, pub h: f64 });
+result!(#[schemars(rename = "DesignRenderPng")] RenderPng {
+    /// The PNG on this machine. The newest 32 renders are kept, none older than an hour once a
+    /// newer one is written.
+    pub path: String,
+    pub w: u32,
+    pub h: u32,
+});
+result!(#[schemars(rename = "DesignRenderBoxes")] RenderBoxes {
+    /// Always ["id","kind","parent","x","y","w","h","rx","ry","rot"].
+    pub fields: Vec<String>,
+    /// One row per visible node in scope, in design.get's order (parents before children,
+    /// siblings bottom to top). x, y, w, h: the laid-out box in page px, hugged text measured.
+    /// rx, ry: its corner from the parent's origin. rot: degrees as stored (boxes are unrotated).
+    /// At rest, whatever `at_ms` asked.
+    pub rows: Vec<Vec<serde_json::Value>>,
+    /// Visible nodes in scope, listed or not.
+    pub total: u32,
+    /// Nodes in scope that are hidden, so have no box.
+    pub hidden: u32,
+});
+result!(#[schemars(rename = "DesignRenderIssue")] RenderIssue {
+    /// overflow, overlap, text_overlap, clipped or contrast.
+    pub code: String,
+    pub ids: Vec<String>,
+    pub message: String,
+});
+result!(#[schemars(rename = "DesignRenderTimings")] RenderTimings { pub read: f64, pub layout: f64, pub paint: f64, pub encode: f64 });
+
+op!(Render, "design.render", RenderIn => RenderOut,
+    OpMeta::query(Scope::Project, 12, "See a design: a PNG of a page or some of its nodes (shown to you as an image), at rest, at a time of its motion or as a contact sheet of frames, and every node's laid-out box in page px, hugged text measured, with layout issues; drawn by Relay's desktop app, which must be open")
+        .doors(Doors::SocketOnly));
+
+payload!(#[schemars(rename = "DesignRenderServeIn")] ServeIn {
+    /// The font families this app can draw, at most 2000, each 1 to 200 characters: what
+    /// design.fonts answers and design.apply's font warnings read.
+    #[schemars(length(max = SERVE_FONTS_MAX), inner(length(min = 1, max = crate::design::MAX_NAME)))]
+    pub fonts: Option<Vec<String>>,
+});
+op!(RenderServe, "design.render.serve", ServeIn => Empty,
+    OpMeta::query(Scope::Global, 12, "The desktop app offers to draw designs for agents on this connection, until it closes")
+        .actors(Actors::UserOnly).doors(Doors::SocketOnly));
+
+payload!(#[schemars(rename = "DesignRenderAnswerIn")] AnswerIn {
+    /// The request's `render_id`.
+    pub render_id: String,
+    /// What was drawn. Exactly one of `drawn` and `error`.
+    pub drawn: Option<RenderDrawn>,
+    pub error: Option<RenderFailure>,
+});
+result!(#[schemars(rename = "DesignRenderDrawn")] RenderDrawn {
+    pub rev: i64,
+    pub area: RenderRect,
+    pub scale: f64,
+    /// The PNG, base64, at most 4 MiB decoded. Absent without a picture.
+    pub png_b64: Option<String>,
+    pub boxes: RenderBoxes,
+    pub issues: Vec<RenderIssue>,
+    pub issue_count: u32,
+    pub warnings: Vec<String>,
+    pub timings_ms: RenderTimings,
+    /// A contact sheet's frame times in ms, in reading order (at most 24); empty for one
+    /// picture.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub times_ms: Vec<f64>,
+});
+result!(#[schemars(rename = "DesignRenderFailure")] RenderFailure { pub code: String, pub message: String });
+result!(#[schemars(rename = "DesignRenderAnswerOut")] AnswerOut {
+    /// Whether a render was still waiting for this answer (it then got it, drawn or refused).
+    pub accepted: bool,
+});
+op!(RenderAnswer, "design.render.answer", AnswerIn => AnswerOut,
+    OpMeta::query(Scope::Global, 12, "The desktop app's answer to one design.render request")
+        .actors(Actors::UserOnly));
+
+/// The payload of the `design.render.request` line the engine writes to the leased connection
+/// (not an op, not an event on the bus; BUS.md §6.2).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RenderRequest {
+    pub render_id: String,
+    pub design_id: Id,
+    /// Resolved by the engine to the page's id: never absent.
+    pub page: String,
+    pub nodes: Option<Vec<String>>,
+    pub png: bool,
+    pub scale: f64,
+    pub max_side: u32,
+    pub boxes_limit: u32,
+    /// Unix ms after which the engine no longer waits: skip the job, or the rest of it.
+    pub deadline_unix_ms: i64,
+    /// Pose each node at this time of its motion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_ms: Option<f64>,
+    /// A contact sheet of this many frames.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frames: Option<u8>,
+    /// The agent session that asked, for the note an open board shows; none for the person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+}
 /// The design ops; `design.apply`'s `bus.schema` refusals name the edit and key at fault
 /// (`design::locate`).
 pub fn entries() -> Vec<OpEntry> {
@@ -351,6 +531,9 @@ pub fn entries() -> Vec<OpEntry> {
         OpEntry::of::<Fonts>(),
         OpEntry::of::<AssetAdd>(),
         OpEntry::of::<AssetGet>(),
+        OpEntry::of::<Render>(),
+        OpEntry::of::<RenderServe>(),
+        OpEntry::of::<RenderAnswer>(),
     ]
 }
 
@@ -387,6 +570,22 @@ mod tests {
         assert!(doc(&get, "since_rev").contains(&format!("{} revs", crate::design::SINCE_WINDOW)));
         assert!(doc(&schema::<FindIn>(), "with_nodes").contains(&format!("first {FIND_NODES_MAX}, up to {} KiB", FIND_BYTES_MAX >> 10)));
         assert!(doc(&schema::<GetOut>(), "credits").contains(&format!("at most {CREDITS_MAX}")));
+        let render = schema::<RenderIn>();
+        for (field, lo, hi) in [("scale", RENDER_SCALE_MIN, RENDER_SCALE_MAX), ("max_side", RENDER_SIDE_MIN.into(), RENDER_SIDE_MAX.into()),
+            ("timeout_ms", RENDER_TIMEOUT_MIN_MS as f64, RENDER_TIMEOUT_MAX_MS as f64), ("frames", RENDER_FRAMES_MIN.into(), RENDER_FRAMES_MAX.into()),
+            ("at_ms", 0.0, crate::design::motion::MAX_MS)] {
+            let property = &render["properties"][field];
+            assert_eq!((property["minimum"].as_f64(), property["maximum"].as_f64()), (Some(lo), Some(hi)), "{field}");
+            assert!(doc(&render, field).contains(&format!("{lo} to {hi}")), "{field}: {}", doc(&render, field));
+        }
+        assert_eq!(render["properties"]["boxes_limit"]["maximum"].as_u64(), Some(RENDER_BOXES_MAX.into()));
+        assert_eq!(render["properties"]["nodes"]["maxItems"].as_u64(), Some(RENDER_NODES_MAX as u64));
+        assert!(doc(&render, "max_side").contains(&format!("Default {RENDER_SIDE_DEFAULT}")));
+        assert!(doc(&render, "boxes_limit").contains(&format!("Default {RENDER_BOXES_DEFAULT}")));
+        assert!(doc(&render, "timeout_ms").contains(&format!("Default {RENDER_TIMEOUT_DEFAULT_MS}")));
+        let serve = schema::<ServeIn>();
+        assert_eq!(serve["properties"]["fonts"]["maxItems"].as_u64(), Some(SERVE_FONTS_MAX as u64));
+        assert_eq!(serve["properties"]["fonts"]["items"]["maxLength"].as_u64(), Some(crate::design::MAX_NAME as u64));
     }
 
     /// B48: the lenient doc says what a lenient list skips, where it says so, that a list that

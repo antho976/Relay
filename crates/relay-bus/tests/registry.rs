@@ -170,3 +170,53 @@ fn the_design_queries_have_their_attributes() {
     assert!(find(&serde_json::json!({"design_id": 1, "kind": ["text", "sticky"], "any_color": "#4C9DFF", "with_nodes": true})).is_ok());
     assert!(find(&serde_json::json!({"design_id": 1, "kind": ["button"]})).is_err(), "kinds are the node kinds");
 }
+
+/// render v2 §4 (MODEL-SPEC §3.3): design.render is any actor's query of a project, answered by
+/// the socket door; serve and answer are the desktop app's (the person's).
+#[test]
+fn render_ops_have_their_attributes() {
+    use relay_bus::registry::{Actors, Doors, Scope};
+    let reg = Registry::global();
+    let meta = |op: &str| reg.get(op).unwrap_or_else(|| panic!("{op} is not registered")).meta;
+    let render = meta("design.render");
+    assert_eq!((render.kind, render.scope, render.actors, render.doors), (OpKind::Query, Scope::Project, Actors::All, Doors::SocketOnly));
+    let serve = meta("design.render.serve");
+    assert_eq!((serve.kind, serve.scope, serve.actors, serve.doors), (OpKind::Query, Scope::Global, Actors::UserOnly, Doors::SocketOnly));
+    let answer = meta("design.render.answer");
+    assert_eq!((answer.kind, answer.scope, answer.actors, answer.doors), (OpKind::Query, Scope::Global, Actors::UserOnly, Doors::All));
+    // The fonts the app reports ride on serve (§1 #18); nothing else does.
+    let validate = reg.get("design.render.serve").unwrap().validate;
+    assert!(validate(&serde_json::json!({})).is_ok());
+    assert!(validate(&serde_json::json!({"fonts": ["Geist", "Inter"]})).is_ok());
+    assert!(validate(&serde_json::json!({"renderer": "x"})).is_err());
+    assert!(meta("design.apply").summary.ends_with("see the result with design.render"));
+}
+
+/// A render asks only what it names: `rev` is no field, `base_rev` is.
+#[test]
+fn render_in_refuses_unknown_fields() {
+    let validate = Registry::global().get("design.render").unwrap().validate;
+    assert!(validate(&serde_json::json!({"design_id": 1, "rev": 3})).is_err());
+    assert!(validate(&serde_json::json!({"design_id": 1, "base_rev": 3, "page": "Page 1", "at_ms": 500})).is_ok());
+    assert!(validate(&serde_json::json!({"design_id": 1, "frames": 6, "png": false})).is_ok());
+    assert!(validate(&serde_json::json!({"design_id": 1, "frames": 300})).is_err(), "frames is a u8");
+}
+
+/// The request line the engine writes to the app reads back as it was, and an older line (no
+/// time, no asker) still reads.
+#[test]
+fn render_request_round_trips() {
+    use relay_bus::ops::design::RenderRequest;
+    let request = RenderRequest {
+        render_id: "6f0c2b1e-0000-4000-8000-000000000000".into(), design_id: 12, page: "page-1".into(), nodes: Some(vec!["hero".into()]),
+        png: true, scale: 1.0, max_side: 1568, boxes_limit: 200, deadline_unix_ms: 1_792_368_000_000, at_ms: None, frames: Some(6),
+        by: Some("silver-lemur".into()),
+    };
+    let line = serde_json::to_value(&request).unwrap();
+    assert_eq!(serde_json::from_value::<RenderRequest>(line.clone()).unwrap(), request);
+    assert!(line.get("at_ms").is_none(), "an absent time is not written");
+    let older = serde_json::json!({"render_id": "r", "design_id": 12, "page": "page-1", "nodes": null, "png": true, "scale": 1.0,
+        "max_side": 1568, "boxes_limit": 200, "deadline_unix_ms": 1});
+    let read: RenderRequest = serde_json::from_value(older).unwrap();
+    assert_eq!((read.at_ms, read.frames, read.by), (None, None, None));
+}

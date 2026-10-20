@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 340,
+  "op_count": 343,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -6481,6 +6481,60 @@
       },
       "result": {
         "$ref": "#/$defs/DesignAssetGetOut"
+      }
+    },
+    "design.render": {
+      "summary": "See a design: a PNG of a page or some of its nodes (shown to you as an image), at rest, at a time of its motion or as a contact sheet of frames, and every node's laid-out box in page px, hugged text measured, with layout issues; drawn by Relay's desktop app, which must be open",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "socket_only",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignRenderIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignRenderOut"
+      }
+    },
+    "design.render.serve": {
+      "summary": "The desktop app offers to draw designs for agents on this connection, until it closes",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "socket_only",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignRenderServeIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "design.render.answer": {
+      "summary": "The desktop app's answer to one design.render request",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignRenderAnswerIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignRenderAnswerOut"
       }
     },
     "design.picture.search": {
@@ -28421,6 +28475,479 @@
         "media_type",
         "size",
         "bytes_b64"
+      ]
+    },
+    "DesignRenderIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "page": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The page to picture: its id, or its name when no other page has that name. Default: the\ndesign's first page; with `nodes`, the page they are on."
+        },
+        "nodes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Picture and measure only these nodes (the outermost of them) and what is inside them.\nAt most 200, all on one page.",
+          "maxItems": 200
+        },
+        "png": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "A picture as well as the boxes. Default true; false gives the boxes and issues alone."
+        },
+        "scale": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Picture pixels per page px, 0.25 to 2. Default 1. Lowered to fit `max_side` and 4\nmegapixels.",
+          "minimum": 0.25,
+          "maximum": 2.0
+        },
+        "max_side": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 64,
+          "description": "The picture's longer side at most, 64 to 2560 px. Default 1568.",
+          "maximum": 2560
+        },
+        "boxes_limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Box rows in the answer, 0 to 500. Default 200. `boxes.total` counts every box.",
+          "maximum": 500
+        },
+        "base_rev": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "Refuse (`design.stale`) unless the design is still at this `rev`: the `rev` your last\ndesign.apply answered."
+        },
+        "timeout_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 2000,
+          "description": "How long to wait for the desktop app, 2000 to 60000 ms. Default 20000.",
+          "maximum": 60000
+        },
+        "at_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Picture it at this time of its motion, in ms from the start (0 to 600000), each node posed\non its own timeline. Default: at rest, as stored. Not with `frames`.",
+          "minimum": 0,
+          "maximum": 600000.0
+        },
+        "frames": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 2,
+          "maximum": 24,
+          "description": "A contact sheet of this many frames (2 to 24), evenly spaced over the longest timeline in\nscope, each labelled with its time (`times_ms`). Not with `at_ms`."
+        }
+      },
+      "required": [
+        "design_id"
+      ]
+    },
+    "DesignRenderOut": {
+      "type": "object",
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "rev": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The rev the picture and the boxes show."
+        },
+        "page": {
+          "type": "string",
+          "description": "The page's id."
+        },
+        "area": {
+          "$ref": "#/$defs/DesignRenderRect",
+          "description": "The page rectangle pictured, in page px: the page's content with 32 px around it, or the\nnodes' painted bounds, widened to whole px. Picture pixel (u, v) is page point\n(x + u / scale, y + v / scale); on a contact sheet, in each cell."
+        },
+        "scale": {
+          "type": "number",
+          "format": "double",
+          "description": "Picture pixels per page px, after the size limits."
+        },
+        "png": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignRenderPng"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent with `png: false`, or when nothing in scope is visible (a warning says which)."
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignRenderIssue"
+          },
+          "description": "Layout problems, worst first, at most 100."
+        },
+        "issue_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Every problem found, listed or not."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What to know that is not an error, at most 20; each says what to do next."
+        },
+        "boxes": {
+          "$ref": "#/$defs/DesignRenderBoxes"
+        },
+        "timings_ms": {
+          "$ref": "#/$defs/DesignRenderTimings"
+        },
+        "times_ms": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "description": "A contact sheet's frame times in ms, in reading order; empty for one picture."
+        }
+      },
+      "required": [
+        "design_id",
+        "rev",
+        "page",
+        "area",
+        "scale",
+        "issues",
+        "issue_count",
+        "warnings",
+        "boxes",
+        "timings_ms"
+      ]
+    },
+    "DesignRenderRect": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number",
+          "format": "double"
+        },
+        "y": {
+          "type": "number",
+          "format": "double"
+        },
+        "w": {
+          "type": "number",
+          "format": "double"
+        },
+        "h": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ]
+    },
+    "DesignRenderPng": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "The PNG on this machine. The newest 32 renders are kept, none older than an hour once a\nnewer one is written."
+        },
+        "w": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "h": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "path",
+        "w",
+        "h"
+      ]
+    },
+    "DesignRenderIssue": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "overflow, overlap, text_overlap, clipped or contrast."
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "ids",
+        "message"
+      ]
+    },
+    "DesignRenderBoxes": {
+      "type": "object",
+      "properties": {
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Always [\"id\",\"kind\",\"parent\",\"x\",\"y\",\"w\",\"h\",\"rx\",\"ry\",\"rot\"]."
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": true
+          },
+          "description": "One row per visible node in scope, in design.get's order (parents before children,\nsiblings bottom to top). x, y, w, h: the laid-out box in page px, hugged text measured.\nrx, ry: its corner from the parent's origin. rot: degrees as stored (boxes are unrotated).\nAt rest, whatever `at_ms` asked."
+        },
+        "total": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Visible nodes in scope, listed or not."
+        },
+        "hidden": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Nodes in scope that are hidden, so have no box."
+        }
+      },
+      "required": [
+        "fields",
+        "rows",
+        "total",
+        "hidden"
+      ]
+    },
+    "DesignRenderTimings": {
+      "type": "object",
+      "properties": {
+        "read": {
+          "type": "number",
+          "format": "double"
+        },
+        "layout": {
+          "type": "number",
+          "format": "double"
+        },
+        "paint": {
+          "type": "number",
+          "format": "double"
+        },
+        "encode": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "read",
+        "layout",
+        "paint",
+        "encode"
+      ]
+    },
+    "DesignRenderServeIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fonts": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": "The font families this app can draw, at most 2000, each 1 to 200 characters: what\ndesign.fonts answers and design.apply's font warnings read.",
+          "maxItems": 2000
+        }
+      }
+    },
+    "DesignRenderAnswerIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "render_id": {
+          "type": "string",
+          "description": "The request's `render_id`."
+        },
+        "drawn": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignRenderDrawn"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What was drawn. Exactly one of `drawn` and `error`."
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignRenderFailure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "render_id"
+      ]
+    },
+    "DesignRenderDrawn": {
+      "type": "object",
+      "properties": {
+        "rev": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "area": {
+          "$ref": "#/$defs/DesignRenderRect"
+        },
+        "scale": {
+          "type": "number",
+          "format": "double"
+        },
+        "png_b64": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The PNG, base64, at most 4 MiB decoded. Absent without a picture."
+        },
+        "boxes": {
+          "$ref": "#/$defs/DesignRenderBoxes"
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignRenderIssue"
+          }
+        },
+        "issue_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "timings_ms": {
+          "$ref": "#/$defs/DesignRenderTimings"
+        },
+        "times_ms": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "description": "A contact sheet's frame times in ms, in reading order (at most 24); empty for one\npicture."
+        }
+      },
+      "required": [
+        "rev",
+        "area",
+        "scale",
+        "boxes",
+        "issues",
+        "issue_count",
+        "warnings",
+        "timings_ms"
+      ]
+    },
+    "DesignRenderFailure": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "DesignRenderAnswerOut": {
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "type": "boolean",
+          "description": "Whether a render was still waiting for this answer (it then got it, drawn or refused)."
+        }
+      },
+      "required": [
+        "accepted"
       ]
     },
     "DesignPictureSearchIn": {
