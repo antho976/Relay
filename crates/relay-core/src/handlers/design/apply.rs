@@ -702,7 +702,10 @@ impl Run<'_> {
     fn sibling_left(&self, parent: Option<&str>, ord: f64, id: &str) {
         if let Some(Siblings::Held(list)) = self.siblings.borrow_mut().get_mut(parent.unwrap_or("")) {
             let at = list.partition_point(|sib| below(sib, ord, id));
-            if list.get(at).is_some_and(|(_, sib)| sib == id) {
+            // A move within one parent that spent the gap renumbered the list after `ord` was
+            // read, so the node is held at its new place: look it up by id.
+            let at = if list.get(at).is_some_and(|(_, sib)| sib == id) { Some(at) } else { list.iter().position(|(_, sib)| sib == id) };
+            if let Some(at) = at {
                 list.remove(at);
             }
         }
@@ -1572,8 +1575,8 @@ mod tests {
     /// B58: a list that moves, adds and deletes many children of one parent reads them once and
     /// keeps them as it goes, and renumbers a spent gap. The order it leaves is the one the
     /// client's Scene gives the same list, and its undo puts every node back where it was.
-    #[test]
-    fn a_long_list_in_one_parent_keeps_the_order_the_scene_gives_it() {
+    /// An engine with a design whose page holds `count` children `s0..`, every fifth a frame.
+    fn seeded(count: usize) -> (std::sync::Arc<Engine>, i64, tempfile::TempDir) {
         let root = tempfile::tempdir().unwrap();
         let ws = std::fs::canonicalize(root.path()).unwrap().join("ws");
         let repo = ws.join("app");
@@ -1588,9 +1591,33 @@ mod tests {
         ok(&engine, "workspace.create", json!({"path": ws}));
         ok(&engine, "project.add", json!({"workspace_id": 1, "path": repo}));
         let design = ok(&engine, "design.create", json!({"project_id": 1, "title": "Order"}))["design"]["id"].as_i64().unwrap();
-        let seed: Vec<Value> = (0..300).map(|i| json!({"op": "add", "node": {"id": format!("s{i}"), "parent": "page-1", "kind": if i % 5 == 0 { "frame" } else { "rect" }}})).collect();
+        let seed: Vec<Value> = (0..count).map(|i| json!({"op": "add", "node": {"id": format!("s{i}"), "parent": "page-1", "kind": if i % 5 == 0 { "frame" } else { "rect" }}})).collect();
         ok(&engine, "design.apply", json!({"design_id": design, "ops": seed}));
-        let before = order(&engine, design);
+        (engine, design, root)
+    }
+
+    /// Runs `ops` on the engine and on the client's Scene: the page's order is the same, and the
+    /// undo puts it back. Answers the order after.
+    fn alike(engine: &Engine, design: i64, ops: Vec<Value>) -> Vec<String> {
+        let before = order(engine, design);
+        let nodes: Vec<Node> = serde_json::from_value(ok(engine, "design.get", json!({"design_id": design}))["nodes"].clone()).unwrap();
+        let mut scene = relay_client::design::Scene::new(nodes);
+        let edits: Vec<NodeOp> = serde_json::from_value(Value::Array(ops.clone())).unwrap();
+        scene.apply_all(&edits).unwrap();
+        let out = ok(engine, "design.apply", json!({"design_id": design, "ops": ops}));
+        let after = order(engine, design);
+        assert_eq!(after, scene.children("page-1"), "the engine's order is the scene's");
+        ok(engine, "design.apply", json!({"design_id": design, "ops": out["inverse"], "lenient": true, "expect": out["expect"]}));
+        assert_eq!(order(engine, design), before, "the undo puts every node back");
+        after
+    }
+
+    /// B58: a list that moves, adds and deletes many children of one parent reads them once and
+    /// keeps them as it goes, and renumbers a spent gap. The order it leaves is the one the
+    /// client's Scene gives the same list, and its undo puts every node back where it was.
+    #[test]
+    fn a_long_list_in_one_parent_keeps_the_order_the_scene_gives_it() {
+        let (engine, design, _root) = seeded(300);
 
         // A group of 100, one of them moved within it, a delete and an add at an index beside
         // them, and the group taken apart again node after node in one gap (spending it).
@@ -1604,18 +1631,24 @@ mod tests {
         ops.push(json!({"op": "delete", "id": "g"}));
         ops.push(json!({"op": "move", "id": "s0", "parent": "page-1"}));
 
-        let nodes: Vec<Node> = serde_json::from_value(ok(&engine, "design.get", json!({"design_id": design}))["nodes"].clone()).unwrap();
-        let mut scene = relay_client::design::Scene::new(nodes);
-        let edits: Vec<NodeOp> = serde_json::from_value(Value::Array(ops.clone())).unwrap();
-        scene.apply_all(&edits).unwrap();
-        let out = ok(&engine, "design.apply", json!({"design_id": design, "ops": ops}));
-        let after = order(&engine, design);
-        assert_eq!(after, scene.children("page-1"), "the engine's order is the scene's");
+        let after = alike(&engine, design, ops);
         let first = after.iter().position(|id| id == "s100").unwrap();
         let run: Vec<String> = (100..200).map(|i| format!("s{i}")).collect();
         assert_eq!(after[first..first + 100], run, "each put below the one before it");
+    }
 
-        ok(&engine, "design.apply", json!({"design_id": design, "ops": out["inverse"], "lenient": true, "expect": out["expect"]}));
-        assert_eq!(order(&engine, design), before, "the undo puts every node back");
+    /// B58: moves within one parent that spend the gap renumber a list holding the moving node
+    /// itself; it is held once, at its new place, so later indexes in the list still count right.
+    #[test]
+    fn a_reorder_that_spends_the_gap_holds_the_node_once() {
+        let (engine, design, _root) = seeded(60);
+        let mut ops: Vec<Value> = (5..46).rev().map(|i| json!({"op": "move", "id": format!("s{i}"), "parent": "page-1", "index": 1})).collect();
+        ops.push(json!({"op": "add", "node": {"id": "n1", "parent": "page-1", "kind": "rect"}, "index": 3}));
+        ops.push(json!({"op": "move", "id": "s5", "parent": "page-1", "index": 2}));
+        ops.push(json!({"op": "move", "id": "s50", "parent": "page-1", "index": 30}));
+        ops.push(json!({"op": "add", "node": {"id": "n2", "parent": "page-1", "kind": "rect"}, "index": 57}));
+        ops.push(json!({"op": "move", "id": "s2", "parent": "page-1", "index": 58}));
+        ops.push(json!({"op": "delete", "id": "s3"}));
+        alike(&engine, design, ops);
     }
 }
