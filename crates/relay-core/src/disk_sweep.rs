@@ -22,6 +22,9 @@
 //!   newest test executables of each name ([`trim`]).
 //! - a closed session's scratch directory goes.
 //!
+//! [`sweep_design_assets`] runs beside it, after the retention pass, for the pictures in
+//! `design-assets/` that no design, undo or removal backup has named for an undo window (B66).
+//!
 //! Nothing is touched while someone works there: no purge while any process's cwd is inside the
 //! checkout, no trim while cargo or rustc runs in it or a test executable of it is running — a
 //! test run executes the binaries it judged fresh, and the trim must not take one from under it.
