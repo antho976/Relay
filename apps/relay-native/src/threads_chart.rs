@@ -470,6 +470,16 @@ fn draw_data(body: &gtk::Box, legend: &gtk::Box, kind: ChartKind, data: Data) {
     }
 }
 
+/// An axis tick's words: whole units when the step is a whole unit, else with the fraction it
+/// needs, so half-percent steps read 0.5% and 1.5% rather than 1% twice.
+fn axis_label(fmt: &Fmt, value: i64, step: i64) -> String {
+    if step % 10_i64.pow(fmt.fraction_digits()) == 0 {
+        fmt.format_whole(value)
+    } else {
+        fmt.format(value)
+    }
+}
+
 /// Bars or lines over a value axis, labels under each group.
 fn plot(body: &gtk::Box, data: &Data, kind: ChartKind) {
     let all = data.series.iter().flat_map(|(_, v)| v.iter().flatten().copied());
@@ -496,7 +506,7 @@ fn plot(body: &gtk::Box, data: &Data, kind: ChartKind) {
     overlay.set_child(Some(&area));
     for k in -(down as i64)..=i64::from(up) {
         let value = base + k * step;
-        let tick = label(&data.fmt.format_whole(value), "threads-chart-axis");
+        let tick = label(&axis_label(&data.fmt, value, step), "threads-chart-axis");
         tick.set_halign(gtk::Align::Start);
         tick.set_valign(gtk::Align::Start);
         tick.set_margin_top((y_of(value, f64::from(PLOT_H)) - 7.0).max(0.0) as i32);
@@ -1102,6 +1112,20 @@ mod tests {
         assert!(read_written(&toward, "CAD", ChartKind::Bar).from_zero);
         let balance = json!({"labels": ["Oct", "Nov"], "series": [{"name": "Balance", "values": [5000, 5200]}]});
         assert!(read_written(&balance, "CAD", ChartKind::Line).from_zero);
+    }
+
+    #[test]
+    fn an_axis_under_one_unit_shows_its_fractions() {
+        let share = Fmt::Unit(String::from("%"));
+        let (step, up) = ticks(12, 1);
+        assert_eq!(step, 5, "0.4% to 1.2% steps by half a percent");
+        let labels: Vec<String> = (0..=i64::from(up)).map(|k| axis_label(&share, k * step, step)).collect();
+        assert_eq!(labels, ["0%", "0.5%", "1%", "1.5%"]);
+        // Whole steps read whole, money included.
+        let kg = Fmt::Unit(String::from("kg"));
+        assert_eq!(axis_label(&kg, 800, 50), "80 kg");
+        let dollars = Fmt::Money(MoneyFormatter::new("CAD", Locale::from_env()));
+        assert_eq!(axis_label(&dollars, 50_000, 10_000), dollars.format_whole(50_000));
     }
 
     #[test]
