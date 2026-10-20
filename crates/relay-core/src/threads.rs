@@ -751,17 +751,20 @@ impl ThreadStore {
         Ok(Some(gone))
     }
 
-    /// Store the person's message, carrying `pictures`, and mark its thread used now.
-    pub fn add_user(&self, thread: Id, text: &str, pictures: &[ImageView], now: &str) -> rusqlite::Result<MessageView> {
+    /// Store the person's message, carrying `pictures`, and mark its thread used now; nothing, and
+    /// the id of the first picture that is gone, when one is.
+    pub fn add_user(&self, thread: Id, text: &str, pictures: &[ImageView], now: &str) -> rusqlite::Result<Result<MessageView, String>> {
         let mut body = json!({"text": text});
         if !pictures.is_empty() {
             body["images"] = pictures.iter().map(images::body).collect();
         }
         let tx = self.conn.unchecked_transaction()?;
         let message = self.add(thread, "user", &body, now)?;
-        self.carry(message.id, pictures)?;
+        if let Some(gone) = self.carry(message.id, pictures)? {
+            return Ok(Err(gone));
+        }
         tx.commit()?;
-        Ok(message)
+        Ok(Ok(message))
     }
 
     /// Store a message and mark its thread used now.
@@ -1008,7 +1011,11 @@ pub fn post(engine: &Engine, id: Id, text: &str, pictures: &[ImageView], now: &s
         live.working.insert(id, Turn { token, delivered: false });
         token
     };
-    with_db(engine, |db| db.add_user(id, text, pictures, now)).map(|m| (m, token)).inspect_err(|_| {
+    let added = images::room(engine, id, pictures).and_then(|()| with_db(engine, |db| db.add_user(id, text, pictures, now))).and_then(|added| {
+        added.map_err(|gone| BusError::invalid("thread.image_unknown", format!("No picture {gone}"))
+            .with_hint("it was removed unsent after a day; upload it again with thread.upload"))
+    });
+    added.map(|m| (m, token)).inspect_err(|_| {
         end_turn(engine, id, token);
     })
 }
@@ -1677,6 +1684,7 @@ mod tests {
             use base64::Engine as _;
             let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
             bytes.extend([0, 0, 0, 2, 0, 0, 0, 1]);
+            bytes.extend(b"\0\0\0\0IEND\xAE\x42\x60\x82");
             base64::engine::general_purpose::STANDARD.encode(bytes)
         };
         let ids: Vec<String> = (0..5).map(|_| images::upload(&engine, "image/png", &png, &crate::time::now()).unwrap().id).collect();
@@ -1696,6 +1704,42 @@ mod tests {
         assert_eq!(images::UNSUPPORTED, "This thread runs on a model on this PC, which cannot read pictures: choose a Claude model for it to send them.");
         assert_eq!(checked_message(&engine, "Words alone", &[], Some("qwen35-4b")).unwrap().0, "Words alone");
         assert_eq!((images::title(1), images::title(3)), ("Picture".to_string(), "3 pictures".to_string()));
+    }
+
+    /// Every turn resends the whole conversation, pictures and all, and a request the API refuses
+    /// is refused again on every later turn.
+    #[test]
+    fn a_thread_carries_so_many_pictures_and_no_picture_swept_since_it_was_looked_up() {
+        let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
+        let now = crate::time::now();
+        let png = {
+            use base64::Engine as _;
+            let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+            bytes.extend([0, 0, 0, 2, 0, 0, 0, 1]);
+            bytes.extend(b"\0\0\0\0IEND\xAE\x42\x60\x82");
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        };
+        let thread = create(&engine, MONEY, "Receipts", None, None, &now).unwrap().id;
+        let uploaded: Vec<ImageView> = (0..images::THREAD_MAX + 1).map(|_| images::upload(&engine, "image/png", &png, &now).unwrap()).collect();
+        for four in uploaded[..images::THREAD_MAX].chunks(images::MAX) {
+            with_db(&engine, |db| db.add_user(thread, "", four, &now)).unwrap().unwrap();
+        }
+        assert!(images::room(&engine, thread, &uploaded[..1]).is_ok(), "a picture it carries already is no more");
+        let full = images::room(&engine, thread, &uploaded[images::THREAD_MAX..]).unwrap_err();
+        assert_eq!(full.code, "thread.images_full");
+        assert!(full.message.contains("would carry 21"), "{}", full.message);
+        let other = create(&engine, MONEY, "Statements", None, None, &now).unwrap().id;
+        let large = ImageView { bytes: images::THREAD_BYTES + 1, ..uploaded[images::THREAD_MAX].clone() };
+        assert_eq!(images::room(&engine, other, std::slice::from_ref(&large)).unwrap_err().code, "thread.images_full");
+        assert!(images::room(&engine, other, &uploaded[images::THREAD_MAX..]).is_ok());
+
+        // Looked up, then swept as unsent before the message was stored: the message is not.
+        let gone = ImageView { id: "e".repeat(32), ..uploaded[0].clone() };
+        let rolled = with_db(&engine, |db| db.add_user(other, "Here", &[uploaded[images::THREAD_MAX].clone(), gone.clone()], &now)).unwrap();
+        assert_eq!(rolled.unwrap_err(), gone.id);
+        assert!(messages(&engine, other, None).unwrap().is_empty(), "the message and what it carried roll back");
+        assert_eq!(post(&engine, other, "Here", std::slice::from_ref(&gone), &now).unwrap_err().code, "thread.image_unknown");
+        assert!(post(&engine, other, "Here", &uploaded[images::THREAD_MAX..], &now).is_ok(), "the turn the refusal claimed was given back");
     }
 
     #[test]
