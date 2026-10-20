@@ -603,15 +603,16 @@ impl Styles {
         !node.names().is_empty()
     }
 
-    /// `node` as it draws: its style laid under it, then each `$name` as the colour it names. A
-    /// name the design does not hold (none should be left) is taken out as
-    /// [`Styles::forget_missing`] takes it, so the kind's default shows.
+    /// `node` as it draws: first what it names that the design does not hold (none should be
+    /// left) taken out, as [`Styles::forget_missing`] takes it from a lenient re-add, so a
+    /// colour of its own that names nothing does not hide its style's and it draws as that
+    /// re-add stores it; then its style laid under it, and each `$name` as the colour it names
+    /// (one a style names that is gone, which none should, taken out: the kind's default shows).
     pub fn resolve(&self, node: &Node) -> Node {
         let mut drawn = node.clone();
-        match node.style.as_deref().map(|name| self.styles.get(name)) {
-            Some(Some(style)) => style.lay_under(&mut drawn),
-            Some(None) => drawn.style = None,
-            None => {}
+        self.forget_missing(&mut drawn);
+        if let Some(style) = drawn.style.as_deref().and_then(|name| self.styles.get(name)) {
+            style.lay_under(&mut drawn);
         }
         fix_colors(node_slots(&mut drawn), &mut |name| match self.colors.get(name) {
             Some(value) => Fix::Write(value.clone()),
@@ -1409,5 +1410,30 @@ mod tests {
         }
         let detach = Styles::detach(&line, "s", &Removed::Style(inner)).unwrap();
         assert_eq!(Value::Object(detach), json!({"style": null, "opacity": 0.5}), "no shadow left, none written");
+    }
+
+    /// A node's own colour that names nothing does not block its style's: the node draws as a
+    /// lenient re-add stores it, which forgets the missing name first.
+    #[test]
+    fn resolve_draws_what_a_lenient_re_add_stores() {
+        let styles = palette();
+        for body in [
+            json!({"parent": "p", "kind": "rect", "style": "title", "fill": "$gone"}),
+            json!({"parent": "p", "kind": "rect", "style": "card",
+                "gradient": {"stops": [{"at": 0, "color": "$gone"}, {"at": 1, "color": "#fff"}]}}),
+            json!({"parent": "p", "kind": "rect", "style": "card", "shadow": {"color": "$gone"}}),
+            json!({"parent": "p", "kind": "text", "text": "Hi", "style": "title", "color": "$gone"}),
+            json!({"parent": "p", "kind": "rect", "style": "nope", "fill": "$gone"}),
+            json!({"parent": "p", "kind": "rect", "style": "card", "fill": "$ink"}),
+        ] {
+            let n = node(body.clone());
+            let mut stored = n.clone();
+            styles.forget_missing(&mut stored);
+            assert_eq!(styles.resolve(&n), styles.resolve(&stored), "{body}");
+        }
+        let drawn = styles.resolve(&node(json!({"parent": "p", "kind": "rect", "style": "title", "fill": "$gone"})));
+        assert_eq!(drawn.fill.as_deref(), Some("#FFFDF8"), "the style's fill shows");
+        let drawn = styles.resolve(&node(json!({"parent": "p", "kind": "rect", "style": "card", "shadow": {"color": "$gone"}})));
+        assert_eq!(drawn.shadows.map(|s| s.len()), Some(2), "the style's shadows show");
     }
 }
