@@ -110,6 +110,7 @@ pub fn install(ui: &Rc<Ui>, key: &gtk::Button, host: &gtk::Overlay) {
     fresh.set_valign(gtk::Align::Center);
     head.append(&fresh);
     let close = icon_button("close", "Close the assistant");
+    close.set_widget_name("assistant-close");
     close.set_valign(gtk::Align::Center);
     head.append(&close);
     drawer.append(&head);

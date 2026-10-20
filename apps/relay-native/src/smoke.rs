@@ -456,6 +456,31 @@ async fn verify_confirmations(ui: Rc<Ui>) -> Result<(), String> {
     Ok(())
 }
 
+/// The assistant drawer opens from its key with the keyboard in its message box and the key lit,
+/// and closing it gives the keyboard back to the terminal that had it.
+async fn verify_assistant(ui: Rc<Ui>) -> Result<(), String> {
+    let window = ui.window.clone();
+    let focused = || GtkWindowExt::focus(&window);
+    let terminal = util::find(window.upcast_ref(), &|w| w.is::<vte4::Terminal>() && w.is_mapped()).ok_or("No terminal on the wall")?;
+    terminal.grab_focus();
+    require(focused().as_ref() == Some(&terminal), "The terminal did not take the keyboard")?;
+    click(&window, "assistant-key")?;
+    let drawer = named(&window, "assistant").ok_or("Missing the assistant drawer")?;
+    let key = named(&window, "assistant-key").ok_or("Missing the assistant key")?;
+    wait_for(|| drawer.is_mapped(), "The assistant drawer opens").await?;
+    require(
+        focused().is_some_and(|f| f.is::<gtk::TextView>() && f.is_ancestor(&drawer)),
+        "The assistant's message box did not take the keyboard",
+    )?;
+    require(key.has_css_class("assistant-open"), "The assistant key is not lit while its drawer is open")?;
+    click(&window, "assistant-close")?;
+    require(focused().as_ref() == Some(&terminal), "Closing the assistant did not give the keyboard back")?;
+    require(!key.has_css_class("assistant-open"), "The assistant key stayed lit")?;
+    wait_for(|| !drawer.is_mapped(), "The assistant drawer closes").await?;
+    println!("Assistant drawer open, close and focus verified");
+    Ok(())
+}
+
 /// Decides two held writes from their cards on the Guardrails page, as a person would
 /// (RA-719): Allow once stays disabled until the exact action has been reviewed, then
 /// confirms the hold; Deny… closes the other without running it.
@@ -747,7 +772,17 @@ pub fn install(ui: &Rc<Ui>) {
             navigate.navigate("agents");
             navigate.verify_shell();
             if std::env::var("RELAY_NATIVE_PAGE").as_deref() == Ok("agents") {
-                track("confirmations", verify_confirmations(navigate.clone()));
+                // The drawer goes after the confirmations, whose panels take the keyboard, and not
+                // when a capture presses keys of its own.
+                let ui = navigate.clone();
+                let drawer = std::env::var_os("RELAY_NATIVE_CLICK").is_none();
+                track("confirmations", async move {
+                    verify_confirmations(ui.clone()).await?;
+                    if drawer {
+                        verify_assistant(ui).await?;
+                    }
+                    Ok(())
+                });
             }
             let visible = navigate.sidebar.is_visible();
             click(&navigate.window, "sidebar-toggle").unwrap();
