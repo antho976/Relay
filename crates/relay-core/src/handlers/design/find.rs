@@ -9,7 +9,7 @@ use crate::engine::{Engine, IntoBus};
 use crate::handlers::notes::check_project;
 use relay_bus::design::{parse_color, Node, NodeKind, Styles};
 use relay_bus::error::BusError;
-use relay_bus::ops::design::{Find, FindIn, FindOut, Fonts, FontsOut};
+use relay_bus::ops::design::{Find, FindIn, FindOut, Fonts, FontsOut, TextMatch};
 use std::collections::HashSet;
 
 /// Most nodes `with_nodes` answers, and most bytes of them.
@@ -58,8 +58,8 @@ pub(super) fn families(n: &Node) -> impl Iterator<Item = &str> {
     n.font.as_deref().into_iter().chain(n.runs.iter().flatten().filter_map(|r| r.font.as_deref()))
 }
 
-fn contains(hay: Option<&str>, needle: &str) -> bool {
-    hay.is_some_and(|hay| hay.to_lowercase().contains(needle))
+fn matches(how: TextMatch, hay: Option<&str>, needle: &str) -> bool {
+    hay.is_some_and(|hay| how.is(&hay.to_lowercase(), needle))
 }
 
 pub(super) fn register(e: &mut Engine) {
@@ -70,6 +70,7 @@ pub(super) fn register(e: &mut Engine) {
         let color = Wanted::read("color", &p.color)?;
         let any = Wanted::read("any_color", &p.any_color)?;
         let (name, text, font) = (p.name.as_deref().map(str::to_lowercase), p.text.as_deref().map(str::to_lowercase), p.font.as_deref().map(str::to_lowercase));
+        let how = p.match_.unwrap_or_default();
         let kinds: Option<HashSet<NodeKind>> = p.kind.as_ref().map(|k| k.iter().copied().collect());
         let (session_id, agent) = (ctx.actor_session_id(), ctx.actor.is_agent());
         let (design, rows, styles) = ctx.read(|conn| {
@@ -98,8 +99,8 @@ pub(super) fn register(e: &mut Engine) {
                 return false;
             }
             let n = styles.resolve(stored);
-            name.as_deref().is_none_or(|w| contains(n.name.as_deref(), w))
-                && text.as_deref().is_none_or(|w| contains(n.text.as_deref(), w))
+            name.as_deref().is_none_or(|w| matches(how, n.name.as_deref(), w))
+                && text.as_deref().is_none_or(|w| matches(how, n.text.as_deref(), w))
                 && font.as_deref().is_none_or(|w| families(&n).any(|f| f.to_lowercase() == w))
                 && fill.as_ref().is_none_or(|c| c.is(n.fill.as_deref()))
                 && stroke.as_ref().is_none_or(|c| c.is(n.stroke.as_deref()))

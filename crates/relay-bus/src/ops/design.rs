@@ -254,12 +254,17 @@ payload!(#[schemars(rename = "DesignFindIn")] FindIn {
     pub inside: Option<String>,
     /// Any of these kinds.
     pub kind: Option<Vec<NodeKind>>,
-    /// Words in its name, any case.
+    /// Words in its name, any case, matched by `match`.
     #[schemars(length(min = 1))]
     pub name: Option<String>,
-    /// Words in its text, any case.
+    /// Words in its text, any case, matched by `match`.
     #[schemars(length(min = 1))]
     pub text: Option<String>,
+    /// How `name` and `text` match (default `word`): `word` as whole words ("Edit" finds "Edit
+    /// profile", not "CREDIT"), `prefix` at the start of a word ("Cred" finds "Credit card"),
+    /// `contains` anywhere, `exact` the whole name or text.
+    #[serde(rename = "match")]
+    pub match_: Option<TextMatch>,
     /// Its fill as drawn (a `$name` colour or a style gives one too). `#RGB` or `#RRGGBB` matches
     /// any alpha; `#RRGGBBAA` matches exactly.
     pub fill: Option<String>,
@@ -287,6 +292,42 @@ result!(#[schemars(rename = "DesignFindOut")] FindOut {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cut: bool,
 });
+/// How `design.find` matches the words of a name or a text, any case.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "DesignTextMatch")]
+pub enum TextMatch {
+    /// As whole words: neither end of the match runs on into a letter or digit.
+    #[default]
+    Word,
+    /// At the start of a word: the end of the match may run on.
+    Prefix,
+    /// Anywhere, inside a word too.
+    Contains,
+    /// The whole name or text, its outer spaces aside.
+    Exact,
+}
+
+impl TextMatch {
+    /// Whether `hay` holds `needle` (both already lowercased) this way.
+    pub fn is(self, hay: &str, needle: &str) -> bool {
+        if self == TextMatch::Exact {
+            return hay.trim() == needle.trim();
+        }
+        if self == TextMatch::Contains {
+            return hay.contains(needle);
+        }
+        let word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
+        // A needle that starts or ends in a space or a mark has no word edge there to keep.
+        let (open, close) = (word(needle.chars().next()), word(needle.chars().next_back()));
+        hay.match_indices(needle).any(|(at, _)| {
+            let before = hay[..at].chars().next_back();
+            let after = hay[at + needle.len()..].chars().next();
+            !(open && word(before)) && (self == TextMatch::Prefix || !(close && word(after)))
+        })
+    }
+}
+
 op!(Find, "design.find", FindIn => FindOut,
     OpMeta::query(Scope::Project, 12, "Find a design's nodes by kind, name, words, colour or font; returns their ids in paint order"));
 

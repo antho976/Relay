@@ -28317,7 +28317,7 @@
             "string",
             "null"
           ],
-          "description": "Words in its name, any case.",
+          "description": "Words in its name, any case, matched by `match`.",
           "minLength": 1
         },
         "text": {
@@ -28325,8 +28325,19 @@
             "string",
             "null"
           ],
-          "description": "Words in its text, any case.",
+          "description": "Words in its text, any case, matched by `match`.",
           "minLength": 1
+        },
+        "match": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignTextMatch"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How `name` and `text` match (default `word`): `word` as whole words (\"Edit\" finds \"Edit\nprofile\", not \"CREDIT\"), `prefix` at the start of a word (\"Cred\" finds \"Credit card\"),\n`contains` anywhere, `exact` the whole name or text."
         },
         "fill": {
           "type": [
@@ -28375,6 +28386,31 @@
       "required": [
         "design_id"
       ]
+    },
+    "DesignTextMatch": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "word",
+          "description": "As whole words: neither end of the match runs on into a letter or digit."
+        },
+        {
+          "type": "string",
+          "const": "prefix",
+          "description": "At the start of a word: the end of the match may run on."
+        },
+        {
+          "type": "string",
+          "const": "contains",
+          "description": "Anywhere, inside a word too."
+        },
+        {
+          "type": "string",
+          "const": "exact",
+          "description": "The whole name or text, its outer spaces aside."
+        }
+      ],
+      "description": "How `design.find` matches the words of a name or a text, any case."
     },
     "DesignFindOut": {
       "type": "object",
