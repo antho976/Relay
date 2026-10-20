@@ -308,7 +308,7 @@ async fn open(id: i64) {
     }
     set_busy(&a, read["thread"]["working"] == true);
     refresh_asks().await;
-    stick_to_bottom(&a);
+    stick_to_bottom(&a, true);
 }
 
 /// Clear the drawer for thread `id` (none: a new chat).
@@ -413,7 +413,7 @@ async fn catch_up(id: i64) {
             }
             // Its `thread.changed` may have come before its id was known here.
             set_busy(&a, read["thread"]["working"] == true);
-            stick_to_bottom(&a);
+            stick_to_bottom(&a, true);
         }
     }
 }
@@ -441,9 +441,13 @@ fn set_busy(a: &Assistant, busy: bool) {
 }
 
 /// Scroll to the newest: on the next frame, and once more after it, when wrapped text and a card
-/// filled from a later read have taken their height.
-fn stick_to_bottom(a: &Assistant) {
+/// filled from a later read have taken their height. Always when `force`, else only when the reader
+/// was already at the bottom, so new words never pull them away from what they scrolled up to.
+fn stick_to_bottom(a: &Assistant, force: bool) {
     let adj = a.scroll.vadjustment();
+    if !force && adj.value() + adj.page_size() < adj.upper() - 48.0 {
+        return;
+    }
     a.scroll.add_tick_callback(move |_, _| {
         adj.set_value(adj.upper() - adj.page_size());
         let adj = adj.clone();
@@ -854,11 +858,11 @@ pub fn event(_ui: &Rc<Ui>, ev: &str, payload: &Value) -> bool {
                 a.column.append(&a.pending);
             }
             keep_working_last(&a);
-            stick_to_bottom(&a);
+            stick_to_bottom(&a, false);
         }
         "thread.message" if shown => {
             draw_message(&a, &payload["message"]);
-            stick_to_bottom(&a);
+            stick_to_bottom(&a, false);
         }
         "thread.changed" if shown => {
             if payload["deleted"] == true {
