@@ -889,6 +889,16 @@ impl Board {
             v
         }));
 
+        // Motion (any layer but a page) and a frame's timeline: one layer at a time.
+        if single && first.kind != NodeKind::Page {
+            if let Some(stored) = self.doc.scene.borrow().stored(&first.id).cloned() {
+                super::motion_panel::motion(&b, &section(body, "Motion"), &stored);
+                if stored.kind == NodeKind::Frame {
+                    super::motion_panel::timeline(&b, &section(body, "Timeline"), &stored);
+                }
+            }
+        }
+
         // Export.
         let sec = section(body, "Export");
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
