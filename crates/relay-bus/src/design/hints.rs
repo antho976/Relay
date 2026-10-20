@@ -56,7 +56,7 @@ pub const FIELD_HINTS: &[(&[&str], &str)] = &[
     (&["overflow", "scrollable", "scroll"], "use clip on a frame (true hides what overflows it); frames do not scroll yet"),
     (&["box_shadow", "drop_shadow", "glow", "shadows"], "use shadow: {x, y, blur, spread, color} (a glow: x 0, y 0)"),
     (&["line_cap", "stroke_linecap", "stroke_cap", "line_join", "stroke_linejoin", "stroke_join"], "a stroke's ends and corners cannot be chosen yet"),
-    (&["animation", "keyframes", "transition", "motion"], "nodes do not move yet"),
+    (&["animation", "keyframes", "transition", "motion"], "nodes do not animate yet"),
     (&["class", "token", "tokens", "variables"], "there are no named colours or styles yet: write each node's own"),
     (&["text_padding", "label_padding"], "use padding"),
     (&["background", "background_color", "bg"], "use fill"),
