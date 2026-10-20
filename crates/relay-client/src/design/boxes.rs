@@ -1,24 +1,37 @@
-//! What `design.render` answers besides the picture (render-SPEC-v2 §7): every node's laid-out
-//! box as a row, the page area the picture covers, and the scale that keeps it within its limits.
-//! GTK-free, so CI tests it. The desktop app's render job calls it with the scene as drawn, the
-//! still placement (`layout::place`) and the painter's text measure, and answers with the
-//! relay-bus types it builds, so the contract has one definition.
+//! What `design.render` answers besides the picture (render-SPEC-v2 §7; MODEL-SPEC §1 #29,
+//! agent-api W51): every node's laid-out box as a row, the page area the picture covers and the
+//! scale that keeps it within its limits, and the problems an agent should hear about (a child
+//! past its frame's padding, siblings laid over each other, texts drawn over texts, a child its
+//! frame cuts off, and words too faint on what they sit on). GTK-free, so CI tests it. The
+//! desktop app's render job calls it with the scene as drawn, the still placement
+//! (`layout::place`) and the painter's text measure, and answers with the relay-bus types it
+//! builds, so the contract has one definition.
 
 use super::bounds::{painted_bounds, painted_bounds_in_page};
+use super::color::{contrast, fill_of, ground_of, text_color, CANVAS};
 use super::edit::outermost;
 use super::geom::Rect;
-use super::layout::{Measure, Placed};
+use super::layout::{Measure, Placed, STICKY_PAD};
 use super::scene::Scene;
 use super::shapes;
-use relay_bus::ops::design::{RenderBoxes, RenderRect, RENDER_BOXES_MAX};
+use relay_bus::design::{parse_color, Layout, Node, NodeKind, TextAlign};
+use relay_bus::ops::design::{RenderBoxes, RenderIssue, RenderRect, RENDER_BOXES_MAX};
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::{json, Value};
 
 /// The columns of every box row, in order.
 pub const FIELDS: [&str; 10] = ["id", "kind", "parent", "x", "y", "w", "h", "rx", "ry", "rot"];
+/// Issues an answer lists; [`issues`] counts every one it finds.
+pub const MAX_ISSUES: usize = 100;
 /// Picture pixels in all (w × h), 4 megapixels; export keeps its own cap per side.
 pub const MAX_AREA_PX: f64 = 4_000_000.0;
 /// Room around a page's content in its picture.
 pub const PAGE_MARGIN: f64 = 32.0;
+/// How far past an edge, or how much shared area (px²), is rounding rather than a problem.
+const SLACK: f64 = 0.5;
+/// Contrast that words need (WCAG AA): large words, and the rest.
+const LARGE_NEEDS: f64 = 3.0;
+const TEXT_NEEDS: f64 = 4.5;
 
 /// The nodes a render measures, in `design.get`'s order (parents before children, siblings
 /// bottom to top): with no `ids`, or the page among them, everything on `page` but the page;
@@ -142,13 +155,409 @@ pub fn picture_size(area: &Rect, scale: f64) -> (u32, u32) {
     (px(area.w), px(area.h))
 }
 
+/// What [`issues`] finds, in the order it lists them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Code {
+    Overflow,
+    Overlap,
+    TextOverlap,
+    Clipped,
+    Contrast,
+}
+
+impl Code {
+    fn name(self) -> &'static str {
+        match self {
+            Code::Overflow => "overflow",
+            Code::Overlap => "overlap",
+            Code::TextOverlap => "text_overlap",
+            Code::Clipped => "clipped",
+            Code::Contrast => "contrast",
+        }
+    }
+}
+
+/// An issue with where its nodes paint, for the order.
+struct Found {
+    code: Code,
+    at: (usize, usize),
+    ids: Vec<String>,
+    message: String,
+}
+
+/// The page as it paints, for the checks that compare nodes or look under one.
+struct Paint<'a> {
+    scene: &'a Scene,
+    placed: &'a Placed,
+    measure: &'a dyn Measure,
+    /// Every node of the page, the page first, in paint order (`design.get`'s).
+    order: Vec<String>,
+    at: FxHashMap<String, usize>,
+    /// Whether each node of `order` is drawn through a turn, its own or an ancestor's.
+    turned: Vec<bool>,
+    /// The nodes in scope.
+    wanted: FxHashSet<String>,
+    grounds: Grounds,
+}
+
+/// The nodes a text can sit on (not a text, line, path, icon or group; placed, and not clear),
+/// by where they are drawn on the page, so the ground under a text is looked for among those
+/// around its centre, not among everything painted before it.
+#[derive(Default)]
+struct Grounds {
+    /// Each [`CELL`]-sized square of the page, with the grounds drawn over it, in paint order.
+    cells: FxHashMap<(i64, i64), Vec<usize>>,
+    /// Grounds over more than [`MAX_CELLS`] squares, in paint order.
+    wide: Vec<usize>,
+}
+
+const CELL: f64 = 256.0;
+const MAX_CELLS: i64 = 64;
+
+impl Grounds {
+    fn new(scene: &Scene, placed: &Placed, order: &[String], turned: &[bool]) -> Grounds {
+        let mut grounds = Grounds::default();
+        for (i, id) in order.iter().enumerate().skip(1) {
+            let Some(n) = scene.node(id).filter(|n| !matches!(n.kind, NodeKind::Text | NodeKind::Line | NodeKind::Path | NodeKind::Icon | NodeKind::Group)) else {
+                continue;
+            };
+            let drawn = if turned[i] { shapes::visual(scene, placed, id).map(|(r, turn)| shapes::rotated_bounds(&r, turn)) } else { placed.rect(id) };
+            let Some(b) = drawn.filter(|_| n.opacity.is_none_or(|o| o > 0.0)) else { continue };
+            let (x0, y0, x1, y1) = (cell(b.x), cell(b.y), cell(b.right()), cell(b.bottom()));
+            if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) > MAX_CELLS {
+                grounds.wide.push(i);
+                continue;
+            }
+            for x in x0..=x1 {
+                for y in y0..=y1 {
+                    grounds.cells.entry((x, y)).or_default().push(i);
+                }
+            }
+        }
+        grounds
+    }
+
+    /// The grounds that may be drawn over page point `p` and are painted before `from`, nearest
+    /// (last painted) first.
+    fn under(&self, (x, y): (f64, f64), from: usize) -> Vec<usize> {
+        let near = self.cells.get(&(cell(x), cell(y))).map_or(&[][..], Vec::as_slice);
+        let (near, wide) = (&near[..near.partition_point(|&i| i < from)], &self.wide[..self.wide.partition_point(|&i| i < from)]);
+        let mut out: Vec<usize> = near.iter().chain(wide).copied().collect();
+        out.sort_unstable_by(|a, b| b.cmp(a));
+        out
+    }
+}
+
+/// The square of the page that coordinate `v` falls in, along one axis.
+fn cell(v: f64) -> i64 {
+    (v / CELL).floor() as i64
+}
+
+/// The problems an agent should hear about among the visible nodes of [`scope`], worst kind
+/// first (overflow, overlap, text_overlap, clipped, contrast), then in paint order; at most
+/// [`MAX_ISSUES`], with the count of all. Rotated boxes are not where they paint, so the box
+/// checks pass over a turned node.
+///
+/// - `overflow`: a child an auto-layout frame lays out whose box passes the frame's padding
+///   box by more than half a px, except along the axis the frame scrolls.
+/// - `overlap`: two children an auto-layout frame lays out that share more than half a px² of
+///   their boxes; a frame whose `gap` (or a wrap's `row_gap`) is negative stacks them on purpose.
+/// - `text_overlap`: two text or sticky siblings, under any parent, drawn over each other: a
+///   text where its words are (and its box when it has a fill), a sticky its paper and words.
+/// - `clipped`: a free child of a clipping frame (any child of one without layout, an absolute
+///   one of one with layout) whose box passes the frame's box, except along its scroll axis.
+/// - `contrast`: a text's or a labelled shape's words, or one of its runs in its own colour,
+///   below 4.5:1 (3:1 at 24 px, or 18.66 px from weight 700) on the ground under its centre:
+///   the nearest node painted before it there that is not a text, line, path, icon or group
+///   and is at least half opaque, with what is fainter laid over it, else the page's fill. On a
+///   picture, or with a colour that does not read, there is no check.
+///
+/// An issue names a node in scope first; the frame, the sibling or the ground it names next
+/// may lie outside.
+pub fn issues(scene: &Scene, placed: &Placed, measure: &dyn Measure, page: &str, ids: &[String]) -> (Vec<RenderIssue>, u32) {
+    let order = scene.subtree(page);
+    let at: FxHashMap<String, usize> = order.iter().enumerate().map(|(i, id)| (id.clone(), i)).collect();
+    let mut turned = vec![false; order.len()];
+    for (i, id) in order.iter().enumerate() {
+        let own = scene.node(id).is_some_and(|n| shapes::rotation(n) != 0.0);
+        turned[i] = own || scene.parent(id).and_then(|p| at.get(p)).is_some_and(|&p| turned[p]);
+    }
+    let inside = scope(scene, page, ids);
+    let wanted = inside.iter().cloned().collect();
+    let grounds = Grounds::new(scene, placed, &order, &turned);
+    let paint = Paint { scene, placed, measure, order, at, turned, wanted, grounds };
+    let mut found = Vec::new();
+    for parent in &paint.order {
+        if paint.scene.children(parent).iter().any(|c| paint.wanted.contains(c)) {
+            paint.under(parent, &mut found);
+        }
+    }
+    found.extend(inside.iter().filter_map(|id| paint.contrast(id)));
+    found.sort_by_key(|f| (f.code, f.at));
+    let count = u32::try_from(found.len()).unwrap_or(u32::MAX);
+    let listed = found.into_iter().take(MAX_ISSUES).map(|f| RenderIssue { code: f.code.name().into(), ids: f.ids, message: f.message });
+    (listed.collect(), count)
+}
+
+impl Paint<'_> {
+    fn at(&self, id: &str) -> usize {
+        self.at.get(id).copied().unwrap_or(usize::MAX)
+    }
+
+    /// `id` and its box when it is drawn where its box is: visible and not turned.
+    fn level(&self, id: &str) -> Option<(&Node, Rect)> {
+        let n = self.scene.node(id)?;
+        let r = self.placed.rect(id)?;
+        (shapes::rotation(n).rem_euclid(180.0) == 0.0).then_some((n, r))
+    }
+
+    /// Whether `id` or an ancestor is wholly clear, so nothing of it is seen.
+    fn clear(&self, id: &str) -> bool {
+        std::iter::once(id).chain(self.scene.ancestors(id)).filter_map(|a| self.scene.node(a)).any(|n| n.opacity.is_some_and(|o| o <= 0.0))
+    }
+
+    /// The issues among `parent`'s children.
+    fn under(&self, parent: &str, found: &mut Vec<Found>) {
+        let (Some(p), Some(pr)) = (self.scene.node(parent), self.placed.rect(parent)) else {
+            return;
+        };
+        let kids = self.scene.children(parent);
+        let mode = p.layout_mode();
+        let (across, down) = p.scroll.map_or((false, false), |s| (s.x(), s.y()));
+        if mode != Layout::None {
+            let flow: Vec<(&Node, Rect)> = kids.iter().filter_map(|c| self.level(c)).filter(|(n, _)| !n.is_absolute()).collect();
+            let [t, r, b, l] = p.padding_edges();
+            let padded = [pr.x + l, pr.right() - r, pr.y + t, pr.bottom() - b];
+            for (n, nr) in flow.iter().filter(|(n, _)| self.wanted.contains(&n.id)) {
+                if let Some((side, past, edge, limit)) = passes(nr, padded, across, down) {
+                    let message = format!("{} extends {} px past {parent}'s padding ({side} {}, limit {})", n.id, fmt(past), fmt(edge), fmt(limit));
+                    found.push(self.found(Code::Overflow, &n.id, parent, message));
+                }
+            }
+            let gap = p.gap.unwrap_or(0.0);
+            if gap >= 0.0 && !(mode == Layout::Wrap && p.row_gap.unwrap_or(gap) < 0.0) {
+                let name = match mode {
+                    Layout::Row => "row",
+                    Layout::Column => "column",
+                    _ => "wrap",
+                };
+                for (a, b, shared) in self.pairs(&flow) {
+                    let message = format!("{} and {} overlap {} × {} px in {parent}'s {name} layout", a.id, b.id, fmt(shared.w), fmt(shared.h));
+                    found.push(self.found(Code::Overlap, &a.id, &b.id, message));
+                }
+            }
+        }
+        if p.kind == NodeKind::Frame && p.clip != Some(false) {
+            let edges = [pr.x, pr.right(), pr.y, pr.bottom()];
+            let free = kids.iter().filter(|c| self.wanted.contains(*c)).filter_map(|c| self.level(c));
+            for (n, nr) in free.filter(|(n, _)| mode == Layout::None || n.is_absolute()) {
+                if let Some((side, past, edge, limit)) = passes(&nr, edges, across, down) {
+                    let message = format!("{} is cut off {} px past {parent}'s edge, which clips ({side} {}, limit {})", n.id, fmt(past), fmt(edge), fmt(limit));
+                    found.push(self.found(Code::Clipped, &n.id, parent, message));
+                }
+            }
+        }
+        let texts: Vec<(&Node, Rect)> = kids.iter().filter(|c| !self.clear(c)).filter_map(|c| self.level(c)).filter_map(|(n, r)| Some((n, self.words_drawn(n, &r)?))).collect();
+        for (a, b, shared) in self.pairs(&texts) {
+            let message = format!("{} and {} are drawn over each other ({} × {} px): text over text is hard to read", a.id, b.id, fmt(shared.w), fmt(shared.h));
+            found.push(self.found(Code::TextOverlap, &a.id, &b.id, message));
+        }
+    }
+
+    fn found(&self, code: Code, first: &str, second: &str, message: String) -> Found {
+        Found { code, at: (self.at(first), self.at(second)), ids: vec![first.to_string(), second.to_string()], message }
+    }
+
+    /// Each two of `boxes` that share more than [`SLACK`] px² and at least one of which is in
+    /// scope, the one painted first first, with what they share.
+    fn pairs<'n>(&self, boxes: &[(&'n Node, Rect)]) -> Vec<(&'n Node, &'n Node, Rect)> {
+        let mut by_x: Vec<usize> = (0..boxes.len()).collect();
+        by_x.sort_by(|&a, &b| boxes[a].1.x.total_cmp(&boxes[b].1.x));
+        let mut out = Vec::new();
+        for (k, &i) in by_x.iter().enumerate() {
+            let (a, ar) = boxes[i];
+            for &j in by_x[k + 1..].iter().take_while(|&&j| boxes[j].1.x < ar.right()) {
+                let (b, br) = boxes[j];
+                let shared = Rect::spanning((ar.x.max(br.x), ar.y.max(br.y)), (ar.right().min(br.right()), ar.bottom().min(br.bottom())));
+                let apart = ar.right() <= br.x || br.right() <= ar.x || ar.bottom() <= br.y || br.bottom() <= ar.y;
+                if apart || shared.w * shared.h <= SLACK || !(self.wanted.contains(&a.id) || self.wanted.contains(&b.id)) {
+                    continue;
+                }
+                out.push(if self.at(&a.id) <= self.at(&b.id) { (a, b, shared) } else { (b, a, shared) });
+            }
+        }
+        out
+    }
+
+    /// Where a text or sticky is drawn, in its parent's coordinates, for `text_overlap`: a
+    /// text's words (with its box when it paints a fill), a sticky's paper and words. `None`
+    /// for any other node and a text that draws nothing.
+    fn words_drawn(&self, n: &Node, r: &Rect) -> Option<Rect> {
+        let has_words = n.text.as_deref().is_some_and(|t| !t.trim().is_empty());
+        let words = |x: f64, y: f64| {
+            let wrap = self.placed.wrap_width(n, r);
+            let (mw, mh) = self.measure.measure(n, wrap);
+            let room = wrap.unwrap_or(mw);
+            let x = x + match n.align.unwrap_or(TextAlign::Left) {
+                TextAlign::Left => 0.0,
+                TextAlign::Center => (room - mw) / 2.0,
+                TextAlign::Right => room - mw,
+            };
+            Rect::new(x, y, mw, mh)
+        };
+        match n.kind {
+            NodeKind::Text => {
+                let words = has_words.then(|| words(r.x, r.y));
+                let fill = n.fill.is_some().then_some(*r);
+                words.into_iter().chain(fill).reduce(|a, b| a.union(&b))
+            }
+            NodeKind::Sticky if has_words => Some(r.union(&words(r.x + STICKY_PAD, r.y + STICKY_PAD))),
+            NodeKind::Sticky => Some(*r),
+            _ => None,
+        }
+    }
+
+    /// The contrast issue of `id`'s words, when they are a text's or a labelled shape's and
+    /// some part of them, the text's own colour or a run's, is too faint on its ground.
+    fn contrast(&self, id: &str) -> Option<Found> {
+        let n = self.scene.node(id)?;
+        let words = n.text.as_deref().filter(|t| !t.trim().is_empty())?;
+        let labelled = matches!(n.kind, NodeKind::Rect | NodeKind::Ellipse | NodeKind::Polygon | NodeKind::Sticky);
+        if !(n.kind == NodeKind::Text || labelled) || self.clear(id) {
+            return None;
+        }
+        let r = self.placed.rect(id)?;
+        let (ground, bg) = self.ground(n, &r)?;
+        let own = text_color(self.scene, n);
+        let (size, weight) = (n.font_size.unwrap_or(16.0), n.font_weight.unwrap_or(400));
+        let fade = n.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
+        let runs = n.runs.as_deref().unwrap_or(&[]);
+        let len = words.chars().count() as u32;
+        let covered: u32 = runs.iter().map(|run| run.end.min(len).saturating_sub(run.start.min(len))).sum();
+        // The words in the text's own colour, when any are outside every run, then each run.
+        let plain = (covered < len).then_some((None, own.as_str(), size, weight));
+        let parts = runs.iter().map(|run| {
+            let color = run.color.as_deref().unwrap_or(&own);
+            (Some((run.start, run.end)), color, run.font_size.unwrap_or(size), run.font_weight.unwrap_or(weight))
+        });
+        let worst = plain
+            .into_iter()
+            .chain(parts)
+            .filter_map(|(chars, color, size, weight)| {
+                let [r, g, b, a] = parse_color(color)?;
+                let fg = [r, g, b, (f64::from(a) * fade).round() as u8];
+                let ratio = contrast(&hex(fg), &hex(bg));
+                let needs = if size >= 24.0 || (size >= 18.66 && weight >= 700) { LARGE_NEEDS } else { TEXT_NEEDS };
+                (ratio < needs).then_some((ratio / needs, chars, fg, ratio, needs))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))?;
+        let (_, chars, fg, ratio, needs) = worst;
+        let what = match chars {
+            Some((start, end)) => format!("{id}, characters {start} to {end}"),
+            None => id.to_string(),
+        };
+        let faded = if fade < 1.0 { format!(" at {}% opacity", (fade * 100.0).round()) } else { String::new() };
+        let fg = hex([fg[0], fg[1], fg[2], 255]);
+        let message = format!("{what}: {fg}{faded} on {} ({ground}) is {}:1; text this size needs {}:1", hex(bg), short(ratio), fmt(needs));
+        let ids = if ground == id { vec![id.to_string()] } else { vec![id.to_string(), ground.clone()] };
+        Some(Found { code: Code::Contrast, at: (self.at(id), self.at(&ground)), ids, message })
+    }
+
+    /// The ground under the centre of `n` (placed at `r`) and its colour, opaque: the nearest
+    /// node painted before it there (itself first, when it paints a ground of its own) that is
+    /// not a text, line, path, icon or group and whose ground is at least half opaque, with the
+    /// fainter grounds above it laid over; else the page and its fill. `None` on a picture or a
+    /// colour that does not read.
+    fn ground(&self, n: &Node, r: &Rect) -> Option<(String, [u8; 4])> {
+        let parent = n.parent.as_deref().unwrap_or_default();
+        let centre = if self.turned.get(self.at(parent)).copied().unwrap_or(false) {
+            shapes::to_page_pt(self.scene, self.placed, parent, r.cx(), r.cy())
+        } else {
+            (r.cx(), r.cy())
+        };
+        let from = self.at.get(&n.id).copied()?;
+        let own = ground_of(n).is_some().then_some(from);
+        let mut fainter: Vec<([u8; 4], f64)> = Vec::new();
+        for i in own.into_iter().chain(self.grounds.under(centre, from)) {
+            let id = &self.order[i];
+            let Some(c) = self.scene.node(id) else { continue };
+            let opacity = c.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
+            let Some(cr) = self.placed.rect(id).filter(|_| opacity > 0.0) else { continue };
+            let (x, y) = if self.turned[i] { shapes::to_local(self.scene, self.placed, id, centre.0, centre.1) } else { centre };
+            if !cr.contains(x, y) {
+                continue;
+            }
+            if c.kind == NodeKind::Image {
+                return None;
+            }
+            let Some(ground) = ground_of(c) else { continue };
+            let color = parse_color(&ground)?;
+            let alpha = f64::from(color[3]) / 255.0 * opacity;
+            if alpha >= 0.5 {
+                return Some((id.clone(), laid(color, &fainter)));
+            }
+            if alpha > 0.0 {
+                fainter.push((color, alpha));
+            }
+        }
+        let page = self.order.first()?;
+        let fill = self.scene.node(page).and_then(fill_of).unwrap_or_else(|| CANVAS.into());
+        Some((page.clone(), laid(parse_color(&fill)?, &fainter)))
+    }
+}
+
+/// `ground` made opaque with the fainter grounds above it, nearest first, laid over it.
+fn laid(ground: [u8; 4], fainter: &[([u8; 4], f64)]) -> [u8; 4] {
+    let mut at = [ground[0], ground[1], ground[2]].map(f64::from);
+    for (c, a) in fainter.iter().rev() {
+        for k in 0..3 {
+            at[k] = f64::from(c[k]) * a + at[k] * (1.0 - a);
+        }
+    }
+    let [r, g, b] = at.map(|v| v.round().clamp(0.0, 255.0) as u8);
+    [r, g, b, 255]
+}
+
+/// Which side of `r` passes `[left, right, top, bottom]` furthest, by more than [`SLACK`]: the
+/// side, how far, `r`'s edge there and the limit. The sides across or down are passed over
+/// when the parent scrolls that way.
+fn passes(r: &Rect, [left, right, top, bottom]: [f64; 4], across: bool, down: bool) -> Option<(&'static str, f64, f64, f64)> {
+    let mut sides = Vec::with_capacity(4);
+    if !across {
+        sides.extend([("left", left - r.x, r.x, left), ("right", r.right() - right, r.right(), right)]);
+    }
+    if !down {
+        sides.extend([("top", top - r.y, r.y, top), ("bottom", r.bottom() - bottom, r.bottom(), bottom)]);
+    }
+    sides.into_iter().filter(|s| s.1 > SLACK).max_by(|a, b| a.1.total_cmp(&b.1))
+}
+
+/// A colour as `#RRGGBB`, or `#RRGGBBAA` when it is not opaque.
+fn hex([r, g, b, a]: [u8; 4]) -> String {
+    if a == 255 {
+        format!("#{r:02X}{g:02X}{b:02X}")
+    } else {
+        format!("#{r:02X}{g:02X}{b:02X}{a:02X}")
+    }
+}
+
+/// A length for a message, to 0.01 px without trailing zeros.
+fn fmt(v: f64) -> String {
+    format!("{}", (v * 100.0).round() / 100.0 + 0.0)
+}
+
+/// A contrast ratio for a message, cut (never rounded up) to 0.01, so a ratio just short of
+/// what is needed never reads as enough.
+fn short(v: f64) -> String {
+    format!("{}", (v * 100.0).floor() / 100.0 + 0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::design::layout::{place, tests::Mono};
     use crate::design::scene::tests::node;
-    use relay_bus::design::{Layout, Node, NodeKind as K, Sizing};
-
+    use relay_bus::design::{NodeKind as K, Scroll, Sizing, TextRun};
 
     fn page(nodes: Vec<Node>) -> (Scene, Placed) {
         let s = Scene::new(std::iter::once(node("p1", None, K::Page, [0.0; 4])).chain(nodes).collect());
@@ -176,6 +585,13 @@ mod tests {
         b.rows.iter().map(|r| serde_json::to_string(r).unwrap()).collect()
     }
 
+    fn codes(found: &(Vec<RenderIssue>, u32)) -> Vec<(&str, Vec<&str>)> {
+        found.0.iter().map(|i| (i.code.as_str(), i.ids.iter().map(String::as_str).collect())).collect()
+    }
+
+    fn all_issues(s: &Scene, p: &Placed) -> (Vec<RenderIssue>, u32) {
+        issues(s, p, &Mono, "p1", &[])
+    }
 
     #[test]
     fn area_of_a_page_has_a_32_px_margin_and_whole_px() {
@@ -288,6 +704,329 @@ mod tests {
         assert_eq!(more_boxes(&boxes(&s, &p, "p1", &[], 7)), None);
     }
 
+    #[test]
+    fn overflow_past_padding() {
+        let mut card = frame("settings-card", "p1", [0.0, 0.0, 424.0, 200.0], Layout::Column);
+        card.padding = Some(vec![24.0]);
+        let (s, p) = page(vec![card, node("save-button", Some("settings-card"), K::Rect, [0.0, 0.0, 388.0, 40.0]), node("fits", Some("settings-card"), K::Rect, [0.0, 0.0, 376.5, 40.0])]);
+        let found = all_issues(&s, &p);
+        assert_eq!(codes(&found), [("overflow", vec!["save-button", "settings-card"])], "half a px over is rounding");
+        assert_eq!(found.0[0].message, "save-button extends 12 px past settings-card's padding (right 412, limit 400)");
+        assert_eq!(found.1, 1);
+        // The frame need not be in scope; the child must.
+        assert_eq!(codes(&issues(&s, &p, &Mono, "p1", &ids(&["save-button"]))).len(), 1);
+        assert!(issues(&s, &p, &Mono, "p1", &ids(&["fits"])).0.is_empty());
+    }
+
+    #[test]
+    fn overlap_only_in_laid_out_frames() {
+        // Auto layout lines its children up, so only sizes it was not given overlap them: a
+        // placement drawn over itself is reported.
+        let row = frame("row", "p1", [0.0, 0.0, 300.0, 50.0], Layout::Row);
+        let (s, mut p) = page(vec![row, node("a", Some("row"), K::Rect, [0.0, 0.0, 100.0, 50.0]), node("b", Some("row"), K::Rect, [0.0, 0.0, 100.0, 50.0])]);
+        assert!(all_issues(&s, &p).0.is_empty(), "laid out side by side");
+        p.rects.insert("b".into(), Rect::new(90.0, 0.0, 100.0, 50.0));
+        let found = all_issues(&s, &p);
+        assert_eq!(codes(&found), [("overlap", vec!["a", "b"])]);
+        assert_eq!(found.0[0].message, "a and b overlap 10 × 50 px in row's row layout");
+        // Free siblings may lie over each other: a badge on a card.
+        let (s, p) = page(vec![node("a", Some("p1"), K::Rect, [0.0, 0.0, 100.0, 50.0]), node("b", Some("p1"), K::Rect, [50.0, 0.0, 100.0, 50.0])]);
+        assert!(all_issues(&s, &p).0.is_empty());
+        // A negative gap stacks them on purpose: avatars.
+        let mut stack = frame("stack", "p1", [0.0, 0.0, 0.0, 40.0], Layout::Row);
+        (stack.gap, stack.w_sizing) = (Some(-12.0), Some(Sizing::Hug));
+        let (s, p) = page(vec![stack, node("x", Some("stack"), K::Ellipse, [0.0, 0.0, 40.0, 40.0]), node("y", Some("stack"), K::Ellipse, [0.0, 0.0, 40.0, 40.0])]);
+        assert_eq!(p.rect("y").unwrap().x, 28.0);
+        assert!(all_issues(&s, &p).0.is_empty());
+    }
+
+    #[test]
+    fn text_overlap_under_any_parent() {
+        let (s, p) = page(vec![text("title", "p1", [0.0, 0.0, 0.0, 0.0], "Settings"), text("sub", "p1", [8.0, 10.0, 0.0, 0.0], "Account")]);
+        let found = all_issues(&s, &p);
+        assert_eq!(codes(&found), [("text_overlap", vec!["title", "sub"])]);
+        assert_eq!(found.0[0].message, "title and sub are drawn over each other (56 × 10 px): text over text is hard to read");
+        // In a frame, and a sticky's paper counts.
+        let (s, p) = page(vec![
+            node("f", Some("p1"), K::Frame, [0.0, 0.0, 400.0, 400.0]),
+            node("note", Some("f"), K::Sticky, [0.0, 0.0, 200.0, 200.0]),
+            text("over", "f", [150.0, 150.0, 0.0, 0.0], "Hi"),
+        ]);
+        assert_eq!(codes(&all_issues(&s, &p)), [("text_overlap", vec!["note", "over"])]);
+        // Words that spill out of a fixed-height text are where it is drawn.
+        let mut spill = text("spill", "p1", [0.0, 0.0, 80.0, 20.0], &"x".repeat(30));
+        (spill.w_sizing, spill.h_sizing) = (Some(Sizing::Fixed), Some(Sizing::Fixed));
+        let (s, p) = page(vec![spill.clone(), text("below", "p1", [0.0, 30.0, 0.0, 0.0], "Next")]);
+        assert_eq!(codes(&all_issues(&s, &p)), [("text_overlap", vec!["spill", "below"])]);
+        // A wide box with few words: the words are drawn at its left, and the box is empty.
+        let mut wide = text("wide", "p1", [0.0, 0.0, 300.0, 20.0], "Hi");
+        wide.w_sizing = Some(Sizing::Fixed);
+        let (s, p) = page(vec![wide.clone(), text("right", "p1", [200.0, 0.0, 0.0, 0.0], "There")]);
+        assert!(all_issues(&s, &p).0.is_empty());
+        wide.fill = Some("#FFFFFF".into());
+        let (s, p) = page(vec![wide, text("right", "p1", [200.0, 0.0, 0.0, 0.0], "There")]);
+        assert_eq!(codes(&all_issues(&s, &p))[0].0, "text_overlap", "a filled text paints its box");
+    }
+
+    #[test]
+    fn clipped_child_of_a_clipping_frame() {
+        let (s, p) = page(vec![
+            node("card", Some("p1"), K::Frame, [0.0, 0.0, 400.0, 400.0]),
+            node("img", Some("card"), K::Rect, [100.0, 300.0, 100.0, 112.0]),
+            node("inside", Some("card"), K::Rect, [0.0, 0.0, 400.0, 400.0]),
+        ]);
+        let found = all_issues(&s, &p);
+        assert_eq!(codes(&found), [("clipped", vec!["img", "card"])]);
+        assert_eq!(found.0[0].message, "img is cut off 12 px past card's edge, which clips (bottom 412, limit 400)");
+        let mut open = s.node("card").unwrap().clone();
+        open.clip = Some(false);
+        let (s, p) = page(vec![open, node("img", Some("card"), K::Rect, [100.0, 300.0, 100.0, 112.0])]);
+        assert!(all_issues(&s, &p).0.is_empty(), "an unclipped frame shows what spills");
+    }
+
+    #[test]
+    fn touching_edges_are_not_overlap() {
+        let (s, p) = page(vec![text("a", "p1", [0.0, 0.0, 0.0, 0.0], "Left"), text("b", "p1", [32.0, 0.0, 0.0, 0.0], "Right"), text("c", "p1", [0.0, 20.0, 0.0, 0.0], "Below")]);
+        assert!(all_issues(&s, &p).0.is_empty());
+        let (s, p) = page(vec![text("a", "p1", [0.0, 0.0, 0.0, 0.0], "Left"), text("b", "p1", [31.99, 0.0, 0.0, 0.0], "Right")]);
+        assert!(all_issues(&s, &p).0.is_empty(), "0.2 px² is rounding");
+        let (s, p) = page(vec![text("a", "p1", [0.0, 0.0, 0.0, 0.0], "Left"), text("b", "p1", [31.9, 0.0, 0.0, 0.0], "Right")]);
+        assert_eq!(all_issues(&s, &p).1, 1, "2 px² is not");
+    }
+
+    #[test]
+    fn rotated_nodes_are_skipped() {
+        let mut turned = node("t", Some("card"), K::Rect, [100.0, 300.0, 100.0, 200.0]);
+        turned.rotation = Some(45.0);
+        let mut flipped = text("u", "p1", [500.0, 0.0, 0.0, 0.0], "Upside");
+        flipped.rotation = Some(180.0);
+        let (s, p) = page(vec![node("card", Some("p1"), K::Frame, [0.0, 0.0, 400.0, 400.0]), turned, flipped, text("v", "p1", [520.0, 0.0, 0.0, 0.0], "Down")]);
+        assert_eq!(codes(&all_issues(&s, &p)), [("text_overlap", vec!["u", "v"])], "a half turn covers the same box");
+    }
+
+    #[test]
+    fn issues_are_ordered_and_capped_at_100_with_the_full_count() {
+        let mut nodes = vec![node("card", Some("p1"), K::Frame, [0.0, 0.0, 100.0, 100.0])];
+        nodes.extend((0..120).map(|i| node(&format!("c{i:03}"), Some("card"), K::Rect, [90.0, 0.0, 20.0, 10.0])));
+        let mut col = frame("col", "p1", [200.0, 0.0, 100.0, 100.0], Layout::Column);
+        col.padding = Some(vec![10.0]);
+        nodes.extend([col, node("wide", Some("col"), K::Rect, [0.0, 0.0, 200.0, 10.0])]);
+        nodes.extend([text("t1", "p1", [0.0, 500.0, 0.0, 0.0], "One"), text("t2", "p1", [8.0, 500.0, 0.0, 0.0], "Two")]);
+        let (s, p) = page(nodes);
+        let (list, count) = all_issues(&s, &p);
+        assert_eq!((list.len(), count), (MAX_ISSUES, 122));
+        assert_eq!((list[0].code.as_str(), list[1].code.as_str(), list[2].code.as_str()), ("overflow", "text_overlap", "clipped"));
+        assert_eq!(list[2].ids[0], "c000", "then in paint order");
+        assert_eq!(list[99].ids[0], "c097");
+    }
+
+    #[test]
+    fn issues_skip_the_scroll_axis_of_scrolling_frames() {
+        let mut carousel = frame("carousel", "p1", [0.0, 0.0, 200.0, 100.0], Layout::Row);
+        carousel.scroll = Some(Scroll::X);
+        let cards = (0..4).map(|i| node(&format!("card{i}"), Some("carousel"), K::Rect, [0.0, 0.0, 90.0, 120.0]));
+        let (s, p) = page(std::iter::once(carousel).chain(cards).collect());
+        let found = all_issues(&s, &p);
+        assert_eq!(found.1, 4, "the cards past its right edge scroll into view: {:?}", found.0);
+        assert!(found.0.iter().all(|i| i.code == "overflow" && i.message.ends_with("(bottom 120, limit 100)")), "down still overflows: {:?}", found.0);
+        let mut feed = node("feed", Some("p1"), K::Frame, [0.0, 0.0, 200.0, 100.0]);
+        feed.scroll = Some(Scroll::Y);
+        let (s, p) = page(vec![feed, node("post", Some("feed"), K::Rect, [0.0, 50.0, 100.0, 400.0])]);
+        assert!(all_issues(&s, &p).0.is_empty(), "a feed's content passes its bottom on purpose");
+    }
+
+    #[test]
+    fn absolute_children_are_left_out_of_overflow_and_overlap_but_can_be_clipped() {
+        let mut card = frame("card", "p1", [0.0, 0.0, 200.0, 100.0], Layout::Column);
+        card.padding = Some(vec![16.0]);
+        let mut badge = node("badge", Some("card"), K::Ellipse, [190.0, -5.0, 20.0, 20.0]);
+        badge.absolute = Some(true);
+        let (s, p) = page(vec![card.clone(), node("body", Some("card"), K::Rect, [0.0, 0.0, 168.0, 40.0]), badge.clone()]);
+        let found = all_issues(&s, &p);
+        assert_eq!(codes(&found), [("clipped", vec!["badge", "card"])], "a badge hanging off a clipping card is cut");
+        assert_eq!(found.0[0].message, "badge is cut off 10 px past card's edge, which clips (right 210, limit 200)");
+        card.clip = Some(false);
+        let (s, p) = page(vec![card, node("body", Some("card"), K::Rect, [0.0, 0.0, 168.0, 40.0]), badge]);
+        assert!(all_issues(&s, &p).0.is_empty(), "nor past an open one's padding");
+    }
+
+    /// A text on a frame filled `ground`.
+    fn on_ground(ground: &str, words: Node) -> (Scene, Placed) {
+        let mut f = node("email", Some("p1"), K::Frame, [0.0, 0.0, 300.0, 100.0]);
+        f.fill = Some(ground.into());
+        page(vec![f, words])
+    }
+
+    #[test]
+    fn contrast_flags_grey_on_white_and_spares_large_text() {
+        let mut hint = text("settings-hint", "email", [10.0, 10.0, 0.0, 0.0], "Your address");
+        hint.color = Some("#9A9A9A".into());
+        let (s, p) = on_ground("#F4F4F4", hint.clone());
+        let found = all_issues(&s, &p);
+        assert_eq!(codes(&found), [("contrast", vec!["settings-hint", "email"])]);
+        assert_eq!(found.0[0].message, "settings-hint: #9A9A9A on #F4F4F4 (email) is 2.55:1; text this size needs 4.5:1");
+        // #888888 on white is 3.54:1: too faint at 16 px, enough at 24.
+        hint.color = Some("#888888".into());
+        let (s, p) = on_ground("#FFFFFF", hint.clone());
+        assert!(all_issues(&s, &p).0[0].message.ends_with("is 3.54:1; text this size needs 4.5:1"));
+        hint.font_size = Some(24.0);
+        let (s, p) = on_ground("#FFFFFF", hint.clone());
+        assert!(all_issues(&s, &p).0.is_empty());
+        hint.color = Some("#AAAAAA".into());
+        let (s, p) = on_ground("#FFFFFF", hint.clone());
+        assert!(all_issues(&s, &p).0[0].message.ends_with("is 2.32:1; text this size needs 3:1"));
+        (hint.font_size, hint.font_weight) = (Some(18.66), Some(700));
+        let (s, p) = on_ground("#FFFFFF", hint.clone());
+        assert!(all_issues(&s, &p).0[0].message.ends_with("is 2.32:1; text this size needs 3:1"), "bold 18.66 px is large too");
+        hint.font_weight = Some(600);
+        let (s, p) = on_ground("#FFFFFF", hint.clone());
+        assert!(all_issues(&s, &p).0[0].message.ends_with("needs 4.5:1"));
+        hint.font_size = Some(16.0);
+        // A ratio just short of what is needed never reads as enough.
+        hint.color = Some("#777777".into());
+        let (s, p) = on_ground("#FFFFFF", hint.clone());
+        assert!(all_issues(&s, &p).0[0].message.contains("is 4.47:1"), "{:?}", all_issues(&s, &p).0);
+        hint.color = Some("#767676".into());
+        let (s, p) = on_ground("#FFFFFF", hint);
+        assert!(all_issues(&s, &p).0.is_empty(), "4.54:1 is enough");
+        // The colour the painter picks itself always reads.
+        let (s, p) = on_ground("#F4F4F4", text("plain", "email", [10.0, 10.0, 0.0, 0.0], "Plain"));
+        assert!(all_issues(&s, &p).0.is_empty());
+    }
+
+    #[test]
+    fn contrast_reads_the_shape_under_the_text() {
+        // On the dark canvas a text with no colour of its own is light; on a light card it fades.
+        let card = node("card", Some("p1"), K::Rect, [0.0, 0.0, 300.0, 100.0]);
+        let (s, p) = page(vec![card.clone(), text("label", "p1", [10.0, 40.0, 0.0, 0.0], "Name")]);
+        let found = all_issues(&s, &p);
+        assert_eq!(codes(&found), [("contrast", vec!["label", "card"])]);
+        assert_eq!(found.0[0].message, "label: #EDE9E2 on #D9D9D9 (card) is 1.16:1; text this size needs 4.5:1");
+        // A shape whose box misses the text's centre is not under it; one painted later is not
+        // under it either.
+        let (s, p) = page(vec![text("label", "p1", [10.0, 40.0, 0.0, 0.0], "Name"), card.clone()]);
+        assert!(all_issues(&s, &p).0.is_empty(), "the canvas is under it");
+        let mut aside = card.clone();
+        aside.x = 200.0;
+        let (s, p) = page(vec![aside, text("label", "p1", [10.0, 40.0, 0.0, 0.0], "Name")]);
+        assert!(all_issues(&s, &p).0.is_empty());
+        // A labelled shape's words sit on the shape itself.
+        let mut button = node("button", Some("p1"), K::Rect, [0.0, 0.0, 120.0, 40.0]);
+        (button.text, button.fill, button.color) = (Some("Save".into()), Some("#2D6BFF".into()), Some("#1A1A1A".into()));
+        let (s, p) = page(vec![button]);
+        let found = all_issues(&s, &p);
+        assert_eq!(codes(&found), [("contrast", vec!["button"])]);
+        assert_eq!(found.0[0].message, "button: #1A1A1A on #2D6BFF (button) is 3.86:1; text this size needs 4.5:1");
+        // A ground under half opaque is laid over what is beneath it, and the next one is the
+        // ground: white at 25% on black is a dark grey.
+        let mut glass = node("glass", Some("p1"), K::Rect, [0.0, 0.0, 300.0, 100.0]);
+        glass.fill = Some("#FFFFFF40".into());
+        let mut ink = text("ink", "p1", [10.0, 40.0, 0.0, 0.0], "Ink");
+        ink.color = Some("#222222".into());
+        let mut black = card;
+        black.fill = Some("#000000".into());
+        let (s, p) = page(vec![black, glass, ink]);
+        let found = all_issues(&s, &p);
+        assert_eq!(codes(&found), [("contrast", vec!["ink", "card"])]);
+        assert!(found.0[0].message.contains("#222222 on #404040 (card)"), "{}", found.0[0].message);
+    }
+
+    #[test]
+    fn contrast_skips_text_over_a_picture() {
+        let mut photo = node("photo", Some("email"), K::Image, [0.0, 0.0, 300.0, 100.0]);
+        photo.src = Some("a.png".into());
+        let mut caption = text("caption", "email", [10.0, 40.0, 0.0, 0.0], "Sunset");
+        caption.color = Some("#FFFFFF".into());
+        let mut f = node("email", Some("p1"), K::Frame, [0.0, 0.0, 300.0, 100.0]);
+        f.fill = Some("#FFFFFF".into());
+        let (s, p) = page(vec![f.clone(), photo.clone(), caption.clone()]);
+        assert!(all_issues(&s, &p).0.is_empty());
+        // On a scrim over the picture, the scrim is the ground.
+        let mut scrim = node("scrim", Some("email"), K::Rect, [0.0, 0.0, 300.0, 100.0]);
+        scrim.fill = Some("#FFFFFFCC".into());
+        let (s, p) = page(vec![f, photo, scrim, caption]);
+        assert_eq!(codes(&all_issues(&s, &p)), [("contrast", vec!["caption", "scrim"])]);
+    }
+
+    #[test]
+    fn contrast_checks_each_run_with_its_own_colour() {
+        let mut price = text("price", "email", [10.0, 10.0, 0.0, 0.0], "8.4 km away");
+        price.color = Some("#1A1A1A".into());
+        price.runs = Some(vec![TextRun { start: 4, end: 6, color: Some("#BBBBBB".into()), font: None, font_size: None, font_weight: None, italic: None, underline: None, strike: None, rise: None }]);
+        let (s, p) = on_ground("#FFFFFF", price.clone());
+        let found = all_issues(&s, &p);
+        assert_eq!(codes(&found), [("contrast", vec!["price", "email"])]);
+        assert!(found.0[0].message.starts_with("price, characters 4 to 6: #BBBBBB on #FFFFFF (email) is 1.9"), "{}", found.0[0].message);
+        // A large run needs less; a run without a colour of its own takes the text's.
+        let runs = price.runs.as_mut().unwrap();
+        runs[0].font_size = Some(40.0);
+        runs[0].color = Some("#949494".into());
+        let (s, p) = on_ground("#FFFFFF", price.clone());
+        assert!(all_issues(&s, &p).0.is_empty(), "3.03:1 is enough at 40 px");
+        price.color = Some("#AAAAAA".into());
+        price.runs = Some(vec![TextRun { start: 0, end: 11, color: None, font: None, font_size: Some(30.0), font_weight: None, italic: None, underline: None, strike: None, rise: None }]);
+        let (s, p) = on_ground("#FFFFFF", price);
+        let found = all_issues(&s, &p);
+        assert!(found.0[0].message.starts_with("price, characters 0 to 11: #AAAAAA on #FFFFFF (email) is 2.32:1; text this size needs 3:1"), "{:?}", found.0);
+    }
+
+    #[test]
+    fn contrast_counts_opacity_and_passes_over_what_it_cannot_read() {
+        let mut faded = text("faded", "email", [10.0, 10.0, 0.0, 0.0], "Disabled");
+        (faded.color, faded.opacity) = (Some("#1A1A1A".into()), Some(0.4));
+        let (s, p) = on_ground("#FFFFFF", faded.clone());
+        let found = all_issues(&s, &p);
+        assert!(found.0[0].message.starts_with("faded: #1A1A1A at 40% opacity on #FFFFFF (email) is 2."), "{:?}", found.0);
+        faded.opacity = Some(0.0);
+        let (s, p) = on_ground("#FFFFFF", faded.clone());
+        assert!(all_issues(&s, &p).0.is_empty(), "a clear text is not read");
+        (faded.opacity, faded.color) = (None, Some("$muted".into()));
+        let (s, p) = on_ground("#FFFFFF", faded.clone());
+        assert!(all_issues(&s, &p).0.is_empty(), "a colour name the scene did not resolve");
+        faded.color = Some("#EEEEEE".into());
+        let (s, p) = on_ground("$paper", faded);
+        assert!(all_issues(&s, &p).0.is_empty());
+    }
+
+    #[test]
+    fn contrast_finds_the_ground_through_turns() {
+        // A text in a turned card is still on the card; on the page beside it, it is not.
+        let mut card = node("card", Some("p1"), K::Frame, [0.0, 0.0, 400.0, 100.0]);
+        (card.rotation, card.fill) = (Some(90.0), Some("#FFFFFF".into()));
+        let mut inside = text("inside", "card", [300.0, 40.0, 0.0, 0.0], "On");
+        inside.color = Some("#BBBBBB".into());
+        let mut beside = text("beside", "p1", [300.0, 40.0, 0.0, 0.0], "Off");
+        beside.color = Some("#BBBBBB".into());
+        let (s, p) = page(vec![card, inside, beside]);
+        assert_eq!(codes(&all_issues(&s, &p)), [("contrast", vec!["inside", "card"])], "the card turned away from (308, 50)");
+    }
+
+    #[test]
+    fn contrast_finds_grounds_of_any_size_anywhere() {
+        // A backdrop over thousands of px, a small tile far out, and a text on each: each finds
+        // its own ground wherever it is drawn.
+        let mut backdrop = node("backdrop", Some("p1"), K::Rect, [-5000.0, -5000.0, 20000.0, 20000.0]);
+        backdrop.fill = Some("#FFFFFF".into());
+        let mut tile = node("tile", Some("p1"), K::Rect, [9000.0, 9000.0, 40.0, 40.0]);
+        tile.fill = Some("#000000".into());
+        let mut near = text("near", "p1", [300.0, 300.0, 0.0, 0.0], "Near");
+        near.color = Some("#EEEEEE".into());
+        let mut far = text("far", "p1", [9004.0, 9010.0, 0.0, 0.0], "Far");
+        far.color = Some("#111111".into());
+        let (s, p) = page(vec![backdrop, tile, near, far]);
+        assert_eq!(codes(&all_issues(&s, &p)), [("contrast", vec!["near", "backdrop"]), ("contrast", vec!["far", "tile"])]);
+    }
+
+    #[test]
+    fn issues_of_a_part_are_about_what_is_in_it() {
+        let mut hint = text("hint", "email", [10.0, 10.0, 0.0, 0.0], "Your address");
+        hint.color = Some("#BBBBBB".into());
+        let (s, p) = on_ground("#FFFFFF", hint);
+        assert_eq!(issues(&s, &p, &Mono, "p1", &ids(&["hint"])).1, 1);
+        assert_eq!(issues(&s, &p, &Mono, "p1", &ids(&["email"])).1, 1, "inside the node asked for");
+        let (s, p) = page(vec![node("other", Some("p1"), K::Rect, [500.0, 0.0, 10.0, 10.0])]);
+        assert_eq!(issues(&s, &p, &Mono, "p1", &ids(&["other"])).1, 0);
+    }
 
     #[test]
     fn fit_scale_honours_max_side_area_and_request() {
@@ -311,10 +1050,12 @@ mod tests {
         }
     }
 
-
     #[test]
-    fn rows_read_as_numbers() {
+    fn rows_and_messages_read_as_numbers() {
         assert_eq!([num(1.0), num(-0.001), num(2.345), num(f64::NAN), num(-3.5)], [json!(1), json!(0), json!(2.35), json!(0), json!(-3.5)]);
+        assert_eq!((fmt(12.0), fmt(0.125), fmt(-0.001)), ("12".into(), "0.13".into(), "0".into()));
+        assert_eq!((short(4.4999), short(21.0)), ("4.49".into(), "21".into()));
+        assert_eq!((hex([255, 0, 16, 255]), hex([0, 0, 0, 128])), ("#FF0010".into(), "#00000080".into()));
         assert_eq!(render_rect(&Rect::new(1.0, 2.0, 3.0, 4.0)), RenderRect { x: 1.0, y: 2.0, w: 3.0, h: 4.0 });
     }
 }
