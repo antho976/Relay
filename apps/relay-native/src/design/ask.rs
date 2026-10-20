@@ -243,7 +243,9 @@ fn send_request(b: &Rc<Board>, session: String, request: String, with_picture: b
         return;
     };
     let ids = b.selected();
-    let rendered = with_picture.then(|| super::export::render(b, &ids, 1.0, ids.is_empty())).flatten();
+    let rendered = with_picture
+        .then(|| super::export::extent(b, &ids).and_then(|area| super::export::render(b, &ids, true, super::export::ask_scale(&area)).ok()))
+        .flatten();
     let selected: Vec<(String, String, String)> = {
         let scene = b.doc.scene.borrow();
         ids.iter()
