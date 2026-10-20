@@ -272,19 +272,8 @@ pub fn fillable_line(n: &Node) -> bool {
     matches!(n.kind, NodeKind::Line | NodeKind::Path) && !routed(n) && n.points.as_ref().is_some_and(|p| p.len() > 2)
 }
 
-/// Where a rect's, ellipse's or polygon's label sits inside its box `r`, as top, right, bottom
-/// and left: `padding`, else 12 px at the sides, less on a narrow shape (an eighth of its
-/// width), so a small badge keeps room for its words.
-pub fn label_inset(n: &Node, r: &Rect) -> [f64; 4] {
-    if n.padding.is_some() {
-        n.padding_edges()
-    } else {
-        let side = 12f64.min(r.w / 8.0).max(0.0);
-        [0.0, side, 0.0, side]
-    }
-}
-
-/// A rect's, ellipse's or polygon's label box in its box `r`: inside `label_inset`, as wide as
+/// A rect's, ellipse's or polygon's label box in its box `r`: inside `Node::label_inset` at its
+/// width (`padding`, else 12 px at the sides, an eighth of a narrow shape's width), as wide as
 /// that leaves (the width its words wrap at), as tall as its words, centred on the inset box.
 /// It may be taller than the shape. `None` without words. Paint draws the label here and
 /// bounds count it.
@@ -292,7 +281,7 @@ pub fn label_box(n: &Node, r: &Rect, measure: &dyn Measure) -> Option<Rect> {
     if n.text.as_deref().is_none_or(str::is_empty) {
         return None;
     }
-    let [t, rt, b, l] = label_inset(n, r);
+    let [t, rt, b, l] = n.label_inset(r.w);
     let inner = Rect::new(r.x + l, r.y + t, (r.w - l - rt).max(1.0), (r.h - t - b).max(0.0));
     let (_, h) = measure.measure(n, Some(inner.w));
     Some(Rect::new(inner.x, inner.cy() - h / 2.0, inner.w, h))

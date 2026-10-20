@@ -1776,13 +1776,15 @@ impl Node {
         self.shadows.as_deref().unwrap_or(self.shadow.as_slice())
     }
 
-    /// Where a rect's, ellipse's or polygon's label sits inside its box, as top, right, bottom
-    /// and left: `padding`, else 12 px at the sides.
-    pub fn label_inset(&self) -> [f64; 4] {
+    /// Where a rect's, ellipse's or polygon's label sits inside its box `width` wide (as placed),
+    /// as top, right, bottom and left: `padding`, else 12 px at the sides, less on a narrow shape
+    /// (an eighth of its width), so a small badge keeps room for its words.
+    pub fn label_inset(&self, width: f64) -> [f64; 4] {
         if self.padding.is_some() {
             self.padding_edges()
         } else {
-            [0.0, 12.0, 0.0, 12.0]
+            let side = 12f64.min(width / 8.0).max(0.0);
+            [0.0, side, 0.0, side]
         }
     }
 
@@ -2060,11 +2062,13 @@ mod tests {
         }
         let ring = read(json!({"kind": "ellipse", "parent": "p", "arc": {"inner": 0.5, "sweep": 90, "cap": "round"}}));
         assert_eq!(ring.arc.unwrap().cap, Some(StrokeCap::Round));
-        // Defaults: a label sits 12 px in from the sides; padding moves it.
-        assert_eq!(rect().label_inset(), [0.0, 12.0, 0.0, 12.0]);
+        // Defaults: a label sits 12 px in from the sides, an eighth of a narrow shape's width;
+        // padding moves it.
+        assert_eq!(rect().label_inset(200.0), [0.0, 12.0, 0.0, 12.0]);
+        assert_eq!(rect().label_inset(40.0), [0.0, 5.0, 0.0, 5.0]);
         let mut padded = rect();
         padded.padding = Some(vec![8.0, 24.0]);
-        assert_eq!(padded.label_inset(), [8.0, 24.0, 8.0, 24.0]);
+        assert_eq!(padded.label_inset(40.0), [8.0, 24.0, 8.0, 24.0]);
         // Unset, none of it is written; an arc without a cap writes none.
         let plain = serde_json::to_value(Node::new(NodeKind::Ellipse)).unwrap();
         for key in ["stroke_cap", "stroke_join", "stroke_gradient", "shadows", "runs", "max_lines"] {
