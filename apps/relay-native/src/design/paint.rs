@@ -10,7 +10,7 @@ use relay_bus::design::{parse_color, Blend, Gradient, GradientKind, ImageFit, No
 use relay_client::design::layout::{self, Measure, Placed, STICKY_PAD};
 use relay_client::design::{shapes, Rect, Scene};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
@@ -160,12 +160,86 @@ fn text_key(n: &Node, wrap: Option<f64>) -> u64 {
     h.finish()
 }
 
+/// The longest side a raster picture is decoded at: sharp at twice the 960 px a picture is
+/// placed at, a fraction of a full-size photo's memory (B33).
+const DECODE_EDGE: i32 = 2048;
+
 #[derive(Clone)]
 enum Picture {
     Loading,
     Ready(gdk::Texture),
     Vector(gtk::Svg),
     Failed,
+}
+
+/// What a picture file decodes to on the blocking thread.
+enum Decoded {
+    Raster(gdk::Texture),
+    Svg(Vec<u8>),
+}
+
+/// The size to decode a raster picture whose long side is `long` px at: `DECODE_EDGE` on its long
+/// side when it is longer, else `None` for its own size (a small picture is never blown up).
+fn decode_edge(long: i32) -> Option<i32> {
+    (long > DECODE_EDGE).then_some(DECODE_EDGE)
+}
+
+/// A raster picture upright (its Exif orientation applied, TM-24) and no longer than
+/// `DECODE_EDGE` on its long side; a format the pixbuf loaders lack is read by GDK at its size.
+fn decode(path: &std::path::Path) -> Result<gdk::Texture, String> {
+    use gtk::gdk_pixbuf::Pixbuf;
+    let pixbuf = match Pixbuf::file_info(path).map(|(_, w, h)| decode_edge(w.max(h))) {
+        Some(Some(edge)) => Pixbuf::from_file_at_scale(path, edge, edge, true),
+        Some(None) => Pixbuf::from_file(path),
+        None => return gdk::Texture::from_filename(path).map_err(|e| e.to_string()),
+    };
+    match pixbuf {
+        Ok(p) => Ok(gdk::Texture::for_pixbuf(&p.apply_embedded_orientation().unwrap_or(p))),
+        Err(_) => gdk::Texture::from_filename(path).map_err(|e| e.to_string()),
+    }
+}
+
+/// An SVG picture that reads nothing outside itself: no files or addresses it links to, so a
+/// picture an agent added cannot reach the disk or the network when it is drawn.
+fn svg(bytes: Vec<u8>) -> gtk::Svg {
+    let svg = gtk::Svg::new();
+    svg.set_features(gtk::SvgFeatures::ANIMATIONS | gtk::SvgFeatures::SYSTEM_RESOURCES | gtk::SvgFeatures::EXTENSIONS);
+    svg.load_from_bytes(&glib::Bytes::from_owned(bytes));
+    svg
+}
+
+/// The picture an image node shows, if it is one.
+fn image_src(n: &Node) -> Option<&str> {
+    n.src.as_deref().filter(|_| n.kind == NodeKind::Image)
+}
+
+/// Call `f` with `root` and every node inside it, without copying them: a walk with its own
+/// stack, so a design nested past any depth cannot overflow ours.
+fn each_under<'a>(scene: &'a Scene, root: &'a str, mut f: impl FnMut(&'a Node)) {
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        if let Some(n) = scene.node(id) {
+            f(n);
+        }
+        stack.extend(scene.children(id).iter().map(String::as_str));
+    }
+}
+
+/// Keep the pictures `scene` still shows, on any page, and every one still loading (its load
+/// lands in the map when it finishes); a picture that failed goes too with `drop_failed`, so it
+/// is tried again the next time it is drawn (B33; the render job's choice).
+fn prune_pictures(map: &mut HashMap<String, Picture>, scene: &Scene, drop_failed: bool) {
+    let mut used = HashSet::new();
+    for page in scene.pages() {
+        each_under(scene, page, |n| {
+            used.extend(image_src(n));
+        });
+    }
+    map.retain(|src, p| match p {
+        Picture::Loading => true,
+        Picture::Failed if drop_failed => false,
+        _ => used.contains(src.as_str()),
+    });
 }
 
 /// Caches for drawing one design. One per canvas (and one for the gallery's thumbnails).
@@ -206,8 +280,8 @@ impl Painter {
         *self.loaded.borrow_mut() = Some(Rc::new(f));
     }
 
-    /// Drop the layouts and paths of nodes that are gone, so a long session's caches stay the
-    /// size of the design.
+    /// Drop the layouts, paths and pictures of nodes that are gone, so a long session's caches
+    /// stay the size of the design.
     pub fn retain(&self, scene: &Scene) {
         self.layouts.borrow_mut().retain(|id, _| scene.node(id).is_some());
         self.paths.borrow_mut().retain(|id, _| scene.node(id).is_some());
@@ -215,6 +289,13 @@ impl Painter {
         if sizes.len() > 20_000 {
             sizes.clear();
         }
+        self.retain_pictures(scene, false);
+    }
+
+    /// Keep only the pictures `scene` shows and those still loading; with `drop_failed`, one
+    /// that failed to load is tried again the next time it is drawn.
+    pub fn retain_pictures(&self, scene: &Scene, drop_failed: bool) {
+        prune_pictures(&mut self.pictures.borrow_mut(), scene, drop_failed);
     }
 
     fn new_layout(&self, n: &Node, wrap: Option<f64>) -> pango::Layout {
@@ -254,11 +335,21 @@ impl Painter {
     /// Whether any picture `scene` shows is still loading; asking starts the loads.
     pub fn loading(&self, scene: &Scene) -> bool {
         let mut any = false;
-        for n in scene.to_nodes() {
-            if let Some(src) = n.src.as_deref().filter(|_| n.kind == NodeKind::Image) {
+        for page in scene.pages() {
+            any |= self.loading_under(scene, page);
+        }
+        any
+    }
+
+    /// Whether any picture under `root` (itself included) is still loading; asking starts their
+    /// loads. A thumbnail of one page waits on that page's pictures alone.
+    pub fn loading_under(&self, scene: &Scene, root: &str) -> bool {
+        let mut any = false;
+        each_under(scene, root, |n| {
+            if let Some(src) = image_src(n) {
                 any |= matches!(self.picture(src), Picture::Loading);
             }
-        }
+        });
         any
     }
 
@@ -292,17 +383,17 @@ impl Painter {
         let painter_ptr = self.me.clone();
         glib::spawn_future_local(async move {
             let is_svg = src.ends_with(".svg");
-            let read = gtk::gio::spawn_blocking(move || -> Result<(Option<gdk::Texture>, Option<Vec<u8>>), String> {
+            let read = gtk::gio::spawn_blocking(move || -> Result<Decoded, String> {
                 if is_svg {
-                    std::fs::read(&path).map(|b| (None, Some(b))).map_err(|e| e.to_string())
+                    std::fs::read(&path).map(Decoded::Svg).map_err(|e| e.to_string())
                 } else {
-                    gdk::Texture::from_filename(&path).map(|t| (Some(t), None)).map_err(|e| e.to_string())
+                    decode(&path).map(Decoded::Raster)
                 }
             })
             .await;
             let picture = match read {
-                Ok(Ok((Some(texture), _))) => Picture::Ready(texture),
-                Ok(Ok((None, Some(bytes)))) => Picture::Vector(gtk::Svg::from_bytes(&glib::Bytes::from_owned(bytes))),
+                Ok(Ok(Decoded::Raster(texture))) => Picture::Ready(texture),
+                Ok(Ok(Decoded::Svg(bytes))) => Picture::Vector(svg(bytes)),
                 _ => Picture::Failed,
             };
             if let Some(painter) = painter_ptr.upgrade() {
@@ -998,5 +1089,76 @@ impl Measure for Painter {
         let size = (w, logical.height().max(1) as f64);
         self.sizes.borrow_mut().insert(key, size);
         size
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(id: &str, parent: Option<&str>, kind: NodeKind, rect: [f64; 4]) -> Node {
+        let mut n = Node::new(kind);
+        n.id = id.into();
+        n.parent = parent.map(Into::into);
+        [n.x, n.y, n.w, n.h] = rect;
+        n
+    }
+
+    fn image(id: &str, parent: &str, src: &str) -> Node {
+        let mut n = node(id, Some(parent), NodeKind::Image, [0.0, 0.0, 40.0, 30.0]);
+        n.src = Some(src.into());
+        n
+    }
+
+    #[test]
+    fn pictures_leave_with_their_nodes_and_stay_while_they_load() {
+        // Two pages, a picture on each (one inside a frame), and pictures no node shows.
+        let scene = Scene::new(vec![
+            node("p1", None, NodeKind::Page, [0.0; 4]),
+            node("p2", None, NodeKind::Page, [0.0; 4]),
+            node("f", Some("p1"), NodeKind::Frame, [0.0, 0.0, 200.0, 200.0]),
+            image("a", "f", "shown.png"),
+            image("b", "p2", "failed.png"),
+        ]);
+        let fresh = || {
+            HashMap::from([
+                ("shown.png".to_string(), Picture::Failed),
+                ("failed.png".to_string(), Picture::Failed),
+                ("gone.png".to_string(), Picture::Failed),
+                ("deleted-while-loading.png".to_string(), Picture::Loading),
+            ])
+        };
+        let mut map = fresh();
+        prune_pictures(&mut map, &scene, false);
+        let mut kept: Vec<&str> = map.keys().map(String::as_str).collect();
+        kept.sort();
+        assert_eq!(kept, ["deleted-while-loading.png", "failed.png", "shown.png"]);
+        // The render job tries a failed picture again; a load in flight still lands.
+        let mut map = fresh();
+        prune_pictures(&mut map, &scene, true);
+        assert_eq!(map.keys().collect::<Vec<_>>(), ["deleted-while-loading.png"]);
+    }
+
+    #[test]
+    fn a_large_picture_decodes_smaller_and_a_small_one_at_its_size() {
+        assert_eq!(decode_edge(6000), Some(DECODE_EDGE));
+        assert_eq!(decode_edge(DECODE_EDGE + 1), Some(DECODE_EDGE));
+        assert_eq!(decode_edge(DECODE_EDGE), None);
+        assert_eq!(decode_edge(640), None);
+    }
+
+    #[test]
+    fn a_walk_under_a_node_takes_its_subtree_alone() {
+        let scene = Scene::new(vec![
+            node("p1", None, NodeKind::Page, [0.0; 4]),
+            node("f", Some("p1"), NodeKind::Frame, [0.0, 0.0, 200.0, 200.0]),
+            node("g", Some("f"), NodeKind::Group, [0.0; 4]),
+            image("a", "g", "a.png"),
+            image("b", "p1", "b.png"),
+        ]);
+        let mut seen = Vec::new();
+        each_under(&scene, "f", |n| seen.push(n.id.as_str()));
+        seen.sort();
+        assert_eq!(seen, ["a", "f", "g"]);
     }
 }
