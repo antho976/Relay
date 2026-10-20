@@ -230,17 +230,16 @@ private sealed interface Shown {
 
 /**
  * The pictures of a message of the person's, above its words: one up to 240dp wide, several side
- * by side, each in its own shape and rounded as a card. A tap opens one full screen.
+ * by side, each in its own shape and rounded as a card. A tap hands one to [onView], which opens
+ * it full screen from outside the list: a reply that scrolls the message away must not close it.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun SentPictures(pictures: List<Picture>, modifier: Modifier = Modifier) {
-    var open by remember { mutableStateOf<Picture?>(null) }
+internal fun SentPictures(pictures: List<Picture>, onView: (Picture) -> Unit, modifier: Modifier = Modifier) {
     val one = pictures.size == 1
     FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        for (p in pictures) SentPicture(p, if (one) 240.dp else 116.dp, if (one) 320.dp else 160.dp) { open = p }
+        for (p in pictures) SentPicture(p, if (one) 240.dp else 116.dp, if (one) 320.dp else 160.dp) { onView(p) }
     }
-    open?.let { p -> PictureViewer(p) { open = null } }
 }
 
 @Composable
@@ -280,7 +279,7 @@ private fun SentPicture(p: Picture, maxWidth: Dp, maxHeight: Dp, onOpen: () -> U
 
 /** A picture over the whole screen, fitted, at up to 2048 px; Back or the close key puts it away. */
 @Composable
-private fun PictureViewer(p: Picture, onClose: () -> Unit) {
+internal fun PictureViewer(p: Picture, onClose: () -> Unit) {
     val c = Relay.colors
     val nav = LocalNav.current
     val app = LocalContext.current.applicationContext

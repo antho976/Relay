@@ -823,6 +823,8 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     var firstPictures by remember(opened) { mutableStateOf<List<Picture>>(emptyList()) }
     val queuedPictures = if (temp) create?.payload?.let { picturesOf(it) } else null
     LaunchedEffect(queuedPictures) { if (queuedPictures != null) firstPictures = queuedPictures }
+    // The picture open full screen: held here, not by its bubble, which the list drops once a reply scrolls it away.
+    var viewing by remember(tid) { mutableStateOf<Picture?>(null) }
     // A message the PC refused stays in the outbox: its bubble says why, in place of "Sending…".
     val refusedSends = remember(s.outbox) { s.outbox.filter { it.op == "thread.send" && it.parked }.associate { "m:" + Optimistic.tempId(it.id) to refusal(it.error) } }
     val anyProposal = rows.any { it is Piece.Tool && it.call.card is CardData.Proposal }
@@ -1044,8 +1046,8 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                     contentPadding = PaddingValues(top = 8.dp, bottom = 20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    if (firstText != null) item("first") { UserBubble(firstText, queued = false, online = s.online, modifier = cell.padding(top = 12.dp), pictures = firstPictures) }
-                    items(rows, key = { it.key }, contentType = { it::class }) { p -> PieceView(p, cell, s.online, money, current, keys, retry.takeIf { p.key == retryAt }, !working, refusedSends[p.key], asked) }
+                    if (firstText != null) item("first") { UserBubble(firstText, queued = false, online = s.online, modifier = cell.padding(top = 12.dp), pictures = firstPictures, onView = { viewing = it }) }
+                    items(rows, key = { it.key }, contentType = { it::class }) { p -> PieceView(p, cell, s.online, money, current, keys, retry.takeIf { p.key == retryAt }, !working, refusedSends[p.key], asked) { viewing = it } }
                     stopped?.let { text ->
                         item("stopped") {
                             Column(cell.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1077,6 +1079,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                     }
                 }
             }
+            viewing?.let { PictureViewer(it) { viewing = null } }
         }
         BoxWithConstraints(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(top = 4.dp, bottom = 8.dp), contentAlignment = Alignment.TopCenter) {
             val dictate = com.quietsoftware.relay.ui.dev.rememberDictation { said -> draft = com.quietsoftware.relay.ui.dev.joinSaid(draft, said) }
@@ -1161,6 +1164,7 @@ private fun PieceView(
     idle: Boolean = true,
     refused: String? = null,
     asked: AskedReading = AskedReading.None,
+    onView: (Picture) -> Unit = {},
 ) {
     val c = Relay.colors
     when (p) {
@@ -1176,6 +1180,7 @@ private fun PieceView(
             onResend = keys.resend?.takeIf { !p.queued }?.let { again -> { again(p.text, p.pictures) } },
             pictures = p.pictures,
             refused = refused,
+            onView = onView,
         )
         is Piece.Reply -> Markdown(p.text, cell.padding(top = 12.dp))
         is Piece.Tool -> Box(cell.padding(top = if (p.call.card != null) 10.dp else 2.dp)) { ToolView(p.call, money, proposals, asked) }
@@ -1208,11 +1213,12 @@ private fun UserBubble(
     onResend: (() -> Unit)? = null,
     pictures: List<Picture> = emptyList(),
     refused: String? = null,
+    onView: (Picture) -> Unit = {},
 ) {
     val c = Relay.colors
     Column(modifier, horizontalAlignment = Alignment.End) {
         if (pictures.isNotEmpty()) Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
-            SentPictures(pictures, Modifier.padding(bottom = if (text.isNotBlank()) 6.dp else 0.dp))
+            SentPictures(pictures, onView, Modifier.padding(bottom = if (text.isNotBlank()) 6.dp else 0.dp))
         }
         if (text.isNotBlank() || pictures.isEmpty()) Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
             Box(
