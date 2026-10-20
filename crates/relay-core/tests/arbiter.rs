@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{call, code, engine, ok};
+use common::{call, code, engine, ok, refused};
 use relay_arbiter::exchange::{Account, ExchangeError, Market, Result};
 use relay_arbiter::model::*;
 use relay_arbiter::Decimal;
@@ -627,4 +627,22 @@ fn an_order_filled_before_its_fills_show_stays_open_until_they_are_booked() {
     pass(&engine);
     let d = ok(&engine, "arbiter.strategy.get", json!({"id": id}));
     assert_eq!((d["orders"][0]["status"].as_str(), d["row"]["held_base"].as_str()), (Some("filled"), Some("0.5")), "{d:#}");
+}
+
+#[test]
+fn a_strategy_cannot_switch_venue_while_it_holds_what_it_bought() {
+    let (engine, _) = setup();
+    connect(&engine);
+    let id = ok(&engine, "arbiter.strategy.save", json!({"draft": draft("Live", "50")}))["row"]["id"].as_i64().unwrap();
+    ok(&engine, "arbiter.strategy.set", json!({"id": id, "venue": "live", "running": true}));
+    pass(&engine);
+    assert_eq!(ok(&engine, "arbiter.strategy.get", json!({"id": id}))["row"]["held_base"], "0.5");
+    // Back on paper the real coins would have no stop, count in no limit and could not be sold.
+    let err = refused(call(&engine, "arbiter.strategy.set", json!({"id": id, "venue": "paper"})));
+    assert_eq!(err.code, "arbiter.invalid");
+    assert!(err.message.contains("sell it before switching to paper"), "{}", err.message);
+    assert_eq!(ok(&engine, "arbiter.strategy.get", json!({"id": id}))["row"]["venue"], "live");
+    // Sold, it may go back.
+    ok(&engine, "arbiter.flatten", json!({"strategy_id": id}));
+    assert_eq!(ok(&engine, "arbiter.strategy.set", json!({"id": id, "venue": "paper"}))["row"]["venue"], "paper");
 }

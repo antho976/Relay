@@ -476,6 +476,12 @@ impl Book {
         if !self.open_orders(Some(id))?.is_empty() {
             return invalid("It has an order open: wait for it, or halt the strategy, before switching");
         }
+        // The runner weighs and exits a strategy on its venue only: a holding left on the old one
+        // would have no stop-loss, take-profit or trailing stop, count in no limit, and could not
+        // be sold from here.
+        if self.position(id, s.venue)?.base > Decimal::ZERO {
+            return invalid(format!("It still holds what it bought: sell it before switching to {}", venue.as_str()));
+        }
         if venue == Venue::Live && s.mode != Mode::Ask && s.limits.max_order.is_none() {
             return invalid("Before it trades real money on its own, give it a limit per order (or let every order ask)");
         }

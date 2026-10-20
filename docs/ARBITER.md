@@ -55,7 +55,10 @@ training data. The guard against each is in the engine, not the prompt.
 
 **Paper or live** is a second switch on the same strategy. Paper reads real prices and balances
 and simulates fills (Coinbase has no paper trading; its sandbox returns canned replies). Going live
-shows the paper record and the limits in one confirmation; nothing else gates it.
+shows the paper record and the limits in one confirmation. Either way, the switch waits for an open
+order and for what the strategy holds on its venue to be sold: the runner exits and weighs a
+strategy on its own venue only, so a holding left behind would have no stop-loss, take-profit or
+trailing stop, count in no limit, and could not be sold from Arbiter.
 
 ## The risk gate
 
