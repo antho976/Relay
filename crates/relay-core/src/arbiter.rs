@@ -868,8 +868,11 @@ pub fn route(engine: &Engine, strategy_id: i64, intent: &Intent, why: &str, thre
     Ok(Outcome::Proposed(Box::new(with_book(engine, |b| b.proposal(id))?.0)))
 }
 
-/// Approves or dismisses a proposal. An approved order passes the gate again, now.
+/// Approves or dismisses a proposal. An approved order passes the gate again, now, and only on
+/// the venue and product it was asked for; an approved change only onto the strategy it was made
+/// from. A card past its time is expired, whether or not the runner has been by since.
 pub fn resolve(engine: &Engine, id: i64, approve: bool, draft_hash: Option<&str>) -> Result<ProposalView, BusError> {
+    with_book(engine, |b| b.expire_proposals(book::now()))?;
     let (p, cause) = with_book(engine, |b| b.proposal(id))?;
     if p.status != "pending" {
         return Err(BusError::conflict("arbiter.answered", format!("That proposal is already {}", p.status)));
@@ -883,9 +886,17 @@ pub fn resolve(engine: &Engine, id: i64, approve: bool, draft_hash: Option<&str>
             let sid = p.strategy_id.ok_or_else(|| BusError::invalid("arbiter.invalid", "The proposal names no strategy"))?;
             // The card said which venue it was for; `execute` uses the strategy's venue now. A
             // card asked on paper must never become a real order because the strategy went live.
-            let venue = with_book(engine, |b| b.strategy(sid))?.venue;
-            if p.venue.is_some_and(|v| v != venue) {
-                let text = format!("The strategy has switched to {} since this was asked; nothing was placed.", venue.as_str());
+            // Nor may a card for one product be placed on a strategy that trades another now: the
+            // gate checks the product against the card's own.
+            let s = with_book(engine, |b| b.strategy(sid))?;
+            let changed = if p.venue.is_some_and(|v| v != s.venue) {
+                Some(format!("The strategy has switched to {} since this was asked; nothing was placed.", s.venue.as_str()))
+            } else if p.product.as_deref().is_some_and(|x| x != s.product) {
+                Some(format!("The strategy trades {} now; nothing was placed.", s.product))
+            } else {
+                None
+            };
+            if let Some(text) = changed {
                 with_book(engine, |b| b.resolve_proposal(id, "failed", Some(&text)))?;
                 return Ok(with_book(engine, |b| b.proposal(id))?.0);
             }
@@ -913,7 +924,15 @@ pub fn resolve(engine: &Engine, id: i64, approve: bool, draft_hash: Option<&str>
                 return Err(BusError::conflict("arbiter.changed_since", "The proposal is not the one shown; reopen it"));
             }
             let result = with_book(engine, |b| match p.strategy_id {
-                Some(sid) => b.save_strategy(sid, &draft).map(|_| sid),
+                Some(sid) => {
+                    // The draft carries the rule and limits as they were when it was asked: saved
+                    // over a strategy changed since, it would put back what the person changed.
+                    let now = book::strategy_hash(&b.strategy(sid)?);
+                    if b.proposal_based_on(id)?.is_some_and(|h| h != now) {
+                        return Err(BookError::Invalid("The strategy has changed since this was asked, so nothing was saved: ask again for a change to it as it is now.".into()));
+                    }
+                    b.save_strategy(sid, &draft).map(|_| sid)
+                }
                 None => b.create_strategy(&draft),
             });
             match result {

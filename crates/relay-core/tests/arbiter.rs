@@ -73,9 +73,14 @@ fn eth() -> Product {
     }
 }
 
+/// A second product, for a strategy that changes what it trades.
+fn sol() -> Product {
+    Product { id: "SOL-CAD".into(), base: "SOL".into(), ..eth() }
+}
+
 impl Market for Fake {
     fn products(&self) -> Result<Vec<Product>> {
-        Ok(vec![eth()])
+        Ok(vec![eth(), sol()])
     }
     fn product(&self, id: &str) -> Result<Product> {
         if id == "ETH-CAD" { Ok(eth()) } else { Err(ExchangeError::Refused(format!("no {id}"))) }
@@ -198,6 +203,12 @@ fn setup_on_disk() -> (tempfile::TempDir, Arc<relay_core::Engine>, Arc<Fake>) {
 fn age_order(dir: &Path, id: i64, secs: i64) {
     let db = rusqlite::Connection::open(dir.join("store/arbiter.db")).unwrap();
     db.execute("UPDATE orders SET created_at = created_at - ?2 WHERE id = ?1", rusqlite::params![id, secs]).unwrap();
+}
+
+/// Moves a card's expiry back `secs`, as if it had been waiting that much longer.
+fn age_card(dir: &Path, id: i64, secs: i64) {
+    let db = rusqlite::Connection::open(dir.join("store/arbiter.db")).unwrap();
+    db.execute("UPDATE proposals SET expires_at = expires_at - ?2 WHERE id = ?1", rusqlite::params![id, secs]).unwrap();
 }
 
 /// A live strategy the AI may trade, on a connected key: what the order tests place through.
@@ -645,4 +656,52 @@ fn a_strategy_cannot_switch_venue_while_it_holds_what_it_bought() {
     // Sold, it may go back.
     ok(&engine, "arbiter.flatten", json!({"strategy_id": id}));
     assert_eq!(ok(&engine, "arbiter.strategy.set", json!({"id": id, "venue": "paper"}))["row"]["venue"], "paper");
+}
+
+#[test]
+fn a_change_card_is_not_approved_over_a_change_made_since() {
+    let (engine, _) = setup();
+    let id = ok(&engine, "arbiter.strategy.save", json!({"draft": draft("Dip", "50")}))["row"]["id"].as_i64().unwrap();
+    let mut next = draft("Dip", "50");
+    next["rule"]["exit"]["take_profit_pct"] = json!("3");
+    let p = ok(&engine, "arbiter.propose", json!({"strategy_id": id, "draft": next, "why": "A smaller target won more often"}));
+    // The person lowers the most held after the card was made; the card still carries 200.
+    ok(&engine, "arbiter.limits.set", json!({"strategy_id": id, "limits": {"max_order": "50", "max_position": "100", "daily_loss": "40"}}));
+    let r = ok(&engine, "arbiter.proposal.resolve", json!({"id": p["id"], "approve": true, "draft_hash": p["draft_hash"]}));
+    assert_eq!(r["status"], "failed", "{r:#}");
+    assert!(r["outcome"].as_str().unwrap().contains("changed since"), "{r:#}");
+    let d = ok(&engine, "arbiter.strategy.get", json!({"id": id}));
+    assert_eq!((d["limits"]["max_position"].as_str(), d["row"]["version"].as_i64()), (Some("100"), Some(1)), "{d:#}");
+    // A card made from the strategy as it is now applies.
+    let p = ok(&engine, "arbiter.propose", json!({"strategy_id": id, "draft": next, "why": "Again"}));
+    assert_eq!(ok(&engine, "arbiter.proposal.resolve", json!({"id": p["id"], "approve": true}))["status"], "approved");
+}
+
+#[test]
+fn an_order_card_is_not_placed_once_the_strategy_trades_another_product() {
+    let (engine, fake) = setup();
+    let id = ok(&engine, "arbiter.strategy.save", json!({"draft": draft("Ask", "20")}))["row"]["id"].as_i64().unwrap();
+    let out = ok(&engine, "arbiter.order.place", json!({"strategy_id": id, "side": "buy", "quote": "20", "why": "RSI is low"}));
+    assert_eq!(out["outcome"], "proposed", "{out:#}");
+    let mut sol = draft("Ask", "20");
+    sol["product"] = json!("SOL-CAD");
+    ok(&engine, "arbiter.strategy.save", json!({"id": id, "draft": sol}));
+    let p = ok(&engine, "arbiter.proposal.resolve", json!({"id": out["proposal"]["id"], "approve": true}));
+    assert_eq!(p["status"], "failed", "{p:#}");
+    assert_eq!(p["outcome"], "The strategy trades SOL-CAD now; nothing was placed.");
+    assert!(ok(&engine, "arbiter.order.list", json!({"strategy_id": id}))["orders"].as_array().unwrap().is_empty());
+    assert!(fake.placed.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_card_past_its_time_is_not_approved_before_the_runner_expires_it() {
+    let (dir, engine, _) = setup_on_disk();
+    let id = ok(&engine, "arbiter.strategy.save", json!({"draft": draft("Ask", "20")}))["row"]["id"].as_i64().unwrap();
+    let out = ok(&engine, "arbiter.order.place", json!({"strategy_id": id, "side": "buy", "quote": "20", "why": "RSI is low"}));
+    let pid = out["proposal"]["id"].as_i64().unwrap();
+    age_card(dir.path(), pid, 3600);
+    assert_eq!(code(call(&engine, "arbiter.proposal.resolve", json!({"id": pid, "approve": true}))), "arbiter.answered");
+    let cards = ok(&engine, "arbiter.proposal.list", json!({}));
+    assert_eq!(cards["proposals"][0]["status"], "expired", "{cards:#}");
+    assert!(ok(&engine, "arbiter.order.list", json!({"strategy_id": id}))["orders"].as_array().unwrap().is_empty());
 }

@@ -18,7 +18,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 /// Bumped with every entry appended to [`MIGRATIONS`]; every earlier version must stay openable.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 const MIGRATIONS: &[&str] = &[r"
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -65,7 +65,10 @@ CREATE TABLE candles (
     product TEXT NOT NULL, granularity TEXT NOT NULL, start INTEGER NOT NULL,
     open REAL NOT NULL, high REAL NOT NULL, low REAL NOT NULL, close REAL NOT NULL, volume REAL NOT NULL,
     PRIMARY KEY (product, granularity, start)) WITHOUT ROWID;
-"];
+",
+// 2: a change card keeps a hash of the strategy it was made from (see `strategy_hash`), so
+// approving it cannot put back what was changed since. NULL on older cards: no check.
+"ALTER TABLE proposals ADD COLUMN based_on TEXT;"];
 
 #[derive(Debug)]
 pub enum BookError {
@@ -842,13 +845,13 @@ impl Book {
 
     pub fn add_proposal(&self, p: &NewProposal) -> Result<i64> {
         self.conn.prepare_cached(
-            "INSERT INTO proposals (kind, strategy_id, title, why, source, side, product, quote, base, is_limit, venue, draft, draft_hash, changes, thread_id, cause, created_at, expires_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            "INSERT INTO proposals (kind, strategy_id, title, why, source, side, product, quote, base, is_limit, venue, draft, draft_hash, changes, thread_id, cause, created_at, expires_at, based_on)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         )?.execute(params![
             p.kind, p.strategy_id, p.title, p.why, p.source.as_str(), p.side.map(Side::as_str), p.product, text(p.quote), text(p.base),
             p.limit, p.venue.map(Venue::as_str), p.draft.as_ref().map(|d| serde_json::to_string(d).unwrap_or_default()),
             p.draft.as_ref().map(draft_hash), serde_json::to_string(&p.changes).unwrap_or_default(), p.thread_id, p.cause,
-            now(), p.expires_at
+            now(), p.expires_at, p.based_on
         ])?;
         let id = self.conn.last_insert_rowid();
         self.log(p.strategy_id, "proposal", &format!("{} ({} asks: {})", p.title, p.source.as_str(), p.why), None)?;
@@ -857,6 +860,12 @@ impl Book {
 
     pub fn proposal(&self, id: i64) -> Result<(ProposalView, Option<String>)> {
         self.proposals_where("p.id = ?1", params![id], 1)?.pop().ok_or_else(|| BookError::NotFound(format!("There is no proposal {id}")))
+    }
+
+    /// The [`strategy_hash`] a change card was made from; `None` for a card made before it was
+    /// kept, or for another kind of card.
+    pub fn proposal_based_on(&self, id: i64) -> Result<Option<String>> {
+        Ok(self.conn.prepare_cached("SELECT based_on FROM proposals WHERE id = ?1")?.query_row([id], |r| r.get(0)).optional()?.flatten())
     }
 
     pub fn proposals(&self, pending_only: bool, limit: u32) -> Result<Vec<ProposalView>> {
@@ -1040,6 +1049,8 @@ pub struct NewProposal {
     pub thread_id: Option<i64>,
     pub cause: Option<String>,
     pub expires_at: Option<i64>,
+    /// A change card: the [`strategy_hash`] of the strategy it was made from.
+    pub based_on: Option<String>,
 }
 
 trait SourceStr {
@@ -1057,6 +1068,12 @@ pub fn draft_hash(d: &Draft) -> String {
     use sha2::{Digest, Sha256};
     let json = serde_json::to_string(d).unwrap_or_default();
     Sha256::digest(json.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+/// What a change card was made from: the strategy's product, bars, rule and limits, its name
+/// left out. Approving the card is refused when this has changed since.
+pub fn strategy_hash(s: &StrategyRec) -> String {
+    draft_hash(&Draft { name: String::new(), ..s.draft() })
 }
 
 fn opt_money(d: Option<Decimal>) -> String {
@@ -1271,6 +1288,32 @@ mod tests {
         assert_eq!(book.expire_proposals(now()).unwrap(), 1);
         assert_eq!(book.proposal(id).unwrap().0.status, "expired");
         assert!(book.resolve_proposal(id, "approved", None).is_err());
+    }
+
+    #[test]
+    fn a_version_1_book_opens_and_its_cards_carry_no_basis() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        conn.execute("INSERT INTO proposals (kind, strategy_id, title, why, source, created_at) VALUES ('change', 1, 'Change', 'why', 'agent', 0)", []).unwrap();
+        let book = Book::init(conn).unwrap();
+        assert_eq!(book.conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0)).unwrap(), SCHEMA_VERSION);
+        assert_eq!(book.proposal(1).unwrap().0.status, "pending");
+        assert_eq!(book.proposal_based_on(1).unwrap(), None);
+    }
+
+    #[test]
+    fn a_strategys_hash_follows_its_rule_and_limits_not_its_name() {
+        let book = Book::open_in_memory().unwrap();
+        let sid = book.create_strategy(&draft()).unwrap();
+        let before = strategy_hash(&book.strategy(sid).unwrap());
+        let mut d = draft();
+        d.name = "Renamed".into();
+        book.save_strategy(sid, &d).unwrap();
+        assert_eq!(strategy_hash(&book.strategy(sid).unwrap()), before);
+        d.limits.max_position = Some(Decimal::new(100, 0));
+        book.set_strategy_limits(sid, &d.limits).unwrap();
+        assert_ne!(strategy_hash(&book.strategy(sid).unwrap()), before);
     }
 
     #[test]
