@@ -641,7 +641,7 @@ elsewhere. `crates/relay-core/src/threads/images.rs`; the ops are in `crates/rel
   instructions.
 - **Drawing them:** `thread.image {id}` → `{media_type, bytes_b64}`, an unlocked query;
   `thread.image_not_found` for an id it does not know.
-- **Going:** an upload no message carries is removed a day after it was made, swept whenever
+- **Going:** an upload no message carries is removed a week after it was made, swept whenever
   another is uploaded (with any file a cut-short write left without a row). Deleting a thread
   removes the pictures its messages carried that no other message does, after the handler. The
   phone may call both ops (`PHONE_OPS`).

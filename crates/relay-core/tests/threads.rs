@@ -652,7 +652,7 @@ fn deleting_a_thread_removes_the_pictures_no_other_thread_carries() {
     ok(&engine, "thread.image", json!({"id": shared["id"]}));
     ok(&engine, "thread.delete", json!({"id": second["id"]}));
     assert!(!picture_file(root.path(), &shared).exists());
-    // An upload not yet sent is no thread's: it waits for its message, or its day.
+    // An upload not yet sent is no thread's: it waits for its message, or its week.
     assert!(picture_file(root.path(), &kept).is_file());
     ok(&engine, "thread.image", json!({"id": kept["id"]}));
 }

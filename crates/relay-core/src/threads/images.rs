@@ -28,8 +28,9 @@ pub const MAX: usize = 4;
 /// A refused request is refused again on every later turn.
 pub const THREAD_MAX: usize = 20;
 pub const THREAD_BYTES: u64 = 20 << 20;
-/// How long an upload no message carries is kept.
-pub const UNSENT: Duration = Duration::from_secs(24 * 60 * 60);
+/// How long an upload no message carries is kept: a week, so a draft kept that long, or a message
+/// a phone queued while the PC was away, still finds its pictures.
+pub const UNSENT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 pub(super) const SCHEMA: &str = "
 CREATE TABLE image (
@@ -213,7 +214,7 @@ pub fn upload(engine: &Engine, media_type: &str, bytes_b64: &str, now: &str) -> 
 fn sweep(engine: &Engine, now: &str) {
     let cutoff = now.parse::<jiff::Timestamp>().ok()
         .and_then(|now| now.checked_sub(jiff::SignedDuration::from_secs(UNSENT.as_secs() as i64)).ok())
-        .map_or_else(|| crate::time::days_ago(1), crate::time::stamp);
+        .map_or_else(|| crate::time::days_ago(7), crate::time::stamp);
     match with_db(engine, |db| db.forget_unsent(&cutoff)) {
         Ok(gone) => remove(&gone.iter().map(|image| path(engine, image)).collect::<Vec<_>>()),
         Err(e) => tracing::warn!("sweeping unsent thread pictures failed: {}", e.message),
@@ -279,7 +280,7 @@ pub fn room(engine: &Engine, id: Id, adding: &[ImageView]) -> Result<(), BusErro
 /// The uploads `ids` name, each one known.
 pub fn find(engine: &Engine, ids: &[String]) -> Result<Vec<ImageView>, BusError> {
     let unknown = |id: &str| {
-        BusError::invalid("thread.image_unknown", format!("No picture {id}")).with_hint("upload it with thread.upload first; one never sent is removed after a day")
+        BusError::invalid("thread.image_unknown", format!("No picture {id}")).with_hint("upload it with thread.upload first; one never sent is removed after a week")
     };
     ids.iter().map(|id| {
         if !valid_id(id) {
@@ -350,15 +351,17 @@ mod tests {
     }
 
     #[test]
-    fn an_upload_never_sent_goes_after_a_day_and_a_sent_one_stays() {
+    fn an_upload_never_sent_goes_after_a_week_and_a_sent_one_stays() {
         let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
         let now = crate::time::now();
-        let two_days_ago = crate::time::days_ago(2);
-        let unsent = upload(&engine, "image/png", &png(4, 3), &two_days_ago).unwrap();
-        let sent = upload(&engine, "image/png", &png(5, 3), &two_days_ago).unwrap();
-        let thread = super::super::create(&engine, super::super::MONEY, "Receipts", None, None, &two_days_ago).unwrap().id;
-        super::super::post(&engine, thread, "", std::slice::from_ref(&sent), &two_days_ago).unwrap();
-        // A file left with no row by a write cut short, a day and more ago, and one just now.
+        let eight_days_ago = crate::time::days_ago(8);
+        let unsent = upload(&engine, "image/png", &png(4, 3), &eight_days_ago).unwrap();
+        let sent = upload(&engine, "image/png", &png(5, 3), &eight_days_ago).unwrap();
+        // A draft's picture, or a queued message's, two days on.
+        let waiting = upload(&engine, "image/png", &png(7, 3), &crate::time::days_ago(2)).unwrap();
+        let thread = super::super::create(&engine, super::super::MONEY, "Receipts", None, None, &eight_days_ago).unwrap().id;
+        super::super::post(&engine, thread, "", std::slice::from_ref(&sent), &eight_days_ago).unwrap();
+        // A file left with no row by a write cut short, a week and more ago, and one just now.
         let stray = dir(&engine).join(format!("{}.png", "0".repeat(32)));
         let fresh = dir(&engine).join(format!("{}.png", "1".repeat(32)));
         for file in [&stray, &fresh] {
@@ -369,10 +372,11 @@ mod tests {
         assert!(file_of(&engine, &unsent).is_file());
 
         let next = upload(&engine, "image/png", &png(6, 3), &now).unwrap();
-        assert!(!file_of(&engine, &unsent).exists(), "unsent for two days");
+        assert!(!file_of(&engine, &unsent).exists(), "unsent for eight days");
+        assert!(file_of(&engine, &waiting).is_file(), "unsent for two days is still waiting");
         assert!(with_db(&engine, |db| db.image(&unsent.id)).unwrap().is_none());
         assert!(file_of(&engine, &sent).is_file() && file_of(&engine, &next).is_file());
-        assert!(!stray.exists() && fresh.exists(), "a stray file goes only once it is a day old");
+        assert!(!stray.exists() && fresh.exists(), "a stray file goes only once it is a week old");
         std::fs::remove_file(&fresh).unwrap();
         assert!(find(&engine, std::slice::from_ref(&unsent.id)).is_err() && find(&engine, std::slice::from_ref(&sent.id)).is_ok());
     }

@@ -1013,7 +1013,7 @@ pub fn post(engine: &Engine, id: Id, text: &str, pictures: &[ImageView], now: &s
     };
     let added = images::room(engine, id, pictures).and_then(|()| with_db(engine, |db| db.add_user(id, text, pictures, now))).and_then(|added| {
         added.map_err(|gone| BusError::invalid("thread.image_unknown", format!("No picture {gone}"))
-            .with_hint("it was removed unsent after a day; upload it again with thread.upload"))
+            .with_hint("it was removed unsent after a week; upload it again with thread.upload"))
     });
     added.map(|m| (m, token)).inspect_err(|_| {
         end_turn(engine, id, token);
