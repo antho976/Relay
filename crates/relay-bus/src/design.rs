@@ -769,13 +769,16 @@ pub struct Node {
     #[serde(default)]
     #[schemars(range(min = -MAX_COORD, max = MAX_COORD))]
     pub y: f64,
-    /// Width in px, 0 to 1000000 (`width` is read as `w`). A text with no `w` hugs its words.
-    /// In a laid-out frame `w_sizing` hug or fill replaces it.
+    /// Width in px, 0 to 1000000 (`width` is read as `w`). A text with no `w` hugs its words; a
+    /// rect, ellipse, polygon or frame added without one is 100 wide, an icon 24 (within
+    /// `min_w`/`max_w`); an image needs the `w` `design.asset.add` answered; a line's follows its
+    /// points. In a laid-out frame `w_sizing` hug or fill replaces it.
     #[serde(default, alias = "width")]
     #[schemars(range(min = 0, max = MAX_COORD))]
     pub w: f64,
     /// Height in px, 0 to 1000000 (`height` is read as `h`). A text hugs its lines whatever `h`
-    /// says, unless `h_sizing` is fixed; a sticky grows past it to fit its words.
+    /// says, unless `h_sizing` is fixed; a sticky grows past it to fit its words. A shape, frame
+    /// or icon added without one gets a default as with `w`, and an image needs its `h`.
     #[serde(default, alias = "height")]
     #[schemars(range(min = 0, max = MAX_COORD))]
     pub h: f64,
@@ -871,12 +874,14 @@ pub struct Node {
     pub letter_spacing: Option<f64>,
 
     /// Width rule (default `fixed`: its `w`; a text without a `w` hugs its words). `hug`
-    /// shrinks a text or sticky to its words and a laid-out frame to its children; `fill` takes
-    /// the room a laid-out parent leaves along its direction, or its inner width across it.
+    /// shrinks a text or sticky to its words and a laid-out frame to its children (nothing else
+    /// hugs); `fill` takes the room a laid-out parent leaves along its direction, or its inner
+    /// width across it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub w_sizing: Option<Sizing>,
     /// Height rule (default `fixed`; a text hugs its lines). A sticky's fixed `h` is a minimum
-    /// that grows to fit its words, and `hug` makes it exactly as tall as they are, as a text's.
+    /// that grows to fit its words, and `hug` makes it exactly as tall as they are, as a text's
+    /// (only a text, a sticky or a frame hugs).
     /// `fill` takes the room a laid-out parent leaves along its direction, or its inner height
     /// across it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

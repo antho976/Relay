@@ -10,7 +10,7 @@
 
 use super::hints::{bad_value, not_a_field};
 use super::read::probe;
-use super::{canonical_key, Node, NodeKind, NodeOp, Shadow, MAX_SHADOW_BLUR};
+use super::{canonical_key, Node, NodeKind, NodeOp, Shadow, Sizing, MAX_SHADOW_BLUR};
 use serde::ser::{self, Impossible, Serialize, SerializeStruct, Serializer};
 use serde_json::{Map, Value};
 use std::borrow::Cow;
@@ -227,11 +227,28 @@ fn written_shadow(kind: NodeKind, field: &str, s: &Shadow) -> Result<(), String>
     Ok(())
 }
 
+/// Whether a `kind` node sizes to its content when it hugs (B49): a text or sticky to its words,
+/// a frame to its children. Layout reads hug on any other as fixed, so a rect told to hug kept a
+/// 0 size and drew nothing.
+fn hugs(kind: NodeKind) -> bool {
+    matches!(kind, NodeKind::Text | NodeKind::Sticky | NodeKind::Frame)
+}
+
 /// The written rules on one field's new value beyond its kind: no control characters in a name,
 /// font, text or a run's font (B43), a shadow's blur within the node blur's cap (B72) and no inner
-/// shadow or spread where only outer ones are cast.
+/// shadow or spread where only outer ones are cast, and hug only where something sizes to its
+/// content (B49).
 fn written(n: &Node, field: &str) -> Result<(), String> {
     match field {
+        "w_sizing" | "h_sizing" => {
+            let rule = if field == "w_sizing" { n.w_sizing } else { n.h_sizing };
+            if rule == Some(Sizing::Hug) && !hugs(n.kind) {
+                let kind = n.kind.name();
+                let a = if kind.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
+                return Err(format!("{field}: {a} {kind} cannot hug; only a text, a sticky or a frame sizes to its content"));
+            }
+            Ok(())
+        }
         "name" | "font" => {
             let value = if field == "name" { &n.name } else { &n.font };
             match value {
@@ -282,6 +299,14 @@ impl Node {
         }
         if self.shadow.is_some() && self.shadows.is_some() {
             return Err(BOTH_SHADOWS.into());
+        }
+        // B49: an image added without its size draws nothing, unless layout gives it one.
+        if self.kind == NodeKind::Image {
+            for (key, size, rule) in [("w", self.w, self.w_rule()), ("h", self.h, self.h_rule())] {
+                if size <= 0.0 && rule != Sizing::Fill {
+                    return Err(format!("{key}: an image needs its size; design.asset.add answers w and h"));
+                }
+            }
         }
         Ok(())
     }
@@ -390,6 +415,12 @@ pub fn fit_written(op: &mut NodeOp, kind_of: impl Fn(&str) -> Option<NodeKind>) 
                 }
             }
             let kind = node.kind;
+            for (field, rule) in [("w_sizing", &mut node.w_sizing), ("h_sizing", &mut node.h_sizing)] {
+                if *rule == Some(Sizing::Hug) && !hugs(kind) {
+                    *rule = None;
+                    dropped.push(field.into());
+                }
+            }
             if node.shadow.as_mut().map(|s| fit_shadow(kind, s)) == Some(false) {
                 node.shadow = None;
                 dropped.push("shadow".into());
@@ -427,6 +458,12 @@ pub fn fit_written(op: &mut NodeOp, kind_of: impl Fn(&str) -> Option<NodeKind>) 
                             *f = clean;
                         }
                     }
+                }
+            }
+            for field in ["w_sizing", "h_sizing"] {
+                if kind.is_some_and(|k| !hugs(k)) && set.get(field).and_then(Value::as_str) == Some("hug") {
+                    set.remove(field);
+                    dropped.push(field.into());
                 }
             }
             let outer_only = kind.is_some_and(casts_outer_only);
@@ -663,7 +700,7 @@ mod tests {
             NodeKind::Page => json!({"kind": "page"}),
             NodeKind::Line => json!({"kind": "line", "parent": "p", "points": [[0, 0], [9, 9]]}),
             NodeKind::Path => json!({"kind": "path", "parent": "p", "points": [[0, 0]]}),
-            NodeKind::Image => json!({"kind": "image", "parent": "p", "src": "0123456789abcdef0123.png"}),
+            NodeKind::Image => json!({"kind": "image", "parent": "p", "src": "0123456789abcdef0123.png", "w": 64, "h": 48}),
             NodeKind::Icon => json!({"kind": "icon", "parent": "p", "icon": "home"}),
             kind => json!({"kind": kind.name(), "parent": "p"}),
         };
@@ -880,6 +917,47 @@ mod tests {
         assert!(node(json!({"kind": "group", "shadows": [{"color": "#000"}]})).check_new().unwrap_err().starts_with("shadows: group nodes"));
         assert!(node(json!({"kind": "icon", "icon": "home", "stroke_gradient": {"stops": []}})).check_new().unwrap_err().starts_with("stroke_gradient: icon nodes"));
         assert_eq!(node(json!({"kind": "polygon", "text": "Go", "max_lines": 1, "stroke_join": "bevel", "stroke_cap": "square"})).check_new(), Ok(()));
+    }
+
+    /// B49: hug only where something sizes to its content, and an image added with its size.
+    #[test]
+    fn hug_and_image_sizes_are_written_rules() {
+        for kind in ["rect", "ellipse", "polygon", "group"] {
+            for field in ["w_sizing", "h_sizing"] {
+                let why = node(json!({"kind": kind, field: "hug"})).check_new().unwrap_err();
+                let a = if kind == "ellipse" { "an" } else { "a" };
+                assert_eq!(why, format!("{field}: {a} {kind} cannot hug; only a text, a sticky or a frame sizes to its content"));
+            }
+        }
+        for ok in [json!({"kind": "text", "text": "Hi", "w_sizing": "hug"}), json!({"kind": "sticky", "h_sizing": "hug"}),
+            json!({"kind": "frame", "layout": "row", "w_sizing": "hug", "h_sizing": "hug"}), json!({"kind": "rect", "w_sizing": "fill"})] {
+            assert_eq!(node(ok.clone()).check_new(), Ok(()), "{ok}");
+        }
+        let rect = node(json!({"kind": "rect", "w": 10, "h": 10}));
+        let hug = set(json!({"h_sizing": "hug"}));
+        assert!(Node::check_update(&rect, &hug, &rect.patched(&hug).unwrap()).unwrap_err().starts_with("h_sizing: a rect cannot hug"));
+        // A rect stored hugging stays editable.
+        let stored = node(json!({"kind": "rect", "w_sizing": "hug"}));
+        let x = set(json!({"x": 2}));
+        assert_eq!(Node::check_update(&stored, &x, &stored.patched(&x).unwrap()), Ok(()));
+        // An image needs its size, unless layout gives it one.
+        let src = "0123456789abcdef0123.png";
+        for (body, why) in [
+            (json!({"kind": "image", "src": src}), Some("w: an image needs its size; design.asset.add answers w and h")),
+            (json!({"kind": "image", "src": src, "w": 640}), Some("h: an image needs its size; design.asset.add answers w and h")),
+            (json!({"kind": "image", "src": src, "w": 640, "h": 480}), None),
+            (json!({"kind": "image", "src": src, "w_sizing": "fill", "h": 200}), None),
+        ] {
+            assert_eq!(node(body.clone()).check_new().err().as_deref(), why, "{body}");
+        }
+        // The canvas never sends a hug where it would be refused.
+        let kinds = |id: &str| (id == "r").then_some(NodeKind::Rect);
+        let mut op = NodeOp::Update { id: "r".into(), set: set(json!({"w_sizing": "hug", "h_sizing": "fill"})) };
+        assert_eq!(fit_written(&mut op, kinds), ["w_sizing"]);
+        let mut op = NodeOp::Add { node: node(json!({"id": "e", "kind": "ellipse", "w": 9, "h": 9, "h_sizing": "hug"})), index: None };
+        assert_eq!(fit_written(&mut op, kinds), ["h_sizing"]);
+        let NodeOp::Add { node: fitted, .. } = &op else { panic!() };
+        assert_eq!((fitted.h_sizing, fitted.check_new()), (None, Ok(())));
     }
 
     /// What the canvas sends is fitted to what a strict list takes (MODEL-SPEC §1 #33).

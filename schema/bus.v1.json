@@ -25144,7 +25144,7 @@
         "w": {
           "type": "number",
           "format": "double",
-          "description": "Width in px, 0 to 1000000 (`width` is read as `w`). A text with no `w` hugs its words.\nIn a laid-out frame `w_sizing` hug or fill replaces it.",
+          "description": "Width in px, 0 to 1000000 (`width` is read as `w`). A text with no `w` hugs its words; a\nrect, ellipse, polygon or frame added without one is 100 wide, an icon 24 (within\n`min_w`/`max_w`); an image needs the `w` `design.asset.add` answered; a line's follows its\npoints. In a laid-out frame `w_sizing` hug or fill replaces it.",
           "minimum": 0,
           "maximum": 1000000.0,
           "default": 0.0
@@ -25152,7 +25152,7 @@
         "h": {
           "type": "number",
           "format": "double",
-          "description": "Height in px, 0 to 1000000 (`height` is read as `h`). A text hugs its lines whatever `h`\nsays, unless `h_sizing` is fixed; a sticky grows past it to fit its words.",
+          "description": "Height in px, 0 to 1000000 (`height` is read as `h`). A text hugs its lines whatever `h`\nsays, unless `h_sizing` is fixed; a sticky grows past it to fit its words. A shape, frame\nor icon added without one gets a default as with `w`, and an image needs its `h`.",
           "minimum": 0,
           "maximum": 1000000.0,
           "default": 0.0
@@ -25338,7 +25338,7 @@
               "type": "null"
             }
           ],
-          "description": "Width rule (default `fixed`: its `w`; a text without a `w` hugs its words). `hug`\nshrinks a text or sticky to its words and a laid-out frame to its children; `fill` takes\nthe room a laid-out parent leaves along its direction, or its inner width across it."
+          "description": "Width rule (default `fixed`: its `w`; a text without a `w` hugs its words). `hug`\nshrinks a text or sticky to its words and a laid-out frame to its children (nothing else\nhugs); `fill` takes the room a laid-out parent leaves along its direction, or its inner\nwidth across it."
         },
         "h_sizing": {
           "anyOf": [
@@ -25349,7 +25349,7 @@
               "type": "null"
             }
           ],
-          "description": "Height rule (default `fixed`; a text hugs its lines). A sticky's fixed `h` is a minimum\nthat grows to fit its words, and `hug` makes it exactly as tall as they are, as a text's.\n`fill` takes the room a laid-out parent leaves along its direction, or its inner height\nacross it."
+          "description": "Height rule (default `fixed`; a text hugs its lines). A sticky's fixed `h` is a minimum\nthat grows to fit its words, and `hug` makes it exactly as tall as they are, as a text's\n(only a text, a sticky or a frame hugs).\n`fill` takes the room a laid-out parent leaves along its direction, or its inner height\nacross it."
         },
         "layout": {
           "anyOf": [

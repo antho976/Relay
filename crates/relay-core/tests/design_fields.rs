@@ -153,3 +153,32 @@ fn shadows_follow_the_kinds_that_cast_them() {
     assert_eq!(out["warnings"], json!(["ops[0] add \"t\": shadow.inset: text nodes cast no inner shadow; kept as it was"]));
     assert_eq!(find(&out["nodes"], "t")["shadow"]["inset"], true);
 }
+
+/// B49: an image added without its size, or a shape told to hug, would draw nothing; a strict
+/// list refuses both by field, and an undo puts back what was stored.
+#[test]
+fn an_image_needs_its_size_and_only_what_has_content_hugs() {
+    let (e, _root) = project();
+    let id = create(&e);
+    card(&e, id);
+    let src = "0123456789abcdef0123.png";
+    for (node, message) in [
+        (json!({"id": "pic", "parent": "card", "kind": "image", "src": src}),
+            "ops[0] add \"pic\": w: an image needs its size; design.asset.add answers w and h"),
+        (json!({"id": "pic", "parent": "card", "kind": "image", "src": src, "w": 320}),
+            "ops[0] add \"pic\": h: an image needs its size; design.asset.add answers w and h"),
+        (json!({"id": "dot", "parent": "card", "kind": "ellipse", "w": 9, "h_sizing": "hug"}),
+            "ops[0] add \"dot\": h_sizing: an ellipse cannot hug; only a text, a sticky or a frame sizes to its content"),
+    ] {
+        let error = refused(&e, id, json!([{"op": "add", "node": node}]));
+        assert_eq!((error.code.as_str(), error.message.as_str()), ("design.node_invalid", message));
+    }
+    let error = refused(&e, id, json!([{"op": "update", "id": "card", "set": {"w_sizing": "hug"}}, {"op": "add",
+        "node": {"id": "r", "parent": "card", "kind": "rect", "w": 4, "h": 4}}, {"op": "update", "id": "r", "set": {"w_sizing": "hug"}}]));
+    assert_eq!(error.message, "ops[2] update \"r\": w_sizing: a rect cannot hug; only a text, a sticky or a frame sizes to its content");
+    // A frame hugs; an image filling a laid-out row takes its width from it.
+    apply(&e, id, json!([
+        {"op": "update", "id": "card", "set": {"layout": "row", "w_sizing": "hug"}},
+        {"op": "add", "node": {"id": "pic", "parent": "card", "kind": "image", "src": src, "w_sizing": "fill", "h": 80}},
+    ]));
+}
