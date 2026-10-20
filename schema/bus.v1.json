@@ -25162,14 +25162,14 @@
             "string",
             "null"
           ],
-          "description": "Background: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour the design names (a\n`color` edit names one). Default: a frame `#FFFFFF`, a rect,\nellipse or polygon `#D9D9D9`, a sticky `#FFE58A`, a page `#1E1D1B` (the canvas colour); a\ntext, line or path paints none unless given one (a text's is a box behind its words, a\nline's or path's of three points or more fills inside them). A text's letters are `color`."
+          "description": "Background: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour the design names (a\n`color` edit names one). Default: a frame `#FFFFFF`, a rect, ellipse or polygon\n`#D9D9D9`, a sticky `#FFE58A`, a page `#1E1D1B` (the canvas colour); a text, line or path\npaints none unless given one (a text's is a box behind its words, a line's or path's of\nthree points or more fills inside them). A text's letters are `color`."
         },
         "stroke": {
           "type": [
             "string",
             "null"
           ],
-          "description": "Outline colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour. A box's border (frame, rect, sticky,\nimage) and an ellipse's or polygon's outline are drawn only when set, inside the edge; a\nline or path defaults to `#8C8C8C`; an icon is drawn in it (default: its `color`, else dark\non a light ground and light on a dark one)."
+          "description": "Outline colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour. A box's border\n(frame, rect, sticky, image) and an ellipse's or polygon's outline are drawn only when set,\ninside the edge; a line or path defaults to `#8C8C8C`; an icon is drawn in it (default: its\n`color`, else dark on a light ground and light on a dark one)."
         },
         "stroke_width": {
           "type": [
@@ -26364,7 +26364,7 @@
           "description": "Keeps its place and height as fractions of the parent's height."
         }
       ],
-      "description": "How a child follows its parent's height, as [`PinX`] its width."
+      "description": "How a child follows its parent's height, as `pin_x` does its width."
     },
     "DesignScroll": {
       "oneOf": [

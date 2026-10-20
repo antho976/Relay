@@ -268,7 +268,7 @@ pub enum PinX {
     Scale,
 }
 
-/// How a child follows its parent's height, as [`PinX`] its width.
+/// How a child follows its parent's height, as `pin_x` does its width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(rename = "DesignPinY")]
@@ -785,16 +785,16 @@ pub struct Node {
     #[schemars(range(min = 0, max = MAX_COORD))]
     pub h: f64,
     /// Background: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour the design names (a
-    /// `color` edit names one). Default: a frame `#FFFFFF`, a rect,
-    /// ellipse or polygon `#D9D9D9`, a sticky `#FFE58A`, a page `#1E1D1B` (the canvas colour); a
-    /// text, line or path paints none unless given one (a text's is a box behind its words, a
-    /// line's or path's of three points or more fills inside them). A text's letters are `color`.
+    /// `color` edit names one). Default: a frame `#FFFFFF`, a rect, ellipse or polygon
+    /// `#D9D9D9`, a sticky `#FFE58A`, a page `#1E1D1B` (the canvas colour); a text, line or path
+    /// paints none unless given one (a text's is a box behind its words, a line's or path's of
+    /// three points or more fills inside them). A text's letters are `color`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<String>,
-    /// Outline colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour. A box's border (frame, rect, sticky,
-    /// image) and an ellipse's or polygon's outline are drawn only when set, inside the edge; a
-    /// line or path defaults to `#8C8C8C`; an icon is drawn in it (default: its `color`, else dark
-    /// on a light ground and light on a dark one).
+    /// Outline colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour. A box's border
+    /// (frame, rect, sticky, image) and an ellipse's or polygon's outline are drawn only when set,
+    /// inside the edge; a line or path defaults to `#8C8C8C`; an icon is drawn in it (default: its
+    /// `color`, else dark on a light ground and light on a dark one).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stroke: Option<String>,
     /// In px, 0 to 1000. Default 1 for a border or outline, 2 for a line, path or icon (an
@@ -2142,6 +2142,16 @@ mod tests {
         // A conic gradient takes 2 to 8 stops like the others, on the stroke too.
         let one = read(json!({"kind": "rect", "parent": "p", "stroke_gradient": {"kind": "conic", "stops": [{"at": 0, "color": "#000"}]}}));
         assert_eq!(one.validate().unwrap_err(), "stroke_gradient: give 2 to 8 stops");
+    }
+
+    /// What agents read of a node and its edits is plain text: no rustdoc link leaks into it.
+    #[test]
+    fn the_edit_schema_holds_no_rustdoc_links() {
+        let schema = serde_json::to_value(schemars::schema_for!(NodeOp)).unwrap().to_string();
+        assert!(!schema.contains("[`"), "a rustdoc link leaked into the schema");
+        for def in ["DesignPinX", "DesignPinY", "DesignScroll", "DesignStrokeCap", "DesignTextRun", "DesignNode"] {
+            assert!(schema.contains(def), "{def}");
+        }
     }
 
     /// The tool schema still refuses unknown keys, and does not show `extra`.
