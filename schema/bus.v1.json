@@ -25880,6 +25880,28 @@
           "maxLength": 64,
           "pattern": "^[A-Za-z0-9_.:-]+$"
         },
+        "motion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignMotion"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How it moves when the design plays: 2 to 64 keys in time order on the clock of the nearest\nframe or page with a `timeline` (itself included), else its page's. Its own fields are its\nlook at rest, which whatever does not play shows (the canvas until Play, exports,\n`design.render` without `at_ms`). `dx`, `dy`, `rotate` and the scales move it from where\nlayout puts it; `opacity`, `fill`, `stroke`, `color`, `blur`, `sweep`, `angle` and `trim`\nshow their value instead of its own. Times are milliseconds:\n`{\"ease\": \"ease_out\", \"keys\": [{\"at_ms\": 0, \"dy\": 24, \"opacity\": 0}, {\"at_ms\": 500, \"dy\": 0, \"opacity\": 1}]}`."
+        },
+        "timeline": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignTimeline"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A frame's or page's clock for the motion inside it: `{\"duration_ms\": 3000, \"loop\": true}`\n(default: as long as the latest key, looping). A nested timeline keeps its own time."
+        },
         "width": {
           "type": "number",
           "minimum": 0,
@@ -26495,6 +26517,282 @@
       ],
       "description": "One stretch of a text in a style of its own: characters `start` to `end` of `text` (counted\nin characters, `end` not included). A field it leaves out is the node's."
     },
+    "DesignMotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "keys": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignKey"
+          },
+          "description": "2 to 64 keys in time order, the last at 50 ms or later.",
+          "minItems": 2,
+          "maxItems": 64
+        },
+        "ease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignEase"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Ease of every move whose key names none (default `ease`)."
+        },
+        "origin": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double",
+            "minimum": -10.0,
+            "maximum": 10.0
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "The point it turns and scales about, as fractions of its box, each within ±10: `[0.5, 0.5]`\n(the default) the centre, `[0.5, 1]` the bottom middle, `[0, 0]` the top left."
+        },
+        "loop": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Plays its keys again from 0 every last-key ms, whatever its timeline does: spinners,\npulses (default false)."
+        }
+      },
+      "required": [
+        "keys"
+      ],
+      "description": "How a node moves when its design plays."
+    },
+    "DesignKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "at_ms": {
+          "type": "number",
+          "format": "double",
+          "description": "Milliseconds from the start of the timeline, 0 to 600000 (half a second is 500).",
+          "minimum": 0,
+          "maximum": 600000.0
+        },
+        "ease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignEase"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the move from this key to the next eases (default: the motion's `ease`)."
+        },
+        "dx": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Moved right by this many px from where it sits (negative: left), within ±1000000.",
+          "minimum": -1000000.0,
+          "maximum": 1000000.0
+        },
+        "dy": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Moved down by this many px from where it sits (negative: up), within ±1000000.",
+          "minimum": -1000000.0,
+          "maximum": 1000000.0
+        },
+        "rotate": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Degrees clockwise added to its own rotation, about `origin`, within ±3600.",
+          "minimum": -3600.0,
+          "maximum": 3600.0
+        },
+        "scale": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Size multiplier about `origin`, both ways, 0 to 100 (1 as drawn).",
+          "minimum": 0,
+          "maximum": 100.0
+        },
+        "scale_x": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Width multiplier about `origin`, times `scale`, 0 to 100.",
+          "minimum": 0,
+          "maximum": 100.0
+        },
+        "scale_y": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Height multiplier about `origin`, times `scale`, 0 to 100.",
+          "minimum": 0,
+          "maximum": 100.0
+        },
+        "opacity": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "0 to 1, shown instead of its own opacity.",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "fill": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Shown instead of its fill and gradient: `#RGB`, `#RRGGBB` or `#RRGGBBAA` (a key takes no\n`$name` colour)."
+        },
+        "stroke": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Shown instead of its stroke colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`."
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Shown instead of its text colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`."
+        },
+        "blur": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Layer blur in px, 0 to 200, instead of its own.",
+          "minimum": 0,
+          "maximum": 200
+        },
+        "sweep": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "An ellipse's arc sweep in degrees, -360 to 360, instead of its own (a whole ellipse sweeps\nfrom the top): a ring that fills.",
+          "minimum": -360,
+          "maximum": 360
+        },
+        "angle": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "A linear or conic gradient's angle in degrees, within ±3600, instead of its own (and the\nstroke gradient's); nothing without one.",
+          "minimum": -3600.0,
+          "maximum": 3600.0
+        },
+        "trim": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "How much of a line's or path's stroke is drawn from its start, 0 to 1: drawing on.",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "required": [
+        "at_ms"
+      ],
+      "description": "One moment of a node's motion: how it looks `at_ms` into its timeline. A key names only what\nit sets; between two keys that set a property it is interpolated, before the first that sets\nit the property holds that key's value, after the last that key's."
+    },
+    "DesignEase": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "linear"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "ease",
+          "description": "CSS `ease`, cubic-bezier(0.25, 0.1, 0.25, 1): the default."
+        },
+        {
+          "type": "string",
+          "const": "ease_in",
+          "description": "cubic-bezier(0.42, 0, 1, 1): departures."
+        },
+        {
+          "type": "string",
+          "const": "ease_out",
+          "description": "cubic-bezier(0, 0, 0.58, 1): arrivals."
+        },
+        {
+          "type": "string",
+          "const": "ease_in_out",
+          "description": "cubic-bezier(0.42, 0, 0.58, 1)."
+        },
+        {
+          "type": "string",
+          "const": "overshoot",
+          "description": "cubic-bezier(0.34, 1.56, 0.64, 1): goes a little past and settles; pops and bounces."
+        },
+        {
+          "type": "string",
+          "const": "hold",
+          "description": "Holds the key's values until the next key, then jumps: blinks, frame by frame."
+        }
+      ],
+      "description": "How a move speeds up and slows down between two keys, as CSS names them."
+    },
+    "DesignTimeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "duration_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Its length in ms, 50 to 600000; default the latest key of the motion it clocks.",
+          "minimum": 50.0,
+          "maximum": 600000.0
+        },
+        "loop": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Starts again when it ends (default true); false holds the last frame."
+        }
+      },
+      "description": "A frame's or page's clock for the motion inside it."
+    },
     "DesignCreateIn": {
       "type": "object",
       "additionalProperties": false,
@@ -26735,6 +27033,8 @@
                   "runs",
                   "max_lines",
                   "style",
+                  "motion",
+                  "timeline",
                   "width",
                   "height"
                 ]

@@ -134,6 +134,8 @@ pub const FIELDS: &[(&str, Kinds, Option<&str>)] = &[
     ("runs", Kinds(T | S | R | E | Y), None),
     ("max_lines", Kinds(T | S | R | E | Y), None),
     ("style", Kinds(ALL & !P), Some("style: a page takes no style; give it its own fill")),
+    ("motion", Kinds(ALL & !P), Some("motion: a page does not move; give motion to what is on it")),
+    ("timeline", Kinds(F | P), Some("timeline: only a frame or a page keeps time")),
 ];
 
 fn table() -> &'static HashMap<&'static str, (Kinds, Option<&'static str>)> {
@@ -694,7 +696,8 @@ mod tests {
             "to": "b", "route": "straight", "closed": true, "smooth": true, "flip_x": true, "flip_y": true,
             "arc": {}, "blend": "normal", "text_case": "upper", "pin_x": "left", "pin_y": "top", "absolute": false,
             "min_w": 1, "max_w": 1, "min_h": 1, "max_h": 1, "row_gap": 1, "scroll": "x", "stroke_cap": "round",
-            "stroke_join": "round", "stroke_gradient": {"stops": []}, "shadows": [], "runs": [], "max_lines": 1, "style": "card"
+            "stroke_join": "round", "stroke_gradient": {"stops": []}, "shadows": [], "runs": [], "max_lines": 1, "style": "card",
+            "motion": {"keys": []}, "timeline": {}
         }"##).unwrap();
         let keys = present(&full);
         assert_eq!(keys.len(), FIELDS.len(), "{keys:?}");
