@@ -25144,7 +25144,7 @@
         "w": {
           "type": "number",
           "format": "double",
-          "description": "Width in px, 0 to 1000000 (`width` is read as `w`). A text with no `w` hugs its words.\nIn a laid-out frame `w_sizing` hug or fill replaces it.",
+          "description": "Width in px, 0 to 1000000 (`width` is read as `w`). A text with no `w` hugs its words; a\nrect, ellipse, polygon or frame added without one is 100 wide, an icon 24 (within\n`min_w`/`max_w`); an image needs the `w` `design.asset.add` answered; a line's follows its\npoints. In a laid-out frame `w_sizing` hug or fill replaces it.",
           "minimum": 0,
           "maximum": 1000000.0,
           "default": 0.0
@@ -25152,7 +25152,7 @@
         "h": {
           "type": "number",
           "format": "double",
-          "description": "Height in px, 0 to 1000000 (`height` is read as `h`). A text hugs its lines whatever `h`\nsays, unless `h_sizing` is fixed; a sticky grows past it to fit its words.",
+          "description": "Height in px, 0 to 1000000 (`height` is read as `h`). A text hugs its lines whatever `h`\nsays, unless `h_sizing` is fixed; a sticky grows past it to fit its words. A shape, frame\nor icon added without one gets a default as with `w`, and an image needs its `h`.",
           "minimum": 0,
           "maximum": 1000000.0,
           "default": 0.0
@@ -25162,14 +25162,14 @@
             "string",
             "null"
           ],
-          "description": "Background: `#RGB`, `#RRGGBB` or `#RRGGBBAA`. Default: a frame `#FFFFFF`, a rect,\nellipse or polygon `#D9D9D9`, a sticky `#FFE58A`, a page `#1E1D1B` (the canvas colour); a\ntext, line or path paints none unless given one (a text's is a box behind its words, a\nline's or path's of three points or more fills inside them). A text's letters are `color`."
+          "description": "Background: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour the design names (a\n`color` edit names one). Default: a frame `#FFFFFF`, a rect, ellipse or polygon\n`#D9D9D9`, a sticky `#FFE58A`, a page `#1E1D1B` (the canvas colour); a text, line or path\npaints none unless given one (a text's is a box behind its words, a line's or path's of\nthree points or more fills inside them). A text's letters are `color`."
         },
         "stroke": {
           "type": [
             "string",
             "null"
           ],
-          "description": "Outline colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`. A box's border (frame, rect, sticky,\nimage) and an ellipse's or polygon's outline are drawn only when set, inside the edge; a\nline or path defaults to `#8C8C8C`; an icon is drawn in it (default: its `color`, else dark\non a light ground and light on a dark one)."
+          "description": "Outline colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour. A box's border\n(frame, rect, sticky, image) and an ellipse's or polygon's outline are drawn only when set,\ninside the edge; a line or path defaults to `#8C8C8C`; an icon is drawn in it (default: its\n`color`, else dark on a light ground and light on a dark one)."
         },
         "stroke_width": {
           "type": [
@@ -25210,14 +25210,14 @@
               "type": "null"
             }
           ],
-          "description": "A shadow under a frame, rect, ellipse, polygon, sticky or image, or with `inset` inside its\nedge; a text, line, path or icon casts an outer one only, without spread (a glow when `x`\nand `y` are 0). A sticky casts a soft one of its own unless given one. `x`, `y` and `spread`\nwithin ±10000 px, `blur` 0 to 200."
+          "description": "A shadow under a frame, rect, ellipse, polygon, sticky or image, or with `inset` inside its\nedge; a text, line, path or icon casts an outer one only, without spread (a glow when `x`\nand `y` are 0). A sticky casts a soft one of its own unless given one. `x`, `y` and `spread`\nwithin ±10000 px, `blur` 0 to 200. One shadow; `shadows` holds several (give one field or\nthe other)."
         },
         "clip": {
           "type": [
             "boolean",
             "null"
           ],
-          "description": "Whether a frame hides what overflows it (default true)."
+          "description": "Whether a frame hides what overflows it (default true; a scrolling frame always does)."
         },
         "hidden": {
           "type": [
@@ -25246,7 +25246,7 @@
             "string",
             "null"
           ],
-          "description": "Colour of the letters of a text, sticky or label, and of an icon without a `stroke`:\n`#RGB`, `#RRGGBB` or `#RRGGBBAA` (default: dark on a light ground, light on a dark one)."
+          "description": "Colour of the letters of a text, sticky or label, and of an icon without a `stroke`:\n`#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour (default: dark on a light ground,\nlight on a dark one)."
         },
         "font": {
           "type": [
@@ -25338,7 +25338,7 @@
               "type": "null"
             }
           ],
-          "description": "Width rule (default `fixed`: its `w`; a text without a `w` hugs its words). `hug`\nshrinks a text or sticky to its words and a laid-out frame to its children; `fill` takes\nthe room a laid-out parent leaves along its direction, or its inner width across it."
+          "description": "Width rule (default `fixed`: its `w`; a text without a `w` hugs its words). `hug`\nshrinks a text or sticky to its words and a laid-out frame to its children (nothing else\nhugs); `fill` takes the room a laid-out parent leaves along its direction, or its inner\nwidth across it."
         },
         "h_sizing": {
           "anyOf": [
@@ -25349,7 +25349,7 @@
               "type": "null"
             }
           ],
-          "description": "Height rule (default `fixed`; a text hugs its lines). A sticky's fixed `h` is a minimum\nthat grows to fit its words, and `hug` makes it exactly as tall as they are, as a text's.\n`fill` takes the room a laid-out parent leaves along its direction, or its inner height\nacross it."
+          "description": "Height rule (default `fixed`; a text hugs its lines). A sticky's fixed `h` is a minimum\nthat grows to fit its words, and `hug` makes it exactly as tall as they are, as a text's\n(only a text, a sticky or a frame hugs).\n`fill` takes the room a laid-out parent leaves along its direction, or its inner height\nacross it."
         },
         "layout": {
           "anyOf": [
@@ -25360,7 +25360,7 @@
               "type": "null"
             }
           ],
-          "description": "A frame's auto layout: `row` or `column` places its children one after another, `gap`\napart inside `padding`, ignoring their `x`/`y`. Default `none`."
+          "description": "A frame's auto layout: `row` or `column` places its children one after another, `gap`\napart inside `padding`, ignoring their `x`/`y` (an `absolute` child keeps its own); `wrap`\nis a row that starts a new line when the next child would pass the frame's width. Default\n`none`."
         },
         "gap": {
           "type": [
@@ -25368,7 +25368,7 @@
             "null"
           ],
           "format": "double",
-          "description": "Space between laid-out children, in px, -10000 to 10000 (default 0); negative overlaps\nthem.",
+          "description": "Space between laid-out children along a row, column or wrap line, in px, -10000 to 10000\n(default 0); negative overlaps them.",
           "minimum": -10000,
           "maximum": 10000
         },
@@ -25713,6 +25713,173 @@
           ],
           "description": "Draws a text's, sticky's or label's letters upper, lower or title case; the stored words\nkeep theirs."
         },
+        "pin_x": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignPinX"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How it follows its parent's width: `left` (the default), `right`, `left_right` (its width\nstretches), `center` or `scale`. Its `x`/`w` are where it sits while the parent is at its\nstored `w`; a parent resized, or drawn wider or narrower (fill, stretch, hug), carries it\nalong. Only a child free in a frame (one without auto layout, or `absolute`) is pinned. A\nstretching pin needs a fixed width (a text, a `w`); a line, path or group cannot stretch."
+        },
+        "pin_y": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignPinY"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How it follows its parent's height: `top` (the default), `bottom`, `top_bottom` (its\nheight stretches), `center` or `scale`, as `pin_x` (a text needs `h_sizing: fixed` to\nstretch)."
+        },
+        "absolute": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "In a frame with auto layout: keeps its own `x`/`y` from the frame's top-left, takes no\nroom and is not counted when the frame hugs (a badge on a card); pin it to stick to an\nedge. Elsewhere it changes nothing. Default false."
+        },
+        "min_w": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Smallest width in px, 0 to 1000000, whatever decides it (hug, fill, stretch, a pin). A\nfixed `w` must lie between `min_w` and `max_w`.",
+          "minimum": 0,
+          "maximum": 1000000.0
+        },
+        "max_w": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Largest width in px, 0 to 1000000, whatever decides it; a hugging text wraps at it, and so\ndoes a hugging `wrap` frame.",
+          "minimum": 0,
+          "maximum": 1000000.0
+        },
+        "min_h": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Smallest height in px, 0 to 1000000, whatever decides it. A fixed `h` must lie between\n`min_h` and `max_h`.",
+          "minimum": 0,
+          "maximum": 1000000.0
+        },
+        "max_h": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Largest height in px, 0 to 1000000, whatever decides it.",
+          "minimum": 0,
+          "maximum": 1000000.0
+        },
+        "row_gap": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Space between the lines of a `wrap` layout, in px, -10000 to 10000 (default: `gap`).",
+          "minimum": -10000,
+          "maximum": 10000
+        },
+        "scroll": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignScroll"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A frame whose content scrolls that way (`x`, `y` or `both`): what overflows is clipped, a\nstill picture shows the start, and the canvas scrolls it with Alt+wheel. Children keep\ntheir sizes, so a row of fixed-width cards overflows into a carousel. The scrolling axis\nneeds a fixed or fill size."
+        },
+        "stroke_cap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignStrokeCap"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How a stroke's ends are drawn: `butt` (flat at the point), `round` or `square` (half the\nweight past it). Default: `round` for a solid line or path, `butt` for dashes, `round`\nfor dots (`butt` would draw nothing of a dot). On a closed outline (a box, an ellipse, a\npolygon) only its dashes have ends."
+        },
+        "stroke_join": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignStrokeJoin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the stroke of an ellipse, polygon, line or path turns its corners: `miter` (sharp),\n`round` (the default) or `bevel`."
+        },
+        "stroke_gradient": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignGradient"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A gradient painted along the stroke instead of `stroke`'s colour, over the stroke's own\nbounds (a box's border, a line's path); it draws the stroke even when `stroke` is unset."
+        },
+        "shadows": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignShadow"
+          },
+          "description": "Several shadows instead of `shadow`, 1 to 8, painted in order (the last on top). A glow\nis a shadow with no offset: `{\"blur\": 16, \"color\": \"#4AF0FF99\"}`. A text, line, path or\nicon casts outer ones only, without spread. Give `shadow` or `shadows`, not both.",
+          "minItems": 1,
+          "maxItems": 8
+        },
+        "runs": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignTextRun"
+          },
+          "description": "Parts of `text` styled on their own, 1 to 64, in order and not overlapping, counted in\ncharacters (`end` not included); a field a run leaves out is the node's:\n`\"text\": \"8.4 km\", \"runs\": [{\"start\": 3, \"end\": 6, \"font_size\": 14, \"color\": \"#8C877F\"}]`.\nA change of `text` sends `runs` (or `null`) with it.",
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "max_lines": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "Most lines shown, 1 to 1000; the rest is cut and the last line shown ends in \"…\". The\nwords need a width to wrap at: a sticky, a shape's label, or a text whose width is fixed\nor fills."
+        },
+        "style": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A named style of the design (a `style` edit makes one; `design.get` lists them): each of\nits fields this node does not set itself applies to it, so changing the style restyles\nevery node that names it.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
         "width": {
           "type": "number",
           "minimum": 0,
@@ -25833,7 +26000,7 @@
         },
         "color": {
           "type": "string",
-          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`."
+          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour."
         },
         "inset": {
           "type": "boolean",
@@ -25867,7 +26034,7 @@
         {
           "type": "string",
           "const": "fill",
-          "description": "Stretch to the room left in a laid-out parent (along its axis), or to its full depth\n(across it)."
+          "description": "Stretch to the room left in a laid-out parent (along its axis; in a `wrap` layout, the\nroom left in its line), or to its full depth (across it)."
         }
       ],
       "description": "How a node's width or height is decided."
@@ -25888,6 +26055,11 @@
           "type": "string",
           "const": "column",
           "description": "Top to bottom, `gap` apart."
+        },
+        {
+          "type": "string",
+          "const": "wrap",
+          "description": "Left to right like a row, starting a new line when the next child would pass the\nframe's inner width; `gap` apart along a line, `row_gap` between lines. A frame that hugs\nits width wraps only at `max_w`."
         }
       ],
       "description": "The direction a frame lays its children out in."
@@ -25954,7 +26126,7 @@
             "null"
           ],
           "format": "double",
-          "description": "Direction of a linear gradient in degrees, as CSS reads it: 180 (the default) runs top\nto bottom, 90 left to right."
+          "description": "Linear: its direction in degrees as CSS reads it, 180 (the default) top to bottom, 90 left\nto right. Conic: where the first stop sits, in degrees clockwise from the top (default 0).\nRadial: unused."
         },
         "stops": {
           "type": "array",
@@ -25983,6 +26155,11 @@
           "type": "string",
           "const": "radial",
           "description": "From the centre out to the box's edges."
+        },
+        {
+          "type": "string",
+          "const": "conic",
+          "description": "Round the centre, clockwise from `angle` (default 0, the top), as CSS\n`conic-gradient(from …)`."
         }
       ]
     },
@@ -25999,7 +26176,7 @@
         },
         "color": {
           "type": "string",
-          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`."
+          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour."
         }
       },
       "required": [
@@ -26054,9 +26231,41 @@
           "description": "The hole in the middle as a fraction of the radius, from 0 (the default, a pie) to below\n1: 0.6 a donut.",
           "minimum": 0,
           "default": 0.0
+        },
+        "cap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignStrokeCap"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The ends of a ring segment (`inner` above 0, `sweep` under 360): `butt` (flat, the\ndefault), `round` (a progress ring's rounded ends) or `square`. Each end reaches half the\nring's thickness past `start` and `start + sweep`."
         }
       },
       "description": "Part of an ellipse: a pie, a donut or a ring segment."
+    },
+    "DesignStrokeCap": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "round"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "butt",
+          "description": "Flat at the point."
+        },
+        {
+          "type": "string",
+          "const": "square",
+          "description": "Square, half the weight past the point."
+        }
+      ],
+      "description": "How a stroke's ends are drawn."
     },
     "DesignBlend": {
       "type": "string",
@@ -26096,6 +26305,195 @@
         }
       ],
       "description": "How a text's letters are cased when drawn; the stored words keep theirs. Upper and lower use\nUnicode's default case mapping, one letter at a time (no language's own rules)."
+    },
+    "DesignPinX": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "left",
+          "description": "Keeps its distance from the parent's left edge (the default)."
+        },
+        {
+          "type": "string",
+          "const": "right",
+          "description": "Keeps its distance from the parent's right edge."
+        },
+        {
+          "type": "string",
+          "const": "left_right",
+          "description": "Keeps both distances: its width stretches with the parent's."
+        },
+        {
+          "type": "string",
+          "const": "center",
+          "description": "Keeps its offset from the parent's centre line."
+        },
+        {
+          "type": "string",
+          "const": "scale",
+          "description": "Keeps its place and width as fractions of the parent's width."
+        }
+      ],
+      "description": "How a child follows its parent's width when the parent is resized, or drawn wider or narrower\nthan its stored `w`."
+    },
+    "DesignPinY": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "top",
+          "description": "Keeps its distance from the parent's top edge (the default)."
+        },
+        {
+          "type": "string",
+          "const": "bottom",
+          "description": "Keeps its distance from the parent's bottom edge."
+        },
+        {
+          "type": "string",
+          "const": "top_bottom",
+          "description": "Keeps both distances: its height stretches with the parent's."
+        },
+        {
+          "type": "string",
+          "const": "center",
+          "description": "Keeps its offset from the parent's middle."
+        },
+        {
+          "type": "string",
+          "const": "scale",
+          "description": "Keeps its place and height as fractions of the parent's height."
+        }
+      ],
+      "description": "How a child follows its parent's height, as `pin_x` does its width."
+    },
+    "DesignScroll": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "both"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "x",
+          "description": "Across: a carousel."
+        },
+        {
+          "type": "string",
+          "const": "y",
+          "description": "Down: a feed."
+        }
+      ],
+      "description": "Which way a frame's content scrolls."
+    },
+    "DesignStrokeJoin": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "round"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "miter",
+          "description": "Sharp."
+        },
+        {
+          "type": "string",
+          "const": "bevel",
+          "description": "Cut off."
+        }
+      ],
+      "description": "How a stroke turns its corners."
+    },
+    "DesignTextRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Its first character, from 0."
+        },
+        "end": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1,
+          "description": "The character after its last: above `start`, at most the text's length."
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its letters' colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour."
+        },
+        "font": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its font family.",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "font_size": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Its letter size in px, 1 to 1000; it also sets its line's height (`line_height` times it).",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "font_weight": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "1 to 1000 (700 is bold)."
+        },
+        "italic": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "underline": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "strike": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "rise": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Px above the baseline (negative below), -1000 to 1000: a superscript, a raised unit.",
+          "minimum": -1000,
+          "maximum": 1000
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "description": "One stretch of a text in a style of its own: characters `start` to `end` of `text` (counted\nin characters, `end` not included). A field it leaves out is the node's."
     },
     "DesignCreateIn": {
       "type": "object",
@@ -26321,6 +26719,22 @@
                   "arc",
                   "blend",
                   "text_case",
+                  "pin_x",
+                  "pin_y",
+                  "absolute",
+                  "min_w",
+                  "max_w",
+                  "min_h",
+                  "max_h",
+                  "row_gap",
+                  "scroll",
+                  "stroke_cap",
+                  "stroke_join",
+                  "stroke_gradient",
+                  "shadows",
+                  "runs",
+                  "max_lines",
+                  "style",
                   "width",
                   "height"
                 ]
@@ -26367,6 +26781,13 @@
               "minimum": 0,
               "description": "0 at the bottom; absent puts it on top."
             },
+            "keep_position": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Keep it where it is on the page: its `x`/`y` are rewritten for the new parent from the\nstored offsets up both parents' chains. Refused (`design.position`) when it or a parent\non either side is placed by auto layout, since that place is not stored. Default false:\n`x`/`y` stay as they are, relative to the new parent."
+            },
             "op": {
               "type": "string",
               "const": "move"
@@ -26398,6 +26819,175 @@
             "id"
           ],
           "description": "Delete a node and everything inside it. A design keeps at least one page."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "as": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The copy's id; left out, the engine assigns one.",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "parent": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The page, frame or group to put the copy in; absent, the original's. A page's copy\ntakes none.",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "index": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Its place among the parent's children, 0 at the bottom; absent puts it on top."
+            },
+            "dx": {
+              "type": "number",
+              "format": "double",
+              "description": "Added to the copy's `x`, in px (default 0).",
+              "minimum": -1000000.0,
+              "maximum": 1000000.0
+            },
+            "dy": {
+              "type": "number",
+              "format": "double",
+              "description": "Added to the copy's `y`, in px (default 0).",
+              "minimum": -1000000.0,
+              "maximum": 1000000.0
+            },
+            "op": {
+              "type": "string",
+              "const": "copy"
+            }
+          },
+          "required": [
+            "op",
+            "id"
+          ],
+          "description": "Copy a node and everything inside it, as one edit (a page copies as a new page). The\ncopy's id is `as` (left out, the engine assigns one); each node inside takes an id made\nfrom it: one starting with the copied node's id and `-`, `_`, `.` or `:` has that start\nswapped for the copy's (`card-title` becomes `card-2-title`), any other gets the copy's id\nand `:` in front (`text-14` becomes `card-2:text-14`), so later edits of the same list can\nname them. A connector inside joins the copies of its ends; one attached to a node outside\nthe copy lets go of that end, staying where it is drawn."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "1 to 64 letters, digits, `-`, `_`, `.` or `:`; one namespace with the styles.",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "value": {
+              "type": "string",
+              "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA` (not another `$name`)."
+            },
+            "op": {
+              "type": "string",
+              "const": "color"
+            }
+          },
+          "required": [
+            "op",
+            "name",
+            "value"
+          ],
+          "description": "Name a colour that any colour field of a node, or of a style, takes as `$name`. Naming it\nagain changes it wherever it is used."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "1 to 64 letters, digits, `-`, `_`, `.` or `:`; one namespace with the colours.",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "set": {
+              "type": "object",
+              "description": "Style fields to set, each with a value as a node takes it; null takes the field out of the style.",
+              "propertyNames": {
+                "enum": [
+                  "fill",
+                  "gradient",
+                  "stroke",
+                  "stroke_width",
+                  "dash",
+                  "radius",
+                  "radii",
+                  "shadow",
+                  "shadows",
+                  "opacity",
+                  "blur",
+                  "blend",
+                  "color",
+                  "font",
+                  "font_size",
+                  "font_weight",
+                  "italic",
+                  "underline",
+                  "strike",
+                  "align",
+                  "line_height",
+                  "letter_spacing",
+                  "text_case",
+                  "stroke_cap",
+                  "stroke_join",
+                  "stroke_gradient"
+                ]
+              }
+            },
+            "op": {
+              "type": "string",
+              "const": "style"
+            }
+          },
+          "required": [
+            "op",
+            "name",
+            "set"
+          ],
+          "description": "Name a style, or change one: each key of `set` is a style field (fill, gradient, stroke,\nstroke_width, dash, radius, radii, shadow, shadows, opacity, blur, blend, color, font,\nfont_size, font_weight, italic, underline, strike, align, line_height, letter_spacing,\ntext_case, stroke_cap, stroke_join, stroke_gradient) with a value as a node takes it;\n`null` takes it out of the style. A node names it with `style`."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "op": {
+              "type": "string",
+              "const": "delete_style"
+            }
+          },
+          "required": [
+            "op",
+            "name"
+          ],
+          "description": "Take a named colour or style out of the design. What used it keeps its look: the colour,\nor the style's fields a node did not set itself, are written into it."
         }
       ],
       "description": "One edit of a design. `design.apply` runs a list of them in order, all or none."

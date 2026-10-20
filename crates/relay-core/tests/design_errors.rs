@@ -53,7 +53,7 @@ fn each_refusal_names_its_edit_and_field() {
     let id = create(&e);
     let cases = [
         (with(&[json!({"op": "delete", "id": "title"}), json!({"op": "add", "node": {"id": "x", "parent": "card", "kind": "frame", "layout": "grid"}})]),
-            "ops[3] add \"x\": layout: unknown variant `grid`, expected one of `none`, `row`, `column`", 3, Some("x"), Some("layout")),
+            "ops[3] add \"x\": layout: unknown variant `grid`, expected one of `none`, `row`, `column`, `wrap`", 3, Some("x"), Some("layout")),
         (with(&[json!({"op": "add", "node": {"id": "star", "parent": "card", "kind": "polygon", "star": 0.4, "sides": 300}})]),
             "ops[2] add \"star\": sides: 300 is outside 3 to 24", 2, Some("star"), Some("sides")),
         (with(&[json!({"op": "add", "node": {"id": "x", "parent": "card", "kind": "rect", "fil": "#fff"}})]),
@@ -62,13 +62,13 @@ fn each_refusal_names_its_edit_and_field() {
             "ops[2] update \"card\": padding: invalid type: integer `16`, expected a sequence; give a list: [all], [vertical, horizontal] or [top, right, bottom, left]",
             2, Some("card"), Some("padding")),
         (with(&[json!({"op": "update", "id": "card", "set": {"fill": "red"}})]),
-            "ops[2] update \"card\": fill: \"red\" is not #RGB, #RRGGBB or #RRGGBBAA", 2, Some("card"), Some("fill")),
+            "ops[2] update \"card\": fill: \"red\" is not #RGB, #RRGGBB, #RRGGBBAA or a $name colour", 2, Some("card"), Some("fill")),
         (with(&[json!({"op": "update", "id": "title", "set": {"x": "12"}})]),
             "ops[2] update \"title\": x: invalid type: string \"12\", expected f64", 2, Some("title"), Some("x")),
         (with(&[json!({"op": "update", "id": "card", "set": {"background": "#fff"}})]),
             "ops[2] update \"card\": background: not a node field; use fill", 2, Some("card"), Some("background")),
         (with(&[json!({"op": "add", "node": {"id": "col", "parent": "card", "kind": "frame", "layout": "vertical"}})]),
-            "ops[2] add \"col\": layout: unknown variant `vertical`, expected one of `none`, `row`, `column`; use \"column\"", 2, Some("col"), Some("layout")),
+            "ops[2] add \"col\": layout: unknown variant `vertical`, expected one of `none`, `row`, `column`, `wrap`; use \"column\"", 2, Some("col"), Some("layout")),
         (with(&[json!({"op": "add", "node": {"parent": "card", "kind": "rect", "shadow": {"blur": 300, "color": "#000"}}})]),
             "ops[2] add rect: shadow.blur: 300 is outside 0 to 200", 2, None, Some("shadow.blur")),
     ];
@@ -107,8 +107,8 @@ fn an_edit_that_does_not_read_is_named_before_the_list_runs() {
     let id = create(&e);
     let prefix = "payload for design.apply does not match its schema: ";
     let cases = [
-        (with(&[json!({"op": "copy", "id": "card"})]),
-            "ops[2]: op \"copy\" is not an edit; there is no copy edit: add the node again under a new id (design.get has its fields), then its children",
+        (with(&[json!({"op": "duplicate", "id": "card"})]),
+            "ops[2]: op \"duplicate\" is not an edit; use copy {id, as}",
             json!({"op": 2, "index": 2, "id": null, "field": "op"})),
         (with(&[json!({"op": "add", "node": {"id": "cta", "parent": "card", "kind": "button"}})]),
             "ops[2] add \"cta\": node.kind: \"button\" is not a kind; use frame (layout: row or column lays out its children)",

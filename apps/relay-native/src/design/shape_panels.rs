@@ -178,7 +178,7 @@ fn path_flags(b: &Rc<Board>, n: &Node, smooth: bool) -> gtk::Box {
 /// An ellipse's arc: where it starts, how far it goes and the hole in its middle, with the
 /// shapes people reach for.
 pub fn arc(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
-    let a = n.arc.clone().unwrap_or(relay_bus::design::Arc { start: 0.0, sweep: 360.0, inner: 0.0 });
+    let a = n.arc.clone().unwrap_or(relay_bus::design::Arc { start: 0.0, sweep: 360.0, inner: 0.0, cap: None });
     let write = {
         let weak = Rc::downgrade(b);
         Rc::new(move |start: f64, sweep: f64, inner: f64| {
@@ -252,7 +252,8 @@ fn detach_line(b: &Board, id: &str) {
 pub fn fill(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
     let mode = match n.gradient.as_ref().map(|g| g.kind) {
         None => "solid",
-        Some(GradientKind::Linear) => "linear",
+        // Conic shows as linear until native-panels gives it a segment.
+        Some(GradientKind::Linear | GradientKind::Conic) => "linear",
         Some(GradientKind::Radial) => "radial",
     };
     let base = super::paint::fill_of(n).unwrap_or_else(|| "#4C9DFF".into());

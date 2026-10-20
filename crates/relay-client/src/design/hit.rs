@@ -119,7 +119,7 @@ mod tests {
         shape.closed = Some(true);
         assert!(on_shape(&s, &p, &shape, &r, 50.0, 30.0, 1.0));
         let mut ring = node("e", Some("p1"), K::Ellipse, [0.0, 0.0, 100.0, 100.0]);
-        ring.arc = Some(relay_bus::design::Arc { start: 0.0, sweep: 360.0, inner: 0.5 });
+        ring.arc = Some(relay_bus::design::Arc { start: 0.0, sweep: 360.0, inner: 0.5, cap: None });
         assert!(!on_shape(&s, &p, &ring, &r, 50.0, 50.0, 0.0), "the hole is not the ring");
         assert!(on_shape(&s, &p, &ring, &r, 50.0, 10.0, 0.0));
     }

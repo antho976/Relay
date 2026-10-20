@@ -114,6 +114,20 @@ impl Run<'_> {
         Ok(())
     }
 
+    /// Every colour and style `node` names exists. Until the store keeps a design's colours and
+    /// styles (engine-reuse, with `Styles::check`), the design has none, so a node naming one is
+    /// refused by name rather than stored naming nothing (lenient or not: no stored node can name
+    /// one yet, so no undo carries one).
+    pub(super) fn names_exist(&self, node: &Node) -> Result<(), BusError> {
+        let why = match node.names().first() {
+            None => return Ok(()),
+            Some(("style", name)) => format!("style: the design has no style {name:?}"),
+            Some((field, name)) => format!("{field}: the design has no colour ${name}"),
+        };
+        Err(self.fail(ErrorKind::NotFound, "design.style_not_found", why)
+            .with_hint("named colours and styles are not supported yet: write the colour itself"))
+    }
+
     /// The node row `id`, if this build can read it: an edit naming one it cannot (a kind it
     /// does not know, a body it cannot parse) is refused, or skipped when lenient. Nothing of
     /// such a row is lost: it is left as it is.
@@ -242,6 +256,7 @@ impl Run<'_> {
         if let Err(why) = node.check_new() {
             self.breach(why)?;
         }
+        self.names_exist(&node)?;
         if let Some(parent) = node.parent.as_deref() {
             if !self.container(parent)? {
                 return Ok(None);
@@ -275,6 +290,7 @@ impl Run<'_> {
         if let Err(why) = Node::check_update(&node, &set, &next) {
             self.breach(why)?;
         }
+        self.names_exist(&next)?;
         let body = body_of(&mut next)?;
         if body != row.body {
             self.tx.prepare_cached("UPDATE design_nodes SET body = ?3 WHERE design_id = ?1 AND node_id = ?2").bus()?
@@ -325,7 +341,7 @@ impl Run<'_> {
         self.tx.prepare_cached("UPDATE design_nodes SET parent_id = ?3, ord = ?4 WHERE design_id = ?1 AND node_id = ?2").bus()?
             .execute(params![self.design, id, to, ord]).bus()?;
         self.touch(&id);
-        self.inverse.push(vec![NodeOp::Move { id: id.clone(), parent: from, index: Some(old_index) }]);
+        self.inverse.push(vec![NodeOp::Move { id: id.clone(), parent: from, index: Some(old_index), keep_position: None }]);
         Ok(Some(id))
     }
 
@@ -507,8 +523,21 @@ pub(super) fn register(e: &mut Engine) {
             let id = match op {
                 NodeOp::Add { node, index } => run.add(node, index)?,
                 NodeOp::Update { id, set } => run.update(id, set)?,
-                NodeOp::Move { id, parent, index } => run.move_(id, parent, index)?,
+                // Until engine-pins rewrites x/y from page points (MODEL-SPEC §2.11).
+                NodeOp::Move { keep_position: Some(true), .. } => {
+                    return Err(run.fail_on("keep_position", ErrorKind::Invalid, "design.ops", "keep_position is not supported yet")
+                        .with_hint("move it without keep_position, then set x and y in an update"));
+                }
+                NodeOp::Move { id, parent, index, .. } => run.move_(id, parent, index)?,
                 NodeOp::Delete { id } => run.delete(id)?,
+                // Until the store keeps colours and styles and the engine copies (engine-reuse).
+                NodeOp::Copy { .. } | NodeOp::Color { .. } | NodeOp::Style { .. } | NodeOp::DeleteStyle { .. } => {
+                    let hint = match op {
+                        NodeOp::Copy { .. } => "add the node again under a new id (design.get has its fields), then its children",
+                        _ => "write each node's colours and look itself",
+                    };
+                    return Err(run.fail(ErrorKind::Invalid, "design.ops", format!("{} is not supported yet", op.name())).with_hint(hint));
+                }
             };
             run.ids.push(id.unwrap_or_default());
         }

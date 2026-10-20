@@ -10,7 +10,7 @@
 
 use super::hints::{bad_value, not_a_field};
 use super::read::probe;
-use super::{canonical_key, Node, NodeKind, NodeOp, MAX_SHADOW_BLUR};
+use super::{canonical_key, Node, NodeKind, NodeOp, Shadow, Sizing, MAX_SHADOW_BLUR};
 use serde::ser::{self, Impossible, Serialize, SerializeStruct, Serializer};
 use serde_json::{Map, Value};
 use std::borrow::Cow;
@@ -116,6 +116,24 @@ pub const FIELDS: &[(&str, Kinds, Option<&str>)] = &[
     ("flip_x", Kinds(Y | I | C), None),
     ("flip_y", Kinds(Y | I | C), None),
     ("arc", Kinds(E), None),
+    ("pin_x", Kinds(ALL & !P), Some("pin_x: a page sits in no parent")),
+    ("pin_y", Kinds(ALL & !P), Some("pin_y: a page sits in no parent")),
+    ("absolute", Kinds(ALL & !P), Some("absolute: a page sits in no parent")),
+    // A group's size comes from its children, a line's or path's from its points.
+    ("min_w", Kinds(F | R | E | Y | S | T | I | C), None),
+    ("max_w", Kinds(F | R | E | Y | S | T | I | C), None),
+    ("min_h", Kinds(F | R | E | Y | S | T | I | C), None),
+    ("max_h", Kinds(F | R | E | Y | S | T | I | C), None),
+    ("row_gap", Kinds(F), None),
+    ("scroll", Kinds(F), Some("scroll: only a frame scrolls")),
+    ("stroke_cap", Kinds(F | R | E | Y | S | I | L | A), None),
+    // A box's border turns its corners by `radius`.
+    ("stroke_join", Kinds(E | Y | L | A), None),
+    ("stroke_gradient", Kinds(F | R | E | Y | S | I | L | A), None),
+    ("shadows", Kinds(F | R | E | Y | S | I | T | L | A | C), None),
+    ("runs", Kinds(T | S | R | E | Y), None),
+    ("max_lines", Kinds(T | S | R | E | Y), None),
+    ("style", Kinds(ALL & !P), Some("style: a page takes no style; give it its own fill")),
 ];
 
 fn table() -> &'static HashMap<&'static str, (Kinds, Option<&'static str>)> {
@@ -187,10 +205,51 @@ pub fn strip_controls(s: &str, keep_breaks: bool) -> Cow<'_, str> {
     }
 }
 
+/// A text, line, path or icon casts its shadows round its letters or strokes: outer ones only,
+/// without spread (MODEL-SPEC §1 #13).
+fn casts_outer_only(kind: NodeKind) -> bool {
+    matches!(kind, NodeKind::Text | NodeKind::Line | NodeKind::Path | NodeKind::Icon)
+}
+
+/// The written rules on one shadow (`field` is `shadow` or `shadows[2]`): its blur within the node
+/// blur's cap (B72), and on a kind that casts outer shadows only, no inset and no spread.
+fn written_shadow(kind: NodeKind, field: &str, s: &Shadow) -> Result<(), String> {
+    if s.blur > MAX_SHADOW_BLUR {
+        return Err(format!("{field}.blur: {} is outside 0 to {MAX_SHADOW_BLUR}", s.blur));
+    }
+    if casts_outer_only(kind) {
+        if s.inset {
+            return Err(format!("{field}.inset: {} nodes cast no inner shadow", kind.name()));
+        }
+        if s.spread != 0.0 {
+            return Err(format!("{field}.spread: {} nodes cast their shadow without spread; widen it with blur", kind.name()));
+        }
+    }
+    Ok(())
+}
+
+/// Whether a `kind` node sizes to its content when it hugs (B49): a text or sticky to its words,
+/// a frame to its children. Layout reads hug on any other as fixed, so a rect told to hug kept a
+/// 0 size and drew nothing.
+fn hugs(kind: NodeKind) -> bool {
+    matches!(kind, NodeKind::Text | NodeKind::Sticky | NodeKind::Frame)
+}
+
 /// The written rules on one field's new value beyond its kind: no control characters in a name,
-/// font or text (B43), a shadow's blur within the node blur's cap (B72).
+/// font, text or a run's font (B43), a shadow's blur within the node blur's cap (B72) and no inner
+/// shadow or spread where only outer ones are cast, and hug only where something sizes to its
+/// content (B49).
 fn written(n: &Node, field: &str) -> Result<(), String> {
     match field {
+        "w_sizing" | "h_sizing" => {
+            let rule = if field == "w_sizing" { n.w_sizing } else { n.h_sizing };
+            if rule == Some(Sizing::Hug) && !hugs(n.kind) {
+                let kind = n.kind.name();
+                let a = if kind.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
+                return Err(format!("{field}: {a} {kind} cannot hug; only a text, a sticky or a frame sizes to its content"));
+            }
+            Ok(())
+        }
         "name" | "font" => {
             let value = if field == "name" { &n.name } else { &n.font };
             match value {
@@ -204,13 +263,27 @@ fn written(n: &Node, field: &str) -> Result<(), String> {
             }
             _ => Ok(()),
         },
-        "shadow" => match &n.shadow {
-            Some(s) if s.blur > MAX_SHADOW_BLUR => Err(format!("shadow.blur: {} is outside 0 to {MAX_SHADOW_BLUR}", s.blur)),
-            _ => Ok(()),
-        },
+        "shadow" => n.shadow.as_ref().map_or(Ok(()), |s| written_shadow(n.kind, "shadow", s)),
+        "shadows" => {
+            for (i, s) in n.shadows.iter().flatten().enumerate() {
+                written_shadow(n.kind, &format!("shadows[{i}]"), s)?;
+            }
+            Ok(())
+        }
+        "runs" => {
+            for (i, run) in n.runs.iter().flatten().enumerate() {
+                if run.font.as_deref().is_some_and(|f| !plain_label(f)) {
+                    return Err(format!("runs[{i}].font: no control characters"));
+                }
+            }
+            Ok(())
+        }
         _ => Ok(()),
     }
 }
+
+/// The refusal of a node holding both `shadow` and `shadows`.
+const BOTH_SHADOWS: &str = "shadows: give shadow or shadows, not both (shadows is the list)";
 
 impl Node {
     /// An add as a caller writes it, in a strict list: nothing in `extra`, every field one its
@@ -224,6 +297,17 @@ impl Node {
                 return Err(why);
             }
             written(self, field)?;
+        }
+        if self.shadow.is_some() && self.shadows.is_some() {
+            return Err(BOTH_SHADOWS.into());
+        }
+        // B49: an image added without its size draws nothing, unless layout gives it one.
+        if self.kind == NodeKind::Image {
+            for (key, size, rule) in [("w", self.w, self.w_rule()), ("h", self.h, self.h_rule())] {
+                if size <= 0.0 && rule != Sizing::Fill {
+                    return Err(format!("{key}: an image needs its size; design.asset.add answers w and h"));
+                }
+            }
         }
         Ok(())
     }
@@ -249,6 +333,13 @@ impl Node {
                 return Err(why);
             }
             written(after, field)?;
+            if matches!(field, "shadow" | "shadows") && after.shadow.is_some() && after.shadows.is_some() {
+                return Err(BOTH_SHADOWS.into());
+            }
+        }
+        // No stale range survives a rewrite of the words: the runs come with them.
+        if set.contains_key("text") && !set.contains_key("runs") && before.runs.is_some() {
+            return Err("runs: this text has runs; send runs (or runs: null) with its new text".into());
         }
         Ok(())
     }
@@ -267,10 +358,38 @@ impl Node {
     }
 }
 
+/// A shadow written to a `kind` node, fitted to the written rules: its blur within the cap, and
+/// where only outer shadows are cast, no spread. False for an inner one there, which goes.
+fn fit_shadow(kind: NodeKind, s: &mut Shadow) -> bool {
+    s.blur = s.blur.min(MAX_SHADOW_BLUR);
+    if casts_outer_only(kind) {
+        s.spread = 0.0;
+        return !s.inset;
+    }
+    true
+}
+
+/// [`fit_shadow`] on a shadow as an update writes it (`outer_only` when the node's kind casts
+/// outer shadows only).
+fn fit_shadow_value(outer_only: bool, s: &mut Value) -> bool {
+    if let Some(blur) = s.get_mut("blur").filter(|b| b.as_f64().is_some_and(|b| b > MAX_SHADOW_BLUR)) {
+        *blur = Value::from(MAX_SHADOW_BLUR);
+    }
+    if outer_only {
+        if let Some(spread) = s.get_mut("spread").filter(|v| v.as_f64() != Some(0.0)) {
+            *spread = Value::from(0.0);
+        }
+        return s.get("inset") != Some(&Value::Bool(true));
+    }
+    true
+}
+
 /// Fit one edit the canvas is about to send to what a strict list takes (MODEL-SPEC §1 #33):
 /// drop the keys its node's kind does not use (a `null` stays: it clears a stale value), drop
 /// what the node holds in `extra` and keys no field has, take control characters out of a
-/// name, font or text, and bring a shadow's blur within its cap. `kind_of` names the kind of an
+/// name, font, text or a run's font, and fit shadows: a blur within its cap, and on a text,
+/// line, path or icon no inner shadow (it goes) and no spread. A list of shadows replaces the
+/// single one and the other way round (the other is cleared). `kind_of` names the kind of an
 /// updated node (`None` when unknown: only unknown keys go). Returns the keys dropped.
 pub fn fit_written(op: &mut NodeOp, kind_of: impl Fn(&str) -> Option<NodeKind>) -> Vec<String> {
     let mut dropped = Vec::new();
@@ -289,8 +408,32 @@ pub fn fit_written(op: &mut NodeOp, kind_of: impl Fn(&str) -> Option<NodeKind>) 
                     }
                 }
             }
-            if let Some(shadow) = node.shadow.as_mut() {
-                shadow.blur = shadow.blur.min(MAX_SHADOW_BLUR);
+            for run in node.runs.iter_mut().flatten() {
+                if let Some(font) = run.font.as_mut() {
+                    if let Cow::Owned(clean) = strip_controls(font, false) {
+                        *font = clean;
+                    }
+                }
+            }
+            let kind = node.kind;
+            for (field, rule) in [("w_sizing", &mut node.w_sizing), ("h_sizing", &mut node.h_sizing)] {
+                if *rule == Some(Sizing::Hug) && !hugs(kind) {
+                    *rule = None;
+                    dropped.push(field.into());
+                }
+            }
+            if node.shadow.as_mut().map(|s| fit_shadow(kind, s)) == Some(false) {
+                node.shadow = None;
+                dropped.push("shadow".into());
+            }
+            if node.shadows.as_mut().map(|list| { list.retain_mut(|s| fit_shadow(kind, s)); list.is_empty() }) == Some(true) {
+                node.shadows = None;
+                dropped.push("shadows".into());
+            }
+            // Both from two builds: `shadows` is what draws.
+            if node.shadow.is_some() && node.shadows.is_some() {
+                node.shadow = None;
+                dropped.push("shadow".into());
             }
         }
         NodeOp::Update { id, set } => {
@@ -309,13 +452,49 @@ pub fn fit_written(op: &mut NodeOp, kind_of: impl Fn(&str) -> Option<NodeKind>) 
                     }
                 }
             }
-            if let Some(blur) = set.get_mut("shadow").and_then(|s| s.get_mut("blur")) {
-                if blur.as_f64().is_some_and(|b| b > MAX_SHADOW_BLUR) {
-                    *blur = Value::from(MAX_SHADOW_BLUR);
+            if let Some(Value::Array(runs)) = set.get_mut("runs") {
+                for font in runs.iter_mut().filter_map(|run| run.get_mut("font")) {
+                    if let Value::String(f) = font {
+                        if let Cow::Owned(clean) = strip_controls(f, false) {
+                            *f = clean;
+                        }
+                    }
+                }
+            }
+            for field in ["w_sizing", "h_sizing"] {
+                if kind.is_some_and(|k| !hugs(k)) && set.get(field).and_then(Value::as_str) == Some("hug") {
+                    set.remove(field);
+                    dropped.push(field.into());
+                }
+            }
+            let outer_only = kind.is_some_and(casts_outer_only);
+            if set.get_mut("shadow").filter(|s| s.is_object()).map(|s| fit_shadow_value(outer_only, s)) == Some(false) {
+                set.remove("shadow");
+                dropped.push("shadow".into());
+            }
+            if let Some(Value::Array(list)) = set.get_mut("shadows") {
+                list.retain_mut(|s| !s.is_object() || fit_shadow_value(outer_only, s));
+                if list.is_empty() {
+                    set.remove("shadows");
+                    dropped.push("shadows".into());
+                }
+            }
+            // One shadow replaces a list, and a list one shadow, so the node never holds both.
+            if kind.is_some_and(|k| takes(k, "shadows")) {
+                for (given, other) in [("shadow", "shadows"), ("shadows", "shadow")] {
+                    if set.get(given).is_some_and(|v| !v.is_null()) && !set.contains_key(other) {
+                        set.insert(other.into(), Value::Null);
+                    }
                 }
             }
         }
-        NodeOp::Move { .. } | NodeOp::Delete { .. } => {}
+        // A copy writes what is stored, and colour and style edits name no node.
+        NodeOp::Move { .. }
+        | NodeOp::Delete { .. }
+        | NodeOp::Copy { .. }
+        | NodeOp::Color { .. }
+        | NodeOp::Style { .. }
+        | NodeOp::DeleteStyle { .. } => {}
     }
     dropped
 }
@@ -513,7 +692,9 @@ mod tests {
             "src": "0123456789abcdef0123.png", "fit": "cover", "rotation": 1, "sides": 3, "star": 0.5,
             "gradient": {"stops": []}, "radii": [1, 1, 1, 1], "dash": [1], "blur": 1, "icon": "home", "from": "a",
             "to": "b", "route": "straight", "closed": true, "smooth": true, "flip_x": true, "flip_y": true,
-            "arc": {}, "blend": "normal", "text_case": "upper"
+            "arc": {}, "blend": "normal", "text_case": "upper", "pin_x": "left", "pin_y": "top", "absolute": false,
+            "min_w": 1, "max_w": 1, "min_h": 1, "max_h": 1, "row_gap": 1, "scroll": "x", "stroke_cap": "round",
+            "stroke_join": "round", "stroke_gradient": {"stops": []}, "shadows": [], "runs": [], "max_lines": 1, "style": "card"
         }"##).unwrap();
         let keys = present(&full);
         assert_eq!(keys.len(), FIELDS.len(), "{keys:?}");
@@ -526,11 +707,14 @@ mod tests {
             NodeKind::Page => json!({"kind": "page"}),
             NodeKind::Line => json!({"kind": "line", "parent": "p", "points": [[0, 0], [9, 9]]}),
             NodeKind::Path => json!({"kind": "path", "parent": "p", "points": [[0, 0]]}),
-            NodeKind::Image => json!({"kind": "image", "parent": "p", "src": "0123456789abcdef0123.png"}),
+            NodeKind::Image => json!({"kind": "image", "parent": "p", "src": "0123456789abcdef0123.png", "w": 64, "h": 48}),
             NodeKind::Icon => json!({"kind": "icon", "parent": "p", "icon": "home"}),
             kind => json!({"kind": kind.name(), "parent": "p"}),
         };
         body[field] = value;
+        if field == "runs" {
+            body["text"] = json!("a".repeat(crate::design::MAX_RUNS));
+        }
         body
     }
 
@@ -595,7 +779,12 @@ mod tests {
                 assert_eq!(written(body_of(kind, field, filler(json!(v)))), ok, "{field} holding {v}");
                 checked.push(*field);
             }
-            let count = |n: u64| Value::Array(vec![if *field == "points" { json!([1, 1]) } else { json!(1) }; n as usize]);
+            let count = |n: u64| Value::Array((0..n).map(|i| match *field {
+                "points" => json!([1, 1]),
+                "shadows" => json!({"color": "#000"}),
+                "runs" => json!({"start": i, "end": i + 1, "italic": true}),
+                _ => json!(1),
+            }).collect());
             if let Some(min) = property["minItems"].as_u64() {
                 assert!(written(body_of(kind, field, count(min))), "{field}: {min} of them");
                 assert!(!written(body_of(kind, field, count(min - 1))), "{field}: {} of them", min - 1);
@@ -607,23 +796,26 @@ mod tests {
             }
         }
         for field in ["x", "w", "stroke_width", "opacity", "font_size", "font_weight", "line_height", "letter_spacing", "gap", "rotation",
-            "sides", "star", "blur", "radius", "name", "text", "font", "id", "padding", "dash", "radii", "points"] {
+            "sides", "star", "blur", "radius", "name", "text", "font", "id", "padding", "dash", "radii", "points", "min_w", "max_h",
+            "row_gap", "max_lines", "shadows", "runs"] {
             assert!(checked.contains(&field), "{field} states no range");
         }
         // The nested objects: a shadow, a gradient's stops, an arc.
         let defs = &schema["$defs"];
         type Wrap = fn(&str, Value) -> Value;
-        let nested: [(&str, &str, Wrap); 3] = [
+        let nested: [(&str, &str, Wrap); 4] = [
             ("DesignShadow", "shadow", |key, v| { let mut s = json!({"color": "#000"}); s[key] = v; s }),
             ("DesignGradientStop", "gradient", |key, v| { let mut s = json!({"at": 0, "color": "#000"}); s[key] = v; json!({"stops": [s, {"at": 1, "color": "#fff"}]}) }),
             ("DesignArc", "arc", |key, v| { let mut a = json!({}); a[key] = v; a }),
+            ("DesignTextRun", "runs", |key, v| { let mut r = json!({"start": 0, "end": 1, "italic": true}); r[key] = v; json!([r]) }),
         ];
         for (def, field, wrap) in nested {
             let kind = field_kinds(field).unwrap().iter().next().unwrap();
             let mut seen = 0;
             for (key, property) in defs[def]["properties"].as_object().unwrap() {
+                let integer = property["type"].to_string().contains("integer");
                 for (v, ok) in bounds(property) {
-                    assert_eq!(written(body_of(kind, field, wrap(key, json!(v)))), ok, "{field}.{key} = {v}");
+                    assert_eq!(written(body_of(kind, field, wrap(key, number(v, integer)))), ok, "{field}.{key} = {v}");
                     seen += 1;
                 }
             }
@@ -684,6 +876,97 @@ mod tests {
         assert!(Node::check_update(&e, &s, &e.patched(&s).unwrap()).unwrap_err().starts_with("shadow.blur"));
     }
 
+    /// The written rules of the drawing fields (MODEL-SPEC §2.6, §2.8): a node holds one of
+    /// `shadow` and `shadows`, a text, line, path or icon casts outer shadows without spread, a
+    /// change of words carries its runs, and a run's font has no control characters.
+    #[test]
+    fn drawing_fields_keep_the_written_rules() {
+        let both = node(json!({"kind": "rect", "shadow": {"color": "#000"}, "shadows": [{"color": "#000"}]}));
+        assert_eq!(both.validate(), Ok(()), "a value rule would make a stored node unpatchable");
+        assert_eq!(both.check_new().unwrap_err(), "shadows: give shadow or shadows, not both (shadows is the list)");
+        for (kind, extra) in [("line", json!({"points": [[0, 0], [9, 9]]})), ("text", json!({"text": "Hi"})), ("path", json!({"points": [[0, 0]]})),
+            ("icon", json!({"icon": "home"}))] {
+            let mut body = extra.clone();
+            body["kind"] = json!(kind);
+            body["shadows"] = json!([{"blur": 8, "color": "#4AF0FF99"}, {"inset": true, "color": "#000"}]);
+            assert_eq!(node(body.clone()).check_new().unwrap_err(), format!("shadows[1].inset: {kind} nodes cast no inner shadow"));
+            body["shadows"] = Value::Null;
+            body["shadow"] = json!({"spread": 2, "color": "#000"});
+            assert_eq!(node(body.clone()).check_new().unwrap_err(), format!("shadow.spread: {kind} nodes cast their shadow without spread; widen it with blur"));
+            body["shadow"] = json!({"blur": 16, "color": "#4AF0FF99"});
+            assert_eq!(node(body).check_new(), Ok(()), "{kind}: a glow");
+        }
+        let inner = node(json!({"kind": "ellipse", "shadows": [{"inset": true, "spread": 3, "color": "#000"}, {"blur": 250, "color": "#000"}]}));
+        assert_eq!(inner.check_new().unwrap_err(), "shadows[1].blur: 250 is outside 0 to 200");
+        // An update setting one shadow field on a node holding the other is refused; clearing the
+        // other in the same set is not.
+        let one = node(json!({"kind": "rect", "shadow": {"color": "#000"}}));
+        let list = set(json!({"shadows": [{"color": "#000"}, {"blur": 9, "color": "#fff"}]}));
+        assert!(Node::check_update(&one, &list, &one.patched(&list).unwrap()).unwrap_err().starts_with("shadows: give shadow or shadows"));
+        let swap = set(json!({"shadow": null, "shadows": [{"color": "#000"}, {"blur": 9, "color": "#fff"}]}));
+        assert_eq!(Node::check_update(&one, &swap, &one.patched(&swap).unwrap()), Ok(()));
+        // New words carry their runs.
+        let rich = node(json!({"kind": "text", "text": "8.4 km", "runs": [{"start": 3, "end": 6, "font_size": 14}]}));
+        let words = set(json!({"text": "12.1 km"}));
+        assert_eq!(Node::check_update(&rich, &words, &rich.patched(&words).unwrap()).unwrap_err(),
+            "runs: this text has runs; send runs (or runs: null) with its new text");
+        for with in [json!({"text": "12.1 km", "runs": [{"start": 4, "end": 7, "font_size": 14}]}), json!({"text": "12.1 km", "runs": null})] {
+            let with = set(with);
+            assert_eq!(Node::check_update(&rich, &with, &rich.patched(&with).unwrap()), Ok(()));
+        }
+        let x = set(json!({"x": 4}));
+        assert_eq!(Node::check_update(&rich, &x, &rich.patched(&x).unwrap()), Ok(()));
+        let font = node(json!({"kind": "text", "text": "Hi", "runs": [{"start": 0, "end": 1, "font": "Ge\u{1}ist"}]}));
+        assert_eq!(font.check_new().unwrap_err(), "runs[0].font: no control characters");
+        // Kinds: runs and max_lines on text holders, stroke_join on shapes that turn corners.
+        assert!(node(json!({"kind": "rect", "stroke_join": "miter"})).check_new().unwrap_err()
+            .starts_with("stroke_join: rect nodes do not use it (it is for ellipse, line, path, polygon)"));
+        assert!(node(json!({"kind": "group", "shadows": [{"color": "#000"}]})).check_new().unwrap_err().starts_with("shadows: group nodes"));
+        assert!(node(json!({"kind": "icon", "icon": "home", "stroke_gradient": {"stops": []}})).check_new().unwrap_err().starts_with("stroke_gradient: icon nodes"));
+        assert_eq!(node(json!({"kind": "polygon", "text": "Go", "max_lines": 1, "stroke_join": "bevel", "stroke_cap": "square"})).check_new(), Ok(()));
+    }
+
+    /// B49: hug only where something sizes to its content, and an image added with its size.
+    #[test]
+    fn hug_and_image_sizes_are_written_rules() {
+        for kind in ["rect", "ellipse", "polygon", "group"] {
+            for field in ["w_sizing", "h_sizing"] {
+                let why = node(json!({"kind": kind, field: "hug"})).check_new().unwrap_err();
+                let a = if kind == "ellipse" { "an" } else { "a" };
+                assert_eq!(why, format!("{field}: {a} {kind} cannot hug; only a text, a sticky or a frame sizes to its content"));
+            }
+        }
+        for ok in [json!({"kind": "text", "text": "Hi", "w_sizing": "hug"}), json!({"kind": "sticky", "h_sizing": "hug"}),
+            json!({"kind": "frame", "layout": "row", "w_sizing": "hug", "h_sizing": "hug"}), json!({"kind": "rect", "w_sizing": "fill"})] {
+            assert_eq!(node(ok.clone()).check_new(), Ok(()), "{ok}");
+        }
+        let rect = node(json!({"kind": "rect", "w": 10, "h": 10}));
+        let hug = set(json!({"h_sizing": "hug"}));
+        assert!(Node::check_update(&rect, &hug, &rect.patched(&hug).unwrap()).unwrap_err().starts_with("h_sizing: a rect cannot hug"));
+        // A rect stored hugging stays editable.
+        let stored = node(json!({"kind": "rect", "w_sizing": "hug"}));
+        let x = set(json!({"x": 2}));
+        assert_eq!(Node::check_update(&stored, &x, &stored.patched(&x).unwrap()), Ok(()));
+        // An image needs its size, unless layout gives it one.
+        let src = "0123456789abcdef0123.png";
+        for (body, why) in [
+            (json!({"kind": "image", "src": src}), Some("w: an image needs its size; design.asset.add answers w and h")),
+            (json!({"kind": "image", "src": src, "w": 640}), Some("h: an image needs its size; design.asset.add answers w and h")),
+            (json!({"kind": "image", "src": src, "w": 640, "h": 480}), None),
+            (json!({"kind": "image", "src": src, "w_sizing": "fill", "h": 200}), None),
+        ] {
+            assert_eq!(node(body.clone()).check_new().err().as_deref(), why, "{body}");
+        }
+        // The canvas never sends a hug where it would be refused.
+        let kinds = |id: &str| (id == "r").then_some(NodeKind::Rect);
+        let mut op = NodeOp::Update { id: "r".into(), set: set(json!({"w_sizing": "hug", "h_sizing": "fill"})) };
+        assert_eq!(fit_written(&mut op, kinds), ["w_sizing"]);
+        let mut op = NodeOp::Add { node: node(json!({"id": "e", "kind": "ellipse", "w": 9, "h": 9, "h_sizing": "hug"})), index: None };
+        assert_eq!(fit_written(&mut op, kinds), ["h_sizing"]);
+        let NodeOp::Add { node: fitted, .. } = &op else { panic!() };
+        assert_eq!((fitted.h_sizing, fitted.check_new()), (None, Ok(())));
+    }
+
     /// What the canvas sends is fitted to what a strict list takes (MODEL-SPEC §1 #33).
     #[test]
     fn fit_written_sends_only_what_a_strict_list_takes() {
@@ -696,11 +979,30 @@ mod tests {
         let mut op = NodeOp::Update { id: "img".into(), set: set(json!({"fill": "#fff", "opacity": 0.5, "radius": null, "fil": 1})) };
         assert_eq!(fit_written(&mut op, kinds), ["fill", "fil"]);
         assert_eq!(op, NodeOp::Update { id: "img".into(), set: set(json!({"opacity": 0.5, "radius": null})) });
-        // Text: control characters out, line breaks kept; a shadow's blur within its cap.
+        // Text: control characters out, line breaks kept; a shadow's blur within its cap, and one
+        // shadow replaces a list.
         let mut op = NodeOp::Update { id: "t".into(), set: set(json!({"text": "a\u{0}b\nc", "name": "x\ty", "shadow": {"blur": 900, "color": "#000"}})) };
         assert!(fit_written(&mut op, kinds).is_empty());
         let NodeOp::Update { set: fitted, .. } = &op else { panic!() };
-        assert_eq!(Value::Object(fitted.clone()), json!({"text": "ab\nc", "name": "xy", "shadow": {"blur": 200.0, "color": "#000"}}));
+        assert_eq!(Value::Object(fitted.clone()), json!({"text": "ab\nc", "name": "xy", "shadow": {"blur": 200.0, "color": "#000"}, "shadows": null}));
+        // A text casts outer shadows only, without spread: an inner one goes, a spread is 0; a
+        // run's font loses its control characters.
+        let mut op = NodeOp::Update { id: "t".into(), set: set(json!({"shadow": {"inset": true, "color": "#000"},
+            "shadows": [{"spread": 4, "blur": 300, "color": "#000"}, {"inset": true, "color": "#fff"}], "runs": [{"start": 0, "end": 1, "font": "Ge\u{0}ist"}]})) };
+        assert_eq!(fit_written(&mut op, kinds), ["shadow"]);
+        let NodeOp::Update { set: fitted, .. } = &op else { panic!() };
+        assert_eq!(Value::Object(fitted.clone()), json!({"shadows": [{"spread": 0.0, "blur": 200.0, "color": "#000"}], "shadow": null,
+            "runs": [{"start": 0, "end": 1, "font": "Geist"}]}));
+        let mut op = NodeOp::Update { id: "t".into(), set: set(json!({"shadows": [{"inset": true, "color": "#000"}]})) };
+        assert_eq!(fit_written(&mut op, kinds), ["shadows"]);
+        assert_eq!(op, NodeOp::Update { id: "t".into(), set: Map::new() });
+        // An image takes inner shadows, and an unknown kind keeps them.
+        for id in ["img", "new"] {
+            let mut op = NodeOp::Update { id: id.into(), set: set(json!({"shadow": {"inset": true, "spread": 2, "color": "#000"}})) };
+            assert!(fit_written(&mut op, kinds).is_empty());
+            let NodeOp::Update { set: fitted, .. } = &op else { panic!() };
+            assert_eq!(fitted["shadow"], json!({"inset": true, "spread": 2, "color": "#000"}));
+        }
         // An unknown target keeps every known field.
         let mut op = NodeOp::Update { id: "new".into(), set: set(json!({"fill": "#fff", "nope": 1})) };
         assert_eq!(fit_written(&mut op, kinds), ["nope"]);
@@ -713,6 +1015,17 @@ mod tests {
         let NodeOp::Add { node: fitted, .. } = &op else { panic!() };
         assert_eq!((fitted.name.as_deref(), fitted.shadow.clone(), fitted.extra.len()), (Some("g"), None, 0));
         assert_eq!(fitted.check_new(), Ok(()));
+        // An add of a line with an inner shadow and both shadow fields, as two builds wrote it.
+        let line = node(json!({"id": "l", "kind": "line", "points": [[0, 0], [9, 0]], "shadow": {"inset": true, "color": "#000"},
+            "shadows": [{"spread": 3, "color": "#000"}], "runs": null}));
+        let mut op = NodeOp::Add { node: line, index: None };
+        assert_eq!(fit_written(&mut op, kinds), ["shadow"]);
+        let NodeOp::Add { node: fitted, .. } = &op else { panic!() };
+        assert_eq!((fitted.shadow.clone(), fitted.shadows.as_ref().map(|s| s[0].spread)), (None, Some(0.0)));
+        assert_eq!(fitted.check_new(), Ok(()));
+        let both = node(json!({"id": "r", "kind": "rect", "shadow": {"color": "#000"}, "shadows": [{"color": "#fff"}]}));
+        let mut op = NodeOp::Add { node: both, index: None };
+        assert_eq!(fit_written(&mut op, kinds), ["shadow"]);
         // Moves and deletes are left alone.
         let mut op = NodeOp::Delete { id: "img".into() };
         assert!(fit_written(&mut op, kinds).is_empty());

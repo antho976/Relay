@@ -200,7 +200,12 @@ impl Scene {
                 let patched = node.patched(set).map_err(|e| format!("update {id}: {e}"))?;
                 self.nodes.insert(id.clone(), patched);
             }
-            NodeOp::Move { id, parent, index } => {
+            NodeOp::Move { id, parent, index, keep_position } => {
+                // The canvas's own moves write exact x/y from where it draws the node; one that
+                // keeps its place is an agent's, which the engine runs and a reread brings here.
+                if *keep_position == Some(true) {
+                    return Err(format!("move {id}: the canvas does not send keep_position"));
+                }
                 let node = self.nodes.get(id).ok_or_else(|| format!("move: no node {id}"))?;
                 let old = node.parent.clone();
                 let new = if node.kind == NodeKind::Page {
@@ -223,6 +228,12 @@ impl Scene {
                 if let Some(node) = self.nodes.get_mut(id) {
                     node.parent = new;
                 }
+            }
+            // An agent's copy runs in the engine and arrives by a reread (MODEL-SPEC §2.11).
+            NodeOp::Copy { id, .. } => return Err(format!("copy {id}: the canvas does not send copy")),
+            // Until client-scene keeps the design's colours and styles.
+            NodeOp::Color { name, .. } | NodeOp::Style { name, .. } | NodeOp::DeleteStyle { name } => {
+                return Err(format!("{} {name}: colours and styles are not on the canvas yet", op.name()));
             }
             NodeOp::Delete { id } => {
                 let node = self.nodes.get(id).ok_or_else(|| format!("delete: no node {id}"))?;
@@ -258,7 +269,12 @@ impl Scene {
                 self.nodes.insert(id.clone(), patched);
                 Ok(())
             }
-            NodeOp::Move { .. } | NodeOp::Delete { .. } => self.apply(op),
+            NodeOp::Move { .. }
+            | NodeOp::Delete { .. }
+            | NodeOp::Copy { .. }
+            | NodeOp::Color { .. }
+            | NodeOp::Style { .. }
+            | NodeOp::DeleteStyle { .. } => self.apply(op),
         }
     }
 
@@ -346,9 +362,9 @@ pub(crate) mod tests {
         let add = NodeOp::Add { node: node("e", Some("a"), NodeKind::Rect, [0.0, 0.0, 5.0, 5.0]), index: Some(0) };
         s.apply(&add).unwrap();
         assert_eq!(s.children("a"), ["e", "b", "c"]);
-        s.apply(&NodeOp::Move { id: "e".into(), parent: None, index: None }).unwrap();
+        s.apply(&NodeOp::Move { id: "e".into(), parent: None, index: None, keep_position: None }).unwrap();
         assert_eq!(s.children("a"), ["b", "c", "e"]);
-        s.apply(&NodeOp::Move { id: "e".into(), parent: Some("p1".into()), index: Some(1) }).unwrap();
+        s.apply(&NodeOp::Move { id: "e".into(), parent: Some("p1".into()), index: Some(1), keep_position: None }).unwrap();
         assert_eq!((s.children("p1"), s.parent("e")), (&["a".to_string(), "e".into(), "d".into()][..], Some("p1")));
         let set = json!({"fill": "#ff0000"}).as_object().unwrap().clone();
         s.apply(&NodeOp::Update { id: "b".into(), set }).unwrap();
@@ -361,9 +377,9 @@ pub(crate) mod tests {
     #[test]
     fn refuses_what_the_engine_refuses() {
         let mut s = sample();
-        assert!(s.apply(&NodeOp::Move { id: "a".into(), parent: Some("b".into()), index: None }).is_err());
+        assert!(s.apply(&NodeOp::Move { id: "a".into(), parent: Some("b".into()), index: None, keep_position: None }).is_err());
         s.apply(&NodeOp::Add { node: node("g", Some("a"), NodeKind::Group, [0.0; 4]), index: None }).unwrap();
-        assert!(s.apply(&NodeOp::Move { id: "a".into(), parent: Some("g".into()), index: None }).unwrap_err().contains("inside"));
+        assert!(s.apply(&NodeOp::Move { id: "a".into(), parent: Some("g".into()), index: None, keep_position: None }).unwrap_err().contains("inside"));
         assert!(s.apply(&NodeOp::Delete { id: "p1".into() }).is_err());
         assert!(s.apply(&NodeOp::Add { node: node("b", Some("a"), NodeKind::Rect, [0.0; 4]), index: None }).is_err());
         let before = s.to_nodes();
@@ -394,6 +410,36 @@ pub(crate) mod tests {
         s.apply_all(&[NodeOp::Update { id: "g".into(), set: x }]).unwrap();
         legacy.x = 5.0;
         assert_eq!(s.node("g"), Some(&legacy));
+    }
+
+    /// What the canvas never sends is refused, leaving the scene as it was: an agent's edit of
+    /// that kind runs in the engine and comes back by a reread.
+    #[test]
+    fn the_canvas_refuses_what_it_never_sends() {
+        let mut s = sample();
+        let before = s.to_nodes();
+        let keep = NodeOp::Move { id: "b".into(), parent: Some("p1".into()), index: None, keep_position: Some(true) };
+        assert_eq!(s.apply(&keep).unwrap_err(), "move b: the canvas does not send keep_position");
+        assert!(s.apply_all(&[keep]).unwrap_err().starts_with("ops[0]: move b"));
+        assert_eq!(s.to_nodes(), before);
+        s.apply(&NodeOp::Move { id: "b".into(), parent: Some("p1".into()), index: None, keep_position: Some(false) }).unwrap();
+        assert_eq!(s.parent("b"), Some("p1"));
+        let before = s.to_nodes();
+        let copy = NodeOp::Copy { id: "a".into(), as_id: Some("a2".into()), parent: None, index: None, dx: 0.0, dy: 0.0 };
+        assert_eq!(s.apply(&copy).unwrap_err(), "copy a: the canvas does not send copy");
+        let reuse = [
+            NodeOp::Color { name: "accent".into(), value: "#fff".into() },
+            NodeOp::Style { name: "card".into(), set: Default::default() },
+            NodeOp::DeleteStyle { name: "card".into() },
+        ];
+        for op in &reuse {
+            assert!(s.apply_all(std::slice::from_ref(op)).unwrap_err().contains("colours and styles are not on the canvas yet"), "{op:?}");
+        }
+        assert_eq!(s.to_nodes(), before);
+        // fit leaves them as they are.
+        let mut ops = reuse.to_vec();
+        assert!(s.fit(&mut ops).is_empty());
+        assert_eq!(ops, reuse);
     }
 
     /// What the canvas sends is fitted to the kinds of the nodes it writes, an add earlier in the

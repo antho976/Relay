@@ -219,7 +219,7 @@ pub fn group(scene: &mut Scene, placed: &Placed, ids: &[String], kind: NodeKind)
     }
     let mut ops = vec![NodeOp::Add { node: g.clone(), index: Some(top + 1) }];
     for id in &ids {
-        ops.push(NodeOp::Move { id: id.clone(), parent: Some(gid.clone()), index: None });
+        ops.push(NodeOp::Move { id: id.clone(), parent: Some(gid.clone()), index: None, keep_position: None });
         let (x, y) = if laid {
             let (x, y) = placed.origin(id);
             (x - origin.0, y - origin.1)
@@ -253,7 +253,7 @@ pub fn ungroup(scene: &Scene, placed: &Placed, id: &str) -> Option<(Vec<NodeOp>,
         } else {
             (node.x + c.x, node.y + c.y)
         };
-        ops.push(NodeOp::Move { id: child.clone(), parent: Some(parent.clone()), index: Some(index) });
+        ops.push(NodeOp::Move { id: child.clone(), parent: Some(parent.clone()), index: Some(index), keep_position: None });
         ops.push(NodeOp::Update { id: child.clone(), set: set(&[("x", px(x)), ("y", px(y))]) });
     }
     ops.push(NodeOp::Delete { id: id.to_string() });
@@ -292,7 +292,7 @@ pub fn reparent(scene: &Scene, placed: &Placed, id: &str, parent: &str, index: O
     let (ox, oy) = placed.origin(id);
     let (bx, by) = placed.rect(id).map_or((ox, oy), |r| (r.x, r.y));
     let (x, y) = (at.0 + ox - bx, at.1 + oy - by);
-    let mut ops = vec![NodeOp::Move { id: id.to_string(), parent: Some(parent.to_string()), index }];
+    let mut ops = vec![NodeOp::Move { id: id.to_string(), parent: Some(parent.to_string()), index, keep_position: None }];
     if !lays_out(scene, parent) {
         ops.push(NodeOp::Update { id: id.to_string(), set: set(&[("x", px(x - origin.0)), ("y", px(y - origin.1))]) });
     }
@@ -481,7 +481,7 @@ pub fn restack(scene: &Scene, ids: &[String], up: bool, all: bool) -> Vec<NodeOp
             }
             order.remove(i);
             order.insert(to, id.clone());
-            ops.push(NodeOp::Move { id, parent: None, index: Some(to as u32) });
+            ops.push(NodeOp::Move { id, parent: None, index: Some(to as u32), keep_position: None });
         }
     }
     ops

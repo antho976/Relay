@@ -258,7 +258,8 @@ impl Board {
                 Some(match mode {
                     Layout::None => "none",
                     Layout::Column => "column",
-                    Layout::Row => "row",
+                    // Wrap shows as a row until native-panels-layout-styles gives it a segment.
+                    Layout::Row | Layout::Wrap => "row",
                 }),
                 move |v| {
                     if let Some(b) = weak.upgrade() {

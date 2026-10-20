@@ -222,7 +222,8 @@ impl Board {
                     let (glyph, tip, next) = match mode {
                         Layout::None => ("free", "Auto layout: add (stack children in a column)", "column"),
                         Layout::Column => ("column", "Auto layout: column — switch to a row", "row"),
-                        Layout::Row => ("row", "Auto layout: row — remove", "none"),
+                        // Wrap shows as a row until native-canvas-layout gives it its own key.
+                        Layout::Row | Layout::Wrap => ("row", "Auto layout: row — remove", "none"),
                     };
                     key.set_child(Some(&glyphs::image(glyph, 16)));
                     super::widgets::tip(&key, tip);

@@ -17,13 +17,16 @@ use std::sync::OnceLock;
 
 /// Edits agents name that are not edits, and what to do instead.
 pub const OP_HINTS: &[(&[&str], &str)] = &[
-    (&["copy", "duplicate", "clone"], "there is no copy edit: add the node again under a new id (design.get has its fields), then its children"),
-    (&["instance", "component", "symbol"], "components and instances are not supported yet: add a copy of the nodes"),
-    (&["set", "patch", "edit", "modify", "change", "style"], "use update with set"),
+    (&["duplicate", "clone"], "use copy {id, as}"),
+    (&["instance", "component", "symbol"], "components are not supported yet: copy the node and give the copies a style"),
+    (&["set", "patch", "edit", "modify", "change"], "use update with set"),
     (&["remove", "destroy"], "use delete"),
     (&["reorder", "reparent", "nest"], "use move with parent and index"),
     (&["create", "insert", "append"], "use add"),
     (&["group", "ungroup"], "add a group node and move nodes into it (ungroup: move them out, then delete the group)"),
+    (&["token", "palette", "variable", "colour", "name_color"], "use color {name, value}"),
+    (&["class", "theme"], "use style {name, set}"),
+    (&["remove_style", "delete_color", "remove_color"], "use delete_style {name}"),
 ];
 
 /// Kinds agents name that are not kinds, and the kind to use.
@@ -34,7 +37,9 @@ pub const KIND_HINTS: &[(&[&str], &str)] = &[
     ),
     (&["rectangle", "square"], "use rect"),
     (&["circle", "oval"], "use ellipse"),
-    (&["progress", "ring", "gauge", "donut", "pie"], "use ellipse (arc with inner draws a ring)"),
+    (&["carousel", "scroller"], "use frame (scroll: x on a row)"),
+    (&["progress", "ring", "gauge"], "use ellipse (arc with inner and cap: round)"),
+    (&["donut", "pie"], "use ellipse (arc with inner draws a ring)"),
     (&["triangle", "diamond", "hexagon", "star"], "use polygon (sides; star for a star)"),
     (&["arrow", "connector"], "use line (arrow_end; from and to attach it)"),
     (&["label", "heading", "paragraph", "title", "span"], "use text"),
@@ -46,18 +51,23 @@ pub const KIND_HINTS: &[(&[&str], &str)] = &[
 /// Fields agents write that are not node fields (other tools' and CSS's names), and the field
 /// to write instead.
 pub const FIELD_HINTS: &[(&[&str], &str)] = &[
-    (&["anchor", "anchors", "constraints"], "nodes have no anchors: x/y place a node from its parent's top-left, and a frame's layout places its children"),
-    (&["position"], "use x and y, from the parent's top-left (a frame's layout places its children)"),
-    (&["truncate", "ellipsis", "text_overflow", "line_clamp", "max_lines"], "text cannot be cut short yet: give it a w (it wraps) inside a frame with a fixed h that clips"),
-    (&["spans", "rich_text", "runs"], "a text has one style: put differently styled words in their own texts inside a row frame"),
-    (&["flex_wrap", "wrap"], "frames do not wrap yet: lay rows out in a column frame"),
-    (&["column_gap", "row_gap"], "use gap"),
-    (&["min_width", "max_width", "min_height", "max_height", "min_w", "max_w", "min_h", "max_h"], "sizes have no limits yet: give w and h"),
-    (&["overflow", "scrollable", "scroll"], "use clip on a frame (true hides what overflows it); frames do not scroll yet"),
-    (&["box_shadow", "drop_shadow", "glow", "shadows"], "use shadow: {x, y, blur, spread, color} (a glow: x 0, y 0)"),
-    (&["line_cap", "stroke_linecap", "stroke_cap", "line_join", "stroke_linejoin", "stroke_join"], "a stroke's ends and corners cannot be chosen yet"),
+    (
+        &["anchor", "anchors", "constraints"],
+        "use pin_x (left, right, left_right, center, scale) and pin_y (top, bottom, top_bottom, center, scale); in auto layout also absolute: true",
+    ),
+    (&["position"], "use absolute: true (with x, y) inside auto layout; elsewhere x and y place a node from its parent's top-left"),
+    (&["truncate", "ellipsis", "text_overflow", "line_clamp"], "use max_lines (the text needs a width)"),
+    (&["spans", "rich_text"], "use runs: [{start, end, …}] (character offsets)"),
+    (&["flex_wrap", "wrap"], "use layout: wrap"),
+    (&["column_gap"], "use gap (row_gap between wrapped lines)"),
+    (&["min_width", "max_width", "min_height", "max_height"], "use min_w, max_w, min_h, max_h"),
+    (&["overflow", "scrollable"], "use scroll: x, y or both on a frame (clip hides what overflows)"),
+    (&["box_shadow", "drop_shadow", "glow"], "use shadow, or shadows for several (a glow: x 0, y 0, blur)"),
+    (&["line_cap", "stroke_linecap"], "use stroke_cap"),
+    (&["line_join", "stroke_linejoin"], "use stroke_join"),
+    (&["border_gradient", "stroke_fill"], "use stroke_gradient"),
     (&["animation", "keyframes", "transition", "motion"], "nodes do not animate yet"),
-    (&["class", "token", "tokens", "variables"], "there are no named colours or styles yet: write each node's own"),
+    (&["class", "token", "tokens", "variables"], "name colours with {op: color} and looks with {op: style}; a node takes style and $name colours"),
     (&["text_padding", "label_padding"], "use padding"),
     (&["background", "background_color", "bg"], "use fill"),
     (&["border", "border_color", "outline"], "use stroke (a colour) and stroke_width"),
@@ -93,6 +103,12 @@ pub const FIELD_HINTS: &[(&[&str], &str)] = &[
 pub const VALUE_HINTS: &[(&[&str], &[&str], &str)] = &[
     (&["layout"], &["vertical", "vstack"], "column"),
     (&["layout"], &["horizontal", "hstack"], "row"),
+    (&["layout"], &["flex_wrap"], "wrap"),
+    (&["pin_x"], &["stretch", "both", "left_and_right"], "left_right"),
+    (&["pin_y"], &["stretch", "both", "top_and_bottom"], "top_bottom"),
+    (&["pin_x", "pin_y"], &["middle", "centre"], "center"),
+    (&["scroll"], &["horizontal"], "x"),
+    (&["scroll"], &["vertical"], "y"),
     (&["justify", "items"], &["flex_start", "left", "top"], "start"),
     (&["justify", "items"], &["flex_end", "right", "bottom"], "end"),
     (&["justify", "items"], &["middle", "centre"], "center"),
@@ -107,6 +123,8 @@ pub const VALUE_HINTS: &[(&[&str], &[&str], &str)] = &[
     (&["text_case"], &["uppercase", "caps"], "upper"),
     (&["text_case"], &["lowercase"], "lower"),
     (&["text_case"], &["capitalize", "titlecase"], "title"),
+    (&["gradient.kind", "stroke_gradient.kind"], &["sweep", "angular"], "conic"),
+    (&["stroke_cap", "arc.cap"], &["flat"], "butt"),
 ];
 
 /// What a field holds, for a value of the wrong shape (`padding: 16` from CSS habit).
@@ -117,7 +135,10 @@ pub const SHAPE_HINTS: &[(&str, &str)] = &[
     ("dash", "give a list of lengths, such as [6, 4]"),
     ("shadow", "give an object: {x, y, blur, spread, color, inset}"),
     ("gradient", "give an object: {kind, angle, stops: [{at, color}, …]}"),
-    ("arc", "give an object: {start, sweep, inner}"),
+    ("arc", "give an object: {start, sweep, inner, cap}"),
+    ("shadows", "give a list of shadows: [{x, y, blur, spread, color}, …]"),
+    ("stroke_gradient", "give an object: {kind, angle, stops: [{at, color}, …]}"),
+    ("runs", "give a list: [{start, end, font_size, color, …}, …]"),
 ];
 
 /// `name` as the tables spell names: lower case, words joined by `_` (`backgroundColor`,
@@ -240,20 +261,38 @@ pub(crate) fn bad_value(field: &str, value: &Value, why: &str) -> String {
     if let (Some(n), Some((lo, hi))) = (value.as_i64().filter(|_| why.starts_with("invalid value: integer")), range_of(field)) {
         return format!("{field}: {n} is outside {lo} to {hi}");
     }
-    let tail = match value.as_str() {
-        Some(given) if why.starts_with("unknown variant") => value_hint(field, given).map(|hint| format!("use {hint:?}")).or_else(|| {
-            let (variants, normal) = (variants(why), normal(given));
-            variants.iter().copied().find(|v| *v == normal)
-                .or_else(|| nearest(given, variants.iter().copied()))
-                .map(|v| format!("did you mean {v:?}?"))
-        }),
-        _ if why.starts_with("invalid type") => SHAPE_HINTS.iter().find(|(f, _)| *f == field).map(|(_, hint)| (*hint).to_string()),
-        _ => None,
+    let tail = if why.starts_with("unknown variant") {
+        variant_tail(field, value, why)
+    } else if why.starts_with("invalid type") {
+        SHAPE_HINTS.iter().find(|(f, _)| *f == field).map(|(_, hint)| (*hint).to_string())
+    } else {
+        None
     };
     match tail {
         Some(tail) => format!("{field}: {why}; {tail}"),
         None => format!("{field}: {why}"),
     }
+}
+
+/// What to write for a value that is not one of its field's: the table's advice, else the closest
+/// variant. For a nested object (`gradient: {kind: "sweep"}`) the value is the one serde names,
+/// looked up as `gradient.kind`.
+fn variant_tail(field: &str, value: &Value, why: &str) -> Option<String> {
+    let (path, given) = match value {
+        Value::String(given) => (field.to_string(), given.as_str()),
+        Value::Object(map) => {
+            let named = why.split('`').nth(1)?;
+            let (key, v) = map.iter().find(|(_, v)| v.as_str() == Some(named))?;
+            (format!("{field}.{key}"), v.as_str()?)
+        }
+        _ => return None,
+    };
+    value_hint(&path, given).map(|hint| format!("use {hint:?}")).or_else(|| {
+        let (variants, normal) = (variants(why), normal(given));
+        variants.iter().copied().find(|v| *v == normal)
+            .or_else(|| nearest(given, variants.iter().copied()))
+            .map(|v| format!("did you mean {v:?}?"))
+    })
 }
 
 /// The values serde's "unknown variant `x`, expected one of `a`, `b`" lists.
@@ -303,6 +342,10 @@ pub fn label(at: usize, op: &NodeOp) -> String {
         NodeOp::Update { id, .. } => format!("ops[{at}] update {id:?}"),
         NodeOp::Move { id, .. } => format!("ops[{at}] move {id:?}"),
         NodeOp::Delete { id } => format!("ops[{at}] delete {id:?}"),
+        NodeOp::Copy { id, .. } => format!("ops[{at}] copy {id:?}"),
+        NodeOp::Color { name, .. } => format!("ops[{at}] color {name:?}"),
+        NodeOp::Style { name, .. } => format!("ops[{at}] style {name:?}"),
+        NodeOp::DeleteStyle { name } => format!("ops[{at}] delete_style {name:?}"),
     }
 }
 
@@ -422,9 +465,10 @@ pub fn explain(at: usize, edit: &Value) -> Unread {
         return unread;
     };
     let node = map.get("node").and_then(Value::as_object);
+    // What the edit names, as `label` names it: a node's id, or a colour's or style's name.
     let id = match node {
         Some(node) => node.get("id"),
-        None => map.get("id"),
+        None => map.get("id").or_else(|| map.get("name")),
     };
     unread.id = id.and_then(Value::as_str).filter(|id| !id.is_empty()).map(str::to_string);
     let kind = node.and_then(|n| n.get("kind")).and_then(Value::as_str).and_then(NodeKind::from_name);
@@ -445,10 +489,13 @@ fn why_edit(shape: &Shape, map: &Map<String, Value>, edit: &Value) -> (Option<St
     let op = shape.op.as_str();
     for (key, value) in map.iter().filter(|(key, _)| *key != "op") {
         if !shape.keys.contains(key) {
-            let why = if field_kinds(key).is_some() && op == "update" {
-                format!("{key}: a node field goes in set: {{\"set\": {{{key:?}: …}}}}")
+            let why = if field_kinds(key).is_some() && matches!(op, "update" | "style") {
+                let what = if op == "style" { "style" } else { "node" };
+                format!("{key}: a {what} field goes in set: {{\"set\": {{{key:?}: …}}}}")
             } else if field_kinds(key).is_some() && op == "add" {
                 format!("{key}: a node field goes in node: {{\"node\": {{{key:?}: …}}}}")
+            } else if op == "copy" && matches!(key.as_str(), "x" | "y" | "offset" | "position") {
+                format!("{key}: not a field of copy; move the copy with dx and dy")
             } else {
                 let keys: Vec<&str> = shape.keys.iter().map(String::as_str).collect();
                 match nearest(key, keys.iter().copied()) {
@@ -466,6 +513,7 @@ fn why_edit(shape: &Shape, map: &Map<String, Value>, edit: &Value) -> (Option<St
             }
             let why = format!("{key}: {error}");
             return (Some(key.clone()), match key.as_str() {
+                "set" if op == "style" => format!("{why}; give the style fields to set, such as {{\"fill\": \"$accent\", \"radius\": 12}}"),
                 "set" => format!("{why}; give the node fields to change, such as {{\"fill\": \"#FFFFFF\"}}"),
                 "index" => format!("{why}; 0 is the bottom of the parent's children"),
                 _ => why,
@@ -475,6 +523,11 @@ fn why_edit(shape: &Shape, map: &Map<String, Value>, edit: &Value) -> (Option<St
     if let Some(key) = shape.required.iter().find(|key| !map.contains_key(*key)) {
         let tail = match key.as_str() {
             "id" => format!("name the node to {op}"),
+            "name" if op == "color" => "name the colour, as nodes will write it after a $".into(),
+            "name" if op == "style" => "name the style, as nodes will write it in style".into(),
+            "name" => "name the colour or style to take out".into(),
+            "value" => "give the colour, such as \"#4C9DFF\"".into(),
+            "set" if op == "style" => "give the style fields to set, such as {\"fill\": \"$accent\", \"radius\": 12}".into(),
             "node" => "give the node to add, such as {\"kind\": \"rect\", \"parent\": \"page-1\"}".into(),
             "set" => "give the node fields to change, such as {\"fill\": \"#FFFFFF\"}".into(),
             _ => format!("{op} needs it"),
@@ -613,13 +666,13 @@ mod tests {
     #[test]
     fn each_bad_edit_names_its_index_and_field() {
         let why = add(3, json!({"id": "x", "parent": "p", "kind": "frame", "layout": "grid"}));
-        assert_eq!(why, "ops[3] add \"x\": layout: unknown variant `grid`, expected one of `none`, `row`, `column`");
+        assert_eq!(why, "ops[3] add \"x\": layout: unknown variant `grid`, expected one of `none`, `row`, `column`, `wrap`");
         assert_eq!(add(0, json!({"id": "x", "parent": "p", "kind": "polygon", "sides": 300})), "ops[0] add \"x\": sides: 300 is outside 3 to 24");
         assert_eq!(add(0, json!({"id": "x", "parent": "p", "kind": "polygon", "sides": -1})), "ops[0] add \"x\": sides: -1 is outside 3 to 24");
         let rect = json!({"id": "r", "parent": "p", "kind": "rect"});
         assert_eq!(update(rect.clone(), json!({"padding": 16})),
             "padding: invalid type: integer `16`, expected a sequence; give a list: [all], [vertical, horizontal] or [top, right, bottom, left]");
-        assert_eq!(update(rect.clone(), json!({"fill": "red"})), "fill: \"red\" is not #RGB, #RRGGBB or #RRGGBBAA");
+        assert_eq!(update(rect.clone(), json!({"fill": "red"})), "fill: \"red\" is not #RGB, #RRGGBB, #RRGGBBAA or a $name colour");
         assert_eq!(update(rect, json!({"background": "#fff"})), "background: not a node field; use fill");
     }
 
@@ -630,24 +683,38 @@ mod tests {
             node[key] = value;
             add(0, node)
         };
-        assert!(node("anchor", json!("top")).ends_with("anchor: not a node field; nodes have no anchors: x/y place a node from its parent's top-left, and a frame's layout places its children"));
-        for key in ["truncate", "max_lines"] {
-            assert!(node(key, json!(1)).contains(&format!("{key}: not a node field; text cannot be cut short yet")), "{key}");
-        }
-        assert!(node("runs", json!([])).contains("runs: not a node field; a text has one style"));
+        assert!(node("anchor", json!("top")).ends_with("anchor: not a node field; use pin_x (left, right, left_right, center, scale) and pin_y (top, bottom, top_bottom, center, scale); in auto layout also absolute: true"));
+        assert!(node("minWidth", json!(10)).ends_with("minWidth: not a node field; use min_w, max_w, min_h, max_h"));
+        let pinned = json!({"id": "t", "parent": "p", "kind": "rect", "pin_x": "stretch"});
+        assert!(add(0, pinned).ends_with("; use \"left_right\""));
+        assert!(node("truncate", json!(1)).ends_with("truncate: not a node field; use max_lines (the text needs a width)"));
+        assert!(node("spans", json!([])).ends_with("spans: not a node field; use runs: [{start, end, …}] (character offsets)"));
+        assert!(node("glow", json!(1)).ends_with("glow: not a node field; use shadow, or shadows for several (a glow: x 0, y 0, blur)"));
+        assert!(node("strokeLinecap", json!("round")).ends_with("strokeLinecap: not a node field; use stroke_cap"));
+        // A nested value is looked up by its path.
+        let stops = json!([{"at": 0, "color": "#fff"}, {"at": 1, "color": "#000"}]);
+        let sweep = json!({"id": "e", "parent": "p", "kind": "ellipse", "gradient": {"kind": "sweep", "stops": stops}});
+        assert!(add(0, sweep).ends_with("gradient: unknown variant `sweep`, expected one of `linear`, `radial`, `conic`; use \"conic\""));
+        let ring = json!({"id": "e", "parent": "p", "kind": "ellipse", "arc": {"inner": 0.8, "cap": "rond"}});
+        assert!(add(0, ring).ends_with("; did you mean \"round\"?"));
+        let flat = json!({"id": "l", "parent": "p", "kind": "line", "points": [[0, 0], [9, 0]], "stroke_cap": "flat"});
+        assert!(add(0, flat).ends_with("; use \"butt\""));
         assert!(node("Background-Color", json!("#fff")).ends_with("Background-Color: not a node field; use fill"));
         let frame = json!({"id": "f", "parent": "p", "kind": "frame", "layout": "vertical"});
-        assert!(add(0, frame).ends_with("layout: unknown variant `vertical`, expected one of `none`, `row`, `column`; use \"column\""));
+        assert!(add(0, frame).ends_with("layout: unknown variant `vertical`, expected one of `none`, `row`, `column`, `wrap`; use \"column\""));
         let justify = json!({"id": "f", "parent": "p", "kind": "frame", "justify": "space-between"});
         assert!(add(0, justify).ends_with("; did you mean \"space_between\"?"));
         let align = json!({"id": "t", "parent": "p", "kind": "text", "align": "centre"});
         assert!(add(0, align).ends_with("; use \"center\""));
         // Edits and kinds that are not.
-        let why = read(json!([{"op": "add", "node": {"kind": "page"}}, {"op": "copy", "id": "a"}])).unwrap_err();
-        assert_eq!(why, "ops[1]: op \"copy\" is not an edit; there is no copy edit: add the node again under a new id (design.get has its fields), then its children");
-        assert!(read(json!([{"op": "instance"}])).unwrap_err().ends_with("components and instances are not supported yet: add a copy of the nodes"));
+        let why = read(json!([{"op": "add", "node": {"kind": "page"}}, {"op": "duplicate", "id": "a"}])).unwrap_err();
+        assert_eq!(why, "ops[1]: op \"duplicate\" is not an edit; use copy {id, as}");
+        assert!(read(json!([{"op": "instance"}])).unwrap_err().ends_with("components are not supported yet: copy the node and give the copies a style"));
+        assert!(read(json!([{"op": "palette"}])).unwrap_err().ends_with("use color {name, value}"));
+        assert!(read(json!([{"op": "theme"}])).unwrap_err().ends_with("use style {name, set}"));
+        assert!(read(json!([{"op": "remove_style"}])).unwrap_err().ends_with("use delete_style {name}"));
         assert_eq!(read(json!([{"op": "updte", "id": "a", "set": {}}])).unwrap_err(), "ops[0]: op \"updte\" is not an edit; did you mean \"update\"?");
-        assert_eq!(read(json!([{"op": "frobnicate"}])).unwrap_err(), "ops[0]: op \"frobnicate\" is not an edit; the edits are add, update, move or delete");
+        assert_eq!(read(json!([{"op": "frobnicate"}])).unwrap_err(), "ops[0]: op \"frobnicate\" is not an edit; the edits are add, update, move, delete, copy, color, style or delete_style");
         assert_eq!(read(json!([{"op": "add", "node": {"id": "b", "parent": "p", "kind": "button"}}])).unwrap_err(),
             "ops[0] add \"b\": node.kind: \"button\" is not a kind; use frame (layout: row or column lays out its children)");
         assert_eq!(read(json!([{"op": "add", "node": {"parent": "p", "kind": "elipse"}}])).unwrap_err(),
@@ -658,8 +725,8 @@ mod tests {
     #[test]
     fn each_edit_is_read_alone_and_explained() {
         let cases = [
-            (json!(["add"]), "ops[0]: each edit is an object with op: add, update, move or delete"),
-            (json!([{"id": "a"}]), "ops[0]: op: each edit is an object with op: add, update, move or delete"),
+            (json!(["add"]), "ops[0]: each edit is an object with op: add, update, move, delete, copy, color, style or delete_style"),
+            (json!([{"id": "a"}]), "ops[0]: op: each edit is an object with op: add, update, move, delete, copy, color, style or delete_style"),
             (json!([{"op": "update", "set": {}}]), "ops[0] update: id: missing; name the node to update"),
             (json!([{"op": "update", "id": "a"}]), "ops[0] update \"a\": set: missing; give the node fields to change, such as {\"fill\": \"#FFFFFF\"}"),
             (json!([{"op": "update", "id": "a", "set": "red"}]),
@@ -672,6 +739,13 @@ mod tests {
             (json!([{"op": "delete", "id": 7}]), "ops[0] delete: id: invalid type: integer `7`, expected a string"),
             (json!([{"op": "add"}]), "ops[0] add: node: missing; give the node to add, such as {\"kind\": \"rect\", \"parent\": \"page-1\"}"),
             (json!([{"op": "add", "node": "rect"}]), "ops[0] add: node: an add's node is an object of node fields, such as {\"kind\": \"rect\", \"parent\": \"page-1\"}"),
+            (json!([{"op": "copy", "id": "card", "offset": 1}]), "ops[0] copy \"card\": offset: not a field of copy; move the copy with dx and dy"),
+            (json!([{"op": "color", "name": "accent"}]), "ops[0] color \"accent\": value: missing; give the colour, such as \"#4C9DFF\""),
+            (json!([{"op": "color", "value": "#fff"}]), "ops[0] color: name: missing; name the colour, as nodes will write it after a $"),
+            (json!([{"op": "style", "name": "card", "radius": 12}]), "ops[0] style \"card\": radius: a style field goes in set: {\"set\": {\"radius\": …}}"),
+            (json!([{"op": "style", "name": "card", "set": [12]}]),
+                "ops[0] style \"card\": set: invalid type: sequence, expected a map; give the style fields to set, such as {\"fill\": \"$accent\", \"radius\": 12}"),
+            (json!([{"op": "delete_style"}]), "ops[0] delete_style: name: missing; name the colour or style to take out"),
             (json!([{"op": "add", "node": {"id": "n", "parent": "p"}}]),
                 "ops[0] add \"n\": node.kind: missing; one of page, frame, group, rect, ellipse, line, text, sticky, path, image, polygon or icon"),
         ];
@@ -701,7 +775,7 @@ mod tests {
         assert_eq!(locate(&json!({"design_id": "one"})), None);
         let long = json!({"ops": vec![json!({"op": "delete", "id": "a"}); MAX_LENIENT_OPS + 1]});
         assert_eq!(locate(&long).map(|(_, details)| details), Some(json!({"field": "ops"})));
-        let unread = explain(4, &json!({"op": "copy", "id": "a"}));
+        let unread = explain(4, &json!({"op": "clone", "id": "a"}));
         assert_eq!((unread.index, unread.id.as_deref(), unread.field.as_deref()), (4, None, Some("op")));
     }
 
@@ -776,7 +850,7 @@ mod tests {
     #[test]
     fn hints_never_shadow_what_exists() {
         let edits: Vec<&str> = shapes().iter().map(|s| s.op.as_str()).collect();
-        assert_eq!(edits, ["add", "update", "move", "delete"]);
+        assert_eq!(edits, ["add", "update", "move", "delete", "copy", "color", "style", "delete_style"]);
         for (names, _) in OP_HINTS {
             assert!(names.iter().all(|n| !edits.contains(n) && normal(n) == *n), "{names:?}");
         }
@@ -787,9 +861,16 @@ mod tests {
             assert!(names.iter().all(|n| field_kinds(n).is_none() && normal(n) == *n), "{names:?}");
         }
         for (fields, values, advice) in VALUE_HINTS {
-            for field in *fields {
+            for path in *fields {
+                // A nested value (`gradient.kind`) is probed inside the least object of its field.
+                let (field, key) = path.split_once('.').map_or((*path, None), |(f, k)| (f, Some(k)));
                 let kind = NodeKind::ALL.into_iter().find(|k| crate::design::takes(*k, field)).unwrap();
-                let probe = |value: &str| super::super::read::probe(kind, field, &json!(value));
+                let wrap = |value: &str| match key {
+                    None => json!(value),
+                    Some(key) if field.ends_with("gradient") => json!({key: value, "stops": []}),
+                    Some(key) => json!({key: value}),
+                };
+                let probe = |value: &str| super::super::read::probe(kind, field, &wrap(value));
                 assert_eq!(probe(advice), Ok(()), "{field}: {advice}");
                 for value in *values {
                     assert!(probe(value).is_err() && normal(value) == *value, "{field}: {value} is a value");
