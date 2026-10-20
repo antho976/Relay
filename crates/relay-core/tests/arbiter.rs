@@ -705,3 +705,18 @@ fn a_card_past_its_time_is_not_approved_before_the_runner_expires_it() {
     assert_eq!(cards["proposals"][0]["status"], "expired", "{cards:#}");
     assert!(ok(&engine, "arbiter.order.list", json!({"strategy_id": id}))["orders"].as_array().unwrap().is_empty());
 }
+
+#[test]
+fn arbiters_most_held_counts_what_other_strategies_open_buys_will_spend() {
+    let (engine, fake) = setup();
+    ok(&engine, "arbiter.limits.set", json!({"global": {"max_exposure": "60", "price_band_pct": "2", "slippage_pct": "0.1", "approval_minutes": 10}}));
+    let a = live_agent(&engine);
+    let b = ok(&engine, "arbiter.strategy.save", json!({"draft": draft("Other", "20")}))["row"]["id"].as_i64().unwrap();
+    ok(&engine, "arbiter.strategy.set", json!({"id": b, "mode": "agent", "venue": "live"}));
+    // A's buy of 20 is open on Coinbase, nothing filled yet: B may add 40, not 50.
+    *fake.rest.lock().unwrap() = true;
+    assert_eq!(agent_buy(&engine, a, "20")["order"]["status"], "open");
+    let out = agent_buy(&engine, b, "50");
+    assert_eq!(out["refusal"]["code"], "arbiter.over_exposure", "{out:#}");
+    assert_eq!(agent_buy(&engine, b, "40")["outcome"], "placed");
+}

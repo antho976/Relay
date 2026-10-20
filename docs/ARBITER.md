@@ -68,7 +68,9 @@ the exchange. It refuses rather than shrinks (a limit that resizes an order is n
 - the product exists, is tradable, and is on the strategy's list (an invented symbol stops here);
 - size rounded down to the product's increments and above its minimum;
 - a limit price within a band of the best bid/ask (default 2%);
-- the most per order, per product position, and total exposure;
+- the most per order, per product position, and total exposure: what every strategy on the venue
+  holds at cost, plus what other strategies' open buys will still spend, since a market buy is
+  usually still pending when the next strategy's turn comes;
 - the most orders per hour;
 - one open order per strategy: a second beside one still resting is refused, since the caps weigh
   only what has filled;

@@ -485,6 +485,13 @@ fn situation_for<'a>(engine: &Engine, s: &'a StrategyRec, product: Option<&'a Pr
             exposure += p.cost;
             pnl_all += p.realized_today + p.open_pnl(last_price(engine, &other.product), taker).min(Decimal::ZERO);
         }
+        // Holdings come from fills, and a market buy is usually still pending when it is placed:
+        // two strategies due in the same pass would each pass the Arbiter-wide limit alone. What
+        // other strategies' open buys will still spend counts too (this one's own open order
+        // already stops it placing another).
+        for o in b.open_orders(None)?.iter().filter(|o| o.venue == s.venue && o.side == Side::Buy && o.strategy_id != Some(s.id)) {
+            exposure += still_to_spend(o, last_price(engine, &o.product));
+        }
         let n = b.orders_since(Some(s.id), s.venue, now - 3600)?;
         let n_all = b.orders_since(None, s.venue, now - 3600)?;
         Ok((pos, exposure, (-pnl_all).max(Decimal::ZERO), n, n_all, b.halted()?.is_some()))
@@ -509,6 +516,18 @@ fn situation_for<'a>(engine: &Engine, s: &'a StrategyRec, product: Option<&'a Pr
         all_halted: halted_all,
     };
     Ok((sit, pos))
+}
+
+/// What an open buy will still spend: its quote amount, else its size at its limit price, else at
+/// `last`; less what has filled, which its strategy's holding already counts.
+fn still_to_spend(o: &OrderView, last: Option<f64>) -> Decimal {
+    let price = o.limit_price.or_else(|| last.and_then(Decimal::from_f64));
+    let whole = match (o.quote_size, o.base_size, price) {
+        (Some(q), _, _) => q,
+        (None, Some(b), Some(p)) => b * p,
+        _ => Decimal::ZERO,
+    };
+    (whole - o.filled_base * o.average_price.or(price).unwrap_or_default()).max(Decimal::ZERO)
 }
 
 /// Runs the gate for an intent on `s`, without placing anything: what a proposal checks first.
