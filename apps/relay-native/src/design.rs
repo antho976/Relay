@@ -520,30 +520,28 @@ pub(crate) fn session_changed(_ui: &Rc<Ui>, payload: &Value) {
 }
 
 /// For the smoke capture: open the Design view on the first design, or the gallery.
+/// `RELAY_SMOKE_DESIGN_ID` names the design to open instead of the gallery's first, which the
+/// harness cannot order reliably (TM-58: an unchanged update no longer moves a design up).
 pub fn smoke_open(ui: &Rc<Ui>) {
     ui.navigate("design");
     let ui = ui.clone();
     glib::timeout_add_local_once(std::time::Duration::from_millis(600), move || {
-        let first = view().and_then(|v| v.gallery_first());
+        let named = std::env::var("RELAY_SMOKE_DESIGN_ID").ok().and_then(|id| id.parse::<i64>().ok());
+        let first = named.or_else(|| view().and_then(|v| v.gallery_first()));
         if let Some(id) = first.filter(|_| std::env::var("RELAY_SMOKE_DESIGN_BOARD").is_ok()) {
-            open(&ui, id);
-            // A scripted run of gestures and commands (drive.rs), checked by the harness.
-            if let Ok(script) = std::env::var("RELAY_SMOKE_DESIGN_SCRIPT") {
-                glib::timeout_add_local_once(std::time::Duration::from_millis(900), move || {
-                    if let Some(b) = view().and_then(|v| v.board.borrow().clone()) {
-                        drive::run(b, script);
-                    }
+            // Once the board has the design and its size, and a few frames have drawn: a scripted
+            // run of gestures and commands (drive.rs), checked by the harness, or a layer to show
+            // selected, with its toolbar and the inspector.
+            let script = std::env::var("RELAY_SMOKE_DESIGN_SCRIPT").ok();
+            let node = std::env::var("RELAY_SMOKE_DESIGN_SELECT").ok();
+            open_with(&ui, id, move |b| {
+                let b = b.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_millis(600), move || match (script, node) {
+                    (Some(script), _) => drive::run(b, script),
+                    (None, Some(node)) => b.select(vec![node]),
+                    (None, None) => {}
                 });
-                return;
-            }
-            // A layer to show selected, with its toolbar and the inspector.
-            if let Ok(node) = std::env::var("RELAY_SMOKE_DESIGN_SELECT") {
-                glib::timeout_add_local_once(std::time::Duration::from_millis(900), move || {
-                    if let Some(b) = view().and_then(|v| v.board.borrow().clone()) {
-                        b.select(vec![node]);
-                    }
-                });
-            }
+            });
         }
     });
 }

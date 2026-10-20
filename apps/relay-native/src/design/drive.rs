@@ -6,7 +6,10 @@
 //! `select:a,b` `click:x,y` `dbl:x,y` `drag:x,y>x,y[:shift|alt]` `tool:rect` `type:words`
 //! `endedit` `nudge:dx,dy` `set:{json}` `align:left` `layout:row` `duplicate` `delete` `group`
 //! `frame` `ungroup` `copy` `paste` `undo` `redo` `ask:words` `zoom:1.5` `fit` `layers` `wait:ms`
-//! `print`
+//! `print` (the scene, the selection and the colours and styles); `mark:name` prints
+//! `DESIGN_MARK name`, for a harness that acts between steps (as an agent would); `chrome`
+//! prints `DESIGN_CHROME` with what the top bar and the toast say, whether Undo agent shows and
+//! whether a text edit is open and on screen.
 //!
 //! A click is three steps, `press:x,y[:shift|alt]`, `idle` (the main loop runs, frames draw)
 //! and `release:x,y`, so a press that lasts frames is exercised as a person's is (I-12); `click`
@@ -361,9 +364,31 @@ fn next(b: Rc<Board>, steps: Vec<String>, at: usize) {
         }
         "wait" => pause = arg.parse().unwrap_or(200),
         "print" => {
-            let nodes = b.doc.scene.borrow().to_nodes();
-            println!("DESIGN_SCENE {}", serde_json::to_string(&nodes).unwrap_or_default());
+            let scene = b.doc.scene.borrow();
+            println!("DESIGN_SCENE {}", serde_json::to_string(&scene.to_nodes()).unwrap_or_default());
             println!("DESIGN_SELECTION {}", serde_json::to_string(&*b.selection.borrow()).unwrap_or_default());
+            println!("DESIGN_STYLES {}", serde_json::to_string(scene.styles()).unwrap_or_default());
+        }
+        "mark" => println!("DESIGN_MARK {arg}"),
+        "chrome" => {
+            let edit = b.edit.borrow().as_ref().map(|e| e.view.is_mapped());
+            // Where the edit view sits on the canvas, and the canvas's size: whether the typing shows.
+            let edit_rect = b.edit.borrow().as_ref().and_then(|e| e.view.compute_bounds(&b.canvas)).map(|r| [r.x(), r.y(), r.width(), r.height()]);
+            let class = ["design-status-agent", "design-status-unsaved"].into_iter().find(|c| b.status.has_css_class(c));
+            let chrome = serde_json::json!({
+                "status": b.status.text().as_str(),
+                "status_class": class,
+                "toast": b.toast_label.text().as_str(),
+                "toast_shown": b.toast.reveals_child(),
+                "agent_undo": b.agent_undo.is_visible(),
+                "agent_undo_tip": b.agent_undo.tooltip_text().map(|t| t.to_string()),
+                "editing": edit.is_some(),
+                "edit_mapped": edit == Some(true),
+                "edit_rect": edit_rect,
+                "canvas": [b.canvas.width(), b.canvas.height()],
+                "layers_open": b.layers_panel.reveals_child(),
+            });
+            println!("DESIGN_CHROME {chrome}");
         }
         other => eprintln!("design script: unknown step {other:?}"),
     }

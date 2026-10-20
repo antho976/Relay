@@ -285,7 +285,7 @@ pub struct Board {
     /// Counts what the status said, so a timer ages only the word it was set for.
     status_serial: Cell<u64>,
     /// Undo the last change an agent made, shown once one arrives.
-    agent_undo: gtk::Button,
+    pub(super) agent_undo: gtk::Button,
     /// Go to the page an agent changed while another was on show, and what it changed there.
     goto: gtk::Button,
     goto_page: RefCell<Option<(String, HashSet<String>)>>,
@@ -329,8 +329,8 @@ pub struct Board {
     pub(super) layers: RefCell<Option<Rc<super::layers::Layers>>>,
     pub(super) layers_panel: gtk::Revealer,
     pub(super) edit: RefCell<Option<super::textedit::Edit>>,
-    toast: gtk::Revealer,
-    toast_label: gtk::Label,
+    pub(super) toast: gtk::Revealer,
+    pub(super) toast_label: gtk::Label,
     toast_serial: Cell<u64>,
     chrome_pending: Cell<bool>,
     pub(super) actions: gio::SimpleActionGroup,
