@@ -519,7 +519,11 @@ main window and returned `unavailable` / `ui.absent` headless. V4 never had it, 
 | `log` | `app.log.tail` | none yet | declared, not implemented: the op answers `unavailable` / `bus.not_implemented` and attaches nothing. The engine logs to `relay serve`'s output, filtered by `RELAY_LOG` |
 
 Input to a PTY is a bus op (`session.input`, `audit: agent_only`), not a stream — it is
-low-volume in bytes and it matters who typed into whose terminal.
+low-volume in bytes and it matters who typed into whose terminal. `paste` (default false) sends
+`data` as one paste: when the program has turned on bracketed paste (DECSET 2004, read from the
+PTY's own output in memory, never the store) it goes between `ESC[200~` and `ESC[201~` with its
+line breaks kept and every ESC and 8-bit CSI removed; otherwise each line break (`\r\n`, `\r` or
+`\n`) becomes a space, so no line in it is sent as Enter.
 
 ---
 
@@ -947,7 +951,7 @@ are `user_only` (§9.1). Agents get `done`, `report`, `attach`/`scrollback`, `bo
 | `session.report` | mutation · agent_only · session · agent | `{ session, kind: "session_start"\|"tool_use"\|"stop"\|"notification"\|"idle"\|"blocked", data?: object }` → `{}` — the provider's hooks calling home (§9.3); this is where `state: blocked`, `provider_ref` and "agent asking" notifications come from. Codex, having no hooks, degrades to PTY-derived idle/busy |
 | `session.attach` | query · stream | `{ session, from_seq?: number }` → attaches `pty` stream (replays scrollback from `from_seq`) |
 | `session.detach` | query | `{ session }` → `{}` |
-| `session.input` | mutation · agent_only · session | `{ session, data: string }` → `{}` — text to the PTY |
+| `session.input` | mutation · agent_only · session | `{ session, data: string, paste?: bool }` → `{}` — text to the PTY, as keys or as one paste |
 | `session.resize` | mutation · agent_only · session | `{ session, cols, rows, until_detach?: bool }` → `{}` — `until_detach` borrows the size: on a connection door the PTY goes back to the size it had when that connection detaches from the session or closes, unless someone resized it since. A size set without it ends a borrow. The phone fits an agent's terminal to its screen this way |
 | `session.scrollback` | query | `{ session, lines?: number }` → `{ text, epoch, seq, cols?, rows? }` — `cols`/`rows` are the live PTY's size, absent for a saved scrollback |
 | `session.transcript` | query | `{ session, after?: number, limit?: number }` → `{ messages: {id, role, body, created_at}[], cursor, reset: bool, found: bool }` — the agent's conversation read from its provider's own log (Claude Code's `projects/<cwd>/<id>.jsonl`, Codex's rollout), in a thread message's shape: `user {text}`, `assistant {blocks: text \| tool_use {id, name, summary}}`, `tool {tool_use_id, is_error, text}` (cut to its head), `error`, `note`. `after` is a previous `cursor` (opaque): only what was written since; `reset` says the answer replaces everything read before. `found: false` until the provider's first hook names its conversation. The phone draws a terminal agent as a chat from it |
