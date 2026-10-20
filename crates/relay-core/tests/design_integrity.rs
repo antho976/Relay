@@ -1,13 +1,14 @@
 //! What a `design.apply` list may leave behind (MODEL-SPEC §2.8, §2.11; feature-agent-api W14, W19,
-//! B6): a design nests at most 64 levels; a connector's ends name nodes on its own page and an
+//! B6, B59): a design nests at most 64 levels; a connector's ends name nodes on its own page and an
 //! image's `src` a stored picture, checked once the whole list has run; a move that carries a
-//! node to another page lets go of the ends it parts; and a missing id is answered with the
-//! nearest one the design holds.
+//! node to another page lets go of the ends it parts; a missing id is answered with the nearest
+//! one the design holds; and a list that takes a design over its size is refused at the edit that
+//! did, before the rest of it is written.
 
 mod common;
 
 use common::{call, committed_repo, engine_with_project, ok, ok_as, refused};
-use relay_bus::design::MAX_DEPTH;
+use relay_bus::design::{MAX_DEPTH, MAX_DESIGN_BYTES, MAX_TEXT};
 use relay_bus::{Actor, BusError, ErrorKind};
 use relay_core::engine::Engine;
 use relay_core::handlers::design::recount_bytes;
@@ -379,6 +380,51 @@ fn a_move_to_another_page_lets_go_of_the_ends_it_parts() {
     assert_eq!((error.code.as_str(), error.details.as_ref().unwrap()["op"].as_u64()), ("design.connector", Some(1)));
     assert_eq!(nodes(&e, id), before);
     counted(&e, id);
+}
+
+/// B59: past the last edit that could shrink it, a list that has taken the design over its size
+/// only grows, so it is refused at the edit that took it over, before the rest is written; a list
+/// that deletes enough later on applies.
+#[test]
+fn the_byte_cap_refuses_a_list_at_the_edit_that_takes_it_over() {
+    let (e, _root) = project();
+    let words = "x".repeat(MAX_TEXT);
+    let adds = |n: usize| -> Vec<Value> {
+        (0..n).map(|i| json!({"op": "add", "node": {"id": format!("t{i}"), "parent": "page-1", "kind": "text", "text": words}})).collect()
+    };
+    let id = create(&e);
+    let before = ok(&e, "design.get", json!({"design_id": id}));
+    let error = refusal(&e, id, json!(adds(200)));
+    assert_eq!(error.code, "design.too_large");
+    let over = error.details.as_ref().expect("the edit is named")["op"].as_u64().unwrap() as usize;
+    assert!((140..170).contains(&over), "{over}");
+    assert!(error.message.starts_with(&format!("ops[{over}] add \"t{over}\": the design would hold at least ")), "{}", error.message);
+    assert!(error.message.ends_with(&format!("the limit is {} KiB", MAX_DESIGN_BYTES >> 10)), "{}", error.message);
+    assert_eq!(ok(&e, "design.get", json!({"design_id": id})), before, "nothing written");
+    // Exactly that edit: the list without it fits.
+    apply(&e, id, json!(adds(over)));
+    counted(&e, id);
+
+    // An edit that may shrink the design comes later: the list is not refused before it, and
+    // applies when it ends small enough.
+    let id = create(&e);
+    let mut ops = adds(200);
+    ops.extend((0..100).map(|i| json!({"op": "delete", "id": format!("t{i}")})));
+    let out = apply(&e, id, json!(ops));
+    assert_eq!(out["design"]["nodes"], 101);
+    counted(&e, id);
+    let id = create(&e);
+    let mut ops = adds(200);
+    ops.push(json!({"op": "update", "id": "t0", "set": {"text": "short"}}));
+    let error = refusal(&e, id, json!(ops));
+    assert_eq!((error.code.as_str(), error.details.as_ref().unwrap()["op"].as_u64()), ("design.too_large", Some(200)));
+    // After a delete, the connectors it frees are rewritten once the edits are done: only the
+    // final count can say.
+    let mut ops = vec![json!({"op": "add", "node": {"id": "z", "parent": "page-1", "kind": "rect"}}), json!({"op": "delete", "id": "z"})];
+    ops.extend(adds(200));
+    let error = refusal(&e, id, json!(ops));
+    assert_eq!(error.code, "design.too_large");
+    assert!(error.details.is_none() && error.message.starts_with("the design would hold "), "refused once every edit ran: {}", error.message);
 }
 
 /// The canvas's undo of an agent's work across pages: every check above runs on the list as a

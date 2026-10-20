@@ -20,6 +20,7 @@ const MAX_WARNINGS: usize = 20;
 /// How far a walk up or down a design goes: past MAX_DEPTH, so a design another build nested
 /// deeper is still measured, but never the whole of a chain gone wrong.
 const WALK: usize = MAX_DEPTH + 6;
+const TOO_LARGE_HINT: &str = "split it across designs, or keep long text and big paths out of it";
 
 /// A row's kind: `Err` holds the name of one this build does not know (a newer build's), whose
 /// row is a leaf it can neither read nor edit.
@@ -823,6 +824,21 @@ impl Run<'_> {
         }
         Ok(())
     }
+
+    /// Nothing after the edits can change the design's size: no node was deleted or moved to
+    /// another page (whose connectors [`Run::release_ends`] rewrites) and no lenient end may let
+    /// go ([`Run::check_refs`]). A pass that rewrites nodes after the edits joins this test.
+    pub(super) fn settled(&self) -> bool {
+        self.removed.is_empty() && self.crossed.is_empty() && !(self.lenient && self.refs.iter().any(|r| r.field != "src"))
+    }
+
+    /// `design.too_large` for a design of `self.bytes` (B60): `at_least` while edits remain.
+    fn too_large(&self, at_least: bool) -> BusError {
+        let why = format!("the design would hold {}{} KiB of nodes as design.get returns them; the limit is {} KiB",
+            if at_least { "at least " } else { "" }, self.bytes >> 10, MAX_DESIGN_BYTES >> 10);
+        let error = if at_least { self.fail(ErrorKind::Invalid, "design.too_large", why) } else { BusError::invalid("design.too_large", why) };
+        error.with_hint(TOO_LARGE_HINT)
+    }
 }
 
 pub(super) fn register(e: &mut Engine) {
@@ -875,6 +891,10 @@ pub(super) fn register(e: &mut Engine) {
             crossed: HashMap::new(),
             assets,
         };
+        // B59: past the last edit that can make the design smaller (any but an add or a copy),
+        // the list only grows it, so one over the cap by then is refused at the edit that took
+        // it over rather than after writing the rest.
+        let grows_from = p.ops.iter().rposition(|op| !matches!(op, NodeOp::Add { .. } | NodeOp::Copy { .. }));
         for (at, op) in p.ops.into_iter().enumerate() {
             (run.at, run.label) = (at, label(at, &op));
             run.target = Some(op.target()).filter(|id| !id.is_empty()).map(str::to_string);
@@ -898,15 +918,16 @@ pub(super) fn register(e: &mut Engine) {
                 }
             };
             run.ids.push(id.unwrap_or_default());
+            if run.bytes > MAX_DESIGN_BYTES && run.bytes > bytes && grows_from.is_none_or(|last| at >= last) && run.settled() {
+                return Err(run.too_large(true));
+            }
         }
         run.release_ends()?;
         run.check_refs()?;
         // B60: a design over the cap (one counted before ids were) can still be edited down; a
         // list is refused only for growing it past the cap.
         if run.bytes > MAX_DESIGN_BYTES && run.bytes > bytes {
-            return Err(BusError::invalid("design.too_large",
-                format!("the design would hold {} KiB of nodes as design.get returns them; the limit is {} KiB", run.bytes >> 10, MAX_DESIGN_BYTES >> 10))
-                .with_hint("split it across designs, or keep long text and big paths out of it"));
+            return Err(run.too_large(false));
         }
         ctx.tx().prepare_cached(
             "UPDATE designs SET rev = rev + 1, pages = ?2, nodes = ?3, bytes = ?4, next_node = ?5, updated_by = ?6, updated_at = ?7 WHERE id = ?1",
