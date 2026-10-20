@@ -124,46 +124,77 @@ pub fn install(b: &Rc<Board>) {
         let Some(b) = weak.upgrade() else {
             return glib::Propagation::Proceed;
         };
-        let mods = c.current_event_state();
-        let wheel = c.unit() == gdk::ScrollUnit::Wheel;
-        let (px, py) = b.pointer.get();
-        if mods.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::META_MASK) {
-            let factor = if wheel { (-dy * 0.18).exp() } else { (-dy * 0.012).exp() };
-            let mut cam = b.cam.get();
-            cam.zoom_at(px, py, cam.zoom * factor);
-            b.set_cam(cam);
-        } else {
-            let (mut sx, mut sy) = if wheel { (dx * 48.0, dy * 48.0) } else { (dx, dy) };
-            if wheel && mods.contains(gdk::ModifierType::SHIFT_MASK) {
-                std::mem::swap(&mut sx, &mut sy);
-            }
-            let mut cam = b.cam.get();
-            cam.pan(-sx, -sy);
-            b.set_cam(cam);
-        }
+        scroll_cam(&b, c, dx, dy);
         glib::Propagation::Stop
     });
     canvas.add_controller(scroll);
+    canvas.add_controller(zoom_gesture(b));
 
-    let zoom = gtk::GestureZoom::new();
-    let start = std::rc::Rc::new(std::cell::Cell::new(1.0));
+    // Over the text being typed, the wheel, a pinch and the middle button move the camera as
+    // they do over the canvas (TM-77): the editor, a sibling of the canvas in the overlay,
+    // would otherwise take them, or let them go nowhere.
+    let over_editor = |b: &Board, x: f64, y: f64| {
+        let view = b.edit.borrow().as_ref().map(|e| e.view.clone().upcast::<gtk::Widget>());
+        view.is_some_and(|v| b.overlay.pick(x, y, gtk::PickFlags::DEFAULT).is_some_and(|w| w == v || w.is_ancestor(&v)))
+    };
+    let motion = gtk::EventControllerMotion::new();
     let weak = Rc::downgrade(b);
-    let s = start.clone();
-    zoom.connect_begin(move |_, _| {
-        if let Some(b) = weak.upgrade() {
-            s.set(b.cam.get().zoom);
+    motion.connect_motion(move |_, x, y| {
+        if let Some(b) = weak.upgrade().filter(|b| over_editor(b, x, y)) {
+            b.pointer.set((x, y));
+        }
+    });
+    b.overlay.add_controller(motion);
+    let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
+    let weak = Rc::downgrade(b);
+    scroll.connect_scroll(move |c, dx, dy| {
+        let Some(b) = weak.upgrade().filter(|b| b.edit.borrow().is_some()) else {
+            return glib::Propagation::Proceed;
+        };
+        let (x, y) = b.pointer.get();
+        if !over_editor(&b, x, y) {
+            return glib::Propagation::Proceed;
+        }
+        scroll_cam(&b, c, dx, dy);
+        glib::Propagation::Stop
+    });
+    b.overlay.add_controller(scroll);
+    let pinch = zoom_gesture(b);
+    pinch.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak = Rc::downgrade(b);
+    pinch.connect_begin(move |g, _| {
+        let over = weak.upgrade().is_some_and(|b| g.bounding_box_center().is_some_and(|(x, y)| over_editor(&b, x, y)));
+        if !over {
+            g.set_state(gtk::EventSequenceState::Denied);
+        }
+    });
+    b.overlay.add_controller(pinch);
+    let pan = gtk::GestureDrag::new();
+    pan.set_button(gdk::BUTTON_MIDDLE);
+    pan.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak = Rc::downgrade(b);
+    let from = Rc::new(std::cell::Cell::new(None));
+    let f = from.clone();
+    pan.connect_drag_begin(move |g, x, y| {
+        match weak.upgrade().filter(|b| over_editor(b, x, y)) {
+            Some(b) => {
+                g.set_state(gtk::EventSequenceState::Claimed);
+                f.set(Some(b.cam.get()));
+            }
+            None => {
+                g.set_state(gtk::EventSequenceState::Denied);
+                f.set(None);
+            }
         }
     });
     let weak = Rc::downgrade(b);
-    zoom.connect_scale_changed(move |g, scale| {
-        if let Some(b) = weak.upgrade() {
-            let (cx, cy) = g.bounding_box_center().unwrap_or(b.pointer.get());
-            let mut cam = b.cam.get();
-            cam.zoom_at(cx, cy, start.get() * scale);
+    pan.connect_drag_update(move |_, dx, dy| {
+        if let (Some(b), Some(mut cam)) = (weak.upgrade(), from.get()) {
+            cam.pan(dx, dy);
             b.set_cam(cam);
         }
     });
-    canvas.add_controller(zoom);
+    b.overlay.add_controller(pan);
 
     let keys = gtk::EventControllerKey::new();
     let weak = Rc::downgrade(b);
@@ -184,8 +215,16 @@ pub fn install(b: &Rc<Board>) {
     });
     canvas.add_controller(keys);
 
-    // Space released elsewhere (another window, a field) would leave the hand on.
+    // Space released elsewhere (another window, a field) would leave the hand on. The canvas
+    // taking the keyboard back ends any typing, so its keys never act on a layer still being
+    // typed into (TM-36).
     let focus = gtk::EventControllerFocus::new();
+    let weak = Rc::downgrade(b);
+    focus.connect_enter(move |_| {
+        if let Some(b) = weak.upgrade().filter(|b| b.edit.borrow().is_some()) {
+            b.end_edit(true);
+        }
+    });
     let weak = Rc::downgrade(b);
     focus.connect_leave(move |_| {
         if let Some(b) = weak.upgrade() {
@@ -211,6 +250,49 @@ pub fn install(b: &Rc<Board>) {
         true
     });
     canvas.add_controller(drop);
+}
+
+/// The wheel or touchpad over the canvas: Ctrl (or Cmd) zooms at the pointer, else it pans
+/// (Shift turns a wheel's pan sideways).
+fn scroll_cam(b: &Board, c: &gtk::EventControllerScroll, dx: f64, dy: f64) {
+    let mods = c.current_event_state();
+    let wheel = c.unit() == gdk::ScrollUnit::Wheel;
+    let (px, py) = b.pointer.get();
+    let mut cam = b.cam.get();
+    if mods.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::META_MASK) {
+        let factor = if wheel { (-dy * 0.18).exp() } else { (-dy * 0.012).exp() };
+        cam.zoom_at(px, py, cam.zoom * factor);
+    } else {
+        let (mut sx, mut sy) = if wheel { (dx * 48.0, dy * 48.0) } else { (dx, dy) };
+        if wheel && mods.contains(gdk::ModifierType::SHIFT_MASK) {
+            std::mem::swap(&mut sx, &mut sy);
+        }
+        cam.pan(-sx, -sy);
+    }
+    b.set_cam(cam);
+}
+
+/// A pinch that zooms the camera about its centre.
+fn zoom_gesture(b: &Rc<Board>) -> gtk::GestureZoom {
+    let zoom = gtk::GestureZoom::new();
+    let start = Rc::new(std::cell::Cell::new(1.0));
+    let weak = Rc::downgrade(b);
+    let s = start.clone();
+    zoom.connect_begin(move |_, _| {
+        if let Some(b) = weak.upgrade() {
+            s.set(b.cam.get().zoom);
+        }
+    });
+    let weak = Rc::downgrade(b);
+    zoom.connect_scale_changed(move |g, scale| {
+        if let Some(b) = weak.upgrade() {
+            let (cx, cy) = g.bounding_box_center().unwrap_or(b.pointer.get());
+            let mut cam = b.cam.get();
+            cam.zoom_at(cx, cy, start.get() * scale);
+            b.set_cam(cam);
+        }
+    });
+    zoom
 }
 
 /// A whole pointer drag from page point `from` to `to`, as the pointer would make it: for the
@@ -433,8 +515,10 @@ fn begin(b: &Rc<Board>, x: f64, y: f64, mods: gdk::ModifierType) {
             erase_at(b, p);
         }
         Tool::Text => {
-            let parent = container_at(b, p);
-            b.create_text(p, parent);
+            if room_for_one(b) {
+                let parent = container_at(b, p);
+                b.create_text(p, parent);
+            }
         }
         Tool::Sticky => create_sticky(b, p),
         tool @ (Tool::Pen | Tool::Highlighter) => {
@@ -1383,7 +1467,12 @@ fn finish_drawing(b: &Rc<Board>, parent: String, points: Vec<[f64; 2]>, tool: To
     b.commit(vec![NodeOp::Add { node: n, index: None }]);
 }
 
+/// A sticky at `p`, typed into at once. It is shown but not sent until the typing ends, and
+/// then with its words, as one undo step; left empty, it is not made (E-text-8).
 fn create_sticky(b: &Rc<Board>, p: (f64, f64)) {
+    if !room_for_one(b) {
+        return;
+    }
     let parent = container_at(b, p);
     let origin = b.origin_of(&parent);
     let mut n = Node::new(NodeKind::Sticky);
@@ -1394,11 +1483,12 @@ fn create_sticky(b: &Rc<Board>, p: (f64, f64)) {
     n.w = 200.0;
     n.h = 200.0;
     n.fill = Some(STICKY_COLORS[0].1.into());
+    n.text = Some(String::new());
     let id = n.id.clone();
-    if b.commit(vec![NodeOp::Add { node: n, index: None }]) {
-        b.select(vec![id.clone()]);
-        b.begin_edit(&id, false);
-    }
+    b.doc.scene.borrow_mut().insert_preview(n);
+    b.invalidate();
+    b.select(vec![id.clone()]);
+    b.begin_edit(&id, true);
     if !b.tool_lock.get() {
         b.set_tool(Tool::Select);
     }
@@ -1477,16 +1567,14 @@ fn double_click(b: &Rc<Board>, x: f64, y: f64, p: (f64, f64)) {
     let page = b.page.borrow().clone();
     let chain = hit::chain(&b.doc.scene.borrow(), &placed, &page, p.0, p.1, 4.0 / b.cam.get().zoom);
     let Some(deep) = chain.last().cloned() else {
-        let parent = page;
-        b.create_text(p, parent);
+        if room_for_one(b) {
+            b.create_text(p, page);
+        }
         return;
     };
     let kind = b.doc.scene.borrow().node(&deep).map(|n| n.kind);
     match kind {
-        Some(NodeKind::Text | NodeKind::Sticky | NodeKind::Rect | NodeKind::Ellipse | NodeKind::Polygon) => {
-            b.select(vec![deep.clone()]);
-            b.begin_edit(&deep, false);
-        }
+        Some(NodeKind::Text | NodeKind::Sticky | NodeKind::Rect | NodeKind::Ellipse | NodeKind::Polygon) => edit_shown(b, &deep, Some((x, y))),
         Some(NodeKind::Image) => super::assets::replace_image(b, &deep),
         _ => {
             // Into the selected container: the next node down under the pointer.
@@ -1628,6 +1716,14 @@ fn key_pressed(
         .map(|(k, ..)| k)
         .unwrap_or(key);
     let stop = glib::Propagation::Stop;
+    // Keys typed into a popover of the canvas's own (a frame's rename) are its own (E-board-19);
+    // while a text is typed, every key but Esc is the editor's (TM-36).
+    if b.focus_widget().is_some_and(|f| f.ancestor(gtk::Popover::static_type()).is_some()) {
+        return glib::Propagation::Proceed;
+    }
+    if b.edit.borrow().is_some() && key != Key::Escape {
+        return glib::Propagation::Proceed;
+    }
     if key == Key::space && !ctrl {
         if !b.space.replace(true) {
             update_cursor(b, Some("grab"));
@@ -1662,6 +1758,8 @@ fn key_pressed(
             Key::h if shift => b.toggle_flag("hidden"),
             Key::k if shift => super::assets::choose_images(b),
             Key::Return | Key::KP_Enter => b.ask_agent(b.ask.upcast_ref()),
+            // Nothing to save: kept here rather than reaching the Files editor (TM-70).
+            Key::s => b.toast("Designs save as you go"),
             _ => return glib::Propagation::Proceed,
         }
         return stop;
@@ -1756,9 +1854,13 @@ fn key_pressed(
             if let [one] = sel.as_slice() {
                 let kind = b.doc.scene.borrow().node(one).map(|n| n.kind);
                 match kind {
-                    Some(NodeKind::Text | NodeKind::Sticky | NodeKind::Rect | NodeKind::Ellipse | NodeKind::Polygon) => b.begin_edit(one, false),
-                    Some(k) if k.holds_children() => {
-                        let kids = b.doc.scene.borrow().children(one).to_vec();
+                    Some(NodeKind::Text | NodeKind::Sticky | NodeKind::Rect | NodeKind::Ellipse | NodeKind::Polygon) => edit_shown(b, one, None),
+                    // Into it: what shows and is not locked there, as Select all takes (TM-44).
+                    Some(k) if k.holds_children() && !hidden_or_locked(b, one).1 => {
+                        let kids: Vec<String> = {
+                            let scene = b.doc.scene.borrow();
+                            scene.children(one).iter().filter(|c| scene.node(c).is_some_and(|n| !n.is_hidden() && !n.is_locked())).cloned().collect()
+                        };
                         if !kids.is_empty() {
                             b.select(kids);
                         }
@@ -1863,12 +1965,15 @@ fn select_parent(b: &Board) {
     }
 }
 
+/// Tab and Shift Tab: the next or previous layer among the selection's siblings that shows and
+/// is not locked; with nothing selected, the page's first such layer (TM-44).
 fn select_sibling(b: &Board, dir: i32) {
     let sel = b.selected();
     let scene = b.doc.scene.borrow();
+    let open = |id: &String| scene.node(id).is_some_and(|n| !n.is_hidden() && !n.is_locked());
     let Some(first) = sel.first() else {
         let page = b.page.borrow().clone();
-        let next = scene.children(&page).first().cloned();
+        let next = scene.children(&page).iter().find(|c| open(c)).cloned();
         drop(scene);
         if let Some(n) = next {
             b.select(vec![n]);
@@ -1881,12 +1986,77 @@ fn select_sibling(b: &Board, dir: i32) {
     let kids = scene.children(&parent);
     let i = scene.index(first).unwrap_or(0) as i32;
     let n = kids.len() as i32;
-    if n == 0 {
-        return;
-    }
-    let next = kids[((i + dir).rem_euclid(n)) as usize].clone();
+    let next = (1..=n).map(|k| &kids[((i + dir * k).rem_euclid(n.max(1))) as usize]).find(|c| open(c)).cloned();
     drop(scene);
-    b.select(vec![next]);
+    if let Some(next) = next {
+        b.select(vec![next]);
+    }
+}
+
+/// Whether `id`, or what holds it, is hidden, and whether it is locked.
+fn hidden_or_locked(b: &Board, id: &str) -> (bool, bool) {
+    let scene = b.doc.scene.borrow();
+    let chain: Vec<&Node> = std::iter::once(id).chain(scene.ancestors(id)).filter_map(|a| scene.node(a)).collect();
+    (chain.iter().any(|n| n.is_hidden()), chain.iter().any(|n| n.is_locked()))
+}
+
+/// Type into `id`, unless it, or what holds it, is hidden or locked, which says what to do
+/// first rather than open an editor off the canvas (E-text-11). A double click at screen point
+/// `at` puts the caret there, on the word under it (E-text-9); Enter selects every word.
+fn edit_shown(b: &Rc<Board>, id: &str, at: Option<(f64, f64)>) {
+    match hidden_or_locked(b, id) {
+        (true, _) => b.toast("Show it first (Ctrl+Shift+H)"),
+        (_, true) => b.toast("Unlock it first (Ctrl+Shift+L)"),
+        _ => {
+            b.select(vec![id.to_string()]);
+            b.begin_edit(id, false);
+            if let Some((x, y)) = at {
+                caret_at(b, x, y);
+            }
+        }
+    }
+}
+
+/// Once the editor is in place, its caret at canvas point `(x, y)`, the word there selected.
+fn caret_at(b: &Rc<Board>, x: f64, y: f64) {
+    let weak = Rc::downgrade(b);
+    glib::idle_add_local_once(move || {
+        let Some(b) = weak.upgrade() else {
+            return;
+        };
+        let Some(view) = b.edit.borrow().as_ref().map(|e| e.view.clone()) else {
+            return;
+        };
+        let Some(at) = b.canvas.compute_point(&view, &gtk::graphene::Point::new(x as f32, y as f32)) else {
+            return;
+        };
+        let (bx, by) = view.window_to_buffer_coords(gtk::TextWindowType::Widget, at.x() as i32, at.y() as i32);
+        let Some(iter) = view.iter_at_location(bx, by) else {
+            return;
+        };
+        let buffer = view.buffer();
+        if iter.inside_word() {
+            let (mut start, mut end) = (iter, iter);
+            if !start.starts_word() {
+                start.backward_word_start();
+            }
+            if !end.ends_word() {
+                end.forward_word_end();
+            }
+            buffer.select_range(&start, &end);
+        } else {
+            buffer.place_cursor(&iter);
+        }
+    });
+}
+
+/// Whether the design has room for one more layer; says so when it has none (I-14).
+fn room_for_one(b: &Board) -> bool {
+    let room = b.doc.scene.borrow().len() < relay_bus::design::MAX_NODES;
+    if !room {
+        b.toast("This design has reached its 5,000-layer limit");
+    }
+    room
 }
 
 impl Board {

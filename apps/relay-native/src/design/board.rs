@@ -279,6 +279,8 @@ pub struct Board {
     pub(super) shape_key: gtk::ToggleButton,
     pub(super) pen_key: gtk::ToggleButton,
     pub(super) page_label: gtk::Label,
+    /// The dock's page list, rebuilt while open when the pages change.
+    pages_popover: RefCell<Option<gtk::Popover>>,
     pub(super) context: RefCell<Option<gtk::Widget>>,
     pub(super) context_at: Cell<(i32, i32)>,
     /// The toolbar's width with its words showing, measured before it was made compact.
@@ -549,6 +551,7 @@ impl Board {
             shape_key,
             pen_key,
             page_label,
+            pages_popover: RefCell::default(),
             context: RefCell::default(),
             context_at: Cell::new((0, 0)),
             context_full: Cell::new(None),
@@ -846,6 +849,12 @@ impl Board {
         if *self.page.borrow() == page {
             return;
         }
+        // A page deleted meanwhile (its row still in an open list) is not shown (TM-69).
+        if !self.doc.scene.borrow().node(page).is_some_and(|n| n.kind == NodeKind::Page) {
+            return;
+        }
+        // A vector path being placed is finished on the page it was drawn on (TM-68).
+        super::tools::finish_vector(self, false);
         self.end_edit(true);
         self.release_fields();
         let old = self.page.replace(page.to_string());
@@ -873,6 +882,11 @@ impl Board {
     pub(super) fn select(&self, ids: Vec<String>) {
         if *self.selection.borrow() == ids {
             return;
+        }
+        // Another layer picked while one is typed into: those words are done (E-text-5).
+        let editing = self.edit.borrow().as_ref().map(|e| e.id.clone());
+        if editing.is_some_and(|e| !ids.contains(&e)) {
+            self.end_edit(true);
         }
         self.release_fields();
         *self.selection.borrow_mut() = ids;
@@ -928,6 +942,7 @@ impl Board {
     fn changed(&self, change: &Change) {
         match change {
             Change::Scene => {
+                self.keep_typed();
                 // A picture deleted or replaced lets go of its decoded copy (B33).
                 self.painter.retain(&self.doc.scene.borrow());
                 // An undo can take away the page on show (one just added, or duplicated).
@@ -936,6 +951,7 @@ impl Board {
                 self.invalidate();
             }
             Change::Reloaded { changed, by } => {
+                self.keep_typed();
                 *self.painter.assets_dir.borrow_mut() = self.doc.assets_dir.borrow().clone();
                 self.painter.retain(&self.doc.scene.borrow());
                 self.prune_selection();
@@ -969,6 +985,26 @@ impl Board {
                 self.refresh_actions();
             }
             Change::Error(e) => self.toast(e),
+        }
+    }
+
+    /// The words being typed stay on the canvas when the scene is put back to what the engine
+    /// holds (a confirm, a reread), which has the words as they were before typing (TM-46).
+    /// The edit still sends them when it ends.
+    fn keep_typed(&self) {
+        let typed = self.edit.borrow().as_ref().filter(|e| !e.created).map(|e| {
+            let buffer = e.view.buffer();
+            (e.id.clone(), buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string())
+        });
+        let Some((id, words)) = typed else {
+            return;
+        };
+        if let Some(n) = self.doc.scene.borrow_mut().node_mut(&id) {
+            if n.text.as_deref() != Some(words.as_str()) {
+                let runs = relay_client::design::text::remap_runs(n.text.as_deref().unwrap_or(""), &words, n.runs.as_deref().unwrap_or_default());
+                n.runs = (!runs.is_empty()).then_some(runs);
+                n.text = Some(words);
+            }
         }
     }
 
@@ -1047,6 +1083,10 @@ impl Board {
         }
         if let Some(layers) = self.layers.borrow().as_ref() {
             layers.pages_changed();
+        }
+        // The dock's open page list lists the pages there are now (TM-69).
+        if let Some(pop) = self.pages_popover.borrow().as_ref().filter(|p| p.is_visible()) {
+            pop.set_child(Some(&super::layers::pages_menu(&self.me(), pop)));
         }
     }
 
@@ -1864,6 +1904,7 @@ impl Board {
         let pages_popover = gtk::Popover::new();
         pages_popover.add_css_class("design-menu");
         page_key.set_popover(Some(&pages_popover));
+        *self.pages_popover.borrow_mut() = Some(pages_popover.clone());
         let weak = Rc::downgrade(self);
         pages_popover.connect_show(move |pop| {
             if let Some(b) = weak.upgrade() {
@@ -1932,8 +1973,8 @@ impl Board {
         let weak = Rc::downgrade(self);
         picker.connect_show(move |pop| {
             if let Some(b) = weak.upgrade() {
-                let target = b.selected().into_iter().find(|id| b.doc.scene.borrow().node(id).is_some_and(|n| n.kind == NodeKind::Icon));
-                pop.set_child(Some(&super::icons::picker(&b, pop, target)));
+                // The dock key and K place a new icon; replacing one is the toolbar's (TM-73).
+                pop.set_child(Some(&super::icons::picker(&b, pop, None)));
             }
         });
         dock.append(&icon_key);
@@ -2271,8 +2312,8 @@ impl Board {
         let tools: Group = ("Tools", &[("V", "Move"), ("H or Space", "Hand"), ("F", "Frame"), ("R / O", "Rectangle / ellipse"), ("Shift R / Shift S", "Triangle / star"), ("K", "Icon"), ("E", "Eraser"), ("L / Shift L", "Line / arrow"), ("T", "Text"), ("S", "Sticky note"), ("P / Shift P", "Pen / highlighter"), ("B", "Vector pen: click points, close on the first")]);
         let text: Group = ("Text", &[("Esc or Ctrl Enter", "Finish typing"), ("Ctrl B / I / U", "Bold / italic / underline")]);
         let view: Group = ("View", &[("Ctrl scroll / pinch", "Zoom at the pointer"), ("Ctrl − / Ctrl =", "Zoom out / in"), ("Shift 1", "Zoom to fit"), ("Shift 2", "Zoom to selection"), ("Shift 0 or Ctrl 0", "Zoom to 100%"), ("Alt 1", "Pages and layers"), ("Ctrl .", "Inspector")]);
-        let selection: Group = ("Selection", &[("Click", "Select what is under the pointer"), ("Esc", "Select the parent"), ("Enter", "Edit text, or select inside"), ("Tab / Shift Tab", "Next / previous layer"), ("Shift click", "Add or remove"), ("Ctrl A", "Select all"), ("Alt drag", "Duplicate while moving")]);
-        let edit: Group = ("Edit", &[("Ctrl Z / Ctrl Shift Z", "Undo / redo"), ("Ctrl C / X / V", "Copy / cut / paste"), ("Ctrl D", "Duplicate"), ("Delete / Backspace", "Delete"), ("Ctrl G / Ctrl Shift G", "Group / ungroup"), ("Ctrl Alt G", "Frame selection"), ("Ctrl ] / Ctrl [", "Forward / backward"), ("Shift H / Shift V", "Flip horizontally / vertically"), ("Ctrl Alt C / V", "Copy / paste style"), ("Alt A / D / W / S", "Align left / right / top / bottom"), ("Alt H / Alt V", "Align centres / middles"), ("Ctrl Shift L / H", "Lock / hide"), ("Ctrl Shift K", "Place an image"), ("Ctrl Enter", "Ask the agent"), ("Arrows", "Nudge 1 px (Shift: 10)")]);
+        let selection: Group = ("Selection", &[("Click", "Select what is under the pointer"), ("Esc", "Select the parent"), ("Enter", "Edit text, or select inside"), ("Tab / Shift Tab", "Next / previous layer"), ("Shift click", "Add or remove"), ("Ctrl A", "Select all"), ("Alt drag", "Duplicate while moving"), ("Alt while dragging", "No snapping"), ("Alt drag a handle", "Resize from the centre"), ("Shift drag a handle", "Keep proportions")]);
+        let edit: Group = ("Edit", &[("Ctrl Z / Ctrl Shift Z", "Undo / redo"), ("Ctrl C / X / V", "Copy / cut / paste"), ("Ctrl D", "Duplicate"), ("Delete / Backspace", "Delete"), ("Ctrl G / Ctrl Shift G", "Group / ungroup"), ("Ctrl Alt G", "Frame selection"), ("Ctrl ] / Ctrl [", "Forward / backward"), ("Ctrl Shift ] / [", "Bring to front / send to back"), ("Shift H / Shift V", "Flip horizontally / vertically"), ("Ctrl Alt C / V", "Copy / paste style"), ("Alt A / D / W / S", "Align left / right / top / bottom"), ("Alt H / Alt V", "Align centres / middles"), ("Ctrl Shift L / H", "Lock / hide"), ("Ctrl Shift K", "Place an image"), ("Ctrl Enter", "Ask the agent"), ("Arrows", "Nudge 1 px (Shift: 10)")]);
         // Two columns, each group under the last, so a longer group never runs into the next.
         for (col, groups) in [[tools, text, view].as_slice(), &[selection, edit]].iter().enumerate() {
             let x = col as i32 * 2;
@@ -2299,8 +2340,21 @@ impl Board {
                 let Some(r) = self.edit_rect() else {
                     return Some(gdk::Rectangle::new(-10_000, -10_000, 10, 10));
                 };
-                let r = self.screen(&r);
-                return Some(gdk::Rectangle::new(r.x.floor() as i32, r.y.floor() as i32, r.w.ceil().max(4.0) as i32 + 2, r.h.ceil().max(4.0) as i32));
+                let wraps = edit.view.wrap_mode() != gtk::WrapMode::None;
+                let (x, y, w, h, left, top) = editor_box(&self.screen(&r), wraps);
+                // The words start where the canvas draws them, not at the whole pixel before,
+                // and wrap at the canvas's width (TM-32, E-text-14).
+                // Set after this layout pass, not during it.
+                if edit.view.left_margin() != left || edit.view.top_margin() != top {
+                    let view = edit.view.downgrade();
+                    glib::idle_add_local_once(move || {
+                        if let Some(view) = view.upgrade() {
+                            view.set_left_margin(left);
+                            view.set_top_margin(top);
+                        }
+                    });
+                }
+                return Some(gdk::Rectangle::new(x, y, w, h));
             }
         }
         let context = self.context.borrow().clone()?;
@@ -2642,9 +2696,12 @@ impl Board {
     pub(super) fn delete_selection(&self) {
         let ids = self.selected();
         // A text being typed for the first time is not on the engine yet: its edit drops it.
-        let fresh = self.edit.borrow().as_ref().filter(|e| e.created).map(|e| e.id.clone());
-        if fresh.is_some_and(|f| ids.contains(&f)) {
-            self.end_edit(false);
+        // One typed into that was there is sent first, so undo brings back its words (TM-45).
+        let editing = self.edit.borrow().as_ref().map(|e| (e.id.clone(), e.created));
+        match editing {
+            Some((id, true)) if ids.contains(&id) => self.end_edit(false),
+            Some((id, false)) if ids.contains(&id) => self.end_edit(true),
+            _ => {}
         }
         let ids = self.selected();
         let placed = self.placed();
@@ -2725,6 +2782,8 @@ impl Board {
 
     /// Copy the selection and take it away.
     pub(super) fn cut(&self) {
+        // The words typed so far are what is cut (TM-45).
+        self.end_edit(true);
         if let Some(count) = self.copy_quietly() {
             self.delete_selection();
             self.toast(&format!("Cut {count} {}", if count == 1 { "layer" } else { "layers" }));
@@ -2973,6 +3032,8 @@ impl Board {
     }
 
     pub(super) fn toggle_flag(&self, flag: &str) {
+        // Hidden or locked, a layer is typed into no more (TM-45).
+        self.end_edit(true);
         let ids = self.selected();
         let scene = self.doc.scene.borrow();
         let on = ids.iter().any(|id| {
@@ -3244,6 +3305,18 @@ pub fn display_name(n: &Node) -> String {
     relay_client::design::names::display_name(n)
 }
 
+/// The text editor's place over screen box `s` (the words' box at the zoom): whole pixels from
+/// the one at or before its corner, with the fraction before the words as margins so they start
+/// where the canvas draws them; a wrapping text exactly as wide as the canvas wraps it, a
+/// hugging one with room for the caret. `(x, y, w, h, left, top)`.
+fn editor_box(s: &Rect, wraps: bool) -> (i32, i32, i32, i32, i32, i32) {
+    let (x0, y0) = (s.x.floor(), s.y.floor());
+    let (left, top) = ((s.x - x0).round() as i32, (s.y - y0).round() as i32);
+    let w = if wraps { left + s.w.round().max(4.0) as i32 } else { ((s.right()).ceil() - x0).max(4.0) as i32 + 2 };
+    let h = ((s.bottom()).ceil() - y0).max(4.0) as i32 + top;
+    (x0 as i32, y0 as i32, w, h, left, top)
+}
+
 /// The keys a copied style carries besides its fields, which `flip::paste_style` passes over:
 /// the fill and corner radius its layer showed.
 const SHOWN_FILL: &str = "_fill";
@@ -3461,6 +3534,15 @@ mod tests {
         assert_eq!(fill(&ops[0])["fill"], json!("#FFFFFF"), "a white frame's style on a rect is white");
         assert_eq!(fill(&ops[1])["radius"], json!(0.0), "square corners stay square on a sticky");
         assert_eq!(fill(&ops[2])["fill"], Value::Null, "the same kind keeps its default");
+    }
+
+    #[test]
+    fn the_editor_wraps_where_the_canvas_does() {
+        // A paragraph wrapped 120.4 px wide from x 10.6: the words start at 11 (a margin of 1
+        // on the pixel at 10), and wrap 120 px on.
+        assert_eq!(editor_box(&Rect::new(10.6, 20.2, 120.4, 40.0), true), (10, 20, 121, 41, 1, 0));
+        // Hugging: room for the caret past the last letter.
+        assert_eq!(editor_box(&Rect::new(10.0, 20.0, 50.0, 18.0), false), (10, 20, 52, 18, 0, 0));
     }
 
     #[test]
