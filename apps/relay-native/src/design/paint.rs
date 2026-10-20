@@ -6,7 +6,7 @@
 use gtk::prelude::*;
 use gtk::{gdk, graphene, gsk, pango};
 use gtk4 as gtk;
-use relay_bus::design::{parse_color, Blend, Gradient, GradientKind, ImageFit, Node, NodeKind, StrokeCap, StrokeJoin, TextAlign};
+use relay_bus::design::{parse_color, Blend, Gradient, GradientKind, ImageFit, Node, NodeKind, Shadow, StrokeCap, StrokeJoin, TextAlign, MAX_SHADOW_BLUR};
 use relay_client::design::layout::{self, Measure, Placed, STICKY_PAD};
 use relay_client::design::shapes::{self, ArcEnd, Seg};
 use relay_client::design::{Rect, Scene};
@@ -487,10 +487,13 @@ impl Painter {
         };
         let clips = n.kind == NodeKind::Frame && n.clip != Some(false);
         let turn = shapes::rotation(n);
-        let reach = n.shadow.as_ref().map_or(0.0, |s| s.blur * 2.0 + s.spread.abs() + s.x.abs().max(s.y.abs()))
-            + n.stroke_width.unwrap_or(2.0)
-            + n.blur.unwrap_or(0.0) * 2.0
-            + 16.0;
+        // How far what it draws reaches past its box: shadows, ring caps, a line's stroke and
+        // heads, blur, and a margin for words that overflow a little.
+        let stroke = match n.kind {
+            NodeKind::Line | NodeKind::Path => shapes::arrow_size(n).max(n.stroke_width.unwrap_or(2.0) * 2.0),
+            _ => n.stroke_width.unwrap_or(2.0),
+        };
+        let reach = shapes::shadow_reach(n) + shapes::cap_reach(n, &r) + stroke.max(0.0) + n.blur.unwrap_or(0.0).max(0.0) * 2.0 + 16.0;
         // A connector runs wherever its ends are, not inside its stored box.
         let connector = n.kind == NodeKind::Line && (n.from.is_some() || n.to.is_some());
         let culls = (!n.kind.holds_children() || clips) && !connector;
@@ -524,11 +527,16 @@ impl Painter {
                 if clips {
                     snap.push_rounded_clip(&rr);
                 }
-                self.paint_children(snap, scene, placed, id, view, Some(&|s: &gtk::Snapshot| self.fill(s, n, &rr)));
+                // Its inner shadow lies over its fill and under its children, as in CSS (B93):
+                // both are the ground a blended child mixes with.
+                let ground = |s: &gtk::Snapshot| {
+                    self.fill(s, n, &rr);
+                    self.inner_shadow(s, n, &rr);
+                };
+                self.paint_children(snap, scene, placed, id, view, Some(&ground));
                 if clips {
                     snap.pop();
                 }
-                self.inner_shadow(snap, n, &rr);
                 self.border(snap, n, &r);
             }
             NodeKind::Ellipse if shapes::arc(n).is_some() => {
@@ -538,10 +546,8 @@ impl Painter {
                 }
             }
             NodeKind::Rect | NodeKind::Sticky | NodeKind::Ellipse => {
+                // A sticky's own shadow, unless it names one, is among its effective shadows.
                 let rr = outline(n, &r);
-                if n.kind == NodeKind::Sticky && n.shadow.is_none() {
-                    snap.append_outset_shadow(&rr, &gdk::RGBA::new(0.0, 0.0, 0.0, 0.22), 0.0, 3.0, 0.0, 10.0);
-                }
                 self.box_paint(snap, n, &rr);
                 self.border(snap, n, &r);
                 if n.kind == NodeKind::Sticky {
@@ -561,7 +567,11 @@ impl Painter {
             }
             NodeKind::Icon => {
                 let flipped = flip_about(snap, n, &r);
+                let cast = self.cast(snap, n);
                 self.icon(snap, scene, n, &r);
+                if cast {
+                    snap.pop();
+                }
                 if flipped {
                     snap.restore();
                 }
@@ -571,17 +581,23 @@ impl Painter {
                     if let Some(fill) = &n.fill {
                         snap.append_color(&rgba(fill), &grect(&r));
                     }
+                    // Its letters cast its shadows, not its fill box (CSS's text-shadow).
+                    let cast = self.cast(snap, n);
                     self.text(snap, scene, n, &r, layout::wrap_width(n, &r));
+                    if cast {
+                        snap.pop();
+                    }
                 }
             }
-            NodeKind::Line | NodeKind::Path => self.stroke(snap, scene, placed, n, &r),
-            NodeKind::Image => {
-                let flipped = flip_about(snap, n, &r);
-                self.image(snap, n, &r);
-                if flipped {
-                    snap.restore();
+            NodeKind::Line | NodeKind::Path => {
+                // Fill, stroke and heads glow together.
+                let cast = self.cast(snap, n);
+                self.stroke(snap, scene, placed, n, &r);
+                if cast {
+                    snap.pop();
                 }
             }
+            NodeKind::Image => self.image(snap, n, &r),
         }
         if blur.is_some() {
             snap.pop();
@@ -601,18 +617,36 @@ impl Painter {
         self.inner_shadow(snap, n, rr);
     }
 
-    /// A drop shadow under the rounded outline.
+    /// The drop shadows under the rounded outline, in order (the last on top): the node's
+    /// effective shadows (`shapes::effective_shadows`: a sticky's own when it names none, none
+    /// for one wholly clear, B37).
     fn shadow(&self, snap: &gtk::Snapshot, n: &Node, rr: &gsk::RoundedRect) {
-        if let Some(s) = n.shadow.as_ref().filter(|s| !s.inset) {
-            snap.append_outset_shadow(rr, &rgba(&s.color), s.x as f32, s.y as f32, s.spread as f32, s.blur as f32);
+        for s in shapes::effective_shadows(n).iter().filter(|s| !s.inset) {
+            snap.append_outset_shadow(rr, &rgba(&s.color), s.x as f32, s.y as f32, s.spread as f32, blur_of(s) as f32);
         }
     }
 
-    /// An inner shadow inside the rounded outline.
+    /// The inner shadows inside the rounded outline, in order.
     fn inner_shadow(&self, snap: &gtk::Snapshot, n: &Node, rr: &gsk::RoundedRect) {
-        if let Some(s) = n.shadow.as_ref().filter(|s| s.inset) {
-            snap.append_inset_shadow(rr, &rgba(&s.color), s.x as f32, s.y as f32, s.spread as f32, s.blur as f32);
+        for s in shapes::effective_shadows(n).iter().filter(|s| s.inset) {
+            snap.append_inset_shadow(rr, &rgba(&s.color), s.x as f32, s.y as f32, s.spread as f32, blur_of(s) as f32);
         }
+    }
+
+    /// Push the shadows a text, icon, line or path casts round its letters or strokes (B123):
+    /// outer ones, without spread, as `effective_shadows` leaves them for these kinds; a glow is
+    /// one with no offset. True when it pushed, so the caller pops once it has drawn.
+    fn cast(&self, snap: &gtk::Snapshot, n: &Node) -> bool {
+        let shadows: Vec<gsk::Shadow> = shapes::effective_shadows(n)
+            .iter()
+            .filter(|s| !s.inset)
+            .map(|s| gsk::Shadow::new(rgba(&s.color), s.x as f32, s.y as f32, blur_of(s) as f32))
+            .collect();
+        if shadows.is_empty() {
+            return false;
+        }
+        snap.push_shadow(&shadows);
+        true
     }
 
     /// A polygon or an arc in its box `r`: its outline built in the box's own coordinates (at
@@ -626,44 +660,16 @@ impl Painter {
         snap.restore();
     }
 
-    /// A shape drawn from a path (a polygon, an arc): its shadow, fill and stroke, the stroke
-    /// inside the edge as a box's border is.
+    /// A shape drawn from a path (a polygon, an arc): its outer shadows, fill, inner shadows and
+    /// stroke, the stroke inside the edge as a box's border is.
     fn shape(&self, snap: &gtk::Snapshot, n: &Node, path: &gsk::Path, r: &Rect) {
-        if let Some(s) = &n.shadow {
-            let c = rgba(&s.color);
-            if s.inset {
-                // Inside: the outline's ring, offset and blurred, clipped to the shape.
-                snap.push_fill(path, gsk::FillRule::Winding);
-                self.fill_path(snap, n, path, r);
-                snap.save();
-                snap.translate(&graphene::Point::new(s.x as f32, s.y as f32));
-                if s.blur > 0.0 {
-                    snap.push_blur(s.blur / 2.0);
-                }
-                snap.append_stroke(path, &gsk::Stroke::new((s.blur.max(1.0) + s.spread.max(0.0) * 2.0) as f32), &c);
-                if s.blur > 0.0 {
-                    snap.pop();
-                }
-                snap.restore();
-                snap.pop();
-            } else {
-                snap.save();
-                snap.translate(&graphene::Point::new(s.x as f32, s.y as f32));
-                if s.blur > 0.0 {
-                    snap.push_blur(s.blur / 2.0);
-                }
-                snap.append_fill(path, gsk::FillRule::Winding, &c);
-                if s.spread > 0.0 {
-                    snap.append_stroke(path, &gsk::Stroke::new((s.spread * 2.0) as f32), &c);
-                }
-                if s.blur > 0.0 {
-                    snap.pop();
-                }
-                snap.restore();
-                self.fill_path(snap, n, path, r);
-            }
-        } else {
-            self.fill_path(snap, n, path, r);
+        let shadows = shapes::effective_shadows(n);
+        for s in shadows.iter().filter(|s| !s.inset) {
+            path_shadow(snap, path, s);
+        }
+        self.fill_path(snap, n, path, r);
+        for s in shadows.iter().filter(|s| s.inset) {
+            path_inset_shadow(snap, path, s, r);
         }
         let w = n.stroke_width.unwrap_or(1.0);
         if w > 0.0 && (n.stroke.is_some() || n.stroke_gradient.is_some()) {
@@ -876,11 +882,12 @@ impl Painter {
         snap.restore();
     }
 
+    /// A picture in its rounded box: its drop shadows, the picture (mirrored as it is
+    /// flipped), its inner shadows over the picture (B31) and its border. Only the picture
+    /// mirrors: its corners, shadows and border stay where they are drawn (B120).
     fn image(&self, snap: &gtk::Snapshot, n: &Node, r: &Rect) {
         let rr = outline(n, r);
-        if let Some(s) = &n.shadow {
-            snap.append_outset_shadow(&rr, &rgba(&s.color), s.x as f32, s.y as f32, s.spread as f32, s.blur as f32);
-        }
+        self.shadow(snap, n, &rr);
         snap.push_rounded_clip(&rr);
         let picture = n.src.as_deref().map(|s| self.picture(s)).unwrap_or(Picture::Failed);
         let natural = match &picture {
@@ -899,6 +906,8 @@ impl Painter {
                         Rect::new(r.cx() - w / 2.0, r.cy() - h / 2.0, w, h)
                     }
                 };
+                // The fit is centred on the box, so it mirrors about the box's centre.
+                let flipped = flip_about(snap, n, r);
                 match &picture {
                     Picture::Ready(t) => snap.append_scaled_texture(t, gsk::ScalingFilter::Trilinear, &grect(&target)),
                     Picture::Vector(svg) => {
@@ -908,6 +917,9 @@ impl Painter {
                         snap.restore();
                     }
                     _ => {}
+                }
+                if flipped {
+                    snap.restore();
                 }
             }
             None => {
@@ -929,8 +941,103 @@ impl Painter {
             }
         }
         snap.pop();
+        self.inner_shadow(snap, n, &rr);
         self.border(snap, n, r);
     }
+}
+
+/// A shadow's blur as painted: within 0 to 200, as the node's own blur, whatever an older build
+/// stored (B72; a blur node's cost grows with its radius).
+fn blur_of(s: &Shadow) -> f64 {
+    if s.blur.is_finite() {
+        s.blur.clamp(0.0, MAX_SHADOW_BLUR)
+    } else {
+        0.0
+    }
+}
+
+/// `color` with its alpha taken off, for a shape drawn whole and then made see-through once.
+fn opaque(c: &gdk::RGBA) -> gdk::RGBA {
+    gdk::RGBA::new(c.red(), c.green(), c.blue(), 1.0)
+}
+
+/// Draw `shape` (in `color`, opaque) see-through by `color`'s alpha as one piece, so parts that
+/// overlap are not darker.
+fn see_through(snap: &gtk::Snapshot, color: &gdk::RGBA, shape: impl FnOnce(&gdk::RGBA)) {
+    let alpha = color.alpha();
+    if alpha < 1.0 {
+        snap.push_opacity(alpha as f64);
+    }
+    shape(&opaque(color));
+    if alpha < 1.0 {
+        snap.pop();
+    }
+}
+
+/// A drop shadow under the shape `path`: the shape moved by the offset, grown by a positive
+/// spread or shrunk by a negative one, blurred as a box's shadow is (TM-25: the same radius
+/// `append_outset_shadow` takes).
+fn path_shadow(snap: &gtk::Snapshot, path: &gsk::Path, s: &Shadow) {
+    let c = rgba(&s.color);
+    let blur = blur_of(s);
+    snap.save();
+    snap.translate(&graphene::Point::new(s.x as f32, s.y as f32));
+    if blur > 0.0 {
+        snap.push_blur(blur);
+    }
+    see_through(snap, &c, |c| {
+        if s.spread < 0.0 {
+            // The shape less a band along its edge.
+            snap.push_mask(gsk::MaskMode::InvertedAlpha);
+            snap.append_stroke(path, &gsk::Stroke::new((-s.spread * 2.0) as f32), c);
+            snap.pop();
+            snap.append_fill(path, gsk::FillRule::Winding, c);
+            snap.pop();
+        } else {
+            snap.append_fill(path, gsk::FillRule::Winding, c);
+            if s.spread > 0.0 {
+                snap.append_stroke(path, &gsk::Stroke::new((s.spread * 2.0) as f32), c);
+            }
+        }
+    });
+    if blur > 0.0 {
+        snap.pop();
+    }
+    snap.restore();
+}
+
+/// An inner shadow inside the shape `path` (its box `r`): everything outside the shape, moved by
+/// the offset, the shape grown inwards by a positive spread (outwards by a negative one),
+/// blurred, and kept inside the shape, as CSS's inset box-shadow.
+fn path_inset_shadow(snap: &gtk::Snapshot, path: &gsk::Path, s: &Shadow, r: &Rect) {
+    let c = rgba(&s.color);
+    let blur = blur_of(s);
+    // Far enough round the shape that its edge never shows inside it.
+    let around = r.inflate(s.x.abs().max(s.y.abs()) + blur * 2.0 + s.spread.abs() + 1.0);
+    snap.push_fill(path, gsk::FillRule::Winding);
+    snap.save();
+    snap.translate(&graphene::Point::new(s.x as f32, s.y as f32));
+    if blur > 0.0 {
+        snap.push_blur(blur);
+    }
+    see_through(snap, &c, |c| {
+        snap.push_mask(gsk::MaskMode::InvertedAlpha);
+        snap.append_fill(path, gsk::FillRule::Winding, c);
+        if s.spread < 0.0 {
+            snap.append_stroke(path, &gsk::Stroke::new((-s.spread * 2.0) as f32), c);
+        }
+        snap.pop();
+        snap.append_color(c, &grect(&around));
+        snap.pop();
+        if s.spread > 0.0 {
+            snap.append_stroke(path, &gsk::Stroke::new((s.spread * 2.0) as f32), c);
+        }
+    });
+    if blur > 0.0 {
+        snap.pop();
+    }
+    snap.restore();
+    snap.pop();
 }
 
 /// A node's outline: an ellipse, or its box with its corner radii (`radii`, else `radius`; a
@@ -1330,6 +1437,16 @@ mod tests {
         n.points = Some(vec![[0.0, 0.0], [1.0, 0.0], [2.0, 1.0]]);
         let b = stroke_path(&n).unwrap().bounds().unwrap();
         assert_eq!((b.x(), b.y(), b.width(), b.height()), (0.0, 0.0, 2.0, 1.0));
+    }
+
+    #[test]
+    fn a_stored_shadow_blur_is_painted_within_the_cap() {
+        // B72: a blur node's cost grows with its radius; older builds stored up to 10000.
+        let shadow = |blur: f64| Shadow { x: 0.0, y: 0.0, blur, spread: 0.0, color: "#000".into(), inset: false };
+        assert_eq!(blur_of(&shadow(10_000.0)), MAX_SHADOW_BLUR);
+        assert_eq!(blur_of(&shadow(12.0)), 12.0);
+        assert_eq!(blur_of(&shadow(-3.0)), 0.0);
+        assert_eq!(blur_of(&shadow(f64::NAN)), 0.0);
     }
 
     #[test]
