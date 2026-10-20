@@ -262,8 +262,10 @@ fn deleting_a_shape_frees_the_connectors_attached_to_it() {
     assert!(joined.get("from").is_none() && joined["to"] == "b", "{joined}");
     // From a's centre (110, 110) to b's (310, 120), counted from the line's own (100, 100).
     assert_eq!(joined["points"], json!([[10.0, 10.0], [210.0, 20.0]]));
+    // TM-60: one drawn with points of its own is drawn again from the stored centres, b's
+    // (310, 120) to where a was (110, 110), not along a route it was first given.
     let drawn = find("drawn");
-    assert!(drawn["from"] == "b" && drawn.get("to").is_none() && drawn["points"] == json!([[0.0, 0.0], [5.0, 5.0]]), "{drawn}");
+    assert!(drawn["from"] == "b" && drawn.get("to").is_none() && drawn["points"] == json!([[310.0, 120.0], [110.0, 110.0]]), "{drawn}");
     assert_eq!(find("other"), before.as_array().unwrap().iter().find(|n| n["id"] == "other").unwrap().clone(), "not attached to it");
     let changed: Vec<String> = ids(&out["nodes"]);
     assert!(changed.contains(&"joined".to_string()) && changed.contains(&"drawn".to_string()), "the answer carries them: {changed:?}");

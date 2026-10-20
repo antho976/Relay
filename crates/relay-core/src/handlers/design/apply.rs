@@ -4,7 +4,7 @@ use super::revs::{self, removed_rev};
 use super::{body_of, emit_applied, expect, kind_of, live_design, node_of, row_bytes};
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project};
-use relay_bus::design::{details, field_of, label, nearest, Conflict, ConflictReason, Node, NodeKind, NodeOp, Styles, MAX_DEPTH, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
+use relay_bus::design::{details, field_of, label, nearest, Conflict, ConflictReason, Node, NodeKind, NodeOp, Styles, MAX_COORD, MAX_DEPTH, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{Apply, ApplyOut, Reply};
 use relay_bus::types::{Design, Id};
@@ -133,6 +133,10 @@ pub(super) struct Run<'a> {
     pub(super) styles_changed: bool,
     /// Each copy edit's new node, and the node it copied.
     pub(super) copied: BTreeMap<String, String>,
+    /// The follow rule's reading (feature-layout §2.1): each frame an update resized, at its size
+    /// before, and each axis (`true` across) the list set on a node itself.
+    pub(super) resized: Vec<(String, (f64, f64))>,
+    pub(super) set_here: HashSet<(String, bool)>,
 }
 
 const NODE_META: &str = "SELECT parent_id, kind, ord FROM design_nodes WHERE design_id = ?1 AND node_id = ?2";
@@ -583,6 +587,12 @@ impl Run<'_> {
     }
 
     pub(super) fn add(&mut self, mut node: Node, index: Option<u32>) -> Result<Option<String>, BusError> {
+        if !self.lenient {
+            // B49: a shape, frame or icon added without a size gets one; B3: a free line's or
+            // path's box is fitted to its points. An undo puts back exactly what was stored.
+            node.fill_default_size();
+            node.contain_points();
+        }
         node.validate().map_err(|why| self.fail(ErrorKind::Invalid, "design.node_invalid", why))?;
         if let Err(why) = node.check_new() {
             self.breach(why)?;
@@ -638,6 +648,7 @@ impl Run<'_> {
         self.pages += i64::from(node.kind == NodeKind::Page);
         self.bytes += row_bytes(&node.id, node.parent.as_deref(), &body);
         self.touch(&node.id);
+        self.set_axes(&node.id, true, true);
         self.added.insert(node.id.clone());
         self.inverse.push(vec![NodeOp::Delete { id: node.id.clone() }]);
         // What a later add may go in; where a leaf sits is read when asked (B6), seldom.
@@ -680,6 +691,21 @@ impl Run<'_> {
         if let Err(why) = Node::check_update(&node, &set, &next) {
             self.breach(why)?;
         }
+        // B3: a free line's or path's box fitted to its new points; what the fit moves joins the
+        // set, so its undo puts back the box and the points exactly.
+        if !self.lenient && next.contain_points() {
+            let fitted = next.to_map();
+            for key in ["x", "y", "w", "h", "points"] {
+                set.insert(key.into(), fitted.get(key).cloned().unwrap_or(Value::Null));
+            }
+            next.validate().map_err(|why| self.fail(ErrorKind::Invalid, "design.node_invalid", why))?;
+        }
+        let keys: Vec<&str> = set.keys().map(String::as_str).collect();
+        let (across, down) = (keys.iter().any(|k| matches!(*k, "x" | "w" | "width")), keys.iter().any(|k| matches!(*k, "y" | "h" | "height")));
+        if keys.iter().any(|k| matches!(*k, "w" | "h" | "width" | "height")) {
+            self.note_resize(&node);
+        }
+        self.set_axes(&id, across, down);
         self.check_names(&mut next)?;
         let body = body_of(&mut next)?;
         if body == row.body {
@@ -702,7 +728,7 @@ impl Run<'_> {
         Ok(Some(next.id))
     }
 
-    pub(super) fn move_(&mut self, id: String, parent: Option<String>, index: Option<u32>) -> Result<Option<String>, BusError> {
+    pub(super) fn move_(&mut self, id: String, parent: Option<String>, index: Option<u32>, keep: bool) -> Result<Option<String>, BusError> {
         if self.stale(&id, Edit::Move, &[]) != Stale::No {
             return Ok(None);
         }
@@ -767,6 +793,17 @@ impl Run<'_> {
             }
             Some(to)
         };
+        // W67: where it is kept, read before it leaves (a page has no place to keep).
+        let kept = match (&to, keep && to != from) {
+            (Some(dest), true) => match self.row(&id)? {
+                Some(row) => match node_of(id.clone(), row.parent.clone(), &row.body) {
+                    Ok(node) => self.kept_position(&node, dest)?.map(|at| (at, row.body)),
+                    Err(_) => None,
+                },
+                None => None,
+            },
+            _ => None,
+        };
         let old_index = self.index_of(from.as_deref(), &id, ord)?;
         if to == from && self.in_place(to.as_deref(), &id, ord, old_index, index)? {
             // TM-58: it already sits where it was sent. Nothing is written or touched, and
@@ -780,6 +817,9 @@ impl Run<'_> {
         self.bytes += to.as_ref().map_or(0, String::len) as i64 - from.as_ref().map_or(0, String::len) as i64;
         self.touch(&id);
         self.moved.insert(id.clone());
+        if to != from {
+            self.set_axes(&id, true, true);
+        }
         self.last_depth = None;
         if to.is_some() {
             self.parents.insert(id.clone(), to.clone());
@@ -788,7 +828,13 @@ impl Run<'_> {
             let last = self.crossed.entry(id.clone()).or_insert(at);
             *last = (*last).max(at);
         }
-        self.inverse.push(vec![NodeOp::Move { id: id.clone(), parent: from, index: Some(old_index), keep_position: None }]);
+        let mut undo = vec![NodeOp::Move { id: id.clone(), parent: from, index: Some(old_index), keep_position: None }];
+        if let Some((at, old)) = kept {
+            if let Some(Ok(node)) = self.row(&id)?.map(|row| node_of(id.clone(), row.parent, &row.body)) {
+                undo.extend(self.keep_at(&node, &old, at)?);
+            }
+        }
+        self.inverse.push(undo);
         Ok(Some(id))
     }
 
@@ -883,9 +929,16 @@ impl Run<'_> {
     pub(super) fn free(&mut self, id: &str, ends: &[&str]) -> Result<(), BusError> {
         let Some(row) = self.row(id)? else { return Ok(()) };
         let Ok(node) = node_of(id.to_string(), row.parent, &row.body) else { return Ok(()) };
-        let set = self.letting_go(&node, ends)?;
-        // A line that cannot be freed (none should fail) keeps its attachment.
-        let Ok(mut next) = node.patched(&set) else { return Ok(()) };
+        let mut set = self.letting_go(&node, ends)?;
+        // B70: one whose points will not take (none should fail) is drawn across its own box;
+        // never is an end left naming a node this list removed.
+        let mut next = match node.patched(&set) {
+            Ok(next) => next,
+            Err(_) => {
+                set.insert("points".into(), json!([[0.0, 0.0], [node.w, node.h]]));
+                node.patched(&set).map_err(|why| BusError::internal(format!("design.apply: connector {id:?} could not let go of {}: {why}", ends.join(" and "))))?
+            }
+        };
         let body = body_of(&mut next)?;
         self.tx.prepare_cached("UPDATE design_nodes SET body = ?3, rev = ?4 WHERE design_id = ?1 AND node_id = ?2").bus()?
             .execute(params![self.design, next.id, body, self.rev]).bus()?;
@@ -897,23 +950,25 @@ impl Run<'_> {
         Ok(())
     }
 
-    /// The update that lets connector `node`, as stored, go of its `ends` where it is drawn by
-    /// the stored boxes: each end `null`, and its points kept, or for one with fewer than two,
-    /// its ends' stored centres.
+    /// The update that lets connector `node`, as stored, go of its `ends` where the stored boxes
+    /// draw it: each end `null`, and its points from one end's stored centre to the other's (a
+    /// connector is drawn from its ends, so points it once had are a stale route: TM-60). When an
+    /// end's box cannot be read it keeps its own points, or with fewer than two is drawn across
+    /// its own box. Points stay within ±1000000 (B70).
     pub(super) fn letting_go(&self, node: &Node, ends: &[&str]) -> Result<Map<String, Value>, BusError> {
         let mut set: Map<String, Value> = ends.iter().map(|end| (end.to_string(), Value::Null)).collect();
-        if node.points.as_ref().is_none_or(|p| p.len() < 2) {
-            let centre = |b: Option<(f64, f64, f64, f64)>| b.map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0));
-            let ends = match node.from.as_deref().zip(node.to.as_deref()) {
-                Some((from, to)) => (self.stored_box(&node.id)?, centre(self.stored_box(from)?), centre(self.stored_box(to)?)),
-                None => (None, None, None),
-            };
-            let points = match ends {
-                (Some((ox, oy, _, _)), Some(a), Some(b)) => json!([[(a.0 - ox).round(), (a.1 - oy).round()], [(b.0 - ox).round(), (b.1 - oy).round()]]),
-                _ => json!([[0.0, 0.0], [node.w, node.h]]),
-            };
-            set.insert("points".into(), points);
-        }
+        let centre = |b: Option<(f64, f64, f64, f64)>| b.map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0));
+        let drawn = match node.from.as_deref().zip(node.to.as_deref()) {
+            Some((from, to)) => (self.stored_box(&node.id)?, centre(self.stored_box(from)?), centre(self.stored_box(to)?)),
+            None => (None, None, None),
+        };
+        let at = |v: f64| v.round().clamp(-MAX_COORD, MAX_COORD);
+        let points = match drawn {
+            (Some((ox, oy, _, _)), Some(a), Some(b)) => json!([[at(a.0 - ox), at(a.1 - oy)], [at(b.0 - ox), at(b.1 - oy)]]),
+            _ if node.points.as_ref().is_some_and(|p| p.len() >= 2) => return Ok(set),
+            _ => json!([[0.0, 0.0], [node.w, node.h]]),
+        };
+        set.insert("points".into(), points);
         Ok(set)
     }
 
@@ -1162,6 +1217,8 @@ pub(super) fn register(e: &mut Engine) {
             styles_len: 0,
             styles_changed: false,
             copied: BTreeMap::new(),
+            resized: Vec::new(),
+            set_here: HashSet::new(),
         };
         // B59: past the last edit that can make the design smaller (any but an add or a copy),
         // the list only grows it, so one over the cap by then is refused at the edit that took
@@ -1173,12 +1230,7 @@ pub(super) fn register(e: &mut Engine) {
             let id = match op {
                 NodeOp::Add { node, index } => run.add(node, index)?,
                 NodeOp::Update { id, set } => run.update(id, set)?,
-                // Until engine-pins rewrites x/y from page points (MODEL-SPEC §2.11).
-                NodeOp::Move { keep_position: Some(true), .. } => {
-                    return Err(run.fail_on("keep_position", ErrorKind::Invalid, "design.ops", "keep_position is not supported yet")
-                        .with_hint("move it without keep_position, then set x and y in an update"));
-                }
-                NodeOp::Move { id, parent, index, .. } => run.move_(id, parent, index)?,
+                NodeOp::Move { id, parent, index, keep_position } => run.move_(id, parent, index, keep_position == Some(true))?,
                 NodeOp::Delete { id } => run.delete(id)?,
                 NodeOp::Copy { id, as_id, parent, index, dx, dy } => run.copy(id, as_id, parent, index, dx, dy)?,
                 NodeOp::Color { name, value } => run.color(name, value)?,
@@ -1190,6 +1242,7 @@ pub(super) fn register(e: &mut Engine) {
                 return Err(run.too_large(true));
             }
         }
+        run.follow_pins()?;
         run.release_ends()?;
         run.check_refs()?;
         run.write_styles()?;

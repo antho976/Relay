@@ -10,7 +10,8 @@
 //! (`Scene::new(nodes).with_styles(..)`), and the `color`, `style` and `delete_style` edits change
 //! them through the rules the engine runs them by (`relay_bus::design::Styles`).
 
-use relay_bus::design::{fit_written, valid_id, Node, NodeKind, NodeOp, Styles, MAX_DEPTH, MAX_NODES, MAX_OPS};
+use relay_bus::design::{fit_written, valid_id, Layout, Node, NodeKind, NodeOp, Styles, MAX_DEPTH, MAX_NODES, MAX_OPS};
+use serde_json::{Map, Value};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// The key pages are listed under in `children`.
@@ -74,6 +75,27 @@ fn names(styles: &Styles, node: &Node, name: &str) -> bool {
 }
 
 /// B44: the engine's refusal of a list longer than it takes, said before anything runs.
+/// A frame to follow: its id, its stored size before and after, and how many levels down.
+type Resize = (String, (f64, f64), (f64, f64), usize);
+
+/// What a list sets that the follow rule reads (feature-layout §2.1).
+#[derive(Default)]
+struct Following {
+    resized: Vec<(String, (f64, f64))>,
+    set_here: FxHashSet<(String, bool)>,
+}
+
+impl Following {
+    fn set_here(&mut self, id: &str, across: bool, down: bool) {
+        if across {
+            self.set_here.insert((id.to_string(), true));
+        }
+        if down {
+            self.set_here.insert((id.to_string(), false));
+        }
+    }
+}
+
 fn too_many(n: usize) -> String {
     format!("that is {n} changes at once; one edit makes at most {MAX_OPS}. Select fewer layers.")
 }
@@ -378,6 +400,16 @@ impl Scene {
                 if self.nodes.len() >= MAX_NODES {
                     return Err(format!("a design holds at most {MAX_NODES} nodes"));
                 }
+                // B49 and B3, as the engine's strict add: a default size, a box fitted to points.
+                let mut fitted;
+                let node = if strict {
+                    fitted = node.clone();
+                    fitted.fill_default_size();
+                    fitted.contain_points();
+                    &fitted
+                } else {
+                    node
+                };
                 node.validate()?;
                 if let Some(parent) = &node.parent {
                     self.check_container(parent)?;
@@ -410,6 +442,10 @@ impl Scene {
                 let mut patched = node.patched(set).map_err(|e| format!("update {id}: {e}"))?;
                 if strict {
                     Node::check_update(node, set, &patched).map_err(|e| format!("update {id}: {e}"))?;
+                    // B3, as the engine's strict update: the box fitted to new points.
+                    if patched.contain_points() {
+                        patched.validate().map_err(|e| format!("update {id}: {e}"))?;
+                    }
                 }
                 if Styles::uses(&patched) {
                     if strict {
@@ -523,9 +559,12 @@ impl Scene {
     /// Run every edit of a new list, all or none, as a strict list ([`Scene::apply_strict`]).
     pub fn apply_all(&mut self, ops: &[NodeOp]) -> Result<(), String> {
         let mut trial = self.clone();
+        let mut follow = Following::default();
         for (i, op) in ops.iter().enumerate() {
+            trial.note(op, &mut follow);
             trial.apply_strict(op).map_err(|e| format!("ops[{i}]: {e}"))?;
         }
+        trial.follow_pins(follow);
         *self = trial;
         Ok(())
     }
@@ -547,20 +586,88 @@ impl Scene {
     pub fn apply_effective(&mut self, ops: Vec<NodeOp>) -> Result<Vec<NodeOp>, String> {
         let mut trial = self.clone();
         let mut kept = Vec::with_capacity(ops.len());
+        let mut follow = Following::default();
         for (i, op) in ops.into_iter().enumerate() {
             if let NodeOp::Update { id, set } = &op {
                 if trial.stored(id).is_some_and(|node| node.patched(set).is_ok_and(|after| after == *node)) {
                     continue;
                 }
             }
+            trial.note(&op, &mut follow);
             trial.apply_strict(&op).map_err(|e| format!("ops[{i}]: {e}"))?;
             kept.push(op);
         }
         if kept.len() > MAX_OPS {
             return Err(too_many(kept.len()));
         }
+        trial.follow_pins(follow);
         *self = trial;
         Ok(kept)
+    }
+
+    /// Note what edit `op`, about to run, sets for the follow rule, as the engine's `Run` does:
+    /// a frame an update resizes, at its size before, and each axis set on a node itself.
+    fn note(&self, op: &NodeOp, follow: &mut Following) {
+        match op {
+            NodeOp::Add { node, .. } => follow.set_here(&node.id, true, true),
+            NodeOp::Update { id, set } => {
+                let has = |keys: &[&str]| keys.iter().any(|k| set.contains_key(*k));
+                if let Some(n) = self.stored(id).filter(|n| n.kind == NodeKind::Frame && has(&["w", "h", "width", "height"])) {
+                    if !follow.resized.iter().any(|(frame, _)| frame == id) {
+                        follow.resized.push((id.clone(), (n.w, n.h)));
+                    }
+                }
+                follow.set_here(id, has(&["x", "w", "width"]), has(&["y", "h", "height"]));
+            }
+            NodeOp::Move { id, parent: Some(to), .. } if self.parent(id) != Some(to.as_str()) => follow.set_here(id, true, true),
+            _ => {}
+        }
+    }
+
+    /// The updates the follow rule gives frame `frame`'s children when its stored size goes from
+    /// `old` to `new` (feature-layout §2.1): each pinned free or absolute child's `Node::follow`,
+    /// on the axes `keeps` does not say it keeps (one an edit set itself). The canvas's resize
+    /// preview reads them too.
+    pub fn followers(&self, frame: &str, old: (f64, f64), new: (f64, f64), keeps: impl Fn(&str, bool) -> bool) -> Vec<(String, Map<String, Value>)> {
+        let Some(holder) = self.stored(frame) else {
+            return Vec::new();
+        };
+        let laid = holder.layout_mode() != Layout::None;
+        self.children(frame)
+            .iter()
+            .filter_map(|child| {
+                let n = self.stored(child)?;
+                if !n.is_pinned() || (laid && !n.is_absolute()) {
+                    return None;
+                }
+                let set = n.follow(old, new, !keeps(child, true), !keeps(child, false));
+                (!set.is_empty()).then(|| (child.clone(), set))
+            })
+            .collect()
+    }
+
+    /// The follow rule once a list has run, as the engine's `Run::follow_pins`: level by level
+    /// from each frame it resized, never more than [`MAX_DEPTH`] levels down.
+    fn follow_pins(&mut self, follow: Following) {
+        let mut queue: std::collections::VecDeque<Resize> = follow
+            .resized
+            .iter()
+            .filter_map(|(frame, old)| self.stored(frame).map(|n| (frame.clone(), *old, (n.w, n.h), 0)))
+            .filter(|(_, old, new, _)| old != new)
+            .collect();
+        while let Some((frame, old, new, level)) = queue.pop_front() {
+            if level >= MAX_DEPTH {
+                continue;
+            }
+            for (child, set) in self.followers(&frame, old, new, |id, across| follow.set_here.contains(&(id.to_string(), across))) {
+                let Some(n) = self.stored(&child) else { continue };
+                let Ok(next) = n.patched(&set) else { continue };
+                if next.kind == NodeKind::Frame && (next.w, next.h) != (n.w, n.h) {
+                    queue.push_back((child.clone(), (n.w, n.h), (next.w, next.h), level + 1));
+                }
+                self.put(next);
+            }
+        }
     }
 
     /// Fit edits about to be sent to what a strict list takes (`relay_bus::design::fit_written`),

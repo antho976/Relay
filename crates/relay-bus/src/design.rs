@@ -1521,8 +1521,11 @@ impl Node {
         // their centre less the old box's centre (MODEL-SPEC §2.8).
         let k = [lo[0] + e[0] / 2.0 - self.w / 2.0, lo[1] + e[1] / 2.0 - self.h / 2.0];
         let (s, c) = self.rotation.unwrap_or(0.0).to_radians().sin_cos();
-        self.x += lo[0] + (c * k[0] - s * k[1]) - k[0];
-        self.y += lo[1] + (s * k[0] + c * k[1]) - k[1];
+        // Rounded to a billionth of a pixel: a quarter turn's sine and cosine are not exactly 0
+        // and 1, and would leave noise like -3.6e-15 in what is stored.
+        let tidy = |v: f64| (v * 1e9).round() / 1e9 + 0.0;
+        self.x = tidy(self.x + lo[0] + (c * k[0] - s * k[1]) - k[0]);
+        self.y = tidy(self.y + lo[1] + (s * k[0] + c * k[1]) - k[1]);
         for p in points.iter_mut() {
             p[0] -= lo[0];
             p[1] -= lo[1];

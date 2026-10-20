@@ -82,16 +82,13 @@ fn layout_fields_are_stored_and_checked() {
     }
 }
 
-/// `keep_position` is read, and refused by name until the engine rewrites x/y from page points.
+/// `keep_position: false` moves as a plain move does, and its undo carries none (what true does
+/// is design_pins').
 #[test]
-fn keep_position_is_refused_until_the_engine_keeps_it() {
+fn keep_position_false_is_a_plain_move() {
     let (e, _root) = project();
     let id = create(&e);
     card(&e, id);
-    let error = refused(&e, id, json!([{"op": "move", "id": "card", "parent": "page-1", "keep_position": true}]));
-    assert_eq!((error.code.as_str(), error.message.as_str()), ("design.ops", "ops[0] move \"card\": keep_position is not supported yet"));
-    assert_eq!(error.details, Some(json!({"op": 0, "index": 0, "id": "card", "field": "keep_position"})));
-    // Without it (or false) a move runs as before, and its undo carries none.
     let out = apply(&e, id, json!([{"op": "move", "id": "card", "parent": "page-1", "keep_position": false}]));
     assert_eq!(out["inverse"], json!([{"op": "move", "id": "card", "parent": "screen", "index": 0}]));
 }

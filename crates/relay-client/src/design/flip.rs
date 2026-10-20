@@ -849,12 +849,12 @@ mod tests {
         let mut path = node("pa", Some("row"), K::Path, [0.0, 0.0, 100.0, 100.0]);
         (path.points, path.rotation) = (Some(vec![[0.0, 0.0], [40.0, 0.0], [40.0, 40.0]]), Some(90.0));
         let mut s = Scene::new(vec![page(), row, path]);
-        let p = place(&s, "p1", &Mono);
-        let before = p.rect("pa").unwrap();
-        flipped(&mut s, &["pa"], false);
+        let ops = flipped(&mut s, &["pa"], false);
+        // Mirrored in its 100 × 100 box about the centre it turns about...
+        assert!(matches!(&ops[0], NodeOp::Update { set, .. } if set["points"] == json!([[0.0, 100.0], [40.0, 100.0], [40.0, 60.0]])), "{ops:?}");
+        // ...then, as every strict write is (B3), its box fitted to its points.
         let pa = s.node("pa").unwrap();
-        assert_eq!((pa.points.clone(), pa.rotation), (Some(vec![[0.0, 100.0], [40.0, 100.0], [40.0, 60.0]]), Some(-90.0)));
-        assert_eq!(place(&s, "p1", &Mono).rect("pa").unwrap(), before, "laid out where it was");
+        assert_eq!((pa.points.clone(), pa.rotation, pa.w, pa.h), (Some(vec![[0.0, 40.0], [40.0, 40.0], [40.0, 0.0]]), Some(-90.0), 40.0, 40.0));
     }
 
     /// A line turns by its points (B99), so one an older Relay stored turned has its turn taken

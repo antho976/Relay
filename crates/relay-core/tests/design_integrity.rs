@@ -355,8 +355,9 @@ fn a_move_to_another_page_lets_go_of_the_ends_it_parts() {
     // From the title's stored centre (110, 110) to b's (410, 120), from the line's corner (100, 100).
     assert!(joined.get("from").is_none() && joined["to"] == "b", "{joined}");
     assert_eq!(joined["points"], json!([[10.0, 10.0], [310.0, 20.0]]));
+    // TM-60: drawn again from the stored centres, not along the route it was first given.
     let drawn = find(&got, "drawn");
-    assert!(drawn["from"] == "b" && drawn.get("to").is_none() && drawn["points"] == json!([[0.0, 0.0], [5.0, 5.0]]), "{drawn}");
+    assert!(drawn["from"] == "b" && drawn.get("to").is_none() && drawn["points"] == json!([[410.0, 120.0], [110.0, 110.0]]), "{drawn}");
     assert_eq!(find(&got, "near-link"), find(&before, "near-link"), "neither end moved");
     assert_eq!(find(&got, "old"), find(&before, "old"), "the list did not part it");
     let mut changed = ids(&out["nodes"]);
