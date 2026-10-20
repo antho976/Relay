@@ -18,6 +18,15 @@ use relay_bus::BusError;
 use serde_json::json;
 use std::fmt;
 
+/// Openverse searches agents together may send in any 24 hours: half its anonymous day, so they
+/// can never spend the person's share (§1.8).
+pub const AGENT_SEARCHES_PER_DAY: usize = 100;
+/// Uncached Openverse thumbnails agents together may fetch in any 24 hours.
+pub const AGENT_THUMBS_PER_DAY: usize = 300;
+/// How long a 429 without `Retry-After` cools its bucket, in seconds.
+pub const COOL_DEFAULT_S: u64 = 60;
+/// The longest a provider can make a bucket cool, in seconds; a longer `Retry-After` is cut.
+pub const COOL_MAX_S: u64 = DAY_S;
 /// The most characters a search sends (Openverse's own limit on `q`).
 pub const MAX_QUERY: usize = 200;
 /// The last page a search reaches.
@@ -26,6 +35,8 @@ pub const MAX_PAGE: u32 = 10;
 pub const MAX_COUNT: u32 = 20;
 pub const DEFAULT_COUNT: u32 = 12;
 
+
+const DAY_S: u64 = 24 * 3600;
 
 // ------------------------------------------------------------------ ids and searches
 
@@ -217,6 +228,63 @@ pub fn too_big(why: String) -> BusError {
     BusError::invalid("design.picture.too_big", format!("the photo is {why}")).with_hint("pick another result")
 }
 
+// ------------------------------------------------------------------ the key's state
+
+/// The Pexels key in memory. Its `Debug` hides it; it has no `Display` or `Serialize`, so it can
+/// reach no answer, log or audit row by accident. It is sent only as `Authorization` to
+/// api.pexels.com ([`net`]).
+#[derive(Clone, PartialEq, Eq)]
+pub struct SecretKey(String);
+
+impl SecretKey {
+    pub fn new(key: impl Into<String>) -> SecretKey {
+        SecretKey(key.into())
+    }
+
+    /// The key itself: for the `Authorization` header and the keyring, nothing else.
+    pub(crate) fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for SecretKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SecretKey(…)")
+    }
+}
+
+// ------------------------------------------------------------------ the desk
+
+/// Where a request spends: each provider limit is counted, and cooled after a 429, on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Bucket {
+    /// Openverse searches and detail reads: 20 a minute, 200 a day, anonymous.
+    OpenverseApi,
+    /// Openverse's image proxy (`/thumb/`, the originals): 1000 a day, anonymous.
+    OpenverseImages,
+    /// Pexels: 200 an hour on the key.
+    Pexels,
+}
+
+impl Bucket {
+    pub fn source(self) -> PictureSource {
+        match self {
+            Bucket::OpenverseApi | Bucket::OpenverseImages => PictureSource::Openverse,
+            Bucket::Pexels => PictureSource::Pexels,
+        }
+    }
+
+    /// What agents together may spend in 24 hours; Pexels has no allowance (its hourly limit
+    /// already bounds a loop).
+    pub fn allowance(self) -> Option<usize> {
+        match self {
+            Bucket::OpenverseApi => Some(AGENT_SEARCHES_PER_DAY),
+            Bucket::OpenverseImages => Some(AGENT_THUMBS_PER_DAY),
+            Bucket::Pexels => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,5 +331,12 @@ mod tests {
         assert_eq!(orientation(PictureSource::Openverse, Orientation::Portrait), "tall");
         assert_eq!(orientation(PictureSource::Pexels, Orientation::Portrait), "portrait");
         assert_eq!(orientation(PictureSource::Pexels, Orientation::Square), "square");
+    }
+
+    #[test]
+    fn the_key_never_shows() {
+        let key = SecretKey::new("sekrit-pexels-key");
+        assert_eq!(format!("{key:?}"), "SecretKey(…)");
+        assert_eq!(key.expose(), "sekrit-pexels-key");
     }
 }
