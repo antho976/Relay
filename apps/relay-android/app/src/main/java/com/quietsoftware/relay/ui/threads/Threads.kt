@@ -63,6 +63,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -84,6 +85,7 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewModelScope
 import com.quietsoftware.relay.core.Hub
 import com.quietsoftware.relay.core.model.Thread
 import com.quietsoftware.relay.core.model.ThreadMessage
@@ -823,8 +825,11 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     var firstPictures by remember(opened) { mutableStateOf<List<Picture>>(emptyList()) }
     val queuedPictures = if (temp) create?.payload?.let { picturesOf(it) } else null
     LaunchedEffect(queuedPictures) { if (queuedPictures != null) firstPictures = queuedPictures }
-    // A message the PC refused stays in the outbox: its bubble says why, in place of "Sending…".
-    val refusedSends = remember(s.outbox) { s.outbox.filter { it.op == "thread.send" && it.parked }.associate { "m:" + Optimistic.tempId(it.id) to refusal(it.error) } }
+    // The picture open full screen: held here, not by its bubble, which the list drops once a reply scrolls it away.
+    var viewing by remember(tid) { mutableStateOf<Picture?>(null) }
+    // A message the PC refused stays in the outbox: its bubble says why, in place of "Sending…",
+    // and Send again replaces it.
+    val refusedSends = remember(s.outbox) { s.outbox.filter { it.op == "thread.send" && it.parked }.associate { "m:" + Optimistic.tempId(it.id) to Refused(refusal(it.error), it.id) } }
     val anyProposal = rows.any { it is Piece.Tool && it.call.card is CardData.Proposal }
     val proposals by remember(anyProposal) {
         if (anyProposal) nav.relay.live("arbiter.proposal.list", buildJsonObject { put("limit", 200) }) else flowOf(RelayData.Live())
@@ -898,8 +903,8 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
         follow = true
     }
     // Again as a new message, with the pictures it had: through the outbox, so it waits for the
-    // PC like any other.
-    fun resend(text: String, pictures: List<Picture>) {
+    // PC like any other. One the PC refused ([replaces], its outbox entry) goes once it is sent.
+    fun resend(text: String, pictures: List<Picture>, replaces: String?) {
         val t = target ?: return
         if (working) {
             nav.shell.toast("Claude is still answering: stop it first, or wait")
@@ -914,7 +919,9 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
             return
         }
         keysOn = null
-        nav.shell.change("thread.send", message(t, text, pictures.map { it.id }), "Message")
+        nav.shell.change("thread.send", message(t, text, pictures.map { it.id }), "Message") {
+            if (replaces != null) nav.shell.viewModelScope.launch { nav.relay.discard(replaces) }
+        }
         stopped = null
         follow = true
     }
@@ -950,7 +957,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     val lastWords = lastUser?.text ?: firstText
     val lastPictures = lastUser?.pictures ?: firstPictures
     val retryAt = if (stopped != null) "stopped" else rows.lastOrNull { it is Piece.Error || it is Piece.User }?.takeIf { it is Piece.Error }?.key
-    val retry: (() -> Unit)? = lastWords?.takeIf { target != null && !createFailed && (it.isNotBlank() || lastPictures.isNotEmpty()) }?.let { words -> { resend(words, lastPictures) } }
+    val retry: (() -> Unit)? = lastWords?.takeIf { target != null && !createFailed && (it.isNotBlank() || lastPictures.isNotEmpty()) }?.let { words -> { resend(words, lastPictures, null) } }
 
     // Nothing to show yet: no message, nothing streaming or waiting. Reading one the PC has
     // messages for says so for about ten seconds, then that it could not be read.
@@ -1032,7 +1039,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                         slow -> Empty("threads", "Could not read this conversation", "The PC did not send its messages.") {
                             Key("Try again", {
                                 tries++
-                                num?.let { nav.relay.hub.syncer.schedule(setOf(Fetch.Thread(it))) }
+                                num?.let { scope.launch { nav.relay.hub.syncer.schedule(setOf(Fetch.Thread(it))) } }
                             }, glyph = "refresh")
                         }
                         else -> T("Reading the conversation…", style = Relay.type.caption, color = c.ink3)
@@ -1044,8 +1051,8 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                     contentPadding = PaddingValues(top = 8.dp, bottom = 20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    if (firstText != null) item("first") { UserBubble(firstText, queued = false, online = s.online, modifier = cell.padding(top = 12.dp), pictures = firstPictures) }
-                    items(rows, key = { it.key }, contentType = { it::class }) { p -> PieceView(p, cell, s.online, money, current, keys, retry.takeIf { p.key == retryAt }, !working, refusedSends[p.key], asked) }
+                    if (firstText != null) item("first") { UserBubble(firstText, queued = false, online = s.online, modifier = cell.padding(top = 12.dp), pictures = firstPictures, onView = { viewing = it }) }
+                    items(rows, key = { it.key }, contentType = { it::class }) { p -> PieceView(p, cell, s.online, money, current, keys, retry.takeIf { p.key == retryAt }, !working, refusedSends[p.key], asked) { viewing = it } }
                     stopped?.let { text ->
                         item("stopped") {
                             Column(cell.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1077,6 +1084,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                     }
                 }
             }
+            viewing?.let { PictureViewer(it) { viewing = null } }
         }
         BoxWithConstraints(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(top = 4.dp, bottom = 8.dp), contentAlignment = Alignment.TopCenter) {
             val dictate = com.quietsoftware.relay.ui.dev.rememberDictation { said -> draft = com.quietsoftware.relay.ui.dev.joinSaid(draft, said) }
@@ -1130,8 +1138,11 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
     }
 }
 
+/** Why the PC refused a message of the person's, and its outbox [entry], which Send again replaces. */
+private class Refused(val why: String, val entry: String)
+
 /** What a message of the person's offers under it, and which one shows its keys. */
-private class BubbleKeys(val opened: String?, val toggle: ((String) -> Unit)?, val edit: ((String) -> Unit)?, val resend: ((String, List<Picture>) -> Unit)?) {
+private class BubbleKeys(val opened: String?, val toggle: ((String) -> Unit)?, val edit: ((String) -> Unit)?, val resend: ((String, List<Picture>, String?) -> Unit)?) {
     companion object {
         val None = BubbleKeys(null, null, null, null)
     }
@@ -1159,8 +1170,9 @@ private fun PieceView(
     keys: BubbleKeys = BubbleKeys.None,
     retry: (() -> Unit)? = null,
     idle: Boolean = true,
-    refused: String? = null,
+    refused: Refused? = null,
     asked: AskedReading = AskedReading.None,
+    onView: (Picture) -> Unit = {},
 ) {
     val c = Relay.colors
     when (p) {
@@ -1173,9 +1185,11 @@ private fun PieceView(
             open = keys.opened == p.key,
             onOpen = keys.toggle?.let { t -> { t(p.key) } },
             onEdit = keys.edit,
-            onResend = keys.resend?.takeIf { !p.queued }?.let { again -> { again(p.text, p.pictures) } },
+            // A message still on its way is not sent twice; one the PC refused may be, in its place.
+            onResend = keys.resend?.takeIf { !p.queued || refused != null }?.let { again -> { again(p.text, p.pictures, refused?.entry) } },
             pictures = p.pictures,
-            refused = refused,
+            refused = refused?.why,
+            onView = onView,
         )
         is Piece.Reply -> Markdown(p.text, cell.padding(top = 12.dp))
         is Piece.Tool -> Box(cell.padding(top = if (p.call.card != null) 10.dp else 2.dp)) { ToolView(p.call, money, proposals, asked) }
@@ -1208,11 +1222,16 @@ private fun UserBubble(
     onResend: (() -> Unit)? = null,
     pictures: List<Picture> = emptyList(),
     refused: String? = null,
+    onView: (Picture) -> Unit = {},
 ) {
     val c = Relay.colors
     Column(modifier, horizontalAlignment = Alignment.End) {
         if (pictures.isNotEmpty()) Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
-            SentPictures(pictures, Modifier.padding(bottom = if (text.isNotBlank()) 6.dp else 0.dp))
+            val haptic = LocalHapticFeedback.current
+            SentPictures(
+                pictures, onView, Modifier.padding(bottom = if (text.isNotBlank()) 6.dp else 0.dp), online = online,
+                onKeys = onOpen?.let { toggle -> { haptic.performHapticFeedback(HapticFeedbackType.LongPress); toggle() } },
+            )
         }
         if (text.isNotBlank() || pictures.isEmpty()) Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
             Box(

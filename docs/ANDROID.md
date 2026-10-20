@@ -83,7 +83,8 @@ A phone may also pair with the cloud copy on your server (`docs/CLOUD.md`): on t
 the server; the personal build offers it through Discord right after the PC is paired (enroll
 kind `relay-cloud`) and takes a pasted link while the bot does not know that kind. It is a
 second, data-only host and never replaces the PC. Once the PC's link has been down for three
-seconds, the phone dials the copy and asks it only for the ledger's and the training history's
+seconds (not when it was disconnected on the phone, and not while the copy refuses this phone),
+the phone dials the copy and asks it only for the ledger's and the training history's
 reads (`Hub.CLOUD_READS`, the reads in `CLOUD_OPS`): their answers are cached as the PC's are and
 say "From your server's copy" instead of "Saved on this phone", and the copy's events mark them
 stale. Edits, acts, the outbox and the full resync go to the PC alone, and the copy's link stops
@@ -142,9 +143,11 @@ Picking needs the PC; a message naming pictures already sent may wait in the out
 other, and its bubble shows them meanwhile (`Optimistic` carries `images` into the shown body).
 The key is offered only on a Claude model: a thread on one of the PC's own models says pictures
 need a Claude model, and a message the PC refuses for it (`thread.images_unsupported`) says so
-under its bubble. A message's pictures are read once with `thread.image` and kept in the app's
-cache (the op cache keeps at most 600,000 characters of an answer), so they show with the PC
-away; a tap opens one full screen.
+under its bubble, and its Send again sends it with its pictures in its place. A message's pictures
+are read once with `thread.image` and kept in the app's cache (the op cache keeps at most 600,000
+characters of an answer), so they show with the PC away, or once it is back; a tap opens one full
+screen, and a long press opens the message's keys, which a message of pictures alone has no words
+for.
 
 A chart block may carry the reply's own numbers instead of a question (`data`), for what the
 ledger does not hold, such as what is to come: amounts as decimals (numbers or strings) in the

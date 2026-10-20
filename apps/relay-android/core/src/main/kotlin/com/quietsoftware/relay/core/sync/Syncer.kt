@@ -138,7 +138,7 @@ object EventRouter {
         "session.*", "guardrail.*", "notify.*", "task.*", "project.*", "workspace.*", "mailbox.*",
         "notes.*", "module.*", "git.*", "file.*", "worktree.*", "overlap.*", "integration.*", "usage.*",
         "run.*", "device.*", "avd.*", "skill.*", "plugin.*", "provider.*", "settings.*", "github.*",
-        "thread.*", "money.*", "arbiter.*", "gym.*",
+        "thread.*", "money.*", "arbiter.*", "gym.*", "design.*",
     )
 }
 

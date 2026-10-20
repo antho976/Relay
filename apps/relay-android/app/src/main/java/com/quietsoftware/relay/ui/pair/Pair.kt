@@ -283,7 +283,7 @@ fun PcScreen(nav: Nav) {
                         }
                     }
 
-                    ServerCopy(nav, pcOnline = s.link is LinkState.Online)
+                    ServerCopy(nav, pc = s.link)
 
                     Slab(Modifier.fillMaxWidth()) {
                         Row(
@@ -350,7 +350,7 @@ fun PcScreen(nav: Nav) {
  * never in its place: nothing here pairs, forgets or wipes the PC or this phone's copy of its data.
  */
 @Composable
-private fun ServerCopy(nav: Nav, pcOnline: Boolean) {
+private fun ServerCopy(nav: Nav, pc: LinkState) {
     val copy by nav.relay.cloudProfile.collectAsStateWithLifecycle(null)
     val state by nav.relay.cloudState.collectAsStateWithLifecycle()
     val seen by nav.relay.cloudLastSeen.collectAsStateWithLifecycle(0L)
@@ -358,13 +358,13 @@ private fun ServerCopy(nav: Nav, pcOnline: Boolean) {
         Eyebrow("Your server's copy")
         Gap(6.dp)
         val p = copy
-        if (p == null) ServerCopyPaste(nav) else ServerCopyState(nav, p, state, seen, pcOnline)
+        if (p == null) ServerCopyPaste(nav) else ServerCopyState(nav, p, state, seen, pc)
     }
 }
 
 /** A paired server's copy: how its link stands, and forgetting it. */
 @Composable
-private fun ServerCopyState(nav: Nav, p: PcProfile, state: LinkState, seen: Long, pcOnline: Boolean) {
+private fun ServerCopyState(nav: Nav, p: PcProfile, state: LinkState, seen: Long, pc: LinkState) {
     val c = Relay.colors
     val scope = rememberCoroutineScope()
     var confirmForget by remember { mutableStateOf(false) }
@@ -372,7 +372,7 @@ private fun ServerCopyState(nav: Nav, p: PcProfile, state: LinkState, seen: Long
         val refused = state is LinkState.Revoked
         Row(verticalAlignment = Alignment.CenterVertically) {
             Dot(linkColor(state), 8.dp)
-            T("  " + serverLine(state, pcOnline), Modifier.weight(1f), Relay.type.uiMedium, c.ink)
+            T("  " + serverLine(state, pc), Modifier.weight(1f), Relay.type.uiMedium, c.ink)
         }
         p.routes.firstOrNull()?.let { T(it.url, Modifier.padding(top = 4.dp), Relay.type.mono, c.ink3, maxLines = 1) }
         T(
@@ -401,11 +401,16 @@ private fun ServerCopyState(nav: Nav, p: PcProfile, state: LinkState, seen: Long
 }
 
 /** Where the link to the server's copy stands, in the words of the PC's line above it. */
-private fun serverLine(state: LinkState, pcOnline: Boolean): String = when (state) {
+private fun serverLine(state: LinkState, pc: LinkState): String = when (state) {
     is LinkState.Online -> "Connected · reading Tally and Avex"
     is LinkState.Connecting, is LinkState.Starting, LinkState.Unpaired -> "Reaching your server"
     is LinkState.Offline -> "Your server is out of reach"
-    LinkState.Stopped -> if (pcOnline) "Not needed while the PC is connected" else "Waiting on the PC"
+    LinkState.Stopped -> when (pc) {
+        is LinkState.Online -> "Not needed while the PC is connected"
+        // It stands in for a PC that is away, not for one disconnected here.
+        LinkState.Stopped, LinkState.Unpaired -> "Off while the PC is disconnected"
+        else -> "Waiting on the PC"
+    }
     is LinkState.Revoked -> "Your server refused this phone"
 }
 
