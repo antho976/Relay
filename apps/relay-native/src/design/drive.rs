@@ -425,7 +425,7 @@ fn animate(b: Rc<Board>, steps: Vec<String>, at: usize, apng: bool, arg: String)
         } else {
             let stem = "frame".to_string();
             match export::write_frames(&b, shown, backdrop, fps, path.into(), stem).await {
-                Ok((count, drawn)) => Ok(format!("DESIGN_FRAMES {path} {count} frames {}x{}", drawn.size.0, drawn.size.1)),
+                Ok((count, _, drawn)) => Ok(format!("DESIGN_FRAMES {path} {count} frames {}x{}", drawn.size.0, drawn.size.1)),
                 Err(e) => Err(e),
             }
         };

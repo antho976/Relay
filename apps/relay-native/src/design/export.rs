@@ -21,6 +21,7 @@ use relay_client::design::motion::{self, Clocks};
 use relay_client::design::{apng, bounds, boxes, edit, names, shapes, Rect, Scene};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::Path;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
@@ -1158,29 +1159,72 @@ pub fn export_frames(b: &Board, page: bool) {
         };
         let written = write_frames(&b, shown, backdrop, ANIMATION_FPS, dir, stem).await;
         match written {
-            Ok((count, drawn)) => b.toast(&format!("Exported {count} frames{}", pictures_note(drawn.unpictured))),
+            Ok((count, stale, drawn)) => b.toast(&format!("Exported {count} frames{}{}", stale_note(stale), pictures_note(drawn.unpictured))),
             Err(e) => b.toast(&format!("Could not export the frames: {e}")),
         }
     });
 }
 
 /// The motion of `ids` (none: the page) as `stem-0000.png`, … in `dir`, written off the main
-/// thread: how many, and what was drawn.
-pub(super) async fn write_frames(b: &Rc<Board>, ids: Vec<String>, backdrop: bool, fps: u16, dir: std::path::PathBuf, stem: String) -> Result<(usize, Drawn), String> {
+/// thread (`save_frames`): how many, how many left from an earlier, longer export were removed,
+/// and what was drawn.
+pub(super) async fn write_frames(b: &Rc<Board>, ids: Vec<String>, backdrop: bool, fps: u16, dir: std::path::PathBuf, stem: String) -> Result<(usize, usize, Drawn), String> {
     let rt = b.ui.upgrade().map(|ui| ui.rt.clone()).ok_or("the app is closing")?;
     let (frames, drawn) = draw_animation(b, ids, backdrop, fps, say_progress).await?;
     let count = frames.len();
-    rt.spawn_blocking(move || {
-        frames.iter().enumerate().try_for_each(|(i, png)| std::fs::write(dir.join(frame_name(&stem, i)), png).map_err(|e| e.to_string()))
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    Ok((count, drawn))
+    let stale = rt.spawn_blocking(move || save_frames(&dir, &stem, &frames, |path, png| std::fs::write(path, png))).await.map_err(|e| e.to_string())??;
+    Ok((count, stale, drawn))
+}
+
+/// Write `frames` into `dir` as `stem-0000.png`, … with `write`. The folder then holds this
+/// export's frames and no other `stem-NNNN.png`: those an earlier, longer export left past the
+/// last are removed, so a numbered sequence read from the folder is this one. A write that fails
+/// takes out the frames this export wrote, and says so: half a sequence is not left looking like
+/// a whole one. Answers how many earlier frames went.
+fn save_frames(dir: &Path, stem: &str, frames: &[Vec<u8>], write: impl Fn(&Path, &[u8]) -> std::io::Result<()>) -> Result<usize, String> {
+    for (i, png) in frames.iter().enumerate() {
+        if let Err(e) = write(&dir.join(frame_name(stem, i)), png) {
+            let kept = (0..i).filter(|j| std::fs::remove_file(dir.join(frame_name(stem, *j))).is_err()).count();
+            let undone = match (i, kept) {
+                (0, _) => String::new(),
+                (n, 0) => format!("; the {n} frame{} written before it {} removed", if n == 1 { "" } else { "s" }, if n == 1 { "was" } else { "were" }),
+                (n, k) => format!("; {} of the {n} frames written before it could not be removed", k),
+            };
+            return Err(format!("frame {} of {}: {e}{undone}", i + 1, frames.len()));
+        }
+    }
+    // Best effort: a frame left over that cannot be removed is no reason to fail the export.
+    let stale = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().to_str().and_then(|name| frame_index(stem, name)).is_some_and(|i| i >= frames.len()))
+                .filter(|entry| std::fs::remove_file(entry.path()).is_ok())
+                .count()
+        })
+        .unwrap_or(0);
+    Ok(stale)
 }
 
 /// Frame `i`'s file: four digits, so the files sort in order up to 600 frames and more.
 fn frame_name(stem: &str, i: usize) -> String {
     format!("{stem}-{i:04}.png")
+}
+
+/// Which frame of `stem` the file `name` is, as `frame_name` writes it; `None` for any other file.
+fn frame_index(stem: &str, name: &str) -> Option<usize> {
+    let digits = name.strip_prefix(stem)?.strip_prefix('-')?.strip_suffix(".png")?;
+    let i = digits.bytes().all(|b| b.is_ascii_digit()).then(|| digits.parse().ok()).flatten()?;
+    (frame_name(stem, i) == name).then_some(i)
+}
+
+/// "; 30 frames left from an earlier export were removed" for the toast, when any were.
+fn stale_note(stale: usize) -> String {
+    match stale {
+        0 => String::new(),
+        1 => "; 1 frame left from an earlier export was removed".into(),
+        n => format!("; {n} frames left from an earlier export were removed"),
+    }
 }
 
 /// What an animation export covers: the board, the selection, what is drawn (none: the page)
@@ -1628,5 +1672,42 @@ mod tests {
         assert!((ask_scale(&page) - 0.25).abs() < 1e-9);
         let (w, h) = boxes::picture_size(&page, ask_scale(&page));
         assert!(f64::from(w) * f64::from(h) <= boxes::MAX_AREA_PX);
+    }
+
+    /// A frames export leaves the folder holding its frames alone: those an earlier, longer one
+    /// left past its last go, other files stay, and a write that fails takes out what it wrote.
+    #[test]
+    fn a_frames_export_leaves_no_partial_or_stale_frames() {
+        assert_eq!((frame_index("hero", "hero-0042.png"), frame_index("hero", "hero-42.png")), (Some(42), None));
+        assert_eq!((frame_index("hero", "hero-0001.png.bak"), frame_index("hero", "hero-x-0001.png"), frame_index("hero", "hero-+001.png")), (None, None, None));
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../target/scratch/frames-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let names = |dir: &Path| {
+            let mut all: Vec<String> = std::fs::read_dir(dir).unwrap().filter_map(|e| e.ok()?.file_name().into_string().ok()).collect();
+            all.sort();
+            all
+        };
+        let write = |path: &Path, png: &[u8]| std::fs::write(path, png);
+        // An earlier export of five, and a file of the person's own.
+        assert_eq!(save_frames(&dir, "hero", &vec![vec![1u8]; 5], write), Ok(0));
+        std::fs::write(dir.join("hero-notes.png"), b"mine").unwrap();
+        assert_eq!(save_frames(&dir, "hero", &vec![vec![2u8]; 3], write), Ok(2), "the two past the new last go");
+        assert_eq!(names(&dir), ["hero-0000.png", "hero-0001.png", "hero-0002.png", "hero-notes.png"]);
+        // Failing at the third frame of another stem: the two it wrote go, and it says so.
+        let failing = |path: &Path, png: &[u8]| {
+            if path.ends_with("logo-0002.png") {
+                return Err(std::io::Error::other("disk full"));
+            }
+            std::fs::write(path, png)
+        };
+        let refused = save_frames(&dir, "logo", &vec![vec![3u8]; 4], failing).unwrap_err();
+        assert_eq!(refused, "frame 3 of 4: disk full; the 2 frames written before it were removed");
+        assert_eq!(names(&dir), ["hero-0000.png", "hero-0001.png", "hero-0002.png", "hero-notes.png"]);
+        for name in names(&dir) {
+            std::fs::remove_file(dir.join(name)).unwrap();
+        }
+        std::fs::remove_dir(&dir).unwrap();
+        assert_eq!(stale_note(0), "");
+        assert_eq!(stale_note(2), "; 2 frames left from an earlier export were removed");
     }
 }
