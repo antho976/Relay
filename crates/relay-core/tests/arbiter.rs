@@ -3,14 +3,16 @@
 
 mod common;
 
-use common::{call, code, engine, ok, refused};
+use common::{call, code, engine, ok, refused, wait_until};
 use relay_arbiter::exchange::{Account, ExchangeError, Market, Result};
 use relay_arbiter::model::*;
 use relay_arbiter::Decimal;
 use relay_core::arbiter::{pass, set_fake_exchange, set_fake_key};
 use serde_json::{json, Value};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 const KEY: &str = "-----BEGIN EC PRIVATE KEY-----
 MHcCAQEEICr3hFJQLruuvjzXzQvrZyWUlBfa0SdE9HtDCMhP7NYqoAoGCCqGSM49
@@ -40,9 +42,19 @@ struct Fake {
     /// The next this many reads of an order's fills answer none yet, though the order reads as
     /// filled: fills lag the order's status.
     fills_lag: Mutex<u32>,
+    /// While shut, create waits at the door before it reaches the exchange: a request in flight.
+    door: (Mutex<bool>, Condvar),
+    at_door: AtomicBool,
 }
 
 impl Fake {
+    fn shut_door(&self) {
+        *self.door.0.lock().unwrap() = true;
+    }
+    fn open_door(&self) {
+        *self.door.0.lock().unwrap() = false;
+        self.door.1.notify_all();
+    }
     fn new(price: f64) -> Arc<Fake> {
         let f = Fake::default();
         *f.price.lock().unwrap() = price;
@@ -112,6 +124,12 @@ impl Account for Fake {
         Ok(Preview { preview_id: Some("pv".into()), commission: None, quote_size: None, base_size: None, errors: vec![], warnings: vec![] })
     }
     fn place(&self, o: &OrderRequest, _: Option<&str>) -> Result<ExchangeOrder> {
+        let mut shut = self.door.0.lock().unwrap();
+        while *shut {
+            self.at_door.store(true, Ordering::SeqCst);
+            shut = self.door.1.wait(shut).unwrap();
+        }
+        drop(shut);
         if o.side == Side::Sell && *self.refuse_sells.lock().unwrap() {
             return Err(ExchangeError::Refused("INSUFFICIENT_FUND".into()));
         }
@@ -509,7 +527,7 @@ fn a_strategy_past_its_own_daily_loss_waits_to_restart() {
 #[test]
 fn an_order_whose_answer_was_lost_is_found_by_its_id_and_booked() {
     for lost in [ExchangeError::Unreachable("the request timed out".into()), ExchangeError::Malformed("expected value at line 1".into())] {
-        let (engine, fake) = setup();
+        let (dir, engine, fake) = setup_on_disk();
         let id = live_agent(&engine);
         *fake.lost.lock().unwrap() = Some(lost.clone());
         *fake.lookup_fails.lock().unwrap() = true;
@@ -517,9 +535,11 @@ fn an_order_whose_answer_was_lost_is_found_by_its_id_and_booked() {
         let out = agent_buy(&engine, id, "20");
         assert_eq!(out["order"]["status"], "pending", "{lost:?}: {out:#}");
         assert!(out["order"]["exchange_order_id"].is_null());
-        // The next pass finds it by its client_order_id and books its fill; it is not sent twice.
+        // A pass once create can no longer be waiting finds it by its client_order_id and books
+        // its fill; it is not sent twice.
         *fake.lost.lock().unwrap() = None;
         *fake.lookup_fails.lock().unwrap() = false;
+        age_order(dir.path(), out["order"]["id"].as_i64().unwrap(), 40);
         pass(&engine);
         let d = ok(&engine, "arbiter.strategy.get", json!({"id": id}));
         assert_eq!(d["orders"][0]["status"], "filled", "{lost:?}: {d:#}");
@@ -534,9 +554,14 @@ fn an_order_coinbase_never_got_is_sent_again_then_failed_after_a_minute() {
     let (dir, engine, fake) = setup_on_disk();
     let id = live_agent(&engine);
     *fake.drop_orders.lock().unwrap() = true;
-    assert_eq!(agent_buy(&engine, id, "20")["order"]["status"], "pending");
-    // Within the minute it is sent again under the same id, and this time it arrives.
+    let o = agent_buy(&engine, id, "20")["order"].clone();
+    assert_eq!(o["status"], "pending");
+    // While create may still be waiting for its answer, the runner leaves the order to it.
     *fake.drop_orders.lock().unwrap() = false;
+    pass(&engine);
+    assert!(fake.placed.lock().unwrap().is_empty());
+    // After that, within the minute, it is sent again under the same id, and this time arrives.
+    age_order(dir.path(), o["id"].as_i64().unwrap(), 40);
     pass(&engine);
     pass(&engine);
     assert_eq!(last_order(&engine, id)["status"], "filled");
@@ -556,23 +581,31 @@ fn an_order_coinbase_never_got_is_sent_again_then_failed_after_a_minute() {
 
 #[test]
 fn a_halted_strategys_unanswered_order_is_not_sent_again_and_cancels_once_coinbase_answers() {
-    let (engine, fake) = setup();
+    let (dir, engine, fake) = setup_on_disk();
     let id = live_agent(&engine);
     *fake.drop_orders.lock().unwrap() = true;
-    agent_buy(&engine, id, "20");
+    let oid = agent_buy(&engine, id, "20")["order"]["id"].as_i64().unwrap();
+    let halt = || ok(&engine, "arbiter.halt", json!({"strategy_id": id, "reason": "testing"}));
+    let not_cancelled = |h: &Value| (h["cancelled"].as_u64(), h["failed"].as_array().unwrap().len()) == (Some(0), 1);
     // The halt cannot ask Coinbase whether it has the order, so it does not call it cancelled.
     *fake.lookup_fails.lock().unwrap() = true;
-    let h = ok(&engine, "arbiter.halt", json!({"strategy_id": id, "reason": "testing"}));
-    assert_eq!((h["cancelled"].as_u64(), h["failed"].as_array().unwrap().len()), (Some(0), 1), "{h:#}");
+    let h = halt();
+    assert!(not_cancelled(&h), "{h:#}");
     assert_eq!(last_order(&engine, id)["status"], "pending");
-    // Halted, it is looked up but never sent again.
+    // Nor when Coinbase does not list it yet, moments after it was sent: it may still appear.
     *fake.drop_orders.lock().unwrap() = false;
     *fake.lookup_fails.lock().unwrap() = false;
+    let h = halt();
+    assert!(not_cancelled(&h), "{h:#}");
+    assert!(h["failed"][0].as_str().unwrap().contains("does not list this order yet"), "{h:#}");
+    // Halted, it is looked up but never sent again.
+    age_order(dir.path(), oid, 40);
     pass(&engine);
     assert!(fake.placed.lock().unwrap().is_empty());
     assert_eq!(last_order(&engine, id)["status"], "pending");
-    // Coinbase answers that it has no such order: only then is it cancelled here alone.
-    let h = ok(&engine, "arbiter.halt", json!({"strategy_id": id, "reason": "testing"}));
+    // A minute on, Coinbase still has no such order: only then is it cancelled here alone.
+    age_order(dir.path(), oid, 30);
+    let h = halt();
     assert_eq!(h["cancelled"], 1, "{h:#}");
     let o = last_order(&engine, id);
     assert_eq!(o["status"], "cancelled");
@@ -745,4 +778,35 @@ fn arbiters_daily_loss_is_weighed_on_each_venue_alone() {
     let err = refused(call(&engine, "arbiter.restart", json!({})));
     assert_eq!(err.code, "arbiter.daily_loss");
     assert!(err.message.starts_with("Today's loss on live is still past"), "{}", err.message);
+}
+
+#[test]
+fn a_halt_waits_for_a_resend_in_flight_and_cancels_what_it_placed() {
+    let (dir, engine, fake) = setup_on_disk();
+    let id = live_agent(&engine);
+    *fake.rest.lock().unwrap() = true;
+    *fake.drop_orders.lock().unwrap() = true;
+    let oid = agent_buy(&engine, id, "20")["order"]["id"].as_i64().unwrap();
+    age_order(dir.path(), oid, 40);
+    // The runner sends it again, and that request is still on its way when the kill switch comes.
+    *fake.drop_orders.lock().unwrap() = false;
+    fake.shut_door();
+    let runner = std::thread::spawn({
+        let engine = engine.clone();
+        move || pass(&engine)
+    });
+    wait_until("the resend is in flight", || fake.at_door.load(Ordering::SeqCst));
+    let halting = std::thread::spawn({
+        let engine = engine.clone();
+        move || ok(&engine, "arbiter.halt", json!({"reason": "testing"}))
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    fake.open_door();
+    runner.join().unwrap();
+    // The halt waited for the resend's answer, so it cancels the order it placed on Coinbase.
+    let h = halting.join().unwrap();
+    assert_eq!(h["cancelled"], 1, "{h:#}");
+    let o = last_order(&engine, id);
+    assert_eq!(o["status"], "cancelled", "{o:#}");
+    assert_eq!(fake.cancelled.lock().unwrap().as_slice(), [o["exchange_order_id"].as_str().unwrap()]);
 }

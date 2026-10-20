@@ -52,6 +52,10 @@ const UNANSWERED: i64 = 60;
 /// How far before an order's own time a lookup by its id starts: the PC's clock and Coinbase's
 /// may differ.
 const LOOKUP_SLACK: i64 = 300;
+/// An order sent less than this long ago may still be waiting for create's answer (preview and
+/// create may each take the client's 15-second timeout): the runner leaves it to the call that
+/// sent it.
+const CREATE_WAIT: i64 = 30;
 
 #[derive(Default)]
 pub struct Desk {
@@ -620,7 +624,7 @@ pub fn execute(engine: &Engine, strategy_id: i64, intent: &Intent, why: &str) ->
                     b.log(Some(s.id), "error", &format!("{what} failed: {e}"), Some(id)).map(|_| ())
                 })?,
             }
-            let _ = reconcile_order(engine, id);
+            let _ = reconcile_order(engine, id, true);
             if req.side == Side::Buy {
                 if let Ok(q) = quote(engine, &req.product) {
                     with_book(engine, |b| b.set_peak(s.id, Some(q.ask)))?;
@@ -696,9 +700,10 @@ fn reconcile_unanswered(engine: &Engine, client: &dyn Exchange, o: &OrderView) -
     Ok(None)
 }
 
-/// Brings one order up to date with its venue: status and fills.
-pub fn reconcile_order(engine: &Engine, id: i64) -> Result<(), BusError> {
-    let o = with_book(engine, |b| b.order(id))?;
+/// Brings one order up to date with its venue: status and fills. `turn_held` says the caller
+/// holds [`Desk::trade`], as `execute` does straight after sending.
+pub fn reconcile_order(engine: &Engine, id: i64, turn_held: bool) -> Result<(), BusError> {
+    let mut o = with_book(engine, |b| b.order(id))?;
     if o.status.is_done() {
         return Ok(());
     }
@@ -720,6 +725,21 @@ pub fn reconcile_order(engine: &Engine, id: i64) -> Result<(), BusError> {
         }
         Venue::Live => {
             let Some(client) = account(engine) else { return Ok(()) };
+            // An order with no answer is decided in the trade turn, as the call that sent it and
+            // the kill switch are: a resend is never in flight while a halt looks the order up and
+            // closes it, nor sent while the first create still waits for its answer. It is read
+            // again in the turn, which the call that sent it may have answered meanwhile.
+            let unanswered = o.exchange_order_id.is_none() && !turn_held;
+            if unanswered && book::now() - created_at(&o) < CREATE_WAIT {
+                return Ok(());
+            }
+            let _turn = unanswered.then(|| lock(&engine.arbiter.trade));
+            if unanswered {
+                o = with_book(engine, |b| b.order(id))?;
+                if o.status.is_done() {
+                    return Ok(());
+                }
+            }
             let order = match o.exchange_order_id.clone() {
                 Some(eid) => client.order(&eid).map_err(ex)?,
                 None => match reconcile_unanswered(engine, client.as_ref(), &o)? {
@@ -801,6 +821,12 @@ fn cancel_one(engine: &Engine, o: &OrderView, why: &str) -> Result<(), BusError>
             // Sent with no answer read back: Coinbase may have it under its client_order_id.
             None => match find_live(client.as_ref(), o)? {
                 Some(found) => found.order_id,
+                // Coinbase may not list an order it took moments ago, so within the minute "not
+                // listed" says nothing: it stays pending, and the runner, which does not send it
+                // again while halted, settles it once the minute is up.
+                None if book::now() - created_at(o) < UNANSWERED => {
+                    return Err(BusError::unavailable("arbiter.unconfirmed", "Coinbase does not list this order yet, so it was not cancelled: it stays pending, is not sent again while halted, and is settled within a minute"));
+                }
                 None => return cancel_here(engine, o, &format!("{why} (Coinbase has no record of it)")),
             },
         };
@@ -997,7 +1023,7 @@ pub fn pass(engine: &Engine) -> bool {
     let mut errors: Vec<String> = Vec::new();
     let _ = with_book(engine, |b| b.expire_proposals(now));
     for o in with_book(engine, |b| b.open_orders(None)).unwrap_or_default() {
-        if let Err(e) = reconcile_order(engine, o.id) {
+        if let Err(e) = reconcile_order(engine, o.id, false) {
             errors.push(e.message);
         }
     }

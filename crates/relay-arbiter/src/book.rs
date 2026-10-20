@@ -578,10 +578,17 @@ impl Book {
         Ok((self.conn.last_insert_rowid(), true))
     }
 
+    /// Writes what the exchange says of an order. A closed row is never reopened, with one
+    /// exception: a row the book closed alone (cancelled or failed with no exchange id, taken for
+    /// an order Coinbase never had) is reopened by an answer that carries an exchange id, which
+    /// proves the order exists there; left closed it would never be read again, and its fills
+    /// would never be booked. An order Coinbase itself closed never reopens there, so an answer
+    /// calling it open later is stale.
     pub fn update_order(&self, id: i64, x: &ExchangeOrder) -> Result<()> {
         self.conn.prepare_cached(
             "UPDATE orders SET status = ?2, filled_base = ?3, average_price = ?4, fees = ?5, exchange_order_id = COALESCE(NULLIF(?6, ''), exchange_order_id),
-             error = COALESCE(?7, error), updated_at = ?8 WHERE id = ?1",
+             error = COALESCE(?7, error), updated_at = ?8
+             WHERE id = ?1 AND (status IN ('pending', 'open') OR ?2 NOT IN ('pending', 'open') OR (exchange_order_id IS NULL AND ?6 != ''))",
         )?.execute(params![
             id, x.status.as_str(), x.filled_size.normalize().to_string(),
             (x.average_filled_price > Decimal::ZERO).then(|| x.average_filled_price.normalize().to_string()),
@@ -1241,6 +1248,26 @@ mod tests {
         assert_eq!(n, 1);
         assert!(last.is_some());
         assert_eq!(book.failed_sells_since(sid, Venue::Paper, now() + 10).unwrap().0, 0);
+    }
+
+    #[test]
+    fn a_closed_order_reopens_only_when_coinbase_shows_one_the_book_closed_alone() {
+        let book = Book::open_in_memory().unwrap();
+        let sid = book.create_strategy(&draft()).unwrap();
+        let x = |id: &str, status| ExchangeOrder { order_id: id.into(), client_order_id: "c".into(), status, filled_size: Decimal::ZERO, average_filled_price: Decimal::ZERO, total_fees: Decimal::ZERO, reason: None };
+        // Closed here alone, with no answer from Coinbase: an answer with an id proves it exists.
+        let alone = order(&book, sid, Side::Buy, "alone");
+        book.update_order(alone, &x("", OrderStatus::Cancelled)).unwrap();
+        book.update_order(alone, &x("", OrderStatus::Open)).unwrap();
+        assert_eq!(book.order(alone).unwrap().status, OrderStatus::Cancelled);
+        book.update_order(alone, &x("cb-1", OrderStatus::Pending)).unwrap();
+        let o = book.order(alone).unwrap();
+        assert_eq!((o.status, o.exchange_order_id.as_deref()), (OrderStatus::Pending, Some("cb-1")));
+        // Closed by Coinbase: a later answer calling it open is stale.
+        let there = order(&book, sid, Side::Buy, "there");
+        book.update_order(there, &x("cb-2", OrderStatus::Cancelled)).unwrap();
+        book.update_order(there, &x("cb-2", OrderStatus::Open)).unwrap();
+        assert_eq!(book.order(there).unwrap().status, OrderStatus::Cancelled);
     }
 
     #[test]
