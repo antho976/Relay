@@ -6,10 +6,14 @@
 use gtk::prelude::*;
 use gtk::{gdk, graphene, gsk, pango};
 use gtk4 as gtk;
-use relay_bus::design::{parse_color, Blend, Gradient, GradientKind, ImageFit, Node, NodeKind, Shadow, StrokeCap, StrokeJoin, TextAlign, MAX_SHADOW_BLUR};
+use relay_bus::design::{
+    parse_color, strip_controls, Blend, Gradient, GradientKind, ImageFit, Node, NodeKind, Shadow, StrokeCap, StrokeJoin, TextAlign, TextRun, MAX_COORD,
+    MAX_SHADOW_BLUR,
+};
 use relay_client::design::layout::{self, Measure, Placed, STICKY_PAD};
 use relay_client::design::shapes::{self, ArcEnd, Seg};
-use relay_client::design::{Rect, Scene};
+use relay_client::design::{text, Rect, Scene};
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -136,7 +140,8 @@ pub fn font_family(n: &Node) -> &str {
 
 pub fn font_description(n: &Node) -> pango::FontDescription {
     let mut d = pango::FontDescription::new();
-    d.set_family(font_family(n));
+    // A control character stored before the rule (a NUL) would abort GTK's setter (B43).
+    d.set_family(&strip_controls(font_family(n), false));
     d.set_absolute_size(font_size(n) * pango::SCALE as f64);
     d.set_weight(weight(n.font_weight.unwrap_or(400)));
     d.set_style(if n.italic == Some(true) { pango::Style::Italic } else { pango::Style::Normal });
@@ -157,8 +162,104 @@ fn text_key(n: &Node, wrap: Option<f64>) -> u64 {
     n.line_height.map(f64::to_bits).hash(&mut h);
     n.letter_spacing.map(f64::to_bits).hash(&mut h);
     n.text_case.hash(&mut h);
+    n.max_lines.hash(&mut h);
+    for run in n.runs.iter().flatten() {
+        (run.start, run.end, &run.color, &run.font, run.font_weight).hash(&mut h);
+        (run.italic, run.underline, run.strike).hash(&mut h);
+        run.font_size.map(f64::to_bits).hash(&mut h);
+        run.rise.map(f64::to_bits).hash(&mut h);
+    }
     wrap.map(|w| (w * 100.0).round() as i64).hash(&mut h);
     h.finish()
+}
+
+/// The most px a Pango layout holds: its units are 32-bit, 1024 to the px (B111).
+const PANGO_MAX_PX: f64 = (i32::MAX / pango::SCALE) as f64 - 1.0;
+
+/// `px` in Pango units, within what they can hold.
+fn pango_units(px: f64) -> i32 {
+    (px.clamp(0.0, PANGO_MAX_PX) * pango::SCALE as f64) as i32
+}
+
+/// A node's words as Pango is given them: `text::shown` (cased), less any control character
+/// but tabs and line breaks (B43: a NUL stored before the rule would abort GTK's setter), and
+/// for each stored character the byte its drawn letters start at, moved to match.
+fn shown_text(n: &Node) -> (String, Vec<usize>) {
+    let (text, offsets) = text::shown(n);
+    if matches!(strip_controls(&text, true), Cow::Borrowed(_)) {
+        return (text, offsets);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut moved = vec![0; text.len() + 1];
+    let mut buf = [0; 4];
+    for (i, c) in text.char_indices() {
+        moved[i] = out.len();
+        if !strip_controls(c.encode_utf8(&mut buf), true).is_empty() {
+            out.push(c);
+        }
+    }
+    moved[text.len()] = out.len();
+    let offsets = offsets.into_iter().map(|o| moved[o.min(text.len())]).collect();
+    (out, offsets)
+}
+
+/// What a run of a text sets of its own, as Pango attributes for its stretch (the caller sets
+/// where they start and end): colour (its alpha too), family, size with its line's height
+/// (`line_height` times it, so a larger run raises its line as CSS does), weight, italic,
+/// underline, strike and rise. A colour that does not parse (a `$name` not yet resolved) is left
+/// to the node's.
+fn run_attrs(n: &Node, run: &TextRun) -> Vec<pango::Attribute> {
+    let units = |px: f64| (px * pango::SCALE as f64).round() as i32;
+    let mut out: Vec<pango::Attribute> = Vec::new();
+    if let Some([r, g, b, a]) = run.color.as_deref().and_then(parse_color) {
+        let wide = |c: u8| c as u16 * 257;
+        out.push(pango::AttrColor::new_foreground(wide(r), wide(g), wide(b)).into());
+        if a < 255 {
+            out.push(pango::AttrInt::new_foreground_alpha(wide(a)).into());
+        }
+    }
+    if let Some(font) = &run.font {
+        out.push(pango::AttrString::new_family(&strip_controls(font, false)).into());
+    }
+    if let Some(px) = run.font_size {
+        out.push(pango::AttrSize::new_size_absolute(units(px)).into());
+        out.push(pango::AttrInt::new_line_height_absolute(units(n.line_height.unwrap_or(1.3) * px)).into());
+    }
+    if let Some(w) = run.font_weight {
+        out.push(pango::AttrInt::new_weight(weight(w)).into());
+    }
+    if let Some(italic) = run.italic {
+        out.push(pango::AttrInt::new_style(if italic { pango::Style::Italic } else { pango::Style::Normal }).into());
+    }
+    if let Some(u) = run.underline {
+        out.push(pango::AttrInt::new_underline(if u { pango::Underline::Single } else { pango::Underline::None }).into());
+    }
+    if let Some(strike) = run.strike {
+        out.push(pango::AttrInt::new_strikethrough(strike).into());
+    }
+    if let Some(rise) = run.rise {
+        out.push(pango::AttrInt::new_rise(units(rise)).into());
+    }
+    out
+}
+
+/// How tall `n`'s words could get at most, one character a line at its largest size: when this
+/// passes what Pango holds, its layout is cut there (B111).
+fn tallest(n: &Node) -> f64 {
+    let chars = n.text.as_deref().map_or(0, |t| t.chars().count()) as f64;
+    let size = n.runs.iter().flatten().filter_map(|r| r.font_size).fold(font_size(n), f64::max);
+    (chars + 1.0) * size * n.line_height.unwrap_or(1.3).max(2.0)
+}
+
+/// A text's height in px from Pango's (`logical`), or, where that overflowed its 32-bit units
+/// (B111), its lines at its own line height, within the model's coordinates.
+fn text_height(logical: i32, lines: i32, line: f64) -> f64 {
+    let h = logical as f64;
+    if h > 0.0 && h < PANGO_MAX_PX {
+        h
+    } else {
+        (lines.max(1) as f64 * line).clamp(1.0, MAX_COORD)
+    }
 }
 
 /// The longest side a raster picture is decoded at: sharp at twice the 960 px a picture is
@@ -302,11 +403,8 @@ impl Painter {
     fn new_layout(&self, n: &Node, wrap: Option<f64>) -> pango::Layout {
         let layout = pango::Layout::new(&self.ctx);
         layout.set_font_description(Some(&font_description(n)));
-        let text = n.text.as_deref().unwrap_or("");
-        match n.text_case {
-            Some(case) => layout.set_text(&case.apply(text)),
-            None => layout.set_text(text),
-        }
+        let (text, offsets) = shown_text(n);
+        layout.set_text(&text);
         let attrs = pango::AttrList::new();
         if n.underline == Some(true) {
             attrs.insert(pango::AttrInt::new_underline(pango::Underline::Single));
@@ -320,9 +418,20 @@ impl Painter {
         // A multiple of the font size, as the model says, not of the font's own line.
         let line = n.line_height.unwrap_or(1.3) * font_size(n);
         attrs.insert(pango::AttrInt::new_line_height_absolute((line * pango::SCALE as f64).round() as i32));
+        // Each run's own look over its stretch, after the node's, so it wins there.
+        for (start, end, run) in text::run_bytes(n, &offsets) {
+            for mut attr in run_attrs(n, run) {
+                attr.set_start_index(start);
+                attr.set_end_index(end);
+                attrs.insert(attr);
+            }
+        }
         layout.set_attributes(Some(&attrs));
-        if let Some(w) = wrap {
-            layout.set_width((w * pango::SCALE as f64) as i32);
+        // Words that could pass what Pango holds wrap and stop there instead of overflowing it
+        // and drawing their last lines anywhere (B111).
+        let tall = tallest(n) >= PANGO_MAX_PX;
+        if let Some(w) = wrap.or(tall.then_some(PANGO_MAX_PX)) {
+            layout.set_width(pango_units(w));
             layout.set_wrap(pango::WrapMode::WordChar);
         }
         layout.set_alignment(match n.align {
@@ -330,6 +439,13 @@ impl Painter {
             Some(TextAlign::Right) => pango::Alignment::Right,
             _ => pango::Alignment::Left,
         });
+        if let (Some(max), Some(_)) = (n.max_lines, wrap) {
+            cut_lines(&layout, max);
+        }
+        if tall && layout.height() < 0 {
+            layout.set_height(pango_units(PANGO_MAX_PX));
+            layout.set_ellipsize(pango::EllipsizeMode::End);
+        }
         layout
     }
 
@@ -352,6 +468,13 @@ impl Painter {
             }
         });
         any
+    }
+
+    /// Whether the canvas draws `id`'s words while they are typed into, rather than leaving them
+    /// to the editor: when it, or anything it is in, is turned (B108, E-text-13). The editor
+    /// cannot turn, so it then shows its words clear and the canvas draws them where they are.
+    pub fn draws_edited(&self, scene: &Scene, id: &str) -> bool {
+        turned_within(scene, id)
     }
 
     /// The font's own line height for `n`, in px: what a line height of 1 means to Pango.
@@ -517,7 +640,8 @@ impl Painter {
         if let Some(b) = blur {
             snap.push_blur(b);
         }
-        let editing = self.editing.borrow().as_deref() == Some(id);
+        // The words being typed are the editor's, unless it cannot show them where they are drawn.
+        let editing = self.editing.borrow().as_deref() == Some(id) && !self.draws_edited(scene, id);
         match n.kind {
             NodeKind::Page => {}
             NodeKind::Group => self.paint_children(snap, scene, placed, id, view, None),
@@ -577,10 +701,11 @@ impl Painter {
                 }
             }
             NodeKind::Text => {
+                // Its fill box stays while it is typed into (B94); the editor shows the words.
+                if let Some(fill) = &n.fill {
+                    snap.append_color(&rgba(fill), &grect(&r));
+                }
                 if !editing {
-                    if let Some(fill) = &n.fill {
-                        snap.append_color(&rgba(fill), &grect(&r));
-                    }
                     // Its letters cast its shadows, not its fill box (CSS's text-shadow).
                     let cast = self.cast(snap, n);
                     self.text(snap, scene, n, &r, layout::wrap_width(n, &r));
@@ -946,6 +1071,31 @@ impl Painter {
     }
 }
 
+/// Show at most `max` lines of `layout` (it has a wrap width), the last one shown ending in "…"
+/// when more were cut (W60). Pango reads a negative height per paragraph, which is wrong for
+/// words with line breaks, so the height is the bottom of line `max`, found by a first pass, and
+/// ellipsizing is set after it (with the default height it would cut every paragraph to a line).
+fn cut_lines(layout: &pango::Layout, max: u16) {
+    let max = i32::from(max.max(1));
+    if layout.line_count() <= max {
+        return;
+    }
+    let mut lines = layout.iter();
+    for _ in 1..max {
+        if !lines.next_line() {
+            return;
+        }
+    }
+    let (_, bottom) = lines.line_yrange();
+    layout.set_height(bottom.saturating_add(pango::SCALE / 2));
+    layout.set_ellipsize(pango::EllipsizeMode::End);
+}
+
+/// Whether `id` or anything it is in is turned (by other than a whole number of turns).
+fn turned_within(scene: &Scene, id: &str) -> bool {
+    std::iter::once(id).chain(scene.ancestors(id)).filter_map(|a| scene.node(a)).any(|n| shapes::rotation(n).rem_euclid(360.0) != 0.0)
+}
+
 /// A shadow's blur as painted: within 0 to 200, as the node's own blur, whatever an older build
 /// stored (B72; a blur node's cost grows with its radius).
 fn blur_of(s: &Shadow) -> f64 {
@@ -1265,18 +1415,19 @@ fn gradient(snap: &gtk::Snapshot, g: &Gradient, r: &Rect) {
     }
 }
 
-/// Where a shape's label sits: centred, 12 px in from its sides, as tall as its words.
+/// Where a shape's label sits: `shapes::label_box` (inside its `padding`, else 12 px in from its
+/// sides, as tall as its words, centred), the box bounds count (B32). While it is typed into
+/// with no words yet, the box one line would take, for the editor.
 pub fn shape_text_box(p: &Painter, n: &Node, r: &Rect) -> Option<Rect> {
-    if n.text.as_deref().is_none_or(str::is_empty) && p.editing.borrow().as_deref() != Some(n.id.as_str()) {
-        return None;
-    }
-    let w = (r.w - 24.0).max(1.0);
-    let mut probe = n.clone();
-    if probe.text.as_deref().is_none_or(str::is_empty) {
+    if n.text.as_deref().is_none_or(str::is_empty) {
+        if p.editing.borrow().as_deref() != Some(n.id.as_str()) {
+            return None;
+        }
+        let mut probe = n.clone();
         probe.text = Some(" ".into());
+        return shapes::label_box(&probe, r, p);
     }
-    let (_, h) = p.measure(&probe, Some(w));
-    Some(Rect::new(r.x + 12.0, r.cy() - h / 2.0, w, h))
+    shapes::label_box(n, r, p)
 }
 
 pub fn rounded(r: &Rect, radius: f64) -> gsk::RoundedRect {
@@ -1297,7 +1448,7 @@ impl Measure for Painter {
         let (_, logical) = layout.pixel_extents();
         let empty = n.text.as_deref().is_none_or(str::is_empty);
         let w = if empty { 2.0 } else { logical.width().max(1) as f64 + 1.0 };
-        let size = (w, logical.height().max(1) as f64);
+        let size = (w, text_height(logical.height(), layout.line_count(), n.line_height.unwrap_or(1.3) * font_size(n)));
         self.sizes.borrow_mut().insert(key, size);
         size
     }
@@ -1447,6 +1598,89 @@ mod tests {
         assert_eq!(blur_of(&shadow(12.0)), 12.0);
         assert_eq!(blur_of(&shadow(-3.0)), 0.0);
         assert_eq!(blur_of(&shadow(f64::NAN)), 0.0);
+    }
+
+    fn run(start: u32, end: u32) -> TextRun {
+        TextRun { start, end, color: None, font: None, font_size: None, font_weight: None, italic: None, underline: None, strike: None, rise: None }
+    }
+
+    #[test]
+    fn a_stored_control_character_never_reaches_pango_and_runs_keep_their_letters() {
+        // B43: "a", NUL, "bc", with a run over "bc" (characters 2 to 4 of the stored text).
+        let mut n = node("t", Some("p1"), NodeKind::Text, [0.0; 4]);
+        n.text = Some("a\u{0}bc\u{7}\nd".into());
+        n.runs = Some(vec![TextRun { color: Some("#FF0000".into()), ..run(2, 4) }]);
+        let (shown, offsets) = shown_text(&n);
+        assert_eq!(shown, "abc\nd");
+        let bytes = text::run_bytes(&n, &offsets);
+        assert_eq!(bytes.iter().map(|(s, e, _)| (*s, *e)).collect::<Vec<_>>(), [(1, 3)]);
+        assert_eq!(&shown[1..3], "bc");
+        // Clean words pass through as they are.
+        n.text = Some("Hello\tthere".into());
+        assert_eq!(shown_text(&n).0, "Hello\tthere");
+    }
+
+    #[test]
+    fn a_run_sets_only_what_it_names() {
+        let n = node("t", Some("p1"), NodeKind::Text, [0.0; 4]);
+        let types = |r: &TextRun| run_attrs(&n, r).iter().map(|a| a.type_()).collect::<Vec<_>>();
+        let see_through = TextRun { color: Some("#FF000080".into()), ..run(0, 1) };
+        assert_eq!(types(&see_through), [pango::AttrType::Foreground, pango::AttrType::ForegroundAlpha]);
+        let attrs = run_attrs(&n, &see_through);
+        let red = attrs[0].downcast_ref::<pango::AttrColor>().unwrap().color();
+        assert_eq!((red.red(), red.green(), red.blue()), (65535, 0, 0));
+        assert_eq!(attrs[1].downcast_ref::<pango::AttrInt>().unwrap().value(), 128 * 257);
+        assert_eq!(types(&TextRun { color: Some("#00FF00".into()), ..run(0, 1) }), [pango::AttrType::Foreground]);
+        assert!(types(&TextRun { color: Some("$accent".into()), ..run(0, 1) }).is_empty(), "an unresolved name keeps the node's colour");
+        // A larger run raises its line: its size and its line height, at the node's multiple.
+        let mut tall = node("t", Some("p1"), NodeKind::Text, [0.0; 4]);
+        tall.line_height = Some(1.5);
+        let attrs = run_attrs(&tall, &TextRun { font_size: Some(24.0), ..run(0, 1) });
+        assert_eq!(attrs[0].downcast_ref::<pango::AttrSize>().unwrap().size(), 24 * pango::SCALE);
+        assert_eq!(attrs[1].downcast_ref::<pango::AttrInt>().unwrap().value(), 36 * pango::SCALE);
+        let styled = TextRun { font: Some("Geist\u{0}Mono".into()), font_weight: Some(700), italic: Some(true), underline: Some(true), strike: Some(false), rise: Some(-4.0), ..run(0, 1) };
+        let attrs = run_attrs(&n, &styled);
+        assert_eq!(attrs.iter().map(|a| a.type_()).collect::<Vec<_>>(), [
+            pango::AttrType::Family,
+            pango::AttrType::Weight,
+            pango::AttrType::Style,
+            pango::AttrType::Underline,
+            pango::AttrType::Strikethrough,
+            pango::AttrType::Rise
+        ]);
+        assert_eq!(attrs[0].downcast_ref::<pango::AttrString>().unwrap().value(), "GeistMono");
+        assert_eq!(attrs[5].downcast_ref::<pango::AttrInt>().unwrap().value(), -4 * pango::SCALE);
+    }
+
+    #[test]
+    fn words_taller_than_pango_holds_measure_by_their_lines() {
+        // B111: 5,000 characters at 1,000 px, one a line, pass Pango's 32-bit units.
+        let mut n = node("t", Some("p1"), NodeKind::Text, [0.0; 4]);
+        n.text = Some("a".repeat(5_000));
+        n.font_size = Some(1_000.0);
+        assert!(tallest(&n) >= PANGO_MAX_PX);
+        n.text = Some("A settings screen".into());
+        n.font_size = Some(16.0);
+        assert!(tallest(&n) < PANGO_MAX_PX);
+        assert_eq!(text_height(62, 3, 20.8), 62.0);
+        assert_eq!(text_height(-1_234, 500, 1_300.0), 650_000.0);
+        assert_eq!(text_height(i32::MAX, 2_000_000, 1_300.0), MAX_COORD);
+        assert_eq!(pango_units(1e9), (PANGO_MAX_PX * pango::SCALE as f64) as i32);
+        assert_eq!(pango_units(100.0), 100 * pango::SCALE);
+    }
+
+    #[test]
+    fn the_canvas_draws_words_typed_into_a_turned_node() {
+        let mut frame = node("f", Some("p1"), NodeKind::Frame, [0.0, 0.0, 200.0, 200.0]);
+        let mut words = node("t", Some("f"), NodeKind::Text, [10.0, 10.0, 80.0, 20.0]);
+        let scene = |f: &Node, t: &Node| Scene::new(vec![node("p1", None, NodeKind::Page, [0.0; 4]), f.clone(), t.clone()]);
+        assert!(!turned_within(&scene(&frame, &words), "t"));
+        words.rotation = Some(30.0);
+        assert!(turned_within(&scene(&frame, &words), "t"));
+        words.rotation = Some(360.0);
+        assert!(!turned_within(&scene(&frame, &words), "t"));
+        frame.rotation = Some(-15.0);
+        assert!(turned_within(&scene(&frame, &words), "t"), "E-text-13: a turned frame turns its words");
     }
 
     #[test]
