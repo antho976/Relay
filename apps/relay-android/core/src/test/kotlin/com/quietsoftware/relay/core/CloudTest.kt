@@ -205,6 +205,33 @@ class CloudTest {
     }
 
     @Test
+    fun `the copy stopped while its door lets it in closes what it opened`() = runBlocking {
+        // The proof is sent, so the door is letting the phone in; it answers too late.
+        server.welcomeDelayMs = 5_000
+        val link = Link(scope, dialer, source(cloudProfile), ops = Wire.OPS_CLOUD)
+        link.start()
+        withTimeout(10_000) { while (server.hellos == 0) delay(10) }
+        link.stop()
+        withTimeout(2_000) { while (!server.pipes.single().toPhone.isClosedForSend) delay(10) }
+        assertEquals(LinkState.Stopped, link.state.value)
+    }
+
+    @Test
+    fun `the copy stopped during its first ping stays stopped and closed`() = runBlocking {
+        server.handle = { op, _ ->
+            if (op == "bus.ping") Thread.sleep(1_500)
+            answerAsCloud(op)
+        }
+        val link = Link(scope, dialer, source(cloudProfile), ops = Wire.OPS_CLOUD)
+        link.start()
+        withTimeout(10_000) { while (server.requests.none { it.first == "bus.ping" }) delay(10) }
+        link.stop()
+        delay(300)
+        assertEquals(LinkState.Stopped, link.state.value)
+        assertTrue(server.pipes.single().toPhone.isClosedForSend)
+    }
+
+    @Test
     fun `the PC's link never takes the server's copy, nor the copy's link a PC`() = runBlocking {
         // The PC's credential, presented at the server's copy: let in, and refused by the phone.
         server.reachable = setOf(pcRoute, cloudRoute)

@@ -86,6 +86,10 @@ class FakeDoor(
     var dials = 0
     val pipes = mutableListOf<Pipe>()
 
+    /** Proofs read so far, and how long the door takes to answer one: a slow door, a far relay. */
+    @Volatile var hellos = 0
+    var welcomeDelayMs = 0L
+
     override suspend fun dial(url: String, timeoutMs: Long): LineSocket {
         dials++
         if (url !in reachable) throw java.io.IOException("unreachable $url")
@@ -113,6 +117,8 @@ class FakeDoor(
             engine?.let { put("engine", it) }
         }.toString())
         val hello = Wire.parse(pipe.toPc.receiveCatching().getOrNull() ?: return) ?: return
+        hellos++
+        if (welcomeDelayMs > 0) kotlinx.coroutines.delay(welcomeDelayMs)
         if (hello.s("pair") != null) {
             pipe.toPhone.send(buildJsonObject { put("v", 1); put("ok", true); put("device", device); put("token", token); ops?.let { put("ops", it) } }.toString())
             return pipe.close()
