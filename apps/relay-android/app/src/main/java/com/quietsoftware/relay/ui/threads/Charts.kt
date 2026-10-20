@@ -377,10 +377,13 @@ internal fun Series.title(): String = name.ifBlank { "Total" }.let { if (project
 /** How strong a projected series' bars and key are against the drawn ones. */
 private const val PROJECTED_ALPHA = .45f
 
-/** What group [j] holds, newest series first: "Groceries $412.30 · Dining $96.00"; a series with no value there is left out. */
-private fun Numbers.parts(j: Int, between: String = "  ·  "): String =
+/**
+ * What group [j] holds, newest series first: "Groceries $412.30 · Dining $96.00"; a series with no
+ * value there is left out. A lone series goes unnamed, unless it is a projection, which says so.
+ */
+internal fun Numbers.parts(j: Int, between: String = "  ·  "): String =
     series.asReversed().mapNotNull { s -> s.values.getOrNull(j)?.let { v -> s to v } }.joinToString(between) { (s, v) ->
-        if (series.size == 1 || (s.name.isBlank() && !s.projected)) fmt.format(v) else "${s.title()} ${fmt.format(v)}"
+        if (!s.projected && (series.size == 1 || s.name.isBlank())) fmt.format(v) else "${s.title()} ${fmt.format(v)}"
     }
 
 /** What a tapped group holds, under its name in full. */

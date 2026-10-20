@@ -69,6 +69,14 @@ class ChartsTest {
     }
 
     @Test
+    fun aLoneProjectionReadsAsOneWhenTapped() {
+        val alone = readWritten(data("""{"labels": ["Mar", "Apr"], "series": [{"name": "Balance", "values": [6000, 6600], "projected": true}]}"""), cad)
+        assertEquals("Balance (projected) $6,600.00", alone.parts(1, ", "))
+        val actual = readWritten(data("""{"labels": ["Mar", "Apr"], "series": [{"name": "Balance", "values": [6000, 6600]}]}"""), cad)
+        assertEquals("$6,600.00", actual.parts(1, ", "))
+    }
+
+    @Test
     fun aChartSaysWhichCopyItsNumbersCameFrom() {
         val spec = chartSpec("""{"type": "bar", "title": "Spending", "query": {"measure": "spending"}}""")!!
         val at = System.currentTimeMillis()
