@@ -208,7 +208,7 @@ fn in_view(body: &gtk::Box, viewport: Option<&gtk::Widget>) -> bool {
 fn load(body: &gtk::Box, legend: &gtk::Box, spec: &ChartSpec) {
     if let Some(data) = &spec.data {
         let currency = data["currency"].as_str().filter(|c| !c.is_empty()).map_or_else(|| super::formatter().currency, str::to_string);
-        draw_data(body, legend, spec.kind, read_written(data, &currency));
+        draw_data(body, legend, spec.kind, read_written(data, &currency, spec.kind));
         return;
     }
     if let Some(query) = spec.gym.clone() {
@@ -376,7 +376,7 @@ fn written_value(value: &Value, places: u32) -> Option<i64> {
 
 /// A chart's own numbers, from its reply (`data`): amounts in `currency` as decimals, converted to
 /// its minor units, or with a `unit`, figures in tenths of it as a training chart's are.
-fn read_written(v: &Value, currency: &str) -> Data {
+fn read_written(v: &Value, currency: &str, kind: ChartKind) -> Data {
     let fmt = match v["unit"].as_str() {
         Some(unit) => Fmt::Unit(unit.trim().to_string()),
         None => Fmt::Money(MoneyFormatter::new(currency, Locale::from_env())),
@@ -384,6 +384,9 @@ fn read_written(v: &Value, currency: &str) -> Data {
     let places = fmt.fraction_digits();
     let (labels, series) = gaps_closed(&v["labels"], &v["series"], |value| written_value(value, places));
     let projected = v["series"].as_array().into_iter().flatten().map(|s| s["projected"] == true).collect();
+    // A line of a measure (a weight, a share) starts near its lowest value, as a lift's does:
+    // from zero, 80 kg to 75 kg would lie flat.
+    let from_zero = !(kind == ChartKind::Line && matches!(fmt, Fmt::Unit(_)));
     Data {
         known: vec![labels.len(); series.len()],
         projected,
@@ -391,7 +394,7 @@ fn read_written(v: &Value, currency: &str) -> Data {
         labels,
         series,
         fmt,
-        from_zero: true,
+        from_zero,
         empty: "Nothing to draw: the reply gave no numbers.",
     }
 }
@@ -1044,12 +1047,12 @@ mod tests {
 
     #[test]
     fn written_amounts_are_decimals_in_the_currency() {
-        let data = read_written(&json!({"labels": ["Nov", "Dec", "Jan"], "series": [{"name": "Savings", "values": [1234.56, "1500.5", "-20"]}]}), "CAD");
+        let data = read_written(&json!({"labels": ["Nov", "Dec", "Jan"], "series": [{"name": "Savings", "values": [1234.56, "1500.5", "-20"]}]}), "CAD", ChartKind::Bar);
         assert_eq!(data.labels, ["Nov", "Dec", "Jan"]);
         assert_eq!(data.series[0].1, [Some(123_456), Some(150_050), Some(-2_000)]);
         assert!(matches!(data.fmt, Fmt::Money(_)));
         // A currency without cents counts whole units; a typographic minus and a plus read too.
-        let yen = read_written(&json!({"labels": [2027, 2028], "series": [{"name": "", "values": ["1500", "\u{2212}12"]}]}), "JPY");
+        let yen = read_written(&json!({"labels": [2027, 2028], "series": [{"name": "", "values": ["1500", "\u{2212}12"]}]}), "JPY", ChartKind::Bar);
         assert_eq!(yen.labels, ["2027", "2028"]);
         assert_eq!(yen.series[0].1, [Some(1_500), Some(-12)]);
         assert_eq!(written_value(&json!("+3.5"), 2), Some(350));
@@ -1068,29 +1071,37 @@ mod tests {
                 {"name": "Saved", "values": [null, null, null, 2]},
             ]}),
             "CAD",
+            ChartKind::Bar,
         );
         assert_eq!(data.labels, ["a", "d"]);
         assert_eq!(data.series[0].1, [Some(1_000), Some(400)]);
         assert_eq!(data.series[1].1, [None, Some(200)]);
         assert_eq!(data.known, [2, 2]);
         // Nothing that reads at all: nothing to draw, said as the reply's.
-        let none = read_written(&json!({"labels": ["a"], "series": [{"name": "x", "values": ["?"]}]}), "CAD");
+        let none = read_written(&json!({"labels": ["a"], "series": [{"name": "x", "values": ["?"]}]}), "CAD", ChartKind::Bar);
         assert!(none.labels.is_empty());
         assert_eq!(none.empty, "Nothing to draw: the reply gave no numbers.");
     }
 
     #[test]
     fn a_written_unit_counts_in_tenths_of_it() {
-        let kg = read_written(&json!({"labels": ["Now", "June"], "unit": "kg", "series": [{"name": "Weight", "values": [80.5, "78"]}]}), "CAD");
+        let kg = read_written(&json!({"labels": ["Now", "June"], "unit": "kg", "series": [{"name": "Weight", "values": [80.5, "78"]}]}), "CAD", ChartKind::Bar);
         assert_eq!(kg.series[0].1, [Some(805), Some(780)]);
         assert_eq!(kg.fmt.format(805), "80.5 kg");
         assert_eq!(kg.fmt.format_whole(780), "78 kg");
-        let share = read_written(&json!({"labels": ["Rent"], "unit": "%", "series": [{"name": "", "values": [12.5]}]}), "CAD");
+        let share = read_written(&json!({"labels": ["Rent"], "unit": "%", "series": [{"name": "", "values": [12.5]}]}), "CAD", ChartKind::Bar);
         assert_eq!(share.fmt.format(125), "12.5%");
         // An empty unit is a plain count.
-        let count = read_written(&json!({"labels": ["Q1"], "unit": "", "series": [{"name": "", "values": ["3"]}]}), "CAD");
+        let count = read_written(&json!({"labels": ["Q1"], "unit": "", "series": [{"name": "", "values": ["3"]}]}), "CAD", ChartKind::Bar);
         assert_eq!(count.series[0].1, [Some(30)]);
         assert_eq!(count.fmt.format(30), "3");
+        // A line of a measure (a weight on its way to 75 kg) starts near its lowest value, as a
+        // lift's does; bars, and money, count from zero.
+        let toward = json!({"labels": ["Now", "May", "June"], "unit": "kg", "series": [{"name": "Weight", "values": [80.5, 78, 75]}]});
+        assert!(!read_written(&toward, "CAD", ChartKind::Line).from_zero);
+        assert!(read_written(&toward, "CAD", ChartKind::Bar).from_zero);
+        let balance = json!({"labels": ["Oct", "Nov"], "series": [{"name": "Balance", "values": [5000, 5200]}]});
+        assert!(read_written(&balance, "CAD", ChartKind::Line).from_zero);
     }
 
     #[test]
@@ -1101,6 +1112,7 @@ mod tests {
                 {"name": "Balance", "values": [null, "120", "150.25"], "projected": true},
             ]}),
             "CAD",
+            ChartKind::Line,
         );
         assert_eq!(data.projected, [false, true]);
         assert_eq!(data.series[1].1, [None, Some(12_000), Some(15_025)]);
@@ -1109,7 +1121,7 @@ mod tests {
         assert_eq!(legend_name("", true), "Projected");
         assert_eq!(legend_name("Balance", false), "Balance");
         // Only a literal true projects.
-        let loose = read_written(&json!({"labels": ["a"], "series": [{"name": "x", "values": [1], "projected": "yes"}]}), "CAD");
+        let loose = read_written(&json!({"labels": ["a"], "series": [{"name": "x", "values": [1], "projected": "yes"}]}), "CAD", ChartKind::Bar);
         assert_eq!(loose.projected, [false]);
     }
 
