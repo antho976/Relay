@@ -412,3 +412,47 @@ fn measure_an_undo_of_a_5000_node_delete() {
     println!("design.apply delete of 4,999 top-level nodes, full answer: median {:?} of {}", median(deletes.clone()), deletes.len());
     println!("design.apply lenient undo re-adding them, with its expectations: median {:?} of {}", median(undos.clone()), undos.len());
 }
+
+// --- Review of engine-expect and engine-reuse --------------------------------------------------
+
+/// A fields skip is reported at the update that writes the field, not at every update of the node.
+#[test]
+fn a_fields_skip_names_only_the_update_that_writes_it() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    let out = apply(&e, id, json!([{"op": "update", "id": "save", "set": {"fill": "#0000FF"}}, {"op": "update", "id": "save", "set": {"radius": 8}}]));
+    apply(&e, id, json!([{"op": "update", "id": "save", "set": {"fill": "#00FF00"}}]));
+    let undone = undo(&e, id, &out);
+    // The undo runs the radius back first, then the fill.
+    assert_eq!(undone["skipped"], json!([{"at": 1, "id": "save", "reason": "fields", "fields": ["fill"]}]));
+    assert_eq!(node(&e, id, "save").unwrap()["radius"].as_f64(), Some(4.0));
+}
+
+/// An undo that deletes a node and then adds back an id inside it is not refused as `exists`:
+/// the delete frees what is inside it first.
+#[test]
+fn an_undo_that_deletes_the_holder_first_may_re_add_its_ids() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    apply(&e, id, json!([{"op": "add", "node": {"id": "card-2:save", "parent": "page-1", "kind": "rect"}}]));
+    let out = ok_as(&e, agent(&e), "design.apply", json!({"design_id": id, "ops": [
+        {"op": "delete", "id": "card-2:save"}, {"op": "copy", "id": "card", "as": "card-2"},
+    ]}));
+    ok(&e, "audit.undo", json!({"audit_id": out["audit_id"]}));
+    assert!(node(&e, id, "card-2").is_none());
+    assert_eq!(node(&e, id, "card-2:save").unwrap()["parent"], "page-1");
+}
+
+/// A lenient copy whose ids are taken makes nothing, and what the list puts in it is skipped
+/// too, never put in the node that holds the id.
+#[test]
+fn a_skipped_copy_skips_what_goes_in_it() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    apply(&e, id, json!([{"op": "add", "node": {"id": "c2", "parent": "page-1", "kind": "frame"}}]));
+    let out = ok(&e, "design.apply", json!({"design_id": id, "lenient": true, "ops": [
+        {"op": "copy", "id": "card", "as": "c2"}, {"op": "add", "node": {"id": "x", "parent": "c2", "kind": "rect"}},
+    ]}));
+    assert_eq!(out["skipped"], json!([{"at": 0, "id": "c2", "reason": "exists"}, {"at": 1, "id": "x", "reason": "parent_skipped"}]));
+    assert!(node(&e, id, "x").is_none());
+}

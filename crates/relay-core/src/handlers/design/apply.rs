@@ -228,7 +228,7 @@ impl Run<'_> {
     /// which the delete would take; an update only drops the fields that hold other values now.
     /// An edit of an id whose add this list skipped is skipped too: what holds the id is not the
     /// node it meant. Each skip is reported in `skipped`, at this edit.
-    pub(super) fn stale(&mut self, id: &str, edit: Edit) -> Stale {
+    pub(super) fn stale(&mut self, id: &str, edit: Edit, writes: &[&str]) -> Stale {
         if self.skipped_adds.contains(id) {
             self.skip(Conflict::new(Some(self.at as u32), id, ConflictReason::Exists));
             return Stale::Skip;
@@ -248,8 +248,10 @@ impl Run<'_> {
             }
             return Stale::Skip;
         }
+        // Only the fields this update writes: one it leaves alone is no conflict of its.
         let fields: Vec<String> = match edit {
-            Edit::Update => found.iter().filter(|c| c.reason == ConflictReason::Fields).flat_map(|c| c.fields.iter().cloned()).collect(),
+            Edit::Update => found.iter().filter(|c| c.reason == ConflictReason::Fields).flat_map(|c| c.fields.iter().cloned())
+                .filter(|field| writes.contains(&field.as_str())).collect(),
             _ => Vec::new(),
         };
         if fields.is_empty() {
@@ -657,7 +659,12 @@ impl Run<'_> {
     }
 
     pub(super) fn update(&mut self, id: String, mut set: Map<String, Value>) -> Result<Option<String>, BusError> {
-        match self.stale(&id, Edit::Update) {
+        let writes: Vec<&str> = set.keys().map(|key| match key.as_str() {
+            "width" => "w",
+            "height" => "h",
+            key => key,
+        }).collect();
+        match self.stale(&id, Edit::Update, &writes) {
             Stale::No => {}
             Stale::Skip => return Ok(None),
             Stale::Drop(fields) => {
@@ -696,7 +703,7 @@ impl Run<'_> {
     }
 
     pub(super) fn move_(&mut self, id: String, parent: Option<String>, index: Option<u32>) -> Result<Option<String>, BusError> {
-        if self.stale(&id, Edit::Move) != Stale::No {
+        if self.stale(&id, Edit::Move, &[]) != Stale::No {
             return Ok(None);
         }
         let Some((from, kind, ord)) = self.meta(&id)? else { return self.missing("no such node") };
@@ -786,7 +793,7 @@ impl Run<'_> {
     }
 
     pub(super) fn delete(&mut self, id: String) -> Result<Option<String>, BusError> {
-        if self.stale(&id, Edit::Delete) != Stale::No {
+        if self.stale(&id, Edit::Delete, &[]) != Stale::No {
             return Ok(None);
         }
         let Some(root) = self.row(&id)? else { return self.missing("no such node") };
@@ -1058,7 +1065,7 @@ impl Run<'_> {
     /// another page (whose connectors [`Run::release_ends`] rewrites) and no lenient end may let
     /// go ([`Run::check_refs`]). A pass that rewrites nodes after the edits joins this test.
     pub(super) fn settled(&self) -> bool {
-        self.removed.is_empty() && self.crossed.is_empty() && !(self.lenient && self.refs.iter().any(|r| r.field != "src"))
+        self.removed.is_empty() && self.crossed.is_empty() && !self.styles_changed && !(self.lenient && self.refs.iter().any(|r| r.field != "src"))
     }
 
     /// `design.too_large` for a design of `self.bytes` (B60): `at_least` while edits remain.
@@ -1274,7 +1281,11 @@ pub(super) fn register(e: &mut Engine) {
             // B7: a full answer stays under the clients' 2 MiB line: past REPLY_BUDGET it leaves
             // out the nodes (the client reads the design again), and past it without them the
             // undo too, which the person is told.
-            let removed_len: usize = removed.iter().map(|id| id.len() + 3).sum();
+            // What every full answer carries besides: the copies, and the colours and styles
+            // when an edit changed them.
+            let styles = run.styles.as_ref().filter(|_| run.styles_changed);
+            let rest = serde_json::to_vec(&out.copied).map_or(0, |b| b.len()) + styles.and_then(|s| serde_json::to_vec(s).ok()).map_or(0, |b| b.len());
+            let removed_len = removed.iter().map(|id| id.len() + 3).sum::<usize>() + rest;
             out.reread = nodes_len + undo_len + removed_len > REPLY_BUDGET;
             if !out.reread {
                 out.nodes = Some(nodes);

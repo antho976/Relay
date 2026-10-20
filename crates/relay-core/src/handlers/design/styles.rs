@@ -76,32 +76,71 @@ impl Run<'_> {
     }
 
     /// `color {name, value}`: name a colour, or change it. Naming it as it is changes nothing.
+    /// A lenient list (an undo) skips a colour whose name a style took since (`exists`).
     pub(super) fn color(&mut self, name: String, value: String) -> Result<Option<String>, BusError> {
         let styles = self.styles()?;
-        let before = styles.clone();
+        let before = styles.colors.get(&name).cloned();
         let set = styles.set_color(&name, &value);
-        let undo = set.map_err(|error| self.style_error(error))?;
-        self.restyled(before, undo);
+        let undo = match set {
+            Ok(undo) => undo,
+            Err(error) if error.code == "style_exists" && self.lenient => {
+                self.skip(Conflict::new(Some(self.at as u32), name, ConflictReason::Exists));
+                return Ok(None);
+            }
+            Err(error) => return Err(self.style_error(error)),
+        };
+        if before.as_ref() != Some(&value) {
+            self.restyled(undo);
+        }
         Ok(Some(name))
     }
 
     /// `style {name, set}`: make a style, or change one. A change to what it already holds
-    /// changes nothing.
-    pub(super) fn style(&mut self, name: String, set: Map<String, Value>) -> Result<Option<String>, BusError> {
+    /// changes nothing. Its undo gives back the whole style as it was, so one replayed after the
+    /// style was deleted makes it again whole, never a part of it. A lenient list (an undo) makes
+    /// a style naming colours deleted since without them, and says so.
+    pub(super) fn style(&mut self, name: String, mut set: Map<String, Value>) -> Result<Option<String>, BusError> {
         let styles = self.styles()?;
-        let before = styles.clone();
-        let made = styles.set_style(&name, &set);
+        let old = styles.styles.get(&name).cloned();
+        let mut made = styles.set_style(&name, &set);
+        if self.lenient && made.as_ref().is_err_and(|error| error.code == "style_not_found") {
+            let held = self.styles()?.colors.clone();
+            let gone: Vec<&'static str> = relay_bus::design::Style::default().patched(&set).map(|style| {
+                style.names().into_iter().filter(|(_, color)| !held.contains_key(*color)).map(|(field, _)| field).collect()
+            }).unwrap_or_default();
+            if !gone.is_empty() {
+                let mut gone = gone;
+                gone.dedup();
+                for field in &gone {
+                    set.remove(*field);
+                }
+                self.warn(format_args!("{}: names a colour the design no longer has; left out", gone.join(", ")));
+                made = self.styles()?.set_style(&name, &set);
+            }
+        }
         let undo = made.map_err(|error| self.style_error(error))?;
-        self.restyled(before, undo);
+        let now = self.styles()?.styles.get(&name).cloned();
+        if now == old {
+            return Ok(Some(name));
+        }
+        let undo = match old {
+            Some(old) => {
+                let mut whole = old.to_set();
+                for key in now.map(|now| now.to_set()).unwrap_or_default().keys() {
+                    whole.entry(key.clone()).or_insert(Value::Null);
+                }
+                NodeOp::Style { name: name.clone(), set: whole }
+            }
+            None => undo,
+        };
+        self.restyled(undo);
         Ok(Some(name))
     }
 
-    /// After a colour or style edit: its undo kept, unless it left them as `before` (TM-58).
-    fn restyled(&mut self, before: Styles, undo: NodeOp) {
-        if self.styles.as_ref() != Some(&before) {
-            self.styles_changed = true;
-            self.inverse.push(vec![undo]);
-        }
+    /// After a colour or style edit that changed them: its undo kept.
+    fn restyled(&mut self, undo: NodeOp) {
+        self.styles_changed = true;
+        self.inverse.push(vec![undo]);
     }
 
     /// `delete_style {name}`: take a colour or style out of the design. Every node using it is
@@ -226,7 +265,14 @@ impl Run<'_> {
             }
             if self.meta(&new)?.is_some() {
                 if self.lenient {
-                    self.skip(Conflict::new(Some(self.at as u32), new, ConflictReason::Exists));
+                    // Nothing of the copy is made: later edits naming any of its ids are skipped.
+                    self.skip(Conflict::new(Some(self.at as u32), new_root.clone(), ConflictReason::Exists));
+                    self.skipped_adds.insert(new_root.clone());
+                    for node in &nodes {
+                        if let Some(copy) = copy_id(&id, &new_root, &node.id) {
+                            self.skipped_adds.insert(copy);
+                        }
+                    }
                     return Ok(None);
                 }
                 return Err(self.fail_on("as", ErrorKind::Conflict, "design.node_exists", format!("{new:?} is already in the design"))

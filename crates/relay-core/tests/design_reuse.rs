@@ -355,3 +355,25 @@ fn the_scene_runs_colour_and_style_edits_as_the_engine_does() {
         }
     }
 }
+
+/// Review: the undo of a style change gives back the whole style, so one replayed after the
+/// style was deleted makes it again whole; one naming a colour deleted since leaves it out.
+#[test]
+fn a_style_undo_replayed_after_a_delete_makes_it_whole() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    apply(&e, id, json!([{"op": "style", "name": "card", "set": {"fill": "#FF0000", "radius": 4}}]));
+    let changed = apply(&e, id, json!([{"op": "style", "name": "card", "set": {"fill": "#00FF00"}}]));
+    apply(&e, id, json!([{"op": "delete_style", "name": "card"}]));
+    undo(&e, id, &changed);
+    assert_eq!(get(&e, id)["styles"]["card"], json!({"fill": "#FF0000", "radius": 4.0}));
+
+    // An agent deletes a style naming a colour; the colour goes; the agent's change is undone.
+    apply(&e, id, json!([{"op": "color", "name": "ink", "value": "#111111"}, {"op": "style", "name": "label", "set": {"fill": "$ink", "radius": 2}}]));
+    let name = ok(&e, "session.create", json!({"project_id": 1, "provider": "claude", "role": "builder"}))["name"].as_str().unwrap().to_string();
+    let theirs = common::ok_as(&e, relay_bus::Actor::agent(&name), "design.apply", json!({"design_id": id, "ops": [{"op": "delete_style", "name": "label"}]}));
+    apply(&e, id, json!([{"op": "delete_style", "name": "ink"}]));
+    ok(&e, "audit.undo", json!({"audit_id": theirs["audit_id"]}));
+    assert_eq!(get(&e, id)["styles"]["label"], json!({"radius": 2.0}), "made again without the colour that went");
+    counted(&e, id);
+}

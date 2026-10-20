@@ -64,22 +64,22 @@ fn parent_map(conn: &Connection, design: Id) -> Result<HashMap<String, Option<St
 }
 
 /// The children of each node, from a parent map, in no particular order.
-fn children(parents: &HashMap<String, Option<String>>) -> HashMap<&str, Vec<&str>> {
-    let mut kids: HashMap<&str, Vec<&str>> = HashMap::new();
+fn children(parents: &HashMap<String, Option<String>>) -> HashMap<String, Vec<String>> {
+    let mut kids: HashMap<String, Vec<String>> = HashMap::new();
     for (id, parent) in parents {
         if let Some(parent) = parent {
-            kids.entry(parent.as_str()).or_default().push(id.as_str());
+            kids.entry(parent.clone()).or_default().push(id.clone());
         }
     }
     kids
 }
 
 /// What is inside node `id`, every level of it, at most WALK deep, in no particular order.
-fn subtree<'a>(kids: &HashMap<&'a str, Vec<&'a str>>, id: &'a str) -> Vec<&'a str> {
+fn subtree<'a>(kids: &'a HashMap<String, Vec<String>>, id: &'a str) -> Vec<&'a str> {
     let mut found = Vec::new();
     let mut level = vec![id];
     for _ in 0..WALK {
-        let next: Vec<&str> = level.iter().flat_map(|at| kids.get(at).into_iter().flatten().copied()).collect();
+        let next: Vec<&str> = level.iter().flat_map(|at| kids.get(*at).into_iter().flatten().map(String::as_str)).collect();
         if next.is_empty() {
             break;
         }
@@ -95,11 +95,13 @@ fn subtree<'a>(kids: &HashMap<&'a str, Vec<&'a str>>, id: &'a str) -> Vec<&'a st
 /// first edit of `ops` naming its node; an expectation no edit names has none.
 pub(crate) fn expect_conflicts(conn: &Connection, design: Id, ops: &[NodeOp], expect: &[Expect], derive_exists: bool)
     -> Result<Vec<Conflict>, BusError> {
+    // The first edit naming each node (a colour's, a style's or a copy's source name is not one).
     let mut first: HashMap<&str, u32> = HashMap::new();
     for (at, op) in ops.iter().enumerate() {
         let id = match op {
             NodeOp::Add { node, .. } => node.id.as_str(),
-            other => other.target(),
+            NodeOp::Update { id, .. } | NodeOp::Move { id, .. } | NodeOp::Delete { id } => id.as_str(),
+            _ => continue,
         };
         if !id.is_empty() {
             first.entry(id).or_insert(at as u32);
@@ -107,6 +109,7 @@ pub(crate) fn expect_conflicts(conn: &Connection, design: Id, ops: &[NodeOp], ex
     }
     let mut conflicts = Vec::new();
     let mut parents: Option<HashMap<String, Option<String>>> = None;
+    let mut kids: Option<HashMap<String, Vec<String>>> = None;
     let mut row = conn.prepare_cached(NODE_ROW).bus()?;
     for want in expect {
         let at = first.get(want.id.as_str()).copied();
@@ -134,13 +137,14 @@ pub(crate) fn expect_conflicts(conn: &Connection, design: Id, ops: &[NodeOp], ex
             conflicts.push(Conflict::new(at, want.id.clone(), ConflictReason::Parent));
         }
         if let Some(within) = &want.within {
-            let map = match &mut parents {
-                Some(map) => map,
-                none => none.insert(parent_map(conn, design)?),
-            };
-            let kids = children(map);
+            // One read of where everything sits, and one map of children, for every `within`.
+            if kids.is_none() {
+                let map = parents.insert(parent_map(conn, design)?);
+                kids = Some(children(map));
+            }
+            let kids = kids.as_ref().expect("built above");
             let allowed: HashSet<&str> = within.iter().map(String::as_str).collect();
-            let mut added: Vec<&str> = subtree(&kids, &want.id).into_iter().filter(|id| !allowed.contains(id)).collect();
+            let mut added: Vec<&str> = subtree(kids, &want.id).into_iter().filter(|id| !allowed.contains(id)).collect();
             if !added.is_empty() {
                 added.sort_unstable();
                 let ids = added.into_iter().take(INSIDE_IDS).map(str::to_string).collect();
@@ -150,12 +154,18 @@ pub(crate) fn expect_conflicts(conn: &Connection, design: Id, ops: &[NodeOp], ex
     }
     drop(row);
     if derive_exists {
-        let mut deleted: HashSet<&str> = HashSet::new();
+        // An id is free once an earlier edit deleted it, or a node it sits in.
+        let mut deleted: HashSet<String> = HashSet::new();
         let mut taken = conn.prepare_cached("SELECT EXISTS(SELECT 1 FROM design_nodes WHERE design_id = ?1 AND node_id = ?2)").bus()?;
         for (at, op) in ops.iter().enumerate() {
             match op {
                 NodeOp::Delete { id } => {
-                    deleted.insert(id);
+                    if kids.is_none() {
+                        let map = parents.insert(parent_map(conn, design)?);
+                        kids = Some(children(map));
+                    }
+                    deleted.extend(subtree(kids.as_ref().expect("built above"), id).into_iter().map(str::to_string));
+                    deleted.insert(id.clone());
                 }
                 NodeOp::Add { node, .. } if !node.id.is_empty() && !deleted.contains(node.id.as_str())
                     && taken.query_row(params![design, node.id], |r| r.get::<_, bool>(0)).bus()? => {
@@ -199,8 +209,9 @@ pub(super) fn stale(design: &Design, conflicts: &[Conflict]) -> BusError {
 /// the parent index, and only when an added node can hold children.
 pub(super) fn undo_expect(conn: &Connection, design: Id, nodes: &[Node], updated: &HashMap<String, BTreeSet<String>>,
     moved: &HashSet<String>, added: &HashSet<String>) -> Result<Vec<Expect>, BusError> {
-    let roots: Vec<&Node> = nodes.iter()
+    let roots: HashSet<&str> = nodes.iter()
         .filter(|n| added.contains(&n.id) && n.kind.holds_children() && n.parent.as_ref().is_none_or(|p| !added.contains(p)))
+        .map(|n| n.id.as_str())
         .collect();
     let parents = if roots.is_empty() { HashMap::new() } else { parent_map(conn, design)? };
     let kids = children(&parents);
@@ -211,7 +222,7 @@ pub(super) fn undo_expect(conn: &Connection, design: Id, nodes: &[Node], updated
             node.before(&keys)
         });
         let parent = (moved.contains(&node.id) && node.kind != NodeKind::Page).then(|| node.parent.clone()).flatten();
-        let within = roots.iter().any(|root| root.id == node.id).then(|| {
+        let within = roots.contains(node.id.as_str()).then(|| {
             let mut ids: Vec<String> = subtree(&kids, &node.id).into_iter().map(str::to_string).collect();
             ids.sort_unstable();
             ids
