@@ -1,7 +1,14 @@
-//! The `design.apply` edits behind the canvas's commands: duplicate, paste, group and frame
-//! the selection, ungroup, delete, align and distribute, reorder, nudge, and put a node in
-//! another parent without it jumping. Each returns the edits; the canvas runs them on its scene and
-//! sends them as one list, so one undo reverts the whole command.
+//! The `design.apply` edits behind the canvas's commands: duplicate, copy and paste, group and
+//! frame the selection, ungroup, delete, align and distribute, reorder and restack, nudge, turn
+//! auto layout on or off, type a size, and put a node in another parent without it jumping; and
+//! the expectations an edit is sent with ([`expect_for`]). Each returns the edits; the canvas
+//! runs them on its scene and sends them as one list, so one undo reverts the whole command.
+//!
+//! Builders read where a node shows from the layout's placed boxes and copy or compare it as
+//! stored (`Scene::stored`), its colour and style names kept. A node that leaves an auto layout
+//! keeps the box it showed ([`freeze`]), written through its new parent's pins; a locked layer is
+//! neither moved nor deleted ([`unlocked`]); a connector whose end goes, or is left behind by a
+//! copy, lets go where it is drawn.
 
 use super::geom::Rect;
 use super::layout::{fit_of, is_laid, stored_shift, unpinned, Fit, Placed};
@@ -294,8 +301,8 @@ pub fn clone_into(
 /// Every node of the selection's subtrees, parents first, as stored (their colour and style
 /// names kept): what Copy puts on the clipboard.
 ///
-/// - A connector's end attached to a node not copied lets go where the line is drawn
-///   ([`let_go_outside`], TM-59).
+/// - A connector's end attached to a node not copied lets go where the line is drawn (TM-59),
+///   so the clipboard names no node it does not carry.
 /// - A selection across parents is put in page space (B14): each root's parent becomes its
 ///   page and its `x`/`y` where it shows on it, so the arrangement survives a paste into one
 ///   parent. Roots of one parent keep their own, but for:
