@@ -30,6 +30,9 @@ const MODELS: [(&str, &str); 5] = [
     ("claude-fable-5-1", "Fable 5.1"),
 ];
 
+/// The message box's placeholder.
+const HINT: &str = "Ask about your sessions, tasks or projects";
+
 /// What the empty drawer offers to ask.
 const SUGGESTIONS: [&str; 3] = [
     "What are my sessions doing right now?",
@@ -39,11 +42,15 @@ const SUGGESTIONS: [&str; 3] = [
 
 struct Assistant {
     ui: Weak<Ui>,
+    /// The title bar's key, lit while the drawer is open.
+    key: gtk::Button,
     revealer: gtk::Revealer,
     scroll: gtk::ScrolledWindow,
     column: gtk::Box,
     empty: gtk::Box,
     input: gtk::TextView,
+    /// The message box's placeholder, shown while it is empty.
+    hint: gtk::Label,
     send: gtk::Button,
     /// The model picker: its key, the caption it shows, and its list.
     model_key: gtk::MenuButton,
@@ -72,6 +79,8 @@ struct Assistant {
     cards: RefCell<HashMap<i64, Vec<glib::WeakRef<gtk::Box>>>>,
     /// The drawer was opened once, and the newest thread read.
     loaded: Cell<bool>,
+    /// What had the keyboard when the drawer opened (a terminal, mostly), which gets it back.
+    before: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
 }
 
 thread_local! {
@@ -101,6 +110,7 @@ pub fn install(ui: &Rc<Ui>, key: &gtk::Button, host: &gtk::Overlay) {
     fresh.set_valign(gtk::Align::Center);
     head.append(&fresh);
     let close = icon_button("close", "Close the assistant");
+    close.set_widget_name("assistant-close");
     close.set_valign(gtk::Align::Center);
     head.append(&close);
     drawer.append(&head);
@@ -130,9 +140,19 @@ pub fn install(ui: &Rc<Ui>, key: &gtk::Button, host: &gtk::Overlay) {
     input.add_css_class("threads-input");
     input.set_wrap_mode(gtk::WrapMode::WordChar);
     input.set_hexpand(true);
-    input.update_property(&[gtk::accessible::Property::Label("Message the assistant")]);
+    // Tab leaves the box, for the picker and Send, as in Threads.
+    input.set_accepts_tab(false);
+    input.update_property(&[gtk::accessible::Property::Label("Message the assistant"), gtk::accessible::Property::Placeholder(HINT)]);
     let input_scroll = gtk::ScrolledWindow::builder().child(&input).hscrollbar_policy(gtk::PolicyType::Never).propagate_natural_height(true).max_content_height(160).build();
     input_scroll.set_hexpand(true);
+    // The placeholder: a text view has none of its own.
+    let field = gtk::Overlay::new();
+    field.set_child(Some(&input_scroll));
+    let hint = label(HINT, "threads-hint");
+    hint.set_can_target(false);
+    hint.set_valign(gtk::Align::Start);
+    hint.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    field.add_overlay(&hint);
     // Under the words: the model picker at the start, Send at the end.
     let foot = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let model_key = gtk::MenuButton::new();
@@ -159,10 +179,11 @@ pub fn install(ui: &Rc<Ui>, key: &gtk::Button, host: &gtk::Overlay) {
     send.set_valign(gtk::Align::End);
     send.set_child(Some(&crate::icons::image("arrow-up", 16)));
     send.set_tooltip_text(Some("Send (Enter)"));
+    send.update_property(&[gtk::accessible::Property::Label("Send")]);
     foot.append(&send);
     let stack = gtk::Box::new(gtk::Orientation::Vertical, 6);
     stack.set_hexpand(true);
-    stack.append(&input_scroll);
+    stack.append(&field);
     stack.append(&foot);
     composer.append(&stack);
     drawer.append(&composer);
@@ -180,11 +201,13 @@ pub fn install(ui: &Rc<Ui>, key: &gtk::Button, host: &gtk::Overlay) {
 
     let a = Rc::new(Assistant {
         ui: Rc::downgrade(ui),
+        key: key.clone(),
         revealer,
         scroll,
         column,
         empty,
         input,
+        hint,
         send,
         model_key,
         model_shown,
@@ -202,15 +225,32 @@ pub fn install(ui: &Rc<Ui>, key: &gtk::Button, host: &gtk::Overlay) {
         tools: RefCell::default(),
         cards: RefCell::default(),
         loaded: Cell::new(false),
+        before: RefCell::default(),
     });
     ASSISTANT.with(|slot| *slot.borrow_mut() = Some(a.clone()));
     fill_models(&a);
     restore_choice(ui);
 
+    // Pressing the key leaves the keyboard where it was, for the drawer to give back on closing.
+    key.set_focus_on_click(false);
+    key.update_state(&[gtk::accessible::State::Expanded(Some(false))]);
     key.connect_clicked(|_| toggle());
+    // The key is the Dev space's: in Threads it hides, and the drawer closes with it.
+    key.connect_visible_notify(|key| {
+        if !key.is_visible() {
+            show(false);
+        }
+    });
     close.connect_clicked(|_| show(false));
     fresh.connect_clicked(|_| new_chat());
-    a.send.connect_clicked(|_| submit());
+    // The key stops a reply while one runs; Enter only ever sends.
+    a.send.connect_clicked(|_| if the().is_some_and(|a| a.busy.get()) { stop() } else { submit() });
+    a.input.buffer().connect_changed(|_| {
+        if let Some(a) = the() {
+            update_send(&a);
+        }
+    });
+    update_send(&a);
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     keys.connect_key_pressed(|_, key, _, mods| {
@@ -268,16 +308,46 @@ fn toggle() {
 
 fn show(open: bool) {
     let Some(a) = the() else { return };
+    let focus = a.revealer.root().and_then(|root| root.focus());
+    if open && !a.revealer.reveals_child() {
+        *a.before.borrow_mut() = focus.filter(|w| !w.is_ancestor(&a.revealer)).map(|w| w.downgrade());
+    } else if !open && a.revealer.reveals_child() {
+        // Closing takes the keyboard out of the drawer, back to what had it; focus moved elsewhere
+        // since stays there.
+        let held = focus.is_none_or(|w| w.is_ancestor(&a.revealer));
+        if let Some(w) = a.before.take().and_then(|w| w.upgrade()).filter(|w| held && w.is_mapped()) {
+            w.grab_focus();
+        }
+    }
     a.revealer.set_reveal_child(open);
     a.revealer.set_can_target(open);
+    if open {
+        a.key.add_css_class("assistant-open");
+    } else {
+        a.key.remove_css_class("assistant-open");
+    }
+    a.key.update_state(&[gtk::accessible::State::Expanded(Some(open))]);
     if open {
         a.input.grab_focus();
         // A model file added since shows up the next time the drawer opens.
         load_local();
         if !a.loaded.replace(true) {
             load_newest();
+        } else {
+            resync();
         }
     }
+}
+
+/// Bring the conversation shown up to date with Relay's copy: what was said while the window
+/// heard no events (it reconnected, or fell behind), whether a reply still runs, and its asks.
+/// Without it a reply that ended unheard left the drawer working, its key a Stop, for good.
+pub fn resync() {
+    let Some(id) = the().and_then(|a| a.thread.get()) else { return };
+    glib::spawn_future_local(async move {
+        catch_up(id, false).await;
+        refresh_asks().await;
+    });
 }
 
 /// Open the newest assistant thread, if there is one.
@@ -307,7 +377,7 @@ async fn open(id: i64) {
     }
     set_busy(&a, read["thread"]["working"] == true);
     refresh_asks().await;
-    stick_to_bottom(&a);
+    stick_to_bottom(&a, true);
 }
 
 /// Clear the drawer for thread `id` (none: a new chat).
@@ -337,12 +407,15 @@ fn new_chat() {
 
 fn submit() {
     let Some(a) = the() else { return };
-    if a.busy.get() {
-        stop();
-        return;
-    }
     let buffer = a.input.buffer();
     let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).trim().to_string();
+    // Words written while it answers stay in the box, and Enter says why.
+    if a.busy.get() {
+        if let Some(ui) = a.ui.upgrade().filter(|_| !text.is_empty()) {
+            ui.show_info("The assistant is still answering: stop it first, or wait");
+        }
+        return;
+    }
     if text.is_empty() {
         return;
     }
@@ -382,7 +455,7 @@ fn send(text: &str) {
         }
         // A new thread's first message arrived as an event before its id was known here.
         if let Some(id) = a.thread.get() {
-            catch_up(id).await;
+            catch_up(id, true).await;
         }
     });
 }
@@ -397,8 +470,9 @@ fn stop() {
     });
 }
 
-/// Draw the messages stored after the newest one drawn.
-async fn catch_up(id: i64) {
+/// Draw the messages stored after the newest one drawn, going to the newest when `follow` and
+/// otherwise only if the reader was there.
+async fn catch_up(id: i64, follow: bool) {
     let Some(a) = the() else { return };
     let Some(ui) = a.ui.upgrade() else { return };
     let after = a.last.get();
@@ -409,7 +483,7 @@ async fn catch_up(id: i64) {
             }
             // Its `thread.changed` may have come before its id was known here.
             set_busy(&a, read["thread"]["working"] == true);
-            stick_to_bottom(&a);
+            stick_to_bottom(&a, follow);
         }
     }
 }
@@ -421,6 +495,8 @@ fn set_busy(a: &Assistant, busy: bool) {
     a.model_key.set_tooltip_text(Some(if busy { "Waits for this reply to finish" } else { "The model the assistant runs on" }));
     a.send.set_child(Some(&crate::icons::image(if busy { "stop" } else { "arrow-up" }, 16)));
     a.send.set_tooltip_text(Some(if busy { "Stop" } else { "Send (Enter)" }));
+    a.send.update_property(&[gtk::accessible::Property::Label(if busy { "Stop" } else { "Send" })]);
+    update_send(a);
     if busy {
         if a.working.parent().is_none() {
             a.column.append(&a.working);
@@ -436,10 +512,23 @@ fn set_busy(a: &Assistant, busy: bool) {
     }
 }
 
+/// The send key: Stop while a reply runs, else Send once there are words to send. The placeholder
+/// shows while the box is empty.
+fn update_send(a: &Assistant) {
+    let buffer = a.input.buffer();
+    a.hint.set_visible(buffer.char_count() == 0);
+    let written = !buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).trim().is_empty();
+    a.send.set_sensitive(a.busy.get() || written);
+}
+
 /// Scroll to the newest: on the next frame, and once more after it, when wrapped text and a card
-/// filled from a later read have taken their height.
-fn stick_to_bottom(a: &Assistant) {
+/// filled from a later read have taken their height. Always when `force`, else only when the reader
+/// was already at the bottom, so new words never pull them away from what they scrolled up to.
+fn stick_to_bottom(a: &Assistant, force: bool) {
     let adj = a.scroll.vadjustment();
+    if !force && adj.value() + adj.page_size() < adj.upper() - 48.0 {
+        return;
+    }
     a.scroll.add_tick_callback(move |_, _| {
         adj.set_value(adj.upper() - adj.page_size());
         let adj = adj.clone();
@@ -636,8 +725,9 @@ fn fill(slot: &gtk::Box, ask: &Value) {
             let approve = button("Approve", "primary");
             approve.add_css_class("threads-card-key");
             for (key, yes) in [(&decline, false), (&approve, true)] {
-                let (approve, decline) = (approve.clone(), decline.clone());
-                key.connect_clicked(move |_| answer(id, yes, &[&approve, &decline]));
+                // Weak: a key holding itself in its own handler would outlive its card.
+                let pair = [approve.downgrade(), decline.downgrade()];
+                key.connect_clicked(move |_| answer(id, yes, pair.iter().filter_map(|k| k.upgrade()).collect()));
             }
             keys.append(&decline);
             keys.append(&approve);
@@ -673,12 +763,11 @@ fn compact(payload: &Value) -> String {
     }).collect::<Vec<_>>().join(" · ")
 }
 
-fn answer(id: i64, approve: bool, keys: &[&gtk::Button]) {
+fn answer(id: i64, approve: bool, keys: Vec<gtk::Button>) {
     let Some(ui) = the().and_then(|a| a.ui.upgrade()) else { return };
-    for key in keys {
+    for key in &keys {
         key.set_sensitive(false);
     }
-    let keys: Vec<gtk::Button> = keys.iter().map(|k| (*k).clone()).collect();
     glib::spawn_future_local(async move {
         if let Err(e) = ui.call("thread.ask.resolve", json!({"id": id, "approve": approve})).await {
             for key in &keys {
@@ -807,7 +896,7 @@ fn choose(model: &str) {
     let Some(a) = the() else { return };
     let Some(ui) = a.ui.upgrade() else { return };
     *a.choice.borrow_mut() = model.to_string();
-    *a.shown_model.borrow_mut() = model.to_string();
+    let was = a.shown_model.replace(model.to_string());
     show_model(&a);
     let (model, thread) = (model.to_string(), a.thread.get());
     let local = a.local.borrow().iter().any(|(id, _)| *id == model);
@@ -822,6 +911,11 @@ fn choose(model: &str) {
         }
         if let Some(id) = thread {
             if let Err(e) = ui.call("thread.set", json!({"id": id, "model": model})).await {
+                // The conversation stays on its model, and the picker says which.
+                if let Some(a) = the().filter(|a| a.thread.get() == Some(id) && *a.shown_model.borrow() == model) {
+                    *a.shown_model.borrow_mut() = was;
+                    show_model(&a);
+                }
                 ui.show_error(&format!("The assistant kept its model: {e}"));
             }
         }
@@ -850,11 +944,11 @@ pub fn event(_ui: &Rc<Ui>, ev: &str, payload: &Value) -> bool {
                 a.column.append(&a.pending);
             }
             keep_working_last(&a);
-            stick_to_bottom(&a);
+            stick_to_bottom(&a, false);
         }
         "thread.message" if shown => {
             draw_message(&a, &payload["message"]);
-            stick_to_bottom(&a);
+            stick_to_bottom(&a, false);
         }
         "thread.changed" if shown => {
             if payload["deleted"] == true {

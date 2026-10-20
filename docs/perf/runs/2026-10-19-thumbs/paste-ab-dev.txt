@@ -1,0 +1,8 @@
+PASTE photo 4032x3024: before 1004 ms [999-1026] 3018 KB image/png | after 305 ms [303-307] 2810 KB image/png
+PASTE photo 1600x1200: before 89 ms [89-90] 2328 KB image/png | after 91 ms [90-92] 596 KB image/jpeg
+PASTE screenshot 2560x1440: before 119 ms [118-121] 246 KB image/png | after 81 ms [80-82] 252 KB image/png
+PASTE cachysurf3.jpg 5120x2160: before 1167 ms [1151-1181] 2237 KB image/png | after 200 ms [199-208] 343 KB image/jpeg
+PASTE cachygalaxy99.jpg 3840x2160: before 694 ms [691-703] 532 KB image/jpeg | after 182 ms [181-184] 532 KB image/jpeg
+PASTE Cachy_Topography.jpg 3440x1440: before 451 ms [450-452] 842 KB image/png | after 111 ms [111-114] 867 KB image/png
+test money::pictures::tests::paste_cost ... ok
+

@@ -456,6 +456,71 @@ async fn verify_confirmations(ui: Rc<Ui>) -> Result<(), String> {
     Ok(())
 }
 
+/// Opens thread `a` (RELAY_NATIVE_THUMBS=a,b), then `b`, then `a` again, and prints for each
+/// opening how many thumbnails it read, how many of those were on screen, and the ms from opening
+/// until every picture on screen showed.
+async fn measure_thumbs(ui: Rc<Ui>) -> Result<(), String> {
+    use crate::money::{pictures, threads};
+    let ids: Vec<i64> = std::env::var("RELAY_NATIVE_THUMBS").unwrap_or_default().split(',').filter_map(|s| s.parse().ok()).collect();
+    let [a, b] = ids[..] else { return Err(String::from("RELAY_NATIVE_THUMBS=a,b")) };
+    for (step, id) in [("cold", a), ("away", b), ("reopen", a)] {
+        pictures::watch_reads(true);
+        let started = Instant::now();
+        threads::open(&ui, id);
+        let mut shown_ms = None;
+        let mut on_screen = Vec::new();
+        loop {
+            glib::timeout_future(Duration::from_millis(2)).await;
+            if let Some(now) = threads::pictures_on_screen() {
+                if shown_ms.is_none() && !now.is_empty() && now.iter().all(|(_, shown)| *shown) {
+                    shown_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+                }
+                on_screen = now;
+            }
+            let settled = started.elapsed() > Duration::from_millis(500) && !pictures::reading();
+            if settled && (shown_ms.is_some() || id == b) {
+                break;
+            }
+            require(started.elapsed() < Duration::from_secs(90), "Thumbnails never settled")?;
+        }
+        let read = pictures::watch_reads(false);
+        let names: std::collections::HashSet<String> = on_screen.iter().map(|(n, _)| n.clone()).collect();
+        let read_on_screen = read.iter().filter(|k| names.contains(&format!("thread-picture-{k}"))).count();
+        println!(
+            "THUMBS {step} reads={} on_screen={} on_screen_read={read_on_screen} shown_ms={:.1}",
+            read.len(),
+            names.len(),
+            shown_ms.unwrap_or(-1.0)
+        );
+    }
+    Ok(())
+}
+
+/// The assistant drawer opens from its key with the keyboard in its message box and the key lit,
+/// and closing it gives the keyboard back to the terminal that had it.
+async fn verify_assistant(ui: Rc<Ui>) -> Result<(), String> {
+    let window = ui.window.clone();
+    let focused = || GtkWindowExt::focus(&window);
+    let terminal = util::find(window.upcast_ref(), &|w| w.is::<vte4::Terminal>() && w.is_mapped()).ok_or("No terminal on the wall")?;
+    terminal.grab_focus();
+    require(focused().as_ref() == Some(&terminal), "The terminal did not take the keyboard")?;
+    click(&window, "assistant-key")?;
+    let drawer = named(&window, "assistant").ok_or("Missing the assistant drawer")?;
+    let key = named(&window, "assistant-key").ok_or("Missing the assistant key")?;
+    wait_for(|| drawer.is_mapped(), "The assistant drawer opens").await?;
+    require(
+        focused().is_some_and(|f| f.is::<gtk::TextView>() && f.is_ancestor(&drawer)),
+        "The assistant's message box did not take the keyboard",
+    )?;
+    require(key.has_css_class("assistant-open"), "The assistant key is not lit while its drawer is open")?;
+    click(&window, "assistant-close")?;
+    require(focused().as_ref() == Some(&terminal), "Closing the assistant did not give the keyboard back")?;
+    require(!key.has_css_class("assistant-open"), "The assistant key stayed lit")?;
+    wait_for(|| !drawer.is_mapped(), "The assistant drawer closes").await?;
+    println!("Assistant drawer open, close and focus verified");
+    Ok(())
+}
+
 /// Decides two held writes from their cards on the Guardrails page, as a person would
 /// (RA-719): Allow once stays disabled until the exact action has been reviewed, then
 /// confirms the hold; Deny… closes the other without running it.
@@ -747,7 +812,17 @@ pub fn install(ui: &Rc<Ui>) {
             navigate.navigate("agents");
             navigate.verify_shell();
             if std::env::var("RELAY_NATIVE_PAGE").as_deref() == Ok("agents") {
-                track("confirmations", verify_confirmations(navigate.clone()));
+                // The drawer goes after the confirmations, whose panels take the keyboard, and not
+                // when a capture presses keys of its own.
+                let ui = navigate.clone();
+                let drawer = std::env::var_os("RELAY_NATIVE_CLICK").is_none();
+                track("confirmations", async move {
+                    verify_confirmations(ui.clone()).await?;
+                    if drawer {
+                        verify_assistant(ui).await?;
+                    }
+                    Ok(())
+                });
             }
             let visible = navigate.sidebar.is_visible();
             click(&navigate.window, "sidebar-toggle").unwrap();
@@ -993,6 +1068,11 @@ pub fn install(ui: &Rc<Ui>) {
                 } else {
                     navigate.project_plugins();
                 }
+                return;
+            }
+            // Thumbnails read again on reopening a thread (scripts/perf/thumbs-reopen.py).
+            if page == "thumbs" {
+                track("thumbs", measure_thumbs(navigate.clone()));
                 return;
             }
             // The start screen and the entry sheet, over Money's Home.

@@ -1,6 +1,7 @@
 /* The assistant (assistant.rs): a drawer over the page's right edge, opened from the title bar.
    Opaque, so a pane's terminal never shows through the conversation. Its replies, tool lines,
    composer and cards are Threads' own (threads.css); only the frame and the ask card are here. */
+.topbar-actions > button.icon-key.assistant-open { color: @ink; background: alpha(@ink, 0.08); }
 .assistant-drawer { background: @pane; border-left: 1px solid @edge; box-shadow: -12px 0 32px alpha(black, 0.28); }
 .assistant-head { padding: 14px 12px 12px 18px; border-bottom: 1px solid @line_subtle; }
 .assistant-title { font-size: 14px; font-weight: 600; color: @ink; }

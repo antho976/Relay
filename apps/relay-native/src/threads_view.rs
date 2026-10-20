@@ -402,6 +402,43 @@ pub fn chart_viewport() -> Option<gtk::Widget> {
     view().map(|v| v.scroll.clone().upcast())
 }
 
+/// The message pictures on screen in the conversation, by widget name, and whether each shows yet;
+/// `None` until the conversation is taller than its window and has landed on its newest message.
+/// For `scripts/perf/thumbs-reopen.py`.
+pub(crate) fn pictures_on_screen() -> Option<Vec<(String, bool)>> {
+    let v = view()?;
+    let adj = v.scroll.vadjustment();
+    if adj.upper() <= adj.page_size() || !at_bottom(&adj) {
+        return None;
+    }
+    let mut found = Vec::new();
+    let mut stack = vec![v.column.clone().upcast::<gtk::Widget>()];
+    while let Some(widget) = stack.pop() {
+        if widget.widget_name().starts_with("thread-picture-") {
+            let shown = widget.compute_bounds(&v.scroll).is_some_and(|r| r.y() + r.height() > 0.0 && r.y() < v.scroll.height() as f32);
+            if shown {
+                let mut painted = false;
+                let mut inner = widget.first_child();
+                while let Some(child) = inner {
+                    inner = child.first_child().or_else(|| child.next_sibling());
+                    if let Some(picture) = child.downcast_ref::<gtk::Picture>() {
+                        painted = picture.paintable().is_some();
+                        break;
+                    }
+                }
+                found.push((widget.widget_name().to_string(), painted));
+            }
+            continue;
+        }
+        let mut child = widget.first_child();
+        while let Some(c) = child {
+            child = c.next_sibling();
+            stack.push(c);
+        }
+    }
+    Some(found)
+}
+
 /// The page, built once and added to the window's stack by `money::add_pages`.
 pub fn page() -> gtk::Box {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -3506,6 +3543,7 @@ fn send_with(ui: &Rc<Ui>, text: &str, images: Vec<Value>, attached: Vec<Rc<Attac
             Ok(_) => {}
             Err(e) => {
                 let why = pictures::said(&e);
+                Attached::expire(&e, &attached);
                 put_back(to, &text, attached);
                 if let Some(v) = view().filter(|_| current() == to && !ids.is_empty()) {
                     note(&v, &why);
@@ -3682,7 +3720,10 @@ pub fn refresh_list(ui: &Rc<Ui>) {
     glib::spawn_future_local(async move {
         while STATE.with(|s| s.list_dirty.replace(false)) {
             match ui.call("thread.list", json!({})).await {
-                Ok(listed) => draw_list(&listed["threads"]),
+                Ok(listed) => {
+                    forget_drafts(&listed["threads"]);
+                    draw_list(&listed["threads"]);
+                }
                 Err(e) => {
                     if let Some(list) = STATE.with(|s| s.list.borrow().clone()) {
                         clear(&list);
@@ -3695,6 +3736,21 @@ pub fn refresh_list(ui: &Rc<Ui>) {
         }
         STATE.with(|s| s.listing.set(false));
     });
+}
+
+/// Let go of the drafts of threads gone from the list: deleted while this window heard no
+/// `thread.changed`, which would have taken them.
+fn forget_drafts(threads: &Value) {
+    let listed: HashSet<i64> = threads.as_array().into_iter().flatten().filter_map(|t| t["id"].as_i64()).collect();
+    STATE.with(|s| s.drafts.borrow_mut().retain(|id, _| kept_draft(*id, &listed)));
+}
+
+/// Whether the draft for thread `id` (none: a new thread) still has its thread, as far as `listed`
+/// shows. A thread newer than any listed may have been made after the list was read, so it keeps
+/// its draft.
+fn kept_draft(id: Option<i64>, listed: &HashSet<i64>) -> bool {
+    let newest = listed.iter().max().copied().unwrap_or(0);
+    id.is_none_or(|id| listed.contains(&id) || id > newest)
 }
 
 /// Which heading a thread used last on `day` sits under.
@@ -4896,8 +4952,18 @@ fn invest_empty(ui: &Rc<Ui>, body: &gtk::Box, currency: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{avex_suggestions, month_history, pending_split, suggestions, week_line, PENDING_KEEP};
+    use super::{avex_suggestions, kept_draft, month_history, pending_split, suggestions, week_line, PENDING_KEEP};
     use serde_json::{json, Value};
+
+    #[test]
+    fn a_draft_goes_with_its_deleted_thread() {
+        let listed = [3, 5, 8].into_iter().collect();
+        assert!(kept_draft(None, &listed), "a new thread's draft has no thread to lose");
+        assert!(kept_draft(Some(5), &listed));
+        assert!(!kept_draft(Some(4), &listed), "thread 4 was deleted unheard");
+        // A thread made after the list was read is not in it yet, and keeps its draft.
+        assert!(kept_draft(Some(9), &listed));
+    }
 
     /// `gym.summary` for a copy exported on `day`, read on Thu 15 Oct 2026 (this week from Mon 12).
     fn avex(day: &str) -> Value {

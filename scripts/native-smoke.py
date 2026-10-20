@@ -227,6 +227,8 @@ for line in sys.stdin:
             # smoke.rs holds the capture for these checks; their own lines prove they ran on this page.
             if page == "agents":
                 assert "In-app confirmation accept and cancel verified" in contents, contents
+                if not os.environ.get("RELAY_NATIVE_CLICK"):
+                    assert "Assistant drawer open, close and focus verified" in contents, contents
             if page == "settings":
                 assert "Settings save verified across categories" in contents, contents
             if page == "start":
