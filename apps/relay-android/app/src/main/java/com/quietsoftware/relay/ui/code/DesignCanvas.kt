@@ -558,12 +558,24 @@ private fun Pt.o(): Offset = Offset(x.toFloat(), y.toFloat())
  * whose corners are half its sides (paint.rs `outline`).
  */
 internal class RoundBox(val rect: Rect, val rx: DoubleArray, val ry: DoubleArray) {
-    /** Grown by [by] on every side (shrunk for a negative one), the corners with it, as GSK spreads and insets them. */
-    fun grown(by: Double): RoundBox = RoundBox(
-        Rect(rect.x - by, rect.y - by, max(rect.w + 2 * by, 0.0), max(rect.h + 2 * by, 0.0)),
-        DoubleArray(4) { max(rx[it] + by, 0.0) },
-        DoubleArray(4) { max(ry[it] + by, 0.0) },
-    )
+    /**
+     * Grown by [by] on every side (shrunk for a negative one) as GSK spreads and insets a rounded
+     * box (`gsk_rounded_rect_shrink`): a rounded corner grows or shrinks with it, a square one
+     * stays square, and one shrunk to nothing either way is square.
+     */
+    fun grown(by: Double): RoundBox {
+        val gx = DoubleArray(4)
+        val gy = DoubleArray(4)
+        for (i in 0 until 4) {
+            val x = if (rx[i] > 0.0) rx[i] + by else rx[i]
+            val y = if (ry[i] > 0.0) ry[i] + by else ry[i]
+            if (x > 0.0 && y > 0.0) {
+                gx[i] = x
+                gy[i] = y
+            }
+        }
+        return RoundBox(Rect(rect.x - by, rect.y - by, max(rect.w + 2 * by, 0.0), max(rect.h + 2 * by, 0.0)), gx, gy)
+    }
 
     fun moved(dx: Double, dy: Double): RoundBox = RoundBox(rect.translate(dx, dy), rx, ry)
 

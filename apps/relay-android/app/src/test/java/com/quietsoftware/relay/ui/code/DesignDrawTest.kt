@@ -292,6 +292,19 @@ class DesignDrawTest {
         assertTrue(hex(faint.rgb(100, 210)), faint.near(100, 210, 0x80FF80, slack = 8))
     }
 
+    /** A spread grows a rounded corner with it and keeps a square one square, as GSK's outset shadow does. */
+    @Test
+    fun `a spread shadow keeps a square corner square`() {
+        val square = draw(page(rect("s", 40.0, 40.0, 100.0, 100.0, "#FFFFFF").copy(shadow = DesignShadow(spread = 20.0, color = "#FF0000")), fill = "#FFFFFF"))
+        // The cast spans 20 to 160; 2 px inside its corner.
+        assertTrue(hex(square.rgb(22, 22)), square.near(22, 22, RED))
+        assertTrue(hex(square.rgb(157, 157)), square.near(157, 157, RED))
+        val round = draw(page(rect("s", 40.0, 40.0, 100.0, 100.0, "#FFFFFF").copy(radius = 10.0, shadow = DesignShadow(spread = 20.0, color = "#FF0000")), fill = "#FFFFFF"))
+        // Its corner, 10 grown to 30, is round about (50, 50).
+        assertTrue(hex(round.rgb(22, 22)), round.near(22, 22, WHITE))
+        assertTrue(hex(round.rgb(30, 30)), round.near(30, 30, RED))
+    }
+
     /** Words are set and drawn in their colour, a run in its own. */
     @Test
     fun `words are drawn, a run in its own colour`() {
