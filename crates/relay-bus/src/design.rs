@@ -434,38 +434,94 @@ impl Blend {
     }
 }
 
-/// How a text's letters are cased when drawn; the stored words keep theirs.
+/// How a text's letters are cased when drawn; the stored words keep theirs. Upper and lower use
+/// Unicode's default case mapping, one letter at a time (no language's own rules).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(rename = "DesignTextCase")]
 pub enum TextCase {
     Upper,
     Lower,
-    /// The first letter of each word upper case.
+    /// The first letter of each word in capitals: after a space or any punctuation (`Well-Known`,
+    /// `And/Or`), not after an apostrophe inside a word (`Don't`).
     Title,
 }
 
 impl TextCase {
     /// `text` as this case draws it.
     pub fn apply(self, text: &str) -> String {
-        match self {
-            TextCase::Upper => text.to_uppercase(),
-            TextCase::Lower => text.to_lowercase(),
-            TextCase::Title => {
-                let mut out = String::with_capacity(text.len());
-                let mut start = true;
-                for c in text.chars() {
-                    if start && c.is_alphanumeric() {
-                        out.extend(c.to_uppercase());
-                        start = false;
-                    } else {
-                        start = c.is_whitespace() || (start && !c.is_alphanumeric());
-                        out.push(c);
-                    }
-                }
-                out
+        self.cased(text, None)
+    }
+
+    /// `text` as this case draws it, and for each of its characters (and one past the last) the
+    /// byte where it starts in the cased text: a letter can become two (`ß` is `SS`), so styled
+    /// stretches of the stored words are found again in what is drawn.
+    pub fn apply_indexed(self, text: &str) -> (String, Vec<usize>) {
+        let mut starts = Vec::with_capacity(text.len() + 1);
+        let out = self.cased(text, Some(&mut starts));
+        (out, starts)
+    }
+
+    fn cased(self, text: &str, mut starts: Option<&mut Vec<usize>>) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut words = WordStarts::default();
+        for c in text.chars() {
+            if let Some(starts) = starts.as_deref_mut() {
+                starts.push(out.len());
+            }
+            match self {
+                TextCase::Upper => out.extend(c.to_uppercase()),
+                TextCase::Lower => out.extend(c.to_lowercase()),
+                TextCase::Title if words.starts(c) => title_case(c, &mut out),
+                TextCase::Title => out.push(c),
             }
         }
+        if let Some(starts) = starts {
+            starts.push(out.len());
+        }
+        out
+    }
+}
+
+/// Where a word starts, a character at a time, as the canvas's text editor (Pango's word starts)
+/// sees it: at a letter or digit after the start of the text, a space or any punctuation, but
+/// not after an apostrophe between two letters (`don't`, `rock'n'roll`).
+#[derive(Default)]
+struct WordStarts {
+    /// The last character was a letter or digit.
+    in_word: bool,
+    /// The last character was an apostrophe right after one.
+    apostrophe: bool,
+}
+
+impl WordStarts {
+    fn starts(&mut self, c: char) -> bool {
+        let start = c.is_alphanumeric() && !self.in_word && !self.apostrophe;
+        (self.in_word, self.apostrophe) = match c {
+            c if c.is_alphanumeric() => (true, false),
+            '\'' | '\u{2019}' => (false, self.in_word),
+            _ => (false, false),
+        };
+        start
+    }
+}
+
+/// The character indices where a title-cased word starts in `text` ([`TextCase::Title`]'s rule),
+/// so an editor showing the stored words can capitalise the same letters.
+pub fn title_starts(text: &str) -> Vec<usize> {
+    let mut words = WordStarts::default();
+    text.chars().enumerate().filter_map(|(i, c)| words.starts(c).then_some(i)).collect()
+}
+
+/// `c` as the first letter of a word: the titlecase digraphs (`ǅ`, `ǈ`, `ǋ`, `ǲ`) for their
+/// letters, as GLib's `g_unichar_totitle`, else its capital.
+fn title_case(c: char, out: &mut String) {
+    match c {
+        '\u{1C4}'..='\u{1C6}' => out.push('\u{1C5}'),
+        '\u{1C7}'..='\u{1C9}' => out.push('\u{1C8}'),
+        '\u{1CA}'..='\u{1CC}' => out.push('\u{1CB}'),
+        '\u{1F1}'..='\u{1F3}' => out.push('\u{1F2}'),
+        _ => out.extend(c.to_uppercase()),
     }
 }
 
@@ -1406,8 +1462,61 @@ mod tests {
         // An outer shadow writes no `inset`, so older readers keep reading it.
         let plain = Shadow { x: 0.0, y: 1.0, blur: 2.0, spread: 0.0, color: "#000".into(), inset: false };
         assert!(serde_json::to_value(&plain).unwrap().get("inset").is_none());
-        assert_eq!(TextCase::Title.apply("hello  wide-world 2go"), "Hello  Wide-world 2go");
+        assert_eq!(TextCase::Title.apply("hello  wide-world 2go"), "Hello  Wide-World 2go");
         assert_eq!(TextCase::Upper.apply("straße"), "STRASSE");
+    }
+
+    /// B74: title case starts a word where the canvas's text editor does (after a space or any
+    /// punctuation, not inside a word's apostrophe) and titlecases the digraphs.
+    #[test]
+    fn title_case_starts_words_where_the_editor_does() {
+        assert_eq!(TextCase::Title.apply("well-known and/or don't \u{1C6}ep"), "Well-Known And/Or Don't \u{1C5}ep");
+        assert_eq!(TextCase::Title.apply("3rd place"), "3rd Place");
+        assert_eq!(TextCase::Title.apply("'tis rock'n'roll, (quoted) \u{2019}twas"), "'Tis Rock'n'roll, (Quoted) \u{2019}Twas");
+        for (digraph, title) in [('\u{1C4}', '\u{1C5}'), ('\u{1C9}', '\u{1C8}'), ('\u{1CA}', '\u{1CB}'), ('\u{1F3}', '\u{1F2}')] {
+            assert_eq!(TextCase::Title.apply(&format!("{digraph}x")), format!("{title}x"));
+        }
+        // The rest of a word keeps its case, as the editor's capitalising does.
+        assert_eq!(TextCase::Title.apply("mcDonald iPHONE"), "McDonald IPHONE");
+    }
+
+    /// TM-34: one word-start rule for the canvas and the editor.
+    #[test]
+    fn title_starts_name_each_word() {
+        let text = "jean-luc e-mail foo/bar foo.bar";
+        let starts: Vec<char> = title_starts(text).into_iter().map(|i| text.chars().nth(i).unwrap()).collect();
+        assert_eq!(starts, ['j', 'l', 'e', 'm', 'f', 'b', 'f', 'b']);
+        assert_eq!(title_starts("don't 2go"), [0, 6]);
+        assert!(title_starts("  -- ").is_empty());
+        // The editor capitalises exactly what apply does.
+        let text = "hello  wide-world 2go \u{1C6}ep";
+        let mut drawn: Vec<char> = text.chars().collect();
+        for i in title_starts(text) {
+            let mut one = String::new();
+            title_case(drawn[i], &mut one);
+            drawn[i] = one.chars().next().unwrap();
+        }
+        assert_eq!(drawn.into_iter().collect::<String>(), TextCase::Title.apply(text));
+    }
+
+    /// Drawing test 12: each character's start in the cased text.
+    #[test]
+    fn case_offsets_follow_the_cased_text() {
+        let (upper, starts) = TextCase::Upper.apply_indexed("straße km");
+        assert_eq!(upper, "STRASSE KM");
+        assert_eq!(starts, [0, 1, 2, 3, 4, 6, 7, 8, 9, 10]);
+        assert_eq!(starts[7], 8, "the k");
+        for case in [TextCase::Upper, TextCase::Lower, TextCase::Title] {
+            for text in ["", "Hello  wide-WORLD 2go", "straße İstanbul ǆep", "a\u{0}b"] {
+                let (cased, starts) = case.apply_indexed(text);
+                assert_eq!(cased, case.apply(text), "{case:?} {text:?}");
+                assert_eq!(starts.len(), text.chars().count() + 1);
+                assert_eq!(starts.last(), Some(&cased.len()));
+                assert!(starts.windows(2).all(|w| w[0] <= w[1]) && starts.iter().all(|s| cased.is_char_boundary(*s)));
+            }
+        }
+        // Upper and lower map one letter at a time: no final-sigma rule.
+        assert_eq!(TextCase::Lower.apply("ΟΔΟΣ"), "οδοσ");
     }
 
     #[test]
