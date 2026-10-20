@@ -6,10 +6,12 @@
 //! When what is asked about moves, the picture is a contact sheet of its motion, and the prompt
 //! says so with the frames' times (feature-motion §3).
 //!
-//! An agent at its prompt (idle) has the prompt typed in. One at work (running) gets it as
-//! priority mail, which it reads with its next tool call, rather than keystrokes queued behind
-//! its turn. One waiting on the person (blocked: a permission prompt or a question) or still
-//! starting is never typed into, since a digit of the prompt would answer its dialog (TM-1).
+//! An agent at its prompt (idle) has the prompt pasted in, its line breaks kept inside a
+//! bracketed paste, then an Enter of its own (I-4); never over text the person has typed there
+//! and not sent (TM-20). One at work (running) gets it as priority mail, which it reads with its
+//! next tool call, rather than keystrokes queued behind its turn. One waiting on the person
+//! (blocked: a permission prompt or a question) or still starting is never typed into, since a
+//! digit of the prompt would answer its dialog (TM-1); Show terminal takes the person there.
 
 use super::board::{display_name, Board};
 use super::export;
@@ -116,6 +118,26 @@ fn hold_note(session: &str, route: Route) -> Option<String> {
 /// `session`'s state in a `session.list` answer; "closed" when it is not listed.
 fn state_of(listed: &Value, session: &str) -> String {
     rows(listed, "sessions").iter().find(|s| text(s, "name") == session).map_or("closed", |s| text(s, "state")).to_string()
+}
+
+/// `session`'s provider in a `session.list` answer; empty when it is not listed.
+fn provider_of(listed: &Value, session: &str) -> String {
+    rows(listed, "sessions").iter().find(|s| text(s, "name") == session).map_or("", |s| text(s, "provider")).to_string()
+}
+
+/// What Send says when `session`'s open pane shows text typed at its prompt and not sent: Ask
+/// would run its prompt into it (TM-20). `None` for an empty prompt, and when no pane is
+/// attached, where the paste's brackets keep a leading `/` or `!` from acting as a command.
+fn unsent_note(session: &str, provider: &str) -> Option<String> {
+    let row = crate::terminal::prompt_row(session)?;
+    (!crate::terminal::prompt_line_empty(&row, provider)).then(|| format!("{session}'s prompt has unsent text; send or clear it there first."))
+}
+
+/// Show `session`'s terminal from the board, or say why it cannot be (TM-1, E-ask-7).
+fn show_terminal(b: &Board, session: &str) {
+    if !b.ui.upgrade().is_some_and(|ui| ui.show_session(session)) {
+        b.toast(&format!("{session}'s terminal is not on the wall"));
+    }
 }
 
 /// A terminal's lamp, as the board's terminal key shows it.
@@ -360,11 +382,27 @@ fn composer(b: &Rc<Board>, anchor: &gtk::Widget, session: String) {
     hold.set_xalign(0.0);
     hold.set_visible(false);
     body.append(&hold);
+    let held = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    held.set_halign(gtk::Align::End);
+    held.set_visible(false);
+    let show = gtk::Button::with_label("Show terminal");
+    show.set_tooltip_text(Some(&format!("Open {session}'s terminal to answer it or clear its prompt")));
+    held.append(&show);
     let mail = gtk::Button::with_label("Send as mail instead");
     mail.set_tooltip_text(Some("The agent reads it with its next tool call, once its terminal is answered"));
-    mail.set_halign(gtk::Align::End);
-    mail.set_visible(false);
-    body.append(&mail);
+    held.append(&mail);
+    body.append(&held);
+    {
+        let (weak, p, session) = (Rc::downgrade(b), pop.downgrade(), session.clone());
+        show.connect_clicked(move |_| {
+            if let Some(p) = p.upgrade() {
+                p.popdown();
+            }
+            if let Some(b) = weak.upgrade() {
+                show_terminal(&b, &session);
+            }
+        });
+    }
     pop.set_child(Some(&body));
     pop.connect_closed(|p| {
         let p = p.clone();
@@ -402,7 +440,7 @@ fn composer(b: &Rc<Board>, anchor: &gtk::Widget, session: String) {
     let go = {
         let weak = Rc::downgrade(b);
         let picture = picture.downgrade();
-        let (p, send, hold, mail) = (pop.downgrade(), send.downgrade(), hold.downgrade(), mail.downgrade());
+        let (p, send, hold, held) = (pop.downgrade(), send.downgrade(), hold.downgrade(), held.downgrade());
         let session = session.clone();
         Rc::new(move || {
             let (Some(b), Some(request), Some(ui)) = (weak.upgrade(), typed(), weak.upgrade().and_then(|b| b.ui.upgrade())) else {
@@ -413,15 +451,15 @@ fn composer(b: &Rc<Board>, anchor: &gtk::Widget, session: String) {
             };
             send.set_sensitive(false);
             let project = b.doc.design.borrow().project_id;
-            let (weak, picture, p, hold, mail, session) = (Rc::downgrade(&b), picture.clone(), p.clone(), hold.clone(), mail.clone(), session.clone());
+            let (weak, picture, p, hold, held, session) = (Rc::downgrade(&b), picture.clone(), p.clone(), hold.clone(), held.clone(), session.clone());
             glib::spawn_future_local(async move {
                 let listed = ui.call("session.list", json!({"project_id": project})).await;
                 send.set_sensitive(true);
-                let (Some(b), Some(picture), Some(pop), Some(hold), Some(mail)) = (weak.upgrade(), picture.upgrade(), p.upgrade(), hold.upgrade(), mail.upgrade()) else {
+                let (Some(b), Some(picture), Some(pop), Some(hold), Some(held)) = (weak.upgrade(), picture.upgrade(), p.upgrade(), hold.upgrade(), held.upgrade()) else {
                     return;
                 };
-                let state = match listed {
-                    Ok(v) => state_of(&v, &session),
+                let (state, provider) = match listed {
+                    Ok(v) => (state_of(&v, &session), provider_of(&v, &session)),
                     Err(e) => {
                         hold.set_text(&format!("Could not check {session}'s terminal: {e}. Send again in a moment."));
                         hold.set_visible(true);
@@ -430,10 +468,13 @@ fn composer(b: &Rc<Board>, anchor: &gtk::Widget, session: String) {
                 };
                 b.set_lamp(&state);
                 let way = route(&state);
-                if let Some(note) = hold_note(&session, way) {
+                // Typed text left at its prompt holds an Ask as a dialog does; mail goes around
+                // both, and Show terminal takes the person to them (TM-1, TM-20).
+                let note = hold_note(&session, way).or_else(|| (way == Route::Type).then(|| unsent_note(&session, &provider)).flatten());
+                if let Some(note) = note {
                     hold.set_text(&note);
                     hold.set_visible(true);
-                    mail.set_visible(way == Route::Blocked);
+                    held.set_visible(way != Route::Starting);
                     return;
                 }
                 let anchor = pop.parent();
@@ -549,18 +590,29 @@ fn clean(s: &str) -> String {
     plain.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The request as typed into a terminal: its lines joined by " / " (a line break would send it
-/// early), tabs as spaces, every other control character dropped (E-ask-5).
+/// The request as it goes to the agent: its lines kept (it is pasted, so a line break does not
+/// send it, I-4), blank lines run together into one, tabs as spaces, every other control
+/// character dropped (E-ask-5).
 fn clean_request(s: &str) -> String {
     let line = |l: &str| {
         let plain: String = l.chars().filter_map(|c| if c == '\t' { Some(' ') } else if c.is_control() { None } else { Some(c) }).collect();
         plain.split_whitespace().collect::<Vec<_>>().join(" ")
     };
-    s.lines().map(line).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" / ")
+    let mut out: Vec<String> = Vec::new();
+    for l in s.lines().map(line) {
+        if !(l.is_empty() && out.last().is_none_or(String::is_empty)) {
+            out.push(l);
+        }
+    }
+    while out.last().is_some_and(String::is_empty) {
+        out.pop();
+    }
+    out.join("\n")
 }
 
-/// The prompt the agent reads: one line, naming the page and every selected layer by id
-/// (kinds as the schema names them), and the read that fetches just them (B76, TM-4, I-1).
+/// The prompt the agent reads: one line but for the request's own, naming the page and every
+/// selected layer by id (kinds as the schema names them), and the read that fetches just them
+/// (B76, TM-4, I-1).
 pub fn prompt(p: &Prompt) -> String {
     let (design, page) = (p.design, p.page);
     let mut out = format!("[Relay design] \"{}\" (design_id {design}, page \"{}\" ({page})).", clean(p.title), clean(p.page_name));
@@ -624,21 +676,24 @@ pub(super) fn ask_now(b: &Rc<Board>, request: &str) {
     let project = b.doc.design.borrow().project_id;
     let (weak, request) = (Rc::downgrade(b), request.to_string());
     glib::spawn_future_local(async move {
-        let state = ui.call("session.list", json!({"project_id": project})).await.map(|v| state_of(&v, &session));
+        let listed = ui.call("session.list", json!({"project_id": project})).await;
+        let state = listed.as_ref().map(|v| state_of(v, &session));
         let Some(b) = weak.upgrade() else {
             return;
         };
         // For the harness's log, as its other steps print theirs.
         println!("DESIGN_ASK {session} {}", state.as_deref().unwrap_or("unread"));
-        match state.as_deref().map(route) {
-            Ok(way @ (Route::Type | Route::Mail)) => send_request(&b, session, request, true, way),
-            Ok(way) => b.toast(&hold_note(&session, way).unwrap_or_else(|| format!("{session}'s terminal has closed"))),
-            Err(e) => b.toast(&format!("Could not check {session}'s terminal: {e}")),
+        let unsent = listed.as_ref().ok().and_then(|v| unsent_note(&session, &provider_of(v, &session)));
+        match (state.as_deref().map(route), unsent) {
+            (Ok(Route::Type), Some(note)) => b.toast(&note),
+            (Ok(way @ (Route::Type | Route::Mail)), _) => send_request(&b, session, request, true, way),
+            (Ok(way), _) => b.toast(&hold_note(&session, way).unwrap_or_else(|| format!("{session}'s terminal has closed"))),
+            (Err(e), _) => b.toast(&format!("Could not check {session}'s terminal: {e}")),
         }
     });
 }
 
-/// Send `request` about the selection to `session` the `way` its state allows (typed at its
+/// Send `request` about the selection to `session` the `way` its state allows (pasted at its
 /// prompt, or mail for one at work), with a picture when asked. Every delivery is here. The
 /// request stays in the composer's draft until it has gone (TM-19); a picture asked for and
 /// not attached is said, to the agent and on the board (B77); and if the agent has changed
@@ -718,9 +773,11 @@ fn send_request(b: &Rc<Board>, session: String, request: String, with_picture: b
                 let mail = json!({"project_id": project, "to": session, "text": message, "priority": true});
                 ui.call("mailbox.send", mail).await.map(|_| true).map_err(|e| e.to_string())
             }
-            _ => match ui.call("session.input", json!({"session": session, "data": message})).await {
+            // One paste, bracketed when the agent's terminal asked for it: its line breaks stay
+            // text, and nothing in it reads as a key or a command (I-4, TM-20).
+            _ => match ui.call("session.input", json!({"session": session, "data": message, "paste": true})).await {
                 Ok(_) => {
-                    // Enter on its own, so a terminal program reads the prompt as typed, not pasted.
+                    // Enter on its own, after the paste has landed, to send it.
                     glib::timeout_future(Duration::from_millis(60)).await;
                     Ok(ui.call("session.input", json!({"session": session, "data": "\r"})).await.is_ok())
                 }
@@ -754,10 +811,49 @@ fn send_request(b: &Rc<Board>, session: String, request: String, with_picture: b
                 answered(rev, d.rev, &d.updated_by, &session)
             };
             if !changed {
-                b.status.set_text(&format!("No change from {session} yet"));
+                no_change_yet(&b, &session);
             }
         }
     });
+}
+
+/// "No change from X yet" on the board's status line, with a key beside it that opens X's
+/// terminal for as long as the status says so (E-ask-7). The line has no key of its own for
+/// this, so the key is put after the status and taken out when the status changes.
+fn no_change_yet(b: &Rc<Board>, session: &str) {
+    const NAME: &str = "design-ask-open-terminal";
+    let Some(line) = b.status.parent().and_downcast::<gtk::Box>() else {
+        return;
+    };
+    // An earlier Ask's key, if its words are still up.
+    let mut child = line.first_child();
+    while let Some(c) = child {
+        child = c.next_sibling();
+        if c.widget_name() == NAME {
+            line.remove(&c);
+        }
+    }
+    b.status.set_text(&format!("No change from {session} yet"));
+    let key = gtk::Button::with_label(&format!("Open {session}'s terminal"));
+    key.add_css_class("design-agent-undo");
+    key.set_widget_name(NAME);
+    line.insert_child_after(&key, Some(&b.status));
+    let (weak, name) = (Rc::downgrade(b), session.to_string());
+    key.connect_clicked(move |_| {
+        if let Some(b) = weak.upgrade() {
+            show_terminal(&b, &name);
+        }
+    });
+    let handler: Rc<std::cell::Cell<Option<glib::SignalHandlerId>>> = Rc::default();
+    let (h, k, l) = (handler.clone(), key.downgrade(), line.downgrade());
+    handler.set(Some(b.status.connect_label_notify(move |status| {
+        if let (Some(k), Some(l)) = (k.upgrade(), l.upgrade()) {
+            l.remove(&k);
+        }
+        if let Some(id) = h.take() {
+            status.disconnect(id);
+        }
+    })));
 }
 
 /// Whether the agent `session` has changed the design since it was asked at `asked` (its rev
@@ -782,15 +878,16 @@ mod tests {
     fn the_prompt_names_everything_by_id_on_one_line() {
         let selected = [layer("cta", "frame", "Save \"now\"")];
         let p = ask(&selected, Ok(Some("/data/design-assets/ab.png")), "Make it\nbigger");
-        assert!(!p.contains('\n'));
+        // I-4: only the request's own line breaks; it is pasted, so they do not send it.
+        assert_eq!(p.matches('\n').count(), 1, "{p}");
         assert!(p.contains("design_id 12"));
         // TM-4: the page by name and by the id design.get takes; the read is of the selection.
         assert!(p.contains("page \"Flows\" (page-7)"), "{p}");
         assert!(p.contains("cta (frame \"Save 'now'\")"));
         // E-ask-4: the path is quoted, clear of the full stop.
         assert!(p.contains("Picture of it: \"/data/design-assets/ab.png\"."), "{p}");
-        // E-ask-5: its lines are kept apart.
-        assert!(p.contains("Request: Make it / bigger"), "{p}");
+        // E-ask-5 and I-4: its lines are kept, as lines.
+        assert!(p.contains("Request: Make it\nbigger —"), "{p}");
         assert!(p.contains("design.get {\"design_id\":12,\"nodes\":[\"cta\"]}"), "{p}");
     }
 
@@ -808,11 +905,13 @@ mod tests {
             motion: None,
             request: "one\u{3}\n\n\ttwo\u{9b}",
         });
-        assert!(!p.chars().any(char::is_control), "{p:?}");
+        assert!(!p.chars().any(|c| c.is_control() && c != '\n'), "{p:?}");
         assert!(p.contains("\"Set tings\"") && p.contains("page \"P '1'\" (p1)"), "{p}");
         assert!((0..10).all(|i| p.contains(&format!("n{i}"))), "every id: {p}");
         assert!(p.contains("n0 (rect \"Box 0 [A\")") && p.contains(", also n8, n9."), "{p}");
-        assert!(p.contains("Request: one / two —"), "{p}");
+        // Blank lines run together; only line breaks survive of the controls.
+        assert!(p.contains("Request: one\n\ntwo —"), "{p}");
+        assert_eq!(clean_request("\n\n a \n\n\n\tb\u{1b}\n\n"), "a\n\nb");
         assert!(p.contains("\"nodes\":[\"n0\",\"n1\",\"n2\",\"n3\",\"n4\",\"n5\",\"n6\",\"n7\",\"n8\",\"n9\"]"));
     }
 

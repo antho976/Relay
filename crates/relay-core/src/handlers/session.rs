@@ -2286,7 +2286,7 @@ pub fn register(e: &mut Engine) {
     // claimed from the PTY rather than read from the row (RA-646).
     e.register_staged::<Input, _>(|ctx, p| {
         let (id, pty) = live_pty(ctx, &p.session)?;
-        Ok((id, crate::engine::write_input(&pty, &p.data)?))
+        Ok((id, crate::engine::write_input(&pty, &p.data, p.paste)?))
     }, |ctx: &mut Ctx, _p, (id, edge): (Id, bool)| {
         if edge && ctx.tx().execute("UPDATE sessions SET state='running',updated_at=?1 WHERE id=?2 AND state='idle'", params![ctx.now, id]).bus()? > 0 {
             let updated = sessions::by_id(ctx.tx(), id)?.ok_or_else(|| BusError::internal("session vanished"))?;
