@@ -173,6 +173,11 @@ fn decode(bytes: &[u8], edge: u32) -> Result<Pixbuf, String> {
     Ok(pixbuf.apply_embedded_orientation().unwrap_or(pixbuf))
 }
 
+/// Whether this PC has a loader for `media_type`: WebP's comes in a package of its own.
+fn can_draw(media_type: &str) -> bool {
+    Pixbuf::formats().iter().any(|format| format.mime_types().iter().any(|m| m == media_type))
+}
+
 /// `pixbuf` no larger than `edge` on its long side.
 fn scaled(pixbuf: &Pixbuf, edge: u32) -> Pixbuf {
     let long = pixbuf.width().max(pixbuf.height()).max(1);
@@ -251,8 +256,8 @@ fn prepare(bytes: Vec<u8>) -> Result<Prepared, String> {
     let pixbuf = match decode(&bytes, MAX_SIDE) {
         Ok(pixbuf) => pixbuf,
         // One this PC cannot draw (a WebP without its loader) still goes when it needs no
-        // redrawing; its chip has no thumbnail.
-        Err(_) if !redraw => return Ok(Prepared { bytes, media_type, thumb: None }),
+        // redrawing; its chip has no thumbnail. One it can draw but not read is damaged.
+        Err(_) if !redraw && !can_draw(media_type) => return Ok(Prepared { bytes, media_type, thumb: None }),
         Err(why) => return Err(format!("It could not be read: {why}")),
     };
     let thumb = Some(Raw::of(&scaled(&pixbuf, THUMB_EDGE)));
@@ -804,6 +809,17 @@ mod tests {
         assert_eq!(prepare(b"BM not this one".to_vec()).err().as_deref(), Some(NOT_A_PICTURE));
         assert!(is_picture(Path::new("Shot.PNG")) && is_picture(Path::new("a.jpeg")) && is_picture(Path::new("b.webp")));
         assert!(!is_picture(Path::new("photo.heic")) && !is_picture(Path::new("notes.png.txt")));
+    }
+
+    #[test]
+    fn a_damaged_picture_stays_here() {
+        // Cut short: its header reads, its pixels do not. The API would refuse it, and a thread
+        // resumed with it in its history would go on failing.
+        let mut cut = png(300, 200, false);
+        cut.truncate(cut.len() / 2);
+        let refused = prepare(cut).err().unwrap_or_default();
+        assert!(refused.starts_with("It could not be read"), "{refused}");
+        assert!(can_draw("image/png") && can_draw("image/jpeg"));
     }
 
     #[test]
