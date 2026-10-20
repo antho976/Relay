@@ -632,6 +632,33 @@ impl Ui {
         names
     }
 
+    /// Bring session `name`'s terminal up from anywhere (Ask's Show terminal key, TM-1 and
+    /// E-ask-7): its project on the agents page, the pane shown alone as its focus key does,
+    /// and the keyboard in its terminal. False when the session is not known here or the
+    /// project switch was refused (the reason is already said).
+    pub fn show_session(self: &Rc<Self>, name: &str) -> bool {
+        let project = self.sidebar_sessions.borrow().iter().chain(self.sessions.borrow().iter())
+            .find(|s| text(s, "name") == name)
+            .and_then(|s| s["project_id"].as_i64());
+        let Some(project) = project else {
+            return false;
+        };
+        self.open_project(project, "agents");
+        if self.project.get() != project || !self.panes.borrow().contains_key(name) {
+            return false;
+        }
+        *self.focused.borrow_mut() = Some(name.to_string());
+        self.set_mode("focus");
+        // Once the focus layout has put it on screen.
+        let pane = Rc::downgrade(&self.panes.borrow()[name]);
+        glib::idle_add_local_once(move || {
+            if let Some(pane) = pane.upgrade() {
+                pane.terminal.grab_focus();
+            }
+        });
+        true
+    }
+
     // ------------------------------------------------------------------ settings popover
 
     fn agent_settings(self: &Rc<Self>, key: &gtk::Button, name: &str) {
