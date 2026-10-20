@@ -238,6 +238,10 @@ pub struct Board {
     pub(super) guides: RefCell<Vec<Guide>>,
     pub(super) space: Cell<bool>,
     pub(super) pointer: Cell<(f64, f64)>,
+    /// The drag under way's last update (screen point, offset, modifiers), which auto-pan
+    /// runs again as the camera moves under a still pointer.
+    pub(super) drag_at: Cell<Option<DragAt>>,
+    pub(super) autopan: Cell<bool>,
     /// The last primary press, for telling a double click: time in µs and where.
     pub(super) last_press: Cell<(i64, f64, f64)>,
     flash: RefCell<(HashSet<String>, i64)>,
@@ -525,6 +529,8 @@ impl Board {
             guides: RefCell::default(),
             space: Cell::new(false),
             pointer: Cell::new((0.0, 0.0)),
+            drag_at: Cell::new(None),
+            autopan: Cell::new(false),
             last_press: Cell::new((0, 0.0, 0.0)),
             flash: RefCell::new((HashSet::new(), 0)),
             flash_tick: RefCell::default(),
@@ -1358,7 +1364,22 @@ impl Board {
             snap.restore();
         }
         self.frame_labels(snap, &scene, &placed, &page);
+        if scene.children(&page).is_empty() && matches!(*self.gesture.borrow(), Gesture::Idle) && self.vector.borrow().is_none() {
+            self.empty_hint(snap, w, h, &canvas_fill);
+        }
         self.overlays(snap, &scene, &placed);
+    }
+
+    /// What an empty page says, in its middle (I-16).
+    fn empty_hint(&self, snap: &gtk::Snapshot, w: f64, h: f64, ground: &str) {
+        let layout = self.label_layout("empty", "Press F, R or T to start, or Ask an agent", 14.0, pango::Weight::Normal, false);
+        let (lw, lh) = layout.pixel_size();
+        let mut ink = label_ink(paint::luminance(ground));
+        ink.set_alpha(0.8);
+        snap.save();
+        snap.translate(&graphene::Point::new(((w - lw as f64) / 2.0) as f32, ((h - lh as f64) / 2.0) as f32));
+        snap.append_layout(&layout, &ink);
+        snap.restore();
     }
 
     /// A dot every 8, 16, 32… page pixels, whichever falls 16 to 32 screen pixels apart.
@@ -1560,8 +1581,7 @@ impl Board {
                 if selection.len() > 1 {
                     self.outline(snap, &s, SELECT, 1.0);
                 }
-                let line = selection.len() == 1
-                    && scene.node(&selection[0]).is_some_and(|n| n.kind == NodeKind::Line);
+                let line = selection.len() == 1 && scene.node(&selection[0]).is_some_and(ends_dragged);
                 if line && !locked {
                     for p in self.endpoints(&selection[0]) {
                         self.handle(snap, p.0, p.1, true);
@@ -1920,7 +1940,10 @@ impl Board {
         if tool != Tool::Vector {
             super::tools::finish_vector(self, false);
         }
-        self.tool.set(tool);
+        // Another tool lets go of the lock on the last one.
+        if self.tool.replace(tool) != tool {
+            self.tool_lock.set(false);
+        }
         for (t, key) in self.tool_keys.borrow().iter() {
             key.set_active(*t == tool);
         }
@@ -1929,17 +1952,41 @@ impl Board {
         let pens = matches!(tool, Tool::Pen | Tool::Vector | Tool::Highlighter | Tool::Eraser);
         self.pen_key.set_active(pens);
         if shapes {
-            self.shape_key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
             tip(&self.shape_key, &tool.tip());
         }
         if pens {
-            self.pen_key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
             tip(&self.pen_key, &tool.tip());
         }
+        self.show_tool_lock();
         if tool != Tool::Select {
             self.end_edit(true);
         }
         super::tools::update_cursor(self, None);
+    }
+
+    /// Keep the tool on hand after it makes something, or let it go back to Move after each
+    /// (a double click on its key; I-16).
+    pub(super) fn toggle_tool_lock(&self) {
+        let locked = !self.tool_lock.get() && self.tool.get() != Tool::Select && self.tool.get() != Tool::Hand;
+        self.tool_lock.set(locked);
+        self.show_tool_lock();
+        if locked {
+            self.toast(&format!("{} stays on until you pick another tool", self.tool.get().caption()));
+        }
+    }
+
+    /// Each tool key's glyph, the tool on hand's with a lock while it is kept.
+    fn show_tool_lock(&self) {
+        let (tool, locked) = (self.tool.get(), self.tool_lock.get());
+        for (t, key) in self.tool_keys.borrow().iter() {
+            key.set_child(Some(&tool_glyph(*t, locked && *t == tool)));
+        }
+        if tool.is_shape() {
+            self.shape_key.set_child(Some(&tool_glyph(tool, locked)));
+        }
+        if matches!(tool, Tool::Pen | Tool::Vector | Tool::Highlighter | Tool::Eraser) {
+            self.pen_key.set_child(Some(&tool_glyph(tool, locked)));
+        }
     }
 
     fn build_dock(self: &Rc<Self>, dock: &gtk::Box) {
@@ -2015,6 +2062,7 @@ impl Board {
                 key.set_active(true);
             }
         });
+        self.lock_on_double_click(&self.shape_key);
         dock.append(&self.shape_key);
         dock.append(&self.tool_menu(&Tool::SHAPES));
         for tool in [Tool::Text, Tool::Sticky] {
@@ -2036,6 +2084,7 @@ impl Board {
                 key.set_active(true);
             }
         });
+        self.lock_on_double_click(&self.pen_key);
         dock.append(&self.pen_key);
         dock.append(&self.tool_menu(&[Tool::Pen, Tool::Vector, Tool::Highlighter, Tool::Eraser]));
         let icon_key = gtk::MenuButton::new();
@@ -2139,6 +2188,7 @@ impl Board {
         key.set_tooltip_text(Some(&tool.tip()));
         key.set_widget_name(&format!("design-tool-{}", tool.glyph()));
         key.update_property(&[gtk::accessible::Property::Label(tool.caption())]);
+        self.lock_on_double_click(&key);
         let weak = Rc::downgrade(self);
         key.connect_clicked(move |key| {
             if let Some(b) = weak.upgrade() {
@@ -2147,6 +2197,19 @@ impl Board {
             }
         });
         key
+    }
+
+    /// A double click on a tool key locks its tool on.
+    fn lock_on_double_click(self: &Rc<Self>, key: &gtk::ToggleButton) {
+        let clicks = gtk::GestureClick::new();
+        clicks.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(self);
+        clicks.connect_pressed(move |_, n, _, _| {
+            if let Some(b) = weak.upgrade().filter(|_| n == 2) {
+                b.toggle_tool_lock();
+            }
+        });
+        key.add_controller(clicks);
     }
 
     /// A narrow chevron key whose menu lists `tools`.
@@ -3373,6 +3436,32 @@ pub fn free_name(base: &str, taken: &[String]) -> String {
 pub fn display_name(n: &Node) -> String {
     relay_client::design::names::display_name(n)
 }
+
+/// Whether a line is reshaped by dragging its ends: a connector, or a straight open line. A
+/// vector path (more than two points) or a closed shape gets the box's handles instead, which
+/// scale its points (I-16).
+pub fn ends_dragged(n: &Node) -> bool {
+    n.kind == NodeKind::Line
+        && (n.from.is_some() || n.to.is_some() || (n.closed != Some(true) && n.points.as_ref().is_none_or(|p| p.len() <= 2)))
+}
+
+/// A tool's glyph for its key; locked on, with a small lock in its corner.
+fn tool_glyph(tool: Tool, locked: bool) -> gtk::Widget {
+    let glyph = glyphs::image(tool.glyph(), 16);
+    if !locked {
+        return glyph.upcast();
+    }
+    let stack = gtk::Overlay::new();
+    stack.set_child(Some(&glyph));
+    let lock = glyphs::image("lock", 8);
+    lock.set_halign(gtk::Align::End);
+    lock.set_valign(gtk::Align::End);
+    stack.add_overlay(&lock);
+    stack.upcast()
+}
+
+/// A drag's last update: its screen point, its offset from the press, and the modifiers held.
+pub type DragAt = (f64, f64, f64, f64, gdk::ModifierType);
 
 /// What a board shows: what `Board::state` takes and `Board::restore` puts back.
 #[derive(Debug, Clone)]

@@ -39,6 +39,8 @@ pub fn install(b: &Rc<Board>) {
             let (sx, sy) = g.start_point().unwrap_or((0.0, 0.0));
             let mods = g.current_event_state();
             update(&b, sx + dx, sy + dy, dx, dy, mods);
+            b.drag_at.set(Some((sx + dx, sy + dy, dx, dy, mods)));
+            autopan(&b);
         }
     });
     let weak = Rc::downgrade(b);
@@ -235,6 +237,21 @@ pub fn install(b: &Rc<Board>) {
     });
     canvas.add_controller(focus);
 
+    // F6 and Shift F6 take the keyboard from the canvas to the layers to the inspector and
+    // round, from wherever it is on the board (I-16).
+    let panes = gtk::EventControllerKey::new();
+    let weak = Rc::downgrade(b);
+    panes.connect_key_pressed(move |_, key, _, mods| {
+        match weak.upgrade().filter(|_| key == gdk::Key::F6) {
+            Some(b) => {
+                next_pane(&b, mods.contains(gdk::ModifierType::SHIFT_MASK));
+                glib::Propagation::Stop
+            }
+            None => glib::Propagation::Proceed,
+        }
+    });
+    b.root.add_controller(panes);
+
     let drop = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
     let weak = Rc::downgrade(b);
     drop.connect_drop(move |_, value, x, y| {
@@ -250,6 +267,80 @@ pub fn install(b: &Rc<Board>) {
         true
     });
     canvas.add_controller(drop);
+}
+
+/// How far a frame the camera moves, in screen pixels, with the pointer at `(x, y)` near an
+/// edge of a `w` by `h` canvas: up to 12 within 24 pixels of it, more the closer.
+fn edge_pan(x: f64, y: f64, w: f64, h: f64) -> (f64, f64) {
+    const EDGE: f64 = 24.0;
+    let along = |p: f64, size: f64| {
+        if p < EDGE {
+            (EDGE - p.max(0.0)) / EDGE * 12.0
+        } else if p > size - EDGE {
+            -((p.min(size) - (size - EDGE)) / EDGE * 12.0)
+        } else {
+            0.0
+        }
+    };
+    (along(x, w), along(y, h))
+}
+
+/// A drag held near the canvas's edge moves the camera a little each frame, and the drag with
+/// it, so a layer can be carried past what shows (I-16).
+fn autopan(b: &Rc<Board>) {
+    let dragging = matches!(
+        *b.gesture.borrow(),
+        Gesture::Move { moved: true, .. } | Gesture::Resize { .. } | Gesture::Marquee { moved: true, .. } | Gesture::Create { .. } | Gesture::Endpoint { .. }
+    );
+    let Some((x, y, ..)) = b.drag_at.get() else {
+        return;
+    };
+    let (w, h) = b.size.get();
+    if !dragging || edge_pan(x, y, w, h) == (0.0, 0.0) || b.autopan.replace(true) {
+        return;
+    }
+    let weak = Rc::downgrade(b);
+    b.canvas.add_tick_callback(move |_, _| {
+        let Some(b) = weak.upgrade() else {
+            return glib::ControlFlow::Break;
+        };
+        let held = !matches!(*b.gesture.borrow(), Gesture::Idle | Gesture::Pan { .. });
+        let (w, h) = b.size.get();
+        match b.drag_at.get().filter(|_| held) {
+            Some((x, y, dx, dy, mods)) if edge_pan(x, y, w, h) != (0.0, 0.0) => {
+                let (vx, vy) = edge_pan(x, y, w, h);
+                let mut cam = b.cam.get();
+                cam.pan(vx, vy);
+                b.set_cam(cam);
+                update(&b, x, y, dx, dy, mods);
+                glib::ControlFlow::Continue
+            }
+            _ => {
+                b.autopan.set(false);
+                glib::ControlFlow::Break
+            }
+        }
+    });
+}
+
+/// Give the keyboard to the next pane on show after the one holding it (`back`: the one before):
+/// the canvas, the layers, the inspector.
+fn next_pane(b: &Board, back: bool) {
+    let mut panes: Vec<gtk::Widget> = vec![b.canvas.clone().upcast()];
+    if b.layers_panel.reveals_child() {
+        panes.push(b.layers_panel.clone().upcast());
+    }
+    if b.inspector_scroll.is_visible() {
+        panes.push(b.inspector_scroll.clone().upcast());
+    }
+    let focus = b.focus_widget();
+    let here = panes.iter().position(|p| focus.as_ref().is_some_and(|f| f == p || f.is_ancestor(p))).unwrap_or(0);
+    let n = panes.len();
+    let next = &panes[if back { (here + n - 1) % n } else { (here + 1) % n }];
+    if next.child_focus(gtk::DirectionType::TabForward) || next.grab_focus() {
+        return;
+    }
+    b.canvas.grab_focus();
 }
 
 /// The wheel or touchpad over the canvas: Ctrl (or Cmd) zooms at the pointer, else it pans
@@ -476,7 +567,7 @@ fn is_line_selected(b: &Board) -> Option<String> {
     let sel = b.selection.borrow();
     let scene = b.doc.scene.borrow();
     match sel.as_slice() {
-        [one] if scene.node(one).is_some_and(|n| n.kind == NodeKind::Line && !n.is_locked()) => Some(one.clone()),
+        [one] if scene.node(one).is_some_and(|n| super::board::ends_dragged(n) && !n.is_locked()) => Some(one.clone()),
         _ => None,
     }
 }
@@ -1186,6 +1277,7 @@ fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
 }
 
 fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
+    b.drag_at.set(None);
     let gesture = std::mem::replace(&mut *b.gesture.borrow_mut(), Gesture::Idle);
     b.guides.borrow_mut().clear();
     match gesture {
@@ -1567,6 +1659,7 @@ pub(super) fn cancel(b: &Board) {
         }
     }
     b.guides.borrow_mut().clear();
+    b.drag_at.set(None);
     b.doc.set_hold(false);
     b.invalidate();
     update_cursor(b, None);
@@ -2133,6 +2226,16 @@ impl Board {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_drag_near_an_edge_pans_toward_it() {
+        assert_eq!(edge_pan(400.0, 300.0, 800.0, 600.0), (0.0, 0.0));
+        let (vx, vy) = edge_pan(2.0, 300.0, 800.0, 600.0);
+        assert!(vx > 10.0 && vy == 0.0, "left edge: the page comes in from the left");
+        let (vx, vy) = edge_pan(400.0, 590.0, 800.0, 600.0);
+        assert!(vx == 0.0 && (-12.0..0.0).contains(&vy));
+        assert_eq!(edge_pan(-50.0, 300.0, 800.0, 600.0).0, 12.0, "past the edge: as fast as it goes");
+    }
 
     #[test]
     fn a_line_over_an_artboards_middle_stays_free() {
