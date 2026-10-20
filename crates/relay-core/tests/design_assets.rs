@@ -379,6 +379,31 @@ fn a_removed_projects_pictures_stay_for_its_restore() {
     assert_eq!(unb64(got["bytes_b64"].as_str().unwrap()), png(20, 20, 0), "the restored design's picture is there");
 }
 
+/// The person may restore the whole store from any backup (app.backup.now's, the one taken
+/// before an upgrade), which brings its designs back as project.restore does: a picture one of
+/// them names stays while that backup is there, and goes once it is not.
+#[test]
+fn a_picture_stays_while_any_backup_names_it() {
+    let (e, root) = project();
+    let id = create(&e);
+    let added = add(&e, id, &png(21, 21, 0));
+    apply(&e, id, json!([{"op": "add", "node": {"id": "photo", "parent": "page-1", "kind": "image", "src": added["src"], "w": 21, "h": 21}}]));
+    ok(&e, "app.backup.now", json!({}));
+    // The node goes and its undo is history: only the backup names the picture.
+    apply(&e, id, json!([{"op": "delete", "id": "photo"}]));
+    e.store.lock().execute("UPDATE audit SET ts = '2000-01-01T00:00:00Z'", []).unwrap();
+    let picture = assets_dir(root.path()).join(added["src"].as_str().unwrap());
+    date(&picture, long_ago());
+    let swept = relay_core::disk_sweep::sweep_design_assets(&e);
+    assert!(swept.removed.is_empty() && picture.is_file(), "{swept:?}");
+
+    for backup in e.store.list_backups().unwrap() {
+        std::fs::remove_file(&backup.path).unwrap();
+    }
+    date(&picture, long_ago());
+    assert_eq!(relay_core::disk_sweep::sweep_design_assets(&e).removed, vec![picture]);
+}
+
 // ---------------------------------------------------------------- designs that go away
 
 /// B67: a removed project's designs, live and in Deleted, are each announced deleted, so a

@@ -373,8 +373,9 @@ pub(crate) static ASSET_FILES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// (`undo.grace_days`, B66). A picture is named by its content and shared by every design, so no
 /// delete or purge can tell whether it was the last to use one; this sweep asks once the file
 /// has sat untouched for the window: a picture any design (deleted ones included, which
-/// `design.restore` brings back), any undoable edit of the window, or any removal backup
-/// (`project.restore`) names is kept and dated now, so a file's time is when it was last seen
+/// `design.restore` brings back), any undoable edit of the window, or any backup (a removal's,
+/// which `project.restore` reads, or any other the person may restore) names is kept and dated
+/// now, so a file's time is when it was last seen
 /// named, and one is removed only after a whole window unnamed, while an undo can still want
 /// it. `design.asset.add` dates a picture now too, so one stored again before the edit that
 /// names it is not taken from under it. 0 or less days keeps every picture.
@@ -419,7 +420,7 @@ fn sweep_assets(engine: &Engine, now: SystemTime) -> AssetsSwept {
         }
     }
     let (Some(since), false) = (unseen_since, candidates.is_empty()) else { return out };
-    // Nothing is known to be unnamed while a removal backup cannot be read.
+    // Nothing is known to be unnamed while a backup cannot be read.
     let Some(named) = named_pictures(engine, &crate::time::days_ago(grace)) else { return out };
     for (name, path) in candidates {
         if named.contains(&name) {
@@ -451,15 +452,16 @@ fn remove_unseen(path: &Path, since: SystemTime) -> Option<u64> {
     Some(meta.len())
 }
 
-/// Every picture name the store's designs, the undoable edits since `since` and the removal
-/// backups hold; `None` when a removal backup cannot be read. Read as text (node bodies, named
-/// styles, undo payloads), so a field this build cannot read still keeps its picture.
+/// Every picture name the store's designs, the undoable edits since `since` and the backups
+/// hold; `None` when a backup cannot be read. Read as text (node bodies, named styles, undo
+/// payloads), so a field this build cannot read still keeps its picture.
 fn named_pictures(engine: &Engine, since: &str) -> Option<HashSet<String>> {
     let mut named = HashSet::new();
-    let designs: Vec<i64> = {
+    let (designs, styled): (Vec<i64>, bool) = {
         let conn = engine.store.lock();
         let ids = conn.prepare_cached("SELECT id FROM designs")
-            .and_then(|mut stmt| stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>());
+            .and_then(|mut stmt| stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>())
+            .and_then(|ids| Ok((ids, has_styles(&conn)?)));
         match ids {
             Ok(ids) => ids,
             Err(error) => {
@@ -470,7 +472,7 @@ fn named_pictures(engine: &Engine, since: &str) -> Option<HashSet<String>> {
     };
     for design in designs {
         let conn = engine.store.lock();
-        if let Err(error) = design_names(&conn, design, &mut named) {
+        if let Err(error) = design_names(&conn, design, styled, &mut named) {
             tracing::warn!(design, %error, "design-assets sweep could not read a design; keeping every picture");
             return None;
         }
@@ -507,10 +509,11 @@ fn named_pictures(engine: &Engine, since: &str) -> Option<HashSet<String>> {
             }
         }
     }
-    // `project.restore` brings a removed project's designs back from the backup taken before it
-    // went: their pictures must be there.
+    // A backup brings its designs back: `project.restore` a removed project's, from the one taken
+    // before it went, and the person a whole store, from any (`app.backup.now`'s, the one taken
+    // before an upgrade). Their pictures must be there. A handful of each reason are kept.
     let backups = engine.store.list_backups().ok()?;
-    for backup in backups.iter().filter(|b| matches!(b.reason.as_str(), "project-remove" | "workspace-remove")) {
+    for backup in &backups {
         let read = rusqlite::Connection::open_with_flags(
             &backup.path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -520,23 +523,25 @@ fn named_pictures(engine: &Engine, since: &str) -> Option<HashSet<String>> {
             if !held {
                 return Ok(());
             }
+            let styled = has_styles(&conn)?;
             let designs: Vec<i64> = conn.prepare("SELECT id FROM designs")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
             for design in designs {
-                design_names(&conn, design, &mut named)?;
+                design_names(&conn, design, styled, &mut named)?;
             }
             Ok(())
         });
         if let Err(error) = read {
-            tracing::warn!(backup = %backup.path.display(), %error, "unreadable removal backup; keeping every design picture");
+            tracing::warn!(backup = %backup.path.display(), %error, "unreadable backup; keeping every design picture");
             return None;
         }
     }
     Some(named)
 }
 
-/// The picture names design `id`'s nodes and named styles hold, added to `named`. A store from
-/// before v30 (a backup) has no styles column.
-fn design_names(conn: &Connection, id: i64, named: &mut HashSet<String>) -> rusqlite::Result<()> {
+/// The picture names design `id`'s nodes and, when its store has them (`styled`, from
+/// [`has_styles`]), its named styles hold, added to `named`. A design gone since its id was
+/// listed (purged between two reads) names nothing.
+fn design_names(conn: &Connection, id: i64, styled: bool, named: &mut HashSet<String>) -> rusqlite::Result<()> {
     let mut each = |text: &str| names_in(text, |name| { named.insert(name.to_string()); });
     let mut nodes = conn.prepare_cached("SELECT body FROM design_nodes WHERE design_id = ?1")?;
     let mut rows = nodes.query([id])?;
@@ -545,13 +550,22 @@ fn design_names(conn: &Connection, id: i64, named: &mut HashSet<String>) -> rusq
             each(body);
         }
     }
-    let styled = conn.prepare_cached("SELECT styles FROM designs WHERE id = ?1").and_then(|mut stmt| stmt.query_row([id], |r| r.get::<_, String>(0)));
-    match styled {
-        Ok(styles) => each(&styles),
-        Err(rusqlite::Error::SqliteFailure(..)) => {}
-        Err(error) => return Err(error),
+    if styled {
+        let mut styles = conn.prepare_cached("SELECT styles FROM designs WHERE id = ?1")?;
+        let mut rows = styles.query([id])?;
+        if let Some(row) = rows.next()? {
+            if let Ok(styles) = row.get_ref(0)?.as_str() {
+                each(styles);
+            }
+        }
     }
     Ok(())
+}
+
+/// Whether `conn`'s designs have named styles: a store from before v30 (a backup) has no such
+/// column, the one thing a read of them may be let off for.
+fn has_styles(conn: &Connection) -> rusqlite::Result<bool> {
+    conn.prepare_cached("SELECT 1 FROM pragma_table_info('designs') WHERE name = 'styles'")?.exists([])
 }
 
 /// Each picture name in `text`: a run of hex digits and an extension that `valid_src` reads as
@@ -835,6 +849,38 @@ mod tests {
         let app = Procs(vec![("relay-native".into(), Some(PathBuf::from("/")), Some(wt.join("target/debug/relay-native")))]);
         assert!(!app.building_in(&wt), "the app run from target/debug does not stop a trim of deps");
         assert!(!app.inside(&wt));
+    }
+
+    /// A store from before v30 (a backup) has no styles to read; a design purged between the
+    /// listing and its read names nothing; a styles read failing for anything else is an error,
+    /// which keeps every picture, not a design read as naming none.
+    #[test]
+    fn a_designs_pictures_are_read_where_its_store_has_them_and_a_failed_read_is_an_error() {
+        let name = "0123456789abcdef0123456789abcdef.png";
+        let old = Connection::open_in_memory().unwrap();
+        old.execute_batch("CREATE TABLE designs (id INTEGER PRIMARY KEY); CREATE TABLE design_nodes (design_id INTEGER, body TEXT); INSERT INTO designs VALUES (1);").unwrap();
+        old.execute("INSERT INTO design_nodes VALUES (1, ?1)", [format!(r#"{{"src":"{name}"}}"#)]).unwrap();
+        assert!(!has_styles(&old).unwrap());
+        let mut named = HashSet::new();
+        design_names(&old, 1, false, &mut named).unwrap();
+        assert_eq!(named, HashSet::from([name.to_string()]));
+
+        let live = Connection::open_in_memory().unwrap();
+        live.execute_batch("CREATE TABLE designs (id INTEGER PRIMARY KEY, styles TEXT NOT NULL DEFAULT '{}'); CREATE TABLE design_nodes (design_id INTEGER, body TEXT);").unwrap();
+        live.execute("INSERT INTO designs VALUES (1, ?1)", [format!(r#"{{"hero":{{"fill_image":"{name}"}}}}"#)]).unwrap();
+        assert!(has_styles(&live).unwrap());
+        let mut named = HashSet::new();
+        design_names(&live, 1, true, &mut named).unwrap();
+        assert_eq!(named, HashSet::from([name.to_string()]), "a named style's picture");
+        let mut none = HashSet::new();
+        design_names(&live, 2, true, &mut none).unwrap();
+        assert!(none.is_empty(), "a design purged since it was listed names nothing");
+
+        let broken = Connection::open_in_memory().unwrap();
+        broken.execute_batch("CREATE TABLE design_nodes (design_id INTEGER, body TEXT);
+            CREATE VIEW designs AS SELECT 1 AS id, json_extract('not json', '$') AS styles;").unwrap();
+        assert!(has_styles(&broken).unwrap());
+        assert!(design_names(&broken, 1, true, &mut HashSet::new()).is_err(), "not let off as a missing column");
     }
 
     /// B66: a design.asset.add of a picture the sweep has found old and is about to remove
