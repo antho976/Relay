@@ -634,7 +634,22 @@ pub fn reparent(scene: &Scene, placed: &Placed, id: &str, parent: &str, index: O
 /// `layout: null` alone drops them at their stale `x`/`y` and sizes, a filling child at its
 /// stored width, often 0, and a hugging frame at its stored size. A hidden child goes to the
 /// frame's content corner. A frame not placed (hidden) only loses its layout.
+///
+/// Frames inside one another go outermost first, each child counted against the size its frame
+/// is stored at once the list has run: a column turned off fixes a filling row in it at the
+/// width it showed, and the row's own children, its layout turned off too, are pinned against
+/// that width, not the one it stored before.
 pub fn set_layout(scene: &Scene, placed: &Placed, frames: &[String], mode: Option<Layout>) -> Vec<NodeOp> {
+    let mut frames: Vec<&String> = frames.iter().filter(|id| scene.node(id).is_some()).collect();
+    frames.sort_by_key(|id| paint_key(scene, id));
+    frames.dedup();
+    let off: HashSet<&str> = frames
+        .iter()
+        .map(|id| id.as_str())
+        .filter(|id| mode.is_none_or(|m| m == Layout::None) && scene.stored(id).is_some_and(|f| f.kind == NodeKind::Frame && f.layout.is_some()))
+        .collect();
+    // The `w`/`h` a frame of `off` is stored at once a frame turned off around it settled it.
+    let mut settled: HashMap<&str, (f64, f64)> = HashMap::new();
     let mut ops = Vec::new();
     for id in frames {
         let Some(f) = scene.stored(id).filter(|f| f.kind == NodeKind::Frame) else {
@@ -661,15 +676,22 @@ pub fn set_layout(scene: &Scene, placed: &Placed, frames: &[String], mode: Optio
             ops.push(NodeOp::Update { id: id.clone(), set: s });
             continue;
         };
-        // Its size as stored from now on: a hug of its children is fixed at what it showed.
-        let mut stored = (f.w, f.h);
-        for (key, rule_key, rule, size, at) in [("w", "w_sizing", f.w_rule(), f.clamp_w(r.w.round()), &mut stored.0), ("h", "h_sizing", f.h_rule(), f.clamp_h(r.h.round()), &mut stored.1)] {
-            if rule == Sizing::Hug {
-                *at = size.clamp(0.0, MAX_COORD);
-                s.insert(key.into(), json!(*at));
-                s.insert(rule_key.into(), json!("fixed"));
+        // Its size as stored from now on: as the frame around it settled it, or with a hug of its
+        // children fixed at what it showed.
+        let stored = match settled.get(id.as_str()) {
+            Some(&size) => size,
+            None => {
+                let mut stored = (f.w, f.h);
+                for (key, rule_key, rule, size, at) in [("w", "w_sizing", f.w_rule(), f.clamp_w(r.w.round()), &mut stored.0), ("h", "h_sizing", f.h_rule(), f.clamp_h(r.h.round()), &mut stored.1)] {
+                    if rule == Sizing::Hug {
+                        *at = size.clamp(0.0, MAX_COORD);
+                        s.insert(key.into(), json!(*at));
+                        s.insert(rule_key.into(), json!("fixed"));
+                    }
+                }
+                stored
             }
-        }
+        };
         ops.push(NodeOp::Update { id: id.clone(), set: s });
         let origin = placed.origin(id);
         let fit = Some(Fit { stored, placed: (r.w, r.h) });
@@ -679,6 +701,16 @@ pub fn set_layout(scene: &Scene, placed: &Placed, frames: &[String], mode: Optio
                 continue;
             };
             let s = match shown(placed, child, origin) {
+                // A frame whose layout goes too no longer measures what it holds: its hug is
+                // fixed here, through this frame's pins, with the rest of its box.
+                Some(rel) if off.contains(child.as_str()) => {
+                    let mut bare = c.clone();
+                    bare.layout = None;
+                    let s = settle(&bare, rel, fit, stretched(scene, child), Sizes::Freeze);
+                    let size = |key: &str, stored: f64| s.get(key).and_then(Value::as_f64).unwrap_or(stored);
+                    settled.insert(child.as_str(), (size("w", c.w), size("h", c.h)));
+                    s
+                }
                 Some(rel) => settle(c, rel, fit, stretched(scene, child), Sizes::Freeze),
                 None => {
                     let r = unpinned(c, fit, Rect::new(left, top, c.w, c.h));
@@ -1798,6 +1830,32 @@ mod tests {
         assert!(matches!(&ops[0], NodeOp::Update { set, .. } if set.len() == 1), "{ops:?}");
         let ops = set_layout(&Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), node("f", Some("p1"), K::Frame, [0.0; 4])]), &after, &ids(&["f"]), Some(Layout::Wrap));
         assert!(matches!(&ops[0], NodeOp::Update { set, .. } if set["layout"] == json!("wrap") && set["padding"] == json!([16])), "{ops:?}");
+    }
+
+    /// TM-8 across one list: layout turned off on a column and the filling row inside it, in
+    /// either order, keeps the row as wide as it showed and its child pinned right where it
+    /// showed, placed against the width the row is stored at from now on.
+    #[test]
+    fn turning_layout_off_on_nested_frames_keeps_pinned_children() {
+        let nest = || {
+            let mut col = node("col", Some("p1"), K::Frame, [0.0, 0.0, 400.0, 300.0]);
+            col.layout = Some(Layout::Column);
+            let mut card = node("card", Some("col"), K::Frame, [0.0, 0.0, 0.0, 100.0]);
+            (card.layout, card.w_sizing, card.h_sizing) = (Some(Layout::Row), Some(Sizing::Fill), Some(Sizing::Hug));
+            let mut r = node("r", Some("card"), K::Rect, [0.0, 0.0, 40.0, 20.0]);
+            r.pin_x = Some(PinX::Right);
+            Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), col, card, r])
+        };
+        for order in [["col", "card"], ["card", "col"]] {
+            let mut s = nest();
+            let before = place(&s, "p1", &Mono);
+            assert_eq!(before.rect("card"), Some(Rect::new(0.0, 0.0, 400.0, 20.0)));
+            let ops = set_layout(&s, &before, &ids(&order), None);
+            run(&mut s, &ops);
+            kept(&before, &place(&s, "p1", &Mono), &["col", "card", "r"]);
+            let card = s.node("card").unwrap();
+            assert_eq!((card.layout, card.w, card.w_rule(), card.h, card.h_rule()), (None, 400.0, Sizing::Fixed, 20.0, Sizing::Fixed), "{order:?}");
+        }
     }
 
     /// TM-8: ungrouping a column that stretches its children keeps their widths: a filling
