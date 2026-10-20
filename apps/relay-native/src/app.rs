@@ -1519,6 +1519,25 @@ impl Ui {
             self.show_error(&refusal);
             return glib::Propagation::Stop;
         }
+        // Edits held back while Relay is not connected (or behind a refusal) would be lost: ask,
+        // since refusing would keep the window open for as long as Relay stays down.
+        if let Some((question, detail)) = crate::design::unsent() {
+            let ui = self.clone();
+            glib::spawn_future_local(async move {
+                let dialog = gtk::AlertDialog::builder()
+                    .message(question)
+                    .detail(detail)
+                    .buttons(["Cancel", "Close Anyway"])
+                    .cancel_button(0)
+                    .default_button(0)
+                    .modal(true)
+                    .build();
+                if dialog.choose_future(Some(&ui.window)).await.ok() == Some(1) {
+                    crate::design::close_anyway(|| ui.window.close());
+                }
+            });
+            return glib::Propagation::Stop;
+        }
         if self.editor.is_dirty() {
             self.show_error("Save or discard your editor changes before closing.");
             return glib::Propagation::Stop;

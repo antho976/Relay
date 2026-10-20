@@ -539,6 +539,12 @@ impl Shared {
         self.refused.get()
     }
 
+    /// The edits and steps held back until the engine's copy is read: while Relay is not
+    /// connected, or behind a refusal (B9). Closing loses them.
+    pub fn unsent(&self) -> usize {
+        self.replay.borrow().len()
+    }
+
     pub fn session(&self) -> Option<String> {
         self.design.borrow().session.clone()
     }
@@ -1536,6 +1542,7 @@ mod tests {
         shared.answered(sent, Err(Failure::Unsent));
         assert_eq!(shared.undo.borrow().len(), 1);
         assert!(matches!(shared.replay.borrow().front(), Some(Pending::Step { undo: true, .. })), "it goes out once Relay is back");
+        assert!(shared.unsent() == 1 && shared.unsaved(), "closing now would lose it");
         // Back: read, then it goes out.
         shared.read(Ok(got(3, nodes())), 0, None);
         let sent = shared.next().unwrap();
@@ -1576,7 +1583,7 @@ mod tests {
         let sent = shared.next().unwrap();
         let refusal = BusError::new(ErrorKind::NotFound, "design.node_not_found", "no node \"button\"");
         shared.answered(sent, Err(Failure::Refused(Box::new(refusal))));
-        assert!(shared.queue.borrow().is_empty() && shared.replay.borrow().len() == 2);
+        assert!(shared.queue.borrow().is_empty() && shared.replay.borrow().len() == 2 && shared.unsent() == 2);
         assert!(shared.unsaved() && shared.stale.get());
         assert_eq!(said(&heard), ["Not saved: no node \"button\""]);
         doc.commit(vec![set("dot", json!({"y": 7.0}))], vec![]);
