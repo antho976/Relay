@@ -11,10 +11,10 @@ use crate::app::{label, Ui};
 use gtk::prelude::*;
 use gtk::{gdk, gio, graphene, gsk, pango};
 use gtk4 as gtk;
-use relay_bus::design::{Node, NodeKind, NodeOp};
+use relay_bus::design::{Node, NodeKind, NodeOp, Scroll};
 use relay_client::design::{bounds, edit, shapes};
 use relay_client::design::geom::step_zoom;
-use relay_client::design::layout::{self, Placed};
+use relay_client::design::layout::{self, Placed, Scrolled};
 use relay_client::design::snap::Guide;
 use relay_client::design::{Camera, Rect, Scene};
 use serde_json::{json, Map, Value};
@@ -223,6 +223,9 @@ pub struct Board {
     pub(super) painter: Rc<Painter>,
     pub(super) page: RefCell<String>,
     pub(super) placed: RefCell<Option<Rc<Placed>>>,
+    /// How far each scrolling frame is scrolled on the canvas (Alt+wheel), by frame id: view
+    /// state, never stored or exported, gone when the board closes (feature-layout §2.5).
+    pub(super) scroll: RefCell<HashMap<String, (f64, f64)>>,
     pub(super) content: RefCell<Option<gsk::RenderNode>>,
     pub(super) cam: Cell<Camera>,
     pub(super) cams: RefCell<HashMap<String, Camera>>,
@@ -515,6 +518,7 @@ impl Board {
             painter,
             page: RefCell::new(first_page),
             placed: RefCell::default(),
+            scroll: RefCell::default(),
             content: RefCell::default(),
             cam: Cell::new(Camera::default()),
             cams: RefCell::default(),
@@ -800,12 +804,44 @@ impl Board {
         }
         let scene = self.doc.scene.borrow();
         let started = trace().then(std::time::Instant::now);
-        let placed = Rc::new(layout::place(&scene, &self.page.borrow(), &*self.painter));
+        let placed = Rc::new(layout::place_scrolled(&scene, &self.page.borrow(), &*self.painter, &self.scroll.borrow()));
         if let Some(t) = started {
             println!("DESIGN_TRACE layout {:.3} ms {} nodes", t.elapsed().as_secs_f64() * 1e3, placed.rects.len());
         }
         *self.placed.borrow_mut() = Some(placed.clone());
         placed
+    }
+
+    /// The page as a still picture shows it, every scrolling frame at its start: what export
+    /// and `design.render` draw. The canvas's own layout when nothing is scrolled.
+    pub(super) fn still_placed(&self) -> Rc<Placed> {
+        if self.scroll.borrow().values().all(|&(x, y)| x == 0.0 && y == 0.0) {
+            return self.placed();
+        }
+        Rc::new(layout::place(&self.doc.scene.borrow(), &self.page.borrow(), &*self.painter))
+    }
+
+    /// Scroll the scrolling frame `id` by `(dx, dy)` page px, held within what its content
+    /// overflows (as last placed). Whether it moved.
+    pub(super) fn scroll_by(&self, id: &str, dx: f64, dy: f64) -> bool {
+        let placed = self.placed();
+        let Some((r, s)) = placed.rect(id).zip(placed.scrolls.get(id).copied()) else {
+            return false;
+        };
+        let Some(scroll) = self.doc.scene.borrow().node(id).and_then(|n| n.scroll) else {
+            return false;
+        };
+        let to = scroll_to(&r, &s, scroll, (dx, dy));
+        if to == s.offset {
+            return false;
+        }
+        if to == (0.0, 0.0) {
+            self.scroll.borrow_mut().remove(id);
+        } else {
+            self.scroll.borrow_mut().insert(id.to_string(), to);
+        }
+        self.invalidate();
+        true
     }
 
     /// The scene or the layout changed: lay out again and redraw, and refresh the chrome
@@ -1479,7 +1515,7 @@ impl Board {
             if s.w < 28.0 || s.bottom() < 0.0 || s.y > self.size.get().1 + 20.0 {
                 continue;
             }
-            let name = display_name(n);
+            let name = frame_label(n);
             let layout = self.label_layout(&format!("frame:{id}"), &name, 12.0, pango::Weight::Medium, false);
             layout.set_width((s.w * pango::SCALE as f64) as i32);
             layout.set_ellipsize(pango::EllipsizeMode::End);
@@ -1509,7 +1545,7 @@ impl Board {
             if s.w < 28.0 {
                 continue;
             }
-            let name = display_name(n);
+            let name = frame_label(n);
             let layout = self.label_layout(&format!("frame:{id}"), &name, 12.0, pango::Weight::Medium, false);
             let (lw, lh) = layout.pixel_size();
             let hit = Rect::new(s.x, s.y - lh as f64 - 8.0, (lw as f64).min(s.w) + 4.0, lh as f64 + 6.0);
@@ -1544,6 +1580,7 @@ impl Board {
                 self.outline_node(snap, scene, placed, id, 1.5);
             }
         }
+        self.scrollbars(snap, scene, placed);
         let gesture = self.gesture.borrow();
         // Where a dragged node would land.
         if let Gesture::Move { target: Some(t), moved: true, .. } = &*gesture {
@@ -1679,6 +1716,48 @@ impl Board {
                 snap.append_stroke(&pb.to_path(), &stroke, &rgba(&self.pen_color(*tool, parent)));
             }
             _ => {}
+        }
+    }
+
+    /// The overlay scrollbars of the scrolling frames under the pointer, selected or holding the
+    /// selection (feature-layout §2.5): drawn over the canvas, never part of the content, so no
+    /// export carries them. A turned frame's turn with it.
+    fn scrollbars(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed) {
+        if placed.scrolls.is_empty() {
+            return;
+        }
+        let hover = self.hover.borrow().clone();
+        let selection = self.selection.borrow();
+        let px = 1.0 / self.cam.get().zoom;
+        // A mid grey reads on light and dark content alike.
+        let mut c = rgba("#7A7A7A");
+        c.set_alpha(0.7);
+        for (id, s) in &placed.scrolls {
+            let Some((n, r)) = scene.node(id).filter(|n| !n.is_hidden()).zip(placed.rect(id)) else {
+                continue;
+            };
+            let near = |other: &str| other == id || scene.is_inside(other, id);
+            if !hover.as_deref().is_some_and(near) && !selection.iter().any(|sel| near(sel)) {
+                continue;
+            }
+            let turned = !shapes::turned_ancestors(scene, placed, id).is_empty() || shapes::rotation(n) != 0.0;
+            for bar in scroll_bars(&r, s, n.scroll.unwrap_or(Scroll::Both), px) {
+                if turned {
+                    let pb = gsk::PathBuilder::new();
+                    for (i, (x, y)) in bar.corners().into_iter().enumerate() {
+                        let (x, y) = shapes::to_page_pt(scene, placed, id, x, y);
+                        let (x, y) = self.cam.get().to_screen(x, y);
+                        if i == 0 { pb.move_to(x as f32, y as f32) } else { pb.line_to(x as f32, y as f32) }
+                    }
+                    pb.close();
+                    snap.append_fill(&pb.to_path(), gsk::FillRule::Winding, &c);
+                } else {
+                    let rr = gsk::RoundedRect::from_rect(grect(&self.screen(&bar)), 2.0);
+                    snap.push_rounded_clip(&rr);
+                    snap.append_color(&c, &grect(&self.screen(&bar)));
+                    snap.pop();
+                }
+            }
         }
     }
 
@@ -3575,6 +3654,54 @@ fn clip_nodes(clip: &Value, design: i64, styles: &relay_bus::design::Styles) -> 
 
 /// Where layer `id` shows on the page, as a box: `shapes::shown_rect` (its drawing, turned by its
 /// own turn) carried out through each turned frame it is in.
+/// The name above a top-level frame, with a mark for the way it scrolls: ⇆ across, ⇅ down.
+fn frame_label(n: &Node) -> String {
+    let mark = match n.scroll {
+        Some(Scroll::X) => " ⇆",
+        Some(Scroll::Y) => " ⇅",
+        Some(Scroll::Both) => " ⇆⇅",
+        None => "",
+    };
+    format!("{}{mark}", display_name(n))
+}
+
+/// The wheel's `(dx, dy)` as a frame that scrolls `scroll` takes it: one that scrolls only
+/// across takes the wheel's turn (down) across, one that scrolls only down takes a sideways
+/// swipe down.
+pub(super) fn scroll_delta(scroll: Scroll, dx: f64, dy: f64) -> (f64, f64) {
+    let main = if dx.abs() > dy.abs() { dx } else { dy };
+    match scroll {
+        Scroll::X => (main, 0.0),
+        Scroll::Y => (0.0, main),
+        Scroll::Both => (dx, dy),
+    }
+}
+
+/// Where a frame placed at `r` and scrolled as `s` is scrolled to by `d` more: along the axes it
+/// scrolls, from its start to as far as its content passes its box.
+fn scroll_to(r: &Rect, s: &Scrolled, scroll: Scroll, d: (f64, f64)) -> (f64, f64) {
+    let along = |on: bool, at: f64, by: f64, room: f64| if on { (at + by).clamp(0.0, room.max(0.0)) } else { 0.0 };
+    (along(scroll.x(), s.offset.0, d.0, s.content.w - r.w), along(scroll.y(), s.offset.1, d.1, s.content.h - r.h))
+}
+
+/// The scrollbar thumbs of a frame placed at `r` and scrolled as `s`, in page coordinates
+/// (`px` page units to a screen pixel): 4 px bars 2 px inside the edges it scrolls past, only
+/// where its content overflows; each as long against the edge as the box is against the content,
+/// and as far along as it is scrolled.
+fn scroll_bars(r: &Rect, s: &Scrolled, scroll: Scroll, px: f64) -> Vec<Rect> {
+    let (thick, inset) = (4.0 * px, 2.0 * px);
+    let mut bars = Vec::new();
+    if scroll.x() && s.content.w > r.w + 0.5 {
+        let len = r.w * r.w / s.content.w;
+        bars.push(Rect::new(r.x + s.offset.0 / s.content.w * r.w, r.bottom() - inset - thick, len, thick));
+    }
+    if scroll.y() && s.content.h > r.h + 0.5 {
+        let len = r.h * r.h / s.content.h;
+        bars.push(Rect::new(r.right() - inset - thick, r.y + s.offset.1 / s.content.h * r.h, thick, len));
+    }
+    bars
+}
+
 pub(super) fn shown_box(scene: &Scene, placed: &Placed, id: &str) -> Option<Rect> {
     let r = shapes::shown_rect(scene, placed, id)?;
     Some(shapes::turned_ancestors(scene, placed, id).iter().rev().fold(r, |b, &(cx, cy, d)| shapes::rotated_bounds_about(&b, d, cx, cy)))
@@ -3771,5 +3898,48 @@ mod tests {
         assert_eq!(title_set("\u{0}", "Home"), None);
         assert_eq!(title_set(" Hero\u{0}x\n", "Home"), Some("Herox".into()));
         assert_eq!(title_set("Landing", "Home"), Some("Landing".into()));
+    }
+
+    #[test]
+    fn alt_wheel_scrolls_a_frame_within_its_content() {
+        // A 350 px carousel holding 804 px of cards.
+        let r = Rect::new(10.0, 20.0, 350.0, 200.0);
+        let s = Scrolled { offset: (0.0, 0.0), content: Rect::new(10.0, 20.0, 804.0, 200.0) };
+        assert_eq!(scroll_to(&r, &s, Scroll::X, (100.0, 0.0)), (100.0, 0.0));
+        assert_eq!(scroll_to(&r, &s, Scroll::X, (-40.0, 0.0)), (0.0, 0.0), "not before its start");
+        assert_eq!(scroll_to(&r, &s, Scroll::X, (9_000.0, 0.0)), (454.0, 0.0), "not past its last card");
+        assert_eq!(scroll_to(&r, &s, Scroll::Both, (0.0, 30.0)), (0.0, 0.0), "nothing below to scroll to");
+        assert_eq!(scroll_to(&r, &s, Scroll::Y, (100.0, 0.0)), (0.0, 0.0), "a feed does not scroll across");
+        // The wheel turned down scrolls a carousel across; a feed takes a sideways swipe down.
+        assert_eq!(scroll_delta(Scroll::X, 0.0, 48.0), (48.0, 0.0));
+        assert_eq!(scroll_delta(Scroll::Y, 30.0, 2.0), (0.0, 30.0));
+        assert_eq!(scroll_delta(Scroll::Both, 3.0, 4.0), (3.0, 4.0));
+    }
+
+    #[test]
+    fn a_scrollbar_is_as_long_as_the_box_against_its_content() {
+        let r = Rect::new(0.0, 0.0, 400.0, 300.0);
+        let s = Scrolled { offset: (200.0, 0.0), content: Rect::new(0.0, 0.0, 800.0, 300.0) };
+        let bars = scroll_bars(&r, &s, Scroll::Both, 1.0);
+        assert_eq!(bars.len(), 1, "only across: the content fits down");
+        let bar = bars[0];
+        assert_eq!((bar.w, bar.h), (200.0, 4.0), "400² / 800");
+        assert_eq!(bar.x, 100.0, "200 of 800 along a 400 box");
+        assert_eq!(bar.bottom(), 298.0, "2 px inside the bottom edge");
+        assert_eq!(scroll_bars(&r, &s, Scroll::X, 0.5)[0].h, 2.0, "4 screen px at 200%");
+        let fits = Scrolled { offset: (0.0, 0.0), content: r };
+        assert!(scroll_bars(&r, &fits, Scroll::Both, 1.0).is_empty());
+    }
+
+    #[test]
+    fn a_frames_label_says_how_it_scrolls() {
+        let mut n = Node::new(NodeKind::Frame);
+        n.id = "f".into();
+        n.name = Some("Trails".into());
+        assert_eq!(frame_label(&n), "Trails");
+        n.scroll = Some(Scroll::X);
+        assert_eq!(frame_label(&n), "Trails ⇆");
+        n.scroll = Some(Scroll::Both);
+        assert_eq!(frame_label(&n), "Trails ⇆⇅");
     }
 }

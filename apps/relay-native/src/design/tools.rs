@@ -126,7 +126,9 @@ pub fn install(b: &Rc<Board>) {
         let Some(b) = weak.upgrade() else {
             return glib::Propagation::Proceed;
         };
-        scroll_cam(&b, c, dx, dy);
+        if !scroll_frame(&b, c, dx, dy) {
+            scroll_cam(&b, c, dx, dy);
+        }
         glib::Propagation::Stop
     });
     canvas.add_controller(scroll);
@@ -361,6 +363,33 @@ fn scroll_cam(b: &Board, c: &gtk::EventControllerScroll, dx: f64, dy: f64) {
         cam.pan(-sx, -sy);
     }
     b.set_cam(cam);
+}
+
+/// Alt and the wheel over a scrolling frame scroll it, the deepest under the pointer, as the
+/// canvas's view only (nothing is stored: feature-layout §2.5). Whether one took the wheel;
+/// with none there the wheel pans as before.
+fn scroll_frame(b: &Board, c: &gtk::EventControllerScroll, dx: f64, dy: f64) -> bool {
+    let mods = c.current_event_state();
+    if !alt(mods) || mods.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::META_MASK) {
+        return false;
+    }
+    let (px, py) = b.pointer.get();
+    let p = b.to_page(px, py);
+    let placed = b.placed();
+    let page = b.page.borrow().clone();
+    let found = {
+        let scene = b.doc.scene.borrow();
+        let chain = hit::chain(&scene, &placed, &page, p.0, p.1, 0.0);
+        chain.into_iter().rev().find_map(|id| Some((scene.node(&id)?.scroll?, id)))
+    };
+    let Some((scroll, id)) = found else {
+        return false;
+    };
+    let (sx, sy) = if c.unit() == gdk::ScrollUnit::Wheel { (dx * 48.0, dy * 48.0) } else { (dx, dy) };
+    let zoom = b.cam.get().zoom;
+    let (dx, dy) = super::board::scroll_delta(scroll, sx / zoom, sy / zoom);
+    b.scroll_by(&id, dx, dy);
+    true
 }
 
 /// A pinch that zooms the camera about its centre.
