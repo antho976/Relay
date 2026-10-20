@@ -22,6 +22,7 @@ mod fields;
 mod hints;
 mod pins;
 mod read;
+mod style;
 
 pub use fields::{field_kinds, fit_written, plain_label, strip_controls, takes, Kinds, FIELDS};
 pub use hints::{
@@ -30,6 +31,7 @@ pub use hints::{
 };
 pub use pins::{follow_axis, page_point, Pin};
 pub use read::{read_node, read_nodes, read_nodes_opt, write_node, write_nodes, write_nodes_opt};
+pub use style::{color_ref, copy_id, Removed, Style, StyleError, Styles, MAX_STYLES, STYLE_FIELDS};
 
 /// Most nodes one design holds.
 pub const MAX_NODES: usize = 5_000;
@@ -190,7 +192,7 @@ pub struct Stop {
     /// 0 at the start, 1 at the end.
     #[schemars(range(min = 0, max = 1))]
     pub at: f64,
-    /// `#RGB`, `#RRGGBB` or `#RRGGBBAA`.
+    /// `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour.
     pub color: String,
 }
 
@@ -380,7 +382,7 @@ pub struct Shadow {
     #[serde(default)]
     #[schemars(range(min = -10_000, max = 10_000))]
     pub spread: f64,
-    /// `#RGB`, `#RRGGBB` or `#RRGGBBAA`.
+    /// `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour.
     pub color: String,
     /// An inner shadow, cast inside the edge instead of under the node.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -782,13 +784,14 @@ pub struct Node {
     #[serde(default, alias = "height")]
     #[schemars(range(min = 0, max = MAX_COORD))]
     pub h: f64,
-    /// Background: `#RGB`, `#RRGGBB` or `#RRGGBBAA`. Default: a frame `#FFFFFF`, a rect,
+    /// Background: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour the design names (a
+    /// `color` edit names one). Default: a frame `#FFFFFF`, a rect,
     /// ellipse or polygon `#D9D9D9`, a sticky `#FFE58A`, a page `#1E1D1B` (the canvas colour); a
     /// text, line or path paints none unless given one (a text's is a box behind its words, a
     /// line's or path's of three points or more fills inside them). A text's letters are `color`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<String>,
-    /// Outline colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`. A box's border (frame, rect, sticky,
+    /// Outline colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour. A box's border (frame, rect, sticky,
     /// image) and an ellipse's or polygon's outline are drawn only when set, inside the edge; a
     /// line or path defaults to `#8C8C8C`; an icon is drawn in it (default: its `color`, else dark
     /// on a light ground and light on a dark one).
@@ -833,7 +836,8 @@ pub struct Node {
     #[schemars(length(max = MAX_TEXT))]
     pub text: Option<String>,
     /// Colour of the letters of a text, sticky or label, and of an icon without a `stroke`:
-    /// `#RGB`, `#RRGGBB` or `#RRGGBBAA` (default: dark on a light ground, light on a dark one).
+    /// `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour (default: dark on a light ground,
+    /// light on a dark one).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
     /// Font family of a text, sticky or label (default `Geist`; `Geist Mono` and `Sora` are
@@ -1084,6 +1088,12 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1, max = 1000))]
     pub max_lines: Option<u16>,
+    /// A named style of the design (a `style` edit makes one; `design.get` lists them): each of
+    /// its fields this node does not set itself applies to it, so changing the style restyles
+    /// every node that names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
+    pub style: Option<String>,
 
     /// What this build cannot read in a node another build wrote: a key it does not know, or a
     /// known one whose value it cannot read (a newer gradient kind). Kept and written back as it
@@ -1290,6 +1300,7 @@ impl Node {
             shadows: None,
             runs: None,
             max_lines: None,
+            style: None,
             extra: Map::new(),
         }
     }
@@ -1553,6 +1564,9 @@ impl Node {
         if let Some(runs) = &self.runs {
             self.check_runs(runs)?;
         }
+        if let Some(style) = self.style.as_deref().filter(|s| !valid_id(s)) {
+            return Err(format!("style: {style:?} is not a style name: use 1 to 64 letters, digits, '-', '_', '.' or ':'"));
+        }
         self.check_layout()?;
         match self.kind {
             NodeKind::Line
@@ -1618,6 +1632,25 @@ impl Node {
         Ok(())
     }
 
+    /// The colours and the style this node names, each with the field a refusal names: `fill`,
+    /// `stroke`, `color`, `shadow`, `shadows`, `gradient`, `stroke_gradient`, `runs` (the `$`
+    /// left off a colour's name) or `style`.
+    pub fn names(&self) -> Vec<(&'static str, &str)> {
+        let mut out = Vec::new();
+        for (field, c) in [("fill", &self.fill), ("stroke", &self.stroke), ("color", &self.color)] {
+            out.extend(c.as_deref().and_then(color_ref).map(|name| (field, name)));
+        }
+        for (field, shadows) in [("shadow", self.shadow.as_slice()), ("shadows", self.shadows.as_deref().unwrap_or_default())] {
+            out.extend(shadows.iter().filter_map(|s| color_ref(&s.color)).map(|name| (field, name)));
+        }
+        for (field, g) in [("gradient", &self.gradient), ("stroke_gradient", &self.stroke_gradient)] {
+            out.extend(g.iter().flat_map(|g| &g.stops).filter_map(|s| color_ref(&s.color)).map(|name| (field, name)));
+        }
+        out.extend(self.runs.iter().flatten().filter_map(|r| r.color.as_deref().and_then(color_ref)).map(|name| ("runs", name)));
+        out.extend(self.style.as_deref().map(|style| ("style", style)));
+        out
+    }
+
     /// The shadows it casts, in paint order: `shadows`, else `shadow` (one holding both, written
     /// by two builds, casts `shadows`).
     pub fn shadow_list(&self) -> &[Shadow] {
@@ -1661,14 +1694,14 @@ impl Node {
     }
 }
 
-/// Whether `c` is a colour a node may hold.
+/// Whether `c` is a colour a node may hold: a literal or a `$name` the design names.
 fn colour_ok(c: &str) -> bool {
-    parse_color(c).is_some()
+    parse_color(c).is_some() || color_ref(c).is_some()
 }
 
 /// The refusal of `c` in colour field `field`.
 fn not_a_colour(field: &str, c: &str) -> String {
-    format!("{field}: {c:?} is not #RGB, #RRGGBB or #RRGGBBAA")
+    format!("{field}: {c:?} is not #RGB, #RRGGBB, #RRGGBBAA or a $name colour")
 }
 
 /// A shadow's values, its messages starting with `field` (`shadow`, `shadows[2]`): a colour, and
@@ -1804,7 +1837,7 @@ mod tests {
         r.shadow = Some(Shadow { x: 0.0, y: 2.0, blur: 4.0, spread: 0.0, color: "#000".into(), inset: false });
         assert_eq!(r.validate(), Ok(()));
         r.shadow.as_mut().unwrap().color = "red".into();
-        assert_eq!(r.validate().unwrap_err(), "shadow.color: \"red\" is not #RGB, #RRGGBB or #RRGGBBAA");
+        assert_eq!(r.validate().unwrap_err(), "shadow.color: \"red\" is not #RGB, #RRGGBB, #RRGGBBAA or a $name colour");
         // Every colour's doc names the three forms.
         let schema = serde_json::to_value(schemars::schema_for!(Node)).unwrap();
         for doc in [&schema["properties"]["fill"], &schema["properties"]["stroke"], &schema["properties"]["color"],
@@ -1854,6 +1887,34 @@ mod tests {
 
     fn read(body: Value) -> Node {
         Node::read(body).unwrap()
+    }
+
+    /// Reuse test list: `$name` colours in every colour slot, style names, and what a node names.
+    #[test]
+    fn colour_names_and_styles_validate() {
+        let stops = json!([{"at": 0, "color": "$brand"}, {"at": 1, "color": "#fff"}]);
+        let named = read(json!({"kind": "text", "parent": "p", "text": "8.4 km", "w": 90, "fill": "$paper", "color": "$ink",
+            "stroke": "#000", "shadow": {"blur": 4, "color": "$shade"}, "runs": [{"start": 3, "end": 6, "color": "$muted"}], "style": "body.small"}));
+        assert_eq!(named.validate(), Ok(()));
+        assert_eq!(named.names(), [("fill", "paper"), ("color", "ink"), ("shadow", "shade"), ("runs", "muted"), ("style", "body.small")]);
+        let glow = read(json!({"kind": "line", "parent": "p", "points": [[0, 0], [9, 0]], "stroke": "$a", "gradient": {"stops": stops},
+            "stroke_gradient": {"stops": stops}, "shadows": [{"color": "#000"}, {"color": "$b"}]}));
+        assert_eq!(glow.validate(), Ok(()));
+        assert_eq!(glow.names(), [("stroke", "a"), ("shadows", "b"), ("gradient", "brand"), ("stroke_gradient", "brand")]);
+        assert!(rect().names().is_empty());
+        for (field, value) in [("fill", "$"), ("stroke", "$bad name"), ("color", "accent")] {
+            let mut body = json!({"kind": "rect", "parent": "p"});
+            body[field] = json!(value);
+            assert_eq!(read(body).validate().unwrap_err(), format!("{field}: {value:?} is not #RGB, #RRGGBB, #RRGGBBAA or a $name colour"));
+        }
+        let stop = read(json!({"kind": "rect", "parent": "p", "gradient": {"stops": [{"at": 0, "color": "$ x"}, {"at": 1, "color": "#fff"}]}}));
+        assert_eq!(stop.validate().unwrap_err(), "gradient: \"$ x\" is not #RGB, #RRGGBB, #RRGGBBAA or a $name colour");
+        for style in ["", "my style", "a/b"] {
+            let n = read(json!({"kind": "rect", "parent": "p", "style": style}));
+            assert_eq!(n.validate().unwrap_err(), format!("style: {style:?} is not a style name: use 1 to 64 letters, digits, '-', '_', '.' or ':'"));
+        }
+        // A page takes no style.
+        assert_eq!(read(json!({"kind": "page", "style": "card"})).check_new().unwrap_err(), "style: a page takes no style; give it its own fill");
     }
 
     /// Drawing test 1: the drawing fields read as agents write them, validate, and round-trip.
@@ -1906,7 +1967,7 @@ mod tests {
         n.shadows = Some(vec![glow.clone(); 9]);
         assert_eq!(n.validate().unwrap_err(), "shadows: 1 to 8 of them; null for none");
         n.shadows = Some(vec![glow.clone(), Shadow { color: "glow".into(), ..glow.clone() }]);
-        assert_eq!(n.validate().unwrap_err(), "shadows[1].color: \"glow\" is not #RGB, #RRGGBB or #RRGGBBAA");
+        assert_eq!(n.validate().unwrap_err(), "shadows[1].color: \"glow\" is not #RGB, #RRGGBB, #RRGGBBAA or a $name colour");
         n.shadows = Some(vec![Shadow { blur: -1.0, ..glow }]);
         assert_eq!(n.validate().unwrap_err(), "shadows[0]: x, y and spread within ±10000, blur from 0");
         // An update moves one shadow into the list in one set.
@@ -1929,7 +1990,7 @@ mod tests {
                 "runs[1]: starts at 3, inside runs[0] (0 to 4); give them in order without overlap"),
             (json!([{"start": 2, "end": 4}]), "runs[0]: give it a style (color, font, font_size, font_weight, italic, underline, strike or rise)"),
             (json!([{"start": 2, "end": 2, "italic": true}]), "runs[0]: start (2) is not before end (2)"),
-            (json!([{"start": 0, "end": 1, "color": "grey"}]), "runs[0].color: \"grey\" is not #RGB, #RRGGBB or #RRGGBBAA"),
+            (json!([{"start": 0, "end": 1, "color": "grey"}]), "runs[0].color: \"grey\" is not #RGB, #RRGGBB, #RRGGBBAA or a $name colour"),
             (json!([{"start": 0, "end": 1, "font_size": 0}]), "runs[0].font_size: 0 is outside 1 to 1000"),
             (json!([{"start": 0, "end": 1, "font_weight": 1001}]), "runs[0].font_weight: 1001 is outside 1 to 1000"),
             (json!([{"start": 0, "end": 1, "rise": -1001}]), "runs[0].rise: -1001 is outside -1000 to 1000"),

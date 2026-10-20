@@ -133,6 +133,7 @@ pub const FIELDS: &[(&str, Kinds, Option<&str>)] = &[
     ("shadows", Kinds(F | R | E | Y | S | I | T | L | A | C), None),
     ("runs", Kinds(T | S | R | E | Y), None),
     ("max_lines", Kinds(T | S | R | E | Y), None),
+    ("style", Kinds(ALL & !P), Some("style: a page takes no style; give it its own fill")),
 ];
 
 fn table() -> &'static HashMap<&'static str, (Kinds, Option<&'static str>)> {
@@ -687,7 +688,7 @@ mod tests {
             "to": "b", "route": "straight", "closed": true, "smooth": true, "flip_x": true, "flip_y": true,
             "arc": {}, "blend": "normal", "text_case": "upper", "pin_x": "left", "pin_y": "top", "absolute": false,
             "min_w": 1, "max_w": 1, "min_h": 1, "max_h": 1, "row_gap": 1, "scroll": "x", "stroke_cap": "round",
-            "stroke_join": "round", "stroke_gradient": {"stops": []}, "shadows": [], "runs": [], "max_lines": 1
+            "stroke_join": "round", "stroke_gradient": {"stops": []}, "shadows": [], "runs": [], "max_lines": 1, "style": "card"
         }"##).unwrap();
         let keys = present(&full);
         assert_eq!(keys.len(), FIELDS.len(), "{keys:?}");

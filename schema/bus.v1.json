@@ -25162,14 +25162,14 @@
             "string",
             "null"
           ],
-          "description": "Background: `#RGB`, `#RRGGBB` or `#RRGGBBAA`. Default: a frame `#FFFFFF`, a rect,\nellipse or polygon `#D9D9D9`, a sticky `#FFE58A`, a page `#1E1D1B` (the canvas colour); a\ntext, line or path paints none unless given one (a text's is a box behind its words, a\nline's or path's of three points or more fills inside them). A text's letters are `color`."
+          "description": "Background: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour the design names (a\n`color` edit names one). Default: a frame `#FFFFFF`, a rect,\nellipse or polygon `#D9D9D9`, a sticky `#FFE58A`, a page `#1E1D1B` (the canvas colour); a\ntext, line or path paints none unless given one (a text's is a box behind its words, a\nline's or path's of three points or more fills inside them). A text's letters are `color`."
         },
         "stroke": {
           "type": [
             "string",
             "null"
           ],
-          "description": "Outline colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`. A box's border (frame, rect, sticky,\nimage) and an ellipse's or polygon's outline are drawn only when set, inside the edge; a\nline or path defaults to `#8C8C8C`; an icon is drawn in it (default: its `color`, else dark\non a light ground and light on a dark one)."
+          "description": "Outline colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour. A box's border (frame, rect, sticky,\nimage) and an ellipse's or polygon's outline are drawn only when set, inside the edge; a\nline or path defaults to `#8C8C8C`; an icon is drawn in it (default: its `color`, else dark\non a light ground and light on a dark one)."
         },
         "stroke_width": {
           "type": [
@@ -25246,7 +25246,7 @@
             "string",
             "null"
           ],
-          "description": "Colour of the letters of a text, sticky or label, and of an icon without a `stroke`:\n`#RGB`, `#RRGGBB` or `#RRGGBBAA` (default: dark on a light ground, light on a dark one)."
+          "description": "Colour of the letters of a text, sticky or label, and of an icon without a `stroke`:\n`#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour (default: dark on a light ground,\nlight on a dark one)."
         },
         "font": {
           "type": [
@@ -25870,6 +25870,16 @@
           "maximum": 1000,
           "description": "Most lines shown, 1 to 1000; the rest is cut and the last line shown ends in \"…\". The\nwords need a width to wrap at: a sticky, a shape's label, or a text whose width is fixed\nor fills."
         },
+        "style": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A named style of the design (a `style` edit makes one; `design.get` lists them): each of\nits fields this node does not set itself applies to it, so changing the style restyles\nevery node that names it.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
         "width": {
           "type": "number",
           "minimum": 0,
@@ -25990,7 +26000,7 @@
         },
         "color": {
           "type": "string",
-          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`."
+          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour."
         },
         "inset": {
           "type": "boolean",
@@ -26166,7 +26176,7 @@
         },
         "color": {
           "type": "string",
-          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`."
+          "description": "`#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour."
         }
       },
       "required": [
@@ -26724,6 +26734,7 @@
                   "shadows",
                   "runs",
                   "max_lines",
+                  "style",
                   "width",
                   "height"
                 ]

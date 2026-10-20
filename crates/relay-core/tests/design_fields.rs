@@ -182,3 +182,29 @@ fn an_image_needs_its_size_and_only_what_has_content_hugs() {
         {"op": "add", "node": {"id": "pic", "parent": "card", "kind": "image", "src": src, "w_sizing": "fill", "h": 80}},
     ]));
 }
+
+/// Reuse: a node may name a `$name` colour or a style, but until the store keeps a design's
+/// colours and styles the design has none, so a node naming one is refused by name, not stored
+/// naming nothing.
+#[test]
+fn named_colours_and_styles_are_refused_until_the_design_holds_them() {
+    let (e, _root) = project();
+    let id = create(&e);
+    card(&e, id);
+    for (ops, message) in [
+        (json!([{"op": "add", "node": {"id": "cta", "parent": "card", "kind": "rect", "fill": "$accent"}}]),
+            "ops[0] add \"cta\": fill: the design has no colour $accent"),
+        (json!([{"op": "add", "node": {"id": "cta", "parent": "card", "kind": "rect", "style": "button"}}]),
+            "ops[0] add \"cta\": style: the design has no style \"button\""),
+        (json!([{"op": "update", "id": "card", "set": {"shadow": {"blur": 4, "color": "$shade"}}}]),
+            "ops[0] update \"card\": shadow: the design has no colour $shade"),
+    ] {
+        let error = refused(&e, id, ops);
+        assert_eq!((error.code.as_str(), error.message.as_str()), ("design.style_not_found", message));
+        assert!(error.hint.as_deref().is_some_and(|h| h.contains("not supported yet")), "{:?}", error.hint);
+    }
+    // A name that is not one is a value error, as any colour.
+    let error = refused(&e, id, json!([{"op": "update", "id": "card", "set": {"fill": "$"}}]));
+    assert_eq!((error.code.as_str(), error.message.as_str()),
+        ("design.node_invalid", "ops[0] update \"card\": fill: \"$\" is not #RGB, #RRGGBB, #RRGGBBAA or a $name colour"));
+}

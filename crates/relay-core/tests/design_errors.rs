@@ -62,7 +62,7 @@ fn each_refusal_names_its_edit_and_field() {
             "ops[2] update \"card\": padding: invalid type: integer `16`, expected a sequence; give a list: [all], [vertical, horizontal] or [top, right, bottom, left]",
             2, Some("card"), Some("padding")),
         (with(&[json!({"op": "update", "id": "card", "set": {"fill": "red"}})]),
-            "ops[2] update \"card\": fill: \"red\" is not #RGB, #RRGGBB or #RRGGBBAA", 2, Some("card"), Some("fill")),
+            "ops[2] update \"card\": fill: \"red\" is not #RGB, #RRGGBB, #RRGGBBAA or a $name colour", 2, Some("card"), Some("fill")),
         (with(&[json!({"op": "update", "id": "title", "set": {"x": "12"}})]),
             "ops[2] update \"title\": x: invalid type: string \"12\", expected f64", 2, Some("title"), Some("x")),
         (with(&[json!({"op": "update", "id": "card", "set": {"background": "#fff"}})]),

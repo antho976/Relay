@@ -64,7 +64,7 @@ pub const FIELD_HINTS: &[(&[&str], &str)] = &[
     (&["line_join", "stroke_linejoin"], "use stroke_join"),
     (&["border_gradient", "stroke_fill"], "use stroke_gradient"),
     (&["animation", "keyframes", "transition", "motion"], "nodes do not animate yet"),
-    (&["class", "token", "tokens", "variables"], "there are no named colours or styles yet: write each node's own"),
+    (&["class", "token", "tokens", "variables"], "name colours with {op: color} and looks with {op: style}; a node takes style and $name colours"),
     (&["text_padding", "label_padding"], "use padding"),
     (&["background", "background_color", "bg"], "use fill"),
     (&["border", "border_color", "outline"], "use stroke (a colour) and stroke_width"),
@@ -655,7 +655,7 @@ mod tests {
         let rect = json!({"id": "r", "parent": "p", "kind": "rect"});
         assert_eq!(update(rect.clone(), json!({"padding": 16})),
             "padding: invalid type: integer `16`, expected a sequence; give a list: [all], [vertical, horizontal] or [top, right, bottom, left]");
-        assert_eq!(update(rect.clone(), json!({"fill": "red"})), "fill: \"red\" is not #RGB, #RRGGBB or #RRGGBBAA");
+        assert_eq!(update(rect.clone(), json!({"fill": "red"})), "fill: \"red\" is not #RGB, #RRGGBB, #RRGGBBAA or a $name colour");
         assert_eq!(update(rect, json!({"background": "#fff"})), "background: not a node field; use fill");
     }
 
