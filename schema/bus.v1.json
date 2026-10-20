@@ -25210,7 +25210,7 @@
               "type": "null"
             }
           ],
-          "description": "A shadow under a frame, rect, ellipse, polygon, sticky or image, or with `inset` inside its\nedge; a text, line, path or icon casts an outer one only, without spread (a glow when `x`\nand `y` are 0). A sticky casts a soft one of its own unless given one. `x`, `y` and `spread`\nwithin ±10000 px, `blur` 0 to 200."
+          "description": "A shadow under a frame, rect, ellipse, polygon, sticky or image, or with `inset` inside its\nedge; a text, line, path or icon casts an outer one only, without spread (a glow when `x`\nand `y` are 0). A sticky casts a soft one of its own unless given one. `x`, `y` and `spread`\nwithin ±10000 px, `blur` 0 to 200. One shadow; `shadows` holds several (give one field or\nthe other)."
         },
         "clip": {
           "type": [
@@ -25803,6 +25803,73 @@
           ],
           "description": "A frame whose content scrolls that way (`x`, `y` or `both`): what overflows is clipped, a\nstill picture shows the start, and the canvas scrolls it with Alt+wheel. Children keep\ntheir sizes, so a row of fixed-width cards overflows into a carousel. The scrolling axis\nneeds a fixed or fill size."
         },
+        "stroke_cap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignStrokeCap"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How a stroke's ends are drawn: `butt` (flat at the point), `round` or `square` (half the\nweight past it). Default: `round` for a solid line or path, `butt` for dashes, `round`\nfor dots (`butt` would draw nothing of a dot). On a closed outline (a box, an ellipse, a\npolygon) only its dashes have ends."
+        },
+        "stroke_join": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignStrokeJoin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the stroke of an ellipse, polygon, line or path turns its corners: `miter` (sharp),\n`round` (the default) or `bevel`."
+        },
+        "stroke_gradient": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignGradient"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A gradient painted along the stroke instead of `stroke`'s colour, over the stroke's own\nbounds (a box's border, a line's path); it draws the stroke even when `stroke` is unset."
+        },
+        "shadows": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignShadow"
+          },
+          "description": "Several shadows instead of `shadow`, 1 to 8, painted in order (the last on top). A glow\nis a shadow with no offset: `{\"blur\": 16, \"color\": \"#4AF0FF99\"}`. A text, line, path or\nicon casts outer ones only, without spread. Give `shadow` or `shadows`, not both.",
+          "minItems": 1,
+          "maxItems": 8
+        },
+        "runs": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignTextRun"
+          },
+          "description": "Parts of `text` styled on their own, 1 to 64, in order and not overlapping, counted in\ncharacters (`end` not included); a field a run leaves out is the node's:\n`\"text\": \"8.4 km\", \"runs\": [{\"start\": 3, \"end\": 6, \"font_size\": 14, \"color\": \"#8C877F\"}]`.\nA change of `text` sends `runs` (or `null`) with it.",
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "max_lines": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "Most lines shown, 1 to 1000; the rest is cut and the last line shown ends in \"…\". The\nwords need a width to wrap at: a sticky, a shape's label, or a text whose width is fixed\nor fills."
+        },
         "width": {
           "type": "number",
           "minimum": 0,
@@ -26049,7 +26116,7 @@
             "null"
           ],
           "format": "double",
-          "description": "Direction of a linear gradient in degrees, as CSS reads it: 180 (the default) runs top\nto bottom, 90 left to right."
+          "description": "Linear: its direction in degrees as CSS reads it, 180 (the default) top to bottom, 90 left\nto right. Conic: where the first stop sits, in degrees clockwise from the top (default 0).\nRadial: unused."
         },
         "stops": {
           "type": "array",
@@ -26078,6 +26145,11 @@
           "type": "string",
           "const": "radial",
           "description": "From the centre out to the box's edges."
+        },
+        {
+          "type": "string",
+          "const": "conic",
+          "description": "Round the centre, clockwise from `angle` (default 0, the top), as CSS\n`conic-gradient(from …)`."
         }
       ]
     },
@@ -26149,9 +26221,41 @@
           "description": "The hole in the middle as a fraction of the radius, from 0 (the default, a pie) to below\n1: 0.6 a donut.",
           "minimum": 0,
           "default": 0.0
+        },
+        "cap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignStrokeCap"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The ends of a ring segment (`inner` above 0, `sweep` under 360): `butt` (flat, the\ndefault), `round` (a progress ring's rounded ends) or `square`. Each end reaches half the\nring's thickness past `start` and `start + sweep`."
         }
       },
       "description": "Part of an ellipse: a pie, a donut or a ring segment."
+    },
+    "DesignStrokeCap": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "round"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "butt",
+          "description": "Flat at the point."
+        },
+        {
+          "type": "string",
+          "const": "square",
+          "description": "Square, half the weight past the point."
+        }
+      ],
+      "description": "How a stroke's ends are drawn."
     },
     "DesignBlend": {
       "type": "string",
@@ -26272,6 +26376,114 @@
         }
       ],
       "description": "Which way a frame's content scrolls."
+    },
+    "DesignStrokeJoin": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "round"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "miter",
+          "description": "Sharp."
+        },
+        {
+          "type": "string",
+          "const": "bevel",
+          "description": "Cut off."
+        }
+      ],
+      "description": "How a stroke turns its corners."
+    },
+    "DesignTextRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Its first character, from 0."
+        },
+        "end": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1,
+          "description": "The character after its last: above `start`, at most the text's length."
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its letters' colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour."
+        },
+        "font": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its font family.",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "font_size": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Its letter size in px, 1 to 1000; it also sets its line's height (`line_height` times it).",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "font_weight": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "1 to 1000 (700 is bold)."
+        },
+        "italic": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "underline": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "strike": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "rise": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Px above the baseline (negative below), -1000 to 1000: a superscript, a raised unit.",
+          "minimum": -1000,
+          "maximum": 1000
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "description": "One stretch of a text in a style of its own: characters `start` to `end` of `text` (counted\nin characters, `end` not included). A field it leaves out is the node's."
     },
     "DesignCreateIn": {
       "type": "object",
@@ -26506,6 +26718,12 @@
                   "max_h",
                   "row_gap",
                   "scroll",
+                  "stroke_cap",
+                  "stroke_join",
+                  "stroke_gradient",
+                  "shadows",
+                  "runs",
+                  "max_lines",
                   "width",
                   "height"
                 ]

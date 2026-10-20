@@ -53,6 +53,10 @@ pub const MAX_ASSET_B64: usize = 1024 * 1024;
 pub const SINCE_WINDOW: i64 = 1_000;
 /// The widest shadow blur a caller may write, in px: a node's own `blur` cap.
 pub const MAX_SHADOW_BLUR: f64 = 200.0;
+/// Most entries of a node's `shadows`.
+pub const MAX_SHADOWS: usize = 8;
+/// Most entries of a node's `runs`.
+pub const MAX_RUNS: usize = 64;
 /// Longest text a node holds, in characters.
 pub const MAX_TEXT: usize = 10_000;
 /// Most points one path or line holds.
@@ -174,6 +178,9 @@ pub enum GradientKind {
     Linear,
     /// From the centre out to the box's edges.
     Radial,
+    /// Round the centre, clockwise from `angle` (default 0, the top), as CSS
+    /// `conic-gradient(from …)`.
+    Conic,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -194,8 +201,9 @@ pub struct Stop {
 pub struct Gradient {
     #[serde(default = "linear")]
     pub kind: GradientKind,
-    /// Direction of a linear gradient in degrees, as CSS reads it: 180 (the default) runs top
-    /// to bottom, 90 left to right.
+    /// Linear: its direction in degrees as CSS reads it, 180 (the default) top to bottom, 90 left
+    /// to right. Conic: where the first stop sits, in degrees clockwise from the top (default 0).
+    /// Radial: unused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub angle: Option<f64>,
     /// 2 to 8 colours along it.
@@ -397,6 +405,87 @@ pub struct Arc {
     #[serde(default)]
     #[schemars(range(min = 0))]
     pub inner: f64,
+    /// The ends of a ring segment (`inner` above 0, `sweep` under 360): `butt` (flat, the
+    /// default), `round` (a progress ring's rounded ends) or `square`. Each end reaches half the
+    /// ring's thickness past `start` and `start + sweep`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cap: Option<StrokeCap>,
+}
+
+/// How a stroke's ends are drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "DesignStrokeCap")]
+pub enum StrokeCap {
+    /// Flat at the point.
+    Butt,
+    Round,
+    /// Square, half the weight past the point.
+    Square,
+}
+
+/// How a stroke turns its corners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "DesignStrokeJoin")]
+pub enum StrokeJoin {
+    /// Sharp.
+    Miter,
+    Round,
+    /// Cut off.
+    Bevel,
+}
+
+/// One stretch of a text in a style of its own: characters `start` to `end` of `text` (counted
+/// in characters, `end` not included). A field it leaves out is the node's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "DesignTextRun")]
+pub struct TextRun {
+    /// Its first character, from 0.
+    pub start: u32,
+    /// The character after its last: above `start`, at most the text's length.
+    #[schemars(range(min = 1))]
+    pub end: u32,
+    /// Its letters' colour: `#RGB`, `#RRGGBB` or `#RRGGBBAA`, or a `$name` colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Its font family.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = MAX_NAME))]
+    pub font: Option<String>,
+    /// Its letter size in px, 1 to 1000; it also sets its line's height (`line_height` times it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 1000))]
+    pub font_size: Option<f64>,
+    /// 1 to 1000 (700 is bold).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 1000))]
+    pub font_weight: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strike: Option<bool>,
+    /// Px above the baseline (negative below), -1000 to 1000: a superscript, a raised unit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = -1000, max = 1000))]
+    pub rise: Option<f64>,
+}
+
+impl TextRun {
+    /// Whether it sets anything of its own.
+    fn styled(&self) -> bool {
+        self.color.is_some()
+            || self.font.is_some()
+            || self.font_size.is_some()
+            || self.font_weight.is_some()
+            || self.italic.is_some()
+            || self.underline.is_some()
+            || self.strike.is_some()
+            || self.rise.is_some()
+    }
 }
 
 fn full_turn() -> f64 {
@@ -438,6 +527,27 @@ pub(crate) fn obj_opt<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> R
         }
     }
     d.deserialize_option(Opt(PhantomData))
+}
+
+/// [`obj_vec`] for an optional list: `null` is none.
+pub(crate) fn obj_vec_opt<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<Vec<T>>, D::Error> {
+    struct OptVec<T>(PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for OptVec<T> {
+        type Value = Option<Vec<T>>;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a list of objects or null")
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Option<Vec<T>>, E> {
+            Ok(None)
+        }
+        fn visit_unit<E: de::Error>(self) -> Result<Option<Vec<T>>, E> {
+            Ok(None)
+        }
+        fn visit_some<D: Deserializer<'de>>(self, d: D) -> Result<Option<Vec<T>>, D::Error> {
+            obj_vec(d).map(Some)
+        }
+    }
+    d.deserialize_option(OptVec(PhantomData))
 }
 
 /// [`object_only`] for each entry of a list.
@@ -698,7 +808,8 @@ pub struct Node {
     /// A shadow under a frame, rect, ellipse, polygon, sticky or image, or with `inset` inside its
     /// edge; a text, line, path or icon casts an outer one only, without spread (a glow when `x`
     /// and `y` are 0). A sticky casts a soft one of its own unless given one. `x`, `y` and `spread`
-    /// within ±10000 px, `blur` 0 to 200.
+    /// within ±10000 px, `blur` 0 to 200. One shadow; `shadows` holds several (give one field or
+    /// the other).
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "obj_opt")]
     pub shadow: Option<Shadow>,
     /// Whether a frame hides what overflows it (default true; a scrolling frame always does).
@@ -935,6 +1046,40 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scroll: Option<Scroll>,
 
+    /// How a stroke's ends are drawn: `butt` (flat at the point), `round` or `square` (half the
+    /// weight past it). Default: `round` for a solid line or path, `butt` for dashes, `round`
+    /// for dots (`butt` would draw nothing of a dot). On a closed outline (a box, an ellipse, a
+    /// polygon) only its dashes have ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_cap: Option<StrokeCap>,
+    /// How the stroke of an ellipse, polygon, line or path turns its corners: `miter` (sharp),
+    /// `round` (the default) or `bevel`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_join: Option<StrokeJoin>,
+    /// A gradient painted along the stroke instead of `stroke`'s colour, over the stroke's own
+    /// bounds (a box's border, a line's path); it draws the stroke even when `stroke` is unset.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "obj_opt")]
+    pub stroke_gradient: Option<Gradient>,
+    /// Several shadows instead of `shadow`, 1 to 8, painted in order (the last on top). A glow
+    /// is a shadow with no offset: `{"blur": 16, "color": "#4AF0FF99"}`. A text, line, path or
+    /// icon casts outer ones only, without spread. Give `shadow` or `shadows`, not both.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "obj_vec_opt")]
+    #[schemars(length(min = 1, max = MAX_SHADOWS))]
+    pub shadows: Option<Vec<Shadow>>,
+    /// Parts of `text` styled on their own, 1 to 64, in order and not overlapping, counted in
+    /// characters (`end` not included); a field a run leaves out is the node's:
+    /// `"text": "8.4 km", "runs": [{"start": 3, "end": 6, "font_size": 14, "color": "#8C877F"}]`.
+    /// A change of `text` sends `runs` (or `null`) with it.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "obj_vec_opt")]
+    #[schemars(length(min = 1, max = MAX_RUNS))]
+    pub runs: Option<Vec<TextRun>>,
+    /// Most lines shown, 1 to 1000; the rest is cut and the last line shown ends in "…". The
+    /// words need a width to wrap at: a sticky, a shape's label, or a text whose width is fixed
+    /// or fills.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 1000))]
+    pub max_lines: Option<u16>,
+
     /// What this build cannot read in a node another build wrote: a key it does not know, or a
     /// known one whose value it cannot read (a newer gradient kind). Kept and written back as it
     /// was by [`Node::to_map`]; never set by this build. The derived `Serialize` leaves it out,
@@ -1134,6 +1279,12 @@ impl Node {
             max_h: None,
             row_gap: None,
             scroll: None,
+            stroke_cap: None,
+            stroke_join: None,
+            stroke_gradient: None,
+            shadows: None,
+            runs: None,
+            max_lines: None,
             extra: Map::new(),
         }
     }
@@ -1278,18 +1429,19 @@ impl Node {
             }
         }
         for (field, color) in [("fill", &self.fill), ("stroke", &self.stroke), ("color", &self.color)] {
-            if let Some(c) = color.as_deref().filter(|c| parse_color(c).is_none()) {
-                return Err(format!("{field}: {c:?} is not #RGB, #RRGGBB or #RRGGBBAA"));
+            if let Some(c) = color.as_deref().filter(|c| !colour_ok(c)) {
+                return Err(not_a_colour(field, c));
             }
         }
         if let Some(shadow) = &self.shadow {
-            if parse_color(&shadow.color).is_none() {
-                return Err(format!("shadow.color: {:?} is not #RGB, #RRGGBB or #RRGGBBAA", shadow.color));
+            check_shadow("shadow", shadow)?;
+        }
+        if let Some(shadows) = &self.shadows {
+            if !(1..=MAX_SHADOWS).contains(&shadows.len()) {
+                return Err(format!("shadows: 1 to {MAX_SHADOWS} of them; null for none"));
             }
-            if [shadow.x, shadow.y, shadow.blur, shadow.spread].iter().any(|v| !v.is_finite() || v.abs() > 10_000.0)
-                || shadow.blur < 0.0
-            {
-                return Err("shadow: x, y and spread within ±10000, blur from 0".into());
+            for (i, shadow) in shadows.iter().enumerate() {
+                check_shadow(&format!("shadows[{i}]"), shadow)?;
             }
         }
         let ranged = [
@@ -1344,20 +1496,9 @@ impl Node {
         if let Some(v) = self.star.filter(|v| !v.is_finite() || !(0.05..=0.95).contains(v)) {
             return Err(format!("star: {v} is outside 0.05 to 0.95"));
         }
-        if let Some(g) = &self.gradient {
-            if !(2..=8).contains(&g.stops.len()) {
-                return Err("gradient: give 2 to 8 stops".into());
-            }
-            for stop in &g.stops {
-                if !stop.at.is_finite() || !(0.0..=1.0).contains(&stop.at) {
-                    return Err(format!("gradient: a stop's at ({}) is outside 0 to 1", stop.at));
-                }
-                if parse_color(&stop.color).is_none() {
-                    return Err(format!("gradient: {:?} is not #RGB, #RRGGBB or #RRGGBBAA", stop.color));
-                }
-            }
-            if g.angle.is_some_and(|a| !a.is_finite()) {
-                return Err("gradient: angle must be a number".into());
+        for (field, g) in [("gradient", &self.gradient), ("stroke_gradient", &self.stroke_gradient)] {
+            if let Some(g) = g {
+                check_gradient(field, g)?;
             }
         }
         if self.radii.is_some_and(|r| r.iter().any(|v| !v.is_finite() || !(0.0..=MAX_COORD).contains(v))) {
@@ -1366,6 +1507,11 @@ impl Node {
         if let Some(dash) = &self.dash {
             if dash.is_empty() || dash.len() > 8 || dash.iter().any(|v| !v.is_finite() || !(0.0..=1000.0).contains(v)) || dash.iter().all(|v| *v == 0.0) {
                 return Err("dash: 1 to 8 lengths from 0 to 1000, not all 0".into());
+            }
+            // The dashes are the even entries; an odd list repeats, so every entry is one in turn.
+            let dots = dash.iter().enumerate().any(|(i, v)| *v == 0.0 && (i % 2 == 0 || dash.len() % 2 == 1));
+            if dots && self.stroke_cap == Some(StrokeCap::Butt) {
+                return Err("stroke_cap: butt ends draw nothing for the 0-length dashes of a dotted dash; use round or square".into());
             }
         }
         if let Some(b) = self.blur.filter(|b| !b.is_finite() || !(0.0..=200.0).contains(b)) {
@@ -1384,9 +1530,23 @@ impl Node {
             {
                 return Err("arc: start within ±3600 degrees, sweep within ±360, inner from 0 to below 1".into());
             }
+            if matches!(arc.cap, Some(StrokeCap::Round | StrokeCap::Square)) && (arc.inner == 0.0 || arc.sweep.abs() >= 360.0) {
+                return Err("arc.cap: only a ring segment (inner above 0, sweep under 360) has ends to shape".into());
+            }
         }
         if let Some(name) = self.icon.as_deref().filter(|n| !ICONS.contains(n)) {
             return Err(format!("icon: {name:?} is not one of Relay's icons ({})", ICONS.join(", ")));
+        }
+        if let Some(v) = self.max_lines {
+            if !(1..=1000).contains(&v) {
+                return Err(format!("max_lines: {v} is outside 1 to 1000"));
+            }
+            if self.kind == NodeKind::Text && self.w_rule() == Sizing::Hug {
+                return Err("max_lines: a text that hugs its words never wraps; give it a width (w with w_sizing fixed or fill)".into());
+            }
+        }
+        if let Some(runs) = &self.runs {
+            self.check_runs(runs)?;
         }
         self.check_layout()?;
         match self.kind {
@@ -1407,6 +1567,66 @@ impl Node {
             _ => {}
         }
         Ok(())
+    }
+
+    /// The parts of its text styled on their own: within the text, in order, each styling
+    /// something, each field in its range.
+    fn check_runs(&self, runs: &[TextRun]) -> Result<(), String> {
+        if !(1..=MAX_RUNS).contains(&runs.len()) {
+            return Err(format!("runs: 1 to {MAX_RUNS} of them; null for none"));
+        }
+        let n = match self.text.as_deref() {
+            Some(text) if !text.is_empty() => text.chars().count(),
+            _ => return Err("runs: a node without text has no runs".into()),
+        };
+        let mut last: Option<&TextRun> = None;
+        for (i, run) in runs.iter().enumerate() {
+            let (s, e) = (run.start, run.end);
+            if s >= e {
+                return Err(format!("runs[{i}]: start ({s}) is not before end ({e})"));
+            }
+            if e as usize > n {
+                return Err(format!("runs[{i}].end: {e} is past the text's {n} characters"));
+            }
+            if let Some(prev) = last.filter(|prev| s < prev.end) {
+                return Err(format!("runs[{i}]: starts at {s}, inside runs[{}] ({} to {}); give them in order without overlap", i - 1, prev.start, prev.end));
+            }
+            if !run.styled() {
+                return Err(format!("runs[{i}]: give it a style (color, font, font_size, font_weight, italic, underline, strike or rise)"));
+            }
+            if let Some(c) = run.color.as_deref().filter(|c| !colour_ok(c)) {
+                return Err(not_a_colour(&format!("runs[{i}].color"), c));
+            }
+            if run.font.as_ref().is_some_and(|f| f.is_empty() || f.chars().count() > MAX_NAME) {
+                return Err(format!("runs[{i}].font: a family name of 1 to {MAX_NAME} characters"));
+            }
+            for (field, value, lo, hi) in [("font_size", run.font_size, 1.0, 1000.0), ("rise", run.rise, -1000.0, 1000.0)] {
+                if let Some(v) = value.filter(|v| !v.is_finite() || !(lo..=hi).contains(v)) {
+                    return Err(format!("runs[{i}].{field}: {v} is outside {lo} to {hi}"));
+                }
+            }
+            if let Some(w) = run.font_weight.filter(|w| !(1..=1000).contains(w)) {
+                return Err(format!("runs[{i}].font_weight: {w} is outside 1 to 1000"));
+            }
+            last = Some(run);
+        }
+        Ok(())
+    }
+
+    /// The shadows it casts, in paint order: `shadows`, else `shadow` (one holding both, written
+    /// by two builds, casts `shadows`).
+    pub fn shadow_list(&self) -> &[Shadow] {
+        self.shadows.as_deref().unwrap_or(self.shadow.as_slice())
+    }
+
+    /// Where a rect's, ellipse's or polygon's label sits inside its box, as top, right, bottom
+    /// and left: `padding`, else 12 px at the sides.
+    pub fn label_inset(&self) -> [f64; 4] {
+        if self.padding.is_some() {
+            self.padding_edges()
+        } else {
+            [0.0, 12.0, 0.0, 12.0]
+        }
     }
 
     /// Padding as top, right, bottom and left.
@@ -1434,6 +1654,48 @@ impl Node {
             Layout::None
         }
     }
+}
+
+/// Whether `c` is a colour a node may hold.
+fn colour_ok(c: &str) -> bool {
+    parse_color(c).is_some()
+}
+
+/// The refusal of `c` in colour field `field`.
+fn not_a_colour(field: &str, c: &str) -> String {
+    format!("{field}: {c:?} is not #RGB, #RRGGBB or #RRGGBBAA")
+}
+
+/// A shadow's values, its messages starting with `field` (`shadow`, `shadows[2]`): a colour, and
+/// x, y and spread within ±10000 with a blur from 0 (a strict list also caps the blur at 200).
+pub fn check_shadow(field: &str, s: &Shadow) -> Result<(), String> {
+    if !colour_ok(&s.color) {
+        return Err(not_a_colour(&format!("{field}.color"), &s.color));
+    }
+    if [s.x, s.y, s.blur, s.spread].iter().any(|v| !v.is_finite() || v.abs() > 10_000.0) || s.blur < 0.0 {
+        return Err(format!("{field}: x, y and spread within ±10000, blur from 0"));
+    }
+    Ok(())
+}
+
+/// A gradient's values, its messages starting with `field` (`gradient`, `stroke_gradient`): 2 to
+/// 8 stops, each at 0 to 1 with a colour, and an angle that is a number.
+pub fn check_gradient(field: &str, g: &Gradient) -> Result<(), String> {
+    if !(2..=8).contains(&g.stops.len()) {
+        return Err(format!("{field}: give 2 to 8 stops"));
+    }
+    for stop in &g.stops {
+        if !stop.at.is_finite() || !(0.0..=1.0).contains(&stop.at) {
+            return Err(format!("{field}: a stop's at ({}) is outside 0 to 1", stop.at));
+        }
+        if !colour_ok(&stop.color) {
+            return Err(not_a_colour(field, &stop.color));
+        }
+    }
+    if g.angle.is_some_and(|a| !a.is_finite()) {
+        return Err(format!("{field}: angle must be a number"));
+    }
+    Ok(())
 }
 
 /// An asset name as `design.asset.add` gives it: hex digest, a dot and a picture extension.
@@ -1568,8 +1830,12 @@ mod tests {
             ("shadow", json!([0, 2, 6, 0, "#000"])),
             ("gradient", json!(["linear", 90, [stop.clone(), stop.clone()]])),
             ("gradient", json!({"stops": [stop.clone(), [1, "#000"]]})),
+            ("shadows", json!([[0, 2, 6, 0, "#000"]])),
+            ("runs", json!([[0, 1, "#000"]])),
+            ("stroke_gradient", json!(["linear", 90, [stop.clone(), stop.clone()]])),
+            ("stroke_gradient", json!({"stops": [stop.clone(), [1, "#000"]]})),
         ] {
-            let body = json!({"kind": "ellipse", "parent": "p", field: value});
+            let body = json!({"kind": "ellipse", "parent": "p", "text": "Hi", field: value});
             assert!(serde_json::from_value::<Node>(body.clone()).is_err(), "{body}");
             let node = Node::read(body).unwrap();
             let why = node.check_new().unwrap_err();
@@ -1579,6 +1845,150 @@ mod tests {
         let node: Node = serde_json::from_value(json!({"kind": "ellipse", "parent": "p", "arc": {"sweep": 90},
             "shadow": null, "gradient": {"stops": [stop.clone(), stop]}})).unwrap();
         assert_eq!((node.arc.map(|a| a.sweep), node.shadow, node.gradient.map(|g| g.stops.len())), (Some(90.0), None, Some(2)));
+    }
+
+    fn read(body: Value) -> Node {
+        Node::read(body).unwrap()
+    }
+
+    /// Drawing test 1: the drawing fields read as agents write them, validate, and round-trip.
+    #[test]
+    fn drawing_fields_read_as_agents_write_them() {
+        let stops = json!([{"at": 0, "color": "#4AF0FF"}, {"at": 1, "color": "#7B61FF"}]);
+        for body in [
+            json!({"kind": "line", "points": [[0, 0], [90, 0]], "stroke_cap": "square", "stroke_join": "bevel",
+                "stroke_gradient": {"angle": 90, "stops": stops}, "shadows": [{"blur": 4, "color": "#4AF0FFCC"}, {"blur": 18, "color": "#4AF0FF66"}]}),
+            json!({"kind": "ellipse", "w": 120, "h": 120, "gradient": {"kind": "conic", "angle": 350, "stops": stops},
+                "arc": {"start": 0, "sweep": 252, "inner": 0.82, "cap": "round"}}),
+            json!({"kind": "text", "text": "8.4 km", "w": 160, "max_lines": 1, "runs": [{"start": 3, "end": 6, "font_size": 14, "color": "#8C877F"}]}),
+            json!({"kind": "rect", "w": 200, "h": 40, "text": "Continue", "padding": [8, 24]}),
+        ] {
+            let mut body = body;
+            body["parent"] = json!("p");
+            let n: Node = serde_json::from_value(body.clone()).unwrap_or_else(|e| panic!("{e}: {body}"));
+            assert_eq!((n.validate(), n.check_new()), (Ok(()), Ok(())), "{body}");
+            assert!(n.extra.is_empty());
+            assert_eq!(serde_json::from_value::<Node>(serde_json::to_value(&n).unwrap()).unwrap(), n);
+        }
+        let ring = read(json!({"kind": "ellipse", "parent": "p", "arc": {"inner": 0.5, "sweep": 90, "cap": "round"}}));
+        assert_eq!(ring.arc.unwrap().cap, Some(StrokeCap::Round));
+        // Defaults: a label sits 12 px in from the sides; padding moves it.
+        assert_eq!(rect().label_inset(), [0.0, 12.0, 0.0, 12.0]);
+        let mut padded = rect();
+        padded.padding = Some(vec![8.0, 24.0]);
+        assert_eq!(padded.label_inset(), [8.0, 24.0, 8.0, 24.0]);
+        // Unset, none of it is written; an arc without a cap writes none.
+        let plain = serde_json::to_value(Node::new(NodeKind::Ellipse)).unwrap();
+        for key in ["stroke_cap", "stroke_join", "stroke_gradient", "shadows", "runs", "max_lines"] {
+            assert!(plain.get(key).is_none(), "{key}");
+        }
+        assert_eq!(serde_json::to_value(Arc { start: 0.0, sweep: 90.0, inner: 0.0, cap: None }).unwrap(), json!({"start": 0.0, "sweep": 90.0, "inner": 0.0}));
+    }
+
+    /// Drawing test 2: `shadows` is a list beside `shadow`, read first.
+    #[test]
+    fn shadows_are_a_list_beside_the_old_field() {
+        let glow = Shadow { x: 0.0, y: 0.0, blur: 16.0, spread: 0.0, color: "#4AF0FF99".into(), inset: false };
+        let mut n = rect();
+        assert!(n.shadow_list().is_empty());
+        n.shadow = Some(Shadow { y: 4.0, ..glow.clone() });
+        assert_eq!(n.shadow_list(), [Shadow { y: 4.0, ..glow.clone() }]);
+        n.shadows = Some(vec![glow.clone(), glow.clone()]);
+        assert_eq!(n.shadow_list(), [glow.clone(), glow.clone()], "shadows wins");
+        n.shadow = None;
+        n.shadows = Some(Vec::new());
+        assert_eq!(n.validate().unwrap_err(), "shadows: 1 to 8 of them; null for none");
+        n.shadows = Some(vec![glow.clone(); 9]);
+        assert_eq!(n.validate().unwrap_err(), "shadows: 1 to 8 of them; null for none");
+        n.shadows = Some(vec![glow.clone(), Shadow { color: "glow".into(), ..glow.clone() }]);
+        assert_eq!(n.validate().unwrap_err(), "shadows[1].color: \"glow\" is not #RGB, #RRGGBB or #RRGGBBAA");
+        n.shadows = Some(vec![Shadow { blur: -1.0, ..glow }]);
+        assert_eq!(n.validate().unwrap_err(), "shadows[0]: x, y and spread within ±10000, blur from 0");
+        // An update moves one shadow into the list in one set.
+        let one = read(json!({"kind": "rect", "parent": "p", "shadow": {"color": "#000"}}));
+        let set = json!({"shadow": null, "shadows": [{"color": "#000"}, {"blur": 9, "color": "#fff"}]}).as_object().unwrap().clone();
+        let after = one.patched(&set).unwrap();
+        assert_eq!((after.shadow.clone(), after.shadow_list().len()), (None, 2));
+        assert_eq!(Node::check_update(&one, &set, &after), Ok(()));
+    }
+
+    /// Drawing test 3: runs lie inside their text, in order, each styling something.
+    #[test]
+    fn runs_stay_inside_their_text_in_order() {
+        let text = |runs: Value| read(json!({"kind": "text", "parent": "p", "text": "8.4 km", "runs": runs})).validate();
+        assert_eq!(text(json!([{"start": 0, "end": 3, "font_weight": 700}, {"start": 3, "end": 6, "font_size": 14, "rise": 4}])), Ok(()));
+        for (runs, why) in [
+            (json!([]), "runs: 1 to 64 of them; null for none"),
+            (json!([{"start": 3, "end": 7, "italic": true}]), "runs[0].end: 7 is past the text's 6 characters"),
+            (json!([{"start": 0, "end": 4, "italic": true}, {"start": 3, "end": 6, "strike": true}]),
+                "runs[1]: starts at 3, inside runs[0] (0 to 4); give them in order without overlap"),
+            (json!([{"start": 2, "end": 4}]), "runs[0]: give it a style (color, font, font_size, font_weight, italic, underline, strike or rise)"),
+            (json!([{"start": 2, "end": 2, "italic": true}]), "runs[0]: start (2) is not before end (2)"),
+            (json!([{"start": 0, "end": 1, "color": "grey"}]), "runs[0].color: \"grey\" is not #RGB, #RRGGBB or #RRGGBBAA"),
+            (json!([{"start": 0, "end": 1, "font_size": 0}]), "runs[0].font_size: 0 is outside 1 to 1000"),
+            (json!([{"start": 0, "end": 1, "font_weight": 1001}]), "runs[0].font_weight: 1001 is outside 1 to 1000"),
+            (json!([{"start": 0, "end": 1, "rise": -1001}]), "runs[0].rise: -1001 is outside -1000 to 1000"),
+            (json!([{"start": 0, "end": 1, "font": ""}]), "runs[0].font: a family name of 1 to 200 characters"),
+        ] {
+            assert_eq!(text(runs.clone()).unwrap_err(), why, "{runs}");
+        }
+        // Counted in characters, not bytes.
+        let wide = read(json!({"kind": "text", "parent": "p", "text": "straße", "runs": [{"start": 4, "end": 6, "underline": true}]}));
+        assert_eq!(wide.validate(), Ok(()));
+        let none = read(json!({"kind": "text", "parent": "p", "runs": [{"start": 0, "end": 1, "italic": true}]}));
+        assert_eq!(none.validate().unwrap_err(), "runs: a node without text has no runs");
+        // A run reads only its own fields.
+        assert!(serde_json::from_value::<TextRun>(json!({"from": 0, "to": 1})).is_err());
+    }
+
+    /// Drawing test 4: `max_lines` needs a width to cut at.
+    #[test]
+    fn max_lines_needs_a_width() {
+        let hug = "max_lines: a text that hugs its words never wraps; give it a width (w with w_sizing fixed or fill)";
+        assert_eq!(read(json!({"kind": "text", "parent": "p", "text": "Hi", "max_lines": 2})).validate().unwrap_err(), hug);
+        assert_eq!(read(json!({"kind": "text", "parent": "p", "text": "Hi", "w": 90, "w_sizing": "hug", "max_lines": 2})).validate().unwrap_err(), hug);
+        for ok in [
+            json!({"kind": "text", "parent": "p", "text": "Hi", "w": 160, "max_lines": 1}),
+            json!({"kind": "text", "parent": "p", "text": "Hi", "w_sizing": "fill", "max_lines": 3}),
+            json!({"kind": "sticky", "parent": "p", "text": "Hi", "max_lines": 1000}),
+            json!({"kind": "rect", "parent": "p", "w": 90, "h": 30, "text": "Hi", "max_lines": 1}),
+        ] {
+            assert_eq!(read(ok.clone()).validate(), Ok(()), "{ok}");
+        }
+        for v in [0, 1001] {
+            let n = read(json!({"kind": "sticky", "parent": "p", "max_lines": v}));
+            assert_eq!(n.validate().unwrap_err(), format!("max_lines: {v} is outside 1 to 1000"));
+        }
+    }
+
+    /// Drawing test 5: only a ring segment has ends to shape.
+    #[test]
+    fn arc_caps_need_a_ring_segment() {
+        let ring = |arc: Value| read(json!({"kind": "ellipse", "parent": "p", "arc": arc})).validate();
+        let why = "arc.cap: only a ring segment (inner above 0, sweep under 360) has ends to shape";
+        assert_eq!(ring(json!({"inner": 0, "sweep": 270, "cap": "round"})).unwrap_err(), why);
+        assert_eq!(ring(json!({"inner": 0.8, "sweep": 360, "cap": "square"})).unwrap_err(), why);
+        assert_eq!(ring(json!({"inner": 0.8, "sweep": -360, "cap": "round"})).unwrap_err(), why);
+        assert_eq!(ring(json!({"inner": 0.8, "sweep": 270, "cap": "round"})), Ok(()));
+        assert_eq!(ring(json!({"inner": 0.8, "sweep": -90, "cap": "square"})), Ok(()));
+        for arc in [json!({"inner": 0, "cap": "butt"}), json!({"inner": 0.5, "sweep": 360, "cap": "butt"})] {
+            assert_eq!(ring(arc), Ok(()), "butt is the default written out");
+        }
+    }
+
+    /// Drawing test 6: flat ends draw nothing of a dot.
+    #[test]
+    fn butt_caps_on_dots_are_refused() {
+        let why = "stroke_cap: butt ends draw nothing for the 0-length dashes of a dotted dash; use round or square";
+        let line = |dash: Value, cap: &str| read(json!({"kind": "line", "parent": "p", "points": [[0, 0], [9, 0]], "dash": dash, "stroke_cap": cap})).validate();
+        assert_eq!(line(json!([0, 4]), "butt").unwrap_err(), why);
+        assert_eq!(line(json!([6, 4, 0]), "butt").unwrap_err(), why, "an odd list repeats, so its 0 is a dash in turn");
+        assert_eq!(line(json!([6, 0]), "butt"), Ok(()), "a 0 gap is no dot");
+        assert_eq!(line(json!([0, 4]), "round"), Ok(()));
+        assert_eq!(line(json!([6, 4]), "butt"), Ok(()));
+        // A conic gradient takes 2 to 8 stops like the others, on the stroke too.
+        let one = read(json!({"kind": "rect", "parent": "p", "stroke_gradient": {"kind": "conic", "stops": [{"at": 0, "color": "#000"}]}}));
+        assert_eq!(one.validate().unwrap_err(), "stroke_gradient: give 2 to 8 stops");
     }
 
     /// The tool schema still refuses unknown keys, and does not show `extra`.
@@ -1769,7 +2179,7 @@ mod tests {
         assert_eq!(donut.blend.map(Blend::name), Some("color_dodge"));
         assert!(donut.shadow.as_ref().unwrap().inset);
         let mut full = donut.clone();
-        full.arc = Some(Arc { start: 0.0, sweep: 360.0, inner: 1.0 });
+        full.arc = Some(Arc { start: 0.0, sweep: 360.0, inner: 1.0, cap: None });
         assert!(full.validate().unwrap_err().starts_with("arc"));
         // An outer shadow writes no `inset`, so older readers keep reading it.
         let plain = Shadow { x: 0.0, y: 1.0, blur: 2.0, spread: 0.0, color: "#000".into(), inset: false };

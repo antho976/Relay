@@ -277,12 +277,12 @@ mod tests {
         assert!((pts[0].1 - 100.0).abs() < 1e-9, "the apex is at the bottom: {pts:?}");
         let mut pie = node("e", Some("p1"), K::Ellipse, [0.0, 0.0, 100.0, 100.0]);
         assert!(arc(&pie).is_none());
-        pie.arc = Some(relay_bus::design::Arc { start: 0.0, sweep: 90.0, inner: 0.5 });
+        pie.arc = Some(relay_bus::design::Arc { start: 0.0, sweep: 90.0, inner: 0.5, cap: None });
         // The top-right quarter, less its hole.
         assert!(on_ellipse(&pie, &r, 80.0, 30.0, 0.0));
         assert!(!on_ellipse(&pie, &r, 20.0, 30.0, 0.0), "outside the sweep");
         assert!(!on_ellipse(&pie, &r, 55.0, 45.0, 0.0), "in the hole");
-        pie.arc = Some(relay_bus::design::Arc { start: 0.0, sweep: -90.0, inner: 0.0 });
+        pie.arc = Some(relay_bus::design::Arc { start: 0.0, sweep: -90.0, inner: 0.0, cap: None });
         assert!(on_ellipse(&pie, &r, 20.0, 30.0, 0.0), "a negative sweep runs anticlockwise");
     }
 

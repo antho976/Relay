@@ -95,3 +95,61 @@ fn keep_position_is_refused_until_the_engine_keeps_it() {
     let out = apply(&e, id, json!([{"op": "move", "id": "card", "parent": "page-1", "keep_position": false}]));
     assert_eq!(out["inverse"], json!([{"op": "move", "id": "card", "parent": "screen", "index": 0}]));
 }
+
+/// Drawing: a text's words and its runs change together, and the undo restores both.
+#[test]
+fn text_and_runs_change_together() {
+    let (e, _root) = project();
+    let id = create(&e);
+    card(&e, id);
+    apply(&e, id, json!([{"op": "add", "node": {"id": "km", "parent": "card", "kind": "text", "text": "8.4 km", "w": 160, "max_lines": 1,
+        "runs": [{"start": 3, "end": 6, "font_size": 14, "color": "#8C877F"}]}}]));
+    let error = refused(&e, id, json!([{"op": "update", "id": "km", "set": {"text": "12.1 km"}}]));
+    assert_eq!((error.code.as_str(), error.message.as_str()),
+        ("design.node_invalid", "ops[0] update \"km\": runs: this text has runs; send runs (or runs: null) with its new text"));
+    assert_eq!(error.details.unwrap()["field"], "runs");
+    let out = apply(&e, id, json!([{"op": "update", "id": "km", "set": {"text": "12.1 km", "runs": [{"start": 4, "end": 7, "font_size": 14}]}}]));
+    assert_eq!(find(&out["nodes"], "km")["runs"], json!([{"start": 4, "end": 7, "font_size": 14.0}]));
+    let undo = ok(&e, "design.apply", json!({"design_id": id, "ops": out["inverse"], "lenient": true}));
+    let km = find(&undo["nodes"], "km");
+    assert_eq!((km["text"].clone(), km["runs"].clone()), (json!("8.4 km"), json!([{"start": 3, "end": 6, "font_size": 14.0, "color": "#8C877F"}])));
+    // A run past its text is a value rule: refused whatever the list.
+    let error = refused(&e, id, json!([{"op": "update", "id": "km", "set": {"runs": [{"start": 3, "end": 9, "italic": true}]}}]));
+    assert_eq!(error.message, "ops[0] update \"km\": runs[0].end: 9 is past the text's 6 characters");
+}
+
+/// Drawing: a text, line, path or icon casts outer shadows (a glow) and refuses inner ones and
+/// spread in a strict list; one node holds `shadow` or `shadows`. An undo puts back what was
+/// stored, telling an agent.
+#[test]
+fn shadows_follow_the_kinds_that_cast_them() {
+    let (e, _root) = project();
+    let id = create(&e);
+    card(&e, id);
+    let out = apply(&e, id, json!([
+        {"op": "add", "node": {"id": "glow", "parent": "card", "kind": "line", "points": [[0, 0], [200, 0]], "stroke_cap": "round",
+            "stroke_gradient": {"angle": 90, "stops": [{"at": 0, "color": "#4AF0FF"}, {"at": 1, "color": "#7B61FF"}]},
+            "shadows": [{"blur": 4, "color": "#4AF0FFCC"}, {"blur": 18, "color": "#4AF0FF66"}]}},
+        {"op": "add", "node": {"id": "ring", "parent": "card", "kind": "ellipse", "w": 96, "h": 96,
+            "arc": {"start": 0, "sweep": 252, "inner": 0.82, "cap": "round"},
+            "gradient": {"kind": "conic", "angle": 350, "stops": [{"at": 0, "color": "#4AF0FF"}, {"at": 1, "color": "#7B61FF"}]}}},
+    ]));
+    assert_eq!(find(&out["nodes"], "ring")["gradient"]["kind"], "conic");
+    for (set, message) in [
+        (json!({"shadow": {"inset": true, "color": "#000"}}), "ops[0] update \"glow\": shadow.inset: line nodes cast no inner shadow"),
+        (json!({"shadows": [{"spread": 2, "color": "#000"}]}), "ops[0] update \"glow\": shadows[0].spread: line nodes cast their shadow without spread; widen it with blur"),
+        (json!({"shadow": {"blur": 8, "color": "#000"}}), "ops[0] update \"glow\": shadows: give shadow or shadows, not both (shadows is the list)"),
+    ] {
+        let error = refused(&e, id, json!([{"op": "update", "id": "glow", "set": set}]));
+        assert_eq!((error.code.as_str(), error.message.as_str()), ("design.node_invalid", message));
+    }
+    // One shadow replacing the list in the same set is taken.
+    apply(&e, id, json!([{"op": "update", "id": "glow", "set": {"shadows": null, "shadow": {"blur": 8, "color": "#4AF0FF99"}}}]));
+    // A legacy inner shadow on a text, put back by an undo, is kept with a warning to an agent.
+    let name = ok(&e, "session.create", json!({"project_id": 1, "provider": "claude", "role": "builder"}))["name"].as_str().unwrap().to_string();
+    let agent = relay_bus::Actor::agent(&name);
+    let stored = json!({"id": "t", "parent": "card", "kind": "text", "text": "Hi", "shadow": {"inset": true, "color": "#000"}});
+    let out = common::ok_as(&e, agent, "design.apply", json!({"design_id": id, "lenient": true, "ops": [{"op": "add", "node": stored}]}));
+    assert_eq!(out["warnings"], json!(["ops[0] add \"t\": shadow.inset: text nodes cast no inner shadow; kept as it was"]));
+    assert_eq!(find(&out["nodes"], "t")["shadow"]["inset"], true);
+}

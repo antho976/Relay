@@ -945,7 +945,8 @@ fn gradient(snap: &gtk::Snapshot, g: &Gradient, r: &Rect) {
     let mut stops: Vec<gsk::ColorStop> = g.stops.iter().map(|s| gsk::ColorStop::new(s.at as f32, rgba(&s.color))).collect();
     stops.sort_by(|a, b| a.offset().total_cmp(&b.offset()));
     match g.kind {
-        GradientKind::Linear => {
+        // A conic gradient paints as linear until native-paint draws it round its centre.
+        GradientKind::Linear | GradientKind::Conic => {
             // CSS reading: 0 points up, 90 right, 180 (the default) down.
             let a = g.angle.unwrap_or(180.0).to_radians();
             let (dx, dy) = (a.sin(), -a.cos());

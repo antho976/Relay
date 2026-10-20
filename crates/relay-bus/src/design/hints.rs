@@ -35,7 +35,8 @@ pub const KIND_HINTS: &[(&[&str], &str)] = &[
     (&["rectangle", "square"], "use rect"),
     (&["circle", "oval"], "use ellipse"),
     (&["carousel", "scroller"], "use frame (scroll: x on a row)"),
-    (&["progress", "ring", "gauge", "donut", "pie"], "use ellipse (arc with inner draws a ring)"),
+    (&["progress", "ring", "gauge"], "use ellipse (arc with inner and cap: round)"),
+    (&["donut", "pie"], "use ellipse (arc with inner draws a ring)"),
     (&["triangle", "diamond", "hexagon", "star"], "use polygon (sides; star for a star)"),
     (&["arrow", "connector"], "use line (arrow_end; from and to attach it)"),
     (&["label", "heading", "paragraph", "title", "span"], "use text"),
@@ -52,14 +53,16 @@ pub const FIELD_HINTS: &[(&[&str], &str)] = &[
         "use pin_x (left, right, left_right, center, scale) and pin_y (top, bottom, top_bottom, center, scale); in auto layout also absolute: true",
     ),
     (&["position"], "use absolute: true (with x, y) inside auto layout; elsewhere x and y place a node from its parent's top-left"),
-    (&["truncate", "ellipsis", "text_overflow", "line_clamp", "max_lines"], "text cannot be cut short yet: give it a w (it wraps) inside a frame with a fixed h that clips"),
-    (&["spans", "rich_text", "runs"], "a text has one style: put differently styled words in their own texts inside a row frame"),
+    (&["truncate", "ellipsis", "text_overflow", "line_clamp"], "use max_lines (the text needs a width)"),
+    (&["spans", "rich_text"], "use runs: [{start, end, …}] (character offsets)"),
     (&["flex_wrap", "wrap"], "use layout: wrap"),
     (&["column_gap"], "use gap (row_gap between wrapped lines)"),
     (&["min_width", "max_width", "min_height", "max_height"], "use min_w, max_w, min_h, max_h"),
     (&["overflow", "scrollable"], "use scroll: x, y or both on a frame (clip hides what overflows)"),
-    (&["box_shadow", "drop_shadow", "glow", "shadows"], "use shadow: {x, y, blur, spread, color} (a glow: x 0, y 0)"),
-    (&["line_cap", "stroke_linecap", "stroke_cap", "line_join", "stroke_linejoin", "stroke_join"], "a stroke's ends and corners cannot be chosen yet"),
+    (&["box_shadow", "drop_shadow", "glow"], "use shadow, or shadows for several (a glow: x 0, y 0, blur)"),
+    (&["line_cap", "stroke_linecap"], "use stroke_cap"),
+    (&["line_join", "stroke_linejoin"], "use stroke_join"),
+    (&["border_gradient", "stroke_fill"], "use stroke_gradient"),
     (&["animation", "keyframes", "transition", "motion"], "nodes do not animate yet"),
     (&["class", "token", "tokens", "variables"], "there are no named colours or styles yet: write each node's own"),
     (&["text_padding", "label_padding"], "use padding"),
@@ -117,6 +120,8 @@ pub const VALUE_HINTS: &[(&[&str], &[&str], &str)] = &[
     (&["text_case"], &["uppercase", "caps"], "upper"),
     (&["text_case"], &["lowercase"], "lower"),
     (&["text_case"], &["capitalize", "titlecase"], "title"),
+    (&["gradient.kind", "stroke_gradient.kind"], &["sweep", "angular"], "conic"),
+    (&["stroke_cap", "arc.cap"], &["flat"], "butt"),
 ];
 
 /// What a field holds, for a value of the wrong shape (`padding: 16` from CSS habit).
@@ -127,7 +132,10 @@ pub const SHAPE_HINTS: &[(&str, &str)] = &[
     ("dash", "give a list of lengths, such as [6, 4]"),
     ("shadow", "give an object: {x, y, blur, spread, color, inset}"),
     ("gradient", "give an object: {kind, angle, stops: [{at, color}, …]}"),
-    ("arc", "give an object: {start, sweep, inner}"),
+    ("arc", "give an object: {start, sweep, inner, cap}"),
+    ("shadows", "give a list of shadows: [{x, y, blur, spread, color}, …]"),
+    ("stroke_gradient", "give an object: {kind, angle, stops: [{at, color}, …]}"),
+    ("runs", "give a list: [{start, end, font_size, color, …}, …]"),
 ];
 
 /// `name` as the tables spell names: lower case, words joined by `_` (`backgroundColor`,
@@ -250,20 +258,38 @@ pub(crate) fn bad_value(field: &str, value: &Value, why: &str) -> String {
     if let (Some(n), Some((lo, hi))) = (value.as_i64().filter(|_| why.starts_with("invalid value: integer")), range_of(field)) {
         return format!("{field}: {n} is outside {lo} to {hi}");
     }
-    let tail = match value.as_str() {
-        Some(given) if why.starts_with("unknown variant") => value_hint(field, given).map(|hint| format!("use {hint:?}")).or_else(|| {
-            let (variants, normal) = (variants(why), normal(given));
-            variants.iter().copied().find(|v| *v == normal)
-                .or_else(|| nearest(given, variants.iter().copied()))
-                .map(|v| format!("did you mean {v:?}?"))
-        }),
-        _ if why.starts_with("invalid type") => SHAPE_HINTS.iter().find(|(f, _)| *f == field).map(|(_, hint)| (*hint).to_string()),
-        _ => None,
+    let tail = if why.starts_with("unknown variant") {
+        variant_tail(field, value, why)
+    } else if why.starts_with("invalid type") {
+        SHAPE_HINTS.iter().find(|(f, _)| *f == field).map(|(_, hint)| (*hint).to_string())
+    } else {
+        None
     };
     match tail {
         Some(tail) => format!("{field}: {why}; {tail}"),
         None => format!("{field}: {why}"),
     }
+}
+
+/// What to write for a value that is not one of its field's: the table's advice, else the closest
+/// variant. For a nested object (`gradient: {kind: "sweep"}`) the value is the one serde names,
+/// looked up as `gradient.kind`.
+fn variant_tail(field: &str, value: &Value, why: &str) -> Option<String> {
+    let (path, given) = match value {
+        Value::String(given) => (field.to_string(), given.as_str()),
+        Value::Object(map) => {
+            let named = why.split('`').nth(1)?;
+            let (key, v) = map.iter().find(|(_, v)| v.as_str() == Some(named))?;
+            (format!("{field}.{key}"), v.as_str()?)
+        }
+        _ => return None,
+    };
+    value_hint(&path, given).map(|hint| format!("use {hint:?}")).or_else(|| {
+        let (variants, normal) = (variants(why), normal(given));
+        variants.iter().copied().find(|v| *v == normal)
+            .or_else(|| nearest(given, variants.iter().copied()))
+            .map(|v| format!("did you mean {v:?}?"))
+    })
 }
 
 /// The values serde's "unknown variant `x`, expected one of `a`, `b`" lists.
@@ -644,10 +670,18 @@ mod tests {
         assert!(node("minWidth", json!(10)).ends_with("minWidth: not a node field; use min_w, max_w, min_h, max_h"));
         let pinned = json!({"id": "t", "parent": "p", "kind": "rect", "pin_x": "stretch"});
         assert!(add(0, pinned).ends_with("; use \"left_right\""));
-        for key in ["truncate", "max_lines"] {
-            assert!(node(key, json!(1)).contains(&format!("{key}: not a node field; text cannot be cut short yet")), "{key}");
-        }
-        assert!(node("runs", json!([])).contains("runs: not a node field; a text has one style"));
+        assert!(node("truncate", json!(1)).ends_with("truncate: not a node field; use max_lines (the text needs a width)"));
+        assert!(node("spans", json!([])).ends_with("spans: not a node field; use runs: [{start, end, …}] (character offsets)"));
+        assert!(node("glow", json!(1)).ends_with("glow: not a node field; use shadow, or shadows for several (a glow: x 0, y 0, blur)"));
+        assert!(node("strokeLinecap", json!("round")).ends_with("strokeLinecap: not a node field; use stroke_cap"));
+        // A nested value is looked up by its path.
+        let stops = json!([{"at": 0, "color": "#fff"}, {"at": 1, "color": "#000"}]);
+        let sweep = json!({"id": "e", "parent": "p", "kind": "ellipse", "gradient": {"kind": "sweep", "stops": stops}});
+        assert!(add(0, sweep).ends_with("gradient: unknown variant `sweep`, expected one of `linear`, `radial`, `conic`; use \"conic\""));
+        let ring = json!({"id": "e", "parent": "p", "kind": "ellipse", "arc": {"inner": 0.8, "cap": "rond"}});
+        assert!(add(0, ring).ends_with("; did you mean \"round\"?"));
+        let flat = json!({"id": "l", "parent": "p", "kind": "line", "points": [[0, 0], [9, 0]], "stroke_cap": "flat"});
+        assert!(add(0, flat).ends_with("; use \"butt\""));
         assert!(node("Background-Color", json!("#fff")).ends_with("Background-Color: not a node field; use fill"));
         let frame = json!({"id": "f", "parent": "p", "kind": "frame", "layout": "vertical"});
         assert!(add(0, frame).ends_with("layout: unknown variant `vertical`, expected one of `none`, `row`, `column`, `wrap`; use \"column\""));
@@ -800,9 +834,16 @@ mod tests {
             assert!(names.iter().all(|n| field_kinds(n).is_none() && normal(n) == *n), "{names:?}");
         }
         for (fields, values, advice) in VALUE_HINTS {
-            for field in *fields {
+            for path in *fields {
+                // A nested value (`gradient.kind`) is probed inside the least object of its field.
+                let (field, key) = path.split_once('.').map_or((*path, None), |(f, k)| (f, Some(k)));
                 let kind = NodeKind::ALL.into_iter().find(|k| crate::design::takes(*k, field)).unwrap();
-                let probe = |value: &str| super::super::read::probe(kind, field, &json!(value));
+                let wrap = |value: &str| match key {
+                    None => json!(value),
+                    Some(key) if field.ends_with("gradient") => json!({key: value, "stops": []}),
+                    Some(key) => json!({key: value}),
+                };
+                let probe = |value: &str| super::super::read::probe(kind, field, &wrap(value));
                 assert_eq!(probe(advice), Ok(()), "{field}: {advice}");
                 for value in *values {
                     assert!(probe(value).is_err() && normal(value) == *value, "{field}: {value} is a value");
