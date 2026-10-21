@@ -59,7 +59,7 @@ internal fun CoachSettingsPage(
             // type builds its accepted streak. The count waits for loadCoachData so it never
             // flashes a false zero.
             val earned = trust.count { it.earned }
-            SettingsGroup("Mode") {
+            SettingsGroup("Mode", rowGap = KitPickGap) {
                 SettingsRadioRow("Suggest", state.coachMode != "auto", "Every change waits for your tap") {
                     vm.setCoachMode("suggest")
                 }

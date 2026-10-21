@@ -23,6 +23,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.foundation.layout.size
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.notify.QuietWindow
 import com.forge.app.domain.units.formatClockHour
@@ -85,16 +86,16 @@ internal fun QuietHoursDays(state: SettingsUiState, vm: SettingsViewModel, enabl
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         windowLabel(window, use24h),
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = com.forge.app.ui.theme.SettingsType.chip,
                         // A day with no window is the inactive state, so it reads quieter.
                         color = if (window.isOff) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
                     )
                     val turn by animateFloatAsState(if (open) 180f else 0f, ForgeMotion.standardTween(), label = "chevron")
                     Icon(
-                        Icons.Rounded.ExpandMore,
+                        com.forge.app.ui.theme.OpenIcons.ChevronDown,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.rotate(turn)
+                        tint = com.forge.app.ui.theme.OpenColors.Rule,
+                        modifier = Modifier.size(16.dp).rotate(turn)
                     )
                 }
             }
@@ -103,7 +104,7 @@ internal fun QuietHoursDays(state: SettingsUiState, vm: SettingsViewModel, enabl
                 enter = expandVertically(ForgeMotion.enterTween()) + fadeIn(ForgeMotion.enterTween()),
                 exit = shrinkVertically(ForgeMotion.exitTween()) + fadeOut(ForgeMotion.exitTween(ForgeMotion.DurationFast))
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(KitRowGap)) {
                     SettingsHourRow("From", window.start, use24h, enabled, indent = 32.dp) { vm.setQuietWindow(day, it, window.end) }
                     SettingsHourRow("Until", window.end, use24h, enabled, indent = 32.dp) { vm.setQuietWindow(day, window.start, it) }
                 }

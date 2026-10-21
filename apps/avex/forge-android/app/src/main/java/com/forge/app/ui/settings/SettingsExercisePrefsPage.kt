@@ -1,6 +1,12 @@
 package com.forge.app.ui.settings
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.draw.clip
+import com.forge.app.ui.common.touchSlop
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -331,26 +337,24 @@ private fun PrefFilter(
 ) {
     var open by remember { mutableStateOf(false) }
     Box {
-        FilterChip(
-            selected = !isDefault,
-            onClick = { open = true },
-            label = { Text(value) },
-            trailingIcon = { Icon(Icons.Rounded.ArrowDropDown, contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize)) },
-            colors = FilterChipDefaults.filterChipColors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                labelColor = MaterialTheme.colorScheme.onSurface,
-                iconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                selectedLabelColor = MaterialTheme.colorScheme.onSurface,
-                selectedTrailingIconColor = MaterialTheme.colorScheme.onSurface
-            ),
-            border = FilterChipDefaults.filterChipBorder(
-                enabled = true,
-                selected = !isDefault,
-                borderColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                selectedBorderColor = MaterialTheme.colorScheme.primary
-            )
-        )
+        // The chips' look: rule-grey edge, the accent wash under an accent edge while it filters.
+        val shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp)
+        Row(
+            Modifier
+                .touchSlop(vertical = 6.dp)
+                .clickableLabeled("Filter: $value. Change") { open = true }
+                .padding(vertical = 6.dp)
+                .heightIn(min = 36.dp)
+                .clip(shape)
+                .background(if (!isDefault) kitWash() else androidx.compose.ui.graphics.Color.Transparent)
+                .border(1.dp, if (!isDefault) MaterialTheme.colorScheme.primary else com.forge.app.ui.theme.OpenColors.Rule, shape)
+                .padding(start = 12.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(value, style = com.forge.app.ui.theme.SettingsType.chip, color = MaterialTheme.colorScheme.onBackground)
+            Icon(com.forge.app.ui.theme.OpenIcons.ChevronDown, contentDescription = null, tint = com.forge.app.ui.theme.OpenColors.Glyph, modifier = Modifier.size(14.dp))
+        }
         SettingsMenu(open, options, selectedIndex, onDismiss = { open = false }) { onSelect(it); open = false }
     }
 }
@@ -373,7 +377,6 @@ private fun ExercisePrefRow(
         SettingsRowContainer(
             interaction = Modifier.clickableLabeled("$name, ${pref.label.lowercase()}. Change preference") { menuOpen = true }
         ) {
-            SettingsIconTile(icon)
             SettingsRowText(name, subtitle)
             when (pref) {
                 Pref.PREFERRED -> Icon(Icons.Rounded.Favorite, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))

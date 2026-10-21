@@ -53,7 +53,7 @@ private fun ChangeRow(note: ChangeNote) {
         }
         Text(
             note.text,
-            style = MaterialTheme.typography.bodyMedium,
+            style = com.forge.app.ui.theme.OpenType.body,
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.weight(1f)
         )

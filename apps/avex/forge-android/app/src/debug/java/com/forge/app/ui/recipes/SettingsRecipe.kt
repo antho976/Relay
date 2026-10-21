@@ -31,17 +31,17 @@ import com.forge.app.ui.theme.ForgeTheme
  *
  * Settings runs on its own kit (`ui/settings/SettingsKit.kt`), not the editorial one:
  *
- *   SettingsTheme                  labels re-mapped to sans for every control on the screen
- *   └─ SettingsScaffold            large serif title that collapses into the bar on scroll
- *      ├─ SettingsSearchBar        root page only
- *      └─ SettingsGroup            sans header · rows as 4dp slabs 2dp apart · 16dp outer clip
- *         ├─ navigation row        icon tile · title · live value · chevron
- *         ├─ switch / radio row    the WHOLE row is the tap target, the control is drawn
- *         ├─ segmented row         2–4 short values, sliding thumb
- *         └─ footer                one note under the group, never above it
+ *   SettingsTheme                  labels re-mapped to sans for every Material control (dialogs)
+ *   └─ SettingsScaffold            bare back arrow · serif title (56, or 40 for a long name)
+ *      ├─ SettingsSearchBar        a long list's own search (the root's lives in its top bar)
+ *      └─ SettingsGroup            mono label · open rows 22dp apart, no slabs (Open panel, 2026-10-21)
+ *         ├─ navigation row        name (16/600) · mono reading · rule-grey chevron
+ *         ├─ switch / radio row    the WHOLE row is the tap target; red switch on, outline off
+ *         ├─ segmented row         2–7 short values as 4dp chips, the pick on the accent wash
+ *         └─ footer                one note under the group, in body, never above it
  *
  * Groups own no page gutter: [SettingsScaffold] applies it once. A do-it-now button closes the
- * page in a [SettingsButtonBar]; the Primary kind takes the accent, the rest stay neutral.
+ * page in a [SettingsButtonBar]; the Primary kind is the red one, the rest are outlined.
  */
 @Composable
 fun SettingsRecipe(onBack: () -> Unit = {}) {

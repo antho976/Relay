@@ -56,7 +56,6 @@ internal fun BackupPage(vm: SettingsViewModel, onBack: () -> Unit) {
                 title = folderUri?.let(::folderLabel) ?: "No folder chosen",
                 supporting = if (folderUri != null) "Each backup also lands here" else "Backups stay on this phone only",
                 interaction = Modifier.clickableLabeled("Choose backup folder") { folderPicker.launch(null) },
-                leading = { SettingsIconTile(Icons.Rounded.Folder) }
             ) { SettingsCompactButton(if (folderUri == null) "Choose" else "Change") }
         }
 
@@ -69,7 +68,7 @@ internal fun BackupPage(vm: SettingsViewModel, onBack: () -> Unit) {
                 else vm.backupNow()
             }
             if (folderUri != null) {
-                SettingsButton("Remove folder", kind = ButtonKind.Tonal, onClick = vm::clearBackupFolder)
+                SettingsButton("Remove folder", kind = ButtonKind.Outlined, onClick = vm::clearBackupFolder)
             }
         }
     }
@@ -80,7 +79,6 @@ internal fun BackupPage(vm: SettingsViewModel, onBack: () -> Unit) {
 private fun BackupStatusRow(savedAt: String?, failed: Boolean, noBackup: Boolean) {
     val flag = failed || noBackup
     SettingsRowContainer {
-        SettingsIconTile(if (flag) Icons.Rounded.ErrorOutline else Icons.Rounded.History, if (flag) TileTone.Danger else TileTone.Neutral)
         SettingsRowText(
             when {
                 failed -> "Last backup failed"
@@ -94,6 +92,8 @@ private fun BackupStatusRow(savedAt: String?, failed: Boolean, noBackup: Boolean
             },
             supportingColor = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        // The one mark of red on the page: a failed run, or data with no copy at all.
+        if (flag) SettingsStatus("Needs a copy", live = true)
     }
 }
 

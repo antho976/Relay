@@ -62,7 +62,6 @@ internal fun BackupPasswordSection(vm: SettingsViewModel, galleryLocked: Boolean
                 interaction = Modifier.clickableLabeled("Change backup password") {
                     guarded("Unlock to change the backup password") { askNew = true }
                 },
-                leading = { SettingsIconTile(Icons.Rounded.Key, if (state == BackupPasswordState.NEEDS_RESET) TileTone.Danger else TileTone.Neutral) }
             ) { SettingsCompactButton(if (state == BackupPasswordState.NEEDS_RESET) "Set" else "Change") }
         }
     }
@@ -109,7 +108,7 @@ private fun PasswordField(
         supportingText = supporting?.let { { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
         visualTransformation = PasswordVisualTransformation(),
         colors = settingsFieldColors(),
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
         keyboardOptions = KeyboardOptions(
             keyboardType = KeyboardType.Password,
             autoCorrectEnabled = false,
