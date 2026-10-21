@@ -19,6 +19,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -110,8 +117,28 @@ internal fun CardioReading(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         OpenLabel(label)
-        Text(figure, style = OpenType.figureM, color = MaterialTheme.colorScheme.onBackground)
+        CardioFittedFigure(figure, OpenType.figureM)
         if (change != null) CardioChange(change, moved)
+    }
+}
+
+/**
+ * A serif figure that steps itself down (to 70% at most) rather than wrap its unit onto a second
+ * line when a narrow column cannot hold it, as "12.7 mi" in a third of a 384dp phone. Past that
+ * floor it wraps.
+ */
+@Composable
+internal fun CardioFittedFigure(figure: AnnotatedString, style: TextStyle, modifier: Modifier = Modifier) {
+    var shrink by remember(figure) { mutableFloatStateOf(1f) }
+    val d = LocalDensity.current
+    CompositionLocalProvider(LocalDensity provides Density(d.density, d.fontScale * shrink)) {
+        Text(
+            figure,
+            style = style,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = modifier,
+            onTextLayout = { if (it.lineCount > 1 && shrink > 0.71f) shrink -= 0.1f }
+        )
     }
 }
 

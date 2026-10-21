@@ -134,7 +134,8 @@ private fun CardioDayBars(state: CardioUiState, todayDow: Int, onOpenThisWeek: (
         OpenColumnChart(
             values = days.map { it.minutes.toFloat() },
             colors = days.map { accent },
-            height = 96.dp,
+            // An untrained week is its letters over the meter: no tall empty plot above them.
+            height = if (days.any { it.minutes > 0 }) 96.dp else 28.dp,
             columnLabels = letters,
             gapFraction = 0.5f,
             description = reading
