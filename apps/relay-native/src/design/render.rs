@@ -13,7 +13,8 @@
 //! With `at_ms` the picture is posed at that time of the motion; with `frames` it is a contact
 //! sheet of that many frames over the span of what moves in scope, its times answered in
 //! `times_ms` (feature-motion §5). Both are drawn through export.rs's posing and sheet code, as
-//! the board's own exports are; the boxes and issues stay at rest.
+//! the board's own exports are. The boxes stay at rest; the issues are the still's, then what
+//! the page posed at each time pictured adds (`boxes::motion_issues`), each with its `at_ms`.
 
 use super::export;
 use super::paint::Painter;
@@ -278,7 +279,14 @@ async fn draw(ui: &Rc<Ui>, painter: &Rc<Painter>, req: &RenderRequest, scene: &S
         None => export::area_of(painter, scene, &placed, page, &ids),
     };
     let boxes = boxes::boxes(scene, &placed, page, &ids, req.boxes_limit as usize);
-    let (issues, issue_count) = boxes::issues(scene, &placed, &**painter, page, &ids);
+    let (mut issues, mut issue_count) = boxes::issues(scene, &placed, &**painter, page, &ids);
+    // What motion brings at the times pictured, after the still's: an agent reads a sheet's first
+    // frame alone, so it hears of a later one here.
+    if let Some(clocks) = &clocks {
+        let (moving, count) = boxes::motion_issues(scene, &placed, &**painter, page, &ids, clocks, &times);
+        issues.extend(moving.into_iter().take(boxes::MAX_ISSUES.saturating_sub(issues.len())));
+        issue_count = issue_count.saturating_add(count);
+    }
     trace("boxes", t);
     warnings.extend(boxes::more_boxes(&boxes));
     let Some(area) = area else {
@@ -476,7 +484,7 @@ fn shaped(rev: i64, area: RenderRect, scale: f64, png_b64: Option<String>, boxes
     let issues = issues
         .into_iter()
         .take(boxes::MAX_ISSUES)
-        .map(|i| RenderIssue { code: i.code, ids: i.ids.into_iter().take(ISSUE_IDS).collect(), message: cut(i.message) })
+        .map(|i| RenderIssue { code: i.code, ids: i.ids.into_iter().take(ISSUE_IDS).collect(), message: cut(i.message), at_ms: i.at_ms })
         .collect();
     let warnings = warnings.into_iter().take(MAX_WARNINGS).map(cut).collect();
     RenderDrawn { rev, area, scale, png_b64, boxes, issues, issue_count, warnings, timings_ms, times_ms }
@@ -564,7 +572,7 @@ mod tests {
     fn an_answer_is_shaped_as_answer_in() {
         assert_eq!(boxes::FIELDS, RENDER_BOX_FIELDS, "the rows' columns are the ones the engine holds an answer to");
         let boxes = RenderBoxes { fields: boxes::FIELDS.map(String::from).to_vec(), rows: vec![], total: 0, hidden: 0 };
-        let issue = |i: usize| RenderIssue { code: "overlap".into(), ids: (0..12).map(|k| format!("n{i}-{k}")).collect(), message: "x".repeat(400) };
+        let issue = |i: usize| RenderIssue { code: "overlap".into(), ids: (0..12).map(|k| format!("n{i}-{k}")).collect(), message: "x".repeat(400), at_ms: None };
         let issues: Vec<RenderIssue> = (0..130).map(issue).collect();
         let warnings: Vec<String> = (0..25).map(|i| format!("warning {i} {}", "y".repeat(320))).collect();
         let timings = RenderTimings { read: 1.0, layout: 2.0, paint: 3.0, encode: 4.0 };

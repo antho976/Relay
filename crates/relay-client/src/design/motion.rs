@@ -8,6 +8,7 @@
 //! changes layout, so nothing here lays out: a pose moves a laid-out box after the fact.
 
 use super::geom::Rect;
+use super::layout::Placed;
 use super::scene::Scene;
 use relay_bus::design::{Ease, Key, Motion, Node, NodeKind, Pose};
 use std::collections::{HashMap, HashSet};
@@ -151,6 +152,53 @@ impl Clocks {
             }
         }
     }
+}
+
+/// The scene and its placement as they stand `t_ms` after Play starts, for the checks a still
+/// runs (`boxes::issues`): each mover's opacity, colours and sweep as posed and its turn added to
+/// its own, and its box, with everything inside it, scaled about its origin and moved by its
+/// offset, a mover inside another taking both. Blur, trim and a gradient's angle change nothing a
+/// check reads. Text keeps its measure: a scaled text is checked at its own size.
+pub fn posed_still(scene: &Scene, placed: &Placed, clocks: &Clocks, t_ms: f64) -> (Scene, Placed) {
+    let mut poses = HashMap::new();
+    clocks.poses(scene, t_ms, &mut poses);
+    let (mut posed, mut moved) = (scene.clone(), placed.clone());
+    let hex = |[r, g, b, a]: [u8; 4]| format!("#{r:02X}{g:02X}{b:02X}{a:02X}");
+    // Paint order: an outer mover's change is in place before an inner one's is laid on it.
+    for (id, _) in clocks.movers() {
+        let Some(pose) = poses.get(id) else { continue };
+        if let Some(n) = posed.node_mut(id) {
+            if let Some(o) = pose.opacity {
+                n.opacity = Some(o.clamp(0.0, 1.0));
+            }
+            for (field, value) in [(&mut n.fill, pose.fill), (&mut n.stroke, pose.stroke), (&mut n.color, pose.color)] {
+                if let Some(value) = value {
+                    *field = Some(hex(value));
+                }
+            }
+            if let (Some(sweep), Some(arc)) = (pose.sweep, n.arc.as_mut()) {
+                arc.sweep = sweep;
+            }
+            if pose.rotate != 0.0 {
+                n.rotation = Some(n.rotation.unwrap_or(0.0) + pose.rotate);
+            }
+        }
+        let Some(r) = moved.rect(id) else { continue };
+        let (ox, oy) = (r.x + pose.origin[0] * r.w, r.y + pose.origin[1] * r.h);
+        let at = |(x, y): (f64, f64)| (ox + (x - ox) * pose.scale_x + pose.dx, oy + (y - oy) * pose.scale_y + pose.dy);
+        for inner in scene.subtree(id) {
+            if let Some(b) = moved.rects.get_mut(&inner) {
+                let ((x0, y0), (x1, y1)) = (at((b.x, b.y)), at((b.right(), b.bottom())));
+                *b = Rect::spanning((x0.min(x1), y0.min(y1)), (x0.max(x1), y0.max(y1)));
+            }
+            for origins in [&mut moved.origins, &mut moved.content_origin] {
+                if let Some(o) = origins.get_mut(&inner) {
+                    *o = at(*o);
+                }
+            }
+        }
+    }
+    (posed, moved)
 }
 
 /// Put `id` and its ancestors in `touched`.

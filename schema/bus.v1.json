@@ -28478,6 +28478,14 @@
         },
         "message": {
           "type": "string"
+        },
+        "at_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "With `at_ms` or `frames`: the first time pictured, in ms, at which motion brings this\nproblem that the still does not have (its message says how many of the times show it).\nAbsent for one the design has at rest."
         }
       },
       "required": [
