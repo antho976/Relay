@@ -130,6 +130,15 @@ pub fn run(tx: &Transaction, store_dir: &Path) -> rusqlite::Result<Purged> {
             tx.prepare_cached("DELETE FROM designs WHERE id=?1")?.execute([id])?;
         }
         note(designs.len(), "deleted design(s) past the undo window");
+
+        // Deleted videos' rows. Their folders stay on disk: they are someone's code, and Relay does
+        // no destructive cleanup of its own (D167); the person deletes a folder when they want it gone.
+        let videos: Vec<i64> = tx.prepare_cached("SELECT id FROM videos WHERE deleted_at IS NOT NULL AND deleted_at < ?1")?
+            .query_map([&cutoff], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        for &id in &videos {
+            tx.prepare_cached("DELETE FROM videos WHERE id=?1")?.execute([id])?;
+        }
+        note(videos.len(), "deleted video(s) past the undo window");
         out.designs = designs;
 
         // Trashed files: the row and its `.relay/trash/<id>/` directory. Restored rows have no
