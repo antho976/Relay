@@ -114,7 +114,6 @@
 3 font-size ui/gym/train/components/SessionSummarySheet.kt fontSize=
 11 font-size ui/gym/train/components/SetInputRow.kt fontSize=
 9 font-size ui/gym/train/components/SetRow.kt fontSize=
-1 font-size ui/nav/ForgeBottomBar.kt fontSize=
 1 font-size ui/onboarding/PlanModeVignettes.kt fontSize=
 1 font-size ui/overview/HistoryComponents.kt fontSize=
 2 font-size ui/overview/SummarySheet.kt fontSize=
@@ -169,3 +168,9 @@
 1 unlabelled-clickable ui/gym/session/SessionDetailComponents.kt .clickable(
 1 unlabelled-clickable ui/gym/session/SessionDetailMetricCards.kt .clickable(
 1 unlabelled-clickable ui/gym/stats/StatsStrength.kt .clickable(
+# The 2026-10-21 redesign draws these three exactly; none is text or a surface rung:
+# the sparkline's area under its line (accent 10%), and the bottom bar's ground (page 90%)
+# with its top hairline (white 8%), which content scrolls under.
+1 alpha ui/common/OpenPanel.kt 0.10
+1 alpha ui/nav/ForgeBottomBar.kt 0.08
+1 alpha ui/nav/ForgeBottomBar.kt 0.9

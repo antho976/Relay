@@ -34,7 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
+import com.forge.app.ui.theme.AvexFonts
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -182,7 +182,7 @@ private fun CrashLogViewerDialog(
                         Text(
                             text,
                             style = MaterialTheme.typography.bodySmall.copy(
-                                fontFamily = FontFamily.Monospace
+                                fontFamily = AvexFonts.Monospace
                             ),
                             color = muted.copy(alpha = 0.7f)
                         )
@@ -221,9 +221,16 @@ private fun LicensesDialog(onDismiss: () -> Unit) {
                 Text(
                     MIT_LICENSE_BODY_HIGHLIGHTER,
                     style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = AvexFonts.Monospace
                     ),
                     color = muted.copy(alpha = 0.7f)
+                )
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "Noto Serif Display, Noto Sans and Noto Sans Mono (© The Noto Project Authors) " +
+                        "are licensed under the SIL Open Font License, Version 1.1 (scripts.sil.org/OFL).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = muted
                 )
                 Spacer(Modifier.height(16.dp))
                 Text(

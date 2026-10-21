@@ -108,7 +108,7 @@ class DoctrineParityTest {
         val code = read(DesignDoctrine.appSource("ui/theme/Type.kt"))
         // style name -> (family, size) — one TextStyle block per Material style.
         val styles = Regex(
-            """(\w+)\s*=\s*TextStyle\((?:[^)]*?)fontFamily\s*=\s*FontFamily\.(\w+)(?:.*?)fontSize\s*=\s*(\d+)\.sp""",
+            """(\w+)\s*=\s*TextStyle\((?:[^)]*?)fontFamily\s*=\s*(?:FontFamily|AvexFonts)\.(\w+)(?:.*?)fontSize\s*=\s*(\d+)\.sp""",
             setOf(RegexOption.DOT_MATCHES_ALL)
         ).findAll(code).associate { m ->
             m.groupValues[1] to (m.groupValues[2] to m.groupValues[3].toInt())

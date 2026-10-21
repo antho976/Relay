@@ -1,5 +1,12 @@
 package com.forge.app.ui.nav
 
+import com.forge.app.ui.theme.OpenIcons
+import com.forge.app.ui.theme.OpenType
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,19 +42,20 @@ import androidx.compose.ui.unit.Density
  * and Coach can be hidden. Home sits in the middle.
  */
 enum class BottomTab(val label: String, val icon: ImageVector) {
-    CARDIO("Cardio", NavIcons.Cardio),
-    STATS("Stats", NavIcons.Stats),
-    HOME("Home", NavIcons.Home),
-    COACH("Coach", NavIcons.Coach),
+    CARDIO("Cardio", OpenIcons.Activity),
+    STATS("Stats", OpenIcons.BarChart),
+    HOME("Home", OpenIcons.Home),
+    COACH("Coach", OpenIcons.Compass),
     // Took Profile's slot on 2026-07-27: the Academy had been a link inside Coach, which buried the
     // half of the coach you can read. Profile moved to the Home top bar, where Settings used to sit.
-    ACADEMY("Academy", NavIcons.Academy),
+    ACADEMY("Academy", OpenIcons.GraduationCap),
 }
 
 /**
- * Minimal bottom navigation bar — a top hairline over the app's gradient (no solid footer), so it
- * reads as part of the pearl surface rather than a heavy chrome bar. The selected tab takes the
- * accent; the rest stay muted. Each item is a full-height, ≥48dp Tab-role target (a11y).
+ * The bottom bar, as the redesign draws it (2026-10-21): the page colour at 90% under a faint top
+ * hairline, outline glyphs from the redesign's family, mono labels. The selected tab's glyph takes the
+ * accent and its label the ink; the rest sit at the quiet muted rung. Each item is a full-height,
+ * ≥48dp Tab-role target (a11y).
  */
 @Composable
 fun ForgeBottomBar(
@@ -64,19 +72,27 @@ fun ForgeBottomBar(
      */
     badges: Map<BottomTab, Int> = emptyMap()
 ) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val faint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+    val ink = MaterialTheme.colorScheme.onBackground
     val accent = MaterialTheme.colorScheme.primary
-    Column(Modifier.fillMaxWidth()) {
+    val ground = MaterialTheme.colorScheme.background
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(ground.copy(alpha = 0.9f))
+            .drawBehind { drawRect(Color.White.copy(alpha = 0.08f), size = Size(size.width, 1.dp.toPx())) }
+    ) {
         Row(
             Modifier
                 .fillMaxWidth()
+                .padding(horizontal = 22.dp)
                 .navigationBarsPadding(),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
             tabs.forEachIndexed { index, tab ->
                 val selected = index == selectedIndex
-                val color = if (selected) accent else muted
+                val color = if (selected) accent else faint
                 Column(
                     // A minimum, not a fixed height, so a label at large text grows the bar instead
                     // of being cut. On the tab, not the row: fillMaxHeight under a row with only a
@@ -102,7 +118,7 @@ fun ForgeBottomBar(
                             contentDescription = "$badge new"
                         )
                     }
-                    Spacer(Modifier.height(3.dp))
+                    Spacer(Modifier.height(5.dp))
                     // Chrome clamps its own scaling (§14): at 2x, five tabs left "Academy" about
                     // 90dp of text in an 82dp tab, and it was cut to "Academ". At 1.3x it fits a
                     // 360dp phone's 72dp tab, and the bar grows to the label rather than clipping.
@@ -112,10 +128,8 @@ fun ForgeBottomBar(
                     ) {
                         Text(
                             tab.label,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = color,
-                            fontSize = 10.sp,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                            style = OpenType.monoXS.copy(letterSpacing = 0.sp),
+                            color = if (selected) ink else faint
                         )
                     }
                 }

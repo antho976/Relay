@@ -25,7 +25,7 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
-import androidx.compose.ui.text.font.FontFamily
+import com.forge.app.ui.theme.AvexFonts
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import com.forge.app.ui.theme.ForgeMotion
@@ -183,7 +183,7 @@ private fun DrawScope.type(
     val layout = ink.measurer.measure(
         text,
         TextStyle(
-            fontFamily = if (mono) FontFamily.Monospace else FontFamily.SansSerif,
+            fontFamily = if (mono) AvexFonts.Monospace else AvexFonts.SansSerif,
             fontWeight = if (mono) FontWeight.Normal else FontWeight.Medium,
             fontSize = px(sizePx).toSp(),
             letterSpacing = px(if (mono) LABEL_TRACKING else 0f).toSp(),
