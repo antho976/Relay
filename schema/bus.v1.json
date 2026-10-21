@@ -26407,6 +26407,24 @@
           "description": "On an instance's node: the fields it keeps as its own while the main changes, at most 64.\nAn update of an instance's node adds each field it sets; give `overrides` itself to say\nwhich (`[]` or `null` puts every field back to the main's).",
           "maxItems": 64
         },
+        "chart": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignChart"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A chart this frame (without `layout`) draws as its `generated` children, redrawn when it or\nthe frame's size changes."
+        },
+        "generated": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Set on a chart's parts, which are edited through the chart."
+        },
         "motion": {
           "anyOf": [
             {
@@ -27043,6 +27061,241 @@
         "end"
       ],
       "description": "One stretch of a text in a style of its own: characters `start` to `end` of `text` (counted\nin characters, `end` not included). A field it leaves out is the node's."
+    },
+    "DesignChart": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/DesignChartKind"
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The categories (a donut's or pie's slices), 1 to 100.",
+          "minItems": 1,
+          "maxItems": 100
+        },
+        "series": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignChartSeries"
+          },
+          "description": "1 to 8 (a donut or pie draws the first).",
+          "minItems": 1,
+          "maxItems": 8
+        },
+        "stacked": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Bars stacked, not side by side."
+        },
+        "horizontal": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Bars across, labels down the left."
+        },
+        "min": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "The value axis' ends (default: 0 to a round number past the data)."
+        },
+        "max": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "ticks": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 10,
+          "description": "About how many axis steps, 0 to 10 (default 4; 0 none)."
+        },
+        "grid": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Grid lines (default true)."
+        },
+        "values": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Each value written by its bar, point or slice."
+        },
+        "legend": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "A key along the top (default: several series, or a ring)."
+        },
+        "prefix": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Written before (`\"$\"`) and after (`\"%\"`) each number, and its decimals (0 to 6).",
+          "maxLength": 8
+        },
+        "suffix": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 8
+        },
+        "decimals": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 6
+        },
+        "smooth": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Curved lines."
+        },
+        "points": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "A dot at each point."
+        },
+        "inner": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "A donut's hole, of its radius (default 0.6).",
+          "minimum": 0.1,
+          "maximum": 0.9
+        },
+        "center": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Words in a donut's hole.",
+          "maxLength": 64
+        },
+        "gap": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "The room between bars (default 0.3).",
+          "maximum": 0.9
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The labels' colour, the grid's, and the labels' size (default 12)."
+        },
+        "grid_color": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "font_size": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": 6,
+          "maximum": 48
+        },
+        "palette": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Colours for what names none (default: Relay's eight).",
+          "minItems": 1,
+          "maxItems": 12
+        }
+      },
+      "required": [
+        "kind",
+        "labels",
+        "series"
+      ],
+      "description": "A chart a frame draws: `{\"kind\": \"bar\", \"labels\": [\"Jan\", \"Feb\"], \"series\": [{\"name\": \"Spent\", \"values\": [420, 380]}], \"prefix\": \"$\"}`."
+    },
+    "DesignChartKind": {
+      "type": "string",
+      "enum": [
+        "bar",
+        "line",
+        "area",
+        "donut",
+        "pie"
+      ],
+      "description": "What a chart draws."
+    },
+    "DesignChartSeries": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Its name in the legend.",
+          "maxLength": 64
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "description": "One per label.",
+          "minItems": 1,
+          "maxItems": 100
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Default: the palette's next."
+        }
+      },
+      "required": [
+        "values"
+      ],
+      "description": "One series of a chart: a value per label."
     },
     "DesignMotion": {
       "type": "object",
@@ -27909,6 +28162,8 @@
                   "component",
                   "instance_of",
                   "overrides",
+                  "chart",
+                  "generated",
                   "motion",
                   "timeline",
                   "width",

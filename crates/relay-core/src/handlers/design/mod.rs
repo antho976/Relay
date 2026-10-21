@@ -12,6 +12,7 @@
 
 mod apply;
 mod assets;
+mod charts;
 mod check;
 mod components;
 mod expect;

@@ -137,6 +137,10 @@ data class DesignNode(
     @SerialName("instance_of") val instanceOf: String? = null,
     /** The fields an instance's node keeps as its own; nothing drawn changes. */
     val overrides: List<String>? = null,
+    /** A frame's chart, as data: the PC draws it as the frame's `generated` children, which the phone draws as any. */
+    val chart: JsonObject? = null,
+    /** Drawn by its frame's chart; nothing drawn changes. */
+    val generated: Boolean? = null,
     val text: String? = null,
     val color: String? = null,
     val font: String? = null,
