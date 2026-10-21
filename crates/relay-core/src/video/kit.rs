@@ -127,6 +127,7 @@ pub fn status(engine: &Engine) -> KitStatus {
     let mut out = KitStatus {
         state: KitState::Missing,
         root: root.display().to_string(),
+        kit_dir: root.join(".relay/kit").display().to_string(),
         node: None,
         remotion: REMOTION.into(),
         error: None,

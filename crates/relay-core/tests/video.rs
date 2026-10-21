@@ -323,3 +323,33 @@ fn a_deleted_video_is_listed_only_when_asked_and_comes_back() {
     assert!(dir.join("src/Video.tsx").exists(), "deleting a video leaves its code");
     assert_eq!(ok(&e, "video.restore", json!({"video_id": id}))["deleted_at"], Value::Null);
 }
+
+#[test]
+fn a_scan_checks_every_few_frames_where_words_rest_and_how_long_they_stay() {
+    let (e, _root) = project();
+    with_worker(&e);
+    let (id, _) = create(&e);
+    let scanned = ok(&e, "video.scan", json!({"video_id": id}));
+    assert_eq!((scanned["every"].as_u64(), scanned["frames"].as_u64()), (Some(3), Some(30)));
+    let kinds: Vec<&str> = scanned["issues"].as_array().unwrap().iter().map(|i| i["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["unsafe", "brief_text"], "{}", scanned["issues"]);
+    // The title is judged where it rests, not on its way up: from frame 12, the first it was still.
+    assert_eq!(scanned["issues"][0]["frames"][0], 12);
+    assert_eq!(scanned["issues"][1]["id"], "flash");
+    // Answers stay short: no schema or default props.
+    assert!(scanned["composition"].get("props_schema").is_none() && scanned["composition"].get("default_props").is_none());
+    let part = ok(&e, "video.scan", json!({"video_id": id, "every": 10, "from": "1s", "to": "2s"}));
+    assert_eq!(part["frames"], 4);
+}
+
+#[test]
+fn versions_say_what_they_changed() {
+    let (e, _root) = project();
+    with_worker(&e);
+    let (id, dir) = create(&e);
+    fs::write(dir.join("src/Hook.tsx"), "export const Hook = () => null;\n").unwrap();
+    ok(&e, "video.check", json!({"video_id": id}));
+    let versions = ok(&e, "video.get", json!({"video_id": id}))["versions"].clone();
+    assert_eq!(versions[0]["changed"], json!(["+src/Hook.tsx"]));
+    assert_eq!(versions[1]["changed"], json!(["the starter"]));
+}

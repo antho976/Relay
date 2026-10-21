@@ -7,7 +7,7 @@ use super::sheet::{self, Rgba};
 use super::{blobs_dir, bundle_dir, get_video, poster_path, versions, worker, Video};
 use crate::engine::{Engine, IntoBus};
 use relay_bus::error::BusError;
-use relay_bus::ops::video::{frame_label, CheckOut, CodeError, Composition, ErrorKind, StillFrame, StillIn, StillOut, MAX_STILLS};
+use relay_bus::ops::video::{frame_label, CheckOut, CodeError, Composition, ErrorKind, ScanIn, ScanOut, StillFrame, StillIn, StillOut, MAX_STILLS};
 use relay_bus::types::Id;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -64,7 +64,17 @@ pub fn check(engine: &Engine, video: &Video, by: &Caller) -> Result<CheckOut, Bu
     if !found.compositions.is_empty() {
         keep_compositions(engine, video, &found.compositions, by)?;
     }
-    Ok(CheckOut { ok, errors: found.errors, compositions: found.compositions, version })
+    // Their props and schemas are kept for video.get and the props panel; a check answers what
+    // the agent acts on.
+    let compositions = found.compositions.into_iter().map(summary).collect();
+    Ok(CheckOut { ok, errors: found.errors, compositions, version })
+}
+
+/// A composition without its props and schema: what a check, a still or a scan answers.
+pub fn summary(mut c: Composition) -> Composition {
+    c.default_props = Value::Null;
+    c.props_schema = None;
+    c
 }
 
 /// Keep what a check found on the row: the compositions, and the default one's size, rate and
@@ -207,7 +217,7 @@ pub fn still(engine: &Engine, video: &Video, p: &StillIn, by: &Caller) -> Result
 
     let pictures: Vec<Option<Rgba>> = drawn.stills.iter().map(|s| s.path.as_ref().and_then(|p| sheet::decode(Path::new(p)).ok())).collect();
     let checked: Vec<Drawn> = drawn.stills.iter().zip(&pictures).filter_map(|(s, picture)| {
-        s.probe.as_ref().map(|probe| Drawn { probe, picture: picture.as_ref(), scale, console: &s.console })
+        s.probe.as_ref().map(|probe| Drawn { probe, picture: picture.as_ref(), scale, console: &s.console, moving: &[] })
     }).collect();
     let issues = probe::issues(&checked, comp.fps);
     let boxes = if p.boxes.unwrap_or(false) {
@@ -248,7 +258,52 @@ pub fn still(engine: &Engine, video: &Video, p: &StillIn, by: &Caller) -> Result
     prune(&dir);
 
     let frames = drawn.stills.iter().map(|s| StillFrame { frame: s.frame, at_ms: s.frame as f64 * 1000.0 / comp.fps, label: frame_label(s.frame, comp.fps) }).collect();
-    Ok(StillOut { png: png.display().to_string(), composition: comp, frames, boxes, issues, errors, version })
+    Ok(StillOut { png: png.display().to_string(), composition: summary(comp), frames, boxes, issues, errors, version })
+}
+
+#[derive(Deserialize)]
+struct WorkerScan {
+    #[serde(default)]
+    probes: Vec<Probe>,
+    #[serde(default)]
+    console: Vec<String>,
+    #[serde(default)]
+    errors: Vec<CodeError>,
+}
+
+/// Measure every `every` frames of a composition, with no pictures, and check them all.
+pub fn scan(engine: &Engine, video: &Video, p: &ScanIn, by: &Caller) -> Result<ScanOut, BusError> {
+    super::kit::ready(engine)?;
+    let version = snapshot(engine, video, by)?;
+    let composition = p.composition.clone().unwrap_or_else(|| video.composition.clone());
+    let props = props_for(engine, video.id, &composition, p.props.as_ref())?;
+    let bundle = bundle_dir(engine, video.id);
+    let meta: WorkerMeta = serde_json::from_value(worker::call(engine, "meta",
+        json!({"dir": video.dir, "bundle_dir": bundle, "composition": composition, "props": props}), META_WITHIN)?).bus()?;
+    let Some(comp) = meta.composition.filter(|_| meta.errors.is_empty()) else {
+        return Err(build_refusal(&meta.errors));
+    };
+    let every = p.every.unwrap_or(3).clamp(1, 30);
+    let bad = |e: String| BusError::invalid("video.moment", e);
+    let last = comp.duration_frames.saturating_sub(1);
+    let from = p.from.as_ref().map(|m| m.frame(comp.fps, comp.duration_frames)).transpose().map_err(bad)?.unwrap_or(0);
+    let to = p.to.as_ref().map(|m| m.frame(comp.fps, comp.duration_frames)).transpose().map_err(bad)?.unwrap_or(last);
+    if to < from {
+        return Err(BusError::invalid("video.moment", "`to` is before `from`"));
+    }
+    // About a fifth of a second a frame measured, on a loaded machine.
+    let within = Duration::from_secs(60 + u64::from((to - from) / every) / 5);
+    let found: WorkerScan = serde_json::from_value(worker::call(engine, "scan", json!({
+        "dir": video.dir, "bundle_dir": bundle, "composition": composition, "props": props, "every": every, "range": [from, to],
+    }), within)?).bus()?;
+    let mut probes = found.probes;
+    probes.sort_by_key(|p| p.frame);
+    probes.dedup_by_key(|p| p.frame);
+    if probes.is_empty() && !found.errors.is_empty() {
+        return Err(build_refusal(&found.errors));
+    }
+    let issues = probe::scan(&probes, &found.console, comp.fps, every);
+    Ok(ScanOut { composition: summary(comp), frames: probes.len() as u32, every, issues, errors: found.errors, version })
 }
 
 /// Copy `from` to the video's poster, and name it on the row the first time.

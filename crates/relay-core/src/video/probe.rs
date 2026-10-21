@@ -62,6 +62,13 @@ pub struct ProbeText {
     /// The other texts (by index) this one sits inside.
     #[serde(default)]
     pub within: Vec<usize>,
+    /// Not meant to be read (inside `aria-hidden`): no reading checks.
+    #[serde(default)]
+    pub decorative: bool,
+    /// Part of an app's screen in a device frame (`data-relay-screen`): context, not held to the
+    /// video's type sizes or reading times.
+    #[serde(default)]
+    pub screen: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -92,13 +99,14 @@ const SLACK: f64 = 2.0;
 /// Most issues one answer lists.
 const MOST_ISSUES: usize = 40;
 
-/// A frame drawn: what the probe measured, the picture (when it drew) at `scale`, and the errors
-/// the page logged.
+/// A frame drawn: what the probe measured, the picture (when it drew) at `scale`, the errors the
+/// page logged, and which of its texts are in motion (by index; none when empty).
 pub struct Drawn<'a> {
     pub probe: &'a Probe,
     pub picture: Option<&'a Rgba>,
     pub scale: f64,
     pub console: &'a [String],
+    pub moving: &'a [bool],
 }
 
 /// The issues across the frames drawn, each once with every frame it was found on, in the order
@@ -120,12 +128,15 @@ pub fn issues(frames: &[Drawn], fps: f64) -> Vec<Issue> {
         let safe = safe_area(fw, fh);
         let short = fw.min(fh);
         let visible: Vec<(usize, &ProbeText)> = p.texts.iter().enumerate().filter(|(_, t)| t.opacity > 0.05 && t.w > 0.0 && t.h > 0.0).collect();
-        for &(_, t) in &visible {
+        // Words in motion are where an animation puts them for a moment: where they are is
+        // judged only once they settle.
+        let moving = |i: usize| drawn.moving.get(i).copied().unwrap_or(false);
+        for &(i, t) in &visible {
             let key = t.id.clone().unwrap_or_else(|| format!("{}|{}", t.path, t.text));
             let name = || Some(t.text.clone());
             let (x0, y0, x1, y1) = (t.x, t.y, t.x + t.w, t.y + t.h);
 
-            if let Some([cx, cy, cw, ch]) = t.clip {
+            if let Some([cx, cy, cw, ch]) = t.clip.filter(|_| !moving(i)) {
                 let (cx1, cy1) = (cx + cw, cy + ch);
                 let shows = x1 > cx && x0 < cx1 && y1 > cy && y0 < cy1;
                 let cut = [cx - x0, cy - y0, x1 - cx1, y1 - cy1];
@@ -136,21 +147,24 @@ pub fn issues(frames: &[Drawn], fps: f64) -> Vec<Issue> {
                 }
             }
 
-            let inside_frame = x1 > 0.0 && x0 < fw && y1 > 0.0 && y0 < fh;
+            let inside_frame = x1 > 0.0 && x0 < fw && y1 > 0.0 && y0 < fh && !moving(i);
+            // A run's box is its glyphs', which rise past its line box by part of the font's
+            // size: words laid out exactly at an edge are not past it.
+            let edge = SLACK.max(t.size * 0.2);
             let past = [-x0, -y0, x1 - fw, y1 - fh];
-            if inside_frame && past.iter().any(|&c| c > SLACK) {
-                let sides: Vec<&str> = ["left", "top", "right", "bottom"].into_iter().zip(past).filter(|(_, c)| *c > SLACK).map(|(s, _)| s).collect();
+            if inside_frame && past.iter().any(|&c| c > edge) {
+                let sides: Vec<&str> = ["left", "top", "right", "bottom"].into_iter().zip(past).filter(|(_, c)| *c > edge).map(|(s, _)| s).collect();
                 add("offscreen", key.clone(), t.id.clone(), name(), p.frame, format!("runs past the {} edge of the frame", sides.join(" and ")));
             } else if inside_frame {
                 let into = [safe[0] - x0, safe[1] - y0, x1 - safe[2], y1 - safe[3]];
-                if into.iter().any(|&c| c > SLACK) {
-                    let sides: Vec<&str> = ["left", "top", "right", "bottom"].into_iter().zip(into).filter(|(_, c)| *c > SLACK).map(|(s, _)| s).collect();
+                if into.iter().any(|&c| c > edge) {
+                    let sides: Vec<&str> = ["left", "top", "right", "bottom"].into_iter().zip(into).filter(|(_, c)| *c > edge).map(|(s, _)| s).collect();
                     add("unsafe", key.clone(), t.id.clone(), name(), p.frame,
                         format!("outside the safe area at the {} (useSafeArea / useSafePadding), where a platform's buttons and captions sit", sides.join(" and ")));
                 }
             }
 
-            if t.opacity > 0.5 && t.size < short * 0.022 {
+            if t.opacity > 0.5 && t.size < short * 0.022 && !t.decorative && !t.screen {
                 add("small_text", key.clone(), t.id.clone(), name(), p.frame,
                     format!("{} px is hard to read on a phone; at least {} px for a frame {} px across", t.size, (short * 0.022).ceil(), short));
             }
@@ -160,9 +174,10 @@ pub fn issues(frames: &[Drawn], fps: f64) -> Vec<Issue> {
                     format!("the font {:?} is not there, so another stood in: use a kit family (Inter, Space Grotesk, Fraunces, JetBrains Mono), one fc-list shows, or load its file with loadFonts", t.family));
             }
 
+            // Judged as drawn, dimmed or not; below half its opacity it is fading, not text to read.
             if let (Some(picture), Some((ink, alpha))) = (drawn.picture, css_color(&t.color)) {
-                if alpha > 0.9 && t.opacity > 0.9 {
-                    if let Some(c) = text_contrast(picture, drawn.scale, [t.x, t.y, t.w, t.h], ink) {
+                if alpha * t.opacity >= 0.5 && !t.decorative {
+                    if let Some(c) = text_contrast(picture, drawn.scale, [t.x, t.y, t.w, t.h], ink, alpha * t.opacity) {
                         let large = t.size >= short * 0.04;
                         let need = if large { 3.0 } else { 4.5 };
                         if c < need {
@@ -178,7 +193,7 @@ pub fn issues(frames: &[Drawn], fps: f64) -> Vec<Issue> {
         // in or out (a crossfade between scenes draws both) the overlap is the transition's.
         for (i, &(ai, a)) in visible.iter().enumerate() {
             for &(bi, b) in &visible[i + 1..] {
-                if a.opacity < 0.95 || b.opacity < 0.95 || a.within.contains(&bi) || b.within.contains(&ai) {
+                if a.opacity < 0.95 || b.opacity < 0.95 || a.within.contains(&bi) || b.within.contains(&ai) || moving(ai) || moving(bi) {
                     continue;
                 }
                 let w = (a.x + a.w).min(b.x + b.w) - a.x.max(b.x);
@@ -217,6 +232,115 @@ pub fn issues(frames: &[Drawn], fps: f64) -> Vec<Issue> {
     }).collect()
 }
 
+/// What identifies a run of words from frame to frame: its element (data-id and path) and its
+/// words, with digits as one mark so a counting number stays the same run.
+fn key(t: &ProbeText) -> String {
+    let mut words = String::with_capacity(t.text.len());
+    for c in t.text.chars() {
+        if c.is_ascii_digit() {
+            if !words.ends_with('#') {
+                words.push('#');
+            }
+        } else {
+            words.push(c);
+        }
+    }
+    format!("{}|{}|{}", t.id.as_deref().unwrap_or_default(), t.path, words)
+}
+
+/// Which texts of `now` are in motion against `other`, a frame measured just before or after it:
+/// not in it (entering or leaving), or there with another box or opacity.
+pub fn moving(before: Option<&Probe>, now: &Probe) -> Vec<bool> {
+    let Some(before) = before else { return vec![false; now.texts.len()] };
+    let mut taken = vec![false; before.texts.len()];
+    now.texts.iter().map(|t| {
+        let k = key(t);
+        let found = before.texts.iter().enumerate().position(|(j, b)| !taken[j] && key(b) == k);
+        match found {
+            Some(j) => {
+                taken[j] = true;
+                let b = &before.texts[j];
+                [t.x - b.x, t.y - b.y, t.w - b.w, t.h - b.h].iter().any(|d| d.abs() > 0.5) || (t.opacity - b.opacity).abs() > 0.02
+            }
+            None => true,
+        }
+    }).collect()
+}
+
+/// Seconds a run of `words` words should stay on screen to be read: 0.4 s and 0.3 s a word.
+fn reading_time(words: usize) -> f64 {
+    0.4 + 0.3 * words as f64
+}
+
+/// Words on screen too short a time to read, across frames measured `every` frames apart up to
+/// `last` (the last frame measured): each run of two words or more, from when it shows to when it
+/// goes. A run still showing at the end is not cut short; one whose words grow (typed in) counts
+/// as the longest.
+pub fn brief(probes: &[Probe], fps: f64, every: u32, last: u32) -> Vec<Issue> {
+    let mut seen: BTreeMap<String, (Vec<u32>, ProbeText)> = BTreeMap::new();
+    for p in probes {
+        for t in p.texts.iter().filter(|t| t.opacity > 0.5 && t.w > 0.0 && !t.decorative && !t.screen) {
+            let entry = seen.entry(key(t)).or_insert_with(|| (Vec::new(), t.clone()));
+            entry.0.push(p.frame);
+        }
+    }
+    let keys: Vec<String> = seen.keys().cloned().collect();
+    let mut out = Vec::new();
+    for (k, (frames, t)) in &seen {
+        let words = t.text.split_whitespace().count();
+        let (element, text) = k.rsplit_once('|').unwrap_or(("", k));
+        // Typed in: an earlier part of a longer run of the same element.
+        let grows = keys.iter().any(|o| o != k && o.rsplit_once('|').is_some_and(|(e, w)| e == element && w.len() > text.len() && w.starts_with(text)));
+        if words < 2 || grows {
+            continue;
+        }
+        let mut runs: Vec<Vec<u32>> = Vec::new();
+        for &f in frames {
+            match runs.last_mut() {
+                Some(run) if f <= run[run.len() - 1] + every + every / 2 => run.push(f),
+                _ => runs.push(vec![f]),
+            }
+        }
+        for run in runs {
+            let (first, end) = (run[0], run[run.len() - 1]);
+            if end + every > last {
+                continue;
+            }
+            let shown = (end - first + every) as f64 / fps;
+            let needed = reading_time(words);
+            if shown < needed {
+                out.push(Issue {
+                    kind: "brief_text".into(),
+                    id: t.id.clone(),
+                    text: Some(t.text.clone()),
+                    frames: run.clone(),
+                    detail: format!("on screen about {shown:.1} s; {words} words want at least {needed:.1} s (0.4 s and 0.3 s a word)"),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// The issues across a whole video measured every `every` frames, without pictures: the still's
+/// checks on words at rest, then those shown too briefly. At most 40.
+pub fn scan(probes: &[Probe], console: &[String], fps: f64, every: u32) -> Vec<Issue> {
+    // In motion against the frame before or the one after: the first frame measured has only one.
+    let flags: Vec<Vec<bool>> = probes.iter().enumerate().map(|(i, p)| {
+        let before = moving(i.checked_sub(1).map(|j| &probes[j]), p);
+        let after = moving(probes.get(i + 1), p);
+        before.iter().zip(after).map(|(a, b)| *a || b).collect()
+    }).collect();
+    let drawn: Vec<Drawn> = probes.iter().zip(&flags).enumerate().map(|(i, (probe, moving))| {
+        Drawn { probe, picture: None, scale: 1.0, console: if i == 0 { console } else { &[] }, moving }
+    }).collect();
+    let mut found = issues(&drawn, fps);
+    let last = probes.iter().map(|p| p.frame).max().unwrap_or(0);
+    found.extend(brief(probes, fps, every, last));
+    found.truncate(MOST_ISSUES);
+    found
+}
+
 /// The boxes of the elements with a `data-id`, frame by frame; at most `limit`.
 pub fn boxes(frames: &[&Probe], limit: usize) -> Vec<VideoBox> {
     frames.iter()
@@ -232,7 +356,7 @@ mod tests {
     fn text(id: &str, x: f64, y: f64, w: f64, h: f64) -> ProbeText {
         ProbeText {
             id: Some(id.into()), path: "div".into(), text: id.to_uppercase(), x, y, w, h, size: 64.0, family: "Inter".into(),
-            resolved: true, color: "rgb(255, 255, 255)".into(), opacity: 1.0, clip: None, within: vec![],
+            resolved: true, color: "rgb(255, 255, 255)".into(), opacity: 1.0, clip: None, within: vec![], decorative: false, screen: false,
         }
     }
 
@@ -241,7 +365,7 @@ mod tests {
     }
 
     fn check(probes: &[Probe]) -> Vec<Issue> {
-        let drawn: Vec<Drawn> = probes.iter().map(|p| Drawn { probe: p, picture: None, scale: 1.0, console: &[] }).collect();
+        let drawn: Vec<Drawn> = probes.iter().map(|p| Drawn { probe: p, picture: None, scale: 1.0, console: &[], moving: &[] }).collect();
         issues(&drawn, 30.0)
     }
 
@@ -295,6 +419,19 @@ mod tests {
     }
 
     #[test]
+    fn an_apps_screen_and_decorations_are_not_held_to_the_videos_type() {
+        let mut clock = text("clock", 200.0, 800.0, 40.0, 20.0);
+        clock.size = 15.0;
+        clock.decorative = true;
+        let mut row = text("row", 200.0, 900.0, 300.0, 20.0);
+        row.size = 16.0;
+        row.screen = true;
+        assert!(check(&[frame(0, vec![clock, row])]).is_empty());
+        // Laid out at the top of the safe area, its glyphs rising a little above it.
+        assert!(check(&[frame(0, vec![text("title", 200.0, 192.0 - 10.0, 600.0, 90.0)])]).is_empty());
+    }
+
+    #[test]
     fn small_text_and_missing_fonts_are_flagged() {
         let mut small = text("legal", 200.0, 800.0, 400.0, 20.0);
         small.size = 18.0;
@@ -312,9 +449,22 @@ mod tests {
         let mut dim = text("dim", 200.0, 800.0, 400.0, 100.0);
         dim.color = "rgb(70, 70, 70)".into();
         let p = frame(0, vec![dim]);
-        let found = issues(&[Drawn { probe: &p, picture: Some(&picture), scale: 0.5, console: &[] }], 30.0);
+        let found = issues(&[Drawn { probe: &p, picture: Some(&picture), scale: 0.5, console: &[], moving: &[] }], 30.0);
         assert_eq!(kinds(&found), ["contrast"]);
         assert!(found[0].detail.contains(":1 against"), "{}", found[0].detail);
+    }
+
+    #[test]
+    fn dimmed_text_is_judged_as_drawn() {
+        // Grey words on a white card, the card at 0.68: about 3:1, too faint for small text.
+        let picture = Rgba::new(540, 960, [255, 255, 255, 255]);
+        let mut dim = text("this-month", 200.0, 800.0, 160.0, 30.0);
+        dim.color = "rgb(85, 98, 92)".into();
+        dim.size = 26.0;
+        dim.opacity = 0.68;
+        let p = frame(0, vec![dim]);
+        let found = issues(&[Drawn { probe: &p, picture: Some(&picture), scale: 0.5, console: &[], moving: &[] }], 30.0);
+        assert!(found.iter().any(|i| i.kind == "contrast"), "{found:?}");
     }
 
     #[test]
@@ -322,8 +472,41 @@ mod tests {
         let mut p = frame(3, vec![]);
         p.images.push(ProbeImage { id: Some("logo".into()), src: "http://localhost/static/logo.png".into() });
         let console = ["TypeError: x is undefined".to_string()];
-        let found = issues(&[Drawn { probe: &p, picture: None, scale: 1.0, console: &console }], 30.0);
+        let found = issues(&[Drawn { probe: &p, picture: None, scale: 1.0, console: &console, moving: &[] }], 30.0);
         assert_eq!(kinds(&found), ["broken_image", "console"]);
+    }
+
+    #[test]
+    fn a_scan_judges_words_where_they_settle_not_on_their_way() {
+        // A title sliding in from below the frame, then resting inside it.
+        let slide = |f: u32, y: f64| frame(f, vec![text("title", 200.0, y, 600.0, 120.0)]);
+        let probes = vec![slide(0, 1900.0), slide(3, 1500.0), slide(6, 900.0), slide(9, 900.0), slide(12, 900.0)];
+        assert!(scan(&probes, &[], 30.0, 3).is_empty(), "{:?}", scan(&probes, &[], 30.0, 3));
+        // Resting past the edge is a fault.
+        let probes = vec![slide(0, 1900.0), slide(3, 1850.0), slide(6, 1850.0)];
+        assert_eq!(kinds(&scan(&probes, &[], 30.0, 3)), ["offscreen"]);
+    }
+
+    #[test]
+    fn words_shown_too_briefly_are_found_but_a_counting_number_is_one_run() {
+        let line = |f: u32, words: &str| {
+            let mut t = text("line", 200.0, 900.0, 600.0, 80.0);
+            t.text = words.into();
+            frame(f, vec![t])
+        };
+        // Six words for 0.3 s (frames 30–36 at 30 fps, measured every 3), then gone.
+        let mut probes: Vec<Probe> = (0..30).step_by(3).map(|f| frame(f, vec![])).collect();
+        probes.extend([line(30, "Every euro finds its place here"), line(33, "Every euro finds its place here"), line(36, "Every euro finds its place here")]);
+        probes.extend((39..90).step_by(3).map(|f| frame(f, vec![])));
+        let found = brief(&probes, 30.0, 3, 87);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].detail.contains("6 words want at least 2.2 s"), "{}", found[0].detail);
+        // A number counting up keeps its run whatever its digits.
+        let probes: Vec<Probe> = (0..90).step_by(3).map(|f| line(f, &format!("${} spent", f * 37))).collect();
+        assert!(brief(&probes, 30.0, 3, 87).is_empty());
+        // Still on screen at the end: not cut short.
+        let probes = vec![frame(0, vec![]), line(84, "Get it today friends"), line(87, "Get it today friends")];
+        assert!(brief(&probes, 30.0, 3, 87).is_empty());
     }
 
     #[test]

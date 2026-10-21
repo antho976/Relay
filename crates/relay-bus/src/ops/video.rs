@@ -167,10 +167,12 @@ result!(#[schemars(rename = "VideoComposition")] Composition {
     pub height: u32,
     pub fps: f64,
     pub duration_frames: u32,
-    /// Its `defaultProps`.
+    /// Its `defaultProps`. `video.get` answers it; checks and stills leave it out.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
     pub default_props: Value,
     /// Its zod `schema` as JSON Schema, when it has one: what the props panel edits. A string
-    /// described `__remotion-color` is a colour (`zColor()`).
+    /// described `__remotion-color` is a colour (`zColor()`). `video.get` answers it; checks and
+    /// stills leave it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub props_schema: Option<Value>,
 });
@@ -215,6 +217,10 @@ result!(#[schemars(rename = "VideoVersion")] Version {
     pub actor: String,
     pub files: u32,
     pub created_at: Ts,
+    /// What changed from the version before: `src/Hook.tsx` (changed), `+src/Outro.tsx` (added),
+    /// `-src/Old.tsx` (removed); at most 12.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed: Vec<String>,
 });
 
 /// Where a render is.
@@ -368,6 +374,9 @@ result!(#[schemars(rename = "VideoKitStatus")] KitStatus {
     pub state: KitState,
     /// Where the kit lives: every video's folder is under it.
     pub root: String,
+    /// The `@relay/video` kit's sources, to read when the skill is not enough; `node_modules/`
+    /// beside them holds Remotion's own types.
+    pub kit_dir: String,
     /// `node --version`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
@@ -525,8 +534,9 @@ result!(#[schemars(rename = "VideoIssue")] Issue {
     /// `clipped` (text cut off by a box that hides its overflow), `offscreen` (partly outside
     /// the frame), `unsafe` (outside the area a platform's buttons and captions leave free),
     /// `text_overlap`, `small_text` (hard to read on a phone), `font_fallback` (the font it names
-    /// is not there, so another stood in), `contrast` (against the pixels under it),
-    /// `broken_image`, `console` (an error the page logged).
+    /// is not there, so another stood in), `contrast` (against the pixels under it, as drawn),
+    /// `brief_text` (from `video.scan`: on screen too short a time to read), `broken_image`,
+    /// `console` (an error the page logged).
     pub kind: String,
     /// The element's `data-id`, or its nearest parent's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -554,6 +564,37 @@ result!(#[schemars(rename = "VideoStillOut")] StillOut {
 });
 op!(Still, "video.still", StillIn => StillOut,
     OpMeta::query(Scope::Project, 12, "Look at a video: frames at moments of it (or a contact sheet across it) as a picture, with the problems found in them; through MCP the picture comes with the answer")
+        .emits(&["video.changed"]).plugin(PLUGIN));
+
+payload!(#[schemars(rename = "VideoScanIn")] ScanIn {
+    pub video_id: Id,
+    /// Default the video's composition.
+    pub composition: Option<String>,
+    /// Check every this many frames, 1 to 30; default 3 (ten times a second at 30 fps).
+    #[schemars(range(min = 1, max = 30))]
+    pub every: Option<u32>,
+    /// Only part of it, from this moment (as `video.still`'s `at`) …
+    pub from: Option<Moment>,
+    /// … to this one.
+    pub to: Option<Moment>,
+    /// Props to draw with instead of the video's.
+    pub props: Option<Value>,
+});
+result!(#[schemars(rename = "VideoScanOut")] ScanOut {
+    pub composition: Composition,
+    /// How many frames were measured.
+    pub frames: u32,
+    pub every: u32,
+    /// As `video.still`'s, from every frame measured but without `contrast` (no pictures are
+    /// drawn), with words in motion (entering, leaving, mid-transition) left out of the checks of
+    /// where they are, and `brief_text`: words on screen too short a time to read.
+    pub issues: Vec<Issue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<CodeError>,
+    pub version: i64,
+});
+op!(Scan, "video.scan", ScanIn => ScanOut,
+    OpMeta::query(Scope::Project, 12, "Check a whole video without pictures: the problems across every few frames, words in motion left out, and words shown too briefly to read")
         .emits(&["video.changed"]).plugin(PLUGIN));
 
 payload!(#[schemars(rename = "VideoRenderIn")] RenderIn {
@@ -629,7 +670,7 @@ op!(KitInstall, "video.kit.install", Empty => KitStatus,
     OpMeta::mutation(Scope::Global, 12, "Set this machine up to render videos: downloads Remotion and its browser (about 600 MB) once; answers at once, then video.kit.changed")
         .emits(&["video.kit.changed"]).plugin(PLUGIN));
 
-entries!(List, Get, Create, Update, Delete, Restore, Check, Still, Render, RenderGet, RenderCancel, AssetAdd,
+entries!(List, Get, Create, Update, Delete, Restore, Check, Still, Scan, Render, RenderGet, RenderCancel, AssetAdd,
     VersionRestore, KitStatusOp, KitInstall);
 
 #[cfg(test)]

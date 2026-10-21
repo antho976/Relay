@@ -13,6 +13,7 @@ import {
   getCompositions,
   makeCancelSignal,
   openBrowser,
+  renderFrames,
   renderMedia,
   renderStill,
   selectComposition,
@@ -408,6 +409,40 @@ const commands = {
       }
     }
     return { composition: summary(c), stills, errors };
+  },
+
+  /** Measure every `every` frames of `range` with the probe and no pictures: video.scan. */
+  async scan({ dir, bundle_dir, composition, props, every, range }) {
+    let v;
+    try {
+      v = await bundleVideo(dir, bundle_dir);
+    } catch (e) {
+      if (e instanceof Refusal) throw e;
+      return { probes: [], errors: bundleErrors(e, dir) };
+    }
+    const inputProps = props ?? {};
+    const logs = [];
+    try {
+      const c = await withBrowser((puppeteerInstance) => selectComposition({ serveUrl: v.serveUrl, id: composition, inputProps, puppeteerInstance, logLevel: LOG_LEVEL }));
+      await withBrowser((puppeteerInstance) => renderFrames({
+        serveUrl: v.serveUrl, composition: c, inputProps, imageFormat: 'none', everyNthFrame: every ?? 3, frameRange: range ?? null,
+        envVariables: PROBE_ENV, onBrowserLog: (l) => logs.push(l), onStart: () => {}, onFrameUpdate: () => {}, outputDir: null,
+        puppeteerInstance, logLevel: LOG_LEVEL,
+      }));
+    } catch (e) {
+      if (/Could not find composition/i.test(String(e?.message))) throw new Refusal('video.composition', String(e.message).split('\n')[0]);
+      return { probes: [], errors: [await runtimeError(e, dir, v.outDir)] };
+    }
+    const probes = [];
+    for (const l of logs) {
+      if (!l.text?.startsWith(PROBE_PREFIX)) continue;
+      try {
+        probes.push(JSON.parse(l.text.slice(PROBE_PREFIX.length)));
+      } catch {
+        /* a line cut short */
+      }
+    }
+    return { probes, console: [...new Set(consoleErrors(logs))], errors: [] };
   },
 
   /** Render the whole composition (or `range`) to `out`, reporting progress as it goes. */

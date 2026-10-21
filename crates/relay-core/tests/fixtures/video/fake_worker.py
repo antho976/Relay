@@ -93,6 +93,24 @@ def still(a):
     return {"composition": c, "stills": stills, "errors": errors}
 
 
+def scan(a):
+    c = composition(a["composition"])
+    first, last = a.get("range") or [0, c["duration_frames"] - 1]
+    probes = []
+    for frame in range(first, last + 1, a.get("every", 3)):
+        texts = []
+        # A title rising into place over its first 9 frames, then resting past the right edge's margin.
+        y = 1900 - frame * 120 if frame < 9 else 800
+        texts.append({"id": "title", "path": "div", "text": "Hello there", "x": 700, "y": y, "w": 340, "h": 90, "size": 64,
+                      "family": "Inter", "resolved": True, "color": "rgb(245, 247, 250)", "opacity": 1, "clip": None, "within": []})
+        # Six words for a tenth of a second.
+        if 30 <= frame <= 33:
+            texts.append({"id": "flash", "path": "p", "text": "Six words gone before you read", "x": 100, "y": 1200, "w": 600, "h": 60,
+                          "size": 48, "family": "Inter", "resolved": True, "color": "rgb(255, 255, 255)", "opacity": 1, "clip": None, "within": []})
+        probes.append({"frame": frame, "width": c["width"], "height": c["height"], "boxes": [], "texts": texts, "images": []})
+    return {"probes": probes, "console": [], "errors": []}
+
+
 def render(a):
     job = a["job"]
     slow = flag(a["dir"], "SLOW")
@@ -117,7 +135,7 @@ def cancel(a):
     return {"cancelled": True}
 
 
-COMMANDS = {"hello": lambda a: {"node": "fake", "remotion": "4.0.534"}, "check": check, "meta": meta, "still": still,
+COMMANDS = {"hello": lambda a: {"node": "fake", "remotion": "4.0.534"}, "check": check, "meta": meta, "still": still, "scan": scan,
             "render": render, "cancel": cancel, "forget": lambda a: {}}
 
 

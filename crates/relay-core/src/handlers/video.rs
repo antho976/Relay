@@ -13,7 +13,7 @@ use relay_bus::design::{plain_label, MAX_NAME};
 use relay_bus::error::BusError;
 use relay_bus::ops::video::{
     AssetAdd, AssetAddOut, Check, Composition, Create, CreateOut, Delete, Format, Get, GetOut, KitInstall, KitState, KitStatusOp,
-    List, ListOut, Quality, Render, RenderCancel, RenderGet, RenderState, Restore, Still, Update, Version, VersionRestore,
+    List, ListOut, Quality, Render, RenderCancel, RenderGet, RenderState, Restore, Scan, Still, Update, Version, VersionRestore,
     VersionRestoreOut, MAX_SECONDS, MAX_SIDE,
 };
 use relay_bus::types::Id;
@@ -200,9 +200,20 @@ pub fn register(e: &mut Engine) {
         let video = read_video(ctx, p.video_id, false)?;
         let (compositions, props, versions, renders) = ctx.read(|conn| {
             let props: String = conn.prepare_cached("SELECT props FROM videos WHERE id = ?1").bus()?.query_row([video.id], |r| r.get(0)).bus()?;
-            let versions = conn.prepare_cached("SELECT n, actor, files, created_at FROM video_versions WHERE video_id = ?1 ORDER BY n DESC LIMIT 20").bus()?
-                .query_map([video.id], |r| Ok(Version { n: r.get(0)?, actor: r.get(1)?, files: r.get(2)?, created_at: r.get(3)? })).bus()?
+            // The newest 20 and the one before them, each told by what it changed.
+            let rows = conn.prepare_cached("SELECT n, actor, files, created_at, manifest FROM video_versions WHERE video_id = ?1 ORDER BY n DESC LIMIT 21").bus()?
+                .query_map([video.id], |r| Ok((Version { n: r.get(0)?, actor: r.get(1)?, files: r.get(2)?, created_at: r.get(3)?, changed: Vec::new() }, r.get::<_, String>(4)?))).bus()?
                 .collect::<rusqlite::Result<Vec<_>>>().bus()?;
+            let manifests: Vec<Vec<versions::Entry>> = rows.iter().map(|(_, m)| serde_json::from_str(m).unwrap_or_default()).collect();
+            let versions = rows.iter().take(20).enumerate().map(|(i, (v, _))| {
+                let mut v = v.clone();
+                v.changed = match manifests.get(i + 1) {
+                    Some(before) => versions::changes(before, &manifests[i], 12),
+                    None if v.n == 1 => vec!["the starter".to_string()],
+                    None => Vec::new(),
+                };
+                v
+            }).collect::<Vec<_>>();
             let renders = conn.prepare_cached(&format!("SELECT {RENDER_COLUMNS} FROM video_renders WHERE video_id = ?1 ORDER BY id DESC LIMIT 20")).bus()?
                 .query_map([video.id], render_row).bus()?.collect::<rusqlite::Result<Vec<_>>>().bus()?;
             Ok((compositions(conn, video.id)?, serde_json::from_str(&props).unwrap_or(json!({})), versions, renders))
@@ -247,6 +258,10 @@ pub fn register(e: &mut Engine) {
         // A handful of small files: written in the transaction, so a video row always has its folder.
         let files = write_starter(&dir, &title, w, h, fps, frames)
             .map_err(|e| BusError::unavailable("video.folder", format!("could not write the video's folder: {e}")))?;
+        // The starter is version 1: replacing it whole is then a rewrite a version undoes.
+        let starter = versions::scan(&dir, &video::blobs_dir(ctx.engine()))
+            .map_err(|e| BusError::unavailable("video.folder", format!("could not read the video's folder: {e}")))?;
+        versions::record(ctx.tx(), id, &starter, &by, &ctx.now)?;
         ctx.set_undo("video.delete", json!({"video_id": id}), None);
         // While the agent writes its code, the worker starts and builds the starter: its first
         // check then finds the browser open and the bundler's and TypeScript's caches warm
@@ -366,6 +381,12 @@ pub fn register(e: &mut Engine) {
         let video = read_video(ctx, p.video_id, true)?;
         let actor = caller_name(ctx);
         stills::still(ctx.engine(), &video, &p, &Caller { actor: &actor, session_id: ctx.actor_session_id() })
+    });
+
+    e.register_unlocked::<Scan>(|ctx, p| {
+        let video = read_video(ctx, p.video_id, true)?;
+        let actor = caller_name(ctx);
+        stills::scan(ctx.engine(), &video, &p, &Caller { actor: &actor, session_id: ctx.actor_session_id() })
     });
 
     // Staged: the folder is read (and its new files kept) with the lock released; the

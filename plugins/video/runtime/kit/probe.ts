@@ -8,8 +8,22 @@ declare global {
   interface Window {
     remotion_setFrame?: (frame: number, composition: string, attempt: number) => void;
     remotion_delayRenderTimeouts?: Record<string, unknown>;
+    remotion_initialFrame?: number;
   }
 }
+
+/** The frame of each composition React last committed, as relayRoot's FrameMark records it. */
+let committed: Record<string, number> = {};
+
+/** relayRoot's FrameMark reports the frames its commit drew. */
+export const markCommitted = (frames: Record<string, number>) => {
+  committed = frames;
+};
+
+/** Whether the DOM shows frame `frame` of `composition` yet: Remotion seeks by setting state, and
+ * a page that drew an earlier frame (a render's tab goes from frame to frame) keeps showing it
+ * until React commits. */
+const shows = (composition: string, frame: number) => (committed[composition] ?? window.remotion_initialFrame ?? 0) === frame;
 
 /** The prefix of the console line a measurement goes out on. */
 export const PROBE_PREFIX = '__relay_probe__';
@@ -125,12 +139,15 @@ const measure = (frame: number) => {
     if (!Number.isFinite(x0)) continue;
     const s = getComputedStyle(el);
     const family = s.fontFamily.split(',')[0].trim().replace(/^["']|["']$/g, '');
+    // Its size as drawn: a phone's screen scaled to fit, a pop's scale, all count.
+    const html = el as HTMLElement;
+    const drawnScale = html.offsetHeight > 0 ? el.getBoundingClientRect().height / html.offsetHeight : 1;
     texts.push({
       id: idOf(el),
       path: pathOf(el),
       text: nodes.map((t) => t.data).join('').replace(/\s+/g, ' ').trim().slice(0, 60),
       x: round(x0), y: round(y0), w: round(x1 - x0), h: round(y1 - y0),
-      size: round(Number.parseFloat(s.fontSize)),
+      size: round(Number.parseFloat(s.fontSize) * (Number.isFinite(drawnScale) && drawnScale > 0 ? drawnScale : 1)),
       weight: s.fontWeight,
       family,
       resolved: fontResolved(family, s.fontWeight, s.fontStyle),
@@ -138,6 +155,10 @@ const measure = (frame: number) => {
       opacity,
       clip: clipOf(el),
       within: [] as number[],
+      // Not meant to be read (aria-hidden: a status bar's clock), or part of an app's screen in a
+      // device frame (data-relay-screen): context the video's own words carry.
+      decorative: !!el.closest('[aria-hidden="true"]'),
+      screen: !!el.closest('[data-relay-screen]'),
     });
     els.push(el);
   }
@@ -180,7 +201,7 @@ export const installProbe = () => {
       const started = performance.now();
       const settle = () => {
         const holds = Object.keys(window.remotion_delayRenderTimeouts ?? {}).length;
-        if (holds > 1 && performance.now() - started < 20000) {
+        if ((holds > 1 || !shows(composition, frame)) && performance.now() - started < 20000) {
           requestAnimationFrame(settle);
           return;
         }

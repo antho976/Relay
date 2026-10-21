@@ -136,6 +136,25 @@ pub fn record(tx: &Transaction, video_id: Id, scan: &Scan, actor: &str, now: &st
     Ok((n, true))
 }
 
+/// What changed from manifest `before` to `after`: changed paths as they are, added ones with a
+/// `+`, removed ones with a `-`; at most `most`, then how many more.
+pub fn changes(before: &[Entry], after: &[Entry], most: usize) -> Vec<String> {
+    let old: std::collections::HashMap<&str, &str> = before.iter().map(|e| (e.path.as_str(), e.hash.as_str())).collect();
+    let new: std::collections::HashSet<&str> = after.iter().map(|e| e.path.as_str()).collect();
+    let mut out: Vec<String> = after.iter().filter_map(|e| match old.get(e.path.as_str()) {
+        None => Some(format!("+{}", e.path)),
+        Some(hash) if *hash != e.hash => Some(e.path.clone()),
+        Some(_) => None,
+    }).collect();
+    out.extend(before.iter().filter(|e| !new.contains(e.path.as_str())).map(|e| format!("-{}", e.path)));
+    if out.len() > most {
+        let more = out.len() - most;
+        out.truncate(most);
+        out.push(format!("{more} more"));
+    }
+    out
+}
+
 /// Version `n`'s manifest.
 pub fn manifest(conn: &Connection, video_id: Id, n: i64) -> Result<Vec<Entry>, BusError> {
     let text: String = conn.prepare_cached("SELECT manifest FROM video_versions WHERE video_id = ?1 AND n = ?2").bus()?
@@ -249,6 +268,16 @@ mod tests {
         // Renders are not the code's: a restore leaves them.
         assert!(dir.join("out/main.mp4").exists());
         assert_eq!(scan(&dir, &blobs).unwrap().digest, first.digest);
+    }
+
+    #[test]
+    fn a_version_says_what_changed_from_the_one_before() {
+        let e = |path: &str, hash: &str| Entry { path: path.into(), hash: hash.into(), size: 1 };
+        let before = [e("src/Video.tsx", "a"), e("src/Old.tsx", "b"), e("tsconfig.json", "c")];
+        let after = [e("src/Video.tsx", "a2"), e("src/Hook.tsx", "d"), e("tsconfig.json", "c")];
+        assert_eq!(changes(&before, &after, 12), ["src/Video.tsx", "+src/Hook.tsx", "-src/Old.tsx"]);
+        assert_eq!(changes(&before, &after, 1), ["src/Video.tsx", "2 more"]);
+        assert!(changes(&after, &after, 12).is_empty());
     }
 
     #[test]

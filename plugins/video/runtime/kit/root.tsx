@@ -5,7 +5,7 @@ import React from 'react';
 import { Internals } from 'remotion';
 import { z } from 'zod';
 import { loadKitFonts } from './fonts';
-import { installProbe } from './probe';
+import { installProbe, markCommitted } from './probe';
 
 /** The prefix of the console line the compositions' schemas go out on. */
 export const SCHEMA_PREFIX = '__relay_schema__';
@@ -30,6 +30,16 @@ const SchemaReader: React.FC = () => {
   return null;
 };
 
+/** Records the frame each commit draws, for the probe: it is in the same tree as the composition
+ * being drawn, so its layout effect runs in the commit that shows a new frame. */
+const FrameMark: React.FC = () => {
+  const { frame } = Internals.useTimelineContext();
+  React.useLayoutEffect(() => {
+    markCommitted(frame);
+  });
+  return null;
+};
+
 /** `registerRoot(relayRoot(Root))`: the video's Root, as Relay can see it. */
 export const relayRoot = (Root: React.FC): React.FC => {
   installProbe();
@@ -38,6 +48,7 @@ export const relayRoot = (Root: React.FC): React.FC => {
     <>
       <Root />
       <SchemaReader />
+      <FrameMark />
     </>
   );
   return RelayRoot;

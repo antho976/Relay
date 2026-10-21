@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 361,
+  "op_count": 362,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -6835,6 +6835,26 @@
       },
       "result": {
         "$ref": "#/$defs/VideoStillOut"
+      }
+    },
+    "video.scan": {
+      "summary": "Check a whole video without pictures: the problems across every few frames, words in motion left out, and words shown too briefly to read",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "video.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoScanIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoScanOut"
       }
     },
     "video.render": {
@@ -30906,10 +30926,10 @@
           "minimum": 0
         },
         "default_props": {
-          "description": "Its `defaultProps`."
+          "description": "Its `defaultProps`. `video.get` answers it; checks and stills leave it out."
         },
         "props_schema": {
-          "description": "Its zod `schema` as JSON Schema, when it has one: what the props panel edits. A string\ndescribed `__remotion-color` is a colour (`zColor()`)."
+          "description": "Its zod `schema` as JSON Schema, when it has one: what the props panel edits. A string\ndescribed `__remotion-color` is a colour (`zColor()`). `video.get` answers it; checks and\nstills leave it out."
         }
       },
       "required": [
@@ -30917,8 +30937,7 @@
         "width",
         "height",
         "fps",
-        "duration_frames",
-        "default_props"
+        "duration_frames"
       ]
     },
     "VideoVersion": {
@@ -30939,6 +30958,13 @@
         },
         "created_at": {
           "type": "string"
+        },
+        "changed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What changed from the version before: `src/Hook.tsx` (changed), `+src/Outro.tsx` (added),\n`-src/Old.tsx` (removed); at most 12."
         }
       },
       "required": [
@@ -31220,6 +31246,10 @@
           "type": "string",
           "description": "Where the kit lives: every video's folder is under it."
         },
+        "kit_dir": {
+          "type": "string",
+          "description": "The `@relay/video` kit's sources, to read when the skill is not enough; `node_modules/`\nbeside them holds Remotion's own types."
+        },
         "node": {
           "type": [
             "string",
@@ -31245,6 +31275,7 @@
       "required": [
         "state",
         "root",
+        "kit_dir",
         "remotion",
         "about"
       ]
@@ -31656,7 +31687,7 @@
       "properties": {
         "kind": {
           "type": "string",
-          "description": "`clipped` (text cut off by a box that hides its overflow), `offscreen` (partly outside\nthe frame), `unsafe` (outside the area a platform's buttons and captions leave free),\n`text_overlap`, `small_text` (hard to read on a phone), `font_fallback` (the font it names\nis not there, so another stood in), `contrast` (against the pixels under it),\n`broken_image`, `console` (an error the page logged)."
+          "description": "`clipped` (text cut off by a box that hides its overflow), `offscreen` (partly outside\nthe frame), `unsafe` (outside the area a platform's buttons and captions leave free),\n`text_overlap`, `small_text` (hard to read on a phone), `font_fallback` (the font it names\nis not there, so another stood in), `contrast` (against the pixels under it, as drawn),\n`brief_text` (from `video.scan`: on screen too short a time to read), `broken_image`,\n`console` (an error the page logged)."
         },
         "id": {
           "type": [
@@ -31689,6 +31720,104 @@
         "kind",
         "frames",
         "detail"
+      ]
+    },
+    "VideoScanIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "composition": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Default the video's composition."
+        },
+        "every": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1,
+          "description": "Check every this many frames, 1 to 30; default 3 (ten times a second at 30 fps).",
+          "maximum": 30
+        },
+        "from": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoMoment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Only part of it, from this moment (as `video.still`'s `at`) …"
+        },
+        "to": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoMoment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "… to this one."
+        },
+        "props": {
+          "description": "Props to draw with instead of the video's."
+        }
+      },
+      "required": [
+        "video_id"
+      ]
+    },
+    "VideoScanOut": {
+      "type": "object",
+      "properties": {
+        "composition": {
+          "$ref": "#/$defs/VideoComposition"
+        },
+        "frames": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How many frames were measured."
+        },
+        "every": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoIssue"
+          },
+          "description": "As `video.still`'s, from every frame measured but without `contrast` (no pictures are\ndrawn), with words in motion (entering, leaving, mid-transition) left out of the checks of\nwhere they are, and `brief_text`: words on screen too short a time to read."
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoCodeError"
+          }
+        },
+        "version": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "composition",
+        "frames",
+        "every",
+        "issues",
+        "version"
       ]
     },
     "VideoRenderIn": {
