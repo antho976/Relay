@@ -259,8 +259,10 @@ outside the copy is let go**: the line stays drawn where it was, attached to not
 `dx`/`dy` add to the copy's stored `x/y`, which a laid-out parent ignores.
 
 **Charts are data, not drawings.** Never build a chart from hand-placed rects and labels: give a
-frame (no `layout`, a fixed `w` and `h`) a `chart`, and the engine draws its parts from the data as
-the frame's children, placed exactly, so every label sits under its bar:
+frame (no `layout`, a `w` and `h`) a `chart`, and the engine draws its parts from the data as the
+frame's children, placed exactly, so every label sits under its bar. **In a card or a column, give
+the chart `"w_sizing": "fill"`** (or `h_sizing`): it is drawn at the width the layout gives it, and
+drawn again when that room changes, so a narrower screen never pushes it out of its card:
 
 ```json
 {"op":"add","node":{"id":"spend","parent":"screen","kind":"frame","w":358,"h":220,"padding":[16],"fill":"$card",

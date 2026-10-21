@@ -1243,8 +1243,21 @@ added, or whose `chart`, `w`, `h` or `padding` an update set, has its parts draw
 one no longer drawn deleted, all under the frame's other children in paint order. Each write is an
 ordinary edit with its undo, so a lenient list draws nothing. A strict list's update, move or delete
 of a generated node is `invalid` / `design.chart`. A chart frame in an instance is drawn by its main
-(the sync carries the parts). Parts are placed from the stored `w` and `h`, so a chart frame that
-fills or hugs is drawn at its stored size.
+(the sync carries the parts). Parts are placed from the stored `w` and `h`. A bar of no length (a
+0) is not drawn: a rect stored 0 tall would take the 100 px a shape added without a size gets.
+
+A chart frame whose `w_sizing` or `h_sizing` is `fill` is drawn at the size its laid-out parent
+gives it. After the follow rule, each page child (an artboard, most often) that holds one and that
+the list reached (a node in it written, added or moved, or deleted from it) is laid out by the
+canvas's own code, with words measured roughly; a chart whose laid-out size differs from its
+stored one by half a pixel or more has the new size written to `w` and `h` (an ordinary update,
+with its undo), the follow rule runs for what it holds pinned, and its parts are drawn again. A
+chart frame a pin stretches is drawn again at the size the follow rule gives it. The charts that
+fill are listed on the design (`designs.fill_charts`, kept by the writes that make one and pruned
+as one stops filling), so a list on a design without one reads and lays out nothing, and one in
+another page child reads only that list and the chart's row (0.44 M → 0.59 M instructions for one
+text edit); an edit beside one lays out that page child alone, 2.8 M at any design size
+(`docs/perf/DESIGN-2026-10-21-chart-fit.md`). A chart that hugs is drawn at its stored size.
 
 **Components.** A `copy` with `instance: true` makes an instance of the node copied, which becomes a
 main component (`component: true`, set by the copy with its undo): each node of the copy names the

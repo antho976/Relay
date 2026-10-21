@@ -298,8 +298,8 @@ pub fn register(e: &mut Engine) {
         };
         // A new design at rev 1, its rows with it; its size and its colours and styles as they are.
         ctx.tx().execute(
-            "INSERT INTO designs(project_id, session, title, rev, pages, nodes, bytes, next_node, styles, components, created_by, updated_by, created_at, updated_at)
-             SELECT project_id, ?2, ?3, 1, pages, nodes, bytes, next_node, styles, components, ?4, ?4, ?5, ?5 FROM designs WHERE id = ?1",
+            "INSERT INTO designs(project_id, session, title, rev, pages, nodes, bytes, next_node, styles, components, fill_charts, created_by, updated_by, created_at, updated_at)
+             SELECT project_id, ?2, ?3, 1, pages, nodes, bytes, next_node, styles, components, fill_charts, ?4, ?4, ?5, ?5 FROM designs WHERE id = ?1",
             params![from.id, session, title, by, ctx.now],
         ).bus()?;
         let id = ctx.tx().last_insert_rowid();
