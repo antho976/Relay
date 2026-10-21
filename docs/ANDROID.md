@@ -190,8 +190,8 @@ layout in rows, columns and wraps, hugging text and stickies, pins, absolute chi
 sizes and scrolling frames (each at its start); every kind (frames, groups, rectangles, ellipses with
 arcs, polygons and stars, lines and connectors in their routes, pen paths, stickies, icons (a saved icon by
 the outline its node carries, `icon_path`), text with its runs, and
-pictures) with fills, linear, radial and conic gradients, strokes with dashes and ends, per-corner
-radii, inner and drop shadows, opacity, blend modes, rotation and flips; and a design's named colours
+pictures) with fills, linear, radial and conic gradients, strokes with dashes and ends, borders of
+their own width on each side, per-corner radii, inner and drop shadows, opacity, blend modes, rotation and flips; and a design's named colours
 and styles, resolved as the PC resolves them (`skip_checks` changes nothing drawn: it is for the
 PC's checks; nor do `component`, `instance_of` and `overrides`, since an instance is real nodes the
 PC keeps in step, nor `chart` and `generated`: a chart is drawn as its frame's children, which the
@@ -204,7 +204,8 @@ are read at a time.
 
 What it leaves out, said in a line under each page ("Not drawn on the phone: …") and never silently:
 
-- a layer's blur, and the glow a text, line, path or icon casts as a shadow (other layers' shadows are drawn);
+- a layer's blur, frosted glass (`backdrop_blur`: what lies under the layer is drawn sharp through its
+  fill), and the glow a text, line, path or icon casts as a shadow (other layers' shadows are drawn);
 - SVG pictures (the phone has no SVG decoder and does not read them), shown as a placeholder;
 - motion: a layer that moves is drawn at rest, and the line says the PC plays it;
 - layers of a kind, and the contents of a frame with an auto layout, from a newer Relay, and layers

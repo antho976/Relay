@@ -45,6 +45,11 @@ pub struct Series {
     /// Default: the palette's next.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// One per label, a colour or `null`: that value's bar, point or slice in its own colour, the
+    /// rest in the series'. `[null, null, null, "#7FB2FF"]` brings out the last bar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = MAX_CHART_LABELS))]
+    pub colors: Option<Vec<Option<String>>>,
 }
 
 /// A chart a frame draws: `{"kind": "bar", "labels": ["Jan", "Feb"], "series": [{"name": "Spent", "values": [420, 380]}], "prefix": "$"}`.
@@ -156,6 +161,16 @@ impl Chart {
             if let Some(c) = &s.color {
                 color(&format!("chart.series[{i}].color"), c)?;
             }
+            if let Some(colors) = &s.colors {
+                if colors.len() != n {
+                    return Err(format!("chart.series[{i}].colors: {} of them, one per label ({n}); null keeps the series' colour", colors.len()));
+                }
+                for (k, c) in colors.iter().enumerate() {
+                    if let Some(c) = c {
+                        color(&format!("chart.series[{i}].colors[{k}]"), c)?;
+                    }
+                }
+            }
         }
         if !self.kind.has_axes() {
             if self.series[0].values.iter().any(|v| *v < 0.0) {
@@ -220,6 +235,21 @@ impl Chart {
     /// Series `i`'s colour: its own, else the palette's, round again past its end.
     pub fn series_color(&self, i: usize) -> String {
         self.series.get(i).and_then(|s| s.color.clone()).unwrap_or_else(|| self.palette_color(i))
+    }
+
+    /// Series `j`'s value `i`'s colour: its own in `colors`, else the series'.
+    pub fn value_color(&self, j: usize, i: usize) -> String {
+        self.own_color(j, i).unwrap_or_else(|| self.series_color(j))
+    }
+
+    /// A donut's or pie's slice `i`'s colour: the first series' own for it in `colors`, else the
+    /// palette's.
+    pub fn slice_color(&self, i: usize) -> String {
+        self.own_color(0, i).unwrap_or_else(|| self.palette_color(i))
+    }
+
+    fn own_color(&self, j: usize, i: usize) -> Option<String> {
+        self.series.get(j)?.colors.as_ref()?.get(i)?.clone()
     }
 
     /// The palette's colour `i`, round again past its end.

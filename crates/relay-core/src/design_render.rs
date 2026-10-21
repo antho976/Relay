@@ -23,7 +23,7 @@ use relay_bus::design::motion::MAX_MS;
 use relay_bus::design::MAX_NAME;
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{
-    AnswerIn, AnswerOut, Render, RenderDrawn, RenderFailure, RenderIn, RenderIssue, RenderOut, RenderPng, RenderRequest,
+    AnswerIn, AnswerOut, MotionChecks, Render, RenderDrawn, RenderFailure, RenderIn, RenderIssue, RenderOut, RenderPng, RenderRequest,
     RENDER_AREA_PX_MAX, RENDER_BOXES_DEFAULT, RENDER_BOXES_MAX, RENDER_BOX_FIELDS, RENDER_FRAMES_MAX, RENDER_FRAMES_MIN,
     RENDER_NODES_MAX, RENDER_SCALE_MAX, RENDER_SCALE_MIN, RENDER_SIDE_DEFAULT, RENDER_SIDE_MAX, RENDER_SIDE_MIN,
     RENDER_TIMEOUT_DEFAULT_MS, RENDER_TIMEOUT_MAX_MS, RENDER_TIMEOUT_MIN_MS, SERVE_FONTS_MAX,
@@ -129,6 +129,7 @@ pub(crate) struct Options {
     pub timeout: Duration,
     pub at_ms: Option<f64>,
     pub frames: Option<u8>,
+    pub motion_checks: Option<MotionChecks>,
     /// The asking agent's session name, for the note an open board shows; none for the person.
     pub by: Option<String>,
 }
@@ -258,6 +259,7 @@ fn request_line(id: Uuid, target: &Target, options: &Options, now_ms: i64) -> Re
         deadline_unix_ms: now_ms.saturating_add(timeout_ms).saturating_sub(DEADLINE_MARGIN_MS),
         at_ms: options.at_ms,
         frames: options.frames,
+        motion_checks: options.motion_checks,
         by: options.by.clone(),
     };
     let payload = serde_json::to_value(request).map_err(crate::engine::internal)?;
@@ -380,6 +382,7 @@ fn options_of(p: &RenderIn) -> Result<Options, BusError> {
         timeout: Duration::from_millis(within("timeout_ms", p.timeout_ms, RENDER_TIMEOUT_MIN_MS, RENDER_TIMEOUT_MAX_MS, RENDER_TIMEOUT_DEFAULT_MS)?),
         at_ms: p.at_ms.map(|at| within("at_ms", Some(at), 0.0, MAX_MS, 0.0)).transpose()?,
         frames: p.frames.map(|n| within("frames", Some(n), RENDER_FRAMES_MIN, RENDER_FRAMES_MAX, RENDER_FRAMES_MIN)).transpose()?,
+        motion_checks: p.motion_checks,
         by: None,
     })
 }
@@ -680,6 +683,7 @@ mod tests {
             timeout: Duration::from_secs(20),
             at_ms: None,
             frames: None,
+            motion_checks: None,
             by: None,
         }
     }
@@ -1044,6 +1048,7 @@ mod tests {
                 deadline_unix_ms: deadline,
                 at_ms: Some(500.0),
                 frames: None,
+                motion_checks: None,
                 by: Some("brisk-otter".into()),
             }
         );

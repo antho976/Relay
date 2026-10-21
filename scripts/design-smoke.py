@@ -26,6 +26,9 @@ Shots (default all):
 - reuse: named colours, styles and a copy; a colour changed from outside is re-read and redrawn;
 - motion: Play, pause, seek, a contact sheet and an APNG; the design's rev stays as it was;
 - render: design.render answered by the open app: sizes, boxes, issues, its traces;
+- glass: a tab bar frosting what scrolls under it (backdrop_blur) with a top border alone
+  (stroke_widths), a chart with one bar of its own colour, and a fade sliding up in a hugging
+  column, which design.render's motion checks pass over;
 - pictures: the image key's popover searching the picture fixtures, a photo placed with its
   credit and the inspector's Credit section;
 - perf: a 1,721-node design: layout, content and frame times.
@@ -43,7 +46,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / ".impeccable/review"; OUT.mkdir(parents=True, exist_ok=True)
 ALL = ["gallery", "board", "board-select", "board-narrow", "edit", "script", "agent", "agent-undo", "agent-stale",
-       "agent-delete", "media", "shapes", "more", "reuse", "motion", "render", "pictures", "perf"]
+       "agent-delete", "media", "shapes", "more", "reuse", "motion", "render", "glass", "pictures", "perf"]
 SHOTS = sys.argv[1:] or ALL
 unknown = [s for s in SHOTS if s not in ALL + ["gallery-narrow"]]
 if unknown:
@@ -456,6 +459,21 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                 text("title", "card", "Hello render", font_size=24),
                 node("wide", "card", "rect", w=400, h=40, fill="#4C9DFF"),
             ])[0]
+        if "glass" in SHOTS:
+            designs["glass"] = create("Glass", lambda page: [
+                node("screen", page, "frame", x=0, y=0, w=390, h=420, fill="#101418", timeline={"duration_ms": 600, "loop": False}),
+                node("trend", "screen", "frame", x=16, y=16, w=358, h=200, fill="#101418", padding=[8],
+                     chart={"kind": "bar", "labels": ["M", "T", "W", "T", "F", "S", "S"], "grid": False, "ticks": 0, "color": "#C9D1DC",
+                            "series": [{"name": "Minutes", "color": "#3A4A66", "values": [30, 45, 20, 50, 20, 60, 40],
+                                        "colors": [None, None, None, None, None, None, "#7FB2FF"]}]}),
+                node("today", "screen", "frame", x=16, y=240, w=220, layout="column", h_sizing="hug", padding=[8], fill="#1B2230", clip=False),
+                text("today-title", "today", "Strength · Upper body", font_size=16, color="#FFFFFF",
+                     motion={"keys": [{"at_ms": 0, "dy": 24, "opacity": 0}, {"at_ms": 600, "dy": 0, "opacity": 1}], "ease": "ease_out"}),
+                *[node(f"stripe-{i}", "screen", "rect", x=40 + 8 * i, y=320, w=8, h=100, fill="#FFFFFF" if i % 2 else "#000000") for i in range(16)],
+                text("under", "screen", "Strength · Upper body", x=180, y=356, font_size=16, color="#FFFFFF"),
+                node("tabbar", "screen", "rect", x=0, y=340, w=390, h=80, fill="#FFFFFF14", backdrop_blur=12, stroke="#FF0000",
+                     stroke_widths=[2, 0, 0, 0]),
+            ])[0]
         if "pictures" in SHOTS:
             designs["pictures"] = create("Pictures", lambda page: [
                 node("card", page, "frame", x=0, y=0, w=720, h=480, fill="#FFFFFF"),
@@ -801,6 +819,49 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
             readings["render"]["traces"] = traced
             print("RENDER_OK", json.dumps(readings["render"]))
 
+        def shot_glass(shot):
+            got = {}
+
+            def renders(_wait_mark):
+                deadline = time.monotonic() + 30
+                while True:
+                    r = call("design.render", {"design_id": designs[shot], "nodes": ["screen"], "timeout_ms": 15000}, ok=False)
+                    if r.get("code") != "design.render.no_renderer" or time.monotonic() > deadline:
+                        break
+                    time.sleep(0.2)
+                got["still"] = r
+                got["frames"] = call("design.render", {"design_id": designs[shot], "nodes": ["screen"], "frames": 6, "png": False})
+                got["end"] = call("design.render", {"design_id": designs[shot], "nodes": ["screen"], "frames": 6, "png": False, "motion_checks": "end"})
+            native(shot, shot, seconds=12, during=renders)
+            Image, _, _ = image()
+            still = got["still"]
+            assert still.get("png"), still
+            picture = Path(still["png"]["path"])
+            (OUT / "design-glass-render.png").write_bytes(picture.read_bytes())
+            img = on_white(Image.open(picture))
+            px = img.load()
+            area, scale = still["area"], still["scale"]
+            at = lambda x, y: px[int((x - area["x"]) * scale), int((y - area["y"]) * scale)]
+            spread = lambda y: statistics.pstdev(sum(at(x, y)) / 3 for x in range(44, 164))
+            # The stripes are sharp above the tab bar and frosted under it.
+            sharp, frosted = spread(330), spread(390)
+            assert sharp > 80 and frosted < sharp / 4, (sharp, frosted)
+            # Its border is on its top side alone.
+            top, bottom, left = at(300, 341), at(300, 418), at(1, 380)
+            assert top[0] > 180 and top[1] < 90, top
+            assert bottom[0] < 120 and left[0] < 120, (bottom, left)
+            # Today's bar in its own colour, the others in the series'.
+            nodes = by_id(call("design.get", {"design_id": designs[shot]})["nodes"])
+            centre = lambda b: at(16 + b["x"] + b["w"] / 2, 16 + b["y"] + b["h"] / 2)
+            near = lambda c, rgb: all(abs(c[k] - rgb[k]) <= 8 for k in range(3))
+            assert near(centre(nodes["trend.bar-0-6"]), (0x7F, 0xB2, 0xFF)), centre(nodes["trend.bar-0-6"])
+            assert near(centre(nodes["trend.bar-0-0"]), (0x3A, 0x4A, 0x66)), centre(nodes["trend.bar-0-0"])
+            # The fade sliding up in its hugging column: nothing to flag while it settles, nor where it ends.
+            for name in ("frames", "end"):
+                moving = [i for i in got[name]["issues"] if i.get("at_ms") is not None]
+                assert not moving, (name, moving)
+            print("GLASS_OK", json.dumps({"sharp": round(sharp, 1), "frosted": round(frosted, 1), "top": top, "bottom": bottom}))
+
         def shot_pictures(shot):
             # The popover alone, searching the fixtures; then a photo placed, with its credit.
             native(shot + "-popover", shot, seconds=8, RELAY_NATIVE_CAPTURE_POPOVER=1, script="fit;wait:400;pictures:kitchen;wait:3000")
@@ -915,7 +976,7 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                  "board-narrow": shot_simple, "edit": shot_edit, "script": shot_script, "agent": shot_agent,
                  "agent-undo": shot_agent_undo, "agent-stale": shot_agent_stale, "agent-delete": shot_agent_delete,
                  "media": shot_media, "shapes": shot_shapes, "more": shot_more, "reuse": shot_reuse, "motion": shot_motion,
-                 "render": shot_render, "pictures": shot_pictures, "perf": shot_perf}
+                 "render": shot_render, "glass": shot_glass, "pictures": shot_pictures, "perf": shot_perf}
         for shot in SHOTS:
             started = time.monotonic()
             try:

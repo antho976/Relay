@@ -94,8 +94,13 @@ instead of `fill`:
 `{"kind": "linear", "angle": 135, "stops": [{"at": 0, "color": "#4C9DFF"}, {"at": 1, "color": "#A178FF"}]}`
 (2 to 8 stops; `angle` reads as CSS: 180 top to bottom; `"radial"` from the centre; `"conic"` round
 the centre, clockwise from `angle`, 0 the top). Rects, frames, stickies and images take
-`radii: [tl, tr, br, bl]` for different corners; any stroke takes `dash`: `[6, 4]` dashed, `[0, 4]`
-dotted (a dot needs `stroke_cap` round or square). A `rect`, `ellipse` or `polygon` with `text`
+`radii: [tl, tr, br, bl]` for different corners and `stroke_widths: [top, right, bottom, left]` for a
+border on some sides only (a tab bar's hairline on top: `"stroke": "#FFFFFF1F", "stroke_widths": [1,
+0, 0, 0]`); any stroke takes `dash`: `[6, 4]` dashed, `[0, 4]` dotted (a dot needs `stroke_cap` round
+or square). Frosted glass is `backdrop_blur` (0 to 200 px) on a frame, rect or ellipse with a
+see-through fill (`"fill": "#14161ACC", "backdrop_blur": 20`): what its parent draws under it (the
+parent's fill and the siblings before it) shows through blurred, so put the bar after the content
+that scrolls under it, in the same frame. A `rect`, `ellipse` or `polygon` with `text`
 shows it centred inside: a labelled box for a diagram.
 
 **Colours** are `#RGB`, `#RRGGBB` or `#RRGGBBAA` (`#00000000` is transparent), or a `$name` the
@@ -272,7 +277,10 @@ value per label (a donut or pie draws the first, a slice per label, `center` wor
 Options: `values` (each value written), `legend` (on by default with several series and for a ring),
 `min`/`max`, `ticks` (about how many steps, 0 for none), `grid`, `prefix`/`suffix`/`decimals`,
 `smooth` and `points` (lines), `inner` (a donut's hole), `gap` (bars), `color`, `grid_color`,
-`font_size`, `palette` (colours for series that name none; may be `$name`s). The parts are named
+`font_size`, `palette` (colours for series that name none; may be `$name`s). A series' `colors`, one
+per label, gives single values a colour of their own, `null` keeping the series': `"colors": [null,
+null, null, null, null, null, "$accent"]` brings out today's bar (a line's point, a ring's slice). The
+parts are named
 `<frame>.<part>` (`spend.bar-0-2`, `spend.label-2`, `spend.tick-0`, `spend.slice-1`) and marked
 `generated`: they are redrawn whenever the chart, the frame's size or its padding changes, so an edit
 of one by hand is refused (`design.chart`). Change the chart instead, and add a title or note as your
@@ -446,8 +454,12 @@ a screen, **look at it**: `design.render {"design_id": 12, "page": "page-7", "no
 - Motion: `at_ms` (0 to 600000) pictures one time, `frames` (2 to 24) a contact sheet labelled by
   `times_ms`; not both (`design.render.args`). With either, `issues` also lists what the motion
   brings that the still does not have, each with `at_ms`, the first time it shows (a slide-in drawn
-  over a label, a fade that leaves words faint): you may not see a later frame clearly, but you will
-  hear of it. `frames: 12, png: false` checks a motion without a picture.
+  over a label, a fade that stops with words faint): you may not see a later frame clearly, but you
+  will hear of it. What is on its way is not flagged where it passes: a fade under way is read at
+  its resting opacity, and `overflow`/`overlap` are the still's alone (motion moves a box after
+  layout, so words sliding up inside a hugging frame have not outgrown it). `motion_checks: "end"`
+  checks only where the motion ends, as it holds; `"off"` leaves the still's issues alone.
+  `frames: 12, png: false` checks a motion without a picture.
 - It is drawn by Relay's desktop app. **`design.render.no_renderer`** means none is open: tell the
   person to open Relay, carry on without sizes (never guess them) and say you could not look. The
   other refusals say what to do: `busy` (try again in a few seconds), `timeout` and

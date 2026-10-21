@@ -490,6 +490,21 @@ pub const RENDER_BOX_FIELDS: [&str; 10] = ["id", "kind", "parent", "x", "y", "w"
 /// Most pixels in a `design.render` picture, width times height (4 megapixels).
 pub const RENDER_AREA_PX_MAX: u64 = 4_000_000;
 
+/// Which times of its motion `design.render` checks for the problems motion brings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "DesignMotionChecks")]
+pub enum MotionChecks {
+    /// Each time pictured, as the motion settles: a fade under way is read at its node's resting
+    /// opacity (one that stops, not looping, is read as it holds), and overflow and overlap are
+    /// the still's alone, since motion moves a box after layout.
+    Frames,
+    /// Only where the motion ends, everything as drawn there: the state it settles in.
+    End,
+    /// None: the issues are the still's.
+    Off,
+}
+
 payload!(#[schemars(rename = "DesignRenderIn")] RenderIn {
     pub design_id: Id,
     /// The page to picture: its id, or its name when no other page has that name. Default: the
@@ -525,6 +540,9 @@ payload!(#[schemars(rename = "DesignRenderIn")] RenderIn {
     /// scope, each labelled with its time (`times_ms`). Not with `at_ms`.
     #[schemars(range(min = RENDER_FRAMES_MIN, max = RENDER_FRAMES_MAX))]
     pub frames: Option<u8>,
+    /// With `at_ms` or `frames`, which times are checked for problems motion brings: `frames`
+    /// (default), `end` or `off`.
+    pub motion_checks: Option<MotionChecks>,
 });
 result!(#[schemars(rename = "DesignRenderOut")] RenderOut {
     pub design_id: Id,
@@ -578,7 +596,7 @@ result!(#[schemars(rename = "DesignRenderIssue")] RenderIssue {
     pub code: String,
     pub ids: Vec<String>,
     pub message: String,
-    /// With `at_ms` or `frames`: the first time pictured, in ms, at which motion brings this
+    /// With `at_ms` or `frames`: the first time checked, in ms, at which motion brings this
     /// problem that the still does not have (its message says how many of the times show it).
     /// Absent for one the design has at rest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -653,6 +671,9 @@ pub struct RenderRequest {
     /// A contact sheet of this many frames.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frames: Option<u8>,
+    /// Which times are checked for problems motion brings (default `frames`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion_checks: Option<MotionChecks>,
     /// The agent session that asked, for the note an open board shows; none for the person.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by: Option<String>,

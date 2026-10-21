@@ -82,6 +82,9 @@ pub const FIELDS: &[(&str, Kinds, Option<&str>)] = &[
     ("dash", Kinds(F | R | E | Y | S | I | L | A | C), None),
     ("radius", Kinds(F | R | S | I), None),
     ("radii", Kinds(F | R | S | I), None),
+    // A box's border; an ellipse's or polygon's outline has no sides.
+    ("stroke_widths", Kinds(F | R | S | I), None),
+    ("backdrop_blur", Kinds(F | R | E), None),
     ("shadow", Kinds(F | R | E | Y | S | I | T | L | A | C), None),
     ("clip", Kinds(F), None),
     ("layout", Kinds(F), None),
@@ -699,7 +702,7 @@ mod tests {
             "letter_spacing": 0, "w_sizing": "fixed", "h_sizing": "fixed", "layout": "row", "gap": 1, "padding": [1],
             "justify": "start", "items": "start", "points": [[0, 0]], "arrow_start": true, "arrow_end": true,
             "src": "0123456789abcdef0123.png", "fit": "cover", "rotation": 1, "sides": 3, "star": 0.5,
-            "gradient": {"stops": []}, "radii": [1, 1, 1, 1], "dash": [1], "blur": 1, "icon": "home", "icon_path": "M0 0", "from": "a",
+            "gradient": {"stops": []}, "radii": [1, 1, 1, 1], "stroke_widths": [1, 0, 0, 0], "dash": [1], "blur": 1, "backdrop_blur": 1, "icon": "home", "icon_path": "M0 0", "from": "a",
             "to": "b", "route": "straight", "closed": true, "smooth": true, "flip_x": true, "flip_y": true,
             "arc": {}, "blend": "normal", "text_case": "upper", "pin_x": "left", "pin_y": "top", "absolute": false,
             "min_w": 1, "max_w": 1, "min_h": 1, "max_h": 1, "row_gap": 1, "scroll": "x", "stroke_cap": "round",
@@ -783,7 +786,7 @@ mod tests {
             // A list: its count, and the range of what it holds.
             let filler = |v: Value| match *field {
                 "dash" => json!([v, 4]),
-                "radii" => json!([v, 1, 1, 1]),
+                "radii" | "stroke_widths" => json!([v, 1, 1, 1]),
                 "points" => json!([[v, 0], [0, 0]]),
                 _ => json!([v]),
             };
@@ -810,7 +813,7 @@ mod tests {
             }
         }
         for field in ["x", "w", "stroke_width", "opacity", "font_size", "font_weight", "line_height", "letter_spacing", "gap", "rotation",
-            "sides", "star", "blur", "radius", "name", "text", "font", "id", "padding", "dash", "radii", "points", "min_w", "max_h",
+            "sides", "star", "blur", "backdrop_blur", "stroke_widths", "radius", "name", "text", "font", "id", "padding", "dash", "radii", "points", "min_w", "max_h",
             "row_gap", "max_lines", "shadows", "runs"] {
             assert!(checked.contains(&field), "{field} states no range");
         }

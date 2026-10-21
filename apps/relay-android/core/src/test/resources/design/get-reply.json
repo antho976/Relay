@@ -23,7 +23,7 @@
     {"id": "draft", "parent": "screen", "kind": "rect", "x": 0, "y": 0, "w": 100, "h": 40, "hidden": true, "locked": true, "skip_checks": true, "text": "Draft", "strike": true},
     {"id": "badge", "parent": "screen", "kind": "ellipse", "x": 350, "y": 12, "w": 16, "h": 16, "fill": "#FF5A5A", "pin_x": "right", "pin_y": "top", "absolute": true},
     {"id": "board", "parent": "page-1", "kind": "frame", "name": "Board", "x": 450, "y": 0, "w": 600, "h": 400, "fill": "#FFFFFF", "radius": 8, "layout": "none", "scroll": "both"},
-    {"id": "header-bar", "parent": "board", "kind": "rect", "x": 0, "y": 0, "w": 600, "h": 56, "fill": "#F2EFEA", "pin_x": "left_right", "pin_y": "top"},
+    {"id": "header-bar", "parent": "board", "kind": "rect", "x": 0, "y": 0, "w": 600, "h": 56, "fill": "#F2EFEAE6", "stroke": "#D9D4CC", "stroke_widths": [0, 0, 1, 0], "backdrop_blur": 16, "pin_x": "left_right", "pin_y": "top"},
     {"id": "side", "parent": "board", "kind": "rect", "x": 0, "y": 56, "w": 80, "h": 344, "fill": "#EDE9E2", "pin_x": "left", "pin_y": "top_bottom"},
     {"id": "scaled", "parent": "board", "kind": "rect", "x": 100, "y": 100, "w": 100, "h": 60, "fill": "#DDEEFF", "stroke": "#5A7FFF", "dash": [6, 4], "pin_x": "scale", "pin_y": "scale", "stroke_cap": "butt"},
     {"id": "hexagon", "parent": "board", "kind": "polygon", "x": 260, "y": 160, "w": 80, "h": 80, "fill": "#B8E986", "opacity": 0.9, "text": "Hex", "sides": 6, "flip_y": true, "pin_x": "center", "pin_y": "center"},

@@ -94,7 +94,7 @@ impl Draw<'_> {
     fn legend(&mut self, room: Room) -> Room {
         let ring = !self.chart.kind.has_axes();
         let names: Vec<(String, String)> = if ring {
-            self.chart.labels.iter().enumerate().map(|(i, l)| (l.clone(), self.chart.palette_color(i))).collect()
+            self.chart.labels.iter().enumerate().map(|(i, l)| (l.clone(), self.chart.slice_color(i))).collect()
         } else {
             self.chart.series.iter().enumerate().map(|(i, s)| (s.name.clone(), self.chart.series_color(i))).collect()
         };
@@ -257,7 +257,7 @@ impl Draw<'_> {
                     (true, true) => [0.0, corner, corner, 0.0],
                     (true, false) => [corner, 0.0, 0.0, corner],
                 };
-                let color = c.series_color(j);
+                let color = c.value_color(j, i);
                 let bar = self.node(NodeKind::Rect, format!("bar-{j}-{i}"), rect);
                 (bar.fill, bar.radii) = (Some(color), Some(radii));
                 if c.values == Some(true) && (!stacked || j + 1 == m) {
@@ -305,9 +305,11 @@ impl Draw<'_> {
                 line.smooth = smooth.then_some(true);
             }
             for (i, [x, y]) in points.iter().copied().enumerate() {
-                if c.points == Some(true) || alone {
+                // A point with a colour of its own is shown, so a line can mark one.
+                let own = s.colors.as_ref().and_then(|cs| cs.get(i)).is_some_and(Option::is_some);
+                if c.points == Some(true) || alone || own {
                     let dot = self.node(NodeKind::Ellipse, format!("dot-{j}-{i}"), [x - 3.0, y - 3.0, 6.0, 6.0]);
-                    dot.fill = Some(color.clone());
+                    dot.fill = Some(c.value_color(j, i));
                 }
                 if c.values == Some(true) {
                     let v = s.values[i];
@@ -344,7 +346,7 @@ impl Draw<'_> {
             if sweep <= 0.0 {
                 continue;
             }
-            let color = c.palette_color(i);
+            let color = c.slice_color(i);
             let slice = self.node(NodeKind::Ellipse, format!("slice-{i}"), [cx - r, cy - r, d, d]);
             slice.fill = Some(color);
             slice.arc = Some(Arc { start, sweep: sweep.min(360.0), inner, cap: None });
@@ -479,6 +481,23 @@ mod tests {
         assert!(r.w > g.w && g.x == r.x && r.y > g.y, "across, in label order down");
         let label = part(&across, "label-1");
         assert!((label.y + 8.0 - (r.y + r.h / 2.0)).abs() <= 1.5, "the label at its bar's middle");
+    }
+
+    /// A value with a colour of its own stands out from its series: today's bar, a marked point,
+    /// a slice; the legend keeps the series' colour.
+    #[test]
+    fn one_value_can_be_brought_out() {
+        let week = json!([{"name": "Minutes", "color": "#3A4A66", "values": [30, 45, 0, 50, 20, 60, 40], "colors": [null, null, null, null, null, null, "#7FB2FF"]}]);
+        let bars = parts(&frame(json!({"kind": "bar", "legend": true, "labels": ["M", "T", "W", "T", "F", "S", "S"], "series": week}), 360.0, 200.0));
+        let fills: Vec<&str> = (0..7).map(|i| part(&bars, &format!("bar-0-{i}")).fill.as_deref().unwrap()).collect();
+        assert_eq!(fills, ["#3A4A66", "#3A4A66", "#3A4A66", "#3A4A66", "#3A4A66", "#3A4A66", "#7FB2FF"]);
+        assert_eq!(part(&bars, "key-0").fill.as_deref(), Some("#3A4A66"), "the legend shows the series");
+        let line = parts(&frame(json!({"kind": "line", "labels": ["A", "B", "C"], "series": [{"values": [1, 3, 2], "colors": [null, "$accent", null]}]}), 300.0, 200.0));
+        assert_eq!(part(&line, "dot-0-1").fill.as_deref(), Some("$accent"), "a marked point is shown");
+        assert!(line.iter().all(|n| n.id != "spend.dot-0-0"), "the rest are as asked: no points");
+        let ring = parts(&frame(json!({"kind": "donut", "labels": ["A", "B"], "series": [{"values": [1, 2], "colors": ["#111111", null]}]}), 200.0, 200.0));
+        assert_eq!((part(&ring, "slice-0").fill.as_deref(), part(&ring, "key-0").fill.as_deref()), (Some("#111111"), Some("#111111")));
+        assert_eq!(part(&ring, "slice-1").fill.as_deref(), Some(relay_bus::design::chart::CHART_PALETTE[1]));
     }
 
     #[test]

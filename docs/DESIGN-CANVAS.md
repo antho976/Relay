@@ -223,8 +223,8 @@ MCP tools are generated from the same registry, with each node field documented 
 ## On the phone
 
 The phone shows designs read only: the gallery, and a page at a time, drawn with ports of the
-canvas's layout, shape and paint rules, with a line under each page for what it leaves out (blur,
-glows, SVG pictures, motion, newer kinds). It never edits. `docs/ANDROID.md` ("Design on the phone")
+canvas's layout, shape and paint rules, with a line under each page for what it leaves out (blur
+and frosted glass, glows, SVG pictures, motion, newer kinds). It never edits. `docs/ANDROID.md` ("Design on the phone")
 has the rest; the ops it may send are `design.list`, `design.get` and `design.asset.get`
 (`PHONE_OPS`).
 

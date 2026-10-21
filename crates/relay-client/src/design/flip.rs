@@ -379,8 +379,8 @@ fn mirrored_pin(n: &Node, horizontal: bool) -> Option<(&'static str, Value, Pin)
 
 /// The fields that turn a layer's own drawing over where it is, read from `n` as stored with
 /// its style laid under (`laid`): its turn (not a line's, which turns by its points), the
-/// `flip_x`/`flip_y` of a polygon, picture or icon, its corner radii, its gradients, its arc and
-/// its motion.
+/// `flip_x`/`flip_y` of a polygon, picture or icon, its corner radii, its border's sides, its
+/// gradients, its arc and its motion.
 fn own(n: &Node, horizontal: bool) -> Map<String, Value> {
     let mut set = Map::new();
     if let Some(turn) = n.rotation.filter(|t| *t != 0.0 && n.kind != NodeKind::Line) {
@@ -395,6 +395,12 @@ fn own(n: &Node, horizontal: bool) -> Map<String, Value> {
         let radii = if horizontal { [tr, tl, bl, br] } else { [bl, br, tr, tl] };
         if radii != [tl, tr, br, bl] {
             set.insert("radii".into(), json!(radii));
+        }
+    }
+    if let Some([t, r, b, l]) = n.stroke_widths {
+        let sides = if horizontal { [t, l, b, r] } else { [b, r, t, l] };
+        if sides != [t, r, b, l] {
+            set.insert("stroke_widths".into(), json!(sides));
         }
     }
     for (key, g) in [("gradient", &n.gradient), ("stroke_gradient", &n.stroke_gradient)] {
@@ -637,9 +643,11 @@ mod tests {
             node("b", Some("p1"), K::Rect, [200.0, 0.0, 50.0, 50.0]),
         ]);
         s.node_mut("a").unwrap().radii = Some([10.0, 0.0, 0.0, 0.0]);
+        s.node_mut("a").unwrap().stroke_widths = Some([1.0, 0.0, 0.0, 2.0]);
         flipped(&mut s, &["a", "b"], true);
         assert_eq!((s.node("a").unwrap().x, s.node("b").unwrap().x), (150.0, 0.0));
         assert_eq!(s.node("a").unwrap().radii, Some([0.0, 10.0, 0.0, 0.0]));
+        assert_eq!(s.node("a").unwrap().stroke_widths, Some([1.0, 2.0, 0.0, 0.0]), "its left border is on its right");
         // Flipping twice is where it started.
         flipped(&mut s, &["a", "b"], true);
         assert_eq!((s.node("a").unwrap().x, s.node("b").unwrap().x), (0.0, 200.0));

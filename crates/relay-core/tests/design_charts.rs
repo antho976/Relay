@@ -104,6 +104,8 @@ fn its_parts_are_not_edited_by_hand() {
         (json!({"kind": "bar", "labels": ["A", "B"], "series": [{"values": [1]}]}), "chart.series[0].values: 1 of them, one per label (2)"),
         (json!({"kind": "donut", "labels": ["A"], "series": [{"values": [-1]}]}), "no value below 0"),
         (json!({"kind": "line", "horizontal": true, "labels": ["A"], "series": [{"values": [1]}]}), "only a bar chart"),
+        (json!({"kind": "bar", "labels": ["A", "B"], "series": [{"values": [1, 2], "colors": ["#FFF"]}]}), "chart.series[0].colors: 1 of them, one per label (2)"),
+        (json!({"kind": "bar", "labels": ["A"], "series": [{"values": [1], "colors": ["bright"]}]}), "chart.series[0].colors[0]: \"bright\" is not"),
     ] {
         let error = refused(call(&e, "design.apply", json!({"design_id": id, "ops": [{"op": "update", "id": "spend", "set": {"chart": chart}}]})));
         assert!(error.message.contains(why), "{}", error.message);

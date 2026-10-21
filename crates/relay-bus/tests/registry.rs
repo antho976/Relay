@@ -210,13 +210,14 @@ fn render_request_round_trips() {
     let request = RenderRequest {
         render_id: "6f0c2b1e-0000-4000-8000-000000000000".into(), design_id: 12, page: "page-1".into(), nodes: Some(vec!["hero".into()]),
         png: true, scale: 1.0, max_side: 1568, boxes_limit: 200, deadline_unix_ms: 1_792_368_000_000, at_ms: None, frames: Some(6),
-        by: Some("silver-lemur".into()),
+        motion_checks: Some(relay_bus::ops::design::MotionChecks::End), by: Some("silver-lemur".into()),
     };
     let line = serde_json::to_value(&request).unwrap();
     assert_eq!(serde_json::from_value::<RenderRequest>(line.clone()).unwrap(), request);
     assert!(line.get("at_ms").is_none(), "an absent time is not written");
+    assert_eq!(line["motion_checks"], "end");
     let older = serde_json::json!({"render_id": "r", "design_id": 12, "page": "page-1", "nodes": null, "png": true, "scale": 1.0,
         "max_side": 1568, "boxes_limit": 200, "deadline_unix_ms": 1});
     let read: RenderRequest = serde_json::from_value(older).unwrap();
-    assert_eq!((read.at_ms, read.frames, read.by), (None, None, None));
+    assert_eq!((read.at_ms, read.frames, read.motion_checks, read.by), (None, None, None, None));
 }
