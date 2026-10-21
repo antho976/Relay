@@ -320,7 +320,7 @@ internal fun ProfileActivityMonth(
                                         Icon(
                                             Icons.Rounded.Bedtime,
                                             contentDescription = null,
-                                            tint = if (date.isAfter(today)) muted.copy(alpha = 0.5f) else muted,
+                                            tint = if (date.isAfter(today)) muted.copy(alpha = 0.6f) else muted,
                                             modifier = Modifier.size(16.dp)
                                         )
                                     }
