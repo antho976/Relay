@@ -1,23 +1,16 @@
 package com.forge.app.ui.profile.state
 
 import com.forge.app.data.repo.ProgressPhoto
-import com.forge.app.data.repo.TrophyCell
-import com.forge.app.domain.rank.RankInfo
-import com.forge.app.domain.rank.StandingMetric
-import com.forge.app.domain.rank.XpBreakdown
 
 /**
- * The "You" hub state. Most fields are surfaced from data the app already computes; the rank/XP
- * ladder and the offline standing estimate are the new engine outputs (see `domain/rank`).
+ * The Profile page's state: who you are, what you have done all time, the days you trained, and
+ * your progress photos. Ranks and trophies left the page in the 2026-10-21 redesign, so their
+ * readings are no longer carried here.
  */
 data class ProfileUiState(
     val loading: Boolean = true,
     val name: String = "",
     val sinceLabel: String = "",
-
-    // Rank + XP
-    val rank: RankInfo? = null,
-    val xp: XpBreakdown? = null,
 
     // All-time lifetime tallies
     val totalSessions: Int = 0,
@@ -27,21 +20,19 @@ data class ProfileUiState(
     val streakDays: Int = 0,
     val longestStreakDays: Int = 0,
 
-    // This-week vs last-week tallies — the All-Time tiles' "vs last week" arrows.
+    // This-week tallies (and this month's PRs): the All time counts' change lines.
     val workoutsThisWeek: Int = 0,
     val workoutsLastWeek: Int = 0,
     val setsThisWeek: Int = 0,
     val setsLastWeek: Int = 0,
     val prsThisWeek: Int = 0,
     val prsLastWeek: Int = 0,
+    val prsThisMonth: Int = 0,
 
-    // Standing (estimated vs typical lifters, 90 days)
-    val standings: List<StandingMetric> = emptyList(),
-
-    // The mirror test (progress photos)
+    // Progress photos
     val photos: List<ProgressPhoto> = emptyList(),
 
-    // Avatar (app-private file)
+    // Avatar (app-private file), drawn as the cover
     val hasAvatar: Boolean = false,
     val avatarStamp: Long = 0L,
     // Key of the provided default currently in use (GYMAP-22), null when it's the user's own photo —
@@ -49,16 +40,13 @@ data class ProfileUiState(
     val avatarDefaultKey: String? = null,
     val showAvatarHint: Boolean = false,
 
-    // Trophy case
-    val trophyUnlocked: Int = 0,
-    val trophyTotal: Int = 0,
-    val trophyGrid: List<TrophyCell> = emptyList(),
-    val closestTrophy: String? = null,
-
-    // Cumulative lifted volume (lb), one point per finished session, oldest → newest — the All-Time graph.
+    // Cumulative lifted volume (lb), one point per finished session, oldest → newest, and when each
+    // point was lifted (epoch ms, same order) — the All time curve.
     val lifetimeVolumeSeriesLb: List<Double> = emptyList(),
+    val lifetimeVolumeTimesMs: List<Long> = emptyList(),
 
-    // Times trained each calendar day this year (gym + cardio), keyed by epoch-day — the THIS YEAR
-    // consistency grid. Empty ⇒ no activity yet this year (the section hides).
-    val activityByDay: Map<Long, Int> = emptyMap()
+    // Times trained each calendar day over all of history (gym + cardio), keyed by epoch-day, and
+    // the days a session was logged as a deload — the Consistency month grid.
+    val activityByDay: Map<Long, Int> = emptyMap(),
+    val deloadDays: Set<Long> = emptySet()
 )

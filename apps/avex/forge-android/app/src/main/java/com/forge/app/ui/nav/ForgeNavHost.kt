@@ -338,8 +338,9 @@ fun ForgeNavHost(
             com.forge.app.ui.profile.ProfileScreen(
                 onBack = { nav.popBackStack() },
                 // Single-top, like the hub's own entry points: a double tap stacked two copies.
-                onOpenTrophies = { nav.navigate(Routes.TROPHIES) { launchSingleTop = true } },
                 onOpenPhotoGallery = { nav.navigate(Routes.MIRROR_TEST) { launchSingleTop = true } },
+                // Gated like the gallery (its route shows the last shot as a pose ghost).
+                onOpenCamera = { nav.navigate(Routes.PROGRESS_CAMERA) { launchSingleTop = true } },
                 onOpenMeasurements = { nav.navigate(Routes.BODY_MEASUREMENTS) { launchSingleTop = true } },
                 // Out of the ACTIVITY day sheet, into the same two destinations History opens.
                 onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) },
