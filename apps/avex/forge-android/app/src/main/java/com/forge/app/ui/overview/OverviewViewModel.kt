@@ -326,21 +326,14 @@ class OverviewViewModel @Inject constructor(
     fun refreshCoach() = coachRefresh.request()
 
     /**
-     * Each recent gym row's "vs last time" bars, memoised by session id: a finished session's lifts
-     * and the bouts before it never change, so each is read once per screen life.
+     * The last session's "vs last time" bars, memoised by session id: a finished session's lifts and
+     * the bouts before it never change, so each is read once per screen life.
      */
     private val liftDeltaCache = ConcurrentHashMap<Long, List<StatsRepository.LiftDelta>>()
     private suspend fun liftDeltas(sessionId: Long): List<StatsRepository.LiftDelta> =
         liftDeltaCache[sessionId] ?: runCatching { statsRepo.liftDeltas(sessionId) }
             .getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it else emptyList() }
             .also { liftDeltaCache[sessionId] = it }
-
-    val recentMarks: StateFlow<Map<Long, List<StatsRepository.LiftDelta>>> =
-        state.map { s -> s.recentItems.filter { it.isGym && it.id >= 0 }.map { it.id } }
-            .distinctUntilChanged()
-            .map { ids -> ids.associateWith { liftDeltas(it) } }
-            .flowOn(Dispatchers.Default)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     /** The newest tracked gym session as the "Yesterday" reading. */
     private val lastSessionReading: kotlinx.coroutines.flow.Flow<SlotReading?> =

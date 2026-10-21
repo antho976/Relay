@@ -146,7 +146,6 @@ fun OverviewScreen(
     val spec by viewModel.spec.collectAsStateWithLifecycle()
     val coach by viewModel.coach.collectAsStateWithLifecycle()
     val slots by viewModel.slots.collectAsStateWithLifecycle()
-    val marks by viewModel.recentMarks.collectAsStateWithLifecycle()
 
     // Keep the readings current across a day of glances (W6): a night's sleep that synced, steps
     // taken while away, and today's answer, which is date- and session-sensitive (B2).
@@ -366,7 +365,7 @@ fun OverviewScreen(
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(26.dp)) {
                         state.recentItems.take(HOME_LIST_CAP).forEach { item ->
-                            RecentRow(item, marks[item.id]) {
+                            RecentRow(item) {
                                 if (item.isGym) onOpenSession(item.id) else viewModel.selectRecentItem(item)
                             }
                         }
@@ -489,24 +488,12 @@ private fun WeekRow(
     val count = if (!freestyle && state.weeklyTrainingDays > 0) "$days / ${state.weeklyTrainingDays}" else if (days == 1) "1 day" else "$days days"
     val ink = MaterialTheme.colorScheme.onBackground
     val reading = "This week, $days of " + (if (!freestyle && state.weeklyTrainingDays > 0) "${state.weeklyTrainingDays} days trained" else "7 days trained")
-    Row(
-        modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) { contentDescription = reading },
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            buildAnnotatedString {
-                append("THIS WEEK  ")
-                withStyle(SpanStyle(color = ink)) { append(count.uppercase()) }
-            },
-            style = OpenType.monoS,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.clearAndSetSemantics { }
-        )
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
-            modifier = Modifier.clearAndSetSemantics { }
-        ) {
+    val label = buildAnnotatedString {
+        append("THIS WEEK  ")
+        withStyle(SpanStyle(color = ink)) { append(count.uppercase()) }
+    }
+    val dots: @Composable (dot: androidx.compose.ui.unit.Dp, gap: androidx.compose.ui.unit.Dp, modifier: Modifier) -> Unit = { dot, gap, m ->
+        Row(horizontalArrangement = Arrangement.spacedBy(gap), modifier = m.clearAndSetSemantics { }) {
             for (i in 0 until 7) {
                 WeekDot(
                     letter = initials[i],
@@ -514,7 +501,35 @@ private fun WeekRow(
                     today = i == todayIndex,
                     rest = i in state.weekRestDays && i !in state.weekDaysTrained,
                     name = names[i],
+                    size = dot,
                 )
+            }
+        }
+    }
+    // The design's row is 412 wide. A narrower phone (an S21 at 384dp) or a larger font left the
+    // count touching the first dot, so the dots close up first, then shrink, and only when even that
+    // will not leave 16dp of air does the label take its own line above them.
+    androidx.compose.foundation.layout.BoxWithConstraints(
+        Modifier.fillMaxWidth().semantics(mergeDescendants = true) { contentDescription = reading }
+    ) {
+        val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+        val density = LocalDensity.current
+        val labelWidth = with(density) { measurer.measure(label, OpenType.monoS).size.width.toDp() }
+        val width = maxWidth
+        val room = width - labelWidth - 16.dp
+        val full = 24.dp * 7 + 7.dp * 6
+        when {
+            room >= full -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(label, style = OpenType.monoS, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.clearAndSetSemantics { })
+                dots(24.dp, 7.dp, Modifier)
+            }
+            (room - 4.dp * 6) / 7 >= 20.dp -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(label, style = OpenType.monoS, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.clearAndSetSemantics { })
+                dots(minOf(24.dp, (room - 4.dp * 6) / 7), 4.dp, Modifier)
+            }
+            else -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(label, style = OpenType.monoS, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.clearAndSetSemantics { })
+                dots(24.dp, ((width - 24.dp * 7) / 6).coerceAtMost(16.dp), Modifier)
             }
         }
     }
@@ -523,9 +538,9 @@ private fun WeekRow(
 private val DotLetter = OpenType.tag.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.sp)
 
 @Composable
-private fun WeekDot(letter: String, trained: Boolean, today: Boolean, rest: Boolean, name: String) {
+private fun WeekDot(letter: String, trained: Boolean, today: Boolean, rest: Boolean, name: String, size: androidx.compose.ui.unit.Dp = 24.dp) {
     val accent = MaterialTheme.colorScheme.primary
-    val base = Modifier.size(24.dp)
+    val base = Modifier.size(size)
     val modifier = when {
         trained -> base.background(accent, CircleShape)
         today -> base.background(MaterialTheme.colorScheme.primaryContainer, CircleShape).border(1.5.dp, accent, CircleShape)
@@ -548,6 +563,17 @@ private fun WeekDot(letter: String, trained: Boolean, today: Boolean, rest: Bool
             )
         }
     }
+}
+
+/** The unit an empty reading's zero wears, so "0h" reads as no sleep yet rather than a stray digit. */
+@Composable
+private fun emptyUnit(slot: HomeSlot): String = when (slot) {
+    HomeSlot.SLEEP -> "h"
+    HomeSlot.RESTING_HR -> " bpm"
+    HomeSlot.HRV -> " ms"
+    HomeSlot.STEPS -> ""
+    HomeSlot.BODY_WEIGHT -> " " + com.forge.app.domain.units.unitLabel(LocalForgeSettings.current.weightUnit)
+    HomeSlot.LAST_SESSION -> " min"
 }
 
 /** What tapping a reading's figure opens: the body view for the watch and weight, the log for a session. */
@@ -573,19 +599,22 @@ private fun SlotReadingView(
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OpenSlotLabel(reading?.label ?: slot.label, onClick = onChange)
         if (reading == null) {
-            FigureLine(figureWithUnit("–", "", muted), muted)
-            Spacer(Modifier.height(30.dp))
+            // Nothing to read yet: a zero in the figure's place and a bare baseline where the mark
+            // goes, so the empty slot keeps the same shape as the one beside it.
+            FigureLine(figureWithUnit("0", emptyUnit(slot), muted), muted)
+            OpenDeltaBars(emptyList(), Modifier.fillMaxWidth().height(30.dp))
             when {
                 slot.needsWatch && watchInvite ->
-                    Text(
-                        "CONNECT A WATCH",
+                    OpenLabel(
+                        "Connect a watch",
                         style = OpenType.monoSTight,
                         color = ink,
                         modifier = Modifier.touchSlop(vertical = 14.dp).clickableLabeled("Connect a watch", onClick = onConnectWatch).padding(vertical = 14.dp)
                     )
                 slot == HomeSlot.LAST_SESSION -> OpenLabel("No sessions yet", style = OpenType.monoSTight)
                 slot == HomeSlot.BODY_WEIGHT -> OpenLabel("No weigh-ins yet", style = OpenType.monoSTight)
-                else -> OpenLabel("Nothing today yet", style = OpenType.monoSTight)
+                slot == HomeSlot.STEPS -> OpenLabel("None counted yet", style = OpenType.monoSTight)
+                else -> OpenLabel("Nothing synced yet", style = OpenType.monoSTight)
             }
             return@Column
         }
@@ -598,6 +627,7 @@ private fun SlotReadingView(
             FigureLine(figureWithUnit(reading.figure, reading.unit, muted), ink)
             when {
                 reading.bars != null -> OpenDeltaBars(reading.bars, Modifier.fillMaxWidth().height(30.dp), barWidth = 22.dp)
+                reading.spark.size < 2 -> OpenDeltaBars(emptyList(), Modifier.fillMaxWidth().height(30.dp))
                 reading.spark.size >= 2 -> OpenSparkline(reading.spark, Modifier.fillMaxWidth().height(30.dp))
                 else -> Spacer(Modifier.height(30.dp))
             }
@@ -746,10 +776,12 @@ private fun EmptyLine(text: String, action: String, onClick: () -> Unit) {
 
 /**
  * A recent session: its date in a narrow column (MON over a serif 19), the title and "48 min ·
- * Bench Press 205×5" with a PR tag when it set one, and each lift against last time on the right.
+ * Bench Press 205×5" with a PR tag when it set one, and the kind of session as a glyph on a quiet
+ * square tile at the right (Antho kept the old row's mark, 2026-10-21; the redesign squares its
+ * corners and drops its colour).
  */
 @Composable
-private fun RecentRow(item: OverviewRecentItem, deltas: List<StatsRepository.LiftDelta>?, onClick: () -> Unit) {
+private fun RecentRow(item: OverviewRecentItem, onClick: () -> Unit) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val ink = MaterialTheme.colorScheme.onBackground
     val title = item.displayTitle(com.forge.app.ui.cardio.LocalCardioTypes.current)
@@ -761,7 +793,6 @@ private fun RecentRow(item: OverviewRecentItem, deltas: List<StatsRepository.Lif
             com.forge.app.domain.units.formatDistance(it, LocalForgeSettings.current.useMiles)
         }
     ).joinToString(" · ")
-    val bars = deltas?.map { d -> d.pct?.let { if (kotlin.math.abs(it) < MATCHED_PCT) 0f else it } }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -780,13 +811,17 @@ private fun RecentRow(item: OverviewRecentItem, deltas: List<StatsRepository.Lif
                 if (item.prCount > 0) OpenPrTag()
             }
         }
-        if (!bars.isNullOrEmpty()) {
-            val up = bars.count { (it ?: 0f) > 0f }
-            val compared = bars.count { it != null }
-            OpenDeltaBars(
-                bars,
-                Modifier.width(64.dp).height(28.dp),
-                description = if (compared > 0) "$up of $compared lifts up on last time" else null
+        Box(
+            Modifier
+                .size(32.dp)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh, androidx.compose.foundation.shape.RoundedCornerShape(4.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                if (item.isGym) OpenIcons.Dumbbell else OpenIcons.Activity,
+                contentDescription = null,
+                tint = muted,
+                modifier = Modifier.size(18.dp)
             )
         }
     }

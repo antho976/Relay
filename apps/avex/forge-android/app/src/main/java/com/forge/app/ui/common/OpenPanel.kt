@@ -259,8 +259,9 @@ fun OpenPrTag(modifier: Modifier = Modifier) {
 /**
  * "Each lift vs last time": one bar per exercise on a baseline two thirds of the way down. A gain
  * rises above it, a loss hangs below it, a lift that matched last time is a 2dp stub, and the biggest
- * gain is the one red bar (other gains grey, losses dimmer still). Null entries (no previous time)
- * draw as stubs too. Bars spread evenly across the width at [barWidth].
+ * gain is the one red bar (other gains grey, losses dimmer still). A null entry (no previous time to
+ * compare) keeps its place but draws nothing: a row of stubs read as a dashed line, not as data. An
+ * empty list draws the bare baseline, which an empty reading uses as its mark.
  */
 @Composable
 fun OpenDeltaBars(
@@ -293,7 +294,7 @@ fun OpenDeltaBars(
         val stub = 2.dp.toPx()
         val r = CornerRadius(1.dp.toPx())
         deltas.forEachIndexed { i, d ->
-            val v = d ?: 0f
+            val v = d ?: return@forEachIndexed
             val x = i * (bw + gap)
             val color = when {
                 i == lit -> accent
