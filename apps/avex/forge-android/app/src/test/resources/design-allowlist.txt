@@ -95,7 +95,6 @@
 2 font-size ui/cardio/components/CardioEntryRow.kt fontSize=
 1 font-size ui/cardio/components/CardioPaceTrendSection.kt fontSize=
 4 font-size ui/cardio/components/CardioWeekDetailComponents.kt fontSize=
-3 font-size ui/coach/CoachCharts.kt fontSize=
 1 font-size ui/common/DayLog.kt fontSize=
 3 font-size ui/common/Editorial.kt fontSize=
 1 font-size ui/common/SegmentPill.kt fontSize=
@@ -139,7 +138,6 @@
 1 paren-plural ui/coach/CoachUi.kt (s)
 2 raw-color wear/ui/WearComponents.kt Color(0x
 7 raw-color wear/ui/WearTheme.kt Color(0x
-1 screen-name-title ui/coach/GoalPickerDialog.kt title={Text(
 1 screen-name-title ui/common/ProgramChangeGuardHost.kt title={Text(
 # AlertDialog titles, not a top bar: the fourth is the empty-workout FINISH confirm (2026-09-28 scan),
 # the fifth the finish-with-exercises-not-started confirm (2026-10-16): finishing can't be undone.

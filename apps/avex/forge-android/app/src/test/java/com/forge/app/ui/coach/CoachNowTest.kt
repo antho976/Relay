@@ -91,74 +91,9 @@ class CoachNowTest {
     }
 
     @Test
-    fun liftsCountTheClimbAndNameTheStall() {
-        val lifts = listOf(
-            TrackedLift("Bench Press", 9, true, slotId = "b"),
-            TrackedLift("Back Squat", 8, true, slotId = "s"),
-            TrackedLift("DB Row", 7, true, stalling = true, slotId = "r"),
-            TrackedLift("Overhead Press", 1, false, slotId = "o")
-        )
-        val line = liftsLine(
-            state(
-                watch = watch(lifts = lifts),
-                e1rm = mapOf(
-                    "b" to listOf(200.0, 210.0),
-                    "s" to listOf(300.0, 300.5),
-                    "r" to listOf(150.0, 150.0)
-                )
-            )
-        )!!
-        assertEquals("1 of 3 climbing", line.value)
-        assertEquals("DB Row stalled · 1 flat · 1 still forming", line.sub)
-    }
-
-    @Test
-    fun liftsWithNoTrendYetSayWhenTheyRead() {
-        val lifts = listOf(TrackedLift("Bench Press", 1, false, slotId = "b"))
-        val line = liftsLine(state(watch = watch(lifts = lifts)))!!
-        assertEquals("Forming", line.value)
-        assertEquals("1 lift building history, first read after two sessions.", line.sub)
-    }
-
-    @Test
-    fun theRecordSplitsAppliedChangesByVerdict() {
-        val line = recordLine(CoachRecord(applied = 9, held = 6, missed = 1, watching = 2, anyProposed = true))!!
-        assertEquals("6 of 9 held", line.value)
-        assertEquals("1 missed · 2 still proving out", line.sub)
-    }
-
-    @Test
-    fun changesWithNoVerdictAreCountedSoTheLineAddsUp() {
-        val line = recordLine(CoachRecord(applied = 4, held = 1, missed = 1, notJudged = 2, anyProposed = true))!!
-        assertEquals("1 of 4 held", line.value)
-        assertEquals("1 missed · 2 not judged", line.sub)
-    }
-
-    @Test
-    fun theRecordIsAbsentUntilTheCoachHasProposedAnything() {
-        assertNull(recordLine(CoachRecord()))
-        assertEquals("None yet", recordLine(CoachRecord(anyProposed = true))!!.value)
-    }
-
-    @Test
-    fun theRecordRailMarksAWeekByItsWorstOutcome() {
-        fun d(status: String, outcome: String = "pending") = com.forge.app.data.db.entities.CoachDecision(
-            id = 0, weekId = "2025-W30", type = "volume_up", targetKey = "k", targetName = "Lift",
-            summary = "s", reason = "r", status = status, outcome = outcome
-        )
-        val applied = com.forge.app.data.repo.CoachRepository.STATUS_APPLIED
-        val skipped = com.forge.app.data.repo.CoachRepository.STATUS_SKIPPED
-        assertEquals(WeekMark.NONE, weekMark(emptyList()))
-        assertEquals(WeekMark.HELD, weekMark(listOf(d(applied, "ok"))))
-        assertEquals(WeekMark.PROVING, weekMark(listOf(d(applied, "ok"), d(applied, "pending"))))
-        assertEquals(WeekMark.MISSED, weekMark(listOf(d(applied, "ok"), d(applied, "failed"))))
-        assertEquals(WeekMark.DECLINED, weekMark(listOf(d(skipped))))
-    }
-
-    @Test
     fun noLineCarriesABannedCharacter() {
         val st = state(readiness = Recommendation.ReadinessScale(2, "slept well", Confidence.MEDIUM))
-        val lines = listOfNotNull(readinessLine(st), recoveryLine(st), liftsLine(st))
+        val lines = listOfNotNull(readinessLine(st), recoveryLine(st))
         assertTrue(lines.isNotEmpty())
         lines.forEach { l ->
             listOf(l.label, l.value, l.sub.orEmpty()).forEach { text ->
