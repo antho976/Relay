@@ -1,0 +1,48 @@
+[package]
+name = "relay-core"
+description = "RELAY v4 engine: store, audit, pipeline, socket door. Headless; zero GUI deps."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+relay-bus.workspace = true
+# design.apply's contrast flags: the canvas's layout and checks, GTK-free.
+relay-client.workspace = true
+relay-money = { workspace = true, features = ["ledger"] }
+relay-arbiter = { workspace = true, features = ["engine"] }
+relay-gym = { workspace = true, features = ["store"] }
+rust_decimal = { version = "1.43", default-features = false, features = ["std"] }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
+jiff.workspace = true
+directories.workspace = true
+libc.workspace = true
+rand.workspace = true
+portable-pty.workspace = true
+base64.workspace = true
+gix.workspace = true
+which.workspace = true
+tree-sitter.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-svelte.workspace = true
+tree-sitter-kotlin.workspace = true
+notify.workspace = true
+regex.workspace = true
+similar.workspace = true
+tempfile = "3"
+# The Pictures plugin's client for its fixed hosts (pictures-core), as relay-remote's.
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+
+# The native client's headless half: tests/native_input.rs sends its mirror payload builders.
+[dev-dependencies]
+ctor = "1"

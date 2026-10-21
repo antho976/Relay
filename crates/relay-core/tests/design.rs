@@ -545,7 +545,7 @@ fn a_backup_from_before_designs_still_restores() {
 
 /// Timings for one `design.apply` of 500 nodes and a `design.get` of 5,000, through the
 /// engine's ordinary call path on a store on disk. Run with
-/// `cargo test --release -p relay-core --test design -- --ignored --nocapture`.
+/// `cargo test --release -p relay-core --test all -- design:: --ignored --nocapture`.
 #[test]
 #[ignore]
 fn measure_apply_500_and_get_5000() {

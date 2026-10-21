@@ -746,7 +746,7 @@ fn an_agent_reads_what_changed_since() {
 /// Timings for what a reader of the most a design holds reads after one edit (W20), whole and
 /// cut to a page, and for an edit sent against the rev before it, which applies on top (W6),
 /// beside the same edit sent without a base_rev.
-/// Run with `cargo test --release -p relay-core --test design_revs -- --ignored --nocapture`.
+/// Run with `cargo test --release -p relay-core --test all -- design_revs:: --ignored --nocapture`.
 #[test]
 #[ignore]
 fn measure_since_rev_and_base_rev_on_5000() {

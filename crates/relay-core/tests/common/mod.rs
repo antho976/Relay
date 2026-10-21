@@ -1,5 +1,5 @@
-//! Helpers the engine's integration tests share (RA-671). Every file under `tests/` is its own
-//! crate and pulls these in with `mod common;`.
+//! Helpers the engine's integration tests share (RA-671). Every file under `tests/` pulls these
+//! in with `mod common;`, whether it is linked into `tests/all.rs` or is a crate of its own.
 //!
 //! Git is hermetic (RA-672): neither fixture git nor the in-process engine's reads global or
 //! system config, so a developer's `core.hooksPath`, `commit.gpgsign` or `init.templateDir`

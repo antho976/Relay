@@ -106,7 +106,7 @@ fn skip_checks_and_deletes() {
 /// What the check costs an agent's reply on a full design: 10 pages of 400 nodes (screens of
 /// cards with a title, a caption and a badge), a colour edit that reaches every page. Prints the
 /// median of an agent's apply and of the person's (unchecked) one; run with
-/// `cargo test -p relay-core --test design_contrast -- --ignored --nocapture`.
+/// `cargo test -p relay-core --test all -- design_contrast:: --ignored --nocapture`.
 #[test]
 #[ignore]
 fn the_check_costs_on_a_full_design() {

@@ -1,0 +1,6 @@
+base round1: exit 0, wall 43.6 s, cpu 74.9 s, peak rss sum/single MB 5706 1226, linked 68 exes 12.5 GB, load 44.5
+merged round1: exit 0, wall 12.3 s, cpu 18.2 s, peak rss sum/single MB 4704 1082, linked 9 exes 1.7 GB, load 39.1
+base round2: exit 0, wall 44.0 s, cpu 75.9 s, peak rss sum/single MB 5184 1173, linked 68 exes 12.5 GB, load 23.8
+merged round2: exit 0, wall 13.0 s, cpu 18.0 s, peak rss sum/single MB 5384 1226, linked 9 exes 1.7 GB, load 19.9
+base round3: exit 0, wall 51.7 s, cpu 74.3 s, peak rss sum/single MB 4941 1154, linked 68 exes 12.5 GB, load 13.9
+merged round3: exit 0, wall 17.0 s, cpu 17.5 s, peak rss sum/single MB 5101 1157, linked 9 exes 1.7 GB, load 13.6
