@@ -16,7 +16,7 @@ use super::layout::{Measure, Placed, STICKY_PAD};
 use super::motion::{posed_settled, Clocks};
 use super::scene::Scene;
 use super::shapes;
-use relay_bus::design::{parse_color, Layout, Node, NodeKind, Shadow, TextAlign};
+use relay_bus::design::{parse_color, Layout, Node, NodeKind, Shadow, Sizing, TextAlign};
 use relay_bus::ops::design::{RenderBoxes, RenderIssue, RenderRect, RENDER_BOXES_MAX};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::{json, Value};
@@ -274,9 +274,10 @@ fn cell(v: f64) -> i64 {
 ///   text where its words are (and its box when it has a fill), a sticky its paper and words.
 /// - `clipped`: a free child of a clipping frame (any child of one without layout, an absolute
 ///   one of one with layout) whose box passes the frame's box, except along its scroll axis; any
-///   child, inside it, whose outer shadow still shows past an edge it stands clear of
-///   (`shadow_cut`: a glow squared off); and any child of one that does not scroll that paints
-///   into the cut of its rounded corner (`cut_by_corner`).
+///   child, inside it, whose outer shadow still shows past an edge it stands clear of, or is
+///   flush with where the frame only wraps it (`shadow_cut`: a glow squared off); and any child
+///   of one that does not scroll that paints into the cut of a rounded corner it is not flush
+///   with (`cut_by_corner`; full-bleed content is rounded with its frame on purpose).
 /// - `contrast`: a text's or a labelled shape's words, or one of its runs in its own colour,
 ///   below 4.5:1 (3:1 at 24 px, or 18.66 px from weight 700) on what is drawn under their
 ///   centre. Both colours there are worked out as the painter lays them down: each node's
@@ -480,15 +481,21 @@ impl Paint<'_> {
                     continue;
                 }
                 // Its box inside, its shadow squared off by an edge it stands clear of.
-                if let Some((side, past, gap)) = shadow_cut(n, &nr, edges, across, down) {
-                    let message = format!("{}'s shadow is cut off by {parent}'s {side} edge, which clips: it shows {} px past it, {} px from {}; give it room or set clip false on {parent}", n.id, fmt(past), fmt(gap), n.id);
+                if let Some((side, past, gap)) = shadow_cut(n, &nr, p, edges, across, down) {
+                    let room = if gap > SLACK { format!("{} px from {}", fmt(gap), n.id) } else { format!("flush with {}, which {parent} wraps", n.id) };
+                    let message = format!("{}'s shadow is cut off by {parent}'s {side} edge, which clips: it shows {} px past it, {room}; give it room or set clip false on {parent}", n.id, fmt(past));
                     found.push(self.found(Code::Clipped, &n.id, parent, message));
                     continue;
                 }
                 // A corner of what it paints in the rounded corner's cut, of a frame that does not scroll.
                 if !(across || down) {
-                    if let Some((corner, depth, radius)) = cut_by_corner(n, &nr, &pr, corners) {
-                        let message = format!("{} is cut {} px by {parent}'s rounded {corner} corner (radius {}), which clips: move it in or round its own corner", n.id, fmt(depth), fmt(radius));
+                    if let Some((cut, depth, radius)) = cut_by_corner(n, &nr, &pr, corners) {
+                        let which = match cut.as_slice() {
+                            [one] => format!("rounded {one} corner"),
+                            [rest @ .., last] => format!("rounded {} and {last} corners", rest.join(", ")),
+                            [] => continue,
+                        };
+                        let message = format!("{} is cut {} px by {parent}'s {which} (radius {}), which clips: move it in or round its own corner", n.id, fmt(depth), fmt(radius));
                         found.push(self.found(Code::Clipped, &n.id, parent, message));
                     }
                 }
@@ -749,20 +756,24 @@ fn shadow_reach(s: &Shadow) -> Option<[f64; 4]> {
     Some([out - s.x, out + s.x, out - s.y, out + s.y])
 }
 
-/// The side of a clipping frame whose edge (`edges`: left, right, top, bottom) squares off the
-/// outer shadows of `n` drawn at `r`, with how far they show past it and how far `r` stands from
-/// it: only along a side `r` stands clear of (a bar flush with the frame casts past it on
-/// purpose), never along the axis the frame scrolls, and only for a cut past half a px.
-fn shadow_cut(n: &Node, r: &Rect, edges: [f64; 4], across: bool, down: bool) -> Option<(&'static str, f64, f64)> {
+/// The side of clipping frame `frame` whose edge (`edges`: left, right, top, bottom) squares off
+/// the outer shadows of `n` drawn at `r`, with how far they show past it and how far `r` stands
+/// from it, for a cut past half a px and never along the axis the frame scrolls. Along a side `r`
+/// is flush with, only where the frame wraps `n` there (it hugs along that axis, or is `n`'s
+/// own box): a glowing button in a row that hugs it is cut, a bar flush with its screen casts
+/// past the screen's edge on purpose.
+fn shadow_cut(n: &Node, r: &Rect, frame: &Node, edges: [f64; 4], across: bool, down: bool) -> Option<(&'static str, f64, f64)> {
     let gaps = [r.x - edges[0], edges[1] - r.right(), r.y - edges[2], edges[3] - r.bottom()];
     let sides = ["left", "right", "top", "bottom"];
+    let snug = gaps.iter().all(|g| g.abs() <= SLACK);
+    let wraps = |k: usize| snug || if k < 2 { frame.w_sizing == Some(Sizing::Hug) } else { frame.h_sizing == Some(Sizing::Hug) };
     let mut worst: Option<(&'static str, f64, f64)> = None;
     for s in shapes::effective_shadows(n).iter().filter(|s| !s.inset) {
         let Some(reach) = shadow_reach(s) else { continue };
         for k in 0..4 {
             let scrolls = if k < 2 { across } else { down };
-            let (gap, past) = (gaps[k], reach[k] - gaps[k]);
-            if scrolls || gap <= SLACK || past <= SLACK {
+            let (gap, past) = (gaps[k], reach[k] - gaps[k].max(0.0));
+            if scrolls || (gap <= SLACK && !wraps(k)) || past <= SLACK {
                 continue;
             }
             if worst.is_none_or(|w| past > w.1) {
@@ -773,12 +784,13 @@ fn shadow_cut(n: &Node, r: &Rect, edges: [f64; 4], across: bool, down: bool) -> 
     worst
 }
 
-/// How deep the rounded corner of a clipping frame drawn at `frame` with `radii` (top-left,
-/// top-right, bottom-right, bottom-left) cuts what `n` paints at `r`, at the corner it cuts most:
-/// its name, the depth past the corner's curve and its radius. Only for what paints out to its
-/// box's corners (a box with a fill, border or picture, an ellipse as the circle in its box), and
-/// none under half a px.
-fn cut_by_corner(n: &Node, r: &Rect, frame: &Rect, radii: [f64; 4]) -> Option<(&'static str, f64, f64)> {
+/// The rounded corners of a clipping frame drawn at `frame` with `radii` (top-left, top-right,
+/// bottom-right, bottom-left) that cut what `n` paints at `r`, in that order, with the deepest
+/// cut past a corner's curve and that corner's radius. Only for what paints out to its box's
+/// corners (a box with a fill, border or picture, an ellipse as the circle in its box), never at
+/// a corner `r` is flush with both edges of (full-bleed content is rounded with its frame on
+/// purpose), and none under half a px.
+fn cut_by_corner(n: &Node, r: &Rect, frame: &Rect, radii: [f64; 4]) -> Option<(Vec<&'static str>, f64, f64)> {
     let paints = n.stroke.is_some() || n.gradient.is_some() || fill_of(n).and_then(|f| parse_color(&f)).is_some_and(|c| c[3] > 0);
     let own = match n.kind {
         NodeKind::Rect | NodeKind::Frame | NodeKind::Sticky if paints => shapes::corner_radii(n, r),
@@ -787,20 +799,26 @@ fn cut_by_corner(n: &Node, r: &Rect, frame: &Rect, radii: [f64; 4]) -> Option<(&
         _ => return None,
     };
     let corners = [("top-left", -1.0, -1.0), ("top-right", 1.0, -1.0), ("bottom-right", 1.0, 1.0), ("bottom-left", -1.0, 1.0)];
-    corners
+    let cuts: Vec<(&'static str, f64, f64)> = corners
         .iter()
         .zip(radii.iter().zip(own))
         .filter(|(_, (c, _))| **c > 0.0)
         .filter_map(|(&(name, sx, sy), (&c, mine))| {
             let edge = |s: f64, lo: f64, hi: f64| if s < 0.0 { lo } else { hi };
+            // Flush with (or past) both of the frame's edges there: rounded with it on purpose.
+            let flush = (edge(sx, r.x, r.right()) - edge(sx, frame.x, frame.right())) * sx >= -SLACK
+                && (edge(sy, r.y, r.bottom()) - edge(sy, frame.y, frame.bottom())) * sy >= -SLACK;
             let centre = (edge(sx, frame.x, frame.right()) - sx * c, edge(sy, frame.y, frame.bottom()) - sy * c);
             let at = (edge(sx, r.x, r.right()) - sx * mine, edge(sy, r.y, r.bottom()) - sy * mine);
             // Only where it reaches into the corner's square, outward of the curve's centre both ways.
             let (dx, dy) = ((at.0 - centre.0) * sx, (at.1 - centre.1) * sy);
             let depth = dx.hypot(dy) + mine - c;
-            (dx > 0.0 && dy > 0.0 && depth > SLACK).then_some((name, depth, c))
+            (!flush && dx > 0.0 && dy > 0.0 && depth > SLACK).then_some((name, depth, c))
         })
-        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .collect();
+    // The deepest cut, the first of equal ones.
+    let &(_, depth, radius) = cuts.iter().reduce(|a, b| if b.1 > a.1 { b } else { a })?;
+    Some((cuts.iter().map(|c| c.0).collect(), depth, radius))
 }
 
 /// A colour as `#RRGGBB`, or `#RRGGBBAA` when it is not opaque.
@@ -1069,6 +1087,49 @@ mod tests {
         s.node_mut("card").unwrap().scroll = Some(Scroll::Y);
         let p = place(&s, "p1", &Mono);
         assert!(all_issues(&s, &p).0.is_empty(), "what scrolls past a round corner is meant to");
+    }
+
+    /// Full-bleed content rounded with its frame is meant: a photo filling a rounded card, its
+    /// colour and shade layers over it, and a sidebar flush in a rounded window. An inset layer
+    /// is cut at all four corners alike, and said so.
+    #[test]
+    fn full_bleed_content_is_rounded_on_purpose() {
+        let mut card = node("card", Some("p1"), K::Frame, [0.0, 0.0, 300.0, 200.0]);
+        card.radius = Some(24.0);
+        let mut photo = node("photo", Some("card"), K::Image, [0.0, 0.0, 300.0, 160.0]);
+        photo.src = Some("a.png".into());
+        let mut tint = node("tint", Some("card"), K::Rect, [0.0, 0.0, 300.0, 160.0]);
+        tint.fill = Some("#4C7DFF33".into());
+        let mut shade = node("shade", Some("card"), K::Rect, [0.0, 100.0, 300.0, 100.0]);
+        shade.fill = Some("#00000066".into());
+        let mut window = node("window", Some("p1"), K::Frame, [400.0, 0.0, 600.0, 400.0]);
+        window.radius = Some(12.0);
+        let mut sidebar = node("sidebar", Some("window"), K::Rect, [0.0, 0.0, 180.0, 400.0]);
+        sidebar.fill = Some("#1B2230".into());
+        let nodes = vec![card, photo, tint, shade, window, sidebar];
+        let (s, p) = page(nodes.clone());
+        assert!(all_issues(&s, &p).0.iter().all(|i| i.code != "clipped"), "{:?}", all_issues(&s, &p).0);
+        let mut inset = node("inset", Some("window"), K::Rect, [2.0, 2.0, 596.0, 396.0]);
+        inset.fill = Some("#222222".into());
+        let (s, p) = page(nodes.into_iter().chain([inset]).collect());
+        let found = all_issues(&s, &p);
+        let cut: Vec<&RenderIssue> = found.0.iter().filter(|i| i.code == "clipped").collect();
+        assert_eq!(cut.len(), 1, "{found:?}");
+        assert!(cut[0].message.contains("by window's rounded top-left, top-right, bottom-right and bottom-left corners (radius 12)"), "{}", cut[0].message);
+    }
+
+    /// A glowing button in a row that hugs it: flush on every side, its glow cut flat all round.
+    #[test]
+    fn a_glow_in_a_frame_that_hugs_it_is_cut() {
+        let mut row = frame("row", "p1", [20.0, 20.0, 0.0, 0.0], Layout::Row);
+        (row.w_sizing, row.h_sizing) = (Some(Sizing::Hug), Some(Sizing::Hug));
+        let mut pause = node("pause", Some("row"), K::Ellipse, [0.0, 0.0, 40.0, 40.0]);
+        pause.fill = Some("#4AF0FF".into());
+        pause.shadow = Some(Shadow { x: 0.0, y: 0.0, blur: 16.0, spread: 0.0, color: "#4AF0FF99".into(), inset: false });
+        let (s, p) = page(vec![row, pause]);
+        let found = all_issues(&s, &p);
+        assert_eq!(codes(&found), [("clipped", vec!["pause", "row"])]);
+        assert!(found.0[0].message.contains("it shows 11.27 px past it, flush with pause, which row wraps"), "{}", found.0[0].message);
     }
 
     #[test]

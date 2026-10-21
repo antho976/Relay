@@ -24,7 +24,7 @@ pub fn parts(frame: &Node) -> Vec<Node> {
     if room.w < 8.0 || room.h < 8.0 {
         return Vec::new();
     }
-    let mut draw = Draw { frame: &frame.id, chart, out: Vec::new(), size: chart.font_size.unwrap_or(12.0) };
+    let mut draw = Draw { frame: &frame.id, chart, out: Vec::new(), size: chart.font_size.unwrap_or(12.0), bounds: room };
     let legend = chart.legend.unwrap_or(chart.series.len() > 1 || !chart.kind.has_axes());
     let room = if legend { draw.legend(room) } else { room };
     match chart.kind {
@@ -51,6 +51,17 @@ struct Draw<'a> {
     chart: &'a Chart,
     out: Vec<Node>,
     size: f64,
+    /// Inside the frame's padding: no word is set past it.
+    bounds: Room,
+}
+
+/// How a value is written: in full (`$1,240 kcal`), without the words after it (`$1,240`), or
+/// short (`$1.2k`), as a dense chart needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Form {
+    Full,
+    Bare,
+    Short,
 }
 
 /// The value axis: its ends, and the steps labelled along it.
@@ -79,9 +90,12 @@ impl Draw<'_> {
         self.out.last_mut().expect("just pushed")
     }
 
-    /// A one-line text `words` in a box `w` wide at (`x`, `y`), aligned as `align` says.
+    /// A one-line text `words` in a box `w` wide at (`x`, `y`), aligned as `align` says, moved
+    /// (and narrowed, past the frame's width) to stay inside the frame's padding.
     fn words(&mut self, part: String, words: &str, x: f64, y: f64, w: f64, align: TextAlign) -> &mut Node {
-        let (size, color) = (self.size, self.chart.color.clone());
+        let (size, color, b) = (self.size, self.chart.color.clone(), self.bounds);
+        let w = w.min(b.w);
+        let x = x.clamp(b.x, b.x + b.w - w);
         let n = self.node(NodeKind::Text, part, [x, y, w, 0.0]);
         n.text = Some(words.to_string());
         (n.font_size, n.align, n.max_lines, n.color) = (Some(size), Some(align), Some(1), color);
@@ -155,36 +169,87 @@ impl Draw<'_> {
         Axis { lo, hi, steps, decimals }
     }
 
-    /// The room a value written by its bar or point takes: the widest of them as estimated, with
-    /// room to spare, and at least 48.
-    fn value_room(&self) -> f64 {
+    /// The values written by bars or points: each, and a stack's totals.
+    fn shown(&self) -> Vec<f64> {
         let c = self.chart;
-        if c.values != Some(true) {
-            return 48.0;
-        }
         let mut shown: Vec<f64> = c.series.iter().flat_map(|s| s.values.iter().copied()).collect();
         if c.stacked == Some(true) {
             shown.extend((0..c.labels.len()).map(|i| c.series.iter().map(|s| s.values[i]).sum::<f64>()));
         }
-        let words = |v: f64| self.value(v, c.decimals.map_or(decimals_of_value(v), usize::from));
-        shown.into_iter().map(|v| estimate(&words(v), self.size)).fold(48.0, f64::max)
+        shown
     }
 
-    fn value(&self, v: f64, decimals: usize) -> String {
+    /// The room a value written past a bar lying across takes: the widest of them as estimated,
+    /// with room to spare, and at least 48.
+    fn value_room(&self) -> f64 {
+        if self.chart.values != Some(true) {
+            return 48.0;
+        }
+        self.shown().into_iter().map(|v| estimate(&self.written(v, Form::Full), self.size)).fold(48.0, f64::max)
+    }
+
+    /// How the values written over bars or points `slot` px apart are set so the widest fits its
+    /// slot: in full, then without the words after them, then short, each at the chart's size or
+    /// a point at a time smaller down to three quarters of it (and not under 8); short at that
+    /// smallest size when nothing fits.
+    fn value_fit(&self, slot: f64) -> (Form, f64) {
+        let shown = self.shown();
+        let smallest = (self.size * 0.75).floor().max(8.0).min(self.size);
+        for form in self.forms(&shown) {
+            let mut size = self.size;
+            while size >= smallest {
+                if shown.iter().all(|v| estimate(&self.written(*v, form), size) <= slot) {
+                    return (form, size);
+                }
+                size -= 1.0;
+            }
+        }
+        (*self.forms(&shown).last().unwrap_or(&Form::Full), smallest)
+    }
+
+    /// The forms worth trying for `values`, fullest first: without the words after them only when
+    /// there are some, short only when a value is in the thousands.
+    fn forms(&self, values: &[f64]) -> Vec<Form> {
+        let mut forms = vec![Form::Full];
+        if self.chart.suffix.as_deref().is_some_and(|s| !s.is_empty()) {
+            forms.push(Form::Bare);
+        }
+        if values.iter().any(|v| v.abs() >= 1000.0) {
+            forms.push(Form::Short);
+        }
+        forms
+    }
+
+    /// Value `v` written as `form`, with the chart's decimals or its own (at most 2).
+    fn written(&self, v: f64, form: Form) -> String {
+        let decimals = self.chart.decimals.map_or(decimals_of_value(v), usize::from);
+        self.value_as(v, decimals, form)
+    }
+
+    fn value_as(&self, v: f64, decimals: usize, form: Form) -> String {
         let c = self.chart;
-        format!("{}{}{}", c.prefix.as_deref().unwrap_or(""), grouped(v, decimals), c.suffix.as_deref().unwrap_or(""))
+        let prefix = c.prefix.as_deref().unwrap_or("");
+        match form {
+            Form::Full => format!("{prefix}{}{}", grouped(v, decimals), c.suffix.as_deref().unwrap_or("")),
+            Form::Bare => format!("{prefix}{}", grouped(v, decimals)),
+            Form::Short => format!("{prefix}{}", short(v, decimals)),
+        }
     }
 
     /// A bar, line or area chart with labels along the bottom and values up the left.
     fn axes(&mut self, room: Room) {
         let axis = self.axis();
         let lh = self.line_h();
-        let gutter = axis.steps.iter().map(|v| estimate(&self.value(*v, axis.decimals), self.size)).fold(0.0, f64::max);
-        let gutter = if axis.steps.is_empty() { 0.0 } else { (gutter + 8.0).min(room.w * 0.4) };
+        // The steps' words take at most a quarter of the width when they can: in full, else
+        // without the words after them, else short.
+        let width = |form: Form| axis.steps.iter().map(|v| estimate(&self.value_as(*v, axis.decimals, form), self.size)).fold(0.0, f64::max) + 8.0;
+        let forms = self.forms(&axis.steps);
+        let form = forms.iter().copied().find(|f| width(*f) <= room.w * 0.25).unwrap_or(*forms.last().unwrap_or(&Form::Full));
+        let gutter = if axis.steps.is_empty() { 0.0 } else { width(form).min(room.w * 0.4) };
         let top = if self.chart.values == Some(true) { lh + 2.0 } else { lh / 2.0 };
         let plot = Room { x: room.x + gutter, y: room.y + top, w: room.w - gutter, h: (room.h - top - lh - 6.0).max(1.0) };
         let y_of = |v: f64| plot.y + plot.h * (1.0 - axis.at(v));
-        self.grid(&axis, |v| (plot.x, y_of(v), plot.w, 0.0), |d, k, v, label| {
+        self.grid(&axis, form, |v| (plot.x, y_of(v), plot.w, 0.0), |d, k, v, label| {
             d.words(format!("tick-{k}"), label, room.x, y_of(v) - lh / 2.0, gutter - 8.0, TextAlign::Right);
         });
         let n = self.chart.labels.len();
@@ -209,7 +274,7 @@ impl Draw<'_> {
         let right = if self.chart.values == Some(true) { self.value_room() + 4.0 } else { 12.0 };
         let plot = Room { x: room.x + gutter, y: room.y, w: (room.w - gutter - right).max(1.0), h: (room.h - lh - 6.0).max(1.0) };
         let x_of = |v: f64| plot.x + plot.w * axis.at(v);
-        self.grid(&axis, |v| (x_of(v), plot.y, 0.0, plot.h), |d, k, v, label| {
+        self.grid(&axis, Form::Full, |v| (x_of(v), plot.y, 0.0, plot.h), |d, k, v, label| {
             // Centred under its step, unless that would pass an end of the room: then flush with it.
             let x = x_of(v);
             let (at, align) = if x - 40.0 < room.x {
@@ -232,7 +297,7 @@ impl Draw<'_> {
 
     /// A line at each step of `axis` (`at` gives its start and its length across or down) and its
     /// label (`label`), unless the chart has no grid.
-    fn grid(&mut self, axis: &Axis, at: impl Fn(f64) -> (f64, f64, f64, f64), label: impl Fn(&mut Self, usize, f64, &str)) {
+    fn grid(&mut self, axis: &Axis, form: Form, at: impl Fn(f64) -> (f64, f64, f64, f64), label: impl Fn(&mut Self, usize, f64, &str)) {
         let grid = self.chart.grid != Some(false);
         let color = self.chart.grid_color.clone().unwrap_or_else(|| GRID.to_string());
         for (k, v) in axis.steps.iter().enumerate() {
@@ -242,7 +307,7 @@ impl Draw<'_> {
                 line.points = Some(vec![[0.0, 0.0], [round(w), round(h)]]);
                 (line.stroke, line.stroke_width) = (Some(color.clone()), Some(1.0));
             }
-            let words = self.value(*v, axis.decimals);
+            let words = self.value_as(*v, axis.decimals, form);
             label(self, k, *v, &words);
         }
     }
@@ -257,6 +322,9 @@ impl Draw<'_> {
         let thick = if stacked { group } else { group / m as f64 };
         let zero = axis.at(0.0_f64.clamp(axis.lo, axis.hi));
         let (lh, room) = (self.line_h(), self.value_room());
+        // Standing up, each value has its bar's share of the label's room.
+        let slot = if stacked { band } else { band / m as f64 };
+        let (form, size) = if across { (Form::Full, self.size) } else { self.value_fit(slot) };
         for i in 0..c.labels.len() {
             let (mut up, mut down) = (0.0_f64, 0.0_f64);
             for j in 0..m {
@@ -290,16 +358,16 @@ impl Draw<'_> {
                 (bar.fill, bar.radii) = (Some(color), Some(radii));
                 if c.values == Some(true) && (!stacked || j + 1 == m) {
                     let shown = if stacked { up + down } else { v };
-                    let words = self.value(shown, self.chart.decimals.map_or(decimals_of_value(shown), usize::from));
+                    let words = self.written(shown, form);
                     let [x, y, w, h] = rect;
                     if across {
                         let end = if v >= 0.0 { x + w + 4.0 } else { x - 4.0 - room };
                         let align = if v >= 0.0 { TextAlign::Left } else { TextAlign::Right };
                         self.words(format!("value-{j}-{i}"), &words, end, y + h / 2.0 - lh / 2.0, room, align);
                     } else {
-                        let wide = thick.max(room);
+                        let wide = slot.max(estimate(&words, size));
                         let at = if v >= 0.0 { y - lh - 2.0 } else { y + h + 2.0 };
-                        self.words(format!("value-{j}-{i}"), &words, x + thick / 2.0 - wide / 2.0, at, wide, TextAlign::Center);
+                        self.words(format!("value-{j}-{i}"), &words, x + thick / 2.0 - wide / 2.0, at, wide, TextAlign::Center).font_size = Some(size);
                     }
                 }
             }
@@ -311,7 +379,8 @@ impl Draw<'_> {
     fn lines(&mut self, axis: &Axis, plot: Room, band: f64) {
         let c = self.chart;
         let base = plot.y + plot.h * (1.0 - axis.at(0.0_f64.clamp(axis.lo, axis.hi)));
-        let (lh, room) = (self.line_h(), self.value_room());
+        let lh = self.line_h();
+        let (form, size) = self.value_fit(band);
         for (j, s) in c.series.iter().enumerate() {
             let color = c.series_color(j);
             let points: Vec<[f64; 2]> = s.values.iter().enumerate()
@@ -341,9 +410,9 @@ impl Draw<'_> {
                 }
                 if c.values == Some(true) {
                     let v = s.values[i];
-                    let words = self.value(v, c.decimals.map_or(decimals_of_value(v), usize::from));
-                    let wide = band.max(room);
-                    self.words(format!("value-{j}-{i}"), &words, x - wide / 2.0, y - lh - 4.0, wide, TextAlign::Center);
+                    let words = self.written(v, form);
+                    let wide = band.max(estimate(&words, size));
+                    self.words(format!("value-{j}-{i}"), &words, x - wide / 2.0, y - lh - 4.0, wide, TextAlign::Center).font_size = Some(size);
                 }
             }
         }
@@ -437,6 +506,22 @@ fn grouped(v: f64, decimals: usize) -> String {
     if v < 0.0 && !zero { format!("-{out}") } else { out }
 }
 
+/// `v` short, as a dense chart writes it: in thousands, millions or billions with a decimal when
+/// it has fewer than three figures (`7.3k`, `12k`, `1.2M`), else with `decimals`.
+fn short(v: f64, decimals: usize) -> String {
+    let a = v.abs();
+    let (n, unit) = match a {
+        a if a >= 1e9 => (v / 1e9, "B"),
+        a if a >= 1e6 => (v / 1e6, "M"),
+        a if a >= 1e3 => (v / 1e3, "k"),
+        _ => return grouped(v, decimals),
+    };
+    // Halves round away from zero, as people round: 7,250 is 7.3k.
+    let tenths = (n * 10.0).round() / 10.0;
+    let text = if tenths.abs() < 100.0 { format!("{tenths:.1}") } else { format!("{:.0}", n.round()) };
+    format!("{}{unit}", text.strip_suffix(".0").unwrap_or(&text))
+}
+
 /// About how wide `words` are at `size` px, with room to spare: 4 px over the per-character
 /// guess, which short words with wide capitals ("Mon" at 12 px) otherwise outgrow and are cut
 /// with an ellipsis.
@@ -492,6 +577,34 @@ mod tests {
         assert!(mar.y > top.y, "under the round top");
         assert!(parts.iter().all(|n| n.id != "spend.bar-0-3"), "a 0 draws no bar");
         assert!(parts.iter().all(|n| !n.id.contains("key-")), "one series, no legend");
+    }
+
+    /// Seven days of "7,250 kcal" over bars in 220 to 300 px: the values are set smaller,
+    /// without their unit or short until none runs into the next, and every word stays inside the
+    /// frame. A line chart with no padding keeps its end values inside too.
+    #[test]
+    fn dense_values_fit_their_bars() {
+        let kcal = json!([{"name": "Burned", "values": [7250, 6890, 7410, 5980, 7020, 8130, 6640]}]);
+        for w in [220.0, 260.0, 300.0] {
+            for kind in ["bar", "line"] {
+                let chart = json!({"kind": kind, "values": true, "suffix": " kcal", "labels": ["M", "T", "W", "T", "F", "S", "S"], "series": kcal});
+                let parts = parts(&frame(chart, w, 180.0));
+                let values: Vec<&Node> = (0..7).map(|i| part(&parts, &format!("value-0-{i}"))).collect();
+                for pair in values.windows(2) {
+                    let (a, b) = (pair[0], pair[1]);
+                    let half = |n: &Node| (estimate(n.text.as_deref().unwrap(), n.font_size.unwrap()) - 4.0) / 2.0;
+                    let gap = (b.x + b.w / 2.0) - (a.x + a.w / 2.0) - half(a) - half(b);
+                    assert!(gap >= 0.0, "{kind} {w}: {} {:?} and {} {:?} overlap by {}", a.id, a.text, b.id, b.text, -gap);
+                }
+                for n in parts.iter().filter(|n| n.kind == NodeKind::Text) {
+                    assert!(n.x >= 0.0 && n.x + n.w <= w, "{kind} {w}: {} from {} to {}", n.id, n.x, n.x + n.w);
+                }
+            }
+        }
+        // A roomy chart keeps them whole.
+        let roomy = parts(&frame(json!({"kind": "bar", "values": true, "suffix": " kcal", "labels": ["M", "T"], "series": [{"values": [7250, 6890]}]}), 480.0, 180.0));
+        assert_eq!((part(&roomy, "value-0-0").text.as_deref(), part(&roomy, "value-0-0").font_size), (Some("7,250 kcal"), Some(12.0)));
+        assert_eq!((short(7250.0, 0), short(12_000.0, 0), short(1_250_000.0, 0), short(-950.0, 0), short(150_000.0, 0)), ("7.3k".into(), "12k".into(), "1.3M".into(), "-950".into(), "150k".into()));
     }
 
     /// A bar lying across leaves room past its end for its value, however long it is written:
