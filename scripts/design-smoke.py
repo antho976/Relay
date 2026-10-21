@@ -40,7 +40,8 @@ Shots (default all):
 - panel-drag: real pointer and keys through KWin's fake input: the agent panel resized from its
   edges and corners and moved by its head, each to where the hand went, then its text zoomed;
 - pages: real pointer input on the pages list: a page hidden by its eye, shown again from the
-  Hidden fold, and another dragged to the top; the engine keeps the order.
+  Hidden fold, and another dragged to the top; the engine keeps the order;
+- tabs: labels in spaced capitals that a hugging column stretches stay on one line (design.render).
 
 Each board opens its design by id (RELAY_SMOKE_DESIGN_ID), not as the gallery's first card.
 Needs target/debug/relay and target/debug/relay-native (cargo build -p relay-cli -p
@@ -55,7 +56,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / ".impeccable/review"; OUT.mkdir(parents=True, exist_ok=True)
 ALL = ["gallery", "board", "board-select", "board-narrow", "edit", "script", "agent", "agent-undo", "agent-stale",
-       "agent-delete", "media", "shapes", "more", "reuse", "motion", "render", "glass", "pictures", "perf", "panel", "panel-chat", "panel-drag", "pages"]
+       "agent-delete", "media", "shapes", "more", "reuse", "motion", "render", "glass", "pictures", "perf", "panel", "panel-chat", "panel-drag", "pages", "tabs"]
 SHOTS = sys.argv[1:] or ALL
 unknown = [s for s in SHOTS if s not in ALL + ["gallery-narrow"]]
 if unknown:
@@ -506,6 +507,21 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                 text("title", "card", "Hello render", font_size=24),
                 node("wide", "card", "rect", w=400, h=40, fill="#4C9DFF"),
             ])[0]
+        if "tabs" in SHOTS:
+            # A selected tab as an agent drew one: a hugging column that stretches its label and
+            # an underline that fills it, the label in spaced capitals ("VOLUM-E" broke here).
+            cases = [("Volume", 2), ("Strength", 2), ("Days", 2), ("Body", 2.5), ("Weekly volume", 3)]
+            def tabs(page):
+                ops = []
+                for i, (words, ls) in enumerate(cases):
+                    look = dict(font="Noto Sans Mono", font_size=12, letter_spacing=ls, text_case="upper")
+                    ops += [node(f"tab{i}", page, "frame", x=i * 220, y=0, w_sizing="hug", h_sizing="hug", layout="column", gap=8, items="stretch"),
+                            text(f"label{i}", f"tab{i}", words, **look),
+                            node(f"line{i}", f"tab{i}", "rect", w_sizing="fill", h=2, fill="#E23D3D"),
+                            text(f"free{i}", page, words, x=i * 220, y=120, **look)]
+                return ops
+            designs["tabs"] = create("Tabs", tabs)[0]
+            designs["tabs-cases"] = cases
         if "glass" in SHOTS:
             designs["glass"] = create("Glass", lambda page: [
                 {"op": "style", "name": "glass", "set": {"fill": "#FFFFFF14", "backdrop_blur": 12, "stroke": "#FF0000", "stroke_widths": [2, 0, 0, 0]}},
@@ -1161,6 +1177,28 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
             assert not any(n.get("hidden") for n in call("design.get", {"design_id": designs["pages"]})["nodes"] if n["kind"] == "page")
             print("PAGES_OK")
 
+        def shot_tabs(shot):
+            # Each stretched label is as tall as the same label standing free: one line.
+            got = {}
+            def renders(_wait_mark):
+                deadline = time.monotonic() + 30
+                while True:
+                    r = call("design.render", {"design_id": designs["tabs"], "png": False, "timeout_ms": 15000}, ok=False)
+                    if r.get("code") != "design.render.no_renderer" or time.monotonic() > deadline:
+                        break
+                    time.sleep(0.2)
+                got.update(r)
+            native(shot, "tabs", seconds=10, during=renders)
+            rows = {r[0]: r for r in got["boxes"]["rows"]}
+            broke = []
+            for i, (words, ls) in enumerate(designs["tabs-cases"]):
+                label, free, tab = rows[f"label{i}"], rows[f"free{i}"], rows[f"tab{i}"]
+                print("TAB", words, ls, "label h", label[6], "free h", free[6], "tab w", tab[5], "label w", label[5])
+                if label[6] != free[6]:
+                    broke.append(words)
+            assert not broke, ("a stretched label broke onto two lines", broke)
+            print("TABS_OK")
+
         def shot_panel_chat(shot):
             # As for Ask: the app's paste check sets the agent working until it is at its prompt
             # again, and a request sent meanwhile goes as mail, which the fixture does not read.
@@ -1194,7 +1232,7 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                  "agent-undo": shot_agent_undo, "agent-stale": shot_agent_stale, "agent-delete": shot_agent_delete,
                  "media": shot_media, "shapes": shot_shapes, "more": shot_more, "reuse": shot_reuse, "motion": shot_motion,
                  "render": shot_render, "glass": shot_glass, "pictures": shot_pictures, "perf": shot_perf,
-                 "panel": shot_panel, "panel-chat": shot_panel_chat, "panel-drag": shot_panel_drag, "pages": shot_pages}
+                 "panel": shot_panel, "panel-chat": shot_panel_chat, "panel-drag": shot_panel_drag, "pages": shot_pages, "tabs": shot_tabs}
         for shot in SHOTS:
             started = time.monotonic()
             try:
