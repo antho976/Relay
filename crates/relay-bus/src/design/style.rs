@@ -55,6 +55,27 @@ pub fn color_ref(text: &str) -> Option<&str> {
 /// from `card-2` as `card-3` is `card-3:text-14`). `None` when the result is longer than an id
 /// may be.
 pub fn copy_id(from: &str, to: &str, id: &str) -> Option<String> {
+    copy_id_renamed(from, to, id, None)
+}
+
+/// [`copy_id`] with a copy's `rename`: an id inside the copied node that one of its keys starts
+/// takes that key's value in its place ([`renamed`]); the copied node itself is `to`, and any
+/// other id follows [`copy_id`]'s rule.
+pub fn copy_id_renamed(from: &str, to: &str, id: &str, rename: Option<&std::collections::BTreeMap<String, String>>) -> Option<String> {
+    let swapped = (id != from).then(|| renamed(id, rename)).flatten();
+    if let Some(copied) = swapped {
+        return (copied.len() <= MAX_ID).then_some(copied);
+    }
+    plain_copy_id(from, to, id)
+}
+
+/// `id` with the longest key of `rename` it starts with swapped for that key's value.
+pub fn renamed(id: &str, rename: Option<&std::collections::BTreeMap<String, String>>) -> Option<String> {
+    let (key, value) = rename?.iter().filter(|(key, _)| id.starts_with(key.as_str())).max_by_key(|(key, _)| key.len())?;
+    Some(format!("{value}{}", &id[key.len()..]))
+}
+
+fn plain_copy_id(from: &str, to: &str, id: &str) -> Option<String> {
     let copied = if id == from {
         to.to_string()
     } else {

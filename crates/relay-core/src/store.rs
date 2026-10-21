@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 /// The schema version this build knows. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: i64 = 30;
+pub const SCHEMA_VERSION: i64 = 31;
 
 /// Numbered migrations; index 0 brings a fresh DB to `user_version = 1`.
 pub const MIGRATIONS: &[&str] = &[
@@ -491,6 +491,17 @@ pub const MIGRATIONS: &[&str] = &[
     ) WITHOUT ROWID;
     UPDATE designs SET bytes = (SELECT COALESCE(SUM(length(CAST(body AS BLOB)) + length(CAST(node_id AS BLOB))
       + COALESCE(length(CAST(parent_id AS BLOB)), 0) + 21), 0) FROM design_nodes WHERE design_nodes.design_id = designs.id);
+    "#,
+    // v31 - Relay's icon set (`design.icon.*`, BUS.md §10.18): outline icons an agent or the
+    // person saved, shared by every project's designs. An icon node that names one copies its
+    // path into its own `icon_path`, so a design never depends on a row here to draw. Keywords
+    // are one space-separated line.
+    r#"
+    CREATE TABLE design_icons (
+      name TEXT PRIMARY KEY, path TEXT NOT NULL, keywords TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL, updated_by TEXT NOT NULL,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    ) WITHOUT ROWID;
     "#,
 ];
 

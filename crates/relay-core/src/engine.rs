@@ -265,6 +265,9 @@ impl Unlocked<'_> {
     }
 }
 
+/// A reply's last step, run with nothing locked ([`Ctx::finish_reply`]).
+type FinishReply = Box<dyn FnOnce(&Engine, &mut Value) + Send + 'static>;
+
 pub struct Ctx<'a> {
     tx: &'a Transaction<'a>,
     engine: &'a Engine,
@@ -292,6 +295,8 @@ pub struct Ctx<'a> {
     audit_op: Option<String>,
     on_behalf_of: Option<Actor>,
     after_commit: Vec<Box<dyn FnOnce(Arc<Engine>) + Send + 'static>>,
+    /// [`Ctx::finish_reply`].
+    finish_reply: Option<FinishReply>,
     /// What the op's read/external phase produced, for handlers registered with
     /// [`Engine::register_staged`]. Taken once, by the matching `finish` closure.
     staged: Option<Box<dyn Any + Send>>,
@@ -360,6 +365,13 @@ impl<'a> Ctx<'a> {
     /// Run after the transaction commits (side effects that must not precede state).
     pub fn after_commit(&mut self, f: impl FnOnce(Arc<Engine>) + Send + 'static) {
         self.after_commit.push(Box::new(f));
+    }
+    /// Finish the reply once the transaction has committed and the store is released, before it
+    /// is sent: slow work that only adds to what the caller is told (design.apply's contrast
+    /// flags) and must not hold the lock. It may take the store for short reads. The audit row
+    /// keeps the reply as the handler returned it. Not run when the request fails.
+    pub fn finish_reply(&mut self, f: impl FnOnce(&Engine, &mut Value) + Send + 'static) {
+        self.finish_reply = Some(Box::new(f));
     }
     /// The thread whose agent sent this request (`peer::Peer::Thread`, through the socket door),
     /// else `None`: the person, the phone, a session, the engine itself.
@@ -454,11 +466,14 @@ impl<'a> Ctx<'a> {
         let prior_payload =
             std::mem::replace(&mut self.payload, std::borrow::Cow::Owned(payload.clone()));
         let prior_staged = std::mem::replace(&mut self.staged, staged);
+        // A nested op's reply is not the request's: what it would finish is dropped.
+        let prior_finish = self.finish_reply.take();
         self.op = entry.name;
         let result = handler(self, &payload);
         self.op = prior;
         self.payload = prior_payload;
         self.staged = prior_staged;
+        self.finish_reply = prior_finish;
         result
     }
 
@@ -730,6 +745,18 @@ impl Engine {
                 .map_err(|e| BusError::internal(format!("serializing {} result: {e}", O::NAME)))
         });
         self.handlers.insert(O::NAME, Handler { call });
+    }
+
+    /// One short read of the store for `op`, measured as a lock span: what work that runs with
+    /// nothing locked ([`Ctx::finish_reply`]) takes the store for.
+    pub fn read_store<T>(&self, op: &'static str, f: impl FnOnce(&rusqlite::Connection) -> Result<T, BusError>) -> Result<T, BusError> {
+        let mut span = LockSpan::opening(op);
+        let conn = self.store.lock();
+        span.acquired();
+        let out = f(&conn);
+        drop(conn);
+        span.finish();
+        out
     }
 
     /// Whether `op` is a query registered with [`Engine::register_unlocked`]: it takes the
@@ -1175,6 +1202,7 @@ impl Engine {
             audit_op: None,
             on_behalf_of: None,
             after_commit: staged_after,
+            finish_reply: None,
             staged,
             thread,
         };
@@ -1191,6 +1219,7 @@ impl Engine {
             audit_op,
             on_behalf_of,
             after_commit,
+            finish_reply,
             ..
         } = ctx;
         let audit_op = audit_op.as_deref().unwrap_or(entry.name);
@@ -1219,7 +1248,11 @@ impl Engine {
                 }
                 tx.commit().map_err(internal)?;
                 self.publish(conn, span, events, after_commit);
-                Ok(Response::ok(req.id, outcome?))
+                let mut result = outcome?;
+                if let Some(finish) = finish_reply {
+                    finish(self, &mut result);
+                }
+                Ok(Response::ok(req.id, result))
             }
             Err(err) => {
                 let outcome = Err(err.clone());

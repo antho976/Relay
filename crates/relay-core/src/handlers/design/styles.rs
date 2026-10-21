@@ -10,12 +10,12 @@
 use super::apply::Run;
 use super::{body_of, row_bytes};
 use crate::engine::IntoBus;
-use relay_bus::design::{copy_id, valid_id, Conflict, ConflictReason, Node, NodeKind, NodeOp, StyleError, Styles, MAX_NODES};
+use relay_bus::design::{copy_id_renamed, renamed, valid_id, Conflict, ConflictReason, Node, NodeKind, NodeOp, StyleError, Styles, MAX_NODES, MAX_RENAMES};
 use relay_bus::error::BusError;
 use relay_bus::ErrorKind;
 use rusqlite::params;
 use serde_json::{Map, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Most names a refusal of an unknown one lists in its hint.
 const HINT_NAMES: usize = 10;
@@ -210,8 +210,17 @@ impl Run<'_> {
     /// ends, and an end outside what is copied lets go where the stored boxes draw it, as the
     /// canvas's duplicate does; a page copies as a page. The undo deletes the copy.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn copy(&mut self, id: String, as_id: Option<String>, parent: Option<String>, index: Option<u32>, dx: f64, dy: f64)
-        -> Result<Option<String>, BusError> {
+    pub(super) fn copy(&mut self, id: String, as_id: Option<String>, parent: Option<String>, index: Option<u32>, dx: f64, dy: f64,
+        rename: Option<BTreeMap<String, String>>) -> Result<Option<String>, BusError> {
+        if let Some(rename) = &rename {
+            if !(1..=MAX_RENAMES).contains(&rename.len()) {
+                return Err(self.fail_on("rename", ErrorKind::Invalid, "design.node_invalid", format!("rename: 1 to {MAX_RENAMES} id starts")));
+            }
+            if let Some((from, to)) = rename.iter().find(|(from, to)| from.is_empty() || !valid_id(from) || !valid_id(to)) {
+                return Err(self.fail_on("rename", ErrorKind::Invalid, "design.node_invalid", format!("rename: {from:?} to {to:?}: each is the start of an id, 1 to 64 letters, digits, '-', '_', '.' or ':'")));
+            }
+        }
+        let rename = rename.as_ref();
         let Some(root) = self.row(&id)? else { return self.missing("no such node") };
         let page = root.kind == Ok(NodeKind::Page);
         // Where it goes: a page among the pages; anything else in `parent`, else beside the
@@ -253,12 +262,15 @@ impl Run<'_> {
                 return Err(self.fail_on("as", ErrorKind::Invalid, "design.node_invalid", format!("as: {new_root:?} is not an id: use 1 to 64 letters, digits, '-', '_', '.' or ':'")));
             }
             Some(new_root) => new_root,
-            None => self.assign(kind)?,
+            None => match renamed(&id, rename).filter(|to| valid_id(to)) {
+                Some(new_root) => new_root,
+                None => self.assign(kind)?,
+            },
         };
         let mut map: HashMap<&str, String> = HashMap::with_capacity(rows.len());
         let mut taken: HashMap<String, &str> = HashMap::with_capacity(rows.len());
         for node in &nodes {
-            let Some(new) = copy_id(&id, &new_root, &node.id) else {
+            let Some(new) = copy_id_renamed(&id, &new_root, &node.id, rename) else {
                 return Err(self.fail_on("as", ErrorKind::Invalid, "design.node_invalid", format!("the copy of {:?} would be over 64 characters", node.id))
                     .with_hint("use a shorter as"));
             };
@@ -272,7 +284,7 @@ impl Run<'_> {
                     self.skip(Conflict::new(Some(self.at as u32), new_root.clone(), ConflictReason::Exists));
                     self.skipped_adds.insert(new_root.clone());
                     for node in &nodes {
-                        if let Some(copy) = copy_id(&id, &new_root, &node.id) {
+                        if let Some(copy) = copy_id_renamed(&id, &new_root, &node.id, rename) {
                             self.skipped_adds.insert(copy);
                         }
                     }
@@ -342,6 +354,7 @@ impl Run<'_> {
                 self.parents.insert(node.id.clone(), node.parent.clone());
             }
         }
+        self.copy_ids.push((self.at, nodes.iter().map(|n| (n.id.clone(), map[n.id.as_str()].clone())).collect()));
         self.copied.insert(new_root.clone(), id);
         self.inverse.push(vec![NodeOp::Delete { id: new_root.clone() }]);
         Ok(Some(new_root))

@@ -262,7 +262,7 @@ fn a_v29_store_migrates_counted_and_dated() {
     v29_store(&path);
     let old: i64 = Connection::open(&path).unwrap().query_row("SELECT bytes FROM designs WHERE id = 5", [], |r| r.get(0)).unwrap();
     let store = Store::open(&path, false).unwrap();
-    assert_eq!(store.version().unwrap(), 30);
+    assert_eq!(store.version().unwrap(), relay_core::store::SCHEMA_VERSION, "through v30 to the latest");
     let conn = store.lock();
     let (rows, revs): (i64, i64) = conn.query_row("SELECT COUNT(*), MIN(rev) FROM design_nodes WHERE design_id = 5 AND rev = 7", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
     assert_eq!((rows, revs), (3, 7), "every row kept, at its design's rev");
@@ -350,4 +350,17 @@ fn motion_and_timeline_are_stored_checked_and_undone() {
     let refused = call(&e, "design.apply", json!({"design_id": id, "ops": [{"op": "update", "id": "r", "set": {"timeline": {"duration_ms": 1000}}}]}));
     assert_eq!(refused.error.unwrap().message, "ops[0] update \"r\": timeline: only a frame or a page keeps time");
     assert_eq!(rev(&e, id), at, "nothing applied");
+}
+
+/// v31 adds Relay's icon set, empty, beside a store's designs, which it leaves as they were.
+#[test]
+fn a_v30_store_gains_an_empty_icon_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("store.db");
+    v29_store(&path);
+    let store = Store::open(&path, false).unwrap();
+    let conn = store.lock();
+    let saved: i64 = conn.query_row("SELECT COUNT(*) FROM design_icons", [], |r| r.get(0)).unwrap();
+    let designs: i64 = conn.query_row("SELECT COUNT(*) FROM designs", [], |r| r.get(0)).unwrap();
+    assert_eq!((saved, designs > 0), (0, true));
 }

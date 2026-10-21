@@ -188,10 +188,12 @@ What it draws is what the PC draws at rest, by ports of the PC's rules rather th
 design (`apps/relay-android/core/.../core/design/`, drawn by `ui/code/DesignCanvas.kt`): auto
 layout in rows, columns and wraps, hugging text and stickies, pins, absolute children, min and max
 sizes and scrolling frames (each at its start); every kind (frames, groups, rectangles, ellipses with
-arcs, polygons and stars, lines and connectors in their routes, pen paths, stickies, icons, text with its runs, and
+arcs, polygons and stars, lines and connectors in their routes, pen paths, stickies, icons (a saved icon by
+the outline its node carries, `icon_path`), text with its runs, and
 pictures) with fills, linear, radial and conic gradients, strokes with dashes and ends, per-corner
 radii, inner and drop shadows, opacity, blend modes, rotation and flips; and a design's named colours
-and styles, resolved as the PC resolves them. Words are set by Compose in the fonts the app carries (Geist,
+and styles, resolved as the PC resolves them (`skip_checks` changes nothing drawn: it is for the
+PC's checks). Words are set by Compose in the fonts the app carries (Geist,
 Geist Mono, Sora, Fira Sans, Fira Sans Condensed, Fira Mono; any other family is the phone's sans
 serif), so a line may break a word earlier or later than on the PC. Pictures are read with
 `design.asset.get` in pieces of at most 3 MiB, kept on the phone (64 MiB, the least recently drawn

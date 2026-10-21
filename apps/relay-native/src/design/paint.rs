@@ -1040,14 +1040,16 @@ impl Painter {
 
     /// An icon from the set, scaled to its box and stroked in its colour.
     fn icon(&self, snap: &gtk::Snapshot, scene: &Scene, n: &Node, r: &Rect) {
-        let name = n.icon.as_deref().unwrap_or("");
+        // Its own outline (a saved icon's) first, else the built-in one it names; cached by the
+        // path data itself, so two names never share an entry.
+        let d = n.icon_path.as_deref().or_else(|| n.icon.as_deref().and_then(relay_client::design::icons::path)).unwrap_or("");
         let path = {
             let mut cache = self.icons.borrow_mut();
-            if !cache.contains_key(name) {
-                let parsed = relay_client::design::icons::path(name).and_then(|d| gsk::Path::parse(d).ok());
-                cache.insert(name.to_string(), parsed);
+            if !cache.contains_key(d) {
+                let parsed = (!d.is_empty()).then(|| gsk::Path::parse(d).ok()).flatten();
+                cache.insert(d.to_string(), parsed);
             }
-            cache.get(name).cloned().flatten()
+            cache.get(d).cloned().flatten()
         };
         let color = rgba(&n.stroke.clone().unwrap_or_else(|| text_color(scene, n)));
         let Some(path) = path else {

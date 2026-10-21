@@ -21,9 +21,9 @@ the Design view.
 | `design.list {project_id, session?}` | The project's designs, newest change first. Yours carry your session name. |
 | `design.create {project_id, title?}` | A new design with one empty page (`page-1`); answers `{design, nodes:[page]}`. Tied to your terminal. |
 | `design.get {design_id, page?, nodes?, since_rev?, pages_only?}` | The design and its nodes (parents before children, siblings bottom to top), plus `colors`, `styles` and picture `credits`. `page`: one page, by id or by a name no other page has. `nodes`: 1 to 500 ids and what is inside them. `since_rev`: only what changed after that rev (`nodes`, and `removed` ids). `pages_only`: the page list alone. |
-| `design.find {design_id, kind?, name?, text?, fill?, stroke?, color?, any_color?, font?, page?, inside?, with_nodes?}` | The ids of nodes that match every filter, in paint order; `with_nodes: true` adds the first 200 as stored. Use it instead of reading a whole design to find a colour, a word or a kind. |
+| `design.find {design_id, kind?, name?, text?, match?, fill?, stroke?, color?, any_color?, font?, page?, inside?, with_nodes?}` | The ids of nodes that match every filter, in paint order; `with_nodes: true` adds the first 200 as stored. `name` and `text` match whole words by default ("Edit" passes over "CREDIT"); `match: "prefix"`, `"contains"` or `"exact"` asks for the others. Use it instead of reading a whole design to find a colour, a word or a kind. |
 | `design.fonts {name?}` | The font families the desktop app can draw. |
-| `design.apply {design_id, ops, base_rev?, lenient?, reply?}` | Add, update, move, copy, delete nodes; name colours and styles. Answers `{rev, prev_rev, ids, removed_count, audit_id}`, with `rebased`, `copied`, `skipped` and `warnings` when there are any. |
+| `design.apply {design_id, ops, base_rev?, lenient?, reply?}` | Add, update, move, copy, delete nodes; name colours and styles. Answers `{rev, prev_rev, ids, removed_count, audit_id}`, with `rebased`, `copied`, `contrast`, `skipped` and `warnings` when there are any. `contrast` lists the contrast flags your change made (words it made too faint, or whose ground it changed), on every page a colour or style edit reaches: read it before you move on, and fix what it names. It is worked out without the desktop app, so `design.render` has the last word. |
 | `design.render {design_id, page?, nodes?, at_ms? or frames?, …}` | A picture of a page or some nodes, and every node's laid-out box. See "Check what you drew". |
 | `design.update {design_id, title?}` | Rename the design. |
 | `design.asset.add {design_id, path}` | Store a PNG/JPEG/GIF/WebP/SVG (a file up to 20 MiB, or `bytes_b64` up to 1 MiB); answers `{src, w, h}` for an image node. |
@@ -51,16 +51,35 @@ by default (`#1E1D1B`, the canvas colour): put light screens in a frame (white b
 | `path` | a freehand stroke | `points`, `stroke`, `stroke_width` |
 | `image` | a picture | `src` from `design.asset.add`, `w h` (both needed), `fit: cover|contain|stretch`, `radius` |
 | `polygon` | triangles, diamonds, hexagons, stars, flowchart decisions | `sides` (3 triangle, 4 diamond, 6 hexagon…, 3 to 24), `star` (inner ratio 0.05 to 0.95, e.g. 0.4; **a star with no `sides` has 5 points**), `fill`, `stroke`, `text` |
-| `icon` | interface icons in mockups | `icon` (a name below), `stroke` (its colour), `w h` (24 is the native size, which an icon added without one gets) |
+| `icon` | interface icons in mockups | `icon` (a name below, or one saved to Relay's set), `stroke` (its colour), `w h` (24 is the native size, which an icon added without one gets) |
 
 Icons are outline icons on a 24-unit grid, drawn at the smaller of `w` and `h`, stroke 2 px unless
-set. A name not in this list is refused: home, search, settings, user, users, bell, mail, heart,
-star, plus, minus, x, check, chevron-left, chevron-right, chevron-up, chevron-down, arrow-left,
-arrow-right, arrow-up, arrow-down, menu, more-horizontal, more-vertical, trash, edit, copy,
-download, upload, share, link, lock, unlock, eye, eye-off, calendar, clock, camera, image, file,
-folder, shopping-cart, credit-card, globe, map-pin, phone, message, send, filter, sliders, grid,
-list, play, pause, refresh, log-out, bookmark, info, alert, help, sun, moon, wifi, battery,
-terminal, code, zap, cloud, git-branch, bar-chart.
+set. Relay's own: home, search, settings, user, users, bell, mail, heart, star, plus, minus, x, check, chevron-left, chevron-right, chevron-up, chevron-down, arrow-left, arrow-right, arrow-up,
+arrow-down, menu, more-horizontal, more-vertical, trash, edit, copy, download, upload, share, link,
+lock, unlock, eye, eye-off, calendar, clock, camera, image, file, folder, shopping-cart,
+credit-card, globe, map-pin, phone, message, send, filter, sliders, grid, list, play, pause,
+refresh, log-out, bookmark, info, alert, help, sun, moon, wifi, battery, terminal, code, zap, cloud,
+git-branch, bar-chart, wallet, bank, receipt, tag, coins, banknote, dollar-sign, percent,
+calculator, trending-up, trending-down, pie-chart, line-chart, shopping-bag, gift, utensils, coffee,
+car, bus, plane, fuel, briefcase, book, graduation-cap, music, film, tv, gamepad, dumbbell,
+activity, pill, shirt, scissors, wrench, lightbulb, droplet, flame, leaf, umbrella, thermometer,
+inbox, archive, layers, external-link, paperclip, at-sign, hash, smile, thumbs-up, flag, award,
+target, shield, key, mic, video, headphones, smartphone, laptop, printer, map, navigation, compass,
+package, truck, store, database, server, cpu, rotate-ccw, repeat, shuffle, skip-forward, skip-back,
+volume, maximize, minimize, plus-circle, check-circle, x-circle, log-in, user-plus, sparkles, timer,
+history.
+
+**When none fits, save one to Relay's set instead of reusing a near miss** (one icon for three
+different things reads as one thing). `design.icon.list {query?}` names Relay's own and every saved
+icon, which every project's designs share; check it first, since another agent may have saved what
+you need. `design.icon.save {name, path | svg, keywords?}` adds one: `path` is SVG path data on the
+24-unit grid, drawn as an outline (`"M4 12a8 6 0 1 0 16 0a8 6 0 1 0-16 0M8 17v3M16 17v3"`); `svg`
+takes an outline SVG as most icon sets ship them (`<svg viewBox="0 0 24 24" fill="none"
+stroke="currentColor">…</svg>`) and fits it onto the grid. Name it for what it shows (`piggy-bank`,
+not `icon-3`); a filled picture belongs in an image node instead. Then `"icon": "piggy-bank"` on any
+icon node draws it: the node keeps the outline in its own `icon_path`, so it draws the same if the
+saved icon changes or goes. `design.icon.save` with `replace: true` changes a saved icon, and
+`design.icon.delete` removes one, only when the person asks.
 
 **A kind refuses fields that are not its own**, naming the kinds that use it: `radius: ellipse
 nodes do not use it (it is for frame, rect, sticky, image)`. `null` always clears a field, on any
@@ -232,7 +251,10 @@ make a variant). The copy is `as` (or an assigned id, answered in `ids`), and `c
 maps each new root to the node it copied. Nodes inside take ids from it: an id starting with the
 copied id and `-`, `_`, `.` or `:` has that start swapped (`card-title` becomes `card-2-title`), any
 other gets the copy's id and `:` in front (`text-14` becomes `card-2:text-14`), so later edits of
-the same list can name them. **A connector inside the copy joins the copies of its ends; an end
+the same list can name them. **When the ids inside share a start that is not the copied id's, pick
+them with `rename`**: copying `v2-phone` with `"rename": {"v2-": "v3-"}` makes `v3-phone` (when `as`
+is left out) and `v3-fade` from `v2-fade`, instead of `v3-phone:v2-fade`. A later edit naming an id
+the copy did not make is refused with the ids it did make. **A connector inside the copy joins the copies of its ends; an end
 outside the copy is let go**: the line stays drawn where it was, attached to nothing at that end.
 `dx`/`dy` add to the copy's stored `x/y`, which a laid-out parent ignores.
 
@@ -381,7 +403,10 @@ a screen, **look at it**: `design.render {"design_id": 12, "page": "page-7", "no
 - `issues` (worst first, at most 100; `issue_count` counts all) name layout problems by `code`:
   `overflow` (a child past its frame's padding), `overlap` (siblings laid over each other in a
   layout), `text_overlap`, `clipped` (cut off by a clipping frame), `contrast` (words too faint on
-  what they sit on). Fix them and render again. Read `warnings` too.
+  what is painted under their centre: through a ring's hole or past a round corner, not the shape's
+  box). Fix them and render again. Read `warnings` too. A node you mean to leave as it is (words
+  meant to be faint, a caption on a photo the check cannot read) takes `"skip_checks": true`, and
+  no issue names it first again; never use it to quiet a real problem.
 - Motion: `at_ms` (0 to 600000) pictures one time, `frames` (2 to 24) a contact sheet labelled by
   `times_ms`; not both (`design.render.args`).
 - It is drawn by Relay's desktop app. **`design.render.no_renderer`** means none is open: tell the

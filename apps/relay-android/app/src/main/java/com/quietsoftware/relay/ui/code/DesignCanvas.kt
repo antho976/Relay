@@ -274,7 +274,7 @@ internal fun planPage(scene: DesignScene, page: String, name: String, measure: C
                 val box = labelBox(n, r) { measure.measure(n, it).h }
                 words[id] = Words(measure.layout(n, box.w, textAlign(n)), box.x, box.y, textColorOf(scene, n))
             }
-            "icon" -> n.icon?.let { icon -> if (icon !in icons) icons[icon] = DesignIcons.path(icon)?.let(::iconPath) }
+            "icon" -> iconData(n)?.let { d -> if (d !in icons) icons[d] = iconPath(d) }
         }
         todo.addAll(scene.children(id))
     }
@@ -315,6 +315,9 @@ private fun textColorOf(scene: DesignScene, n: DesignNode): Color = colorOf(text
 
 /** An icon's path data as a path on its 24-unit grid. */
 internal fun iconPath(data: String): Path? = runCatching { PathParser().parsePathString(data).toPath() }.getOrNull()
+
+/** What an icon node draws: its own outline (a saved icon's), else the set's icon it names (paint.rs `icon`). */
+internal fun iconData(n: DesignNode): String? = n.iconPath ?: DesignIcons.path(n.icon)
 
 /** `#RGB`, `#RRGGBB` or `#RRGGBBAA` as a colour; null for anything else. */
 internal fun colorOf(hex: String?): Color? = parseColor(hex)?.let { Color(it) }
@@ -979,9 +982,9 @@ private class PagePainter(val plan: PagePlan, val hair: Float, val picture: (Str
         drawText(w.layout, color = w.color, topLeft = Offset(w.x.toFloat(), w.y.toFloat()))
     }
 
-    /** An icon from the set, scaled to its box's shorter side and stroked in its colour; a grey tile for a name the phone lacks (paint.rs `icon`). */
+    /** An icon from the set, or its own outline, scaled to its box's shorter side and stroked in its colour; a grey tile for a name the phone lacks (paint.rs `icon`). */
     fun DrawScope.icon(n: DesignNode, r: Rect) {
-        val path = plan.icons[n.icon.orEmpty()]
+        val path = iconData(n)?.let { plan.icons[it] }
         if (path == null) {
             drawRect(Color(0.55f, 0.55f, 0.55f, 0.3f), r.topLeft, r.size)
             return

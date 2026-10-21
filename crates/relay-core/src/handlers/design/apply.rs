@@ -1,10 +1,10 @@
 //! `design.apply`: a list of node edits run in order against the request's transaction.
 
 use super::revs::{self, removed_rev};
-use super::{body_of, emit_applied, expect, kind_of, live_design, node_of, row_bytes};
+use super::{body_of, check, emit_applied, expect, icons, kind_of, live_design, node_of, row_bytes};
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project};
-use relay_bus::design::{details, field_of, label, nearest, Conflict, ConflictReason, Node, NodeKind, NodeOp, Styles, MAX_COORD, MAX_DEPTH, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
+use relay_bus::design::{details, field_of, label, nearest, path_data, Conflict, ConflictReason, Node, NodeKind, NodeOp, Styles, MAX_COORD, MAX_DEPTH, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS, ICONS};
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{Apply, ApplyOut, Reply};
 use relay_bus::types::{Design, Id};
@@ -33,6 +33,8 @@ const RENUMBER_STEP: f64 = 1024.0;
 /// How many times a list asks after one parent's children, one query each, before it reads
 /// them whole and holds them ([`Siblings`]).
 const SIBLINGS_ASKED: u32 = 2;
+/// Most ids of a copy a refusal lists.
+const COPY_IDS_LISTED: usize = 12;
 const TOO_LARGE_HINT: &str = "split it across designs, or keep long text and big paths out of it";
 
 /// A row's kind: `Err` holds the name of one this build does not know (a newer build's), whose
@@ -172,6 +174,9 @@ pub(super) struct Run<'a> {
     pub(super) styles_changed: bool,
     /// Each copy edit's new node, and the node it copied.
     pub(super) copied: BTreeMap<String, String>,
+    /// Each copy edit's index and the ids it made, each beside the id it copied, in walk order:
+    /// what a refusal of a later edit naming an id no copy made lists ([`Run::copies_note`]).
+    pub(super) copy_ids: Vec<(usize, Vec<(String, String)>)>,
     /// The follow rule's reading (feature-layout §2.1): each frame an update resized, at its size
     /// before, and each axis (`true` across) the list set on a node itself.
     pub(super) resized: Vec<(String, (f64, f64))>,
@@ -329,10 +334,54 @@ impl Run<'_> {
         let ids: Vec<String> = self.tx.prepare_cached("SELECT node_id FROM design_nodes WHERE design_id = ?1").bus()?
             .query_map([self.design], |r| r.get(0)).bus()?
             .collect::<rusqlite::Result<_>>().bus()?;
-        Ok(match nearest(want, ids.iter().map(String::as_str)) {
+        let close = nearest(want, ids.iter().map(String::as_str));
+        let hint = match close {
             Some(id) => format!("did you mean {id:?}?"),
             None => "design.get lists the ids (pass page to read one page)".to_string(),
+        };
+        Ok(match self.copies_note(want, close) {
+            Some(note) => format!("{hint} {note}"),
+            None => hint,
         })
+    }
+
+    /// An icon node's outline as an edit writes it (`set` gets `icon_path`): path data it gives
+    /// is written in its plain form; an `icon` naming one saved to Relay's set, with no path
+    /// given, takes the saved one's. A name neither built in nor saved, with no path, is refused.
+    pub(super) fn icon_outline(&self, icon: Option<&str>, path: Option<&str>, set: &mut Map<String, Value>) -> Result<(), BusError> {
+        if let Some(d) = path {
+            let d = path_data::normalize(d).map_err(|why| self.fail_on("icon_path", ErrorKind::Invalid, "design.node_invalid", format!("icon_path: {why}")))?;
+            set.insert("icon_path".into(), Value::String(d));
+            return Ok(());
+        }
+        if let Some(name) = icon.filter(|name| !ICONS.contains(name)) {
+            let Some(d) = icons::saved_path(self.tx, name)? else {
+                let hint = match nearest(name, ICONS.iter().copied()) {
+                    Some(close) => format!("did you mean {close:?}? design.icon.list names every icon, and design.icon.save adds one"),
+                    None => "design.icon.list names every icon, and design.icon.save adds one".to_string(),
+                };
+                return Err(self.fail_on("icon", ErrorKind::Invalid, "design.node_invalid", format!("icon: {name:?} is neither one of Relay's icons nor one saved to its set")).with_hint(hint));
+            };
+            set.insert("icon_path".into(), Value::String(d));
+        }
+        Ok(())
+    }
+
+    /// What a refusal of an id the design does not hold adds when this list copied: the copy
+    /// of the id it wanted, or of the one nearest it, when a copy made one; else the ids the
+    /// latest copy made (the first [`COPY_IDS_LISTED`]), so a guess at a copy's ids is put right.
+    pub(super) fn copies_note(&self, want: &str, close: Option<&str>) -> Option<String> {
+        let (at, made) = self.copy_ids.last()?;
+        let copied = |id: &str| self.copy_ids.iter().rev().find_map(|(at, made)| {
+            made.iter().find(|(from, _)| from == id).map(|(from, to)| format!("ops[{at}] copied {from:?} as {to:?}"))
+        });
+        if let Some(note) = copied(want).or_else(|| close.and_then(copied)) {
+            return Some(format!("{note}; a copy's ids follow its as, or its rename ({{\"v2-\": \"v3-\"}})"));
+        }
+        let listed: Vec<String> = made.iter().take(COPY_IDS_LISTED).map(|(_, to)| format!("{to:?}")).collect();
+        let more = made.len().saturating_sub(COPY_IDS_LISTED);
+        let more = if more > 0 { format!(" and {more} more") } else { String::new() };
+        Some(format!("ops[{at}]'s copy made {}{more}; a copy's rename ({{\"v2-\": \"v3-\"}}) picks its ids", listed.join(", ")))
     }
 
     /// Learn where node `id` sits: its chain up to its page (or WALK levels) into `parents`.
@@ -753,6 +802,13 @@ impl Run<'_> {
             // path's box is fitted to its points. An undo puts back exactly what was stored.
             node.fill_default_size();
             node.contain_points();
+            if node.kind == NodeKind::Icon {
+                let mut set = Map::new();
+                self.icon_outline(node.icon.as_deref(), node.icon_path.as_deref(), &mut set)?;
+                if let Some(Value::String(d)) = set.remove("icon_path") {
+                    node.icon_path = Some(d);
+                }
+            }
         }
         node.validate().map_err(|why| self.fail(ErrorKind::Invalid, "design.node_invalid", why))?;
         if let Err(why) = node.check_new() {
@@ -851,6 +907,16 @@ impl Run<'_> {
         }
         let Some(row) = self.row(&id)? else { return self.missing("no such node") };
         let Some(node) = self.readable(&id, &row)? else { return Ok(None) };
+        if !self.lenient && node.kind == NodeKind::Icon && (set.contains_key("icon") || set.contains_key("icon_path")) {
+            let icon = set.get("icon").map_or(node.icon.clone(), |v| v.as_str().map(str::to_string));
+            let path = set.get("icon_path").and_then(|v| v.as_str().map(str::to_string));
+            let given = set.contains_key("icon_path");
+            self.icon_outline(icon.as_deref(), path.as_deref(), &mut set)?;
+            // A built-in icon named in place of one with an outline of its own drops the outline.
+            if !given && set.contains_key("icon") && !set.contains_key("icon_path") && node.icon_path.is_some() {
+                set.insert("icon_path".into(), Value::Null);
+            }
+        }
         let mut next = node.patched(&set).map_err(|why| self.fail(ErrorKind::Invalid, "design.node_invalid", why))?;
         if let Err(why) = Node::check_update(&node, &set, &next) {
             self.breach(why)?;
@@ -1394,6 +1460,7 @@ pub(super) fn register(e: &mut Engine) {
             styles_len: 0,
             styles_changed: false,
             copied: BTreeMap::new(),
+            copy_ids: Vec::new(),
             resized: Vec::new(),
             set_here: HashSet::new(),
             fonts: ctx.engine().renders.fonts(),
@@ -1413,7 +1480,7 @@ pub(super) fn register(e: &mut Engine) {
                 NodeOp::Update { id, set } => run.update(id, set)?,
                 NodeOp::Move { id, parent, index, keep_position } => run.move_(id, parent, index, keep_position == Some(true))?,
                 NodeOp::Delete { id } => run.delete(id)?,
-                NodeOp::Copy { id, as_id, parent, index, dx, dy } => run.copy(id, as_id, parent, index, dx, dy)?,
+                NodeOp::Copy { id, as_id, parent, index, dx, dy, rename } => run.copy(id, as_id, parent, index, dx, dy, rename)?,
                 NodeOp::Color { name, value } => run.color(name, value)?,
                 NodeOp::Style { name, set } => run.style(name, set)?,
                 NodeOp::DeleteStyle { name } => run.delete_style(name)?,
@@ -1448,6 +1515,7 @@ pub(super) fn register(e: &mut Engine) {
             skipped,
             warnings: Vec::new(),
             copied: std::mem::take(&mut run.copied),
+            contrast: Vec::new(),
             design: None,
             nodes: None,
             removed: None,
@@ -1510,6 +1578,32 @@ pub(super) fn register(e: &mut Engine) {
         // replay answers with the row of the undo itself, which it does not return).
         out.audit_id = Some(crate::audit::next_id(ctx.tx()).bus()?);
         (out.rev, out.removed_count) = (design.rev, removed.len() as u32);
+        if ctx.actor.is_agent() {
+            // What the change did to contrast, worked out once it has committed and the store is
+            // released: it lays the pages out twice, which the lock must not wait on.
+            let applied = check::Applied {
+                design: design.id,
+                rev: design.rev,
+                inverse: inverse.clone(),
+                touched: nodes.iter().map(|n| n.id.clone()).chain(removed.iter().cloned()).collect(),
+                restyled: run.styles_changed,
+            };
+            ctx.finish_reply(move |engine, reply| {
+                let (contrast, warning) = match check::new_contrast(engine, applied) {
+                    Ok(found) => (found.contrast, found.warning),
+                    Err(why) => (Vec::new(), Some(format!("this change's contrast could not be checked ({}); design.render checks it", why.message))),
+                };
+                if !contrast.is_empty() {
+                    reply["contrast"] = json!(contrast);
+                }
+                if let Some(warning) = warning {
+                    match reply.get_mut("warnings").and_then(Value::as_array_mut) {
+                        Some(list) => list.push(json!(warning)),
+                        None => reply["warnings"] = json!([warning]),
+                    }
+                }
+            });
+        }
         if full {
             // B7: a full answer stays under the clients' 2 MiB line: past REPLY_BUDGET it leaves
             // out the nodes (the client reads the design again), and past it without them the

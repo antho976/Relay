@@ -15,6 +15,7 @@ use schemars::JsonSchema;
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
 
@@ -22,6 +23,7 @@ mod expect;
 mod fields;
 mod hints;
 pub mod motion;
+pub mod path_data;
 mod pins;
 mod read;
 mod style;
@@ -36,7 +38,7 @@ pub use motion::{Ease, Key, Motion, Pose, Timeline};
 pub use pins::{follow_axis, page_point, Pin};
 pub use read::{read_node, read_nodes, read_nodes_opt, write_node, write_nodes, write_nodes_opt};
 pub use style::{
-    color_ref, copy_id, read_styles, read_styles_opt, write_styles, write_styles_opt, Removed, Style, StyleError, Styles,
+    color_ref, copy_id, copy_id_renamed, renamed, read_styles, read_styles_opt, write_styles, write_styles_opt, Removed, Style, StyleError, Styles,
     MAX_STYLES, STYLE_FIELDS,
 };
 
@@ -70,6 +72,8 @@ pub const MAX_SHADOW_BLUR: f64 = 200.0;
 pub const MAX_SHADOWS: usize = 8;
 /// Most entries of a node's `runs`.
 pub const MAX_RUNS: usize = 64;
+/// Most id starts one `copy` swaps (`rename`).
+pub const MAX_RENAMES: usize = 16;
 /// Longest text a node holds, in characters.
 pub const MAX_TEXT: usize = 10_000;
 /// Most points one path or line holds.
@@ -170,6 +174,18 @@ pub const ICONS: &[&str] = &[
     "globe", "map-pin", "phone", "message", "send", "filter", "sliders", "grid", "list", "play",
     "pause", "refresh", "log-out", "bookmark", "info", "alert", "help", "sun", "moon", "wifi",
     "battery", "terminal", "code", "zap", "cloud", "git-branch", "bar-chart",
+    // Money, places, things and more controls (2026-10-20).
+    "wallet", "bank", "receipt", "tag", "coins", "banknote", "dollar-sign", "percent", "calculator",
+    "trending-up", "trending-down", "pie-chart", "line-chart", "shopping-bag", "gift", "utensils",
+    "coffee", "car", "bus", "plane", "fuel", "briefcase", "book", "graduation-cap", "music", "film",
+    "tv", "gamepad", "dumbbell", "activity", "pill", "shirt", "scissors", "wrench", "lightbulb",
+    "droplet", "flame", "leaf", "umbrella", "thermometer", "inbox", "archive", "layers",
+    "external-link", "paperclip", "at-sign", "hash", "smile", "thumbs-up", "flag", "award",
+    "target", "shield", "key", "mic", "video", "headphones", "smartphone", "laptop", "printer",
+    "map", "navigation", "compass", "package", "truck", "store", "database", "server", "cpu",
+    "rotate-ccw", "repeat", "shuffle", "skip-forward", "skip-back", "volume", "maximize",
+    "minimize", "plus-circle", "check-circle", "x-circle", "log-in", "user-plus", "sparkles",
+    "timer", "history",
 ];
 
 /// How a connector runs between its ends.
@@ -840,6 +856,11 @@ pub struct Node {
     /// them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locked: Option<bool>,
+    /// Leaves it out of the layout and contrast checks (default false): design.render lists no
+    /// issue, and design.apply no contrast flag, that names it first. For words meant to be faint,
+    /// or set on what the check cannot see (a picture's colours); not to quiet a real problem.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip_checks: Option<bool>,
 
     /// The words of a text or sticky, or a centred label on a rect, ellipse or polygon; at most
     /// 10000 characters. Newlines break lines.
@@ -975,11 +996,19 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0, max = 200))]
     pub blur: Option<f64>,
-    /// An icon node's icon, one of these outline icons, drawn on a 24-unit grid scaled to the
-    /// smaller of `w` and `h` (24 is its natural size).
+    /// An icon node's icon, one of these outline icons or one saved to Relay's set (design.icon.list,
+    /// which every project's designs share), drawn on a 24-unit grid scaled to the smaller of `w`
+    /// and `h` (24 is its natural size).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "icon_schema")]
     pub icon: Option<String>,
+    /// An icon's own outline, drawn instead of `icon`'s: SVG path data on the 24-unit grid
+    /// (`M4 6h16M4 12h16`), stroked as Relay's icons are, at most 8000 characters. `icon` naming
+    /// an icon saved to Relay's set (design.icon.save) fills it in; naming a built-in one clears
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = path_data::MAX_PATH_DATA))]
+    pub icon_path: Option<String>,
     /// A connector's start: a node on the same page, not the line itself or a page. The line
     /// then runs from that node's edge and follows it when it moves; `points` are only where it
     /// was last drawn.
@@ -1131,8 +1160,12 @@ pub struct Node {
 /// `icon`'s schema: the names of [`ICONS`], so the list an agent reads is whole and stays in step
 /// with what validates.
 fn icon_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    let names: Vec<Value> = ICONS.iter().map(|name| Value::from(*name)).chain([Value::Null]).collect();
-    schemars::json_schema!({"type": ["string", "null"], "enum": names})
+    let names: Vec<Value> = ICONS.iter().map(|name| Value::from(*name)).collect();
+    schemars::json_schema!({"anyOf": [
+        {"type": "string", "enum": names},
+        {"type": "string", "pattern": ID_PATTERN, "maxLength": MAX_ID, "description": "An icon saved to Relay's set: design.icon.list names them."},
+        {"type": "null"},
+    ]})
 }
 
 /// The node schema also names `width` and `height`, which an add reads as `w` and `h`, so a
@@ -1204,8 +1237,9 @@ pub enum NodeOp {
     /// from it: one starting with the copied node's id and `-`, `_`, `.` or `:` has that start
     /// swapped for the copy's (`card-title` becomes `card-2-title`), any other gets the copy's id
     /// and `:` in front (`text-14` becomes `card-2:text-14`), so later edits of the same list can
-    /// name them. A connector inside joins the copies of its ends; one attached to a node outside
-    /// the copy lets go of that end, staying where it is drawn.
+    /// name them; `rename` picks them yourself. A refusal of a later edit that names an id the
+    /// copy did not make lists those it did. A connector inside joins the copies of its ends;
+    /// one attached to a node outside the copy lets go of that end, staying where it is drawn.
     Copy {
         #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
         id: String,
@@ -1229,6 +1263,13 @@ pub enum NodeOp {
         #[serde(default, skip_serializing_if = "is_zero")]
         #[schemars(range(min = -MAX_COORD, max = MAX_COORD))]
         dy: f64,
+        /// Id starts to swap, 1 to 16: each node copied whose id starts with a key takes its
+        /// value there instead (the longest key that fits), whatever the rule above would give;
+        /// `{"v2-": "v3-"}` copies `v2-phone` as `v3-phone` (when `as` is left out) and `v2-fade`
+        /// inside it as `v3-fade`. Ids no key starts keep the rule above.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(length(min = 1, max = MAX_RENAMES))]
+        rename: Option<BTreeMap<String, String>>,
     },
     /// Name a colour that any colour field of a node, or of a style, takes as `$name`. Naming it
     /// again changes it wherever it is used.
@@ -1411,6 +1452,8 @@ impl Node {
             shadows: None,
             runs: None,
             max_lines: None,
+            skip_checks: None,
+            icon_path: None,
             style: None,
             motion: None,
             timeline: None,
@@ -1666,8 +1709,12 @@ impl Node {
                 return Err("arc.cap: only a ring segment (inner above 0, sweep under 360) has ends to shape".into());
             }
         }
-        if let Some(name) = self.icon.as_deref().filter(|n| !ICONS.contains(n)) {
-            return Err(format!("icon: {name:?} is not one of Relay's icons ({})", ICONS.join(", ")));
+        if let Some(d) = &self.icon_path {
+            path_data::parse(d).map_err(|why| format!("icon_path: {why}"))?;
+        }
+        // With its own outline, an icon's name is only what it was saved as.
+        if let Some(name) = self.icon.as_deref().filter(|n| !ICONS.contains(n) && self.icon_path.is_none()) {
+            return Err(format!("icon: {name:?} is neither one of Relay's icons ({}) nor one saved to its set (design.icon.list)", ICONS.join(", ")));
         }
         if let Some(v) = self.max_lines {
             if !(1..=1000).contains(&v) {
@@ -2475,7 +2522,7 @@ mod tests {
             {"op": "delete_style", "name": "accent"}
         ]);
         let ops: Vec<NodeOp> = serde_json::from_value(edits.clone()).unwrap();
-        let NodeOp::Copy { id, as_id, parent, index, dx, dy } = &ops[0] else { panic!() };
+        let NodeOp::Copy { id, as_id, parent, index, dx, dy, .. } = &ops[0] else { panic!() };
         assert_eq!((id.as_str(), as_id.as_deref(), parent, index, *dx, *dy), ("card", Some("card-2"), &None, &None, 400.0, 0.0));
         assert_eq!(ops.iter().map(NodeOp::target).collect::<Vec<_>>(), ["card", "page-1", "accent", "card", "accent"]);
         assert_eq!(ops.iter().map(NodeOp::node_target).collect::<Vec<_>>(), [Some("card"), Some("page-1"), None, None, None]);

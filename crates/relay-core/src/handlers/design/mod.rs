@@ -12,9 +12,11 @@
 
 mod apply;
 mod assets;
+mod check;
 mod expect;
 mod find;
 mod get;
+mod icons;
 mod pins;
 pub(crate) mod render;
 mod revs;
@@ -356,6 +358,7 @@ pub fn register(e: &mut Engine) {
     apply::register(e);
     assets::register(e);
     find::register(e);
+    icons::register(e);
     render::register(e);
 }
 

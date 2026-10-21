@@ -83,6 +83,37 @@ fn find_with_nodes_is_cut_at_200() {
     assert!(small.get("cut").is_none() && small["nodes"].as_array().unwrap().len() == 1);
 }
 
+/// Words match whole by default, so "Edit" passes over "CREDIT"; prefix, contains and exact ask
+/// for the others, for a name as for a text.
+#[test]
+fn find_matches_whole_words_unless_asked_otherwise() {
+    let (e, _root) = project();
+    let id = ok(&e, "design.create", json!({"project_id": 1, "title": "Wallet"}))["design"]["id"].as_i64().unwrap();
+    ok(&e, "design.apply", json!({"design_id": id, "ops": [
+        {"op": "add", "node": {"id": "edit", "parent": "page-1", "kind": "text", "text": "Edit profile"}},
+        {"op": "add", "node": {"id": "card", "parent": "page-1", "kind": "text", "text": "CREDIT CARD", "name": "Credit row"}},
+        {"op": "add", "node": {"id": "edited", "parent": "page-1", "kind": "text", "text": "Edited 2 min ago"}},
+        {"op": "add", "node": {"id": "plain", "parent": "page-1", "kind": "text", "text": " edit "}},
+    ]}));
+    let by = |how: Option<&str>, field: &str, words: &str| {
+        let mut filters = json!({field: words});
+        if let Some(how) = how {
+            filters["match"] = json!(how);
+        }
+        ids(&find(&e, id, filters)).into_iter().map(String::from).collect::<Vec<_>>()
+    };
+    assert_eq!(by(None, "text", "Edit"), ["edit", "plain"], "whole words: not CREDIT, not Edited");
+    assert_eq!(by(Some("word"), "text", "edit profile"), ["edit"], "a phrase");
+    assert_eq!(by(Some("prefix"), "text", "edit"), ["edit", "edited", "plain"]);
+    assert_eq!(by(Some("prefix"), "text", "cred"), ["card"]);
+    assert_eq!(by(Some("contains"), "text", "edit"), ["edit", "card", "edited", "plain"]);
+    assert_eq!(by(Some("exact"), "text", "EDIT"), ["plain"], "the whole text, its outer spaces aside");
+    assert_eq!(by(None, "name", "credit"), ["card"]);
+    assert!(by(None, "name", "cred").is_empty());
+    let error = refused(call(&e, "design.find", json!({"design_id": id, "text": "x", "match": "fuzzy"})));
+    assert!(error.message.contains("fuzzy"), "{}", error.message);
+}
+
 #[test]
 fn find_refuses_a_colour_it_cannot_read() {
     let (e, _root) = project();

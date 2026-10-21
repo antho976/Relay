@@ -167,7 +167,7 @@ class DesignShapesTest {
     /** The icon set is the PC's copy (phone_fixtures.rs holds it to icons.rs), each path data of commands and numbers alone. */
     @Test
     fun `the icons are the PC's`() {
-        assertEquals(70, DesignIcons.names.size)
+        assertEquals(155, DesignIcons.names.size)
         assertEquals(listOf("home", "search"), DesignIcons.names.take(2))
         assertEquals("M12 5v14M5 12h14", DesignIcons.path("plus"))
         assertNull(DesignIcons.path("no-such-icon"))

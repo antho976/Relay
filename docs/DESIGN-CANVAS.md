@@ -26,7 +26,7 @@ the project's terminals draw and revise designs alongside you.
   its sizes (phone, tablet, laptop, desktop, slide, social post, watch: placed beside the page's
   content), shapes (R rectangle, O ellipse, Shift R triangle, diamond, hexagon, Shift S star, L line,
   Shift L arrow), Text (T), Sticky (S), Pen (P) / Vector pen (B) / Highlighter (Shift P) /
-  Eraser (E), Icon (K: a searchable set of 70 interface icons) and the image key (a file, or a stock
+  Eraser (E), Icon (K: a searchable set of 155 interface icons, then the ones saved to Relay's icon set) and the image key (a file, or a stock
   photo: see Pictures).
 - **Vector pen** (B): click to place points (Shift: 45° steps), click the first point to close the
   shape, click the last again, press Enter or Esc to leave it open; Backspace takes the last point
@@ -289,6 +289,7 @@ Designs outlive the build that wrote them, and the engine and the clients read a
 | Animated PNG assembly | `crates/relay-client/src/design/apng.rs` |
 | Rectangles in page px and the camera | `crates/relay-client/src/design/geom.rs` |
 | The icon set (the phone holds a copy) | `crates/relay-client/src/design/icons.rs` |
+| Relay's saved icons (`design.icon.*`), and an SVG fitted onto the grid | `crates/relay-core/src/handlers/design/icons.rs`, `crates/relay-bus/src/design/path_data.rs` |
 | Default names, copies' names, captions, cut text and sort order | `crates/relay-client/src/design/names.rs` |
 | Numbers as fields show and read them | `crates/relay-client/src/design/number.rs` |
 | Runs and case over a text's characters | `crates/relay-client/src/design/text.rs` |

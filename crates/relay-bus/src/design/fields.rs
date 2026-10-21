@@ -66,6 +66,7 @@ pub const FIELDS: &[(&str, Kinds, Option<&str>)] = &[
     ("h", Kinds(ALL), None),
     ("hidden", Kinds(ALL), None),
     ("locked", Kinds(ALL), None),
+    ("skip_checks", Kinds(ALL & !P), Some("skip_checks: a page is not checked; set it on what is on it")),
     ("opacity", Kinds(ALL & !P), None),
     ("blur", Kinds(ALL & !P), None),
     ("blend", Kinds(ALL & !P), None),
@@ -113,6 +114,7 @@ pub const FIELDS: &[(&str, Kinds, Option<&str>)] = &[
     ("sides", Kinds(Y), None),
     ("star", Kinds(Y), None),
     ("icon", Kinds(C), None),
+    ("icon_path", Kinds(C), None),
     ("flip_x", Kinds(Y | I | C), None),
     ("flip_y", Kinds(Y | I | C), None),
     ("arc", Kinds(E), None),
@@ -687,12 +689,12 @@ mod tests {
         let full: Node = serde_json::from_str(r##"{
             "id": "n", "parent": "p", "kind": "rect", "name": "n", "x": 1, "y": 1, "w": 1, "h": 1, "fill": "#fff",
             "stroke": "#000", "stroke_width": 1, "radius": 1, "opacity": 1, "shadow": {"color": "#000"}, "clip": true,
-            "hidden": false, "locked": false, "text": "t", "color": "#000", "font": "Geist", "font_size": 9,
+            "hidden": false, "locked": false, "skip_checks": true, "text": "t", "color": "#000", "font": "Geist", "font_size": 9,
             "font_weight": 400, "italic": true, "underline": true, "strike": true, "align": "left", "line_height": 1,
             "letter_spacing": 0, "w_sizing": "fixed", "h_sizing": "fixed", "layout": "row", "gap": 1, "padding": [1],
             "justify": "start", "items": "start", "points": [[0, 0]], "arrow_start": true, "arrow_end": true,
             "src": "0123456789abcdef0123.png", "fit": "cover", "rotation": 1, "sides": 3, "star": 0.5,
-            "gradient": {"stops": []}, "radii": [1, 1, 1, 1], "dash": [1], "blur": 1, "icon": "home", "from": "a",
+            "gradient": {"stops": []}, "radii": [1, 1, 1, 1], "dash": [1], "blur": 1, "icon": "home", "icon_path": "M0 0", "from": "a",
             "to": "b", "route": "straight", "closed": true, "smooth": true, "flip_x": true, "flip_y": true,
             "arc": {}, "blend": "normal", "text_case": "upper", "pin_x": "left", "pin_y": "top", "absolute": false,
             "min_w": 1, "max_w": 1, "min_h": 1, "max_h": 1, "row_gap": 1, "scroll": "x", "stroke_cap": "round",
@@ -759,8 +761,10 @@ mod tests {
                 checked.push(*field);
             }
             if let Some(max) = property["maxLength"].as_u64() {
-                assert!(written(body_of(kind, field, json!("a".repeat(max as usize)))), "{field}: {max} characters");
-                assert!(!written(body_of(kind, field, json!("a".repeat(max as usize + 1)))), "{field}: {max} + 1 characters");
+                // Path data that reads, at any length: one line of a long zero.
+                let filler = |n: usize| if *field == "icon_path" { format!("M0 0h{}", "0".repeat(n - 5)) } else { "a".repeat(n) };
+                assert!(written(body_of(kind, field, json!(filler(max as usize)))), "{field}: {max} characters");
+                assert!(!written(body_of(kind, field, json!(filler(max as usize + 1)))), "{field}: {max} + 1 characters");
                 checked.push(*field);
             }
             if property["minLength"].as_u64() == Some(1) {
@@ -839,7 +843,7 @@ mod tests {
     #[test]
     fn the_schema_lists_every_icon() {
         let schema = serde_json::to_value(schemars::schema_for!(Node)).unwrap();
-        let listed: Vec<&str> = schema["properties"]["icon"]["enum"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        let listed: Vec<&str> = schema["properties"]["icon"]["anyOf"][0]["enum"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert_eq!(listed, crate::design::ICONS);
         assert!(!schema.to_string().contains("[`ICONS`]"), "a rustdoc link leaked into the schema");
     }

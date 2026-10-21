@@ -1184,7 +1184,7 @@ warning rather than failing every guardrail read.
 
 A project's design canvases: pages of frames, shapes, text, stickies, pen paths and pictures, each
 design optionally tied to one terminal (`session`). The node model, its validation and limits are
-`relay_bus::design` (`DesignNode`, `DesignNodeOp` in the schema). Kinds: page, frame, group, rect, ellipse, polygon (`sides`, `star`), line (`points`, or attached `from`/`to` with a `route`), text, sticky, path, image, icon (one of `ICONS`); any node may be turned (`rotation`), shapes take `gradient`, `radii`, `dash`, `blur` and a centred `text` label. Geometry is px, `x`/`y` relative
+`relay_bus::design` (`DesignNode`, `DesignNodeOp` in the schema). Kinds: page, frame, group, rect, ellipse, polygon (`sides`, `star`), line (`points`, or attached `from`/`to` with a `route`), text, sticky, path, image, icon (one of `ICONS`, or one saved to Relay's icon set, its outline copied into the node's `icon_path`); any node may be turned (`rotation`), shapes take `gradient`, `radii`, `dash`, `blur` and a centred `text` label. Geometry is px, `x`/`y` relative
 to the parent; siblings paint in order, the last on top.
 
 | op | attrs | payload → result |
@@ -1196,12 +1196,15 @@ to the parent; siblings paint in order, the last on top.
 | `design.duplicate` | mutation · always · inverse | `{ design_id, title? = "<title> copy" }` → `Design` — every node, with its id, and the id counter |
 | `design.delete` / `design.restore` | mutation · always · inverse | `{ design_id }` → `{}` / `Design` — soft (§5.4): the retention pass purges a deleted design past `undo.grace_days`. Any change to a deleted design is `conflict` / `design.deleted` |
 | `design.purge` | mutation · always · user_only | `{ design_id }` → `{}` — a deleted one only (`conflict` / `design.not_deleted`), nodes and all; emits `design.deleted` |
-| `design.apply` | mutation · always · inverse | `{ design_id, ops: DesignNodeOp[], base_rev?, lenient?, reply?, expect? }` → `ApplyOut`: short (`rev`, `prev_rev`, `ids`, `removed_count`, `audit_id`, `skipped`, `warnings`, `copied`, `rebased`), or with `reply: "full"` also `design`, `nodes`, `removed`, `inverse`, `expect`, `colors`, `styles`, `reread` — below |
+| `design.apply` | mutation · always · inverse | `{ design_id, ops: DesignNodeOp[], base_rev?, lenient?, reply?, expect? }` → `ApplyOut`: short (`rev`, `prev_rev`, `ids`, `removed_count`, `audit_id`, `skipped`, `warnings`, `copied`, `rebased`, and for an agent `contrast`), or with `reply: "full"` also `design`, `nodes`, `removed`, `inverse`, `expect`, `colors`, `styles`, `reread` — below |
 | `design.asset.add` | mutation · always | `{ design_id, path? \| bytes_b64? }` → `{ src, path, w, h }` — a PNG, JPEG, GIF, WebP or SVG, by its bytes (`invalid` / `design.asset` for anything else); an absolute `path` up to 20 MiB or `bytes_b64` up to 1 MiB. Stored once by content in `design-assets/` beside the store as `<32 hex of SHA-256>.<ext>`, the `src` an image node names; `w`/`h` its natural size (an SVG's `width`/`height` in px, else its `viewBox`, else 300×150). Staged: the file work runs unlocked. Emits no event: it changes no row a query shows (§3.3) |
-| `design.find` | query | `{ design_id, page?, inside?, kind?, name?, text?, fill?, stroke?, color?, any_color?, font?, with_nodes? }` → `{ ids, nodes?, cut? }` — the nodes that match every filter given, in paint order (`ids`); `kind` is any of its kinds, `name` and `text` a case-insensitive word match, `font` a family, and colours compare as drawn (a `$name` or a style counts). `inside` (not the node itself) is `not_found` / `design.node_not_found` when unknown. `with_nodes` adds the first 200 matches as stored (512 KiB at most; `cut` when more) |
+| `design.icon.save` | mutation · always · inverse | `{ name, path? \| svg?, keywords?, replace? }` → `{ icon: SavedIcon, replaced, warnings? }` — saves an outline icon to Relay's icon set (global, table `design_icons`, v31), for every project's designs: `path` is SVG path data on the 24-unit grid (at most 8,000 characters, 2,000 commands), stored in a plain form every painter reads; `svg` is an outline SVG whose path, line, polyline, polygon, circle, ellipse and rect shapes are joined and fitted from its viewBox onto the grid (a `transform`, `<use>` or text is refused; one with no stroke anywhere is saved with a warning that it looks filled). A built-in name is `invalid`; a saved one is `conflict` / `design.icon_exists` unless `replace`. The undo deletes it, or puts back the one it replaced |
+| `design.icon.list` | query · unlocked | `{ query? }` → `{ built_in: string[], saved: SavedIcon[] }` — Relay's own icons and the saved ones (`name`, `path`, `keywords`, `updated_by`, `updated_at`), by name or keyword |
+| `design.icon.delete` | mutation · always · inverse | `{ name }` → `{ deleted }` — takes a saved icon out; icon nodes drawn with it keep their outline. Undone by saving it again |
+| `design.find` | query | `{ design_id, page?, inside?, kind?, name?, text?, match?, fill?, stroke?, color?, any_color?, font?, with_nodes? }` → `{ ids, nodes?, cut? }` — the nodes that match every filter given, in paint order (`ids`); `kind` is any of its kinds, `name` and `text` a case-insensitive match of whole words (`match`: `word`, the default; `prefix`, at a word's start; `contains`, anywhere; `exact`, the whole of it), `font` a family, and colours compare as drawn (a `$name` or a style counts). `inside` (not the node itself) is `not_found` / `design.node_not_found` when unknown. `with_nodes` adds the first 200 matches as stored (512 KiB at most; `cut` when more) |
 | `design.fonts` | query · global | `{ name? }` → `{ families, complete }` — the families the newest connected desktop app can draw a design's text in, sorted, `name` a case-insensitive word match. With no app reporting, Geist, Geist Mono and Sora with `complete: false` |
 | `design.asset.get` | query · user | `{ design_id, src, offset? }` → `{ media_type, size, bytes_b64, next }` — an image node's picture, in pieces of at most 3 MiB decoded from `offset`; `next` is where the next piece starts, null on the last |
-| `design.render` | query · socket only | `{ design_id, page?, nodes?, png? = true, scale? = 1, max_side? = 1568, boxes_limit? = 200, base_rev?, timeout_ms? = 20000, at_ms?, frames? }` → `{ design_id, rev, page, area, scale, png?, issues, issue_count, warnings, boxes, timings_ms, times_ms? }` — the desktop app draws a page, or the outermost of up to 200 `nodes` on one page, and answers a PNG written beside the store (`png.path`, `w`, `h`; shown to an MCP caller as an image) and every visible node's laid-out box in page px, hugged text measured: `boxes.fields` is always `id, kind, parent, x, y, w, h, rx, ry, rot`, `rows` at most `boxes_limit` (0–500) of them, `total` and `hidden` counting the rest. `issues` (worst first, at most 100; `issue_count` counts all) are `overflow`, `overlap`, `text_overlap`, `clipped` and `contrast`, each with the ids it concerns. `scale` is 0.25–2 and is lowered to fit `max_side` (64–2560) and 4 megapixels; `area` is the page rectangle pictured. `at_ms` (0–600000) poses each node at that time of its motion, `frames` (2–24, not with `at_ms`) draws a contact sheet of that many frames over the longest timeline in scope, their times in `times_ms`; boxes and issues stay at rest. `base_rev` refuses `conflict` / `design.stale` unless the design is still at that rev. An agent may picture only its own project's designs. Waits for the app with no lock held; see §6.2 for the lease, the codes and the limits |
+| `design.render` | query · socket only | `{ design_id, page?, nodes?, png? = true, scale? = 1, max_side? = 1568, boxes_limit? = 200, base_rev?, timeout_ms? = 20000, at_ms?, frames? }` → `{ design_id, rev, page, area, scale, png?, issues, issue_count, warnings, boxes, timings_ms, times_ms? }` — the desktop app draws a page, or the outermost of up to 200 `nodes` on one page, and answers a PNG written beside the store (`png.path`, `w`, `h`; shown to an MCP caller as an image) and every visible node's laid-out box in page px, hugged text measured: `boxes.fields` is always `id, kind, parent, x, y, w, h, rx, ry, rot`, `rows` at most `boxes_limit` (0–500) of them, `total` and `hidden` counting the rest. `issues` (worst first, at most 100; `issue_count` counts all) are `overflow`, `overlap`, `text_overlap`, `clipped` and `contrast`, each with the ids it concerns; `contrast` reads what is painted under the words' centre (a ring's hole shows what is under it), and none names first a node with `skip_checks`. `scale` is 0.25–2 and is lowered to fit `max_side` (64–2560) and 4 megapixels; `area` is the page rectangle pictured. `at_ms` (0–600000) poses each node at that time of its motion, `frames` (2–24, not with `at_ms`) draws a contact sheet of that many frames over the longest timeline in scope, their times in `times_ms`; boxes and issues stay at rest. `base_rev` refuses `conflict` / `design.stale` unless the design is still at that rev. An agent may picture only its own project's designs. Waits for the app with no lock held; see §6.2 for the lease, the codes and the limits |
 | `design.render.serve` | query · global · socket only · user_only | `{ fonts? }` → `{}` — the desktop app offers to draw on this connection until it closes (§6.2) |
 | `design.render.answer` | query · global · user_only | `{ render_id, drawn? \| error? }` → `{ accepted }` — the app's answer to one `design.render.request`, exactly one of `drawn` and `error`; `accepted` is whether a render still waited for it. Unlocked: it decodes and checks the picture without the store |
 | `design.picture.search` | query · plugin `pictures` | `{ design_id, query, source?, orientation?, page?, count? }` → `{ source, page, has_more, results }` — stock photos from Openverse (no key) or Pexels (the person's key); a hit's `id` goes to `thumb` and `add`. Agents may call it only in a project where the plugin is on |
@@ -1223,11 +1226,23 @@ or style naming a colour or style the design lacks), `design.position` (a `keep_
 either place is laid out by auto layout), or `design.node_unreadable` (an edit naming a node of a
 kind this build cannot read).
 
-`copy` takes `{id, as?, parent?, index?, dx?, dy?}` and copies a node and everything inside it, as
+An agent's applied list is answered with `contrast` too: design.render's `contrast` issues that
+the change made, on each page an edit reached (every page after a `color` or `style` edit), at most
+20 (a warning counts the rest). They are worked out after the commit, with the store released but
+for one read of the design (`Ctx::finish_reply`): its pages laid out by `relay_client::design` with
+words measured roughly (`layout::Estimate`), and again with the list's undo run on that scene; a flag
+is new when the same ids were not flagged before. The audit row keeps the reply without them, and a
+design changed again before the read gets a warning instead.
+
+`copy` takes `{id, as?, parent?, index?, dx?, dy?, rename?}` and copies a node and everything inside it, as
 one edit (a page copies as a page). Each node inside the copy takes an id from the copied id: one
 starting with the copied id and `-`, `_`, `.` or `:` has that start swapped for the copy's
 (`card-title` becomes `card-2-title`); any other gets the copy's id and `:` in front (`text-14`
-becomes `card-2:text-14`). A connector inside joins the copies of its ends; one attached outside the
+becomes `card-2:text-14`). `rename` (1 to 16 id starts) overrides that: an id inside that a key
+starts takes the key's value there, the longest key first, and the root too when `as` is left out
+(`{"v2-": "v3-"}` copies `v2-phone` as `v3-phone` and `v2-fade` as `v3-fade`). A `not_found` of a
+later edit's id adds the copy of the id it is nearest, or the ids the latest copy made, to its
+hint. A connector inside joins the copies of its ends; one attached outside the
 copy lets go of that end where the stored boxes draw it. `color` `{name, value}` names a colour that
 a colour field takes as `$name`. `style` `{name, set}` names a style or changes one. `delete_style`
 `{name}` takes one out, and what used it keeps its look: the colour, or the style's fields a node did
@@ -1284,6 +1299,10 @@ written at (`design_nodes.rev`), and `design_removed` (the ids removed in the la
 rev each went at). It recounts `designs.bytes` so the size cap counts each node as `design.get`
 returns it. Rows written before take their design's rev, so an older `base_rev` reads them as
 changed; a restored v29 backup's rows are dated the same way, and its removals are kept from that rev.
+
+Migration v31 (schema 31) adds `design_icons`, Relay's icon set (`design.icon.*`): one row per saved
+outline icon by name, with its path, its keywords and who saved it when. Nothing in a design refers
+to a row: an icon node that names one carries its path in `icon_path`.
 
 ---
 

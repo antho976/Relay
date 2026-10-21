@@ -129,6 +129,8 @@ data class DesignNode(
     val clip: Boolean? = null,
     val hidden: Boolean? = null,
     val locked: Boolean? = null,
+    /** The PC's layout and contrast checks pass over it; nothing drawn changes. */
+    @SerialName("skip_checks") val skipChecks: Boolean? = null,
     val text: String? = null,
     val color: String? = null,
     val font: String? = null,
@@ -160,6 +162,8 @@ data class DesignNode(
     val dash: List<Double>? = null,
     val blur: Double? = null,
     val icon: String? = null,
+    /** An icon's own outline (a saved icon's), drawn instead of [icon]'s: path data on the 24-unit grid. */
+    @SerialName("icon_path") val iconPath: String? = null,
     val from: String? = null,
     val to: String? = null,
     val route: String? = null,
