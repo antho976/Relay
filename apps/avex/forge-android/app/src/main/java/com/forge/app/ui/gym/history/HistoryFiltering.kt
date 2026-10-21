@@ -47,7 +47,9 @@ data class HistoryFilters(
     val query: String = "",
     val tag: String? = null,
     val duration: SessionHistoryFilter? = null,
-    val volume: SessionHistoryFilter? = null
+    val volume: SessionHistoryFilter? = null,
+    /** The type filter: all, gym, cardio, or sessions with a PR. */
+    val kind: HistoryKind = HistoryKind.ALL
 )
 
 /**
@@ -103,7 +105,7 @@ internal fun buildFilteredHistory(
         .map { HistoryItem.Workout(it) }
     val card = cardio.filter { matchesCardio(it, needle, filters, customCardioTypes) }
         .map { HistoryItem.Cardio(it) }
-    return (gym + card).sortedByDescending { it.dateMs }
+    return (gym + card).filter { filters.kind.admits(it) }.sortedByDescending { it.dateMs }
 }
 
 /** Distinct quick tags across all workouts, alphabetised — the source for the filter chips. */
