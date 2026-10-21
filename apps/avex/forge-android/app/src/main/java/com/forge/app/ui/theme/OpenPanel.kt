@@ -121,6 +121,49 @@ object OpenType {
     /** A small filled or outlined button's label (Apply, Skip, Undo). Dark text on red. */
     val buttonS = button.copy(fontSize = 14.sp, lineHeight = 18.sp)
 
+    /** Axis ticks and month names under a graph. */
+    val chartLabel = TextStyle(
+        fontFamily = AvexFonts.SansSerif,
+        fontWeight = FontWeight.Normal,
+        fontSize = 10.sp,
+        lineHeight = 12.sp,
+    )
+
+    /** A bar list's row names (muscles), one step up from the axis. */
+    val chartRowLabel = chartLabel.copy(fontSize = 11.sp, lineHeight = 14.sp)
+
+    /** A page title, the size Stats and a lift's page open with. */
+    val titleL = TextStyle(
+        fontFamily = AvexFonts.Serif,
+        fontWeight = FontWeight.Normal,
+        fontSize = 64.sp,
+        lineHeight = 64.sp,
+        letterSpacing = (-2).sp,
+        fontFeatureSettings = "tnum",
+    )
+
+    /** A page title one step down, for a long name (a lift's page). */
+    val titleM = titleL.copy(fontSize = 48.sp, lineHeight = 50.sp)
+
+    /** A reading's figure when it leads its section alone (Est. 1RM, body weight). */
+    val figureXL = TextStyle(
+        fontFamily = AvexFonts.Serif,
+        fontWeight = FontWeight.Normal,
+        fontSize = 56.sp,
+        lineHeight = 58.sp,
+        fontFeatureSettings = "tnum",
+    )
+
+    /** A figure's unit at half size, for [figureXL] ("lb" after "228"). */
+    val figureXLUnit = figureXL.copy(fontSize = 22.sp)
+
+    /** A list row's serif figure (a lift's e1RM on the right). */
+    val figureRow = figureXL.copy(fontSize = 28.sp, lineHeight = 30.sp)
+
+    /** A list row's serif set ("195×5") and its reps at a smaller size. */
+    val figureSet = figureXL.copy(fontSize = 26.sp, lineHeight = 28.sp)
+    val figureSetUnit = figureXL.copy(fontSize = 15.sp)
+
     /** The PR tag and other 10sp filled tags. */
     val tag = TextStyle(
         fontFamily = AvexFonts.SansSerif,
@@ -150,6 +193,20 @@ object OpenColors {
     val Unreached = Color(0xFF2A2420)
     /** Dark content on an accent fill, as drawn. */
     val OnAccentDark = Color(0xFF0A0806)
+    /** The span before, drawn under the current line on a trend graph. */
+    val Previous = Color(0xFF4A423B)
+    /** Horizontal bars that are in range (a muscle's weekly sets). */
+    val BarQuiet = Color(0xFF4F4740)
+    /** Graph gridlines: white at 5%. */
+    val Grid = Color(0x0DFFFFFF)
+    /** A deload week's band behind a graph: white at 4%. */
+    val Band = Color(0x0AFFFFFF)
+    /** The deload swatch in a graph's key, a step brighter than the band so it reads at 10dp. */
+    val BandKey = Color(0x12FFFFFF)
+    /** The edge of a floating readout or sheet: white at 8%. */
+    val Edge = Color(0x14FFFFFF)
+    /** The drag readout's guide line: muted at 40%. */
+    val Guide = Color(0x66BFB6AA)
 }
 
 /**

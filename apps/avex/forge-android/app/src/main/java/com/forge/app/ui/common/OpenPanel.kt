@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -317,7 +318,13 @@ fun OpenDeltaBars(
  * bottom edge, with a dot on the latest value ringed in the page colour so it reads as "now".
  */
 @Composable
-fun OpenSparkline(values: List<Float>, modifier: Modifier = Modifier, description: String? = null) {
+fun OpenSparkline(
+    values: List<Float>,
+    modifier: Modifier = Modifier,
+    description: String? = null,
+    /** Just the line: no area under it and no dot on the latest value (Stats' Body readings). */
+    plain: Boolean = false,
+) {
     val accent = MaterialTheme.colorScheme.primary
     val ground = MaterialTheme.colorScheme.background
     Canvas(
@@ -344,10 +351,12 @@ fun OpenSparkline(values: List<Float>, modifier: Modifier = Modifier, descriptio
             lineTo(pts.first().x, size.height)
             close()
         }
-        drawPath(area, accent.copy(alpha = 0.10f))
+        if (!plain) drawPath(area, accent.copy(alpha = 0.10f))
         drawPath(line, accent, style = Stroke(2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-        drawCircle(ground, radius = dotR + 2.dp.toPx() / 2f, center = pts.last())
-        drawCircle(accent, radius = dotR - 2.dp.toPx() / 2f, center = pts.last())
+        if (!plain) {
+            drawCircle(ground, radius = dotR + 2.dp.toPx() / 2f, center = pts.last())
+            drawCircle(accent, radius = dotR - 2.dp.toPx() / 2f, center = pts.last())
+        }
     }
 }
 
@@ -412,5 +421,63 @@ fun OpenTopBarIcon(icon: ImageVector, label: String, onClick: () -> Unit, modifi
             .padding(13.dp)
     ) {
         Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
+    }
+}
+
+/**
+ * A page's tabs: mono labels with the selected one in ink over a 2dp red underline as wide as its
+ * word (Stats, Coach, Profile). Each label is a 48dp target.
+ */
+@Composable
+fun <T> OpenTabs(tabs: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit, modifier: Modifier = Modifier) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(26.dp), verticalAlignment = Alignment.Top) {
+        tabs.forEach { t ->
+            val on = t == selected
+            androidx.compose.foundation.layout.Column(
+                Modifier
+                    .touchSlop(vertical = 10.dp, horizontal = 6.dp)
+                    .selectable(selected = on, role = Role.Tab) { onSelect(t) }
+                    .padding(vertical = 10.dp, horizontal = 6.dp)
+                    .width(androidx.compose.foundation.layout.IntrinsicSize.Max),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    label(t).uppercase(),
+                    style = OpenType.monoM,
+                    color = if (on) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(2.dp)
+                        .then(if (on) Modifier.background(MaterialTheme.colorScheme.primary) else Modifier)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The page's one range (4W / 12W / 6M / All): mono labels, the chosen one in ink inside a quiet 4dp
+ * outline. Small on purpose: it sets the window, it is not the content.
+ */
+@Composable
+fun <T> OpenRangeSwitch(options: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit, modifier: Modifier = Modifier) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+        options.forEach { o ->
+            val on = o == selected
+            Box(
+                Modifier
+                    .touchSlop(vertical = 11.dp, horizontal = 2.dp)
+                    .selectable(selected = on, role = Role.RadioButton) { onSelect(o) }
+                    .padding(vertical = 11.dp, horizontal = 2.dp)
+                    .heightIn(min = 26.dp)
+                    .then(if (on) Modifier.border(1.dp, OpenColors.Rule, OpenCorner) else Modifier)
+                    .padding(horizontal = 10.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(label(o).uppercase(), style = OpenType.monoS, color = if (on) MaterialTheme.colorScheme.onBackground else OpenColors.Glyph)
+            }
+        }
     }
 }
