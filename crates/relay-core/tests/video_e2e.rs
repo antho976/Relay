@@ -2,7 +2,9 @@
 //! real worker, the starter checked, looked at and rendered. It needs Node.js 20+ and the network
 //! the first time, so it is ignored unless asked for:
 //!
-//! `cargo test -p relay-core --test all video_e2e -- --ignored --nocapture`
+//! `cargo test -p relay-core --test all video_e2e -- --ignored --nocapture --test-threads=1`
+//!
+//! One at a time: they share one store.
 //!
 //! The store and the kit are kept under the workspace's `target/video-e2e/` (on disk, about
 //! 600 MB, set up once), so a second run takes seconds.
@@ -76,7 +78,10 @@ fn video_e2e_the_starter_checks_looks_and_renders_for_real() {
     assert_eq!(checked["errors"], json!([]), "the starter typechecks: {checked}");
     let main = &checked["compositions"][0];
     assert_eq!((main["id"].as_str(), main["duration_frames"].as_u64()), (Some("main"), Some(120)));
-    assert_eq!(main["props_schema"]["properties"]["title"]["description"], "Headline");
+    // The schema is kept for video.get and the props panel; a check's answer leaves it out.
+    assert!(main.get("props_schema").is_none());
+    let kept = &ok(&e, "video.get", json!({"video_id": id}))["compositions"][0];
+    assert_eq!(kept["props_schema"]["properties"]["title"]["description"], "Headline");
     timed("second check", || ok(&e, "video.check", json!({"video_id": id})));
 
     let sheet = timed("sheet of 6", || ok(&e, "video.still", json!({"video_id": id, "count": 6})));
@@ -88,6 +93,8 @@ fn video_e2e_the_starter_checks_looks_and_renders_for_real() {
     for issue in sheet["issues"].as_array().unwrap() {
         assert!(!["unsafe", "font_fallback", "clipped", "broken_image", "console"].contains(&issue["kind"].as_str().unwrap()), "{issue}");
     }
+    let scanned = timed("scan every 3", || ok(&e, "video.scan", json!({"video_id": id})));
+    println!("scan: {} frames, issues {}", scanned["frames"], scanned["issues"]);
     let one = timed("one frame with boxes", || ok(&e, "video.still", json!({"video_id": id, "at": ["1.5s"], "boxes": true})));
     let ids: Vec<&str> = one["boxes"].as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap()).collect();
     assert!(ids.contains(&"title") && ids.contains(&"subtitle"), "{ids:?}");
@@ -114,7 +121,7 @@ fn video_e2e_the_starter_checks_looks_and_renders_for_real() {
     println!("broken: {}", broken["errors"]);
     assert_eq!(broken["errors"][0]["file"], "src/Video.tsx");
     assert_eq!(code(call(&e, "video.still", json!({"video_id": id}))), "video.build");
-    fs::write(&video, original.replace("const sub = useSpring(16);", "const sub = useSpring(16);\n  if (useCurrentFrame() > 30) throw new Error('scene two broke');")
+    fs::write(&video, original.replace("const sub = useSpring(4);", "const sub = useSpring(4);\n  if (useCurrentFrame() > 30) throw new Error('scene two broke');")
         .replace("import { AbsoluteFill, useVideoConfig } from 'remotion';", "import { AbsoluteFill, useCurrentFrame, useVideoConfig } from 'remotion';")).unwrap();
     let thrown = refused(call(&e, "video.still", json!({"video_id": id, "at": ["1.5s"]})));
     println!("thrown: {} {}", thrown.code, thrown.message);
@@ -161,5 +168,66 @@ fn video_e2e_first_check_after_writing() {
     fs::write(&video, fs::read_to_string(&video).unwrap().replace("gap: 36", "gap: 40")).unwrap();
     let checked = timed("first check after writing", || ok(&e, "video.check", json!({"video_id": id})));
     assert_eq!(checked["ok"], true, "{checked}");
+    ok(&e, "video.delete", json!({"video_id": id}));
+}
+
+/// The kit's screens and charts drawn for real: a phone laid out at iPhone points with its status
+/// bar and home indicator, a donut, bars, a tap and a counter. Typechecks clean and draws without
+/// issues; the sheet is printed to look at.
+#[test]
+#[ignore = "needs Node.js 20+ and the kit video_e2e sets up: run with --ignored"]
+fn video_e2e_the_kit_draws_screens_and_charts() {
+    let e = engine();
+    assert_eq!(ok(&e, "video.kit.status", json!({}))["state"], "ready", "run video_e2e_the_starter_checks_looks_and_renders_for_real first");
+    let made = ok(&e, "video.create", json!({"project_id": 1, "title": "Kit", "seconds": 4}));
+    let (id, dir) = (made["video"]["id"].as_i64().unwrap(), PathBuf::from(made["video"]["dir"].as_str().unwrap()));
+    fs::write(dir.join("src/Video.tsx"), r##"import { Bars, Counter, Donut, Glow, Gradient, Phone, Tap, theme, Title, useSafePadding } from '@relay/video';
+import { AbsoluteFill } from 'remotion';
+import type { Props } from './Root';
+
+const App: React.FC = () => (
+  <AbsoluteFill style={{ background: '#F6F7F9', padding: '64px 20px 0', fontFamily: 'Inter', gap: 16 }}>
+    <div data-id="app-title" style={{ fontSize: 28, fontWeight: 800, color: '#0B0D12' }}>October</div>
+    <Donut id="donut" size={220} thickness={30} track="#E6E9EE" highlight={0}
+      segments={[{ value: 32, color: '#34D399' }, { value: 24, color: '#60A5FA' }, { value: 18, color: '#F59E0B' }, { value: 26, color: '#A78BFA' }]}>
+      <div data-id="donut-total" style={{ fontSize: 24, fontWeight: 800, color: '#0B0D12' }}>$2,486</div>
+    </Donut>
+    <Bars id="bars" values={[320, 410, 280, 520, 390]} labels={['M', 'T', 'W', 'T', 'F']} colors="#34D399" width={340} height={180} highlight={3} labelColor="#5B6472" />
+  </AbsoluteFill>
+);
+
+export const Video: React.FC<Props> = ({ accent }) => {
+  const padding = useSafePadding();
+  return (
+    <AbsoluteFill>
+      <Gradient />
+      <Glow color={accent} />
+      <AbsoluteFill style={{ ...padding, alignItems: 'center', gap: 40 }}>
+        <Title id="headline" size={84}>Every euro, seen</Title>
+        <div style={{ position: 'relative' }}>
+          <Phone id="phone" width={460} designWidth={390} statusBar="dark" homeIndicator><App /></Phone>
+          <Tap x={230} y={520} at={50} />
+        </div>
+        <Counter id="saved" to={1240} prefix="$" size={theme.type.title} delay={10} />
+      </AbsoluteFill>
+    </AbsoluteFill>
+  );
+};
+"##).unwrap();
+    let checked = ok(&e, "video.check", json!({"video_id": id}));
+    assert_eq!((checked["ok"].as_bool(), checked["errors"].clone()), (Some(true), json!([])), "{checked}");
+    assert!(checked["compositions"][0].get("props_schema").is_none(), "a check answers no schema");
+    let sheet = timed("kit sheet", || ok(&e, "video.still", json!({"video_id": id, "at": ["0.5s", "1.8s", "3s"], "boxes": true})));
+    println!("kit sheet: {}", sheet["png"]);
+    println!("kit issues: {}", sheet["issues"]);
+    for issue in sheet["issues"].as_array().unwrap() {
+        assert!(!["font_fallback", "clipped", "broken_image", "console", "offscreen"].contains(&issue["kind"].as_str().unwrap()), "{issue}");
+    }
+    let ids: Vec<&str> = sheet["boxes"].as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap()).collect();
+    for wanted in ["phone", "donut", "bars", "app-title", "donut-total", "saved"] {
+        assert!(ids.contains(&wanted), "{wanted} not in {ids:?}");
+    }
+    let scanned = timed("kit scan", || ok(&e, "video.scan", json!({"video_id": id})));
+    println!("kit scan: {} frames, issues {}", scanned["frames"], scanned["issues"]);
     ok(&e, "video.delete", json!({"video_id": id}));
 }

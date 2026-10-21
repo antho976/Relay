@@ -59,11 +59,14 @@ problems it finds in what it drew:
 | `contrast` | Words too faint against the pixels under them |
 | `small_text` | Words too small to read on a phone |
 | `text_overlap` | Words drawn over other words |
+| `brief_text` | Words on screen too short a time to read (from `video.scan`) |
 | `font_fallback` | A font that is not there, so another stood in |
 | `broken_image` | A picture that did not load |
 | `console` | An error the page logged |
 
 `video.check` builds and typechecks the code first, answering each error at its file and line.
+`video.scan` checks the whole video every few frames without drawing pictures, judging words only
+where they come to rest, so an entrance or a transition is not taken for a fault.
 
 ## Where the work runs
 

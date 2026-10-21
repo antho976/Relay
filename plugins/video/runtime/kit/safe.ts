@@ -21,8 +21,13 @@ export const useSafeArea = (): Insets => {
   return safeArea(width, height);
 };
 
-/** Padding that keeps an AbsoluteFill's content inside the safe area. */
-export const useSafePadding = (): React.CSSProperties => {
+/** Padding that keeps an AbsoluteFill's content inside the safe area. Its sides are even by
+ * default (the larger of the two), so centred content stays on the frame's centre line; with
+ * `{ symmetric: false }` each side is its own, the most room there is. */
+export const useSafePadding = ({ symmetric = true }: { symmetric?: boolean } = {}): React.CSSProperties => {
   const s = useSafeArea();
-  return { paddingTop: s.top, paddingRight: s.right, paddingBottom: s.bottom, paddingLeft: s.left };
+  const side = Math.max(s.left, s.right);
+  return symmetric
+    ? { paddingTop: s.top, paddingRight: side, paddingBottom: s.bottom, paddingLeft: side }
+    : { paddingTop: s.top, paddingRight: s.right, paddingBottom: s.bottom, paddingLeft: s.left };
 };

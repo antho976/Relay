@@ -3,6 +3,7 @@
 // interpolate, spring, Img, OffthreadVideo, Audio) beside it freely.
 export * from './backgrounds';
 export * from './captions';
+export * from './charts';
 export * from './devices';
 export * from './fonts';
 export * from './motion';

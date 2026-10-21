@@ -1,6 +1,6 @@
 ---
 name: video-code
-description: Make videos with code in Relay - a video is a folder of React components that Remotion draws frame by frame (compositions, props and zod schemas, timing with useCurrentFrame, interpolate and spring, Sequence, Series and TransitionSeries, Img, OffthreadVideo and Audio with staticFile), Relay's kit (@relay/video - Title, Words, FitText, Counter, Highlight, Phone, Window, Tap, Cursor, Captions, Gradient, Grid, Glow, Grain, safe areas, bundled fonts, motion helpers), the loop of editing with your file tools then video.check (errors at file and line) and video.still (a picture or contact sheet with the problems found - clipped, offscreen, unsafe, contrast, small_text, text_overlap, font_fallback), assets through video.asset.add, putting a screen from a Relay design into a video, rendering with video.render and waiting on video.render.finished, versions, and the craft of pacing, type and layout for promos, explainers and social clips. Use whenever a task asks to make, edit, check or render a video, an animation to export as a video, a promo, a reel, a short, or a message starts with "[Relay video]".
+description: Make videos with code in Relay - a video is a folder of React components that Remotion draws frame by frame (compositions, props and zod schemas, timing with useCurrentFrame, interpolate and spring, Sequence, Series and TransitionSeries, Img, OffthreadVideo and Audio with staticFile), Relay's kit (@relay/video - Title, Words, FitText, Counter, Highlight, Phone drawn at phone points with its status bar, Window, Tap, Cursor, Donut and Bars charts, Captions, Gradient, Grid, Glow, Grain, safe areas, the theme, bundled fonts, motion helpers), the loop of editing with your file tools then video.check (errors at file and line), video.still (a picture or contact sheet with the problems found - clipped, offscreen, unsafe, contrast, small_text, text_overlap, font_fallback) and video.scan (the problems across the whole video, and words shown too briefly to read), assets through video.asset.add, putting a screen from a Relay design into a video, rendering with video.render and waiting on video.render.finished, versions, and the craft of pacing, type and layout for promos, explainers and social clips. Use whenever a task asks to make, edit, check or render a video, an animation to export as a video, a promo, a reel, a short, or a message starts with "[Relay video]".
 ---
 
 # Videos as code in Relay
@@ -24,8 +24,11 @@ project's **Design** view.
    means it does not build or throws; type errors leave `ok: true` but fix them anyway.
 5. `video.still {video_id, count: 8}` — a contact sheet across the whole video, every frame
    labelled `1.5s · f45`; or `at: ["0.5s", "2s", "end"]` for exact moments. Read the picture **and**
-   `issues`; fix what they show, then look again.
-6. `video.render {video_id}` when the person wants the file. Wait:
+   `issues`; fix what they show, then look again. Single frames (`at: ["2s"]`) to read small text.
+6. `video.scan {video_id}` before you call it done — every third frame of the whole video checked
+   without pictures (about a second for 15 s): what the stills' samples missed, and words on screen
+   too briefly to read.
+7. `video.render {video_id}` when the person wants the file. Wait:
    `bus.wait {events: ["video.render.finished"], matching: {"id": <render id>}, timeout_ms: 600000}`,
    then give them `path` (and say how long it is and its size).
 
@@ -38,17 +41,18 @@ about 600 MB the first time; say so). `video.kit.no_node` means Node.js is missi
 | Tool | Use |
 | --- | --- |
 | `video.list {project_id, session?}` | The project's videos, newest change first, each with its `dir`, size, length and last render. |
-| `video.get {video_id}` | One video: its `dir`, `entry`, compositions (with their props schema), the props the person set, the last 20 versions and renders. |
+| `video.get {video_id}` | One video: its `dir`, `entry`, compositions (with their props schema), the props the person set, the last 20 versions (each with the files it `changed`) and renders. |
 | `video.create {project_id, title?, shape?, width?, height?, fps?, seconds?}` | A new folder from the starter. `shape`: `vertical` (1080×1920, default), `landscape` (1920×1080), `square`, `portrait` (1080×1350). Sizes must be even. |
-| `video.check {video_id}` | Build + typecheck + list compositions. Errors: `{kind, file, line, col, message}`; kinds `syntax`, `bundle`, `type`, `runtime`, `probe`. |
-| `video.still {video_id, at? \| count?, from?, to?, composition?, scale?, props?, boxes?}` | The picture (`png`, attached through MCP) and `issues`; `boxes: true` adds every `data-id` element's box per frame. Default: 6 frames across it. |
+| `video.check {video_id}` | Build + typecheck + list compositions (id, size, fps, length; their props schemas are in `video.get`). Errors: `{kind, file, line, col, message}`; kinds `syntax`, `bundle`, `type`, `runtime`, `probe`. |
+| `video.still {video_id, at? \| count?, from?, to?, composition?, scale?, props?, boxes?}` | The picture (`png`, attached through MCP) and `issues`; `boxes: true` adds every `data-id` element's box per frame. Default: 6 frames across it. `scale` is against the composition's size (0.6 of 1080×1920 is 648×1152); by default one frame is 1280 px on its long side, a sheet's frames 480. |
+| `video.scan {video_id, every?, from?, to?, composition?, props?}` | The issues across the whole video (or `from`–`to`), measured every `every` frames (default 3) with no pictures: no `contrast`, but words in motion are left out of the position checks, and `brief_text` finds words shown too short a time to read. |
 | `video.render {video_id, format?, quality?, from?, to?, composition?, props?}` | A render job; answers the render row at once. `format`: `mp4` (default), `webm`, `gif`, `prores` (keeps transparency), `mp3`, `wav`. `quality`: `preview` (half size, quick), `standard`, `high`. Writes `out/<composition>-<id>.<ext>`. |
 | `video.render.get {render_id}` / `video.render.cancel {render_id}` | Where a render is; stop one. |
 | `video.asset.add {video_id, path, name?}` | Copy a file (picture, clip, sound, font) into `public/assets/`; answers `static_file` for `staticFile()`. |
 | `video.update {video_id, title?, composition?, props?}` | Rename; pick the default composition; set props (`{"main": {...}}`, `null` to reset). |
 | `video.version.restore {video_id, version}` | Put the code back as a version had it (the current code is recorded first). |
 | `video.delete {video_id}` / `video.restore {video_id}` | Only when the person asked. |
-| `video.kit.status {}` / `video.kit.install {}` | Whether this machine can render; set it up. |
+| `video.kit.status {}` / `video.kit.install {}` | Whether this machine can render; set it up. `kit_dir` is the kit's sources, to read when this skill is not enough; Remotion's types are in `node_modules/` under `root`. |
 
 Moments (`at`, `from`, `to`) are seconds as a number (`1.5`), or `"1.5s"`, `"1500ms"`, `"0:01.5"`,
 `"f45"` (a frame), `"50%"`, `"start"`, `"end"`. Past the end is the last frame.
@@ -59,7 +63,8 @@ Moments (`at`, `from`, `to`) are seconds as a number (`1.5`), or `"1.5s"`, `"150
 <dir>/
   src/index.ts     ← Relay's: registerRoot(relayRoot(Root)). Never change it.
   src/Root.tsx     ← compositions: id, size, fps, length, schema, defaultProps
-  src/Video.tsx    ← the video; split scenes into their own files as it grows
+  src/Video.tsx    ← the video: put each scene in a file of its own (src/Hook.tsx, …) and
+                     compose them here; replace the starter's scenes, it is only a start
   public/          ← what staticFile("…") names; video.asset.add puts files in public/assets/
   out/             ← renders
   tsconfig.json    ← extends the kit's settings
@@ -86,7 +91,10 @@ Packages you may import (nothing else is installed, and nothing can be): `remoti
 - `<Series>` plays `<Series.Sequence durationInFrames>` one after another — scenes in order.
 - `<TransitionSeries>` is Series with `<TransitionSeries.Transition presentation={fade()}
   timing={linearTiming({durationInFrames: 15})} />` between scenes; each transition **overlaps**
-  its neighbours, so the total is the sum of scenes minus the transitions.
+  its neighbours, so the total is the sum of scenes minus the transitions. The scene coming in
+  starts its own frame 0 when the transition starts: its entrances play while it is still
+  sliding or fading in. Delay them by the transition's length (`delay={15}`) to start once it has
+  arrived, or keep them to show motion through the cut.
 - Media: `<Img src={staticFile("assets/x.png")} />` (waits for the picture, unlike `<img>`),
   `<OffthreadVideo src=… />` for clips (`startFrom`, `endAt`, `muted`, `volume`),
   `<Audio src=… volume={(f) => …} />` for sound. Only `staticFile()` paths: no web addresses.
@@ -111,6 +119,9 @@ Motion (all pure functions of the frame):
 | `stagger(i, step = 4, base = 0)` | Delay of the i-th item in a list. |
 | `mix(p, a, b)`, `easeOut`, `easeIn`, `easeInOut`, `useSeconds()` | Helpers. |
 
+A negative `delay` starts an entrance before frame 0: `delay={-10}` has it well under way at the
+first frame, which is also the video's thumbnail.
+
 Text (each takes `id` → its `data-id`, `delay`, `style`, and `size`, `color`, `weight`, `font`, `align`):
 
 | Export | Use |
@@ -125,10 +136,18 @@ Screens and hands:
 
 | Export | Use |
 | --- | --- |
-| `<Phone src={staticFile(…)} width={520}>` or children | A modern phone, 19.5:9, with its island. |
+| `<Phone src={staticFile(…)} width={520}>` or children | A modern phone, 19.5:9, with its island. Its screen is `phoneScreen(width)`: 487 × 1093 px for 520, the island over its top 60 px. |
+| `<Phone width={460} designWidth={390} statusBar="dark" homeIndicator>…</Phone>` | Draw the app's screen at iPhone points (390 × about 875) and it is scaled to fit; `statusBar` / `homeIndicator` draw the time, signal, battery and home bar, `"dark"` for a light app (`true` is dark), `"light"` for a dark one. Leave about 54 points at the top for the status bar. |
 | `<Window src url title width height dark>` | A desktop app or browser window. |
-| `<Tap x y at>` | A tap ripple at frame `at` (coordinates in its parent). |
+| `<Tap x y at size? color?>` | A tap ripple at frame `at`, `size` px across (default 90): white with a dark edge, seen on light and dark screens. Coordinates in its parent: put it beside the phone in a `position: relative` box. |
 | `<Cursor stops={[{x, y, at, click}]}>` | A pointer gliding between stops and clicking. |
+
+Charts:
+
+| Export | Use |
+| --- | --- |
+| `<Donut segments={[{value, color}]} size thickness gap track highlight delay duration>` | A donut sweeping in, `highlight` lifting one segment; its children sit in the middle (a total). `thickness` of half the size is a pie. |
+| `<Bars values labels colors max width height gap radius highlight showValues format step delay>` | Bars growing in turn, `step` frames apart; `highlight` keeps one bright and dims the rest. |
 
 Captions, grounds, layout, look:
 
@@ -136,8 +155,8 @@ Captions, grounds, layout, look:
 | --- | --- |
 | `<Captions captions position highlight size>` | A few words at a time, the spoken one lit. `captionsFromText(text, startMs, wpm)` times plain text; `parseSrt` from `@remotion/captions` reads an `.srt`. |
 | `<Gradient from to angle turn>`, `<Grid>`, `<Glow x y color>`, `<Grain>` | Grounds that move a little. Put them first in an `AbsoluteFill`. |
-| `useSafeArea()`, `useSafePadding()`, `safeArea(w, h)` | The area text should stay in (the same numbers `unsafe` checks). |
-| `theme`, `defineTheme({colors, fonts, type})`, `scaleType(size, width)` | A starting look: dark ground, one accent, a type ramp for 1080 px. |
+| `useSafeArea()`, `useSafePadding()`, `safeArea(w, h)` | The area text should stay in (the same numbers `unsafe` checks). `useSafePadding()` is even left and right (the larger side), so centred content stays centred; `useSafePadding({symmetric: false})` gives each side its own. |
+| `theme`, `defineTheme({colors, fonts, type, radius})`, `scaleType(size, width)` | A starting look. `theme.colors`: `background` #0B0D12, `surface` #161A23, `text` #F5F7FA, `muted` #9AA3B2, `accent` #7DD3FC, `accentText` #06202B. `theme.type` (px for 1080 wide): `display` 128, `title` 88, `subtitle` 52, `body` 40, `caption` 34. `theme.fonts`: `display` and `body` Inter, `mono` JetBrains Mono. `theme.radius` 28. |
 | `fonts`, `loadFonts({family, file, weight})` | Bundled families: `Inter` (100–900, italic), `"Space Grotesk"` (300–700), `Fraunces` (serif, 100–900), `"JetBrains Mono"` (100–800). Other font files: `video.asset.add`, then `loadFonts` at module level. |
 
 ## Look at it — and read what it tells you
@@ -152,14 +171,17 @@ and what to do:
 | `offscreen` | Words run past the frame. Fine mid-entrance (one frame); a fault if it holds. |
 | `unsafe` | Words where Shorts/Reels/TikTok put their buttons and captions (vertical: 10% top, 12% right, 20% bottom, 6% left) or past a 5% margin: lay out inside `useSafePadding()`. |
 | `contrast` | Below 4.5:1 (body) or 3:1 (large) against the actual pixels under it: darken the ground behind the words, add a scrim (`linear-gradient(transparent, rgba(0,0,0,.6))`), or change the colour. |
-| `small_text` | Under about 2.2% of the frame's short side (24 px at 1080): people watch on phones. |
+| `small_text` | Under about 2.2% of the frame's short side (24 px at 1080) as drawn, scaling included: people watch on phones. An app's screen in a `Phone` or `Window` is context and not held to it; the words over it carry the message. |
 | `text_overlap` | Two runs of words over each other (not one inside the other). |
 | `font_fallback` | The family is not there and something else drew: use a kit family, one `fc-list` shows, or load the file. |
+| `brief_text` | (`video.scan`) Two words or more on screen less than 0.4 s and 0.3 s a word: hold them longer, or say less. |
 | `broken_image` / `console` | A picture did not load / the page logged an error. |
 
-An entrance animates through clipped or offscreen states for a frame or two; an issue on only the
-first frames of a scene is usually that. Look at the picture before deciding. `errors` in a still
-are frames that threw: fix them like `video.check`'s.
+A still judges each frame on its own, so an entrance or a transition caught mid-way can show
+`clipped`, `offscreen` or `unsafe` for words on their way somewhere: an issue on one frame of a
+scene's start is usually that. `video.scan` compares each frame with its neighbours and judges
+words only where they rest, so trust it for those. `errors` in a still are frames that threw: fix
+them like `video.check`'s. Words in an `aria-hidden` element are decoration and not read at all.
 
 Use `boxes: true` when you need exact positions: every element with a `data-id`, per frame, in
 the composition's px.
@@ -200,11 +222,17 @@ the composition's px.
   `Grid`, a 2–4% scale over the scene) so nothing looks frozen.
 - **Stay in the safe area,** and test the vertical crop: Shorts, Reels and TikTok cover the
   bottom fifth and the right edge with their own buttons and captions.
-- **Sound:** captions on by default (most watch muted); music under −18 LUFS-ish with `volume`
-  ramps (`interpolate` at the start and end), never cut mid-note: fade the last 0.5 s.
-- **App promos:** show the real screen (`Phone` with a design render or a screenshot), point at
-  what matters (`Cursor`, `Tap`, `Highlight`), one benefit per scene, end on the name and one
-  call to action, held 1.5–2 s.
+- **The first frame is the thumbnail.** Have the hook on screen at frame 0 (a negative `delay`),
+  not an empty ground fading up.
+- **Sound:** captions on by default (most watch muted). The kit has no music: ask the person for
+  a track (they give you a file; `video.asset.add` it) rather than leaving the video silent
+  unannounced or fetching one. Keep music around −18 LUFS with `volume` ramps (`interpolate` at the
+  start and end), never cut mid-note: fade the last 0.5 s.
+- **App promos:** show the real screen (`Phone` with a design render or a screenshot; with neither,
+  draw it at `designWidth={390}` with `statusBar` and `homeIndicator`), keep one phone on screen
+  across the feature scenes and change what it shows, point at what matters (`Cursor`, `Tap`,
+  `Highlight`, a `Donut`'s `highlight`), one benefit per scene, end on the name and one call to
+  action, held 1.5–2 s.
 - **Colour:** one accent; dark grounds suit phones; check `contrast` on every scene.
 - Name everything a check should report with `data-id` — titles, captions, buttons, cards.
 
@@ -236,7 +264,8 @@ export const BudgetScene: React.FC<{ accent: string }> = ({ accent }) => {
 ```
 
 Then `video.check`, then `video.still {at: ["0.3s", "1s", "2s"]}`: the title enters, the phone
-rises after it, and the tap lands on the button. Read the issues before moving on.
+rises after it, and the tap lands on the button. Read the issues before moving on, and
+`video.scan` once the whole video is there.
 
 ## Refusals
 

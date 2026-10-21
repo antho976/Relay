@@ -4,11 +4,12 @@ import { fade } from '@remotion/transitions/fade';
 import { AbsoluteFill, useVideoConfig } from 'remotion';
 import type { Props } from './Root';
 
-// Two scenes with a fade between them. Every element a check should name has a data-id.
+// Two scenes with a fade between them. Every element a check should name has a data-id. The
+// title is already entering at frame 0 (a negative delay): the first frame is the thumbnail.
 
 const Intro: React.FC<Props> = ({ title, subtitle, accent }) => {
   const padding = useSafePadding();
-  const sub = useSpring(16);
+  const sub = useSpring(4);
   const lastWord = title.trim().split(/\s+/).pop() ?? '';
   return (
     <AbsoluteFill>
@@ -16,7 +17,7 @@ const Intro: React.FC<Props> = ({ title, subtitle, accent }) => {
       <Glow color={accent} />
       <Grid />
       <AbsoluteFill style={{ ...padding, alignItems: 'center', justifyContent: 'center', gap: 36 }}>
-        <Words id="title" text={title} highlight={[lastWord]} highlightColor={accent} size={theme.type.display} />
+        <Words id="title" text={title} highlight={[lastWord]} highlightColor={accent} size={theme.type.display} delay={-10} />
         <div data-id="subtitle" style={{
           fontFamily: theme.fonts.body, fontSize: theme.type.subtitle, color: theme.colors.muted, textAlign: 'center',
           textWrap: 'balance', ...rise(sub, 24),
