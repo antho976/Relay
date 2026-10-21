@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+# The integration tests are listed below: most are one executable, tests/all.rs.
+autotests = false
 
 [dependencies]
 relay-bus.workspace = true
@@ -46,3 +48,37 @@ ureq = { version = "3", default-features = false, features = ["rustls", "json"] 
 # The native client's headless half: tests/native_input.rs sends its mirror payload builders.
 [dev-dependencies]
 ctor = "1"
+
+# Most of tests/ links as one executable (tests/all.rs). These files change process-wide state
+# (`set_var`, `set_current_dir`), so each keeps an executable of its own.
+[[test]]
+name = "all"
+path = "tests/all.rs"
+
+[[test]]
+name = "integration_registry"
+path = "tests/integration_registry.rs"
+
+[[test]]
+name = "money"
+path = "tests/money.rs"
+
+[[test]]
+name = "phase12"
+path = "tests/phase12.rs"
+
+[[test]]
+name = "store"
+path = "tests/store.rs"
+
+[[test]]
+name = "task_edges"
+path = "tests/task_edges.rs"
+
+[[test]]
+name = "transcript"
+path = "tests/transcript.rs"
+
+[[test]]
+name = "usage_source"
+path = "tests/usage_source.rs"

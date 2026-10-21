@@ -75,7 +75,7 @@ fn a_seeded_worktree_rebuilds_only_its_own_crates() {
 }
 
 /// The real thing, by hand: `RELAY_SEED_REPO=<checkout> RELAY_SEED_INTO=<new worktree path>
-/// cargo test -p relay-core --test build_seed -- --ignored --nocapture` builds the seed for the
+/// cargo test -p relay-core --test all -- build_seed:: --ignored --nocapture` builds the seed for the
 /// checkout's HEAD under its `.relay/build-seed/`, then checks HEAD out at the second path and
 /// copies the seed in, for timing a first build there (docs/perf/FIXES-2026-10-16.md).
 #[test]

@@ -381,7 +381,7 @@ fn a_replay_whose_result_was_not_kept_says_it_applied() {
 // --- Timings ----------------------------------------------------------------------------------
 
 /// W7: an undo re-adding 5,000 top-level nodes, and the full answer that keeps what its own undo
-/// expects. Run with `cargo test --release -p relay-core --test design_expect -- --ignored --nocapture`.
+/// expects. Run with `cargo test --release -p relay-core --test all -- design_expect:: --ignored --nocapture`.
 #[test]
 #[ignore]
 fn measure_an_undo_of_a_5000_node_delete() {

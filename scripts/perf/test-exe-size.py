@@ -3,10 +3,12 @@
 
 Every integration-test file is an executable of its own, linked against the whole engine: with
 full debug info each was ~450 MB, and one `cargo test` wrote 22 GB and held 12 GB of RAM in
-its linkers. Line tables only brought them to ~170 MB. This fails when the largest test
-executable, or all of them together, grows past its budget: debug info come back, a heavy
-dependency, or many new test files (each one is another link of the engine; add tests to an
-existing file where one fits). Lower a budget when the number drops.
+its linkers. Line tables only brought them to ~170 MB, and linking most of `relay-core`'s as one
+executable (`tests/all.rs`, docs/perf/FIXES-2026-10-20.md) cut 67 links of the engine to 8. This
+fails when the largest test executable, or all of them together, grows past its budget: debug
+info come back, a heavy dependency, or new test executables (each one is another link of the
+engine; declare a new `relay-core` test file in `tests/all.rs`). Lower a budget when the number
+drops.
 
     python3 scripts/perf/test-exe-size.py                 # the budgets below
     python3 scripts/perf/test-exe-size.py --max-mb 200 --total-gb 10
@@ -22,9 +24,10 @@ import subprocess
 import sys
 
 # 2026-10-18, rust 1.99, dev profile with line tables only: 62 executables, largest 184 MB, all
-# 9.5 GB. With full debug info the largest was ~450 MB.
-MAX_MB = 210
-TOTAL_GB = 11
+# 9.5 GB. With full debug info the largest was ~450 MB. 2026-10-20, `relay-core`'s tests as one
+# executable: 24 executables, largest (that one) 223 MB, all 3.0 GB.
+MAX_MB = 250
+TOTAL_GB = 3.5
 
 
 def executables(extra):

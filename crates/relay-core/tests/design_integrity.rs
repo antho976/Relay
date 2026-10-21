@@ -492,7 +492,7 @@ fn an_undo_attaches_before_it_re_adds() {
 /// move into another parent on the same page, a delete (which reads every connector's ends) and a
 /// move to another page (which places them). Each list's undo runs after it, untimed, so every run
 /// starts from the same design. Run with
-/// `cargo test --release -p relay-core --test design_integrity -- --ignored --nocapture`.
+/// `cargo test --release -p relay-core --test all -- design_integrity:: --ignored --nocapture`.
 #[test]
 #[ignore]
 fn measure_apply_beside_1500_connectors() {
