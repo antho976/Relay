@@ -19,7 +19,8 @@ starter, `~/.local/share/relay-v4/<instance>/videos/p<project>/<id>-<title>/`:
 | `out/` | Renders, `<composition>-<render id>.<ext>` |
 | `tsconfig.json` | Extends the kit's settings |
 
-Agents edit the folder with their own file tools. With the **Video** plugin on (`plugins/video/`),
+Agents edit the folder with their own file tools; the starter is recorded as version 1 when the
+video is made. With the **Video** plugin on (`plugins/video/`),
 every session of the project may write under `videos/p<project>/` (`guardrail::config`), Claude and
 Codex get that folder with `--add-dir` at launch, and every agent gets the `video-code` skill and
 the plugin's rules. The ops are BUS.md §10.19.
@@ -57,9 +58,12 @@ diagnostics, and a frame that threw mapped through the bundle's source maps.
 
 ## Checks
 
-`relayRoot` wraps Remotion's frame seek: while a still is drawn (`RELAY_PROBE`), each frame is
-measured once every hold on it (pictures, fonts) has gone, and the measurement goes out as one
-console line. It holds the box and opacity of every element with a `data-id`, every run of words
+`relayRoot` wraps Remotion's frame seek: while a still is drawn or a scan runs (`RELAY_PROBE`), each
+frame is measured once every hold on it (pictures, fonts) has gone and React has committed it, and
+the measurement goes out as one console line. The commit is known from `FrameMark`, a component
+`relayRoot` draws beside `Root` that records the timeline's frame in a layout effect: Remotion
+seeks by setting state, and a render's tabs go from frame to frame, so a page measured on the
+animation frame Remotion releases its own hold could still show the frame before. It holds the box and opacity of every element with a `data-id`, every run of words
 with its box, font (and whether that font is really there, by measuring against two fallbacks),
 colour, opacity and the box that clips it, and the pictures that did not load. The engine
 (`video/probe.rs`) turns that and the drawn pixels into issues, each once with the frames it was
@@ -70,11 +74,21 @@ found on:
 | `clipped` | words pass a box that hides its overflow by more than 2 px, while some of them show |
 | `offscreen` | words run past the frame's edge, while some of them are in it |
 | `unsafe` | words inside the frame cross the safe area: a frame taller than 3:2 keeps 10% top, 12% right, 20% bottom and 6% left free (Shorts, Reels and TikTok lay their buttons and captions there); any other 5% each side |
-| `small_text` | words under 2.2% of the frame's short side, drawn at least half opaque |
+| `small_text` | words under 2.2% of the frame's short side as drawn (scaling included), at least half opaque, not in an app's screen (`data-relay-screen`, which `Phone` and `Window` mark) or decoration (`aria-hidden`) |
 | `font_fallback` | the first family named is not there |
-| `contrast` | under 4.5:1 (3:1 for words at least 4% of the short side) against the median of the pixels under them that are not the words' colour |
+| `contrast` | under 4.5:1 (3:1 for words at least 4% of the short side), the words judged as drawn (their colour over the ground at their opacity, so dimmed words read dim) against the median of the pixels under them that are not the words' colour; words fading below half their opacity are not judged |
 | `text_overlap` | two runs of words, both drawn whole and neither inside the other, overlap by more than 20% of the smaller (a crossfade's are not) |
+| `brief_text` | (`video.scan` only) a run of two words or more on screen less than 0.4 s and 0.3 s a word, not cut short by the end; a number counting keeps its run, and words typed in count as their longest |
 | `broken_image`, `console` | a picture that did not load; an error the page logged |
+
+`offscreen` and `unsafe` allow a fifth of the words' size past an edge: a run's box is its glyphs',
+which rise above its line box, so words laid out exactly at the safe edge are inside it.
+
+`video.scan` measures every few frames (default 3) with Remotion's `renderFrames` and no pictures
+(`imageFormat: none`): about a second for 15 s of video. It judges position (`clipped`,
+`offscreen`, `unsafe`, `text_overlap`) only for words at rest — the same box and opacity as in the
+frames measured before and after — so an entrance, an exit or a transition is not a fault. It has
+no `contrast`, which needs the pixels; a still's frames have it.
 
 ## Versions
 
@@ -95,6 +109,8 @@ the code as it is, then puts the version's back, and is undone by restoring the 
   to play or show in their folder; and its versions, to restore.
 - **Render** offers a preview (half size), MP4, high-quality MP4, WebM, GIF, ProRes with
   transparency, and the sound alone. Progress shows over the player, with **Stop**.
+- A video opens on its poster; **Play** loads its newest render into the player (the media pipeline
+  starts then, not when the board opens).
 - **Ask agent** pauses the player and sends the video's terminal one line: the video, the moment
   on screen (`1.5s · f45`), your request and the `video.still` that shows the agent that frame. It
   goes as a design's Ask does: typed at an agent at its prompt, priority mail to one at work, held
@@ -109,8 +125,8 @@ the code as it is, then puts the version's back, and is undone by restoring the 
 | The hub, folders and rows | `crates/relay-core/src/video/mod.rs` |
 | The worker's process and protocol | `crates/relay-core/src/video/worker.rs` |
 | Setting up the kit | `crates/relay-core/src/video/kit.rs` |
-| check and still: versions first, stills, sheets, posters | `crates/relay-core/src/video/stills.rs` |
-| Issues from probed frames | `crates/relay-core/src/video/probe.rs` |
+| check, still and scan: versions first, stills, sheets, posters | `crates/relay-core/src/video/stills.rs` |
+| Issues from probed frames, motion between them, reading time | `crates/relay-core/src/video/probe.rs` |
 | PNGs, sheets with labels, contrast | `crates/relay-core/src/video/sheet.rs` |
 | Versions | `crates/relay-core/src/video/versions.rs` |
 | The render queue | `crates/relay-core/src/video/jobs.rs` |
