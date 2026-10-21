@@ -375,6 +375,36 @@ class StatsRepository @Inject constructor(
         }
     }
 
+    /** One lift of a session against the last time it was done. */
+    data class LiftDelta(
+        val exerciseName: String,
+        /** Best working e1RM this session vs the previous bout's, in percent. Null: no comparable bout. */
+        val pct: Float?,
+    )
+
+    /**
+     * "Each lift vs last time" for a finished session (the redesign's bar mark on Home): every
+     * non-skipped exercise with sets, in session order, compared on best working e1RM against its own
+     * previous bout before this session started. Bodyweight and timed lifts have no e1RM and come back
+     * null, as does a lift done for the first time. A finished session never changes, so callers
+     * memoise by session id.
+     */
+    suspend fun liftDeltas(sessionId: Long): List<LiftDelta> {
+        val session = sessionDao.get(sessionId) ?: return emptyList()
+        val exercises = loggedExerciseDao.forSession(sessionId).filterNot { it.skipped }
+        val setsByExId = loggedSetDao.allForSession(sessionId).groupBy { it.loggedExerciseId }
+        return exercises.mapNotNull { ex ->
+            val sets = setsByExId[ex.id].orEmpty()
+            if (sets.isEmpty()) return@mapNotNull null
+            val now = com.forge.app.domain.adapt.bestWorkingE1rm(sets)
+            val prev = if (now == null) null else
+                loggedExerciseDao.lastLoggedBeforeTime(ex.exerciseId, session.startedAt)
+                    ?.let { com.forge.app.domain.adapt.bestWorkingE1rm(loggedSetDao.forLoggedExercise(it.id)) }
+            val pct = if (now != null && prev != null && prev > 0.0) ((now - prev) / prev * 100.0).toFloat() else null
+            LiftDelta(Program.exerciseDisplayName(ex.exerciseId, ex.swappedName), pct)
+        }
+    }
+
     /**
      * The full per-session breakdown that drives the session-detail page: the session row's
      * aggregates plus every non-skipped exercise with its sets. Pure read — assembled off the

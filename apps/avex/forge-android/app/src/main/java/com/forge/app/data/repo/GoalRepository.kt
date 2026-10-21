@@ -89,4 +89,15 @@ class GoalRepository @Inject constructor(
 
     /** How many set goals have been reached — feeds the Goal Crusher trophy. */
     suspend fun achievedCount(): Int = goalsWithProgress().count { it.achieved }
+
+    /**
+     * Each lift's heaviest working set before [beforeMs] (the 30-days-ago end of Home's "↑ 10 in 30d"
+     * change line), from the same per-rep frontier the session page uses for "best at the time". A lift
+     * with no set before then is absent: a change from nothing is not a change.
+     */
+    suspend fun bestWeightBefore(exerciseIds: List<String>, beforeMs: Long): Map<String, Double> =
+        if (exerciseIds.isEmpty()) emptyMap()
+        else loggedSetDao.repMaxFrontierBeforeSession(exerciseIds, beforeMs)
+            .groupBy { it.exerciseId }
+            .mapValues { (_, rows) -> rows.maxOf { it.weightLb } }
 }

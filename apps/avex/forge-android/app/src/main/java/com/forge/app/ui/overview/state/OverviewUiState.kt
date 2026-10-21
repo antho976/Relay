@@ -77,6 +77,12 @@ data class OverviewUiState(
     val weekRestDays: Set<Int> = emptySet(),
     /** The planned day's word (PUSH, PULL, LEGS…) per training day, same indices; empty without fixed weekdays. */
     val weekDayWords: Map<Int, String> = emptyMap(),
+    /**
+     * Days the fixed-weekday schedule plans a training day on, same indices as [weekDaysTrained].
+     * With [weekRestDays] it lets the week dots tell planned, rest and unplanned apart; both are
+     * empty in sequence mode, where every day reads as unplanned.
+     */
+    val weekPlannedDays: Set<Int> = emptySet(),
     /** Custom name for the next-up day set by the user, or null if using the program default. */
     val customDayName: String? = null,
     /** Combined gym + cardio, sorted newest first, capped at 3. */
@@ -86,5 +92,7 @@ data class OverviewUiState(
     /** Lift-target goals + auto-tracked custom goals (achieved-first/closest-first). Home previews the
      *  top few as progress lines — the ambient motivator that replaced the generic coach entry. */
     val goals: List<com.forge.app.data.repo.GoalRepository.GoalProgress> = emptyList(),
-    val customGoals: List<com.forge.app.data.repo.ExtendedGoalRepository.Progress> = emptyList()
+    val customGoals: List<com.forge.app.data.repo.ExtendedGoalRepository.Progress> = emptyList(),
+    /** Each lift goal's heaviest set now minus 30 days ago, in lb, by exercise id. Absent: no set then. */
+    val liftGoalChange30dLb: Map<String, Double> = emptyMap()
 )

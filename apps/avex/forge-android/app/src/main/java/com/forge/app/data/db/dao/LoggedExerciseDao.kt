@@ -94,6 +94,25 @@ interface LoggedExerciseDao {
     """)
     suspend fun lastLoggedBefore(exerciseId: String, excludeSessionId: Long): LoggedExercise?
 
+    /**
+     * The newest real bout of [exerciseId] in a finished, tracked session that STARTED before
+     * [beforeStartedAt]: "last time" as of an older session. [lastLoggedBefore] answers it for the
+     * live session, where every other session is earlier; Home's recent rows need it for sessions that
+     * are not the newest, where "any other session" would find the newer one.
+     */
+    @Query("""
+        SELECT le.* FROM logged_exercise le
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE le.exercise_id = :exerciseId
+          AND s.started_at < :beforeStartedAt
+          AND s.finished_at IS NOT NULL
+          AND s.is_untracked = 0
+          AND le.skipped = 0
+          AND EXISTS (SELECT 1 FROM logged_set ls WHERE ls.logged_exercise_id = le.id)
+        ORDER BY s.started_at DESC, le.id DESC LIMIT 1
+    """)
+    suspend fun lastLoggedBeforeTime(exerciseId: String, beforeStartedAt: Long): LoggedExercise?
+
     @Query("""
         SELECT COUNT(*) FROM logged_exercise le
         INNER JOIN session s ON le.session_id = s.id

@@ -107,6 +107,9 @@ internal fun buildOverviewUiState(
         weekDayWords = stats.weekPlannedDays.mapNotNull { (i, key) ->
             Program.dayOrNull(key)?.word?.takeIf { it.isNotBlank() }?.let { i to it }
         }.toMap(),
+        weekPlannedDays = stats.weekPlannedDays.keys.filter { i ->
+            Program.dayOrNull(stats.weekPlannedDays.getValue(i)) != null
+        }.toSet(),
         recentItems = recentItems
     )
 }

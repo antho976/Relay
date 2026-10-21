@@ -103,6 +103,12 @@ object PreferenceKeys {
     /** Set of tile IDs that are HIDDEN. Empty = show all. Tile IDs: "gym", "cardio", "trophies", "streak", "deload". */
     val HIDDEN_OVERVIEW_TILES = stringSetPreferencesKey("hidden_overview_tiles")
 
+    /**
+     * Home's two reading slots, left then right, comma-joined (2026-10-21 redesign): ids of
+     * `HomeSlot`, default "sleep,last_session". A view choice, so a settings reset puts the defaults back.
+     */
+    val HOME_SLOTS = stringPreferencesKey("home_slots")
+
     // ─── Note templates (#113) ────────────────────────────────────────────────
     /** User-defined note templates shown as quick-insert chips. Default set is hard-coded in SettingsRepository. */
     val NOTE_TEMPLATES = stringSetPreferencesKey("note_templates")
