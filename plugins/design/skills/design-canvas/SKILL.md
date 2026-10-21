@@ -132,8 +132,8 @@ More you can reach for:
 - **Runs**: parts of a text in a style of their own: `"text": "8.4 km", "runs": [{"start": 3,
   "end": 6, "font_size": 14, "color": "#8C877F"}]`. 1 to 64, in order, not overlapping, counted in
   characters (`end` not included), each setting `color`, `font`, `font_size`, `font_weight`,
-  `italic`, `underline`, `strike` or `rise` (px above the baseline). Changing `text` means sending
-  `runs` (or `null`) with it.
+  `italic`, `underline`, `strike`, `rise` (px above the baseline) or `letter_spacing` (px).
+  Changing `text` means sending `runs` (or `null`) with it.
 - **`max_lines`** (1 to 1000) cuts a text after that many lines with "…". It needs a width to wrap
   at: a sticky, a shape's label, or a text with a fixed `w` or `w_sizing: "fill"`; a hugging text is
   refused.

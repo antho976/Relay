@@ -116,6 +116,7 @@ fn text_key(n: &Node, wrap: Option<f64>) -> u64 {
         (run.italic, run.underline, run.strike).hash(&mut h);
         run.font_size.map(f64::to_bits).hash(&mut h);
         run.rise.map(f64::to_bits).hash(&mut h);
+        run.letter_spacing.map(f64::to_bits).hash(&mut h);
     }
     wrap.map(|w| (w * 100.0).round() as i64).hash(&mut h);
     h.finish()
@@ -154,7 +155,7 @@ fn shown_text(n: &Node) -> (String, Vec<usize>) {
 /// What a run of a text sets of its own, as Pango attributes for its stretch (the caller sets
 /// where they start and end): colour (its alpha too), family, size with its line's height
 /// (`line_height` times it, so a larger run raises its line as CSS does), weight, italic,
-/// underline, strike and rise. A colour that does not parse (a `$name` not yet resolved) is left
+/// underline, strike, rise and letter spacing. A colour that does not parse (a `$name` not yet resolved) is left
 /// to the node's.
 fn run_attrs(n: &Node, run: &TextRun) -> Vec<pango::Attribute> {
     let units = |px: f64| (px * pango::SCALE as f64).round() as i32;
@@ -187,6 +188,9 @@ fn run_attrs(n: &Node, run: &TextRun) -> Vec<pango::Attribute> {
     }
     if let Some(rise) = run.rise {
         out.push(pango::AttrInt::new_rise(units(rise)).into());
+    }
+    if let Some(ls) = run.letter_spacing {
+        out.push(pango::AttrInt::new_letter_spacing(units(ls)).into());
     }
     out
 }
@@ -1882,7 +1886,7 @@ mod tests {
     }
 
     fn run(start: u32, end: u32) -> TextRun {
-        TextRun { start, end, color: None, font: None, font_size: None, font_weight: None, italic: None, underline: None, strike: None, rise: None }
+        TextRun { start, end, color: None, font: None, font_size: None, font_weight: None, italic: None, underline: None, strike: None, rise: None, letter_spacing: None }
     }
 
     #[test]

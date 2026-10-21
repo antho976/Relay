@@ -509,6 +509,10 @@ pub struct TextRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = -1000, max = 1000))]
     pub rise: Option<f64>,
+    /// Extra space between its letters, in px, -100 to 1000: a spaced-out label in a sentence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = -100, max = 1000))]
+    pub letter_spacing: Option<f64>,
 }
 
 impl TextRun {
@@ -522,6 +526,7 @@ impl TextRun {
             || self.underline.is_some()
             || self.strike.is_some()
             || self.rise.is_some()
+            || self.letter_spacing.is_some()
     }
 }
 
@@ -1844,7 +1849,7 @@ impl Node {
                 return Err(format!("runs[{i}]: starts at {s}, inside runs[{}] ({} to {}); give them in order without overlap", i - 1, prev.start, prev.end));
             }
             if !run.styled() {
-                return Err(format!("runs[{i}]: give it a style (color, font, font_size, font_weight, italic, underline, strike or rise)"));
+                return Err(format!("runs[{i}]: give it a style (color, font, font_size, font_weight, italic, underline, strike, rise or letter_spacing)"));
             }
             if let Some(c) = run.color.as_deref().filter(|c| !colour_ok(c)) {
                 return Err(not_a_colour(&format!("runs[{i}].color"), c));
@@ -1852,7 +1857,7 @@ impl Node {
             if run.font.as_ref().is_some_and(|f| f.is_empty() || f.chars().count() > MAX_NAME) {
                 return Err(format!("runs[{i}].font: a family name of 1 to {MAX_NAME} characters"));
             }
-            for (field, value, lo, hi) in [("font_size", run.font_size, 1.0, 1000.0), ("rise", run.rise, -1000.0, 1000.0)] {
+            for (field, value, lo, hi) in [("font_size", run.font_size, 1.0, 1000.0), ("rise", run.rise, -1000.0, 1000.0), ("letter_spacing", run.letter_spacing, -100.0, 1000.0)] {
                 if let Some(v) = value.filter(|v| !v.is_finite() || !(lo..=hi).contains(v)) {
                     return Err(format!("runs[{i}].{field}: {v} is outside {lo} to {hi}"));
                 }
@@ -2228,7 +2233,8 @@ mod tests {
             (json!([{"start": 3, "end": 7, "italic": true}]), "runs[0].end: 7 is past the text's 6 characters"),
             (json!([{"start": 0, "end": 4, "italic": true}, {"start": 3, "end": 6, "strike": true}]),
                 "runs[1]: starts at 3, inside runs[0] (0 to 4); give them in order without overlap"),
-            (json!([{"start": 2, "end": 4}]), "runs[0]: give it a style (color, font, font_size, font_weight, italic, underline, strike or rise)"),
+            (json!([{"start": 2, "end": 4}]), "runs[0]: give it a style (color, font, font_size, font_weight, italic, underline, strike, rise or letter_spacing)"),
+            (json!([{"start": 0, "end": 1, "letter_spacing": 1001}]), "runs[0].letter_spacing: 1001 is outside -100 to 1000"),
             (json!([{"start": 2, "end": 2, "italic": true}]), "runs[0]: start (2) is not before end (2)"),
             (json!([{"start": 0, "end": 1, "color": "grey"}]), "runs[0].color: \"grey\" is not #RGB, #RRGGBB, #RRGGBBAA or a $name colour"),
             (json!([{"start": 0, "end": 1, "font_size": 0}]), "runs[0].font_size: 0 is outside 1 to 1000"),

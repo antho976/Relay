@@ -47,7 +47,7 @@ class DesignModelTest {
         assertNull(link.points)
         // Round two's fields arrive.
         val name = got.nodes.single { it.id == "name" }
-        assertEquals(DesignTextRun(start = 15, end = 21, color = "\$accent", font = "Geist Mono", fontSize = 14.0, italic = true, underline = true, strike = false, rise = 2.0), name.runs!![1])
+        assertEquals(DesignTextRun(start = 15, end = 21, color = "\$accent", font = "Geist Mono", fontSize = 14.0, italic = true, underline = true, strike = false, rise = 2.0, letterSpacing = 1.0), name.runs!![1])
         assertEquals(1, name.maxLines)
         val progress = got.nodes.single { it.id == "progress" }
         assertEquals(DesignArc(start = 0.0, sweep = 270.0, inner = 0.8, cap = "round"), progress.arc)

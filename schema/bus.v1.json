@@ -27054,6 +27054,16 @@
           "description": "Px above the baseline (negative below), -1000 to 1000: a superscript, a raised unit.",
           "minimum": -1000,
           "maximum": 1000
+        },
+        "letter_spacing": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Extra space between its letters, in px, -100 to 1000: a spaced-out label in a sentence.",
+          "minimum": -100,
+          "maximum": 1000
         }
       },
       "required": [
