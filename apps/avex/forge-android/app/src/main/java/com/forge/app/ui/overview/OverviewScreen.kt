@@ -771,7 +771,7 @@ private fun RecentRow(item: OverviewRecentItem, onClick: () -> Unit) {
     val ink = MaterialTheme.colorScheme.onBackground
     val title = item.displayTitle(com.forge.app.ui.cardio.LocalCardioTypes.current)
     val date = Instant.ofEpochMilli(item.timestampMs).atZone(ZoneId.systemDefault()).toLocalDate()
-    val dow = date.dayOfWeek.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.getDefault())
+    val dow = date.dayOfWeek.getDisplayName(java.time.format.TextStyle.SHORT, com.forge.app.ui.common.currentLocale())
     val sub = listOfNotNull(
         item.durationMin?.let { "$it min" },
         if (item.isGym) item.topLift else item.distanceKm?.let {

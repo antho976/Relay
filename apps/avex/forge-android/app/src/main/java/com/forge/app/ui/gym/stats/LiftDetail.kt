@@ -192,7 +192,7 @@ private fun TopSetRow(s: LiftSession, unit: WeightUnit, modifier: Modifier = Mod
     val date = Instant.ofEpochMilli(s.t).atZone(ZoneId.systemDefault()).toLocalDate()
     Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.width(34.dp)) {
-            OpenLabel(date.dayOfWeek.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.getDefault()), style = OpenType.monoXS)
+            OpenLabel(date.dayOfWeek.getDisplayName(java.time.format.TextStyle.SHORT, com.forge.app.ui.common.currentLocale()), style = OpenType.monoXS)
             Text("${date.dayOfMonth}", style = OpenType.figureS, color = ink)
         }
         Text(
