@@ -190,7 +190,7 @@ plus domain events (`session.state`, `session.output` on the data plane, `guardr
 `ui.toast` from the shell model of §6.5). `design.changed` carries the `Design` row, never its
 nodes; `design.deleted` is `{id, project_id}` (§10.18). Rule: **every
 mutation emits at least one event**, and every event's payload is reproducible by a query op.
-`design.asset.add` and `design.picture.add` are the exception: they store a content-addressed file and
+`design.asset.add`, `design.picture.add` and `video.asset.add` are the exception: they store a file and
 change no row any query shows, so they emit no event (a documented exemption). From `design.apply`,
 `design.changed` also carries `prev_rev` (the rev before the list), `touched` (the ids it added, changed
 or moved), `removed` (the ids it removed, at most 100 of each), `all: true` when either list was cut,
@@ -610,11 +610,12 @@ allow-sets, straight from SPEC §3's agent action list plus reads:
 | `reviewer` | all queries · `mailbox.*` · `notes.append` · `overlap.flag` · `task.changelog.write` / `task.comment` on the reviewed task · `session.done/report/intent/claim/release` (self) · `device.claim/release` · `usage.report` · `guardrail.check` — **nothing** that writes files, commits, or moves the task |
 | `docs` | builder's set minus `task.link_commit`/`integration.request`, plus `notes.create/update` |
 
-**Open to every role:** `design.*` (`guardrail::OPEN_TO_EVERY_ROLE`) passes layer 3 for every role
-whatever its allowlist says, so a saved list cannot shut it out. A design is the person's to ask for
-and to undo: every `design.apply` answers with its inverse, which the board's Undo replays through
-`audit.undo`; `design.purge` stays the person's by its registry actors. Agents are told to touch a
-design only when asked.
+**Open to every role:** `design.*` and `video.*` (`guardrail::OPEN_TO_EVERY_ROLE`) pass layer 3 for
+every role whatever its allowlist says, so a saved list cannot shut them out. A design is the
+person's to ask for and to undo: every `design.apply` answers with its inverse, which the board's
+Undo replays through `audit.undo`; `design.purge` stays the person's by its registry actors. A video
+likewise: its changes carry inverses, its code keeps every version, and the Video plugin decides
+where the ops exist at all (D167). Agents are told to touch a design or a video only when asked.
 
 No role moves a task on the board: an agent hands its task to review with `session.done`, which
 judges the branch first (§9.2), waits for the task's other builders and tells the reviewer. A
@@ -1353,6 +1354,51 @@ tests an index's condition on every node write, which cost each write ~12,000 in
 Migration v31 (schema 31) adds `design_icons`, Relay's icon set (`design.icon.*`): one row per saved
 outline icon by name, with its path, its keywords and who saved it when. Nothing in a design refers
 to a row: an icon node that names one carries its path in `icon_path`.
+
+### 10.19 video
+
+Videos written as code (D167, docs/VIDEO.md): a video is a folder of Remotion code under the store's
+`videos/p<project>/<id>-<slug>/`, which agents edit with their own file tools, and a `videos` row.
+Every op but `video.kit.status` comes with the Video plugin (`plugin video`): an agent may call them
+only in a project with it on, and gets the project's videos folder as a write root there
+(`guardrail::config`). What reads the folder through the Node worker runs unlocked or staged (D149).
+
+| op | attrs | payload → result |
+|---|---|---|
+| `video.list` | query · plugin `video` | `{ project_id, session?, include_deleted? }` → `{ videos: Video[] }` — newest change first, each with its newest render (`last_render`) |
+| `video.get` | query · plugin `video` | `{ video_id }` → `{ video, entry, compositions, props, versions, renders }` — the compositions as the last check found them (with their props schema as JSON Schema), the props the person set by composition, the newest 20 versions and renders |
+| `video.create` | mutation · always · inverse · plugin `video` | `{ project_id, title? = "Untitled video", shape? = vertical, width?, height?, fps? = 30, seconds? = 10, session? }` → `{ video, entry, files, kit, next }` — the folder from the starter (`src/index.ts`, `src/Root.tsx`, `src/Video.tsx`, `tsconfig.json`, `public/`), written in the transaction. `shape`: vertical 1080×1920, landscape 1920×1080, square 1080×1080, portrait 1080×1350; `width` and `height` together instead, 16–7680 and even (`video.size`); `fps` 1–120 (`video.fps`); `seconds` 1–600 (`video.seconds`). Session rules as `design.create`'s (`video.session`) |
+| `video.update` | mutation · always · inverse · plugin `video` | `{ video_id, title?, session?: string \| null, composition?, props?: {<composition>: object \| null} }` → `Video` — props are checked against the composition's schema as the last check found it (type, `enum`, no unknown name where `additionalProperties` is false: `video.props`); `null` drops a composition's props; an unknown composition is `video.composition` |
+| `video.delete` / `video.restore` | mutation · always · inverse · plugin `video` | `{ video_id }` → `{}` / `Video` — soft; the retention pass purges the rows of one deleted past `undo.grace_days` and leaves its folder. Any other op on a deleted one is `conflict` / `video.deleted` |
+| `video.check` | query · unlocked · plugin `video` | `{ video_id }` → `{ ok, errors: CodeError[], compositions, version }` — bundles, typechecks and lists the compositions through the worker; `ok` is false for `syntax`, `bundle` or `runtime` errors (`type` and `probe` leave it true). Keeps the compositions, and the default one's size, rate and length, on the row (`video.changed` when they changed) |
+| `video.still` | query · unlocked · plugin `video` | `{ video_id, composition?, at?: Moment[] (≤24) \| count? (2–24, default 6), from?, to?, scale? (0.05–1), props?, boxes? }` → `{ png, composition, frames: {frame, at_ms, label}[], boxes?, issues: Issue[], errors?, version }` — draws the frames (one, or a labelled contact sheet) into `video-stills/<uuid>.png` beside the store (the newest 64 kept) and checks them (`clipped`, `offscreen`, `unsafe`, `text_overlap`, `small_text`, `font_fallback`, `contrast`, `broken_image`, `console`; each once with the frames it was found on; at most 40). Through MCP the picture is attached. Nothing drawn: `invalid` / `video.build` or `video.runtime` (the first error at its file and line, `details.errors` all); `video.composition`; `video.moment` |
+| `video.render` | mutation · always · staged · plugin `video` | `{ video_id, composition?, format? = mp4, quality? = standard, from?, to?, props? }` → `VideoRender` (`queued`) — records the code's version, queues the render and answers; renders run one at a time, oldest first, into `out/<composition>-<id>.<ext>`. `format`: mp4 (H.264), webm (VP8), gif, prores (4444, transparency kept, `.mov`), mp3, wav; `quality`: preview (half size, CRF 28), standard, high (CRF 14) |
+| `video.render.get` | query · unlocked · plugin `video` | `{ render_id }` → `VideoRender` |
+| `video.render.cancel` | mutation · always · plugin `video` | `{ render_id }` → `VideoRender` — a queued one at once; a running one through the worker, its thread then marking it `cancelled` |
+| `video.asset.add` | mutation · always · staged · plugin `video` | `{ video_id, path, name? }` → `{ static_file, path, bytes, kind, w?, h? }` — copies a file (at most 4 GiB) into `public/assets/` under a safe name, never over another file (a taken name gets `-2`, …; the same content is the same asset); an agent's relative path is read from its own checkout. Changes no row and emits nothing, as `design.asset.add` (§3.3) |
+| `video.version.restore` | mutation · always · inverse · staged · plugin `video` | `{ video_id, version }` → `{ video, previous }` — records the code as it is, then puts the folder back as `version` had it (files written from their kept contents, files it did not hold removed; `out/`, `public/assets/`, dot-files and files over 2 MiB untouched) and records that; `previous` is the version a restore of which undoes it. An unknown version is `not_found` / `video.version` |
+| `video.kit.status` | query · unlocked · global | `{}` → `{ state, root, node?, remotion, error?, about }` — `state`: missing, installing, ready, outdated, failed, no_node |
+| `video.kit.install` | mutation · always · global · plugin `video` | `{}` → the status (`installing`) — sets the kit up on a thread (npm install of the pinned packages, then Remotion's browser), then `video.kit.changed` |
+
+**Moments** (`at`, `from`, `to`) are seconds as a number, or `"1.5s"`, `"1500ms"`, `"0:01.5"`, `"f45"`,
+`"50%"`, `"start"` or `"end"`; one past the end is the last frame. **Versions**: each check, still
+and render records the folder's code (a manifest of path, sha-256 and size; contents kept once by hash
+in `videos/.relay/blobs/`) when it differs from the newest version's; an unlocked one through
+`Engine::system_write` (audit op `video.version`). **Events**: `video.changed` (the `Video` row) on
+every change to the row, a new version and a new poster; `video.render.changed` (the `VideoRender`
+row) at each change of state and each tenth of a render's progress, never per frame; and
+`video.render.finished` (the row) once it is done, failed or cancelled — what an agent waits on with
+`matching: {"id": <render id>}`; `video.kit.changed` (the kit's status) when setting up starts and ends.
+
+**The kit refuses** what needs the worker until it is set up: `unavailable` / `video.kit.missing`
+(with the last setup's error), `video.kit.installing`, `video.kit.outdated` (set up for other pinned
+versions) or `video.kit.no_node` (no Node.js 20+), each with a hint. The worker's own failures are
+`unavailable` / `video.worker` (it stopped; `details.stderr` its last lines) or `video.timeout`.
+
+Migration v34 (schema 34) adds `videos` (the folder, the default composition and its size, rate and
+length, the compositions and props as JSON, the newest version, the poster), `video_versions`
+(manifests by video and number) and `video_renders` (the job and its file); renders still queued or
+running when the engine starts are failed (`video::jobs::reconcile`).
 
 ---
 

@@ -136,6 +136,8 @@ mod task_comments;
 mod threads;
 #[path = "upload.rs"]
 mod upload;
+#[path = "video.rs"]
+mod video;
 #[path = "worktree_dirty.rs"]
 mod worktree_dirty;
 

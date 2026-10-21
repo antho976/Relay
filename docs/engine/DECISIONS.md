@@ -1075,3 +1075,28 @@ The *why* behind anything surprising. Append; never rewrite history. Reference a
   records that note as `note_id` (`task.create {note_id}`, store v26; `task.list {note_id}`
   lists them). The link is refused across projects and to a deleted note, and purging the note
   clears it rather than the task.
+- **D167 Videos are code that Remotion renders, through a worker the engine keeps.** Agents make
+  videos (app promos, explainers, social clips) by writing React that Remotion draws frame by
+  frame, because they already write React fluently and a browser draws anything a video needs
+  (CSS, SVG, canvas, WebGL, Lottie, charts); a timeline or node format of Relay's own would have
+  been a language agents learn only from a skill, capped by what its painter draws. A video is a
+  folder of code beside the store (`videos/p<project>/<id>-<slug>/`) that agents edit with their own
+  file tools — the Video plugin makes the project's folder a write root and an `--add-dir` — plus a
+  `videos` row. Headless Chrome is a render tool here, as ffmpeg is, never a webview: the UI stays
+  native (PRODUCT.md). One Node.js process per instance (`videos/.relay/worker.mjs`, JSON lines on
+  stdio) keeps each video's bundle, a TypeScript service and one browser between requests, so a
+  still after an edit takes about 0.2 s rather than a cold start's seconds; it is spawned like
+  `llama-server` (its own process group, a parent-death signal, a waiting thread), every caller
+  waits on its own answer with a deadline and no lock held, and it stops after ten idle minutes.
+  It is not a one-shot child, so it does not go through `proc::output_with_timeout`; setting the
+  kit up (npm, the browser download) does. The kit — Remotion, React, TypeScript and four OFL font
+  families at pinned versions, about 600 MB with the browser — is set up once on request
+  (`video.kit.install`), never at startup, and Relay passes Remotion no licence key, so it sends
+  no usage reports. What the agent sees is checked: Relay's `src/index.ts` registers the root
+  through `relayRoot`, which wraps Remotion's frame seek to measure each drawn frame (boxes of
+  `data-id` elements, every run of words with its font, colour, opacity and clip) and reads the
+  compositions' zod schemas; the engine turns that and the pixels into issues (clipped, offscreen,
+  unsafe for a platform's buttons, contrast, small text, overlap, a font that fell back). Because
+  agents' edits never pass through Relay, each check, still and render records the folder's code
+  as a version when it changed (content-addressed blobs), which is what restore and undo work
+  from.
