@@ -40,9 +40,9 @@ class RootReadingsTest {
         assertEquals("None planned", holidayReading(periods, today))
     }
 
-    @Test fun `cardio count reads as added sports`() {
-        assertEquals("None added", cardioReading(0))
-        assertEquals("1 added", cardioReading(1))
-        assertEquals("4 added", cardioReading(4))
+    @Test fun `cardio count reads as sports of your own`() {
+        assertEquals("0 of your own", cardioReading(0))
+        assertEquals("1 of your own", cardioReading(1))
+        assertEquals("4 of your own", cardioReading(4))
     }
 }

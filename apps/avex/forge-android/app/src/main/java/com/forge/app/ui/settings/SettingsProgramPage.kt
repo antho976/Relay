@@ -9,8 +9,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.FlowRowScope
 import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,16 +18,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.TrendingDown
-import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.EditNote
-import androidx.compose.material.icons.rounded.Shuffle
-import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -40,8 +34,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.schedule.WeeklySchedule
@@ -49,18 +47,25 @@ import com.forge.app.program.Equipment
 import com.forge.app.program.EquipmentPreset
 import com.forge.app.program.equipmentGroups
 import com.forge.app.program.equipmentPresets
+import com.forge.app.ui.common.OpenLabel
+import com.forge.app.ui.common.touchSlop
+import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.onboarding.EXPERIENCE_DETAILS
 import com.forge.app.ui.onboarding.GOAL_DETAILS
 import com.forge.app.ui.onboarding.OnboardingIcons
+import com.forge.app.ui.theme.OpenColors
+import com.forge.app.ui.theme.OpenIcons
+import com.forge.app.ui.theme.OpenType
 
 /**
- * Program & equipment: what the plan is built from. A menu of four focused sections (Plan, Goal &
- * experience, Emphasis & priorities, Equipment), each row carrying its live value, then rotation
- * and the three actions that rebuild the plan. The open section is hoisted to [SettingsScreen] so
- * every back returns to this menu before leaving it.
+ * Program & equipment (Relay design "sp"): the plan in one line, then what shapes it. The page
+ * opens on the plan as a serif line, the days a week as seven chips and the session length beside
+ * its name, then the four things that shape the plan (schedule, goal, emphasis, equipment) as rows
+ * with their live values, the rotation, and the actions that rebuild it. The open section is
+ * hoisted to [SettingsScreen] so every back returns to this page before leaving it.
  */
 internal enum class ProgramSection(val title: String) {
-    Plan("Plan"),
+    Plan("Schedule"),
     Goal("Goal & experience"),
     Emphasis("Emphasis & priorities"),
     Equipment("Equipment")
@@ -73,11 +78,13 @@ internal fun ProgramPage(
     section: ProgramSection?,
     onSectionChange: (ProgramSection?) -> Unit,
     onBack: () -> Unit,
-    onOpenBuilder: () -> Unit = {}
+    onOpenBuilder: () -> Unit = {},
+    /** The active plan's split ("Upper · Lower", see [splitLabel]). */
+    split: String = ""
 ) {
     SettingsScaffold(section?.title ?: "Program & equipment", onBack) {
         when (section) {
-            null -> ProgramMenu(state, vm, onOpenBuilder) { onSectionChange(it) }
+            null -> ProgramMenu(state, vm, split, onOpenBuilder) { onSectionChange(it) }
             ProgramSection.Plan -> PlanSection(state, vm)
             ProgramSection.Goal -> GoalExperienceSection(state, vm)
             ProgramSection.Emphasis -> EmphasisSection(state, vm)
@@ -86,25 +93,102 @@ internal fun ProgramPage(
     }
 }
 
-// ─── Menu root ───────────────────────────────────────────────────────────────
+// ─── The page ────────────────────────────────────────────────────────────────
 
 @Composable
 private fun ProgramMenu(
     state: SettingsUiState,
     vm: SettingsViewModel,
+    split: String,
     onOpenBuilder: () -> Unit,
     onOpen: (ProgramSection) -> Unit
 ) {
     val scheduleMode by vm.scheduleMode.collectAsState()
-    SettingsGroup("Your plan") {
-        SettingsNavigationRow("Plan", planSummary(state, scheduleMode), SettingsIcons.Program) { onOpen(ProgramSection.Plan) }
-        SettingsNavigationRow("Goal & experience", goalSummary(state), OnboardingIcons.forGoal(state.userGoal)) { onOpen(ProgramSection.Goal) }
-        SettingsNavigationRow("Emphasis & priorities", emphasisSummary(state), Icons.Rounded.Tune) { onOpen(ProgramSection.Emphasis) }
-        SettingsNavigationRow("Equipment", equipmentSummary(state), OnboardingIcons.forPreset(activePreset(state)?.id ?: "everything")) {
-            onOpen(ProgramSection.Equipment)
+    var rebuild by remember { mutableStateOf<Rebuild?>(null) }
+    ProgramMenuContent(
+        state, scheduleMode, split,
+        ProgramMenuActions(
+            open = onOpen,
+            openBuilder = onOpenBuilder,
+            setDays = vm::setDaysPerWeek,
+            setMinutes = vm::setSessionMinutes,
+            setRotation = vm::setRotationCadence,
+            rebuild = { rebuild = Rebuild.GENERATE },
+            reroll = { rebuild = Rebuild.REROLL },
+            deload = { rebuild = Rebuild.DELOAD }
+        )
+    )
+    rebuild?.let { r -> RebuildConfirm(r, state.daysPerWeek, vm) { rebuild = null } }
+}
+
+/** What the Program page's top can change, so it draws without its view model (goldens). */
+internal class ProgramMenuActions(
+    val open: (ProgramSection) -> Unit = {},
+    val openBuilder: () -> Unit = {},
+    val setDays: (Int) -> Unit = {},
+    val setMinutes: (Int?) -> Unit = {},
+    val setRotation: (String, Int) -> Unit = { _, _ -> },
+    val rebuild: () -> Unit = {},
+    val reroll: () -> Unit = {},
+    val deload: () -> Unit = {}
+)
+
+/** The Program page's own content (Relay design "sp"), laid into [SettingsScaffold]'s column. */
+@Composable
+internal fun ProgramMenuContent(
+    state: SettingsUiState,
+    scheduleMode: String,
+    split: String,
+    actions: ProgramMenuActions
+) {
+    val vm = actions
+    val onOpen = actions.open
+    val onOpenBuilder = actions.openBuilder
+    // The plan in one line.
+    Column {
+        OpenLabel("Your plan", style = OpenType.monoXS)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            if (state.freestyleMode) "Freestyle" else planLine(split, state.daysPerWeek),
+            style = OpenType.figureRow,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Spacer(Modifier.height(8.dp))
+        OpenLabel(
+            planCaption(state, scheduleMode),
+            style = OpenType.monoXS,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+    }
+
+    // Days and length: the two values the plan is cut to, set right here.
+    Column {
+        SettingsGroupHeader("Days", trailing = "${state.daysPerWeek} a week")
+        DayCountChips(state.daysPerWeek) { vm.setDays(it) }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "Sets your weekly target on Home. The split changes when you rebuild the plan.",
+            style = OpenType.bodyS,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (!state.freestyleMode) {
+            Spacer(Modifier.height(18.dp))
+            val lengths = com.forge.app.program.SessionEstimate.SESSION_LENGTH_CHOICES
+            SettingsSegmentedRow(
+                "Session length",
+                lengths.map { com.forge.app.program.SessionEstimate.sessionLengthLabel(it) },
+                lengths.indexOf(state.sessionMinutes).takeIf { it >= 0 } ?: lengths.lastIndex
+            ) { vm.setMinutes(lengths[it]) }
         }
+    }
+
+    SettingsGroup("What shapes it") {
+        SettingsNavigationRow(ProgramSection.Plan.title, planSummary(state, scheduleMode)) { onOpen(ProgramSection.Plan) }
+        SettingsNavigationRow(ProgramSection.Goal.title, goalSummary(state)) { onOpen(ProgramSection.Goal) }
+        SettingsNavigationRow(ProgramSection.Emphasis.title, emphasisSummary(state)) { onOpen(ProgramSection.Emphasis) }
+        SettingsNavigationRow(ProgramSection.Equipment.title, equipmentSummary(state)) { onOpen(ProgramSection.Equipment) }
         // The builder is its own screen, not a fifth section.
-        SettingsNavigationRow("Plan builder", "Edit each day and exercise by hand", Icons.Rounded.EditNote, onClick = onOpenBuilder)
+        SettingsNavigationRow("Plan builder", "Edit each day and exercise by hand", onClick = onOpenBuilder)
     }
 
     SettingsGroup("Rotation") {
@@ -118,20 +202,83 @@ private fun ProgramMenu(
             supporting = "After this many finished sessions",
             stacked = true
         ) { i ->
-            if (i == 0) vm.setRotationCadence("never", state.rotationEveryN)
-            else vm.setRotationCadence("every_n", listOf(4, 8, 12)[i - 1])
+            if (i == 0) vm.setRotation("never", state.rotationEveryN)
+            else vm.setRotation("every_n", listOf(4, 8, 12)[i - 1])
         }
     }
 
-    var rebuild by remember { mutableStateOf<Rebuild?>(null) }
-    SettingsGroup("Rebuild", footer = "A new plan replaces the current one, built from the settings on this page.") {
-        SettingsActionRow("Generate a new ${state.daysPerWeek}-day plan", "A fresh split and exercise picks", Icons.Rounded.AutoAwesome) {
-            rebuild = Rebuild.GENERATE
+    // The one rebuild as drawn, then the two lighter ones as plain words: each replaces the plan
+    // too, behind the same confirm.
+    Column {
+        SettingsButton("Rebuild the plan from these", kind = ButtonKind.Outlined, onClick = vm.rebuild)
+        Spacer(Modifier.height(4.dp))
+        OpenLabel("History and records stay; only the plan changes", style = OpenType.monoXS)
+        Spacer(Modifier.height(12.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+            ProgramTextAction("Re-roll exercises", vm.reroll)
+            ProgramTextAction("Start a deload week", vm.deload)
         }
-        SettingsActionRow("Re-roll exercises now", "Same split, new movement picks", Icons.Rounded.Shuffle) { rebuild = Rebuild.REROLL }
-        SettingsActionRow("Deload week", "A lighter week to recover", Icons.AutoMirrored.Rounded.TrendingDown) { rebuild = Rebuild.DELOAD }
     }
-    rebuild?.let { r -> RebuildConfirm(r, state.daysPerWeek, vm) { rebuild = null } }
+}
+
+/** A quiet action as words (14/600 ink), a 48dp target. */
+@Composable
+private fun ProgramTextAction(label: String, onClick: () -> Unit) {
+    Text(
+        label,
+        style = com.forge.app.ui.theme.SettingsType.chip,
+        color = MaterialTheme.colorScheme.onBackground,
+        modifier = Modifier
+            .touchSlop(vertical = 15.dp, horizontal = 4.dp)
+            .clickableLabeled(label, onClick = onClick)
+            .padding(vertical = 15.dp, horizontal = 4.dp)
+    )
+}
+
+/** "60 min sessions · in sequence": what the serif line leaves out. */
+private fun planCaption(state: SettingsUiState, scheduleMode: String): String = when {
+    state.freestyleMode -> "No fixed plan · log as you go"
+    else -> buildList {
+        add(state.sessionMinutes?.let { "$it min sessions" } ?: "Any session length")
+        add(if (scheduleMode == WeeklySchedule.MODE_WEEKDAY) "by weekday" else "in sequence")
+    }.joinToString(" · ")
+}
+
+/**
+ * Days a week as seven chips, 1 to 7, lit up to the count (the design's week of lit days): tap a
+ * number to set it. Each is a radio for TalkBack, the picked count the one selected.
+ */
+@Composable
+private fun DayCountChips(days: Int, onSelect: (Int) -> Unit) {
+    val accent = MaterialTheme.colorScheme.primary
+    val shape = RoundedCornerShape(4.dp)
+    Row(
+        Modifier.fillMaxWidth().selectableGroup().semantics { contentDescription = "Days per week" },
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        (1..7).forEach { n ->
+            val lit = n <= days
+            Box(
+                Modifier
+                    .weight(1f)
+                    .touchSlop(vertical = 2.dp)
+                    .selectable(selected = n == days, role = Role.RadioButton) { onSelect(n) }
+                    .padding(vertical = 2.dp)
+                    .heightIn(min = 44.dp)
+                    .clip(shape)
+                    .background(if (lit) accent.copy(alpha = 0.15f) else Color.Transparent)
+                    .border(1.dp, if (lit) accent else OpenColors.Rule, shape)
+                    .semantics { contentDescription = "$n ${if (n == 1) "day" else "days"} a week" },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "$n",
+                    style = OpenType.monoM.copy(fontWeight = if (lit) FontWeight.Bold else FontWeight.Normal),
+                    color = if (lit) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
 }
 
 /** The four Settings actions that replace the plan in one tap. */
@@ -179,11 +326,11 @@ private fun RebuildConfirm(
     )
 }
 
-/** "4 days a week · in sequence" — the Plan row's live value. */
+/** "In sequence" — the Schedule row's live value. */
 private fun planSummary(state: SettingsUiState, scheduleMode: String): String = when {
     state.freestyleMode -> "Freestyle · log as you go"
-    scheduleMode == WeeklySchedule.MODE_WEEKDAY -> "${state.daysPerWeek} days a week · by weekday"
-    else -> "${state.daysPerWeek} days a week · in sequence"
+    scheduleMode == WeeklySchedule.MODE_WEEKDAY -> "Following a plan · by weekday"
+    else -> "Following a plan · in sequence"
 }
 
 /** "Build muscle · Intermediate" — the Goal & experience row's live value. */
@@ -195,8 +342,8 @@ private fun goalSummary(state: SettingsUiState): String {
 /** "Balanced · 2 prioritized" — the Emphasis & priorities row's live value. */
 private fun emphasisSummary(state: SettingsUiState): String = buildList {
     add(EMPHASIS_OPTIONS.firstOrNull { it.first == state.programEmphasis }?.second ?: "Balanced")
-    if (state.priorityMuscles.isNotEmpty()) add("${state.priorityMuscles.size} prioritized")
-    if (state.problemAreas.isNotEmpty()) add("${state.problemAreas.size} flagged")
+    add("${state.priorityMuscles.size} prioritized")
+    add("${state.problemAreas.size} sore spots")
 }.joinToString(" · ")
 
 /** "Basic gym · 45 lb plates" — the Equipment row's live value (preset name when one is active). */
@@ -207,7 +354,7 @@ private fun equipmentSummary(state: SettingsUiState): String {
     return "$base · ${plateHardwareLabel(state.plateWeightLb, state.weightUnit)} plates"
 }
 
-private fun activePreset(state: SettingsUiState): EquipmentPreset? = equipmentPresets.firstOrNull {
+internal fun activePreset(state: SettingsUiState): EquipmentPreset? = equipmentPresets.firstOrNull {
     state.availableEquipment == it.equipment && state.frozenExerciseIds == it.frozenIds
 }
 
@@ -225,14 +372,14 @@ private val EMPHASIS_OPTIONS = listOf(
     "legs" to "Legs", "arms-shoulders" to "Arms & shoulders"
 )
 
-// ─── Plan ──────────────────────────────────────────────────────────────────────
+// ─── Schedule ──────────────────────────────────────────────────────────────────
 
 @Composable
 private fun PlanSection(state: SettingsUiState, vm: SettingsViewModel) {
     val mode by vm.scheduleMode.collectAsState()
     val schedule by vm.weeklySchedule.collectAsState()
 
-    SettingsGroup("How you train") {
+    SettingsGroup("How you train", rowGap = KitPickGap) {
         SettingsRadioRow("Follow a plan", !state.freestyleMode, "A fixed split the coach adapts week by week") {
             vm.setFreestyleMode(false)
         }
@@ -241,38 +388,11 @@ private fun PlanSection(state: SettingsUiState, vm: SettingsViewModel) {
         }
     }
 
-    SettingsGroup("Days per week", footer = "Sets your weekly target on Home. Your split changes the next time you generate.") {
-        SettingsGroupBlock(padding = PaddingValues(12.dp)) {
-            SettingsSegmented(
-                options = DAY_COUNT_OPTIONS,
-                selectedIndex = state.daysPerWeek - 1,
-                onSelect = { vm.setDaysPerWeek(it + 1) },
-                contentDescription = "Days per week"
-            )
-        }
-    }
-
     // A schedule orders a plan's workouts; freestyle has none to order.
     if (!state.freestyleMode) {
-        val lengths = com.forge.app.program.SessionEstimate.SESSION_LENGTH_CHOICES
-        SettingsGroup(
-            "Minutes per session",
-            footer = "Each workout is trimmed to fit: accessories go first, your main lifts stay. " +
-                "Used the next time you generate or re-roll."
-        ) {
-            SettingsGroupBlock(padding = PaddingValues(12.dp)) {
-                SettingsSegmented(
-                    options = lengths.map { com.forge.app.program.SessionEstimate.sessionLengthLabel(it) },
-                    selectedIndex = lengths.indexOf(state.sessionMinutes).takeIf { it >= 0 } ?: lengths.lastIndex,
-                    onSelect = { vm.setSessionMinutes(lengths[it]) },
-                    contentDescription = "Minutes per session"
-                )
-            }
-        }
-
-        SettingsGroup("Schedule") {
+        SettingsGroup("Order") {
             SettingsSegmentedRow(
-                "Order",
+                "Workouts come",
                 listOf("In sequence", "By weekday"),
                 if (mode == WeeklySchedule.MODE_WEEKDAY) 1 else 0,
                 supporting = if (mode == WeeklySchedule.MODE_WEEKDAY) "Each weekday is pinned to a workout"
@@ -293,16 +413,13 @@ private fun PlanSection(state: SettingsUiState, vm: SettingsViewModel) {
                         value = options[index].second,
                         options = options.map { it.second },
                         selectedIndex = index,
-                        valueColor = if (index == 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+                        valueColor = if (index == 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onBackground
                     ) { vm.setScheduleDay(wd, options[it].first) }
                 }
             }
         }
     }
 }
-
-/** "1".."7", built once: the segmented control keys its label measurements on this list. */
-private val DAY_COUNT_OPTIONS = (1..7).map { "$it" }
 
 private val WEEKDAYS = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
@@ -311,12 +428,12 @@ private val WEEKDAYS = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Fri
 /** The same words and rep ranges onboarding asked with (one home for the copy). */
 @Composable
 private fun GoalExperienceSection(state: SettingsUiState, vm: SettingsViewModel) {
-    SettingsGroup("Goal", footer = "Same exercises, different loading. Switch anytime.") {
+    SettingsGroup("Goal", footer = "Same exercises, different loading. Switch anytime.", rowGap = KitPickGap) {
         GOAL_DETAILS.forEach { (key, label, desc, meta) ->
             SettingsRadioRow(label, state.userGoal == key, "$desc ${meta.replace('-', '–')}.", OnboardingIcons.forGoal(key)) { vm.setUserGoal(key) }
         }
     }
-    SettingsGroup("Experience", footer = "Sets your volume and which movements you're given.") {
+    SettingsGroup("Experience", footer = "Sets your volume and which movements you're given.", rowGap = KitPickGap) {
         EXPERIENCE_DETAILS.forEach { (key, label, desc, meta) ->
             SettingsRadioRow(label, state.experience == key, "$meta · $desc") { vm.setExperience(key) }
         }
@@ -327,7 +444,7 @@ private fun GoalExperienceSection(state: SettingsUiState, vm: SettingsViewModel)
 
 @Composable
 private fun EmphasisSection(state: SettingsUiState, vm: SettingsViewModel) {
-    SettingsGroup("Emphasis", footer = "A volume lean toward one region.") {
+    SettingsGroup("Emphasis", footer = "A volume lean toward one region.", rowGap = KitPickGap) {
         EMPHASIS_OPTIONS.forEach { (value, label) ->
             SettingsRadioRow(label, state.programEmphasis == value) { vm.setProgramEmphasis(value) }
         }
@@ -339,7 +456,7 @@ private fun EmphasisSection(state: SettingsUiState, vm: SettingsViewModel) {
             }
         }
     }
-    SettingsGroup("Problem areas", footer = "Flag a sore joint and the plan steers around it.") {
+    SettingsGroup("Sore spots", footer = "Flag a sore joint and the plan steers around it.") {
         SettingsChipBlock {
             com.forge.app.program.ProblemArea.entries.forEach { a ->
                 SettingsFilterChip(a.displayName.sentenceCase(), a.code in state.problemAreas) { vm.toggleProblemArea(a.code) }
@@ -430,9 +547,7 @@ private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
     Column {
         SettingsButton(
             "Regenerate for this equipment",
-            Modifier.fillMaxWidth(),
-            kind = if (equipmentEdited) ButtonKind.Primary else ButtonKind.Tonal,
-            icon = Icons.Rounded.AutoAwesome
+            kind = if (equipmentEdited) ButtonKind.Primary else ButtonKind.Outlined
         ) {
             regenerate = true
         }
@@ -446,11 +561,12 @@ private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
 /** A titled chip set inside the Loading group. */
 @Composable
 private fun LoadingChips(title: String, chips: @Composable FlowRowScope.() -> Unit) {
-    SettingsGroupBlock(padding = PaddingValues(start = KitRowPad, end = KitRowPad, top = 14.dp, bottom = 8.dp)) {
-        Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-        Spacer(Modifier.height(6.dp))
+    Column {
+        Text(title, style = OpenType.rowTitleL, color = MaterialTheme.colorScheme.onBackground)
+        Spacer(Modifier.height(12.dp))
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             content = chips
         )
     }
@@ -479,17 +595,18 @@ private fun GearTile(
     meta: String? = null
 ) {
     val scheme = MaterialTheme.colorScheme
-    val shape = RoundedCornerShape(12.dp)
+    val shape = RoundedCornerShape(4.dp)
     val select = if (role == Role.Checkbox) {
         Modifier.toggleable(value = selected, role = role, onValueChange = { onClick() })
     } else {
         Modifier.selectable(selected = selected, role = role, onClick = onClick)
     }
+    // The chips' look at tile size: the rule-grey edge, the accent wash under an accent edge once on.
     Box(
         modifier
             .clip(shape)
-            .background(if (selected) scheme.primaryContainer else kitRowColor())
-            .then(if (selected) Modifier.border(1.dp, scheme.primary, shape) else Modifier)
+            .background(if (selected) kitWash() else Color.Transparent)
+            .border(1.dp, if (selected) scheme.primary else OpenColors.Rule, shape)
             .then(select)
     ) {
         Column(
@@ -497,31 +614,26 @@ private fun GearTile(
             horizontalAlignment = if (meta == null) Alignment.CenterHorizontally else Alignment.Start,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Icon(icon, contentDescription = null, tint = if (selected) scheme.onSurface else scheme.onSurfaceVariant, modifier = Modifier.size(26.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Icon(icon, contentDescription = null, tint = if (selected) scheme.onBackground else scheme.onSurfaceVariant, modifier = Modifier.size(24.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 // minLines keeps a row of tiles one height; no maxLines, so long names wrap at 200%.
                 Text(
                     label,
-                    style = if (meta == null) MaterialTheme.typography.bodySmall else MaterialTheme.typography.titleSmall,
-                    color = if (selected) scheme.onSurface else scheme.onSurfaceVariant,
+                    style = if (meta == null) OpenType.bodyS else OpenType.rowTitleL,
+                    color = if (selected) scheme.onBackground else scheme.onSurfaceVariant,
                     textAlign = if (meta == null) TextAlign.Center else TextAlign.Start,
                     minLines = if (meta == null) 2 else 1
                 )
-                if (meta != null) Text(meta, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
+                if (meta != null) SettingsReading(meta)
             }
         }
         if (selected) {
-            Box(
-                Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(8.dp)
-                    .size(18.dp)
-                    .clip(CircleShape)
-                    .background(scheme.primary),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Rounded.Check, contentDescription = null, tint = scheme.onPrimary, modifier = Modifier.size(12.dp))
-            }
+            Icon(
+                OpenIcons.Check,
+                contentDescription = null,
+                tint = scheme.primary,
+                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).size(16.dp)
+            )
         }
     }
 }
