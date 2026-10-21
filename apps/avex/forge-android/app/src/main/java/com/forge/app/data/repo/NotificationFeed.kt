@@ -190,7 +190,7 @@ class NotificationFeed @Inject constructor(
                 glyph = NoticeGlyph.COACH,
                 eyebrow = "TODAY",
                 title = "How are you feeling today?",
-                detail = "Sleep, soreness, stress, drive, and optional weight.",
+                detail = "Sleep, soreness, stress, drive. Shapes today's targets.",
                 action = NoticeAction.OpenCheckin,
                 // Saving resolves it. Clear all should not silently skip today's check-in.
                 dismissible = false,
@@ -286,7 +286,7 @@ class NotificationFeed @Inject constructor(
                     glyph = NoticeGlyph.BELL,
                     eyebrow = "CONNECT",
                     title = "Turn on notifications",
-                    detail = "Training nudges, your weekly recap, and a ping when a rest timer ends.",
+                    detail = "Training nudges, the weekly recap, rest timer pings.",
                     action = NoticeAction.EnableNotifications,
                 )
             )
@@ -492,7 +492,7 @@ class NotificationFeed @Inject constructor(
                     kind = NoticeKind.ACADEMY,
                     glyph = NoticeGlyph.ACADEMY,
                     eyebrow = "NEW LESSONS",
-                    title = "${academy.size} new lessons in the Academy",
+                    title = "${academy.size} new lessons",
                     detail = if (titles.size == 2) "${titles[0]} and ${titles[1]}"
                     else "${titles[0]}, ${titles[1]} and ${titles.size - 2} more",
                     action = NoticeAction.OpenAcademy,

@@ -73,6 +73,22 @@ class NotificationsViewModel @Inject constructor(
     }
 
     /**
+     * Clear one row (the feed's swipe), offering its Undo. Each source owns its own inverse, so the
+     * Undo puts back exactly what was cleared.
+     */
+    fun dismiss(id: String) = viewModelScope.launch {
+        val undo = try {
+            withContext(NonCancellable) { feed.dismiss(id) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            snackbar.show("Couldn't clear that. Try again.")
+            return@launch
+        }
+        snackbar.showUndo("Notification cleared") { undo() }
+    }
+
+    /**
      * A short persistence mutation that must outlive the screen it was tapped on. Shielded like
      * `SettingsViewModel.write`; cancellation is re-thrown rather than swallowed so a cancelled
      * coroutine still ends as one.
