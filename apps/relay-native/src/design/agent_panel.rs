@@ -12,7 +12,7 @@
 use super::board::Board;
 use crate::app::{label, Ui};
 use crate::terminal::Pane;
-use gtk::prelude::*;
+use vte4::prelude::*;
 use gtk::gdk;
 use gtk4 as gtk;
 use serde_json::{json, Value};
@@ -31,6 +31,8 @@ const KEEP: usize = 400;
 thread_local! {
     /// Where the card was left, its size, and how it showed, for the next design opened.
     static LAST: Cell<Option<Place>> = const { Cell::new(None) };
+    /// How large the card shows its terminal and conversation, for every design.
+    static ZOOM: Cell<f64> = const { Cell::new(1.0) };
 }
 
 /// The card's place on the canvas (its top left corner, from the canvas's) and size, and
@@ -117,6 +119,35 @@ impl Edges {
     }
 }
 
+/// The text sizes Ctrl and the wheel, or Ctrl = and Ctrl -, step through.
+const ZOOMS: [f64; 10] = [0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5];
+
+/// The text size `by` steps from `z`, within the steps (a size between two counts as the
+/// nearer one).
+pub fn zoom_step(z: f64, by: i32) -> f64 {
+    let at = ZOOMS.iter().enumerate().min_by(|a, b| (a.1 - z).abs().total_cmp(&(b.1 - z).abs())).map_or(3, |(i, _)| i);
+    ZOOMS[(at as i32 + by).clamp(0, ZOOMS.len() as i32 - 1) as usize]
+}
+
+/// `label`'s words at `zoom` times the size its style gives them, over any look of its own.
+fn scale_label(label: &gtk::Label, zoom: f64) {
+    let attrs = label.attributes().map_or_else(gtk::pango::AttrList::new, |a| a.copy().unwrap_or_default());
+    attrs.change(gtk::pango::AttrFloat::new_scale(zoom));
+    label.set_attributes(Some(&attrs));
+}
+
+/// Every label in `w` at `zoom`.
+fn scale_labels(w: &gtk::Widget, zoom: f64) {
+    if let Some(label) = w.downcast_ref::<gtk::Label>() {
+        scale_label(label, zoom);
+    }
+    let mut child = w.first_child();
+    while let Some(c) = child {
+        scale_labels(&c, zoom);
+        child = c.next_sibling();
+    }
+}
+
 /// How thick an edge's strip is, and how far a corner's reaches along each side.
 const EDGE: i32 = 6;
 const CORNER: i32 = 14;
@@ -158,6 +189,8 @@ pub struct AgentPanel {
     /// still goes back.
     ui: Weak<Ui>,
     title: gtk::Label,
+    /// Says the text size while it is not 100%, and puts it back.
+    zoom_key: gtk::Button,
     terminal_key: gtk::ToggleButton,
     chat_key: gtk::ToggleButton,
     stack: gtk::Stack,
@@ -222,6 +255,13 @@ impl AgentPanel {
             modes.append(key);
         }
         head.append(&modes);
+        let zoom_key = gtk::Button::with_label("100%");
+        zoom_key.add_css_class("quiet");
+        zoom_key.add_css_class("design-agent-zoom");
+        zoom_key.set_cursor_from_name(Some("default"));
+        zoom_key.set_tooltip_text(Some("Text size: Ctrl and the wheel, or Ctrl = and Ctrl -, over the panel. Click for 100%"));
+        zoom_key.set_visible(false);
+        head.append(&zoom_key);
         let close = crate::app::icon_button("close", "Close the agent panel");
         close.set_cursor_from_name(Some("default"));
         head.append(&close);
@@ -307,6 +347,7 @@ impl AgentPanel {
             board: Rc::downgrade(b),
             ui: b.ui.clone(),
             title,
+            zoom_key,
             terminal_key,
             chat_key,
             stack,
@@ -380,6 +421,51 @@ impl AgentPanel {
         for edges in [Edges::TOP, Edges::BOTTOM, Edges::LEFT, Edges::RIGHT, Edges::TOP_LEFT, Edges::TOP_RIGHT, Edges::BOTTOM_LEFT, Edges::BOTTOM_RIGHT] {
             panel.root.add_overlay(&panel.edge(edges));
         }
+        // Ctrl and the wheel, or Ctrl = - 0, size the text over the card, before the terminal
+        // or the conversation scrolls or types.
+        let wheel = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+        wheel.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let (weak, rolled) = (Rc::downgrade(&panel), Cell::new(0.0));
+        wheel.connect_scroll(move |c, _, dy| {
+            let ctrl = c.current_event_state().intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::META_MASK);
+            let Some(p) = weak.upgrade().filter(|_| ctrl) else {
+                return glib::Propagation::Proceed;
+            };
+            // A wheel's notch is a step; a touchpad's glide, one per so far rolled.
+            let r = rolled.get() + if c.unit() == gdk::ScrollUnit::Wheel { dy } else { dy / 40.0 };
+            let steps = r.trunc();
+            rolled.set(r - steps);
+            if steps != 0.0 {
+                p.set_zoom(zoom_step(p.zoom(), -steps as i32));
+            }
+            glib::Propagation::Stop
+        });
+        panel.root.add_controller(wheel);
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(&panel);
+        keys.connect_key_pressed(move |_, key, _, mods| {
+            let ctrl = mods.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::META_MASK);
+            let Some(p) = weak.upgrade().filter(|_| ctrl) else {
+                return glib::Propagation::Proceed;
+            };
+            let to = match key {
+                gdk::Key::equal | gdk::Key::plus | gdk::Key::KP_Add => zoom_step(p.zoom(), 1),
+                gdk::Key::minus | gdk::Key::KP_Subtract => zoom_step(p.zoom(), -1),
+                gdk::Key::_0 | gdk::Key::KP_0 => 1.0,
+                _ => return glib::Propagation::Proceed,
+            };
+            p.set_zoom(to);
+            glib::Propagation::Stop
+        });
+        panel.root.add_controller(keys);
+        let weak = Rc::downgrade(&panel);
+        panel.zoom_key.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.set_zoom(1.0);
+            }
+        });
+        panel.show_zoom();
         let weak = Rc::downgrade(&panel);
         panel.terminal_key.connect_toggled(move |key| {
             if let Some(p) = weak.upgrade().filter(|_| key.is_active()) {
@@ -547,6 +633,7 @@ impl AgentPanel {
         }
         self.slot.append(&pane.root);
         self.missing.set_visible(false);
+        pane.terminal.set_font_scale(self.zoom());
         pane.schedule_resize();
         *self.lent.borrow_mut() = Some((session, pane));
     }
@@ -560,6 +647,7 @@ impl AgentPanel {
         if old.root.parent().as_ref() == Some(self.slot.upcast_ref()) {
             self.slot.remove(&old.root);
         }
+        old.terminal.set_font_scale(1.0);
         let Some(pane) = self.ui.upgrade().and_then(|ui| ui.relend_pane(name)) else {
             return self.say_missing(&format!("{name}'s terminal is not open in this project's wall, so it cannot show here."));
         };
@@ -568,6 +656,7 @@ impl AgentPanel {
         }
         self.slot.append(&pane.root);
         self.missing.set_visible(false);
+        pane.terminal.set_font_scale(self.zoom());
         pane.schedule_resize();
         *self.lent.borrow_mut() = Some((name.to_string(), pane));
     }
@@ -648,6 +737,39 @@ impl AgentPanel {
         self.grabbed.set(at.map(|p| (f64::from(p.x()), f64::from(p.y()))));
     }
 
+    /// How large the card shows its text: 1 is as the wall shows it.
+    fn zoom(&self) -> f64 {
+        ZOOM.with(Cell::get)
+    }
+
+    /// Show the terminal and the conversation at `zoom` times their size, as every card will.
+    fn set_zoom(&self, zoom: f64) {
+        if ZOOM.with(|z| z.replace(zoom)) == zoom {
+            return;
+        }
+        if let Some((_, pane)) = self.lent.borrow().as_ref() {
+            pane.terminal.set_font_scale(zoom);
+        }
+        scale_labels(self.column.upcast_ref(), zoom);
+        self.show_zoom();
+    }
+
+    /// The size key: shown, with the size, while it is not 100%.
+    fn show_zoom(&self) {
+        let zoom = self.zoom();
+        self.zoom_key.set_label(&format!("{}%", (zoom * 100.0).round()));
+        self.zoom_key.set_visible((zoom - 1.0).abs() > 1e-9);
+    }
+
+    /// Add `w` to the conversation, its words at the card's size.
+    fn put(&self, w: &impl IsA<gtk::Widget>) {
+        let zoom = self.zoom();
+        if (zoom - 1.0).abs() > 1e-9 {
+            scale_labels(w.upcast_ref(), zoom);
+        }
+        self.column.append(w);
+    }
+
     fn say_missing(&self, why: &str) {
         self.missing_note.set_text(why);
         self.missing.set_visible(true);
@@ -661,6 +783,8 @@ impl AgentPanel {
         if pane.root.parent().as_ref() == Some(self.slot.upcast_ref()) {
             self.slot.remove(&pane.root);
         }
+        // On the wall it shows at the wall's size.
+        pane.terminal.set_font_scale(1.0);
         if let Some(ui) = self.ui.upgrade() {
             ui.return_pane(&name);
         }
@@ -779,7 +903,7 @@ impl AgentPanel {
                 if request.is_some() {
                     let caption = label("Asked about the selection", "design-agent-asked");
                     caption.set_halign(gtk::Align::End);
-                    self.column.append(&caption);
+                    self.put(&caption);
                     self.drawn.set(self.drawn.get() + 1);
                 }
                 let bubble = label(request.unwrap_or(text), "threads-user");
@@ -790,7 +914,7 @@ impl AgentPanel {
                 bubble.set_halign(gtk::Align::End);
                 bubble.set_xalign(0.0);
                 bubble.set_max_width_chars(48);
-                self.column.append(&bubble);
+                self.put(&bubble);
                 drawn = true;
             }
             "assistant" => {
@@ -800,7 +924,7 @@ impl AgentPanel {
                             let turn = gtk::Box::new(gtk::Orientation::Vertical, 8);
                             turn.add_css_class("design-agent-reply");
                             crate::money::threads::draw_reply(&turn, block["text"].as_str().unwrap_or(""));
-                            self.column.append(&turn);
+                            self.put(&turn);
                             self.drawn.set(self.drawn.get() + 1);
                             drawn = true;
                         }
@@ -812,7 +936,7 @@ impl AgentPanel {
                             words.set_ellipsize(gtk::pango::EllipsizeMode::End);
                             words.set_xalign(0.0);
                             line.append(&words);
-                            self.column.append(&line);
+                            self.put(&line);
                             self.drawn.set(self.drawn.get() + 1);
                             drawn = true;
                         }
@@ -902,6 +1026,16 @@ mod tests {
         // First opened at the bottom left, clear of the inspector.
         let first = Place::first(1600.0, 900.0);
         assert_eq!((first.x, first.y), (12.0, 900.0 - 380.0 - 12.0));
+    }
+
+    #[test]
+    fn the_text_size_steps_and_stops_at_its_ends() {
+        assert_eq!(zoom_step(1.0, 1), 1.1);
+        assert_eq!(zoom_step(1.0, -2), 0.8);
+        assert_eq!(zoom_step(2.5, 1), 2.5);
+        assert_eq!(zoom_step(0.7, -3), 0.7);
+        // A size between steps counts as the nearer.
+        assert_eq!(zoom_step(1.3, 1), 1.5);
     }
 
     #[test]
