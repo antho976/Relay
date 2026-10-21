@@ -282,7 +282,10 @@ value per label (a donut or pie draws the first, a slice per label, `center` wor
 Options: `values` (each value written), `legend` (on by default with several series and for a ring),
 `min`/`max`, `ticks` (about how many steps, 0 for none), `grid`, `prefix`/`suffix`/`decimals`,
 `smooth` and `points` (lines), `inner` (a donut's hole), `gap` (bars), `color`, `grid_color`,
-`font_size`, `palette` (colours for series that name none; may be `$name`s). A series' `colors`, one
+`font_size`, `palette` (colours for series that name none; may be `$name`s). Values that do not
+fit over their bars or points are set smaller, then without the `suffix`, then short (`7.3k`), and
+the axis does the same past a quarter of the width; give the chart more width, or fewer labels,
+to keep them whole. A series' `colors`, one
 per label, gives single values a colour of their own, `null` keeping the series': `"colors": [null,
 null, null, null, null, null, "$accent"]` brings out today's bar (a line's point, a ring's slice). The
 parts are named
@@ -455,7 +458,8 @@ a screen, **look at it**: `design.render {"design_id": 12, "page": "page-7", "no
 - `issues` (worst first, at most 100; `issue_count` counts all) name layout problems by `code`:
   `overflow` (a child past its frame's padding), `overlap` (siblings laid over each other in a
   layout), `text_overlap`, `clipped` (cut off by a clipping frame: past its edge, its shadow or glow
-  squared off by an edge it stands near, or cut by its rounded corner), `contrast` (words too faint on
+  squared off by an edge it stands near or by a frame that hugs it, or cut by a rounded corner it
+  is not flush with; full-bleed content rounded with its card is fine), `contrast` (words too faint on
   what is painted under their centre: through a ring's hole or past a round corner, not the shape's
   box). Fix them and render again. Read `warnings` too. A node you mean to leave as it is (words
   meant to be faint, a caption on a photo the check cannot read) takes `"skip_checks": true`, and
