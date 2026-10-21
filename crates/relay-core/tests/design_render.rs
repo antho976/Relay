@@ -528,6 +528,45 @@ async fn node_scope_is_checked() {
     call.answer().await;
 }
 
+/// 11b. `since_rev` pictures what changed after it: the outermost nodes changed on the page most
+/// of them are on, the other pages named in a warning; a page asked for keeps to its own; with
+/// nothing changed, the whole page. Not with `nodes`, nor a rev the design has not reached.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn since_rev_pictures_what_changed() {
+    let fx = fixture().await;
+    let mut renderer = Renderer::serve(&fx).await;
+    let before = fx.rev();
+    ok(&fx.engine, "design.apply", json!({"design_id": fx.design, "ops": [
+        {"op": "update", "id": "title", "set": {"text": "Hi"}},
+        {"op": "add", "node": {"id": "badge", "parent": "card", "kind": "frame", "w": 20, "h": 20}},
+        {"op": "add", "node": {"id": "dot", "parent": "badge", "kind": "ellipse", "w": 4, "h": 4}},
+        {"op": "add", "node": {"id": "receipt", "parent": "pay", "kind": "text", "text": "Paid"}},
+    ]}));
+    let call = fx.send(fx.render(json!({"since_rev": before}))).await;
+    let request = renderer.request().await;
+    assert_eq!((request.page.as_str(), request.nodes.clone()), ("page-1", Some(vec!["badge".to_string(), "title".into()])), "dot comes inside badge");
+    assert!(renderer.draw(&request, fx.rev(), &[]).await);
+    let answer = call.answer().await;
+    let warnings = answer.result.unwrap()["warnings"].clone();
+    assert_eq!(warnings, json!([format!(r#"since_rev {before}: page "checkout" changed too; picture it with page "checkout" and since_rev"#)]));
+
+    let call = fx.send(fx.render(json!({"since_rev": before, "page": "Checkout"}))).await;
+    let request = renderer.request().await;
+    assert_eq!((request.page.as_str(), request.nodes.clone()), ("checkout", Some(vec!["receipt".to_string()])));
+    assert!(renderer.draw(&request, fx.rev(), &[]).await);
+    assert!(call.answer().await.result.unwrap()["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains(r#"page "page-1""#)));
+
+    let call = fx.send(fx.render(json!({"since_rev": fx.rev()}))).await;
+    let request = renderer.request().await;
+    assert_eq!((request.page.as_str(), request.nodes.clone()), ("page-1", None), "nothing changed: the whole first page");
+    assert!(renderer.draw(&request, fx.rev(), &[]).await);
+    assert_eq!(call.answer().await.result.unwrap()["warnings"], json!([]));
+
+    assert_eq!(code_of(&fx.at_once(fx.render(json!({"since_rev": before, "nodes": ["card"]}))).await), "design.render.args");
+    assert_eq!(code_of(&fx.at_once(fx.render(json!({"since_rev": fx.rev() + 1}))).await), "design.render.args");
+    renderer.quiet().await;
+}
+
 /// 12. The app's own failure reaches the agent: a missing surface with what to do, any other
 /// code as a failed render with the app's code beside its reason.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

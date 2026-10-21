@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
+mod design_calls;
 mod mcp;
 mod units;
 mod unreal;

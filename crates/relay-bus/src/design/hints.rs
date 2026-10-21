@@ -359,6 +359,8 @@ pub fn label(at: usize, op: &NodeOp) -> String {
         NodeOp::Color { name, .. } => format!("ops[{at}] color {name:?}"),
         NodeOp::Style { name, .. } => format!("ops[{at}] style {name:?}"),
         NodeOp::DeleteStyle { name } => format!("ops[{at}] delete_style {name:?}"),
+        NodeOp::UpdateMany { .. } => format!("ops[{at}] update_many"),
+        NodeOp::DeleteMany { .. } => format!("ops[{at}] delete_many"),
     }
 }
 
@@ -507,6 +509,8 @@ fn why_edit(shape: &Shape, map: &Map<String, Value>, edit: &Value) -> (Option<St
                 format!("{key}: a {what} field goes in set: {{\"set\": {{{key:?}: …}}}}")
             } else if field_kinds(key).is_some() && op == "add" {
                 format!("{key}: a node field goes in node: {{\"node\": {{{key:?}: …}}}}")
+            } else if matches!(op, "update" | "delete") && matches!(key.as_str(), "ids" | "where") {
+                format!("{key}: {op} acts on one node (id); {op}_many takes ids and where, for many in one edit")
             } else if op == "copy" && matches!(key.as_str(), "x" | "y" | "offset" | "position") {
                 format!("{key}: not a field of copy; move the copy with dx and dy")
             } else {
@@ -740,7 +744,7 @@ mod tests {
         assert!(read(json!([{"op": "theme"}])).unwrap_err().ends_with("use style {name, set}"));
         assert!(read(json!([{"op": "remove_style"}])).unwrap_err().ends_with("use delete_style {name}"));
         assert_eq!(read(json!([{"op": "updte", "id": "a", "set": {}}])).unwrap_err(), "ops[0]: op \"updte\" is not an edit; did you mean \"update\"?");
-        assert_eq!(read(json!([{"op": "frobnicate"}])).unwrap_err(), "ops[0]: op \"frobnicate\" is not an edit; the edits are add, update, move, delete, copy, color, style or delete_style");
+        assert_eq!(read(json!([{"op": "frobnicate"}])).unwrap_err(), "ops[0]: op \"frobnicate\" is not an edit; the edits are add, update, move, delete, copy, color, style, delete_style, update_many or delete_many");
         assert_eq!(read(json!([{"op": "add", "node": {"id": "b", "parent": "p", "kind": "button"}}])).unwrap_err(),
             "ops[0] add \"b\": node.kind: \"button\" is not a kind; use frame (layout: row or column lays out its children)");
         assert_eq!(read(json!([{"op": "add", "node": {"parent": "p", "kind": "elipse"}}])).unwrap_err(),
@@ -751,8 +755,8 @@ mod tests {
     #[test]
     fn each_edit_is_read_alone_and_explained() {
         let cases = [
-            (json!(["add"]), "ops[0]: each edit is an object with op: add, update, move, delete, copy, color, style or delete_style"),
-            (json!([{"id": "a"}]), "ops[0]: op: each edit is an object with op: add, update, move, delete, copy, color, style or delete_style"),
+            (json!(["add"]), "ops[0]: each edit is an object with op: add, update, move, delete, copy, color, style, delete_style, update_many or delete_many"),
+            (json!([{"id": "a"}]), "ops[0]: op: each edit is an object with op: add, update, move, delete, copy, color, style, delete_style, update_many or delete_many"),
             (json!([{"op": "update", "set": {}}]), "ops[0] update: id: missing; name the node to update"),
             (json!([{"op": "update", "id": "a"}]), "ops[0] update \"a\": set: missing; give the node fields to change, such as {\"fill\": \"#FFFFFF\"}"),
             (json!([{"op": "update", "id": "a", "set": "red"}]),
@@ -803,6 +807,15 @@ mod tests {
         assert_eq!(locate(&long).map(|(_, details)| details), Some(json!({"field": "ops"})));
         let unread = explain(4, &json!({"op": "clone", "id": "a"}));
         assert_eq!((unread.index, unread.id.as_deref(), unread.field.as_deref()), (4, None, Some("op")));
+    }
+
+    #[test]
+    fn an_update_of_many_nodes_points_at_update_many() {
+        let why = read(json!([{"op": "update", "ids": ["a", "b"], "set": {"opacity": 0.5}}])).unwrap_err();
+        assert!(why.contains("ids: update acts on one node (id); update_many takes ids and where"), "{why}");
+        let ops = read(json!([{"op": "update_many", "ids": ["a"], "where": {"fill": "#FFF"}, "set": {"opacity": 0.5}}, {"op": "delete_many", "where": {"kind": ["sticky"]}}])).unwrap();
+        assert_eq!(ops.iter().map(NodeOp::name).collect::<Vec<_>>(), ["update_many", "delete_many"]);
+        assert!(read(json!([{"op": "delete_many", "where": {"colour": "#FFF"}}])).is_err(), "a where's keys are design.find's");
     }
 
     #[test]
@@ -876,7 +889,7 @@ mod tests {
     #[test]
     fn hints_never_shadow_what_exists() {
         let edits: Vec<&str> = shapes().iter().map(|s| s.op.as_str()).collect();
-        assert_eq!(edits, ["add", "update", "move", "delete", "copy", "color", "style", "delete_style"]);
+        assert_eq!(edits, ["add", "update", "move", "delete", "copy", "color", "style", "delete_style", "update_many", "delete_many"]);
         for (names, _) in OP_HINTS {
             assert!(names.iter().all(|n| !edits.contains(n) && normal(n) == *n), "{names:?}");
         }

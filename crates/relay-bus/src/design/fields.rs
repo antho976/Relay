@@ -506,7 +506,10 @@ pub fn fit_written(op: &mut NodeOp, kind_of: impl Fn(&str) -> Option<NodeKind>) 
         | NodeOp::Copy { .. }
         | NodeOp::Color { .. }
         | NodeOp::Style { .. }
-        | NodeOp::DeleteStyle { .. } => {}
+        | NodeOp::DeleteStyle { .. }
+        // The canvas sends one edit a node.
+        | NodeOp::UpdateMany { .. }
+        | NodeOp::DeleteMany { .. } => {}
     }
     dropped
 }

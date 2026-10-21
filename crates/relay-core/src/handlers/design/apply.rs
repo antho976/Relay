@@ -1472,6 +1472,9 @@ pub(super) fn register(e: &mut Engine) {
         }
         let design = live_design(ctx.tx(), p.design_id)?;
         assert_actor_project(ctx, design.project_id)?;
+        // An edit of many nodes is an edit a node from here on, each keeping its index as sent.
+        let mut many = super::many::expand(ctx.tx(), design.id, p.ops)?;
+        let ops = &many.ops;
         // W5: an agent reads what changed with design.get or design.render; the person's clients
         // keep the nodes and the undo.
         let full = p.reply.unwrap_or(if agent { Reply::Short } else { Reply::Full }) == Reply::Full;
@@ -1482,7 +1485,7 @@ pub(super) fn register(e: &mut Engine) {
             if base > design.rev {
                 return Err(revs::ahead(&design, base));
             }
-            let conflicts = revs::base_conflicts(ctx.tx(), design.id, &p.ops, base)?;
+            let conflicts = revs::base_conflicts(ctx.tx(), design.id, ops, base)?;
             if !conflicts.is_empty() && !lenient {
                 return Err(revs::stale(&design, base, &conflicts));
             }
@@ -1494,7 +1497,7 @@ pub(super) fn register(e: &mut Engine) {
         // W7, W8: what the nodes must still hold (an undo's `expect`): refused when they do not,
         // or when lenient, just the fields or edits that would overwrite a later change skipped.
         if let Some(expect) = p.expect.as_deref().filter(|expect| !expect.is_empty()) {
-            let conflicts = expect::expect_conflicts(ctx.tx(), design.id, &p.ops, expect, false)?;
+            let conflicts = expect::expect_conflicts(ctx.tx(), design.id, ops, expect, false)?;
             if !conflicts.is_empty() && !lenient {
                 return Err(expect::stale(&design, &conflicts));
             }
@@ -1516,7 +1519,7 @@ pub(super) fn register(e: &mut Engine) {
             design: design.id,
             lenient,
             agent,
-            warnings: Vec::new(),
+            warnings: many.warnings.clone(),
             pages: design.pages,
             nodes: design.nodes,
             bytes,
@@ -1529,8 +1532,8 @@ pub(super) fn register(e: &mut Engine) {
             touched: Vec::new(),
             seen: HashSet::new(),
             removed: Vec::new(),
-            ids: Vec::with_capacity(p.ops.len()),
-            inverse: Vec::with_capacity(p.ops.len()),
+            ids: Vec::with_capacity(ops.len()),
+            inverse: Vec::with_capacity(ops.len()),
             parents: HashMap::new(),
             last_depth: None,
             refs: Vec::new(),
@@ -1567,9 +1570,10 @@ pub(super) fn register(e: &mut Engine) {
         // B59: past the last edit that can make the design smaller (any but an add or a copy),
         // the list only grows it, so one over the cap by then is refused at the edit that took
         // it over rather than after writing the rest.
-        let grows_from = p.ops.iter().rposition(|op| !matches!(op, NodeOp::Add { .. } | NodeOp::Copy { .. }));
-        for (at, op) in p.ops.into_iter().enumerate() {
-            (run.at, run.label) = (at, label(at, &op));
+        let grows_from = ops.iter().rposition(|op| !matches!(op, NodeOp::Add { .. } | NodeOp::Copy { .. }));
+        for (at, op) in std::mem::take(&mut many.ops).into_iter().enumerate() {
+            let sent_at = many.origin[at];
+            (run.at, run.label) = (sent_at, label(sent_at, &op));
             run.target = Some(op.target()).filter(|id| !id.is_empty()).map(str::to_string);
             let id = match op {
                 NodeOp::Add { node, index } => run.add(node, index)?,
@@ -1580,6 +1584,7 @@ pub(super) fn register(e: &mut Engine) {
                 NodeOp::Color { name, value } => run.color(name, value)?,
                 NodeOp::Style { name, set } => run.style(name, set)?,
                 NodeOp::DeleteStyle { name } => run.delete_style(name)?,
+                NodeOp::UpdateMany { .. } | NodeOp::DeleteMany { .. } => return Err(BusError::internal("an edit of many nodes reached the list unexpanded")),
             };
             run.ids.push(id.unwrap_or_default());
             if run.bytes > MAX_DESIGN_BYTES && run.bytes > bytes && grows_from.is_none_or(|last| at >= last) && run.settled() {
@@ -1612,7 +1617,8 @@ pub(super) fn register(e: &mut Engine) {
             rev: prev_rev,
             prev_rev,
             rebased,
-            ids: std::mem::take(&mut run.ids),
+            ids: many.collapse(std::mem::take(&mut run.ids)),
+            matched: many.matched.clone(),
             removed_count: 0,
             audit_id: None,
             skipped,

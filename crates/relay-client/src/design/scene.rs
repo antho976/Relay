@@ -509,6 +509,8 @@ impl Scene {
                 self.restyle(Some(name));
             }
             NodeOp::DeleteStyle { name } => self.delete_style(name, strict)?,
+            // An agent's edits, which the engine runs one a node; the canvas sends one a node.
+            NodeOp::UpdateMany { .. } | NodeOp::DeleteMany { .. } => return Err(format!("{} is run by the engine, one edit a node", op.name())),
             NodeOp::Delete { id } => {
                 if !strict && self.skips(id) {
                     return Ok(());

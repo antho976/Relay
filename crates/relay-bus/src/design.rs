@@ -1386,6 +1386,73 @@ pub enum NodeOp {
         #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
         name: String,
     },
+    /// The same `set` on many nodes, as an `update` of each: those `ids` names and those `where`
+    /// finds in the design before this list, each once (`matched` counts them; a `where` that
+    /// finds none warns).
+    UpdateMany {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(length(min = 1, max = MAX_NODES))]
+        ids: Option<Vec<String>>,
+        #[serde(default, rename = "where", skip_serializing_if = "Option::is_none")]
+        where_: Option<Where>,
+        /// Node fields to change, as `update`'s `set` takes them.
+        set: Map<String, Value>,
+    },
+    /// Delete many nodes, each with what is inside it, picked as `update_many` picks them.
+    DeleteMany {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(length(min = 1, max = MAX_NODES))]
+        ids: Option<Vec<String>>,
+        #[serde(default, rename = "where", skip_serializing_if = "Option::is_none")]
+        where_: Option<Where>,
+    },
+}
+
+/// The nodes an `update_many` or `delete_many` edit finds, as design.find's filters find them:
+/// every filter given holds, and at least one is given. Pages are never found.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "DesignWhere")]
+pub struct Where {
+    /// On this page (its id or name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<String>,
+    /// Inside this node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inside: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<Vec<NodeKind>>,
+    /// Words in its name, by `match`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1))]
+    pub name: Option<String>,
+    /// Words in its text, by `match`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1))]
+    pub text: Option<String>,
+    #[serde(default, rename = "match", skip_serializing_if = "Option::is_none")]
+    pub match_: Option<crate::ops::design::TextMatch>,
+    /// As drawn: `#RGB` or `#RRGGBB` any alpha, `#RRGGBBAA` exactly; so are stroke and color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// This colour anywhere it draws one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub any_color: Option<String>,
+    /// Its font family, or a run's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1))]
+    pub font: Option<String>,
+}
+
+impl Where {
+    /// Whether it names nothing to find by, which would find every node.
+    pub fn is_empty(&self) -> bool {
+        *self == Where::default()
+    }
 }
 
 fn is_zero(v: &f64) -> bool {
@@ -1400,6 +1467,8 @@ impl NodeOp {
             NodeOp::Add { node, .. } => &node.id,
             NodeOp::Update { id, .. } | NodeOp::Move { id, .. } | NodeOp::Delete { id } | NodeOp::Copy { id, .. } => id,
             NodeOp::Color { name, .. } | NodeOp::Style { name, .. } | NodeOp::DeleteStyle { name } => name,
+            // Many nodes: `design.apply` runs each as an edit of its own.
+            NodeOp::UpdateMany { .. } | NodeOp::DeleteMany { .. } => "",
         }
     }
 
@@ -1407,7 +1476,7 @@ impl NodeOp {
     /// or a style.
     pub fn node_target(&self) -> Option<&str> {
         match self {
-            NodeOp::Color { .. } | NodeOp::Style { .. } | NodeOp::DeleteStyle { .. } => None,
+            NodeOp::Color { .. } | NodeOp::Style { .. } | NodeOp::DeleteStyle { .. } | NodeOp::UpdateMany { .. } | NodeOp::DeleteMany { .. } => None,
             _ => Some(self.target()),
         }
     }
@@ -1423,6 +1492,8 @@ impl NodeOp {
             NodeOp::Color { .. } => "color",
             NodeOp::Style { .. } => "style",
             NodeOp::DeleteStyle { .. } => "delete_style",
+            NodeOp::UpdateMany { .. } => "update_many",
+            NodeOp::DeleteMany { .. } => "delete_many",
         }
     }
 }
