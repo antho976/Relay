@@ -209,8 +209,7 @@ textview.design-ask-text, textview.design-ask-text text { background: transparen
 .design-agent-column .threads-user { font-size: 13px; line-height: 20px; padding: 8px 12px; }
 .design-agent-reply .threads-reply { font-size: 13px; line-height: 20px; }
 .design-agent-composer { padding: 8px 10px 4px 10px; border-top: 1px solid @line_subtle; }
-.design-agent-corner { min-height: 14px; color: @faint; }
-.design-agent-corner:hover { color: @ink; }
+.design-agent-edge { background: none; }
 
 /* Typing on the canvas: the text view is invisible but for the words and the caret. */
 textview.design-text-edit, textview.design-text-edit text { background: transparent; padding: 0; margin: 0; border: 0; box-shadow: none; caret-color: #4C9DFF; }

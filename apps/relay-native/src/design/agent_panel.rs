@@ -55,6 +55,27 @@ impl Place {
         Place { x, y, w, h, ..self }
     }
 
+    /// Resized from `edges` by the hand's `dx`/`dy` on a canvas `cw` by `ch`: the edges held
+    /// stay put, the moved ones follow the hand, within the least size and the canvas.
+    pub fn resized(self, edges: Edges, dx: f64, dy: f64, cw: f64, ch: f64) -> Place {
+        let (mut x, mut y, mut w, mut h) = (self.x, self.y, self.w, self.h);
+        if edges.left {
+            let right = x + w;
+            x = (x + dx).min(right - MIN_W).max(0.0);
+            w = right - x;
+        } else if edges.right {
+            w = (w + dx).min(cw - x).max(MIN_W);
+        }
+        if edges.top {
+            let bottom = y + h;
+            y = (y + dy).min(bottom - MIN_H).max(0.0);
+            h = bottom - y;
+        } else if edges.bottom {
+            h = (h + dy).min(ch - y).max(MIN_H);
+        }
+        Place { x, y, w, h, ..self }.within(cw, ch)
+    }
+
     /// Where a card first opens on a canvas `cw` by `ch`: at its bottom left, clear of the
     /// inspector on the right and the dock above.
     fn first(cw: f64, ch: f64) -> Place {
@@ -62,6 +83,43 @@ impl Place {
         Place { x: 12.0, y: ch - h - 12.0, w, h, chat: false }.within(cw, ch)
     }
 }
+
+/// The edges a resize strip moves: a side, or two at a corner.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Edges {
+    pub left: bool,
+    pub top: bool,
+    pub right: bool,
+    pub bottom: bool,
+}
+
+impl Edges {
+    const NONE: Edges = Edges { left: false, top: false, right: false, bottom: false };
+    pub const TOP: Edges = Edges { top: true, ..Edges::NONE };
+    pub const BOTTOM: Edges = Edges { bottom: true, ..Edges::NONE };
+    pub const LEFT: Edges = Edges { left: true, ..Edges::NONE };
+    pub const RIGHT: Edges = Edges { right: true, ..Edges::NONE };
+    pub const TOP_LEFT: Edges = Edges { top: true, left: true, ..Edges::NONE };
+    pub const TOP_RIGHT: Edges = Edges { top: true, right: true, ..Edges::NONE };
+    pub const BOTTOM_LEFT: Edges = Edges { bottom: true, left: true, ..Edges::NONE };
+    pub const BOTTOM_RIGHT: Edges = Edges { bottom: true, right: true, ..Edges::NONE };
+
+    /// The cursor over its strip.
+    fn cursor(self) -> &'static str {
+        match (self.top, self.bottom, self.left, self.right) {
+            (true, _, true, _) => "nw-resize",
+            (true, _, _, true) => "ne-resize",
+            (_, true, true, _) => "sw-resize",
+            (_, true, _, true) => "se-resize",
+            (true, ..) | (_, true, ..) => "ns-resize",
+            _ => "ew-resize",
+        }
+    }
+}
+
+/// How thick an edge's strip is, and how far a corner's reaches along each side.
+const EDGE: i32 = 6;
+const CORNER: i32 = 14;
 
 /// How long to wait before reading the conversation again: soon while the agent works or a
 /// message is on its way, less often while it waits on the person, rarely once it has stopped.
@@ -94,7 +152,7 @@ pub fn tool_words(block: &Value) -> String {
 }
 
 pub struct AgentPanel {
-    pub root: gtk::Box,
+    pub root: gtk::Overlay,
     board: Weak<Board>,
     /// The shell the terminal is lent from: reached as the board itself is dropped, so the pane
     /// still goes back.
@@ -114,6 +172,8 @@ pub struct AgentPanel {
     about: gtk::CheckButton,
     note: gtk::Label,
     place: Cell<Place>,
+    /// Where the drag moving or resizing the card began, on the board.
+    grabbed: Cell<Option<(f64, f64)>>,
     /// The session shown, and the pane lent for it while the terminal shows.
     session: RefCell<Option<String>>,
     lent: RefCell<Option<(String, Rc<Pane>)>>,
@@ -132,10 +192,12 @@ pub struct AgentPanel {
 
 impl AgentPanel {
     pub fn new(b: &Rc<Board>) -> Rc<Self> {
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let root = gtk::Overlay::new();
         root.add_css_class("design-agent-panel");
         root.set_widget_name("design-agent-panel");
         root.set_overflow(gtk::Overflow::Hidden);
+        let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        root.set_child(Some(&card));
 
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         head.add_css_class("design-agent-head");
@@ -163,7 +225,7 @@ impl AgentPanel {
         let close = crate::app::icon_button("close", "Close the agent panel");
         close.set_cursor_from_name(Some("default"));
         head.append(&close);
-        root.append(&head);
+        card.append(&head);
 
         let stack = gtk::Stack::new();
         stack.set_vexpand(true);
@@ -237,17 +299,7 @@ impl AgentPanel {
         composer.append(&note);
         chat_page.append(&composer);
         stack.add_named(&chat_page, Some("chat"));
-        root.append(&stack);
-
-        // The corner to resize from, over the card's own.
-        let corner = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        corner.add_css_class("design-agent-corner");
-        corner.set_size_request(16, 16);
-        corner.set_halign(gtk::Align::End);
-        corner.set_cursor_from_name(Some("se-resize"));
-        corner.set_tooltip_text(Some("Drag to resize"));
-        corner.append(&crate::icons::image("expand", 12));
-        root.append(&corner);
+        card.append(&stack);
 
         let place = LAST.with(Cell::get).unwrap_or_else(|| Place::first(b.size.get().0, b.size.get().1));
         let panel = Rc::new(AgentPanel {
@@ -268,6 +320,7 @@ impl AgentPanel {
             about,
             note,
             place: Cell::new(place),
+            grabbed: Cell::new(None),
             session: RefCell::default(),
             lent: RefCell::default(),
             cursor: Cell::new(None),
@@ -297,48 +350,36 @@ impl AgentPanel {
             }
         });
 
-        // Moved by its head, resized from its corner; the board places it (`placed`).
+        // Moved by its head, resized from any edge or corner; the board places it (`placed`).
         let moving = gtk::GestureDrag::new();
-        let (weak, from) = (Rc::downgrade(&panel), Rc::new(Cell::new(place)));
-        let f = from.clone();
+        let from = Rc::new(Cell::new(place));
+        let (weak, f) = (Rc::downgrade(&panel), from.clone());
         moving.connect_drag_begin(move |g, x, y| {
             let Some(p) = weak.upgrade() else {
                 return;
             };
             // The mode keys and Close are pressed, not dragged.
-            if p.root.pick(x, y, gtk::PickFlags::DEFAULT).is_some_and(|w| w.ancestor(gtk::Button::static_type()).is_some()) {
+            let head = g.widget();
+            if head.and_then(|h| h.pick(x, y, gtk::PickFlags::DEFAULT)).is_some_and(|w| w.ancestor(gtk::Button::static_type()).is_some()) {
                 g.set_state(gtk::EventSequenceState::Denied);
                 return;
             }
             g.set_state(gtk::EventSequenceState::Claimed);
             f.set(p.place.get());
+            p.grab(g, x, y);
         });
         let weak = Rc::downgrade(&panel);
-        let f = from.clone();
-        moving.connect_drag_update(move |_, dx, dy| {
-            if let Some(p) = weak.upgrade() {
-                let start = f.get();
+        moving.connect_drag_update(move |g, dx, dy| {
+            if let Some((p, (dx, dy))) = weak.upgrade().and_then(|p| p.hand(g, dx, dy).map(|d| (p, d))) {
+                let start = from.get();
                 p.set_place(Place { x: start.x + dx, y: start.y + dy, ..p.place.get() });
             }
         });
         head.add_controller(moving);
-        let sizing = gtk::GestureDrag::new();
-        let weak = Rc::downgrade(&panel);
-        let f = from.clone();
-        sizing.connect_drag_begin(move |g, _, _| {
-            if let Some(p) = weak.upgrade() {
-                g.set_state(gtk::EventSequenceState::Claimed);
-                f.set(p.place.get());
-            }
-        });
-        let weak = Rc::downgrade(&panel);
-        sizing.connect_drag_update(move |_, dx, dy| {
-            if let Some(p) = weak.upgrade() {
-                let start = from.get();
-                p.set_place(Place { w: start.w + dx, h: start.h + dy, ..p.place.get() });
-            }
-        });
-        corner.add_controller(sizing);
+        // Invisible strips along each edge and at each corner: the cursor says what they do.
+        for edges in [Edges::TOP, Edges::BOTTOM, Edges::LEFT, Edges::RIGHT, Edges::TOP_LEFT, Edges::TOP_RIGHT, Edges::BOTTOM_LEFT, Edges::BOTTOM_RIGHT] {
+            panel.root.add_overlay(&panel.edge(edges));
+        }
         let weak = Rc::downgrade(&panel);
         panel.terminal_key.connect_toggled(move |key| {
             if let Some(p) = weak.upgrade().filter(|_| key.is_active()) {
@@ -539,6 +580,72 @@ impl AgentPanel {
         }
         self.set_chat(true);
         true
+    }
+
+    /// How far the hand has gone on the board since drag `g` began, `dx`/`dy` from its start
+    /// in its widget: that widget moves or grows under the drag, so its own offsets fall
+    /// behind the hand by as much (resizing went at half speed, moving shook).
+    fn hand(&self, g: &gtk::GestureDrag, dx: f64, dy: f64) -> Option<(f64, f64)> {
+        let b = self.board.upgrade()?;
+        let (sx, sy) = g.start_point()?;
+        let w = g.widget()?;
+        let at = |x: f64, y: f64| w.compute_point(&b.overlay, &gtk::graphene::Point::new(x as f32, y as f32));
+        let (start, now) = (self.grabbed.get()?, at(sx + dx, sy + dy)?);
+        Some((f64::from(now.x()) - start.0, f64::from(now.y()) - start.1))
+    }
+
+    /// A strip that resizes the card from `edges`, laid over its edge or corner.
+    fn edge(self: &Rc<Self>, edges: Edges) -> gtk::Box {
+        let strip = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        strip.add_css_class("design-agent-edge");
+        strip.set_cursor_from_name(Some(edges.cursor()));
+        let corner = (edges.left || edges.right) && (edges.top || edges.bottom);
+        let along = |start: bool, end: bool| match (start, end) {
+            (true, _) => gtk::Align::Start,
+            (_, true) => gtk::Align::End,
+            _ => gtk::Align::Fill,
+        };
+        strip.set_halign(along(edges.left, edges.right));
+        strip.set_valign(along(edges.top, edges.bottom));
+        let side = |on: bool| if corner { CORNER } else if on { EDGE } else { -1 };
+        strip.set_size_request(side(edges.left || edges.right), side(edges.top || edges.bottom));
+        let sizing = gtk::GestureDrag::new();
+        let from = Rc::new(Cell::new(self.place.get()));
+        let (weak, f) = (Rc::downgrade(self), from.clone());
+        sizing.connect_drag_begin(move |g, x, y| {
+            if let Some(p) = weak.upgrade() {
+                g.set_state(gtk::EventSequenceState::Claimed);
+                f.set(p.place.get());
+                p.grab(g, x, y);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        sizing.connect_drag_update(move |g, dx, dy| {
+            let Some(p) = weak.upgrade() else {
+                return;
+            };
+            let (Some((dx, dy)), Some(b)) = (p.hand(g, dx, dy), p.board.upgrade()) else {
+                return;
+            };
+            let (cw, ch) = b.size.get();
+            p.set_place(from.get().resized(edges, dx, dy, cw, ch));
+        });
+        let weak = Rc::downgrade(self);
+        sizing.connect_drag_end(move |_, _, _| {
+            // The terminal's rows and columns follow once, at the size it was left at.
+            if let Some((_, pane)) = weak.upgrade().and_then(|p| p.lent.borrow().clone()) {
+                pane.schedule_resize();
+            }
+        });
+        strip.add_controller(sizing);
+        strip
+    }
+
+    /// Where drag `g` began on the board, `x`/`y` in its widget: what [`AgentPanel::hand`]
+    /// measures from.
+    fn grab(&self, g: &gtk::GestureDrag, x: f64, y: f64) {
+        let at = self.board.upgrade().zip(g.widget()).and_then(|(b, w)| w.compute_point(&b.overlay, &gtk::graphene::Point::new(x as f32, y as f32)));
+        self.grabbed.set(at.map(|p| (f64::from(p.x()), f64::from(p.y()))));
     }
 
     fn say_missing(&self, why: &str) {
@@ -795,6 +902,28 @@ mod tests {
         // First opened at the bottom left, clear of the inspector.
         let first = Place::first(1600.0, 900.0);
         assert_eq!((first.x, first.y), (12.0, 900.0 - 380.0 - 12.0));
+    }
+
+    #[test]
+    fn a_resize_moves_only_the_edges_held() {
+        let p = Place { x: 100.0, y: 100.0, w: 500.0, h: 400.0, chat: false };
+        let at = |e, dx, dy| {
+            let r = p.resized(e, dx, dy, 1200.0, 800.0);
+            (r.x, r.y, r.w, r.h)
+        };
+        // The right and bottom follow the hand; the left and top stay.
+        assert_eq!(at(Edges::BOTTOM_RIGHT, 50.0, 30.0), (100.0, 100.0, 550.0, 430.0));
+        // The left and top follow it; the right and bottom stay.
+        assert_eq!(at(Edges::TOP_LEFT, -40.0, 20.0), (60.0, 120.0, 540.0, 380.0));
+        // A side moves along its own axis alone.
+        assert_eq!(at(Edges::LEFT, 30.0, 99.0), (130.0, 100.0, 470.0, 400.0));
+        assert_eq!(at(Edges::TOP, 99.0, -30.0), (100.0, 70.0, 500.0, 430.0));
+        // Past the least size the moved edge stops and the held one does not move.
+        assert_eq!(at(Edges::LEFT, 400.0, 0.0), (100.0 + 500.0 - MIN_W, 100.0, MIN_W, 400.0));
+        assert_eq!(at(Edges::BOTTOM, 0.0, -400.0), (100.0, 100.0, 500.0, MIN_H));
+        // Past the canvas it stops at its edge.
+        assert_eq!(at(Edges::TOP_LEFT, -500.0, -500.0), (0.0, 0.0, 600.0, 500.0));
+        assert_eq!(at(Edges::RIGHT, 900.0, 0.0), (100.0, 100.0, 1100.0, 400.0));
     }
 
     #[test]
