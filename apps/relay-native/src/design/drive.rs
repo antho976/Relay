@@ -7,7 +7,9 @@
 //! `endedit` `nudge:dx,dy` `set:{json}` `align:left` `layout:row` `duplicate` `delete` `group`
 //! `frame` `ungroup` `copy` `paste` `undo` `redo` `ask:words` `zoom:1.5` `fit` `layers` `wait:ms`
 //! `print` (the scene, the selection and the colours and styles); `pages` prints `DESIGN_PAGES`
-//! with the Layers panel's page rows, their eyes and the hidden fold; `mark:name` prints
+//! with the Layers panel's page rows, their eyes and the hidden fold; `app-page:agents` goes to
+//! that page of the app, and `lent-card` prints `DESIGN_LENT`, the wall's card for the terminal
+//! the agent panel holds; `mark:name` prints
 //! `DESIGN_MARK name`, for a harness that acts between steps (as an agent would); `chrome`
 //! prints `DESIGN_CHROME` with what the top bar and the toast say, whether Undo agent shows and
 //! whether a text edit is open and on screen.
@@ -293,6 +295,23 @@ fn next(b: Rc<Board>, steps: Vec<String>, at: usize) {
             if let Some(key) = super::tools::find_named(b.overlay.upcast_ref(), "design-layers-key").and_downcast::<gtk::ToggleButton>() {
                 key.set_active(!key.is_active());
             }
+        }
+        "app-page" => {
+            // `app-page:agents`: the app goes to that page, as its tabs take it there.
+            if let Some(ui) = b.ui.upgrade() {
+                ui.navigate(arg);
+            }
+            pause = 600;
+        }
+        "lent-card" => {
+            // The wall's card for the terminal lent to the agent panel: `DESIGN_LENT {...}`, with
+            // its Bring back key's box on the window, or null when there is none on show.
+            let session = b.agent_panel.borrow().as_ref().and_then(|p| p.state()["session"].as_str().map(str::to_string));
+            let window = b.overlay.root().map(|r| r.upcast::<gtk::Widget>());
+            let card = window.as_ref().zip(session.as_ref()).and_then(|(w, s)| super::tools::find_named(w, &format!("lent-{s}"))).filter(|c| c.is_mapped());
+            let back = card.as_ref().and_then(|c| c.last_child());
+            let on_window = |w: &gtk::Widget| window.as_ref().and_then(|r| w.compute_bounds(r)).map(|b| [b.x(), b.y(), b.width(), b.height()]);
+            println!("DESIGN_LENT {}", serde_json::json!({"card": card.is_some(), "back": back.as_ref().and_then(on_window)}));
         }
         "pages" => {
             // The Layers panel's pages list as drawn: `DESIGN_PAGES {...}`.

@@ -41,7 +41,9 @@ Shots (default all):
   edges and corners and moved by its head, each to where the hand went, then its text zoomed;
 - pages: real pointer input on the pages list: a page hidden by its eye, shown again from the
   Hidden fold, and another dragged to the top; the engine keeps the order;
-- tabs: labels in spaced capitals that a hugging column stretches stay on one line (design.render).
+- tabs: labels in spaced capitals that a hugging column stretches stay on one line (design.render);
+- lent: the terminal the agent panel holds shows as a card on Agents, whose Bring it back here
+  (a real click) hands it back.
 
 Each board opens its design by id (RELAY_SMOKE_DESIGN_ID), not as the gallery's first card.
 Needs target/debug/relay and target/debug/relay-native (cargo build -p relay-cli -p
@@ -56,7 +58,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / ".impeccable/review"; OUT.mkdir(parents=True, exist_ok=True)
 ALL = ["gallery", "board", "board-select", "board-narrow", "edit", "script", "agent", "agent-undo", "agent-stale",
-       "agent-delete", "media", "shapes", "more", "reuse", "motion", "render", "glass", "pictures", "perf", "panel", "panel-chat", "panel-drag", "pages", "tabs"]
+       "agent-delete", "media", "shapes", "more", "reuse", "motion", "render", "glass", "pictures", "perf", "panel", "panel-chat", "panel-drag", "pages", "tabs", "lent"]
 SHOTS = sys.argv[1:] or ALL
 unknown = [s for s in SHOTS if s not in ALL + ["gallery-narrow"]]
 if unknown:
@@ -397,7 +399,7 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                 {"op": "add", "node": {"id": "four", "kind": "page", "name": "Four"}},
             ]})
             designs["pages-first"] = first
-        if "panel" in SHOTS or "panel-chat" in SHOTS or "panel-drag" in SHOTS:
+        if "panel" in SHOTS or "panel-chat" in SHOTS or "panel-drag" in SHOTS or "lent" in SHOTS:
             # A dark screen whose glow is a full-bleed rect: its colour moves, the layer stays put.
             designs["panel"], pp = create("Live workout", session=sname)
             call("design.apply", {"design_id": designs["panel"], "ops": [
@@ -1199,6 +1201,27 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
             assert not broke, ("a stretched label broke onto two lines", broke)
             print("TABS_OK")
 
+        def shot_lent(shot):
+            # The terminal the agent panel holds: on Agents its place shows a card, and its Bring
+            # it back here (a real click) hands it back: the panel shows the conversation.
+            log = OUT / f"design-{shot}.log"
+            we = dict(os.environ, WAYLAND_DISPLAY=sock)
+            go = lambda *a: subprocess.run(["python3", str(ROOT / "scripts/wayland-fake-input.py"), *map(str, a)], env=we, check=True, timeout=20)
+            seen = {}
+            def act(wait_mark):
+                wait_mark("card")
+                time.sleep(0.3)
+                seen["card"] = lent = lines(log.read_text(), "DESIGN_LENT")[-1]
+                assert lent["card"] and lent["back"], ("no card on the wall for the lent terminal", lent)
+                x, y, w, h = lent["back"]
+                go("click", x + w / 2, y + h / 2)
+            run = native(shot, "panel", script=["agent-panel:terminal", "wait:2500", "app-page:agents", "wait:1200", "lent-card",
+                                                "mark:card", "wait:2500", "lent-card", "panel"], seconds=14, during=act)
+            after = lines(run.log, "DESIGN_LENT")[-1]
+            panel = lines(run.log, "DESIGN_PANEL")[-1]
+            assert not after["card"] and panel["chat"] and panel["lent"] is None, ("the terminal did not come back", after, panel)
+            print("LENT_OK", seen["card"]["back"])
+
         def shot_panel_chat(shot):
             # As for Ask: the app's paste check sets the agent working until it is at its prompt
             # again, and a request sent meanwhile goes as mail, which the fixture does not read.
@@ -1232,7 +1255,7 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                  "agent-undo": shot_agent_undo, "agent-stale": shot_agent_stale, "agent-delete": shot_agent_delete,
                  "media": shot_media, "shapes": shot_shapes, "more": shot_more, "reuse": shot_reuse, "motion": shot_motion,
                  "render": shot_render, "glass": shot_glass, "pictures": shot_pictures, "perf": shot_perf,
-                 "panel": shot_panel, "panel-chat": shot_panel_chat, "panel-drag": shot_panel_drag, "pages": shot_pages, "tabs": shot_tabs}
+                 "panel": shot_panel, "panel-chat": shot_panel_chat, "panel-drag": shot_panel_drag, "pages": shot_pages, "tabs": shot_tabs, "lent": shot_lent}
         for shot in SHOTS:
             started = time.monotonic()
             try:
