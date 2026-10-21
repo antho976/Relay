@@ -92,8 +92,13 @@ the project's terminals draw and revise designs alongside you.
   the opposite edge moving as far the other way, snap included. Alt does not turn snapping off here.
   A turned layer resizes along its own sides, without snapping. A text given a width wraps from then
   on.
-- **View**: Ctrl scroll or pinch zooms at the pointer, scroll pans, Space or the middle button
-  drags; Shift 1 fits the page, Shift 2 the selection, Shift 0 is 100%.
+- **A gradient's centre**: one selected layer with a radial or conic fill (or stroke) shows a ring
+  at the gradient's centre; dragging it moves the colour inside the layer (`center`, Shift lands on
+  tenths), so a glow is placed without its layer hanging past its frame. The inspector has the same
+  centre as X and Y in % and a radial one's size (R, `radius`).
+- **View**: a mouse wheel zooms at the pointer (Shift and the wheel pan sideways, Ctrl and the
+  wheel up and down); on a touchpad two fingers pan, and a pinch or Ctrl zooms. Space or the middle
+  button drags; Shift 1 fits the page, Shift 2 the selection, Shift 0 is 100%.
 - **Alt+scroll** over a scrolling frame (`scroll: x`, `y` or `both`) scrolls it: the deepest one
   under the pointer, held within what its content overflows. The offset is the canvas's view only,
   never stored, and every still (an export, a render, the phone) shows the frame at its start. With

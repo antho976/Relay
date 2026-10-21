@@ -369,14 +369,17 @@ fn next_pane(b: &Board, back: bool) {
     b.canvas.grab_focus();
 }
 
-/// The wheel or touchpad over the canvas: Ctrl (or Cmd) zooms at the pointer, else it pans
-/// (Shift turns a wheel's pan sideways).
+/// The wheel or touchpad over the canvas. A mouse wheel zooms at the pointer, rolled away to
+/// zoom in; with Shift it pans sideways and with Ctrl (or Cmd) up and down, since the middle
+/// button and Space pan as well. A touchpad's two fingers pan, and zoom with Ctrl, as a pinch
+/// does.
 fn scroll_cam(b: &Board, c: &gtk::EventControllerScroll, dx: f64, dy: f64) {
     let mods = c.current_event_state();
     let wheel = c.unit() == gdk::ScrollUnit::Wheel;
     let (px, py) = b.pointer.get();
     let mut cam = b.cam.get();
-    if mods.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::META_MASK) {
+    let ctrl = mods.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::META_MASK);
+    if wheel_zooms(wheel, ctrl, mods.contains(gdk::ModifierType::SHIFT_MASK)) {
         let factor = if wheel { (-dy * 0.18).exp() } else { (-dy * 0.012).exp() };
         cam.zoom_at(px, py, cam.zoom * factor);
     } else {
@@ -387,6 +390,12 @@ fn scroll_cam(b: &Board, c: &gtk::EventControllerScroll, dx: f64, dy: f64) {
         cam.pan(-sx, -sy);
     }
     b.set_cam(cam);
+}
+
+/// Whether a scroll zooms rather than pans: a mouse wheel with neither Shift nor Ctrl, or a
+/// touchpad with Ctrl (`scroll_cam`).
+fn wheel_zooms(wheel: bool, ctrl: bool, shift: bool) -> bool {
+    if wheel { !ctrl && !shift } else { ctrl }
 }
 
 /// Alt and the wheel over a scrolling frame scroll it, the deepest under the pointer, as the
@@ -788,12 +797,43 @@ pub fn finish_vector(b: &Board, closed: bool) {
     }
 }
 
+/// Where page point `p` falls in a gradient's box `drawn` (turned by `turn`), as the shares
+/// of it its `center` stores: within what one may be, to a thousandth, and with `snap` (Shift)
+/// to the nearest tenth, so the middle and the edges are easy to land on.
+fn centre_share(drawn: &Rect, turn: f64, p: (f64, f64), snap: bool) -> [f64; 2] {
+    use relay_bus::design::{GRADIENT_CENTER_MAX, GRADIENT_CENTER_MIN};
+    let (x, y) = shapes::rotate(p.0, p.1, drawn.cx(), drawn.cy(), -turn);
+    let share = |at: f64, from: f64, size: f64| {
+        let v = if size > 0.0 { (at - from) / size } else { 0.5 };
+        let v = if snap { (v * 10.0).round() / 10.0 } else { (v * 1000.0).round() / 1000.0 };
+        v.clamp(GRADIENT_CENTER_MIN, GRADIENT_CENTER_MAX) + 0.0
+    };
+    [share(x, drawn.x, drawn.w), share(y, drawn.y, drawn.h)]
+}
+
+/// A node's fill gradient (`gradient`) or stroke gradient (`stroke_gradient`), to change.
+fn gradient_mut<'a>(n: &'a mut Node, field: &str) -> Option<&'a mut relay_bus::design::Gradient> {
+    if field == "gradient" { n.gradient.as_mut() } else { n.stroke_gradient.as_mut() }
+}
+
 /// A frame drawn inside another frame nests in it; one drawn on the canvas is a new artboard.
 fn frame_parent(b: &Board, p: (f64, f64)) -> String {
     container_at(b, p)
 }
 
 fn begin_select(b: &Rc<Board>, x: f64, y: f64, p: (f64, f64), mods: gdk::ModifierType) {
+    // A radial or conic gradient's centre: the colour moves inside the layer, which stays put.
+    if let Some((id, field, (cx, cy))) = b.gradient_centre() {
+        if (x - cx).hypot(y - cy) <= 8.0 {
+            let drawn = shapes::visual(&b.doc.scene.borrow(), &b.placed(), &id);
+            let Some((orig, (drawn, turn))) = b.doc.scene.borrow().node(&id).cloned().zip(drawn) else {
+                return;
+            };
+            b.doc.set_hold(true);
+            *b.gesture.borrow_mut() = Gesture::Centre { id, field, drawn, turn, orig, moved: false };
+            return;
+        }
+    }
     // A line's ends.
     if let Some(id) = is_line_selected(b) {
         for (which, (ex, ey)) in b.endpoints(&id).into_iter().enumerate() {
@@ -1060,6 +1100,16 @@ fn update(b: &Rc<Board>, x: f64, y: f64, dx: f64, dy: f64, mods: gdk::ModifierTy
             };
             drop(gesture);
             b.canvas.queue_draw();
+        }
+        Gesture::Centre { id, field, drawn, turn, moved, .. } => {
+            *moved = true;
+            let center = centre_share(drawn, *turn, p, shift(mods));
+            let (id, field) = (id.clone(), *field);
+            drop(gesture);
+            if let Some(g) = b.doc.scene.borrow_mut().node_mut(&id).and_then(|n| gradient_mut(n, field)) {
+                g.center = Some(center);
+            }
+            b.invalidate();
         }
         Gesture::Rotate { id, centre, start, orig, moved } => {
             *moved = true;
@@ -1716,6 +1766,21 @@ fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
             b.invalidate();
         }
         Gesture::Create { tool, parent, a, b: end, from, to } => create_shape(b, tool, parent, a, end, from, to),
+        Gesture::Centre { id, field, orig, moved, .. } => {
+            if moved {
+                let after = b.doc.scene.borrow().node(&id).and_then(|n| if field == "gradient" { n.gradient.clone() } else { n.stroke_gradient.clone() });
+                if let Some(n) = b.doc.scene.borrow_mut().node_mut(&id) {
+                    *n = orig.clone();
+                }
+                if let Some(g) = after {
+                    let mut set = Map::new();
+                    set.insert(field.into(), serde_json::to_value(g).unwrap_or(Value::Null));
+                    b.commit(vec![NodeOp::Update { id, set }]);
+                }
+            }
+            b.doc.set_hold(false);
+            b.invalidate();
+        }
         Gesture::Rotate { id, orig, moved, .. } if orig.kind == NodeKind::Line => {
             if moved {
                 let after = b.doc.scene.borrow().node(&id).cloned();
@@ -1984,7 +2049,7 @@ pub(super) fn cancel(b: &Board) {
                     }
                 }
             }
-            Gesture::Endpoint { id, orig, .. } | Gesture::Rotate { id, orig, .. } => {
+            Gesture::Endpoint { id, orig, .. } | Gesture::Rotate { id, orig, .. } | Gesture::Centre { id, orig, .. } => {
                 if let Some(n) = scene.node_mut(id) {
                     *n = orig.clone();
                 }
@@ -2056,7 +2121,9 @@ fn hover(b: &Rc<Board>, x: f64, y: f64) {
         return;
     }
     if b.tool.get() == Tool::Select {
-        if is_line_selected(b).is_some_and(|id| b.endpoints(&id).iter().any(|(ex, ey)| (x - ex).abs() <= 7.0 && (y - ey).abs() <= 7.0)) {
+        if b.gradient_centre().is_some_and(|(_, _, (cx, cy))| (x - cx).hypot(y - cy) <= 8.0) {
+            update_cursor(b, Some("move"));
+        } else if is_line_selected(b).is_some_and(|id| b.endpoints(&id).iter().any(|(ex, ey)| (x - ex).abs() <= 7.0 && (y - ey).abs() <= 7.0)) {
             update_cursor(b, Some("crosshair"));
         } else if let Some(h) = handle_at(b, x, y).filter(|_| is_line_selected(b).is_none()) {
             update_cursor(b, Some(h.cursor()));
@@ -2646,6 +2713,27 @@ mod tests {
 
     fn page(nodes: Vec<Node>) -> Scene {
         Scene::new(std::iter::once(node("p1", None, NodeKind::Page, [0.0; 4])).chain(nodes).collect())
+    }
+
+    #[test]
+    fn a_gradient_centre_follows_the_pointer_in_its_box() {
+        let glow = Rect::new(100.0, 200.0, 400.0, 800.0);
+        assert_eq!(centre_share(&glow, 0.0, (300.0, 240.0), false), [0.5, 0.05]);
+        assert_eq!(centre_share(&glow, 0.0, (311.0, 239.0), true), [0.5, 0.0], "Shift lands on tenths");
+        assert_eq!(centre_share(&glow, 0.0, (-2000.0, 9000.0), false), [-1.0, 2.0], "held within what one may be");
+        // A box turned a quarter clockwise: its top is on the right, so the pointer right of its
+        // middle is up its own height.
+        let square = Rect::new(0.0, 0.0, 100.0, 100.0);
+        assert_eq!(centre_share(&square, 90.0, (75.0, 50.0), false), [0.5, 0.25]);
+    }
+
+    #[test]
+    fn a_wheel_zooms_and_a_touchpad_pans() {
+        assert!(wheel_zooms(true, false, false));
+        assert!(!wheel_zooms(true, true, false), "Ctrl and the wheel pan up and down");
+        assert!(!wheel_zooms(true, false, true), "Shift and the wheel pan sideways");
+        assert!(!wheel_zooms(false, false, false), "two fingers pan");
+        assert!(wheel_zooms(false, true, false), "Ctrl and two fingers zoom, as a pinch does");
     }
 
     #[test]

@@ -121,6 +121,8 @@ mod tests {
             kind: GradientKind::Linear,
             angle: None,
             stops: ["#000000", "#FFFFFF", "#000000"].iter().enumerate().map(|(i, c)| Stop { at: i as f64 / 2.0, color: (*c).into() }).collect(),
+            center: None,
+            radius: None,
         });
         let s = Scene::new(vec![
             node("p1", None, K::Page, [0.0; 4]),

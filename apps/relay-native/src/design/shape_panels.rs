@@ -10,7 +10,7 @@ use super::widgets::{color_key, segmented, stored_number};
 use crate::app::label;
 use gtk::prelude::*;
 use gtk4 as gtk;
-use relay_bus::design::{takes, Gradient, GradientKind, Node, NodeKind, NodeOp, Route, StrokeCap, StrokeJoin};
+use relay_bus::design::{takes, Gradient, GradientKind, Node, NodeKind, NodeOp, Route, StrokeCap, StrokeJoin, GRADIENT_CENTER_MAX, GRADIENT_CENTER_MIN, GRADIENT_RADIUS};
 use relay_client::design::names::display_name;
 use relay_client::design::{color, shapes};
 use serde_json::{json, Map, Value};
@@ -373,6 +373,11 @@ fn default_angle(kind: GradientKind) -> Option<f64> {
     }
 }
 
+/// A gradient centre's field in %, as the share of the box it stores: within what one may be.
+fn gradient_share(percent: f64) -> f64 {
+    (percent / 100.0).clamp(GRADIENT_CENTER_MIN, GRADIENT_CENTER_MAX)
+}
+
 /// A fill or a stroke: one colour, or a linear, radial or conic gradient with its angle and
 /// stops (where the node's kind takes one).
 pub fn paint(b: &Rc<Board>, sec: &gtk::Box, n: &Node, slot: Slot) {
@@ -474,6 +479,34 @@ pub fn paint(b: &Rc<Board>, sec: &gtk::Box, n: &Node, slot: Slot) {
             w(&|v| v["angle"] = json!(a));
             a
         }));
+    }
+    // Where a radial or conic one is centred, in % of the box (its handle on the canvas drags
+    // it too), and how far a radial one reaches: the glow moves, its layer stays in its frame.
+    if g.kind != GradientKind::Linear {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        row.set_homogeneous(true);
+        let (cx, cy) = g.center_or_middle();
+        for (axis, value, tip) in [(0, cx, "Centre across, % of the width"), (1, cy, "Centre down, % of the height")] {
+            let w = write.clone();
+            row.append(&stored_number(["X", "Y"][axis], Some((value * 100.0).round()), tip, move |p| {
+                let share = gradient_share(p);
+                w(&|v| {
+                    let mut c = v.get("center").and_then(|c| serde_json::from_value::<[f64; 2]>(c.clone()).ok()).unwrap_or([0.5, 0.5]);
+                    c[axis] = share;
+                    v["center"] = json!(c);
+                });
+                share * 100.0
+            }));
+        }
+        if g.kind == GradientKind::Radial {
+            let w = write.clone();
+            row.append(&stored_number("R", Some((g.radius_or_edges() * 100.0).round()), "Size, % of the way to the edges", move |p| {
+                let r = (p / 100.0).clamp(*GRADIENT_RADIUS.start(), *GRADIENT_RADIUS.end());
+                w(&|v| v["radius"] = json!(r));
+                r * 100.0
+            }));
+        }
+        sec.append(&row);
     }
     for (i, stop) in g.stops.iter().enumerate() {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -705,6 +738,13 @@ mod tests {
         // Flat ends are the default, and the whole ellipse is no arc at all.
         assert_eq!(arc_value(&arc(90.0, 180.0, 0.5, Some(StrokeCap::Butt))), json!({"start": 90.0, "sweep": 180.0, "inner": 0.5}));
         assert_eq!(arc_value(&arc(0.0, 360.0, 0.0, None)), Value::Null);
+    }
+
+    #[test]
+    fn a_gradient_centre_stays_where_one_may_be() {
+        assert_eq!(gradient_share(50.0), 0.5);
+        assert_eq!(gradient_share(-250.0), GRADIENT_CENTER_MIN);
+        assert_eq!(gradient_share(900.0), GRADIENT_CENTER_MAX);
     }
 
     #[test]

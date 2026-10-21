@@ -702,7 +702,8 @@ private fun joinOf(n: DesignNode): StrokeJoin = when (strokeJoin(n)) {
 
 /**
  * A gradient laid over [r] (paint.rs `gradient`): linear along its angle as CSS reads it, radial
- * as an ellipse filling the box, conic round the centre from its angle (0 at the top); its stops
+ * as an ellipse filling the box (times its radius), conic round the centre from its angle (0 at the
+ * top), either centred where its center says; its stops
  * in order. A kind this phone does not know paints its middle stop flat.
  */
 internal fun brushOf(g: DesignGradient, r: Rect): Brush? {
@@ -711,16 +712,19 @@ internal fun brushOf(g: DesignGradient, r: Rect): Brush? {
     if (stops.size == 1) return SolidColor(colorOrBlack(stops[0].color))
     val colors = stops.map { colorOrBlack(it.color) }
     val at = FloatArray(stops.size) { stops[it].at.toFloat().coerceIn(0f, 1f) }
-    val cx = r.cx.toFloat()
-    val cy = r.cy.toFloat()
+    // A radial or conic gradient's centre may be moved off the box's middle.
+    val share = g.center?.takeIf { it.size == 2 && it.all(Double::isFinite) }
+    val cx = (if (share != null) r.x + r.w * share[0] else r.cx).toFloat()
+    val cy = (if (share != null) r.y + r.h * share[1] else r.cy).toFloat()
     return when (g.kind) {
         "linear" -> {
             val (a, b) = linearEnds(g.angle, r)
             if (a == b) SolidColor(colors.last()) else Brush.linearGradient(*Array(stops.size) { at[it] to colors[it] }, start = a.o(), end = b.o(), tileMode = TileMode.Clamp)
         }
         "radial" -> {
-            val rx = max(r.w / 2, 0.5).toFloat()
-            val ry = max(r.h / 2, 0.5).toFloat()
+            val reach = g.radius?.takeIf { it.isFinite() && it > 0 } ?: 1.0
+            val rx = max(r.w / 2 * reach, 0.5).toFloat()
+            val ry = max(r.h / 2 * reach, 0.5).toFloat()
             shaderBrush(RadialGradient(cx, cy, rx, IntArray(colors.size) { colors[it].toArgb() }, at, android.graphics.Shader.TileMode.CLAMP).apply {
                 setLocalMatrix(Matrix().apply { setScale(1f, ry / rx, cx, cy) })
             })

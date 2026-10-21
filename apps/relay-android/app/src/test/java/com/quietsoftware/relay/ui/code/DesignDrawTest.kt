@@ -107,6 +107,16 @@ class DesignDrawTest {
         assertTrue(hex(conic.rgb(47, 10)), conic.near(47, 10, BLUE, slack = 24))
     }
 
+    /** A radial gradient moved to the top of its box (`center`) and reaching half way (`radius`): a glow kept inside its frame. */
+    @Test
+    fun `a radial gradient is centred where its center says`() {
+        val stops = listOf(DesignStop(0.0, "#FF0000"), DesignStop(1.0, "#0000FF"))
+        val glow = DesignGradient("radial", stops = stops, center = listOf(0.5, 0.0), radius = 0.5)
+        val out = draw(page(DesignNode(id = "g", kind = "rect", w = 200.0, h = 200.0, gradient = glow)))
+        assertTrue(hex(out.rgb(100, 1)), out.near(100, 1, RED, slack = 16))
+        assertTrue(hex(out.rgb(100, 100)), out.near(100, 100, BLUE, slack = 16))
+    }
+
     /** B54: `radii` round each corner on its own. */
     @Test
     fun `radii round each corner`() {

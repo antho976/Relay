@@ -449,14 +449,18 @@ fn mirrored_angle(a: f64, horizontal: bool) -> f64 {
 
 /// A gradient turned over (drawing §5.4): a linear one's direction mirrored; a conic one's
 /// start mirrored and its stops run the other way, since a clockwise sweep mirrored runs
-/// anticlockwise; a radial one is its own mirror. `None` when that changes nothing.
+/// anticlockwise; a radial one is its own mirror. A moved centre (`center`) moves to its mirror.
+/// `None` when that changes nothing.
 fn flipped_gradient(g: &Gradient, horizontal: bool) -> Option<Gradient> {
+    let mut next = g.clone();
+    if g.kind != GradientKind::Linear {
+        next.center = g.center.map(|[x, y]| if horizontal { [tidy(1.0 - x), y] } else { [x, tidy(1.0 - y)] });
+    }
     let default = match g.kind {
         GradientKind::Linear => 180.0,
         GradientKind::Conic => 0.0,
-        GradientKind::Radial => return None,
+        GradientKind::Radial => return (next.center != g.center).then_some(next),
     };
-    let mut next = g.clone();
     let angle = mirrored_angle(g.angle.unwrap_or(default), horizontal);
     next.angle = if g.angle.is_none() && angle == default { None } else { Some(angle) };
     if g.kind == GradientKind::Conic {
@@ -1073,6 +1077,13 @@ mod tests {
         s.node_mut("e").unwrap().stroke_gradient = None;
         let p = place(&s, "p1", &Mono);
         assert!(flip(&s, &p, &Mono, &ids(&["e"]), true).is_empty());
+        // A glow moved to the top left goes to the top right, and back.
+        s.node_mut("e").unwrap().gradient.as_mut().unwrap().center = Some([0.2, 0.1]);
+        let moved = s.clone();
+        flipped(&mut s, &["e"], true);
+        assert_eq!(s.node("e").unwrap().gradient.as_ref().unwrap().center, Some([0.8, 0.1]));
+        flipped(&mut s, &["e"], true);
+        assert_eq!(s.to_nodes(), moved.to_nodes());
     }
 
     /// What a style gives a layer (a corner, a gradient naming a colour) is written on the layer

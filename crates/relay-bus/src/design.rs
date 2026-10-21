@@ -213,9 +213,10 @@ pub enum Route {
 #[schemars(rename = "DesignGradientKind")]
 pub enum GradientKind {
     Linear,
-    /// From the centre out to the box's edges.
+    /// From its `center` (the box's middle unless moved) out as far as the box's edges, times
+    /// `radius`.
     Radial,
-    /// Round the centre, clockwise from `angle` (default 0, the top), as CSS
+    /// Round its `center`, clockwise from `angle` (default 0, the top), as CSS
     /// `conic-gradient(from …)`.
     Conic,
 }
@@ -247,6 +248,35 @@ pub struct Gradient {
     #[serde(deserialize_with = "obj_vec")]
     #[schemars(length(min = 2, max = 8))]
     pub stops: Vec<Stop>,
+    /// Radial and conic: where its centre sits, as shares of the box, each within -1 to 2:
+    /// `[0.5, 0.5]` (the default) its middle, `[0.5, 0]` the middle of its top edge. A glow is
+    /// moved here rather than by moving its layer out past its frame. Linear: unused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center: Option<[f64; 2]>,
+    /// Radial: how far its last stop reaches, as a share of the box's half width and half
+    /// height, within 0.05 to 4 (default 1, the edges seen from the middle). Others: unused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.05, max = 4))]
+    pub radius: Option<f64>,
+}
+
+/// Where a gradient's centre sits, at least this far out of its box either way (as a share of it)…
+pub const GRADIENT_CENTER_MIN: f64 = -1.0;
+/// …and at most this far.
+pub const GRADIENT_CENTER_MAX: f64 = 2.0;
+/// A radial gradient's reach, as a share of its box's half size.
+pub const GRADIENT_RADIUS: std::ops::RangeInclusive<f64> = 0.05..=4.0;
+
+impl Gradient {
+    /// Its centre as shares of the box: `center`, else the middle.
+    pub fn center_or_middle(&self) -> (f64, f64) {
+        self.center.map_or((0.5, 0.5), |[x, y]| (x, y))
+    }
+
+    /// Its reach as a share of the box's half size: `radius`, else 1.
+    pub fn radius_or_edges(&self) -> f64 {
+        self.radius.unwrap_or(1.0)
+    }
 }
 
 fn linear() -> GradientKind {
@@ -1994,6 +2024,12 @@ pub fn check_gradient(field: &str, g: &Gradient) -> Result<(), String> {
     if g.angle.is_some_and(|a| !a.is_finite()) {
         return Err(format!("{field}: angle must be a number"));
     }
+    if g.center.is_some_and(|c| c.iter().any(|v| !v.is_finite() || !(GRADIENT_CENTER_MIN..=GRADIENT_CENTER_MAX).contains(v))) {
+        return Err(format!("{field}: center is [x, y] as shares of the box, each within {GRADIENT_CENTER_MIN} to {GRADIENT_CENTER_MAX} ([0.5, 0.5] its middle)"));
+    }
+    if g.radius.is_some_and(|r| !r.is_finite() || !GRADIENT_RADIUS.contains(&r)) {
+        return Err(format!("{field}: radius is a share of the box's half size, within {} to {}", GRADIENT_RADIUS.start(), GRADIENT_RADIUS.end()));
+    }
     Ok(())
 }
 
@@ -2322,6 +2358,24 @@ mod tests {
         // A conic gradient takes 2 to 8 stops like the others, on the stroke too.
         let one = read(json!({"kind": "rect", "parent": "p", "stroke_gradient": {"kind": "conic", "stops": [{"at": 0, "color": "#000"}]}}));
         assert_eq!(one.validate().unwrap_err(), "stroke_gradient: give 2 to 8 stops");
+    }
+
+    /// A radial or conic gradient's centre moves within its box, and a little past it; a radial
+    /// one's reach grows and shrinks.
+    #[test]
+    fn a_gradient_centre_and_reach_are_checked() {
+        let glow = |extra: Value| {
+            let mut g = json!({"kind": "radial", "stops": [{"at": 0, "color": "#FF3B6B59"}, {"at": 1, "color": "#FF3B6B00"}]});
+            g.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            read(json!({"kind": "rect", "parent": "p", "w": 390, "h": 844, "gradient": g})).validate()
+        };
+        assert_eq!(glow(json!({"center": [0.5, 0.1], "radius": 0.6})), Ok(()));
+        assert_eq!(glow(json!({"center": [-1, 2]})), Ok(()), "the ends of the range are in it");
+        assert!(glow(json!({"center": [0.5, 2.5]})).unwrap_err().starts_with("gradient: center is [x, y]"));
+        assert!(glow(json!({"radius": 0})).unwrap_err().starts_with("gradient: radius is a share"));
+        let g: Gradient = serde_json::from_value(json!({"stops": [{"at": 0, "color": "#000"}, {"at": 1, "color": "#fff"}]})).unwrap();
+        assert_eq!((g.center_or_middle(), g.radius_or_edges()), ((0.5, 0.5), 1.0));
+        assert_eq!(serde_json::to_value(&g).unwrap().get("center"), None, "an unmoved centre is not stored");
     }
 
     /// What agents read of a node and its edits is plain text: no rustdoc link leaks into it.

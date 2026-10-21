@@ -1769,7 +1769,9 @@ fn stroke_of(n: &Node, width: f64) -> gsk::Stroke {
 fn gradient(snap: &gtk::Snapshot, g: &Gradient, r: &Rect, vector: bool) {
     let mut stops: Vec<gsk::ColorStop> = g.stops.iter().map(|s| gsk::ColorStop::new(s.at as f32, rgba(&s.color))).collect();
     stops.sort_by(|a, b| a.offset().total_cmp(&b.offset()));
-    let centre = graphene::Point::new(r.cx() as f32, r.cy() as f32);
+    // A radial or conic gradient's centre may be moved off the box's middle (`center`).
+    let (fx, fy) = g.center_or_middle();
+    let centre = graphene::Point::new((r.x + r.w * fx) as f32, (r.y + r.h * fy) as f32);
     match g.kind {
         GradientKind::Linear => {
             // CSS reading: 0 points up, 90 right, 180 (the default) down.
@@ -1782,7 +1784,8 @@ fn gradient(snap: &gtk::Snapshot, g: &Gradient, r: &Rect, vector: bool) {
             snap.append_linear_gradient(&grect(r), &start, &end, &stops);
         }
         GradientKind::Radial => {
-            snap.append_radial_gradient(&grect(r), &centre, (r.w / 2.0).max(0.5) as f32, (r.h / 2.0).max(0.5) as f32, 0.0, 1.0, &stops);
+            let reach = g.radius_or_edges();
+            snap.append_radial_gradient(&grect(r), &centre, (r.w / 2.0 * reach).max(0.5) as f32, (r.h / 2.0 * reach).max(0.5) as f32, 0.0, 1.0, &stops);
         }
         // Round the centre, clockwise from `angle` (0, the default, at the top), as CSS's
         // `conic-gradient(from …)` and GSK's rotation read it.

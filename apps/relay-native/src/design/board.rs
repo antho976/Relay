@@ -212,11 +212,19 @@ pub enum Gesture {
     Create { tool: Tool, parent: String, a: (f64, f64), b: (f64, f64), from: Option<String>, to: Option<String> },
     /// A pen or highlighter stroke: the tool it began with draws it, whatever is picked since (B17).
     Draw { parent: String, points: Vec<[f64; 2]>, tool: Tool },
+    /// Dragging the centre of one node's radial or conic gradient (`field`: `gradient` or
+    /// `stroke_gradient`) within the box it paints, `drawn` on the page and turned by `turn`:
+    /// the glow moves, the layer stays in its frame.
+    Centre { id: String, field: &'static str, drawn: Rect, turn: f64, orig: Node, moved: bool },
     /// Turning one node about its centre (page coordinates), from the pointer's first angle.
     Rotate { id: String, centre: (f64, f64), start: f64, orig: Node, moved: bool },
     /// Rubbing out strokes: each touched one with the opacity it had.
     Erase { hits: Vec<(String, Option<f64>)> },
 }
+
+/// The smallest a layer's box is on the screen, either way, for its gradient's centre to take a
+/// handle: below it a press at its middle moves the layer.
+const CENTRE_MIN_BOX: f64 = 48.0;
 
 /// The inspector's width, beside the canvas's right edge.
 const INSPECTOR_W: f64 = 256.0;
@@ -1714,6 +1722,11 @@ impl Board {
                     self.size_pill(snap, &s, &b);
                 }
             }
+            if !matches!(*gesture, Gesture::Move { moved: true, .. }) {
+                if let Some((_, _, (x, y))) = self.gradient_centre() {
+                    self.centre_handle(snap, x, y);
+                }
+            }
         }
         if editing.is_none() && matches!(*gesture, Gesture::Idle | Gesture::Resize { .. }) {
             self.pin_marks(snap, scene, placed);
@@ -1959,6 +1972,20 @@ impl Board {
         snap.append_border(&rr, &[1.2; 4], &[c, c, c, c]);
     }
 
+    /// A gradient's centre: a ring round a dot, apart from the square resize handles.
+    fn centre_handle(&self, snap: &gtk::Snapshot, x: f64, y: f64) {
+        let c = rgba(SELECT);
+        for (radius, colour, width) in [(7.0, gdk::RGBA::WHITE, 3.0), (7.0, c, 1.5)] {
+            let r = Rect::new(x - radius, y - radius, radius * 2.0, radius * 2.0);
+            let rr = gsk::RoundedRect::from_rect(grect(&r), radius as f32);
+            snap.append_border(&rr, &[width; 4], &[colour; 4]);
+        }
+        let dot = Rect::new(x - 2.0, y - 2.0, 4.0, 4.0);
+        snap.push_rounded_clip(&gsk::RoundedRect::from_rect(grect(&dot), 2.0));
+        snap.append_color(&c, &grect(&dot));
+        snap.pop();
+    }
+
     /// "W × H" under the selection.
     fn size_pill(&self, snap: &gtk::Snapshot, s: &Rect, page: &Rect) {
         let text = format!("{} × {}", fmt(page.w), fmt(page.h));
@@ -1992,6 +2019,33 @@ impl Board {
         scene.node(id).filter(|n| n.kind != NodeKind::Line)?;
         let (r, turn) = shapes::visual(&scene, &self.placed(), id)?;
         (turn != 0.0).then(|| (id.clone(), r, turn))
+    }
+
+    /// The one selected layer's radial or conic gradient (its fill's, else its stroke's), for
+    /// the handle that drags its centre: its id, the field, and the centre on the screen. None
+    /// for a locked layer, a linear gradient, or a box too small on the screen to grab apart
+    /// from moving the layer.
+    pub(super) fn gradient_centre(&self) -> Option<(String, &'static str, (f64, f64))> {
+        let sel = self.selection.borrow();
+        let [id] = sel.as_slice() else {
+            return None;
+        };
+        let scene = self.doc.scene.borrow();
+        if !handled(&scene, &sel) {
+            return None;
+        }
+        let n = scene.node(id)?;
+        let (field, g) = [("gradient", &n.gradient), ("stroke_gradient", &n.stroke_gradient)]
+            .into_iter()
+            .find_map(|(f, g)| g.as_ref().filter(|g| g.kind != relay_bus::design::GradientKind::Linear).map(|g| (f, g)))?;
+        let (r, turn) = shapes::visual(&scene, &self.placed(), id)?;
+        let zoom = self.cam.get().zoom;
+        if r.w * zoom < CENTRE_MIN_BOX || r.h * zoom < CENTRE_MIN_BOX {
+            return None;
+        }
+        let (fx, fy) = g.center_or_middle();
+        let (x, y) = shapes::rotate(r.x + r.w * fx, r.y + r.h * fy, r.cx(), r.cy(), turn);
+        Some((id.clone(), field, self.cam.get().to_screen(x, y)))
     }
 
     /// A line's ends, on screen.
