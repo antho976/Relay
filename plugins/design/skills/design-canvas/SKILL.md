@@ -206,7 +206,10 @@ never are.
   update the screen to `h: 700` and the bar stays at the bottom, 390 wide. A floating button:
   `"pin_x": "right", "pin_y": "bottom"`.
 - A frame with no stored `w` (it fills or hugs) reads pins against 0: a right-pinned child's `x`
-  counts from the right edge (`x: -40, w: 24` sits 16 px in).
+  counts from the right edge (`x: -40, w: 24` sits 16 px in). **A stretching pin there keeps
+  its stored distance to the far edge**: a photo `h: 260` pinned `top_bottom` in a card that
+  fills (stored `h` 0, drawn 260) is drawn 520 tall. Give the card the `h` it draws, or pin the
+  photo `top`; design.apply warns when a pin draws a node past its frame or to nothing.
 - **`absolute: true`** takes a child of a laid-out frame out of the flow: it keeps its own `x/y`
   from the frame's top-left corner (padding ignored), takes no room, is not counted when the frame
   hugs, and can be pinned (a close icon: `absolute: true, pin_x: "right", x: -40`). It cannot
@@ -451,7 +454,8 @@ a screen, **look at it**: `design.render {"design_id": 12, "page": "page-7", "no
   `boxes_limit` rows (default 200, most 500); `boxes.total` counts all, `boxes.hidden` the hidden.
 - `issues` (worst first, at most 100; `issue_count` counts all) name layout problems by `code`:
   `overflow` (a child past its frame's padding), `overlap` (siblings laid over each other in a
-  layout), `text_overlap`, `clipped` (cut off by a clipping frame), `contrast` (words too faint on
+  layout), `text_overlap`, `clipped` (cut off by a clipping frame: past its edge, its shadow or glow
+  squared off by an edge it stands near, or cut by its rounded corner), `contrast` (words too faint on
   what is painted under their centre: through a ring's hole or past a round corner, not the shape's
   box). Fix them and render again. Read `warnings` too. A node you mean to leave as it is (words
   meant to be faint, a caption on a photo the check cannot read) takes `"skip_checks": true`, and

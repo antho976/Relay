@@ -16,7 +16,7 @@ use super::layout::{Measure, Placed, STICKY_PAD};
 use super::motion::{posed_settled, Clocks};
 use super::scene::Scene;
 use super::shapes;
-use relay_bus::design::{parse_color, Layout, Node, NodeKind, TextAlign};
+use relay_bus::design::{parse_color, Layout, Node, NodeKind, Shadow, TextAlign};
 use relay_bus::ops::design::{RenderBoxes, RenderIssue, RenderRect, RENDER_BOXES_MAX};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::{json, Value};
@@ -273,7 +273,10 @@ fn cell(v: f64) -> i64 {
 /// - `text_overlap`: two text or sticky siblings, under any parent, drawn over each other: a
 ///   text where its words are (and its box when it has a fill), a sticky its paper and words.
 /// - `clipped`: a free child of a clipping frame (any child of one without layout, an absolute
-///   one of one with layout) whose box passes the frame's box, except along its scroll axis.
+///   one of one with layout) whose box passes the frame's box, except along its scroll axis; any
+///   child, inside it, whose outer shadow still shows past an edge it stands clear of
+///   (`shadow_cut`: a glow squared off); and any child of one that does not scroll that paints
+///   into the cut of its rounded corner (`cut_by_corner`).
 /// - `contrast`: a text's or a labelled shape's words, or one of its runs in its own colour,
 ///   below 4.5:1 (3:1 at 24 px, or 18.66 px from weight 700) on what is drawn under their
 ///   centre. Both colours there are worked out as the painter lays them down: each node's
@@ -467,11 +470,27 @@ impl Paint<'_> {
         }
         if p.kind == NodeKind::Frame && p.clip != Some(false) {
             let edges = [pr.x, pr.right(), pr.y, pr.bottom()];
-            let free = kids.iter().filter(|c| self.wanted.contains(*c)).filter_map(|c| self.level(c));
-            for (n, nr) in free.filter(|(n, _)| mode == Layout::None || n.is_absolute()) {
-                if let Some((side, past, edge, limit)) = passes(&nr, edges, across, down) {
+            let corners = shapes::corner_radii(p, &pr);
+            let inside = kids.iter().filter(|c| self.wanted.contains(*c) && !self.clear(c)).filter_map(|c| self.level(c));
+            for (n, nr) in inside {
+                let free = mode == Layout::None || n.is_absolute();
+                if let Some((side, past, edge, limit)) = passes(&nr, edges, across, down).filter(|_| free) {
                     let message = format!("{} is cut off {} px past {parent}'s edge, which clips ({side} {}, limit {})", n.id, fmt(past), fmt(edge), fmt(limit));
                     found.push(self.found(Code::Clipped, &n.id, parent, message));
+                    continue;
+                }
+                // Its box inside, its shadow squared off by an edge it stands clear of.
+                if let Some((side, past, gap)) = shadow_cut(n, &nr, edges, across, down) {
+                    let message = format!("{}'s shadow is cut off by {parent}'s {side} edge, which clips: it shows {} px past it, {} px from {}; give it room or set clip false on {parent}", n.id, fmt(past), fmt(gap), n.id);
+                    found.push(self.found(Code::Clipped, &n.id, parent, message));
+                    continue;
+                }
+                // A corner of what it paints in the rounded corner's cut, of a frame that does not scroll.
+                if !(across || down) {
+                    if let Some((corner, depth, radius)) = cut_by_corner(n, &nr, &pr, corners) {
+                        let message = format!("{} is cut {} px by {parent}'s rounded {corner} corner (radius {}), which clips: move it in or round its own corner", n.id, fmt(depth), fmt(radius));
+                        found.push(self.found(Code::Clipped, &n.id, parent, message));
+                    }
                 }
             }
         }
@@ -708,6 +727,82 @@ fn passes(r: &Rect, [left, right, top, bottom]: [f64; 4], across: bool, down: bo
     sides.into_iter().filter(|s| s.1 > SLACK).max_by(|a, b| a.1.total_cmp(&b.1))
 }
 
+/// Where an outer shadow `s` stops showing past its box, along each side (left, right, top,
+/// bottom): its offset and spread, and for a blur, as far as it stays at least 5% dark (a blur
+/// falls off as a gaussian of sigma blur / 2, taken here as a logistic curve). `None` for a
+/// shadow too faint to see anywhere.
+fn shadow_reach(s: &Shadow) -> Option<[f64; 4]> {
+    const SEEN: f64 = 0.05;
+    let alpha = f64::from(parse_color(&s.color)?[3]) / 255.0;
+    let blur = s.blur.max(0.0);
+    let fade = if blur > 0.0 {
+        if alpha <= 2.0 * SEEN {
+            return None;
+        }
+        blur / 2.0 / 1.702 * (alpha / SEEN - 1.0).ln()
+    } else if alpha >= SEEN {
+        0.0
+    } else {
+        return None;
+    };
+    let out = s.spread + fade;
+    Some([out - s.x, out + s.x, out - s.y, out + s.y])
+}
+
+/// The side of a clipping frame whose edge (`edges`: left, right, top, bottom) squares off the
+/// outer shadows of `n` drawn at `r`, with how far they show past it and how far `r` stands from
+/// it: only along a side `r` stands clear of (a bar flush with the frame casts past it on
+/// purpose), never along the axis the frame scrolls, and only for a cut past half a px.
+fn shadow_cut(n: &Node, r: &Rect, edges: [f64; 4], across: bool, down: bool) -> Option<(&'static str, f64, f64)> {
+    let gaps = [r.x - edges[0], edges[1] - r.right(), r.y - edges[2], edges[3] - r.bottom()];
+    let sides = ["left", "right", "top", "bottom"];
+    let mut worst: Option<(&'static str, f64, f64)> = None;
+    for s in shapes::effective_shadows(n).iter().filter(|s| !s.inset) {
+        let Some(reach) = shadow_reach(s) else { continue };
+        for k in 0..4 {
+            let scrolls = if k < 2 { across } else { down };
+            let (gap, past) = (gaps[k], reach[k] - gaps[k]);
+            if scrolls || gap <= SLACK || past <= SLACK {
+                continue;
+            }
+            if worst.is_none_or(|w| past > w.1) {
+                worst = Some((sides[k], past, gap));
+            }
+        }
+    }
+    worst
+}
+
+/// How deep the rounded corner of a clipping frame drawn at `frame` with `radii` (top-left,
+/// top-right, bottom-right, bottom-left) cuts what `n` paints at `r`, at the corner it cuts most:
+/// its name, the depth past the corner's curve and its radius. Only for what paints out to its
+/// box's corners (a box with a fill, border or picture, an ellipse as the circle in its box), and
+/// none under half a px.
+fn cut_by_corner(n: &Node, r: &Rect, frame: &Rect, radii: [f64; 4]) -> Option<(&'static str, f64, f64)> {
+    let paints = n.stroke.is_some() || n.gradient.is_some() || fill_of(n).and_then(|f| parse_color(&f)).is_some_and(|c| c[3] > 0);
+    let own = match n.kind {
+        NodeKind::Rect | NodeKind::Frame | NodeKind::Sticky if paints => shapes::corner_radii(n, r),
+        NodeKind::Image => shapes::corner_radii(n, r),
+        NodeKind::Ellipse if paints && n.arc.is_none() => [r.w.min(r.h) / 2.0; 4],
+        _ => return None,
+    };
+    let corners = [("top-left", -1.0, -1.0), ("top-right", 1.0, -1.0), ("bottom-right", 1.0, 1.0), ("bottom-left", -1.0, 1.0)];
+    corners
+        .iter()
+        .zip(radii.iter().zip(own))
+        .filter(|(_, (c, _))| **c > 0.0)
+        .filter_map(|(&(name, sx, sy), (&c, mine))| {
+            let edge = |s: f64, lo: f64, hi: f64| if s < 0.0 { lo } else { hi };
+            let centre = (edge(sx, frame.x, frame.right()) - sx * c, edge(sy, frame.y, frame.bottom()) - sy * c);
+            let at = (edge(sx, r.x, r.right()) - sx * mine, edge(sy, r.y, r.bottom()) - sy * mine);
+            // Only where it reaches into the corner's square, outward of the curve's centre both ways.
+            let (dx, dy) = ((at.0 - centre.0) * sx, (at.1 - centre.1) * sy);
+            let depth = dx.hypot(dy) + mine - c;
+            (dx > 0.0 && dy > 0.0 && depth > SLACK).then_some((name, depth, c))
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+}
+
 /// A colour as `#RRGGBB`, or `#RRGGBBAA` when it is not opaque.
 fn hex([r, g, b, a]: [u8; 4]) -> String {
     if a == 255 {
@@ -924,6 +1019,56 @@ mod tests {
         let (s, p) = page(vec![stack, node("x", Some("stack"), K::Ellipse, [0.0, 0.0, 40.0, 40.0]), node("y", Some("stack"), K::Ellipse, [0.0, 0.0, 40.0, 40.0])]);
         assert_eq!(p.rect("y").unwrap().x, 28.0);
         assert!(all_issues(&s, &p).0.is_empty());
+    }
+
+    /// A glow squared off: a pause button 4 px from the edge of a screen that clips, its 16 px
+    /// glow showing about 12 px. A bar flush with the edge casts past it on purpose, and a glow
+    /// with room to fade, or too faint to see, is not cut.
+    #[test]
+    fn a_shadow_cut_by_a_clipping_frame_is_clipped() {
+        let mut screen = node("screen", Some("p1"), K::Frame, [0.0, 0.0, 390.0, 200.0]);
+        screen.fill = Some("#101418".into());
+        let glow = |id: &str, x: f64, color: &str| {
+            let mut n = node(id, Some("screen"), K::Ellipse, [x, 80.0, 40.0, 40.0]);
+            n.fill = Some("#4AF0FF".into());
+            n.shadow = Some(Shadow { x: 0.0, y: 0.0, blur: 16.0, spread: 0.0, color: color.into(), inset: false });
+            n
+        };
+        let mut bar = node("bar", Some("screen"), K::Rect, [0.0, 150.0, 390.0, 50.0]);
+        bar.shadow = Some(Shadow { x: 0.0, y: -2.0, blur: 12.0, spread: 0.0, color: "#00000066".into(), inset: false });
+        let (s, p) = page(vec![screen, glow("pause", 4.0, "#4AF0FF99"), glow("roomy", 150.0, "#4AF0FF99"), glow("faint", 346.0, "#4AF0FF0A"), bar]);
+        let found = all_issues(&s, &p);
+        assert_eq!(codes(&found), [("clipped", vec!["pause", "screen"])]);
+        let message = &found.0[0].message;
+        assert!(message.starts_with("pause's shadow is cut off by screen's left edge, which clips: it shows 7.27 px past it, 4 px from pause"), "{message}");
+        // Unclipped, nothing is cut.
+        let (mut s, _) = (s, p);
+        s.node_mut("screen").unwrap().clip = Some(false);
+        let p = place(&s, "p1", &Mono);
+        assert!(all_issues(&s, &p).0.is_empty());
+    }
+
+    /// A rounded corner cuts what paints out to it: a legend swatch tucked in a card's corner.
+    /// An inner card whose corner follows the outer one, words, and a frame that scrolls are not
+    /// cut.
+    #[test]
+    fn a_rounded_corner_cuts_what_reaches_into_it() {
+        let mut card = node("card", Some("p1"), K::Frame, [0.0, 0.0, 300.0, 200.0]);
+        card.radius = Some(24.0);
+        let mut swatch = node("swatch", Some("card"), K::Rect, [4.0, 4.0, 10.0, 10.0]);
+        swatch.fill = Some("#4C7DFF".into());
+        let mut inner = node("inner", Some("card"), K::Frame, [8.0, 8.0, 284.0, 184.0]);
+        (inner.radius, inner.fill) = (Some(16.0), Some("#F4F4F5".into()));
+        let words = text("words", "card", [2.0, 180.0, 0.0, 0.0], "Hi");
+        let (s, p) = page(vec![card, inner, swatch, words]);
+        let found = all_issues(&s, &p);
+        assert_eq!(codes(&found), [("clipped", vec!["swatch", "card"])]);
+        let message = &found.0[0].message;
+        assert!(message.starts_with("swatch is cut 4.28 px ") && message.contains("by card's rounded top-left corner (radius 24)"), "{message}");
+        let mut s = s;
+        s.node_mut("card").unwrap().scroll = Some(Scroll::Y);
+        let p = place(&s, "p1", &Mono);
+        assert!(all_issues(&s, &p).0.is_empty(), "what scrolls past a round corner is meant to");
     }
 
     #[test]
