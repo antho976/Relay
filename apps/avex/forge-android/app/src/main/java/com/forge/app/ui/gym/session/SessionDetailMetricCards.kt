@@ -165,9 +165,9 @@ internal fun liftValue(ex: ExerciseDetail, metric: SessionMetric, unit: WeightUn
     SessionMetric.WEIGHT -> ex.topWeightLb?.takeIf { it > 0 }?.let { formatWeight(it, unit) }
         ?: if (ex.sets.isNotEmpty() && ex.sets.all { it.durationSeconds != null }) formatHoldLabel(ex.sets.maxOf { it.durationSeconds ?: 0 })
         else "BW"
-    SessionMetric.VOLUME -> String.format("%,d", toDisplayWeight(ex.volumeLb, unit).toLong())
+    SessionMetric.VOLUME -> String.format(java.util.Locale.getDefault(), "%,d", toDisplayWeight(ex.volumeLb, unit).toLong())
     SessionMetric.REPS -> "${ex.totalReps}"
-    SessionMetric.RPE -> if (ex.sets.any { it.rpe != null }) String.format("%.1f", ex.avgRpe) else "0"
+    SessionMetric.RPE -> if (ex.sets.any { it.rpe != null }) String.format(java.util.Locale.getDefault(), "%.1f", ex.avgRpe) else "0"
 }
 
 /**
