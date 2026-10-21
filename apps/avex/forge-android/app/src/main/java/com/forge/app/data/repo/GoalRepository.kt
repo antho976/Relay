@@ -87,6 +87,22 @@ class GoalRepository @Inject constructor(
         }.sortedWith(compareByDescending<GoalProgress> { it.achieved }.thenByDescending { it.fraction })
     }
 
+    /** One finished session's heaviest set on a lift, oldest first: the target screen's done bars. */
+    data class TopSet(val atMs: Long, val weightLb: Double)
+
+    /**
+     * Each finished, tracked session's heaviest set on [exerciseId], oldest first. The Goals page
+     * reads when a target was first reached from it, and the target screen draws its pace from it.
+     */
+    suspend fun topSets(exerciseId: String, limit: Int = 160): List<TopSet> =
+        loggedSetDao.sessionAggregatesForExercise(exerciseId, limit)
+            .mapNotNull { a -> a.topWeightLb?.takeIf { it > 0 }?.let { TopSet(a.sessionStartedAt, it) } }
+            .sortedBy { it.atMs }
+
+    /** The heaviest set ever logged on [exerciseId] as weight and reps ("205 × 5"), or null. */
+    suspend fun bestSet(exerciseId: String): Pair<Double, Int>? =
+        loggedSetDao.personalBestSet(exerciseId)?.let { set -> set.weightLb?.takeIf { it > 0 }?.let { it to set.reps } }
+
     /** How many set goals have been reached — feeds the Goal Crusher trophy. */
     suspend fun achievedCount(): Int = goalsWithProgress().count { it.achieved }
 

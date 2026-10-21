@@ -61,14 +61,14 @@ class ExtendedGoalRepository @Inject constructor(
      * lb). Bodyweight snapshots the current weigh-in as its progress baseline (stored in the spare
      * `stretch_value` column) so a cut like "get to 80 kg" shows correct progress from where you were.
      */
-    suspend fun create(metric: GoalMetric, period: GoalPeriod, targetValue: Double, label: String = "") {
+    suspend fun create(metric: GoalMetric, period: GoalPeriod, targetValue: Double, label: String = ""): Long? {
         // Repository-level guards so no entry point can store a degenerate goal: a non-positive
         // target breaks the fraction math, and BODYWEIGHT is point-in-time — a WEEK/MONTH window is
         // meaningless for it (currentValue ignores the period), so it normalizes to ALL.
-        if (targetValue <= 0) return
+        if (targetValue <= 0) return null
         val normalizedPeriod = if (metric == GoalMetric.BODYWEIGHT) GoalPeriod.ALL else period
         val baseline = if (metric == GoalMetric.BODYWEIGHT) bodyweightDao.latest()?.weightLb else null
-        dao.insert(
+        return dao.insert(
             ExtendedGoal(
                 goalType = encodeGoalType(metric, normalizedPeriod),
                 targetValue = targetValue,
@@ -165,6 +165,39 @@ class ExtendedGoalRepository @Inject constructor(
             )
         }.sortedWith(compareByDescending<Progress> { it.achieved }.thenByDescending { it.fraction })
     }
+
+    /**
+     * What a cumulative [metric] totalled in each of the last [count] windows of [period], oldest
+     * first and the current (unfinished) window last: the target screen's "your recent weeks". Empty
+     * for [GoalPeriod.ALL] and for bodyweight, which has no windows. Values are canonical units.
+     */
+    suspend fun history(metric: GoalMetric, period: GoalPeriod, count: Int, nowMs: Long = clock.nowMs()): List<Double> {
+        if (period == GoalPeriod.ALL || metric == GoalMetric.BODYWEIGHT || count <= 0) return emptyList()
+        val zone = java.time.ZoneId.systemDefault()
+        val today = java.time.Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
+        val starts = (count - 1 downTo 0).map { back ->
+            when (period) {
+                GoalPeriod.WEEK -> today.with(java.time.DayOfWeek.MONDAY).minusWeeks(back.toLong())
+                else -> today.withDayOfMonth(1).minusMonths(back.toLong())
+            }
+        }
+        return starts.map { start ->
+            val from = start.atStartOfDay(zone).toInstant().toEpochMilli()
+            val next = if (period == GoalPeriod.WEEK) start.plusWeeks(1) else start.plusMonths(1)
+            val to = minOf(next.atStartOfDay(zone).toInstant().toEpochMilli(), nowMs)
+            when (metric) {
+                GoalMetric.CARDIO_DISTANCE -> cardioDao.between(from, to).sumOf { it.distanceKm ?: 0.0 }
+                GoalMetric.CARDIO_MINUTES -> cardioDao.between(from, to).sumOf { it.durationMin.toDouble() }
+                GoalMetric.SESSIONS -> sessionDao.aggregateInRange(from, to).sessionCount.toDouble()
+                GoalMetric.VOLUME -> sessionDao.aggregateInRange(from, to).totalVolume ?: 0.0
+                GoalMetric.BODYWEIGHT -> 0.0
+            }
+        }
+    }
+
+    /** Weigh-ins since [sinceMs], oldest first, as (recorded at, lb): bodyweight pace and its line. */
+    suspend fun weighIns(sinceMs: Long): List<Pair<Long, Double>> =
+        bodyweightDao.since(sinceMs).map { it.recordedAt to it.weightLb }.sortedBy { it.first }
 
     /** The current tracked value for one goal, in its canonical unit. */
     private suspend fun currentValue(
