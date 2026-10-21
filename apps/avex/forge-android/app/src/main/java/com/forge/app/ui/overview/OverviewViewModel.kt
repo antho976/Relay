@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -46,7 +47,8 @@ class OverviewViewModel @Inject constructor(
     private val healthConnectManager: com.forge.app.data.health.HealthConnectManager,
     private val timeSignals: com.forge.app.core.time.TimeSignals,
     private val clock: Clock,
-    private val snackbar: com.forge.app.ui.common.SnackbarController
+    private val snackbar: com.forge.app.ui.common.SnackbarController,
+    private val coachRepo: com.forge.app.data.repo.CoachRepository
 ) : ViewModel() {
 
     // ── design/surface-experiment (2026-08-15) ────────────────────────────────────────────────
@@ -137,7 +139,7 @@ class OverviewViewModel @Inject constructor(
      *  re-subscribing observeWeeklyStats() (which the main combine below already collects) — that
      *  double subscription recomputed goals on stats ticks yet still missed bodyweight logs, leaving
      *  a bodyweight goal line stale until an unrelated event. All reads are cheap aggregate queries. */
-    private val goalsFlow: kotlinx.coroutines.flow.Flow<Pair<List<com.forge.app.data.repo.GoalRepository.GoalProgress>, List<com.forge.app.data.repo.ExtendedGoalRepository.Progress>>> =
+    private val goalsFlow: kotlinx.coroutines.flow.Flow<Triple<List<com.forge.app.data.repo.GoalRepository.GoalProgress>, List<com.forge.app.data.repo.ExtendedGoalRepository.Progress>, Map<String, Double>>> =
         combine(
             goalRepo.observeAll(),
             extendedGoalRepo.observeAll(),
@@ -160,7 +162,11 @@ class OverviewViewModel @Inject constructor(
                 .getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it else emptyList() }
             val custom = runCatching { extendedGoalRepo.goalsWithProgress() }
                 .getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it else emptyList() }
-            lift to custom
+            val monthAgo = clock.nowMs() - 30L * 24 * 60 * 60 * 1000
+            val before = runCatching { goalRepo.bestWeightBefore(lift.map { it.exerciseId }.distinct(), monthAgo) }
+                .getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it else emptyMap() }
+            val change = lift.mapNotNull { g -> before[g.exerciseId]?.let { g.exerciseId to (g.currentBestLb - it) } }.toMap()
+            Triple(lift, custom, change)
         }.flowOn(Dispatchers.Default)
 
     // P-15: five inputs, each of which reaches something Home draws. Others were subscribed for
@@ -213,7 +219,7 @@ class OverviewViewModel @Inject constructor(
         // signature so flipping the unit re-formats the marquee instead of serving a stale string.
         s.copy(recentItems = withTopLifts(s.recentItems, weightUnit))
     }.combine(goalsFlow) { s, gc ->
-        s.copy(goals = gc.first, customGoals = gc.second)
+        s.copy(goals = gc.first, customGoals = gc.second, liftGoalChange30dLb = gc.third)
     }.combine(timeSignals.dayStarts()) { s, todayStartMs ->
         // The day the state describes, so the goal captions below can be memoised against it
         // rather than against a goal object that may not change across a period boundary (M-32).
@@ -270,6 +276,133 @@ class OverviewViewModel @Inject constructor(
     }
     fun refreshDirective() = directiveRefresh.request()
 
+    // ── The redesign's Home (2026-10-21) ─────────────────────────────────────────────────────
+
+    /** The hero's spec line: "5 exercises · 18 sets · ~55 min". */
+    data class SessionSpec(val exercises: Int, val sets: Int, val minutes: Int)
+
+    /**
+     * The user's realised rest pace, folded into the minutes estimate exactly as the day list does
+     * it, so Home and the Train card never print two different lengths for the same day.
+     */
+    private val restTuning: kotlinx.coroutines.flow.Flow<Triple<com.forge.app.domain.adapt.RestTuning, Int, Int>> =
+        combine(settingsRepo.restCompoundSeconds, settingsRepo.restIsolationSeconds) { c, i -> c to i }
+            .distinctUntilChanged()
+            .map { (c, i) ->
+                val tuning = runCatching {
+                    com.forge.app.domain.adapt.RestAdvisor.tuning(
+                        com.forge.app.domain.adapt.RestAdvisor.samples(
+                            workoutRepo.recentRestEvents(), compoundBase = c, isolationBase = i
+                        ) { com.forge.app.program.Program.exercise(it) }
+                    )
+                }.getOrElse {
+                    if (it is kotlinx.coroutines.CancellationException) throw it
+                    com.forge.app.domain.adapt.RestTuning.NEUTRAL
+                }
+                Triple(tuning, c, i)
+            }
+
+    val spec: StateFlow<SessionSpec?> = combine(state, restTuning) { s, (tuning, c, i) ->
+        val key = s.activeSessionDayKey ?: s.directive?.dayKey ?: s.nextUpDayKey
+        val plan = com.forge.app.program.Program.dayOrNull(key) ?: return@combine null
+        // Today's brief already leaves out what an injury rules out, so its count is what will be done.
+        val targets = s.brief?.takeIf { it.dayKey == key }?.targets
+        val exercises = targets?.size ?: plan.exercises.size
+        val sets = targets?.sumOf { it.setsText.toIntOrNull() ?: 0 } ?: plan.exercises.sumOf { it.sets }
+        val minutes = com.forge.app.domain.adapt.RestAdvisor.estimateMinutes(
+            plan, tuning, compoundBase = c, isolationBase = i
+        )
+        if (exercises == 0) null else SessionSpec(exercises, sets, minutes)
+    }.flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    private val _coach = MutableStateFlow<com.forge.app.data.repo.CoachHomeSummary?>(null)
+    /** The COACH row: open calls and changes on watch. Null hides the row. */
+    val coach: StateFlow<com.forge.app.data.repo.CoachHomeSummary?> = _coach
+    private val coachRefresh = com.forge.app.core.ConflatedRefresh(viewModelScope) {
+        _coach.value = runCatching { coachRepo.homeSummary() }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
+    }
+    fun refreshCoach() = coachRefresh.request()
+
+    /**
+     * Each recent gym row's "vs last time" bars, memoised by session id: a finished session's lifts
+     * and the bouts before it never change, so each is read once per screen life.
+     */
+    private val liftDeltaCache = ConcurrentHashMap<Long, List<StatsRepository.LiftDelta>>()
+    private suspend fun liftDeltas(sessionId: Long): List<StatsRepository.LiftDelta> =
+        liftDeltaCache[sessionId] ?: runCatching { statsRepo.liftDeltas(sessionId) }
+            .getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it else emptyList() }
+            .also { liftDeltaCache[sessionId] = it }
+
+    val recentMarks: StateFlow<Map<Long, List<StatsRepository.LiftDelta>>> =
+        state.map { s -> s.recentItems.filter { it.isGym && it.id >= 0 }.map { it.id } }
+            .distinctUntilChanged()
+            .map { ids -> ids.associateWith { liftDeltas(it) } }
+            .flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** The newest tracked gym session as the "Yesterday" reading. */
+    private val lastSessionReading: kotlinx.coroutines.flow.Flow<SlotReading?> =
+        combine(sessionDao.observeRecentTracked(1), settingsRepo.weightUnit, timeSignals.dayStarts()) { list, unit, todayStart ->
+            val session = list.firstOrNull() ?: return@combine null
+            lastSessionSlot(
+                session = session,
+                lines = runCatching { statsRepo.getSessionExerciseLines(session.id) }
+                    .getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it else emptyList() },
+                deltas = liftDeltas(session.id),
+                unit = unit,
+                todayStartMs = todayStart,
+            )
+        }.flowOn(Dispatchers.Default)
+
+    private val bodyWeightReading: kotlinx.coroutines.flow.Flow<SlotReading?> =
+        combine(bodyweightRepo.observeRecent(60), settingsRepo.weightUnit) { entries, unit ->
+            bodyWeightSlot(entries, unit)
+        }.flowOn(Dispatchers.Default)
+
+    /** Home's two reading slots, resolved: which reading sits where and what each one reads. */
+    data class HomeSlots(
+        val left: HomeSlot,
+        val right: HomeSlot,
+        val readings: Map<HomeSlot, SlotReading?>,
+        /** Health Connect is on the phone but nothing is granted: a watch slot offers to connect. */
+        val watchInvite: Boolean,
+    )
+
+    val slots: StateFlow<HomeSlots> = combine(
+        settingsRepo.homeSlots, _body, lastSessionReading, bodyWeightReading
+    ) { ids, body, last, weight ->
+        val left = HomeSlot.of(ids.getOrNull(0)) ?: HomeSlot.DEFAULT_LEFT
+        val right = (HomeSlot.of(ids.getOrNull(1)) ?: HomeSlot.DEFAULT_RIGHT)
+            .let { if (it == left) HomeSlot.entries.first { e -> e != left } else it }
+        val watch = body as? HomeBody.Readings
+        HomeSlots(
+            left = left,
+            right = right,
+            readings = mapOf(
+                HomeSlot.SLEEP to watch?.sleep,
+                HomeSlot.RESTING_HR to watch?.restingHr,
+                HomeSlot.HRV to watch?.hrv,
+                HomeSlot.STEPS to watch?.steps,
+                HomeSlot.BODY_WEIGHT to weight,
+                HomeSlot.LAST_SESSION to last,
+            ),
+            watchInvite = body == HomeBody.Invite,
+        )
+    }.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000),
+        HomeSlots(HomeSlot.DEFAULT_LEFT, HomeSlot.DEFAULT_RIGHT, emptyMap(), watchInvite = false)
+    )
+
+    /** Put [slot] in the left or right spot; picking the other spot's reading swaps the two. */
+    fun setSlot(left: Boolean, slot: HomeSlot) {
+        val current = slots.value
+        val (l, r) = if (left) slot to (if (current.right == slot) current.left else current.right)
+            else (if (current.left == slot) current.right else current.left) to slot
+        viewModelScope.launch { settingsRepo.setHomeSlots(l.id, r.id) }
+    }
+
     fun onMilestoneShown(milestoneId: String) {
         viewModelScope.launch { settingsRepo.markMilestoneShown(milestoneId) }
     }
@@ -319,13 +452,15 @@ class OverviewViewModel @Inject constructor(
             item.copy(topLift = lift)
         }
 
-    /** Heaviest weighted set of a session, formatted "Name 185 lb × 5". Null for bodyweight-only days. */
+    /** Heaviest weighted set of a session, formatted "Name 185×5". Null for bodyweight-only days. */
     private suspend fun topLiftFor(sessionId: Long, weightUnit: WeightUnit): String? {
         val top = statsRepo.getSessionExerciseLines(sessionId)
             .filter { (it.topWeightLb ?: 0.0) > 0.0 }
             .maxByOrNull { it.topWeightLb!! } ?: return null
-        val wText = formatWeight(top.topWeightLb!!, weightUnit)
-        return "${top.exerciseName} $wText × ${top.topReps ?: 0}"
+        // The redesign's row reads "48 min · Bench Press 205×5": the unit is the user's own and says
+        // nothing a lifter needs repeated on every row.
+        val wText = com.forge.app.domain.units.weightInputValue(top.topWeightLb!!, weightUnit)
+        return "${compactLiftName(top.exerciseName)} $wText×${top.topReps ?: 0}"
     }
 }
 
