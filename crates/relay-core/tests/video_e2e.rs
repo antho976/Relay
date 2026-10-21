@@ -145,3 +145,21 @@ fn video_e2e_the_starter_checks_looks_and_renders_for_real() {
     println!("versions: {}", ok(&e, "video.get", json!({"video_id": id}))["versions"]);
     ok(&e, "video.delete", json!({"video_id": id}));
 }
+
+/// The first check of a session as an agent meets it: the video made, some seconds spent writing
+/// its code, an edit, then the check (docs/perf/VIDEO-2026-10-21.md). A fresh engine, so no worker
+/// runs yet.
+#[test]
+#[ignore = "needs Node.js 20+ and the kit video_e2e sets up: run with --ignored"]
+fn video_e2e_first_check_after_writing() {
+    let e = engine();
+    assert_eq!(ok(&e, "video.kit.status", json!({}))["state"], "ready", "run video_e2e_the_starter_checks_looks_and_renders_for_real first");
+    let made = ok(&e, "video.create", json!({"project_id": 1, "title": "First check"}));
+    let (id, dir) = (made["video"]["id"].as_i64().unwrap(), PathBuf::from(made["video"]["dir"].as_str().unwrap()));
+    std::thread::sleep(Duration::from_secs(8));
+    let video = dir.join("src/Video.tsx");
+    fs::write(&video, fs::read_to_string(&video).unwrap().replace("gap: 36", "gap: 40")).unwrap();
+    let checked = timed("first check after writing", || ok(&e, "video.check", json!({"video_id": id})));
+    assert_eq!(checked["ok"], true, "{checked}");
+    ok(&e, "video.delete", json!({"video_id": id}));
+}

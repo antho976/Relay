@@ -248,6 +248,17 @@ pub fn register(e: &mut Engine) {
         let files = write_starter(&dir, &title, w, h, fps, frames)
             .map_err(|e| BusError::unavailable("video.folder", format!("could not write the video's folder: {e}")))?;
         ctx.set_undo("video.delete", json!({"video_id": id}), None);
+        // While the agent writes its code, the worker starts and builds the starter: its first
+        // check then finds the browser open and the bundler's and TypeScript's caches warm
+        // (docs/perf/VIDEO-2026-10-21.md). Nothing is recorded; a kit not set up skips it.
+        let (warm_dir, warm_bundle) = (dir.display().to_string(), video::bundle_dir(ctx.engine(), id));
+        ctx.after_commit(move |engine| {
+            let _ = std::thread::Builder::new().name("video-warm".into()).spawn(move || {
+                if kit::ready(&engine).is_ok() {
+                    let _ = video::worker::call(&engine, "check", json!({"dir": warm_dir, "bundle_dir": warm_bundle}), std::time::Duration::from_secs(180));
+                }
+            });
+        });
         let video = emit(ctx, id)?;
         let kit = kit::status(ctx.engine());
         let next = match kit.state {
