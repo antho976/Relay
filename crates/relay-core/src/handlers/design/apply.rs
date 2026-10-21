@@ -1,7 +1,7 @@
 //! `design.apply`: a list of node edits run in order against the request's transaction.
 
 use super::revs::{self, removed_rev};
-use super::{body_of, emit_applied, expect, kind_of, live_design, node_of, row_bytes};
+use super::{body_of, check, emit_applied, expect, kind_of, live_design, node_of, row_bytes};
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project};
 use relay_bus::design::{details, field_of, label, nearest, Conflict, ConflictReason, Node, NodeKind, NodeOp, Styles, MAX_COORD, MAX_DEPTH, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
@@ -1476,6 +1476,7 @@ pub(super) fn register(e: &mut Engine) {
             skipped,
             warnings: Vec::new(),
             copied: std::mem::take(&mut run.copied),
+            contrast: Vec::new(),
             design: None,
             nodes: None,
             removed: None,
@@ -1538,6 +1539,32 @@ pub(super) fn register(e: &mut Engine) {
         // replay answers with the row of the undo itself, which it does not return).
         out.audit_id = Some(crate::audit::next_id(ctx.tx()).bus()?);
         (out.rev, out.removed_count) = (design.rev, removed.len() as u32);
+        if ctx.actor.is_agent() {
+            // What the change did to contrast, worked out once it has committed and the store is
+            // released: it lays the pages out twice, which the lock must not wait on.
+            let applied = check::Applied {
+                design: design.id,
+                rev: design.rev,
+                inverse: inverse.clone(),
+                touched: nodes.iter().map(|n| n.id.clone()).chain(removed.iter().cloned()).collect(),
+                restyled: run.styles_changed,
+            };
+            ctx.finish_reply(move |engine, reply| {
+                let (contrast, warning) = match check::new_contrast(engine, applied) {
+                    Ok(found) => (found.contrast, found.warning),
+                    Err(why) => (Vec::new(), Some(format!("this change's contrast could not be checked ({}); design.render checks it", why.message))),
+                };
+                if !contrast.is_empty() {
+                    reply["contrast"] = json!(contrast);
+                }
+                if let Some(warning) = warning {
+                    match reply.get_mut("warnings").and_then(Value::as_array_mut) {
+                        Some(list) => list.push(json!(warning)),
+                        None => reply["warnings"] = json!([warning]),
+                    }
+                }
+            });
+        }
         if full {
             // B7: a full answer stays under the clients' 2 MiB line: past REPLY_BUDGET it leaves
             // out the nodes (the client reads the design again), and past it without them the

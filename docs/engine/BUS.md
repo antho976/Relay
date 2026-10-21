@@ -1196,7 +1196,7 @@ to the parent; siblings paint in order, the last on top.
 | `design.duplicate` | mutation · always · inverse | `{ design_id, title? = "<title> copy" }` → `Design` — every node, with its id, and the id counter |
 | `design.delete` / `design.restore` | mutation · always · inverse | `{ design_id }` → `{}` / `Design` — soft (§5.4): the retention pass purges a deleted design past `undo.grace_days`. Any change to a deleted design is `conflict` / `design.deleted` |
 | `design.purge` | mutation · always · user_only | `{ design_id }` → `{}` — a deleted one only (`conflict` / `design.not_deleted`), nodes and all; emits `design.deleted` |
-| `design.apply` | mutation · always · inverse | `{ design_id, ops: DesignNodeOp[], base_rev?, lenient?, reply?, expect? }` → `ApplyOut`: short (`rev`, `prev_rev`, `ids`, `removed_count`, `audit_id`, `skipped`, `warnings`, `copied`, `rebased`), or with `reply: "full"` also `design`, `nodes`, `removed`, `inverse`, `expect`, `colors`, `styles`, `reread` — below |
+| `design.apply` | mutation · always · inverse | `{ design_id, ops: DesignNodeOp[], base_rev?, lenient?, reply?, expect? }` → `ApplyOut`: short (`rev`, `prev_rev`, `ids`, `removed_count`, `audit_id`, `skipped`, `warnings`, `copied`, `rebased`, and for an agent `contrast`), or with `reply: "full"` also `design`, `nodes`, `removed`, `inverse`, `expect`, `colors`, `styles`, `reread` — below |
 | `design.asset.add` | mutation · always | `{ design_id, path? \| bytes_b64? }` → `{ src, path, w, h }` — a PNG, JPEG, GIF, WebP or SVG, by its bytes (`invalid` / `design.asset` for anything else); an absolute `path` up to 20 MiB or `bytes_b64` up to 1 MiB. Stored once by content in `design-assets/` beside the store as `<32 hex of SHA-256>.<ext>`, the `src` an image node names; `w`/`h` its natural size (an SVG's `width`/`height` in px, else its `viewBox`, else 300×150). Staged: the file work runs unlocked. Emits no event: it changes no row a query shows (§3.3) |
 | `design.find` | query | `{ design_id, page?, inside?, kind?, name?, text?, match?, fill?, stroke?, color?, any_color?, font?, with_nodes? }` → `{ ids, nodes?, cut? }` — the nodes that match every filter given, in paint order (`ids`); `kind` is any of its kinds, `name` and `text` a case-insensitive match of whole words (`match`: `word`, the default; `prefix`, at a word's start; `contains`, anywhere; `exact`, the whole of it), `font` a family, and colours compare as drawn (a `$name` or a style counts). `inside` (not the node itself) is `not_found` / `design.node_not_found` when unknown. `with_nodes` adds the first 200 matches as stored (512 KiB at most; `cut` when more) |
 | `design.fonts` | query · global | `{ name? }` → `{ families, complete }` — the families the newest connected desktop app can draw a design's text in, sorted, `name` a case-insensitive word match. With no app reporting, Geist, Geist Mono and Sora with `complete: false` |
@@ -1222,6 +1222,14 @@ of node JSON), `design.style_invalid`, `design.style_exists` or `design.style_no
 or style naming a colour or style the design lacks), `design.position` (a `keep_position` move where
 either place is laid out by auto layout), or `design.node_unreadable` (an edit naming a node of a
 kind this build cannot read).
+
+An agent's applied list is answered with `contrast` too: design.render's `contrast` issues that
+the change made, on each page an edit reached (every page after a `color` or `style` edit), at most
+20 (a warning counts the rest). They are worked out after the commit, with the store released but
+for one read of the design (`Ctx::finish_reply`): its pages laid out by `relay_client::design` with
+words measured roughly (`layout::Estimate`), and again with the list's undo run on that scene; a flag
+is new when the same ids were not flagged before. The audit row keeps the reply without them, and a
+design changed again before the read gets a warning instead.
 
 `copy` takes `{id, as?, parent?, index?, dx?, dy?, rename?}` and copies a node and everything inside it, as
 one edit (a page copies as a page). Each node inside the copy takes an id from the copied id: one

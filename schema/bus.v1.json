@@ -28111,6 +28111,13 @@
           },
           "description": "Each copy edit's new node and the node it copied (`{\"card-2\": \"card\"}`). The nodes inside\na copy take ids by copy's rule (`card-title` becomes `card-2-title`)."
         },
+        "contrast": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignRenderIssue"
+          },
+          "description": "An agent's list only: the `contrast` issues design.render would now raise that it did not\nbefore this change, on the pages it touched (all of them after a colour or style edit):\nwords it made too faint, or whose ground it changed, worst first, at most 20 (a warning\ncounts the rest). Worked out without the desktop app, words measured roughly, so\ndesign.render has the last word."
+        },
         "design": {
           "anyOf": [
             {
@@ -28297,6 +28304,29 @@
         }
       ],
       "description": "Why an edit did not go ahead as sent."
+    },
+    "DesignRenderIssue": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "overflow, overlap, text_overlap, clipped or contrast."
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "ids",
+        "message"
+      ]
     },
     "DesignFindIn": {
       "type": "object",
@@ -28848,29 +28878,6 @@
         "path",
         "w",
         "h"
-      ]
-    },
-    "DesignRenderIssue": {
-      "type": "object",
-      "properties": {
-        "code": {
-          "type": "string",
-          "description": "overflow, overlap, text_overlap, clipped or contrast."
-        },
-        "ids": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "message": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "code",
-        "ids",
-        "message"
       ]
     },
     "DesignRenderBoxes": {

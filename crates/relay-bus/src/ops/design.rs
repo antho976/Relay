@@ -212,6 +212,13 @@ result!(#[schemars(rename = "DesignApplyOut")] ApplyOut {
     /// a copy take ids by copy's rule (`card-title` becomes `card-2-title`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub copied: BTreeMap<String, String>,
+    /// An agent's list only: the `contrast` issues design.render would now raise that it did not
+    /// before this change, on the pages it touched (all of them after a colour or style edit):
+    /// words it made too faint, or whose ground it changed, worst first, at most 20 (a warning
+    /// counts the rest). Worked out without the desktop app, words measured roughly, so
+    /// design.render has the last word.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contrast: Vec<RenderIssue>,
     /// Full only: the design row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub design: Option<Design>,

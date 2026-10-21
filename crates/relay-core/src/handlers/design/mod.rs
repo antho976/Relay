@@ -12,6 +12,7 @@
 
 mod apply;
 mod assets;
+mod check;
 mod expect;
 mod find;
 mod get;

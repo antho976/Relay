@@ -1415,6 +1415,7 @@ mod tests {
             skipped: Vec::new(),
             warnings: Vec::new(),
             copied: Default::default(),
+            contrast: Vec::new(),
             design: Some(row(rev)),
             nodes: Some(nodes),
             removed: Some(Vec::new()),

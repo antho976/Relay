@@ -288,23 +288,7 @@ fn cell(v: f64) -> i64 {
 /// An issue names a node in scope first; the frame, the sibling or the ground it names next
 /// may lie outside. None names first a node that sets `skip_checks`.
 pub fn issues(scene: &Scene, placed: &Placed, measure: &dyn Measure, page: &str, ids: &[String]) -> (Vec<RenderIssue>, u32) {
-    let order = scene.subtree(page);
-    let at: FxHashMap<String, usize> = order.iter().enumerate().map(|(i, id)| (id.clone(), i)).collect();
-    let n = order.len();
-    let (mut up, mut opacity, mut seen, mut turned) = (vec![0; n], vec![1.0; n], vec![1.0; n], vec![false; n]);
-    // Parents come before their children, so each is done before its children read it.
-    for (i, id) in order.iter().enumerate() {
-        let node = scene.node(id);
-        let parent = scene.parent(id).and_then(|p| at.get(p)).copied().filter(|&p| p < i);
-        up[i] = parent.unwrap_or(0);
-        opacity[i] = node.and_then(|n| n.opacity).unwrap_or(1.0).clamp(0.0, 1.0);
-        seen[i] = opacity[i] * parent.map_or(1.0, |p| seen[p]);
-        turned[i] = node.is_some_and(|n| shapes::rotation(n) != 0.0) || parent.is_some_and(|p| turned[p]);
-    }
-    let inside = scope(scene, page, ids);
-    let wanted = inside.iter().cloned().collect();
-    let grounds = Grounds::new(scene, placed, &order, &turned, &seen);
-    let paint = Paint { scene, placed, measure, order, at, up, opacity, seen, turned, wanted, grounds };
+    let (paint, inside) = Paint::new(scene, placed, measure, page, ids);
     let mut found = Vec::new();
     for parent in &paint.order {
         if paint.scene.children(parent).iter().any(|c| paint.wanted.contains(c)) {
@@ -317,6 +301,41 @@ pub fn issues(scene: &Scene, placed: &Placed, measure: &dyn Measure, page: &str,
     let count = u32::try_from(found.len()).unwrap_or(u32::MAX);
     let listed = found.into_iter().take(MAX_ISSUES).map(|f| RenderIssue { code: f.code.name().into(), ids: f.ids, message: f.message });
     (listed.collect(), count)
+}
+
+/// Every `contrast` issue of [`issues`] on `page`, uncapped and in paint order: the one check
+/// design.apply's contrast flags run.
+pub fn contrast_issues(scene: &Scene, placed: &Placed, measure: &dyn Measure, page: &str) -> Vec<RenderIssue> {
+    let (paint, inside) = Paint::new(scene, placed, measure, page, &[]);
+    inside.iter()
+        .filter_map(|id| paint.contrast(id))
+        .filter(|f| f.ids.first().and_then(|id| scene.node(id)).is_none_or(|n| n.skip_checks != Some(true)))
+        .map(|f| RenderIssue { code: f.code.name().into(), ids: f.ids, message: f.message })
+        .collect()
+}
+
+impl<'s> Paint<'s> {
+    /// The page as the painter lays it down, for the checks of [`scope`]'s nodes, which it
+    /// answers with.
+    fn new(scene: &'s Scene, placed: &'s Placed, measure: &'s dyn Measure, page: &str, ids: &[String]) -> (Paint<'s>, Vec<String>) {
+        let order = scene.subtree(page);
+        let at: FxHashMap<String, usize> = order.iter().enumerate().map(|(i, id)| (id.clone(), i)).collect();
+        let n = order.len();
+        let (mut up, mut opacity, mut seen, mut turned) = (vec![0; n], vec![1.0; n], vec![1.0; n], vec![false; n]);
+        // Parents come before their children, so each is done before its children read it.
+        for (i, id) in order.iter().enumerate() {
+            let node = scene.node(id);
+            let parent = scene.parent(id).and_then(|p| at.get(p)).copied().filter(|&p| p < i);
+            up[i] = parent.unwrap_or(0);
+            opacity[i] = node.and_then(|n| n.opacity).unwrap_or(1.0).clamp(0.0, 1.0);
+            seen[i] = opacity[i] * parent.map_or(1.0, |p| seen[p]);
+            turned[i] = node.is_some_and(|n| shapes::rotation(n) != 0.0) || parent.is_some_and(|p| turned[p]);
+        }
+        let inside = scope(scene, page, ids);
+        let wanted = inside.iter().cloned().collect();
+        let grounds = Grounds::new(scene, placed, &order, &turned, &seen);
+        (Paint { scene, placed, measure, order, at, up, opacity, seen, turned, wanted, grounds }, inside)
+    }
 }
 
 impl Paint<'_> {

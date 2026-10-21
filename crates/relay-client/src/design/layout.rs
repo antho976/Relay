@@ -36,6 +36,36 @@ pub trait Measure {
     fn measure(&self, node: &Node, wrap: Option<f64>) -> (f64, f64);
 }
 
+/// Words measured without fonts, where no painter is at hand (the engine's contrast flags for
+/// design.apply): each character [`ESTIMATE_EM`] of the letter size wide plus the letter
+/// spacing, lines `line_height` apart, a line wrapped where the next character would pass
+/// `wrap`, at most `max_lines` of them. Close enough to say what lies under a text's centre;
+/// not a measure to report sizes from.
+pub struct Estimate;
+
+/// A character's width as a share of the letter size, about Geist's average.
+pub const ESTIMATE_EM: f64 = 0.55;
+
+impl Measure for Estimate {
+    fn measure(&self, n: &Node, wrap: Option<f64>) -> (f64, f64) {
+        let size = n.font_size.unwrap_or(16.0);
+        let advance = (size * ESTIMATE_EM + n.letter_spacing.unwrap_or(0.0)).max(0.1);
+        let (mut w, mut lines) = (0.0_f64, 0.0_f64);
+        for line in n.text.as_deref().unwrap_or("").split('\n') {
+            let chars = line.chars().count() as f64;
+            match wrap {
+                Some(room) if chars * advance > room + SLACK && room >= advance => {
+                    let per = (room / advance).floor();
+                    (w, lines) = (w.max(per * advance), lines + (chars / per).ceil());
+                }
+                _ => (w, lines) = (w.max(chars * advance), lines + 1.0),
+            }
+        }
+        let lines = n.max_lines.map_or(lines, |most| lines.min(f64::from(most))).max(1.0);
+        (w, lines * size * n.line_height.unwrap_or(1.3))
+    }
+}
+
 /// The width rule a node follows when it names none: a text without a width hugs its words
 /// (`Node::w_rule`, which the engine shares).
 pub fn w_sizing(n: &Node) -> Sizing {
