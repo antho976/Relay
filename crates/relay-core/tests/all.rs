@@ -138,6 +138,8 @@ mod threads;
 mod upload;
 #[path = "video.rs"]
 mod video;
+#[path = "video_e2e.rs"]
+mod video_e2e;
 #[path = "worktree_dirty.rs"]
 mod worktree_dirty;
 

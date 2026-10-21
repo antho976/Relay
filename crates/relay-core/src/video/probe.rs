@@ -174,10 +174,11 @@ pub fn issues(frames: &[Drawn], fps: f64) -> Vec<Issue> {
             }
         }
 
-        // Texts over one another, but not one inside the other.
+        // Texts over one another, both drawn whole, and not one inside the other: while one fades
+        // in or out (a crossfade between scenes draws both) the overlap is the transition's.
         for (i, &(ai, a)) in visible.iter().enumerate() {
             for &(bi, b) in &visible[i + 1..] {
-                if a.opacity <= 0.5 || b.opacity <= 0.5 || a.within.contains(&bi) || b.within.contains(&ai) {
+                if a.opacity < 0.95 || b.opacity < 0.95 || a.within.contains(&bi) || b.within.contains(&ai) {
                     continue;
                 }
                 let w = (a.x + a.w).min(b.x + b.w) - a.x.max(b.x);
@@ -287,6 +288,10 @@ mod tests {
         let mut inner = text("bold", 250.0, 820.0, 100.0, 60.0);
         inner.within = vec![0];
         assert!(check(&[frame(0, vec![text("sentence", 200.0, 800.0, 400.0, 100.0), inner])]).is_empty());
+        // A crossfade draws the scene leaving under the one coming: not an overlap.
+        let mut leaving = text("a", 200.0, 800.0, 400.0, 100.0);
+        leaving.opacity = 0.3;
+        assert!(check(&[frame(0, vec![leaving, text("b", 250.0, 820.0, 400.0, 100.0)])]).is_empty());
     }
 
     #[test]
