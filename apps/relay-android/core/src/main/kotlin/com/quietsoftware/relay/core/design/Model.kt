@@ -169,8 +169,12 @@ data class DesignNode(
     val star: Double? = null,
     val gradient: DesignGradient? = null,
     val radii: List<Double>? = null,
+    /** A box's border width on each side, top, right, bottom, left, instead of [strokeWidth]. */
+    @SerialName("stroke_widths") val strokeWidths: List<Double>? = null,
     val dash: List<Double>? = null,
     val blur: Double? = null,
+    /** Frosted glass: the PC blurs what is drawn under it; the phone draws it without ([Omissions]). */
+    @SerialName("backdrop_blur") val backdropBlur: Double? = null,
     val icon: String? = null,
     /** An icon's own outline (a saved icon's), drawn instead of [icon]'s: path data on the 24-unit grid. */
     @SerialName("icon_path") val iconPath: String? = null,

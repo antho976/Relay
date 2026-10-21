@@ -260,8 +260,9 @@ class DesignModelTest {
     @Test
     fun `the fixture's page leaves out only what the phone cannot draw yet`() {
         val got = decodeDesignGot(reply)!!
-        // Blurred: slide-2. Glowing: the text, icon and line with shadows. SVG: diagram. Moving: title, progress, fab, pen.
-        assertEquals(Omissions(blur = 1, glow = 3, svg = 1, moving = 4), omissions(got.scene(), "page-1", got.unreadable))
+        // Blurred: slide-2, and header-bar's frosted ground. Glowing: the text, icon and line with shadows. SVG: diagram.
+        // Moving: title, progress, fab, pen.
+        assertEquals(Omissions(blur = 2, glow = 3, svg = 1, moving = 4), omissions(got.scene(), "page-1", got.unreadable))
         // A frame of a layout the phone does not know: drawn, and what it holds counted.
         val scene = DesignScene(
             listOf(

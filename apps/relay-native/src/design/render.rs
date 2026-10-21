@@ -14,7 +14,8 @@
 //! sheet of that many frames over the span of what moves in scope, its times answered in
 //! `times_ms` (feature-motion §5). Both are drawn through export.rs's posing and sheet code, as
 //! the board's own exports are. The boxes stay at rest; the issues are the still's, then what
-//! the page posed at each time pictured adds (`boxes::motion_issues`), each with its `at_ms`.
+//! the page posed at each time pictured adds (`boxes::motion_issues`), each with its `at_ms`, or
+//! only what it adds where it ends (`motion_checks: end`), or nothing (`off`).
 
 use super::export;
 use super::paint::Painter;
@@ -26,7 +27,7 @@ use gtk::{gdk, graphene};
 use gtk4 as gtk;
 use relay_bus::design::{NodeKind, Styles, MAX_NAME};
 use relay_bus::envelope::Event;
-use relay_bus::ops::design::{AnswerIn, GetOut, RenderBoxes, RenderDrawn, RenderFailure, RenderIssue, RenderRect, RenderRequest, RenderTimings, SERVE_FONTS_MAX};
+use relay_bus::ops::design::{AnswerIn, GetOut, MotionChecks, RenderBoxes, RenderDrawn, RenderFailure, RenderIssue, RenderRect, RenderRequest, RenderTimings, SERVE_FONTS_MAX};
 use relay_client::design::{boxes, layout, motion, Scene};
 use serde_json::json;
 use std::cell::RefCell;
@@ -271,7 +272,7 @@ async fn draw(ui: &Rc<Ui>, painter: &Rc<Painter>, req: &RenderRequest, scene: &S
     let t = Instant::now();
     // The motion asked for: the clocks of the page's movers, and the times pictured (none: at
     // rest). The area holds the movers wherever they are at those times.
-    let (clocks, times, note) = posed_times(req, scene, painter, page, &ids);
+    let (clocks, times, span, note) = posed_times(req, scene, painter, page, &ids);
     warnings.extend(note.map(str::to_string));
     let sheet = req.frames.is_some() && !times.is_empty();
     let area = match &clocks {
@@ -283,7 +284,13 @@ async fn draw(ui: &Rc<Ui>, painter: &Rc<Painter>, req: &RenderRequest, scene: &S
     // What motion brings at the times pictured, after the still's: an agent reads a sheet's first
     // frame alone, so it hears of a later one here.
     if let Some(clocks) = &clocks {
-        let (moving, count) = boxes::motion_issues(scene, &placed, &**painter, page, &ids, clocks, &times);
+        // As it settles at each time pictured, else only where it ends, as it holds there.
+        let (checked, held) = match req.motion_checks.unwrap_or(MotionChecks::Frames) {
+            MotionChecks::Frames => (times.clone(), false),
+            MotionChecks::End if span > 0.0 => (vec![span], true),
+            MotionChecks::End | MotionChecks::Off => (Vec::new(), false),
+        };
+        let (moving, count) = boxes::motion_issues(scene, &placed, &**painter, page, &ids, clocks, &checked, held);
         issues.extend(moving.into_iter().take(boxes::MAX_ISSUES.saturating_sub(issues.len())));
         issue_count = issue_count.saturating_add(count);
     }
@@ -394,16 +401,17 @@ async fn draw(ui: &Rc<Ui>, painter: &Rc<Painter>, req: &RenderRequest, scene: &S
     Some(Ok(shaped(rev, boxes::render_rect(&area), scale, png_b64, boxes, issues, issue_count, warnings, timings, times_ms)))
 }
 
-/// The clocks and times `req` pictures `ids` (none: the page) at, and a warning: at rest with
-/// neither `at_ms` nor `frames`; else the page's clocks and the times [`times_for`] the span of
-/// what moves in scope.
-fn posed_times(req: &RenderRequest, scene: &Scene, painter: &Painter, page: &str, ids: &[String]) -> (Option<Rc<motion::Clocks>>, Vec<f64>, Option<&'static str>) {
+/// The clocks and times `req` pictures `ids` (none: the page) at, the span of what moves in
+/// scope, and a warning: at rest with neither `at_ms` nor `frames`; else the page's clocks and
+/// the times [`times_for`] that span.
+fn posed_times(req: &RenderRequest, scene: &Scene, painter: &Painter, page: &str, ids: &[String]) -> (Option<Rc<motion::Clocks>>, Vec<f64>, f64, Option<&'static str>) {
     if req.at_ms.is_none() && req.frames.is_none() {
-        return (None, Vec::new(), None);
+        return (None, Vec::new(), 0.0, None);
     }
     let clocks = export::clocks_of(painter, scene, page);
-    let (times, note) = times_for(req, export::span_of(scene, &clocks, page, ids).0);
-    (Some(clocks), times, note)
+    let span = export::span_of(scene, &clocks, page, ids).0;
+    let (times, note) = times_for(req, span);
+    (Some(clocks), times, span, note)
 }
 
 /// The times `req` pictures over a motion `span_ms` long: `at_ms` alone, or `frames` times
@@ -526,6 +534,7 @@ mod tests {
             deadline_unix_ms: 1_792_368_000_000,
             at_ms: None,
             frames: None,
+            motion_checks: None,
             by: None,
         }
     }

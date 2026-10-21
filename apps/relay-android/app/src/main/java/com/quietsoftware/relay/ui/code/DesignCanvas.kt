@@ -952,6 +952,7 @@ private class PagePainter(val plan: PagePlan, val hair: Float, val picture: (Str
      */
     fun DrawScope.border(n: DesignNode, r: Rect) {
         if (n.stroke == null && n.strokeGradient == null) return
+        n.strokeWidths?.takeIf { it.size == 4 }?.let { return borderSides(n, r, it) }
         val w = n.strokeWidth ?: 1.0
         if (w <= 0.0) return
         val color = n.stroke?.let(::colorOrBlack)
@@ -963,6 +964,41 @@ private class PagePainter(val plan: PagePlan, val hair: Float, val picture: (Str
         } else if (color != null) {
             val path = box.path()
             clipPath(path) { drawPath(path, color, style = Stroke(max(2 * w.toFloat(), 2 * hair))) }
+        }
+    }
+
+    /**
+     * A border of [sides] (`stroke_widths`: top, right, bottom, left) inside the edge, kept inside
+     * the outline (paint.rs `border_sides`): dashed, each side with a width a stroke along its
+     * middle; else the band between the box and the box inset by each side, in the stroke's
+     * colour or gradient (the PC rounds the band's inner corners with the outline's).
+     */
+    fun DrawScope.borderSides(n: DesignNode, r: Rect, sides: List<Double>) {
+        val (t, right, b, l) = sides.map { if (it.isFinite()) it.coerceIn(0.0, 1000.0) else 0.0 }
+        if (t <= 0.0 && right <= 0.0 && b <= 0.0 && l <= 0.0) return
+        val color = n.stroke?.let(::colorOrBlack)
+        clipPath(outline(n, r).path()) {
+            if (n.dash != null) {
+                val lines = listOf(
+                    Triple(t, Pt(r.x, r.y + t / 2), Pt(r.right, r.y + t / 2)),
+                    Triple(right, Pt(r.right - right / 2, r.y), Pt(r.right - right / 2, r.bottom)),
+                    Triple(b, Pt(r.right, r.bottom - b / 2), Pt(r.x, r.bottom - b / 2)),
+                    Triple(l, Pt(r.x + l / 2, r.bottom), Pt(r.x + l / 2, r.y)),
+                )
+                for ((w, from, to) in lines) {
+                    if (w <= 0.0) continue
+                    val line = Path().apply { moveTo(from.x.toFloat(), from.y.toFloat()); lineTo(to.x.toFloat(), to.y.toFloat()) }
+                    strokeWith(n, line, penOf(n, max(w.toFloat(), hair)), color, r)
+                }
+            } else {
+                val band = Path().apply {
+                    fillType = PathFillType.EvenOdd
+                    addRect(r.g())
+                    addRect(Rect(r.x + l, r.y + t, max(r.w - l - right, 0.0), max(r.h - t - b, 0.0)).g())
+                }
+                val g = n.strokeGradient
+                if (g != null) brushOf(g, r)?.let { drawPath(band, it) } else if (color != null) drawPath(band, color)
+            }
         }
     }
 

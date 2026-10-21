@@ -25912,6 +25912,21 @@
           "maxItems": 4,
           "description": "Corner radii in px, top-left, top-right, bottom-right, bottom-left, instead of `radius`."
         },
+        "stroke_widths": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "minItems": 4,
+          "maxItems": 4,
+          "description": "A box's border width on each side in px, top, right, bottom, left, each 0 to 1000, instead\nof `stroke_width`: `[1, 0, 0, 0]` draws a top border alone (a tab bar's hairline). Drawn\nwith `stroke` or `stroke_gradient`, inside the edge."
+        },
         "dash": {
           "type": [
             "array",
@@ -25934,6 +25949,16 @@
           ],
           "format": "double",
           "description": "Blur of the whole node, in px, 0 to 200.",
+          "minimum": 0,
+          "maximum": 200
+        },
+        "backdrop_blur": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Frosted glass: blur, in px (0 to 200), of what is drawn behind a frame, rect or ellipse,\nseen through its fill inside its outline; give it a see-through fill (`#FFFFFFB8`). What\nblurs is what its parent draws before it: the parent's fill and the siblings under it (a\nscreen's content under its tab bar).",
           "minimum": 0,
           "maximum": 200
         },
@@ -27290,6 +27315,21 @@
             "null"
           ],
           "description": "Default: the palette's next."
+        },
+        "colors": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": "One per label, a colour or `null`: that value's bar, point or slice in its own colour, the\nrest in the series'. `[null, null, null, \"#7FB2FF\"]` brings out the last bar.",
+          "minItems": 1,
+          "maxItems": 100
         }
       },
       "required": [
@@ -28129,8 +28169,10 @@
                   "star",
                   "gradient",
                   "radii",
+                  "stroke_widths",
                   "dash",
                   "blur",
+                  "backdrop_blur",
                   "icon",
                   "icon_path",
                   "from",
@@ -28778,7 +28820,7 @@
             "null"
           ],
           "format": "double",
-          "description": "With `at_ms` or `frames`: the first time pictured, in ms, at which motion brings this\nproblem that the still does not have (its message says how many of the times show it).\nAbsent for one the design has at rest."
+          "description": "With `at_ms` or `frames`: the first time checked, in ms, at which motion brings this\nproblem that the still does not have (its message says how many of the times show it).\nAbsent for one the design has at rest."
         }
       },
       "required": [
@@ -29366,11 +29408,42 @@
           "minimum": 2,
           "maximum": 24,
           "description": "A contact sheet of this many frames (2 to 24), evenly spaced over the longest timeline in\nscope, each labelled with its time (`times_ms`). Not with `at_ms`."
+        },
+        "motion_checks": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignMotionChecks"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "With `at_ms` or `frames`, which times are checked for problems motion brings: `frames`\n(default), `end` or `off`."
         }
       },
       "required": [
         "design_id"
       ]
+    },
+    "DesignMotionChecks": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "frames",
+          "description": "Each time pictured, as the motion settles: a fade under way is read at its node's resting\nopacity (one that stops, not looping, is read as it holds), and overflow and overlap are\nthe still's alone, since motion moves a box after layout."
+        },
+        {
+          "type": "string",
+          "const": "end",
+          "description": "Only where the motion ends, everything as drawn there: the state it settles in."
+        },
+        {
+          "type": "string",
+          "const": "off",
+          "description": "None: the issues are the still's."
+        }
+      ],
+      "description": "Which times of its motion `design.render` checks for the problems motion brings."
     },
     "DesignRenderOut": {
       "type": "object",

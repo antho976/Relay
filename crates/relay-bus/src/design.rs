@@ -995,6 +995,12 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(inner(range(min = 0, max = MAX_COORD)))]
     pub radii: Option<[f64; 4]>,
+    /// A box's border width on each side in px, top, right, bottom, left, each 0 to 1000, instead
+    /// of `stroke_width`: `[1, 0, 0, 0]` draws a top border alone (a tab bar's hairline). Drawn
+    /// with `stroke` or `stroke_gradient`, inside the edge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(inner(range(min = 0, max = 1000)))]
+    pub stroke_widths: Option<[f64; 4]>,
     /// The stroke's dash pattern in px, 1 to 8 lengths from 0 to 1000, not all 0: `[6, 4]`
     /// dashes, `[0, 4]` round dots. Absent is solid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1004,6 +1010,13 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0, max = 200))]
     pub blur: Option<f64>,
+    /// Frosted glass: blur, in px (0 to 200), of what is drawn behind a frame, rect or ellipse,
+    /// seen through its fill inside its outline; give it a see-through fill (`#FFFFFFB8`). What
+    /// blurs is what its parent draws before it: the parent's fill and the siblings under it (a
+    /// screen's content under its tab bar).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0, max = 200))]
+    pub backdrop_blur: Option<f64>,
     /// An icon node's icon, one of these outline icons or one saved to Relay's set (design.icon.list,
     /// which every project's designs share), drawn on a 24-unit grid scaled to the smaller of `w`
     /// and `h` (24 is its natural size).
@@ -1463,8 +1476,10 @@ impl Node {
             star: None,
             gradient: None,
             radii: None,
+            stroke_widths: None,
             dash: None,
             blur: None,
+            backdrop_blur: None,
             icon: None,
             from: None,
             to: None,
@@ -1723,6 +1738,9 @@ impl Node {
         if self.radii.is_some_and(|r| r.iter().any(|v| !v.is_finite() || !(0.0..=MAX_COORD).contains(v))) {
             return Err(format!("radii: four numbers from 0 to {MAX_COORD}"));
         }
+        if self.stroke_widths.is_some_and(|w| w.iter().any(|v| !v.is_finite() || !(0.0..=1000.0).contains(v))) {
+            return Err("stroke_widths: four numbers from 0 to 1000: top, right, bottom, left".into());
+        }
         if let Some(dash) = &self.dash {
             if dash.is_empty() || dash.len() > 8 || dash.iter().any(|v| !v.is_finite() || !(0.0..=1000.0).contains(v)) || dash.iter().all(|v| *v == 0.0) {
                 return Err("dash: 1 to 8 lengths from 0 to 1000, not all 0".into());
@@ -1733,8 +1751,10 @@ impl Node {
                 return Err("stroke_cap: butt ends draw nothing for the 0-length dashes of a dotted dash; use round or square".into());
             }
         }
-        if let Some(b) = self.blur.filter(|b| !b.is_finite() || !(0.0..=200.0).contains(b)) {
-            return Err(format!("blur: {b} is outside 0 to 200"));
+        for (field, blur) in [("blur", self.blur), ("backdrop_blur", self.backdrop_blur)] {
+            if let Some(b) = blur.filter(|b| !b.is_finite() || !(0.0..=200.0).contains(b)) {
+                return Err(format!("{field}: {b} is outside 0 to 200"));
+            }
         }
         for (field, end) in [("from", &self.from), ("to", &self.to)] {
             if let Some(id) = end.as_deref().filter(|id| !valid_id(id)) {

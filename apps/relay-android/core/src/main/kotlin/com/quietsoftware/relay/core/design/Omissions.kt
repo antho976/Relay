@@ -4,7 +4,8 @@ package com.quietsoftware.relay.core.design
  * What a page shows on the PC that the phone leaves out or shows otherwise, counted over the
  * page's visible nodes, for the one-line caption under it (feature-phone §7):
  *
- * - [blur]: nodes with a layer `blur`, drawn sharp.
+ * - [blur]: nodes with a layer `blur`, drawn sharp, or a `backdrop_blur`, whose ground is drawn
+ *   unfrosted.
  * - [glow]: texts, lines, paths and icons casting a shadow (a glow), drawn without it.
  * - [svg]: SVG pictures, shown as a placeholder (Android has no SVG decoder).
  * - [unknown]: nodes of a kind this phone does not know, what a frame with a layout it does not
@@ -48,7 +49,7 @@ fun omissions(scene: DesignScene, page: String, unreadable: Int = 0): Omissions 
             why == TOO_DEEP || scene.tooDeep(id) -> deep++
             n.kind !in DesignValues.kinds -> unknown++
             else -> {
-                if ((n.blur ?: 0.0) > 0.0) blur++
+                if ((n.blur ?: 0.0) > 0.0 || (n.backdropBlur ?: 0.0) > 0.0) blur++
                 if (castsOuterOnly(n.kind) && effectiveShadows(n).isNotEmpty()) glow++
                 if (n.kind == "image" && n.src.orEmpty().endsWith(".svg", ignoreCase = true)) svg++
                 if (n.motion != null) moving++

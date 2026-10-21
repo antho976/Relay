@@ -160,15 +160,28 @@ impl Clocks {
 /// offset, a mover inside another taking both. Blur, trim and a gradient's angle change nothing a
 /// check reads. Text keeps its measure: a scaled text is checked at its own size.
 pub fn posed_still(scene: &Scene, placed: &Placed, clocks: &Clocks, t_ms: f64) -> (Scene, Placed) {
+    pose_still(scene, placed, clocks, t_ms, |_| true)
+}
+
+/// [`posed_still`] as motion's checks read it (`boxes::motion_issues`): a mover whose clock still
+/// runs keeps its resting opacity, since a fade passes through faint on its way and a person reads
+/// the words where it settles. A mover whose clock has stopped (it does not loop and `t_ms` is at
+/// or past its end) holds its pose, its opacity with it, and so does every mover when `held`.
+pub fn posed_settled(scene: &Scene, placed: &Placed, clocks: &Clocks, t_ms: f64, held: bool) -> (Scene, Placed) {
+    pose_still(scene, placed, clocks, t_ms, |clock| held || (!clock.looped && t_ms >= clock.duration_ms))
+}
+
+/// [`posed_still`], each mover's posed opacity taken only where `fades` says of its clock.
+fn pose_still(scene: &Scene, placed: &Placed, clocks: &Clocks, t_ms: f64, fades: impl Fn(&Clock) -> bool) -> (Scene, Placed) {
     let mut poses = HashMap::new();
     clocks.poses(scene, t_ms, &mut poses);
     let (mut posed, mut moved) = (scene.clone(), placed.clone());
     let hex = |[r, g, b, a]: [u8; 4]| format!("#{r:02X}{g:02X}{b:02X}{a:02X}");
     // Paint order: an outer mover's change is in place before an inner one's is laid on it.
-    for (id, _) in clocks.movers() {
+    for (id, clock) in clocks.movers() {
         let Some(pose) = poses.get(id) else { continue };
         if let Some(n) = posed.node_mut(id) {
-            if let Some(o) = pose.opacity {
+            if let Some(o) = pose.opacity.filter(|_| fades(clock)) {
                 n.opacity = Some(o.clamp(0.0, 1.0));
             }
             for (field, value) in [(&mut n.fill, pose.fill), (&mut n.stroke, pose.stroke), (&mut n.color, pose.color)] {

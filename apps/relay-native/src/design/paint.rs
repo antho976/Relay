@@ -327,6 +327,9 @@ pub struct Painter {
     /// frame of Play to the next, and the clocks they were kept for.
     stills: RefCell<HashMap<String, Option<gsk::RenderNode>>>,
     stills_for: RefCell<Option<Rc<Clocks>>>,
+    /// What a node with a `backdrop_blur` frosts: the id about to be painted and what its parent
+    /// drew under it, set by `paint_children` just before it paints that node.
+    backdrop: RefCell<Option<(String, gsk::RenderNode)>>,
     me: std::rc::Weak<Painter>,
 }
 
@@ -348,6 +351,7 @@ impl Painter {
             posing: RefCell::default(),
             stills: RefCell::default(),
             stills_for: RefCell::default(),
+            backdrop: RefCell::default(),
         })
     }
 
@@ -624,12 +628,13 @@ impl Painter {
     }
 
     /// Paint `parent`'s children in order. A child with a `blend` mixes with what is painted
-    /// before it in the same parent (and `ground`, the parent's own fill, under them all). For a
-    /// vector file (`vector`), what they draw stays vectors, and each blended child is a picture
-    /// of the blend over what is under it, cut to where it draws, which every viewer shows.
+    /// before it in the same parent (and `ground`, the parent's own fill, under them all), and a
+    /// child with a `backdrop_blur` frosts it. For a vector file (`vector`), what they draw stays
+    /// vectors, and each blended child is a picture of the blend over what is under it, cut to
+    /// where it draws, which every viewer shows.
     fn paint_children(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, parent: &str, view: Option<&Rect>, ground: Option<&dyn Fn(&gtk::Snapshot)>) {
         let kids = scene.children(parent);
-        let blends = |id: &String| scene.node(id).is_some_and(|n| !n.is_hidden() && blend_mode(n).is_some());
+        let blends = |id: &String| scene.node(id).is_some_and(|n| !n.is_hidden() && (blend_mode(n).is_some() || frosts(n)));
         if !kids.iter().any(blends) {
             if let Some(ground) = ground {
                 ground(snap);
@@ -648,6 +653,15 @@ impl Painter {
             }
         }
         for child in kids {
+            if scene.node(child).is_some_and(|n| !n.is_hidden() && frosts(n)) {
+                // What is under it so far, for it to blur; `acc` goes on holding it.
+                let below = acc.to_node();
+                acc = gtk::Snapshot::new();
+                if let Some(below) = &below {
+                    acc.append_node(below);
+                }
+                *self.backdrop.borrow_mut() = below.map(|below| (child.clone(), below));
+            }
             match scene.node(child).filter(|n| !n.is_hidden()).and_then(blend_mode) {
                 Some(mode) => {
                     let below = acc.to_node();
@@ -691,8 +705,10 @@ impl Painter {
     /// Paint one node and what is inside it; while posing, as the frame of Play shows it.
     pub fn paint(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, id: &str, view: Option<&Rect>) {
         let posing = self.posing.borrow().clone();
+        // A frosted node's backdrop changes as what is under it moves: never kept as a still.
+        let frosted = self.backdrop.borrow().as_ref().is_some_and(|(owner, _)| owner == id);
         match posing {
-            Some(p) if !p.clocks.touches(id) => self.paint_still(snap, scene, placed, id),
+            Some(p) if !p.clocks.touches(id) && !frosted => self.paint_still(snap, scene, placed, id),
             Some(p) => self.paint_node(snap, scene, placed, id, view, p.poses.get(id)),
             None => self.paint_node(snap, scene, placed, id, view, None),
         }
@@ -723,6 +739,10 @@ impl Painter {
     /// its pose's transform outside its own turn (CSS's order: `transform` from the motion, the
     /// node's rotation within), and a line or path drawn on as far as its trim.
     fn paint_node(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, id: &str, view: Option<&Rect>, pose: Option<&Pose>) {
+        let backdrop = {
+            let mut kept = self.backdrop.borrow_mut();
+            if kept.as_ref().is_some_and(|(owner, _)| owner == id) { kept.take().map(|(_, below)| below) } else { None }
+        };
         let Some(rest) = scene.node(id).filter(|n| !n.is_hidden()) else {
             return;
         };
@@ -768,6 +788,28 @@ impl Painter {
             snap.translate(&graphene::Point::new(r.cx() as f32, r.cy() as f32));
             snap.rotate(turn as f32);
             snap.translate(&graphene::Point::new(-r.cx() as f32, -r.cy() as f32));
+        }
+        if let (Some(below), Some(radius)) = (&backdrop, n.backdrop_blur.filter(|b| *b > 0.0)) {
+            // Inside its outline as it is moved and turned, what is under it where it lies on the
+            // page: the clip takes the node's transform, the blurred picture is put back.
+            let mut on_page = gsk::Transform::new();
+            if let Some(t) = &moved {
+                on_page = on_page.transform(Some(t));
+            }
+            if turn != 0.0 {
+                let c = graphene::Point::new(r.cx() as f32, r.cy() as f32);
+                on_page = on_page.translate(&c).rotate(turn as f32).translate(&graphene::Point::new(-c.x(), -c.y()));
+            }
+            snap.push_rounded_clip(&outline(n, &r));
+            snap.save();
+            if let Ok(back) = on_page.invert() {
+                snap.transform(Some(&back));
+            }
+            snap.push_blur(radius.min(MAX_SHADOW_BLUR));
+            snap.append_node(below);
+            snap.pop();
+            snap.restore();
+            snap.pop();
         }
         let blur = n.blur.filter(|b| *b > 0.0);
         if let Some(b) = blur {
@@ -989,10 +1031,13 @@ impl Painter {
     }
 
     /// The outline drawn inside the edge; dashed or in a gradient, as a stroke along the edge
-    /// inset by half its width.
+    /// inset by half its width. With `stroke_widths`, each side its own width.
     fn border(&self, snap: &gtk::Snapshot, n: &Node, r: &Rect) {
         if n.stroke.is_none() && n.stroke_gradient.is_none() {
             return;
+        }
+        if let Some(sides) = n.stroke_widths {
+            return self.border_sides(snap, n, r, sides);
         }
         let w = n.stroke_width.unwrap_or(1.0);
         if w <= 0.0 {
@@ -1014,6 +1059,46 @@ impl Painter {
             self.stroke_with(snap, n, &b.to_path(), &pen, c.as_ref(), Some(r));
         } else if let Some(c) = c {
             snap.append_border(&outline(n, r), &[w as f32; 4], &[c, c, c, c]);
+        }
+    }
+
+    /// A border of `sides` (top, right, bottom, left) inside the edge: solid, GSK's own border;
+    /// in a gradient, the band between the outline and the outline shrunk by each side, filled
+    /// with it; dashed, each side with a width a stroke along its middle, kept inside the outline.
+    fn border_sides(&self, snap: &gtk::Snapshot, n: &Node, r: &Rect, sides: [f64; 4]) {
+        let sides = sides.map(|w| if w.is_finite() { w.clamp(0.0, 1000.0) } else { 0.0 });
+        if sides.iter().all(|w| *w <= 0.0) {
+            return;
+        }
+        let rr = outline(n, r);
+        let c = n.stroke.as_deref().map(rgba);
+        let [t, right, b, l] = sides;
+        if n.dash.is_some() {
+            snap.push_rounded_clip(&rr);
+            let lines = [
+                (t, (r.x, r.y + t / 2.0), (r.right(), r.y + t / 2.0)),
+                (right, (r.right() - right / 2.0, r.y), (r.right() - right / 2.0, r.bottom())),
+                (b, (r.right(), r.bottom() - b / 2.0), (r.x, r.bottom() - b / 2.0)),
+                (l, (r.x + l / 2.0, r.bottom()), (r.x + l / 2.0, r.y)),
+            ];
+            for (w, (x0, y0), (x1, y1)) in lines.into_iter().filter(|(w, _, _)| *w > 0.0) {
+                let line = gsk::PathBuilder::new();
+                line.move_to(x0 as f32, y0 as f32);
+                line.line_to(x1 as f32, y1 as f32);
+                self.stroke_with(snap, n, &line.to_path(), &stroke_of(n, w), c.as_ref(), Some(r));
+            }
+            snap.pop();
+        } else if let Some(g) = &n.stroke_gradient {
+            let mut inner = rr;
+            inner.shrink(t as f32, right as f32, b as f32, l as f32);
+            let band = gsk::PathBuilder::new();
+            band.add_rounded_rect(&rr);
+            band.add_rounded_rect(&inner);
+            snap.push_fill(&band.to_path(), gsk::FillRule::EvenOdd);
+            gradient(snap, g, r, self.vector.get());
+            snap.pop();
+        } else if let Some(c) = c {
+            snap.append_border(&rr, &sides.map(|w| w as f32), &[c, c, c, c]);
         }
     }
 
@@ -1335,6 +1420,12 @@ fn raster_on_cairo(snap: &gtk::Snapshot, node: &gsk::RenderNode, area: &Rect) {
     drop(cr);
     surface.flush();
     surface_on_cairo(snap, &surface, &Rect::new(b.x, b.y, w as f64 / k, h as f64 / k));
+}
+
+/// Whether `n` frosts what is drawn under it (`backdrop_blur`), as only a frame, rect or ellipse
+/// does.
+fn frosts(n: &Node) -> bool {
+    matches!(n.kind, NodeKind::Frame | NodeKind::Rect | NodeKind::Ellipse) && n.backdrop_blur.is_some_and(|b| b > 0.0) && n.opacity != Some(0.0)
 }
 
 /// A shadow's blur as painted: within 0 to 200, as the node's own blur, whatever an older build
