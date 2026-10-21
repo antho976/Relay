@@ -13,9 +13,11 @@
     </style>
 
     <!--
-        Launch theme: the Android 12+ splash, backported via androidx.core:core-splashscreen.
-        Shows the app icon on the brand background, then hands off to Theme.Forge once the first
-        frame is ready. Set as the activity theme; installSplashScreen() applies postSplashScreenTheme.
+        Launch theme for Android 8 to 11 (core-splashscreen): the app's dark ground alone. Before
+        Android 12 the splash is this static window background, drawn before any app code runs, so it
+        cannot wear the icon the user picked; the app draws that icon from its first frame instead
+        (ui/launch/LaunchHandOff.kt). Android 12+ uses values-v31/themes.xml. Set as the activity
+        theme; installSplashScreen() applies postSplashScreenTheme.
     -->
     <style name="Theme.Forge.Splash" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/forge_background</item>

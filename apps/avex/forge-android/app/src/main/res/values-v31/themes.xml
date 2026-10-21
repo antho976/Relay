@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Android 12+ launch: the system splash shows the app icon the user picked, on the app's dark.
+
+        No splash icon is named here on purpose. With none set, the platform draws the launching
+        component's own icon, and a launcher tap starts the enabled `.icon.*` activity-alias, whose
+        icon IS the pick (AppIcon / AppIconManager). An activity-alias cannot carry a theme of its
+        own, so naming a drawable here would show that one drawable for every pick.
+
+        The splash holds until the first screen is laid out (2 s cap), then MainActivity's exit
+        listener fades the icon as it settles a touch smaller (ui/launch/LaunchHandOff.kt).
+    -->
+    <style name="Theme.Forge.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/forge_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@null</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@null</item>
+        <item name="postSplashScreenTheme">@style/Theme.Forge</item>
+    </style>
+</resources>

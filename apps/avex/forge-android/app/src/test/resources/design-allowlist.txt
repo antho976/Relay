@@ -15,14 +15,8 @@
 #
 #   gradle -p forge-android :app:testDebugUnitTest --tests '*RegenerateAllowlist*' -Dforge.regen=true
 
-1 alpha ui/common/AvexWordmark.kt 0.90
 1 alpha ui/common/EmptyState.kt 0.5
 1 alpha ui/common/ForgeShimmer.kt 0.07
-1 alpha ui/common/LaunchScenes.kt 0.12
-1 alpha ui/common/LaunchScenes.kt 0.18
-1 alpha ui/common/LaunchScenes.kt 0.20
-1 alpha ui/common/LaunchScenes.kt 0.30
-1 alpha ui/common/LaunchScenes.kt 0.40
 3 alpha ui/gym/freestyle/ExerciseBrowserScreen.kt 0.12
 1 alpha ui/gym/freestyle/ExerciseBrowserScreen.kt 0.28
 1 alpha ui/gym/freestyle/ExerciseBrowserScreen.kt 0.3
@@ -99,8 +93,6 @@
 6 font-size ui/trophies/TrophiesComponents.kt fontSize=
 2 hype program/ExerciseLibrary.kt "insane"
 1 hype program/Trophies.kt "Beast"
-1 literal-duration ui/common/AvexWordmark.kt literal duration
-1 literal-duration ui/common/LaunchScenes.kt literal duration
 2 literal-duration ui/gym/train/components/RestTimerBubble.kt literal duration
 16 literal-duration ui/profile/TrophyIconMotion.kt literal duration
 1 max-lines ui/common/Editorial.kt maxLines=1

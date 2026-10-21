@@ -180,7 +180,7 @@ sheet top 16 — no custom radii. Photos: rounded 16 clips, caption UNDER the pl
 
 **The kit** — check here before writing any component. `EditorialHeader` · `EditorialHairline` ·
 `EditorialFigure` · `EditorialLegend` · `SegmentPill` · `ForgeSwitch` · `InlineEmptyHint` ·
-`NotificationBell` / `CountBadge` · `ArrivalBannerHost` · `AvexWordmark` · `AvexIntro` · `IconLaunchScene` · `bounceClick` /
+`NotificationBell` / `CountBadge` · `ArrivalBannerHost` · `bounceClick` /
 `bounceCombinedClick` · `clickableLabeled` · `GlyphButton` · `ForgeHeroAction` · `ForgePrimaryCapsule` /
 `ForgeOutlineCapsule` · `ForgeRowPill` · `ForgeChoiceChip` / `ForgeSegmentedChoice` / `ForgeOptionCard` / `ForgeIconTile` / `ForgePresetTile` / `ForgeDayChip` · `ForgeShimmer` / `ForgeShimmerHost` · `ConfettiOverlay` · `statsEntrance` ·
 `EntranceItem` · `rememberDrawProgress` · `CountUpText` · `ExerciseLibraryPicker` ·
