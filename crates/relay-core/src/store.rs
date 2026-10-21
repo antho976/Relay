@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 /// The schema version this build knows. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: i64 = 33;
+pub const SCHEMA_VERSION: i64 = 34;
 
 /// Numbered migrations; index 0 brings a fresh DB to `user_version = 1`.
 pub const MIGRATIONS: &[&str] = &[
@@ -518,6 +518,51 @@ pub const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE designs ADD COLUMN fill_charts TEXT NOT NULL DEFAULT '[]';
     "#,
+    // v34 - videos written as code (`video.*`, BUS.md §10.19, D167). A video is a folder of
+    // Remotion code under `videos/` beside the store (`dir`), which agents edit with their own
+    // tools; the row keeps what Relay knows of it: its compositions as the last check found them
+    // (JSON), the props the person set per composition (JSON), and the newest version recorded.
+    // A version is a manifest of the code's files (path, content hash, size) whose contents are
+    // kept by hash in `videos/.relay/blobs/`. A render is a job and, once done, its file in the
+    // folder's `out/`. Ids are AUTOINCREMENT, as designs' are, for the same reason (undo rows).
+    r#"
+    CREATE TABLE videos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES projects(id),
+      session TEXT, title TEXT NOT NULL, dir TEXT NOT NULL,
+      composition TEXT NOT NULL DEFAULT 'main',
+      width INTEGER NOT NULL, height INTEGER NOT NULL, fps REAL NOT NULL, duration_frames INTEGER NOT NULL,
+      compositions TEXT NOT NULL DEFAULT '[]', props TEXT NOT NULL DEFAULT '{}',
+      version INTEGER NOT NULL DEFAULT 0, poster TEXT,
+      created_by TEXT NOT NULL, updated_by TEXT NOT NULL,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+    );
+    CREATE INDEX videos_project ON videos(project_id, deleted_at, updated_at);
+
+    CREATE TABLE video_versions (
+      video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+      n INTEGER NOT NULL, digest TEXT NOT NULL, manifest TEXT NOT NULL, files INTEGER NOT NULL,
+      actor TEXT NOT NULL, created_at TEXT NOT NULL,
+      PRIMARY KEY (video_id, n)
+    ) WITHOUT ROWID;
+
+    CREATE TABLE video_renders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+      project_id INTEGER NOT NULL REFERENCES projects(id),
+      composition TEXT NOT NULL,
+      format TEXT NOT NULL CHECK (format IN ('mp4','webm','gif','prores','mp3','wav')),
+      quality TEXT NOT NULL CHECK (quality IN ('preview','standard','high')),
+      state TEXT NOT NULL CHECK (state IN ('queued','rendering','done','failed','cancelled')),
+      progress REAL NOT NULL DEFAULT 0, version INTEGER NOT NULL,
+      props TEXT NOT NULL DEFAULT '{}', range_from INTEGER, range_to INTEGER,
+      path TEXT, bytes INTEGER, error TEXT, actor TEXT NOT NULL,
+      created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT
+    );
+    CREATE INDEX video_renders_video ON video_renders(video_id, id);
+    CREATE INDEX video_renders_project ON video_renders(project_id);
+    CREATE INDEX video_renders_state ON video_renders(state) WHERE state IN ('queued','rendering');
+    "#,
 ];
 
 pub struct Store {
@@ -677,6 +722,25 @@ impl Store {
         match self.path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
             Some(dir) => dir.join("design-renders"),
             None => std::env::temp_dir().join(format!("relay-design-renders-{}", std::process::id())),
+        }
+    }
+
+    /// Where videos live, beside the store (D167): the kit (`package.json`, `node_modules/`,
+    /// `.relay/`) and one folder per project (`p<id>/`) holding a folder of code per video, so
+    /// every video resolves the kit's packages by walking up.
+    pub fn videos_dir(&self) -> PathBuf {
+        match self.path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+            Some(dir) => dir.join("videos"),
+            None => std::env::temp_dir().join(format!("relay-videos-{}", std::process::id())),
+        }
+    }
+
+    /// Where `video.still` writes the pictures it answers with, beside the store: the newest
+    /// few, each named by a fresh id, as `design.render`'s are.
+    pub fn video_stills_dir(&self) -> PathBuf {
+        match self.path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+            Some(dir) => dir.join("video-stills"),
+            None => std::env::temp_dir().join(format!("relay-video-stills-{}", std::process::id())),
         }
     }
 
