@@ -57,7 +57,10 @@ class ProfileAuditRegressionTest {
  }
  @Test fun `profile name editor remains open after tap`() {
   var savedName: String? = null
-  compose.setContent { ForgeTheme { val c=MaterialTheme.colorScheme; ProfileHeaderCard("Audit Athlete","",false,File("/tmp/audit-missing-avatar.jpg"),0,{savedName=it}, {},c.onBackground,c.onSurfaceVariant,c.primary) } }
+  compose.setContent { ForgeTheme { ProfilePage(
+   state=com.forge.app.ui.profile.state.ProfileUiState(loading=false,name="Audit Athlete"),body=ProfileBody(),weightUnit=WeightUnit.LB,
+   galleryLocked=false,today=LocalDate.of(2026,10,21),nowMs=0L,planOn={null},onVacation={false},
+   actions=ProfileActions(onSetName={savedName=it}),cover=null,photo={_,_->}) } }
   compose.onNodeWithText("Audit Athlete").performClick()
   val editors=compose.onAllNodes(hasSetTextAction()).fetchSemanticsNodes().size
   assertEquals(1, editors)
