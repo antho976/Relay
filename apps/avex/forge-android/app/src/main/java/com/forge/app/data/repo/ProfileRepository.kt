@@ -80,7 +80,13 @@ data class ProfileData(
     val lifetimeVolumeSeriesLb: List<Double> = emptyList(),
     /** How many times you trained each calendar day THIS YEAR (gym sessions + non-rest cardio),
      *  keyed by epoch-day — feeds the THIS YEAR consistency grid. Empty ⇒ no activity yet this year. */
-    val activityByDay: Map<Long, Int> = emptyMap()
+    val activityByDay: Map<Long, Int> = emptyMap(),
+    /** When each [lifetimeVolumeSeriesLb] point was lifted (epoch ms), same order — dates the curve. */
+    val lifetimeVolumeTimesMs: List<Long> = emptyList(),
+    /** PRs set this calendar month — the Overview's "↑ n this month" under PRs. */
+    val prsThisMonth: Int = 0,
+    /** Epoch days with a session logged as a deload — drawn faded on the consistency grid. */
+    val deloadDays: Set<Long> = emptySet()
 )
 
 /**
@@ -221,7 +227,14 @@ class ProfileRepository @Inject constructor(
             prsThisWeek = prsThisWeek,
             prsLastWeek = prsLastWeek,
             lifetimeVolumeSeriesLb = cumulativeSessionVolumeLb(sessions),
-            activityByDay = buildActivityByDay(sessions, cardioAllD.await(), zone)
+            activityByDay = buildActivityByDay(sessions, cardioAllD.await(), zone),
+            lifetimeVolumeTimesMs = sessions.map { it.startedAt }.sorted(),
+            prsThisMonth = sessions.filter {
+                val d = Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate()
+                d.year == today.year && d.month == today.month
+            }.sumOf { it.prCount },
+            deloadDays = sessions.filter { it.deloadMarkedHere }
+                .mapTo(HashSet()) { Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate().toEpochDay() }
         )
         }.also { lastData = it }
     }
