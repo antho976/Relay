@@ -84,5 +84,15 @@ data class CardioUiState(
     val useMiles: Boolean = false,
     /** The last cardio activity code logged (GYMAP-40); the log sheet seeds a new entry to it instead
      *  of always defaulting to Run. Null until the first non-rest session. */
-    val lastCardioType: String? = null
+    val lastCardioType: String? = null,
+    /** Distance (km) logged last week up to the same weekday — the hero's "vs last" line. */
+    val lastWeekToDateKm: Double = 0.0,
+    /** Consecutive weeks with an active session, ending this week or last — the hero's streak. */
+    val cardioStreakWeeks: Int = 0,
+    /** The most recently logged distinct activity codes (newest first) — the log sheet's tiles. */
+    val recentTypes: List<String> = emptyList(),
+    /** The usual steps by this hour over the past week (null under three days of data). */
+    val usualStepsByNow: Int? = null,
+    /** The local hour (0..23) [todayWearable] was read at: the "now" bar on the steps mark. */
+    val stepsHour: Int = -1
 )
