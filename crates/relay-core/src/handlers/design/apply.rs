@@ -194,6 +194,8 @@ pub(super) struct Run<'a> {
     /// deleted nodes, and the mains deleted.
     pub(super) has_mains: Option<bool>,
     pub(super) syncing: bool,
+    /// The chart frames to draw again once the edits have run ([`Run::draw_charts`]).
+    pub(super) charts: Vec<String>,
     pub(super) reached: Vec<String>,
     pub(super) mains_gone: Vec<String>,
 }
@@ -888,6 +890,9 @@ impl Run<'_> {
         self.check_fonts(families.iter().map(String::as_str), &node.id);
         self.added.insert(node.id.clone());
         self.inverse.push(vec![NodeOp::Delete { id: node.id.clone() }]);
+        if node.chart.is_some() {
+            self.chart_changed(&node.id);
+        }
         // What a later add may go in; where a leaf sits is read when asked (B6), seldom.
         if node.kind.holds_children() {
             self.parents.insert(node.id.clone(), node.parent.clone());
@@ -935,6 +940,9 @@ impl Run<'_> {
             }
         }
         let mut detaching = false;
+        if !self.lenient && !self.syncing && node.generated == Some(true) {
+            return Err(self.chart_part(&id));
+        }
         if !self.lenient && !self.syncing {
             if let Some(link) = set.get("instance_of") {
                 if !link.is_null() {
@@ -995,6 +1003,9 @@ impl Run<'_> {
         if detaching {
             self.detach(&next.id)?;
         }
+        if (next.chart.is_some() || node.chart.is_some()) && set.keys().any(|k| super::charts::DRAWN_FROM.contains(&k.as_str())) {
+            self.chart_changed(&next.id);
+        }
         Ok(Some(next.id))
     }
 
@@ -1003,6 +1014,9 @@ impl Run<'_> {
             return Ok(None);
         }
         let Some((from, kind, ord)) = self.meta(&id)? else { return self.missing("no such node") };
+        if !self.lenient && !self.syncing && id.contains('.') && self.row(&id)?.is_some_and(|row| row.body.contains("\"generated\":true")) {
+            return Err(self.chart_part(&id));
+        }
         if !self.lenient && !self.syncing && self.has_mains()? {
             let link = self.link(&id)?;
             if link.as_ref().is_some_and(|l| l.of.is_some()) && self.instance_root(&id)?.is_none() {
@@ -1130,6 +1144,9 @@ impl Run<'_> {
             return Ok(None);
         }
         let Some(root) = self.row(&id)? else { return self.missing("no such node") };
+        if !self.lenient && !self.syncing && root.body.contains("\"generated\":true") {
+            return Err(self.chart_part(&id));
+        }
         if !self.lenient && !self.syncing && root.body.contains("\"instance_of\":") && self.instance_root(&id)?.is_none() {
             return Err(self.inside_instance(&format!("{id:?} is part of an instance")));
         }
@@ -1527,6 +1544,7 @@ pub(super) fn register(e: &mut Engine) {
             last_placed: RefCell::new(None),
             has_mains: Some(components),
             syncing: false,
+            charts: Vec::new(),
             reached: Vec::new(),
             mains_gone: Vec::new(),
         };
@@ -1552,6 +1570,7 @@ pub(super) fn register(e: &mut Engine) {
                 return Err(run.too_large(true));
             }
         }
+        run.draw_charts()?;
         run.sync_components()?;
         run.follow_pins()?;
         run.release_ends()?;

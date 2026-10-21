@@ -7,6 +7,7 @@
 //! connectors; `icons` the icon set; `geom` is rectangles and the camera.
 pub mod apng;
 pub mod bounds;
+pub mod chart;
 pub mod boxes;
 pub mod color;
 pub mod edit;

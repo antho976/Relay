@@ -1234,6 +1234,18 @@ words measured roughly (`layout::Estimate`), and again with the list's undo run 
 is new when the same ids were not flagged before. The audit row keeps the reply without them, and a
 design changed again before the read gets a warning instead.
 
+**Charts.** A frame (no `layout`, an id of at most 44 characters) may hold a `chart`
+(`DesignChart`: `kind` bar, line, area, donut or pie, `labels`, `series` of a value per label, and
+its options). Once a list's edits have run, and before the component sync, each chart frame an edit
+added, or whose `chart`, `w`, `h` or `padding` an update set, has its parts drawn again
+(`relay_client::design::chart::parts`). They are written as its children marked `generated`, named
+`<frame>.<part>`. A part drawn as before is left alone, a changed one updated, a new one added and
+one no longer drawn deleted, all under the frame's other children in paint order. Each write is an
+ordinary edit with its undo, so a lenient list draws nothing. A strict list's update, move or delete
+of a generated node is `invalid` / `design.chart`. A chart frame in an instance is drawn by its main
+(the sync carries the parts). Parts are placed from the stored `w` and `h`, so a chart frame that
+fills or hugs is drawn at its stored size.
+
 **Components.** A `copy` with `instance: true` makes an instance of the node copied, which becomes a
 main component (`component: true`, set by the copy with its undo): each node of the copy names the
 main's node it follows (`instance_of`). Once a list's edits have run and before the follow rule,

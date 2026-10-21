@@ -22,6 +22,7 @@ use std::marker::PhantomData;
 mod expect;
 mod fields;
 mod hints;
+pub mod chart;
 pub mod motion;
 pub mod path_data;
 mod pins;
@@ -74,6 +75,8 @@ pub const MAX_SHADOWS: usize = 8;
 pub const MAX_RUNS: usize = 64;
 /// Most id starts one `copy` swaps (`rename`).
 pub const MAX_RENAMES: usize = 16;
+/// The longest id of a chart's frame: its parts' ids are made from it.
+pub const MAX_CHART_ID: usize = 44;
 /// Most fields an instance's node keeps as its own (`overrides`).
 pub const MAX_OVERRIDES: usize = 64;
 /// What an instance's node never takes from its main nor keeps as an override: what places it
@@ -1157,6 +1160,13 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(length(max = MAX_OVERRIDES))]
     pub overrides: Option<Vec<String>>,
+    /// A chart this frame (without `layout`) draws as its `generated` children, redrawn when it or
+    /// the frame's size changes.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "obj_opt")]
+    pub chart: Option<Box<chart::Chart>>,
+    /// Set on a chart's parts, which are edited through the chart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated: Option<bool>,
     /// How it moves when the design plays (any node but a page): 2 to 64 keys in time order on the
     /// clock of the nearest frame or page with a `timeline` (itself included), else its page's. Its own fields are its
     /// look at rest, which whatever does not play shows (the canvas until Play, exports,
@@ -1486,6 +1496,8 @@ impl Node {
             component: None,
             instance_of: None,
             overrides: None,
+            chart: None,
+            generated: None,
             style: None,
             motion: None,
             timeline: None,
@@ -1747,6 +1759,15 @@ impl Node {
         // With its own outline, an icon's name is only what it was saved as.
         if let Some(name) = self.icon.as_deref().filter(|n| !ICONS.contains(n) && self.icon_path.is_none()) {
             return Err(format!("icon: {name:?} is neither one of Relay's icons ({}) nor one saved to its set (design.icon.list)", ICONS.join(", ")));
+        }
+        if let Some(chart) = &self.chart {
+            chart.check()?;
+            if self.layout_mode() != Layout::None {
+                return Err("chart: a chart's frame places its parts itself; give it no layout".into());
+            }
+            if self.id.len() > MAX_CHART_ID {
+                return Err(format!("chart: its parts are named from the frame's id, which for a chart is at most {MAX_CHART_ID} characters"));
+            }
         }
         if let Some(id) = self.instance_of.as_deref().filter(|id| !valid_id(id)) {
             return Err(format!("instance_of: {id:?} is not a node id"));

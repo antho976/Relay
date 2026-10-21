@@ -258,6 +258,26 @@ the copy did not make is refused with the ids it did make. **A connector inside 
 outside the copy is let go**: the line stays drawn where it was, attached to nothing at that end.
 `dx`/`dy` add to the copy's stored `x/y`, which a laid-out parent ignores.
 
+**Charts are data, not drawings.** Never build a chart from hand-placed rects and labels: give a
+frame (no `layout`, a fixed `w` and `h`) a `chart`, and the engine draws its parts from the data as
+the frame's children, placed exactly, so every label sits under its bar:
+
+```json
+{"op":"add","node":{"id":"spend","parent":"screen","kind":"frame","w":358,"h":220,"padding":[16],"fill":"$card",
+  "chart":{"kind":"bar","labels":["Jan","Feb","Mar","Apr"],"series":[{"name":"Spent","values":[420,380,515,610]}],"prefix":"$"}}}
+```
+
+`kind` is `bar` (with `stacked` or `horizontal`), `line`, `area`, `donut` or `pie`; `series` holds a
+value per label (a donut or pie draws the first, a slice per label, `center` words in its hole).
+Options: `values` (each value written), `legend` (on by default with several series and for a ring),
+`min`/`max`, `ticks` (about how many steps, 0 for none), `grid`, `prefix`/`suffix`/`decimals`,
+`smooth` and `points` (lines), `inner` (a donut's hole), `gap` (bars), `color`, `grid_color`,
+`font_size`, `palette` (colours for series that name none; may be `$name`s). The parts are named
+`<frame>.<part>` (`spend.bar-0-2`, `spend.label-2`, `spend.tick-0`, `spend.slice-1`) and marked
+`generated`: they are redrawn whenever the chart, the frame's size or its padding changes, so an edit
+of one by hand is refused (`design.chart`). Change the chart instead, and add a title or note as your
+own children of the frame. `chart: null` takes the parts out.
+
 **Components** are for anything repeated with the same build: a card, a list row, a button, a tab
 bar. **Build it once, then place instances of it instead of copies**:
 `{"op":"copy","id":"card","instance":true,"rename":{"card":"rent"},"dy":120}` makes an instance and

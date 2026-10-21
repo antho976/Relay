@@ -141,6 +141,8 @@ pub const FIELDS: &[(&str, Kinds, Option<&str>)] = &[
     ("component", Kinds(ALL & !P), Some("component: a page is not a component; make one of what is on it")),
     ("instance_of", Kinds(ALL & !P), Some("instance_of: a page is not an instance")),
     ("overrides", Kinds(ALL & !P), Some("overrides: a page is not an instance")),
+    ("chart", Kinds(F), Some("chart: a chart is drawn in a frame; put it in one")),
+    ("generated", Kinds(ALL & !P), Some("generated: a page is not drawn by a chart")),
 ];
 
 fn table() -> &'static HashMap<&'static str, (Kinds, Option<&'static str>)> {
@@ -702,7 +704,8 @@ mod tests {
             "arc": {}, "blend": "normal", "text_case": "upper", "pin_x": "left", "pin_y": "top", "absolute": false,
             "min_w": 1, "max_w": 1, "min_h": 1, "max_h": 1, "row_gap": 1, "scroll": "x", "stroke_cap": "round",
             "stroke_join": "round", "stroke_gradient": {"stops": []}, "shadows": [], "runs": [], "max_lines": 1, "style": "card",
-            "motion": {"keys": []}, "timeline": {}, "component": true, "instance_of": "a", "overrides": []
+            "motion": {"keys": []}, "timeline": {}, "component": true, "instance_of": "a", "overrides": [], "generated": true,
+            "chart": {"kind": "bar", "labels": ["a"], "series": [{"values": [1]}]}
         }"##).unwrap();
         let keys = present(&full);
         assert_eq!(keys.len(), FIELDS.len(), "{keys:?}");

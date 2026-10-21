@@ -50,8 +50,10 @@ fn design_apply_writes_each_type_once_and_fits_a_tool_output() {
             assert!(mentions(&doc["payload"], about) >= 1, "{field} is described");
         }
     }
+    // Under the ~100,000 characters a tool's output keeps, with room to spare: 80 KiB until charts
+    // (`DesignChart`) took it to 83.6 KiB.
     let bytes = serde_json::to_string(&doc).unwrap().len();
-    assert!(bytes < 80 * 1024, "bus.schema design.apply is {bytes} bytes");
+    assert!(bytes < 90 * 1024, "bus.schema design.apply is {bytes} bytes");
 }
 
 /// The result half writes a type the payload describes bare, but whole: it still reads alone, and
