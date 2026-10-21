@@ -51,16 +51,35 @@ by default (`#1E1D1B`, the canvas colour): put light screens in a frame (white b
 | `path` | a freehand stroke | `points`, `stroke`, `stroke_width` |
 | `image` | a picture | `src` from `design.asset.add`, `w h` (both needed), `fit: cover|contain|stretch`, `radius` |
 | `polygon` | triangles, diamonds, hexagons, stars, flowchart decisions | `sides` (3 triangle, 4 diamond, 6 hexagon…, 3 to 24), `star` (inner ratio 0.05 to 0.95, e.g. 0.4; **a star with no `sides` has 5 points**), `fill`, `stroke`, `text` |
-| `icon` | interface icons in mockups | `icon` (a name below), `stroke` (its colour), `w h` (24 is the native size, which an icon added without one gets) |
+| `icon` | interface icons in mockups | `icon` (a name below, or one saved to Relay's set), `stroke` (its colour), `w h` (24 is the native size, which an icon added without one gets) |
 
 Icons are outline icons on a 24-unit grid, drawn at the smaller of `w` and `h`, stroke 2 px unless
-set. A name not in this list is refused: home, search, settings, user, users, bell, mail, heart,
-star, plus, minus, x, check, chevron-left, chevron-right, chevron-up, chevron-down, arrow-left,
-arrow-right, arrow-up, arrow-down, menu, more-horizontal, more-vertical, trash, edit, copy,
-download, upload, share, link, lock, unlock, eye, eye-off, calendar, clock, camera, image, file,
-folder, shopping-cart, credit-card, globe, map-pin, phone, message, send, filter, sliders, grid,
-list, play, pause, refresh, log-out, bookmark, info, alert, help, sun, moon, wifi, battery,
-terminal, code, zap, cloud, git-branch, bar-chart.
+set. Relay's own: home, search, settings, user, users, bell, mail, heart, star, plus, minus, x, check, chevron-left, chevron-right, chevron-up, chevron-down, arrow-left, arrow-right, arrow-up,
+arrow-down, menu, more-horizontal, more-vertical, trash, edit, copy, download, upload, share, link,
+lock, unlock, eye, eye-off, calendar, clock, camera, image, file, folder, shopping-cart,
+credit-card, globe, map-pin, phone, message, send, filter, sliders, grid, list, play, pause,
+refresh, log-out, bookmark, info, alert, help, sun, moon, wifi, battery, terminal, code, zap, cloud,
+git-branch, bar-chart, wallet, bank, receipt, tag, coins, banknote, dollar-sign, percent,
+calculator, trending-up, trending-down, pie-chart, line-chart, shopping-bag, gift, utensils, coffee,
+car, bus, plane, fuel, briefcase, book, graduation-cap, music, film, tv, gamepad, dumbbell,
+activity, pill, shirt, scissors, wrench, lightbulb, droplet, flame, leaf, umbrella, thermometer,
+inbox, archive, layers, external-link, paperclip, at-sign, hash, smile, thumbs-up, flag, award,
+target, shield, key, mic, video, headphones, smartphone, laptop, printer, map, navigation, compass,
+package, truck, store, database, server, cpu, rotate-ccw, repeat, shuffle, skip-forward, skip-back,
+volume, maximize, minimize, plus-circle, check-circle, x-circle, log-in, user-plus, sparkles, timer,
+history.
+
+**When none fits, save one to Relay's set instead of reusing a near miss** (one icon for three
+different things reads as one thing). `design.icon.list {query?}` names Relay's own and every saved
+icon, which every project's designs share; check it first, since another agent may have saved what
+you need. `design.icon.save {name, path | svg, keywords?}` adds one: `path` is SVG path data on the
+24-unit grid, drawn as an outline (`"M4 12a8 6 0 1 0 16 0a8 6 0 1 0-16 0M8 17v3M16 17v3"`); `svg`
+takes an outline SVG as most icon sets ship them (`<svg viewBox="0 0 24 24" fill="none"
+stroke="currentColor">…</svg>`) and fits it onto the grid. Name it for what it shows (`piggy-bank`,
+not `icon-3`); a filled picture belongs in an image node instead. Then `"icon": "piggy-bank"` on any
+icon node draws it: the node keeps the outline in its own `icon_path`, so it draws the same if the
+saved icon changes or goes. `design.icon.save` with `replace: true` changes a saved icon, and
+`design.icon.delete` removes one, only when the person asks.
 
 **A kind refuses fields that are not its own**, naming the kinds that use it: `radius: ellipse
 nodes do not use it (it is for frame, rect, sticky, image)`. `null` always clears a field, on any

@@ -1,10 +1,10 @@
 //! `design.apply`: a list of node edits run in order against the request's transaction.
 
 use super::revs::{self, removed_rev};
-use super::{body_of, check, emit_applied, expect, kind_of, live_design, node_of, row_bytes};
+use super::{body_of, check, emit_applied, expect, icons, kind_of, live_design, node_of, row_bytes};
 use crate::engine::{Ctx, Engine, IntoBus};
 use crate::handlers::notes::{actor_name, assert_actor_project};
-use relay_bus::design::{details, field_of, label, nearest, Conflict, ConflictReason, Node, NodeKind, NodeOp, Styles, MAX_COORD, MAX_DEPTH, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS};
+use relay_bus::design::{details, field_of, label, nearest, path_data, Conflict, ConflictReason, Node, NodeKind, NodeOp, Styles, MAX_COORD, MAX_DEPTH, MAX_DESIGN_BYTES, MAX_LENIENT_OPS, MAX_NODES, MAX_OPS, ICONS};
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{Apply, ApplyOut, Reply};
 use relay_bus::types::{Design, Id};
@@ -343,6 +343,28 @@ impl Run<'_> {
             Some(note) => format!("{hint} {note}"),
             None => hint,
         })
+    }
+
+    /// An icon node's outline as an edit writes it (`set` gets `icon_path`): path data it gives
+    /// is written in its plain form; an `icon` naming one saved to Relay's set, with no path
+    /// given, takes the saved one's. A name neither built in nor saved, with no path, is refused.
+    pub(super) fn icon_outline(&self, icon: Option<&str>, path: Option<&str>, set: &mut Map<String, Value>) -> Result<(), BusError> {
+        if let Some(d) = path {
+            let d = path_data::normalize(d).map_err(|why| self.fail_on("icon_path", ErrorKind::Invalid, "design.node_invalid", format!("icon_path: {why}")))?;
+            set.insert("icon_path".into(), Value::String(d));
+            return Ok(());
+        }
+        if let Some(name) = icon.filter(|name| !ICONS.contains(name)) {
+            let Some(d) = icons::saved_path(self.tx, name)? else {
+                let hint = match nearest(name, ICONS.iter().copied()) {
+                    Some(close) => format!("did you mean {close:?}? design.icon.list names every icon, and design.icon.save adds one"),
+                    None => "design.icon.list names every icon, and design.icon.save adds one".to_string(),
+                };
+                return Err(self.fail_on("icon", ErrorKind::Invalid, "design.node_invalid", format!("icon: {name:?} is neither one of Relay's icons nor one saved to its set")).with_hint(hint));
+            };
+            set.insert("icon_path".into(), Value::String(d));
+        }
+        Ok(())
     }
 
     /// What a refusal of an id the design does not hold adds when this list copied: the copy
@@ -780,6 +802,13 @@ impl Run<'_> {
             // path's box is fitted to its points. An undo puts back exactly what was stored.
             node.fill_default_size();
             node.contain_points();
+            if node.kind == NodeKind::Icon {
+                let mut set = Map::new();
+                self.icon_outline(node.icon.as_deref(), node.icon_path.as_deref(), &mut set)?;
+                if let Some(Value::String(d)) = set.remove("icon_path") {
+                    node.icon_path = Some(d);
+                }
+            }
         }
         node.validate().map_err(|why| self.fail(ErrorKind::Invalid, "design.node_invalid", why))?;
         if let Err(why) = node.check_new() {
@@ -878,6 +907,16 @@ impl Run<'_> {
         }
         let Some(row) = self.row(&id)? else { return self.missing("no such node") };
         let Some(node) = self.readable(&id, &row)? else { return Ok(None) };
+        if !self.lenient && node.kind == NodeKind::Icon && (set.contains_key("icon") || set.contains_key("icon_path")) {
+            let icon = set.get("icon").map_or(node.icon.clone(), |v| v.as_str().map(str::to_string));
+            let path = set.get("icon_path").and_then(|v| v.as_str().map(str::to_string));
+            let given = set.contains_key("icon_path");
+            self.icon_outline(icon.as_deref(), path.as_deref(), &mut set)?;
+            // A built-in icon named in place of one with an outline of its own drops the outline.
+            if !given && set.contains_key("icon") && !set.contains_key("icon_path") && node.icon_path.is_some() {
+                set.insert("icon_path".into(), Value::Null);
+            }
+        }
         let mut next = node.patched(&set).map_err(|why| self.fail(ErrorKind::Invalid, "design.node_invalid", why))?;
         if let Err(why) = Node::check_update(&node, &set, &next) {
             self.breach(why)?;

@@ -23,6 +23,7 @@ mod expect;
 mod fields;
 mod hints;
 pub mod motion;
+pub mod path_data;
 mod pins;
 mod read;
 mod style;
@@ -173,6 +174,18 @@ pub const ICONS: &[&str] = &[
     "globe", "map-pin", "phone", "message", "send", "filter", "sliders", "grid", "list", "play",
     "pause", "refresh", "log-out", "bookmark", "info", "alert", "help", "sun", "moon", "wifi",
     "battery", "terminal", "code", "zap", "cloud", "git-branch", "bar-chart",
+    // Money, places, things and more controls (2026-10-20).
+    "wallet", "bank", "receipt", "tag", "coins", "banknote", "dollar-sign", "percent", "calculator",
+    "trending-up", "trending-down", "pie-chart", "line-chart", "shopping-bag", "gift", "utensils",
+    "coffee", "car", "bus", "plane", "fuel", "briefcase", "book", "graduation-cap", "music", "film",
+    "tv", "gamepad", "dumbbell", "activity", "pill", "shirt", "scissors", "wrench", "lightbulb",
+    "droplet", "flame", "leaf", "umbrella", "thermometer", "inbox", "archive", "layers",
+    "external-link", "paperclip", "at-sign", "hash", "smile", "thumbs-up", "flag", "award",
+    "target", "shield", "key", "mic", "video", "headphones", "smartphone", "laptop", "printer",
+    "map", "navigation", "compass", "package", "truck", "store", "database", "server", "cpu",
+    "rotate-ccw", "repeat", "shuffle", "skip-forward", "skip-back", "volume", "maximize",
+    "minimize", "plus-circle", "check-circle", "x-circle", "log-in", "user-plus", "sparkles",
+    "timer", "history",
 ];
 
 /// How a connector runs between its ends.
@@ -983,11 +996,19 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0, max = 200))]
     pub blur: Option<f64>,
-    /// An icon node's icon, one of these outline icons, drawn on a 24-unit grid scaled to the
-    /// smaller of `w` and `h` (24 is its natural size).
+    /// An icon node's icon, one of these outline icons or one saved to Relay's set (design.icon.list,
+    /// which every project's designs share), drawn on a 24-unit grid scaled to the smaller of `w`
+    /// and `h` (24 is its natural size).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "icon_schema")]
     pub icon: Option<String>,
+    /// An icon's own outline, drawn instead of `icon`'s: SVG path data on the 24-unit grid
+    /// (`M4 6h16M4 12h16`), stroked as Relay's icons are, at most 8000 characters. `icon` naming
+    /// an icon saved to Relay's set (design.icon.save) fills it in; naming a built-in one clears
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = path_data::MAX_PATH_DATA))]
+    pub icon_path: Option<String>,
     /// A connector's start: a node on the same page, not the line itself or a page. The line
     /// then runs from that node's edge and follows it when it moves; `points` are only where it
     /// was last drawn.
@@ -1139,8 +1160,12 @@ pub struct Node {
 /// `icon`'s schema: the names of [`ICONS`], so the list an agent reads is whole and stays in step
 /// with what validates.
 fn icon_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    let names: Vec<Value> = ICONS.iter().map(|name| Value::from(*name)).chain([Value::Null]).collect();
-    schemars::json_schema!({"type": ["string", "null"], "enum": names})
+    let names: Vec<Value> = ICONS.iter().map(|name| Value::from(*name)).collect();
+    schemars::json_schema!({"anyOf": [
+        {"type": "string", "enum": names},
+        {"type": "string", "pattern": ID_PATTERN, "maxLength": MAX_ID, "description": "An icon saved to Relay's set: design.icon.list names them."},
+        {"type": "null"},
+    ]})
 }
 
 /// The node schema also names `width` and `height`, which an add reads as `w` and `h`, so a
@@ -1428,6 +1453,7 @@ impl Node {
             runs: None,
             max_lines: None,
             skip_checks: None,
+            icon_path: None,
             style: None,
             motion: None,
             timeline: None,
@@ -1683,8 +1709,12 @@ impl Node {
                 return Err("arc.cap: only a ring segment (inner above 0, sweep under 360) has ends to shape".into());
             }
         }
-        if let Some(name) = self.icon.as_deref().filter(|n| !ICONS.contains(n)) {
-            return Err(format!("icon: {name:?} is not one of Relay's icons ({})", ICONS.join(", ")));
+        if let Some(d) = &self.icon_path {
+            path_data::parse(d).map_err(|why| format!("icon_path: {why}"))?;
+        }
+        // With its own outline, an icon's name is only what it was saved as.
+        if let Some(name) = self.icon.as_deref().filter(|n| !ICONS.contains(n) && self.icon_path.is_none()) {
+            return Err(format!("icon: {name:?} is neither one of Relay's icons ({}) nor one saved to its set (design.icon.list)", ICONS.join(", ")));
         }
         if let Some(v) = self.max_lines {
             if !(1..=1000).contains(&v) {

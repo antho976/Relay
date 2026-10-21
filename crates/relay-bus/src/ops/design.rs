@@ -394,6 +394,79 @@ op!(AssetGet, "design.asset.get", AssetGetIn => AssetGetOut,
     OpMeta::query(Scope::Project, 12, "A picture an image node shows, in pieces of at most 3 MiB, to draw it where its file is out of reach")
         .actors(Actors::UserOnly));
 
+/// Most keywords a saved icon holds, and the longest one.
+pub const ICON_KEYWORDS_MAX: usize = 16;
+pub const ICON_KEYWORD_LEN: usize = 32;
+
+payload!(#[schemars(rename = "DesignIconSaveIn")] IconSaveIn {
+    /// Its name, 1 to 64 letters, digits, `-`, `_`, `.` or `:`, and none of Relay's own icons'
+    /// (`piggy-bank`, `budget:groceries`): what an icon node's `icon` names it by, in any
+    /// project's design.
+    #[schemars(length(min = 1, max = 64), pattern(crate::design::ID_PATTERN))]
+    pub name: String,
+    /// Its outline as SVG path data on the 24-unit grid (`M4 6h16M4 12h16`), stroked as Relay's
+    /// icons are: round ends and corners, in the node's stroke or text colour. At most 8000
+    /// characters. Give this or `svg`.
+    #[schemars(length(min = 1, max = crate::design::path_data::MAX_PATH_DATA))]
+    pub path: Option<String>,
+    /// An outline icon as an SVG document (`<svg viewBox="0 0 24 24">…</svg>`, as most outline
+    /// sets ship them): its `path`, `line`, `polyline`, `polygon`, `circle`, `ellipse` and `rect`
+    /// shapes joined into one path and fitted from its viewBox onto the 24-unit grid. A
+    /// `transform`, `<use>` or text is refused. At most 64 KiB. Give this or `path`.
+    #[schemars(length(min = 1, max = 65536))]
+    pub svg: Option<String>,
+    /// Words design.icon.list finds it by besides its name, at most 16 of up to 32 characters.
+    #[schemars(length(max = ICON_KEYWORDS_MAX))]
+    pub keywords: Option<Vec<String>>,
+    /// Replace a saved icon of this name. Without it, one is refused (`design.icon_exists`).
+    pub replace: Option<bool>,
+});
+result!(#[schemars(rename = "DesignSavedIcon")] SavedIcon {
+    pub name: String,
+    /// Its outline, path data on the 24-unit grid as stored (each command spelt out).
+    pub path: String,
+    pub keywords: Vec<String>,
+    /// Who saved it last (`user`, or an agent's session name), and when (RFC 3339).
+    pub updated_by: String,
+    pub updated_at: String,
+});
+result!(#[schemars(rename = "DesignIconSaveOut")] IconSaveOut {
+    pub icon: SavedIcon,
+    /// It replaced a saved icon of the same name.
+    pub replaced: bool,
+    /// What was saved but may not draw as meant (an SVG that looks filled rather than outlined).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+});
+op!(IconSave, "design.icon.save", IconSaveIn => IconSaveOut,
+    OpMeta::mutation(Scope::Global, 12, "Save an outline icon (SVG path data or an SVG) to Relay's icon set, which every project's designs and every agent can use by name; returns it as stored")
+        .undo(Undo::Inverse));
+
+payload!(#[schemars(rename = "DesignIconListIn")] IconListIn {
+    /// Only icons whose name or a keyword holds these words, any case.
+    #[schemars(length(min = 1))]
+    pub query: Option<String>,
+});
+result!(#[schemars(rename = "DesignIconListOut")] IconListOut {
+    /// Relay's own icons an icon node's `icon` names, in the schema's order.
+    pub built_in: Vec<String>,
+    /// The icons saved to Relay's set, by name, with their outlines.
+    pub saved: Vec<SavedIcon>,
+});
+op!(IconList, "design.icon.list", IconListIn => IconListOut,
+    OpMeta::query(Scope::Global, 12, "The icons an icon node can name: Relay's own and those saved to its set (design.icon.save), found by name or keyword"));
+
+payload!(#[schemars(rename = "DesignIconDeleteIn")] IconDeleteIn {
+    pub name: String,
+});
+result!(#[schemars(rename = "DesignIconDeleteOut")] IconDeleteOut {
+    /// It was saved, and is gone. Icon nodes drawn with it keep their outline.
+    pub deleted: bool,
+});
+op!(IconDelete, "design.icon.delete", IconDeleteIn => IconDeleteOut,
+    OpMeta::mutation(Scope::Global, 12, "Take an icon out of Relay's icon set, only when the person asked; icon nodes already drawn with it keep their outline")
+        .undo(Undo::Inverse));
+
 /// `design.render`'s limits: a picture's scale, its longer side, the box rows, the wait, the
 /// nodes named, the frames of a contact sheet.
 pub const RENDER_SCALE_MIN: f64 = 0.25;
@@ -594,6 +667,9 @@ pub fn entries() -> Vec<OpEntry> {
         OpEntry::of::<Apply>().located(crate::design::locate),
         OpEntry::of::<Find>(),
         OpEntry::of::<Fonts>(),
+        OpEntry::of::<IconSave>(),
+        OpEntry::of::<IconList>(),
+        OpEntry::of::<IconDelete>(),
         OpEntry::of::<AssetAdd>(),
         OpEntry::of::<AssetGet>(),
         OpEntry::of::<Render>(),

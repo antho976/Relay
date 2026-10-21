@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 343,
+  "op_count": 346,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -6445,6 +6445,60 @@
       },
       "result": {
         "$ref": "#/$defs/DesignFontsOut"
+      }
+    },
+    "design.icon.save": {
+      "summary": "Save an outline icon (SVG path data or an SVG) to Relay's icon set, which every project's designs and every agent can use by name; returns it as stored",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "inverse",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignIconSaveIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignIconSaveOut"
+      }
+    },
+    "design.icon.list": {
+      "summary": "The icons an icon node can name: Relay's own and those saved to its set (design.icon.save), found by name or keyword",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignIconListIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignIconListOut"
+      }
+    },
+    "design.icon.delete": {
+      "summary": "Take an icon out of Relay's icon set, only when the person asked; icon nodes already drawn with it keep their outline",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "inverse",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignIconDeleteIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignIconDeleteOut"
       }
     },
     "design.asset.add": {
@@ -25884,84 +25938,187 @@
           "maximum": 200
         },
         "icon": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "home",
+                "search",
+                "settings",
+                "user",
+                "users",
+                "bell",
+                "mail",
+                "heart",
+                "star",
+                "plus",
+                "minus",
+                "x",
+                "check",
+                "chevron-left",
+                "chevron-right",
+                "chevron-up",
+                "chevron-down",
+                "arrow-left",
+                "arrow-right",
+                "arrow-up",
+                "arrow-down",
+                "menu",
+                "more-horizontal",
+                "more-vertical",
+                "trash",
+                "edit",
+                "copy",
+                "download",
+                "upload",
+                "share",
+                "link",
+                "lock",
+                "unlock",
+                "eye",
+                "eye-off",
+                "calendar",
+                "clock",
+                "camera",
+                "image",
+                "file",
+                "folder",
+                "shopping-cart",
+                "credit-card",
+                "globe",
+                "map-pin",
+                "phone",
+                "message",
+                "send",
+                "filter",
+                "sliders",
+                "grid",
+                "list",
+                "play",
+                "pause",
+                "refresh",
+                "log-out",
+                "bookmark",
+                "info",
+                "alert",
+                "help",
+                "sun",
+                "moon",
+                "wifi",
+                "battery",
+                "terminal",
+                "code",
+                "zap",
+                "cloud",
+                "git-branch",
+                "bar-chart",
+                "wallet",
+                "bank",
+                "receipt",
+                "tag",
+                "coins",
+                "banknote",
+                "dollar-sign",
+                "percent",
+                "calculator",
+                "trending-up",
+                "trending-down",
+                "pie-chart",
+                "line-chart",
+                "shopping-bag",
+                "gift",
+                "utensils",
+                "coffee",
+                "car",
+                "bus",
+                "plane",
+                "fuel",
+                "briefcase",
+                "book",
+                "graduation-cap",
+                "music",
+                "film",
+                "tv",
+                "gamepad",
+                "dumbbell",
+                "activity",
+                "pill",
+                "shirt",
+                "scissors",
+                "wrench",
+                "lightbulb",
+                "droplet",
+                "flame",
+                "leaf",
+                "umbrella",
+                "thermometer",
+                "inbox",
+                "archive",
+                "layers",
+                "external-link",
+                "paperclip",
+                "at-sign",
+                "hash",
+                "smile",
+                "thumbs-up",
+                "flag",
+                "award",
+                "target",
+                "shield",
+                "key",
+                "mic",
+                "video",
+                "headphones",
+                "smartphone",
+                "laptop",
+                "printer",
+                "map",
+                "navigation",
+                "compass",
+                "package",
+                "truck",
+                "store",
+                "database",
+                "server",
+                "cpu",
+                "rotate-ccw",
+                "repeat",
+                "shuffle",
+                "skip-forward",
+                "skip-back",
+                "volume",
+                "maximize",
+                "minimize",
+                "plus-circle",
+                "check-circle",
+                "x-circle",
+                "log-in",
+                "user-plus",
+                "sparkles",
+                "timer",
+                "history"
+              ]
+            },
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "maxLength": 64,
+              "description": "An icon saved to Relay's set: design.icon.list names them."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "An icon node's icon, one of these outline icons or one saved to Relay's set (design.icon.list,\nwhich every project's designs share), drawn on a 24-unit grid scaled to the smaller of `w`\nand `h` (24 is its natural size)."
+        },
+        "icon_path": {
           "type": [
             "string",
             "null"
           ],
-          "enum": [
-            "home",
-            "search",
-            "settings",
-            "user",
-            "users",
-            "bell",
-            "mail",
-            "heart",
-            "star",
-            "plus",
-            "minus",
-            "x",
-            "check",
-            "chevron-left",
-            "chevron-right",
-            "chevron-up",
-            "chevron-down",
-            "arrow-left",
-            "arrow-right",
-            "arrow-up",
-            "arrow-down",
-            "menu",
-            "more-horizontal",
-            "more-vertical",
-            "trash",
-            "edit",
-            "copy",
-            "download",
-            "upload",
-            "share",
-            "link",
-            "lock",
-            "unlock",
-            "eye",
-            "eye-off",
-            "calendar",
-            "clock",
-            "camera",
-            "image",
-            "file",
-            "folder",
-            "shopping-cart",
-            "credit-card",
-            "globe",
-            "map-pin",
-            "phone",
-            "message",
-            "send",
-            "filter",
-            "sliders",
-            "grid",
-            "list",
-            "play",
-            "pause",
-            "refresh",
-            "log-out",
-            "bookmark",
-            "info",
-            "alert",
-            "help",
-            "sun",
-            "moon",
-            "wifi",
-            "battery",
-            "terminal",
-            "code",
-            "zap",
-            "cloud",
-            "git-branch",
-            "bar-chart",
-            null
-          ],
-          "description": "An icon node's icon, one of these outline icons, drawn on a 24-unit grid scaled to the\nsmaller of `w` and `h` (24 is its natural size)."
+          "description": "An icon's own outline, drawn instead of `icon`'s: SVG path data on the 24-unit grid\n(`M4 6h16M4 12h16`), stroked as Relay's icons are, at most 8000 characters. `icon` naming\nan icon saved to Relay's set (design.icon.save) fills it in; naming a built-in one clears\nit.",
+          "minLength": 1,
+          "maxLength": 8000
         },
         "from": {
           "type": [
@@ -27694,6 +27851,7 @@
                   "dash",
                   "blur",
                   "icon",
+                  "icon_path",
                   "from",
                   "to",
                   "route",
@@ -28520,6 +28678,174 @@
       "required": [
         "families",
         "complete"
+      ]
+    },
+    "DesignIconSaveIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Its name, 1 to 64 letters, digits, `-`, `_`, `.` or `:`, and none of Relay's own icons'\n(`piggy-bank`, `budget:groceries`): what an icon node's `icon` names it by, in any\nproject's design.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its outline as SVG path data on the 24-unit grid (`M4 6h16M4 12h16`), stroked as Relay's\nicons are: round ends and corners, in the node's stroke or text colour. At most 8000\ncharacters. Give this or `svg`.",
+          "minLength": 1,
+          "maxLength": 8000
+        },
+        "svg": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "An outline icon as an SVG document (`<svg viewBox=\"0 0 24 24\">…</svg>`, as most outline\nsets ship them): its `path`, `line`, `polyline`, `polygon`, `circle`, `ellipse` and `rect`\nshapes joined into one path and fitted from its viewBox onto the 24-unit grid. A\n`transform`, `<use>` or text is refused. At most 64 KiB. Give this or `path`.",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "keywords": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Words design.icon.list finds it by besides its name, at most 16 of up to 32 characters.",
+          "maxItems": 16
+        },
+        "replace": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Replace a saved icon of this name. Without it, one is refused (`design.icon_exists`)."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "DesignIconSaveOut": {
+      "type": "object",
+      "properties": {
+        "icon": {
+          "$ref": "#/$defs/DesignSavedIcon"
+        },
+        "replaced": {
+          "type": "boolean",
+          "description": "It replaced a saved icon of the same name."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What was saved but may not draw as meant (an SVG that looks filled rather than outlined)."
+        }
+      },
+      "required": [
+        "icon",
+        "replaced"
+      ]
+    },
+    "DesignSavedIcon": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string",
+          "description": "Its outline, path data on the 24-unit grid as stored (each command spelt out)."
+        },
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "updated_by": {
+          "type": "string",
+          "description": "Who saved it last (`user`, or an agent's session name), and when (RFC 3339)."
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "keywords",
+        "updated_by",
+        "updated_at"
+      ]
+    },
+    "DesignIconListIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Only icons whose name or a keyword holds these words, any case.",
+          "minLength": 1
+        }
+      }
+    },
+    "DesignIconListOut": {
+      "type": "object",
+      "properties": {
+        "built_in": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Relay's own icons an icon node's `icon` names, in the schema's order."
+        },
+        "saved": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignSavedIcon"
+          },
+          "description": "The icons saved to Relay's set, by name, with their outlines."
+        }
+      },
+      "required": [
+        "built_in",
+        "saved"
+      ]
+    },
+    "DesignIconDeleteIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "DesignIconDeleteOut": {
+      "type": "object",
+      "properties": {
+        "deleted": {
+          "type": "boolean",
+          "description": "It was saved, and is gone. Icon nodes drawn with it keep their outline."
+        }
+      },
+      "required": [
+        "deleted"
       ]
     },
     "DesignAssetAddIn": {

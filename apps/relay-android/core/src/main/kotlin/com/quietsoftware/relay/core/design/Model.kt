@@ -162,6 +162,8 @@ data class DesignNode(
     val dash: List<Double>? = null,
     val blur: Double? = null,
     val icon: String? = null,
+    /** An icon's own outline (a saved icon's), drawn instead of [icon]'s: path data on the 24-unit grid. */
+    @SerialName("icon_path") val iconPath: String? = null,
     val from: String? = null,
     val to: String? = null,
     val route: String? = null,

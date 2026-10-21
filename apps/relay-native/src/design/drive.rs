@@ -312,7 +312,7 @@ fn next(b: Rc<Board>, steps: Vec<String>, at: usize) {
             super::assets::place_files(&b, vec![std::path::PathBuf::from(path)], at);
             pause = 600;
         }
-        "icon" => super::icons::choose(&b, arg, None),
+        "icon" => super::icons::choose(&b, arg, None, None),
         "pictures" => {
             super::pictures::drive_search(&b, arg);
             pause = 800;
