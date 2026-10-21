@@ -190,7 +190,7 @@ layout in rows, columns and wraps, hugging text and stickies, pins, absolute chi
 sizes and scrolling frames (each at its start); every kind (frames, groups, rectangles, ellipses with
 arcs, polygons and stars, lines and connectors in their routes, pen paths, stickies, icons (a saved icon by
 the outline its node carries, `icon_path`), text with its runs, and
-pictures) with fills, linear, radial and conic gradients, strokes with dashes and ends, borders of
+pictures) with fills, linear, radial and conic gradients (a radial or conic one at its `center`, a radial one to its `radius`), strokes with dashes and ends, borders of
 their own width on each side, per-corner radii, inner and drop shadows, opacity, blend modes, rotation and flips; and a design's named colours
 and styles, resolved as the PC resolves them (`skip_checks` changes nothing drawn: it is for the
 PC's checks; nor do `component`, `instance_of` and `overrides`, since an instance is real nodes the

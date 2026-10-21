@@ -93,7 +93,11 @@ Any node but a page can also take `rotation` (degrees clockwise about its centre
 instead of `fill`:
 `{"kind": "linear", "angle": 135, "stops": [{"at": 0, "color": "#4C9DFF"}, {"at": 1, "color": "#A178FF"}]}`
 (2 to 8 stops; `angle` reads as CSS: 180 top to bottom; `"radial"` from the centre; `"conic"` round
-the centre, clockwise from `angle`, 0 the top). Rects, frames, stickies and images take
+the centre, clockwise from `angle`, 0 the top). A radial or conic one takes `center: [x, y]` as shares
+of the box (default `[0.5, 0.5]`, each -1 to 2) and a radial one `radius` (share of the half size,
+default 1): **a glow at a screen's top is a full-bleed rect with `"center": [0.5, 0.05], "radius":
+0.6`, not an oversized ellipse hanging past its frame**, so the person can drag its centre on the
+canvas. Rects, frames, stickies and images take
 `radii: [tl, tr, br, bl]` for different corners and `stroke_widths: [top, right, bottom, left]` for a
 border on some sides only (a tab bar's hairline on top: `"stroke": "#FFFFFF1F", "stroke_widths": [1,
 0, 0, 0]`); any stroke takes `dash`: `[6, 4]` dashed, `[0, 4]` dotted (a dot needs `stroke_cap` round

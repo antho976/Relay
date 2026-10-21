@@ -5,6 +5,7 @@
 //! designs through the same `design.*` ops, and an open board shows their changes as they land.
 //! A design can also open in a window of its own.
 
+mod agent_panel;
 mod ask;
 mod assets;
 mod board;
@@ -144,6 +145,7 @@ fn shown(ui: &Rc<Ui>) {
 fn close_board(view: &View) {
     if let Some(b) = view.board.borrow_mut().take() {
         b.end_edit(true);
+        b.close_agent_panel();
         view.host.remove(&b.root);
         // The gallery comes back before its pictures are drawn again (TM-80).
         view.gallery.hold_thumbs(Duration::from_secs(1));

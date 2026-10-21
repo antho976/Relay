@@ -152,8 +152,12 @@ fn clear_sent(draft: &mut String, sent: &str) {
     }
 }
 
-/// Show `session`'s terminal from the board, or say why it cannot be (TM-1, E-ask-7).
+/// Show `session`'s terminal from the board, or say why it cannot be (TM-1, E-ask-7): in the
+/// agent panel when the panel holds it.
 fn show_terminal(b: &Board, session: &str) {
+    if b.agent_panel.borrow().as_ref().is_some_and(|p| p.show_terminal_of(session)) {
+        return;
+    }
     if !b.ui.upgrade().is_some_and(|ui| ui.show_session(session)) {
         b.toast(&format!("{session}'s terminal is not on the wall"));
     }
@@ -708,6 +712,34 @@ pub(super) fn ask_now(b: &Rc<Board>, request: &str) {
             (Ok(way @ (Route::Type | Route::Mail)), _) => send_request(&b, session, request, true, way),
             (Ok(way), _) => b.toast(&hold_note(&session, way).unwrap_or_else(|| format!("{session}'s terminal has closed"))),
             (Err(e), _) => b.toast(&format!("Could not check {session}'s terminal: {e}")),
+        }
+    });
+}
+
+/// Ask `session` about the selection from the agent panel's conversation, with a picture: its
+/// terminal checked as Send checks it. Why it holds goes to `held`, to say under the box.
+pub(super) fn ask_from_panel(b: &Rc<Board>, session: String, request: String, held: impl Fn(String) + 'static) {
+    let Some(ui) = b.ui.upgrade() else {
+        return;
+    };
+    let project = b.doc.design.borrow().project_id;
+    let weak = Rc::downgrade(b);
+    glib::spawn_future_local(async move {
+        let listed = ui.call("session.list", json!({"project_id": project})).await;
+        let Some(b) = weak.upgrade() else {
+            return;
+        };
+        let (state, provider) = match &listed {
+            Ok(v) => (state_of(v, &session), provider_of(v, &session)),
+            Err(e) => return held(format!("Could not check {session}'s terminal: {e}. Send again in a moment.")),
+        };
+        b.set_lamp(&state);
+        let way = route(&state);
+        let note = hold_note(&session, way).or_else(|| (way == Route::Type).then(|| unsent_note(&session, &provider)).flatten());
+        match (way, note) {
+            (_, Some(note)) => held(note),
+            (Route::Gone, None) => held(gone_heading(&session, &state)),
+            (way, None) => send_request(&b, session, request, true, way),
         }
     });
 }

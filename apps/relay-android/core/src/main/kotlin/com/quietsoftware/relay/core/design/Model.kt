@@ -44,9 +44,19 @@ data class DesignList(val designs: List<DesignRow> = emptyList())
 @Serializable
 data class DesignStop(val at: Double = 0.0, val color: String = "")
 
-/** `linear` (along [angle], CSS's reading, 180 top to bottom), `radial` or `conic` (round the centre from [angle], 0 the top). */
+/**
+ * `linear` (along [angle], CSS's reading, 180 top to bottom), `radial` or `conic` (round the centre from [angle], 0 the top).
+ * A radial or conic one is centred at [center] (shares of the box, the middle when null); a radial one reaches [radius] of
+ * the way to the box's edges (1 when null).
+ */
 @Serializable
-data class DesignGradient(val kind: String = "linear", val angle: Double? = null, val stops: List<DesignStop> = emptyList())
+data class DesignGradient(
+    val kind: String = "linear",
+    val angle: Double? = null,
+    val stops: List<DesignStop> = emptyList(),
+    val center: List<Double>? = null,
+    val radius: Double? = null,
+)
 
 @Serializable
 data class DesignShadow(

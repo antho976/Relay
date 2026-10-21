@@ -26728,6 +26728,29 @@
           "description": "2 to 8 colours along it.",
           "minItems": 2,
           "maxItems": 8
+        },
+        "center": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "Radial and conic: where its centre sits, as shares of the box, each within -1 to 2:\n`[0.5, 0.5]` (the default) its middle, `[0.5, 0]` the middle of its top edge. A glow is\nmoved here rather than by moving its layer out past its frame. Linear: unused."
+        },
+        "radius": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Radial: how far its last stop reaches, as a share of the box's half width and half\nheight, within 0.05 to 4 (default 1, the edges seen from the middle). Others: unused.",
+          "minimum": 0.05,
+          "maximum": 4
         }
       },
       "required": [
@@ -26746,12 +26769,12 @@
         {
           "type": "string",
           "const": "radial",
-          "description": "From the centre out to the box's edges."
+          "description": "From its `center` (the box's middle unless moved) out as far as the box's edges, times\n`radius`."
         },
         {
           "type": "string",
           "const": "conic",
-          "description": "Round the centre, clockwise from `angle` (default 0, the top), as CSS\n`conic-gradient(from …)`."
+          "description": "Round its `center`, clockwise from `angle` (default 0, the top), as CSS\n`conic-gradient(from …)`."
         }
       ]
     },

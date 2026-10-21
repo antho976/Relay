@@ -32,7 +32,11 @@ Shots (default all):
   inspector's Border and Layer sections for the tab bar;
 - pictures: the image key's popover searching the picture fixtures, a photo placed with its
   credit and the inspector's Credit section;
-- perf: a 1,721-node design: layout, content and frame times.
+- perf: a 1,721-node design: layout, content and frame times;
+- panel: a glow's gradient centre dragged inside its screen (no layer past the frame), then the
+  agent panel on the canvas showing the fixture terminal, lent from the wall;
+- panel-chat: the agent panel as a conversation: a request sent from its box reaches the fixture
+  agent, which changes the layer, and its log is drawn as Threads draws one.
 
 Each board opens its design by id (RELAY_SMOKE_DESIGN_ID), not as the gallery's first card.
 Needs target/debug/relay and target/debug/relay-native (cargo build -p relay-cli -p
@@ -47,7 +51,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / ".impeccable/review"; OUT.mkdir(parents=True, exist_ok=True)
 ALL = ["gallery", "board", "board-select", "board-narrow", "edit", "script", "agent", "agent-undo", "agent-stale",
-       "agent-delete", "media", "shapes", "more", "reuse", "motion", "render", "glass", "pictures", "perf"]
+       "agent-delete", "media", "shapes", "more", "reuse", "motion", "render", "glass", "pictures", "perf", "panel", "panel-chat"]
 SHOTS = sys.argv[1:] or ALL
 unknown = [s for s in SHOTS if s not in ALL + ["gallery-narrow"]]
 if unknown:
@@ -58,7 +62,7 @@ FAKE_AGENT = r'''#!/usr/bin/env python3
 selected layer green through design.apply, as the session's own agent. It says it is at its prompt
 whenever it is, as a real agent's hooks do, and leaves its session and token where the harness
 can act as it."""
-import json, os, re, subprocess, sys
+import json, os, re, subprocess, sys, time, uuid
 if "--version" in sys.argv:
     print("fixture 1.0"); sys.exit()
 if "auth" in sys.argv or "login" in sys.argv:
@@ -69,13 +73,28 @@ if smoke and os.environ.get("RELAY_TOKEN"):
         json.dump({"session": os.environ.get("RELAY_SESSION", ""), "token": os.environ["RELAY_TOKEN"]}, f)
     os.replace(os.path.join(smoke, "agent.json.part"), os.path.join(smoke, "agent.json"))
 print("Fixture agent ready.", flush=True)
+# Its conversation, kept where Claude Code keeps one, for session.transcript to read.
+CONVERSATION = "fixture-conversation"
+LOG = None
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    slug = "".join(c if c.isascii() and c.isalnum() else "-" for c in os.getcwd())
+    folder = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "projects", slug)
+    os.makedirs(folder, exist_ok=True)
+    LOG = os.path.join(folder, CONVERSATION + ".jsonl")
+def logged(kind, content):
+    if LOG:
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with open(LOG, "a") as f:
+            f.write(json.dumps({"type": kind, "uuid": str(uuid.uuid4()), "timestamp": stamp, "message": {"role": kind, "content": content}}) + "\n")
 def idle():
     """At its prompt again, as a real agent's Stop hook says: Ask types only into an idle agent."""
     subprocess.run([os.environ["RELAY_BIN"], "cmd", "session.report",
-                    json.dumps({"session": os.environ.get("RELAY_SESSION", ""), "kind": "idle"})], capture_output=True)
+                    json.dumps({"session": os.environ.get("RELAY_SESSION", ""), "kind": "idle", "data": {"session_id": CONVERSATION}})], capture_output=True)
 idle()
 for line in sys.stdin:
     print("echo: " + line.rstrip()[:400], flush=True)
+    if line.strip():
+        logged("user", line.strip())
     m = re.search(r"design_id (\d+)", line)
     sel = re.search(r"Selected: ([A-Za-z0-9_.:-]+)", line)
     if m and sel:
@@ -83,6 +102,10 @@ for line in sys.stdin:
         done = subprocess.run([os.environ["RELAY_BIN"], "cmd", "design.apply",
                                json.dumps({"design_id": int(m.group(1)), "ops": ops})], capture_output=True, text=True)
         print("agent applied: " + (done.stdout.strip()[:200] or done.stderr.strip()[:400]), flush=True)
+        logged("assistant", [{"type": "tool_use", "id": "t" + uuid.uuid4().hex[:8], "name": "mcp__relay__design_apply", "input": {"design_id": int(m.group(1))}},
+                             {"type": "text", "text": "Done: **" + sel.group(1) + "** is green now. Say if it should be warmer."}])
+    elif line.strip():
+        logged("assistant", [{"type": "text", "text": "Heard: " + line.strip()[:200]}])
     idle()
 '''
 
@@ -267,7 +290,8 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
     runtime = base / "runtime"; runtime.mkdir(mode=0o700)
     env = dict(os.environ, XDG_DATA_HOME=str(base / "data"), XDG_CONFIG_HOME=str(base / "config"),
                XDG_CACHE_HOME=str(base / "cache"), XDG_RUNTIME_DIR=str(runtime), RELAY_INSTANCE="test",
-               RELAY_BIN=str(ENGINE), NO_COLOR="1", RELAY_SMOKE_DIR=str(base), RELAY_PICTURE_FIXTURES=str(FIXTURES))
+               RELAY_BIN=str(ENGINE), NO_COLOR="1", RELAY_SMOKE_DIR=str(base), RELAY_PICTURE_FIXTURES=str(FIXTURES),
+               CLAUDE_CONFIG_DIR=str(base / "claude"))
     for key in ("RELAY_SESSION", "RELAY_TOKEN", "RELAY_BRIEF", "WAYLAND_DISPLAY"):
         env.pop(key, None)
     provider = base / "provider"
@@ -359,6 +383,15 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
         for name in ("edit", "agent-undo", "agent-stale", "agent-delete"):
             if name in SHOTS:
                 designs[name] = create(f"Settings ({name})", settings_screen, session=sname)[0]
+        if "panel" in SHOTS or "panel-chat" in SHOTS:
+            # A dark screen whose glow is a full-bleed rect: its colour moves, the layer stays put.
+            designs["panel"], pp = create("Live workout", session=sname)
+            call("design.apply", {"design_id": designs["panel"], "ops": [
+                node("live", pp, "frame", name="Live workout", x=0, y=0, w=390, h=844, fill="#0B0C0F"),
+                node("glow", "live", "rect", name="Glow", x=0, y=0, w=390, h=844,
+                     gradient={"kind": "radial", "stops": [{"at": 0, "color": "#FF3B6B80"}, {"at": 1, "color": "#FF3B6B00"}], "radius": 0.7}),
+                text("elapsed", "live", "32:47", x=95, y=260, font_size=72, font_weight=700, color="#FFFFFF"),
+            ]})
         if "shapes" in SHOTS:
             designs["shapes"], sp = create("Shapes")
             call("design.apply", {"design_id": designs["shapes"], "ops": [
@@ -381,7 +414,7 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                 node("curve", sp, "line", **{"from": "tri", "to": "tilt"}, route="curve", arrow_end=True, stroke="#8C877F", stroke_width=2, dash=[1, 5]),
             ]})
             refused = call("design.apply", {"design_id": designs["shapes"], "ops": [node("bad", sp, "icon", icon="no-such")]}, ok=False)
-            assert "is not one of Relay" in refused.get("message", ""), ("an unknown icon must be refused", refused)
+            assert "one of Relay" in refused.get("message", ""), ("an unknown icon must be refused", refused)
         if "more" in SHOTS:
             designs["more"], mp = create("More shapes")
             # The same shadow under a box and under part of an ellipse, on white (TM-25).
@@ -1000,6 +1033,31 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
             assert run.scenes[-1]["cta"].get("fill") == "#151413", "the board did not read the undo"
             print("AGENT_OK", sname)
 
+        def shot_panel(shot):
+            # The glow's centre dragged to the screen's top middle: its layer stays full bleed.
+            run = native(shot, "panel", script=["fit", "wait:400", "select:glow", "centre-drag:195,60", "wait:500", "print",
+                                                "agent-panel:terminal", "wait:2500", "panel"], seconds=12)
+            glow = engine_nodes("panel")["glow"]
+            centre = glow["gradient"].get("center")
+            assert centre and abs(centre[0] - 0.5) < 0.02 and abs(centre[1] - 60 / 844) < 0.02, glow
+            assert (glow["x"], glow["y"], glow["w"], glow["h"]) == (0, 0, 390, 844), glow
+            panel = (lines(run.log, "DESIGN_PANEL") or [None])[-1]
+            assert panel and panel["lent"] == sname and not panel["chat"], (panel, run.log[-1500:])
+            print("PANEL_OK", centre, panel["box"])
+
+        def shot_panel_chat(shot):
+            # As for Ask: the app's paste check sets the agent working until it is at its prompt
+            # again, and a request sent meanwhile goes as mail, which the fixture does not read.
+            run = native(shot, "panel", script=["fit", "wait:400", "select:glow", "agent-panel:chat", "wait:1500",
+                                                "panel-send:make the glow warmer", "wait:5000", "panel"], seconds=15)
+            panel = (lines(run.log, "DESIGN_PANEL") or [None])[-1]
+            assert panel and panel["chat"] and panel["lent"] is None, (panel, run.log[-1500:])
+            scroll = call("session.scrollback", {"session": sname})["text"]
+            assert "[Relay design]" in scroll and "Selected: glow" in scroll, scroll[-1500:]
+            assert engine_nodes("panel")["glow"].get("fill") == "#2EC469", "the fixture agent did not answer the panel's Ask"
+            assert panel["messages"] >= 2, ("the conversation was not drawn", panel)
+            print("PANEL_CHAT_OK", panel["messages"], "messages")
+
         def shot_script(shot):
             run = scripted(shot)
             same_as_engine(run.scenes[-1], "settings")
@@ -1019,7 +1077,8 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                  "board-narrow": shot_simple, "edit": shot_edit, "script": shot_script, "agent": shot_agent,
                  "agent-undo": shot_agent_undo, "agent-stale": shot_agent_stale, "agent-delete": shot_agent_delete,
                  "media": shot_media, "shapes": shot_shapes, "more": shot_more, "reuse": shot_reuse, "motion": shot_motion,
-                 "render": shot_render, "glass": shot_glass, "pictures": shot_pictures, "perf": shot_perf}
+                 "render": shot_render, "glass": shot_glass, "pictures": shot_pictures, "perf": shot_perf,
+                 "panel": shot_panel, "panel-chat": shot_panel_chat}
         for shot in SHOTS:
             started = time.monotonic()
             try:

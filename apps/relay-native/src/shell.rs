@@ -213,6 +213,10 @@ impl Ui {
             let Some(p) = self.panes.borrow().get(name).cloned() else {
                 continue;
             };
+            // Shown in a design's agent panel until it is handed back.
+            if self.lent.borrow().as_deref() == Some(name.as_str()) {
+                continue;
+            }
             if mode == "focus" && focus.as_ref() != Some(name) {
                 continue;
             }
@@ -287,6 +291,36 @@ impl Ui {
         self.sync_focus_keys();
         tracing::debug!(panes = names.len(), moved, elapsed_us = started.elapsed().as_micros() as u64, "wall layout");
         self.update_attachments();
+    }
+    /// Lend session `name`'s terminal to a design's agent panel, taken off the wall and kept
+    /// attached while it is there, whatever page is open. One at a time, to one panel: `None`
+    /// while one is lent (to a design in another window, say), or when no pane is built for it
+    /// (a session of another project, or not listed yet). The panel puts `root` where it shows
+    /// it and gives it back with `return_pane`.
+    pub fn lend_pane(self: &Rc<Self>, name: &str) -> Option<Rc<Pane>> {
+        if self.lent.borrow().is_some() {
+            return None;
+        }
+        let pane = self.panes.borrow().get(name).cloned()?;
+        *self.lent.borrow_mut() = Some(name.to_string());
+        if let Some(grid) = pane.root.parent().and_downcast::<gtk::Grid>() {
+            grid.remove(&pane.root);
+        }
+        self.update_attachments();
+        Some(pane)
+    }
+    /// Take back the terminal lent to a design's agent panel: on the wall again, where the
+    /// layout puts it. The panel has already let go of its root.
+    pub fn return_pane(self: &Rc<Self>, name: &str) {
+        if self.lent.borrow().as_deref() != Some(name) {
+            return;
+        }
+        *self.lent.borrow_mut() = None;
+        self.layout();
+    }
+    /// The session whose terminal a design's agent panel holds.
+    pub fn lent_pane(&self) -> Option<String> {
+        self.lent.borrow().clone()
     }
     pub(super) fn set_mode(self: &Rc<Self>, mode: &str) {
         let previous = self.mode.replace(mode.into());

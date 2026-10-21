@@ -29,6 +29,10 @@
 //! `picture-caption` puts the selected photo's credit under it, as the inspector's Add caption
 //! does. `inspector:Title` scrolls the inspector to its section of that title
 //! (`inspector:Credit`), for a capture of it.
+//!
+//! The agent panel: `agent-panel:terminal|chat|off` shows it as the terminal or the conversation,
+//! or closes it; `panel-send:words` sends from its box; `panel` prints `DESIGN_PANEL` with what
+//! it shows. `centre-drag:x,y` drags the selected layer's gradient centre to page point x,y.
 
 use super::board::{Board, Tool};
 use super::export;
@@ -389,6 +393,35 @@ fn next(b: Rc<Board>, steps: Vec<String>, at: usize) {
                 "layers_open": b.layers_panel.reveals_child(),
             });
             println!("DESIGN_CHROME {chrome}");
+        }
+        "agent-panel" => {
+            // `agent-panel:terminal|chat|off`: the agent panel shown as its terminal or its
+            // conversation, or closed, as its key and mode keys do.
+            b.set_agent_panel(arg != "off");
+            if let Some(panel) = b.agent_panel.borrow().as_ref() {
+                panel.set_chat(arg == "chat");
+            }
+            pause = 600;
+        }
+        "panel-send" => {
+            // `panel-send:words`: written in the agent panel's box and sent, as Enter sends it.
+            if let Some(panel) = b.agent_panel.borrow().clone() {
+                panel.send_text(arg);
+            }
+            pause = 600;
+        }
+        "panel" => {
+            // What the agent panel shows: `DESIGN_PANEL {...}`.
+            let state = b.agent_panel.borrow().as_ref().map(|p| p.state());
+            println!("DESIGN_PANEL {}", state.unwrap_or(serde_json::Value::Null));
+        }
+        "centre-drag" => {
+            // `centre-drag:x,y`: the selected layer's gradient centre dragged to page point x,y.
+            let to: Vec<f64> = arg.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+            if let (Some((_, _, (sx, sy))), [x, y]) = (b.gradient_centre(), to.as_slice()) {
+                let from = b.to_page(sx, sy);
+                super::tools::simulate(&b, from, (*x, *y), gdk::ModifierType::empty());
+            }
         }
         other => eprintln!("design script: unknown step {other:?}"),
     }

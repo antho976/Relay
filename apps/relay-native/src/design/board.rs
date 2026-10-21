@@ -212,11 +212,19 @@ pub enum Gesture {
     Create { tool: Tool, parent: String, a: (f64, f64), b: (f64, f64), from: Option<String>, to: Option<String> },
     /// A pen or highlighter stroke: the tool it began with draws it, whatever is picked since (B17).
     Draw { parent: String, points: Vec<[f64; 2]>, tool: Tool },
+    /// Dragging the centre of one node's radial or conic gradient (`field`: `gradient` or
+    /// `stroke_gradient`) within the box it paints, `drawn` on the page and turned by `turn`:
+    /// the glow moves, the layer stays in its frame.
+    Centre { id: String, field: &'static str, drawn: Rect, turn: f64, orig: Node, moved: bool },
     /// Turning one node about its centre (page coordinates), from the pointer's first angle.
     Rotate { id: String, centre: (f64, f64), start: f64, orig: Node, moved: bool },
     /// Rubbing out strokes: each touched one with the opacity it had.
     Erase { hits: Vec<(String, Option<f64>)> },
 }
+
+/// The smallest a layer's box is on the screen, either way, for its gradient's centre to take a
+/// handle: below it a press at its middle moves the layer.
+const CENTRE_MIN_BOX: f64 = 48.0;
 
 /// The inspector's width, beside the canvas's right edge.
 const INSPECTOR_W: f64 = 256.0;
@@ -297,6 +305,10 @@ pub struct Board {
     /// after undoes it anyway.
     agent_force: Cell<Option<(i64, i64)>>,
     pub(super) ask: gtk::Button,
+    /// The design's terminal on the canvas, as a terminal or a conversation, while it is open,
+    /// and the top bar's key that opens it.
+    pub(super) agent_panel: RefCell<Option<Rc<super::agent_panel::AgentPanel>>>,
+    agent_key: gtk::ToggleButton,
     /// What was typed to Ask and not sent, for the next time it opens.
     pub(super) ask_draft: RefCell<String>,
     /// The image key's stock photo picker: its last search, and the picker while it shows.
@@ -419,10 +431,17 @@ impl Board {
         ask.set_child(Some(&ask_row));
         ask.set_tooltip_text(Some("Ask the terminal's agent to change the selection or this page (Ctrl+Enter)"));
         ask.set_widget_name("design-ask");
+        let agent_key = gtk::ToggleButton::new();
+        agent_key.add_css_class("quiet");
+        agent_key.add_css_class("icon-key");
+        agent_key.set_child(Some(&crate::icons::image("terminal", 16)));
+        tip(&agent_key, "The design's terminal on the canvas, to move and resize: as its terminal or as a conversation");
+        agent_key.set_widget_name("design-agent-key");
         let play_key = crate::app::icon_button("play", PLAY_TIP);
         play_key.set_widget_name("design-play");
         play_key.set_visible(false);
         top.append(&play_key);
+        top.append(&agent_key);
         top.append(&ask);
         let pop_out = crate::app::icon_button("window", "Open in a new window");
         pop_out.set_child(Some(&glyphs::image("window", 16)));
@@ -589,6 +608,8 @@ impl Board {
             agent_undoing: Cell::new(false),
             agent_force: Cell::new(None),
             ask,
+            agent_panel: RefCell::default(),
+            agent_key,
             ask_draft: RefCell::default(),
             pictures: RefCell::default(),
             zoom_label,
@@ -695,6 +716,15 @@ impl Board {
                 b.ask_agent(key.upcast_ref());
             }
         });
+        let weak = Rc::downgrade(&board);
+        board.agent_key.connect_toggled(move |key| {
+            if let Some(b) = weak.upgrade() {
+                b.set_agent_panel(key.is_active());
+            }
+        });
+        if AGENT_PANEL_ON.with(Cell::get) {
+            board.agent_key.set_active(true);
+        }
         let weak = Rc::downgrade(&board);
         board.agent_undo.connect_clicked(move |_| {
             if let Some(b) = weak.upgrade() {
@@ -1350,6 +1380,46 @@ impl Board {
         self.terminal_lamp.set_visible(self.doc.session().is_some());
     }
 
+    /// The design's terminal's state as its lamp last showed it (running, idle, closed…).
+    pub(super) fn lamp_state(&self) -> String {
+        self.lamp_state.borrow().clone()
+    }
+
+    /// Open or close the agent panel: the design's terminal on the canvas. Its key in the top
+    /// bar follows, and the next design opened shows it as this one left it.
+    pub(super) fn set_agent_panel(self: &Rc<Self>, on: bool) {
+        AGENT_PANEL_ON.with(|c| c.set(on));
+        if self.agent_key.is_active() != on {
+            // Toggling comes back here.
+            return self.agent_key.set_active(on);
+        }
+        let open = self.agent_panel.borrow().clone();
+        match (on, open) {
+            (true, None) => {
+                let panel = super::agent_panel::AgentPanel::new(self);
+                self.overlay.add_overlay(&panel.root);
+                *self.agent_panel.borrow_mut() = Some(panel.clone());
+                panel.open();
+            }
+            (true, Some(panel)) => panel.open(),
+            (false, Some(panel)) => {
+                panel.close();
+                self.overlay.remove_overlay(&panel.root);
+                self.agent_panel.borrow_mut().take();
+                self.canvas.grab_focus();
+            }
+            (false, None) => {}
+        }
+    }
+
+    /// Put the agent panel away as the board closes: its terminal back on the wall.
+    pub(super) fn close_agent_panel(&self) {
+        if let Some(panel) = self.agent_panel.borrow_mut().take() {
+            panel.close();
+            self.overlay.remove_overlay(&panel.root);
+        }
+    }
+
     /// Read the design's terminal's state for its lamp.
     fn refresh_lamp(&self) {
         let (Some(ui), Some(session)) = (self.ui.upgrade(), self.doc.session()) else {
@@ -1714,6 +1784,11 @@ impl Board {
                     self.size_pill(snap, &s, &b);
                 }
             }
+            if !matches!(*gesture, Gesture::Move { moved: true, .. }) {
+                if let Some((_, _, (x, y))) = self.gradient_centre() {
+                    self.centre_handle(snap, x, y);
+                }
+            }
         }
         if editing.is_none() && matches!(*gesture, Gesture::Idle | Gesture::Resize { .. }) {
             self.pin_marks(snap, scene, placed);
@@ -1959,6 +2034,20 @@ impl Board {
         snap.append_border(&rr, &[1.2; 4], &[c, c, c, c]);
     }
 
+    /// A gradient's centre: a ring round a dot, apart from the square resize handles.
+    fn centre_handle(&self, snap: &gtk::Snapshot, x: f64, y: f64) {
+        let c = rgba(SELECT);
+        for (radius, colour, width) in [(7.0, gdk::RGBA::WHITE, 3.0), (7.0, c, 1.5)] {
+            let r = Rect::new(x - radius, y - radius, radius * 2.0, radius * 2.0);
+            let rr = gsk::RoundedRect::from_rect(grect(&r), radius as f32);
+            snap.append_border(&rr, &[width; 4], &[colour; 4]);
+        }
+        let dot = Rect::new(x - 2.0, y - 2.0, 4.0, 4.0);
+        snap.push_rounded_clip(&gsk::RoundedRect::from_rect(grect(&dot), 2.0));
+        snap.append_color(&c, &grect(&dot));
+        snap.pop();
+    }
+
     /// "W × H" under the selection.
     fn size_pill(&self, snap: &gtk::Snapshot, s: &Rect, page: &Rect) {
         let text = format!("{} × {}", fmt(page.w), fmt(page.h));
@@ -1992,6 +2081,33 @@ impl Board {
         scene.node(id).filter(|n| n.kind != NodeKind::Line)?;
         let (r, turn) = shapes::visual(&scene, &self.placed(), id)?;
         (turn != 0.0).then(|| (id.clone(), r, turn))
+    }
+
+    /// The one selected layer's radial or conic gradient (its fill's, else its stroke's), for
+    /// the handle that drags its centre: its id, the field, and the centre on the screen. None
+    /// for a locked layer, a linear gradient, or a box too small on the screen to grab apart
+    /// from moving the layer.
+    pub(super) fn gradient_centre(&self) -> Option<(String, &'static str, (f64, f64))> {
+        let sel = self.selection.borrow();
+        let [id] = sel.as_slice() else {
+            return None;
+        };
+        let scene = self.doc.scene.borrow();
+        if !handled(&scene, &sel) {
+            return None;
+        }
+        let n = scene.node(id)?;
+        let (field, g) = [("gradient", &n.gradient), ("stroke_gradient", &n.stroke_gradient)]
+            .into_iter()
+            .find_map(|(f, g)| g.as_ref().filter(|g| g.kind != relay_bus::design::GradientKind::Linear).map(|g| (f, g)))?;
+        let (r, turn) = shapes::visual(&scene, &self.placed(), id)?;
+        let zoom = self.cam.get().zoom;
+        if r.w * zoom < CENTRE_MIN_BOX || r.h * zoom < CENTRE_MIN_BOX {
+            return None;
+        }
+        let (fx, fy) = g.center_or_middle();
+        let (x, y) = shapes::rotate(r.x + r.w * fx, r.y + r.h * fy, r.cx(), r.cy(), turn);
+        Some((id.clone(), field, self.cam.get().to_screen(x, y)))
     }
 
     /// A line's ends, on screen.
@@ -3026,6 +3142,10 @@ impl Board {
     // ------------------------------------------------------------------ floating widgets
 
     fn child_position(&self, widget: &gtk::Widget) -> Option<gdk::Rectangle> {
+        if let Some(panel) = self.agent_panel.borrow().as_ref().filter(|p| p.root.upcast_ref::<gtk::Widget>() == widget) {
+            let (w, h) = self.size.get();
+            return Some(panel.placed(w, h));
+        }
         if let Some(edit) = self.edit.borrow().as_ref() {
             if edit.view.upcast_ref::<gtk::Widget>() == widget {
                 let Some(r) = self.edit_rect() else {
@@ -3866,6 +3986,8 @@ thread_local! {
     /// one design (and window) to the next.
     static INSPECTOR_ON: Cell<bool> = const { Cell::new(true) };
     static LAYERS_ON: Cell<bool> = const { Cell::new(false) };
+    /// Whether the agent panel shows, the same way.
+    static AGENT_PANEL_ON: Cell<bool> = const { Cell::new(false) };
 }
 
 /// `RELAY_DESIGN_TRACE` set: print how long layout, content rebuilds and draws take.
@@ -4061,6 +4183,9 @@ fn read_view(v: &Value) -> Option<(String, Camera)> {
 impl Drop for Board {
     /// Keep the page and camera it was left at, for the next time the design opens (I-15).
     fn drop(&mut self) {
+        // The agent panel's terminal went back to the wall as the board was closed
+        // (`close_agent_panel`); handing it back here would lay out a wall the app may be
+        // tearing down as it quits.
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
