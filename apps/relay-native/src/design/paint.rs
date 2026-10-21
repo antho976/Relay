@@ -203,6 +203,12 @@ fn tallest(n: &Node) -> f64 {
     (chars + 1.0) * size * n.line_height.unwrap_or(1.3).max(2.0)
 }
 
+/// The widest letter spacing `n`'s words carry, its own or a run's: what a line may run past
+/// its wrap width with nothing drawn there.
+fn trailing_spacing(n: &Node) -> f64 {
+    n.runs.iter().flatten().filter_map(|r| r.letter_spacing).fold(n.letter_spacing.unwrap_or(0.0), f64::max).max(0.0)
+}
+
 /// A text's height in px from Pango's (`logical`), or, where that overflowed its 32-bit units
 /// (B111), its lines at its own line height, within the model's coordinates.
 fn text_height(logical: i32, lines: i32, line: f64) -> f64 {
@@ -472,7 +478,10 @@ impl Painter {
         // and drawing their last lines anywhere (B111).
         let tall = tallest(n) >= PANGO_MAX_PX;
         if let Some(w) = wrap.or(tall.then_some(PANGO_MAX_PX)) {
-            layout.set_width(pango_units(w));
+            // Pango counts a line's last letter spacing when it breaks lines but leaves it out
+            // of the extents `measure` reads, so words wrapped at their own measured width broke
+            // ("VOLUM-E" under 2 px of spacing). That spacing is room the line may take.
+            layout.set_width(pango_units(w + trailing_spacing(n)));
             layout.set_wrap(pango::WrapMode::WordChar);
         }
         layout.set_alignment(match n.align {
