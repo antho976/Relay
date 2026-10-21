@@ -400,7 +400,7 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState, split: String =
         } else head
     }
     SettingsPage.Program ->
-        if (s.freestyleMode) "Freestyle · ${gearReading(s)}" else "${planLine(split, s.daysPerWeek)} · ${gearReading(s)}"
+        gearReading(s).let { gear -> if (s.freestyleMode) "Freestyle · $gear" else "${planLine(split, s.daysPerWeek)} · $gear" }
     SettingsPage.Coach -> when {
         !s.coachEnabled -> "Off"
         s.coachMode == "auto" -> "On · earning auto-apply"
