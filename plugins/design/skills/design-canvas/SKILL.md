@@ -23,11 +23,33 @@ the Design view.
 | `design.get {design_id, page?, nodes?, since_rev?, pages_only?}` | The design and its nodes (parents before children, siblings bottom to top), plus `colors`, `styles` and picture `credits`. `page`: one page, by id or by a name no other page has. `nodes`: 1 to 500 ids and what is inside them. `since_rev`: only what changed after that rev (`nodes`, and `removed` ids). `pages_only`: the page list alone. |
 | `design.find {design_id, kind?, name?, text?, match?, fill?, stroke?, color?, any_color?, font?, page?, inside?, with_nodes?}` | The ids of nodes that match every filter, in paint order; `with_nodes: true` adds the first 200 as stored. `name` and `text` match whole words by default ("Edit" passes over "CREDIT"); `match: "prefix"`, `"contains"` or `"exact"` asks for the others. Use it instead of reading a whole design to find a colour, a word or a kind. |
 | `design.fonts {name?}` | The font families the desktop app can draw. |
-| `design.apply {design_id, ops, base_rev?, lenient?, reply?}` | Add, update, move, copy, delete nodes; name colours and styles. Answers `{rev, prev_rev, ids, removed_count, audit_id}`, with `rebased`, `copied`, `contrast`, `skipped` and `warnings` when there are any. `contrast` lists the contrast flags your change made (words it made too faint, or whose ground it changed), on every page a colour or style edit reaches: read it before you move on, and fix what it names. It is worked out without the desktop app, so `design.render` has the last word. |
-| `design.render {design_id, page?, nodes?, at_ms? or frames?, …}` | A picture of a page or some nodes, and every node's laid-out box. See "Check what you drew". |
+| `design.apply {design_id, ops, base_rev?, lenient?, reply?, render?, fix?, drop?}` | Add, update, move, copy, delete nodes (`update_many` and `delete_many` for many in one edit); name colours and styles. `render: true` also answers with the picture of what it changed. Answers `{rev, prev_rev, ids, removed_count, audit_id}`, with `rebased`, `copied`, `contrast`, `skipped` and `warnings` when there are any. `contrast` lists the contrast flags your change made (words it made too faint, or whose ground it changed), on every page a colour or style edit reaches: read it before you move on, and fix what it names. It is worked out without the desktop app, so `design.render` has the last word. |
+| `design.render {design_id, page?, nodes? or since_rev?, at_ms? or frames?, …}` | A picture of a page, some nodes, or what changed after a rev, and every node's laid-out box. See "Check what you drew". |
 | `design.update {design_id, title?}` | Rename the design. |
 | `design.asset.add {design_id, path}` | Store a PNG/JPEG/GIF/WebP/SVG (a file up to 20 MiB, or `bytes_b64` up to 1 MiB); answers `{src, w, h}` for an image node. |
 | `design.duplicate`, `design.delete`, `design.restore` | Copy a design, or move it to the deleted ones and back. Delete only when the person asked. |
+
+## Few calls: each one is a turn
+
+Every tool call is a turn of yours the person waits on. Spend them on the work, not the plumbing:
+
+- **One `design.apply` per screen or per request**, every edit in it (up to 2000, all or none),
+  with your own ids so later edits of the same list can name what earlier ones added.
+- **Change and look in one call:** `"render": true` on the apply answers with design.render's
+  picture and issues of what it changed (`since_rev`: its `prev_rev`), or pass render's options
+  (`{"max_side": 900}`, `{"nodes": ["login"]}`, `{"frames": 6}`). Boxes come only when you give
+  `boxes_limit`. No desktop app: the edits still apply and the answer says why there is no picture.
+- **Many layers, one edit:** `{"op": "update_many", "where": {"fill": "#FF3B30"}, "set": {"fill":
+  "$danger"}}` changes every node design.find would find with those filters (`page`, `inside`,
+  `kind`, `name`, `text`, `match`, `fill`, `stroke`, `color`, `any_color`, `font`), and `"ids": […]`
+  names them outright; `delete_many` takes the same. No design.find first, no edit a node. The
+  reply's `matched` counts each one's nodes; a `where` that finds none warns.
+- **A refused list costs only its fix:** the refusal's `resend` says how. Send `{"design_id": 12,
+  "fix": {"63": <that edit, corrected>}}` (or `"drop": [63]`) instead of `ops`, and the other edits
+  go again as you sent them, still all or none; after `design.stale`, `"fix": {}` with the new
+  `base_rev` (and the edits that collided, fixed).
+- **Read only what you need:** `design.find` for ids, `design.get` with `nodes`, `page` or
+  `since_rev` rather than the whole design, and `reply: "full"` only when you need nodes back.
 
 **Photos.** Stock photographs come through `design.picture.search` / `thumb` / `add`, only in a
 project where the Pictures plugin is on: load the `design-pictures` skill. A stored photo keeps its
@@ -434,7 +456,8 @@ A request from the board is one line:
    place is not stored.
 4. Keep ids and the person's layers; don't delete and re-add what an `update` can change.
 5. Pass `base_rev`; on `design.stale` read `since_rev` and redo only what collided.
-6. Look at what you changed (next section), then say what you did.
+6. Look at what you changed (`"render": true` on that same apply; next section), then say what you
+   did.
 
 **Undo.** One request → one `design.apply`, so the person's **Undo <agent>** button on the board
 (after you change a design) takes it back in one press, each press one more of your changes; if they
@@ -449,7 +472,10 @@ since a `line` takes no `rotation`; a `path` node takes `rotation`.
 ## Check what you drew
 
 You cannot measure text, and `design.get` reads hugged text as `w 0, h 0`. After you draw or change
-a screen, **look at it**: `design.render {"design_id": 12, "page": "page-7", "nodes": ["login"]}`.
+a screen, **look at it**: `"render": true` on the apply that drew it, or `design.render {"design_id":
+12, "page": "page-7", "nodes": ["login"]}`; `"since_rev": <a prev_rev>` in place of `nodes`
+pictures what changed after that rev (the outermost changed nodes, on the page most of them are on;
+a warning names the other pages).
 
 - `png.path` is a picture of the page, or of `nodes` (the outermost of up to 200, on one page); the
   MCP tool shows it to you as an image. `png: false` gives boxes and issues alone; `scale` 0.25 to
@@ -488,7 +514,8 @@ a screen, **look at it**: `design.render {"design_id": 12, "page": "page-7", "no
 A refusal names the edit and the field: `ops[3] update "hero": fill: "red" is not #RGB, #RRGGBB,
 #RRGGBBAA or a $name colour`. A misnamed field, id or page gets a suggestion (`"fil" is not a node
 field; did you mean "fill"?`, `did you mean "card-title"?`). Nothing in a refused list was applied;
-fix that edit and send the list again. `details` carries `{index, id, field}`.
+send only the corrected edit with `fix` (its `resend` says how), not the whole list again. `details`
+carries `{index, id, field}`.
 
 | code | meaning |
 | --- | --- |

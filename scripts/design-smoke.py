@@ -860,6 +860,10 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                 assert nodes["scale"] == 2 and nodes["png"]["w"] == math.ceil(nodes["area"]["w"] * 2), (nodes["area"], nodes["png"])
                 bare = call("design.render", {"design_id": designs[shot], "png": False})
                 assert bare.get("png") is None and bare["boxes"]["total"] == got["boxes"]["total"], bare
+                # since_rev: only what the last list changed, here the title alone.
+                done = call("design.apply", {"design_id": designs[shot], "ops": [{"op": "update", "id": "title", "set": {"text": "Changed"}}]})
+                changed = call("design.render", {"design_id": designs[shot], "since_rev": done["prev_rev"]})
+                assert [r[0] for r in changed["boxes"]["rows"]] == ["title"] and changed["area"]["w"] < got["area"]["w"], (changed["boxes"], changed["area"])
                 # Readings: this design, the settings screen and the 1,721-node one, ten renders each.
                 for name in (shot, "settings", "perf"):
                     seen = len((OUT / "design-render.log").read_text())

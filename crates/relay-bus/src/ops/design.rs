@@ -208,6 +208,10 @@ result!(#[schemars(rename = "DesignApplyOut")] ApplyOut {
     /// lenient list let through), each saying what to do: at most 20.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// Each `update_many` or `delete_many` edit, by its index in the list: how many nodes it
+    /// changed or deleted (its entry in `ids` is the first of them).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub matched: BTreeMap<String, u32>,
     /// Each copy edit's new node and the node it copied (`{"card-2": "card"}`). The nodes inside
     /// a copy take ids by copy's rule (`card-title` becomes `card-2-title`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -529,6 +533,12 @@ payload!(#[schemars(rename = "DesignRenderIn")] RenderIn {
     /// Refuse (`design.stale`) unless the design is still at this `rev`: the `rev` your last
     /// design.apply answered.
     pub base_rev: Option<i64>,
+    /// Picture what changed after this rev, as `nodes` would picture it: the outermost nodes
+    /// added, changed or moved since, on the page most of them are on (with `page`, on that one;
+    /// a warning names the other pages changed). The whole page when a page itself changed, when
+    /// more than 200 did, or when none did (an edit of colours or styles, a delete). Your last
+    /// design.apply's `prev_rev` pictures what it did. Not with `nodes`.
+    pub since_rev: Option<i64>,
     /// How long to wait for the desktop app, 2000 to 60000 ms. Default 20000.
     #[schemars(range(min = RENDER_TIMEOUT_MIN_MS, max = RENDER_TIMEOUT_MAX_MS))]
     pub timeout_ms: Option<u64>,

@@ -552,6 +552,13 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
     // bus's own integers stay between the engine and people's apps.
     let schema = relay_bus::schema::render_op(name).unwrap_or(Value::Null);
     unstring(&mut arguments, &schema["payload"]);
+    // design.apply's own arguments here: a picture of what it changed, and a refused list sent
+    // again with only its corrections (`design_calls`).
+    let apply = name == relay_bus::ops::design::Apply::NAME;
+    let render = match apply.then(|| crate::design_calls::prepare(&mut arguments)).transpose() {
+        Ok(render) => render.flatten(),
+        Err(why) => return Ok(tool_error(json!({"kind":"invalid","code":"bus.schema","message":why}), None)),
+    };
     let (in_units, out_units) = (units::has_units(&schema["payload"]), units::has_units(&schema["result"]));
     let ledger = if in_units || out_units { ledger_digits(&mut client, actor, token).await } else { 2 };
     let style = Style::from_env();
@@ -615,13 +622,50 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
         if name == relay_bus::ops::design::Render::NAME {
             return Ok(render_success(value, mail.as_ref()));
         }
+        if apply {
+            crate::design_calls::applied(value["design_id"].as_i64());
+            if let Some(options) = render {
+                return Ok(apply_and_look(&mut client, actor, token, value, options, mail).await);
+            }
+        }
         if name == relay_bus::ops::picture::Thumb::NAME {
             return Ok(thumb_success(value, mail.as_ref()));
         }
         Ok(tool_success(value, mail.as_ref())?)
     } else {
-        Ok(refusal(serde_json::to_value(response.error)?, mail.as_ref(), &style))
+        let mut error = serde_json::to_value(response.error)?;
+        if apply {
+            crate::design_calls::refused(&request.payload, &mut error);
+        }
+        Ok(refusal(error, mail.as_ref(), &style))
     }
+}
+
+/// design.apply's answer with design.render's of what it changed after it, as one tool result:
+/// the apply's JSON, then the render's and its picture. A render that cannot be made (no desktop
+/// app, say) is said under the apply's answer: the edits stand either way.
+async fn apply_and_look(client: &mut Client, actor: &Actor, token: Option<&str>, applied: Value, options: serde_json::Map<String, Value>, mail: Option<MailHint>) -> Value {
+    let mut request = Request::new(actor.clone(), relay_bus::ops::design::Render::NAME, crate::design_calls::render_payload(options, &applied));
+    if let Some(token) = token { request = request.with_token(token); }
+    let mut content = vec![json!({"type":"text","text":serde_json::to_string(&applied).unwrap_or_default()})];
+    let mut mail = mail;
+    match client.call(&request, |_| {}).await {
+        Ok(response) if response.ok => {
+            mail = response.mail.clone().or(mail);
+            let shown = render_success(response.result.unwrap_or_else(|| json!({})), None);
+            content.extend(shown["content"].as_array().cloned().unwrap_or_default());
+        }
+        Ok(response) => {
+            mail = response.mail.clone().or(mail);
+            let error = response.error.map(|e| format!("{}: {}{}", e.code, e.message, e.hint.map(|h| format!(" ({h})")).unwrap_or_default()));
+            content.push(json!({"type":"text","text":format!("Applied; no picture: {}", error.unwrap_or_else(|| "design.render refused".into()))}));
+        }
+        Err(e) => content.push(json!({"type":"text","text":format!("Applied; no picture: {e}")})),
+    }
+    if let Some(notice) = mail_notice(mail.as_ref()) {
+        content.push(notice);
+    }
+    json!({"content":content,"isError":false})
 }
 
 /// Arguments as models sometimes write them: an array or an object sent as the string of its
@@ -998,7 +1042,7 @@ fn op_tool(entry: &OpEntry) -> Value {
     let schema = relay_bus::schema::render_op(entry.name).expect("registry op has schema");
     // Result schemas are two thirds of this document and are only needed *after* choosing an
     // op. They stay one `bus.schema {op}` call away rather than in every session's context.
-    json!({
+    let mut tool = json!({
         "name":entry.name,
         "title":entry.name,
         "description":entry.meta.summary,
@@ -1008,7 +1052,11 @@ fn op_tool(entry: &OpEntry) -> Value {
             "destructiveHint":entry.meta.kind == OpKind::Mutation,
             "openWorldHint":false
         }
-    })
+    });
+    if entry.name == relay_bus::ops::design::Apply::NAME {
+        crate::design_calls::extend_tool(&mut tool);
+    }
+    tool
 }
 
 /// A tool as a small model is shown it: its description in plain words with an example call, and

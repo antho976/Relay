@@ -117,6 +117,8 @@ pub(crate) struct Target {
     pub design_id: Id,
     pub page: String,
     pub nodes: Option<Vec<String>>,
+    /// A warning the engine adds to the answer: the other pages a `since_rev` render left out.
+    pub note: Option<String>,
 }
 
 /// A render's options after the door's range checks, defaults filled in.
@@ -315,6 +317,7 @@ pub(crate) struct Waiting {
     pub(crate) reply: oneshot::Receiver<Reply>,
     pub(crate) timeout: Duration,
     started: Instant,
+    note: Option<String>,
     _guard: WaitGuard,
 }
 
@@ -334,7 +337,10 @@ impl Waiting {
     /// connection ended without one (`Some(Err)`), or `timeout` when none came in time (`None`).
     pub(crate) fn finish(self, outcome: Option<Result<Reply, oneshot::error::RecvError>>) -> Reply {
         match outcome {
-            Some(Ok(reply)) => reply,
+            Some(Ok(reply)) => reply.map(|mut out| {
+                out.warnings.extend(self.note);
+                out
+            }),
             Some(Err(_)) => Err(renderer_gone()),
             None => Err(timeout(self.started.elapsed())),
         }
@@ -348,7 +354,7 @@ pub(crate) async fn begin(engine: &Arc<Engine>, payload: Value, asker: Option<As
     // The door's preflight has read it once already.
     let p: RenderIn = serde_json::from_value(payload).map_err(|e| BusError::schema(Render::NAME, e))?;
     let mut options = options_of(&p)?;
-    let ask = Ask { design_id: p.design_id, page: p.page, nodes: nodes(p.nodes)?, base_rev: p.base_rev };
+    let ask = Ask { design_id: p.design_id, page: p.page, nodes: nodes(p.nodes)?, base_rev: p.base_rev, since_rev: p.since_rev };
     let project = asker.as_ref().map(|asker| asker.project_id);
     options.by = asker.map(|asker| asker.session);
     let e = engine.clone();
@@ -356,7 +362,7 @@ pub(crate) async fn begin(engine: &Arc<Engine>, payload: Value, asker: Option<As
         .await
         .map_err(|e| BusError::internal(format!("design.render's checks did not finish: {e}")))??;
     let (id, reply) = engine.renders.start(&target, &options)?;
-    Ok(Waiting { reply, timeout: options.timeout, started: Instant::now(), _guard: WaitGuard { engine: engine.clone(), id } })
+    Ok(Waiting { reply, timeout: options.timeout, started: Instant::now(), note: target.note, _guard: WaitGuard { engine: engine.clone(), id } })
 }
 
 /// A render's options with the defaults filled in, each checked as given: a value out of range is
@@ -671,7 +677,7 @@ mod tests {
     }
 
     fn target() -> Target {
-        Target { design_id: 12, page: "page-1".into(), nodes: None }
+        Target { design_id: 12, page: "page-1".into(), nodes: None, note: None }
     }
     fn options() -> Options {
         Options {
@@ -1250,7 +1256,7 @@ mod tests {
         let first = app(&engine.renders, None);
         let waiting = |engine: &Arc<Engine>| {
             let (id, reply) = engine.renders.start(&target(), &options()).unwrap();
-            (id, Waiting { reply, timeout: Duration::from_secs(20), started: Instant::now(), _guard: WaitGuard { engine: engine.clone(), id } })
+            (id, Waiting { reply, timeout: Duration::from_secs(20), started: Instant::now(), note: None, _guard: WaitGuard { engine: engine.clone(), id } })
         };
         let waits = |engine: &Engine| engine.renders.inner.lock().unwrap().waits.len();
         // Timed out: the agent is told how long it waited, and the wait goes with the door.

@@ -42,6 +42,7 @@ const HINT_PAGES: usize = 20;
 const HINT_IDS: usize = 20;
 
 /// One node row as `design.get` copies it out under the lock; parsed once the lock is gone.
+#[derive(Clone)]
 pub(super) struct Raw {
     pub(super) id: String,
     pub(super) parent: Option<String>,

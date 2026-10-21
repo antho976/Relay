@@ -19,6 +19,7 @@ mod expect;
 mod find;
 mod get;
 mod icons;
+mod many;
 mod pins;
 pub(crate) mod render;
 mod revs;

@@ -135,3 +135,62 @@ fn fonts_without_an_app_are_the_three_always_there() {
     assert_eq!(ok(&e, "design.fonts", json!({})), json!({"families": ["Geist", "Geist Mono", "Sora"], "complete": false}));
     assert_eq!(ok(&e, "design.fonts", json!({"name": "mono"})), json!({"families": ["Geist Mono"], "complete": false}));
 }
+
+fn node<'a>(got: &'a Value, id: &str) -> Option<&'a Value> {
+    got["nodes"].as_array().unwrap().iter().find(|n| n["id"] == id)
+}
+
+/// One edit changes many nodes: by id, and by a `where` that finds them as design.find does (a
+/// colour as drawn, words, a page), each once, as an update of each would. `ids` gives the first
+/// and `matched` counts them; a where that finds nothing warns and changes nothing.
+#[test]
+fn update_many_changes_every_node_it_picks() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    let out = ok(&e, "design.apply", json!({"design_id": id, "reply": "short", "ops": [
+        {"op": "update_many", "where": {"text": "sign"}, "set": {"font_size": 18}},
+        {"op": "update_many", "ids": ["save", "badge", "save"], "where": {"kind": ["ellipse"]}, "set": {"opacity": 0.5}},
+        {"op": "update_many", "where": {"fill": "#123456"}, "set": {"opacity": 0.2}},
+        {"op": "update", "id": "card", "set": {"name": "Card"}},
+    ]}));
+    assert_eq!(out["ids"], json!(["title", "save", "", "card"]), "one id an edit as sent");
+    assert_eq!(out["matched"], json!({"0": 2, "1": 2, "2": 0}));
+    assert!(out["warnings"][0].as_str().unwrap().starts_with("ops[2] update_many: where finds no node"), "{out}");
+    let got = ok(&e, "design.get", json!({"design_id": id}));
+    for (n, field, value) in [("title", "font_size", json!(18.0)), ("note", "font_size", json!(18.0)), ("save", "opacity", json!(0.5)), ("badge", "opacity", json!(0.5))] {
+        assert_eq!(node(&got, n).unwrap()[field], value, "{n}");
+    }
+    assert!(node(&got, "card").unwrap().get("opacity").is_none());
+    // A node it names that is not there is refused under the edit's own index, naming the node.
+    let why = refused(call(&e, "design.apply", json!({"design_id": id, "ops": [
+        {"op": "update", "id": "card", "set": {"opacity": 0.9}},
+        {"op": "update_many", "ids": ["save", "nope"], "set": {"opacity": 0.1}},
+    ]})));
+    assert!(why.message.starts_with(r#"ops[1] update "nope""#), "{}", why.message);
+    // A key no node field has is refused as an update's is.
+    let why = refused(call(&e, "design.apply", json!({"design_id": id, "ops": [{"op": "update_many", "ids": ["save"], "set": {"colour": "#FFF"}}]})));
+    assert!(why.message.starts_with(r#"ops[0] update "save""#) && why.message.contains("colour"), "{}", why.message);
+    // Nothing to pick by, and an empty where, are refused.
+    let why = refused(call(&e, "design.apply", json!({"design_id": id, "ops": [{"op": "update_many", "set": {"opacity": 0.1}}]})));
+    assert!(why.message.contains("give ids, where, or both"), "{}", why.message);
+    let why = refused(call(&e, "design.apply", json!({"design_id": id, "ops": [{"op": "update_many", "where": {}, "set": {"opacity": 0.1}}]})));
+    assert!(why.message.contains("an empty where would find every node"), "{}", why.message);
+}
+
+/// One edit deletes many nodes, a node inside another it deletes going with it rather than
+/// twice; undone in one step.
+#[test]
+fn delete_many_takes_what_it_picks_once() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    let out = ok(&e, "design.apply", json!({"design_id": id, "ops": [
+        {"op": "delete_many", "ids": ["title"], "where": {"inside": "card"}},
+    ]}));
+    assert_eq!(out["matched"], json!({"0": 3}), "title, save and badge, each once");
+    assert_eq!(ids(&find(&e, id, json!({"inside": "card"}))), Vec::<&str>::new());
+    let back = ok(&e, "design.apply", json!({"design_id": id, "lenient": true, "ops": out["inverse"], "expect": out["expect"]}));
+    assert_eq!(back["skipped"], json!(null));
+    assert_eq!(ids(&find(&e, id, json!({"inside": "card"}))), ["title", "save", "badge"]);
+    let out = ok(&e, "design.apply", json!({"design_id": id, "ops": [{"op": "delete_many", "ids": ["card", "title"]}]}));
+    assert_eq!(out["matched"], json!({"0": 1}), "title goes with card");
+}

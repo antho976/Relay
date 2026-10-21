@@ -8,18 +8,21 @@ use crate::design_render::{args, stale, Target};
 use crate::engine::{Engine, IntoBus};
 use crate::handlers::bus::door_only;
 use relay_bus::design::nearest;
+use relay_bus::ops::design::RENDER_NODES_MAX;
 use relay_bus::error::BusError;
 use relay_bus::ops::design::{Render, RenderAnswer, RenderServe};
 use relay_bus::registry::Op;
 use relay_bus::types::Id;
 use rusqlite::Connection;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Every row of a design: its id, its parent and its place, no body.
 const IDS: &str = "SELECT node_id, parent_id, ord FROM design_nodes WHERE design_id = ?1";
 /// A design's pages with their bodies, in page order, through `design_nodes_parent` as
 /// design.get's `pages_only` reads them: read only for a page asked for by a name no id matched.
 const PAGE_BODIES: &str = "SELECT node_id, body FROM design_nodes WHERE design_id = ?1 AND parent_id IS NULL ORDER BY ord, node_id";
+/// The rows written after a rev, through `design_nodes_rev`: what a `since_rev` render pictures.
+const CHANGED: &str = "SELECT node_id FROM design_nodes WHERE design_id = ?1 AND rev > ?2 ORDER BY node_id";
 
 pub(super) fn register(e: &mut Engine) {
     // Both answered by the socket door (socket.rs), which runs the pipeline's checks through these
@@ -41,6 +44,8 @@ pub(crate) struct Ask {
     /// Each once, at least one.
     pub nodes: Option<Vec<String>>,
     pub base_rev: Option<i64>,
+    /// Picture what changed after this rev instead of `nodes`.
+    pub since_rev: Option<i64>,
 }
 
 /// `ask` resolved against the store before anything goes to the desktop app, so a refusal sends
@@ -59,6 +64,18 @@ pub(crate) fn render_target(conn: &Connection, ask: &Ask, project: Option<Id>) -
     if let Some(base_rev) = ask.base_rev.filter(|base_rev| *base_rev != design.rev) {
         return Err(stale(design.id, design.rev, base_rev));
     }
+    let changed: Option<Vec<String>> = match ask.since_rev {
+        None => None,
+        Some(_) if ask.nodes.is_some() => {
+            return Err(args("give nodes or since_rev, not both: since_rev pictures the nodes that changed after it"));
+        }
+        Some(since) if since < 0 || since > design.rev => {
+            return Err(args(format!("since_rev: {since} is not a rev of design {} (0 to {})", design.id, design.rev))
+                .with_hint("pass the prev_rev your last design.apply answered"));
+        }
+        Some(since) => Some(conn.prepare_cached(CHANGED).bus()?.query_map(rusqlite::params![design.id, since], |r| r.get(0)).bus()?
+            .collect::<rusqlite::Result<_>>().bus()?),
+    };
     let rows: Vec<(String, Option<String>, f64)> = conn.prepare_cached(IDS).bus()?
         .query_map([design.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).bus()?
         .collect::<rusqlite::Result<_>>().bus()?;
@@ -82,8 +99,17 @@ pub(crate) fn render_target(conn: &Connection, ask: &Ask, project: Option<Id>) -
         };
         BusError::not_found("design.node_not_found", format!("nodes: design {} has no node {id:?}", design.id)).with_hint(hint)
     };
+    // What changed, by the page it is on: the page most of it is on is the one pictured.
+    let mut by_page: Vec<(String, usize)> = Vec::new();
+    for page in changed.iter().flatten().filter_map(|id| page_of(id)) {
+        match by_page.iter_mut().find(|(p, _)| *p == page) {
+            Some((_, n)) => *n += 1,
+            None => by_page.push((page, 1)),
+        }
+    }
+    let busiest = by_page.iter().max_by_key(|(_, n)| *n).map(|(page, _)| page.clone());
     let first = ask.nodes.as_deref().and_then(<[String]>::first);
-    let page = match (ask.page.as_deref(), first) {
+    let page = match (ask.page.as_deref().or(busiest.as_deref()), first) {
         (Some(wanted), _) if parents.get(wanted) == Some(&None) => wanted.to_string(),
         (Some(wanted), _) => {
             let bodies: Vec<(String, String)> = conn.prepare_cached(PAGE_BODIES).bus()?
@@ -119,7 +145,40 @@ pub(crate) fn render_target(conn: &Connection, ask: &Ask, project: Option<Id>) -
             });
         }
     }
-    Ok(Target { design_id: design.id, page, nodes: ask.nodes.clone() })
+    let (nodes, note) = match &changed {
+        None => (ask.nodes.clone(), None),
+        Some(changed) => {
+            let on: HashSet<&str> = changed.iter().map(String::as_str).filter(|id| page_of(id).as_deref() == Some(page.as_str())).collect();
+            // The outermost: none inside another that changed. A page that changed is the whole.
+            let outermost: Vec<String> = changed.iter().map(String::as_str)
+                .filter(|id| on.contains(id) && parents.get(id).is_some_and(Option::is_some))
+                .filter(|id| !ancestors(&parents, id, rows.len()).any(|up| on.contains(up)))
+                .map(str::to_string)
+                .collect();
+            let whole = on.contains(page.as_str()) || outermost.is_empty() || outermost.len() > RENDER_NODES_MAX;
+            let others: Vec<&str> = by_page.iter().filter(|(p, _)| *p != page).map(|(p, _)| p.as_str()).collect();
+            let note = (!others.is_empty()).then(|| format!(
+                "since_rev {}: page {} changed too; picture it with page {:?} and since_rev",
+                ask.since_rev.unwrap_or_default(),
+                others.iter().map(|p| format!("{p:?}")).collect::<Vec<_>>().join(", "),
+                others[0],
+            ));
+            ((!whole).then_some(outermost), note)
+        }
+    };
+    Ok(Target { design_id: design.id, page, nodes, note })
+}
+
+/// The ids above `id`, its parent first, to its page: at most `limit` steps, so a loop in the
+/// rows cannot hold the walk.
+fn ancestors<'a>(parents: &'a HashMap<&'a str, Option<&'a str>>, id: &'a str, limit: usize) -> impl Iterator<Item = &'a str> + 'a {
+    let mut at = parents.get(id).copied().flatten();
+    std::iter::from_fn(move || {
+        let up = at?;
+        at = parents.get(up).copied().flatten();
+        Some(up)
+    })
+    .take(limit)
 }
 
 #[cfg(test)]

@@ -28536,9 +28536,200 @@
             "name"
           ],
           "description": "Take a named colour or style out of the design. What used it keeps its look: the colour,\nor the style's fields a node did not set itself, are written into it."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ids": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "maxItems": 5000
+            },
+            "where": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DesignWhere"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "set": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "Node fields to change, as `update`'s `set` takes them."
+            },
+            "op": {
+              "type": "string",
+              "const": "update_many"
+            }
+          },
+          "required": [
+            "op",
+            "set"
+          ],
+          "description": "The same `set` on many nodes, as an `update` of each: those `ids` names and those `where`\nfinds in the design before this list, each once (`matched` counts them; a `where` that\nfinds none warns)."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ids": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "maxItems": 5000
+            },
+            "where": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DesignWhere"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "op": {
+              "type": "string",
+              "const": "delete_many"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "description": "Delete many nodes, each with what is inside it, picked as `update_many` picks them."
         }
       ],
       "description": "One edit of a design. `design.apply` runs a list of them in order, all or none."
+    },
+    "DesignWhere": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "page": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "On this page (its id or name)."
+        },
+        "inside": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Inside this node."
+        },
+        "kind": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignNodeKind"
+          }
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Words in its name, by `match`.",
+          "minLength": 1
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Words in its text, by `match`.",
+          "minLength": 1
+        },
+        "match": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignTextMatch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fill": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "As drawn: `#RGB` or `#RRGGBB` any alpha, `#RRGGBBAA` exactly; so are stroke and color."
+        },
+        "stroke": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "any_color": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "This colour anywhere it draws one."
+        },
+        "font": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its font family, or a run's.",
+          "minLength": 1
+        }
+      },
+      "description": "The nodes an `update_many` or `delete_many` edit finds, as design.find's filters find them:\nevery filter given holds, and at least one is given. Pages are never found."
+    },
+    "DesignTextMatch": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "word",
+          "description": "As whole words: neither end of the match runs on into a letter or digit."
+        },
+        {
+          "type": "string",
+          "const": "prefix",
+          "description": "At the start of a word: the end of the match may run on."
+        },
+        {
+          "type": "string",
+          "const": "contains",
+          "description": "Anywhere, inside a word too."
+        },
+        {
+          "type": "string",
+          "const": "exact",
+          "description": "The whole name or text, its outer spaces aside."
+        }
+      ],
+      "description": "How `design.find` matches the words of a name or a text, any case."
     },
     "DesignReply": {
       "oneOf": [
@@ -28654,6 +28845,15 @@
             "type": "string"
           },
           "description": "What applied but may not be what you meant (a font the desktop lacks, a written rule a\nlenient list let through), each saying what to do: at most 20."
+        },
+        "matched": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "description": "Each `update_many` or `delete_many` edit, by its index in the list: how many nodes it\nchanged or deleted (its entry in `ids` is the first of them)."
         },
         "copied": {
           "type": "object",
@@ -28993,31 +29193,6 @@
       "required": [
         "design_id"
       ]
-    },
-    "DesignTextMatch": {
-      "oneOf": [
-        {
-          "type": "string",
-          "const": "word",
-          "description": "As whole words: neither end of the match runs on into a letter or digit."
-        },
-        {
-          "type": "string",
-          "const": "prefix",
-          "description": "At the start of a word: the end of the match may run on."
-        },
-        {
-          "type": "string",
-          "const": "contains",
-          "description": "Anywhere, inside a word too."
-        },
-        {
-          "type": "string",
-          "const": "exact",
-          "description": "The whole name or text, its outer spaces aside."
-        }
-      ],
-      "description": "How `design.find` matches the words of a name or a text, any case."
     },
     "DesignFindOut": {
       "type": "object",
@@ -29436,6 +29611,14 @@
           ],
           "format": "int64",
           "description": "Refuse (`design.stale`) unless the design is still at this `rev`: the `rev` your last\ndesign.apply answered."
+        },
+        "since_rev": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "Picture what changed after this rev, as `nodes` would picture it: the outermost nodes\nadded, changed or moved since, on the page most of them are on (with `page`, on that one;\na warning names the other pages changed). The whole page when a page itself changed, when\nmore than 200 did, or when none did (an edit of colours or styles, a delete). Your last\ndesign.apply's `prev_rev` pictures what it did. Not with `nodes`."
         },
         "timeout_ms": {
           "type": [
