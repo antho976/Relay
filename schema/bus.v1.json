@@ -26379,6 +26379,34 @@
           "maxLength": 64,
           "pattern": "^[A-Za-z0-9_.:-]+$"
         },
+        "component": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Makes this node and what is inside it a main component (any node but a page): a `copy`\nwith `instance: true` makes an instance of it, and every change to it reaches every\ninstance once its list has run, except the fields an instance overrides. Set by that copy\nwhen it is not set already; `null` makes it a plain node again and detaches its instances."
+        },
+        "instance_of": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Set by the engine on every node of an instance: the id of the main component's node it\nfollows. Not written by hand, but `null` on an instance's root detaches it, leaving plain\nnodes that look as they did.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "overrides": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "On an instance's node: the fields it keeps as its own while the main changes, at most 64.\nAn update of an instance's node adds each field it sets; give `overrides` itself to say\nwhich (`[]` or `null` puts every field back to the main's).",
+          "maxItems": 64
+        },
         "motion": {
           "anyOf": [
             {
@@ -27878,6 +27906,9 @@
                   "runs",
                   "max_lines",
                   "style",
+                  "component",
+                  "instance_of",
+                  "overrides",
                   "motion",
                   "timeline",
                   "width",
@@ -28027,6 +28058,13 @@
                 "type": "string"
               },
               "description": "Id starts to swap, 1 to 16: each node copied whose id starts with a key takes its\nvalue there instead (the longest key that fits), whatever the rule above would give;\n`{\"v2-\": \"v3-\"}` copies `v2-phone` as `v3-phone` (when `as` is left out) and `v2-fade`\ninside it as `v3-fade`. Ids no key starts keep the rule above."
+            },
+            "instance": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Make the copy an instance of the node copied, which becomes a main component (its\n`component` set) if it is not one: it then follows every change to the main, but for\nthe fields an edit of the instance sets (`overrides`). Instances inside the main are\ncarried in. Of an instance, the copy is another instance of its main either way."
             },
             "op": {
               "type": "string",
@@ -28478,6 +28516,14 @@
         },
         "message": {
           "type": "string"
+        },
+        "at_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "With `at_ms` or `frames`: the first time pictured, in ms, at which motion brings this\nproblem that the still does not have (its message says how many of the times show it).\nAbsent for one the design has at rest."
         }
       },
       "required": [

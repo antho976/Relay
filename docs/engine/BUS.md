@@ -1204,7 +1204,7 @@ to the parent; siblings paint in order, the last on top.
 | `design.find` | query | `{ design_id, page?, inside?, kind?, name?, text?, match?, fill?, stroke?, color?, any_color?, font?, with_nodes? }` → `{ ids, nodes?, cut? }` — the nodes that match every filter given, in paint order (`ids`); `kind` is any of its kinds, `name` and `text` a case-insensitive match of whole words (`match`: `word`, the default; `prefix`, at a word's start; `contains`, anywhere; `exact`, the whole of it), `font` a family, and colours compare as drawn (a `$name` or a style counts). `inside` (not the node itself) is `not_found` / `design.node_not_found` when unknown. `with_nodes` adds the first 200 matches as stored (512 KiB at most; `cut` when more) |
 | `design.fonts` | query · global | `{ name? }` → `{ families, complete }` — the families the newest connected desktop app can draw a design's text in, sorted, `name` a case-insensitive word match. With no app reporting, Geist, Geist Mono and Sora with `complete: false` |
 | `design.asset.get` | query · user | `{ design_id, src, offset? }` → `{ media_type, size, bytes_b64, next }` — an image node's picture, in pieces of at most 3 MiB decoded from `offset`; `next` is where the next piece starts, null on the last |
-| `design.render` | query · socket only | `{ design_id, page?, nodes?, png? = true, scale? = 1, max_side? = 1568, boxes_limit? = 200, base_rev?, timeout_ms? = 20000, at_ms?, frames? }` → `{ design_id, rev, page, area, scale, png?, issues, issue_count, warnings, boxes, timings_ms, times_ms? }` — the desktop app draws a page, or the outermost of up to 200 `nodes` on one page, and answers a PNG written beside the store (`png.path`, `w`, `h`; shown to an MCP caller as an image) and every visible node's laid-out box in page px, hugged text measured: `boxes.fields` is always `id, kind, parent, x, y, w, h, rx, ry, rot`, `rows` at most `boxes_limit` (0–500) of them, `total` and `hidden` counting the rest. `issues` (worst first, at most 100; `issue_count` counts all) are `overflow`, `overlap`, `text_overlap`, `clipped` and `contrast`, each with the ids it concerns; `contrast` reads what is painted under the words' centre (a ring's hole shows what is under it), and none names first a node with `skip_checks`. `scale` is 0.25–2 and is lowered to fit `max_side` (64–2560) and 4 megapixels; `area` is the page rectangle pictured. `at_ms` (0–600000) poses each node at that time of its motion, `frames` (2–24, not with `at_ms`) draws a contact sheet of that many frames over the longest timeline in scope, their times in `times_ms`; boxes and issues stay at rest. `base_rev` refuses `conflict` / `design.stale` unless the design is still at that rev. An agent may picture only its own project's designs. Waits for the app with no lock held; see §6.2 for the lease, the codes and the limits |
+| `design.render` | query · socket only | `{ design_id, page?, nodes?, png? = true, scale? = 1, max_side? = 1568, boxes_limit? = 200, base_rev?, timeout_ms? = 20000, at_ms?, frames? }` → `{ design_id, rev, page, area, scale, png?, issues, issue_count, warnings, boxes, timings_ms, times_ms? }` — the desktop app draws a page, or the outermost of up to 200 `nodes` on one page, and answers a PNG written beside the store (`png.path`, `w`, `h`; shown to an MCP caller as an image) and every visible node's laid-out box in page px, hugged text measured: `boxes.fields` is always `id, kind, parent, x, y, w, h, rx, ry, rot`, `rows` at most `boxes_limit` (0–500) of them, `total` and `hidden` counting the rest. `issues` (worst first, at most 100; `issue_count` counts all) are `overflow`, `overlap`, `text_overlap`, `clipped` and `contrast`, each with the ids it concerns; `contrast` reads what is painted under the words' centre (a ring's hole shows what is under it), and none names first a node with `skip_checks`. `scale` is 0.25–2 and is lowered to fit `max_side` (64–2560) and 4 megapixels; `area` is the page rectangle pictured. `at_ms` (0–600000) poses each node at that time of its motion, `frames` (2–24, not with `at_ms`) draws a contact sheet of that many frames over the longest timeline in scope, their times in `times_ms`; boxes stay at rest, and `issues` adds, after the still's, each problem the page posed at those times has that the still does not, once, with the first time it shows as `at_ms` (its message says at how many of the times). `base_rev` refuses `conflict` / `design.stale` unless the design is still at that rev. An agent may picture only its own project's designs. Waits for the app with no lock held; see §6.2 for the lease, the codes and the limits |
 | `design.render.serve` | query · global · socket only · user_only | `{ fonts? }` → `{}` — the desktop app offers to draw on this connection until it closes (§6.2) |
 | `design.render.answer` | query · global · user_only | `{ render_id, drawn? \| error? }` → `{ accepted }` — the app's answer to one `design.render.request`, exactly one of `drawn` and `error`; `accepted` is whether a render still waited for it. Unlocked: it decodes and checks the picture without the store |
 | `design.picture.search` | query · plugin `pictures` | `{ design_id, query, source?, orientation?, page?, count? }` → `{ source, page, has_more, results }` — stock photos from Openverse (no key) or Pexels (the person's key); a hit's `id` goes to `thumb` and `add`. Agents may call it only in a project where the plugin is on |
@@ -1234,7 +1234,28 @@ words measured roughly (`layout::Estimate`), and again with the list's undo run 
 is new when the same ids were not flagged before. The audit row keeps the reply without them, and a
 design changed again before the read gets a warning instead.
 
-`copy` takes `{id, as?, parent?, index?, dx?, dy?, rename?}` and copies a node and everything inside it, as
+**Components.** A `copy` with `instance: true` makes an instance of the node copied, which becomes a
+main component (`component: true`, set by the copy with its undo): each node of the copy names the
+main's node it follows (`instance_of`). Once a list's edits have run and before the follow rule,
+every main they reached (a node inside it, or a node of one of its instances, written, added, moved
+or deleted) is brought to each of its instances, and a main holding an instance of another after
+that one: each instance node takes the main node's fields but `id`, `parent`, `kind`, `component`,
+`instance_of`, `overrides`, the fields in its `overrides` and, on the root, `x`, `y`, `rotation`,
+`pin_x`, `pin_y`, `absolute`, `hidden` and `locked`; a node the main gained is added (by copy's id
+rule from the main's id to the root's), one it lost is deleted, and the main's order is kept. Every
+write is an ordinary edit with its undo, so one undo reverts the change and its instances; a lenient
+list syncs nothing. An update of an instance's node adds the fields it sets to its `overrides`
+unless it gives `overrides` itself. A strict list is refused (`design.instance`) an add into, a
+move of or into, or a delete of a node inside an instance (its root aside), and `instance_of` set to
+anything but `null`, which detaches an instance's root: each of its nodes then follows what its main
+node follows (an instance inside the main stays one), or nothing. A main deleted or set
+`component: null` detaches its instances. A main brought to its instances more than 16 times in one
+list, or holding an instance of itself, is `design.component_cycle`. A design that never held a main
+(`designs.components`, migration v32, read with the row every list reads) skips all of this; the
+nodes that follow a main are found by one pass over the design's bodies, only when that main
+changed.
+
+`copy` takes `{id, as?, parent?, index?, dx?, dy?, rename?, instance?}` and copies a node and everything inside it, as
 one edit (a page copies as a page). Each node inside the copy takes an id from the copied id: one
 starting with the copied id and `-`, `_`, `.` or `:` has that start swapped for the copy's
 (`card-title` becomes `card-2-title`); any other gets the copy's id and `:` in front (`text-14`
@@ -1299,6 +1320,10 @@ written at (`design_nodes.rev`), and `design_removed` (the ids removed in the la
 rev each went at). It recounts `designs.bytes` so the size cap counts each node as `design.get`
 returns it. Rows written before take their design's rev, so an older `base_rev` reads them as
 changed; a restored v29 backup's rows are dated the same way, and its removals are kept from that rev.
+
+Migration v32 (schema 32) adds `designs.components`: 1 once a write made a node of the design a main
+component, never cleared, copied by `design.duplicate`. Not a partial index on the bodies: SQLite
+tests an index's condition on every node write, which cost each write ~12,000 instructions.
 
 Migration v31 (schema 31) adds `design_icons`, Relay's icon set (`design.icon.*`): one row per saved
 outline icon by name, with its path, its keywords and who saved it when. Nothing in a design refers

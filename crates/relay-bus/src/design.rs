@@ -74,6 +74,11 @@ pub const MAX_SHADOWS: usize = 8;
 pub const MAX_RUNS: usize = 64;
 /// Most id starts one `copy` swaps (`rename`).
 pub const MAX_RENAMES: usize = 16;
+/// Most fields an instance's node keeps as its own (`overrides`).
+pub const MAX_OVERRIDES: usize = 64;
+/// What an instance's node never takes from its main nor keeps as an override: what places it
+/// in the design and links it.
+pub const NOT_OVERRIDDEN: &[&str] = &["id", "parent", "kind", "component", "instance_of", "overrides"];
 /// Longest text a node holds, in characters.
 pub const MAX_TEXT: usize = 10_000;
 /// Most points one path or line holds.
@@ -1134,6 +1139,24 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
     pub style: Option<String>,
+    /// Makes this node and what is inside it a main component (any node but a page): a `copy`
+    /// with `instance: true` makes an instance of it, and every change to it reaches every
+    /// instance once its list has run, except the fields an instance overrides. Set by that copy
+    /// when it is not set already; `null` makes it a plain node again and detaches its instances.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<bool>,
+    /// Set by the engine on every node of an instance: the id of the main component's node it
+    /// follows. Not written by hand, but `null` on an instance's root detaches it, leaving plain
+    /// nodes that look as they did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = MAX_ID), pattern(ID_PATTERN))]
+    pub instance_of: Option<String>,
+    /// On an instance's node: the fields it keeps as its own while the main changes, at most 64.
+    /// An update of an instance's node adds each field it sets; give `overrides` itself to say
+    /// which (`[]` or `null` puts every field back to the main's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = MAX_OVERRIDES))]
+    pub overrides: Option<Vec<String>>,
     /// How it moves when the design plays (any node but a page): 2 to 64 keys in time order on the
     /// clock of the nearest frame or page with a `timeline` (itself included), else its page's. Its own fields are its
     /// look at rest, which whatever does not play shows (the canvas until Play, exports,
@@ -1270,6 +1293,12 @@ pub enum NodeOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(length(min = 1, max = MAX_RENAMES))]
         rename: Option<BTreeMap<String, String>>,
+        /// Make the copy an instance of the node copied, which becomes a main component (its
+        /// `component` set) if it is not one: it then follows every change to the main, but for
+        /// the fields an edit of the instance sets (`overrides`). Instances inside the main are
+        /// carried in. Of an instance, the copy is another instance of its main either way.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instance: Option<bool>,
     },
     /// Name a colour that any colour field of a node, or of a style, takes as `$name`. Naming it
     /// again changes it wherever it is used.
@@ -1454,6 +1483,9 @@ impl Node {
             max_lines: None,
             skip_checks: None,
             icon_path: None,
+            component: None,
+            instance_of: None,
+            overrides: None,
             style: None,
             motion: None,
             timeline: None,
@@ -1715,6 +1747,17 @@ impl Node {
         // With its own outline, an icon's name is only what it was saved as.
         if let Some(name) = self.icon.as_deref().filter(|n| !ICONS.contains(n) && self.icon_path.is_none()) {
             return Err(format!("icon: {name:?} is neither one of Relay's icons ({}) nor one saved to its set (design.icon.list)", ICONS.join(", ")));
+        }
+        if let Some(id) = self.instance_of.as_deref().filter(|id| !valid_id(id)) {
+            return Err(format!("instance_of: {id:?} is not a node id"));
+        }
+        if let Some(fields) = &self.overrides {
+            if fields.len() > MAX_OVERRIDES {
+                return Err(format!("overrides: at most {MAX_OVERRIDES} fields"));
+            }
+            if let Some(field) = fields.iter().find(|f| NOT_OVERRIDDEN.contains(&f.as_str()) || fields::field_kinds(f).is_none()) {
+                return Err(format!("overrides: {field:?} is not a field an instance can keep as its own"));
+            }
         }
         if let Some(v) = self.max_lines {
             if !(1..=1000).contains(&v) {

@@ -438,6 +438,7 @@ fn checked(dir: &Path, id: Uuid, wait: &Wait, p: AnswerIn) -> Reply {
             code: issue.code,
             ids: issue.ids.into_iter().take(ISSUE_IDS).collect(),
             message: cut(issue.message, NOTE_CHARS),
+            at_ms: issue.at_ms,
         })
         .collect();
     let warnings = warnings.into_iter().take(MAX_WARNINGS).map(|warning| cut(warning, NOTE_CHARS)).collect();
@@ -891,7 +892,7 @@ mod tests {
         let long = |id| {
             let mut drawn = drawn(1);
             drawn.issues = (0..150)
-                .map(|at| RenderIssue { code: "overlap".into(), ids: (0..20).map(|n| format!("n{at}-{n}")).collect(), message: "é".repeat(1000) })
+                .map(|at| RenderIssue { code: "overlap".into(), ids: (0..20).map(|n| format!("n{at}-{n}")).collect(), message: "é".repeat(1000), at_ms: None })
                 .collect();
             drawn.issue_count = 120; // fewer than it lists: the count is at least what was found
             drawn.warnings = (0..30).map(|_| "w".repeat(400)).collect();

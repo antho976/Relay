@@ -13,6 +13,7 @@ use super::edit::outermost;
 use super::geom::Rect;
 use super::hit::on_shape;
 use super::layout::{Measure, Placed, STICKY_PAD};
+use super::motion::{posed_still, Clocks};
 use super::scene::Scene;
 use super::shapes;
 use relay_bus::design::{parse_color, Layout, Node, NodeKind, TextAlign};
@@ -157,7 +158,7 @@ pub fn picture_size(area: &Rect, scale: f64) -> (u32, u32) {
 }
 
 /// What [`issues`] finds, in the order it lists them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Code {
     Overflow,
     Overlap,
@@ -288,6 +289,14 @@ fn cell(v: f64) -> i64 {
 /// An issue names a node in scope first; the frame, the sibling or the ground it names next
 /// may lie outside. None names first a node that sets `skip_checks`.
 pub fn issues(scene: &Scene, placed: &Placed, measure: &dyn Measure, page: &str, ids: &[String]) -> (Vec<RenderIssue>, u32) {
+    let found = all_found(scene, placed, measure, page, ids);
+    let count = u32::try_from(found.len()).unwrap_or(u32::MAX);
+    let listed = found.into_iter().take(MAX_ISSUES).map(|f| RenderIssue { code: f.code.name().into(), ids: f.ids, message: f.message, at_ms: None });
+    (listed.collect(), count)
+}
+
+/// Every issue of [`issues`], worst kind first, then in paint order.
+fn all_found(scene: &Scene, placed: &Placed, measure: &dyn Measure, page: &str, ids: &[String]) -> Vec<Found> {
     let (paint, inside) = Paint::new(scene, placed, measure, page, ids);
     let mut found = Vec::new();
     for parent in &paint.order {
@@ -298,8 +307,47 @@ pub fn issues(scene: &Scene, placed: &Placed, measure: &dyn Measure, page: &str,
     found.extend(inside.iter().filter_map(|id| paint.contrast(id)));
     found.retain(|f| f.ids.first().and_then(|id| scene.node(id)).is_none_or(|n| n.skip_checks != Some(true)));
     found.sort_by_key(|f| (f.code, f.at));
-    let count = u32::try_from(found.len()).unwrap_or(u32::MAX);
-    let listed = found.into_iter().take(MAX_ISSUES).map(|f| RenderIssue { code: f.code.name().into(), ids: f.ids, message: f.message });
+    found
+}
+
+/// What motion brings that the still does not have: the page posed at each of `times`
+/// (`motion::posed_still`) and checked as [`issues`] checks it, each problem the still lacks
+/// listed once, at the first time it shows (`at_ms`), its message saying at how many of the
+/// times it does; in the order they first show, then worst kind first; at most [`MAX_ISSUES`],
+/// with the count of all. Agents read a contact sheet's first frame alone, so this is how they
+/// hear of a label a slide-in covers or a fade that leaves words faint.
+pub fn motion_issues(scene: &Scene, placed: &Placed, measure: &dyn Measure, page: &str, ids: &[String], clocks: &Clocks, times: &[f64]) -> (Vec<RenderIssue>, u32) {
+    if clocks.is_empty() || times.is_empty() {
+        return (Vec::new(), 0);
+    }
+    let key = |f: &Found| (f.code, f.ids.clone());
+    let still: FxHashSet<(Code, Vec<String>)> = all_found(scene, placed, measure, page, ids).iter().map(key).collect();
+    // Each new problem: when it first shows, its first message, and at how many times it shows.
+    let mut seen: FxHashMap<(Code, Vec<String>), usize> = FxHashMap::default();
+    let mut moving: Vec<(f64, Found, usize)> = Vec::new();
+    for &t in times {
+        let (posed, moved) = posed_still(scene, placed, clocks, t);
+        for f in all_found(&posed, &moved, measure, page, ids) {
+            let k = key(&f);
+            if still.contains(&k) {
+                continue;
+            }
+            match seen.get(&k) {
+                Some(&i) => moving[i].2 += 1,
+                None => {
+                    seen.insert(k, moving.len());
+                    moving.push((t, f, 1));
+                }
+            }
+        }
+    }
+    moving.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.code.cmp(&b.1.code)));
+    let count = u32::try_from(moving.len()).unwrap_or(u32::MAX);
+    let n = times.len();
+    let listed = moving.into_iter().take(MAX_ISSUES).map(|(t, f, shows)| {
+        let when = if n == 1 { format!(" (at {} ms of its motion)", fmt(t)) } else { format!(" (from {} ms of its motion; at {shows} of the {n} times pictured)", fmt(t)) };
+        RenderIssue { code: f.code.name().into(), ids: f.ids, message: format!("{}{when}", f.message), at_ms: Some(t) }
+    });
     (listed.collect(), count)
 }
 
@@ -310,7 +358,7 @@ pub fn contrast_issues(scene: &Scene, placed: &Placed, measure: &dyn Measure, pa
     inside.iter()
         .filter_map(|id| paint.contrast(id))
         .filter(|f| f.ids.first().and_then(|id| scene.node(id)).is_none_or(|n| n.skip_checks != Some(true)))
-        .map(|f| RenderIssue { code: f.code.name().into(), ids: f.ids, message: f.message })
+        .map(|f| RenderIssue { code: f.code.name().into(), ids: f.ids, message: f.message, at_ms: None })
         .collect()
 }
 
@@ -1112,6 +1160,67 @@ mod tests {
         let found = all_issues(&s, &p);
         assert_eq!(codes(&found), [("contrast", vec!["loud", "card"])]);
         assert_eq!(found.1, 1, "nor is it counted");
+    }
+
+    fn moving(keys: serde_json::Value) -> relay_bus::design::Motion {
+        serde_json::from_value(json!({"keys": keys})).unwrap()
+    }
+
+    /// Motion's problems are checked at the times pictured: a fade that starts faint is flagged at
+    /// its first time, once, saying how many times show it; what the still has already is not
+    /// listed again; nothing moving, nothing listed.
+    #[test]
+    fn motion_brings_its_own_issues() {
+        let mut screen = node("screen", Some("p1"), K::Frame, [0.0, 0.0, 300.0, 200.0]);
+        screen.fill = Some("#101418".into());
+        let mut title = text("title", "screen", [10.0, 10.0, 0.0, 0.0], "Left to spend");
+        title.color = Some("#FFFFFF".into());
+        title.motion = Some(moving(json!([{"at_ms": 0, "opacity": 0.1}, {"at_ms": 1000, "opacity": 1}])));
+        let mut dim = text("dim", "screen", [10.0, 60.0, 0.0, 0.0], "Faint at rest");
+        dim.color = Some("#30343A".into());
+        let (s, p) = page(vec![screen, title, dim]);
+        let clocks = Clocks::new(&s, "p1");
+        let (still, _) = all_issues(&s, &p);
+        assert_eq!(codes(&(still.clone(), 0)), [("contrast", vec!["dim", "screen"])]);
+        let (found, count) = motion_issues(&s, &p, &Mono, "p1", &[], &clocks, &[0.0, 250.0, 500.0, 1000.0]);
+        assert_eq!((count, found.len()), (1, 1), "{found:?}");
+        assert_eq!((found[0].code.as_str(), found[0].ids.clone(), found[0].at_ms), ("contrast", ids(&["title", "screen"]), Some(0.0)));
+        assert!(found[0].message.ends_with("(from 0 ms of its motion; at 1 of the 4 times pictured)"), "{}", found[0].message);
+        assert!(found[0].message.contains("at 10% opacity"), "{}", found[0].message);
+        // One time: said as that time.
+        let (one, _) = motion_issues(&s, &p, &Mono, "p1", &[], &clocks, &[100.0]);
+        assert!(one[0].message.ends_with("(at 100 ms of its motion)"), "{}", one[0].message);
+        // At its end it reads; and with nothing moving there is nothing to add.
+        assert!(motion_issues(&s, &p, &Mono, "p1", &[], &clocks, &[1000.0]).0.is_empty());
+        assert!(motion_issues(&s, &p, &Mono, "p1", &[], &Clocks::default(), &[0.0]).0.is_empty());
+    }
+
+    /// A pose moves a box with what is inside it: a toast sliding up over a label is drawn over it
+    /// partway, and a colour key is read as posed.
+    #[test]
+    fn motion_moves_boxes_and_colours_as_posed() {
+        let label = text("label", "p1", [10.0, 10.0, 0.0, 0.0], "Balance");
+        let mut toast = node("toast", Some("p1"), K::Frame, [0.0, 200.0, 200.0, 40.0]);
+        toast.motion = Some(moving(json!([{"at_ms": 0, "dy": 0}, {"at_ms": 1000, "dy": -200}])));
+        let note = text("note", "toast", [10.0, 10.0, 0.0, 0.0], "Saved");
+        let (s, p) = page(vec![label, toast, note]);
+        let clocks = Clocks::new(&s, "p1");
+        let (posed, moved) = posed_still(&s, &p, &clocks, 1000.0);
+        assert_eq!(moved.rect("note").map(|r| (r.x, r.y)), Some((10.0, 10.0)), "the child moves with it");
+        assert_eq!(posed.node("toast").map(|n| n.y), Some(200.0), "the node itself is as stored");
+        assert!(motion_issues(&s, &p, &Mono, "p1", &[], &clocks, &[0.0, 1000.0]).0.is_empty(), "a frame over a label is drawn on top of it");
+        // A text sliding onto another is text over text.
+        let mut sliding = text("sliding", "p1", [10.0, 200.0, 0.0, 0.0], "Saved");
+        sliding.motion = Some(moving(json!([{"at_ms": 0, "dy": 0}, {"at_ms": 1000, "dy": -190}])));
+        let (s, p) = page(vec![text("label", "p1", [10.0, 10.0, 0.0, 0.0], "Balance"), sliding]);
+        let (found, _) = motion_issues(&s, &p, &Mono, "p1", &[], &Clocks::new(&s, "p1"), &[0.0, 500.0, 1000.0]);
+        assert_eq!(found.iter().map(|i| (i.code.as_str(), i.ids.clone(), i.at_ms)).collect::<Vec<_>>(), [("text_overlap", ids(&["label", "sliding"]), Some(1000.0))]);
+        let mut chip = node("chip", Some("p1"), K::Rect, [0.0, 0.0, 120.0, 40.0]);
+        (chip.text, chip.fill, chip.color) = (Some("Paid".into()), Some("#FFFFFF".into()), Some("#111111".into()));
+        chip.motion = Some(moving(json!([{"at_ms": 0, "fill": "#FFFFFF"}, {"at_ms": 500, "fill": "#111111"}])));
+        let (s, p) = page(vec![chip]);
+        let (found, _) = motion_issues(&s, &p, &Mono, "p1", &[], &Clocks::new(&s, "p1"), &[0.0, 500.0]);
+        assert_eq!(found.iter().map(|i| (i.code.as_str(), i.at_ms)).collect::<Vec<_>>(), [("contrast", Some(500.0))]);
     }
 
     #[test]

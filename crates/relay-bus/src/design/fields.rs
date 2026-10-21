@@ -138,6 +138,9 @@ pub const FIELDS: &[(&str, Kinds, Option<&str>)] = &[
     ("style", Kinds(ALL & !P), Some("style: a page takes no style; give it its own fill")),
     ("motion", Kinds(ALL & !P), Some("motion: a page does not move; give motion to what is on it")),
     ("timeline", Kinds(F | P), Some("timeline: only a frame or a page keeps time")),
+    ("component", Kinds(ALL & !P), Some("component: a page is not a component; make one of what is on it")),
+    ("instance_of", Kinds(ALL & !P), Some("instance_of: a page is not an instance")),
+    ("overrides", Kinds(ALL & !P), Some("overrides: a page is not an instance")),
 ];
 
 fn table() -> &'static HashMap<&'static str, (Kinds, Option<&'static str>)> {
@@ -699,7 +702,7 @@ mod tests {
             "arc": {}, "blend": "normal", "text_case": "upper", "pin_x": "left", "pin_y": "top", "absolute": false,
             "min_w": 1, "max_w": 1, "min_h": 1, "max_h": 1, "row_gap": 1, "scroll": "x", "stroke_cap": "round",
             "stroke_join": "round", "stroke_gradient": {"stops": []}, "shadows": [], "runs": [], "max_lines": 1, "style": "card",
-            "motion": {"keys": []}, "timeline": {}
+            "motion": {"keys": []}, "timeline": {}, "component": true, "instance_of": "a", "overrides": []
         }"##).unwrap();
         let keys = present(&full);
         assert_eq!(keys.len(), FIELDS.len(), "{keys:?}");
@@ -790,6 +793,7 @@ mod tests {
                 "points" => json!([1, 1]),
                 "shadows" => json!({"color": "#000"}),
                 "runs" => json!({"start": i, "end": i + 1, "italic": true}),
+                "overrides" => json!("fill"),
                 _ => json!(1),
             }).collect());
             if let Some(min) = property["minItems"].as_u64() {

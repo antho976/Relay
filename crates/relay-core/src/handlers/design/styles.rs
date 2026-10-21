@@ -211,7 +211,7 @@ impl Run<'_> {
     /// canvas's duplicate does; a page copies as a page. The undo deletes the copy.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn copy(&mut self, id: String, as_id: Option<String>, parent: Option<String>, index: Option<u32>, dx: f64, dy: f64,
-        rename: Option<BTreeMap<String, String>>) -> Result<Option<String>, BusError> {
+        rename: Option<BTreeMap<String, String>>, instance: bool) -> Result<Option<String>, BusError> {
         if let Some(rename) = &rename {
             if !(1..=MAX_RENAMES).contains(&rename.len()) {
                 return Err(self.fail_on("rename", ErrorKind::Invalid, "design.node_invalid", format!("rename: 1 to {MAX_RENAMES} id starts")));
@@ -223,6 +223,20 @@ impl Run<'_> {
         let rename = rename.as_ref();
         let Some(root) = self.row(&id)? else { return self.missing("no such node") };
         let page = root.kind == Ok(NodeKind::Page);
+        // An instance of a main; of an instance, another instance of its main, which a plain copy
+        // makes too.
+        let mut of_main = instance;
+        if instance && !self.lenient {
+            if page {
+                return Err(self.fail_on("instance", ErrorKind::Invalid, "design.instance", "a page is not a component; make one of what is on it"));
+            }
+            if root.body.contains("\"instance_of\":") {
+                if self.instance_root(&id)?.is_none() {
+                    return Err(self.inside_instance("instance: part of an instance is not a main"));
+                }
+                of_main = false;
+            }
+        }
         // Where it goes: a page among the pages; anything else in `parent`, else beside the
         // original, never in itself.
         let to = if page {
@@ -255,6 +269,18 @@ impl Run<'_> {
         for (node_id, row) in &rows {
             let Some(node) = self.readable(node_id, row)? else { return Ok(None) };
             nodes.push(node);
+        }
+        // Links in a copy: an instance's root keeps its main, and what is inside a kept one keeps
+        // its link; a node of an instance copied without its root is plain.
+        let mut linked: HashSet<String> = HashSet::new();
+        if !of_main && !self.lenient && nodes.iter().any(|n| n.instance_of.is_some()) {
+            for node in &nodes {
+                let Some(of) = node.instance_of.as_deref() else { continue };
+                let root_of = self.link(of)?.is_some_and(|l| l.main);
+                if root_of || node.parent.as_ref().is_some_and(|p| linked.contains(p)) {
+                    linked.insert(node.id.clone());
+                }
+            }
         }
         let kind = nodes[0].kind;
         let new_root = match as_id {
@@ -317,6 +343,12 @@ impl Run<'_> {
                 None => original.clone(),
             };
             node.id = map[original.id.as_str()].clone();
+            if of_main {
+                // Each node follows the one it was copied from; nothing of it is its own yet.
+                (node.instance_of, node.overrides, node.component) = (Some(original.id.clone()), None, None);
+            } else if !self.lenient && node.instance_of.is_some() && !linked.contains(&original.id) {
+                (node.instance_of, node.overrides) = (None, None);
+            }
             let ord = if i == 0 {
                 node.parent = to.clone();
                 (node.x, node.y) = (node.x + dx, node.y + dy);
@@ -355,8 +387,16 @@ impl Run<'_> {
             }
         }
         self.copy_ids.push((self.at, nodes.iter().map(|n| (n.id.clone(), map[n.id.as_str()].clone())).collect()));
-        self.copied.insert(new_root.clone(), id);
         self.inverse.push(vec![NodeOp::Delete { id: new_root.clone() }]);
+        // The node an instance was made of is a main from now on.
+        if of_main && nodes[0].component != Some(true) {
+            let set = Map::from_iter([("component".to_string(), Value::Bool(true))]);
+            self.update(id.clone(), set)?;
+        }
+        if of_main || nodes.iter().any(|n| n.component == Some(true)) {
+            self.mark_mains()?;
+        }
+        self.copied.insert(new_root.clone(), id);
         Ok(Some(new_root))
     }
 }

@@ -131,6 +131,12 @@ data class DesignNode(
     val locked: Boolean? = null,
     /** The PC's layout and contrast checks pass over it; nothing drawn changes. */
     @SerialName("skip_checks") val skipChecks: Boolean? = null,
+    /** A main component; its instances are real nodes the PC keeps in step, drawn as any are. */
+    val component: Boolean? = null,
+    /** On an instance's node, the main's node it follows; nothing drawn changes. */
+    @SerialName("instance_of") val instanceOf: String? = null,
+    /** The fields an instance's node keeps as its own; nothing drawn changes. */
+    val overrides: List<String>? = null,
     val text: String? = null,
     val color: String? = null,
     val font: String? = null,

@@ -258,6 +258,22 @@ the copy did not make is refused with the ids it did make. **A connector inside 
 outside the copy is let go**: the line stays drawn where it was, attached to nothing at that end.
 `dx`/`dy` add to the copy's stored `x/y`, which a laid-out parent ignores.
 
+**Components** are for anything repeated with the same build: a card, a list row, a button, a tab
+bar. **Build it once, then place instances of it instead of copies**:
+`{"op":"copy","id":"card","instance":true,"rename":{"card":"rent"},"dy":120}` makes an instance and
+makes `card` the main component (`component: true`). The instance's nodes are real nodes you can
+name (`rent`, `rent-title` by the rename), and each names the main's node it follows
+(`instance_of`). **Change the main and every instance follows** when the list has run, in the same
+undo step: its fields, the nodes it gains or loses, its order. An edit of an instance's node is an
+override: its fields are kept (`overrides` lists them) while the rest follows; `"overrides": []`
+puts it back to the main. The instance's root keeps its own place (`x`, `y`, pins, rotation,
+`hidden`). Its structure is the main's: adding to, moving or deleting a node inside an instance is
+refused (`design.instance`); change the main, or hide the node (`hidden: true` is an override). A
+main may hold instances of another (a button in a card), and both settle. `instance_of: null` on
+an instance's root detaches it into plain nodes that look as they did; deleting the main, or
+`component: null`, detaches every instance. An instance inside its own main is refused
+(`design.component_cycle`).
+
 **Colours and styles** keep a design consistent and restylable. **Name the palette first**, then
 the type ramp and component looks, before the nodes that use them (a `$name` or `style` the design
 lacks is refused):
@@ -408,7 +424,10 @@ a screen, **look at it**: `design.render {"design_id": 12, "page": "page-7", "no
   meant to be faint, a caption on a photo the check cannot read) takes `"skip_checks": true`, and
   no issue names it first again; never use it to quiet a real problem.
 - Motion: `at_ms` (0 to 600000) pictures one time, `frames` (2 to 24) a contact sheet labelled by
-  `times_ms`; not both (`design.render.args`).
+  `times_ms`; not both (`design.render.args`). With either, `issues` also lists what the motion
+  brings that the still does not have, each with `at_ms`, the first time it shows (a slide-in drawn
+  over a label, a fade that leaves words faint): you may not see a later frame clearly, but you will
+  hear of it. `frames: 12, png: false` checks a motion without a picture.
 - It is drawn by Relay's desktop app. **`design.render.no_renderer`** means none is open: tell the
   person to open Relay, carry on without sizes (never guess them) and say you could not look. The
   other refusals say what to do: `busy` (try again in a few seconds), `timeout` and

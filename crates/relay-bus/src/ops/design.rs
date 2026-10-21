@@ -578,6 +578,11 @@ result!(#[schemars(rename = "DesignRenderIssue")] RenderIssue {
     pub code: String,
     pub ids: Vec<String>,
     pub message: String,
+    /// With `at_ms` or `frames`: the first time pictured, in ms, at which motion brings this
+    /// problem that the still does not have (its message says how many of the times show it).
+    /// Absent for one the design has at rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_ms: Option<f64>,
 });
 result!(#[schemars(rename = "DesignRenderTimings")] RenderTimings { pub read: f64, pub layout: f64, pub paint: f64, pub encode: f64 });
 
