@@ -1,6 +1,5 @@
 package com.forge.app.ui.cardio
 
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -10,12 +9,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.ui.cardio.components.CardioLogSheet
+import com.forge.app.ui.cardio.components.CardioLogSheetHost
 import com.forge.app.ui.cardio.components.CardioSessionDetailSheet
 
 /**
  * Routed, single-session cardio stats — what a cardio row in the History page opens. Shows the same
- * [CardioSessionDetailSheet] as the in-tab overlay, with Edit (the log sheet) and a confirmed Delete.
+ * [CardioSessionDetailSheet] as the in-tab page, with Edit (the log sheet over it) and Delete with Undo.
  */
 @Composable
 fun CardioSessionDetailScreen(
@@ -52,31 +51,32 @@ fun CardioSessionDetailScreen(
 
     val entry = state.entry ?: return  // still loading, or already gone (handled above)
 
-    // Editing is a state flip within this route, not a destination, so Back left the whole session
-    // behind rather than the edit form over it — discarding whatever had been typed with no prompt.
-    BackHandler(enabled = state.editing) { viewModel.closeEdit() }
-
+    // The edit is a sheet over this page; the sheet's own dismissal (Back, a swipe down) closes it.
+    CardioSessionDetailSheet(
+        entry = entry,
+        allEntries = state.allEntries,
+        useMiles = state.useMiles,
+        route = state.route,
+        onShowRoute = state.routeConsentId?.let { id -> { routeLauncher.launch(id) } },
+        wearable = state.wearable,
+        wearableConnected = state.stepsConnected,
+        hr = state.hr,
+        hrAvgBpm = state.hrAvgBpm,
+        hrMaxBpm = state.hrMaxBpm,
+        watchStats = state.watch,
+        onAdoptWatchStats = viewModel::adoptWatchStats,
+        onEdit = viewModel::openEdit,
+        // Undo over confirm: delete now, offer an Undo on the History list we pop back to.
+        onDelete = viewModel::delete,
+        onBack = onBack
+    )
     if (state.editing) {
-        CardioLogSheet(
+        CardioLogSheetHost(
             onDismiss = viewModel::closeEdit,
             onSave = viewModel::save,
             onCreateCustom = viewModel::addCustomType,
             editing = entry,
             useMiles = state.useMiles
-        )
-    } else {
-        CardioSessionDetailSheet(
-            entry = entry,
-            allEntries = state.allEntries,
-            useMiles = state.useMiles,
-            route = state.route, // Matched watch GPS track, once available/consented (else null).
-            onShowRoute = state.routeConsentId?.let { id -> { routeLauncher.launch(id) } },
-            wearable = state.wearable, // That day's watch steps (null until loaded / when none).
-            wearableConnected = state.stepsConnected, // Show an empty placeholder once connected.
-            onEdit = viewModel::openEdit,
-            // §13 undo over confirm: delete now, offer an Undo on the History list we pop back to.
-            onDelete = viewModel::delete,
-            onBack = onBack
         )
     }
 }
