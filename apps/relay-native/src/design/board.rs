@@ -305,6 +305,10 @@ pub struct Board {
     /// after undoes it anyway.
     agent_force: Cell<Option<(i64, i64)>>,
     pub(super) ask: gtk::Button,
+    /// The design's terminal on the canvas, as a terminal or a conversation, while it is open,
+    /// and the top bar's key that opens it.
+    pub(super) agent_panel: RefCell<Option<Rc<super::agent_panel::AgentPanel>>>,
+    agent_key: gtk::ToggleButton,
     /// What was typed to Ask and not sent, for the next time it opens.
     pub(super) ask_draft: RefCell<String>,
     /// The image key's stock photo picker: its last search, and the picker while it shows.
@@ -427,10 +431,17 @@ impl Board {
         ask.set_child(Some(&ask_row));
         ask.set_tooltip_text(Some("Ask the terminal's agent to change the selection or this page (Ctrl+Enter)"));
         ask.set_widget_name("design-ask");
+        let agent_key = gtk::ToggleButton::new();
+        agent_key.add_css_class("quiet");
+        agent_key.add_css_class("icon-key");
+        agent_key.set_child(Some(&crate::icons::image("terminal", 16)));
+        tip(&agent_key, "The design's terminal on the canvas, to move and resize: as its terminal or as a conversation");
+        agent_key.set_widget_name("design-agent-key");
         let play_key = crate::app::icon_button("play", PLAY_TIP);
         play_key.set_widget_name("design-play");
         play_key.set_visible(false);
         top.append(&play_key);
+        top.append(&agent_key);
         top.append(&ask);
         let pop_out = crate::app::icon_button("window", "Open in a new window");
         pop_out.set_child(Some(&glyphs::image("window", 16)));
@@ -597,6 +608,8 @@ impl Board {
             agent_undoing: Cell::new(false),
             agent_force: Cell::new(None),
             ask,
+            agent_panel: RefCell::default(),
+            agent_key,
             ask_draft: RefCell::default(),
             pictures: RefCell::default(),
             zoom_label,
@@ -703,6 +716,15 @@ impl Board {
                 b.ask_agent(key.upcast_ref());
             }
         });
+        let weak = Rc::downgrade(&board);
+        board.agent_key.connect_toggled(move |key| {
+            if let Some(b) = weak.upgrade() {
+                b.set_agent_panel(key.is_active());
+            }
+        });
+        if AGENT_PANEL_ON.with(Cell::get) {
+            board.agent_key.set_active(true);
+        }
         let weak = Rc::downgrade(&board);
         board.agent_undo.connect_clicked(move |_| {
             if let Some(b) = weak.upgrade() {
@@ -1356,6 +1378,46 @@ impl Board {
         }
         self.terminal_lamp.add_css_class(state);
         self.terminal_lamp.set_visible(self.doc.session().is_some());
+    }
+
+    /// The design's terminal's state as its lamp last showed it (running, idle, closed…).
+    pub(super) fn lamp_state(&self) -> String {
+        self.lamp_state.borrow().clone()
+    }
+
+    /// Open or close the agent panel: the design's terminal on the canvas. Its key in the top
+    /// bar follows, and the next design opened shows it as this one left it.
+    pub(super) fn set_agent_panel(self: &Rc<Self>, on: bool) {
+        AGENT_PANEL_ON.with(|c| c.set(on));
+        if self.agent_key.is_active() != on {
+            // Toggling comes back here.
+            return self.agent_key.set_active(on);
+        }
+        let open = self.agent_panel.borrow().clone();
+        match (on, open) {
+            (true, None) => {
+                let panel = super::agent_panel::AgentPanel::new(self);
+                self.overlay.add_overlay(&panel.root);
+                *self.agent_panel.borrow_mut() = Some(panel.clone());
+                panel.open();
+            }
+            (true, Some(panel)) => panel.open(),
+            (false, Some(panel)) => {
+                panel.close();
+                self.overlay.remove_overlay(&panel.root);
+                self.agent_panel.borrow_mut().take();
+                self.canvas.grab_focus();
+            }
+            (false, None) => {}
+        }
+    }
+
+    /// Put the agent panel away as the board closes: its terminal back on the wall.
+    pub(super) fn close_agent_panel(&self) {
+        if let Some(panel) = self.agent_panel.borrow_mut().take() {
+            panel.close();
+            self.overlay.remove_overlay(&panel.root);
+        }
     }
 
     /// Read the design's terminal's state for its lamp.
@@ -3080,6 +3142,10 @@ impl Board {
     // ------------------------------------------------------------------ floating widgets
 
     fn child_position(&self, widget: &gtk::Widget) -> Option<gdk::Rectangle> {
+        if let Some(panel) = self.agent_panel.borrow().as_ref().filter(|p| p.root.upcast_ref::<gtk::Widget>() == widget) {
+            let (w, h) = self.size.get();
+            return Some(panel.placed(w, h));
+        }
         if let Some(edit) = self.edit.borrow().as_ref() {
             if edit.view.upcast_ref::<gtk::Widget>() == widget {
                 let Some(r) = self.edit_rect() else {
@@ -3920,6 +3986,8 @@ thread_local! {
     /// one design (and window) to the next.
     static INSPECTOR_ON: Cell<bool> = const { Cell::new(true) };
     static LAYERS_ON: Cell<bool> = const { Cell::new(false) };
+    /// Whether the agent panel shows, the same way.
+    static AGENT_PANEL_ON: Cell<bool> = const { Cell::new(false) };
 }
 
 /// `RELAY_DESIGN_TRACE` set: print how long layout, content rebuilds and draws take.
@@ -4115,6 +4183,9 @@ fn read_view(v: &Value) -> Option<(String, Camera)> {
 impl Drop for Board {
     /// Keep the page and camera it was left at, for the next time the design opens (I-15).
     fn drop(&mut self) {
+        // The agent panel's terminal went back to the wall as the board was closed
+        // (`close_agent_panel`); handing it back here would lay out a wall the app may be
+        // tearing down as it quits.
         let Some(ui) = self.ui.upgrade() else {
             return;
         };

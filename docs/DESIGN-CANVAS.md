@@ -213,6 +213,16 @@ MCP tools are generated from the same registry, with each node field documented 
   the prompt gives their times (`It moves: the picture is a contact sheet of 6 frames at …`). Your
   request stays in the composer until it has gone, and if the agent changed nothing 90 seconds later
   the status says "No change from <agent> yet".
+- **The agent panel** (the terminal key beside Ask) puts the design's terminal on the canvas as a
+  card, moved by its head and resized from its corner, kept where it was left for the next design
+  opened. **Terminal** shows the terminal itself: the wall's own pane, lent while it is here (off the
+  wall, and kept attached whatever page is open), so there is one PTY at one size; closing the panel
+  or the board hands it back. **Chat** shows the agent's conversation as Threads draws one, read
+  from its provider's log (`session.transcript`, as the phone's chat reads it) about every second
+  while the agent works and every few while it waits; an Ask shows as the words asked, and each tool
+  the agent ran as one line. Its box sends with Enter: as an Ask about the selection (checked as Ask
+  checks the terminal, with a picture), or, with **About the selection** off, typed at the agent's
+  prompt as written, to answer it.
 - **Who undoes what.** Ctrl+Z undoes your own edits. The status's **Undo <agent>** key takes back an
   agent's last change, one more on each press (see Undo above). The agent's edits arrive as
   `design.changed`; an open board reads the design again, glows what changed in the live colour and
@@ -336,8 +346,10 @@ as an agent would, and drives the real client (`design/drive.rs`, `RELAY_SMOKE_D
   (`agent-undo`), a text edit that loses to an agent's (`agent-stale`) and an agent deleting layers
   (`agent-delete`); re-read named colours and styles an agent changes (`reuse`); play, seek, sheet
   and export a page's motion with its rev unchanged (`motion`); answer `design.render` with and
-  without the app (`render`); and search, place and credit a stock photo from fixtures
-  (`pictures`). Each shot opens its design by id (`RELAY_SMOKE_DESIGN_ID`) and fails on a panic.
+  without the app (`render`); search, place and credit a stock photo from fixtures
+  (`pictures`); drag a glow's gradient centre inside its screen and show the fixture terminal in
+  the agent panel (`panel`); and Ask from the panel's conversation and see the fixture agent's
+  answer drawn there (`panel-chat`). Each shot opens its design by id (`RELAY_SMOKE_DESIGN_ID`) and fails on a panic.
 - **Drive steps** are `;`-separated and go through the same code the pointer and keys use, each
   waiting for the engine: `select`, `click`, `dbl`, `drag` (with `:shift` or `:alt`), `press`,
   `idle` and `release`, `tool`, `type`, `nudge`, `set`, `align`, `layout`, `duplicate`, `group`,

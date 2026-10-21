@@ -193,6 +193,25 @@ button.design-menu-row.destructive, button.design-menu-row.destructive label { c
 .design-ask-field { border-radius: 10px; border: 1px solid @strong; background: @raised; }
 textview.design-ask-text, textview.design-ask-text text { background: transparent; padding: 8px; }
 
+/* The agent panel (agent_panel.rs): the design's terminal as a card on the canvas, moved by its
+   head and resized from its corner. Its terminal is the wall's own pane; its conversation is drawn
+   as Threads draws one (threads.css), a size smaller, as the assistant's is. */
+.design-agent-panel { background: @slab_solid; border: 1px solid @strong; border-radius: 12px; box-shadow: 0 14px 36px alpha(black, 0.42), 0 1px 3px alpha(black, 0.3); }
+.design-agent-head { min-height: 36px; padding: 4px 6px 4px 12px; border-bottom: 1px solid @line_subtle; }
+.design-agent-grip { color: @faint; }
+.design-agent-title { font-size: 13px; font-weight: 600; color: @ink; }
+.design-agent-head .design-segmented button.toggle { min-height: 24px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: @faint; font-size: 12px; box-shadow: none; }
+.design-agent-head .design-segmented button.toggle:hover { color: @ink; }
+.design-agent-head .design-segmented button.toggle:checked { background: @track; color: @ink; font-weight: 600; }
+.design-agent-asked { font-size: 11px; color: @faint; margin-bottom: -6px; }
+.design-agent-scroll, .design-agent-scroll viewport { background: transparent; }
+.design-agent-column { padding: 14px 16px 16px 16px; }
+.design-agent-column .threads-user { font-size: 13px; line-height: 20px; padding: 8px 12px; }
+.design-agent-reply .threads-reply { font-size: 13px; line-height: 20px; }
+.design-agent-composer { padding: 8px 10px 4px 10px; border-top: 1px solid @line_subtle; }
+.design-agent-corner { min-height: 14px; color: @faint; }
+.design-agent-corner:hover { color: @ink; }
+
 /* Typing on the canvas: the text view is invisible but for the words and the caret. */
 textview.design-text-edit, textview.design-text-edit text { background: transparent; padding: 0; margin: 0; border: 0; box-shadow: none; caret-color: #4C9DFF; }
 textview.design-text-edit text selection { background: alpha(#4C9DFF, 0.32); }

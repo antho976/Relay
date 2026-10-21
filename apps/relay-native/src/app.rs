@@ -360,6 +360,9 @@ pub struct Ui {
     wall_stack: gtk::Stack,
     empty_title: gtk::Label,
     panes: RefCell<BTreeMap<String, Rc<Pane>>>,
+    /// The terminal lent to a design's agent panel (`lend_pane`): off the wall, and attached
+    /// while it is shown there whatever page is open.
+    lent: RefCell<Option<String>>,
     ordered: RefCell<Vec<String>>,
     columns: Cell<i32>,
     focused: RefCell<Option<String>>,
@@ -1223,6 +1226,7 @@ impl Ui {
             wall_stack: wall.wall_stack,
             empty_title: wall.empty_title,
             panes: RefCell::default(),
+            lent: RefCell::default(),
             ordered: RefCell::default(),
             columns: Cell::new(2),
             focused: RefCell::new(None),
@@ -2299,11 +2303,13 @@ impl Ui {
         let mode = self.mode.borrow();
         for s in self.sessions.borrow().iter() {
             if let Some(p) = self.panes.borrow().get(text(s, "name")) {
-                let active = (self.window_visible.get()
-                    && *self.page.borrow() == "agents"
-                    && self.editor.agents_visible()
-                    && (mode.as_str() != "focus"
-                        || focus.as_ref().is_none_or(|n| n == text(s, "name"))))
+                let lent = self.lent.borrow().as_deref() == Some(text(s, "name"));
+                let active = (lent
+                    || self.window_visible.get()
+                        && *self.page.borrow() == "agents"
+                        && self.editor.agents_visible()
+                        && (mode.as_str() != "focus"
+                            || focus.as_ref().is_none_or(|n| n == text(s, "name"))))
                     && !matches!(
                         text(s, "state"),
                         "created" | "parked" | "restorable" | "exited"

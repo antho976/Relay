@@ -158,6 +158,7 @@ fn open_doc(ui: &Rc<Ui>, project: i64, id: i64, doc: Option<Rc<Doc>>, ready: Opt
         let weak = Rc::downgrade(&ui);
         window.connect_close_request(move |window| {
             keep.end_edit(true);
+            keep.close_agent_panel();
             WINDOWS.with(|w| w.borrow_mut().retain(|(d, ..)| *d != id));
             // Closed by the person (or with its design): it does not come back at the start.
             if let Some(ui) = weak.upgrade() {
