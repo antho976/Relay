@@ -173,6 +173,11 @@ pub struct Gallery {
     toast_serial: Cell<u64>,
     /// The width each card has: the page's width shared by as many 260 px columns as fit.
     card_width: Cell<i32>,
+    /// Where the videos section is mounted, after the designs.
+    pub(super) videos: gtk::Box,
+    /// Run after each render (a filter or search changed) and each read of the designs.
+    pub(super) on_render: RefCell<Option<Rc<dyn Fn()>>>,
+    pub(super) on_refresh: RefCell<Option<Rc<dyn Fn()>>>,
     me: Weak<Gallery>,
 }
 
@@ -531,6 +536,10 @@ impl Gallery {
         empty.set_visible(false);
         page.append(&empty);
 
+        // The project's videos follow the designs, under the same chips and search (videos.rs).
+        let videos = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        page.append(&videos);
+
         let toast = gtk::Revealer::new();
         toast.set_transition_type(gtk::RevealerTransitionType::Crossfade);
         toast.set_halign(gtk::Align::Center);
@@ -605,6 +614,9 @@ impl Gallery {
             undo: RefCell::default(),
             toast_serial: Cell::new(0),
             card_width: Cell::new(280),
+            videos,
+            on_render: RefCell::default(),
+            on_refresh: RefCell::default(),
             me: me.clone(),
         });
         // Columns follow the page's width; the cards share it, their pictures 16:10.
@@ -841,6 +853,10 @@ impl Gallery {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
+        let refresh = self.on_refresh.borrow().clone();
+        if let Some(f) = refresh {
+            f();
+        }
         self.stale.set(false);
         self.dirty.set(true);
         if self.loading.replace(true) {
@@ -1047,9 +1063,37 @@ impl Gallery {
         }
         self.restore_focus(focus);
         self.queue_thumbs(&list);
+        let rendered = self.on_render.borrow().clone();
+        if let Some(f) = rendered {
+            f();
+        }
         if trace() {
             println!("DESIGN_TRACE gallery render {:.3} ms {} cards", started.elapsed().as_secs_f64() * 1e3, list.len());
         }
+    }
+
+    /// The filter the chips show.
+    pub(super) fn filter(&self) -> Filter {
+        self.filter.borrow().clone()
+    }
+
+    /// What the search holds, as names are compared (`name_key`).
+    pub(super) fn search_key(&self) -> String {
+        name_key(self.search.text().trim())
+    }
+
+    pub(super) fn card_width(&self) -> i32 {
+        self.card_width.get()
+    }
+
+    /// The empty state gives way to what follows the designs (the videos).
+    pub(super) fn hide_empty(&self) {
+        self.empty.set_visible(false);
+    }
+
+    /// The terminals' states, by name, as the chips show them.
+    pub(super) fn session_state(&self, name: &str) -> Option<String> {
+        self.sessions.borrow().get(name).cloned()
     }
 
     // ------------------------------------------------------------------ chips

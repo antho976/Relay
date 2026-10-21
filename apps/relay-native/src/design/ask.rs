@@ -54,7 +54,7 @@ fn wakeable(state: &str) -> bool {
 
 /// What Send does with a terminal in a state.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Route {
+pub(super) enum Route {
     /// At its prompt: type the prompt in.
     Type,
     /// At work: priority mail, read with its next tool call (I-9).
@@ -67,7 +67,7 @@ enum Route {
     Gone,
 }
 
-fn route(state: &str) -> Route {
+pub(super) fn route(state: &str) -> Route {
     match state {
         "idle" => Route::Type,
         "running" => Route::Mail,
@@ -116,19 +116,19 @@ fn hold_note(session: &str, route: Route) -> Option<String> {
 }
 
 /// `session`'s state in a `session.list` answer; "closed" when it is not listed.
-fn state_of(listed: &Value, session: &str) -> String {
+pub(super) fn state_of(listed: &Value, session: &str) -> String {
     rows(listed, "sessions").iter().find(|s| text(s, "name") == session).map_or("closed", |s| text(s, "state")).to_string()
 }
 
 /// `session`'s provider in a `session.list` answer; empty when it is not listed.
-fn provider_of(listed: &Value, session: &str) -> String {
+pub(super) fn provider_of(listed: &Value, session: &str) -> String {
     rows(listed, "sessions").iter().find(|s| text(s, "name") == session).map_or("", |s| text(s, "provider")).to_string()
 }
 
 /// What Send says when `session`'s open pane shows text typed at its prompt and not sent: Ask
 /// would run its prompt into it (TM-20). `None` for an empty prompt, and when no pane is
 /// attached, where the paste's brackets keep a leading `/` or `!` from acting as a command.
-fn unsent_note(session: &str, provider: &str) -> Option<String> {
+pub(super) fn unsent_note(session: &str, provider: &str) -> Option<String> {
     let row = crate::terminal::prompt_row(session)?;
     (!crate::terminal::prompt_line_empty(&row, provider)).then(|| format!("{session}'s prompt has unsent text; send or clear it there first."))
 }
@@ -136,7 +136,7 @@ fn unsent_note(session: &str, provider: &str) -> Option<String> {
 /// Where a request goes once its picture is ready, by `session`'s `state` then: pasted at its
 /// prompt unless text is left there (`unsent`, read only for an agent at its prompt), mail for
 /// one gone to work, else held with what to say, as Send's own check routes it (TM-1, TM-20).
-fn recheck(session: &str, state: &str, unsent: impl FnOnce() -> Option<String>) -> Result<Route, String> {
+pub(super) fn recheck(session: &str, state: &str, unsent: impl FnOnce() -> Option<String>) -> Result<Route, String> {
     match route(state) {
         Route::Type => unsent().map_or(Ok(Route::Type), Err),
         Route::Mail => Ok(Route::Mail),
@@ -164,7 +164,7 @@ fn show_terminal(b: &Board, session: &str) {
 }
 
 /// A terminal's lamp, as the board's terminal key shows it.
-fn lamp(state: &str) -> gtk::Box {
+pub(super) fn lamp(state: &str) -> gtk::Box {
     let lamp = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     lamp.add_css_class("design-lamp");
     lamp.add_css_class(state);

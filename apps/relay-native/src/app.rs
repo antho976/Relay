@@ -1676,7 +1676,7 @@ impl Ui {
                         return;
                     }
                     *ui.client.borrow_mut() = Some(client);
-                    if let Err(e)=ui.call("bus.subscribe",json!({"events":["project.changed","project.deleted","workspace.changed","workspace.deleted","session.changed","task.changed","task.deleted","mailbox.new","mailbox.changed","guardrail.held","guardrail.resolved","guardrail.grant_used","overlap.changed","notes.changed","notes.deleted","file.changed","git.changed","worktree.changed","module.changed","module.deleted","skill.changed","skill.deleted","plugin.changed","settings.changed","provider.update.changed","notify.new","notify.changed","device.changed","device.lease.acquired","device.lease.released","run.changed","run.crash","device.signing.changed","avd.changed","layout.changed","ui.changed","ui.toast","usage.changed","integration.changed","integration.result","money.changed","arbiter.changed","gym.changed","thread.changed","thread.message","thread.delta","thread.local","thread.proposal","thread.ask","gaming.changed","design.changed","design.deleted"]})).await {
+                    if let Err(e)=ui.call("bus.subscribe",json!({"events":["project.changed","project.deleted","workspace.changed","workspace.deleted","session.changed","task.changed","task.deleted","mailbox.new","mailbox.changed","guardrail.held","guardrail.resolved","guardrail.grant_used","overlap.changed","notes.changed","notes.deleted","file.changed","git.changed","worktree.changed","module.changed","module.deleted","skill.changed","skill.deleted","plugin.changed","settings.changed","provider.update.changed","notify.new","notify.changed","device.changed","device.lease.acquired","device.lease.released","run.changed","run.crash","device.signing.changed","avd.changed","layout.changed","ui.changed","ui.toast","usage.changed","integration.changed","integration.result","money.changed","arbiter.changed","gym.changed","thread.changed","thread.message","thread.delta","thread.local","thread.proposal","thread.ask","gaming.changed","design.changed","design.deleted","video.changed","video.render.changed","video.render.finished","video.kit.changed"]})).await {
                         if generation == ui.generation.get() {
                             ui.show_error(&e.to_string());
                         }
@@ -1801,6 +1801,11 @@ impl Ui {
                                 // So does a design in a window of its own.
                                 if e.ev.starts_with("design.") {
                                     crate::design::event(&ui, &e.ev, &e.payload);
+                                    continue;
+                                }
+                                // Videos keep the project they belong to (the kit's events have none).
+                                if e.ev.starts_with("video.") {
+                                    crate::design::video_event(&ui, &e.ev, &e.payload);
                                     continue;
                                 }
                                 // A board's lamp follows its terminal, whatever project the main
