@@ -381,3 +381,67 @@ fun OpenChartKey(items: List<Pair<ChartKeyMark, String>>, modifier: Modifier = M
 }
 
 enum class ChartKeyMark { PREVIOUS, PR, COACH, DELOAD }
+
+/**
+ * Stacked columns: each column a list of (value, colour) segments from the baseline up, with month
+ * names or labels under the plot and a key above it. The Coach record draws a week's outcomes this
+ * way: held, on watch, missed, skipped.
+ */
+@Composable
+fun OpenStackedColumns(
+    stacks: List<List<Pair<Float, Color>>>,
+    modifier: Modifier = Modifier,
+    height: Dp = 150.dp,
+    xLabels: List<Pair<Float, String>> = emptyList(),
+    columnLabels: List<String>? = null,
+    gapFraction: Float = 0.45f,
+    description: String,
+) {
+    val measurer = rememberTextMeasurer()
+    Canvas(modifier.fillMaxWidth().height(height).clearAndSetSemantics { contentDescription = description }) {
+        if (stacks.isEmpty()) return@Canvas
+        val labelRoom = if (columnLabels != null || xLabels.isNotEmpty()) 18.dp.toPx() else 0f
+        val bottom = size.height - labelRoom
+        val slot = size.width / stacks.size
+        val bw = slot * (1f - gapFraction)
+        val max = stacks.maxOf { s -> s.sumOf { it.first.toDouble() } }.toFloat().takeIf { it > 0f } ?: 1f
+        drawRect(OpenColors.Rule, topLeft = Offset(0f, bottom), size = Size(size.width, 1.dp.toPx()))
+        stacks.forEachIndexed { i, segs ->
+            val x = i * slot + (slot - bw) / 2f
+            var y = bottom
+            segs.forEach { (v, c) ->
+                if (v <= 0f) return@forEach
+                val h = v / max * bottom
+                drawRect(c, topLeft = Offset(x, y - h), size = Size(bw, h - 1.dp.toPx().coerceAtMost(h / 2f)))
+                y -= h
+            }
+            columnLabels?.getOrNull(i)?.let { s ->
+                val t = measurer.measure(s, OpenType.chartLabel.copy(color = OpenColors.Glyph))
+                drawText(t, topLeft = Offset(x + bw / 2f - t.size.width / 2f, bottom + 5.dp.toPx()))
+            }
+        }
+        xLabels.forEach { (f, s) ->
+            if (s.isEmpty()) return@forEach
+            val t = measurer.measure(s, OpenType.chartLabel.copy(color = OpenColors.Glyph))
+            val cx = (f * size.width - t.size.width / 2f).coerceIn(0f, size.width - t.size.width)
+            drawText(t, topLeft = Offset(cx, bottom + 5.dp.toPx()))
+        }
+    }
+}
+
+/** A key of small square swatches, each with its word: the legend over a stacked or paired graph. */
+@Composable
+fun OpenSwatchKey(items: List<Pair<String, Color>>, modifier: Modifier = Modifier) {
+    androidx.compose.foundation.layout.FlowRow(
+        modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        items.forEach { (word, color) ->
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Canvas(Modifier.size(8.dp)) { drawRect(color) }
+                Text(word, style = OpenType.chartLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}

@@ -45,13 +45,12 @@ import com.forge.app.domain.coach.WeeklyReviewData
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.ui.coach.CoachActions
 import com.forge.app.ui.coach.CoachPage
+import com.forge.app.ui.coach.CoachTab
 import com.forge.app.ui.coach.CoachViewModel
 import com.forge.app.ui.theme.ForgeTheme
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.github.takahirom.roborazzi.RoborazziOptions
 import com.github.takahirom.roborazzi.captureRoboImage
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -60,9 +59,9 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Golden screenshots of the Coach page (`design/MAP.md`), rebuilt 2026-10-17 as a Today panel and
- * sections on the grouped-surface kit. Pinned at 100% and 200% font scale, Simple and Detailed, on a
- * brand-new account, and on AMOLED. Each region below the fold has its own frame.
+ * Golden screenshots of the Coach page, rebuilt 2026-10-21 as the redesign's Brief / Record / Plan
+ * tabs. Pinned at 100% and 200% font scale, on a brand-new account, and on AMOLED. Each region below
+ * the fold has its own frame.
  *
  * Record or re-record:  gradle -p forge-android :app:recordRoborazziDebug
  */
@@ -106,79 +105,58 @@ class CoachLedgerScreenshotTest {
         compose.onRoot().captureRoboImage("src/test/screenshots/$name.png", options)
     }
 
-    private fun page(state: CoachViewModel.UiState, actions: CoachActions = CoachActions(connectHealth = {})) = @Composable {
-        CoachPage(state = state, weightUnit = WeightUnit.LB, now = NOW, actions = actions)
+    private fun page(
+        state: CoachViewModel.UiState,
+        tab: CoachTab = CoachTab.BRIEF,
+        actions: CoachActions = CoachActions(connectHealth = {})
+    ) = @Composable {
+        CoachPage(state = state, weightUnit = WeightUnit.LB, now = NOW, actions = actions, initialTab = tab)
     }
 
-    /** The default page: the switch on Simple, the Today panel and the first open call. */
+    /** Brief at the top: today's read, fatigue and the next brief. */
     @Test
-    fun simple() = shoot("coach-page") { page(activeState().copy(advanced = false))() }
+    fun brief() = shoot("coach-page") { page(activeState())() }
 
-    /** Simple below the fold: the calls' foot, last week's figures and the record rail. */
+    /** Brief below the fold: this week's open calls with their evidence and Skip / Apply. */
     @Test
-    fun simpleRecord() = shoot("coach-page-record", scrollTo = "Twenty-five applied") {
-        page(activeState().copy(advanced = false))()
+    fun briefCalls() = shoot("coach-page-detailed", scrollTo = "Rotate to") { page(activeState())() }
+
+    /** Record: calls that held, the weeks' outcomes, and what is on watch. */
+    @Test
+    fun record() = shoot("coach-page-record") { page(activeState(), CoachTab.RECORD)() }
+
+    /** Record below the fold: earlier calls by week, each stamped with how it went. */
+    @Test
+    fun recordEarlier() = shoot("coach-page-lifts", scrollTo = "EARLIER") { page(activeState(), CoachTab.RECORD)() }
+
+    /** Plan: the training block, its weeks and phases. */
+    @Test
+    fun plan() = shoot("coach-page-block") { page(activeState(), CoachTab.PLAN)() }
+
+    /** Plan below the fold: goals and the running project. */
+    @Test
+    fun planProject() = shoot("coach-page-learned", scrollTo = "NEXT STEP") { page(activeState(), CoachTab.PLAN)() }
+
+    /** The tabs switch the page between Brief, Record and Plan. */
+    @Test
+    fun theTabsSwitch() {
+        compose.setContent { ForgeTheme { page(activeState())() } }
+        compose.onNodeWithText("RECORD").performClick()
+        compose.onNodeWithText("CALLS THAT HELD").assertIsDisplayed()
+        compose.onNodeWithText("PLAN").performClick()
+        compose.onNodeWithText("TRAINING BLOCK").assertIsDisplayed()
     }
 
-    /** Detailed at the top: the Today panel also lists the fatigue checks that crossed their line. */
     @Test
-    fun detailed() = shoot("coach-page-detailed") { page(activeState())() }
+    fun briefAtLargeFontScale() = shoot("coach-page-200", fontScale = 2f) { page(activeState())() }
 
-    /** Detailed: each watched lift as a tile, the stalled one first with its line in red. */
     @Test
-    fun detailedLifts() = shoot("coach-page-lifts", scrollTo = "first read after two sessions") { page(activeState())() }
+    fun recordAtLargeFontScale() = shoot("coach-page-lifts-200", fontScale = 2f) { page(activeState(), CoachTab.RECORD)() }
 
-    /** Detailed: the training block panel. */
-    @Test
-    fun detailedBlock() = shoot("coach-page-block", scrollTo = "End the block") { page(activeState())() }
-
-    /** Detailed: what the coach has learned, closing the page. */
-    @Test
-    fun detailedLearned() = shoot("coach-page-learned", scrollTo = "Best spacing") { page(activeState())() }
-
-    /**
-     * A LazyColumn only composes what is near the viewport, so absence is proved by scrolling:
-     * `performScrollToNode` walks the whole list and fails when nothing matches.
-     */
-    @Test
-    fun theSimplePageDrawsNoInstruments() {
-        compose.setContent { ForgeTheme { page(activeState().copy(advanced = false))() } }
-        val column = compose.onAllNodes(hasScrollAction()).onFirst()
-        column.performScrollToNode(hasText("Twenty-five applied"))
-        compose.onNodeWithText("Twenty-five applied").assertIsDisplayed()
-        listOf("YOUR LIFTS", "TRAINING BLOCK", "WHAT IT READS", "LEARNED").forEach { anchor ->
-            val found = runCatching { column.performScrollToNode(hasText(anchor)) }.isSuccess
-            assertFalse("$anchor is drawn on Simple", found)
-        }
-    }
-
-    /** The switch under the title writes the preference both ways. */
-    @Test
-    fun theSwitchFlipsSimpleAndDetailed() {
-        val set = mutableListOf<Boolean>()
-        compose.setContent {
-            ForgeTheme { page(activeState().copy(advanced = false), CoachActions(setAdvanced = { set += it }))() }
-        }
-        compose.onNodeWithText("Detailed").performClick()
-        compose.onNodeWithText("Simple").performClick()
-        assertEquals(listOf(true, false), set)
-    }
-
-    /** §14: the page must survive the biggest font without clipping or lost content. */
-    @Test
-    fun simpleAtLargeFontScale() = shoot("coach-page-200", fontScale = 2f) { page(activeState().copy(advanced = false))() }
-
-    /** The lift tiles at 200% drop to one column rather than squeezing each name to a sliver. */
-    @Test
-    fun liftsAtLargeFontScale() = shoot("coach-page-lifts-200", fontScale = 2f, scrollTo = "stalling") {
-        page(activeState())()
-    }
-
-    /** The state every first-run user sees: no calls, no history, a baseline still filling. */
+    /** A new account: the baseline count in place of today's read. */
     @Test
     fun newAccount() = shoot("coach-page-baseline") { page(baselineState())() }
 
-    /** AMOLED is a shipped ground, not a variant. */
     @Test
     fun amoled() = shoot("coach-page-amoled", amoled = true) { page(activeState())() }
 }

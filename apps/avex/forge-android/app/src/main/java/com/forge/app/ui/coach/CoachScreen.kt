@@ -11,6 +11,9 @@
 package com.forge.app.ui.coach
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -65,6 +68,10 @@ fun CoachScreen(
     @Suppress("UNUSED_PARAMETER") entryPoint: CoachEntryPoint = CoachEntryPoint.ACCOUNT,
     // Lands on Settings → Recovery; an unconnected input carries it as a Connect pill.
     onConnectHealth: (() -> Unit)? = null,
+    /** The sliders glyph in the top row: Settings → Coach. */
+    onOpenSettings: (() -> Unit)? = null,
+    /** The Plan tab's goals "View all". */
+    onOpenGoals: () -> Unit = {},
     viewModel: CoachViewModel = hiltViewModel(),
     isVisible: Boolean = true
 ) {
@@ -81,7 +88,17 @@ fun CoachScreen(
     val now = remember(state.brief, state.timeline) { System.currentTimeMillis() }
 
     Scaffold(
-        topBar = { ForgeTopBar(onBack = onBack) },
+        topBar = {
+            Row(
+                Modifier.fillMaxWidth().windowInsetsPadding(androidx.compose.material3.TopAppBarDefaults.windowInsets)
+                    .padding(horizontal = COACH_GUTTER).height(48.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (onBack != null) com.forge.app.ui.common.OpenTopBarIcon(com.forge.app.ui.theme.OpenIcons.ArrowLeft, "Back", onBack)
+                Spacer(Modifier.weight(1f))
+                if (onOpenSettings != null) com.forge.app.ui.common.OpenTopBarIcon(com.forge.app.ui.theme.OpenIcons.Sliders, "Coach settings", onOpenSettings)
+            }
+        },
         containerColor = Color.Transparent
     ) { inner ->
         when {
@@ -111,7 +128,9 @@ fun CoachScreen(
                     startBlock = viewModel::startBlock,
                     endBlock = viewModel::endBlock,
                     connectHealth = onConnectHealth,
-                    setAdvanced = viewModel::setAdvanced
+                    setAdvanced = viewModel::setAdvanced,
+                    startProject = viewModel::startProject,
+                    openGoals = onOpenGoals
                 ),
                 modifier = Modifier.padding(inner)
             )
@@ -133,7 +152,9 @@ internal data class CoachActions(
     val startBlock: () -> Unit = {},
     val endBlock: () -> Unit = {},
     val connectHealth: (() -> Unit)? = null,
-    val setAdvanced: (Boolean) -> Unit = {}
+    val setAdvanced: (Boolean) -> Unit = {},
+    val startProject: (com.forge.app.domain.coach.ProjectScanner.Candidate) -> Unit = {},
+    val openGoals: () -> Unit = {}
 )
 
 /**
@@ -146,50 +167,35 @@ internal fun CoachPage(
     now: Long,
     actions: CoachActions,
     modifier: Modifier = Modifier,
-    listState: LazyListState = rememberLazyListState()
+    listState: LazyListState = rememberLazyListState(),
+    initialTab: CoachTab = CoachTab.BRIEF
 ) {
-    val c = rememberCoachColors()
+    var tab by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(initialTab) }
     LazyColumn(
         state = listState,
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 4.dp, bottom = 64.dp)
+        contentPadding = PaddingValues(start = COACH_GUTTER, end = COACH_GUTTER, top = 4.dp, bottom = 64.dp)
     ) {
         item("head") {
-            Column(Modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER).statsEntrance(0)) {
+            Column(Modifier.fillMaxWidth()) {
+                Spacer(Modifier.height(20.dp))
                 Text(
                     "Coach",
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = c.onBg,
+                    style = com.forge.app.ui.theme.OpenType.titleL,
+                    color = MaterialTheme.colorScheme.onBackground,
                     modifier = Modifier.semantics { heading() }
                 )
-                Spacer(Modifier.height(16.dp))
-                ForgeSlidingSegments(
-                    options = listOf("Simple", "Detailed"),
-                    selectedIndex = if (state.advanced) 1 else 0,
-                    onSelect = { actions.setAdvanced(it == 1) }
-                )
+                Spacer(Modifier.height(18.dp))
+                com.forge.app.ui.common.OpenTabs(CoachTab.entries, tab, { it.label }, { tab = it })
+                Spacer(Modifier.height(26.dp))
             }
         }
-        coachToday(state = state, c = c)
-        coachThisWeek(
-            state = state,
-            weightUnit = weightUnit,
-            c = c,
-            now = now,
-            onApply = actions.apply,
-            onSkip = actions.skip,
-            onUndo = actions.undo,
-            onApplyAll = actions.applyAll
-        )
-        if (state.advanced) {
-            coachLifts(state = state, weightUnit = weightUnit, c = c)
-            coachBlock(state = state, c = c, onStartBlock = actions.startBlock, onEndBlock = actions.endBlock)
-        }
-        coachRecord(state = state, c = c, now = now, onUndo = actions.undo)
-        coachUnlocks(state = state, c = c)
-        if (state.advanced) {
-            coachInputs(state = state, c = c, onConnectHealth = actions.connectHealth)
-            coachLearned(state = state, c = c)
+        item("tab") {
+            when (tab) {
+                CoachTab.BRIEF -> CoachBriefTab(state, weightUnit, now, actions)
+                CoachTab.RECORD -> CoachRecordTab(state, now, actions)
+                CoachTab.PLAN -> CoachPlanTab(state, weightUnit, now, actions, actions.openGoals)
+            }
         }
     }
 }

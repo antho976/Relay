@@ -734,32 +734,17 @@ internal fun goalShortName(name: String): String {
 
 @Composable
 private fun GoalColumn(goal: ScoreGoal, onOpen: () -> Unit, modifier: Modifier = Modifier) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val ink = MaterialTheme.colorScheme.onBackground
-    Column(
-        modifier
-            .clickableLabeled(goal.description, onClick = onOpen)
-            .semantics(mergeDescendants = true) { contentDescription = goal.description },
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        OpenLabel(goal.label, style = OpenType.monoSTight, modifier = Modifier.clearAndSetSemantics { })
-        Text(
-            buildAnnotatedString {
-                append(goal.figure)
-                if (goal.denominator.isNotEmpty()) {
-                    withStyle(OpenType.figureMDenominator.toSpanStyle().copy(color = muted)) { append(goal.denominator) }
-                }
-            },
-            style = OpenType.figureM,
-            color = ink,
-            maxLines = 1,
-            modifier = Modifier.clearAndSetSemantics { }
-        )
-        OpenMeter(goal.fraction)
-        goal.change?.let {
-            OpenLabel(it, style = OpenType.monoSTight, color = if (goal.changeMoved) ink else muted, modifier = Modifier.clearAndSetSemantics { })
-        }
-    }
+    com.forge.app.ui.common.OpenGoalColumn(
+        label = goal.label,
+        figure = goal.figure,
+        denominator = goal.denominator,
+        fraction = goal.fraction,
+        change = goal.change,
+        changeMoved = goal.changeMoved,
+        description = goal.description,
+        onClick = onOpen,
+        modifier = modifier,
+    )
 }
 
 @Composable

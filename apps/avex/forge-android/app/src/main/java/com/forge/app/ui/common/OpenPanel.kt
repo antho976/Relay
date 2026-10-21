@@ -481,3 +481,47 @@ fun <T> OpenRangeSwitch(options: List<T>, selected: T, label: (T) -> String, onS
         }
     }
 }
+
+/**
+ * One goal on a scoreboard (Home, Coach's plan): its name and target as a mono label, where it
+ * stands as a serif figure (a count keeps its denominator full size, muted), the meter, and what
+ * moved. Three share a row.
+ */
+@Composable
+fun OpenGoalColumn(
+    label: String,
+    figure: String,
+    denominator: String,
+    fraction: Float,
+    change: String?,
+    changeMoved: Boolean,
+    description: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val ink = MaterialTheme.colorScheme.onBackground
+    androidx.compose.foundation.layout.Column(
+        modifier
+            .clickableLabeled(description, onClick = onClick)
+            .semantics(mergeDescendants = true) { contentDescription = description },
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        OpenLabel(label, style = OpenType.monoSTight, modifier = Modifier.clearAndSetSemantics { })
+        Text(
+            androidx.compose.ui.text.buildAnnotatedString {
+                append(figure)
+                if (denominator.isNotEmpty()) {
+                    pushStyle(OpenType.figureMDenominator.toSpanStyle().copy(color = muted)); append(denominator); pop()
+                }
+            },
+            style = OpenType.figureM,
+            color = ink,
+            modifier = Modifier.clearAndSetSemantics { }
+        )
+        OpenMeter(fraction)
+        if (change != null) {
+            OpenLabel(change, style = OpenType.monoSTight, color = if (changeMoved) ink else muted, modifier = Modifier.clearAndSetSemantics { })
+        }
+    }
+}
