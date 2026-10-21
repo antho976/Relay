@@ -47,6 +47,7 @@ const SHIPPED_MIGRATIONS: &[&str] = &[
     "3a9ef1e53e8680d3361bb171ec4c89bcffa13311283a0db143ce7b32ada2f9cb", // v29
     "dd05f23663717297092deef2dfdbc5f85ecc4b4d10879e25f3a00955b7618581", // v30
     "fe61179a3bac2cd221e11a72c41911fcd955203b8b0f75193fd605bcaa71293c", // v31
+    "bb3960f456d719549fa72b2e644f35947cca94e838dc8a7eaac3c512003785fd", // v32
 ];
 
 #[test]

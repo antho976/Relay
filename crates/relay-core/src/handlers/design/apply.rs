@@ -189,6 +189,13 @@ pub(super) struct Run<'a> {
     /// (`""` for the pages), and where it last put a node, by parent.
     pub(super) siblings: RefCell<HashMap<String, Siblings>>,
     pub(super) last_placed: RefCell<Option<(Option<String>, f64)>>,
+    /// Components ([`Run::sync_components`]): whether the design holds a main (asked once), the
+    /// sync under way (it is let through what an edit of an instance is refused), the parents of
+    /// deleted nodes, and the mains deleted.
+    pub(super) has_mains: Option<bool>,
+    pub(super) syncing: bool,
+    pub(super) reached: Vec<String>,
+    pub(super) mains_gone: Vec<String>,
 }
 
 const NODE_META: &str = "SELECT parent_id, kind, ord FROM design_nodes WHERE design_id = ?1 AND node_id = ?2";
@@ -815,6 +822,16 @@ impl Run<'_> {
             self.breach(why)?;
         }
         self.check_names(&mut node)?;
+        if !self.lenient && !self.syncing && node.instance_of.is_none() && self.has_mains()? {
+            if let Some(parent) = node.parent.as_deref() {
+                if self.link(parent)?.is_some_and(|l| l.of.is_some()) {
+                    return Err(self.inside_instance(&format!("{parent:?} is part of an instance")));
+                }
+            }
+        }
+        if node.component == Some(true) {
+            self.mark_mains()?;
+        }
         if node.parent.as_ref().is_some_and(|parent| self.skipped_adds.contains(parent)) {
             // W6: what it goes in was not added; neither is it.
             self.skip(Conflict::new(Some(self.at as u32), node.id.clone(), ConflictReason::ParentSkipped));
@@ -917,6 +934,19 @@ impl Run<'_> {
                 set.insert("icon_path".into(), Value::Null);
             }
         }
+        let mut detaching = false;
+        if !self.lenient && !self.syncing {
+            if let Some(link) = set.get("instance_of") {
+                if !link.is_null() {
+                    return Err(self.fail_on("instance_of", ErrorKind::Invalid, "design.instance", "instance_of: an instance is made by a copy with instance: true; null detaches one"));
+                }
+                if node.instance_of.is_some() && self.instance_root(&id)?.is_none() {
+                    return Err(self.inside_instance("instance_of: only an instance's root detaches"));
+                }
+                detaching = node.instance_of.is_some();
+            }
+            self.record_overrides(&node, &mut set)?;
+        }
         let mut next = node.patched(&set).map_err(|why| self.fail(ErrorKind::Invalid, "design.node_invalid", why))?;
         if let Err(why) = Node::check_update(&node, &set, &next) {
             self.breach(why)?;
@@ -947,6 +977,9 @@ impl Run<'_> {
             .execute(params![self.design, next.id, body, self.rev]).bus()?;
         self.bytes += body.len() as i64 - row.body.len() as i64;
         self.touch(&next.id);
+        if next.component == Some(true) {
+            self.mark_mains()?;
+        }
         if set.contains_key("font") || set.contains_key("runs") {
             let families: Vec<String> = super::find::families(&next).map(str::to_string).collect();
             self.check_fonts(families.iter().map(String::as_str), &next.id.clone());
@@ -959,6 +992,9 @@ impl Run<'_> {
                 self.wrote(&next.id, field);
             }
         }
+        if detaching {
+            self.detach(&next.id)?;
+        }
         Ok(Some(next.id))
     }
 
@@ -967,6 +1003,20 @@ impl Run<'_> {
             return Ok(None);
         }
         let Some((from, kind, ord)) = self.meta(&id)? else { return self.missing("no such node") };
+        if !self.lenient && !self.syncing && self.has_mains()? {
+            let link = self.link(&id)?;
+            if link.as_ref().is_some_and(|l| l.of.is_some()) && self.instance_root(&id)?.is_none() {
+                return Err(self.inside_instance(&format!("{id:?} is part of an instance")));
+            }
+            let into = parent.as_deref().or(from.as_deref());
+            if link.is_some_and(|l| l.of.is_none()) && into.is_some_and(|p| p != from.as_deref().unwrap_or_default()) {
+                if let Some(into) = into {
+                    if self.link(into)?.is_some_and(|l| l.of.is_some()) {
+                        return Err(self.inside_instance(&format!("{into:?} is part of an instance")));
+                    }
+                }
+            }
+        }
         let kind = match kind {
             Ok(kind) => kind,
             Err(kind) => {
@@ -1080,6 +1130,9 @@ impl Run<'_> {
             return Ok(None);
         }
         let Some(root) = self.row(&id)? else { return self.missing("no such node") };
+        if !self.lenient && !self.syncing && root.body.contains("\"instance_of\":") && self.instance_root(&id)?.is_none() {
+            return Err(self.inside_instance(&format!("{id:?} is part of an instance")));
+        }
         if root.kind == Ok(NodeKind::Page) && self.pages <= 1 {
             return Err(self.fail(ErrorKind::Conflict, "design.last_page", "a design keeps at least one page")
                 .with_hint("add another page first, or delete the design"));
@@ -1093,6 +1146,11 @@ impl Run<'_> {
         for (i, (node_id, row)) in doomed.iter().enumerate() {
             let Some(node) = self.readable(node_id, row)? else { return Ok(None) };
             undo.push(NodeOp::Add { node, index: (i == 0).then_some(index) });
+        }
+        if !self.lenient && self.has_mains()? {
+            let bodies: Vec<(String, &str)> = doomed.iter().map(|(id, row)| (id.clone(), row.body.as_str())).collect();
+            let parent = doomed.first().and_then(|(_, row)| row.parent.clone());
+            self.note_deleted(parent.as_deref(), &bodies);
         }
         let mut remove = self.tx.prepare_cached("DELETE FROM design_nodes WHERE design_id = ?1 AND node_id = ?2").bus()?;
         // Each id removed, at this rev: what design.get's since_rev answers as gone.
@@ -1418,8 +1476,8 @@ pub(super) fn register(e: &mut Engine) {
             }
         }
         let by = actor_name(ctx)?;
-        let (bytes, next_node): (i64, i64) = ctx.tx().prepare_cached("SELECT bytes, next_node FROM designs WHERE id = ?1").bus()?
-            .query_row([design.id], |r| Ok((r.get(0)?, r.get(1)?))).bus()?;
+        let (bytes, next_node, components): (i64, i64, bool) = ctx.tx().prepare_cached("SELECT bytes, next_node, components FROM designs WHERE id = ?1").bus()?
+            .query_row([design.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).bus()?;
         let tombstones: bool = ctx.tx().prepare_cached("SELECT EXISTS(SELECT 1 FROM design_removed WHERE design_id = ?1)").bus()?
             .query_row([design.id], |r| r.get(0)).bus()?;
         let assets = ctx.engine().store.design_assets_dir();
@@ -1467,6 +1525,10 @@ pub(super) fn register(e: &mut Engine) {
             warned: HashSet::new(),
             siblings: RefCell::new(HashMap::new()),
             last_placed: RefCell::new(None),
+            has_mains: Some(components),
+            syncing: false,
+            reached: Vec::new(),
+            mains_gone: Vec::new(),
         };
         // B59: past the last edit that can make the design smaller (any but an add or a copy),
         // the list only grows it, so one over the cap by then is refused at the edit that took
@@ -1480,7 +1542,7 @@ pub(super) fn register(e: &mut Engine) {
                 NodeOp::Update { id, set } => run.update(id, set)?,
                 NodeOp::Move { id, parent, index, keep_position } => run.move_(id, parent, index, keep_position == Some(true))?,
                 NodeOp::Delete { id } => run.delete(id)?,
-                NodeOp::Copy { id, as_id, parent, index, dx, dy, rename } => run.copy(id, as_id, parent, index, dx, dy, rename)?,
+                NodeOp::Copy { id, as_id, parent, index, dx, dy, rename, instance } => run.copy(id, as_id, parent, index, dx, dy, rename, instance == Some(true))?,
                 NodeOp::Color { name, value } => run.color(name, value)?,
                 NodeOp::Style { name, set } => run.style(name, set)?,
                 NodeOp::DeleteStyle { name } => run.delete_style(name)?,
@@ -1490,6 +1552,7 @@ pub(super) fn register(e: &mut Engine) {
                 return Err(run.too_large(true));
             }
         }
+        run.sync_components()?;
         run.follow_pins()?;
         run.release_ends()?;
         run.check_refs()?;

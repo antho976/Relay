@@ -1234,7 +1234,28 @@ words measured roughly (`layout::Estimate`), and again with the list's undo run 
 is new when the same ids were not flagged before. The audit row keeps the reply without them, and a
 design changed again before the read gets a warning instead.
 
-`copy` takes `{id, as?, parent?, index?, dx?, dy?, rename?}` and copies a node and everything inside it, as
+**Components.** A `copy` with `instance: true` makes an instance of the node copied, which becomes a
+main component (`component: true`, set by the copy with its undo): each node of the copy names the
+main's node it follows (`instance_of`). Once a list's edits have run and before the follow rule,
+every main they reached (a node inside it, or a node of one of its instances, written, added, moved
+or deleted) is brought to each of its instances, and a main holding an instance of another after
+that one: each instance node takes the main node's fields but `id`, `parent`, `kind`, `component`,
+`instance_of`, `overrides`, the fields in its `overrides` and, on the root, `x`, `y`, `rotation`,
+`pin_x`, `pin_y`, `absolute`, `hidden` and `locked`; a node the main gained is added (by copy's id
+rule from the main's id to the root's), one it lost is deleted, and the main's order is kept. Every
+write is an ordinary edit with its undo, so one undo reverts the change and its instances; a lenient
+list syncs nothing. An update of an instance's node adds the fields it sets to its `overrides`
+unless it gives `overrides` itself. A strict list is refused (`design.instance`) an add into, a
+move of or into, or a delete of a node inside an instance (its root aside), and `instance_of` set to
+anything but `null`, which detaches an instance's root: each of its nodes then follows what its main
+node follows (an instance inside the main stays one), or nothing. A main deleted or set
+`component: null` detaches its instances. A main brought to its instances more than 16 times in one
+list, or holding an instance of itself, is `design.component_cycle`. A design that never held a main
+(`designs.components`, migration v32, read with the row every list reads) skips all of this; the
+nodes that follow a main are found by one pass over the design's bodies, only when that main
+changed.
+
+`copy` takes `{id, as?, parent?, index?, dx?, dy?, rename?, instance?}` and copies a node and everything inside it, as
 one edit (a page copies as a page). Each node inside the copy takes an id from the copied id: one
 starting with the copied id and `-`, `_`, `.` or `:` has that start swapped for the copy's
 (`card-title` becomes `card-2-title`); any other gets the copy's id and `:` in front (`text-14`
@@ -1299,6 +1320,10 @@ written at (`design_nodes.rev`), and `design_removed` (the ids removed in the la
 rev each went at). It recounts `designs.bytes` so the size cap counts each node as `design.get`
 returns it. Rows written before take their design's rev, so an older `base_rev` reads them as
 changed; a restored v29 backup's rows are dated the same way, and its removals are kept from that rev.
+
+Migration v32 (schema 32) adds `designs.components`: 1 once a write made a node of the design a main
+component, never cleared, copied by `design.duplicate`. Not a partial index on the bodies: SQLite
+tests an index's condition on every node write, which cost each write ~12,000 instructions.
 
 Migration v31 (schema 31) adds `design_icons`, Relay's icon set (`design.icon.*`): one row per saved
 outline icon by name, with its path, its keywords and who saved it when. Nothing in a design refers

@@ -947,7 +947,7 @@ pub(crate) mod tests {
         s.apply(&NodeOp::Move { id: "b".into(), parent: Some("p1".into()), index: None, keep_position: Some(false) }).unwrap();
         assert_eq!(s.parent("b"), Some("p1"));
         let before = s.to_nodes();
-        let copy = NodeOp::Copy { id: "a".into(), as_id: Some("a2".into()), parent: None, index: None, dx: 0.0, dy: 0.0, rename: None };
+        let copy = NodeOp::Copy { id: "a".into(), as_id: Some("a2".into()), parent: None, index: None, dx: 0.0, dy: 0.0, rename: None, instance: None };
         assert_eq!(s.apply(&copy).unwrap_err(), "copy a: the canvas does not send copy");
         assert!(s.apply_all(&[copy]).unwrap_err().starts_with("ops[0]: copy a"));
         assert_eq!(s.to_nodes(), before);
