@@ -324,9 +324,12 @@ lacks is refused):
 - `style` `{name, set}` names a look: `set` takes the style fields (fill, gradient, stroke,
   stroke_width, dash, radius, radii, shadow, shadows, opacity, blur, blend, color, font, font_size,
   font_weight, italic, underline, strike, align, line_height, letter_spacing, text_case,
-  stroke_cap, stroke_join, stroke_gradient); `null` takes a field out of the style. A node takes
-  it with `"style": "card"`: each style field the node does not set itself applies (a node's own
-  field wins), and changing the style restyles every node that names it.
+  stroke_cap, stroke_join, stroke_gradient, stroke_widths, backdrop_blur); `null` takes a field out
+  of the style. A node takes it with `"style": "card"`: each style field the node does not set
+  itself applies (a node's own field wins; its `stroke_width` keeps a style's `stroke_widths` off,
+  as its `radius` keeps `radii` off), and changing the style restyles every node that names it. A
+  frosted bar is a good style: `{"fill": "#14161ACC", "backdrop_blur": 20, "stroke": "#FFFFFF1F",
+  "stroke_widths": [1, 0, 0, 0]}`.
 - `delete_style` `{name}` removes a colour or style; what used it keeps its look (the values are
   written into it). Colours and styles share one namespace: names are 1 to 64 id characters, at
   most 256 together. `design.get` answers `colors` and `styles`.

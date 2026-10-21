@@ -343,6 +343,22 @@ class DesignLookTest {
         assertEquals("round", dotted.strokeCap)
     }
 
+    @Test
+    fun `a frosted style's sides give way to a node's own weight`() {
+        val looks = DesignLooks(styles = mapOf("glass" to DesignStyle(strokeWidths = listOf(1.0, 0.0, 0.0, 0.0), backdropBlur = 20.0)))
+        val bar = looks.resolve(node("f", "frame").copy(style = "glass"))
+        assertEquals(listOf(1.0, 0.0, 0.0, 0.0), bar.strokeWidths)
+        assertEquals(20.0, bar.backdropBlur)
+        // Its own stroke_width keeps the style's sides off, as its radius keeps radii off.
+        val weighed = looks.resolve(node("r", "rect").copy(style = "glass", strokeWidth = 2.0))
+        assertNull(weighed.strokeWidths)
+        assertEquals(20.0, weighed.backdropBlur)
+        // A text has neither.
+        val text = looks.resolve(node("t", "text").copy(style = "glass"))
+        assertNull(text.strokeWidths)
+        assertNull(text.backdropBlur)
+    }
+
     private fun assertClose(expected: List<Double>, actual: List<Double>) {
         assertEquals(expected.size, actual.size)
         expected.zip(actual).forEach { (e, a) -> assertEquals("$expected vs $actual", e, a, 1e-9) }

@@ -652,6 +652,44 @@ pub fn corners(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
     sec.append(&row);
 }
 
+/// A box's border on each side (`stroke_widths`): a switch between one weight all round and a
+/// weight per side, then the sides, top, right, bottom, left.
+pub fn sides(b: &Rc<Board>, sec: &gtk::Box, n: &Node) {
+    let toggle = gtk::CheckButton::with_label("Each side on its own");
+    toggle.set_active(n.stroke_widths.is_some());
+    let weak = Rc::downgrade(b);
+    let id = n.id.clone();
+    toggle.connect_toggled(move |c| {
+        if let Some(b) = weak.upgrade() {
+            // Every side at the weight it shows now; back to one weight, the widest side's.
+            let w = current(&b, &id, |n| Some(shapes::stroke_weight(n, 1.0))).unwrap_or(1.0);
+            let set = if c.is_active() { set(&[("stroke_widths", json!([w, w, w, w]))]) } else { set(&[("stroke_widths", Value::Null), ("stroke_width", json!(w))]) };
+            b.set_selected(set);
+        }
+    });
+    sec.append(&toggle);
+    let Some(sides) = n.stroke_widths else {
+        return;
+    };
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    row.set_homogeneous(true);
+    for (i, (cap, tip)) in [("T", "Top"), ("R", "Right"), ("B", "Bottom"), ("L", "Left")].into_iter().enumerate() {
+        let weak = Rc::downgrade(b);
+        let id = n.id.clone();
+        row.append(&stored_number(cap, Some(sides[i]), &format!("{tip} border, px"), move |v| {
+            let v = v.clamp(0.0, 1000.0);
+            if let Some(b) = weak.upgrade() {
+                // The other sides as they are now (TM-37).
+                let mut w = current(&b, &id, |n| n.stroke_widths).unwrap_or(sides);
+                w[i] = v;
+                b.set_selected(set(&[("stroke_widths", json!(w))]));
+            }
+            v
+        }));
+    }
+    sec.append(&row);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

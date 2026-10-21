@@ -1340,7 +1340,8 @@ pub enum NodeOp {
     /// Name a style, or change one: each key of `set` is a style field (fill, gradient, stroke,
     /// stroke_width, dash, radius, radii, shadow, shadows, opacity, blur, blend, color, font,
     /// font_size, font_weight, italic, underline, strike, align, line_height, letter_spacing,
-    /// text_case, stroke_cap, stroke_join, stroke_gradient) with a value as a node takes it;
+    /// text_case, stroke_cap, stroke_join, stroke_gradient, stroke_widths, backdrop_blur) with a
+    /// value as a node takes it;
     /// `null` takes it out of the style. A node names it with `style`.
     Style {
         /// 1 to 64 letters, digits, `-`, `_`, `.` or `:`; one namespace with the colours.

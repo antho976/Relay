@@ -212,7 +212,7 @@ data class DesignNode(
 }
 
 /**
- * A named look nodes share (style.rs `Style`): the 26 style fields, each as a node holds it. A
+ * A named look nodes share (style.rs `Style`): the 28 style fields, each as a node holds it. A
  * node takes each one it does not set itself ([resolveLook]).
  */
 @Serializable
@@ -243,6 +243,8 @@ data class DesignStyle(
     @SerialName("stroke_cap") val strokeCap: String? = null,
     @SerialName("stroke_join") val strokeJoin: String? = null,
     @SerialName("stroke_gradient") val strokeGradient: DesignGradient? = null,
+    @SerialName("stroke_widths") val strokeWidths: List<Double>? = null,
+    @SerialName("backdrop_blur") val backdropBlur: Double? = null,
 )
 
 /** Where a stock photo came from (ops/picture.rs `PictureCredit`), by the image's `src`. */

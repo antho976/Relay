@@ -55,6 +55,7 @@
   "styles": {
     "button": {"gradient": {"kind": "linear", "angle": 90, "stops": [{"at": 0, "color": "$accent"}, {"at": 1, "color": "#7B61FF"}]}, "radii": [14, 14, 14, 14], "shadows": [{"y": 4, "blur": 12, "color": "#4AF0FF66"}], "blur": 0, "blend": "normal", "color": "$ink", "font": "Sora", "font_size": 16, "font_weight": 700, "italic": false, "underline": false, "strike": false, "align": "center", "line_height": 1.2, "letter_spacing": 1, "text_case": "upper"},
     "card": {"fill": "#FFFFFF", "stroke": "#0000001A", "stroke_width": 1, "radius": 16, "shadow": {"y": 2, "blur": 8, "color": "#0000001F"}, "opacity": 1},
+    "glass": {"fill": "#14161ACC", "stroke": "#FFFFFF1F", "stroke_widths": [1, 0, 0, 0], "backdrop_blur": 20},
     "outline": {"dash": [4, 2], "stroke_cap": "round", "stroke_join": "round", "stroke_gradient": {"kind": "conic", "stops": [{"at": 0, "color": "$accent"}, {"at": 1, "color": "#7B61FF"}]}}
   },
   "credits": {

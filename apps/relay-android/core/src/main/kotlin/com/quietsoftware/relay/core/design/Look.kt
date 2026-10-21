@@ -352,7 +352,7 @@ fun polygonSides(n: DesignNode): Int = (n.sides ?: if (n.star != null) 5 else 3)
 val STYLE_FIELDS: List<String> = listOf(
     "fill", "gradient", "stroke", "stroke_width", "dash", "radius", "radii", "shadow", "shadows", "opacity", "blur", "blend",
     "color", "font", "font_size", "font_weight", "italic", "underline", "strike", "align", "line_height", "letter_spacing",
-    "text_case", "stroke_cap", "stroke_join", "stroke_gradient",
+    "text_case", "stroke_cap", "stroke_join", "stroke_gradient", "stroke_widths", "backdrop_blur",
 )
 
 private val ALL_BUT_PAGE = DesignValues.kinds - "page"
@@ -392,6 +392,8 @@ val STYLE_KINDS: Map<String, Set<String>> = mapOf(
     "stroke_cap" to CAPPED,
     "stroke_join" to setOf("ellipse", "polygon", "line", "path"),
     "stroke_gradient" to CAPPED,
+    "stroke_widths" to setOf("frame", "rect", "sticky", "image"),
+    "backdrop_blur" to setOf("frame", "rect", "ellipse"),
 )
 
 /** [resolveLook] with the design's named colours and styles. */
@@ -490,6 +492,7 @@ private val DesignTextRun.styled: Boolean
 private val PARTNER = mapOf(
     "fill" to "gradient", "gradient" to "fill", "radius" to "radii", "radii" to "radius",
     "shadow" to "shadows", "shadows" to "shadow", "stroke" to "stroke_gradient", "stroke_gradient" to "stroke",
+    "stroke_width" to "stroke_widths", "stroke_widths" to "stroke_width",
 )
 
 /** Whether [n] sets style field [field] itself. */
@@ -520,6 +523,8 @@ private fun sets(n: DesignNode, field: String): Boolean = when (field) {
     "stroke_cap" -> n.strokeCap != null
     "stroke_join" -> n.strokeJoin != null
     "stroke_gradient" -> n.strokeGradient != null
+    "stroke_widths" -> n.strokeWidths != null
+    "backdrop_blur" -> n.backdropBlur != null
     else -> false
 }
 
@@ -551,6 +556,8 @@ private fun holds(s: DesignStyle, field: String): Boolean = when (field) {
     "stroke_cap" -> s.strokeCap != null
     "stroke_join" -> s.strokeJoin != null
     "stroke_gradient" -> s.strokeGradient != null
+    "stroke_widths" -> s.strokeWidths != null
+    "backdrop_blur" -> s.backdropBlur != null
     else -> false
 }
 
@@ -601,6 +608,8 @@ private fun layUnder(style: DesignStyle, n: DesignNode): DesignNode {
         strokeCap = pick("stroke_cap", n.strokeCap, s.strokeCap),
         strokeJoin = pick("stroke_join", n.strokeJoin, s.strokeJoin),
         strokeGradient = pick("stroke_gradient", n.strokeGradient, s.strokeGradient),
+        strokeWidths = pick("stroke_widths", n.strokeWidths, s.strokeWidths),
+        backdropBlur = pick("backdrop_blur", n.backdropBlur, s.backdropBlur),
     )
 }
 
