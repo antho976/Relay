@@ -1414,6 +1414,7 @@ mod tests {
             audit_id: None,
             skipped: Vec::new(),
             warnings: Vec::new(),
+            matched: Default::default(),
             copied: Default::default(),
             contrast: Vec::new(),
             design: Some(row(rev)),
