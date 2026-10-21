@@ -477,6 +477,14 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                      stroke_widths=[2, 0, 0, 0]),
                 *[node(f"bar-{i}", "screen", "rect", x=260 + 8 * i, y=236, w=8, h=72, fill="#FFFFFF" if i % 2 else "#000000") for i in range(14)],
                 node("pill", "screen", "rect", x=250, y=260, w=124, h=40, radius=12, style="glass"),
+                # A glow 4 px from the screen's edge, squared off by it.
+                node("pause", "screen", "ellipse", x=4, y=180, w=40, h=40, fill="#4AF0FF", shadow={"blur": 16, "color": "#4AF0FF99"}),
+                # Distances written past the longest bar; a swatch in a rounded card's corner.
+                node("km", page, "frame", x=440, y=0, w=320, h=150, fill="#101418", padding=[8],
+                     chart={"kind": "bar", "horizontal": True, "values": True, "suffix": " km", "decimals": 1, "grid": False, "color": "#C9D1DC",
+                            "labels": ["Mon", "Wed", "Sat"], "series": [{"values": [12.5, 30, 64.2], "color": "#4C7DFF"}]}),
+                node("card", page, "frame", x=440, y=180, w=200, h=120, radius=24, fill="#1B2230"),
+                node("swatch", "card", "rect", x=4, y=4, w=10, h=10, fill="#4C7DFF"),
             ])[0]
         if "pictures" in SHOTS:
             designs["pictures"] = create("Pictures", lambda page: [
@@ -834,6 +842,7 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                         break
                     time.sleep(0.2)
                 got["still"] = r
+                got["km"] = call("design.render", {"design_id": designs[shot], "nodes": ["km", "card"], "scale": 2})
                 got["frames"] = call("design.render", {"design_id": designs[shot], "nodes": ["screen"], "frames": 6, "png": False})
                 got["end"] = call("design.render", {"design_id": designs[shot], "nodes": ["screen"], "frames": 6, "png": False, "motion_checks": "end"})
             native(shot, shot, seconds=12, during=renders)
@@ -864,6 +873,10 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
             near = lambda c, rgb: all(abs(c[k] - rgb[k]) <= 8 for k in range(3))
             assert near(centre(nodes["trend.bar-0-6"]), (0x7F, 0xB2, 0xFF)), centre(nodes["trend.bar-0-6"])
             assert near(centre(nodes["trend.bar-0-0"]), (0x3A, 0x4A, 0x66)), centre(nodes["trend.bar-0-0"])
+            # The glow and the swatch are flagged as clipped; the distances are not.
+            clipped = sorted(i["ids"][0] for i in still["issues"] + got["km"]["issues"] if i["code"] == "clipped")
+            assert clipped == ["pause", "swatch"], (still["issues"], got["km"]["issues"])
+            (OUT / "design-glass-km.png").write_bytes(Path(got["km"]["png"]["path"]).read_bytes())
             # The fade sliding up in its hugging column: nothing to flag while it settles, nor where it ends.
             for name in ("frames", "end"):
                 moving = [i for i in got[name]["issues"] if i.get("at_ms") is not None]

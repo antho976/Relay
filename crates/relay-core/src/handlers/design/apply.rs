@@ -1692,14 +1692,14 @@ pub(super) fn register(e: &mut Engine) {
                 restyled: run.styles_changed,
             };
             ctx.finish_reply(move |engine, reply| {
-                let (contrast, warning) = match check::new_contrast(engine, applied) {
-                    Ok(found) => (found.contrast, found.warning),
-                    Err(why) => (Vec::new(), Some(format!("this change's contrast could not be checked ({}); design.render checks it", why.message))),
+                let (contrast, warning, pins) = match check::new_contrast(engine, applied) {
+                    Ok(found) => (found.contrast, found.warning, found.pins),
+                    Err(why) => (Vec::new(), Some(format!("this change's contrast could not be checked ({}); design.render checks it", why.message)), Vec::new()),
                 };
                 if !contrast.is_empty() {
                     reply["contrast"] = json!(contrast);
                 }
-                if let Some(warning) = warning {
+                for warning in pins.into_iter().chain(warning) {
                     match reply.get_mut("warnings").and_then(Value::as_array_mut) {
                         Some(list) => list.push(json!(warning)),
                         None => reply["warnings"] = json!([warning]),

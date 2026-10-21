@@ -148,3 +148,26 @@ fn the_check_costs_on_a_full_design() {
     let (person, agent) = (time(false), time(true));
     println!("{nodes} nodes: the person's apply {person:.2} ms, an agent's {agent:.2} ms (median of 15)");
 }
+
+/// A photo pinned top_bottom in a card a column fills: the card, added with no `h`, stores 0 but
+/// is drawn 260 tall, so the photo keeps 260 px past the card's bottom and is drawn 520 tall. The
+/// agent's reply warns of it; once the card stores what it draws, an edit of the photo says
+/// nothing more.
+#[test]
+fn a_stretching_pin_past_its_frame_is_warned_of() {
+    let (e, _root) = project();
+    let id = ok(&e, "design.create", json!({"project_id": 1, "title": "Workout"}))["design"]["id"].as_i64().unwrap();
+    let me = agent(&e);
+    let reply = ok_as(&e, me.clone(), "design.apply", json!({"design_id": id, "ops": [
+        {"op": "add", "node": {"id": "screen", "parent": "page-1", "kind": "frame", "w": 390, "h": 260, "layout": "column"}},
+        {"op": "add", "node": {"id": "card", "parent": "screen", "kind": "frame", "w": 390, "h_sizing": "fill"}},
+        {"op": "add", "node": {"id": "photo", "parent": "card", "kind": "rect", "w": 390, "h": 260, "pin_y": "top_bottom"}},
+    ]}));
+    let warnings: Vec<&str> = reply["warnings"].as_array().map(|w| w.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    let said: Vec<&&str> = warnings.iter().filter(|w| w.starts_with("photo is drawn")).collect();
+    assert_eq!(said.len(), 1, "{reply}");
+    assert!(said[0].contains("520 px tall, not its h 260") && said[0].contains("give card h 260"), "{}", said[0]);
+    let fixed = ok_as(&e, me, "design.apply", json!({"design_id": id, "ops": [
+        {"op": "update", "id": "card", "set": {"h": 260}}, {"op": "update", "id": "photo", "set": {"name": "Hero"}}]}));
+    assert!(fixed.get("warnings").and_then(Value::as_array).is_none_or(|w| w.iter().all(|w| !w.as_str().unwrap().starts_with("photo"))), "{fixed}");
+}

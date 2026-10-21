@@ -155,6 +155,21 @@ impl Draw<'_> {
         Axis { lo, hi, steps, decimals }
     }
 
+    /// The room a value written by its bar or point takes: the widest of them as estimated, with
+    /// room to spare, and at least 48.
+    fn value_room(&self) -> f64 {
+        let c = self.chart;
+        if c.values != Some(true) {
+            return 48.0;
+        }
+        let mut shown: Vec<f64> = c.series.iter().flat_map(|s| s.values.iter().copied()).collect();
+        if c.stacked == Some(true) {
+            shown.extend((0..c.labels.len()).map(|i| c.series.iter().map(|s| s.values[i]).sum::<f64>()));
+        }
+        let words = |v: f64| self.value(v, c.decimals.map_or(decimals_of_value(v), usize::from));
+        shown.into_iter().map(|v| estimate(&words(v), self.size)).fold(48.0, f64::max)
+    }
+
     fn value(&self, v: f64, decimals: usize) -> String {
         let c = self.chart;
         format!("{}{}{}", c.prefix.as_deref().unwrap_or(""), grouped(v, decimals), c.suffix.as_deref().unwrap_or(""))
@@ -190,11 +205,21 @@ impl Draw<'_> {
         let lh = self.line_h();
         let gutter = self.chart.labels.iter().map(|l| estimate(l, self.size)).fold(0.0, f64::max);
         let gutter = (gutter + 8.0).min(room.w * 0.4);
-        let right = if self.chart.values == Some(true) { 48.0 } else { 12.0 };
+        // Room past the longest bar for its value, 4 px from its end.
+        let right = if self.chart.values == Some(true) { self.value_room() + 4.0 } else { 12.0 };
         let plot = Room { x: room.x + gutter, y: room.y, w: (room.w - gutter - right).max(1.0), h: (room.h - lh - 6.0).max(1.0) };
         let x_of = |v: f64| plot.x + plot.w * axis.at(v);
         self.grid(&axis, |v| (x_of(v), plot.y, 0.0, plot.h), |d, k, v, label| {
-            d.words(format!("tick-{k}"), label, x_of(v) - 40.0, plot.y + plot.h + 6.0, 80.0, TextAlign::Center);
+            // Centred under its step, unless that would pass an end of the room: then flush with it.
+            let x = x_of(v);
+            let (at, align) = if x - 40.0 < room.x {
+                (room.x, TextAlign::Left)
+            } else if x + 40.0 > room.x + room.w {
+                ((room.x + room.w - 80.0).max(room.x), TextAlign::Right)
+            } else {
+                (x - 40.0, TextAlign::Center)
+            };
+            d.words(format!("tick-{k}"), label, at, plot.y + plot.h + 6.0, 80.0_f64.min(room.w), align);
         });
         let n = self.chart.labels.len();
         let band = plot.h / n as f64;
@@ -231,7 +256,7 @@ impl Draw<'_> {
         let group = band * (1.0 - c.gap.unwrap_or(0.3));
         let thick = if stacked { group } else { group / m as f64 };
         let zero = axis.at(0.0_f64.clamp(axis.lo, axis.hi));
-        let lh = self.line_h();
+        let (lh, room) = (self.line_h(), self.value_room());
         for i in 0..c.labels.len() {
             let (mut up, mut down) = (0.0_f64, 0.0_f64);
             for j in 0..m {
@@ -268,11 +293,11 @@ impl Draw<'_> {
                     let words = self.value(shown, self.chart.decimals.map_or(decimals_of_value(shown), usize::from));
                     let [x, y, w, h] = rect;
                     if across {
-                        let end = if v >= 0.0 { x + w + 4.0 } else { x - 52.0 };
+                        let end = if v >= 0.0 { x + w + 4.0 } else { x - 4.0 - room };
                         let align = if v >= 0.0 { TextAlign::Left } else { TextAlign::Right };
-                        self.words(format!("value-{j}-{i}"), &words, end, y + h / 2.0 - lh / 2.0, 48.0, align);
+                        self.words(format!("value-{j}-{i}"), &words, end, y + h / 2.0 - lh / 2.0, room, align);
                     } else {
-                        let wide = thick.max(48.0);
+                        let wide = thick.max(room);
                         let at = if v >= 0.0 { y - lh - 2.0 } else { y + h + 2.0 };
                         self.words(format!("value-{j}-{i}"), &words, x + thick / 2.0 - wide / 2.0, at, wide, TextAlign::Center);
                     }
@@ -286,7 +311,7 @@ impl Draw<'_> {
     fn lines(&mut self, axis: &Axis, plot: Room, band: f64) {
         let c = self.chart;
         let base = plot.y + plot.h * (1.0 - axis.at(0.0_f64.clamp(axis.lo, axis.hi)));
-        let lh = self.line_h();
+        let (lh, room) = (self.line_h(), self.value_room());
         for (j, s) in c.series.iter().enumerate() {
             let color = c.series_color(j);
             let points: Vec<[f64; 2]> = s.values.iter().enumerate()
@@ -317,7 +342,7 @@ impl Draw<'_> {
                 if c.values == Some(true) {
                     let v = s.values[i];
                     let words = self.value(v, c.decimals.map_or(decimals_of_value(v), usize::from));
-                    let wide = band.max(48.0);
+                    let wide = band.max(room);
                     self.words(format!("value-{j}-{i}"), &words, x - wide / 2.0, y - lh - 4.0, wide, TextAlign::Center);
                 }
             }
@@ -412,9 +437,11 @@ fn grouped(v: f64, decimals: usize) -> String {
     if v < 0.0 && !zero { format!("-{out}") } else { out }
 }
 
-/// About how wide `words` are at `size` px, with room to spare.
+/// About how wide `words` are at `size` px, with room to spare: 4 px over the per-character
+/// guess, which short words with wide capitals ("Mon" at 12 px) otherwise outgrow and are cut
+/// with an ellipsis.
 fn estimate(words: &str, size: f64) -> f64 {
-    (words.chars().count() as f64 * size * (ESTIMATE_EM + 0.07)).ceil()
+    (words.chars().count() as f64 * size * (ESTIMATE_EM + 0.07)).ceil() + 4.0
 }
 
 fn round(v: f64) -> f64 {
@@ -467,6 +494,28 @@ mod tests {
         assert!(parts.iter().all(|n| !n.id.contains("key-")), "one series, no legend");
     }
 
+    /// A bar lying across leaves room past its end for its value, however long it is written:
+    /// the longest bar's "64.2 km" ends inside the frame's padding.
+    #[test]
+    fn a_value_past_the_longest_bar_stays_inside() {
+        for w in [320.0, 220.0] {
+            let f = frame(json!({"kind": "bar", "horizontal": true, "values": true, "suffix": " km", "decimals": 1,
+                "labels": ["Mon", "Wed", "Sat"], "series": [{"values": [12.5, 30, 64.2]}]}), w, 140.0);
+            let parts = parts(&f);
+            let value = part(&parts, "value-0-2");
+            assert_eq!(value.text.as_deref(), Some("64.2 km"));
+            let needs = estimate("64.2 km", 12.0);
+            assert!(value.w >= needs, "{w}: {} wide for words about {needs}", value.w);
+            assert!(value.x + value.w <= w, "{w}: it ends at {}", value.x + value.w);
+            assert!(value.x >= part(&parts, "bar-0-2").x + part(&parts, "bar-0-2").w, "{w}: past its bar");
+            // The axis' words stay inside too, its first and last flush with the ends.
+            for tick in parts.iter().filter(|n| n.id.contains(".tick-")) {
+                assert!(tick.x >= 0.0 && tick.x + tick.w <= w, "{w}: {} from {} to {}", tick.id, tick.x, tick.x + tick.w);
+            }
+            assert_eq!(part(&parts, "tick-0").align, Some(TextAlign::Left));
+        }
+    }
+
     #[test]
     fn grouped_stacked_and_across() {
         let data = json!([{"name": "Food", "values": [3, 4]}, {"name": "Rent", "values": [5, 5]}]);
@@ -490,7 +539,7 @@ mod tests {
     /// a slice; the legend keeps the series' colour.
     #[test]
     fn one_value_can_be_brought_out() {
-        let week = json!([{"name": "Minutes", "color": "#3A4A66", "values": [30, 45, 0, 50, 20, 60, 40], "colors": [null, null, null, null, null, null, "#7FB2FF"]}]);
+        let week = json!([{"name": "Minutes", "color": "#3A4A66", "values": [30, 45, 15, 50, 20, 60, 40], "colors": [null, null, null, null, null, null, "#7FB2FF"]}]);
         let bars = parts(&frame(json!({"kind": "bar", "legend": true, "labels": ["M", "T", "W", "T", "F", "S", "S"], "series": week}), 360.0, 200.0));
         let fills: Vec<&str> = (0..7).map(|i| part(&bars, &format!("bar-0-{i}")).fill.as_deref().unwrap()).collect();
         assert_eq!(fills, ["#3A4A66", "#3A4A66", "#3A4A66", "#3A4A66", "#3A4A66", "#3A4A66", "#7FB2FF"]);

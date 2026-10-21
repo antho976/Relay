@@ -9,6 +9,7 @@
 //! Pango agree on where it is.
 
 use super::geom::Rect;
+use super::number::fmt;
 use super::scene::Scene;
 use relay_bus::design::{follow_axis, Items, Justify, Layout, Node, NodeKind, Pin, Sizing, MAX_COORD};
 use rustc_hash::FxHashMap;
@@ -164,6 +165,46 @@ pub fn fit_of(scene: &Scene, placed: &Placed, parent: &str) -> Option<Fit> {
     let p = scene.node(parent).filter(|p| p.kind == NodeKind::Frame)?;
     let r = placed.rect(parent)?;
     Some(Fit { stored: (p.w, p.h), placed: (r.w, r.h) })
+}
+
+/// What a stretching pin (`left_right`, `top_bottom` or `scale`) does to `ids`, or to the free
+/// children of those that are frames, that their author most likely did not mean: in a frame
+/// layout draws at another size than it stores (it fills, stretches or hugs), the node keeps its
+/// stored distances to the frame's edges, so it is drawn past the frame's drawn edge, or to
+/// nothing. One sentence each, with the sizes and the fix, in `ids`' order.
+pub fn pin_traps(scene: &Scene, placed: &Placed, ids: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    let candidates = ids.iter().flat_map(|id| std::iter::once(id.as_str()).chain(scene.children(id).iter().map(String::as_str)));
+    for id in candidates {
+        if !seen.insert(id) {
+            continue;
+        }
+        let Some(n) = scene.node(id).filter(|n| n.is_pinned() && !is_laid(scene, id)) else { continue };
+        let Some(parent) = scene.parent(id) else { continue };
+        let (Some(fit), Some(r), Some(pr)) = (fit_of(scene, placed, parent), placed.rect(id), placed.rect(parent)) else { continue };
+        let (pin_x, pin_y) = n.pins();
+        let axes = [
+            (pin_x, "pin_x", "w", "wide", fit.stored.0, fit.placed.0, n.w, r.w, r.x - pr.x, pr.right() - r.right(), "left"),
+            (pin_y, "pin_y", "h", "tall", fit.stored.1, fit.placed.1, n.h, r.h, r.y - pr.y, pr.bottom() - r.bottom(), "top"),
+        ];
+        for (pin, field, size, long, stored, drawn, own, now, before, after, start) in axes {
+            if !pin.stretches() || (stored - drawn).abs() <= SLACK || (own - now).abs() <= SLACK {
+                continue;
+            }
+            let past = (-before).max(-after);
+            if past <= SLACK && now >= 1.0 {
+                continue;
+            }
+            let how = if pin == Pin::Scale { "scale" } else if field == "pin_x" { "left_right" } else { "top_bottom" };
+            let what = if now < 1.0 { "so it is drawn to nothing".to_string() } else { format!("so it runs {} px past {parent}'s edge", fmt(past)) };
+            out.push(format!(
+                "{id} is drawn {} px {long}, not its {size} {}: it is pinned {how} ({field}) in {parent}, which stores {size} {} but layout draws {} {long}, {what}; give {parent} {size} {}, or pin {id} {start}",
+                fmt(now), fmt(own), fmt(stored), fmt(drawn), fmt(drawn)
+            ));
+        }
+    }
+    out
 }
 
 /// The stored `x`/`y`/`w`/`h` that put `n` at `rel` (its placed box less its parent's origin)
@@ -1247,6 +1288,27 @@ pub(crate) mod tests {
         assert_eq!(p.rect("bar"), Some(Rect::new(10.0, 50.0, 380.0, 4.0)));
         assert_eq!(p.rect("half"), Some(Rect::new(40.0, 0.0, 80.0, 10.0)));
         assert_eq!(p.rect("left"), Some(Rect::new(5.0, 5.0, 10.0, 10.0)));
+    }
+
+    /// A photo pinned top_bottom in a card a column fills: the card stores the 100 px a frame is
+    /// added with but is drawn 260 tall, so the photo keeps 160 px past the card's bottom and is
+    /// drawn 420 tall. Said once, of the photo or of the card; the header's bar, which fits, is
+    /// not.
+    #[test]
+    fn a_stretching_pin_past_its_frame_is_said() {
+        let mut screen = node("screen", Some("p1"), K::Frame, [0.0, 0.0, 400.0, 260.0]);
+        screen.layout = Some(Layout::Column);
+        let mut card = node("card", Some("screen"), K::Frame, [0.0, 0.0, 400.0, 100.0]);
+        card.h_sizing = Some(Sizing::Fill);
+        let mut photo = node("photo", Some("card"), K::Rect, [0.0, 0.0, 400.0, 260.0]);
+        photo.pin_y = Some(PinY::TopBottom);
+        let s = Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), screen, card, photo]);
+        let p = place(&s, "p1", &Mono);
+        assert_eq!(p.rect("photo").map(|r| r.h), Some(420.0));
+        let said = pin_traps(&s, &p, &["photo".into(), "card".into()]);
+        assert_eq!(said, ["photo is drawn 420 px tall, not its h 260: it is pinned top_bottom (pin_y) in card, which stores h 100 but layout draws 260 tall, so it runs 160 px past card's edge; give card h 260, or pin photo top"]);
+        let s = pinned_header();
+        assert!(pin_traps(&s, &place(&s, "p1", &Mono), &["head".into()]).is_empty(), "the bar stretches inside the header");
     }
 
     /// Read back against the header's fit, each placed box is its stored one; a drag along a

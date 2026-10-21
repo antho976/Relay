@@ -1,5 +1,6 @@
 //! design.apply's `contrast`: what an agent's change did to the contrast of the words it
-//! reaches, before it renders. Darkening a named colour can fix five light screens and break five
+//! reaches, before it renders; and the warning for a node a stretching pin draws past its frame
+//! (`layout::pin_traps`), from the same layout. Darkening a named colour can fix five light screens and break five
 //! labels on a dark one; this says which, in the reply, as design.render's `contrast` issues.
 //!
 //! Worked out once the change has committed, with the store lock released (`Ctx::finish_reply`):
@@ -15,7 +16,7 @@ use relay_bus::error::BusError;
 use relay_bus::ops::design::RenderIssue;
 use relay_bus::types::Id;
 use relay_client::design::boxes::contrast_issues;
-use relay_client::design::layout::{place, Estimate};
+use relay_client::design::layout::{pin_traps, place, Estimate};
 use relay_client::design::scene::Scene;
 use std::collections::{BTreeSet, HashSet};
 
@@ -40,7 +41,13 @@ pub(super) struct Applied {
 pub(super) struct Found {
     pub(super) contrast: Vec<RenderIssue>,
     pub(super) warning: Option<String>,
+    /// Each node the list reached (or a free child of one) that a stretching pin draws past its
+    /// frame or to nothing, at most [`PINS_LISTED`].
+    pub(super) pins: Vec<String>,
 }
+
+/// Most pin warnings a reply carries.
+pub(super) const PINS_LISTED: usize = 5;
 
 /// The contrast flags the list made, on each page it reached.
 pub(super) fn new_contrast(engine: &Engine, applied: Applied) -> Result<Found, BusError> {
@@ -57,7 +64,7 @@ pub(super) fn new_contrast(engine: &Engine, applied: Applied) -> Result<Found, B
     })?;
     if rev != applied.rev {
         let warning = format!("the design changed again (rev {rev}) before this change's contrast was checked; design.render checks it");
-        return Ok(Found { contrast: Vec::new(), warning: Some(warning) });
+        return Ok(Found { contrast: Vec::new(), warning: Some(warning), pins: Vec::new() });
     }
     let styles: Styles = serde_json::from_str(&styles)
         .map_err(|why| BusError::internal(format!("design {}: its colours and styles do not read: {why}", applied.design)))?;
@@ -73,19 +80,23 @@ pub(super) fn new_contrast(engine: &Engine, applied: Applied) -> Result<Found, B
     } else {
         applied.touched.iter().filter_map(|id| after.page_of(id).or_else(|| before.page_of(id))).map(str::to_string).collect()
     };
-    let mut found = Vec::new();
+    let (mut found, mut pins) = (Vec::new(), Vec::new());
     for page in &pages {
-        let flags = |scene: &Scene| -> Vec<RenderIssue> {
-            if scene.node(page).is_none() {
-                return Vec::new();
-            }
-            contrast_issues(scene, &place(scene, page, &Estimate), &Estimate, page)
+        let old: HashSet<Vec<String>> = match before.node(page) {
+            Some(_) => contrast_issues(&before, &place(&before, page, &Estimate), &Estimate, page).into_iter().map(|i| i.ids).collect(),
+            None => HashSet::new(),
         };
-        let old: HashSet<Vec<String>> = flags(&before).into_iter().map(|i| i.ids).collect();
-        found.extend(flags(&after).into_iter().filter(|i| !old.contains(&i.ids)));
+        if after.node(page).is_none() {
+            continue;
+        }
+        let placed = place(&after, page, &Estimate);
+        found.extend(contrast_issues(&after, &placed, &Estimate, page).into_iter().filter(|i| !old.contains(&i.ids)));
+        let here: Vec<String> = applied.touched.iter().filter(|id| after.page_of(id) == Some(page.as_str())).cloned().collect();
+        pins.extend(pin_traps(&after, &placed, &here));
     }
+    pins.truncate(PINS_LISTED);
     let more = found.len().saturating_sub(CONTRAST_LISTED);
     found.truncate(CONTRAST_LISTED);
     let warning = (more > 0).then(|| format!("{more} more contrast flags; design.render lists every issue"));
-    Ok(Found { contrast: found, warning })
+    Ok(Found { contrast: found, warning, pins })
 }
