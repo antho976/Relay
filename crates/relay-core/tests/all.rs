@@ -36,8 +36,12 @@ mod build_seed;
 mod bus;
 #[path = "design_assets.rs"]
 mod design_assets;
+#[path = "design_charts.rs"]
+mod design_charts;
 #[path = "design_compat.rs"]
 mod design_compat;
+#[path = "design_components.rs"]
+mod design_components;
 #[path = "design_contrast.rs"]
 mod design_contrast;
 #[path = "design_diff.rs"]

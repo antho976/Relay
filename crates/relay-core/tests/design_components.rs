@@ -233,7 +233,7 @@ fn an_agent_uses_components_and_the_reply_names_the_instance() {
 /// What a main's change costs with many instances: a row main of a title, an amount, a badge and
 /// seven more labels (10 nodes), 40 instances of it, and one edit of the main's title that reaches
 /// them all; beside the same edit of a plain node of the same design. Prints the medians of 15;
-/// run with `cargo test -p relay-core --test design_components -- --ignored --nocapture`.
+/// run with `cargo test -p relay-core --test all -- design_components:: --ignored --nocapture`.
 #[test]
 #[ignore]
 fn a_mains_change_costs_with_its_instances() {

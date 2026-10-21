@@ -135,7 +135,7 @@ fn undo_copies_and_instances() {
 }
 
 /// A page of one chart of each kind, written as design.get answers it to the file `CHART_DUMP`
-/// names, to look at; run with `CHART_DUMP=/path cargo test -p relay-core --test design_charts -- --ignored`.
+/// names, to look at; run with `CHART_DUMP=/path cargo test -p relay-core --test all -- design_charts:: --ignored`.
 #[test]
 #[ignore]
 fn dump_a_page_of_charts() {
