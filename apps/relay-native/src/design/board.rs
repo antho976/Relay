@@ -1079,6 +1079,10 @@ impl Board {
             }
         }
         self.selection_changed();
+        // The pages list lights the page on show, and opens its Hidden fold while that is hidden.
+        if let Some(l) = self.layers.borrow().as_ref() {
+            l.pages_changed();
+        }
     }
 
     pub(super) fn page_name(&self, id: &str) -> String {

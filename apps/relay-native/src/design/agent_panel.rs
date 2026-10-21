@@ -228,8 +228,12 @@ impl AgentPanel {
         let root = gtk::Overlay::new();
         root.add_css_class("design-agent-panel");
         root.set_widget_name("design-agent-panel");
-        root.set_overflow(gtk::Overflow::Hidden);
+        // The card clips what it shows to its rounded corners; the strips over it reach the
+        // true corners, which a rounded clip on the whole would cut off (a press there fell
+        // through to the canvas).
         let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        card.add_css_class("design-agent-card");
+        card.set_overflow(gtk::Overflow::Hidden);
         root.set_child(Some(&card));
 
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -582,6 +586,8 @@ impl AgentPanel {
             "messages": self.drawn.get(),
             "note": self.note.is_visible().then(|| self.note.text().to_string()),
             "box": [alloc.x(), alloc.y(), alloc.width(), alloc.height()],
+            "window_box": self.root.root().and_then(|r| self.root.compute_bounds(&r)).map(|b| [b.x(), b.y(), b.width(), b.height()]),
+            "zoom": self.zoom(),
         })
     }
 

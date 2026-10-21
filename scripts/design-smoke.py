@@ -36,7 +36,11 @@ Shots (default all):
 - panel: a glow's gradient centre dragged inside its screen (no layer past the frame), then the
   agent panel on the canvas showing the fixture terminal, lent from the wall;
 - panel-chat: the agent panel as a conversation: a request sent from its box reaches the fixture
-  agent, which changes the layer, and its log is drawn as Threads draws one.
+  agent, which changes the layer, and its log is drawn as Threads draws one;
+- panel-drag: real pointer and keys through KWin's fake input: the agent panel resized from its
+  edges and corners and moved by its head, each to where the hand went, then its text zoomed;
+- pages: real pointer input on the pages list: a page hidden by its eye, shown again from the
+  Hidden fold, and another dragged to the top; the engine keeps the order.
 
 Each board opens its design by id (RELAY_SMOKE_DESIGN_ID), not as the gallery's first card.
 Needs target/debug/relay and target/debug/relay-native (cargo build -p relay-cli -p
@@ -51,7 +55,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / ".impeccable/review"; OUT.mkdir(parents=True, exist_ok=True)
 ALL = ["gallery", "board", "board-select", "board-narrow", "edit", "script", "agent", "agent-undo", "agent-stale",
-       "agent-delete", "media", "shapes", "more", "reuse", "motion", "render", "glass", "pictures", "perf", "panel", "panel-chat"]
+       "agent-delete", "media", "shapes", "more", "reuse", "motion", "render", "glass", "pictures", "perf", "panel", "panel-chat", "panel-drag", "pages"]
 SHOTS = sys.argv[1:] or ALL
 unknown = [s for s in SHOTS if s not in ALL + ["gallery-narrow"]]
 if unknown:
@@ -383,7 +387,16 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
         for name in ("edit", "agent-undo", "agent-stale", "agent-delete"):
             if name in SHOTS:
                 designs[name] = create(f"Settings ({name})", settings_screen, session=sname)[0]
-        if "panel" in SHOTS or "panel-chat" in SHOTS:
+        if "pages" in SHOTS:
+            designs["pages"], first = create("Four pages")
+            call("design.apply", {"design_id": designs["pages"], "ops": [
+                {"op": "update", "id": first, "set": {"name": "One"}},
+                {"op": "add", "node": {"id": "two", "kind": "page", "name": "Two"}},
+                {"op": "add", "node": {"id": "three", "kind": "page", "name": "Three"}},
+                {"op": "add", "node": {"id": "four", "kind": "page", "name": "Four"}},
+            ]})
+            designs["pages-first"] = first
+        if "panel" in SHOTS or "panel-chat" in SHOTS or "panel-drag" in SHOTS:
             # A dark screen whose glow is a full-bleed rect: its colour moves, the layer stays put.
             designs["panel"], pp = create("Live workout", session=sname)
             call("design.apply", {"design_id": designs["panel"], "ops": [
@@ -584,7 +597,9 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
         # A private virtual compositor: every window opens there, none on a desktop.
         sock = f"relay-design-smoke-{os.getpid()}"
         kwin = subprocess.Popen(["kwin_wayland", "--virtual", "--no-lockscreen", f"--socket={sock}", "--width", "1440", "--height", "900"],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                # Its own, private: panel-drag sends real input through fake input.
+                                env=dict(os.environ, KWIN_WAYLAND_NO_PERMISSION_CHECKS="1"))
         real_runtime = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
         deadline = time.monotonic() + 20
         while not (real_runtime / sock).exists():
@@ -1049,6 +1064,103 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
             assert panel and panel["lent"] == sname and not panel["chat"], (panel, run.log[-1500:])
             print("PANEL_OK", centre, panel["box"])
 
+        def shot_panel_drag(shot):
+            # Real pointer and keys (scripts/wayland-fake-input.py): the agent panel resized from
+            # its edges and corners and moved by its head, each step landing where the hand did,
+            # then Ctrl = twice over it.
+            log = OUT / f"design-{shot}.log"
+            we = dict(os.environ, WAYLAND_DISPLAY=sock)
+            go = lambda *a: subprocess.run(["python3", str(ROOT / "scripts/wayland-fake-input.py"), *map(str, a)], env=we, check=True, timeout=20)
+            steps = []
+            def box():
+                return lines(log.read_text(), "DESIGN_PANEL")[-1]
+            def act(wait_mark):
+                # Each step aims at where the panel is now, then checks where it went.
+                plan = [
+                    ("right edge", lambda x, y, w, h: ("drag", x + w - 2, y + h / 2, 200, 0), lambda b: [b[0], b[1], b[2] + 200, b[3]]),
+                    ("top left corner", lambda x, y, w, h: ("drag", x + 1, y + 1, 60, -120), lambda b: [b[0] + 60, b[1] - 120, b[2] - 60, b[3] + 120]),
+                    ("bottom right corner", lambda x, y, w, h: ("drag", x + w - 1, y + h - 1, -100, -60), lambda b: [b[0], b[1], b[2] - 100, b[3] - 60]),
+                    ("left edge", lambda x, y, w, h: ("drag", x + 2, y + h / 2, -50, 0), lambda b: [b[0] - 50, b[1], b[2] + 50, b[3]]),
+                    ("head", lambda x, y, w, h: ("drag", x + 80, y + 22, 150, -50), lambda b: [b[0] + 150, b[1] - 50, b[2], b[3]]),
+                ]
+                for i, mark in enumerate(["ready", "s1", "s2", "s3", "s4", "s5"]):
+                    wait_mark(mark)
+                    time.sleep(0.3)
+                    now = box()
+                    if steps:
+                        steps[-1]["after"] = now["box"]
+                    if i == len(plan):
+                        x, y, w, h = now["window_box"]
+                        go("click", x + w / 2, y + h / 2)
+                        go("keys", 1, 13, 13)
+                        break
+                    name, aim, want = plan[i]
+                    x, y, w, h = now["window_box"]
+                    steps.append({"name": name, "before": now["box"], "want": want(now["box"])})
+                    go(*aim(x, y, w, h))
+            marks = []
+            for m in ["ready", "s1", "s2", "s3", "s4", "s5"]:
+                marks += ["panel", f"mark:{m}", "wait:2500"]
+            run = native(shot, "panel", script=["fit", "wait:400", "agent-panel:terminal", "wait:2500"] + marks + ["wait:1500", "panel"], seconds=30, during=act)
+            last = lines(run.log, "DESIGN_PANEL")[-1]
+            bad = []
+            for st in steps:
+                ok = all(abs(a - b) <= 2 for a, b in zip(st["after"], st["want"]))
+                print("STEP", st["name"], st["before"], "->", st["after"], "want", st["want"], "OK" if ok else "MISSED")
+                if not ok: bad.append(st["name"])
+            print("ZOOM", last["zoom"], "LENT", last["lent"])
+            assert not bad, bad
+            assert abs(last["zoom"] - 1.25) < 1e-9, last
+            print("PANEL_DRAG_OK")
+
+        def shot_pages(shot):
+            # Real pointer input on the Layers panel's pages list: page Two hidden by its row's eye
+            # (shown under the pointer), found under the Hidden fold and shown again by its eye,
+            # then page Four dragged onto page One's upper half to come first.
+            log = OUT / f"design-{shot}.log"
+            we = dict(os.environ, WAYLAND_DISPLAY=sock)
+            go = lambda *a: subprocess.run(["python3", str(ROOT / "scripts/wayland-fake-input.py"), *map(str, a)], env=we, check=True, timeout=20)
+            first = designs["pages-first"]
+            seen = []
+            def centre(b):
+                return b[0] + b[2] / 2, b[1] + b[3] / 2
+            def act(wait_mark):
+                def state(mark):
+                    wait_mark(mark)
+                    time.sleep(0.3)
+                    st = lines(log.read_text(), "DESIGN_PAGES")[-1]
+                    seen.append((mark, st))
+                    return {r["page"]: r for r in st["rows"]}, st
+                rows, _ = state("ready")
+                go("move", *centre(rows["two"]["box"]))
+                rows, _ = state("s1")
+                assert rows["two"]["eye"], ("no eye under the pointer", rows["two"])
+                go("click", *centre(rows["two"]["eye"]))
+                rows, st = state("s2")
+                assert "two" not in rows and st["fold"], ("Two not folded away", st)
+                go("click", *centre(st["fold"]))
+                rows, st = state("s3")
+                assert rows["two"]["hidden"] and rows["two"]["eye"], ("Two not under the open fold", st)
+                go("click", *centre(rows["two"]["eye"]))
+                rows, st = state("s4")
+                assert not rows["two"]["hidden"] and not st["fold"], ("Two not shown again", st)
+                one = rows[first]["box"]
+                four = rows["four"]["box"]
+                fx, fy = centre(four)
+                go("drag", fx, fy, 0, one[1] + 3 - fy, 30)
+                state("s5")
+            marks = []
+            for m in ["ready", "s1", "s2", "s3", "s4", "s5"]:
+                marks += ["pages", f"mark:{m}", "wait:2000"]
+            run = native(shot, "pages", script=["layers", "wait:800"] + marks, seconds=24, during=act)
+            order = seen[-1][1]["order"]
+            engine = [n["id"] for n in call("design.get", {"design_id": designs["pages"]})["nodes"] if n["kind"] == "page"]
+            print("PAGES", order, "engine", engine)
+            assert order == ["four", first, "two", "three"], order
+            assert engine == order, ("the engine's order differs", engine, order)
+            assert not any(n.get("hidden") for n in call("design.get", {"design_id": designs["pages"]})["nodes"] if n["kind"] == "page")
+            print("PAGES_OK")
+
         def shot_panel_chat(shot):
             # As for Ask: the app's paste check sets the agent working until it is at its prompt
             # again, and a request sent meanwhile goes as mail, which the fixture does not read.
@@ -1082,7 +1194,7 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                  "agent-undo": shot_agent_undo, "agent-stale": shot_agent_stale, "agent-delete": shot_agent_delete,
                  "media": shot_media, "shapes": shot_shapes, "more": shot_more, "reuse": shot_reuse, "motion": shot_motion,
                  "render": shot_render, "glass": shot_glass, "pictures": shot_pictures, "perf": shot_perf,
-                 "panel": shot_panel, "panel-chat": shot_panel_chat}
+                 "panel": shot_panel, "panel-chat": shot_panel_chat, "panel-drag": shot_panel_drag, "pages": shot_pages}
         for shot in SHOTS:
             started = time.monotonic()
             try:

@@ -491,6 +491,29 @@ impl Layers {
     }
 }
 
+impl Layers {
+    /// The pages list as drawn, for the smoke's `pages` step: each row's page, whether it is
+    /// hidden, and its and its eye's boxes on the window, the fold's box, and the pages' order.
+    pub fn pages_state(&self) -> Value {
+        let on_window = |w: &gtk::Widget| w.root().and_then(|r| w.compute_bounds(&r)).map(|b| [b.x(), b.y(), b.width(), b.height()]);
+        let mut rows = Vec::new();
+        let mut fold = None;
+        let mut child = self.pages.first_child();
+        while let Some(row) = child {
+            child = row.next_sibling();
+            if row.has_css_class("design-page-fold") {
+                fold = on_window(&row);
+            } else if let Some(page) = row.widget_name().strip_prefix("design-page:") {
+                let eye = row.first_child().and_then(|g| g.next_sibling()).and_then(|n| n.next_sibling());
+                rows.push(json!({"page": page, "hidden": row.has_css_class("hidden"), "box": on_window(&row),
+                    "eye": eye.as_ref().filter(|e| e.is_visible()).and_then(on_window)}));
+            }
+        }
+        let order = self.board.upgrade().map(|b| b.doc.scene.borrow().pages().to_vec()).unwrap_or_default();
+        json!({"rows": rows, "fold": fold, "order": order})
+    }
+}
+
 /// The pages, their names and whether each is hidden, and whether the fold of hidden pages
 /// shows: a pages list built for them stays.
 fn page_sig(b: &Rc<Board>) -> PageSig {
@@ -684,10 +707,14 @@ fn page_row(b: &Rc<Board>, page: &str, current: bool, pop: Option<&gtk::Popover>
     let id = page.to_string();
     let p = pop.map(|p| p.downgrade());
     let w = row.downgrade();
-    click.connect_pressed(move |_, n, _, _| {
+    click.connect_pressed(move |_, n, x, y| {
         let Some(b) = weak.upgrade() else {
             return;
         };
+        // Its eye is pressed, not the row: hiding a page does not open it first.
+        if w.upgrade().and_then(|w| w.pick(x, y, gtk::PickFlags::DEFAULT)).is_some_and(|t| t.ancestor(gtk::Button::static_type()).is_some()) {
+            return;
+        }
         if n == 2 {
             if let Some(w) = w.upgrade() {
                 rename_node(&b, &id, Some(w.upcast_ref()));

@@ -6,7 +6,8 @@
 //! `select:a,b` `click:x,y` `dbl:x,y` `drag:x,y>x,y[:shift|alt]` `tool:rect` `type:words`
 //! `endedit` `nudge:dx,dy` `set:{json}` `align:left` `layout:row` `duplicate` `delete` `group`
 //! `frame` `ungroup` `copy` `paste` `undo` `redo` `ask:words` `zoom:1.5` `fit` `layers` `wait:ms`
-//! `print` (the scene, the selection and the colours and styles); `mark:name` prints
+//! `print` (the scene, the selection and the colours and styles); `pages` prints `DESIGN_PAGES`
+//! with the Layers panel's page rows, their eyes and the hidden fold; `mark:name` prints
 //! `DESIGN_MARK name`, for a harness that acts between steps (as an agent would); `chrome`
 //! prints `DESIGN_CHROME` with what the top bar and the toast say, whether Undo agent shows and
 //! whether a text edit is open and on screen.
@@ -292,6 +293,11 @@ fn next(b: Rc<Board>, steps: Vec<String>, at: usize) {
             if let Some(key) = super::tools::find_named(b.overlay.upcast_ref(), "design-layers-key").and_downcast::<gtk::ToggleButton>() {
                 key.set_active(!key.is_active());
             }
+        }
+        "pages" => {
+            // The Layers panel's pages list as drawn: `DESIGN_PAGES {...}`.
+            let state = b.layers.borrow().as_ref().map(|l| l.pages_state());
+            println!("DESIGN_PAGES {}", state.unwrap_or(serde_json::Value::Null));
         }
         "pan" => {
             // `pan:dx,dy,frames`: pan by (dx, dy) screen pixels on each of `frames` frames.
