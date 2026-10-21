@@ -236,7 +236,18 @@ MCP tools are generated from the same registry, with each node field documented 
   padding), `overlap`, `text_overlap`, `clipped` and `contrast`. It reads the design afresh and draws
   with a painter of its own, never a board's. Every open board showing that design says **"<agent>
   looked at this design"** in a toast once it has drawn; your own renders carry no name and say
-  nothing.
+  nothing. `since_rev` pictures what changed after a rev: the outermost nodes written since, on
+  the page most of them are on (a warning names the others).
+- **Few calls.** An agent's turns are what a person waits on, so the agent's tools save them. A
+  `design.apply` from the MCP tool may carry `render` (true, or render's options): the server
+  applies the list, then renders `since_rev` its `prev_rev`, and answers both in one tool result
+  (boxes only when asked; without the desktop app the edits stand and the answer says why there is
+  no picture). `update_many` and `delete_many` change or delete every node their `ids` name and
+  their `where` finds (design.find's filters, matched against the design before the list); the
+  engine runs them as an edit a node, so each keeps every rule of `update` and `delete`, under the
+  edit's own index, and the reply's `matched` counts them. A list the engine refuses is kept by
+  the MCP server for that design, and the refusal's `resend` says how to send it again with only
+  its corrections (`fix: {"<index>": <edit>}`, `drop: [index]`, or `fix: {}` after `design.stale`).
 
 ## On the phone
 
