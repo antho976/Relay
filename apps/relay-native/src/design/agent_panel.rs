@@ -510,6 +510,37 @@ impl AgentPanel {
         *self.lent.borrow_mut() = Some((session, pane));
     }
 
+    /// The wall rebuilt `name`'s pane, or let it go: show the new one in place of the stopped
+    /// one held, or say it is gone.
+    pub fn pane_rebuilt(&self, name: &str) {
+        let Some(old) = self.lent.borrow_mut().take_if(|(lent, _)| lent == name).map(|(_, pane)| pane) else {
+            return;
+        };
+        if old.root.parent().as_ref() == Some(self.slot.upcast_ref()) {
+            self.slot.remove(&old.root);
+        }
+        let Some(pane) = self.ui.upgrade().and_then(|ui| ui.relend_pane(name)) else {
+            return self.say_missing(&format!("{name}'s terminal is not open in this project's wall, so it cannot show here."));
+        };
+        if pane.root.parent().is_some() {
+            pane.root.unparent();
+        }
+        self.slot.append(&pane.root);
+        self.missing.set_visible(false);
+        pane.schedule_resize();
+        *self.lent.borrow_mut() = Some((name.to_string(), pane));
+    }
+
+    /// The wall asks for `name`'s terminal back: show the conversation, which hands it back.
+    /// False when this card does not hold it.
+    pub fn reclaim(&self, name: &str) -> bool {
+        if !self.lent.borrow().as_ref().is_some_and(|(lent, _)| lent == name) {
+            return false;
+        }
+        self.set_chat(true);
+        true
+    }
+
     fn say_missing(&self, why: &str) {
         self.missing_note.set_text(why);
         self.missing.set_visible(true);
