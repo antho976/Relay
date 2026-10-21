@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 /// The schema version this build knows. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: i64 = 32;
+pub const SCHEMA_VERSION: i64 = 33;
 
 /// Numbered migrations; index 0 brings a fresh DB to `user_version = 1`.
 pub const MIGRATIONS: &[&str] = &[
@@ -510,6 +510,13 @@ pub const MIGRATIONS: &[&str] = &[
     // instructions each. No design held one before.
     r#"
     ALTER TABLE designs ADD COLUMN components INTEGER NOT NULL DEFAULT 0;
+    "#,
+    // v33 - charts that fill their laid-out parent: the ids of a design's chart frames whose width
+    // or height fills, a JSON array kept by the writes that make one (and pruned as they stop), so
+    // a design.apply lays out only the pages that hold one, and finds them without a pass over the
+    // design (a partial index costs every node write, as v32 says). Nothing filled before.
+    r#"
+    ALTER TABLE designs ADD COLUMN fill_charts TEXT NOT NULL DEFAULT '[]';
     "#,
 ];
 

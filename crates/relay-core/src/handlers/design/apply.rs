@@ -196,6 +196,11 @@ pub(super) struct Run<'a> {
     pub(super) syncing: bool,
     /// The chart frames to draw again once the edits have run ([`Run::draw_charts`]).
     pub(super) charts: Vec<String>,
+    /// The design's chart frames that fill (`designs.fill_charts`), whether an edit changed the
+    /// list, and the parents of the nodes it deleted: [`Run::fit_charts`] lays out their pages.
+    pub(super) fill_charts: Vec<String>,
+    pub(super) fill_charts_changed: bool,
+    pub(super) fit_reached: Vec<String>,
     pub(super) reached: Vec<String>,
     pub(super) mains_gone: Vec<String>,
 }
@@ -892,6 +897,7 @@ impl Run<'_> {
         self.inverse.push(vec![NodeOp::Delete { id: node.id.clone() }]);
         if node.chart.is_some() {
             self.chart_changed(&node.id);
+            self.note_fill(&node);
         }
         // What a later add may go in; where a leaf sits is read when asked (B6), seldom.
         if node.kind.holds_children() {
@@ -1006,6 +1012,7 @@ impl Run<'_> {
         if (next.chart.is_some() || node.chart.is_some()) && set.keys().any(|k| super::charts::DRAWN_FROM.contains(&k.as_str())) {
             self.chart_changed(&next.id);
         }
+        self.note_fill(&next);
         Ok(Some(next.id))
     }
 
@@ -1155,6 +1162,9 @@ impl Run<'_> {
                 .with_hint("add another page first, or delete the design"));
         }
         let index = self.index_of(root.parent.as_deref(), &id, root.ord)?;
+        if let Some(parent) = &root.parent {
+            self.fit_reached.push(parent.clone());
+        }
         // Its undo adds them back in this order, so each lands where it was.
         let doomed = self.subtree_rows(id, root)?;
         // Every node of it is read before any goes: the undo re-adds each, and a node this build
@@ -1493,8 +1503,11 @@ pub(super) fn register(e: &mut Engine) {
             }
         }
         let by = actor_name(ctx)?;
-        let (bytes, next_node, components): (i64, i64, bool) = ctx.tx().prepare_cached("SELECT bytes, next_node, components FROM designs WHERE id = ?1").bus()?
-            .query_row([design.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).bus()?;
+        let (bytes, next_node, components, fill_charts): (i64, i64, bool, String) = ctx.tx()
+            .prepare_cached("SELECT bytes, next_node, components, fill_charts FROM designs WHERE id = ?1").bus()?
+            .query_row([design.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).bus()?;
+        // A list this build cannot read is started again by the next chart that fills.
+        let fill_charts: Vec<String> = serde_json::from_str(&fill_charts).unwrap_or_default();
         let tombstones: bool = ctx.tx().prepare_cached("SELECT EXISTS(SELECT 1 FROM design_removed WHERE design_id = ?1)").bus()?
             .query_row([design.id], |r| r.get(0)).bus()?;
         let assets = ctx.engine().store.design_assets_dir();
@@ -1545,6 +1558,9 @@ pub(super) fn register(e: &mut Engine) {
             has_mains: Some(components),
             syncing: false,
             charts: Vec::new(),
+            fill_charts,
+            fill_charts_changed: false,
+            fit_reached: Vec::new(),
             reached: Vec::new(),
             mains_gone: Vec::new(),
         };
@@ -1573,6 +1589,11 @@ pub(super) fn register(e: &mut Engine) {
         run.draw_charts()?;
         run.sync_components()?;
         run.follow_pins()?;
+        // A chart the layout or a pin resized is drawn at its new size, and what it holds pinned
+        // follows it.
+        run.fit_charts()?;
+        run.follow_pins()?;
+        run.draw_charts()?;
         run.release_ends()?;
         run.check_refs()?;
         run.write_styles()?;

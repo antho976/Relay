@@ -1613,6 +1613,8 @@ fn cases() -> Vec<Case> {
 /// - `1721`, `4903`: `scripts/design-smoke.py perf`'s design (phone artboards in auto layout, a
 ///   title and ten rows of a text and a toggle each), with 40 and 114 artboards: the sizes the
 ///   2026-10-16 reading and teal-moose's TM-80 measured.
+/// - `1721c`, `4903c`: those, with a chart that fills the first artboard's width at its top: a list
+///   on the page lays the page out to size it (`charts.rs`, `fit_charts`).
 /// - `siblings`: a page and 4,998 top-level nodes, one in five an empty frame (B58).
 struct Designs {
     engine: Arc<Engine>,
@@ -1682,6 +1684,15 @@ fn smoke(boards: usize) -> Vec<Value> {
     ops
 }
 
+/// [`smoke`] with a bar chart that fills artboard `a0`'s width, first in it.
+fn smoke_chart(boards: usize) -> Vec<Value> {
+    let mut ops = smoke(boards);
+    ops.insert(1, json!({"op": "add", "node": {"id": "a0-chart", "parent": "a0", "kind": "frame", "w": 300, "w_sizing": "fill", "h": 180,
+        "chart": {"kind": "bar", "stacked": true, "labels": ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"],
+            "series": [{"name": "Run", "values": [20, 0, 15, 30, 0, 45, 10]}, {"name": "Ride", "values": [0, 30, 10, 0, 25, 0, 60]}]}}}));
+    ops
+}
+
 fn siblings() -> Vec<Value> {
     (0..4_998).map(|i| json!({"op": "add", "node": {
         "id": format!("s{i}"), "parent": PAGE, "kind": if i % 5 == 0 { "frame" } else { "rect" }, "x": i, "w": 40, "h": 20, "fill": "#336699",
@@ -1715,7 +1726,7 @@ impl Designs {
         let mut d = Designs { engine, snapshot: root.join("design-baseline.db"), ids: Default::default(), cleanup: Mutex::new(Vec::new()), scenes: Mutex::new(Default::default()) };
         let ws = d.call("workspace.create", json!({"path": root.join("design-ws")}));
         d.call("project.add", json!({"workspace_id": Fixture::id(&ws), "path": repo}));
-        for (name, ops) in [("500", grid(500)), ("2000", grid(2_000)), ("5000", grid(5_000)), ("1721", smoke(40)), ("4903", smoke(114)), ("siblings", siblings())] {
+        for (name, ops) in [("500", grid(500)), ("2000", grid(2_000)), ("5000", grid(5_000)), ("1721", smoke(40)), ("4903", smoke(114)), ("1721c", smoke_chart(40)), ("4903c", smoke_chart(114)), ("siblings", siblings())] {
             let made = d.call("design.create", json!({"project_id": 1, "title": format!("perf {name}")}));
             let id = made["design"]["id"].as_i64().unwrap();
             assert_eq!(made["nodes"][0]["id"], PAGE);
@@ -1865,6 +1876,17 @@ fn design_cases(c: &mut Vec<Case>) {
                 Box::new(move || Outcome::of(engine.dispatch(req, Door::InProcess)))
             }),
         });
+    }
+
+    // A text edited on a page with and without a chart that fills: in another artboard (`a3`),
+    // which lays nothing out, and in the chart's own (`a0`, `beside_chart`), which lays that
+    // artboard out to size the chart (`fit_charts`). A design without one never runs it.
+    for name in ["1721", "1721c", "4903", "4903c"] {
+        for (row, text) in [("update_text", "a3-r4-x"), ("update_text_beside_chart", "a0-r4-x")] {
+            design_apply(c, &format!("apply.{row}.{name}"), Mid, false, move |fx, d| {
+                json!({"design_id": d.id(name), "ops": [{"op": "update", "id": text, "set": {"text": format!("Setting {}", fx.next())}}]})
+            });
+        }
     }
 
     // B58: 1,999 of 4,998 siblings into a new group (2,000 edits, the most a list takes) and out

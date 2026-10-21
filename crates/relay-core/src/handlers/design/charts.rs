@@ -6,22 +6,49 @@
 //! other, so one undo takes back the change and its parts. A chart in an instance is its main's
 //! (the component sync, which runs after, carries the parts); a lenient list draws nothing. An
 //! `impl Run`, as the follow rule is.
+//!
+//! A chart frame that fills its laid-out parent (`w_sizing` or `h_sizing` `fill`) is drawn at the
+//! size the layout gives it: once the follow rule has run, each of a page's children the list
+//! reached that holds one (an artboard, most often) is laid out by the canvas's own code (words
+//! measured roughly, `Estimate`), and a chart whose laid-out size is not its stored one has that
+//! size written to `w`/`h`, which draws it again. A page lays nothing out, so where a chart is
+//! drawn depends on nothing outside its page child, and only that is read. Such charts are listed
+//! on the design (`designs.fill_charts`), so a list on a design without one lays nothing out.
 
 use super::apply::Run;
+use super::get::{ordered, Raw, Scope};
 use super::node_of;
 use crate::engine::IntoBus;
-use relay_bus::design::Node;
+use relay_bus::design::{Node, Sizing, MAX_DEPTH};
 use relay_bus::error::BusError;
 use relay_bus::ErrorKind;
 use relay_client::design::chart::parts;
+use relay_client::design::layout::{place, Estimate};
+use relay_client::design::scene::Scene;
 use rusqlite::params;
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
 /// A frame's children in paint order, with their bodies: its parts are among them.
 const CHILDREN: &str = "SELECT node_id, body FROM design_nodes WHERE design_id = ?1 AND parent_id = ?2 ORDER BY ord, node_id";
 
 /// What an update of a chart frame changes that its parts are drawn from.
 pub(super) const DRAWN_FROM: &[&str] = &["chart", "w", "h", "width", "height", "padding"];
+
+/// Node `?2` and every node inside it as far as `?3` levels down, through the parent index and
+/// then the primary key (`CROSS JOIN` keeps `down` the outer loop of both, as `HEIGHT` in apply
+/// does: as a plain join the planner reads every row of the design for the bodies).
+const SUBTREE: &str = "WITH RECURSIVE down(node_id, n) AS (
+        SELECT ?2, 0
+        UNION ALL
+        SELECT d.node_id, down.n + 1 FROM down CROSS JOIN design_nodes d ON d.design_id = ?1 AND d.parent_id = down.node_id
+        WHERE down.n < ?3)
+    SELECT n.node_id, n.parent_id, n.ord, n.body FROM down CROSS JOIN design_nodes n ON n.design_id = ?1 AND n.node_id = down.node_id";
+
+/// Whether `n` is a chart frame the layout sizes: its width or height fills.
+pub(super) fn fills(n: &Node) -> bool {
+    n.chart.is_some() && (n.w_rule() == Sizing::Fill || n.h_rule() == Sizing::Fill)
+}
 
 impl Run<'_> {
     /// The refusal of an edit by hand of `id`, a part a chart drew.
@@ -48,6 +75,95 @@ impl Run<'_> {
         let out = frames.iter().try_for_each(|frame| self.draw_chart(frame));
         self.syncing = was;
         out
+    }
+
+    /// Note node `n`, as an edit wrote it, on the design's list of charts that fill.
+    pub(super) fn note_fill(&mut self, n: &Node) {
+        if fills(n) && !self.fill_charts.contains(&n.id) {
+            self.fill_charts.push(n.id.clone());
+            self.fill_charts_changed = true;
+        }
+    }
+
+    /// Give each chart that fills, on a page the list reached, its laid-out size (see the module),
+    /// and keep the design's list of them: one gone or no longer filling leaves it.
+    pub(super) fn fit_charts(&mut self) -> Result<(), BusError> {
+        if !self.lenient && !self.fill_charts.is_empty() {
+            self.fit()?;
+        }
+        if std::mem::take(&mut self.fill_charts_changed) {
+            let list = serde_json::to_string(&self.fill_charts).map_err(|why| BusError::internal(why.to_string()))?;
+            self.tx.prepare_cached("UPDATE designs SET fill_charts = ?2 WHERE id = ?1").bus()?
+                .execute(params![self.design, list]).bus()?;
+        }
+        Ok(())
+    }
+
+    fn fit(&mut self) -> Result<(), BusError> {
+        let mut reached: Vec<(String, String)> = Vec::new();
+        for id in self.touched.clone().iter().chain(std::mem::take(&mut self.fit_reached).iter()) {
+            if let Some(top) = self.top(id)? {
+                if !reached.contains(&top) {
+                    reached.push(top);
+                }
+            }
+        }
+        // Each chart that still fills, by the page child it is in; one in a page child the list
+        // did not reach keeps the size it was given.
+        let mut by_top: BTreeMap<(String, String), Vec<Node>> = BTreeMap::new();
+        for id in self.fill_charts.clone() {
+            // Where it is comes from the parent index; its body is read only where it is reached.
+            let top = self.top(&id)?;
+            if top.as_ref().is_some_and(|top| !reached.contains(top)) {
+                continue;
+            }
+            let chart = self.stored(&id)?.filter(|n| fills(n) && n.instance_of.is_none());
+            match (top, chart) {
+                (Some(top), Some(chart)) => by_top.entry(top).or_default().push(chart),
+                _ => {
+                    self.fill_charts.retain(|c| *c != id);
+                    self.fill_charts_changed = true;
+                }
+            }
+        }
+        for ((page, top), charts) in by_top {
+            let Some(page_row) = self.row(&page)? else { continue };
+            let mut rows = vec![Raw { id: page.clone(), parent: None, ord: page_row.ord, known: true, changed: true, body: Some(page_row.body) }];
+            rows.extend(self.tx.prepare_cached(SUBTREE).bus()?
+                .query_map(params![self.design, top, MAX_DEPTH as i64], |r| {
+                    Ok(Raw { id: r.get(0)?, parent: r.get(1)?, ord: r.get(2)?, known: true, changed: true, body: Some(r.get(3)?) })
+                }).bus()?
+                .collect::<rusqlite::Result<Vec<_>>>().bus()?);
+            let read = ordered(self.design, rows, &Scope { page: None, named: None, delta: false })?;
+            let scene = Scene::new(read.nodes).with_styles(self.styles()?.clone());
+            let placed = place(&scene, &page, &Estimate);
+            for chart in charts {
+                let Some(rect) = placed.rect(&chart.id) else { continue };
+                let mut set = Map::new();
+                if chart.w_rule() == Sizing::Fill && (rect.w - chart.w).abs() >= 0.5 {
+                    set.insert("w".into(), Value::from(half(rect.w)));
+                }
+                if chart.h_rule() == Sizing::Fill && (rect.h - chart.h).abs() >= 0.5 {
+                    set.insert("h".into(), Value::from(half(rect.h)));
+                }
+                if !set.is_empty() {
+                    self.label = format!("fit chart {:?}", chart.id);
+                    self.update(chart.id.clone(), set)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Node `id`'s page and the page's child it is in (itself, for one): none for a page, or for
+    /// a node not in the design.
+    fn top(&mut self, id: &str) -> Result<Option<(String, String)>, BusError> {
+        let Some((depth, page)) = self.place(id)? else { return Ok(None) };
+        if depth == 0 {
+            return Ok(None);
+        }
+        let top = self.chain(id).nth(depth - 1).map(str::to_string);
+        Ok(top.map(|top| (page, top)))
     }
 
     fn draw_chart(&mut self, frame: &str) -> Result<(), BusError> {
@@ -109,5 +225,29 @@ impl Run<'_> {
             }
         }
         Ok(())
+    }
+}
+
+/// `v` to the half pixel, as a chart's parts are placed.
+fn half(v: f64) -> f64 {
+    (v.max(0.0) * 2.0).round() / 2.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A page child's nodes are found through the parent index and their bodies by key, never by
+    /// a pass over every row of the design: as a plain join, an edit beside a chart that fills
+    /// cost 6.1 M instructions at 1,721 nodes and 12.3 M at 4,903, and 2.8 M at either this way.
+    #[test]
+    fn the_subtree_is_read_by_index() {
+        let store = crate::Store::open_memory().unwrap();
+        let conn = store.lock();
+        let plan: Vec<String> = conn.prepare(&format!("EXPLAIN QUERY PLAN {SUBTREE}")).unwrap()
+            .query_map(params![1, "a", 70], |r| r.get::<_, String>(3)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert!(plan.iter().any(|step| step.contains("INDEX design_nodes_parent (design_id=? AND parent_id=?)")), "{plan:?}");
+        assert!(plan.iter().any(|step| step.contains("PRIMARY KEY (design_id=? AND node_id=?)")), "{plan:?}");
+        assert!(plan.iter().all(|step| !step.starts_with("SCAN") || step == "SCAN down" || step == "SCAN CONSTANT ROW"), "{plan:?}");
     }
 }

@@ -137,8 +137,8 @@ More you can reach for:
 - **Runs**: parts of a text in a style of their own: `"text": "8.4 km", "runs": [{"start": 3,
   "end": 6, "font_size": 14, "color": "#8C877F"}]`. 1 to 64, in order, not overlapping, counted in
   characters (`end` not included), each setting `color`, `font`, `font_size`, `font_weight`,
-  `italic`, `underline`, `strike` or `rise` (px above the baseline). Changing `text` means sending
-  `runs` (or `null`) with it.
+  `italic`, `underline`, `strike`, `rise` (px above the baseline) or `letter_spacing` (px).
+  Changing `text` means sending `runs` (or `null`) with it.
 - **`max_lines`** (1 to 1000) cuts a text after that many lines with "…". It needs a width to wrap
   at: a sticky, a shape's label, or a text with a fixed `w` or `w_sizing: "fill"`; a hugging text is
   refused.
@@ -264,8 +264,10 @@ outside the copy is let go**: the line stays drawn where it was, attached to not
 `dx`/`dy` add to the copy's stored `x/y`, which a laid-out parent ignores.
 
 **Charts are data, not drawings.** Never build a chart from hand-placed rects and labels: give a
-frame (no `layout`, a fixed `w` and `h`) a `chart`, and the engine draws its parts from the data as
-the frame's children, placed exactly, so every label sits under its bar:
+frame (no `layout`, a `w` and `h`) a `chart`, and the engine draws its parts from the data as the
+frame's children, placed exactly, so every label sits under its bar. **In a card or a column, give
+the chart `"w_sizing": "fill"`** (or `h_sizing`): it is drawn at the width the layout gives it, and
+drawn again when that room changes, so a narrower screen never pushes it out of its card:
 
 ```json
 {"op":"add","node":{"id":"spend","parent":"screen","kind":"frame","w":358,"h":220,"padding":[16],"fill":"$card",

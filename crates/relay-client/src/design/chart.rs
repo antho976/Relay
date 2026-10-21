@@ -32,6 +32,9 @@ pub fn parts(frame: &Node) -> Vec<Node> {
         ChartKind::Bar if chart.horizontal == Some(true) => draw.across(room),
         _ => draw.axes(room),
     }
+    // A bar of no length (a value of 0, or one too small to show) is not drawn: a rect stored
+    // 0 tall takes the 100 px a shape added without a size gets (B49), and would cover its stack.
+    draw.out.retain(|n| n.kind != NodeKind::Rect || (n.w > 0.0 && n.h > 0.0));
     draw.out
 }
 
@@ -450,7 +453,7 @@ mod tests {
         assert!(parts.iter().all(|n| n.generated == Some(true) && n.parent.as_deref() == Some("spend")));
         let ticks: Vec<&str> = (0..).map_while(|k| parts.iter().find(|n| n.id == format!("spend.tick-{k}"))).map(|n| n.text.as_deref().unwrap()).collect();
         assert_eq!(ticks, ["$0", "$200", "$400", "$600"]);
-        for i in 0..4 {
+        for i in 0..3 {
             let (label, bar) = (part(&parts, &format!("label-{i}")), part(&parts, &format!("bar-0-{i}")));
             let (mid_label, mid_bar) = (label.x + label.w / 2.0, bar.x + bar.w / 2.0);
             assert!((mid_label - mid_bar).abs() <= 0.5, "label {i} at {mid_label}, its bar at {mid_bar}");
@@ -460,7 +463,7 @@ mod tests {
         assert!((mar.y + mar.h - zero.y).abs() <= 0.5, "it stands on the zero line");
         let top = part(&parts, "grid-3");
         assert!(mar.y > top.y, "under the round top");
-        assert_eq!(part(&parts, "bar-0-3").h, 0.0);
+        assert!(parts.iter().all(|n| n.id != "spend.bar-0-3"), "a 0 draws no bar");
         assert!(parts.iter().all(|n| !n.id.contains("key-")), "one series, no legend");
     }
 
@@ -538,5 +541,26 @@ mod tests {
             }
         }
         assert!(parts(&frame(json!({"kind": "bar", "labels": ["A"], "series": [{"values": [1]}]}), 4.0, 4.0)).is_empty(), "no room");
+    }
+
+    /// A stack with a 0 in it: the 0 draws nothing, the segments either side of it meet, every
+    /// bar stays between the axis and its top, and the total is still written over the stack.
+    #[test]
+    fn a_zero_in_a_stack_draws_nothing() {
+        let data = json!([{"name": "Run", "values": [20, 0, 15, 0.001]}, {"name": "Ride", "values": [0, 30, 10, 25]}, {"name": "Swim", "values": [10, 5, 0, 0]}]);
+        let stack = parts(&frame(json!({"kind": "bar", "stacked": true, "values": true, "decimals": 0, "labels": ["Mo", "Tu", "We", "Th"], "series": data}), 360.0, 220.0));
+        for gone in ["bar-1-0", "bar-0-1", "bar-2-2", "bar-2-3", "bar-0-3"] {
+            assert!(stack.iter().all(|n| n.id != format!("spend.{gone}")), "{gone} is a 0");
+        }
+        let zero = part(&stack, "grid-0").y;
+        for n in stack.iter().filter(|n| n.kind == NodeKind::Rect && n.id.contains(".bar-")) {
+            assert!(n.y + n.h <= zero + 0.5 && n.h > 0.0, "{} from {} to {} under the axis at {zero}", n.id, n.y, n.y + n.h);
+        }
+        let (run, swim) = (part(&stack, "bar-0-0"), part(&stack, "bar-2-0"));
+        assert!((swim.y + swim.h - run.y).abs() <= 0.5, "swim sits on run, past ride's 0");
+        assert!(swim.radii.unwrap()[0] > 0.0 && run.radii.unwrap()[0] == 0.0, "the top is round");
+        assert!(part(&stack, "bar-1-2").radii.unwrap()[0] > 0.0, "ride tops Wednesday: swim's 0 above it draws nothing");
+        assert_eq!(part(&stack, "value-2-3").text.as_deref(), Some("25"), "the total over a stack whose last is 0");
+        assert!(part(&stack, "value-2-3").y < part(&stack, "bar-1-3").y, "written above the stack");
     }
 }

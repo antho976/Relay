@@ -100,6 +100,7 @@ mod tests {
             underline: None,
             strike: None,
             rise: None,
+            letter_spacing: None,
         }
     }
 

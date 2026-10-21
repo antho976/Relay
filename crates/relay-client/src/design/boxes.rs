@@ -1279,7 +1279,7 @@ mod tests {
     fn contrast_checks_each_run_with_its_own_colour() {
         let mut price = text("price", "email", [10.0, 10.0, 0.0, 0.0], "8.4 km away");
         price.color = Some("#1A1A1A".into());
-        price.runs = Some(vec![TextRun { start: 4, end: 6, color: Some("#BBBBBB".into()), font: None, font_size: None, font_weight: None, italic: None, underline: None, strike: None, rise: None }]);
+        price.runs = Some(vec![TextRun { start: 4, end: 6, color: Some("#BBBBBB".into()), font: None, font_size: None, font_weight: None, italic: None, underline: None, strike: None, rise: None, letter_spacing: None }]);
         let (s, p) = on_ground("#FFFFFF", price.clone());
         let found = all_issues(&s, &p);
         assert_eq!(codes(&found), [("contrast", vec!["price", "email"])]);
@@ -1291,7 +1291,7 @@ mod tests {
         let (s, p) = on_ground("#FFFFFF", price.clone());
         assert!(all_issues(&s, &p).0.is_empty(), "3.03:1 is enough at 40 px");
         price.color = Some("#AAAAAA".into());
-        price.runs = Some(vec![TextRun { start: 0, end: 11, color: None, font: None, font_size: Some(30.0), font_weight: None, italic: None, underline: None, strike: None, rise: None }]);
+        price.runs = Some(vec![TextRun { start: 0, end: 11, color: None, font: None, font_size: Some(30.0), font_weight: None, italic: None, underline: None, strike: None, rise: None, letter_spacing: None }]);
         let (s, p) = on_ground("#FFFFFF", price);
         let found = all_issues(&s, &p);
         assert!(found.0[0].message.starts_with("price, characters 0 to 11: #AAAAAA on #FFFFFF (email) is 2.32:1; text this size needs 3:1"), "{:?}", found.0);

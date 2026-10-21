@@ -624,6 +624,9 @@ fn run_tag(tag: &gtk::TextTag, run: &TextRun, zoom: f64, clear: bool) {
     if let Some(rise) = run.rise {
         tag.set_rise((rise * zoom * pango::SCALE as f64).round() as i32);
     }
+    if let Some(ls) = run.letter_spacing {
+        tag.set_letter_spacing((ls * zoom * pango::SCALE as f64).round() as i32);
+    }
     if let Some(on) = run.underline {
         tag.set_underline(if on { pango::Underline::Single } else { pango::Underline::None });
     }
@@ -670,7 +673,7 @@ fn toggled_runs(n: &Node, runs: &[TextRun], from: u32, to: u32, field: &str) -> 
 
 /// A run with no style of its own, over `start..end`.
 fn blank(start: u32, end: u32) -> TextRun {
-    TextRun { start, end, color: None, font: None, font_size: None, font_weight: None, italic: None, underline: None, strike: None, rise: None }
+    TextRun { start, end, color: None, font: None, font_size: None, font_weight: None, italic: None, underline: None, strike: None, rise: None, letter_spacing: None }
 }
 
 /// `runs` with characters `from..to` restyled by `apply`, each stretch from the look it had (its

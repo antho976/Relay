@@ -88,6 +88,9 @@ impl Run<'_> {
                 self.updated.entry(id.clone()).or_default().extend(before.keys().cloned());
                 self.inverse.push(vec![NodeOp::Update { id: id.clone(), set: before }]);
                 if child.kind == NodeKind::Frame && (next.w, next.h) != (child.w, child.h) {
+                    if next.chart.is_some() {
+                        self.chart_changed(&id);
+                    }
                     queue.push_back((id, (child.w, child.h), (next.w, next.h), level + 1));
                 }
             }

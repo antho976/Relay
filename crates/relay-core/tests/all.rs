@@ -36,6 +36,8 @@ mod build_seed;
 mod bus;
 #[path = "design_assets.rs"]
 mod design_assets;
+#[path = "design_chart_fit.rs"]
+mod design_chart_fit;
 #[path = "design_charts.rs"]
 mod design_charts;
 #[path = "design_compat.rs"]

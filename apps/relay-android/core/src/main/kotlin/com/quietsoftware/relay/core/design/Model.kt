@@ -75,6 +75,7 @@ data class DesignTextRun(
     val underline: Boolean? = null,
     val strike: Boolean? = null,
     val rise: Double? = null,
+    @SerialName("letter_spacing") val letterSpacing: Double? = null,
 )
 
 /** One moment of a node's motion. The phone never plays: it shows a node at rest, its own fields. */

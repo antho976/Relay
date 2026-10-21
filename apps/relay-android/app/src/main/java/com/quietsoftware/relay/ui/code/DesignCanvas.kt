@@ -490,8 +490,8 @@ internal fun withoutControls(text: String): Pair<String, (Int) -> Int> {
 
 /**
  * What a run sets of its own (paint.rs `run_attrs`): colour, family, size, weight, slant,
- * underline and strike (each over the node's), and rise, in px up (Compose shifts by a share of
- * the font's ascent, taken here as nine tenths of its size).
+ * underline and strike (each over the node's), rise, in px up (Compose shifts by a share of
+ * the font's ascent, taken here as nine tenths of its size), and letter spacing, as the node's is.
  */
 private fun spanOf(n: DesignNode, run: DesignTextRun): SpanStyle {
     val size = run.fontSize ?: fontSize(n)
@@ -503,6 +503,7 @@ private fun spanOf(n: DesignNode, run: DesignTextRun): SpanStyle {
         fontFamily = run.font?.let(::familyOf),
         textDecoration = if (run.underline != null || run.strike != null) decoration(run.underline ?: (n.underline == true), run.strike ?: (n.strike == true)) else null,
         baselineShift = run.rise?.takeIf { size > 0.0 }?.let { BaselineShift((it / (0.9 * size)).toFloat()) },
+        letterSpacing = run.letterSpacing?.sp ?: TextUnit.Unspecified,
     )
 }
 

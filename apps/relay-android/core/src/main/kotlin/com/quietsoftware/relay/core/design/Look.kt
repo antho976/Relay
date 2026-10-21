@@ -484,7 +484,7 @@ private fun fixColors(n: DesignNode, fix: (String) -> Fix): DesignNode {
 
 /** Whether a run sets anything of its own (design.rs `TextRun::styled`). */
 private val DesignTextRun.styled: Boolean
-    get() = color != null || font != null || fontSize != null || fontWeight != null || italic != null || underline != null || strike != null || rise != null
+    get() = color != null || font != null || fontSize != null || fontWeight != null || italic != null || underline != null || strike != null || rise != null || letterSpacing != null
 
 /** Each style field and its partner: a node's own `fill` keeps its style's `gradient` off, and the other way round (style.rs `partner`). */
 private val PARTNER = mapOf(
