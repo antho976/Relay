@@ -545,7 +545,15 @@ class StatsRepository @Inject constructor(
         /** All-time best set per lift, heaviest first (Overview "records"). */
         val hallOfFame: List<PrRecord> = emptyList(),
         /** Lifetime totals for the Overview tiles. */
-        val lifetime: LifetimeMetrics? = null
+        val lifetime: LifetimeMetrics? = null,
+        /**
+         * Every tracked set, oldest session first (holds and assisted sets with their weight nulled).
+         * The redesigned Stats page slices it per range (4W / 12W / 6M / All) on the client, so one
+         * history read serves every range and its "the N before" comparison.
+         */
+        val statSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession> = emptyList(),
+        /** Every finished tracked session's volume and deload mark, oldest first (weekly volume bars). */
+        val sessionVolumes: List<SessionDao.SessionVolumeDeloadRow> = emptyList()
     )
 
     /**
@@ -581,7 +589,8 @@ class StatsRepository @Inject constructor(
             val deloadRowsD = async { sessionDao.allFinishedVolumeDeload() }
             val weekCompD = async { buildWeekComparison() }
             val prTimes = prTimesD.await()
-            val deloadTrend = buildVolumeDeloadTrend(deloadRowsD.await(), maxSessions = Int.MAX_VALUE)
+            val deloadRows = deloadRowsD.await()
+            val deloadTrend = buildVolumeDeloadTrend(deloadRows, maxSessions = Int.MAX_VALUE)
             GymStats(
                 recentPrs = buildPrEntries(prRows, allSets),
                 e1rmLifts = buildE1rmLifts(allSets),
@@ -602,7 +611,9 @@ class StatsRepository @Inject constructor(
                 // Heaviest-first so the Overview "records" card leads with the biggest lifts; relative
                 // strength is filled in by the bodyweight combine below.
                 hallOfFame = buildHallOfFame(allSets).sortedByDescending { it.maxWeightLb },
-                lifetime = buildLifetimeMetrics(allSets)
+                lifetime = buildLifetimeMetrics(allSets),
+                statSets = activitySets.sortedBy { it.sessionStartedAt },
+                sessionVolumes = deloadRows
             )
           }
         }.combine(bodyweightRepo.observeRecent(90)) { stats, bw ->

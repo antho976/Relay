@@ -154,13 +154,26 @@ class StatsViewModel @Inject constructor(
         }
     }.flowOn(kotlinx.coroutines.Dispatchers.Default)
 
+    /**
+     * Each lift's applied coach changes as times, for the diamonds on its graph. Re-read whenever
+     * the set of open calls moves, which is when a call is applied or skipped.
+     */
+    private val coachChanges = coachDao.observeOpenCallTargets()
+        .map {
+            runCatching {
+                coachDao.allDecisions()
+                    .filter { d -> d.appliedAt != null && (d.status == "applied" || d.status == "folded") }
+                    .groupBy({ d -> d.targetKey }, { d -> d.appliedAt!! })
+            }.getOrElse { e -> if (e is kotlinx.coroutines.CancellationException) throw e else emptyMap() }
+        }
+
     val state: StateFlow<StatsUiState> = combine(
         statsRepo.observeGymStats(),
         engineFlow,
         settingsRepo.userSex,
         restDays,
-        coachDao.observeOpenCallTargets()
-    ) { snapshot, engine, sex, rest, openCalls ->
+        coachDao.observeOpenCallTargets().combine(coachChanges) { a, b -> a to b }
+    ) { snapshot, engine, sex, rest, (openCalls, coachChanges) ->
         StatsUiState(
             isLoading = false,
             recentPrs = snapshot.recentPrs,
@@ -184,7 +197,10 @@ class StatsViewModel @Inject constructor(
             prsByDayOfWeek = snapshot.prsByDayOfWeek,
             weekComparison = snapshot.weekComparison,
             hallOfFame = snapshot.hallOfFame,
-            lifetime = snapshot.lifetime
+            lifetime = snapshot.lifetime,
+            statSets = snapshot.statSets,
+            sessionVolumes = snapshot.sessionVolumes,
+            coachChanges = coachChanges
         )
     }.catch {
         // A crash in any stats aggregation drops to a non-loading ERROR state instead of an

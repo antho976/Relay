@@ -285,11 +285,16 @@ fun ForgeNavHost(
         ) {
             SessionDetailScreen(
                 onBack = { nav.popBackStack() },
-                onOpenLiftTrend = { liftId ->
-                    com.forge.app.ui.gym.stats.StatsLensRequests.pendingLift.value = liftId
-                    nav.popBackStack(Routes.OVERVIEW, false)
-                    pendingHubPage = BottomTab.STATS
-                }
+                onOpenLiftTrend = { liftId -> nav.navigate(Routes.liftDetail(liftId)) }
+            )
+        }
+        composable(
+            route = Routes.LIFT_DETAIL,
+            arguments = listOf(navArgument(Routes.ARG_LIFT_ID) { type = NavType.StringType })
+        ) {
+            com.forge.app.ui.gym.stats.LiftDetailScreen(
+                onBack = { nav.popBackStack() },
+                onSetGoal = { liftId -> nav.navigate(Routes.goalEditor(exerciseId = liftId)) }
             )
         }
         composable(
