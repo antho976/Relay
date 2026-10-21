@@ -64,7 +64,9 @@ data class ExerciseDetail(
     val e1rmIsBest: Boolean,
     val sets: List<SetDetail>,
     /** The lift actually performed (the swapped one after a swap), for its all-time trend on Stats. */
-    val exerciseId: String? = null
+    val exerciseId: String? = null,
+    /** The heaviest set the last time this lift was done before this session (lb); null = first time. */
+    val prevTopWeightLb: Double? = null
 ) {
     /** Avg RPE across the sets that logged one (0 when none) — the overview's per-exercise RPE rollup. */
     val avgRpe: Double get() = sets.mapNotNull { it.rpe }.let { if (it.isEmpty()) 0.0 else it.average() }
@@ -109,5 +111,7 @@ data class SessionDetailUiState(
     val isLoading: Boolean = true,
     val data: SessionDetailData? = null,
     /** The watch's HR trace, analyzed for the HEART RATE section (W3); null = no watch data. */
-    val hrView: com.forge.app.domain.health.SessionHrView? = null
+    val hrView: com.forge.app.domain.health.SessionHrView? = null,
+    /** The watch read has been tried, so a null [hrView] means "no trace", not "not read yet". */
+    val hrChecked: Boolean = false
 )

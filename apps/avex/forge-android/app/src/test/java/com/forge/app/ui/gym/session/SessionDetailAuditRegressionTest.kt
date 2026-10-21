@@ -28,9 +28,7 @@ class SessionDetailAuditRegressionTest {
         val hold = SetDetail(1, null, "BW", 0, null, false, false, false, false, null, null, 90)
         val exercise = ExerciseDetail("Plank", false, null, true, null, null, 0, 0.0, null, false, listOf(hold))
         compose.setContent { ForgeTheme { Column {
-            val c = MaterialTheme.colorScheme
-            if(metric.value == SessionMetric.RPE) RpeExerciseCard(listOf(exercise), SessionChartStyle.BARS, {}, c.onBackground,c.onSurfaceVariant,c.primary,c.outline)
-            else MetricExerciseCard(listOf(exercise),metric.value,SessionChartStyle.BARS,{},c.onBackground,c.onSurfaceVariant,c.primary,c.outline)
+            LiftRow(exercise, metric.value, SessionChartStyle.BARS, exercise.metricValue(metric.value), true, null)
         } } }
         for (m in SessionMetric.entries) {
             compose.runOnIdle { metric.value = m }

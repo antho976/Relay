@@ -469,7 +469,11 @@ class StatsRepository @Inject constructor(
                 e1rmLb = e1rm,
                 // A best needs something to beat: a lift's first-ever session is not a best.
                 e1rmIsBest = e1rm != null && priorBestE1rm != null && e1rm > priorBestE1rm + 1e-6,
-                sets = setDetails
+                sets = setDetails,
+                // The top set last time, for the opened lift's "Top set +5 lb".
+                prevTopWeightLb = if (topWeight == null) null else
+                    loggedExerciseDao.lastLoggedBeforeTime(ex.exerciseId, session.startedAt)
+                        ?.let { prev -> loggedSetDao.forLoggedExercise(prev.id).mapNotNull { it.weightLb }.maxOrNull() }
             )
         }
 

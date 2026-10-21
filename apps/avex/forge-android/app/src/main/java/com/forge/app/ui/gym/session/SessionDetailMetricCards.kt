@@ -1,344 +1,300 @@
 package com.forge.app.ui.gym.session
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.ui.platform.LocalDensity
-import com.forge.app.ui.common.GROUP_OUTER
-import com.forge.app.ui.common.ROW_H
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
-import com.forge.app.ui.common.window.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.forge.app.ui.common.EditorialHeader
+import com.forge.app.domain.units.WeightUnit
+import com.forge.app.domain.units.formatHoldLabel
+import com.forge.app.domain.units.formatWeight
+import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.domain.units.unitLabel
+import com.forge.app.domain.units.weightInputValue
+import com.forge.app.ui.common.OpenColumnChart
+import com.forge.app.ui.common.OpenLabel
+import com.forge.app.ui.common.bounceCombinedClick
+import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.rpeLabel
+import com.forge.app.ui.common.touchSlop
 import com.forge.app.ui.gym.session.state.ExerciseDetail
 import com.forge.app.ui.gym.session.state.SessionChartStyle
 import com.forge.app.ui.gym.session.state.SessionMetric
-import com.forge.app.ui.common.rememberDrawProgressState
-import com.forge.app.ui.common.staggeredProgress
-import com.forge.app.ui.theme.ForgeMotion
+import com.forge.app.ui.gym.session.state.SetDetail
+import com.forge.app.ui.theme.HistoryColors
+import com.forge.app.ui.theme.HistoryType
 import com.forge.app.ui.theme.LocalForgeSettings
-import com.forge.app.ui.common.ForgeDisclosureCaret
+import com.forge.app.ui.theme.OpenColors
+import com.forge.app.ui.theme.OpenIcons
+import com.forge.app.ui.theme.OpenType
 
-// ─── Open section anchor + style toggle ────────────────────────────────────────
+// ─── The section head over the lifts ───────────────────────────────────────────
 
-/**
- * Open editorial section for a metric: small-caps mono label on the left, the bars/line style
- * toggle right-aligned, then content directly on the page — no card shell, no fill, no border,
- * no hairline (§1: air separates sections). The accent wash on tappable expand/collapse rows
- * inside [content] remains.
- */
+/** "TOP WEIGHT PER EXERCISE" and the bars/line switch on the right. */
 @Composable
-private fun MetricCardShell(
-    title: String,
-    style: SessionChartStyle,
-    onStyle: (SessionChartStyle) -> Unit,
-    onBg: Color,
-    muted: Color,
-    accent: Color,
-    outline: Color,
-    content: @Composable () -> Unit
-) {
-    // One Column root: call sites wrap this in a Box (statsEntrance), where loose siblings would
-    // stack on top of each other instead of flowing vertically.
-    Column(Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // The shared anchor, the same size as Stats' and Home's section headers.
-            EditorialHeader(label = title, muted = muted, accent = accent, modifier = Modifier.weight(1f))
-            Spacer(Modifier.width(8.dp))
-            StyleToggle(style, onStyle, onBg, muted, accent, outline)
-        }
-        Spacer(Modifier.height(10.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            content()
-        }
+internal fun MetricHead(metric: SessionMetric, style: SessionChartStyle, onStyle: (SessionChartStyle) -> Unit) {
+    val unit = LocalForgeSettings.current.weightUnit
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        OpenLabel(metricHeading(metric, unit), Modifier.weight(1f))
+        Spacer(Modifier.width(12.dp))
+        StyleSwitch(style, onStyle)
     }
 }
 
-/** The per-card bars/line switch — reuses the shared [SegmentRow]. */
-@Composable
-private fun StyleToggle(
-    style: SessionChartStyle,
-    onStyle: (SessionChartStyle) -> Unit,
-    onBg: Color,
-    muted: Color,
-    accent: Color,
-    outline: Color
-) {
-    SegmentRow(
-        items = SessionChartStyle.entries,
-        isSelected = { it == style },
-        label = { it.label },
-        onSelect = onStyle,
-        onBg = onBg, muted = muted, accent = accent, outline = outline,
-        // A compact two-way pill beside the section anchor; wider at a large font scale so the
-        // two words stay whole.
-        modifier = Modifier.width(if (LocalDensity.current.fontScale > 1.3f) 200.dp else 132.dp)
-    )
+internal fun metricHeading(metric: SessionMetric, unit: WeightUnit): String = when (metric) {
+    SessionMetric.WEIGHT -> "Top weight per exercise"
+    SessionMetric.VOLUME -> "Volume per exercise · ${unitLabel(unit)}"
+    SessionMetric.REPS -> "Reps per exercise"
+    SessionMetric.RPE -> "Effort per exercise · avg RPE"
 }
 
-// ─── Weight / Volume / Reps: tappable per-exercise comparison ───────────────────
-
-/**
- * The per-exercise comparison for one metric (Weight/Volume/Reps), with its own bars/line toggle.
- * BARS draws a tappable row per exercise; LINE draws the session-shape sparkline first, then the same
- * tappable rows without bars. Tapping a row expands that exercise's full detail inline.
- */
+/** "BARS · LINE": the chosen one in ink. Each word is its own 48dp target. */
 @Composable
-internal fun MetricExerciseCard(
-    exercises: List<ExerciseDetail>,
-    metric: SessionMetric,
-    style: SessionChartStyle,
-    onStyle: (SessionChartStyle) -> Unit,
-    onBg: Color,
-    muted: Color,
-    accent: Color,
-    outline: Color
-) {
-    val values = remember(exercises, metric) { exercises.map { it.metricValue(metric) } }
-    val rawMax = values.maxOrNull() ?: 0.0
-    // Hoisted above the card so the remember runs unconditionally regardless of the empty-state guard.
-    // The slow draw curve fills the comparison bars in gently rather than snapping them to width.
-    // Rows get a lambda over it and read it in draw, so the glide never recomposes the card.
-    val progress = rememberDrawProgressState(metric, ForgeMotion.drawTween())
-    MetricCardShell("${metric.label.uppercase()} PER EXERCISE", style, onStyle, onBg, muted, accent, outline) {
-        // The Weight metric is meaningless for a bodyweight-only session — say so instead of empty bars.
-        if (rawMax <= 0.0) {
-            Text(
-                "No ${metric.label.lowercase()} logged for this session.",
-                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 11.sp
-            )
-            if (exercises.none { it.sets.isNotEmpty() }) return@MetricCardShell
-        }
-        // Bars always compare the exercises; the bars/line toggle now only restyles the per-set chart
-        // inside an expanded row. The first row opens by default to hint that rows are tappable.
-        exercises.forEachIndexed { i, ex ->
-            ExerciseDrillRow(
-                ex = ex,
-                value = values[i],
-                rawMax = rawMax,
-                metric = metric,
-                style = style,
-                defaultExpanded = i == 0,
-                barProgress = { staggeredProgress(progress.value, i, exercises.size) },
-                onBg = onBg, muted = muted, accent = accent, outline = outline
+private fun StyleSwitch(style: SessionChartStyle, onStyle: (SessionChartStyle) -> Unit) {
+    val ink = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SessionChartStyle.entries.forEachIndexed { i, s ->
+            if (i > 0) OpenLabel(" · ")
+            OpenLabel(
+                s.label,
+                Modifier
+                    .selectable(selected = s == style, role = Role.RadioButton) { onStyle(s) }
+                    .padding(vertical = 12.dp, horizontal = 2.dp),
+                color = if (s == style) ink else muted
             )
         }
     }
 }
 
-/** One exercise row in a metric card: name + value + comparison bar; taps open to the full detail. */
+// ─── One lift ─────────────────────────────────────────────────────────────────
+
+/**
+ * One lift under the metric switch: its name, the metric's value and a chevron, then a 4dp bar
+ * against the session's largest. Tapping opens it: the readings, its note, the per-set chart in the
+ * page's metric and the sets themselves. The first lift opens by default.
+ */
 @Composable
-private fun ExerciseDrillRow(
+internal fun LiftRow(
     ex: ExerciseDetail,
-    value: Double,
-    rawMax: Double,
     metric: SessionMetric,
     style: SessionChartStyle,
-    defaultExpanded: Boolean,
-    barProgress: () -> Float,
-    onBg: Color,
-    muted: Color,
-    accent: Color,
-    outline: Color
+    maxValue: Double,
+    defaultOpen: Boolean,
+    onOpenLiftTrend: ((String) -> Unit)?
 ) {
-    val weightUnit = LocalForgeSettings.current.weightUnit
-    // Keyed by name only (NOT metric): Weight/Volume/Reps share one composable tree, so adding metric
-    // to the key would reset the row on every metric switch and re-pop the first row open. Starts at
-    // [defaultExpanded]; rememberSaveable keeps it closed once collapsed, reopening only on a fresh visit.
-    var expanded by rememberSaveable(ex.name) { mutableStateOf(defaultExpanded) }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // Same row as Stats' Strength lens: text on the page gutter (no inner inset), and an open
-        // row told by its weight and caret instead of an accent wash under accent text, which read
-        // as a solid red block.
+    val ink = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val accent = MaterialTheme.colorScheme.primary
+    val unit = LocalForgeSettings.current.weightUnit
+    var open by rememberSaveable(ex.name) { mutableStateOf(defaultOpen) }
+    val value = ex.metricValue(metric)
+    val share = if (maxValue > 0) (value / maxValue).toFloat().coerceIn(0f, 1f) else 0f
+
+    Column(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
         Column(
-            modifier = Modifier
+            Modifier
                 .fillMaxWidth()
-                .clickable(
-                    onClickLabel = if (expanded) "Collapse ${ex.name}" else "Expand ${ex.name}",
+                .bounceCombinedClick(
+                    onClickLabel = if (open) "Close ${ex.name}" else "Open ${ex.name}",
                     role = Role.Button
-                ) { expanded = !expanded }
+                ) { open = !open }
                 .padding(vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    ex.name, style = MaterialTheme.typography.bodyMedium,
-                    color = onBg,
-                    fontWeight = if (expanded) FontWeight.SemiBold else FontWeight.Normal,
+                    ex.name,
+                    style = OpenType.rowTitle.copy(fontWeight = if (open) FontWeight.SemiBold else FontWeight.Normal),
+                    color = if (open) ink else HistoryColors.NameQuiet,
                     modifier = Modifier.weight(1f)
                 )
-                Text(
-                    formatMetricValue(value, metric, weightUnit),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = if (expanded) onBg else muted
+                Text(liftValue(ex, metric, unit), style = HistoryType.liftFigure, color = if (open) ink else muted)
+                Icon(
+                    if (open) OpenIcons.ChevronUp else OpenIcons.ChevronDown,
+                    contentDescription = null,
+                    tint = muted,
+                    modifier = Modifier.size(16.dp)
                 )
-                ForgeDisclosureCaret(expanded, tint = muted)
             }
-            val share = if (rawMax > 0) (value / rawMax).toFloat() else 0f
-            // The fill is drawn rather than sized with fillMaxWidth(fraction), so the reveal is a
-            // redraw per frame, not a relayout: the same pill, anchored at the start edge.
-            Box(
-                modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(50))
-                    .background(outline.copy(alpha = 0.25f))
-                    .drawBehind {
-                        val w = size.width * (share * barProgress()).coerceIn(0f, 1f)
-                        if (w > 0f) {
-                            val left = if (layoutDirection == LayoutDirection.Rtl) size.width - w else 0f
-                            drawRoundRect(
-                                color = accent,
-                                topLeft = Offset(left, 0f),
-                                size = Size(w, size.height),
-                                cornerRadius = CornerRadius(minOf(w, size.height) / 2f)
-                            )
-                        }
-                    }
-            )
+            Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).background(OpenColors.Unreached)) {
+                if (share > 0f) Box(
+                    Modifier.fillMaxWidth(share).height(4.dp).clip(RoundedCornerShape(2.dp))
+                        .background(if (open) accent else OpenColors.Bar)
+                )
+            }
         }
-        if (expanded) {
-            Box(Modifier.padding(bottom = 12.dp)) {
-                ExerciseDetailBody(ex, metric, style, onBg, muted, accent, outline)
-            }
+        if (open) {
+            Spacer(Modifier.height(8.dp))
+            LiftBody(ex, metric, style, onOpenLiftTrend)
+            Spacer(Modifier.height(14.dp))
         }
     }
 }
 
-// ─── RPE: one merged chart with an exercise selector ────────────────────────────
+/** The row's value for [metric]: "195 lb", "4,220", "22", "8.0". A bodyweight lift reads BW. */
+internal fun liftValue(ex: ExerciseDetail, metric: SessionMetric, unit: WeightUnit): String = when (metric) {
+    SessionMetric.WEIGHT -> ex.topWeightLb?.takeIf { it > 0 }?.let { formatWeight(it, unit) }
+        ?: if (ex.sets.isNotEmpty() && ex.sets.all { it.durationSeconds != null }) formatHoldLabel(ex.sets.maxOf { it.durationSeconds ?: 0 })
+        else "BW"
+    SessionMetric.VOLUME -> String.format("%,d", toDisplayWeight(ex.volumeLb, unit).toLong())
+    SessionMetric.REPS -> "${ex.totalReps}"
+    SessionMetric.RPE -> if (ex.sets.any { it.rpe != null }) String.format("%.1f", ex.avgRpe) else "0"
+}
 
 /**
- * RPE for the whole session, merged into one card: pick an exercise from the dropdown and see its
- * per-set RPE (in this card's bars/line style). Every logged exercise stays listed, so this lens
- * never hides what was done (SessionDetailAuditRegressionTest); it opens on one that was rated.
+ * An opened lift: its readings (e1RM, PR, top set against last time, effort) as bare mono words,
+ * the note, the per-set chart in the page's metric, the sets, and the way to its own page.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun RpeExerciseCard(
-    exercises: List<ExerciseDetail>,
+private fun LiftBody(
+    ex: ExerciseDetail,
+    metric: SessionMetric,
     style: SessionChartStyle,
-    onStyle: (SessionChartStyle) -> Unit,
-    onBg: Color,
-    muted: Color,
-    accent: Color,
-    outline: Color
+    onOpenLiftTrend: ((String) -> Unit)?
 ) {
-    // Hoisted above the card and memoized so the filter/map don't re-run each recomposition and the
-    // selection state is created unconditionally (independent of the empty-state guard).
-    val loggedExercises = remember(exercises) { exercises.filter { it.sets.isNotEmpty() } }
-    val names = remember(loggedExercises) { loggedExercises.map { it.name } }
-    // Track the selection by name so it survives a reorder; fall back to the first if it vanishes.
-    var selectedName by rememberSaveable {
-        mutableStateOf(
-            (loggedExercises.firstOrNull { ex -> ex.sets.any { it.rpe != null } } ?: loggedExercises.firstOrNull())
-                ?.name.orEmpty()
-        )
-    }
-    MetricCardShell("RPE", style, onStyle, onBg, muted, accent, outline) {
-        if (loggedExercises.isEmpty()) {
-            Text(
-                "No RPE logged for this session.",
-                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 11.sp
-            )
-            return@MetricCardShell
+    val ink = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val accent = MaterialTheme.colorScheme.primary
+    val unit = LocalForgeSettings.current.weightUnit
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            ex.e1rmLb?.let { e ->
+                OpenLabel("e1RM ${weightInputValue(e, unit)}" + if (ex.e1rmIsBest) " · best" else "", style = OpenType.monoXS, color = ink)
+            }
+            if (ex.isPr) OpenLabel("↑ PR", style = OpenType.monoXS, color = accent)
+            topSetChange(ex, unit)?.let { (text, moved) -> OpenLabel(text, style = OpenType.monoXS, color = if (moved) ink else muted) }
+            if (ex.sets.any { it.rpe != null }) {
+                OpenLabel("Effort ${rpeLabel(ex.avgRpe)}", style = OpenType.monoXS, color = if (metric == SessionMetric.RPE) ink else muted)
+            }
+            ex.effort?.let { OpenLabel("Felt ${it.displayName.lowercase()}", style = OpenType.monoXS) }
         }
-        val idx = loggedExercises.indexOfFirst { it.name == selectedName }.let { if (it >= 0) it else 0 }
-        val ex = loggedExercises[idx]
-        ExercisePicker(
-            items = names,
-            selectedIndex = idx,
-            onSelect = { selectedName = loggedExercises[it].name },
-            onBg = onBg, muted = muted, outline = outline
-        )
-        val rated = ex.sets.count { it.rpe != null }
-        if (rated == 0) {
-            // The chart below would only repeat this line for an unrated exercise.
-            Text("No RPE logged for this exercise.", style = MaterialTheme.typography.labelMedium, color = muted)
-            return@MetricCardShell
+        if (!ex.note.isNullOrBlank()) Text("“${ex.note}”", style = HistoryType.journal, color = muted)
+        SetChart(ex, metric, style)
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            ex.sets.forEach { SetLine(it, unit) }
         }
-        Text(
-            "Avg RPE ${rpeLabel(ex.avgRpe)} · $rated ${if (rated == 1) "set" else "sets"} rated",
-            style = MaterialTheme.typography.labelMedium, color = muted
-        )
-        ExerciseDetailBody(ex, SessionMetric.RPE, style, onBg, muted, accent, outline)
-    }
-}
-
-/** A compact dropdown of exercise names (matches the cardio activity picker's look). */
-@Composable
-private fun ExercisePicker(
-    items: List<String>,
-    selectedIndex: Int,
-    onSelect: (Int) -> Unit,
-    onBg: Color,
-    muted: Color,
-    outline: Color
-) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        Row(
-            // A filled row of the grouped kit, not an outlined box (2026-09-27).
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 48.dp)
-                .clip(RoundedCornerShape(GROUP_OUTER))
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .clickable(onClickLabel = "Choose exercise") { open = true }
-                .padding(horizontal = ROW_H, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                items.getOrElse(selectedIndex) { items.first() },
-                style = MaterialTheme.typography.bodyMedium, color = onBg,
-                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
-            )
-            ForgeDisclosureCaret(expanded = open, tint = muted)
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            items.forEachIndexed { i, name ->
-                DropdownMenuItem(
-                    text = { Text(name, color = onBg) },
-                    onClick = { onSelect(i); open = false }
-                )
+        val liftId = ex.exerciseId
+        if (onOpenLiftTrend != null && liftId != null) {
+            Spacer(Modifier.height(2.dp))
+            Row(
+                Modifier
+                    .touchSlop(vertical = 12.dp)
+                    .clickableLabeled("Open ${ex.name}'s own page") { onOpenLiftTrend(liftId) }
+                    .padding(vertical = 12.dp)
+                    .heightIn(min = 24.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OpenLabel("All-time trend")
+                Icon(OpenIcons.ChevronRight, contentDescription = null, tint = muted, modifier = Modifier.size(14.dp))
             }
         }
     }
 }
+
+/** "Top set +5 lb" against the last time this lift was done; "Top set same" when it matched. */
+internal fun topSetChange(ex: ExerciseDetail, unit: WeightUnit): Pair<String, Boolean>? {
+    val now = ex.topWeightLb?.takeIf { it > 0 } ?: return null
+    val prev = ex.prevTopWeightLb?.takeIf { it > 0 } ?: return null
+    val diff = now - prev
+    if (kotlin.math.abs(diff) < 0.01) return "Top set same" to false
+    val sign = if (diff > 0) "+" else "−"
+    return "Top set $sign${weightInputValue(kotlin.math.abs(diff), unit)} ${unitLabel(unit)}" to true
+}
+
+/** The per-set chart in the page's metric: columns by default, or the line the switch picks. */
+@Composable
+private fun SetChart(ex: ExerciseDetail, metric: SessionMetric, style: SessionChartStyle) {
+    val unit = LocalForgeSettings.current.weightUnit
+    val accent = MaterialTheme.colorScheme.primary
+    val rows: List<Pair<SetDetail, Double>> = when (metric) {
+        SessionMetric.RPE -> ex.sets.mapNotNull { s -> s.rpe?.let { s to it } }
+        SessionMetric.WEIGHT, SessionMetric.VOLUME -> ex.sets.map { it to toDisplayWeight(it.metricValue(metric), unit) }
+        SessionMetric.REPS -> ex.sets.map { it to it.reps.toDouble() }
+    }
+    // One set is a row, not a chart: the set line below already says it.
+    if (rows.size < 2 || rows.none { it.second > 0.0 }) return
+    val description = "${metricTabLabel(metric)} per set: " + rows.joinToString(", ") { "set ${it.first.number} ${rpeLabel(it.second)}" }
+    if (style == SessionChartStyle.LINE) {
+        PerSetLine(rows.map { it.second }, metric, description)
+        return
+    }
+    val top = rows.maxOf { it.second }
+    OpenColumnChart(
+        values = rows.map { it.second.toFloat() },
+        // Weight lights the heaviest sets; the other metrics are all the point.
+        colors = rows.map { (_, v) -> if (metric != SessionMetric.WEIGHT || v >= top - 1e-6) accent else OpenColors.Bar },
+        height = 96.dp + 18.dp,
+        columnLabels = rows.map { "Set ${it.first.number}" },
+        valueLabels = true,
+        gapFraction = 0.45f,
+        modifier = Modifier.padding(horizontal = 12.dp),
+        description = description
+    )
+}
+
+/** One set: its number, "195 × 5" in serif, then its marks and RPE on the right. */
+@Composable
+private fun SetLine(s: SetDetail, unit: WeightUnit) {
+    val ink = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        OpenLabel("${s.number}", Modifier.widthIn(min = 10.dp), style = OpenType.monoS)
+        Text(
+            if (s.durationSeconds != null) buildAnnotatedString { append(formatHoldLabel(s.durationSeconds)) }
+            else buildAnnotatedString {
+                append(setWeight(s, unit))
+                withStyle(HistoryType.liftFigureTimes.toSpanStyle().copy(color = muted)) { append(" × ") }
+                append("${s.reps}")
+            },
+            style = HistoryType.liftFigure,
+            color = ink,
+            modifier = Modifier.weight(1f)
+        )
+        val marks = buildList {
+            if (s.setType == "warmup") add("Warm")
+            if (s.isAmrap) add("AMRAP")
+            if (s.toFailure) add("Fail")
+            if (s.isAssisted) add("Assist")
+            if (s.setType == "drop" || !s.dropAnnotation.isNullOrBlank()) add("Drop")
+            s.rpe?.let { add("RPE ${rpeLabel(it)}") }
+        }
+        if (marks.isNotEmpty()) OpenLabel(marks.joinToString(" · "), style = OpenType.monoXS)
+    }
+}
+
+/** A set's weight in the user's unit without the unit word ("195"); bodyweight reads BW. */
+private fun setWeight(s: SetDetail, unit: WeightUnit): String =
+    if (s.weightLb != null && s.weightLb > 0) weightInputValue(s.weightLb, unit)
+    else s.weightText.ifBlank { "BW" }
+

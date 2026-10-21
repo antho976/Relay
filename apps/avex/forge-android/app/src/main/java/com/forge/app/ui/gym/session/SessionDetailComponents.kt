@@ -1,156 +1,143 @@
 package com.forge.app.ui.gym.session
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import com.forge.app.ui.common.clickableLabeled
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.forge.app.ui.common.window.Dialog
-import com.forge.app.data.db.types.EffortRating
+import com.forge.app.domain.health.SessionHrView
 import com.forge.app.domain.session.SessionType
-import com.forge.app.domain.units.WeightUnit
-import com.forge.app.domain.units.formatHoldLabel
-import com.forge.app.domain.units.formatVolume
-import com.forge.app.domain.units.formatWeight
+import com.forge.app.domain.units.formatVolumeCompact
+import com.forge.app.domain.units.unitLabel
 import com.forge.app.program.MuscleGroup
-import com.forge.app.ui.common.GROUP_SEAM
-import com.forge.app.ui.common.ROW_H
-import com.forge.app.ui.common.rowShape
-import androidx.compose.foundation.layout.widthIn
+import com.forge.app.ui.common.OpenLabel
+import com.forge.app.ui.common.OpenPrTag
+import com.forge.app.ui.common.OpenTopBarIcon
+import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.currentLocale
 import com.forge.app.ui.common.rpeLabel
-import com.forge.app.ui.gym.session.state.ExerciseDetail
-import com.forge.app.ui.gym.session.state.SessionChartStyle
+import com.forge.app.ui.common.window.Dialog
 import com.forge.app.ui.gym.session.state.SessionDetailData
-import com.forge.app.ui.gym.session.state.SessionMetric
-import com.forge.app.ui.gym.session.state.SetDetail
 import com.forge.app.ui.gym.stats.components.BodyHeatmap
 import com.forge.app.ui.gym.stats.components.musclesReadout
 import com.forge.app.ui.gym.stats.state.MuscleSetCount
-import com.forge.app.ui.theme.ForgeError
-import com.forge.app.ui.theme.ForgeSuccess
-import com.forge.app.ui.theme.ForgeWarning
+import com.forge.app.ui.theme.HistoryType
 import com.forge.app.ui.theme.LocalForgeSettings
+import com.forge.app.ui.theme.OpenColors
+import com.forge.app.ui.theme.OpenIcons
+import com.forge.app.ui.theme.OpenType
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-// ─── Header + summary + muscle map ─────────────────────────────────────────────
+// ─── Header ─────────────────────────────────────────────────────────────────────
 
 /**
- * The top block: session title/date/journal + the summary stats on the left, and a compact
- * front+back muscle map on the right. The map is sized to sit just below the title and bottom out
- * near the summary stats so the whole header reads as one tight unit (replaces the old full-width
- * "MUSCLES WORKED" bar card, which ate too much vertical space).
+ * The session's name block: its markers and tags as a mono line, the name in serif with the PR tag,
+ * the date and duration in serif italic, and the body map (tap to enlarge) on the right; the journal
+ * under all of it.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun SessionHeaderBlock(
-    data: SessionDetailData,
-    onBg: Color,
-    muted: Color,
-    accent: Color,
-    outline: Color
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        // Bottom-align so the map's lower edge lands on the summary-stats row rather than floating.
-        verticalAlignment = Alignment.Bottom
-    ) {
-        Column(Modifier.weight(1f)) {
-            val zone = ZoneId.systemDefault()
-            val date = Instant.ofEpochMilli(data.dateMs).atZone(zone).toLocalDate()
-            // The year when it isn't this one, as History shows it: "Monday, 14 October" was
-            // ambiguous for last year's sessions.
-            val pattern = if (date.year == java.time.LocalDate.now(zone).year) "EEEE, d MMMM" else "EEEE, d MMMM yyyy"
-            val dateStr = date.format(DateTimeFormatter.ofPattern(pattern, currentLocale()))
-            val sub = buildList {
-                // Deload marker wins; otherwise the stored session-type's pill (TEST/TECHNIQUE/… once a
-                // picker writes them) — same resolution as the Overview status pill so the two can't drift.
-                (if (data.deload) SessionType.DELOAD.pillLabel else SessionType.fromKey(data.sessionType)?.pillLabel)
-                    ?.let { add(it) }
-                if (data.intensity.isNotBlank() && data.intensity != "normal") add(data.intensity.uppercase())
-                // Quick tags are stored comma-separated (#107); add each as its own token so the sub-line
-                // never shows a raw "FOCUS,HEAVY" (the Overview pill splits them the same way).
-                data.tag.split(",").forEach { t -> t.trim().takeIf { it.isNotEmpty() }?.let { add(it.uppercase()) } }
-            }.joinToString(" · ")
-            if (sub.isNotEmpty()) {
-                Text(sub, style = MaterialTheme.typography.labelSmall, letterSpacing = 1.5.sp, color = muted, fontSize = 9.sp)
-                Spacer(Modifier.height(2.dp))
+internal fun SessionHeader(data: SessionDetailData) {
+    val ink = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val zone = ZoneId.systemDefault()
+    val date = Instant.ofEpochMilli(data.dateMs).atZone(zone).toLocalDate()
+    // The year when it isn't this one: "Monday, 14 October" was ambiguous for last year's sessions.
+    val pattern = if (date.year == LocalDate.now(zone).year) "EEEE, d MMMM" else "EEEE, d MMMM yyyy"
+    val dateLine = listOfNotNull(
+        date.format(DateTimeFormatter.ofPattern(pattern, currentLocale())),
+        data.durationMin?.takeIf { it > 0 }?.let { "$it min" }
+    ).joinToString(" · ")
+    val tags = sessionTags(data)
+
+    Column {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.Bottom
+        ) {
+            Column(Modifier.weight(1f)) {
+                if (tags.isNotEmpty()) {
+                    OpenLabel(tags, style = OpenType.monoXS)
+                    Spacer(Modifier.height(6.dp))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(data.title, style = OpenType.titleM, color = ink, modifier = Modifier.weight(1f, fill = false))
+                    if (data.prCount > 0) OpenPrTag()
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(dateLine, style = HistoryType.dateLine, color = muted)
             }
-            Text(data.title, style = MaterialTheme.typography.headlineMedium, color = onBg)
-            Spacer(Modifier.height(4.dp))
-            Text(dateStr, style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
-            if (data.journal.isNotBlank()) {
-                Spacer(Modifier.height(10.dp))
-                Text("“${data.journal}”", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
-            }
-            Spacer(Modifier.height(18.dp))
-            SummaryStrip(data, onBg, muted)
+            if (data.muscleSplit.isNotEmpty()) CompactBodyMap(data.muscleSplit, Modifier.width(96.dp))
         }
-        if (data.muscleSplit.isNotEmpty()) {
-            CompactBodyMap(data.muscleSplit, accent, muted, outline, Modifier.width(100.dp))
+        if (data.journal.isNotBlank()) {
+            Spacer(Modifier.height(14.dp))
+            Text("“${data.journal}”", style = HistoryType.journal, color = muted)
         }
     }
 }
 
+/** "HEAVY · FOCUS": the session type's marker, a non-normal intensity, then the user's own tags. */
+internal fun sessionTags(data: SessionDetailData): String = buildList {
+    (if (data.deload) SessionType.DELOAD.pillLabel else SessionType.fromKey(data.sessionType)?.pillLabel)?.let { add(it) }
+    if (data.intensity.isNotBlank() && data.intensity != "normal") add(data.intensity)
+    data.tag.split(",").forEach { t -> t.trim().takeIf { it.isNotEmpty() }?.let { add(it) } }
+}.joinToString(" · ")
+
 /**
- * The two anatomical figures (front + back) tinted by set count — same art as the Stats heatmap, but
- * shrunk for the header (no legend, no FRONT/BACK captions). Caller fixes the width; the figures
- * scale to a short fixed height so the pair tucks beside the title. Tap to blow it up full-size.
+ * The front and back figures tinted by sets, shrunk for the header: no legend, no captions. Tap to
+ * see it full size.
  */
 @Composable
-private fun CompactBodyMap(
-    split: List<MuscleSetCount>,
-    accent: Color,
-    muted: Color,
-    outline: Color,
-    modifier: Modifier = Modifier
-) {
+private fun CompactBodyMap(split: List<MuscleSetCount>, modifier: Modifier = Modifier) {
+    val accent = MaterialTheme.colorScheme.primary
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
     val setsBy = split.associate { it.muscle to it.sets }
     var enlarged by rememberSaveable { mutableStateOf(false) }
     Box(
         modifier
-            .clip(RoundedCornerShape(8.dp))
-            .semantics { contentDescription = "Muscles worked: ${musclesReadout(setsBy)}. Tap to enlarge."; role = Role.Button }
-            .clickable { enlarged = true }
+            .clip(RoundedCornerShape(4.dp))
+            .semantics { contentDescription = "Muscles worked: ${musclesReadout(setsBy)}. Tap to enlarge." }
+            .clickableLabeled("Enlarge the muscle map", role = Role.Button) { enlarged = true }
     ) {
         BodyHeatmap(
             setsByMuscle = setsBy,
@@ -163,43 +150,28 @@ private fun CompactBodyMap(
             showTitles = false
         )
     }
-    if (enlarged) MuscleMapDialog(setsBy, accent, muted, outline) { enlarged = false }
+    if (enlarged) MuscleMapDialog(setsBy) { enlarged = false }
 }
 
-/**
- * The full-size front+back heatmap (with captions + legend) shown when the header map is tapped.
- * Dismiss via the explicit close button, a scrim tap, or back — the content itself does NOT swallow
- * taps as dismiss, leaving the figures free for future per-muscle tap targets. Scrolls on short screens.
- */
+/** The full-size map with its captions and key; closes on its X, a scrim tap or back. */
 @Composable
-private fun MuscleMapDialog(
-    setsByMuscle: Map<MuscleGroup, Int>,
-    accent: Color,
-    muted: Color,
-    outline: Color,
-    onDismiss: () -> Unit
-) {
+private fun MuscleMapDialog(setsByMuscle: Map<MuscleGroup, Int>, onDismiss: () -> Unit) {
+    val accent = MaterialTheme.colorScheme.primary
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
     Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
+                .clip(RoundedCornerShape(4.dp))
                 .background(MaterialTheme.colorScheme.surface)
                 .verticalScroll(rememberScrollState())
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    "MUSCLES WORKED",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = muted,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.Filled.Close, contentDescription = "Close", tint = muted)
-                }
+                OpenLabel("Muscles worked", Modifier.weight(1f))
+                OpenTopBarIcon(OpenIcons.X, "Close", onDismiss)
             }
             BodyHeatmap(
                 setsByMuscle = setsByMuscle,
@@ -213,48 +185,17 @@ private fun MuscleMapDialog(
     }
 }
 
-/**
- * The summary figures; wraps so it fits beside the muscle map. Serif, like Stats' and History's
- * figures, one step down from theirs so four or five sit beside the map without a wall. Volume and
- * Sets carry an arrow vs the last session of this same training ([SessionDetailData.prevVolumeLb] /
- * [prevSetCount]) only when it moved; "same" draws nothing.
- */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-internal fun SummaryStrip(data: SessionDetailData, onBg: Color, muted: Color) {
-    val weightUnit = LocalForgeSettings.current.weightUnit
-    FlowRow(
-        modifier = Modifier.fillMaxWidth(),
-        // 12, not 18: four figures (volume · duration · sets · PRs) fit one line beside the map
-        // on a phone instead of stranding the last one alone on a second row.
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        data.volumeLb?.takeIf { it > 0 }?.let {
-            SessionFigure(formatVolume(it, weightUnit), "Volume", trendOf(it, data.prevVolumeLb), onBg, muted)
-        }
-        data.durationMin?.takeIf { it > 0 }?.let { SessionFigure("$it min", "Duration", null, onBg, muted) }
-        if (data.setCount > 0) {
-            SessionFigure(
-                "${data.setCount}", if (data.setCount == 1) "Set" else "Sets",
-                trendOf(data.setCount.toDouble(), data.prevSetCount?.toDouble()), onBg, muted
-            )
-        }
-        if (data.prCount > 0) SessionFigure("${data.prCount}", if (data.prCount == 1) "PR" else "PRs", null, onBg, muted)
-        data.avgRpe?.let { SessionFigure(rpeLabel(it), "Avg RPE", null, onBg, muted) }
-    }
-}
+// ─── Figures ────────────────────────────────────────────────────────────────────
 
 private enum class Trend { UP, DOWN, SAME }
 
 /**
- * Direction of [cur] vs the previous session's [prev]; null only when there's no prior to compare.
- * A prior of exactly 0.0 is valid (a bodyweight-only session logs zero volume), so we guard on null
- * rather than `<= 0.0` — comparing real volume against a prior zero correctly reads as UP.
+ * Direction of [cur] against the last session of the same training; null when there is none. A
+ * prior of exactly zero is real (a bodyweight-only session), so the guard is on null.
  */
 private fun trendOf(cur: Double, prev: Double?): Trend? {
     if (prev == null) return null
-    val eps = prev * 0.001 // ignore sub-0.1% float noise so "same" really means same
+    val eps = prev * 0.001
     return when {
         cur > prev + eps -> Trend.UP
         cur < prev - eps -> Trend.DOWN
@@ -262,186 +203,169 @@ private fun trendOf(cur: Double, prev: Double?): Trend? {
     }
 }
 
-/** One header figure: serif value over a mono label, with a ↑/↓ beside it when it moved. */
-@Composable
-private fun SessionFigure(value: String, label: String, trend: Trend?, onBg: Color, muted: Color) {
-    Column {
-        Row(verticalAlignment = Alignment.Top) {
-            Text(value, style = MaterialTheme.typography.headlineSmall, color = onBg)
-            // §11 deltas: ↑ accent / ↓ muted, the shape carries direction and a contentDescription
-            // gives TalkBack a word. SAME is not an exception, so it isn't flagged (§8).
-            val arrow = when (trend) {
-                Trend.UP -> Triple("↑", MaterialTheme.colorScheme.primary, "up from last session")
-                Trend.DOWN -> Triple("↓", muted, "down from last session")
-                else -> null
-            }
-            arrow?.let { (glyph, color, desc) ->
-                Spacer(Modifier.width(4.dp))
-                Text(
-                    glyph,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = color,
-                    modifier = Modifier.padding(top = 2.dp).semantics { contentDescription = desc }
-                )
-            }
-        }
-        Spacer(Modifier.height(2.dp))
-        Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
-    }
-}
-
-// ─── Per-exercise drill-in detail ──────────────────────────────────────────────
-
 /**
- * The full breakdown for one exercise, shown when its row in a metric card is tapped: PR/e1RM/effort
- * chips, the exercise note, a one-line gist, the per-set chart (in the page's metric + the card's
- * bars/line style), and the complete set table. No outer card — the metric card already supplies it.
+ * The session's figures in one row: volume and sets (with ↑/↓ against the last session of this
+ * training when they moved), average RPE when sets were rated, and PRs. Volume and sets read zero
+ * rather than vanish.
  */
-@Composable
-internal fun ExerciseDetailBody(
-    ex: ExerciseDetail,
-    metric: SessionMetric,
-    style: SessionChartStyle,
-    onBg: Color,
-    muted: Color,
-    accent: Color,
-    outline: Color
-) {
-    val weightUnit = LocalForgeSettings.current.weightUnit
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        val hasMeta = ex.e1rmLb != null || ex.isPr || ex.effort != null
-        if (hasMeta) {
-            // Bare mono readings, not filled chips: they're passive, and a box is a promise of a tap
-            // (§1). Colour stays on the exceptions only, the PR and the effort's state.
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                // "BEST" in words: a best used to only lift the reading from muted to onBg, which
-                // nobody could decode.
-                ex.e1rmLb?.let { e ->
-                    MetaReading(
-                        "E1RM ${formatWeight(e, weightUnit).uppercase()}" + if (ex.e1rmIsBest) " · BEST" else "",
-                        if (ex.e1rmIsBest) onBg else muted
-                    )
-                }
-                if (ex.isPr) MetaReading("↑ PR", accent)
-                ex.effort?.let { MetaReading(it.displayName.uppercase(), effortColor(it)) }
-            }
-        }
-        if (!ex.note.isNullOrBlank()) {
-            Text("“${ex.note}”", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
-        }
-        Text(exerciseSummary(ex, weightUnit), style = MaterialTheme.typography.bodySmall, color = muted)
-        // One session's sets end here; the lift's whole history is a tap away on Stats (§4.5: a
-        // drill-down answers with detail). Weighted lifts only: Strength charts e1RM.
-        val openTrend = LocalOpenLiftTrend.current
-        val liftId = ex.exerciseId
-        if (openTrend != null && liftId != null && ex.e1rmLb != null) {
-            Box(
-                Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                    .clickableLabeled("Open ${ex.name}'s trend on Stats") { openTrend(liftId) },
-                contentAlignment = Alignment.CenterEnd
-            ) {
-                Text("ALL-TIME TREND →", style = MaterialTheme.typography.labelMedium, color = accent)
-            }
-        }
-        PerExerciseSetChart(ex, metric, style, accent, muted, outline)
-        SetTable(ex.sets, onBg, muted, outline)
-    }
-}
-
-/** "Top 135 × 8 · 4 sets · 4,320 lb" — the collapsed-card gist. A timed hold reads "Best 0:45 · N sets". */
-private fun exerciseSummary(ex: ExerciseDetail, weightUnit: WeightUnit): String {
-    // A timed-hold exercise summarises by its longest hold, not weight×reps volume (GYMAP-51).
-    if (ex.sets.isNotEmpty() && ex.sets.all { it.durationSeconds != null }) {
-        val best = ex.sets.maxOf { it.durationSeconds ?: 0 }
-        return "Best ${formatHoldLabel(best)} · ${ex.sets.size} ${if (ex.sets.size == 1) "set" else "sets"}"
-    }
-    val top = ex.sets.firstOrNull { it.isTopSet } ?: ex.sets.maxByOrNull { it.weightLb ?: 0.0 }
-    return buildList {
-        top?.let { add("Top ${weightLabel(it, weightUnit)} × ${it.reps}") }
-        add("${ex.sets.size} ${if (ex.sets.size == 1) "set" else "sets"}")
-        if (ex.volumeLb > 0) add(formatVolume(ex.volumeLb, weightUnit))
-    }.joinToString(" · ")
-}
-
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SetTable(sets: List<SetDetail>, onBg: Color, muted: Color, outline: Color) {
-    val weightUnit = LocalForgeSettings.current.weightUnit
-    // One filled group, a member per set, 2dp seams instead of table rules (2026-09-27).
-    Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
-        sets.forEachIndexed { i, s ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(rowShape(i, sets.size))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .padding(horizontal = ROW_H, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    Modifier.weight(1f, fill = false),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text("${s.number}", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f), modifier = Modifier.widthIn(min = 14.dp))
-                    Text(
-                        // A timed hold reads its held time (0:45); every other set reads "weight × reps".
-                        if (s.durationSeconds != null) formatHoldLabel(s.durationSeconds) else "${weightLabel(s, weightUnit)} × ${s.reps}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        // Always white — the top set keeps a SemiBold emphasis but is no longer accent-tinted.
-                        color = onBg,
-                        fontWeight = if (s.isTopSet) FontWeight.SemiBold else FontWeight.Normal
-                    )
-                }
-                Spacer(Modifier.width(10.dp))
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
-                    itemVerticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (s.setType == "warmup") SetTag("WARM", muted)
-                    if (s.isAmrap) SetTag("AMRAP", muted)
-                    if (s.toFailure) SetTag("FAIL", muted)
-                    if (s.isAssisted) SetTag("ASSIST", muted)
-                    // A drop set is marked by set_type; the annotation (drop weight/reps) is optional
-                    // extra detail, so the badge keys off either (freestyle drops carry no annotation).
-                    if (s.setType == "drop" || !s.dropAnnotation.isNullOrBlank()) SetTag("DROP", muted)
-                    s.rpe?.let {
-                        Text("RPE ${rpeLabel(it)}", style = MaterialTheme.typography.labelSmall, color = muted)
+internal fun SessionFigures(data: SessionDetailData) {
+    val unit = LocalForgeSettings.current.weightUnit
+    val volume = data.volumeLb ?: 0.0
+    // Wraps rather than crowds: at a large font scale four figures do not fit one row of a phone.
+    FlowRow(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Figure(
+            formatVolumeCompact(volume, unit, withUnit = false),
+            "Volume · ${unitLabel(unit)}",
+            trendOf(volume, data.prevVolumeLb),
+            FigureWidth
+        )
+        Figure(
+            "${data.setCount}",
+            if (data.setCount == 1) "Set" else "Sets",
+            trendOf(data.setCount.toDouble(), data.prevSetCount?.toDouble()),
+            FigureWidth
+        )
+        data.avgRpe?.let { Figure(rpeLabel(it), "Avg RPE", null, FigureWidth) }
+        Figure("${data.prCount}", if (data.prCount == 1) "PR" else "PRs", null, FigureWidth)
+    }
+}
+
+/** Each figure's least width, so the row reads as columns, as the design draws it. */
+private val FigureWidth = Modifier.widthIn(min = 72.dp)
+
+/** One figure: serif value, a ↑ (red) or ↓ (muted) when it moved, a mono label under it. */
+@Composable
+private fun Figure(value: String, label: String, trend: Trend?, modifier: Modifier = Modifier) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.Top) {
+            Text(value, style = HistoryType.summaryFigure, color = MaterialTheme.colorScheme.onBackground)
+            when (trend) {
+                Trend.UP -> Text("↑", style = HistoryType.summaryArrow, color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.semantics { contentDescription = "up from last session" })
+                Trend.DOWN -> Text("↓", style = HistoryType.summaryArrow, color = muted,
+                    modifier = Modifier.semantics { contentDescription = "down from last session" })
+                else -> Unit
+            }
+        }
+        OpenLabel(label, style = OpenType.monoXS)
+    }
+}
+
+// ─── Heart rate ─────────────────────────────────────────────────────────────────
+
+/**
+ * Heart rate from the watch: the average as a figure, its peak in the line under it, the trace over
+ * the session's minutes, then each lift's average and the recovery read. Without a trace the reading
+ * is a zero over a bare baseline and a line saying what fills it.
+ */
+@Composable
+internal fun HeartRateSection(hr: SessionHrView?) {
+    val ink = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            OpenLabel("Heart rate")
+            OpenLabel("From your watch")
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            buildAnnotatedString {
+                append("${hr?.avgBpm ?: 0}")
+                withStyle(HistoryType.heartUnit.toSpanStyle().copy(color = muted)) { append(" bpm") }
+            },
+            style = HistoryType.heartFigure,
+            color = ink
+        )
+        Spacer(Modifier.height(6.dp))
+        OpenLabel(
+            if (hr == null) "Wear your watch while you train and it fills this"
+            else "Average · peak ${hr.maxBpm}",
+            style = OpenType.monoXS
+        )
+        Spacer(Modifier.height(12.dp))
+        if (hr == null) {
+            Box(Modifier.fillMaxWidth().height(1.dp).background(OpenColors.Rule))
+            return@Column
+        }
+        HeartTrace(hr)
+        if (hr.perExercise.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                hr.perExercise.forEach { ex ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(ex.name, style = OpenType.bodyS, color = muted, modifier = Modifier.weight(1f))
+                        OpenLabel("Avg ${ex.avgBpm}", style = OpenType.monoXS, color = ink)
                     }
                 }
             }
         }
+        hr.avgHrr60?.let { drop ->
+            Spacer(Modifier.height(10.dp))
+            OpenLabel("Recovery · $drop bpm down in the first minute of rest", style = OpenType.monoXS)
+        }
     }
 }
 
-// ─── Small bits ────────────────────────────────────────────────────────────--
-
+/** The trace as a red line over a faint red area, with the session's minutes under it. */
 @Composable
-private fun MetaReading(text: String, color: Color) {
-    Text(text, style = MaterialTheme.typography.labelMedium, color = color)
+private fun HeartTrace(hr: SessionHrView) {
+    val accent = MaterialTheme.colorScheme.primary
+    val measurer = rememberTextMeasurer()
+    val pts = hr.points
+    val minutes = if (pts.size < 2) 0 else ((pts.last().timeMs - pts.first().timeMs) / 60_000L).toInt()
+    val ticks = minuteTicks(minutes)
+    Canvas(
+        Modifier.fillMaxWidth().height(84.dp + 18.dp).clearAndSetSemantics {
+            contentDescription = "Heart rate over $minutes minutes, average ${hr.avgBpm}, peak ${hr.maxBpm}"
+        }
+    ) {
+        if (pts.size < 2) return@Canvas
+        val plotH = 84.dp.toPx()
+        val t0 = pts.first().timeMs
+        val span = (pts.last().timeMs - t0).coerceAtLeast(1L).toFloat()
+        val lo = pts.minOf { it.bpm }.toFloat()
+        val hi = pts.maxOf { it.bpm }.toFloat()
+        val range = (hi - lo).coerceAtLeast(1f)
+        val inset = 6.dp.toPx()
+        fun x(ms: Long) = inset + ((ms - t0) / span) * (size.width - 2 * inset)
+        fun y(bpm: Int) = plotH - ((bpm - lo) / range) * (plotH * 0.85f) - 2.dp.toPx()
+        val line = Path()
+        pts.forEachIndexed { i, p -> if (i == 0) line.moveTo(x(p.timeMs), y(p.bpm)) else line.lineTo(x(p.timeMs), y(p.bpm)) }
+        val area = Path().apply {
+            addPath(line)
+            lineTo(x(pts.last().timeMs), plotH)
+            lineTo(x(t0), plotH)
+            close()
+        }
+        drawPath(area, accent.copy(alpha = 0.15f))
+        drawPath(line, accent, style = Stroke(2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+        ticks.forEach { m ->
+            val t = measurer.measure("$m", OpenType.chartLabel.copy(color = OpenColors.Glyph))
+            val cx = (inset + (m * 60_000f / span) * (size.width - 2 * inset) - t.size.width / 2f)
+                .coerceIn(0f, size.width - t.size.width)
+            drawText(t, topLeft = Offset(cx, plotH + 6.dp.toPx()))
+        }
+    }
 }
 
-/** Passive set metadata — bare mono text, no box (§1: a border is earned by interactivity). */
-@Composable
-private fun SetTag(text: String, muted: Color) {
-    Text(text, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f), fontSize = 8.sp, letterSpacing = 0.5.sp)
+/** Minute ticks under the trace: every 10 (15 or 30 on a long session), always ending on the last. */
+internal fun minuteTicks(total: Int): List<Int> {
+    if (total <= 0) return listOf(0)
+    val step = when {
+        total <= 70 -> 10
+        total <= 120 -> 15
+        else -> 30
+    }
+    val ticks = (0 until total step step).toMutableList()
+    // The last tick is the session's length; drop a regular tick too close to it to read apart.
+    if (ticks.isNotEmpty() && total - ticks.last() < step / 2) ticks.removeAt(ticks.lastIndex)
+    return ticks + total
 }
 
-private fun weightLabel(s: SetDetail, weightUnit: WeightUnit): String =
-    if (s.weightLb != null && s.weightLb > 0) formatWeight(s.weightLb, weightUnit) else s.weightText.ifBlank { "BW" }
-
-// §5 reserved state colors only — EASY and JUST_RIGHT are both healthy readings (success),
-// HARD cautions, BRUTAL alarms. Never raw literals here.
-private fun effortColor(effort: EffortRating): Color = when (effort) {
-    EffortRating.EASY -> ForgeSuccess
-    EffortRating.JUST_RIGHT -> ForgeSuccess
-    EffortRating.HARD -> ForgeWarning
-    EffortRating.BRUTAL -> ForgeError
-}
-
-/** Opens a lift's all-time trend on Stats, provided by the session detail screen; null hides the link. */
-internal val LocalOpenLiftTrend = androidx.compose.runtime.staticCompositionLocalOf<((String) -> Unit)?> { null }

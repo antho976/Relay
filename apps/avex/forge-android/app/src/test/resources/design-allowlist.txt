@@ -82,9 +82,6 @@
 3 font-size ui/common/Editorial.kt fontSize=
 1 font-size ui/common/SegmentPill.kt fontSize=
 2 font-size ui/gym/freestyle/FreestyleTemplatePicker.kt fontSize=
-3 font-size ui/gym/session/SessionDetailCharts.kt fontSize=
-3 font-size ui/gym/session/SessionDetailComponents.kt fontSize=
-2 font-size ui/gym/session/SessionDetailMetricCards.kt fontSize=
 2 font-size ui/gym/stats/StatsStrength.kt fontSize=
 2 font-size ui/gym/stats/StatsVolume.kt fontSize=
 3 font-size ui/gym/train/DaySessionContent.kt fontSize=
@@ -109,7 +106,6 @@
 1 max-lines ui/common/Editorial.kt maxLines=1
 1 max-lines ui/goals/GoalsComponents.kt maxLines=1
 1 max-lines ui/gym/freestyle/FreestyleTemplatePicker.kt maxLines=1
-1 max-lines ui/gym/session/SessionDetailMetricCards.kt maxLines=1
 # DayCard spine: a rotated mono label (chrome), measured unrotated on one line so it reads whole.
 1 max-lines ui/gym/train/components/SetRow.kt maxLines=1
 2 paren-plural domain/trophy/TrophyEvaluator.kt (s)
@@ -141,8 +137,6 @@
 2 snackbar-host ui/programbuilder/ProgramBuilderDayDetail.kt SnackbarHostState
 2 snackbar-host ui/programbuilder/ProgramBuilderScreen.kt SnackbarHostState
 1 unlabelled-clickable ui/common/BounceClick.kt .clickable(
-1 unlabelled-clickable ui/gym/session/SessionDetailComponents.kt .clickable(
-1 unlabelled-clickable ui/gym/session/SessionDetailMetricCards.kt .clickable(
 1 unlabelled-clickable ui/gym/stats/StatsStrength.kt .clickable(
 # The 2026-10-21 redesign draws these three exactly; none is text or a surface rung:
 # the sparkline's area under its line (accent 10%), and the bottom bar's ground (page 90%)
