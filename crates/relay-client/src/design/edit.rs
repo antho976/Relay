@@ -1028,6 +1028,18 @@ pub fn reorder(scene: &Scene, parent: &str, ids: &[String], index: u32) -> Vec<N
     ops
 }
 
+/// The move that puts `page` just before `target` (just after it, with `after`) among the
+/// pages, its index the place it takes once out of the list, as [`Scene::apply`] and the engine
+/// read it. `None` when it would stay where it is, or either is not a page.
+pub fn move_page(scene: &Scene, page: &str, target: &str, after: bool) -> Option<NodeOp> {
+    let pages = scene.pages();
+    let from = pages.iter().position(|p| p == page)?;
+    pages.iter().position(|p| p == target)?;
+    let rest: Vec<&String> = pages.iter().filter(|p| *p != page).collect();
+    let to = rest.iter().position(|p| *p == target).map_or(from, |i| i + usize::from(after));
+    (to != from).then(|| NodeOp::Move { id: page.to_string(), parent: None, index: Some(to as u32), keep_position: None })
+}
+
 /// The update that types a width (`axis` `"w"`) or a height (`"h"`) of `v` px into `n` (as
 /// stored), as the inspector's W and H fields do: a fixed size from now on, within its min and
 /// max. A line's or path's points scale along that axis from the least of them, so the drawing
@@ -1734,6 +1746,29 @@ mod tests {
         assert_eq!(order(&s2), ["A", "D", "B", "C"]);
         // A child of another parent is left out.
         assert!(reorder(&s, "col", &ids(&["p1"]), 0).is_empty());
+    }
+
+    #[test]
+    fn a_page_moves_before_or_after_another() {
+        let pages = || Scene::new(["A", "B", "C", "D"].map(|p| node(p, None, K::Page, [0.0; 4])).to_vec());
+        let moved = |page: &str, target: &str, after: bool| {
+            let mut s = pages();
+            let op = move_page(&s, page, target, after);
+            if let Some(op) = &op {
+                run(&mut s, std::slice::from_ref(op));
+            }
+            (op.is_some(), s.pages().join(""))
+        };
+        assert_eq!(moved("A", "C", false), (true, "BACD".into()));
+        assert_eq!(moved("A", "C", true), (true, "BCAD".into()));
+        assert_eq!(moved("D", "A", false), (true, "DABC".into()));
+        assert_eq!(moved("B", "D", true), (true, "ACDB".into()));
+        // Already there: nothing is sent.
+        assert_eq!(moved("B", "C", false), (false, "ABCD".into()));
+        assert_eq!(moved("C", "B", true), (false, "ABCD".into()));
+        assert_eq!(moved("B", "B", true), (false, "ABCD".into()));
+        // Not a page.
+        assert!(move_page(&pages(), "A", "nope", false).is_none());
     }
 
     /// B36: a typed height leaves a flat line flat (it has no height to give), a typed width

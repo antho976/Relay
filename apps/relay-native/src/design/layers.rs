@@ -45,13 +45,22 @@ struct Row {
     open: bool,
 }
 
+/// What a pages list was built for: each page, its name and whether it is hidden, and
+/// whether the fold of hidden pages is open.
+type PageSig = (Vec<(String, String, bool)>, bool);
+
+thread_local! {
+    /// Whether the pages lists open their fold of hidden pages.
+    static HIDDEN_OPEN: Cell<bool> = const { Cell::new(false) };
+}
+
 pub struct Layers {
     pub root: gtk::Box,
     board: Weak<Board>,
     pages: gtk::Box,
     /// The pages and names the page rows were built for: while they stay, a page switch only
     /// relights the rows, so a row's double-click (rename) lands on the row it started on (B52).
-    page_sig: RefCell<Vec<(String, String)>>,
+    page_sig: RefCell<PageSig>,
     model: gtk::StringList,
     rows: RefCell<Vec<Row>>,
     open: RefCell<HashSet<String>>,
@@ -459,28 +468,78 @@ impl Layers {
         let Some(b) = self.board.upgrade() else {
             return;
         };
-        let pages = b.doc.scene.borrow().pages().to_vec();
         let current = b.page.borrow().clone();
-        let sig: Vec<(String, String)> = pages.iter().map(|p| (p.clone(), b.page_name(p))).collect();
+        let sig = page_sig(&b);
         if *self.page_sig.borrow() == sig {
             let mut child = self.pages.first_child();
-            for (page, _) in &sig {
-                let Some(row) = child else {
-                    break;
-                };
-                light_page_row(&row, *page == current);
+            while let Some(row) = child {
                 child = row.next_sibling();
+                if let Some(page) = row.widget_name().strip_prefix("design-page:") {
+                    light_page_row(&row, page == current);
+                }
             }
         } else {
             while let Some(c) = self.pages.first_child() {
                 self.pages.remove(&c);
             }
-            for page in &pages {
-                self.pages.append(&page_row(&b, page, *page == current, None));
+            for row in page_rows(&b, None) {
+                self.pages.append(&row);
             }
             *self.page_sig.borrow_mut() = sig;
         }
         self.refresh();
+    }
+}
+
+/// The pages, their names and whether each is hidden, and whether the fold of hidden pages
+/// shows: a pages list built for them stays.
+fn page_sig(b: &Rc<Board>) -> PageSig {
+    let scene = b.doc.scene.borrow();
+    let pages: Vec<_> = scene.pages().iter().map(|p| (p.clone(), b.page_name(p), scene.node(p).is_some_and(|n| n.is_hidden()))).collect();
+    let current = b.page.borrow().clone();
+    let open = HIDDEN_OPEN.with(Cell::get) || pages.iter().any(|(p, _, hidden)| *hidden && *p == current);
+    (pages, open)
+}
+
+/// A pages list's rows in the design's order: the pages shown, then a fold holding the hidden
+/// ones (open while one of them is on show), each with an eye to show it again.
+fn page_rows(b: &Rc<Board>, pop: Option<&gtk::Popover>) -> Vec<gtk::Widget> {
+    let (pages, open) = page_sig(b);
+    let current = b.page.borrow().clone();
+    let mut rows: Vec<gtk::Widget> = pages.iter().filter(|p| !p.2).map(|(p, ..)| page_row(b, p, *p == current, pop, false)).collect();
+    let hidden: Vec<&String> = pages.iter().filter(|p| p.2).map(|(p, ..)| p).collect();
+    if hidden.is_empty() {
+        return rows;
+    }
+    let fold = gtk::Button::new();
+    fold.add_css_class("design-page-fold");
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    row.append(&crate::icons::image(if open { "chevron-down" } else { "chevron-right" }, 10));
+    row.append(&label(&format!("Hidden · {}", hidden.len()), ""));
+    fold.set_child(Some(&row));
+    tip(&fold, if open { "Fold the hidden pages away" } else { "Show the hidden pages, to open or show them again" });
+    let weak = Rc::downgrade(b);
+    let p = pop.map(|p| p.downgrade());
+    fold.connect_clicked(move |_| {
+        HIDDEN_OPEN.with(|o| o.set(!open));
+        if let Some(b) = weak.upgrade() {
+            refresh_pages(&b, p.as_ref().and_then(|p| p.upgrade()).as_ref());
+        }
+    });
+    rows.push(fold.upcast());
+    if open {
+        rows.extend(hidden.into_iter().map(|p| page_row(b, p, *p == current, pop, true)));
+    }
+    rows
+}
+
+/// Both pages lists built again: the Layers panel's, and the dock's in `pop` when it is open.
+fn refresh_pages(b: &Rc<Board>, pop: Option<&gtk::Popover>) {
+    if let Some(l) = b.layers.borrow().as_ref() {
+        l.pages_changed();
+    }
+    if let Some(pop) = pop {
+        pop.set_child(Some(&pages_menu(b, pop)));
     }
 }
 
@@ -496,24 +555,126 @@ fn light_page_row(row: &gtk::Widget, current: bool) {
     }
 }
 
+/// Hide `page` from the pages lists, or show it again: one page always stays shown. Hidden,
+/// it is still opened from the fold, and the board goes to the next page shown when it was on
+/// show.
+fn set_page_hidden(b: &Rc<Board>, page: &str, hide: bool) -> bool {
+    let scene = b.doc.scene.borrow();
+    let shown: Vec<String> = scene.pages().iter().filter(|p| scene.node(p).is_some_and(|n| !n.is_hidden())).cloned().collect();
+    drop(scene);
+    if hide && shown.iter().all(|p| p == page) {
+        b.toast("One page stays shown: show another before hiding this one");
+        return false;
+    }
+    let mut set = Map::new();
+    set.insert("hidden".into(), if hide { json!(true) } else { Value::Null });
+    if !b.commit(vec![NodeOp::Update { id: page.to_string(), set }]) {
+        return false;
+    }
+    if hide {
+        if *b.page.borrow() == page {
+            let all = b.doc.scene.borrow().pages().to_vec();
+            let at = all.iter().position(|p| p == page).unwrap_or(0);
+            let next = all[at..].iter().chain(all[..at].iter().rev()).find(|p| *p != page && shown.contains(p)).cloned();
+            if let Some(next) = next {
+                b.set_page(&next);
+            }
+        }
+        b.toast("Page hidden · it waits under Hidden at the end of the pages");
+    }
+    true
+}
+
+/// The page next to `page` in its own list, shown or hidden: above it with `up`.
+fn page_neighbour(b: &Rc<Board>, page: &str, up: bool) -> Option<String> {
+    let scene = b.doc.scene.borrow();
+    let hidden = |p: &String| scene.node(p).is_some_and(|n| n.is_hidden());
+    let mine = scene.node(page)?.is_hidden();
+    let group: Vec<&String> = scene.pages().iter().filter(|p| hidden(p) == mine).collect();
+    let at = group.iter().position(|p| *p == page)?;
+    let next = if up { at.checked_sub(1)? } else { at + 1 };
+    group.get(next).map(|p| p.to_string())
+}
+
+/// Put `page` before `target` (after it, with `after`) among the pages: one undo step.
+fn move_page(b: &Rc<Board>, page: &str, target: &str, after: bool) -> bool {
+    let op = edit::move_page(&b.doc.scene.borrow(), page, target, after);
+    op.is_some_and(|op| b.commit(vec![op]))
+}
+
 /// A layer row's eye and lock: shown under the pointer, and otherwise only while they are on.
 fn show_keys(row: &gtk::Box, eye: &gtk::Button, lock: &gtk::Button, hover: bool) {
     eye.set_visible(hover || row.has_css_class("hidden"));
     lock.set_visible(hover || lock.has_css_class("on"));
 }
 
-/// One page's row: click to open, double click to rename, its menu to delete.
-fn page_row(b: &Rc<Board>, page: &str, current: bool, pop: Option<&gtk::Popover>) -> gtk::Widget {
+/// One page's row: click to open, double click to rename, drag to reorder, its eye to hide or
+/// show it, its menu for the rest.
+fn page_row(b: &Rc<Board>, page: &str, current: bool, pop: Option<&gtk::Popover>, hidden: bool) -> gtk::Widget {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     row.add_css_class("design-page-row");
+    row.set_widget_name(&format!("design-page:{page}"));
     if current {
         row.add_css_class("selected");
+    }
+    if hidden {
+        row.add_css_class("hidden");
     }
     row.append(&glyphs::image("page", 14));
     let name = label(&b.page_name(page), "");
     name.set_hexpand(true);
     name.set_ellipsize(gtk::pango::EllipsizeMode::End);
     row.append(&name);
+    // The eye: always on a hidden page's row, under the pointer on a shown one.
+    let eye = gtk::Button::new();
+    eye.add_css_class("design-layer-eye");
+    eye.add_css_class("flat");
+    eye.set_child(Some(&glyphs::image(if hidden { "eye-off" } else { "eye" }, 14)));
+    let show = if hidden { "Show this page" } else { "Hide this page" };
+    tip(&eye, show);
+    eye.update_property(&[gtk::accessible::Property::Label(&format!("{show}: {}", b.page_name(page)))]);
+    eye.set_visible(hidden);
+    let weak = Rc::downgrade(b);
+    let id = page.to_string();
+    eye.connect_clicked(move |_| {
+        if let Some(b) = weak.upgrade() {
+            set_page_hidden(&b, &id, !hidden);
+        }
+    });
+    row.append(&eye);
+    if !hidden {
+        let hover = gtk::EventControllerMotion::new();
+        let e = eye.downgrade();
+        hover.connect_enter(move |_, _, _| {
+            if let Some(e) = e.upgrade() {
+                e.set_visible(true);
+            }
+        });
+        let e = eye.downgrade();
+        hover.connect_leave(move |_| {
+            if let Some(e) = e.upgrade() {
+                e.set_visible(false);
+            }
+        });
+        row.add_controller(hover);
+    }
+    // Dragged onto another page's row: before it on its upper half, after it on its lower.
+    let drag = gtk::DragSource::new();
+    drag.set_actions(gtk::gdk::DragAction::MOVE);
+    let id = page.to_string();
+    drag.connect_prepare(move |_, _, _| Some(gtk::gdk::ContentProvider::for_value(&id.to_value())));
+    row.add_controller(drag);
+    let drop = gtk::DropTarget::new(glib::Type::STRING, gtk::gdk::DragAction::MOVE);
+    let weak = Rc::downgrade(b);
+    let id = page.to_string();
+    drop.connect_drop(move |t, value, _, y| {
+        let (Some(b), Ok(dragged)) = (weak.upgrade(), value.get::<String>()) else {
+            return false;
+        };
+        let height = t.widget().map_or(1, |w| w.height()).max(1) as f64;
+        move_page(&b, &dragged, &id, y / height >= 0.5)
+    });
+    row.add_controller(drop);
     // Always there, shown on the page on show: a page switch relights the rows in place.
     let check = crate::icons::image("check", 12);
     check.set_visible(current);
@@ -560,6 +721,23 @@ fn page_row(b: &Rc<Board>, page: &str, current: bool, pop: Option<&gtk::Popover>
     row.upcast()
 }
 
+/// A row of a page's menu titled `title`: it closes the menu, then does `act`.
+fn menu_key(b: &Rc<Board>, list: &gtk::Box, pop: &gtk::Popover, title: &str, act: impl Fn(&Rc<Board>) -> bool + 'static) {
+    let key = gtk::Button::with_label(title);
+    key.add_css_class("design-menu-row");
+    let weak = Rc::downgrade(b);
+    let p = pop.downgrade();
+    key.connect_clicked(move |_| {
+        if let Some(p) = p.upgrade() {
+            p.popdown();
+        }
+        if let Some(b) = weak.upgrade() {
+            act(&b);
+        }
+    });
+    list.append(&key);
+}
+
 fn page_menu(b: &Rc<Board>, page: &str, anchor: &gtk::Widget) {
     let pop = gtk::Popover::new();
     pop.add_css_class("design-menu");
@@ -580,6 +758,15 @@ fn page_menu(b: &Rc<Board>, page: &str, anchor: &gtk::Widget) {
         }
     });
     list.append(&rename);
+    let hidden = b.doc.scene.borrow().node(page).is_some_and(|n| n.is_hidden());
+    for up in [true, false] {
+        if let Some(next) = page_neighbour(b, page, up) {
+            let id = page.to_string();
+            menu_key(b, &list, &pop, if up { "Move up" } else { "Move down" }, move |b| move_page(b, &id, &next, !up));
+        }
+    }
+    let id = page.to_string();
+    menu_key(b, &list, &pop, if hidden { "Show page" } else { "Hide page" }, move |b| set_page_hidden(b, &id, !hidden));
     // The dock's pages list this row sits in, if it does: closed once a page is added or gone,
     // rather than left open on rows of pages that changed (TM-69).
     let pages_list = anchor.ancestor(gtk::Popover::static_type()).and_downcast::<gtk::Popover>().map(|p| p.downgrade());
@@ -707,8 +894,8 @@ pub fn pages_menu(b: &Rc<Board>, pop: &gtk::Popover) -> gtk::Widget {
     list.add_css_class("design-pages-menu");
     list.append(&label("Pages", "design-menu-heading"));
     let current = b.page.borrow().clone();
-    for page in b.doc.scene.borrow().pages().to_vec() {
-        list.append(&page_row(b, &page, page == current, Some(pop)));
+    for row in page_rows(b, Some(pop)) {
+        list.append(&row);
     }
     let add = gtk::Button::new();
     add.add_css_class("design-menu-row");

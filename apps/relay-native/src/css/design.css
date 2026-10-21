@@ -248,3 +248,7 @@ button.design-picture-cell:hover { background: @wash_solid; }
 .design-credit-title { color: @ink; font-weight: 600; }
 .design-credit-meta { color: @secondary; font-size: 12px; }
 button.design-credit-key { min-height: 28px; padding: 0 6px; border-radius: 8px; font-size: 12px; }
+.design-page-row.hidden { color: @ink_dim; }
+.design-page-row button.design-layer-eye { min-height: 22px; min-width: 22px; padding: 0; }
+button.design-page-fold { min-height: 26px; padding: 0 8px; border-radius: 8px; background: none; box-shadow: none; color: @faint; font-size: 12px; }
+button.design-page-fold:hover { color: @ink; background: @wash_solid; }
