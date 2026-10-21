@@ -1,12 +1,13 @@
 package com.forge.app.ui.onboarding
 
-import com.forge.app.ui.common.ForgeGroupSection
-import com.forge.app.ui.common.ForgeLabelTile
-import com.forge.app.ui.common.ForgeTileGrid
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.ui.platform.LocalDensity
+import com.forge.app.ui.theme.OnboardingType
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -56,11 +57,10 @@ internal fun StepSoreSpots(
         }
         counts
     }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        StepTitle("Any sore or injured spots?")
-        StepCaption("Avex steers away from what loads them. A preference, not a ban.")
-        Spacer(Modifier.height(6.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+    Column {
+        StepHeader("Any sore or injured spots?", "Avex steers away from what loads them. A preference, not a ban.")
+        Spacer(Modifier.height(28.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(32.dp)) {
             SpotGroup("Upper body", UPPER_SPOTS, selected, loadedBy, onToggle)
             SpotGroup("Lower body", LOWER_SPOTS, selected, loadedBy, onToggle)
         }
@@ -75,20 +75,21 @@ private fun SpotGroup(
     loadedBy: Map<ProblemArea, Int>,
     onToggle: (String) -> Unit
 ) {
-    ForgeGroupSection(label, meta = "${spots.count { it.code in selected }} flagged") {
-        ForgeTileGrid(spots, cols = 2) { area, corners, modifier ->
+    Column {
+        StepSectionLabel(label, meta = "${spots.count { it.code in selected }} flagged")
+        Spacer(Modifier.height(12.dp))
+        val cols = if (LocalDensity.current.fontScale > 1.3f) 1 else 2
+        TileGrid(spots, cols) { area, modifier ->
             val loaded = loadedBy[area] ?: 0
+            val flagged = area.code in selected
             // The count is a reading, never a state word, so a flagged tile says how much work is
-            // being steered rather than announcing that it is on (the accent wash does that). Zero is
+            // being steered rather than announcing that it is on (the red outline does that). Zero is
             // drawn honestly: a gym that never loads your ankles is worth knowing.
-            ForgeLabelTile(
-                label = area.displayName,
-                meta = if (loaded == 1) "1 movement" else "$loaded movements",
-                selected = area.code in selected,
-                corners = corners,
-                onClick = { onToggle(area.code) },
-                modifier = modifier
-            )
+            OnbTile(selected = flagged, onClick = { onToggle(area.code) }, modifier = modifier, multi = true) {
+                Text(area.displayName, style = OnboardingType.gridTitle, color = MaterialTheme.colorScheme.onBackground)
+                Spacer(Modifier.height(10.dp))
+                TileMeta(if (loaded == 1) "1 movement" else "$loaded movements", flagged)
+            }
         }
     }
 }

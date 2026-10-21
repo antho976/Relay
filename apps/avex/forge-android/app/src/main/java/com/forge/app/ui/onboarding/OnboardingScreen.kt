@@ -2,21 +2,16 @@ package com.forge.app.ui.onboarding
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import com.forge.app.ui.common.window.AlertDialog
@@ -44,7 +39,7 @@ import com.forge.app.domain.schedule.WeeklySchedule
 import com.forge.app.program.Equipment
 import com.forge.app.program.ProgramGenerator
 import com.forge.app.program.SplitTemplates
-import com.forge.app.ui.common.ForgeSecondaryCapsule
+import com.forge.app.ui.theme.OpenIcons
 import com.forge.app.ui.theme.ForgeMotion
 import kotlin.random.Random
 
@@ -59,8 +54,9 @@ import kotlin.random.Random
  * - **The fork leads.** Plan mode is the first screen, because it decides how much of the rest runs.
  * - **Only plan-shaping questions are in the path** — goal, experience, days, gym, gear. Every
  *   setting moved to one optional closing step ([StepExtras]) that lands *after* the week exists.
- * - **The week is drawn under the day-count question** ([PlanLedger]), outside the page slider. It
- *   used to stay under gym, gear and sore spots too; it was in the way there and left on 2026-09-25.
+ * - **The week is drawn under the day-count question** ([WeekBars]), and redraws as the day count
+ *   and session length move. The footer's mono "plan so far" line ([planSoFar]) grows with every
+ *   answer on every step (redesign, 2026-10-21).
  * - **The rail is segmented** ([StepRail]) — one cell per step of the path actually taken, so the
  *   short custom / freestyle path visibly drops the four cells it will never run.
  *
@@ -325,41 +321,32 @@ fun OnboardingScreen(
     }
     val onCta: () -> Unit = { if (isLast) finish() else step++ }
 
+    val soFar = planSoFar(
+        soFarPage(page),
+        SoFarAnswers(
+            planMode = planMode, goal = goal, experience = experience, daysPerWeek = daysPerWeek,
+            sessionMinutes = sessionMinutes, fixedDays = fixedDays, weekdays = weekdays,
+            equipment = equipment, problemAreas = problemAreas,
+            dayNames = archetypes.map { it.name },
+            weekSets = weekSets(archetypes, plannedSets, previewDays).sum()
+        )
+    )
+
     OnboardingScaffold(
         step = step,
         total = path.size,
         onBack = if (step > 0) ({ step-- }) else null,
         onSkip = if (!isLast) ({ showSkipConfirm = true }) else null,
         gateHint = gateHint,
-        // The plan under construction — outside the page slider, so it holds still while the
-        // questions move past it. Only on the day-count step, where it IS the answer: on the gym,
-        // gear and spots pages it sat between the question and the tiles and answered nothing the
-        // user was deciding there (removed 2026-09-25). The week page draws it at full size.
-        ledger = {
-            AnimatedVisibility(
-                visible = page == PAGE_DAYS,
-                enter = fadeIn(ForgeMotion.enterTween()) + expandVertically(ForgeMotion.enterTween()),
-                exit = fadeOut(ForgeMotion.exitTween()) + shrinkVertically(ForgeMotion.exitTween())
-            ) {
-                Column {
-                    Spacer(Modifier.height(20.dp))
-                    PlanLedger(
-                        archetypes = archetypes,
-                        plannedSets = plannedSets,
-                        days = previewDays,
-                        trackHeight = 148.dp
-                    )
-                }
-            }
-        },
+        planSoFar = soFar,
         bottomBar = {
             if (page == PAGE_WEEK) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    ForgeSecondaryCapsule("Re-roll", onClick = { previewSeed = Random.nextLong() })
-                    PrimaryCapsule(ctaLabel, onClick = onCta, modifier = Modifier.weight(1f))
+                    OnbSecondaryButton("Re-roll", OpenIcons.Refresh, onClick = { previewSeed = Random.nextLong() })
+                    OnbPrimaryButton(ctaLabel, onClick = onCta, modifier = Modifier.weight(1f))
                 }
             } else {
-                PrimaryCapsule(ctaLabel, onClick = onCta, enabled = canAdvance, modifier = Modifier.fillMaxWidth())
+                OnbPrimaryButton(ctaLabel, onClick = onCta, enabled = canAdvance, modifier = Modifier.fillMaxWidth())
             }
         }
     ) {
@@ -380,7 +367,8 @@ fun OnboardingScreen(
                         PAGE_EXPERIENCE -> StepExperience(selected = experience, onSelect = { experience = it })
                         PAGE_DAYS -> StepDays(
                             days = daysPerWeek, experience = experience, onChange = { daysPerWeek = it },
-                            sessionMinutes = sessionMinutes, onSessionMinutes = { sessionMinutes = it }
+                            sessionMinutes = sessionMinutes, onSessionMinutes = { sessionMinutes = it },
+                            archetypes = archetypes, plannedSets = plannedSets, previewDays = previewDays
                         )
                         PAGE_WEEKDAYS -> StepWeekdays(
                             daysPerWeek = daysPerWeek,
@@ -516,6 +504,20 @@ fun OnboardingScreen(
             }
         )
     }
+}
+
+/** Which footer line a page writes. */
+private fun soFarPage(page: Int): SoFarPage = when (page) {
+    PAGE_MODE -> SoFarPage.MODE
+    PAGE_GOAL -> SoFarPage.GOAL
+    PAGE_EXPERIENCE -> SoFarPage.EXPERIENCE
+    PAGE_DAYS -> SoFarPage.DAYS
+    PAGE_WEEKDAYS -> SoFarPage.WEEKDAYS
+    PAGE_GYM -> SoFarPage.GYM
+    PAGE_GEAR -> SoFarPage.GEAR
+    PAGE_SPOTS -> SoFarPage.SPOTS
+    PAGE_WEEK -> SoFarPage.WEEK
+    else -> SoFarPage.EXTRAS
 }
 
 /** [plateLb] as the nearest real plate in the target unit, stored in lb (see the extras step's set). */
