@@ -11,8 +11,8 @@
 //! engine never resolves: it stores the names and checks them.
 //!
 //! A node takes each style field it does not set itself and its kind uses ([`Style::lay_under`]),
-//! with `fill`/`gradient`, `radius`/`radii`, `shadow`/`shadows` and `stroke`/`stroke_gradient`
-//! each counted as one field, so a node's own colour is never painted over by its style's
+//! with `fill`/`gradient`, `radius`/`radii`, `shadow`/`shadows`, `stroke`/`stroke_gradient` and
+//! `stroke_width`/`stroke_widths` each counted as one field, so a node's own colour is never painted over by its style's
 //! gradient.
 //!
 //! A style another build stored is read whole, as a node is ([`Style::read`], [`read_styles`]):
@@ -40,7 +40,7 @@ pub const MAX_STYLES: usize = 256;
 pub const STYLE_FIELDS: &[&str] = &[
     "fill", "gradient", "stroke", "stroke_width", "dash", "radius", "radii", "shadow", "shadows", "opacity", "blur", "blend",
     "color", "font", "font_size", "font_weight", "italic", "underline", "strike", "align", "line_height", "letter_spacing",
-    "text_case", "stroke_cap", "stroke_join", "stroke_gradient",
+    "text_case", "stroke_cap", "stroke_join", "stroke_gradient", "stroke_widths", "backdrop_blur",
 ];
 
 /// The name in a `$name` colour, when `text` is one: `$` and a name as an id is written.
@@ -89,7 +89,8 @@ fn plain_copy_id(from: &str, to: &str, id: &str) -> Option<String> {
 
 /// A named look nodes share: any of the style fields, each as a node holds it (a colour may be a
 /// `$name`). A node takes each field it does not set itself; `fill` and `gradient` count as one
-/// field, and so do `radius` and `radii`, `shadow` and `shadows`, `stroke` and `stroke_gradient`.
+/// field, and so do `radius` and `radii`, `shadow` and `shadows`, `stroke` and `stroke_gradient`,
+/// `stroke_width` and `stroke_widths`.
 // The derived `Deserialize` is strict, as a caller's `style` edit is held to it; a style a
 // design stored or a reply carries is read by `Style::read` (`read_styles`), which keeps what
 // this build cannot read in `extra`, and written by `Style::to_map` (`write_styles`). A plain
@@ -165,6 +166,12 @@ pub struct Style {
     pub stroke_join: Option<StrokeJoin>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "obj_opt")]
     pub stroke_gradient: Option<Gradient>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(inner(range(min = 0, max = 1000)))]
+    pub stroke_widths: Option<[f64; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0, max = 200))]
+    pub backdrop_blur: Option<f64>,
     /// What a newer Relay stored in the style that this build cannot read (a field it does not
     /// know, or a value it does not understand), kept aside and written back as it was, so an
     /// older build's colour or style edit loses nothing of it (MODEL-SPEC §2.3, as a node's
@@ -288,12 +295,13 @@ macro_rules! per_field {
 per_field!(
     fill, gradient, stroke, stroke_width, dash, radius, radii, shadow, shadows, opacity, blur, blend, color, font, font_size,
     font_weight, italic, underline, strike, align, line_height, letter_spacing, text_case, stroke_cap, stroke_join,
-    stroke_gradient,
+    stroke_gradient, stroke_widths, backdrop_blur,
 );
 
 /// The field that counts as one with `field` when a style lays itself under a node: a node's own
 /// `fill` is not painted over by its style's `gradient`, nor its `radius` by `radii`, its
-/// `shadow` by `shadows` or its `stroke` by `stroke_gradient`, and the other way round.
+/// `shadow` by `shadows`, its `stroke` by `stroke_gradient` or its `stroke_width` by
+/// `stroke_widths`, and the other way round.
 fn partner(field: &str) -> Option<&'static str> {
     Some(match field {
         "fill" => "gradient",
@@ -304,6 +312,8 @@ fn partner(field: &str) -> Option<&'static str> {
         "shadows" => "shadow",
         "stroke" => "stroke_gradient",
         "stroke_gradient" => "stroke",
+        "stroke_width" => "stroke_widths",
+        "stroke_widths" => "stroke_width",
         _ => return None,
     })
 }
@@ -1013,13 +1023,14 @@ mod tests {
             "shadows": [{"blur": 8, "color": "#000"}], "opacity": 0.5, "blur": 2, "blend": "multiply", "color": "#111", "font": "Geist",
             "font_size": 14, "font_weight": 600, "italic": true, "underline": true, "strike": false, "align": "center", "line_height": 1.4,
             "letter_spacing": 0.5, "text_case": "upper", "stroke_cap": "round", "stroke_join": "bevel",
-            "stroke_gradient": {"stops": [{"at": 0, "color": "#000"}, {"at": 1, "color": "#fff"}]}
+            "stroke_gradient": {"stops": [{"at": 0, "color": "#000"}, {"at": 1, "color": "#fff"}]},
+            "stroke_widths": [1, 0, 0, 0], "backdrop_blur": 12
         });
         let style: Style = serde_json::from_value(full.clone()).unwrap();
         let written = serde_json::to_value(&style).unwrap();
         let keys: Vec<&str> = written.as_object().unwrap().keys().map(String::as_str).collect();
         assert_eq!(keys, STYLE_FIELDS, "written in STYLE_FIELDS' order");
-        assert_eq!(STYLE_FIELDS.len(), 26);
+        assert_eq!(STYLE_FIELDS.len(), 28);
         let schema = serde_json::to_value(schemars::schema_for!(Style)).unwrap();
         let named: Vec<&str> = schema["properties"].as_object().unwrap().keys().map(String::as_str).collect();
         assert_eq!(named, STYLE_FIELDS, "the struct's own order");
@@ -1118,6 +1129,19 @@ mod tests {
         assert_eq!(drawn.stroke_join, None, "a rect's border turns its corners by its radius");
         assert_eq!(drawn.style.as_deref(), Some("card"));
         assert_eq!(own.stroke.as_deref(), Some("$accent"), "the stored node keeps its names");
+
+        // A frosted bar's look as a style: its sides lie under a node with no weight of its own,
+        // and a node's own weight keeps them off it, as `radius` keeps `radii` off.
+        let mut glass = styles.clone();
+        replay(&mut glass, &[NodeOp::Style { name: "glass".into(), set: set(json!({
+            "fill": "#14161ACC", "stroke": "#FFFFFF1F", "stroke_widths": [1, 0, 0, 0], "backdrop_blur": 20
+        })) }]);
+        let bar = glass.resolve(&node(json!({"id": "g", "parent": "p", "kind": "frame", "style": "glass"})));
+        assert_eq!((bar.stroke_widths, bar.backdrop_blur, bar.stroke_width), (Some([1.0, 0.0, 0.0, 0.0]), Some(20.0), None));
+        let weighed = glass.resolve(&node(json!({"id": "h", "parent": "p", "kind": "rect", "style": "glass", "stroke_width": 2})));
+        assert_eq!((weighed.stroke_width, weighed.stroke_widths, weighed.backdrop_blur), (Some(2.0), None, Some(20.0)), "own weight blocks sides");
+        let label = glass.resolve(&node(json!({"id": "t", "parent": "p", "kind": "text", "text": "Hi", "style": "glass"})));
+        assert_eq!((label.stroke_widths, label.backdrop_blur), (None, None), "a text has no border sides nor backdrop");
 
         let bare = styles.resolve(&node(json!({"id": "b", "parent": "p", "kind": "rect", "style": "card"})));
         let gradient = bare.gradient.unwrap();

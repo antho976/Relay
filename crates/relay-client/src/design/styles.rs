@@ -11,7 +11,7 @@ use serde_json::{json, Map, Value};
 /// The field that counts as one with `field` when a style lies under a node, as
 /// `Style::lay_under` pairs them: a node's own `fill` keeps its style's `gradient` off it, its
 /// `radius` the style's `radii`, its `shadow` the style's `shadows`, its `stroke` the style's
-/// `stroke_gradient`, and the other way round.
+/// `stroke_gradient`, its `stroke_width` the style's `stroke_widths`, and the other way round.
 fn partner(field: &str) -> Option<&'static str> {
     Some(match field {
         "fill" => "gradient",
@@ -22,6 +22,8 @@ fn partner(field: &str) -> Option<&'static str> {
         "shadows" => "shadow",
         "stroke" => "stroke_gradient",
         "stroke_gradient" => "stroke",
+        "stroke_width" => "stroke_widths",
+        "stroke_widths" => "stroke_width",
         _ => return None,
     })
 }

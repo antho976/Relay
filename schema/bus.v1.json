@@ -27854,9 +27854,32 @@
               "type": "null"
             }
           ]
+        },
+        "stroke_widths": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "backdrop_blur": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": 0,
+          "maximum": 200
         }
       },
-      "description": "A named look nodes share: any of the style fields, each as a node holds it (a colour may be a\n`$name`). A node takes each field it does not set itself; `fill` and `gradient` count as one\nfield, and so do `radius` and `radii`, `shadow` and `shadows`, `stroke` and `stroke_gradient`."
+      "description": "A named look nodes share: any of the style fields, each as a node holds it (a colour may be a\n`$name`). A node takes each field it does not set itself; `fill` and `gradient` count as one\nfield, and so do `radius` and `radii`, `shadow` and `shadows`, `stroke` and `stroke_gradient`,\n`stroke_width` and `stroke_widths`."
     },
     "DesignPictureCredit": {
       "type": "object",
@@ -28442,7 +28465,9 @@
                   "text_case",
                   "stroke_cap",
                   "stroke_join",
-                  "stroke_gradient"
+                  "stroke_gradient",
+                  "stroke_widths",
+                  "backdrop_blur"
                 ]
               }
             },
@@ -28456,7 +28481,7 @@
             "name",
             "set"
           ],
-          "description": "Name a style, or change one: each key of `set` is a style field (fill, gradient, stroke,\nstroke_width, dash, radius, radii, shadow, shadows, opacity, blur, blend, color, font,\nfont_size, font_weight, italic, underline, strike, align, line_height, letter_spacing,\ntext_case, stroke_cap, stroke_join, stroke_gradient) with a value as a node takes it;\n`null` takes it out of the style. A node names it with `style`."
+          "description": "Name a style, or change one: each key of `set` is a style field (fill, gradient, stroke,\nstroke_width, dash, radius, radii, shadow, shadows, opacity, blur, blend, color, font,\nfont_size, font_weight, italic, underline, strike, align, line_height, letter_spacing,\ntext_case, stroke_cap, stroke_join, stroke_gradient, stroke_widths, backdrop_blur) with a\nvalue as a node takes it;\n`null` takes it out of the style. A node names it with `style`."
         },
         {
           "type": "object",

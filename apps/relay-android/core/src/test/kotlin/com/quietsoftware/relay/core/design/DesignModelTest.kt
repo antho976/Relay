@@ -38,7 +38,7 @@ class DesignModelTest {
         assertEquals(42L, got.design.rev)
         assertEquals(got.nodes.size.toLong(), got.design.nodes)
         assertEquals(setOf("accent", "ink", "surface"), got.colors.keys)
-        assertEquals(setOf("button", "card", "outline"), got.styles.keys)
+        assertEquals(setOf("button", "card", "glass", "outline"), got.styles.keys)
         assertEquals("J. Doe", got.credits.getValue("0123456789abcdef0123456789abcdef.png").creator)
         assertTrue(got.assetsDir.endsWith("design-assets"))
         // A connector without points, by its ends.

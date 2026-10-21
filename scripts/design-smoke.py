@@ -27,8 +27,9 @@ Shots (default all):
 - motion: Play, pause, seek, a contact sheet and an APNG; the design's rev stays as it was;
 - render: design.render answered by the open app: sizes, boxes, issues, its traces;
 - glass: a tab bar frosting what scrolls under it (backdrop_blur) with a top border alone
-  (stroke_widths), a chart with one bar of its own colour, and a fade sliding up in a hugging
-  column, which design.render's motion checks pass over;
+  (stroke_widths), a pill taking both from a style, a chart with one bar of its own colour, and a
+  fade sliding up in a hugging column, which design.render's motion checks pass over; then the
+  inspector's Border and Layer sections for the tab bar;
 - pictures: the image key's popover searching the picture fixtures, a photo placed with its
   credit and the inspector's Credit section;
 - perf: a 1,721-node design: layout, content and frame times.
@@ -461,6 +462,7 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
             ])[0]
         if "glass" in SHOTS:
             designs["glass"] = create("Glass", lambda page: [
+                {"op": "style", "name": "glass", "set": {"fill": "#FFFFFF14", "backdrop_blur": 12, "stroke": "#FF0000", "stroke_widths": [2, 0, 0, 0]}},
                 node("screen", page, "frame", x=0, y=0, w=390, h=420, fill="#101418", timeline={"duration_ms": 600, "loop": False}),
                 node("trend", "screen", "frame", x=16, y=16, w=358, h=200, fill="#101418", padding=[8],
                      chart={"kind": "bar", "labels": ["M", "T", "W", "T", "F", "S", "S"], "grid": False, "ticks": 0, "color": "#C9D1DC",
@@ -473,6 +475,8 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                 text("under", "screen", "Strength · Upper body", x=180, y=356, font_size=16, color="#FFFFFF"),
                 node("tabbar", "screen", "rect", x=0, y=340, w=390, h=80, fill="#FFFFFF14", backdrop_blur=12, stroke="#FF0000",
                      stroke_widths=[2, 0, 0, 0]),
+                *[node(f"bar-{i}", "screen", "rect", x=260 + 8 * i, y=236, w=8, h=72, fill="#FFFFFF" if i % 2 else "#000000") for i in range(14)],
+                node("pill", "screen", "rect", x=250, y=260, w=124, h=40, radius=12, style="glass"),
             ])[0]
         if "pictures" in SHOTS:
             designs["pictures"] = create("Pictures", lambda page: [
@@ -846,6 +850,10 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
             # The stripes are sharp above the tab bar and frosted under it.
             sharp, frosted = spread(330), spread(390)
             assert sharp > 80 and frosted < sharp / 4, (sharp, frosted)
+            # The pill takes its frost and its top border from its style.
+            pill = lambda y: statistics.pstdev(sum(at(x, y)) / 3 for x in range(264, 368))
+            assert pill(248) > 80 and pill(285) < pill(248) / 4, (pill(248), pill(285))
+            assert at(312, 261)[0] > 180 and at(312, 261)[1] < 90 and at(312, 297)[0] < 200, (at(312, 261), at(312, 297))
             # Its border is on its top side alone.
             top, bottom, left = at(300, 341), at(300, 418), at(1, 380)
             assert top[0] > 180 and top[1] < 90, top
@@ -860,7 +868,11 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
             for name in ("frames", "end"):
                 moving = [i for i in got[name]["issues"] if i.get("at_ms") is not None]
                 assert not moving, (name, moving)
-            print("GLASS_OK", json.dumps({"sharp": round(sharp, 1), "frosted": round(frosted, 1), "top": top, "bottom": bottom}))
+            # The inspector: the bar's widest side as its weight, its sides, and its frost.
+            native(shot + "-border", shot, seconds=8, script="fit;wait:400;select:tabbar;wait:300;inspector:Border;wait:400")
+            native(shot + "-layer", shot, seconds=8, script="fit;wait:400;select:tabbar;wait:300;inspector:Layer;wait:400")
+            print("GLASS_OK", json.dumps({"sharp": round(sharp, 1), "frosted": round(frosted, 1), "top": top, "bottom": bottom,
+                                          "pill": [round(pill(248), 1), round(pill(285), 1)]}))
 
         def shot_pictures(shot):
             # The popover alone, searching the fixtures; then a photo placed, with its credit.

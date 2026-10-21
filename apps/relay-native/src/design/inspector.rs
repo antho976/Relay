@@ -804,14 +804,19 @@ impl Board {
                 })));
             }
             let weak = Rc::downgrade(&b);
-            let width = same(nodes.iter().map(|n| bits(n.stroke_width.unwrap_or(if lines { 2.0 } else { 1.0 })))).map(f64::from_bits);
+            // A border with sides of its own shows its widest; a weight set here is all round.
+            let width = same(nodes.iter().map(|n| bits(shapes::stroke_weight(n, if lines { 2.0 } else { 1.0 })))).map(f64::from_bits);
             sec.append(&stored_number("@stroke-width", width, "Weight", move |v| {
                 let v = v.clamp(0.0, 1000.0);
                 if let Some(b) = weak.upgrade() {
-                    b.set_selected(set(&[("stroke_width", json!(v))]));
+                    let ops = shapes::stroke_width_ops(&b.doc.scene.borrow(), &b.selected(), v);
+                    b.commit(ops);
                 }
                 v
             }));
+            if single && takes(first.kind, "stroke_widths") {
+                super::shape_panels::sides(&b, &sec, &first);
+            }
             if all_take("dash") {
                 sec.append(&super::shape_panels::dash(&b, &nodes));
             }
@@ -929,6 +934,17 @@ impl Board {
             }
             v
         }));
+        if all_take("backdrop_blur") {
+            let weak = Rc::downgrade(&b);
+            let frost = same(nodes.iter().map(|n| bits(n.backdrop_blur.unwrap_or(0.0)))).map(f64::from_bits);
+            sec.append(&stored_number("Frost", frost, "Backdrop blur, px: frosts what is under it, seen through a see-through fill", move |v| {
+                let v = v.clamp(0.0, 200.0);
+                if let Some(b) = weak.upgrade() {
+                    b.set_selected(set(&[("backdrop_blur", if v <= 0.0 { Value::Null } else { json!(v) })]));
+                }
+                v
+            }));
+        }
 
         // Motion (any layer but a page) and a frame's timeline: one layer at a time.
         if single && first.kind != NodeKind::Page {

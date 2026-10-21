@@ -538,7 +538,7 @@ const TEXT_STYLE: &[&str] = &[
 /// The style fields a box, shape or stroke paints with.
 const PAINT_STYLE: &[&str] = &[
     "fill", "gradient", "stroke", "stroke_width", "dash", "radius", "radii", "shadow", "shadows", "stroke_cap", "stroke_join",
-    "stroke_gradient",
+    "stroke_gradient", "stroke_widths", "backdrop_blur",
 ];
 /// The style fields every layer has, and the name of the style it takes.
 const LAYER_STYLE: &[&str] = &["opacity", "blur", "blend", "style"];

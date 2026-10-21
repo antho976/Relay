@@ -220,6 +220,34 @@ pub fn radius_ops(scene: &Scene, ids: &[String], v: f64) -> Vec<NodeOp> {
         .collect()
 }
 
+/// The one border weight a field shows for `n`: the widest of its `stroke_widths`, else its
+/// `stroke_width`, else `default` (1 for a border, 2 for a line).
+pub fn stroke_weight(n: &Node, default: f64) -> f64 {
+    match n.stroke_widths {
+        Some(sides) => sides.into_iter().fold(0.0, f64::max),
+        None => n.stroke_width.unwrap_or(default),
+    }
+}
+
+/// The edits that give `ids` border weight `v` (0 to 1000) all round: `stroke_width` `v`, and
+/// `stroke_widths` cleared where the kind has sides, as [`radius_ops`] clears `radii`. A node's
+/// own weight also keeps a style's sides off it.
+pub fn stroke_width_ops(scene: &Scene, ids: &[String], v: f64) -> Vec<NodeOp> {
+    let v = if v.is_finite() { v.clamp(0.0, 1000.0) } else { 0.0 };
+    ids.iter()
+        .filter_map(|id| scene.node(id))
+        .filter(|n| takes(n.kind, "stroke_width"))
+        .map(|n| {
+            let mut set = Map::new();
+            set.insert("stroke_width".into(), json!(v));
+            if takes(n.kind, "stroke_widths") {
+                set.insert("stroke_widths".into(), Value::Null);
+            }
+            NodeOp::Update { id: n.id.clone(), set }
+        })
+        .collect()
+}
+
 /// A box's corner radii as painted, top-left, top-right, bottom-right, bottom-left: `radii`,
 /// else `radius` (a sticky's 6 by default) on every corner, each at most half the box's shorter
 /// side; all 0 for kinds whose box is not rounded.
@@ -1033,6 +1061,23 @@ mod tests {
             other => panic!("{other:?}"),
         });
         assert_eq!(ops.collect::<Vec<_>>(), [json!({"radius": 0.0, "radii": null}), json!({"radius": 0.0, "radii": null}), json!({"radius": 6.0, "radii": null}), json!({"radius": 6.0, "radii": null})]);
+    }
+
+    /// The Weight field shows a bar's widest side, and a weight set all round clears the sides
+    /// of what has them; a line has none to clear.
+    #[test]
+    fn a_weight_all_round_clears_the_sides() {
+        let mut bar = node("bar", Some("p1"), K::Rect, [0.0; 4]);
+        bar.stroke_widths = Some([1.0, 0.0, 3.0, 0.0]);
+        let mut line = node("l", Some("p1"), K::Line, [0.0; 4]);
+        line.points = Some(vec![[0.0, 0.0], [10.0, 0.0]]);
+        let s = Scene::new(vec![node("p1", None, K::Page, [0.0; 4]), bar, line, node("g", Some("p1"), K::Group, [0.0; 4])]);
+        assert_eq!((stroke_weight(s.node("bar").unwrap(), 1.0), stroke_weight(s.node("l").unwrap(), 2.0)), (3.0, 2.0));
+        let sets: Vec<Value> = stroke_width_ops(&s, &["bar", "l", "g"].map(String::from), 2.0).into_iter().map(|op| match op {
+            NodeOp::Update { set, .. } => Value::Object(set),
+            other => panic!("{other:?}"),
+        }).collect();
+        assert_eq!(sets, [json!({"stroke_width": 2.0, "stroke_widths": null}), json!({"stroke_width": 2.0})], "a group has no stroke");
     }
 
     #[test]

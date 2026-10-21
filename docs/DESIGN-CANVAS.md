@@ -66,10 +66,13 @@ the project's terminals draw and revise designs alongside you.
     corners and star, icon and its colour, line route and attachments, path closing and smoothing,
     and arc;
   - **Fill** and **Border** (**Stroke** for a line): solid, or a linear, radial or conic gradient with
-    its stops; solid, dashed or dotted; **Corners** (one radius or each its own);
+    its stops; solid, dashed or dotted; one weight all round (a border with sides shows its widest,
+    and a weight set there is all round again) or **Each side on its own**; **Corners** (one radius
+    or each its own);
   - **Picture**: fit, **Replace picture…**, and for a stock photo its **Credit** (below);
   - **Shadow** (drop or inner), and **Layer**: opacity, blend mode (multiply, screen, overlay and the
-    rest) and layer blur;
+    rest), layer blur and, for a frame, rect or ellipse, **Frost** (`backdrop_blur`: what is under it
+    blurred through a see-through fill);
   - **Motion**, and for a frame **Timeline** (below); **Export** as PNG (1× or 2×), SVG or PDF.
 
   Number fields take arithmetic (`120+16`) and units (`45°`), step with ↑/↓ (Shift: ten steps; a line
@@ -128,8 +131,8 @@ column holding the photo and the caption takes its place. One undo step.
 ### Styles
 
 A design names colours and styles so one change reaches every layer using them. A **named colour**
-is taken by any colour field as `$name`; a **style** is a look (fill or gradient, border, corners,
-shadow, opacity, blur, blend and type) a layer takes for each of those fields it does not set itself.
+is taken by any colour field as `$name`; a **style** is a look (fill or gradient, border and its
+sides, corners, shadow, opacity, blur, frosted glass, blend and type) a layer takes for each of those fields it does not set itself.
 A design holds at most 256 of both together.
 
 - In a colour popover the design's colours come first under **Named**. **Name…** names the colour of

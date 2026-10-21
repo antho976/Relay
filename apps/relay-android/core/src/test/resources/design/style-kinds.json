@@ -24,5 +24,7 @@
   "text_case": ["rect", "ellipse", "text", "sticky", "polygon"],
   "stroke_cap": ["frame", "rect", "ellipse", "line", "sticky", "path", "image", "polygon"],
   "stroke_join": ["ellipse", "line", "path", "polygon"],
-  "stroke_gradient": ["frame", "rect", "ellipse", "line", "sticky", "path", "image", "polygon"]
+  "stroke_gradient": ["frame", "rect", "ellipse", "line", "sticky", "path", "image", "polygon"],
+  "stroke_widths": ["frame", "rect", "sticky", "image"],
+  "backdrop_blur": ["frame", "rect", "ellipse"]
 }
