@@ -214,7 +214,7 @@ internal fun ProgramMenuContent(
         Spacer(Modifier.height(4.dp))
         OpenLabel("History and records stay; only the plan changes", style = OpenType.monoXS)
         Spacer(Modifier.height(12.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             ProgramTextAction("Re-roll exercises", vm.reroll)
             ProgramTextAction("Start a deload week", vm.deload)
         }

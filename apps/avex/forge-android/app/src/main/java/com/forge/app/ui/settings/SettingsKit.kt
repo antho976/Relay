@@ -841,6 +841,8 @@ internal fun SettingsChip(
     modifier: Modifier = Modifier,
     height: Dp = 40.dp,
     role: Role = Role.RadioButton,
+    /** The label's inset from the edge; a crowded row (large font, narrow phone) tightens it. */
+    hPad: Dp = 10.dp,
     contentDescription: String? = null
 ) {
     val select = if (role == Role.Checkbox) {
@@ -858,7 +860,7 @@ internal fun SettingsChip(
             .clip(Corner)
             .background(if (selected) kitWash() else Color.Transparent)
             .border(1.dp, if (selected) MaterialTheme.colorScheme.primary else OpenColors.Rule, Corner)
-            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .padding(horizontal = hPad, vertical = 6.dp)
             .then(if (contentDescription != null) Modifier.semantics { this.contentDescription = contentDescription } else Modifier),
         contentAlignment = Alignment.Center
     ) {
@@ -905,11 +907,13 @@ internal fun SettingsSegmented(
         val fits = (maxWidth - gap * (n - 1)) / n >= widest + pad
         // Equal cells cannot hold the longest word, but the labels side by side still fit: one row,
         // each chip as wide as its own label (a large font scale on a narrow phone).
-        val hugFits = widths.fold(0.dp) { acc, w -> acc + w + pad } + gap * (n - 1) <= maxWidth
+        val tight = 16.dp
+        val hugGap = 6.dp
+        val hugFits = widths.fold(0.dp) { acc, w -> acc + w + tight } + hugGap * (n - 1) <= maxWidth
         if (!fits && hugFits) {
-            Row(groupSemantics.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+            Row(groupSemantics.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(hugGap)) {
                 options.forEachIndexed { i, label ->
-                    SettingsChip(label, i == selectedIndex, { onSelect(i) }, Modifier.weight((widths[i] + pad).value))
+                    SettingsChip(label, i == selectedIndex, { onSelect(i) }, Modifier.weight((widths[i] + tight).value), hPad = 7.dp)
                 }
             }
             return@BoxWithConstraints

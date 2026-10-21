@@ -169,7 +169,8 @@ internal fun MainList(
                 // factory reset in the soft danger red. What each erases is its confirm's to say.
                 FlowRow(
                     Modifier.padding(top = 24.dp),
-                    horizontalArrangement = Arrangement.spacedBy(24.dp)
+                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
                 ) {
                     RootTextAction("Reset…", MaterialTheme.colorScheme.onSurfaceVariant, onOpenResetMenu)
                     RootTextAction(ResetTarget.FACTORY.label, SettingsColors.Danger) { onResetTarget(ResetTarget.FACTORY) }
