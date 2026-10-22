@@ -211,12 +211,18 @@ impl VideoBoard {
         player.set_loop(true);
         player.set_vexpand(true);
         stage.add_named(&player, Some("player"));
+        // The poster takes the height the note and the keys under it leave, so a tall video's
+        // never pushes them off the stage.
         let poster_box = gtk::Box::new(gtk::Orientation::Vertical, 14);
-        poster_box.set_valign(gtk::Align::Center);
-        poster_box.set_halign(gtk::Align::Center);
+        poster_box.set_valign(gtk::Align::Fill);
+        poster_box.set_halign(gtk::Align::Fill);
+        poster_box.set_margin_top(20);
+        poster_box.set_margin_bottom(24);
         let poster = gtk::Picture::new();
         poster.set_content_fit(gtk::ContentFit::Contain);
-        poster.set_size_request(360, 360);
+        poster.set_can_shrink(true);
+        poster.set_vexpand(true);
+        poster.set_size_request(-1, 160);
         poster_box.append(&poster);
         let stage_note = label("", "dim");
         stage_note.set_wrap(true);
