@@ -73,7 +73,9 @@ pub fn command(step: &CaptureStep) -> Result<(Option<Vec<String>>, String), BusE
 
 /// The shell command that opens `app`: an activity with `am start`, a package by its launcher.
 pub fn launch(app: &str) -> Result<Vec<String>, BusError> {
-    if app.is_empty() || !app.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '$')) {
+    // Only what a package or activity name is made of: the device's shell reads the command, and a
+    // `$` (an inner class's) would be expanded there.
+    if app.is_empty() || !app.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/')) {
         return Err(BusError::invalid("video.capture", format!("{app:?} is not an app: a package (com.example.app) or an activity (com.example.app/.Main)")));
     }
     Ok(if app.contains('/') {
@@ -176,22 +178,29 @@ pub fn capture(engine: &Engine, adb_path: &Path, dir: &Path, holder: Holder, pla
         return Err(BusError::invalid("video.capture", format!("about {planned:.0} s of steps: a capture is at most {MOST_SECONDS} s (screenrecord's own limit)")));
     }
     let serial = device(adb_path, plan.device)?;
-    // The device for the whole capture, and back however it ends.
+    // The device for the whole capture, and back however it ends. A caller that holds it already
+    // (its own `device.claim`) keeps its lease as it was: taking one would renew and rename it,
+    // and giving it back would end the caller's claim.
     let action = "video.capture.android";
-    let lease = Lease::new(&serial, holder.clone(), Kind::Claim, action, Some(Duration::from_secs_f64(planned + 120.0)));
-    let mut pruned = Vec::new();
-    engine.device_leases.acquire(lease.clone(), &mut pruned)?;
-    for gone in pruned {
-        engine.emit_system(crate::handlers::device_lease::RELEASED, gone.event());
+    let own = engine.device_leases.holder_of(&serial).is_some_and(|held| held.holder == holder);
+    if !own {
+        let lease = Lease::new(&serial, holder.clone(), Kind::Claim, action, Some(Duration::from_secs_f64(planned + 120.0)));
+        let mut pruned = Vec::new();
+        engine.device_leases.acquire(lease.clone(), &mut pruned)?;
+        for gone in pruned {
+            engine.emit_system(crate::handlers::device_lease::RELEASED, gone.event());
+        }
+        engine.emit_system(crate::handlers::device_lease::ACQUIRED, lease.event());
     }
-    engine.emit_system(crate::handlers::device_lease::ACQUIRED, lease.event());
     let adb = Adb { path: adb_path.to_path_buf(), serial: serial.clone() };
     let result = record(engine, &adb, dir, plan, opening.as_deref(), &commands);
     if plan.demo {
         let _ = adb.shell(&demo_mode().1);
     }
-    for gone in engine.device_leases.release_where(|l| l.device == serial && l.holder == holder && l.kind == Kind::Claim && l.action == action) {
-        engine.emit_system(crate::handlers::device_lease::RELEASED, gone.event());
+    if !own {
+        for gone in engine.device_leases.release_where(|l| l.device == serial && l.holder == holder && l.kind == Kind::Claim && l.action == action) {
+            engine.emit_system(crate::handlers::device_lease::RELEASED, gone.event());
+        }
     }
     result
 }
@@ -292,6 +301,7 @@ mod tests {
         // Nothing reaches the device's shell that its shell would read as its own.
         assert_eq!(command(&step(|s| s.text = Some("a; rm -rf /".into()))).unwrap_err().code, "video.capture");
         assert_eq!(launch("com.x; reboot").unwrap_err().code, "video.capture");
+        assert_eq!(launch("com.x/.Main$Inner").unwrap_err().code, "video.capture");
         assert_eq!(command(&step(|s| { s.tap = Some([1.0, 2.0]); s.wait = Some(1.0); })).unwrap_err().code, "video.capture");
         let (enter, exit) = demo_mode();
         assert!(enter[2].join(" ").contains("clock -e hhmm 1230"));

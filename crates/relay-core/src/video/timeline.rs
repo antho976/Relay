@@ -362,9 +362,10 @@ pub fn build(probes: &[Probe], sounds: &[FrameSounds], fps: f64, frames: u32, ev
     Built { scenes, tracks: all }
 }
 
-/// The grid a video set up itself, if any probe saw one.
+/// The grid a video set up itself, if any probe saw one: one a timeline can draw (a tempo of 20
+/// to 400 BPM, a first beat within the hour).
 pub fn code_grid(probes: &[Probe], fps: f64) -> Option<Grid> {
-    probes.iter().find_map(|p| p.grid).filter(|g| g.bpm > 0.0)
+    probes.iter().find_map(|p| p.grid).filter(|g| (20.0..=400.0).contains(&g.bpm) && g.first_beat.abs() <= 3600.0)
         .map(|g| Grid { bpm: g.bpm, first_beat_s: g.first_beat, beats_per_bar: g.beats_per_bar.max(1), fps })
 }
 
@@ -621,12 +622,13 @@ fn waveform(out: &mut Rgba, mix: &Mix, fps: f64, (a, b): (f64, f64), Area { x, y
 fn grid_lines(out: &mut Rgba, grid: Option<&Grid>, (a, b): (f64, f64), Area { x, y, w, h }: Area) {
     let Some(g) = grid else { return };
     let fpb = g.frames_per_beat();
-    if fpb <= 0.0 || (w as f64 / ((b - a) / fpb)) < 3.0 {
+    if !fpb.is_finite() || fpb <= 0.0 || !g.first().is_finite() || (w as f64 / ((b - a) / fpb)) < 3.0 {
         return;
     }
     let (first, _) = g.nearest(a);
-    let mut n = first - 1;
-    loop {
+    let mut n = first.saturating_sub(1);
+    // Never more lines than there are columns: a grid nowhere near the frames draws none.
+    for _ in 0..=w {
         let f = g.first_beat_s * g.fps + n as f64 * fpb;
         if f > b {
             break;
@@ -636,7 +638,7 @@ fn grid_lines(out: &mut Rgba, grid: Option<&Grid>, (a, b): (f64, f64), Area { x,
             let bar = n.rem_euclid(g.beats_per_bar as i64) == 0;
             out.fill(col, y, 1, h, if bar { BAR } else { BEAT });
         }
-        n += 1;
+        n = n.saturating_add(1);
     }
 }
 
@@ -866,6 +868,15 @@ mod tests {
         let silences: Vec<&Issue> = found.iter().filter(|i| i.kind == "silence").collect();
         assert_eq!(silences.len(), 1, "{found:?}");
         assert_eq!(silences[0].frames, [15]);
+    }
+
+    #[test]
+    fn a_grid_far_from_the_frames_draws_nothing_and_ends() {
+        let built = Built::default();
+        for grid in [Grid { bpm: 120.0, first_beat_s: -1e19, beats_per_bar: 4, fps: 30.0 }, Grid { bpm: 1e-300, first_beat_s: 0.0, beats_per_bar: 4, fps: 30.0 }] {
+            let picture = draw(&built, Some(&grid), None, &[], 30.0, 90, "far");
+            assert!(picture.w > 0);
+        }
     }
 
     #[test]

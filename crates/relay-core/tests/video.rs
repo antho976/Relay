@@ -635,6 +635,12 @@ fn an_android_capture_holds_the_device_records_the_steps_and_adds_an_even_clip()
     // The device was held for the capture, and let go.
     let events: Vec<String> = drain(&mut rx).into_iter().map(|ev| ev.ev).collect();
     assert!(events.contains(&"device.lease.acquired".to_string()) && events.contains(&"device.lease.released".to_string()), "{events:?}");
+    // A claim the person holds already is theirs before and after: the capture rides on it.
+    ok(&e, "device.claim", json!({"device": "emulator-5554", "action": "testing the release", "minutes": 30}));
+    std::env::set_var("FAKE_ADB_LOG", root.path().join("adb2.log"));
+    ok(&e, "video.capture.android", json!({"video_id": id, "steps": [{"wait": 0.1}], "tail": 0.1, "name": "again", "demo": false}));
+    let held = ok(&e, "device.leases", json!({}));
+    assert!(held.to_string().contains("testing the release"), "the claim was kept as it was: {held}");
     let inspected = ok(&e, "video.asset.inspect", json!({"video_id": id, "asset": "assets/home.mp4"}));
     assert_eq!((inspected["fps"].as_f64(), inspected["frames"].as_u64(), inspected.get("variable_rate")), (Some(30.0), Some(60), None), "{inspected}");
 }

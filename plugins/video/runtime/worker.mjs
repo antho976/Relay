@@ -135,13 +135,18 @@ const mirror = (from, to) => {
   for (const e of safeReaddir(from)) {
     const source = path.join(from, e);
     let stat;
+    let linked;
     try {
+      linked = fs.lstatSync(source).isSymbolicLink();
       stat = fs.statSync(source);
     } catch {
       continue; // a link to nothing
     }
-    if (stat.isDirectory()) mirror(source, path.join(to, e));
-    else fs.symlinkSync(fs.realpathSync(source), path.join(to, e));
+    // A folder's own folders are walked; a link to a folder is not (it could be the whole disk),
+    // as Remotion's server would not have served what is under it either.
+    if (stat.isDirectory()) {
+      if (!linked) mirror(source, path.join(to, e));
+    } else fs.symlinkSync(fs.realpathSync(source), path.join(to, e));
   }
 };
 

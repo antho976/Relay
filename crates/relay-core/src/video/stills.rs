@@ -348,13 +348,44 @@ struct WorkerTimeline {
     errors: Vec<CodeError>,
 }
 
+/// What `dir/public/` holds, by each file's name, size and change time (through links): a short
+/// hash that changes when any file there does.
+fn public_print(dir: &Path) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut stack = vec![dir.join("public")];
+    let mut seen = 0;
+    while let Some(at) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&at) else { continue };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            seen += 1;
+            if seen > 5000 {
+                break;
+            }
+            let Ok(meta) = fs::metadata(e.path()) else { continue };
+            if meta.is_dir() && !e.file_type().is_ok_and(|t| t.is_symlink()) {
+                stack.push(e.path());
+                continue;
+            }
+            e.path().hash(&mut hasher);
+            meta.len().hash(&mut hasher);
+            meta.modified().ok().hash(&mut hasher);
+        }
+    }
+    format!("{:016x}", hasher.finish())
+}
+
 /// Most timelines kept measured.
 const KEEP_TIMELINES: usize = 4;
 
 /// The timeline of `video`'s `composition` at `version` with `props`: measured now (every frame,
 /// no pictures, the sound mixed), or the one kept from before.
 pub fn measured(engine: &Engine, video: &Video, composition: &str, props: &Value, version: i64) -> Result<Arc<Measured>, BusError> {
-    let key = format!("{}:{version}:{composition}:{props}", video.id);
+    // Versions leave public/assets/ out, and a sound can be written again in place (overwrite): the
+    // key holds what public/ holds as well, by name, size and change time.
+    let key = format!("{}:{version}:{composition}:{props}:{}", video.id, public_print(Path::new(&video.dir)));
     if let Some((_, kept)) = engine.video.timelines.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(k, _)| *k == key) {
         return Ok(kept.clone());
     }
@@ -398,6 +429,9 @@ pub fn measured(engine: &Engine, video: &Video, composition: &str, props: &Value
 
 /// The grid to check against: the call's, else the code's own, else one found in `music`.
 pub fn grid_for(engine: &Engine, video: &Video, p: &TimelineIn, code: Option<Grid>, fps: f64) -> Result<(Option<Grid>, &'static str), BusError> {
+    if p.bpm.is_some_and(|b| !(40.0..=240.0).contains(&b)) || p.first_beat.is_some_and(|f| !(-3600.0..=3600.0).contains(&f)) {
+        return Err(BusError::invalid("video.grid", "bpm is 40 to 240, first_beat -3600 to 3600 seconds"));
+    }
     if let Some(bpm) = p.bpm {
         return Ok((Some(Grid { bpm, first_beat_s: p.first_beat.unwrap_or(0.0), beats_per_bar: p.beats_per_bar.unwrap_or(4).max(1), fps }), "given"));
     }
@@ -549,6 +583,18 @@ mod tests {
         assert_eq!(frames_of(&ranged, 30.0, 300).unwrap(), [30, 60]);
         ranged.to = Some(Moment::Seconds(0.5));
         assert_eq!(frames_of(&ranged, 30.0, 300).unwrap_err().code, "video.moment");
+    }
+
+    #[test]
+    fn a_sound_written_again_in_place_changes_what_a_timeline_is_kept_by() {
+        let dir = tempfile::tempdir().unwrap();
+        let assets = dir.path().join("public/assets");
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(assets.join("vo-intro.mp3"), b"first take").unwrap();
+        let before = public_print(dir.path());
+        assert_eq!(public_print(dir.path()), before, "nothing changed, the same print");
+        fs::write(assets.join("vo-intro.mp3"), b"second take, longer").unwrap();
+        assert_ne!(public_print(dir.path()), before);
     }
 
     #[test]

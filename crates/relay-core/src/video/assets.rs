@@ -95,6 +95,15 @@ pub fn add(dir: &Path, add: &Add) -> Result<VideoAsset, BusError> {
     }
     let folder = dir.join("public").join(add.folder);
     fs::create_dir_all(&folder).map_err(|e| BusError::unavailable("video.folder", format!("{}: {e}", folder.display())))?;
+    // The file already in its place (its own path, or a link to it): nothing to add. Writing a
+    // link or a copy over it would put a link to itself, or nothing, where the file was.
+    // (Relay's own files on their way in wait in hidden folders under public/: those are added.)
+    if let (Ok(real), Ok(public)) = (fs::canonicalize(source), fs::canonicalize(dir.join("public"))) {
+        let staged = real.strip_prefix(&public).is_ok_and(|rel| rel.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.')));
+        if real.starts_with(&public) && !staged && real.is_file() {
+            return Ok(describe(dir, &real, None, false, true));
+        }
+    }
     let wanted = target_name(source, add.name);
     let (stem, ext) = wanted.rsplit_once('.').map_or((wanted.clone(), String::new()), |(s, e)| (s.to_string(), format!(".{e}")));
     let mut target = folder.join(&wanted);
@@ -328,6 +337,14 @@ mod tests {
         assert_eq!(linked.linked.as_deref(), Some(fs::canonicalize(&a).unwrap().display().to_string().as_str()));
         let listed: Vec<String> = list(dir.path()).into_iter().map(|a| a.static_file).collect();
         assert_eq!(listed, ["assets/big.wav", "assets/sweep-2.wav", "assets/sweep.wav"]);
+        // The asset itself, or a link to it, added again (linked or not) is left as it is: never
+        // a link to itself where the file was.
+        let own = dir.path().join("public/assets/sweep.wav");
+        for link in [false, true] {
+            let again = add(dir.path(), &Add { source: &own, folder: "assets", name: None, overwrite: true, link }).unwrap();
+            assert!(again.unchanged && again.linked.is_none(), "{again:?}");
+            assert_eq!(fs::read(&own).unwrap(), b"second");
+        }
     }
 
     #[test]

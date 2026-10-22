@@ -359,15 +359,16 @@ impl Recent {
             .map(|(_, _, event)| event.clone())
     }
 
-    /// For a wait given `since`: the earliest matching event that fired at or after it, of those
-    /// still kept (the last ten minutes, at most 1024 events).
-    fn since(&self, since: jiff::Timestamp, filter: &Filter, matching: Option<&serde_json::Value>) -> Option<Event> {
+    /// For a wait given `since`: the earliest matching event the waiter may see that fired at or
+    /// after it, of those still kept (the last ten minutes, at most 1024 events). What it may see
+    /// is judged in the search: another project's event first must not hide its own.
+    fn since(&self, since: jiff::Timestamp, filter: &Filter, matching: Option<&serde_json::Value>, sees: impl Fn(&Event) -> bool) -> Option<Event> {
         let mut inner = self.lock();
         inner.drain();
         inner.events.iter()
             .find(|(_, _, event)| {
                 event.ts.parse::<jiff::Timestamp>().is_ok_and(|at| at >= since)
-                    && filter.matches(&event.ev) && payload_matches(&event.payload, matching)
+                    && filter.matches(&event.ev) && payload_matches(&event.payload, matching) && sees(event)
             })
             .map(|(_, _, event)| event.clone())
     }
@@ -955,7 +956,7 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
                         let answered = answered
                             .or_else(|| recent.replay(&req, &filter, p.matching.as_ref()))
                             .filter(|ev| visible(scope.as_ref(), ev))
-                            .or_else(|| since.and_then(|since| recent.since(since, &filter, p.matching.as_ref())).filter(|ev| visible(scope.as_ref(), ev)));
+                            .or_else(|| since.and_then(|since| recent.since(since, &filter, p.matching.as_ref(), |ev| visible(scope.as_ref(), ev))));
                         let wait = tokio::time::timeout(timeout, async {
                             if answered.is_some() {
                                 return Ok::<_, anyhow::Error>(answered);
@@ -1720,6 +1721,12 @@ mod conn_tests {
         assert_eq!(wait_as(&mut conn, waited(json!({"id": 2}), None)).await["timed_out"], true);
         let bad = conn.call(&waited(json!({}), Some("yesterday".into())), |_| {}).await.unwrap();
         assert_eq!(bad.error.map(|e| e.code).as_deref(), Some("bus.since"));
+        // Another project's event first does not hide this one's.
+        let since = crate::time::now();
+        engine.emit_system("video.render.finished", json!({"id": 7, "project_id": 2}));
+        engine.emit_system("video.render.finished", json!({"id": 8, "project_id": 1}));
+        let mine = wait_as(&mut conn, waited(json!({}), Some(since))).await;
+        assert_eq!(mine["event"]["payload"]["id"], 8, "{mine}");
     }
 
     /// RA-336: the ops the door answers itself are refused exactly as the pipeline refuses.

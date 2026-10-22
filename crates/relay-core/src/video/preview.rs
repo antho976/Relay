@@ -30,6 +30,8 @@ struct Running {
 #[derive(Default)]
 pub struct Slot {
     live: Mutex<Option<Running>>,
+    /// Held for the whole of an open: two at once would stop each other's Studio.
+    opening: Mutex<()>,
     /// Tests only: the program to run instead of Studio, `{port}` in its arguments replaced.
     program: Mutex<Option<Vec<String>>>,
 }
@@ -73,6 +75,7 @@ pub fn running(engine: &Engine, id: Id) -> Option<u16> {
 /// The preview of `video` on `composition`: the one running, or a new one (another video's is
 /// stopped first). Its link, and whether this started it.
 pub fn open(engine: &Engine, video: &Video, composition: &str) -> Result<(String, bool), BusError> {
+    let _one = lock(&engine.video.preview.opening);
     if let Some(port) = running(engine, video.id) {
         return Ok((url(port, composition), false));
     }
@@ -145,7 +148,11 @@ pub fn open(engine: &Engine, video: &Video, composition: &str) -> Result<(String
     let at: SocketAddr = ([127, 0, 0, 1], port).into();
     while Instant::now() < deadline {
         if gone.load(Ordering::SeqCst) {
-            lock(&engine.video.preview.live).take();
+            let mut live = lock(&engine.video.preview.live);
+            if live.as_ref().is_some_and(|r| r.pid == pid) {
+                live.take();
+            }
+            drop(live);
             return Err(BusError::unavailable("video.preview", "the preview stopped as it started")
                 .with_hint("video.check the code first; then try again"));
         }
@@ -154,6 +161,8 @@ pub fn open(engine: &Engine, video: &Video, composition: &str) -> Result<(String
         }
         std::thread::sleep(Duration::from_millis(200));
     }
-    stop(engine);
+    if lock(&engine.video.preview.live).as_ref().is_some_and(|r| r.pid == pid) {
+        stop(engine);
+    }
     Err(BusError::unavailable("video.preview", format!("the preview did not open within {} s", OPENS_WITHIN.as_secs())))
 }
