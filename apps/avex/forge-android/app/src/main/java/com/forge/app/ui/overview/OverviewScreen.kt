@@ -99,7 +99,7 @@ import java.time.ZoneId
 private const val HOME_LIST_CAP = 3
 
 /** The air between sections, as drawn. */
-private val SECTION_GAP = 52.dp
+private val SECTION_GAP = 40.dp
 
 // Two orders, one per Settings → Format → Week starts. The dots are indexed in the user's week
 // (StatsRepository.weekDaysTrained, userWeekDayIndex), so the letters rotate with them.
@@ -264,27 +264,31 @@ fun OverviewScreen(
                 else -> spec?.let { "${it.exercises} exercises · ${it.sets} sets · ~${it.minutes} min" }
             }
 
-            Spacer(Modifier.height(32.dp))
+            // Tighter than the design drew (Antho, 2026-10-21: "things feel too apart"): the hero sits
+            // higher and the rows under it close up, so the page reads as one block.
+            Spacer(Modifier.height(16.dp))
             OpenLabel(if (directive == null && trainedToday) "Tomorrow" else "Today")
-            Spacer(Modifier.height(8.dp))
-            HeroLine(headline)
+            Spacer(Modifier.height(4.dp))
+            // The day name and the week's dots both open the plan builder (Antho, 2026-10-21).
+            HeroLine(headline, onClick = onBuildPlan)
             if (specLine != null) {
                 Spacer(Modifier.height(8.dp))
                 OpenLabel(specLine, style = OpenType.monoSTight)
             }
             coach?.let { summary ->
-                Spacer(Modifier.height(36.dp))
+                Spacer(Modifier.height(20.dp))
                 CoachRow(summary, onOpenCoachBrief)
             }
-            Spacer(Modifier.height(26.dp))
+            Spacer(Modifier.height(14.dp))
             WeekRow(
                 state = state,
                 todayIndex = todayDow,
                 initials = if (settings.firstDayMonday) WEEK_INITIALS_MONDAY else WEEK_INITIALS_SUNDAY,
                 names = if (settings.firstDayMonday) WEEK_NAMES_MONDAY else WEEK_NAMES_SUNDAY,
                 freestyle = freestyleMode || programEmpty,
+                onOpenPlan = onBuildPlan,
             )
-            Spacer(Modifier.height(38.dp))
+            Spacer(Modifier.height(28.dp))
             OpenPrimaryButton(
                 text = actionText,
                 onClick = action,
@@ -327,7 +331,7 @@ fun OverviewScreen(
                     actionLabel = "Open goals",
                     onAction = onOpenGoals
                 )
-                Spacer(Modifier.height(20.dp))
+                Spacer(Modifier.height(16.dp))
                 // Nothing before the first read (todayStartMs is 0 until then), so a returning user
                 // never sees the empty prompt flash while their goals load.
                 if (state.todayStartMs != 0L) {
@@ -350,7 +354,7 @@ fun OverviewScreen(
                 actionLabel = "View all sessions",
                 onAction = onViewAllHistory
             )
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(16.dp))
             if (state.todayStartMs != 0L) {
                 if (state.recentItems.isEmpty()) {
                     Text(
@@ -363,7 +367,7 @@ fun OverviewScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(26.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
                         state.recentItems.take(HOME_LIST_CAP).forEach { item ->
                             RecentRow(item) {
                                 if (item.isGym) onOpenSession(item.id) else viewModel.selectRecentItem(item)
@@ -393,16 +397,16 @@ private fun TopRow(today: LocalDate, onOpenProfile: () -> Unit, onOpenSettings: 
     }
 }
 
-private val HERO_STEPS = listOf(OpenType.hero, OpenType.title, OpenType.heroS)
+private val HERO_STEPS = listOf(OpenType.heroM, OpenType.title, OpenType.heroS)
 
 /** The serif hero, its scaling clamped at 1.3× so the biggest font setting keeps Start on screen. */
 @Composable
-private fun HeroLine(text: String) {
+private fun HeroLine(text: String, onClick: () -> Unit) {
     val density = LocalDensity.current
     CompositionLocalProvider(LocalDensity provides Density(density.density, density.fontScale.coerceAtMost(1.3f))) {
         // "Pull B" is what the design drew at 76; a longer answer ("Done for today") steps down the
         // serif rungs until it fits one line, and only wraps once it is at the smallest.
-        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().clickableLabeled("Open the plan builder", onClick = onClick)) {
             val measurer = androidx.compose.ui.text.rememberTextMeasurer()
             val width = constraints.maxWidth
             val style = remember(text, width) {
@@ -483,6 +487,7 @@ private fun WeekRow(
     initials: List<String>,
     names: List<String>,
     freestyle: Boolean,
+    onOpenPlan: () -> Unit,
 ) {
     val days = state.weekDaysTrained.size
     val count = if (!freestyle && state.weeklyTrainingDays > 0) "$days / ${state.weeklyTrainingDays}" else if (days == 1) "1 day" else "$days days"
@@ -510,7 +515,12 @@ private fun WeekRow(
     // count touching the first dot, so the dots close up first, then shrink, and only when even that
     // will not leave 16dp of air does the label take its own line above them.
     androidx.compose.foundation.layout.BoxWithConstraints(
-        Modifier.fillMaxWidth().semantics(mergeDescendants = true) { contentDescription = reading }
+        Modifier
+            .fillMaxWidth()
+            .touchSlop(vertical = 8.dp)
+            .clickableLabeled("Open the plan builder", onClick = onOpenPlan)
+            .padding(vertical = 8.dp)
+            .semantics(mergeDescendants = true) { contentDescription = reading }
     ) {
         val measurer = androidx.compose.ui.text.rememberTextMeasurer()
         val density = LocalDensity.current
@@ -574,11 +584,12 @@ private fun emptyUnit(slot: HomeSlot): String = when (slot) {
     HomeSlot.STEPS -> ""
     HomeSlot.BODY_WEIGHT -> " " + com.forge.app.domain.units.unitLabel(LocalForgeSettings.current.weightUnit)
     HomeSlot.LAST_SESSION -> " min"
+    HomeSlot.WEEK_VOLUME -> " " + com.forge.app.domain.units.unitLabel(LocalForgeSettings.current.weightUnit)
 }
 
 /** What tapping a reading's figure opens: the body view for the watch and weight, the log for a session. */
 private fun slotTap(slot: HomeSlot, onOpenBody: () -> Unit, onOpenHistory: () -> Unit): () -> Unit =
-    if (slot == HomeSlot.LAST_SESSION) onOpenHistory else onOpenBody
+    if (slot == HomeSlot.LAST_SESSION || slot == HomeSlot.WEEK_VOLUME) onOpenHistory else onOpenBody
 
 /**
  * One reading in its slot: the label with ▾ (tap to swap the reading), the serif figure with its unit,
@@ -612,6 +623,7 @@ private fun SlotReadingView(
                         modifier = Modifier.touchSlop(vertical = 14.dp).clickableLabeled("Connect a watch", onClick = onConnectWatch).padding(vertical = 14.dp)
                     )
                 slot == HomeSlot.LAST_SESSION -> OpenLabel("No sessions yet", style = OpenType.monoSTight)
+                slot == HomeSlot.WEEK_VOLUME -> OpenLabel("Nothing lifted yet", style = OpenType.monoSTight)
                 slot == HomeSlot.BODY_WEIGHT -> OpenLabel("No weigh-ins yet", style = OpenType.monoSTight)
                 slot == HomeSlot.STEPS -> OpenLabel("None counted yet", style = OpenType.monoSTight)
                 else -> OpenLabel("Nothing synced yet", style = OpenType.monoSTight)
@@ -761,10 +773,10 @@ private fun EmptyLine(text: String, action: String, onClick: () -> Unit) {
 }
 
 /**
- * A recent session: its date in a narrow column (MON over a serif 19), the title and "48 min ·
- * Bench Press 205×5" with a PR tag when it set one, and the kind of session as a glyph on a quiet
- * square tile at the right (Antho kept the old row's mark, 2026-10-21; the redesign squares its
- * corners and drops its colour).
+ * A recent session: what kind of session it was as a glyph on a quiet square tile (Antho kept the
+ * old row's mark, and asked for it in the date's place with one glyph per day type, 2026-10-21), the
+ * title and "48 min · Bench Press 205×5" with a PR tag when it set one, and the day as a mono "SUN 11"
+ * at the right.
  */
 @Composable
 private fun RecentRow(item: OverviewRecentItem, onClick: () -> Unit) {
@@ -779,6 +791,7 @@ private fun RecentRow(item: OverviewRecentItem, onClick: () -> Unit) {
             com.forge.app.domain.units.formatDistance(it, LocalForgeSettings.current.useMiles)
         }
     ).joinToString(" · ")
+    val glyph = if (item.isGym) dayGlyph(title) else item.cardioTypeCode?.let { cardioGlyph(it) } ?: OpenIcons.Activity
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -786,9 +799,13 @@ private fun RecentRow(item: OverviewRecentItem, onClick: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(Modifier.width(34.dp)) {
-            OpenLabel(dow, style = OpenType.monoXS)
-            Text("${date.dayOfMonth}", style = OpenType.figureS, color = ink)
+        Box(
+            Modifier
+                .size(36.dp)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh, androidx.compose.foundation.shape.RoundedCornerShape(4.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(glyph, contentDescription = null, tint = muted, modifier = Modifier.size(18.dp))
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, style = OpenType.rowTitle, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -797,18 +814,24 @@ private fun RecentRow(item: OverviewRecentItem, onClick: () -> Unit) {
                 if (item.prCount > 0) OpenPrTag()
             }
         }
-        Box(
-            Modifier
-                .size(32.dp)
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh, androidx.compose.foundation.shape.RoundedCornerShape(4.dp)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                if (item.isGym) OpenIcons.Dumbbell else OpenIcons.Activity,
-                contentDescription = null,
-                tint = muted,
-                modifier = Modifier.size(18.dp)
-            )
-        }
+        OpenLabel("$dow ${date.dayOfMonth}", style = OpenType.monoXS)
     }
 }
+
+/** One glyph per kind of training day, read from its name: Push, Pull, Upper, Lower and Legs, Full body. */
+internal fun dayGlyph(title: String): androidx.compose.ui.graphics.vector.ImageVector {
+    val t = title.lowercase()
+    return when {
+        "push" in t -> OpenIcons.DayPush
+        "pull" in t -> OpenIcons.DayPull
+        "lower" in t || "leg" in t || "glute" in t -> OpenIcons.DayLower
+        "upper" in t || "chest" in t || "back" in t || "shoulder" in t || "arm" in t -> OpenIcons.DayUpper
+        "full" in t || "total" in t -> OpenIcons.DayFullBody
+        else -> OpenIcons.Dumbbell
+    }
+}
+
+/** A cardio row's glyph: its type's own icon, the one Cardio draws for it. */
+@Composable
+private fun cardioGlyph(code: String): androidx.compose.ui.graphics.vector.ImageVector =
+    com.forge.app.domain.cardio.CardioActivity.resolve(code, com.forge.app.ui.cardio.LocalCardioTypes.current).icon

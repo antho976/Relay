@@ -42,6 +42,7 @@ private fun HomeSlot.glyph(): ImageVector = when (this) {
     HomeSlot.STEPS -> OpenIcons.Navigation
     HomeSlot.BODY_WEIGHT -> OpenIcons.User
     HomeSlot.LAST_SESSION -> OpenIcons.History
+    HomeSlot.WEEK_VOLUME -> OpenIcons.Dumbbell
 }
 
 /**
