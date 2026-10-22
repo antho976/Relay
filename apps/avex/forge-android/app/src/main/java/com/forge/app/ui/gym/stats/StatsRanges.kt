@@ -257,8 +257,11 @@ data class Banister(val days: List<Long>, val fitness: List<Float>, val fatigue:
  * day and are corrected for it (dividing by the weight seen so far), so a steady load reads as two
  * lines that meet rather than as fatigue far above fitness for everyone's first months.
  */
+/** Training days the fitness-vs-fatigue model needs before it reads anything. */
+const val BANISTER_MIN_DAYS = 5
+
 fun banister(load: List<DayLoad>, fromDay: Long, today: Long): Banister? {
-    if (load.size < 5) return null
+    if (load.size < BANISTER_MIN_DAYS) return null
     val firstDay = load.minOf { it.epochDay }
     val byDay = load.associate { it.epochDay to it.volumeLb }
     val aFit = exp(-1.0 / 42.0)

@@ -1,9 +1,11 @@
 package com.forge.app.ui.onboarding
 
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -125,11 +127,17 @@ internal fun StepPlanMode(selected: String, onSelect: (String) -> Unit) {
 
 /** A pick-one list of tiles: name, what it changes, and its mono reading. */
 @Composable
-private fun TileList(details: List<List<String>>, selected: String, onSelect: (String) -> Unit) {
+private fun TileList(
+    details: List<List<String>>,
+    selected: String,
+    onSelect: (String) -> Unit,
+    icon: (String) -> androidx.compose.ui.graphics.vector.ImageVector,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         details.forEach { (key, label, desc, meta) ->
             OnbTile(selected = selected == key, onClick = { onSelect(key) }) {
-                TileRow(label, tileCopy(desc), rangeCopy(meta), selected == key)
+                // The goal and level glyphs came back on Antho's ask (2026-10-21), the same family the gear tiles draw.
+                TileRow(label, tileCopy(desc), rangeCopy(meta), selected == key, icon = icon(key))
             }
         }
     }
@@ -140,7 +148,7 @@ internal fun StepGoal(selected: String, onSelect: (String) -> Unit) {
     Column {
         StepHeader("What's your main goal?", "Same exercises, different loading. Switch it anytime.")
         Spacer(Modifier.height(28.dp))
-        TileList(GOAL_DETAILS, selected, onSelect)
+        TileList(GOAL_DETAILS, selected, onSelect, OnboardingIcons::forGoal)
     }
 }
 
@@ -149,7 +157,7 @@ internal fun StepExperience(selected: String, onSelect: (String) -> Unit) {
     Column {
         StepHeader("How long have you been training?", "Sets your volume and which movements you're given.")
         Spacer(Modifier.height(28.dp))
-        TileList(EXPERIENCE_DETAILS, selected, onSelect)
+        TileList(EXPERIENCE_DETAILS, selected, onSelect, OnboardingIcons::forExperience)
     }
 }
 
@@ -221,14 +229,24 @@ internal fun StepDays(
             valueDescription = { if (it == 0) "1 day a week" else "${it + 1} days a week" }
         )
         val advice = daysAdvice(days, experience)
-        if (advice != null) {
-            Spacer(Modifier.height(14.dp))
-            DaysAdvice(advice)
+        // The note's room is kept whether or not it shows, so sliding onto 6 never shoves the page
+        // down (Antho, 2026-10-21); the note itself fades and rises into that room.
+        Spacer(Modifier.height(14.dp))
+        Box(Modifier.fillMaxWidth().heightIn(min = 44.dp)) {
+            androidx.compose.animation.AnimatedContent(
+                targetState = advice,
+                transitionSpec = {
+                    (androidx.compose.animation.fadeIn(com.forge.app.ui.theme.ForgeMotion.enterTween()) +
+                        androidx.compose.animation.slideInVertically(com.forge.app.ui.theme.ForgeMotion.enterTween()) { it / 3 }) togetherWith
+                        androidx.compose.animation.fadeOut(com.forge.app.ui.theme.ForgeMotion.exitTween())
+                },
+                label = "days_advice"
+            ) { note -> if (note != null) DaysAdvice(note) }
         }
 
         // Optional: the CTA doesn't wait on it. The week below redraws as it changes, because the
         // answer trims each day to fit (accessories first, never the main lift).
-        Spacer(Modifier.height(40.dp))
+        Spacer(Modifier.height(26.dp))
         StepSectionLabel("Session length", meta = "Optional")
         Spacer(Modifier.height(10.dp))
         val lengths = SessionEstimate.SESSION_LENGTH_CHOICES

@@ -1347,12 +1347,19 @@ internal fun SettingsConfirmDialog(
                 )
             ) { Text(confirmLabel) }
         },
-        dismissButton = {
-            androidx.compose.material3.TextButton(onClick = onDismiss) {
-                Text(dismissLabel, color = scheme.onSurface)
-            }
-        }
+        dismissButton = { SettingsDialogDismiss(dismissLabel, onDismiss) }
     )
+}
+
+/** A dialog's way out: outlined, square-cornered like the action beside it, never a pill. */
+@Composable
+internal fun SettingsDialogDismiss(label: String, onClick: () -> Unit) {
+    androidx.compose.material3.OutlinedButton(
+        onClick = onClick,
+        shape = Corner,
+        border = androidx.compose.foundation.BorderStroke(1.dp, OpenColors.Rule),
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
+    ) { Text(label) }
 }
 
 /** A text field in the Settings palette: accent when focused, the rule grey when not. */

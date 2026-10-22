@@ -64,7 +64,7 @@ internal fun distanceVsLast(thisKm: Double, lastKm: Double, useMiles: Boolean): 
 /** The meter caption under the hero's day bars. */
 internal fun weekMeterCaption(minutes: Int, target: Int, personal: Boolean): String {
     val mark = if (personal) "your weekly target" else "the WHO weekly mark"
-    return if (minutes >= target) "$target reached · $mark" else "${target - minutes} min to $target · $mark"
+    return if (minutes >= target) "$target reached · $mark" else "${target - minutes} min to go · $mark"
 }
 
 /** "Oct 19 to 25", or "Sep 29 to Oct 5" across a month. */

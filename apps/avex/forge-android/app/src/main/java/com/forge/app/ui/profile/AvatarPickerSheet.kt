@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -43,10 +44,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
-import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.OpenLabel
+import com.forge.app.ui.common.OpenPrimaryButton
+import com.forge.app.ui.theme.OpenIcons
+import com.forge.app.ui.theme.OpenType
 import com.forge.app.ui.common.bounceClick
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -111,24 +113,16 @@ internal fun AvatarPickerSheet(
         ) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Column {
-                    Text("Profile photo", style = MaterialTheme.typography.headlineSmall, color = onBg)
-                    Spacer(Modifier.height(12.dp))
-                    ForgePrimaryCapsule(
-                        label = "Select your own",
-                        onClick = onPickOwn,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(14.dp))
-                    Text(
-                        "Or choose one of ours",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = muted, fontStyle = FontStyle.Italic
-                    )
+                    Text("Profile photo", style = OpenType.sheetTitle, color = onBg)
+                    Spacer(Modifier.height(20.dp))
+                    OpenPrimaryButton("Choose from your photos", onClick = onPickOwn, icon = OpenIcons.Image)
+                    Spacer(Modifier.height(28.dp))
+                    OpenLabel("Or one of ours")
                 }
             }
             DefaultAvatars.categories.forEach { category ->
                 item(span = { GridItemSpan(maxLineSpan) }) {
-                    EditorialHeader(category.label, muted, accent, Modifier.padding(top = 14.dp, bottom = 4.dp))
+                    OpenLabel(category.label, color = onBg, modifier = Modifier.padding(top = 18.dp, bottom = 6.dp))
                 }
                 itemsIndexed(category.items, key = { _, it -> it.key }) { index, avatar ->
                     DefaultCoverThumb(
@@ -156,7 +150,7 @@ private fun DefaultCoverThumb(
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
-    val shape = RoundedCornerShape(16.dp)
+    val shape = RoundedCornerShape(4.dp)
     // Thumbs only need ~grid-cell resolution — sample down (source ≤1600px → ≤400px) to keep the
     // open picker's bitmap footprint small; decode off the main thread so scrolling stays smooth.
     // Seed from the sheet-scoped [cache] so a cover scrolled back into view shows instantly and never
@@ -185,7 +179,17 @@ private fun DefaultCoverThumb(
                 Image(bitmap = it, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             } ?: Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant))
         }
-        // Ring drawn ABOVE the cropped image so the accent border is never overdrawn.
-        if (selected) Box(Modifier.fillMaxSize().border(2.dp, accent, shape))
+        // Ring drawn ABOVE the cropped image so the accent border is never overdrawn, with a check in
+        // the corner so the chosen one reads without relying on the red alone.
+        if (selected) {
+            Box(Modifier.fillMaxSize().border(2.dp, accent, shape))
+            Box(
+                Modifier.align(androidx.compose.ui.Alignment.TopEnd).padding(6.dp).size(20.dp)
+                    .background(accent, RoundedCornerShape(2.dp)),
+                contentAlignment = androidx.compose.ui.Alignment.Center
+            ) {
+                androidx.compose.material3.Icon(OpenIcons.Check, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(14.dp))
+            }
+        }
     }
 }

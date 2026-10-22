@@ -37,6 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.EditNote
 import com.forge.app.ui.common.window.AlertDialog
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -57,6 +58,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.domain.units.toStoredWeightText
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.touchSlop
 import com.forge.app.ui.gym.train.components.CollapsedRow
 import com.forge.app.ui.gym.train.components.ExerciseCard
 import com.forge.app.ui.gym.train.components.ExerciseChartSheet
@@ -250,7 +252,9 @@ internal fun DayContent(
                 }
             }
 
-            if (showTimeFit(state)) {
+            // The offer itself lives in the warm-up (Antho, 2026-10-21: asked at the door, not over
+            // every exercise); once a fit is applied, its line and Undo stay here.
+            if (showTimeFit(state) && state.timeFit != null) {
                 item(key = "time-fit", contentType = "time-fit") { TimeFitRow(state, onEvent) }
             }
 
@@ -482,8 +486,10 @@ internal fun SessionHero(
         ) {
             // Left: back, then the day name. Only the name yields space to the pill and FINISH: the
             // back button inside the weighted part was squeezed to a sliver at large text.
-            ForgeChromeIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack)
-            Spacer(Modifier.width(8.dp))
+            // Bare icons and a bare word, as every other page's top bar draws them (Antho,
+            // 2026-10-21): the chrome bubbles behind back, note and Finish are gone, the places kept.
+            com.forge.app.ui.common.OpenTopBarIcon(com.forge.app.ui.theme.OpenIcons.ArrowLeft, "Back", onBack)
+            Spacer(Modifier.width(4.dp))
             // The user's own day name: it wraps to a second line before it is cut (§14).
             Text(
                 state.displayName.uppercase(),
@@ -495,18 +501,21 @@ internal fun SessionHero(
             )
             Spacer(Modifier.width(4.dp))
             // Quick session note — jot a thought mid-workout; tinted when the journal has content.
-            ForgeChromeIconButton(
-                Icons.Filled.EditNote,
-                if (state.sessionJournal.isBlank()) "Add session note" else "Edit session note",
-                onEditNote,
-                tint = if (state.sessionJournal.isNotBlank()) accent else muted
-            )
+            val noteLabel = if (state.sessionJournal.isBlank()) "Add session note" else "Edit session note"
+            Box(
+                Modifier
+                    .touchSlop(vertical = 13.dp, horizontal = 13.dp)
+                    .clickableLabeled(noteLabel, onClick = onEditNote)
+                    .padding(13.dp)
+            ) {
+                Icon(Icons.Filled.EditNote, contentDescription = noteLabel, tint = if (state.sessionJournal.isNotBlank()) accent else muted, modifier = Modifier.size(22.dp))
+            }
             // Passive date: a filled capsule, no outline.
             if (datePillText != null) {
                 Spacer(Modifier.width(4.dp))
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(50))
+                        .clip(RoundedCornerShape(4.dp))
                         .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                         .clearAndSetSemantics { contentDescription = datePillSpoken.orEmpty() }
                         .padding(horizontal = 12.dp, vertical = 6.dp)
@@ -520,20 +529,17 @@ internal fun SessionHero(
             val allDone = state.exercises.isNotEmpty() && state.exercises.all { it.isComplete }
             if (showFinish) Box(
                 modifier = Modifier
-                    .heightIn(min = 44.dp)
-                    .clip(RoundedCornerShape(50))
-                    .then(
-                        if (allDone) Modifier.background(accent)
-                        else Modifier.border(1.dp, outline, RoundedCornerShape(50))
-                    )
+                    .heightIn(min = 48.dp)
                     .clickableLabeled("Finish session") { onFinish() }
-                    .padding(horizontal = 16.dp, vertical = 7.dp),
+                    .padding(horizontal = 12.dp),
                 contentAlignment = Alignment.Center
             ) {
+                // The word turns red once every exercise is done or skipped: a nudge, not a second
+                // button competing with Log set.
                 Text(
                     "Finish",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (allDone) MaterialTheme.colorScheme.onPrimary else onBg
+                    style = com.forge.app.ui.theme.OpenType.rowTitle,
+                    color = if (allDone) accent else onBg
                 )
             }
         }

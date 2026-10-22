@@ -20,7 +20,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -161,7 +160,7 @@ enum class ResetTarget(val label: String, val message: String) {
     // exports and crash logs (2026-09-26 audit, D2), and a folder the user picked is not the app's.
     FACTORY(
         "Factory reset",
-        "Deletes all data stored in the app, including its backup copy, exports and crash logs, and resets all settings. Backups saved outside the app are kept. This cannot be undone."
+        "Deletes all data stored in the app, including its backup copy, exports and crash logs, resets all settings and disconnects Health Connect. Backups saved outside the app, and readings other apps keep in Health Connect, are kept. This cannot be undone."
     )
 }
 
@@ -540,7 +539,7 @@ private fun SettingsDialogs(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { viewModel.cancelExport() }) { Text("Cancel", color = MaterialTheme.colorScheme.onSurface) }
+                SettingsDialogDismiss("Cancel") { viewModel.cancelExport() }
             }
         )
     }

@@ -68,6 +68,8 @@ class OverviewViewModel @Inject constructor(
      */
 
     private val _body = MutableStateFlow<HomeBody?>(null)
+    /** False until the first watch read answers, so a watch slot is not swapped out while it loads. */
+    private val bodyRead = MutableStateFlow(false)
     /** Home's BODY section: null hides it (no Health Connect on the phone, or the invite was dismissed). */
     val body: StateFlow<HomeBody?> = _body
 
@@ -81,6 +83,7 @@ class OverviewViewModel @Inject constructor(
             if (it is kotlinx.coroutines.CancellationException) throw it
             _body.value = null
         }
+        bodyRead.value = true
     }
     fun refreshBody() = bodyRefresh.request()
 
@@ -354,6 +357,12 @@ class OverviewViewModel @Inject constructor(
             bodyWeightSlot(entries, unit)
         }.flowOn(Dispatchers.Default)
 
+    /** This week's lifted volume against the seven weeks before it. */
+    private val weekVolumeReading: kotlinx.coroutines.flow.Flow<SlotReading?> =
+        combine(sessionDao.observeRecentTracked(60), settingsRepo.weightUnit, timeSignals.dayStarts(), settingsRepo.firstDayMonday) { list, unit, todayStart, monday ->
+            weekVolumeSlot(list, unit, todayStart, monday)
+        }.flowOn(Dispatchers.Default)
+
     /** Home's two reading slots, resolved: which reading sits where and what each one reads. */
     data class HomeSlots(
         val left: HomeSlot,
@@ -364,12 +373,18 @@ class OverviewViewModel @Inject constructor(
     )
 
     val slots: StateFlow<HomeSlots> = combine(
-        settingsRepo.homeSlots, _body, lastSessionReading, bodyWeightReading
-    ) { ids, body, last, weight ->
-        val left = HomeSlot.of(ids.getOrNull(0)) ?: HomeSlot.DEFAULT_LEFT
-        val right = (HomeSlot.of(ids.getOrNull(1)) ?: HomeSlot.DEFAULT_RIGHT)
-            .let { if (it == left) HomeSlot.entries.first { e -> e != left } else it }
+        settingsRepo.homeSlots, combine(_body, bodyRead, ::Pair), lastSessionReading, bodyWeightReading, weekVolumeReading
+    ) { ids, (body, read), last, weight, volume ->
+        val chosenLeft = HomeSlot.of(ids.getOrNull(0)) ?: HomeSlot.DEFAULT_LEFT
+        val chosenRight = (HomeSlot.of(ids.getOrNull(1)) ?: HomeSlot.DEFAULT_RIGHT)
+            .let { if (it == chosenLeft) HomeSlot.entries.first { e -> e != chosenLeft } else it }
         val watch = body as? HomeBody.Readings
+        // With no watch connected, a watch reading would only ever say "Connect a watch": a training
+        // reading stands in for it (the choice stays saved, so connecting one brings it back).
+        fun standIn(slot: HomeSlot, other: HomeSlot): HomeSlot =
+            if (slot.needsWatch && read && watch == null) HomeSlot.NO_WATCH_STAND_INS.first { it != other } else slot
+        val left = standIn(chosenLeft, chosenRight)
+        val right = standIn(chosenRight, left)
         HomeSlots(
             left = left,
             right = right,
@@ -380,6 +395,7 @@ class OverviewViewModel @Inject constructor(
                 HomeSlot.STEPS to watch?.steps,
                 HomeSlot.BODY_WEIGHT to weight,
                 HomeSlot.LAST_SESSION to last,
+                HomeSlot.WEEK_VOLUME to volume,
             ),
             watchInvite = body == HomeBody.Invite,
         )

@@ -28,8 +28,8 @@ object OnboardingType {
     val sliderFigureS = OpenType.figureXL.copy(fontSize = 40.sp, lineHeight = 1.05.em)
     val sliderFigureSUnit = OpenType.figureXL.copy(fontSize = 18.sp)
 
-    /** A movement's sets by reps on the week page ("3 × 8–12"): serif 20. */
-    val setsByReps = OpenType.figureXL.copy(fontSize = 20.sp, lineHeight = 1.05.em)
+    /** A movement's sets by reps on the week page ("3 × 8–12"): serif 16, a step under the name it sits beside. */
+    val setsByReps = OpenType.figureXL.copy(fontSize = 16.sp, lineHeight = 1.1.em)
 
     /** A movement's name on the week page: sans 15 medium. */
     val movement = OpenType.rowTitle.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)

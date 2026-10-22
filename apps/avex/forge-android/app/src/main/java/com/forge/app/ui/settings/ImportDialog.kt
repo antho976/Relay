@@ -12,6 +12,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.unit.dp
 import com.forge.app.data.importer.FoundImport
 import com.forge.app.data.importer.foundImportSummary
 import com.forge.app.ui.common.clickableLabeled
@@ -45,10 +47,11 @@ internal fun ImportDialog(
         onDismiss
     ) {
         if (!granted) {
-            SettingsGroup(footer = "Opens Download/Avex. Tap Use this folder, then save your exports there.") {
-                SettingsActionRow("Find my exports", "Let Avex look in one folder for files to import", Icons.Rounded.FolderOpen) {
-                    onGrantFolder()
-                }
+            // The main way in leads, in the accent like every page's main action.
+            androidx.compose.foundation.layout.Column {
+                com.forge.app.ui.common.OpenPrimaryButton("Find my exports", onClick = onGrantFolder, icon = com.forge.app.ui.theme.OpenIcons.Search)
+                androidx.compose.foundation.layout.Spacer(Modifier.height(10.dp))
+                SettingsReading("Opens Download/Avex. Tap Use this folder, then save your exports there.")
             }
         } else {
             SettingsGroup(

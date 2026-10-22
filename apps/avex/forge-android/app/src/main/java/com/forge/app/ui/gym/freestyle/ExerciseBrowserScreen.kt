@@ -437,7 +437,7 @@ private fun MuscleFilterRow(
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(4.dp))
                     .background(if (isSel) cs.primaryContainer else Color.Transparent)
                     .bounceClick { onSelectMuscle(m) }
                     .semantics { contentDescription = "${m.displayName} filter" }
@@ -470,7 +470,7 @@ private fun AllFilterChip(selected: Boolean, onClick: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(4.dp))
             .background(if (selected) cs.primaryContainer else Color.Transparent)
             .bounceClick { onClick() }
             .semantics { contentDescription = "All exercises filter" }
@@ -495,7 +495,7 @@ private fun GlyphFilterChip(glyph: String, label: String, selected: Boolean, onC
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(4.dp))
             .background(if (selected) cs.primaryContainer else Color.Transparent)
             .bounceClick { onClick() }
             .semantics { contentDescription = "$label filter" }

@@ -28,7 +28,7 @@ class CardioFormatTest {
 
     @Test
     fun meterCaptionNamesWhatIsLeft() {
-        assertEquals("55 min to 150 · the WHO weekly mark", weekMeterCaption(95, 150, personal = false))
+        assertEquals("55 min to go · the WHO weekly mark", weekMeterCaption(95, 150, personal = false))
         assertEquals("200 reached · your weekly target", weekMeterCaption(210, 200, personal = true))
     }
 

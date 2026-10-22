@@ -57,7 +57,7 @@ internal fun GymSecondaryCapsule(
     Box(
         modifier = modifier
             .heightIn(min = 44.dp)
-            .clip(RoundedCornerShape(50))
+            .clip(RoundedCornerShape(4.dp))
             .background(fill)
             .bounceClick(enabled = enabled, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 13.dp),
@@ -105,7 +105,7 @@ internal fun GymNoteBox(
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(GROUP_OUTER))
+                    .clip(RoundedCornerShape(4.dp))
                     .background(fill)
                     .padding(horizontal = ROW_H, vertical = 14.dp)
             ) {

@@ -2,6 +2,8 @@ package com.forge.app.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -83,13 +85,19 @@ internal fun DataExportDialog(
             )
         }
 
+        // The one thing worth doing here leads, in the accent like every page's main action.
+        Column {
+            com.forge.app.ui.common.OpenPrimaryButton("Back up now", onClick = { onBackup(); onDismiss() }, icon = com.forge.app.ui.theme.OpenIcons.ArrowUp)
+            Spacer(Modifier.height(10.dp))
+            SettingsReading(stake)
+        }
+
         SettingsGroup(
-            "Backup & restore",
+            "Restore",
             footer = if (autoBackupFailed) "The last auto-backup failed. Free up storage, then back up now."
                      else "Restoring replaces all current data and restarts Avex.",
             footerIsError = autoBackupFailed
         ) {
-            SettingsActionRow("Back up now", stake, SettingsIcons.Backup) { onBackup(); onDismiss() }
             SettingsActionRow("Restore from a file", "Pick an Avex backup .zip", Icons.Rounded.Restore) { onRestore(); onDismiss() }
             // Recover from the silent weekly auto-backup without the file picker (#86).
             autoBackupCopies.firstOrNull()?.let { newest ->
@@ -150,11 +158,7 @@ internal fun DataExportDialog(
                 }
             },
             confirmButton = {},
-            dismissButton = {
-                androidx.compose.material3.TextButton(onClick = { chooseAutoCopy = false }) {
-                    Text("Cancel", color = MaterialTheme.colorScheme.onSurface)
-                }
-            }
+            dismissButton = { SettingsDialogDismiss("Cancel") { chooseAutoCopy = false } }
         )
     }
     confirmAutoRestore?.let { copy ->
@@ -235,7 +239,7 @@ internal fun ResetConfirmDialog(
                             singleLine = true,
                             label = { Text("Type $confirmWord to confirm") },
                             colors = settingsFieldColors(),
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
                             modifier = Modifier.fillMaxWidth()
                         )
                     }

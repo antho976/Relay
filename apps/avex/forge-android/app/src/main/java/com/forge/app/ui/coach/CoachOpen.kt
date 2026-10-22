@@ -455,11 +455,55 @@ private fun EarlierRow(d: CoachDecision) {
 @Composable
 internal fun CoachPlanTab(state: CoachViewModel.UiState, unit: WeightUnit, now: Long, actions: CoachActions, onOpenGoals: () -> Unit) {
     Column {
-        BlockSection(state, actions)
-        Spacer(Modifier.height(SECTION))
+        // Three empty sections in a row read as three unrelated jargon words (Antho, 2026-10-21), so a
+        // plan with nothing in it is the ladder they make instead: goal, then block, then focus.
+        if (state.goals.isEmpty() && state.block == null && state.project == null && state.projectProposal == null) {
+            PlanLadder(state, actions, onOpenGoals)
+            return@Column
+        }
+        // The why first, then the weeks built on it, then the one weak point being worked.
         GoalsSection(state, unit, onOpenGoals)
         Spacer(Modifier.height(SECTION))
+        BlockSection(state, actions)
+        Spacer(Modifier.height(SECTION))
         ProjectSection(state, now, actions)
+    }
+}
+
+/** A plan with nothing in it: the three steps it is made of, numbered, each with what it does. */
+@Composable
+private fun PlanLadder(state: CoachViewModel.UiState, actions: CoachActions, onOpenGoals: () -> Unit) {
+    Head("How the coach plans")
+    Spacer(Modifier.height(10.dp))
+    Serif("Start with a goal")
+    Spacer(Modifier.height(8.dp))
+    Body("Each step builds on the one before. You only have to set the first.")
+    Spacer(Modifier.height(28.dp))
+    Column(verticalArrangement = Arrangement.spacedBy(28.dp)) {
+        LadderStep(1, "Goal", "What you're after: a lift to reach, a muscle to grow, or your body weight.") {
+            OpenSmallButton("Set a goal", filled = true, onClick = onOpenGoals)
+        }
+        LadderStep(2, "Block", "A few weeks of training built around that goal, ending in an easy week to recover.") {
+            if (!state.blockBusy) OpenSmallButton("Start a block", filled = false, onClick = actions.startBlock)
+        }
+        LadderStep(3, "Focus", "When one muscle or lift falls behind, the coach proposes a few weeks on it. Nothing to do yet.")
+    }
+}
+
+@Composable
+private fun LadderStep(n: Int, title: String, text: String, action: (@Composable () -> Unit)? = null) {
+    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Box(Modifier.size(28.dp).border(1.5.dp, OpenColors.Rule, androidx.compose.foundation.shape.CircleShape), contentAlignment = Alignment.Center) {
+            Text("$n", style = OpenType.monoS, color = MaterialTheme.colorScheme.onBackground)
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(title, style = OpenType.rowTitle, color = MaterialTheme.colorScheme.onBackground)
+            Body(text)
+            if (action != null) {
+                Spacer(Modifier.height(6.dp))
+                action()
+            }
+        }
     }
 }
 
@@ -469,11 +513,11 @@ private val DATE_SHORT = DateTimeFormatter.ofPattern("MMM d")
 private fun BlockSection(state: CoachViewModel.UiState, actions: CoachActions) {
     val block = state.block
     if (block == null) {
-        Head("Training block")
+        Head("Training block", "Next few weeks")
         Spacer(Modifier.height(10.dp))
         Serif("No block running")
         Spacer(Modifier.height(8.dp))
-        Body("The coach reads week to week. A block plans a few weeks around one aim, then an easy week.")
+        Body("Right now the coach adjusts week to week. A block plans a few weeks around your goal, then an easy week.")
         Spacer(Modifier.height(14.dp))
         if (!state.blockBusy) OpenSmallButton("Start a block", filled = true, onClick = actions.startBlock)
         return
@@ -483,38 +527,21 @@ private fun BlockSection(state: CoachViewModel.UiState, actions: CoachActions) {
     val phase = BlockPhase.fromCode(block.phase)
     Head("Training block", "${start.format(DATE_SHORT)} to ${end.format(DATE_SHORT)}")
     Spacer(Modifier.height(10.dp))
-    // A no-break space ties the dot to the phase, so a wrap never leaves "·" hanging at a line's end.
-    Serif("Week ${block.weekIndex} of ${block.plannedWeeks}" + (phase?.let { " ·\u00A0${it.displayName}" } ?: ""))
+    // The phase is named once, lit on the bar below; in the title too it wrapped onto a line of its own.
+    Serif("Week ${block.weekIndex} of ${block.plannedWeeks}")
     if (block.intent.isNotBlank()) {
         Spacer(Modifier.height(8.dp))
         Body(block.intent)
     }
     Spacer(Modifier.height(20.dp))
-    // The block's weeks: done in red, this one half lit, the rest the plan.
+    // One bar for where the block is: its phases, the current one lit. (A row of week tiles over it
+    // said the same thing twice; the week count is in the title.)
     val accent = MaterialTheme.colorScheme.primary
-    Row(Modifier.fillMaxWidth().semantics { contentDescription = "Week ${block.weekIndex} of ${block.plannedWeeks}" }, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        (1..block.plannedWeeks).forEach { w ->
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Box(
-                    Modifier.fillMaxWidth().height(36.dp).background(
-                        when {
-                            w < block.weekIndex -> accent
-                            w == block.weekIndex -> accent.copy(alpha = 0.6f)
-                            else -> OpenColors.Previous
-                        },
-                        RoundedCornerShape(2.dp)
-                    )
-                )
-                Text("W$w", style = OpenType.chartLabel, color = OpenColors.Glyph)
-            }
-        }
-    }
-    Spacer(Modifier.height(12.dp))
     val current = phase?.let { BlockPhase.entries.indexOf(it) } ?: -1
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         BlockPhase.entries.forEachIndexed { i, p ->
             Column(Modifier.weight(if (p == BlockPhase.DELOAD) 0.6f else 1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(Modifier.fillMaxWidth().height(4.dp).background(when {
+                Box(Modifier.fillMaxWidth().height(6.dp).background(when {
                     i == current -> accent
                     i < current -> OpenColors.Bar
                     else -> OpenColors.Unreached
@@ -573,25 +600,25 @@ private fun ProjectSection(state: CoachViewModel.UiState, now: Long, actions: Co
     val project = state.project
     if (project == null) {
         val proposal = state.projectProposal
-        Head("Project", "1 at a time")
+        Head("Focus", "One weak point")
         Spacer(Modifier.height(10.dp))
         if (proposal == null) {
-            Serif("None running")
+            Serif("Nothing to focus on")
             Spacer(Modifier.height(8.dp))
-            Body("When one lever is worth working for a few weeks, the coach proposes it here.")
+            Body("When one muscle or lift falls behind, the coach proposes a few weeks on it here.")
         } else {
             Serif(proposal.name, OpenType.figureRow)
             Spacer(Modifier.height(8.dp))
             Body(proposal.why)
             Spacer(Modifier.height(14.dp))
-            OpenSmallButton("Start this project", filled = true, onClick = { actions.startProject(proposal) })
+            OpenSmallButton("Start this focus", filled = true, onClick = { actions.startProject(proposal) })
         }
         return
     }
     val start = Instant.ofEpochMilli(project.startedAt).atZone(ZoneId.systemDefault()).toLocalDate()
     val week = (((now - project.startedAt) / (7 * DAY_MS)).toInt() + 1).coerceIn(1, project.weeks.coerceAtLeast(1))
     val finish = start.plusWeeks(project.weeks.toLong())
-    Head("Project", "Week $week of ${project.weeks}", rightInk = true)
+    Head("Focus", "Week $week of ${project.weeks}", rightInk = true)
     Spacer(Modifier.height(10.dp))
     Serif(project.name, OpenType.figureRow)
     Spacer(Modifier.height(8.dp))

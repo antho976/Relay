@@ -10,6 +10,7 @@ import androidx.compose.material3.SheetState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.PopupPositionProvider
@@ -62,6 +63,8 @@ fun AlertDialog(
         title = title,
         text = text,
         containerColor = containerColor,
+        // The redesign keeps corners tight; Material's 28dp read as a soft bubble around square buttons.
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
         properties = properties,
     )
 }

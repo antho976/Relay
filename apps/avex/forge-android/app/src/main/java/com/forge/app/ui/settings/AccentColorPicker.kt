@@ -116,20 +116,19 @@ internal fun AccentColorPicker(currentHex: String, onSelect: (String) -> Unit) {
     }
 
     // One choice among twelve, announced as such: `selectableGroup` + a radio role per swatch, each
-    // named by its colour. One strip to the screen's edge, as drawn, opened on the current pick.
+    // named by its colour.
     val pickedIndex = ACCENT_PRESETS.indexOfFirst { (hex, _) ->
         currentHex.equals(hex, ignoreCase = true) || (currentHex.isEmpty() && hex == DEFAULT_ACCENT)
     }
-    val stripState = androidx.compose.foundation.lazy.rememberLazyListState(
-        initialFirstVisibleItemIndex = (pickedIndex - 2).coerceAtLeast(0)
-    )
-    androidx.compose.foundation.lazy.LazyRow(
-        state = stripState,
-        modifier = Modifier.kitBleed().selectableGroup(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = KitGutter),
-        horizontalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        items(ACCENT_PRESETS.size, key = { ACCENT_PRESETS[it].first }) { i ->
+    // As many swatches as fit, the current one always in view, the rest a "More" away (Antho,
+    // 2026-10-21: a strip that ran off the screen's edge hid most of the choice).
+    Box(Modifier.selectableGroup()) {
+        SettingsFitGrid(
+            items = ACCENT_PRESETS.indices.toList(),
+            pickedIndex = pickedIndex.coerceAtLeast(0),
+            cellWidth = 60.dp,
+            noun = "accent colours",
+        ) { i ->
             val (hex, label) = ACCENT_PRESETS[i]
             AccentSwatch(hex, label, i == pickedIndex) { onSelect(hex) }
         }

@@ -173,5 +173,7 @@ private fun matchesCardio(
 private fun workoutMatchesQuery(s: Session, needle: String, names: Map<Long, List<String>>): Boolean {
     if (Program.dayDisplayName(s.dayKey).lowercase().contains(needle)) return true
     if (s.journal.lowercase().contains(needle)) return true
+    // Tags are found by search now that they no longer have chips of their own.
+    if (s.tags.lowercase().contains(needle.removePrefix("#"))) return true
     return names[s.id].orEmpty().any { it.lowercase().contains(needle) }
 }

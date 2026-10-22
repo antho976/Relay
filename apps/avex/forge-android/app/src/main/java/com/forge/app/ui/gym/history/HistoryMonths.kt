@@ -16,7 +16,7 @@ enum class HistoryKind(val label: String) {
     ALL("All"),
     GYM("Gym"),
     CARDIO("Cardio"),
-    PRS("With PRs")
+    PRS("PRs")
 }
 
 /** True when [item] passes the type filter [kind]. */

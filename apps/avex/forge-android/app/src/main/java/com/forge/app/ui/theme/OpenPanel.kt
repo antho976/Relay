@@ -83,6 +83,8 @@ object OpenType {
     val figureMDenominator = figureM.copy(fontSize = 20.sp)
 
     /** The hero's last step for a long answer ("Done for today"), before it wraps. */
+    /** Home's day name: a step under [hero], which Antho found a tad big on his phone (2026-10-21). */
+    val heroM = hero.copy(fontSize = 64.sp, lineHeight = 66.sp, letterSpacing = (-2).sp)
     val heroS = hero.copy(fontSize = 44.sp, lineHeight = 48.sp, letterSpacing = (-1).sp)
 
     /** A sheet's serif title ("Show in this spot"). */

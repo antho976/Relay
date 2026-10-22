@@ -12,11 +12,8 @@ import com.forge.app.ui.common.clickableLabeled
  * reading that is on, and the ways out to Health Connect and the Play listing.
  */
 
-/** Where a reading's own options start: a step in from its name, so they read as its children. */
-internal val SignalDetailIndent = 16.dp
-
 /**
- * One thing a reading that is on can do now, indented under it: an import, or allowing write-back.
+ * One thing a reading that is on can do now: an import, or allowing write-back.
  * Its result ("Imported 82.4 kg from today") replaces its description, so the answer lands where
  * the question was asked.
  */
@@ -25,7 +22,6 @@ internal fun SignalAction(title: String, description: String, button: String, on
     SettingsAdaptiveRow(
         title = title,
         supporting = description,
-        indent = SignalDetailIndent,
         interaction = Modifier.clickableLabeled("$button: $title", onClick = onClick)
     ) { SettingsCompactButton(button) }
 }

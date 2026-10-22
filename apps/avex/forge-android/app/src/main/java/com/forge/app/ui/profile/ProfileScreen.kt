@@ -76,6 +76,9 @@ fun ProfileScreen(
     // Persist the one-time cover hint as soon as it surfaces — it stays visible this session, gone next.
     LaunchedEffect(state.showAvatarHint) { if (state.showAvatarHint) viewModel.markAvatarHintSeen() }
 
+    val photoImport = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
+        if (uris.isNotEmpty()) viewModel.importPhotos(uris)
+    }
     val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let { viewModel.setAvatar(it) }
     }
@@ -125,6 +128,7 @@ fun ProfileScreen(
                 onOpenSizes = onOpenMeasurements,
                 onOpenGallery = onOpenPhotoGallery,
                 onOpenCamera = onOpenCamera,
+                onImportPhotos = { photoImport.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                 onUnlock = unlock.launch,
             )
         },

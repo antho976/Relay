@@ -7,7 +7,6 @@ import com.forge.app.ui.common.window.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,8 +32,8 @@ internal fun LeaveSessionDialog(
             onDismissRequest = onKeepGoing,
             title = { Text("Nothing logged yet") },
             text = { Text("This workout has no sets to save. Keep going, or discard it.") },
-            confirmButton = { Button(onClick = onKeepGoing) { Text("Keep going") } },
-            dismissButton = { TextButton(onClick = onDiscard) { Text("Discard workout") } }
+            confirmButton = { DialogPrimary("Keep going", onClick = onKeepGoing) },
+            dismissButton = { DialogQuiet("Discard workout", onClick = onDiscard) }
         )
         return
     }
@@ -42,11 +41,11 @@ internal fun LeaveSessionDialog(
         onDismissRequest = onKeepGoing,
         title = { Text("Leave this workout?") },
         text = { Text("Your logged sets are saved. Resume this workout later from its day, or discard what you've logged.") },
-        confirmButton = { Button(onClick = onResumeLater) { Text("Resume later") } },
+        confirmButton = { DialogPrimary("Resume later", onClick = onResumeLater) },
         dismissButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = onDiscard) { Text("Discard") }
-                TextButton(onClick = onKeepGoing) { Text("Keep going") }
+                DialogQuiet("Discard", onClick = onDiscard)
+                DialogQuiet("Keep going", onClick = onKeepGoing)
             }
         }
     )
@@ -72,8 +71,8 @@ internal fun FinishUntouchedDialog(
         onDismissRequest = onKeepGoing,
         title = { Text(if (count == 1) "1 exercise not started" else "$count exercises not started") },
         text = { Text("$names ${if (count == 1) "has" else "have"} no sets. Finishing closes the workout with ${if (count == 1) "it" else "them"} unlogged.") },
-        confirmButton = { Button(onClick = onKeepGoing) { Text("Keep going") } },
-        dismissButton = { TextButton(onClick = onFinish) { Text("Finish anyway") } }
+        confirmButton = { DialogPrimary("Keep going", onClick = onKeepGoing) },
+        dismissButton = { DialogQuiet("Finish anyway", onClick = onFinish) }
     )
 }
 
@@ -92,8 +91,8 @@ internal fun CrossDaySessionDialog(
         onDismissRequest = onGoBack,
         title = { Text("$otherDayName in progress") },
         text = { Text("You have an unfinished $otherDayName workout. Go back to resume it, or discard it and start $thisDayName instead.") },
-        confirmButton = { Button(onClick = onGoBack) { Text("Resume $otherDayName") } },
-        dismissButton = { TextButton(onClick = onDiscardAndStart) { Text("Discard & start $thisDayName") } }
+        confirmButton = { DialogPrimary("Resume $otherDayName", onClick = onGoBack) },
+        dismissButton = { DialogQuiet("Discard & start $thisDayName", onClick = onDiscardAndStart) }
     )
 }
 
@@ -121,11 +120,28 @@ internal fun GoalSetterDialog(
             )
         },
         confirmButton = {
-            Button(onClick = { weightLb?.let { onSet(it) } }, enabled = weightLb != null && weightLb > 0) { Text("Save") }
+            DialogPrimary("Save", enabled = weightLb != null && weightLb > 0) { weightLb?.let { onSet(it) } }
         },
         dismissButton = {
-            if (currentGoal != null) TextButton(onClick = onClear) { Text("Clear goal") }
-            else TextButton(onClick = onDismiss) { Text("Cancel") }
+            if (currentGoal != null) DialogQuiet("Clear goal", onClick = onClear)
+            else DialogQuiet("Cancel", onClick = onDismiss)
         }
     )
+}
+
+/** A session dialog's action: the red, square-cornered primary the rest of the app uses. */
+@Composable
+private fun DialogPrimary(text: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Button(onClick = onClick, enabled = enabled, shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp)) { Text(text) }
+}
+
+/** A session dialog's other way out: outlined and square-cornered beside the primary, never a pill. */
+@Composable
+private fun DialogQuiet(text: String, onClick: () -> Unit) {
+    androidx.compose.material3.OutlinedButton(
+        onClick = onClick,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, com.forge.app.ui.theme.OpenColors.Rule),
+        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurface)
+    ) { Text(text) }
 }

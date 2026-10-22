@@ -22,10 +22,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.withFrameNanos
@@ -589,6 +591,12 @@ class MainActivity : FragmentActivity() {
                 settingsRepo.onboardingDoneOrUnknown.collect { value = it }
                 if (value == null) prefsReadFailed = true
             }
+            // Each pass through onboarding gets its own ViewModel. A factory reset brings onboarding
+            // back inside this same Activity, and the last pass's model still held "completing" (its
+            // finish button silently did nothing) and the old answers. The pass moves on whenever
+            // onboarding completes, so the next one starts clean; a rotation keeps the current pass.
+            var onboardingPass by rememberSaveable { mutableIntStateOf(0) }
+            LaunchedEffect(onboardingDone) { if (onboardingDone == true) onboardingPass++ }
             // The first screen is composed once the gate knows which one it is; one frame later it
             // is laid out under the splash, and that is when the splash may go.
             LaunchedEffect(onboardingDone) {
@@ -634,7 +642,7 @@ class MainActivity : FragmentActivity() {
                         CompositionLocalProvider(LocalAppLockActive provides lockActive) {
                         Box(Modifier.fillMaxSize()) {
                             when (onboardingDone) {
-                                false -> OnboardingScreen(onFinished = {})
+                                false -> OnboardingScreen(onFinished = {}, viewModel = hiltViewModel(key = "onboarding-$onboardingPass"))
                                 true -> {
                                     Box(
                                         Modifier

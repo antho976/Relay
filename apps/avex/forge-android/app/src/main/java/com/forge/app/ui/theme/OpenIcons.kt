@@ -35,6 +35,11 @@ object OpenIcons {
     val ChevronUp: ImageVector by lazy { openIcon("ChevronUp", "M6 15l6-6 6 6") }
     val Compass: ImageVector by lazy { openIcon("Compass", "M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0M16 8l-2 6-6 2 2-6z") }
     val Copy: ImageVector by lazy { openIcon("Copy", "M8 8h12v12H8zM16 8V4H4v12h4") }
+    val DayFullBody: ImageVector by lazy { openIcon("DayFullBody", "M12 2.5 a2 2 0 1 0 0 4 a2 2 0 1 0 0 -4 M4 9 h16 M12 9 v6 M8 21 l4 -6 l4 6") } // Relay saved icon "day-full-body"
+    val DayLower: ImageVector by lazy { openIcon("DayLower", "M6 4 h12 l1 16 h-5.5 L12 11 l-1.5 9 H5 z") } // Relay saved icon "day-lower"
+    val DayPull: ImageVector by lazy { openIcon("DayPull", "M21 12 H10 M14 7 l-5 5 l5 5 M4 4 v16") } // Relay saved icon "day-pull"
+    val DayPush: ImageVector by lazy { openIcon("DayPush", "M3 12 h11 M10 7 l5 5 l-5 5 M20 4 v16") } // Relay saved icon "day-push"
+    val DayUpper: ImageVector by lazy { openIcon("DayUpper", "M9 4 L4 6.5 l1.5 4.5 L8 10 v10 h8 V10 l2.5 1 L20 6.5 L15 4 c-0.5 1.5 -1.6 2.3 -3 2.3 S9.5 5.5 9 4 z") } // Relay saved icon "day-upper"
     val Dumbbell: ImageVector by lazy { openIcon("Dumbbell", "M6 6v12M18 6v12M3 9v6M21 9v6M6 12h12") }
     val Edit: ImageVector by lazy { openIcon("Edit", "M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4") }
     val Fingerprint: ImageVector by lazy { openIcon("Fingerprint", "M12 10 a2 2 0 0 0 -2 2 c0 1.02 -0.1 2.51 -0.26 4 M14 13.12 c0 2.38 0 6.38 -1 8.88 M17.29 21.02 c0.12 -0.6 0.43 -2.3 0.5 -3.02 M2 12 a10 10 0 0 1 18 -6 M2 16 h0.01 M21.8 16 c0.2 -2 0.131 -5.354 0 -6 M5 19.5 C5.5 18 6 15 6 12 a6 6 0 0 1 0.34 -2 M8.65 22 c0.21 -0.66 0.45 -1.32 0.57 -2 M9 6.8 a6 6 0 0 1 9 5.2 v2") }

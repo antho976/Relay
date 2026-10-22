@@ -183,12 +183,26 @@ internal fun TileMeta(text: String, selected: Boolean, modifier: Modifier = Modi
 
 /** The tile body every list choice shares: name and what it changes on the left, a reading right. */
 @Composable
-internal fun TileRow(title: String, subtitle: String?, meta: String?, selected: Boolean, metaInk: Boolean = selected) {
+internal fun TileRow(
+    title: String,
+    subtitle: String?,
+    meta: String?,
+    selected: Boolean,
+    metaInk: Boolean = selected,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+) {
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        if (icon != null) {
+            androidx.compose.material3.Icon(
+                icon, contentDescription = null,
+                tint = if (selected) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp)
+            )
+        }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(title, style = OnboardingType.tileTitle, color = MaterialTheme.colorScheme.onBackground)
             if (subtitle != null) {

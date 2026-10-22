@@ -255,12 +255,31 @@ private fun ConsistencyMonth(
             }
         }
     }
-    Spacer(Modifier.height(12.dp))
-    val missed = weeks.any { w -> w.any { it?.mark == DayMark.MISSED } }
-    OpenLabel(
-        "Red trained · faded deload" + (if (missed) " · edged missed" else "") + " · tap a day",
-        style = OpenType.monoXS
-    )
+    Spacer(Modifier.height(14.dp))
+    // The key is the cells themselves, small, each with its word (Antho, 2026-10-21: colours, not a
+    // sentence about colours). A mark this month does not use stays out of it.
+    val marks = weeks.flatten().mapNotNull { it?.mark }.toSet()
+    val accent = MaterialTheme.colorScheme.primary
+    androidx.compose.foundation.layout.FlowRow(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        KeySwatch("Trained", Modifier.background(accent))
+        if (DayMark.DELOAD in marks) KeySwatch("Deload", Modifier.background(accent.copy(alpha = 0.6f)))
+        if (DayMark.MISSED in marks) KeySwatch("Missed", Modifier.background(ProfileColors.DayPast).border(1.dp, OpenColors.Rule, CELL_SHAPE))
+        KeySwatch("Rest", Modifier.background(ProfileColors.DayPast))
+        KeySwatch("Today", Modifier.border(1.5.dp, accent, CELL_SHAPE))
+    }
+}
+
+/** One entry of the consistency key: a small cell drawn as the grid draws it, and its word. */
+@Composable
+private fun KeySwatch(word: String, fill: Modifier) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(width = 14.dp, height = 12.dp).clip(CELL_SHAPE).then(fill))
+        OpenLabel(word, style = OpenType.monoXS)
+    }
 }
 
 @Composable

@@ -109,60 +109,41 @@ fun SessionSummarySheet(
                     .padding(horizontal = 24.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Header
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        summary.dayWord.uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
-                        letterSpacing = 1.5.sp,
-                        color = muted,
-                        fontSize = 9.sp
-                    )
-                    Text(
-                        summary.displayName,
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = onBg
-                    )
-                    Text(
-                        "workout complete",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = muted,
-                        fontSize = 11.sp,
-                        fontStyle = FontStyle.Italic
-                    )
+                // Header: what it was, in the redesign's grammar (mono label → serif name).
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    com.forge.app.ui.common.OpenLabel("Workout complete")
+                    Text(summary.displayName, style = com.forge.app.ui.theme.OpenType.figureM, color = onBg)
                 }
 
-                // New PRs — the celebration headline. Hidden entirely when there are none.
-                if (hasPr) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                        CountUpStat(
-                            value = summary.prCount.toDouble(),
-                            label = if (summary.prCount == 1) "NEW PR" else "NEW PRs",
-                            onBg = onBg,
-                            muted = muted
-                        ) { it.toInt().toString() }
+                // The session's figures, two by two: serif figures over mono labels. New PRs lead
+                // when there are any (the celebration), else volume does.
+                val figures = buildList<@Composable (Modifier) -> Unit> {
+                    if (hasPr) add { m -> CountUpStat(summary.prCount.toDouble(), if (summary.prCount == 1) "New PR" else "New PRs", m) { it.toInt().toString() } }
+                    add { m -> CountUpStat(summary.totalVolumeLb, "Volume", m) { formatVolume(it, weightUnit) } }
+                    add { m -> FlatStat("${summary.durationMinutes} min", "Time", m) }
+                    add { m -> FlatStat("${summary.setCount}", if (summary.setCount == 1) "Set" else "Sets", m) }
+                    add { m ->
+                        FlatStat(
+                            "${summary.exercisesLogged}",
+                            (if (summary.exercisesLogged == 1) "Exercise" else "Exercises") +
+                                (if (summary.exercisesSkipped > 0) " · ${summary.exercisesSkipped} skipped" else ""),
+                            m
+                        )
                     }
                 }
-
-                // General stats + time taken.
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                    CountUpStat(value = summary.totalVolumeLb, label = "VOLUME", onBg = onBg, muted = muted) { formatVolume(it, weightUnit) }
-                    FlatStat(value = "${summary.durationMinutes} min", label = "TIME", onBg = onBg, muted = muted)
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                    FlatStat(value = "${summary.setCount}", label = if (summary.setCount == 1) "SET" else "SETS", onBg = onBg, muted = muted)
-                    FlatStat(
-                        value = "${summary.exercisesLogged}" + (if (summary.exercisesSkipped > 0) " · ${summary.exercisesSkipped} skipped" else ""),
-                        label = if (summary.exercisesLogged == 1) "EXERCISE" else "EXERCISES",
-                        onBg = onBg,
-                        muted = muted
-                    )
+                Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                    figures.chunked(2).forEach { pair ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                            pair.forEach { it(Modifier.weight(1f)) }
+                            if (pair.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                    }
                 }
 
                 // Recap — what you worked on: the muscle map + the exercise list.
                 if (summary.setsByMuscle.isNotEmpty() || summary.highlights.isNotEmpty()) {
-                    Spacer(Modifier.height(4.dp))
-                    Text("WHAT YOU WORKED", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+                    Spacer(Modifier.height(12.dp))
+                    com.forge.app.ui.common.OpenLabel("What you worked")
                     if (summary.setsByMuscle.isNotEmpty()) {
                         BodyHeatmap(
                             setsByMuscle = summary.setsByMuscle,
@@ -173,7 +154,7 @@ fun SessionSummarySheet(
                             modifier = Modifier.fillMaxWidth().statsEntrance(0)
                         )
                     }
-                    summary.highlights.forEach { h -> HighlightRow(h, onBg = onBg, muted = muted) }
+                    summary.highlights.forEach { h -> HighlightRow(h) }
                 }
 
                 // Coach — what he read from this session, and the effort data he'd like more of.
@@ -190,13 +171,12 @@ fun SessionSummarySheet(
 
                 // Complete button — only way to dismiss. Tags/mood are gone; the mid-session journal
                 // flows straight through so it's still persisted on finish.
-                // The sheet's one do-it-now action: the standard light capsule.
-                ForgePrimaryCapsule(
+                // The sheet's one do-it-now action: the red primary, as on every page.
+                com.forge.app.ui.common.OpenPrimaryButton(
                     "Complete",
                     onClick = { onDismiss(null, emptyList(), summary.initialJournal) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 4.dp, bottom = 16.dp)
+                    icon = com.forge.app.ui.theme.OpenIcons.Check,
+                    modifier = Modifier.padding(top = 12.dp, bottom = 16.dp)
                 )
             }
 

@@ -61,6 +61,7 @@ import com.forge.app.program.Program
 import com.forge.app.ui.common.OpenDeltaBars
 import com.forge.app.ui.common.OpenLabel
 import com.forge.app.ui.common.OpenPrTag
+import com.forge.app.ui.common.OpenTabs
 import com.forge.app.ui.common.OpenTopBarIcon
 import com.forge.app.ui.common.bounceCombinedClick
 import com.forge.app.ui.common.currentLocale
@@ -248,31 +249,17 @@ private fun HistorySearchField(query: String, onQuery: (String) -> Unit, onClose
     }
 }
 
-/** The type filter, then the older narrowing pills, in one row that scrolls sideways. */
+/**
+ * The type filter as the page tabs every redesigned screen uses: All · Gym · Cardio · PRs. The older
+ * narrowing pills (Heavy, Under 45, Over 60, one per tag) made a row of eight that ran off the screen
+ * (Antho, 2026-10-21); tags are found by search instead.
+ */
 @Composable
 private fun FilterRow(state: SessionHistoryUiState, actions: HistoryActions) {
-    Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        val pillsOff = state.tagFilter == null && state.durationFilter == null && state.volumeFilter == null
-        HistoryKind.entries.forEach { k ->
-            HistoryChip(k.label, selected = state.kind == k && (k != HistoryKind.ALL || pillsOff)) {
-                if (k == HistoryKind.ALL) actions.clearPills()
-                actions.kind(k)
-            }
-        }
-        val heavy = state.volumeFilter == SessionHistoryFilter.HIGH_VOLUME
-        HistoryChip("Heavy", heavy) { actions.heavy(!heavy) }
-        val short = state.durationFilter == SessionHistoryFilter.SHORT
-        HistoryChip("Under 45 min", short) { actions.duration(if (short) null else SessionHistoryFilter.SHORT) }
-        val long = state.durationFilter == SessionHistoryFilter.LONG
-        HistoryChip("Over 60 min", long) { actions.duration(if (long) null else SessionHistoryFilter.LONG) }
-        state.availableTags.forEach { t ->
-            HistoryChip("#$t", state.tagFilter == t) { actions.tag(if (state.tagFilter == t) null else t) }
-        }
-    }
+    OpenTabs(HistoryKind.entries, state.kind, { it.label }, { k ->
+        actions.clearPills()
+        actions.kind(k)
+    })
 }
 
 private val ChipShape = RoundedCornerShape(4.dp)

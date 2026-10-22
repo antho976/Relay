@@ -20,6 +20,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+/** 4dp since the Open panel redesign (2026-10-21): the kept screens' pills read too round beside it. */
+private val CapsuleCorner = RoundedCornerShape(4.dp)
+
 /**
  * The two capsule button levels of DESIGN §8, promoted on their third re-implementation
  * (onboarding / settings / sheets). ① [ForgePrimaryCapsule] = the do-it-now action, filled
@@ -48,7 +51,7 @@ fun ForgePrimaryCapsule(
     val fill = if (accent) cs.primary else cs.onBackground
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(50))
+            .clip(CapsuleCorner)
             .background(fill.copy(alpha = if (enabled) 1f else 0.35f))
             .bounceClick(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 13.dp),
@@ -76,11 +79,11 @@ fun ForgeOutlineCapsule(
     val alpha = if (enabled) 1f else 0.35f
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(50))
+            .clip(CapsuleCorner)
             .border(
                 1.dp,
                 (contentColor ?: MaterialTheme.colorScheme.outline).copy(alpha = 0.35f * alpha),
-                RoundedCornerShape(50)
+                CapsuleCorner
             )
             .bounceClick(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 13.dp),
@@ -105,7 +108,7 @@ fun ForgeOutlineCapsule(
 fun ForgeRowPill(label: String, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
-            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f), RoundedCornerShape(50))
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f), CapsuleCorner)
             .padding(horizontal = 14.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center
     ) {

@@ -104,6 +104,11 @@ class ProfileViewModel @Inject constructor(
      * note field was never touched, so the day keeps whatever note it already has, rather than the
      * sheet's possibly-unseeded blank erasing it (audit 2026-09-26, 03). A blank string clears it.
      */
+    /** Photos picked from the phone's gallery, added one at a time (one index, one lock), as the gallery adds them. */
+    fun importPhotos(uris: List<android.net.Uri>) = viewModelScope.launchDurable {
+        uris.forEach { photoRepo.add(it, album = "", pose = "", muscles = emptyList()) }
+    }
+
     fun logBodyweight(weightLb: Double, date: LocalDate, note: String?) = viewModelScope.launchDurable {
         // Durable for the same reason as [setUserName]: the sheet closes on Save and Back from the
         // profile often follows at once, which cleared this ViewModel and could drop the weigh-in.

@@ -28,34 +28,36 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.ui.common.CountUpText
+import com.forge.app.ui.common.OpenLabel
+import com.forge.app.ui.theme.OpenType
 import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
 import androidx.compose.ui.unit.sp
 import com.forge.app.ui.gym.train.state.ExerciseHighlight
 
 @Composable
-internal fun FlatStat(value: String, label: String, onBg: Color, muted: Color) {
-    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Text(value, style = MaterialTheme.typography.bodyMedium, color = onBg, fontWeight = FontWeight.SemiBold)
-        Text(label, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f), fontSize = 9.sp, letterSpacing = 0.5.sp)
+internal fun FlatStat(value: String, label: String, modifier: Modifier = Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(value, style = OpenType.figureMS, color = MaterialTheme.colorScheme.onBackground)
+        OpenLabel(label, style = OpenType.monoXS)
     }
 }
 
 /**
- * Like [FlatStat] but the big number rolls up from 0 on first appearance (session-end celebration) —
+ * Like [FlatStat] but the figure rolls up from 0 on first appearance (session-end celebration) —
  * reuses the Stats motion kit's [CountUpText] so reduced motion collapses it to an instant value.
  */
 @Composable
-internal fun CountUpStat(value: Double, label: String, onBg: Color, muted: Color, format: (Double) -> String) {
-    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+internal fun CountUpStat(value: Double, label: String, modifier: Modifier = Modifier, format: (Double) -> String) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         CountUpText(
             value = value,
-            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-            color = onBg,
+            style = OpenType.figureMS,
+            color = MaterialTheme.colorScheme.onBackground,
             fromValue = 0.0,
             format = format
         )
-        Text(label, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f), fontSize = 9.sp, letterSpacing = 0.5.sp)
+        OpenLabel(label, style = OpenType.monoXS)
     }
 }
 
@@ -84,15 +86,9 @@ internal fun CoachReadSection(
         modifier = Modifier.fillMaxWidth().statsEntrance(1),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Text(
-            "WHAT THE COACH SEES",
-            style = MaterialTheme.typography.labelSmall,
-            color = muted,
-            fontSize = 9.sp,
-            letterSpacing = 1.sp
-        )
+        OpenLabel("What the coach sees")
         coachOpinion?.let {
-            Text(it, style = MaterialTheme.typography.bodySmall, color = onBg, lineHeight = 18.sp)
+            Text(it, style = OpenType.body, color = onBg)
         }
         CoachCaptureNudge(setsWithRpe, totalSets, exercisesRated, exercisesLogged, onBg, muted, outline)
     }
@@ -119,20 +115,16 @@ private fun CoachCaptureNudge(
     val rpeComplete = totalSets == 0 || setsWithRpe >= totalSets
     val complete = effortComplete && rpeComplete
 
+    // No card around it: the figures and the ask sit on the sheet like everything else here.
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(GROUP_OUTER))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .padding(horizontal = ROW_H, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         if (complete) {
             Text(
                 "Full effort data this session. He can read exactly how hard it landed and tune the next one precisely.",
-                style = MaterialTheme.typography.bodySmall,
-                color = onBg,
-                lineHeight = 18.sp
+                style = OpenType.bodyS,
+                color = onBg
             )
         } else {
             Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -141,46 +133,38 @@ private fun CoachCaptureNudge(
             }
             Text(
                 "Rate how hard each set feels next time and the coach can dial in your load and rest.",
-                style = MaterialTheme.typography.bodySmall,
-                color = muted,
-                lineHeight = 18.sp
+                style = OpenType.bodyS,
+                color = muted
             )
         }
     }
 }
 
-/** One coverage figure for [CoachCaptureNudge]: a small caps label over a "done/total unit" count. */
+/** One coverage figure for [CoachCaptureNudge]: a mono label over a serif "done/total" and its unit. */
 @Composable
 private fun CoverageStat(label: String, done: Int, total: Int, unit: String, onBg: Color, muted: Color) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            color = muted.copy(alpha = 0.6f),
-            fontSize = 9.sp,
-            letterSpacing = 0.5.sp
-        )
-        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text("$done/$total", style = MaterialTheme.typography.bodyMedium, color = onBg, fontWeight = FontWeight.SemiBold)
-            Text(unit, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        OpenLabel(label, style = OpenType.monoXS)
+        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("$done/$total", style = OpenType.figureS, color = onBg)
+            OpenLabel(unit, style = OpenType.monoXS, color = muted)
         }
     }
 }
 
+/** One exercise of the session: its name, "3 sets · 2,400 lb" in mono, and a PR tag when it set one. */
 @Composable
-internal fun HighlightRow(h: ExerciseHighlight, onBg: Color, muted: Color) {
+internal fun HighlightRow(h: ExerciseHighlight) {
     val weightUnit = LocalForgeSettings.current.weightUnit
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(h.exerciseName, style = MaterialTheme.typography.bodySmall, color = onBg)
-            Text("${h.setsLogged} ${if (h.setsLogged == 1) "set" else "sets"} · ${formatVolume(h.volumeLb, weightUnit)}", style = MaterialTheme.typography.bodySmall, color = muted, fontSize = 10.sp)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(h.exerciseName, style = OpenType.rowTitle, color = MaterialTheme.colorScheme.onBackground)
+            OpenLabel("${h.setsLogged} ${if (h.setsLogged == 1) "set" else "sets"} · ${formatVolume(h.volumeLb, weightUnit)}", style = OpenType.monoXS)
         }
-        if (h.isPr) {
-            Text("PR", color = onBg, fontWeight = FontWeight.Black, style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, letterSpacing = 0.5.sp)
-        }
+        if (h.isPr) com.forge.app.ui.common.OpenPrTag()
     }
 }

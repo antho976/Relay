@@ -18,12 +18,16 @@ enum class HomeSlot(val id: String, val label: String, val pickerTitle: String, 
     HRV("hrv", "HRV", "HRV", true),
     STEPS("steps", "Steps", "Steps today", true),
     BODY_WEIGHT("body_weight", "Body weight", "Body weight", false),
-    LAST_SESSION("last_session", "Last session", "Last session", false);
+    LAST_SESSION("last_session", "Last session", "Last session", false),
+    WEEK_VOLUME("week_volume", "This week", "Volume this week", false);
 
     companion object {
         val DEFAULT_LEFT = SLEEP
         val DEFAULT_RIGHT = LAST_SESSION
         fun of(id: String?): HomeSlot? = entries.firstOrNull { it.id == id }
+
+        /** What stands in for a watch reading while no watch is connected, in order of preference. */
+        val NO_WATCH_STAND_INS = listOf(WEEK_VOLUME, LAST_SESSION, BODY_WEIGHT)
     }
 }
 

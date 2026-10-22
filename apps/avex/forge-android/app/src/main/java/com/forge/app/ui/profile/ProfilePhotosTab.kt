@@ -59,8 +59,8 @@ import java.time.format.TextStyle
 import kotlin.math.abs
 
 /*
- * Photos (ph): the comparison leads, the camera is the one action, and the gallery runs by month,
- * Front, Side and Back. Every photo opens the full gallery, where comparing, albums, notes and the
+ * Photos (ph): the comparison leads, then the two ways in side by side (the camera, and an import
+ * from the phone's own photos, which used to hide behind the gallery), and the gallery by month. Every photo opens the full gallery, where comparing, albums, notes and the
  * shareable before-and-after card live. Locked (lk4), the tab says how many photos there are and
  * draws empty frames where they go: no photo is composed until the session is unlocked.
  */
@@ -97,10 +97,10 @@ internal fun ProfilePhotosTab(
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         val then = pair?.then ?: photos.firstOrNull()
         val now = pair?.now
-        listOf(then, now).forEach { p ->
+        listOf(then, now).forEachIndexed { i, p ->
             PhotoFrame(
                 p, photo, actions.onOpenGallery,
-                caption = p?.let { dateOf(it).format(dateFmt) },
+                caption = p?.let { dateOf(it).format(dateFmt) } ?: if (i == 0) "Then" else "Now",
                 sub = p?.weightLb?.let { formatWeight(it, unit) },
                 modifier = Modifier.weight(1f).aspectRatio(177f / 236f)
             )
@@ -128,21 +128,26 @@ internal fun ProfilePhotosTab(
         }
     }
     Spacer(Modifier.height(24.dp))
-    OpenPrimaryButton("Take today's photo", onClick = actions.onOpenCamera, icon = OpenIcons.Camera)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        OpenPrimaryButton("Take photo", onClick = actions.onOpenCamera, icon = OpenIcons.Camera, modifier = Modifier.weight(1f))
+        OpenPrimaryButton("Import", onClick = actions.onImportPhotos, icon = OpenIcons.Image, emphasized = false, modifier = Modifier.weight(1f))
+    }
 
     // ── Gallery ──
     Spacer(Modifier.height(44.dp))
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        OpenLabel(
-            "Gallery · ${photos.size} ${if (photos.size == 1) "photo" else "photos"}",
-            modifier = Modifier.weight(1f, fill = false).semantics { heading() }
-        )
-        OpenLabel("Front · Side · Back", modifier = Modifier.padding(start = 12.dp))
-    }
+    OpenSectionHead(
+        "Gallery · ${photos.size} ${if (photos.size == 1) "photo" else "photos"}",
+        action = if (photos.isEmpty()) null else "All",
+        actionLabel = "Open every photo in the gallery",
+        onAction = actions.onOpenGallery
+    )
     Spacer(Modifier.height(20.dp))
     val months = remember(photos) { galleryByMonth(photos, zone) }
     if (months.isEmpty()) {
-        OpenLabel("Each month's photos land here", style = OpenType.monoXS)
+        Text(
+            "Take one now or import the ones already on your phone. Each month's photos land here, front, side and back.",
+            style = OpenType.body, color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         return
     }
     months.take(MONTHS_SHOWN).forEach { m ->

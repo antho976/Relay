@@ -69,35 +69,29 @@ internal fun AppIconRow(currentKey: String, onOpen: () -> Unit) {
 }
 
 /**
- * The Appearance page's icon strip (Relay design "sa"): every launcher icon as a 56dp tile with its
- * name under it, scrolling to the screen's edge, the one you are on ringed in ink. A tap picks it.
- * Opens scrolled so the current pick is in view.
+ * The Appearance page's icons (Relay design "sa"): as many 56dp tiles as fit the width, each with its
+ * name under it, the one you are on ringed in ink and always in the first row; "More" slides the rest
+ * down. A tap picks it.
  */
 @Composable
 internal fun AppIconStrip(currentKey: String, onSelect: (AppIcon) -> Unit) {
     val current = AppIcon.fromKey(currentKey)
-    val start = AppIcon.entries.indexOf(current).coerceAtLeast(0)
-    val listState = androidx.compose.foundation.lazy.rememberLazyListState(
-        initialFirstVisibleItemIndex = (start - 2).coerceAtLeast(0)
-    )
-    androidx.compose.foundation.lazy.LazyRow(
-        state = listState,
-        modifier = Modifier.kitBleed(),
-        contentPadding = PaddingValues(horizontal = KitGutter),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        items(AppIcon.entries.size, key = { AppIcon.entries[it].name }) { i ->
-            val icon = AppIcon.entries[i]
-            val picked = icon == current
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                AppIconThumb(icon, isSelected = picked, modifier = Modifier.size(56.dp), onClick = { onSelect(icon) }, corner = 14.dp)
-                Text(
-                    icon.label.uppercase(),
-                    style = com.forge.app.ui.theme.OpenType.monoXS,
-                    color = if (picked) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-            }
+    SettingsFitGrid(
+        items = AppIcon.entries,
+        pickedIndex = AppIcon.entries.indexOf(current).coerceAtLeast(0),
+        cellWidth = 64.dp,
+        noun = "app icons",
+    ) { icon ->
+        val picked = icon == current
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AppIconThumb(icon, isSelected = picked, modifier = Modifier.size(56.dp), onClick = { onSelect(icon) }, corner = 14.dp)
+            Text(
+                icon.label.uppercase(),
+                style = com.forge.app.ui.theme.OpenType.monoXS,
+                color = if (picked) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+            )
         }
     }
 }

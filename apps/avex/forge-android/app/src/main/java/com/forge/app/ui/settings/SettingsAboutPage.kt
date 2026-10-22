@@ -23,7 +23,6 @@ import androidx.compose.material.icons.rounded.VisibilityOff
 import com.forge.app.ui.common.window.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -179,7 +178,7 @@ private fun CrashLogViewerDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Close") }
+            SettingsDialogDismiss("Close", onDismiss)
         }
     )
 }
@@ -223,7 +222,7 @@ private fun LicensesDialog(onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Close") }
+            SettingsDialogDismiss("Close", onDismiss)
         }
     )
 }

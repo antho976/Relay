@@ -1,6 +1,7 @@
 package com.forge.app.ui.cardio
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -72,6 +73,10 @@ internal fun CardioHero(
     val target = if (personal) state.weekTargetMin else WHO_WEEKLY_ACTIVITY_MIN
     val unit = distanceUnitLabel(state.useMiles)
     val range = remember(weekStart, locale) { weekRangeLabel(weekStart, weekStart.plusDays(6), locale) }
+    if (state.entries.isEmpty() && !state.isLoading) {
+        CardioFirstWeek(range, target, personal, todayDow, onOpenWeeks, onOpenLog)
+        return
+    }
     Column {
         CardioLinkHead(
             label = "This week · $range",
@@ -117,6 +122,63 @@ internal fun CardioHero(
         CardioChange(weekMeterCaption(state.weekMinutes, target, personal), moved = false)
         Spacer(Modifier.height(28.dp))
         CardioLogBar(watchCount = state.importSuggestions.size, onClick = onOpenLog)
+    }
+}
+
+/**
+ * The hero before anything is logged. Three zeros and a bare meter read as a dead page (Antho,
+ * 2026-10-21), so a new account sees the week it is about to fill instead: what the mark asks of a
+ * day, seven empty day columns with today ringed in red, and the first log as the action.
+ */
+@Composable
+private fun CardioFirstWeek(
+    range: String,
+    target: Int,
+    personal: Boolean,
+    todayDow: Int,
+    onOpenWeeks: () -> Unit,
+    onOpenLog: () -> Unit,
+) {
+    val perDay = (target + 6) / 7
+    Column {
+        CardioLinkHead(label = "This week · $range", action = "Weeks", actionLabel = "Browse your weeks", onAction = onOpenWeeks)
+        Spacer(Modifier.height(14.dp))
+        Text("Your first week", style = OpenType.figureM, color = MaterialTheme.colorScheme.onBackground)
+        Spacer(Modifier.height(8.dp))
+        CardioBodyLine(
+            if (personal) "Your target is $target minutes. About $perDay a day gets you there."
+            else "$target minutes a week is the WHO mark. About $perDay a day gets you there."
+        )
+        Spacer(Modifier.height(20.dp))
+        CardioEmptyWeek(todayDow)
+        Spacer(Modifier.height(28.dp))
+        OpenPrimaryButton("Log your first session", onClick = onOpenLog, icon = OpenIcons.Plus)
+    }
+}
+
+/** Seven empty day columns waiting to fill, today's outlined in red, each with its letter. */
+@Composable
+private fun CardioEmptyWeek(todayDow: Int) {
+    val accent = MaterialTheme.colorScheme.primary
+    val letters = listOf("M", "T", "W", "T", "F", "S", "S")
+    Row(
+        Modifier.fillMaxWidth().semantics(mergeDescendants = true) { contentDescription = "This week, nothing logged yet" },
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        letters.forEachIndexed { i, letter ->
+            val today = i == todayDow
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(56.dp)
+                        .clip(CardioCorner)
+                        .background(if (today) MaterialTheme.colorScheme.primaryContainer else OpenColors.Track.copy(alpha = 0.35f))
+                        .then(if (today) Modifier.border(1.dp, accent, CardioCorner) else Modifier)
+                )
+                OpenLabel(letter, style = OpenType.monoXS, color = if (today) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
     }
 }
 
@@ -227,10 +289,8 @@ internal fun LazyListScope.cardioWeekTab(
             val last = state.entries.firstOrNull { it.type != CardioType.REST.code }
             Column {
                 Spacer(Modifier.height(14.dp))
-                CardioBodyLine(
-                    if (last == null) "0 sessions yet. Log one and it lands here."
-                    else "0 sessions this week."
-                )
+                if (last == null) CardioFirstIdeas(actions.onOpenLog)
+                else CardioBodyLine("0 sessions this week.")
                 if (last != null) {
                     Spacer(Modifier.height(20.dp))
                     OpenLabel("Last time", style = OpenType.monoXS)
@@ -302,6 +362,40 @@ internal fun CardioSessionRow(
             Text(summary, style = OpenType.bodyS, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (figure != null) CardioRowFigure(figure.first, figure.second)
+    }
+}
+
+/**
+ * Before the first session: three easy ways in, each a row that opens the log, so the list starts
+ * with something to do rather than a sentence about nothing.
+ */
+@Composable
+private fun CardioFirstIdeas(onOpenLog: () -> Unit) {
+    val ideas = listOf(
+        Triple(CardioType.WALK, "20 min", "The easiest way in"),
+        Triple(CardioType.RUN, "25 min", "Easy pace, you can still talk"),
+        Triple(CardioType.CYCLE, "30 min", "Outside or on a bike at the gym"),
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        ideas.forEach { (type, length, why) ->
+            Row(
+                Modifier.fillMaxWidth().clickableLabeled("Log a ${type.displayName.lowercase()}", onClick = onOpenLog),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    Modifier.size(36.dp).background(MaterialTheme.colorScheme.surfaceContainerHigh, CardioCorner),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(type.icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("${type.displayName} · $length", style = OpenType.rowTitle, color = MaterialTheme.colorScheme.onBackground)
+                    Text(why, style = OpenType.bodyS, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Icon(OpenIcons.Plus, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+            }
+        }
     }
 }
 

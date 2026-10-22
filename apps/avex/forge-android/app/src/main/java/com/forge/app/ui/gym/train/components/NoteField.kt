@@ -144,7 +144,7 @@ fun NoteField(
                     Modifier
                         .fillMaxWidth()
                         .heightIn(min = 56.dp)
-                        .clip(RoundedCornerShape(GROUP_OUTER))
+                        .clip(RoundedCornerShape(4.dp))
                         .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                         .padding(horizontal = ROW_H, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
