@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 362,
+  "op_count": 367,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -6858,7 +6858,7 @@
       }
     },
     "video.render": {
-      "summary": "Render a video to a file in its out/ folder; answers at once, then video.render.finished (wait on it matching {\"id\": <render id>})",
+      "summary": "Render a video to a file in its out/ folder, its sound measured (and brought to a loudness when asked); with wait: true answers once finished, else at once and video.render.wait waits",
       "kind": "mutation",
       "audit": "always",
       "undo": "none",
@@ -6878,8 +6878,47 @@
         "$ref": "#/$defs/VideoRender"
       }
     },
+    "video.render.batch": {
+      "summary": "Queue several renders of a video in one call (compositions, formats, platforms), optionally waiting for them all",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "video.render.changed",
+        "video.render.finished"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoRenderBatchIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoRendersOut"
+      }
+    },
+    "video.render.wait": {
+      "summary": "Wait for renders to finish (each done, failed or cancelled): one that already finished answers at once",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoRenderWaitIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoRendersOut"
+      }
+    },
     "video.render.get": {
-      "summary": "A render: its state, progress and file",
+      "summary": "A render: its state, progress, file and its sound's loudness",
       "kind": "query",
       "audit": "never",
       "undo": "none",
@@ -6918,7 +6957,7 @@
       }
     },
     "video.asset.add": {
-      "summary": "Copy a picture, clip, sound or font into a video's public/assets/; answers the staticFile() name",
+      "summary": "Add pictures, clips, sounds or fonts to a video's public/assets/ (copied or linked, one or many, or a system font by name); answers each staticFile() name",
       "kind": "mutation",
       "audit": "always",
       "undo": "none",
@@ -6933,6 +6972,60 @@
       },
       "result": {
         "$ref": "#/$defs/VideoAssetAddOut"
+      }
+    },
+    "video.asset.list": {
+      "summary": "A video's assets: every file under public/ with its kind, size, the file a link points to, and how Relay made it",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoAssetListOut"
+      }
+    },
+    "video.asset.inspect": {
+      "summary": "Read a clip, sound or picture: size, length, frame rate and frame count, a variable-rate warning, its loudness, and the frames where its picture changes (taps, screens, scrolls)",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoAssetInspectIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoAssetInfo"
+      }
+    },
+    "video.audio.beats": {
+      "summary": "A music file's beat grid: BPM, first beat and downbeat, every bar in the video's frames with its loudness, and where sections change; to cut on the beat",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoAudioBeatsIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoBeatGrid"
       }
     },
     "video.version.restore": {
@@ -6974,7 +7067,7 @@
       }
     },
     "video.kit.install": {
-      "summary": "Set this machine up to render videos: downloads Remotion and its browser (about 600 MB) once; answers at once, then video.kit.changed",
+      "summary": "Set this machine up to render videos (Remotion and its browser, about 600 MB, once); answers the real state: ready when it already is, else installing, with video.kit.progress as it goes and video.kit.changed at the end",
       "kind": "mutation",
       "audit": "always",
       "undo": "none",
@@ -6982,12 +7075,13 @@
       "actors": "all",
       "doors": "all",
       "emits": [
-        "video.kit.changed"
+        "video.kit.changed",
+        "video.kit.progress"
       ],
       "since": "1.0",
       "phase": 12,
       "payload": {
-        "$ref": "#/$defs/Empty"
+        "$ref": "#/$defs/VideoKitInstallIn"
       },
       "result": {
         "$ref": "#/$defs/VideoKitStatus"
@@ -7644,6 +7738,13 @@
           "additionalProperties": true,
           "description": "Only an event whose payload has every one of these top-level keys equal to the value\ngiven, e.g. `{\"request_id\": 7}`. Omit to take the first event that matches by name.\nAnything but an object is `bus.schema`: read as \"no filter\", it woke on any event.",
           "default": null
+        },
+        "since": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Also take a matching event that fired at or after this moment (RFC 3339, as an event's or\na row's timestamps are), up to ten minutes back: a wait started after what it waits for\nalready happened still wakes. Pass the `created_at` of what you started."
         }
       }
     },
@@ -31025,6 +31126,14 @@
           "maxItems": 2,
           "description": "The frames it covers, first and last (inclusive), when not the whole composition."
         },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The file's name as asked for (`out/<name>.<ext>`); `None` is `<composition>-<id>`.",
+          "default": null
+        },
         "path": {
           "type": [
             "string",
@@ -31045,6 +31154,35 @@
             "null"
           ],
           "description": "Why it failed."
+        },
+        "audio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoAudioReport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its sound as measured once done (formats with sound): loudness, peaks, clipping, and the\ntargets it was brought to.",
+          "default": null
+        },
+        "loudness": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "The loudness it was asked to reach, LUFS, and the true peak it may not pass, dBTP.",
+          "default": null
+        },
+        "peak": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
         },
         "actor": {
           "type": "string",
@@ -31100,6 +31238,112 @@
         }
       ],
       "description": "How much care a render takes over its pictures."
+    },
+    "VideoAudioReport": {
+      "type": "object",
+      "properties": {
+        "lufs": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Integrated loudness (ITU-R BS.1770-4, EBU R128 gating), LUFS; `None` when it is silent."
+        },
+        "lra": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Loudness range (EBU Tech 3342), LU."
+        },
+        "short_term_max": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "The loudest 3 s, LUFS."
+        },
+        "true_peak": {
+          "type": "number",
+          "format": "double",
+          "description": "The highest true peak (4× oversampled), dBTP."
+        },
+        "sample_peak": {
+          "type": "number",
+          "format": "double",
+          "description": "The highest sample, dBFS."
+        },
+        "clipped": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Samples at full scale (clipped)."
+        },
+        "seconds": {
+          "type": "number",
+          "format": "double"
+        },
+        "channels": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "gain_db": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "The gain applied to reach the loudness asked for, dB (a limiter held the peaks)."
+        },
+        "lufs_before": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "The loudness and true peak before that gain, when one was applied."
+        },
+        "true_peak_before": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoAudioWarning"
+          }
+        }
+      },
+      "required": [
+        "true_peak",
+        "sample_peak",
+        "clipped",
+        "seconds",
+        "channels"
+      ]
+    },
+    "VideoAudioWarning": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "`clipping` (samples at full scale, or a true peak over 0 dBTP), `hot` (a true peak over\n-1 dBTP: lossy encoding will clip it), `silent` (no sound at all), `loud` / `quiet`\n(more than 2 LU from the loudness asked for, or from -14 LUFS when none was)."
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "detail"
+      ]
     },
     "VideoCreateIn": {
       "type": "object",
@@ -31242,6 +31486,17 @@
         "state": {
           "$ref": "#/$defs/VideoKitState"
         },
+        "progress": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoKitProgress"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "While `installing`: how far it has come (`video.kit.progress` says so every few seconds)."
+        },
         "root": {
           "type": "string",
           "description": "Where the kit lives: every video's folder is under it."
@@ -31315,6 +31570,36 @@
         }
       ],
       "description": "Whether the video kit (Node, Remotion and its browser) is set up on this machine."
+    },
+    "VideoKitProgress": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "type": "string",
+          "description": "`packages` (npm installs the pinned packages) or `browser` (Remotion's headless Chrome)."
+        },
+        "progress": {
+          "type": "number",
+          "format": "double",
+          "description": "0 to 1 across the whole setup, as far as it can be told."
+        },
+        "detail": {
+          "type": "string",
+          "description": "What it is doing, in words."
+        },
+        "elapsed_s": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Seconds since it started."
+        }
+      },
+      "required": [
+        "stage",
+        "progress",
+        "detail",
+        "elapsed_s"
+      ]
     },
     "VideoUpdateIn": {
       "type": "object",
@@ -31881,10 +32166,280 @@
         },
         "props": {
           "description": "Props to draw with instead of the video's."
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The file's name, `out/<name>.<ext>`: letters, digits, dots, dashes and underscores. A\nrender of the same name and format replaces the file. Default `<composition>-<render id>`.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "loudness": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Bring the sound to this integrated loudness once rendered, -40 to -5 LUFS (a gain, with a\nlimiter holding the peaks under `peak`).",
+          "minimum": -40.0,
+          "maximum": -5.0
+        },
+        "peak": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "The true peak the sound may not pass, -9 to 0 dBTP; default -1 when `loudness` or `preset`\nis given.",
+          "minimum": -9.0,
+          "maximum": 0.0
+        },
+        "preset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoLoudnessPreset"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A platform's loudness and peak instead of `loudness` and `peak`."
+        },
+        "wait": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Answer once the render has finished (done, failed or cancelled) instead of at once."
+        },
+        "timeout_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "How long `wait` blocks, ms: default 30 minutes, at most an hour. A render still going then\nis answered as it stands."
         }
       },
       "required": [
         "video_id"
+      ]
+    },
+    "VideoLoudnessPreset": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "youtube",
+          "description": "-14 LUFS, -1 dBTP: YouTube turns louder uploads down."
+        },
+        {
+          "type": "string",
+          "const": "shorts",
+          "description": "-14 LUFS, -1 dBTP: YouTube Shorts."
+        },
+        {
+          "type": "string",
+          "const": "reels",
+          "description": "-14 LUFS, -1 dBTP: Instagram Reels."
+        },
+        {
+          "type": "string",
+          "const": "tiktok",
+          "description": "-14 LUFS, -1 dBTP."
+        },
+        {
+          "type": "string",
+          "const": "discord",
+          "description": "-16 LUFS, -1 dBTP: Discord does not normalise, and clips played beside voice chat sit\nbetter a little under the streaming level."
+        },
+        {
+          "type": "string",
+          "const": "podcast",
+          "description": "-16 LUFS, -1 dBTP: Apple Podcasts, a spoken explainer."
+        },
+        {
+          "type": "string",
+          "const": "broadcast",
+          "description": "-23 LUFS, -1 dBTP: EBU R128 broadcast."
+        }
+      ],
+      "description": "Where a platform wants the sound: integrated loudness and the true peak it may not pass."
+    },
+    "VideoRenderBatchIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "jobs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoRenderJob"
+          },
+          "description": "Up to 12 renders, each as `video.render`'s fields: several compositions, the picture and\nthe soundtrack (`format: \"wav\"`), several platforms' loudness. They run in this order.",
+          "minItems": 1,
+          "maxItems": 12
+        },
+        "wait": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Answer once every one has finished."
+        },
+        "timeout_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "video_id",
+        "jobs"
+      ]
+    },
+    "VideoRenderJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "composition": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Default the video's composition."
+        },
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoFormat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quality": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoQuality"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "from": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoMoment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "to": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoMoment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "props": true,
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "loudness": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": -40.0,
+          "maximum": -5.0
+        },
+        "peak": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "minimum": -9.0,
+          "maximum": 0.0
+        },
+        "preset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoLoudnessPreset"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "VideoRendersOut": {
+      "type": "object",
+      "properties": {
+        "renders": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoRender"
+          }
+        },
+        "timed_out": {
+          "type": "boolean",
+          "description": "A wait ran out with some still queued or rendering."
+        }
+      },
+      "required": [
+        "renders"
+      ]
+    },
+    "VideoRenderWaitIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "render_ids": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "description": "The renders to wait for: answered once each is done, failed or cancelled. One that has\nalready finished counts at once, so nothing is missed however fast it was.",
+          "minItems": 1,
+          "maxItems": 50
+        },
+        "timeout_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Default 30 minutes, at most an hour."
+        }
+      },
+      "required": [
+        "render_ids"
       ]
     },
     "VideoRenderIdIn": {
@@ -31909,27 +32464,118 @@
           "format": "int64"
         },
         "path": {
-          "type": "string",
-          "description": "A file on this machine: a picture, a clip, a sound or a font. It is copied in, so the\nvideo keeps it when the file moves.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A file on this machine: a picture, a clip, a sound or a font. It is copied in (or linked,\n`link`), so the video keeps it when the file moves.",
           "minLength": 1,
           "maxLength": 4096
+        },
+        "paths": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Several files at once, instead of `path`: up to 100, each under its own name.",
+          "minItems": 1,
+          "maxItems": 100
+        },
+        "font": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A font installed on this machine by family name instead (`fc-list`): \"Noto Serif\". Its\nfiles for `weights` (and `italic`) are added under `assets/fonts/`, and the answer has the\n`loadFonts(…)` call that loads them.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "weights": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "description": "With `font`: the weights wanted, 100 to 900; default 400 and 700."
+        },
+        "italic": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "With `font`: the italics of those weights too."
         },
         "name": {
           "type": [
             "string",
             "null"
           ],
-          "description": "The name to give it under `public/assets/`; default its own, made safe.",
+          "description": "The name to give it under `public/assets/` (one `path` only); default its own, made safe.",
           "minLength": 1,
           "maxLength": 120
+        },
+        "overwrite": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Replace a file of the same name (a clip recorded again). Without it a name another file\nhas gets a number (`sweep-2.wav`), and the answer says so (`renamed_from`)."
+        },
+        "link": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Link to the file where it is instead of copying it: no second copy of a large clip. The\nvideo then needs the file to stay where it is."
+        },
+        "fps": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Write a clip at this constant frame rate as it is added (H.264, `.mp4`): a phone's screen\nrecording has frames unevenly spaced, so its frame numbers do not map to time.",
+          "minimum": 1.0,
+          "maximum": 120.0
         }
       },
       "required": [
-        "video_id",
-        "path"
+        "video_id"
       ]
     },
     "VideoAssetAddOut": {
+      "type": "object",
+      "properties": {
+        "assets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoAsset"
+          },
+          "description": "What was added, in the order asked."
+        },
+        "font": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoFontAdded"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "assets"
+      ]
+    },
+    "VideoAsset": {
       "type": "object",
       "properties": {
         "static_file": {
@@ -31964,6 +32610,31 @@
           ],
           "format": "uint32",
           "minimum": 0
+        },
+        "renamed_from": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The name it was given when the one asked for (this) belonged to another file."
+        },
+        "replaced": {
+          "type": "boolean",
+          "description": "It replaced a file of that name (`overwrite`)."
+        },
+        "unchanged": {
+          "type": "boolean",
+          "description": "The same file was already there under this name: nothing was written."
+        },
+        "linked": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The file it links to (`link`), when it is not a copy."
+        },
+        "made": {
+          "description": "How it was made, when Relay made it (`video.voice`, `video.music`, `video.sfx`,\n`video.capture.android`): the prompt, the voice, the words' timings. Kept beside it as\n`<name>.json`."
         }
       },
       "required": [
@@ -31971,6 +32642,446 @@
         "path",
         "bytes",
         "kind"
+      ]
+    },
+    "VideoFontAdded": {
+      "type": "object",
+      "properties": {
+        "family": {
+          "type": "string",
+          "description": "The family to name in `fontFamily`."
+        },
+        "faces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The weights and styles found, as `\"400\"`, `\"700 italic\"`."
+        },
+        "missing": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What was asked for and is not installed."
+        },
+        "load": {
+          "type": "string",
+          "description": "The call to put at module level (outside components): `loadFonts({family, file, weight}, …)`\nfrom `@relay/video`."
+        }
+      },
+      "required": [
+        "family",
+        "faces",
+        "load"
+      ]
+    },
+    "VideoAssetListOut": {
+      "type": "object",
+      "properties": {
+        "assets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoAsset"
+          },
+          "description": "Everything under `public/`, by name."
+        }
+      },
+      "required": [
+        "assets"
+      ]
+    },
+    "VideoAssetInspectIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "asset": {
+          "type": "string",
+          "description": "The file: its `staticFile()` name (`assets/clip.mp4`), or an absolute path on this machine.",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "motion": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Look for where the picture changes (default true for a clip): taps, screens, scrolls."
+        }
+      },
+      "required": [
+        "video_id",
+        "asset"
+      ]
+    },
+    "VideoAssetInfo": {
+      "type": "object",
+      "properties": {
+        "asset": {
+          "$ref": "#/$defs/VideoAsset"
+        },
+        "duration_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "width": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "height": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "fps": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Its frame rate, averaged over the clip."
+        },
+        "frames": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "variable_rate": {
+          "type": "boolean",
+          "description": "Its frames are not evenly spaced (a phone's screen recording): frame numbers do not map to\ntime. `video.asset.add {fps: 30}` adds it at a constant rate."
+        },
+        "frame_gap_ms": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "The shortest and longest gap between frames, ms."
+        },
+        "video_codec": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "audio_codec": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "audio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoAudioReport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its sound, measured as a render's."
+        },
+        "motion": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoMotionEvent"
+          },
+          "description": "Where its picture changes, in order; at most 300."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "asset"
+      ]
+    },
+    "VideoMotionEvent": {
+      "type": "object",
+      "properties": {
+        "frame": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The clip's own frame it starts on, and its last."
+        },
+        "end_frame": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "at_s": {
+          "type": "number",
+          "format": "double",
+          "description": "Seconds into the clip."
+        },
+        "end_s": {
+          "type": "number",
+          "format": "double"
+        },
+        "kind": {
+          "type": "string",
+          "description": "`cut` (the screen changed at once: a new page, a tab), `motion` (half a second or more of\nmovement: a scroll, an animation) or `change` (a short local change: a tap, a value)."
+        },
+        "size": {
+          "type": "number",
+          "format": "double",
+          "description": "How much of the picture changed at its height, 0 to 1."
+        },
+        "region": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "minItems": 4,
+          "maxItems": 4,
+          "description": "Where, in the clip's px: x, y, w, h."
+        }
+      },
+      "required": [
+        "frame",
+        "end_frame",
+        "at_s",
+        "end_s",
+        "kind",
+        "size",
+        "region"
+      ]
+    },
+    "VideoAudioBeatsIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "asset": {
+          "type": "string",
+          "description": "The music: `assets/music.mp3` or an absolute path.",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "beats_per_bar": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1,
+          "description": "Default 4.",
+          "maximum": 12
+        },
+        "bpm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "About the tempo, when you know it: the search keeps near it (halves and doubles aside).",
+          "minimum": 40.0,
+          "maximum": 240.0
+        }
+      },
+      "required": [
+        "video_id",
+        "asset"
+      ]
+    },
+    "VideoBeatGrid": {
+      "type": "object",
+      "properties": {
+        "bpm": {
+          "type": "number",
+          "format": "double"
+        },
+        "beat_s": {
+          "type": "number",
+          "format": "double"
+        },
+        "bar_s": {
+          "type": "number",
+          "format": "double"
+        },
+        "beats_per_bar": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "first_beat_s": {
+          "type": "number",
+          "format": "double"
+        },
+        "first_downbeat_s": {
+          "type": "number",
+          "format": "double"
+        },
+        "fps": {
+          "type": "number",
+          "format": "double",
+          "description": "The video's frame rate, and the grid in its frames."
+        },
+        "frames_per_beat": {
+          "type": "number",
+          "format": "double"
+        },
+        "first_downbeat_frame": {
+          "type": "number",
+          "format": "double"
+        },
+        "beats_found": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The beats the grid was fitted through, and how far they sit from it (RMS ms)."
+        },
+        "fit_rms_ms": {
+          "type": "number",
+          "format": "double"
+        },
+        "beat_confidence": {
+          "type": "number",
+          "format": "double",
+          "description": "0 to 1: how clearly the beat, and the downbeat among the bar's beats, stand out."
+        },
+        "downbeat_confidence": {
+          "type": "number",
+          "format": "double"
+        },
+        "seconds": {
+          "type": "number",
+          "format": "double"
+        },
+        "bars": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoBeatBar"
+          },
+          "description": "Every bar, at most 600."
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoBeatSection"
+          },
+          "description": "Where the music changes."
+        },
+        "kit": {
+          "type": "string",
+          "description": "The kit's call for this grid: `useBeatGrid({bpm, firstBeat, beatsPerBar})`."
+        }
+      },
+      "required": [
+        "bpm",
+        "beat_s",
+        "bar_s",
+        "beats_per_bar",
+        "first_beat_s",
+        "first_downbeat_s",
+        "fps",
+        "frames_per_beat",
+        "first_downbeat_frame",
+        "beats_found",
+        "fit_rms_ms",
+        "beat_confidence",
+        "downbeat_confidence",
+        "seconds",
+        "bars",
+        "sections",
+        "kit"
+      ]
+    },
+    "VideoBeatBar": {
+      "type": "object",
+      "properties": {
+        "n": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "From 1, at the first downbeat."
+        },
+        "start_s": {
+          "type": "number",
+          "format": "double"
+        },
+        "frame": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The video's frame it starts on."
+        },
+        "loudness_db": {
+          "type": "number",
+          "format": "double",
+          "description": "RMS dBFS."
+        }
+      },
+      "required": [
+        "n",
+        "start_s",
+        "frame",
+        "loudness_db"
+      ]
+    },
+    "VideoBeatSection": {
+      "type": "object",
+      "properties": {
+        "bar": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "start_s": {
+          "type": "number",
+          "format": "double"
+        },
+        "frame": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string",
+          "description": "`louder`, `quieter` (3 dB or more against the two bars before), `bass_in`, `bass_out`."
+        },
+        "change_db": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "bar",
+        "start_s",
+        "frame",
+        "kind",
+        "change_db"
       ]
     },
     "VideoVersionRestoreIn": {
@@ -32008,6 +33119,19 @@
         "video",
         "previous"
       ]
+    },
+    "VideoKitInstallIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "force": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Set it up again even when it is ready (a damaged install)."
+        }
+      }
     }
   }
 }
