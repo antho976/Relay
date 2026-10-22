@@ -144,7 +144,7 @@ class CoachLedgerScreenshotTest {
         compose.onNodeWithText("RECORD").performClick()
         compose.onNodeWithText("CALLS THAT HELD").assertIsDisplayed()
         compose.onNodeWithText("PLAN").performClick()
-        compose.onNodeWithText("TRAINING BLOCK").assertIsDisplayed()
+        compose.onNodeWithText("GOALS").assertIsDisplayed()
     }
 
     @Test
@@ -159,6 +159,10 @@ class CoachLedgerScreenshotTest {
 
     @Test
     fun amoled() = shoot("coach-page-amoled", amoled = true) { page(activeState())() }
+
+    /** A plan with nothing in it: the goal → block → focus ladder, at the phone's width. */
+    @Test @Config(qualifiers = "w384dp-h2400dp-xxhdpi")
+    fun planEmpty384() = shoot("coach-plan-empty-384") { page(baselineState(), CoachTab.PLAN)() }
 
     // Antho's phone is 384dp wide: each tab there, tall enough to show the whole page, and Brief with a 1.3x font.
     @Test @Config(qualifiers = "w384dp-h2400dp-xxhdpi")

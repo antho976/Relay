@@ -109,6 +109,8 @@ internal class ProfileActions(
     val onOpenSizes: () -> Unit = {},
     val onOpenGallery: () -> Unit = {},
     val onOpenCamera: () -> Unit = {},
+    /** Import from the phone's own photos, straight from the Photos tab. */
+    val onImportPhotos: () -> Unit = {},
     val onUnlock: () -> Unit = {},
 )
 

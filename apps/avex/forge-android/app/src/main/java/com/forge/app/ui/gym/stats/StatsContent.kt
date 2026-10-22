@@ -272,11 +272,6 @@ private fun Change(text: String?, moved: Boolean = true) {
     )
 }
 
-@Composable
-private fun Empty(text: String) {
-    Text(text, style = OpenType.body, color = MaterialTheme.colorScheme.onSurfaceVariant)
-}
-
 private val DATE_SHORT: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM d")
 
 private fun dateOf(t: Long): String = Instant.ofEpochMilli(t).atZone(ZoneId.systemDefault()).toLocalDate().format(DATE_SHORT)
@@ -301,7 +296,7 @@ private fun StrengthTab(
             .sortedByDescending { it.now }
     }
     if (trends.isEmpty()) {
-        Empty("Log a weighted set and your strength shows here: each lift's estimated one-rep max over time.")
+        StatsPreview(PreviewShape.LINES, "Log a weighted set and your strength shows here: each lift's estimated one-rep max over time.")
         return
     }
     // The lift on the graph: the one asked for, else the one trained most in the range.
@@ -422,7 +417,7 @@ private fun VolumeTab(state: StatsUiState, window: StatsWindow, range: StatsRang
         Head("Muscles in range", "$RANGE_LOW to $RANGE_HIGH sets a week")
         Spacer(Modifier.height(10.dp))
         if (muscles.isEmpty()) {
-            Empty("Sets you log land here, by the muscle they work.")
+            StatsPreview(PreviewShape.BARS, "Sets you log land here, by the muscle they work, against 10 to 20 a week.")
         } else {
             val inRange = muscles.count { it.second in RANGE_LOW..RANGE_HIGH }
             val under = muscles.filter { it.second < RANGE_LOW }.map { it.first.displayName.lowercase() }
@@ -437,7 +432,7 @@ private fun VolumeTab(state: StatsUiState, window: StatsWindow, range: StatsRang
                         2 -> "${under[0].replaceFirstChar { it.uppercase() }} and ${under[1]} under"
                         else -> "${under.size} under"
                     },
-                    "$total sets a week"
+                    "$total ${if (total == 1) "set" else "sets"} a week"
                 ).joinToString(" · ")
             )
             Spacer(Modifier.height(20.dp))
@@ -455,7 +450,7 @@ private fun VolumeTab(state: StatsUiState, window: StatsWindow, range: StatsRang
         Spacer(Modifier.height(10.dp))
         val finished = weeks.filterNot { it.current }
         if (finished.isEmpty() || finished.all { it.volumeLb == 0.0 }) {
-            Empty("Finish a week of training and its volume shows here.")
+            StatsPreview(PreviewShape.WEEKS, "Finish a week of training and its volume shows here, one column a week.")
             return@Column
         }
         val avg = finished.map { it.volumeLb }.average()
@@ -507,7 +502,12 @@ private fun EffortTab(state: StatsUiState, window: StatsWindow, range: StatsRang
         Head("Fitness vs fatigue", state.readinessPulse?.let { p -> state.readinessThreshold?.let { "Fatigue ${p.score} of $it" } })
         Spacer(Modifier.height(10.dp))
         if (model == null) {
-            Empty("A few sessions in, this reads whether you're building, fresh or carrying fatigue.")
+            StatsPreview(
+                PreviewShape.LINES,
+                "Fitness builds slowly and fatigue comes and goes. Once there is enough to read, this says whether you're building, fresh or carrying fatigue.",
+                progress = state.dailyActivity.size to BANISTER_MIN_DAYS,
+                unitWord = "training days",
+            )
         } else {
             Text(formWord(model), style = OpenType.figureMS, color = MaterialTheme.colorScheme.onBackground)
             Spacer(Modifier.height(8.dp))
@@ -534,7 +534,7 @@ private fun EffortTab(state: StatsUiState, window: StatsWindow, range: StatsRang
         Head("Effort", "${effort.rated} rated ${if (effort.rated == 1) "set" else "sets"}")
         Spacer(Modifier.height(10.dp))
         if (effort.rated == 0) {
-            Empty("Rate how hard a set was while you log it, and how close you train to failure shows here.")
+            StatsPreview(PreviewShape.EFFORT, "Rate a set's reps left as you log it (RPE) and this shows how close to failure you train. Most growth happens 1 to 3 reps short.")
             return@Column
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.Bottom) {

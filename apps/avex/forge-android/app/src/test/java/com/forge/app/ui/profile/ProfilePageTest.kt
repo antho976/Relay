@@ -117,11 +117,14 @@ class ProfilePageTest {
     }
 
     @Test
-    fun theCameraIsThePhotosTabsOneAction() {
-        var opened = false
-        setContent(tab = ProfileTab.PHOTOS, actions = ProfileActions(onOpenCamera = { opened = true }))
-        compose.onNodeWithText("Take today's photo").performClick()
-        assertTrue(opened)
+    fun thePhotosTabTakesOrImportsAPhoto() {
+        var camera = false
+        var imported = false
+        setContent(tab = ProfileTab.PHOTOS, actions = ProfileActions(onOpenCamera = { camera = true }, onImportPhotos = { imported = true }))
+        compose.onNodeWithText("Take photo").performClick()
+        compose.onNodeWithText("Import").performClick()
+        assertTrue(camera)
+        assertTrue(imported)
     }
 
     @Test
