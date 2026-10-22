@@ -340,10 +340,22 @@ const commands = {
     if (v) {
       const logs = [];
       try {
-        const found = await withBrowser((puppeteerInstance) => getCompositions(v.serveUrl, {
+        const list = () => withBrowser((puppeteerInstance) => getCompositions(v.serveUrl, {
           puppeteerInstance, logLevel: LOG_LEVEL, envVariables: PROBE_ENV, inputProps: {}, onBrowserLog: (l) => logs.push(l),
         }));
-        const schemas = probeOf(logs, SCHEMA_PREFIX);
+        // The fullest list the page reported: it says them again as compositions register.
+        const fullest = () => logs
+          .filter((l) => l.text?.startsWith(SCHEMA_PREFIX))
+          .map((l) => { try { return JSON.parse(l.text.slice(SCHEMA_PREFIX.length)); } catch { return null; } })
+          .filter(Array.isArray)
+          .reduce((best, list) => (best === null || list.length >= best.length ? list : best), null);
+        let found = await list();
+        // A page's console can go unheard (the browser busy with other pages): ask once more
+        // before saying relayRoot is missing.
+        if (!fullest()) {
+          found = await list();
+        }
+        const schemas = fullest();
         compositions = found.map((c) => ({ ...summary(c), props_schema: schemas?.find((s) => s.id === c.id)?.schema ?? null }));
         if (!schemas) {
           errors.push({ kind: 'probe', file: 'src/index.ts', message: 'src/index.ts does not register relayRoot(Root): put back `registerRoot(relayRoot(Root))`, or stills cannot see the frame and the props panel has no schema' });
@@ -402,6 +414,13 @@ const commands = {
           serveUrl: v.serveUrl, composition: c, frame, output: outputs[i], scale, inputProps, puppeteerInstance,
           logLevel: LOG_LEVEL, envVariables: PROBE_ENV, imageFormat: 'png', overwrite: true, onBrowserLog: (l) => logs.push(l),
         }));
+        // Drawn but not heard measuring (a console line can go unheard): draw it once more.
+        if (!probeOf(logs, PROBE_PREFIX)) {
+          await withBrowser((puppeteerInstance) => renderStill({
+            serveUrl: v.serveUrl, composition: c, frame, output: outputs[i], scale, inputProps, puppeteerInstance,
+            logLevel: LOG_LEVEL, envVariables: PROBE_ENV, imageFormat: 'png', overwrite: true, onBrowserLog: (l) => logs.push(l),
+          }));
+        }
         stills.push({ frame, path: outputs[i], probe: probeOf(logs, PROBE_PREFIX), console: consoleErrors(logs) });
       } catch (e) {
         errors.push(await runtimeError(e, dir, v.outDir, frame));
@@ -510,6 +529,17 @@ const commands = {
 
 const running = new Map();
 
+// Looking at videos (check, meta, still, scan) goes one request at a time: pages opened side by
+// side have been seen to lose each other's console lines, which is how the probe reports. A
+// render runs beside them; it needs no console.
+const LOOKS = new Set(['check', 'meta', 'still', 'scan']);
+let looking = Promise.resolve();
+const inTurn = (f) => {
+  const run = looking.then(f, f);
+  looking = run.catch(() => {});
+  return run;
+};
+
 // ---------------------------------------------------------------- the loop
 
 const serve = () => {
@@ -530,7 +560,7 @@ const serve = () => {
       return;
     }
     try {
-      out({ id, ok: true, result: await handler(args) });
+      out({ id, ok: true, result: await (LOOKS.has(cmd) ? inTurn(() => handler(args)) : handler(args)) });
     } catch (e) {
       if (!(e instanceof Refusal)) log(cmd, 'failed:', e?.stack ?? e);
       out({ id, ok: false, error: { code: e?.code ?? 'video.worker', message: String(e?.message ?? e).slice(0, 2000) } });

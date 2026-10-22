@@ -151,6 +151,7 @@ fn video_e2e_the_starter_checks_looks_and_renders_for_real() {
     assert_eq!(asset["kind"], "image");
     println!("versions: {}", ok(&e, "video.get", json!({"video_id": id}))["versions"]);
     ok(&e, "video.delete", json!({"video_id": id}));
+    relay_core::video::shutdown(&e);
 }
 
 /// The first check of a session as an agent meets it: the video made, some seconds spent writing
@@ -169,6 +170,7 @@ fn video_e2e_first_check_after_writing() {
     let checked = timed("first check after writing", || ok(&e, "video.check", json!({"video_id": id})));
     assert_eq!(checked["ok"], true, "{checked}");
     ok(&e, "video.delete", json!({"video_id": id}));
+    relay_core::video::shutdown(&e);
 }
 
 /// The kit's screens and charts drawn for real: a phone laid out at iPhone points with its status
@@ -230,4 +232,5 @@ export const Video: React.FC<Props> = ({ accent }) => {
     let scanned = timed("kit scan", || ok(&e, "video.scan", json!({"video_id": id})));
     println!("kit scan: {} frames, issues {}", scanned["frames"], scanned["issues"]);
     ok(&e, "video.delete", json!({"video_id": id}));
+    relay_core::video::shutdown(&e);
 }

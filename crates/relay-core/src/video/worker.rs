@@ -222,13 +222,16 @@ fn spawn(engine: &Engine, root: &std::path::Path, program: &[String]) -> Result<
         tail: Mutex::default(),
     });
 
+    // Every worker's lines, each with its pid (one engine's may outlive another's in a test run),
+    // and started afresh once the log passes 2 MiB.
     let log_path = root.join(".relay/worker.log");
     let for_log = worker.clone();
     let _ = std::thread::Builder::new().name("video-worker-log".into()).spawn(move || {
-        let mut log = std::fs::File::create(&log_path).ok();
+        let fresh = std::fs::metadata(&log_path).is_ok_and(|m| m.len() > 2 * 1024 * 1024);
+        let mut log = std::fs::OpenOptions::new().create(true).append(!fresh).write(true).truncate(fresh).open(&log_path).ok();
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             if let Some(log) = log.as_mut() {
-                let _ = writeln!(log, "{line}");
+                let _ = writeln!(log, "[{pid}] {line}");
             }
             let mut tail = lock(&for_log.tail);
             if tail.len() == TAIL {

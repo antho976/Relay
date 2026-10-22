@@ -285,6 +285,9 @@ pub fn brief(probes: &[Probe], fps: f64, every: u32, last: u32) -> Vec<Issue> {
         }
     }
     let keys: Vec<String> = seen.keys().cloned().collect();
+    // Frames measured: a run of words ends at one of these without them, not at a gap in the
+    // measurements (a frame whose measurement went unheard says nothing).
+    let measured: std::collections::BTreeSet<u32> = probes.iter().map(|p| p.frame).collect();
     let mut out = Vec::new();
     for (k, (frames, t)) in &seen {
         let words = t.text.split_whitespace().count();
@@ -297,7 +300,7 @@ pub fn brief(probes: &[Probe], fps: f64, every: u32, last: u32) -> Vec<Issue> {
         let mut runs: Vec<Vec<u32>> = Vec::new();
         for &f in frames {
             match runs.last_mut() {
-                Some(run) if f <= run[run.len() - 1] + every + every / 2 => run.push(f),
+                Some(run) if measured.range(run[run.len() - 1] + 1..f).next().is_none() => run.push(f),
                 _ => runs.push(vec![f]),
             }
         }
@@ -501,6 +504,10 @@ mod tests {
         let found = brief(&probes, 30.0, 3, 87);
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].detail.contains("6 words want at least 2.2 s"), "{}", found[0].detail);
+        // A frame whose measurement went unheard does not cut a run in two.
+        let mut gappy = probes.clone();
+        gappy.retain(|p| p.frame != 33);
+        assert_eq!(brief(&gappy, 30.0, 3, 87).len(), 1);
         // A number counting up keeps its run whatever its digits.
         let probes: Vec<Probe> = (0..90).step_by(3).map(|f| line(f, &format!("${} spent", f * 37))).collect();
         assert!(brief(&probes, 30.0, 3, 87).is_empty());

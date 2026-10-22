@@ -12,8 +12,11 @@ export const SCHEMA_PREFIX = '__relay_schema__';
 
 const SchemaReader: React.FC = () => {
   const manager = React.useContext(Internals.CompositionManager);
-  React.useEffect(() => {
-    if (process.env.RELAY_PROBE !== '1') return;
+  // A layout effect: in the commit that registers the compositions, before Remotion reads them
+  // and its listing returns; an effect could run after, and the schemas would be missed.
+  React.useLayoutEffect(() => {
+    // Before the Root registers them there are none: nothing to say yet.
+    if (process.env.RELAY_PROBE !== '1' || manager.compositions.length === 0) return;
     const schemas = manager.compositions.map((c) => {
       let schema: unknown = null;
       if (c.schema) {
