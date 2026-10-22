@@ -196,7 +196,9 @@ fun OnboardingScreen(
     // null until the user touches the coach toggle, so the default can follow the plan mode: a
     // generated plan is what the coach adapts, freestyle has nothing to adapt.
     var coachChoice by remember { mutableStateOf(draft?.coachChoice) }
-    var daysPerWeek by remember { mutableIntStateOf(draft?.daysPerWeek ?: 0) }
+    // Four days is where the slider starts: an empty slider with no answer read as broken (Antho,
+    // 2026-10-21), and 4 sits in the 3-to-5 most people progress on.
+    var daysPerWeek by remember { mutableIntStateOf(draft?.daysPerWeek?.takeIf { it in 1..7 } ?: 4) }
     // Optional, asked under the day count: null = not answered, 0 = "Any". Either means no ceiling.
     var sessionMinutes by remember { mutableStateOf(draft?.sessionMinutes) }
     // Fixed weekdays or "whenever I can": null until answered.
