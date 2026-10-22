@@ -319,7 +319,7 @@ fun SetRow(
                 ) {
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(50))
+                            .clip(RoundedCornerShape(4.dp))
                             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                             .padding(horizontal = 10.dp, vertical = 4.dp)
                     ) {
@@ -586,7 +586,7 @@ private fun InlineEffortPicker(
                 // confirms the pick as the panel collapses. Reduced-motion-safe (bouncy() → snap()).
                 val pop by animateFloatAsState(if (selected) 1.08f else 1f, ForgeMotion.bouncy(), label = "rpe-pop")
                 // Filled tiles; the pick wears the app's selectable ring and wash.
-                val tileShape = RoundedCornerShape(12.dp)
+                val tileShape = RoundedCornerShape(4.dp)
                 Column(
                     modifier = Modifier
                         .graphicsLayer { scaleX = pop; scaleY = pop }
@@ -641,7 +641,7 @@ private fun InlineEditField(
                 Modifier
                     .fillMaxWidth()
                     .heightIn(min = 56.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(4.dp))
                     .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.Center

@@ -117,8 +117,9 @@ internal fun ForgeGroupCaption(text: String, modifier: Modifier = Modifier) {
 
 /** Outer corners of a group, and the tight inner corners where two of its members meet. */
 // Tightened 2026-09-27 from 20 / 6: at 20dp every list, panel and control read as a pill, and the
-// rounding became the look instead of the grouping.
-internal val GROUP_OUTER = 12.dp
+// rounding became the look instead of the grouping. 4dp since the Open panel redesign (2026-10-21):
+// the screens kept from before (live session, freestyle log) read "too round" beside the new ones.
+internal val GROUP_OUTER = 4.dp
 internal val GROUP_INNER = 4.dp
 
 /** The seam between two members of one group: a gap, never a rule. */
@@ -776,7 +777,8 @@ internal fun ForgeTopBar(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         if (onBack != null) {
-            ForgeChromeIconButton(Icons.AutoMirrored.Filled.ArrowBack, backLabel, onBack)
+            // A bare arrow, as the redesigned pages draw it; the chrome bubble read as a leftover.
+            OpenTopBarIcon(com.forge.app.ui.theme.OpenIcons.ArrowLeft, backLabel, onBack)
         }
         Box(Modifier.weight(1f)) {
             if (title != null) {

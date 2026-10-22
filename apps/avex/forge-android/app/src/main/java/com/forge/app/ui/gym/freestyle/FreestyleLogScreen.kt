@@ -30,6 +30,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -132,6 +133,16 @@ fun FreestyleLogScreen(
         if (draftChecked) return@LaunchedEffect   // already settled before a configuration change
         viewModel.loadDraft()?.takeIf { draftToItems(it, weightUnit).isNotEmpty() }?.let { pendingDraft = it }
         draftChecked = true
+    }
+    // A fresh open workout goes straight to picking moves: the empty "Pick your first move" page in
+    // front of the picker was one screen too many (Antho, 2026-10-21). Once per open, never over a
+    // draft offer or a log that already has moves.
+    var pickerOpenedOnce by rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
+    LaunchedEffect(draftChecked, pendingDraft) {
+        if (draftChecked && pendingDraft == null && items.isEmpty() && !pickerOpenedOnce) {
+            pickerOpenedOnce = true
+            showBrowser = true
+        }
     }
     LaunchedEffect(items, openedAtMs, pendingDraft, draftChecked, leaving) {
         if (leaving || !draftChecked || pendingDraft != null) return@LaunchedEffect
@@ -511,7 +522,12 @@ fun FreestyleLogScreen(
         if (showBrowser) {
             ExerciseBrowserScreen(
                 exclude = remember(items) { items.mapTo(HashSet()) { it.libId } },
-                onClose = { showBrowser = false },
+                onClose = {
+                    showBrowser = false
+                    // Nothing picked and nothing on the start page to fall back to (no recent moves,
+                    // no saved workouts): Back from the picker leaves rather than showing an empty page.
+                    if (items.isEmpty() && templates.isEmpty() && recentMoves.isEmpty()) leave()
+                },
                 onConfirm = { picked ->
                     addExercises(picked.mapNotNull { fsExerciseFor(it) })
                     showBrowser = false

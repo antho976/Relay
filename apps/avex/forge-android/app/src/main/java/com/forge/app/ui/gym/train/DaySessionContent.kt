@@ -252,7 +252,9 @@ internal fun DayContent(
                 }
             }
 
-            if (showTimeFit(state)) {
+            // The offer itself lives in the warm-up (Antho, 2026-10-21: asked at the door, not over
+            // every exercise); once a fit is applied, its line and Undo stay here.
+            if (showTimeFit(state) && state.timeFit != null) {
                 item(key = "time-fit", contentType = "time-fit") { TimeFitRow(state, onEvent) }
             }
 
@@ -513,7 +515,7 @@ internal fun SessionHero(
                 Spacer(Modifier.width(4.dp))
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(50))
+                        .clip(RoundedCornerShape(4.dp))
                         .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                         .clearAndSetSemantics { contentDescription = datePillSpoken.orEmpty() }
                         .padding(horizontal = 12.dp, vertical = 6.dp)

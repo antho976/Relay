@@ -235,7 +235,7 @@ internal fun FsFoldedCard(
     Box(
         Modifier.fillMaxWidth()
             .padding(top = 12.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(4.dp))
             .then(if (dragging) Modifier.background(cs.surfaceVariant) else Modifier)
             .bounceCombinedClick(onClickLabel = "Log sets for ${exercise.name}", onClick = onOpen)
     ) {
@@ -283,7 +283,7 @@ internal fun FsOpenCard(
     Column(
         Modifier.fillMaxWidth()
             .padding(top = 16.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(4.dp))
             .then(if (dragging) Modifier.background(cs.surfaceVariant) else Modifier)
             .animateContentSize(ForgeMotion.snappy())
     ) {
@@ -388,7 +388,7 @@ private fun FsLastTimeRow(
                     style = MaterialTheme.typography.labelMedium,
                     color = cs.onSurface,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(50))
+                        .clip(RoundedCornerShape(4.dp))
                         .background(cs.surfaceContainerHigh)
                         .padding(horizontal = 12.dp, vertical = 7.dp)
                 )
@@ -421,7 +421,7 @@ private fun FsLedgerRow(
     Row(
         Modifier.fillMaxWidth()
             .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(4.dp))
             .then(if (editing) Modifier.background(cs.primary.copy(alpha = 0.15f)) else Modifier)
             .clickableLabeled(if (editing) "Stop editing set ${index + 1}" else "Edit set ${index + 1}", onClick = onClick)
             .padding(horizontal = 8.dp),
@@ -680,7 +680,7 @@ private fun FsStepButton(symbol: String, label: String, enabled: Boolean, onClic
     Box(
         Modifier
             .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-            .clip(RoundedCornerShape(50))
+            .clip(RoundedCornerShape(4.dp))
             .background(cs.surfaceContainerHighest)
             .bounceClick(enabled = enabled, onClick = onClick)
             .semantics { contentDescription = label },

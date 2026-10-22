@@ -367,7 +367,7 @@ fun SetInputRow(
     // ForgeOutlineCapsule / the top bar's FINISH). This slot used to be a 16dp rounded
     // rectangle, which is M3's stock button corner and read as another app's button
     // sitting inside ours.
-    val ctaShape = RoundedCornerShape(50)
+    val ctaShape = RoundedCornerShape(4.dp)
     val stacked = SetTable.stacked()
     Column(modifier = modifier.fillMaxWidth()) {
         // Active input row — hidden once the target sets are met (then the CTA
@@ -438,7 +438,7 @@ fun SetInputRow(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(GROUP_OUTER))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(4.dp))
                     .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
             Row(verticalAlignment = Alignment.Bottom) {
@@ -536,7 +536,7 @@ fun SetInputRow(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(GROUP_OUTER))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(4.dp))
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.Bottom
             ) {
@@ -745,7 +745,7 @@ private fun AddSetPill(onAdd: (() -> Unit)?) {
     Box(
         modifier = Modifier
             .sizeIn(minHeight = 48.dp)
-            .clip(RoundedCornerShape(50))
+            .clip(RoundedCornerShape(4.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .then(if (onAdd != null) Modifier.clickableLabeled("Add a set") { onAdd() } else Modifier)
             .padding(horizontal = 18.dp),
@@ -770,10 +770,10 @@ private fun StopwatchButton(
     val outline = MaterialTheme.colorScheme.outline
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(50))
+            .clip(RoundedCornerShape(4.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .then(if (running) Modifier.background(accent.copy(alpha = 0.15f)) else Modifier)
-            .border(1.dp, if (running) accent else Color.Transparent, RoundedCornerShape(50))
+            .border(1.dp, if (running) accent else Color.Transparent, RoundedCornerShape(4.dp))
             .clickableLabeled(if (running) "Stop the hold timer" else "Start the hold timer") { onToggle() }
             .sizeIn(minWidth = 96.dp, minHeight = 44.dp)
             .padding(horizontal = 16.dp),
@@ -801,7 +801,7 @@ private fun StepperPill(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .clip(RoundedCornerShape(50))
+            .clip(RoundedCornerShape(4.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
     ) {
         Box(

@@ -280,7 +280,7 @@ internal fun LastSessionStrip(
     // Filled, not outlined: the raised fill is what says "tap for the chart".
     val stripModifier = Modifier
         .fillMaxWidth()
-        .clip(RoundedCornerShape(12.dp))
+        .clip(RoundedCornerShape(4.dp))
         .background(MaterialTheme.colorScheme.surfaceContainerHigh)
         .clickableLabeled("Open this exercise's chart") { onClick() }
         // One reading for TalkBack: the figures are bare ("0 lb"), so it says what each one is.
@@ -518,10 +518,10 @@ internal fun ExerciseCardFooter(
     Spacer(Modifier.height(16.dp))
 
     val context = LocalContext.current
-    val showNote = remember(state.effectiveName) { !state.note.isNullOrBlank() }
+    var showNote by remember(state.effectiveName) { mutableStateOf(!state.note.isNullOrBlank()) }
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-        // No NOTE here: the top bar's note sits beside Finish, and two note buttons read as one
-        // too many (Antho, 2026-10-21). A note already on the exercise still opens below.
+        // The exercise's own note (the top bar's is the session's): taken out once, missed, back.
+        ActionChip(icon = TrainIcons.Note, label = "NOTE") { showNote = !showNote }
         ActionChip(icon = TrainIcons.Video, label = "VIDEO") {
             runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName, state.effectiveUnit == ExerciseUnit.PLATES)) }
         }
