@@ -306,6 +306,17 @@ fn attack_shift(samples: &[f32], first_s: f64, beat_s: f64) -> f64 {
     if best > base * 1.05 { at } else { 0.0 }
 }
 
+/// `samples` under about 150 Hz: two one-pole low-passes in a row.
+fn low_band(samples: &[f32]) -> Vec<f64> {
+    let a = (-2.0 * std::f64::consts::PI * 150.0 / RATE as f64).exp();
+    let (mut y1, mut y2) = (0f64, 0f64);
+    samples.iter().map(|s| {
+        y1 = (1.0 - a) * *s as f64 + a * y1;
+        y2 = (1.0 - a) * y1 + a * y2;
+        y2
+    }).collect()
+}
+
 fn rms_db(samples: &[f32]) -> f64 {
     if samples.is_empty() {
         return -120.0;
@@ -331,33 +342,50 @@ fn low_share_db(samples: &[f32], rate: u32) -> f64 {
 pub fn analyse(pcm: &Pcm, beats_per_bar: u32, hint: Option<f64>) -> Option<Grid> {
     let samples = &pcm.samples;
     let hops = RATE as f64 / HOP as f64;
-    let (flux, low_flux) = onsets(samples);
+    let (flux, _) = onsets(samples);
     let onset = whiten(&flux, (hops * 0.25) as usize);
-    let low = whiten(&low_flux, (hops * 0.25) as usize);
     let (period, beat_confidence) = tempo(&onset, hops, hint)?;
     let beats = track(&onset, period);
     let times: Vec<f64> = beats.iter().map(|&t| refine(&onset, t)).collect();
     let (start, period, rms, found) = fit(&times, period)?;
-    // The bar's phase with the most low-band onset at its beats.
     let bpb = beats_per_bar.max(1) as usize;
-    let at = |curve: &[f64], hop: f64| -> f64 {
-        let i = hop.round();
-        if i < 0.0 { return 0.0; }
-        let i = i as usize;
-        (i.saturating_sub(1)..=(i + 1).min(curve.len().saturating_sub(1))).map(|j| curve.get(j).copied().unwrap_or(0.0)).fold(0.0, f64::max)
-    };
     let hop_s = HOP as f64 / RATE as f64;
     let start = start + ONSET_LEAD_S / hop_s;
     let slack = START_SLACK_S / hop_s;
     let first = start - ((start + slack) / period).floor() * period;
     let count = ((samples.len() as f64 / HOP as f64 - first) / period).floor().max(0.0) as usize + 1;
+    // The bar's phase whose beats hit hardest under 150 Hz: the kick and bass a bar starts on.
+    // Energy in dB, not the whitened flux, which flattens a kick that is only louder.
+    let low = low_band(samples);
+    let window = (RATE as f64 * 0.12) as usize;
+    let hit = |hop: f64| -> f64 {
+        let a = (hop * HOP as f64).max(0.0) as usize;
+        let slice = &low[a.min(low.len())..(a + window).min(low.len())];
+        let ms = slice.iter().map(|v| v * v).sum::<f64>() / slice.len().max(1) as f64;
+        if ms <= 1e-12 { -120.0 } else { 10.0 * ms.log10() }
+    };
+    let hits: Vec<f64> = (0..count).map(|k| hit(first + k as f64 * period)).collect();
+    // Music most often starts on a bar: the phase of its first strong beat leads by 1.5 dB, which
+    // a downbeat that really is harder outweighs.
+    let loudest = hits.iter().copied().fold(f64::MIN, f64::max);
+    let opening = hits.iter().position(|db| *db > loudest - 20.0).map(|k| k % bpb);
+    // Sections change on bars: where the kick comes back after a break (a drop), or a bar starts
+    // harder than the beat before it, the low band jumps. The phase the largest jumps land on
+    // (each held to 12 dB, the three largest) is where bars begin.
+    let jumps: Vec<f64> = (0..bpb).map(|phase| {
+        let mut up: Vec<f64> = (phase..count).step_by(bpb).filter(|k| *k >= 1).map(|k| (hits[k] - hits[k - 1]).clamp(0.0, 12.0)).collect();
+        up.sort_by(|a, b| b.total_cmp(a));
+        up.iter().take(3).sum::<f64>() / 3.0
+    }).collect();
     let phase_score: Vec<f64> = (0..bpb).map(|phase| {
-        let picks: Vec<f64> = (phase..count).step_by(bpb).map(|k| at(&low, first + k as f64 * period) + 0.5 * at(&onset, first + k as f64 * period)).collect();
-        picks.iter().sum::<f64>() / picks.len().max(1) as f64
+        let picks: Vec<f64> = hits.iter().skip(phase).step_by(bpb).copied().filter(|db| *db > -100.0).collect();
+        let energy = if picks.is_empty() { -120.0 } else { picks.iter().sum::<f64>() / picks.len() as f64 };
+        energy + if opening == Some(phase) { 1.5 } else { 0.0 } + jumps[phase]
     }).collect();
     let (phase, best) = phase_score.iter().copied().enumerate().max_by(|a, b| a.1.total_cmp(&b.1)).unwrap_or((0, 0.0));
-    let others = (phase_score.iter().sum::<f64>() - best) / (bpb.saturating_sub(1)).max(1) as f64;
-    let downbeat_confidence = if bpb > 1 && best > 0.0 { ((best - others) / best).clamp(0.0, 1.0) } else { 0.0 };
+    let others = phase_score.iter().enumerate().filter(|(i, _)| *i != phase).map(|(_, v)| *v).fold(f64::MIN, f64::max);
+    // 6 dB over the next strongest phase is as sure as it gets.
+    let downbeat_confidence = if bpb > 1 { ((best - others) / 6.0).clamp(0.0, 1.0) } else { 0.0 };
 
     let seconds = |hop: f64| hop * HOP as f64 / RATE as f64;
     let beat_s = seconds(period);
@@ -493,6 +521,22 @@ mod tests {
         assert!((grid.first_beat_s - 0.1).abs() < 0.015, "{grid:?}");
         assert!((grid.first_downbeat_s - 1.1).abs() < 0.015, "{grid:?}");
         assert!(grid.downbeat_confidence > 0.2, "{grid:?}");
+    }
+
+    #[test]
+    fn a_downbeat_that_is_only_louder_is_found() {
+        // A kick on every beat, 5 dB harder on the bar's first, from a quarter second in.
+        let rate = RATE as f64;
+        let samples: Vec<f32> = (0..(rate * 16.0) as usize).map(|i| {
+            let t = i as f64 / rate - 0.25;
+            if t < 0.0 { return 0.0; }
+            let beat = t % 0.5;
+            let down = (t / 0.5).floor() as i64 % 4 == 0;
+            ((2.0 * std::f64::consts::PI * 55.0 * beat).sin() * (-beat * 30.0).exp() * if down { 0.9 } else { 0.5 }) as f32
+        }).collect();
+        let grid = analyse(&Pcm { rate: RATE, channels: 1, samples }, 4, None).unwrap();
+        assert!((grid.first_downbeat_s - 0.25).abs() < 0.02, "{grid:?}");
+        assert!(grid.downbeat_confidence > 0.5, "{grid:?}");
     }
 
     #[test]

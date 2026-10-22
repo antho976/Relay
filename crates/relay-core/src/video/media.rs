@@ -88,12 +88,27 @@ impl Pcm {
     }
 }
 
+/// The samples of a WAV ffmpeg wrote to a pipe: after its `data` chunk's header, to the end (a
+/// pipe's header cannot say how long the data is).
+fn wav_data(bytes: &[u8]) -> &[u8] {
+    let mut at = 12;
+    while at + 8 <= bytes.len() {
+        let size = u32::from_le_bytes([bytes[at + 4], bytes[at + 5], bytes[at + 6], bytes[at + 7]]) as usize;
+        if &bytes[at..at + 4] == b"data" {
+            return &bytes[at + 8..];
+        }
+        at += 8 + size + size % 2;
+    }
+    &[]
+}
+
 /// The first sound stream of `input` at `rate` Hz in `channels` channels (a mono file is spread
-/// over both, as a player does); `None` when it has none.
+/// over both, as a player does); `None` when it has none. It comes over a pipe as a WAV: Remotion's
+/// ffmpeg has no raw muxers.
 pub fn decode(engine: &Engine, input: &Path, rate: u32, channels: usize) -> Result<Option<Pcm>, BusError> {
     let ffmpeg = tool(engine, "ffmpeg")?;
     let out = run(ffmpeg.command().arg("-nostdin").arg("-i").arg(input)
-        .args(["-vn", "-sn", "-dn", "-ac", &channels.to_string(), "-ar", &rate.to_string(), "-c:a", "pcm_s16le", "-f", "s16le", "pipe:1"]),
+        .args(["-vn", "-sn", "-dn", "-ac", &channels.to_string(), "-ar", &rate.to_string(), "-c:a", "pcm_s16le", "-f", "wav", "pipe:1"]),
         "decoding the sound")?;
     if !out.status.success() {
         let why = stderr_tail(&out);
@@ -102,10 +117,11 @@ pub fn decode(engine: &Engine, input: &Path, rate: u32, channels: usize) -> Resu
         }
         return Err(BusError::invalid("video.media", format!("{} cannot be read as sound: {why}", input.display())));
     }
-    if out.stdout.is_empty() {
+    let data = wav_data(&out.stdout);
+    if data.is_empty() {
         return Ok(None);
     }
-    let samples = out.stdout.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b) as f32 / 32768.0).collect();
+    let samples = data.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b) as f32 / 32768.0).collect();
     Ok(Some(Pcm { rate, channels, samples }))
 }
 
@@ -177,7 +193,7 @@ pub fn grey_frames(engine: &Engine, input: &Path, width: u32) -> Result<(Vec<u8>
     let height = ((h / w * width as f64 / 2.0).round() as u32 * 2).max(2);
     let ffmpeg = tool(engine, "ffmpeg")?;
     let out = run(ffmpeg.command().arg("-nostdin").arg("-i").arg(input)
-        .args(["-an", "-sn", "-fps_mode", "passthrough", "-vf", &format!("scale={width}:{height}"), "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1"]),
+        .args(["-an", "-sn", "-fps_mode", "passthrough", "-vf", &format!("scale={width}:{height}"), "-pix_fmt", "gray", "-c:v", "rawvideo", "-f", "image2pipe", "pipe:1"]),
         "reading the picture")?;
     if !out.status.success() {
         return Err(BusError::invalid("video.media", format!("{} cannot be decoded: {}", input.display(), stderr_tail(&out))));
@@ -212,6 +228,20 @@ mod tests {
         assert!((rate("30000/1001").unwrap() - 29.97).abs() < 0.001);
         assert_eq!(rate("0/0"), None);
         assert_eq!(rate("25"), Some(25.0));
+    }
+
+    #[test]
+    fn a_piped_wavs_samples_follow_its_data_chunk() {
+        let mut bytes = b"RIFF\xff\xff\xff\xffWAVEfmt ".to_vec();
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&[1, 0, 2, 0, 0x80, 0xbb, 0, 0, 0, 0xee, 2, 0, 4, 0, 16, 0]);
+        bytes.extend_from_slice(b"LIST");
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(b"abc\0");
+        bytes.extend_from_slice(b"data\xff\xff\xff\xff");
+        bytes.extend_from_slice(&[1, 0, 2, 0]);
+        assert_eq!(wav_data(&bytes), [1, 0, 2, 0]);
+        assert_eq!(wav_data(b"RIFF"), [] as [u8; 0]);
     }
 
     #[test]

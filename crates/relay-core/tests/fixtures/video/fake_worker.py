@@ -3,7 +3,8 @@
 It speaks the same JSON lines on stdin and stdout and answers as Remotion would for a video with
 two compositions: `main` (1080x1920, 30 fps, 3 s) and `wide` (1920x1080). A file in the video's
 `src/` changes what it does: `BROKEN` fails the build, `THROWS` throws on every frame, `SLOW`
-makes a render run until it is cancelled.
+makes a render run until it is cancelled, `SOUND` gives `main` a sound track: a 120 BPM grid, music
+that does not duck, a voice line from 1 s to 2 s and a tap cue at frame 20, five frames off the beat.
 """
 import json
 import os
@@ -107,8 +108,57 @@ def scan(a):
         if 30 <= frame <= 33:
             texts.append({"id": "flash", "path": "p", "text": "Six words gone before you read", "x": 100, "y": 1200, "w": 600, "h": 60,
                           "size": 48, "family": "Inter", "resolved": True, "color": "rgb(255, 255, 255)", "opacity": 1, "clip": None, "within": []})
-        probes.append({"frame": frame, "width": c["width"], "height": c["height"], "boxes": [], "texts": texts, "images": []})
-    return {"probes": probes, "console": [], "errors": []}
+        probe = {"frame": frame, "width": c["width"], "height": c["height"], "boxes": [], "texts": texts, "images": []}
+        if flag(a["dir"], "SOUND"):
+            probe.update(light_probe(frame, c["width"], c["height"], frame == first))
+        probes.append(probe)
+    return {"probes": probes, "sounds": [], "console": [], "errors": []}
+
+
+GRID = {"bpm": 120, "firstBeat": 0, "beatsPerBar": 4, "fps": 30}
+SEQUENCES = [{"id": "s1", "parent": None, "type": "sequence", "name": "Hook", "from": 0, "duration": 45, "hidden": False},
+             {"id": "s2", "parent": None, "type": "sequence", "name": "Feature", "from": 45, "duration": 45, "hidden": False},
+             {"id": "s3", "parent": "s2", "type": "sequence", "name": "Card", "from": 10, "duration": 20, "hidden": False}]
+
+
+def sound_marks(frame):
+    marks = [{"role": "music", "src": "/static-abc/assets/music.mp3", "name": "music", "elapsed": frame, "volume": 0.45}]
+    if 30 <= frame < 60:
+        marks.append({"role": "voice", "src": "/static-abc/assets/vo-1.mp3", "name": "vo-1", "elapsed": frame - 30, "volume": 1, "frames": 30})
+    if 20 <= frame < 26:
+        marks.append({"role": "sfx", "src": "/static-abc/assets/sfx-tap.wav", "name": "tap", "elapsed": frame - 20, "volume": 0.6, "frames": 6})
+    return marks
+
+
+def light_probe(frame, w, h, first):
+    probe = {"frame": frame, "width": w, "height": h, "sounds": sound_marks(frame), "grid": GRID}
+    if first:
+        probe["sequences"] = SEQUENCES
+    return probe
+
+
+def wav(path, seconds, peak):
+    import math
+    rate, n = 48000, int(48000 * seconds)
+    frames = bytearray()
+    for i in range(n):
+        v = int(peak * 32767 * math.sin(2 * math.pi * 440 * i / rate))
+        frames += struct.pack("<hh", v, v)
+    with open(path, "wb") as f:
+        f.write(b"RIFF" + struct.pack("<I", 36 + len(frames)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 2, rate, rate * 4, 4, 16)
+                + b"data" + struct.pack("<I", len(frames)) + bytes(frames))
+
+
+def timeline(a):
+    c = composition(a["composition"])
+    sound = flag(a["dir"], "SOUND")
+    probes = [light_probe(f, c["width"], c["height"], f == 0) if sound else {"frame": f, "width": c["width"], "height": c["height"]}
+              for f in range(c["duration_frames"])]
+    mix = None
+    if sound and a.get("mix"):
+        wav(a["mix"], c["duration_frames"] / c["fps"], 0.3)
+        mix = a["mix"]
+    return {"composition": c, "probes": probes, "sounds": [], "mix": mix, "console": [], "errors": []}
 
 
 def render(a):
@@ -136,7 +186,7 @@ def cancel(a):
 
 
 COMMANDS = {"hello": lambda a: {"node": "fake", "remotion": "4.0.534"}, "check": check, "meta": meta, "still": still, "scan": scan,
-            "render": render, "cancel": cancel, "forget": lambda a: {}}
+            "timeline": timeline, "render": render, "cancel": cancel, "forget": lambda a: {}}
 
 
 def handle(request):

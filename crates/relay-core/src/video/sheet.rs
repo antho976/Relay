@@ -27,6 +27,7 @@ impl Rgba {
         [self.data[at], self.data[at + 1], self.data[at + 2], self.data[at + 3]]
     }
 
+    #[cfg(test)]
     fn put(&mut self, x: u32, y: u32, c: [u8; 4]) {
         if x < self.w && y < self.h {
             let at = (y as usize * self.w as usize + x as usize) * 4;
@@ -34,8 +35,30 @@ impl Rgba {
         }
     }
 
+    /// `c` over the pixel at (`x`, `y`) at its alpha.
+    pub fn blend(&mut self, x: u32, y: u32, c: [u8; 4]) {
+        if x >= self.w || y >= self.h {
+            return;
+        }
+        let at = (y as usize * self.w as usize + x as usize) * 4;
+        let a = c[3] as u32;
+        for (dst, src) in self.data[at..at + 3].iter_mut().zip(c) {
+            *dst = ((src as u32 * a + *dst as u32 * (255 - a)) / 255) as u8;
+        }
+        self.data[at + 3] = 255;
+    }
+
+    /// A rectangle of `c` (at its alpha), cut to fit.
+    pub fn fill(&mut self, x: u32, y: u32, w: u32, h: u32, c: [u8; 4]) {
+        for yy in y..(y + h).min(self.h) {
+            for xx in x..(x + w).min(self.w) {
+                self.blend(xx, yy, c);
+            }
+        }
+    }
+
     /// `other` copied in with its top left at (`x`, `y`), cut to fit.
-    fn blit(&mut self, other: &Rgba, x: u32, y: u32) {
+    pub fn blit(&mut self, other: &Rgba, x: u32, y: u32) {
         let w = other.w.min(self.w.saturating_sub(x)) as usize;
         for row in 0..other.h.min(self.h.saturating_sub(y)) {
             let from = row as usize * other.w as usize * 4;
@@ -121,27 +144,79 @@ const SCALE: u32 = 3;
 
 /// `text` in a 5 × 7 pixel font: the digits and what a frame's label holds (`1.5s · f45`).
 fn write(out: &mut Rgba, text: &str, x: u32, y: u32) {
+    draw_text(out, text, x, y, SCALE, INK);
+}
+
+/// `text` in the 5 × 7 font at `scale`, in `ink`: digits, capitals (small letters are drawn as
+/// capitals, but `s` and `f`, which labels write as they are) and common marks. Its width.
+pub fn draw_text(out: &mut Rgba, text: &str, x: u32, y: u32, scale: u32, ink: [u8; 4]) -> u32 {
     let mut at = x;
     for ch in text.chars() {
-        if let Some(rows) = glyph(ch) {
+        let shape = glyph(ch).or_else(|| glyph(ch.to_ascii_uppercase()));
+        if let Some(rows) = shape {
             for (r, bits) in rows.iter().enumerate() {
                 for c in 0..5 {
                     if bits & (0b10000 >> c) != 0 {
-                        for dy in 0..SCALE {
-                            for dx in 0..SCALE {
-                                out.put(at + c * SCALE + dx, y + r as u32 * SCALE + dy, INK);
+                        for dy in 0..scale {
+                            for dx in 0..scale {
+                                out.blend(at + c * scale + dx, y + r as u32 * scale + dy, ink);
                             }
                         }
                     }
                 }
             }
         }
-        at += 6 * SCALE;
+        at += 6 * scale;
     }
+    at - x
+}
+
+/// How wide `text` is drawn at `scale`.
+pub fn text_width(text: &str, scale: u32) -> u32 {
+    text.chars().count() as u32 * 6 * scale
 }
 
 fn glyph(ch: char) -> Option<[u8; 7]> {
     Some(match ch {
+        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
+        'C' => [0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110],
+        'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
+        'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+        'F' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
+        'G' => [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111],
+        'H' => [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'I' => [0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+        'J' => [0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100],
+        'K' => [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
+        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+        'M' => [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
+        'N' => [0b10001, 0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001],
+        'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+        'P' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
+        'Q' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101],
+        'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
+        'S' => [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
+        'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+        'U' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+        'V' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+        'W' => [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010],
+        'X' => [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
+        'Y' => [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
+        'Z' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
+        '/' => [0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000],
+        '_' => [0, 0, 0, 0, 0, 0, 0b11111],
+        '%' => [0b11001, 0b11010, 0b00010, 0b00100, 0b01000, 0b01011, 0b10011],
+        '(' => [0b00010, 0b00100, 0b01000, 0b01000, 0b01000, 0b00100, 0b00010],
+        ')' => [0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000],
+        '+' => [0, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0],
+        '#' => [0b01010, 0b01010, 0b11111, 0b01010, 0b11111, 0b01010, 0b01010],
+        '\'' => [0b00100, 0b00100, 0b01000, 0, 0, 0, 0],
+        ',' => [0, 0, 0, 0, 0b01100, 0b00100, 0b01000],
+        '!' => [0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0, 0b00100],
+        '?' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0, 0b00100],
+        '&' => [0b01100, 0b10010, 0b10100, 0b01000, 0b10101, 0b10010, 0b01101],
+        '=' => [0, 0, 0b11111, 0, 0b11111, 0, 0],
         '0' => [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
         '1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
         '2' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],

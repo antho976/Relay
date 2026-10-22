@@ -14,7 +14,7 @@ use relay_bus::error::BusError;
 use relay_bus::ops::video::{
     AssetAdd, AssetAddOut, AssetInspect, AssetList, AssetListOut, AudioBeats, BeatBar, BeatGrid, BeatSection, Check, Composition, Create, CreateOut, Delete, Format, Get, GetOut, KitInstall,
     KitState, KitStatusOp, List, ListOut, Quality, Render, RenderBatch, RenderCancel, RenderGet, RenderJob, RenderState, RenderWait,
-    RendersOut, Restore, Scan, Still, Update, Version, VersionRestore, VersionRestoreOut, VideoRender, MAX_ASSETS, MAX_SECONDS, MAX_SIDE,
+    RendersOut, Restore, Scan, Still, Timeline, Update, Version, VersionRestore, VersionRestoreOut, VideoRender, MAX_ASSETS, MAX_SECONDS, MAX_SIDE,
 };
 use relay_bus::types::Id;
 use relay_bus::Empty;
@@ -518,6 +518,13 @@ pub fn register(e: &mut Engine) {
         let video = read_video(ctx, p.video_id, true)?;
         let actor = caller_name(ctx);
         stills::scan(ctx.engine(), &video, &p, &Caller { actor: &actor, session_id: ctx.actor_session_id() })
+    });
+
+    // Unlocked: a pass of every frame without pictures, and the mix, with nothing held.
+    e.register_unlocked::<Timeline>(|ctx, p| {
+        let video = read_video(ctx, p.video_id, true)?;
+        let actor = caller_name(ctx);
+        stills::timeline_of(ctx.engine(), &video, &p, &Caller { actor: &actor, session_id: ctx.actor_session_id() })
     });
 
     // Staged: the folder is read (and its new files kept) with the lock released; the

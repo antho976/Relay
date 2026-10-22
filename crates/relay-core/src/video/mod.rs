@@ -16,6 +16,7 @@ pub mod media;
 pub mod probe;
 pub mod sheet;
 pub mod stills;
+pub mod timeline;
 pub mod versions;
 pub mod worker;
 
@@ -37,6 +38,11 @@ pub struct Hub {
     pub(crate) worker: worker::Slot,
     pub(crate) kit: kit::State,
     pub(crate) jobs: jobs::Queue,
+    /// The newest timelines measured (`video.timeline`, a still's sound), by video, version,
+    /// composition and props: a still after a timeline reuses its mix.
+    pub(crate) timelines: Mutex<Vec<(String, std::sync::Arc<stills::Measured>)>>,
+    /// Files' lengths in seconds, by path and change time (ffprobe).
+    pub(crate) lengths: Mutex<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<f64>)>>,
     /// Tests only: the worker's command line instead of `node videos/.relay/worker.mjs`, with
     /// the kit counted as set up.
     program: Mutex<Option<Vec<String>>>,

@@ -148,7 +148,7 @@ fn video_e2e_the_starter_checks_looks_and_renders_for_real() {
     let logo = root().join("logo.png");
     fs::copy(&png, &logo).unwrap();
     let asset = ok(&e, "video.asset.add", json!({"video_id": id, "path": logo}));
-    assert_eq!(asset["kind"], "image");
+    assert_eq!(asset["assets"][0]["kind"], "image");
     println!("versions: {}", ok(&e, "video.get", json!({"video_id": id}))["versions"]);
     ok(&e, "video.delete", json!({"video_id": id}));
     relay_core::video::shutdown(&e);
@@ -231,6 +231,160 @@ export const Video: React.FC<Props> = ({ accent }) => {
     }
     let scanned = timed("kit scan", || ok(&e, "video.scan", json!({"video_id": id})));
     println!("kit scan: {} frames, issues {}", scanned["frames"], scanned["issues"]);
+    ok(&e, "video.delete", json!({"video_id": id}));
+    relay_core::video::shutdown(&e);
+}
+
+/// A 16-bit stereo WAV at 48 kHz of `seconds`, each sample `f(t)`.
+fn wav(path: &Path, seconds: f64, f: impl Fn(f64) -> f64) {
+    let rate = 48_000u32;
+    let n = (seconds * rate as f64) as usize;
+    let mut data = Vec::with_capacity(n * 4);
+    for i in 0..n {
+        let v = (f(i as f64 / rate as f64).clamp(-1.0, 1.0) * 32767.0) as i16;
+        data.extend_from_slice(&v.to_le_bytes());
+        data.extend_from_slice(&v.to_le_bytes());
+    }
+    let mut out = Vec::new();
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * 4).to_le_bytes());
+    out.extend_from_slice(&4u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out.extend_from_slice(&data);
+    fs::write(path, out).unwrap();
+}
+
+/// The first channel of a file's sound at 48 kHz, as ffmpeg (honouring an MP4's edit list) reads it.
+fn samples(path: &Path) -> Vec<f32> {
+    let out = std::process::Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(path)
+        .args(["-ac", "1", "-ar", "48000", "-f", "s16le", "pipe:1"]).output().unwrap();
+    out.stdout.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b) as f32 / 32768.0).collect()
+}
+
+/// How many samples `a` lags `b` (positive: later), within ±`most`, by cross-correlation.
+fn lag(a: &[f32], b: &[f32], most: i64) -> i64 {
+    let n = a.len().min(b.len()).min(48_000 * 4);
+    (-most..=most).max_by(|x, y| {
+        let score = |l: i64| (0..n).filter_map(|i| {
+            let j = i as i64 - l;
+            (j >= 0 && (j as usize) < n).then(|| a[i] as f64 * b[j as usize] as f64)
+        }).sum::<f64>();
+        score(*x).total_cmp(&score(*y))
+    }).unwrap()
+}
+
+/// Sound end to end, for real: music, a voice line and cues through the kit's `Music`, `Voice`
+/// and `Cue` on a `useBeatGrid`, the new kit pieces typechecked and drawn, the timeline with its
+/// mix and grid, the beats of the music, a render brought to YouTube's loudness, and the MP4's
+/// sound against a WAV render of the same frames: in sync to the sample.
+#[test]
+#[ignore = "needs Node.js 20+, ffmpeg and the kit video_e2e sets up: run with --ignored"]
+fn video_e2e_sound_from_cues_to_loudness() {
+    let e = engine();
+    assert_eq!(ok(&e, "video.kit.status", json!({}))["state"], "ready", "run video_e2e_the_starter_checks_looks_and_renders_for_real first");
+    let made = ok(&e, "video.create", json!({"project_id": 1, "title": "Sound", "shape": "vertical", "seconds": 8}));
+    let (id, dir) = (made["video"]["id"].as_i64().unwrap(), PathBuf::from(made["video"]["dir"].as_str().unwrap()));
+    let files = root().join("sound");
+    fs::create_dir_all(&files).unwrap();
+    use std::f64::consts::TAU;
+    // Music: a kick on every beat at 120 BPM, louder on the downbeats, over a soft pad.
+    wav(&files.join("music.wav"), 8.0, |t| {
+        let beat = t % 0.5;
+        let down = (t / 0.5).floor() as i64 % 4 == 0;
+        let kick = (TAU * 55.0 * beat).sin() * (-beat * 30.0).exp() * if down { 0.9 } else { 0.5 };
+        kick + 0.08 * (TAU * 220.0 * t).sin()
+    });
+    wav(&files.join("vo-hello.wav"), 1.4, |t| 0.5 * (TAU * 180.0 * t).sin() * (TAU * 3.0 * t).sin().abs());
+    wav(&files.join("sfx-tap.wav"), 0.15, |t| 0.8 * (TAU * 2400.0 * t).sin() * (-t * 40.0).exp());
+    let added = ok(&e, "video.asset.add", json!({"video_id": id, "paths": [files.join("music.wav"), files.join("vo-hello.wav"), files.join("sfx-tap.wav")]}));
+    assert_eq!(added["assets"].as_array().unwrap().len(), 3);
+    fs::write(dir.join("src/Video.tsx"), r##"import { BeforeAfter, Checklist, Cue, Music, Phone, Title, VersionPill, Voice, useBeatGrid, useSafePadding, useSweep } from '@relay/video';
+import { AbsoluteFill, Sequence } from 'remotion';
+import type { Props } from './Root';
+
+export const Video: React.FC<Props> = () => {
+  const grid = useBeatGrid({ bpm: 120, firstBeat: 0 });
+  const padding = useSafePadding();
+  const voice = { at: 30, frames: 42 };
+  return (
+    <AbsoluteFill style={{ background: '#0B0D12' }}>
+      <Music src="assets/music.wav" duckUnder={[[voice.at, voice.at + voice.frames]]} fadeOut={15} frames={240} />
+      <Voice src="assets/vo-hello.wav" at={voice.at} name="hello" />
+      <Cue src="assets/sfx-tap.wav" at={grid.beat(4)} name="on-the-beat" />
+      <Cue src="assets/sfx-tap.wav" at={grid.beat(6) + 5} name="late" level="ui" />
+      <Sequence from={0} durationInFrames={grid.bar(3)} name="Hook">
+        <AbsoluteFill style={{ ...padding, alignItems: 'center', gap: 40 }}>
+          <Title id="hook" size={96}>One phone, two versions</Title>
+          <div style={{ position: 'relative' }}>
+            <Phone id="phone" width={480} model="android" designWidth={412} statusBar="light" homeIndicator="light">
+              <BeforeAfter at={20} duration={24}
+                before={<AbsoluteFill style={{ background: '#3B3F4A' }} />}
+                after={<AbsoluteFill style={{ background: '#1E7A5C' }} />} />
+            </Phone>
+          </div>
+          <Pill />
+        </AbsoluteFill>
+      </Sequence>
+      <Sequence from={grid.bar(3)} name="Everything else">
+        <AbsoluteFill style={{ ...padding, justifyContent: 'center' }}>
+          <Checklist id="list" title="Also in 1.0" items={['Warm-ups', 'Rest timer', 'Cardio goals', 'Profile board']} every={grid.framesPerBeat / 2} />
+        </AbsoluteFill>
+      </Sequence>
+    </AbsoluteFill>
+  );
+};
+
+const Pill: React.FC = () => <VersionPill from="0.9" to="1.0" progress={useSweep(20, 24)} />;
+"##).unwrap();
+    let checked = timed("sound check", || ok(&e, "video.check", json!({"video_id": id})));
+    assert_eq!((checked["ok"].as_bool(), checked["errors"].clone()), (Some(true), json!([])), "the new kit pieces typecheck: {checked}");
+
+    let sheet = timed("still with sound", || ok(&e, "video.still", json!({"video_id": id, "count": 6, "sound": true})));
+    println!("sound sheet: {}\nissues: {}", sheet["png"], sheet["issues"]);
+    let t = timed("timeline", || ok(&e, "video.timeline", json!({"video_id": id})));
+    println!("timeline: {}\nscenes {}\nsounds {}\ngrid {}\nmix {}\nissues {}", t["png"], t["scenes"], t["sounds"], t["grid"], t["mix"], t["issues"]);
+    let scenes: Vec<&str> = t["scenes"].as_array().unwrap().iter().map(|s| s["name"].as_str().unwrap()).collect();
+    assert!(scenes.contains(&"Hook") && scenes.contains(&"Everything else"), "{scenes:?}");
+    let sound = |name: &str| t["sounds"].as_array().unwrap().iter().find(|s| s["name"] == name).cloned().unwrap_or_else(|| panic!("no {name} in {}", t["sounds"]));
+    assert_eq!((sound("hello")["kind"].as_str(), sound("hello")["start"].as_u64()), (Some("voice"), Some(30)));
+    assert_eq!((sound("on-the-beat")["start"].as_u64(), sound("on-the-beat")["on_beat"].as_bool()), (Some(60), Some(true)));
+    assert_eq!((sound("late")["start"].as_u64(), sound("late")["on_beat"].as_bool()), (Some(95), Some(false)));
+    assert_eq!(t["grid"]["from"], "code");
+    let kinds: Vec<&str> = t["issues"].as_array().unwrap().iter().map(|i| i["kind"].as_str().unwrap()).collect();
+    assert!(kinds.contains(&"off_beat") && !kinds.contains(&"no_duck"), "the late cue is off the beat; the music ducks: {kinds:?}");
+    assert!(t["mix"]["lufs"].as_f64().is_some(), "{}", t["mix"]);
+
+    let beats = timed("beats", || ok(&e, "video.audio.beats", json!({"video_id": id, "asset": "assets/music.wav"})));
+    println!("beats: bpm {} first downbeat {} fit {} ms", beats["bpm"], beats["first_downbeat_s"], beats["fit_rms_ms"]);
+    assert!((beats["bpm"].as_f64().unwrap() - 120.0).abs() < 0.1, "{beats}");
+    assert!(beats["first_downbeat_s"].as_f64().unwrap() < 0.02, "{beats}");
+
+    // As it is, then brought to YouTube's -14 LUFS under -1 dBTP; and the sound alone.
+    let plain = timed("render, sound measured", || ok(&e, "video.render", json!({"video_id": id, "name": "plain", "wait": true})));
+    println!("plain audio: {}", plain["audio"]);
+    let loud = timed("render at -14 LUFS", || ok(&e, "video.render", json!({"video_id": id, "name": "youtube", "preset": "youtube", "wait": true})));
+    println!("youtube audio: {}", loud["audio"]);
+    let audio = &loud["audio"];
+    assert!((audio["lufs"].as_f64().unwrap() + 14.0).abs() < 0.5, "{audio}");
+    assert!(audio["true_peak"].as_f64().unwrap() <= -0.9, "{audio}");
+    let wav_render = ok(&e, "video.render", json!({"video_id": id, "name": "plain", "format": "wav", "wait": true}));
+    // The MP4's sound, read as players read it, against the WAV: no lag, before or after the
+    // loudness was applied.
+    let reference = samples(Path::new(wav_render["path"].as_str().unwrap()));
+    for render in [&plain, &loud] {
+        let heard = samples(Path::new(render["path"].as_str().unwrap()));
+        let lagged = lag(&heard, &reference, 2400);
+        println!("{} lags the WAV by {lagged} samples", render["name"]);
+        assert!(lagged.abs() <= 2, "{} is {lagged} samples off", render["name"]);
+    }
     ok(&e, "video.delete", json!({"video_id": id}));
     relay_core::video::shutdown(&e);
 }

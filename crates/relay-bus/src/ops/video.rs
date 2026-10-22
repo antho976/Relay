@@ -605,6 +605,10 @@ payload!(#[schemars(rename = "VideoStillIn")] StillIn {
     pub props: Option<Value>,
     /// Answer the laid-out box of every element with a `data-id` (default false).
     pub boxes: Option<bool>,
+    /// Draw the sound under the picture (default false): the mix's waveform across the frames
+    /// drawn, each frame's moment marked, and where every cue and voice line plays. The first
+    /// for a version makes the mix (a pass without pictures); later ones reuse it.
+    pub sound: Option<bool>,
 });
 result!(#[schemars(rename = "VideoStillFrame")] StillFrame {
     pub frame: u32,
@@ -681,7 +685,8 @@ result!(#[schemars(rename = "VideoScanOut")] ScanOut {
     pub every: u32,
     /// As `video.still`'s, from every frame measured but without `contrast` (no pictures are
     /// drawn), with words in motion (entering, leaving, mid-transition) left out of the checks of
-    /// where they are, and `brief_text`: words on screen too short a time to read.
+    /// where they are, and `brief_text`: words on screen too short a time to read. And the
+    /// sound's: `off_beat`, `voice_overlap`, `no_duck` and `silence`, as `video.timeline`'s.
     pub issues: Vec<Issue>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<CodeError>,
@@ -695,6 +700,92 @@ op!(Scan, "video.scan", ScanIn => ScanOut,
 pub const MAX_WAIT_MS: u64 = 3_600_000;
 /// Most renders one `video.render.batch` queues.
 pub const MAX_BATCH: usize = 12;
+
+payload!(#[schemars(rename = "VideoTimelineIn")] TimelineIn {
+    pub video_id: Id,
+    /// Default the video's composition.
+    pub composition: Option<String>,
+    /// Props to draw with instead of the video's.
+    pub props: Option<Value>,
+    /// The beat grid to check against when the code sets none (`useBeatGrid`): its tempo …
+    #[schemars(range(min = 40.0, max = 240.0))]
+    pub bpm: Option<f64>,
+    /// … its first downbeat, seconds (default 0) …
+    pub first_beat: Option<f64>,
+    /// … and beats a bar (default 4).
+    #[schemars(range(min = 1, max = 12))]
+    pub beats_per_bar: Option<u32>,
+    /// Or the music to find the grid in (`video.audio.beats`): `assets/music.mp3`.
+    pub music: Option<String>,
+    /// Draw it as a picture (default true): the scenes, the sounds, the mix's waveform and the
+    /// beat grid on one time axis. Through `relay mcp` it is attached to the answer.
+    pub picture: Option<bool>,
+});
+result!(#[schemars(rename = "VideoTimelineItem")] TimelineItem {
+    /// A scene: `scene`. A sound: `music`, `voice`, `sfx`, `ui`, `whoosh`, `impact`, `ambience`
+    /// (the kit's levels), `clip` (a video's own sound) or `sound`.
+    pub kind: String,
+    /// Its Sequence's `name`, or the sound's (the kit's `name`, or its file's).
+    pub name: String,
+    /// A sound's file, as `staticFile()` names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// How deep a scene sits in others (0 at the top).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<u32>,
+    /// The composition's frames: its first, how many, and the one after its last.
+    pub start: u32,
+    pub frames: u32,
+    pub end: u32,
+    /// `2.0s · f60`.
+    pub at: String,
+    /// The loudest volume a sound plays at (the kit's level, or `<Audio volume>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f64>,
+    /// With a grid: whether it starts within a frame of a beat, and of a bar's first beat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_beat: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_bar: Option<bool>,
+    /// Frames from the nearest beat (positive: after it), and that beat as `bar 9 · beat 3`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off_by: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub beat: Option<String>,
+});
+result!(#[schemars(rename = "VideoTimelineGrid")] TimelineGrid {
+    pub bpm: f64,
+    pub first_beat_s: f64,
+    pub beats_per_bar: u32,
+    pub frames_per_beat: f64,
+    /// `code` (the video's `useBeatGrid`), `given` (this call's bpm) or `music` (found in it).
+    pub from: String,
+});
+result!(#[schemars(rename = "VideoTimelineOut")] TimelineOut {
+    pub composition: Composition,
+    /// The picture, when drawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub png: Option<String>,
+    /// Every Sequence, in start order: the scenes and what is in them.
+    pub scenes: Vec<TimelineItem>,
+    /// Every sound: the kit's `Music`, `Voice` and `Cue`, and any `<Audio>` or clip with sound.
+    pub sounds: Vec<TimelineItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid: Option<TimelineGrid>,
+    /// The sound mixed as a render mixes it, measured: loudness, peaks, clipping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mix: Option<AudioReport>,
+    /// What the sound gets wrong: `off_beat` (a cue off the grid), `voice_overlap`, `no_duck`
+    /// (music as loud under a voice as without), `silence` (two seconds or more of nothing),
+    /// `clipping` (the mix's peaks).
+    pub issues: Vec<Issue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<CodeError>,
+    pub version: i64,
+});
+op!(Timeline, "video.timeline", TimelineIn => TimelineOut,
+    OpMeta::query(Scope::Project, 12, "A video's timeline: every scene and sound with its start frame and length, whether each starts on the beat grid, the mix's loudness and what the sound gets wrong; through MCP the timeline comes as a picture with the waveform")
+        .emits(&["video.changed"]).plugin(PLUGIN));
 
 payload!(#[schemars(rename = "VideoRenderIn")] RenderIn {
     pub video_id: Id,
@@ -1022,7 +1113,7 @@ op!(KitInstall, "video.kit.install", KitInstallIn => KitStatus,
         .emits(&["video.kit.changed", "video.kit.progress"]).plugin(PLUGIN));
 
 entries!(List, Get, Create, Update, Delete, Restore, Check, Still, Scan, Render, RenderBatch, RenderWait, RenderGet, RenderCancel,
-    AssetAdd, AssetList, AssetInspect, AudioBeats, VersionRestore, KitStatusOp, KitInstall);
+    AssetAdd, AssetList, AssetInspect, AudioBeats, Timeline, VersionRestore, KitStatusOp, KitInstall);
 
 #[cfg(test)]
 mod tests {

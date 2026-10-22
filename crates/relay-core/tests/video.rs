@@ -450,3 +450,70 @@ fn versions_say_what_they_changed() {
     assert_eq!(versions[0]["changed"], json!(["+src/Hook.tsx"]));
     assert_eq!(versions[1]["changed"], json!(["the starter"]));
 }
+
+#[test]
+fn the_timeline_lists_scenes_and_sounds_on_the_grid_and_what_the_sound_gets_wrong() {
+    let (e, _root) = project();
+    with_worker(&e);
+    let (id, dir) = create(&e);
+    fs::write(dir.join("src/SOUND"), "").unwrap();
+    let t = ok(&e, "video.timeline", json!({"video_id": id}));
+    let scenes: Vec<(&str, u64, u64, u64)> = t["scenes"].as_array().unwrap().iter()
+        .map(|s| (s["name"].as_str().unwrap(), s["start"].as_u64().unwrap(), s["frames"].as_u64().unwrap(), s["depth"].as_u64().unwrap())).collect();
+    assert_eq!(scenes, [("Hook", 0, 45, 0), ("Feature", 45, 45, 0), ("Card", 55, 20, 1)], "{t}");
+    // The cut to Feature is on beat 3 of bar 1 (15 frames a beat at 120 BPM and 30 fps).
+    assert_eq!((t["scenes"][1]["on_beat"].as_bool(), t["scenes"][1]["beat"].as_str()), (Some(true), Some("bar 1 · beat 4")));
+    let sounds: Vec<(&str, &str, u64, u64)> = t["sounds"].as_array().unwrap().iter()
+        .map(|s| (s["kind"].as_str().unwrap(), s["name"].as_str().unwrap(), s["start"].as_u64().unwrap(), s["end"].as_u64().unwrap())).collect();
+    assert_eq!(sounds, [("music", "music", 0, 90), ("sfx", "tap", 20, 26), ("voice", "vo-1", 30, 60)], "{t}");
+    assert_eq!(t["sounds"][1]["file"], "assets/sfx-tap.wav");
+    assert_eq!((t["grid"]["bpm"].as_f64(), t["grid"]["from"].as_str()), (Some(120.0), Some("code")));
+    let kinds: Vec<&str> = t["issues"].as_array().unwrap().iter().map(|i| i["kind"].as_str().unwrap()).collect();
+    assert!(kinds.contains(&"off_beat") && kinds.contains(&"no_duck"), "{}", t["issues"]);
+    let off = t["issues"].as_array().unwrap().iter().find(|i| i["kind"] == "off_beat").unwrap();
+    assert_eq!((off["id"].as_str(), off["frames"].clone()), (Some("tap"), json!([20])));
+    let png = PathBuf::from(t["png"].as_str().unwrap());
+    assert!(png.is_file());
+    // A grid given by the call is checked instead of the code's.
+    let given = ok(&e, "video.timeline", json!({"video_id": id, "bpm": 90, "picture": false}));
+    assert_eq!((given["grid"]["from"].as_str(), given.get("png")), (Some("given"), None));
+    // Where ffmpeg can read the mix, it is measured.
+    if which::which("ffmpeg").is_ok() {
+        let lufs = t["mix"]["lufs"].as_f64().unwrap_or_else(|| panic!("{t}"));
+        assert!((-15.0..-8.0).contains(&lufs), "a 0.3 sine: {lufs}");
+    }
+}
+
+#[test]
+fn a_scan_checks_the_sound_too() {
+    let (e, _root) = project();
+    with_worker(&e);
+    let (id, dir) = create(&e);
+    fs::write(dir.join("src/SOUND"), "").unwrap();
+    let scanned = ok(&e, "video.scan", json!({"video_id": id}));
+    let kinds: Vec<&str> = scanned["issues"].as_array().unwrap().iter().map(|i| i["kind"].as_str().unwrap()).collect();
+    assert!(kinds.contains(&"off_beat") && kinds.contains(&"no_duck"), "{kinds:?}");
+}
+
+#[test]
+fn a_still_can_show_its_sound_under_it() {
+    let (e, _root) = project();
+    with_worker(&e);
+    let (id, dir) = create(&e);
+    fs::write(dir.join("src/SOUND"), "").unwrap();
+    let height = |still: &Value| {
+        let decoded = png_size(Path::new(still["png"].as_str().unwrap()));
+        decoded.1
+    };
+    let plain = ok(&e, "video.still", json!({"video_id": id, "count": 3}));
+    let heard = ok(&e, "video.still", json!({"video_id": id, "count": 3, "sound": true}));
+    assert_eq!(height(&heard), height(&plain) + 150, "the strip goes under the sheet");
+    let one = ok(&e, "video.still", json!({"video_id": id, "at": ["1s"], "sound": true}));
+    assert!(height(&one) > 150);
+}
+
+/// A PNG's width and height, from its header.
+fn png_size(path: &Path) -> (u32, u32) {
+    let bytes = fs::read(path).unwrap();
+    (u32::from_be_bytes(bytes[16..20].try_into().unwrap()), u32::from_be_bytes(bytes[20..24].try_into().unwrap()))
+}

@@ -4,10 +4,14 @@
 
 use super::probe::{self, Drawn, Probe};
 use super::sheet::{self, Rgba};
+use super::timeline::{self, Built, FrameSounds, Grid, Mix};
 use super::{blobs_dir, bundle_dir, get_video, poster_path, versions, worker, Video};
 use crate::engine::{Engine, IntoBus};
 use relay_bus::error::BusError;
-use relay_bus::ops::video::{frame_label, CheckOut, CodeError, Composition, ErrorKind, ScanIn, ScanOut, StillFrame, StillIn, StillOut, MAX_STILLS};
+use relay_bus::ops::video::{
+    frame_label, CheckOut, CodeError, Composition, ErrorKind, ScanIn, ScanOut, StillFrame, StillIn, StillOut, TimelineIn, TimelineOut, MAX_STILLS,
+};
+use std::sync::Arc;
 use relay_bus::types::Id;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -233,12 +237,38 @@ pub fn still(engine: &Engine, video: &Video, p: &StillIn, by: &Caller) -> Result
 
     let labels: Vec<String> = drawn.stills.iter().map(|s| frame_label(s.frame, comp.fps)).collect();
     let png = dir.join(format!("{name}.png"));
+    // The sound under it: the mix between the first and last frame drawn, from a timeline measured
+    // for this version (made now when there is none yet).
+    let strip = if p.sound == Some(true) {
+        let m = measured(engine, video, &composition, &props, version)?;
+        let marks: Vec<u32> = drawn.stills.iter().map(|s| s.frame).collect();
+        let (a, b) = (marks.iter().copied().min().unwrap_or(0), marks.iter().copied().max().unwrap_or(0));
+        // One frame: a second either side of it.
+        let around = (comp.fps.round() as u32).max(1);
+        let (a, b) = if a == b { (a.saturating_sub(around), (b + around).min(comp.duration_frames.saturating_sub(1))) } else { (a, b) };
+        Some((m, marks, a, b))
+    } else {
+        None
+    };
+    let with_strip = |picture: Rgba| -> Rgba {
+        let Some((m, marks, a, b)) = &strip else { return picture };
+        let under = timeline::strip(&m.built, m.grid.as_ref(), m.mix.as_ref(), comp.fps, (*a, *b), marks, picture.w);
+        let mut out = Rgba::new(picture.w, picture.h + under.h, [24, 26, 31, 255]);
+        out.blit(&picture, 0, 0);
+        out.blit(&under, 0, picture.h);
+        out
+    };
     if sheet_of {
         let blank = Rgba::new((comp.width as f64 * scale).round().max(1.0) as u32, (comp.height as f64 * scale).round().max(1.0) as u32, [60, 20, 24, 255]);
         let tiles_drawn: Vec<Rgba> = pictures.iter().map(|p| p.clone().unwrap_or_else(|| blank.clone())).collect();
-        sheet::encode(&png, &sheet::sheet(&tiles_drawn, &labels)).map_err(BusError::internal)?;
+        sheet::encode(&png, &with_strip(sheet::sheet(&tiles_drawn, &labels))).map_err(BusError::internal)?;
     } else if let Some(path) = drawn.stills[0].path.as_ref() {
-        fs::rename(path, &png).map_err(|e| BusError::internal(format!("{}: {e}", png.display())))?;
+        if strip.is_some() {
+            let one = pictures[0].clone().ok_or_else(|| BusError::internal("the frame drawn cannot be read"))?;
+            sheet::encode(&png, &with_strip(one)).map_err(BusError::internal)?;
+        } else {
+            fs::rename(path, &png).map_err(|e| BusError::internal(format!("{}: {e}", png.display())))?;
+        }
     }
 
     // The poster: the frame drawn nearest two fifths in, of the video's own composition.
@@ -248,8 +278,10 @@ pub fn still(engine: &Engine, video: &Video, p: &StillIn, by: &Caller) -> Result
             .min_by(|(_, a), (_, b)| (a.frame as f64 - target).abs().total_cmp(&(b.frame as f64 - target).abs()))
             .map(|(i, _)| i);
         if let Some(i) = best {
-            let from = if sheet_of { tiles[i].clone() } else { png.clone() };
-            keep_poster(engine, video, &from, by);
+            let from = if sheet_of || strip.is_some() { tiles[i].clone() } else { png.clone() };
+            if from.exists() {
+                keep_poster(engine, video, &from, by);
+            }
         }
     }
     for tile in &tiles {
@@ -266,9 +298,156 @@ struct WorkerScan {
     #[serde(default)]
     probes: Vec<Probe>,
     #[serde(default)]
+    sounds: Vec<FrameSounds>,
+    #[serde(default)]
     console: Vec<String>,
     #[serde(default)]
     errors: Vec<CodeError>,
+}
+
+/// A file's length in the composition's frames at `fps`, by its `staticFile()` name in the video at
+/// `dir`: ffprobe, kept by path and change time.
+fn lengths<'a>(engine: &'a Engine, dir: &'a Path, fps: f64) -> impl Fn(&str) -> Option<f64> + 'a {
+    move |file: &str| {
+        if file.is_empty() || file.split('/').any(|part| part == "..") {
+            return None;
+        }
+        let path = dir.join("public").join(file);
+        let changed = fs::metadata(&path).and_then(|m| m.modified()).ok()?;
+        if let Some((at, seconds)) = engine.video.lengths.lock().unwrap_or_else(|e| e.into_inner()).get(&path) {
+            if *at == changed {
+                return seconds.map(|s| s * fps);
+            }
+        }
+        let seconds = super::media::probe(engine, &path).ok()
+            .and_then(|info| info["format"]["duration"].as_str().and_then(|d| d.parse::<f64>().ok()));
+        engine.video.lengths.lock().unwrap_or_else(|e| e.into_inner()).insert(path, (changed, seconds));
+        seconds.map(|s| s * fps)
+    }
+}
+
+/// What a pass of every frame without pictures found: the timeline's scenes and sounds, the grid
+/// the code set, and the mix, measured.
+pub struct Measured {
+    pub composition: Composition,
+    pub built: Built,
+    pub grid: Option<Grid>,
+    pub mix: Option<Mix>,
+    pub errors: Vec<CodeError>,
+}
+
+#[derive(Deserialize)]
+struct WorkerTimeline {
+    composition: Option<Composition>,
+    #[serde(default)]
+    probes: Vec<Probe>,
+    #[serde(default)]
+    sounds: Vec<FrameSounds>,
+    mix: Option<String>,
+    #[serde(default)]
+    errors: Vec<CodeError>,
+}
+
+/// Most timelines kept measured.
+const KEEP_TIMELINES: usize = 4;
+
+/// The timeline of `video`'s `composition` at `version` with `props`: measured now (every frame,
+/// no pictures, the sound mixed), or the one kept from before.
+pub fn measured(engine: &Engine, video: &Video, composition: &str, props: &Value, version: i64) -> Result<Arc<Measured>, BusError> {
+    let key = format!("{}:{version}:{composition}:{props}", video.id);
+    if let Some((_, kept)) = engine.video.timelines.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(k, _)| *k == key) {
+        return Ok(kept.clone());
+    }
+    let bundle = bundle_dir(engine, video.id);
+    let meta: WorkerMeta = serde_json::from_value(worker::call(engine, "meta",
+        json!({"dir": video.dir, "bundle_dir": bundle, "composition": composition, "props": props}), META_WITHIN)?).bus()?;
+    let Some(comp) = meta.composition.filter(|_| meta.errors.is_empty()) else {
+        return Err(build_refusal(&meta.errors));
+    };
+    let sound_dir = engine.store.videos_dir().join(".relay/sound");
+    fs::create_dir_all(&sound_dir).map_err(|e| BusError::internal(format!("{}: {e}", sound_dir.display())))?;
+    let mix_path = sound_dir.join(format!("{}-{}.wav", video.id, uuid::Uuid::new_v4()));
+    // Every frame, drawn without pictures: a few milliseconds each, and the mix after.
+    let within = Duration::from_secs(120 + u64::from(comp.duration_frames) / 30);
+    let found: WorkerTimeline = serde_json::from_value(worker::call(engine, "timeline", json!({
+        "dir": video.dir, "bundle_dir": bundle, "composition": composition, "props": props, "mix": mix_path,
+    }), within)?).bus()?;
+    if found.probes.is_empty() && !found.errors.is_empty() {
+        return Err(build_refusal(&found.errors));
+    }
+    let comp = found.composition.unwrap_or(comp);
+    let mix = found.mix.as_ref().and_then(|path| {
+        let pcm = super::media::decode(engine, Path::new(path), super::audio::RATE, 2).ok().flatten();
+        let _ = fs::remove_file(path);
+        pcm.map(|pcm| {
+            let measured = super::audio::measure(&pcm);
+            let mut report = super::audio::report_of(&measured, pcm.channels);
+            report.warnings = super::audio::warnings(&measured, None);
+            Mix::of(&pcm, comp.fps, Some(report))
+        })
+    });
+    let dir = PathBuf::from(&video.dir);
+    let built = timeline::build(&found.probes, &found.sounds, comp.fps, comp.duration_frames, 1, &lengths(engine, &dir, comp.fps));
+    let grid = timeline::code_grid(&found.probes, comp.fps);
+    let measured = Arc::new(Measured { composition: summary(comp), built, grid, mix, errors: found.errors });
+    let mut kept = engine.video.timelines.lock().unwrap_or_else(|e| e.into_inner());
+    kept.insert(0, (key, measured.clone()));
+    kept.truncate(KEEP_TIMELINES);
+    Ok(measured)
+}
+
+/// The grid to check against: the call's, else the code's own, else one found in `music`.
+pub fn grid_for(engine: &Engine, video: &Video, p: &TimelineIn, code: Option<Grid>, fps: f64) -> Result<(Option<Grid>, &'static str), BusError> {
+    if let Some(bpm) = p.bpm {
+        return Ok((Some(Grid { bpm, first_beat_s: p.first_beat.unwrap_or(0.0), beats_per_bar: p.beats_per_bar.unwrap_or(4).max(1), fps }), "given"));
+    }
+    if code.is_some() {
+        return Ok((code, "code"));
+    }
+    let Some(music) = p.music.as_deref() else { return Ok((None, "")) };
+    let path = if Path::new(music).is_absolute() { PathBuf::from(music) } else { Path::new(&video.dir).join("public").join(music) };
+    let pcm = super::media::decode(engine, &path, super::beats::RATE, 1)?
+        .ok_or_else(|| BusError::invalid("video.audio", format!("{music} has no sound")))?;
+    let found = super::beats::analyse(&pcm, p.beats_per_bar.unwrap_or(4), None)
+        .ok_or_else(|| BusError::invalid("video.audio.no_beat", format!("{music} has no steady beat to find")))?;
+    Ok((Some(Grid { bpm: found.bpm, first_beat_s: found.first_downbeat_s, beats_per_bar: found.beats_per_bar, fps }), "music"))
+}
+
+/// `video.timeline`: every scene and sound, on the grid, with the mix and what the sound gets
+/// wrong, and the picture of it all.
+pub fn timeline_of(engine: &Engine, video: &Video, p: &TimelineIn, by: &Caller) -> Result<TimelineOut, BusError> {
+    super::kit::ready(engine)?;
+    let version = snapshot(engine, video, by)?;
+    let composition = p.composition.clone().unwrap_or_else(|| video.composition.clone());
+    let props = props_for(engine, video.id, &composition, p.props.as_ref())?;
+    let m = measured(engine, video, &composition, &props, version)?;
+    let fps = m.composition.fps;
+    let (grid, from) = grid_for(engine, video, p, m.grid, fps)?;
+    let issues = timeline::issues(&m.built, grid.as_ref(), m.mix.as_ref(), fps, m.composition.duration_frames);
+    let (scenes, sounds) = timeline::items(&m.built, grid.as_ref(), fps);
+    let png = if p.picture.unwrap_or(true) {
+        let c = &m.composition;
+        let mut title = format!("{} · {}x{} · {} fps · {:.1}s", c.id, c.width, c.height, c.fps, c.duration_frames as f64 / c.fps.max(1.0));
+        if let Some(g) = grid.as_ref() {
+            title.push_str(&format!(" · {:.2} bpm", g.bpm));
+        }
+        if let Some(lufs) = m.mix.as_ref().and_then(|x| x.report.as_ref()).and_then(|r| r.lufs) {
+            title.push_str(&format!(" · {lufs:.1} lufs"));
+        }
+        let picture = timeline::draw(&m.built, grid.as_ref(), m.mix.as_ref(), &issues, fps, c.duration_frames, &title);
+        let dir = engine.store.video_stills_dir();
+        fs::create_dir_all(&dir).map_err(|e| BusError::internal(format!("{}: {e}", dir.display())))?;
+        let png = dir.join(format!("{}.png", uuid::Uuid::new_v4()));
+        sheet::encode(&png, &picture).map_err(BusError::internal)?;
+        prune(&dir);
+        Some(png.display().to_string())
+    } else {
+        None
+    };
+    Ok(TimelineOut {
+        composition: m.composition.clone(), png, scenes, sounds, grid: grid.map(|g| g.to_bus(from)),
+        mix: m.mix.as_ref().and_then(|x| x.report.clone()), issues, errors: m.errors.clone(), version,
+    })
 }
 
 /// Measure every `every` frames of a composition, with no pictures, and check them all.
@@ -302,7 +481,14 @@ pub fn scan(engine: &Engine, video: &Video, p: &ScanIn, by: &Caller) -> Result<S
     if probes.is_empty() && !found.errors.is_empty() {
         return Err(build_refusal(&found.errors));
     }
-    let issues = probe::scan(&probes, &found.console, comp.fps, every);
+    let mut issues = probe::scan(&probes, &found.console, comp.fps, every);
+    // The sound, from the same frames: the kit's marks are exact, Remotion's assets within a step.
+    let dir = PathBuf::from(&video.dir);
+    let built = timeline::build(&probes, &found.sounds, comp.fps, comp.duration_frames, every, &lengths(engine, &dir, comp.fps));
+    if !built.tracks.is_empty() {
+        let grid = timeline::code_grid(&probes, comp.fps);
+        issues.extend(timeline::issues(&built, grid.as_ref(), None, comp.fps, comp.duration_frames));
+    }
     Ok(ScanOut { composition: summary(comp), frames: probes.len() as u32, every, issues, errors: found.errors, version })
 }
 
@@ -349,7 +535,7 @@ mod tests {
     use relay_bus::ops::video::Moment;
 
     fn input(at: Option<Vec<Moment>>, count: Option<u32>) -> StillIn {
-        StillIn { video_id: 1, composition: None, at, count, from: None, to: None, scale: None, props: None, boxes: None }
+        StillIn { video_id: 1, composition: None, at, count, from: None, to: None, scale: None, props: None, boxes: None, sound: None }
     }
 
     #[test]

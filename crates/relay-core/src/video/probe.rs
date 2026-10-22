@@ -23,6 +23,18 @@ pub struct Probe {
     pub texts: Vec<ProbeText>,
     #[serde(default)]
     pub images: Vec<ProbeImage>,
+    /// The kit's sounds playing on it (`kit/sound.tsx`).
+    #[serde(default)]
+    pub sounds: Vec<super::timeline::SoundMark>,
+    /// The beat grid the video set up (`useBeatGrid`).
+    #[serde(default)]
+    pub grid: Option<super::timeline::GridSet>,
+    /// The Sequences it holds, when they changed since the page last said them.
+    #[serde(default)]
+    pub sequences: Option<Vec<super::timeline::SequenceSeen>>,
+    /// The sound Remotion collects for the mix, as the page read it (the timeline's pass).
+    #[serde(default)]
+    pub assets: Vec<super::timeline::SoundAsset>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

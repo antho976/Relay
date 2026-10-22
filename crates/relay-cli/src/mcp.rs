@@ -674,7 +674,7 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
         if name == relay_bus::ops::picture::Thumb::NAME {
             return Ok(thumb_success(value, mail.as_ref()));
         }
-        if name == relay_bus::ops::video::Still::NAME {
+        if name == relay_bus::ops::video::Still::NAME || name == relay_bus::ops::video::Timeline::NAME {
             return Ok(still_success(value, mail.as_ref()));
         }
         Ok(tool_success(value, mail.as_ref())?)
