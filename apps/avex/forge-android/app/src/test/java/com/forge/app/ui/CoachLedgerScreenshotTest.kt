@@ -159,6 +159,19 @@ class CoachLedgerScreenshotTest {
 
     @Test
     fun amoled() = shoot("coach-page-amoled", amoled = true) { page(activeState())() }
+
+    // Antho's phone is 384dp wide: each tab there, tall enough to show the whole page, and Brief with a 1.3x font.
+    @Test @Config(qualifiers = "w384dp-h2400dp-xxhdpi")
+    fun brief384() = shoot("coach-page-384") { page(activeState())() }
+
+    @Test @Config(qualifiers = "w384dp-h2400dp-xxhdpi")
+    fun brief384Large() = shoot("coach-page-384-fs13", fontScale = 1.3f) { page(activeState())() }
+
+    @Test @Config(qualifiers = "w384dp-h2400dp-xxhdpi")
+    fun record384() = shoot("coach-page-record-384") { page(activeState(), CoachTab.RECORD)() }
+
+    @Test @Config(qualifiers = "w384dp-h2400dp-xxhdpi")
+    fun plan384() = shoot("coach-page-block-384") { page(activeState(), CoachTab.PLAN)() }
 }
 
 private const val NOW = 1_755_648_000_000L // 2025-08-20T00:00:00Z, fixed so goldens are stable.
@@ -296,8 +309,8 @@ private fun activeState() = CoachViewModel.UiState(
         "db_row" to listOf(148.0, 150.0, 149.0, 151.0, 150.0, 149.0, 150.0)
     ),
     goals = listOf(
-        goalState("bench_press", CoachGoalKind.LIFT_1RM, 315.0, "231 of 315 lb · +2.1 lb a week", 8, true),
-        goalState("back", CoachGoalKind.MUSCLE_VOLUME, 18.0, "14 of 18 sets a week", 14, false)
+        goalState("bench_press", CoachGoalKind.LIFT_1RM, 315.0, 231.0, "231 of 315 lb · +2.1 lb a week", 8, true),
+        goalState("back", CoachGoalKind.MUSCLE_VOLUME, 18.0, 14.0, "14 of 18 sets a week", 14, false)
     ),
     block = TrainingBlock(
         id = 1, phase = BlockPhase.ACCUMULATE.code, weekIndex = 3, plannedWeeks = 6,
@@ -335,13 +348,14 @@ private fun goalState(
     targetKey: String,
     kind: CoachGoalKind,
     target: Double,
+    current: Double,
     reading: String,
     etaWeeks: Int,
     onTrack: Boolean
 ) = GoalPortfolio.GoalState(
     goal = CoachGoal(id = 1, kind = kind.code, targetKey = targetKey, targetValue = target, createdAt = NOW),
     kind = kind,
-    current = null,
+    current = current,
     target = target,
     perWeek = null,
     etaWeeks = etaWeeks,

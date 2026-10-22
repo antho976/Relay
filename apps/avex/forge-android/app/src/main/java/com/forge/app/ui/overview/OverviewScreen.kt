@@ -749,7 +749,8 @@ private fun GoalColumn(goal: ScoreGoal, onOpen: () -> Unit, modifier: Modifier =
 
 @Composable
 private fun EmptyLine(text: String, action: String, onClick: () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    // The link's touch slop hides its padding from the layout, so the air between the two is this gap alone.
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(text, style = OpenType.body, color = MaterialTheme.colorScheme.onSurfaceVariant)
         OpenLabel(
             action,

@@ -127,7 +127,7 @@ fun LiftDetailScreen(
                 Text(name, style = OpenType.titleM, color = ink)
                 Spacer(Modifier.height(10.dp))
                 liftMeta(id)?.let { OpenLabel(it) }
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(20.dp))
                 OpenRangeSwitch(StatsRange.entries, range, { it.label }, { range = it })
                 Spacer(Modifier.height(22.dp))
             }

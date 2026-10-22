@@ -377,12 +377,13 @@ internal fun LiftGraph(lift: LiftTrend, state: StatsUiState, window: StatsWindow
             (if (prs.isNotEmpty()) ", ${prs.size} personal records" else "")
     )
     Spacer(Modifier.height(14.dp))
+    // The key names only the marks this chart draws, so it stays one line at 384dp.
     OpenChartKey(
         listOfNotNull(
-            if (range.before != null) ChartKeyMark.PREVIOUS to "${range.span} before" else null,
-            ChartKeyMark.PR to "PR",
-            ChartKeyMark.COACH to "Coach change",
-            ChartKeyMark.DELOAD to "Deload",
+            if (range.before != null && previous.isNotEmpty()) ChartKeyMark.PREVIOUS to "${range.span} before" else null,
+            if (prs.isNotEmpty()) ChartKeyMark.PR to "PR" else null,
+            if (coach.isNotEmpty()) ChartKeyMark.COACH to "Coach change" else null,
+            if (bands.isNotEmpty()) ChartKeyMark.DELOAD to "Deload" else null,
         )
     )
 }
@@ -539,7 +540,8 @@ private fun EffortTab(state: StatsUiState, window: StatsWindow, range: StatsRang
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.Bottom) {
             Column(Modifier.width(120.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(figure("${effort.inZonePct ?: 0}", "%", OpenType.figureXL, OpenType.figureXLUnit), style = OpenType.figureXL, color = MaterialTheme.colorScheme.onBackground)
-                Text("In the 1 to 3 reps left zone", style = OpenType.bodyS, color = muted)
+                // No-break spaces keep "1 to 3 reps left" on one line in the narrow figure column.
+                Text("of sets with 1\u00A0to\u00A03\u00A0reps\u00A0left", style = OpenType.bodyS, color = muted)
             }
             OpenColumnChart(
                 values = effort.buckets.map { it.toFloat() },

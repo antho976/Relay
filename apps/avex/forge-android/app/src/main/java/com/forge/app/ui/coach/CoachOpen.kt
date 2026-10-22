@@ -5,6 +5,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -75,9 +77,11 @@ private const val WATCH_MS = 14L * 24 * 60 * 60 * 1000
 private const val DAY_MS = 24L * 60 * 60 * 1000
 private const val RECORD_WEEKS = 12
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Head(left: String, right: String? = null, rightInk: Boolean = false) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+    // A flow row, so a large font drops the right label under the left one instead of running into it.
+    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         OpenLabel(left)
         if (right != null) OpenLabel(right, color = if (rightInk) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -469,7 +473,7 @@ private fun BlockSection(state: CoachViewModel.UiState, actions: CoachActions) {
         Spacer(Modifier.height(10.dp))
         Serif("No block running")
         Spacer(Modifier.height(8.dp))
-        Body("The coach is reading week to week. A block plans the next few weeks around one aim, then an easy week to cash it in.")
+        Body("The coach reads week to week. A block plans a few weeks around one aim, then an easy week.")
         Spacer(Modifier.height(14.dp))
         if (!state.blockBusy) OpenSmallButton("Start a block", filled = true, onClick = actions.startBlock)
         return
@@ -479,7 +483,8 @@ private fun BlockSection(state: CoachViewModel.UiState, actions: CoachActions) {
     val phase = BlockPhase.fromCode(block.phase)
     Head("Training block", "${start.format(DATE_SHORT)} to ${end.format(DATE_SHORT)}")
     Spacer(Modifier.height(10.dp))
-    Serif("Week ${block.weekIndex} of ${block.plannedWeeks}" + (phase?.let { " · ${it.displayName}" } ?: ""))
+    // A no-break space ties the dot to the phase, so a wrap never leaves "·" hanging at a line's end.
+    Serif("Week ${block.weekIndex} of ${block.plannedWeeks}" + (phase?.let { " ·\u00A0${it.displayName}" } ?: ""))
     if (block.intent.isNotBlank()) {
         Spacer(Modifier.height(8.dp))
         Body(block.intent)
@@ -531,30 +536,35 @@ private fun GoalsSection(state: CoachViewModel.UiState, unit: WeightUnit, onOpen
         Body("Set a goal and the coach plans the block around it.")
         return
     }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-        goals.forEach { g ->
-            val target = g.target
-            val current = g.current
-            val isWeight = g.kind == CoachGoalKind.LIFT_1RM
-            fun fmt(v: Double) = if (isWeight) toDisplayWeight(v, unit).roundToInt().toString() else v.roundToInt().toString()
-            val name = when (g.kind.scope) {
-                CoachGoalKind.Scope.EXERCISE -> Program.exerciseDisplayName(g.goal.targetKey).substringAfterLast(' ')
-                CoachGoalKind.Scope.MUSCLE -> MuscleGroup.entries.firstOrNull { it.code == g.goal.targetKey }?.displayName ?: g.kind.displayName
-                else -> g.kind.displayName
+    // The two-column grid: a third goal starts a second row rather than squeezing three across.
+    Column(verticalArrangement = Arrangement.spacedBy(28.dp)) {
+        goals.chunked(2).forEach { pair ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                pair.forEach { g ->
+                    val target = g.target
+                    val current = g.current
+                    val isWeight = g.kind == CoachGoalKind.LIFT_1RM
+                    fun fmt(v: Double) = if (isWeight) toDisplayWeight(v, unit).roundToInt().toString() else v.roundToInt().toString()
+                    val name = when (g.kind.scope) {
+                        CoachGoalKind.Scope.EXERCISE -> Program.exerciseDisplayName(g.goal.targetKey).substringAfterLast(' ')
+                        CoachGoalKind.Scope.MUSCLE -> MuscleGroup.entries.firstOrNull { it.code == g.goal.targetKey }?.displayName ?: g.kind.displayName
+                        else -> g.kind.displayName
+                    }
+                    OpenGoalColumn(
+                        label = listOfNotNull(name, target?.let { fmt(it) }).joinToString(" "),
+                        figure = current?.let { fmt(it) } ?: "0",
+                        denominator = if (!isWeight && target != null) "/${fmt(target)}" else "",
+                        fraction = if (current != null && target != null && target > 0) (current / target).toFloat() else 0f,
+                        change = g.reading.takeIf { it.isNotBlank() },
+                        changeMoved = g.onTrack == true || g.reachedNow,
+                        description = "$name: ${g.reading}",
+                        onClick = onOpenGoals,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
-            OpenGoalColumn(
-                label = listOfNotNull(name, target?.let { fmt(it) }).joinToString(" "),
-                figure = current?.let { fmt(it) } ?: "0",
-                denominator = if (!isWeight && target != null) "/${fmt(target)}" else "",
-                fraction = if (current != null && target != null && target > 0) (current / target).toFloat() else 0f,
-                change = g.reading.takeIf { it.isNotBlank() },
-                changeMoved = g.onTrack == true || g.reachedNow,
-                description = "$name: ${g.reading}",
-                onClick = onOpenGoals,
-                modifier = Modifier.weight(1f),
-            )
         }
-        repeat(3 - goals.size) { Spacer(Modifier.weight(1f)) }
     }
 }
 
@@ -604,8 +614,8 @@ private fun ProjectSection(state: CoachViewModel.UiState, now: Long, actions: Co
         }
     }
     Spacer(Modifier.height(22.dp))
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         OpenLabel("Next step")
-        Text(project.plan, style = OpenType.body, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+        Text(project.plan, style = OpenType.body, color = MaterialTheme.colorScheme.onBackground)
     }
 }

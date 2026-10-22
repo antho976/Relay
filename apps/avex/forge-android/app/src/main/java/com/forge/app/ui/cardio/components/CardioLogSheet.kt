@@ -180,6 +180,8 @@ fun CardioLogSheet(
     watchSessions: List<WatchWorkout> = emptyList(),
     onHideWatchSessions: () -> Unit = {},
     modifier: Modifier = Modifier,
+    /** The clock; tests pin it so a golden never shows the time it was recorded at. */
+    now: () -> Long = System::currentTimeMillis,
 ) {
     val editKey = editing?.id
     val customTypes = LocalCardioTypes.current
@@ -217,7 +219,7 @@ fun CardioLogSheet(
     val conditions = CardioCondition.decode(conditionsCode)
     // A NEW entry's start defaults to when the sheet opened MINUS its duration, so a session logged
     // right after finishing does not end in the future.
-    val openedAtMs = rememberSaveable(editKey) { editing?.date ?: System.currentTimeMillis() }
+    val openedAtMs = rememberSaveable(editKey) { editing?.date ?: now() }
     var dateMs by rememberSaveable(editKey) { mutableStateOf(openedAtMs) }
     var timePicked by rememberSaveable(editKey) { mutableStateOf(false) }
     var datePicked by rememberSaveable(editKey) { mutableStateOf(false) }
@@ -258,7 +260,7 @@ fun CardioLogSheet(
 
     val locale = currentLocale()
     val use24h = LocalForgeSettings.current.timeFormat24h
-    val dayChip = remember(startMs, locale) { dayChipLabel(startMs, System.currentTimeMillis(), locale) }
+    val dayChip = remember(startMs, locale) { dayChipLabel(startMs, now(), locale) }
     val timeChip = remember(startMs, use24h, locale) { clockLabel(startMs, use24h, locale) }
 
     fun useWatch(w: WatchWorkout) {
@@ -287,7 +289,7 @@ fun CardioLogSheet(
             Spacer(Modifier.height(16.dp))
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 watchSessions.forEach { w ->
-                    WatchSessionRow(w, used = usedWatchId == w.recordId, useMiles = useMiles, locale = locale, use24h = use24h) { useWatch(w) }
+                    WatchSessionRow(w, used = usedWatchId == w.recordId, useMiles = useMiles, locale = locale, use24h = use24h, nowMs = now()) { useWatch(w) }
                 }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -563,12 +565,12 @@ private fun ActivityTiles(
 
 /** One watch session on top of the sheet: washed red, with Use this. */
 @Composable
-private fun WatchSessionRow(w: WatchWorkout, used: Boolean, useMiles: Boolean, locale: Locale, use24h: Boolean, onUse: () -> Unit) {
+private fun WatchSessionRow(w: WatchWorkout, used: Boolean, useMiles: Boolean, locale: Locale, use24h: Boolean, nowMs: Long, onUse: () -> Unit) {
     val accent = MaterialTheme.colorScheme.primary
     val ink = MaterialTheme.colorScheme.onBackground
     val name = CardioType.fromCode(HcExerciseTypes.toCardioCode(w.exerciseType)).displayName
     val whenText = remember(w.startMs, locale, use24h) {
-        "${dayChipLabel(w.startMs, System.currentTimeMillis(), locale).lowercase(locale)} ${clockLabel(w.startMs, use24h, locale)}"
+        "${dayChipLabel(w.startMs, nowMs, locale).lowercase(locale)} ${clockLabel(w.startMs, use24h, locale)}"
     }
     val title = buildList {
         add(name)

@@ -254,7 +254,8 @@ class CardioOpenScreenshotTest {
             CardioLogSheet(
                 onDismiss = {}, onSave = { _, _, _, _, _, _, _, _, _, _, _, _, _ -> },
                 useMiles = true, lastUsedType = "run", recentTypes = listOf("run", "walk", "cycle"),
-                watchSessions = listOf(watchWalk)
+                watchSessions = listOf(watchWalk),
+                now = { at(today, 18, 30) }
             )
         }
     }
@@ -266,7 +267,8 @@ class CardioOpenScreenshotTest {
             CardioLogSheet(
                 onDismiss = {}, onSave = { _, _, _, _, _, _, _, _, _, _, _, _, _ -> },
                 useMiles = true, lastUsedType = "run", recentTypes = listOf("run", "walk", "cycle"),
-                watchSessions = listOf(watchWalk)
+                watchSessions = listOf(watchWalk),
+                now = { at(today, 18, 30) }
             )
         }
     }

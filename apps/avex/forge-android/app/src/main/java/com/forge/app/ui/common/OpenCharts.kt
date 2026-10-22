@@ -356,6 +356,7 @@ fun OpenBarList(
 /** A graph's key: short line, ring, diamond and band swatches, each with its word. */
 @Composable
 fun OpenChartKey(items: List<Pair<ChartKeyMark, String>>, modifier: Modifier = Modifier) {
+    if (items.isEmpty()) return
     val ink = MaterialTheme.colorScheme.onBackground
     val ground = MaterialTheme.colorScheme.background
     androidx.compose.foundation.layout.FlowRow(
