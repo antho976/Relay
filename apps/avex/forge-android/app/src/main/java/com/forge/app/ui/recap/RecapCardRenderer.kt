@@ -8,8 +8,6 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.net.Uri
 import androidx.core.content.FileProvider
-import androidx.core.content.res.ResourcesCompat
-import com.forge.app.R
 import com.forge.app.core.io.exportFile
 import java.io.FileOutputStream
 
@@ -38,9 +36,9 @@ internal object RecapCardRenderer {
         try {
             val c = Canvas(bmp)
             c.drawColor(palette.ground)
-            val serif = ResourcesCompat.getFont(context, R.font.noto_serif_display_regular) ?: Typeface.SERIF
-            val sans = ResourcesCompat.getFont(context, R.font.noto_sans_bold) ?: Typeface.DEFAULT_BOLD
-            val mono = ResourcesCompat.getFont(context, R.font.noto_sans_mono_regular) ?: Typeface.MONOSPACE
+            val serif = Typeface.SERIF
+            val sans = Typeface.DEFAULT_BOLD
+            val mono = Typeface.MONOSPACE
             fun paint(tf: Typeface, size: Float, color: Int, tracking: Float = 0f) = Paint().apply {
                 isAntiAlias = true; typeface = tf; textSize = size; this.color = color; letterSpacing = tracking
             }

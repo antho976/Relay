@@ -215,13 +215,6 @@ private fun LicensesDialog(onDismiss: () -> Unit) {
                 )
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    "Noto Serif Display, Noto Sans and Noto Sans Mono (© The Noto Project Authors) " +
-                        "are licensed under the SIL Open Font License, Version 1.1 (scripts.sil.org/OFL).",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = muted
-                )
-                Spacer(Modifier.height(16.dp))
-                Text(
                     "Jetpack Compose, Room, Hilt, Health Connect and other AndroidX libraries are " +
                         "licensed under the Apache License 2.0 (© Google LLC and contributors).",
                     style = MaterialTheme.typography.bodySmall,

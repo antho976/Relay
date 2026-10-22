@@ -2,42 +2,21 @@ package com.forge.app.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import com.forge.app.R
 
 /**
- * The three voices as bundled faces, not the phone's (2026-10-21 redesign).
+ * The three voices, as the phone's own faces.
  *
- * `FontFamily.Serif` / `SansSerif` / `Monospace` resolve to whatever the phone ships: Noto Serif and
- * Roboto on a Pixel, something else on a Samsung. The redesign was drawn in Noto Serif Display, Noto
- * Sans and Noto Sans Mono, and the serif in particular is the Display cut (higher contrast, tighter
- * at hero sizes), which no phone ships. Bundling them is what makes the build match the designs on
- * every device. `res/font` holds Latin-only subsets (about 470 KB together); a character outside
- * them (↑, CJK) falls back to the system face per glyph. All three are SIL OFL 1.1 and keep their
- * licence in the font metadata; About → Open-source licenses names them.
- *
- * Semibold maps to the Bold file on purpose: the designs were rendered with no Noto Sans SemiBold
- * installed, so every 600 in them was drawn Bold, and Bold is what was approved.
+ * The redesign bundled Noto Serif Display, Noto Sans and Noto Sans Mono for a while (2026-10-21);
+ * Antho saw them on his phone and wanted the phone's fonts back, so these name the system families
+ * again. The object stays so every screen keeps reading its voice from one place.
  */
 object AvexFonts {
-    val Serif = FontFamily(Font(R.font.noto_serif_display_regular, FontWeight.Normal))
-    val SansSerif = FontFamily(
-        Font(R.font.noto_sans_regular, FontWeight.Normal),
-        Font(R.font.noto_sans_medium, FontWeight.Medium),
-        Font(R.font.noto_sans_bold, FontWeight.SemiBold),
-        Font(R.font.noto_sans_bold, FontWeight.Bold),
-        Font(R.font.noto_sans_black, FontWeight.ExtraBold),
-        Font(R.font.noto_sans_black, FontWeight.Black),
-    )
-    val Monospace = FontFamily(
-        Font(R.font.noto_sans_mono_regular, FontWeight.Normal),
-        Font(R.font.noto_sans_mono_medium, FontWeight.Medium),
-        Font(R.font.noto_sans_mono_medium, FontWeight.SemiBold),
-        Font(R.font.noto_sans_mono_bold, FontWeight.Bold),
-    )
+    val Serif: FontFamily = FontFamily.Serif
+    val SansSerif: FontFamily = FontFamily.SansSerif
+    val Monospace: FontFamily = FontFamily.Monospace
 }
 
 // `fontFeatureSettings = "tnum"` forces tabular (fixed-width) figures on the styles that render

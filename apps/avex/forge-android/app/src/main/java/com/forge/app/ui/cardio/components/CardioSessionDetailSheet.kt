@@ -292,7 +292,7 @@ private fun SessionReadings(entry: CardioEntry, all: List<CardioEntry>, useMiles
             val weeks = longestInWeeks(entry, all, zone)
             when {
                 weeks == Int.MAX_VALUE -> "Longest yet" to true
-                weeks != null -> "Longest in $weeks wk" to true
+                weeks != null -> "Best in $weeks wk" to true
                 else -> usualDistanceKm(entry, all)?.let { u ->
                     val d = toDisplayDistance(distance, useMiles) - toDisplayDistance(u, useMiles)
                     val t = (abs(d) * 10).roundToInt() / 10.0

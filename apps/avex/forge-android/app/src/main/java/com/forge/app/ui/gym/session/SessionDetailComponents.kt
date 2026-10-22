@@ -213,26 +213,27 @@ private fun trendOf(cur: Double, prev: Double?): Trend? {
 internal fun SessionFigures(data: SessionDetailData) {
     val unit = LocalForgeSettings.current.weightUnit
     val volume = data.volumeLb ?: 0.0
-    // Wraps rather than crowds: at a large font scale four figures do not fit one row of a phone.
-    FlowRow(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Figure(
-            formatVolumeCompact(volume, unit, withUnit = false),
-            "Volume · ${unitLabel(unit)}",
-            trendOf(volume, data.prevVolumeLb),
-            FigureWidth
-        )
-        Figure(
-            "${data.setCount}",
-            if (data.setCount == 1) "Set" else "Sets",
-            trendOf(data.setCount.toDouble(), data.prevSetCount?.toDouble()),
-            FigureWidth
-        )
-        data.avgRpe?.let { Figure(rpeLabel(it), "Avg RPE", null, FigureWidth) }
-        Figure("${data.prCount}", if (data.prCount == 1) "PR" else "PRs", null, FigureWidth)
+    val figures: List<@Composable (Modifier) -> Unit> = listOfNotNull(
+        { m -> Figure(formatVolumeCompact(volume, unit, withUnit = false), "Volume · ${unitLabel(unit)}", trendOf(volume, data.prevVolumeLb), m) },
+        { m -> Figure("${data.setCount}", if (data.setCount == 1) "Set" else "Sets", trendOf(data.setCount.toDouble(), data.prevSetCount?.toDouble()), m) },
+        data.avgRpe?.let { rpe -> { m: Modifier -> Figure(rpeLabel(rpe), "Avg RPE", null, m) } },
+        { m -> Figure("${data.prCount}", if (data.prCount == 1) "PR" else "PRs", null, m) },
+    )
+    // Even columns across the row at normal text, so all four fit a 384dp phone without one
+    // dropping alone onto a second line; past 1.15x text they wrap rather than crowd.
+    if (androidx.compose.ui.platform.LocalDensity.current.fontScale <= 1.15f) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            // Volume carries the longest label ("Volume · lb"), so its column is a little wider.
+            figures.forEachIndexed { i, f -> f(Modifier.weight(if (i == 0) 1.35f else 1f)) }
+        }
+    } else {
+        FlowRow(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            figures.forEach { it(FigureWidth) }
+        }
     }
 }
 
@@ -308,7 +309,7 @@ internal fun HeartRateSection(hr: SessionHrView?) {
         }
         hr.avgHrr60?.let { drop ->
             Spacer(Modifier.height(10.dp))
-            OpenLabel("Recovery · $drop bpm down in the first minute of rest", style = OpenType.monoXS)
+            OpenLabel("Recovery · $drop bpm down in the first minute", style = OpenType.monoXS)
         }
     }
 }

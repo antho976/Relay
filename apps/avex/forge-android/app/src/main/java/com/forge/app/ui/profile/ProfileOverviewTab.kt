@@ -105,9 +105,9 @@ internal fun ProfileOverviewTab(
     }
     Spacer(Modifier.height(26.dp))
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-        CountColumn(state.totalSessions, "Workouts", state.workoutsThisWeek, "this week", Modifier.weight(1f))
-        CountColumn(state.totalSets, "Sets", state.setsThisWeek, "this week", Modifier.weight(1f))
-        CountColumn(state.totalPrs, "PRs", state.prsThisMonth, "this month", Modifier.weight(1f))
+        CountColumn(state.totalSessions, "Workouts", state.workoutsThisWeek, "this wk", Modifier.weight(1f))
+        CountColumn(state.totalSets, "Sets", state.setsThisWeek, "this wk", Modifier.weight(1f))
+        CountColumn(state.totalPrs, "PRs", state.prsThisMonth, "this mo", Modifier.weight(1f))
     }
     Spacer(Modifier.height(20.dp))
     val curve = remember(state.lifetimeVolumeSeriesLb, state.lifetimeVolumeTimesMs, nowMs, locale) {
