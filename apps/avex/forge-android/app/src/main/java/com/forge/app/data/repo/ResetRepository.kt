@@ -110,6 +110,9 @@ class ResetRepository @Inject constructor(
         eraseOutsideTheStores()
         settingsRepo.resetAll()
         withContext(Dispatchers.IO) { pendingResetMarker().delete() }
+        // Last, after everything above is gone: the system may restart the app when the grants go,
+        // and by now there is nothing left for an interrupted reset to finish.
+        health.revokeAll()
     }
 
     /**

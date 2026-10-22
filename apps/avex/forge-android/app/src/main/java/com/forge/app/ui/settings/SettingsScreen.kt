@@ -160,7 +160,7 @@ enum class ResetTarget(val label: String, val message: String) {
     // exports and crash logs (2026-09-26 audit, D2), and a folder the user picked is not the app's.
     FACTORY(
         "Factory reset",
-        "Deletes all data stored in the app, including its backup copy, exports and crash logs, and resets all settings. Backups saved outside the app are kept. This cannot be undone."
+        "Deletes all data stored in the app, including its backup copy, exports and crash logs, resets all settings and disconnects Health Connect. Backups saved outside the app, and readings other apps keep in Health Connect, are kept. This cannot be undone."
     )
 }
 

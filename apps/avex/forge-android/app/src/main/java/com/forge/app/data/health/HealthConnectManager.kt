@@ -838,6 +838,18 @@ class HealthConnectManager @Inject constructor(
     }
 
     /**
+     * Give up every Health Connect permission Avex holds: the last step of a factory reset. Without
+     * it the grants outlived the reset and the first launch after re-imported every weigh-in other
+     * apps keep there, so "Erase everything" looked like it had kept the weight history (2026-10-21).
+     * Fail-soft: a provider that will not answer leaves the grants, which the user can clear in
+     * Health Connect itself.
+     */
+    suspend fun revokeAll() = withContext(Dispatchers.IO) {
+        val client = clientOrNull() ?: return@withContext
+        hcCatching { client.permissionController.revokeAllPermissions() }
+    }
+
+    /**
      * Delete the calling app's records of [type] under [clientRecordIds], in bounded batches so a
      * multi-year reset never hands the provider one enormous IPC. Gated on the type's write grant
      * (deleting without it throws), fail-soft, and a no-op for an empty list. True when every
