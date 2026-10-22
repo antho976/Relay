@@ -251,7 +251,7 @@ Decelerate-in / Accelerate-out / Standard / DrawDecelerate (chart reveals). Spri
 - Feel (don't retune casually): bounceClick MediumBouncy/MediumLow; ForgeSwitch position 0.68/900, thumb resize no-bounce/1400 + press-stretch.
 - **Haptics rare** (`forgeHaptic`): set logged, PR/finish, timer ticks — nothing else.
 - **Reduce-motion is global**, not per-feature: entrance cascade, chart draw-ins, confetti, launch intro and press bounce all degrade to a settled still state. Never gate meaning on motion.
-- **Launch**: `AvexIntro` settles the serif "Avex" wordmark once per cold launch over the first screen, themed to the chosen app icon, then the plate fades to reveal it. The system splash is background-only so the wordmark is the brand beat. This deliberately spends colour off the one-accent rule (§1/§5) for a pre-app moment only. Per-family mechanics, the icon picker and the unwired launch scenes are recorded in `design/MAP.md`.
+- **Launch**: low-key (2026-10-21). The system splash shows the app icon the user picked, held only until the first screen is laid out (2 s cap), then fades as it settles a touch smaller over the first screen. No wordmark, mascots or icon-family scenes; Remove animations makes it a cut.
 
 ## 10. Charts (overview/detail archetypes)
 
@@ -287,7 +287,7 @@ worded forward under a `NEXT` eyebrow, never a past-tense achievement label.
 
 **Glyphs & numbers.** Mono small-caps section headers, else sentence case (buttons included). Actions
 end ` →` / `+ log` (accent mono); meta joins with `·`; deltas `↑`(accent)/`↓`(muted), `△ LAST`;
-the wordmark "• Avex" is the LAUNCH beat only (`AvexWordmark`), never chrome. Numbers k-abbrev ≥10,000 ("4.5k"); RPE/RIR via `Format.kt`
+the app's name is never chrome; the launch carries only the chosen icon. Numbers k-abbrev ≥10,000 ("4.5k"); RPE/RIR via `Format.kt`
 (no ".0"); **weights always via `WeightFormatter`** reading `LocalForgeSettings.current.weightUnit` — a
 tri-state `WeightUnit` (lb·kg·st), never a `useKg: Boolean` (a legacy bridge lingers on the formatter +
 `ForgeUiSettings.useKg`; new code passes `weightUnit`). Never hardcode lb/kg anywhere. Stones render as a `stone + pounds` compound
