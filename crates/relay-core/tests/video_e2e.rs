@@ -388,3 +388,29 @@ const Pill: React.FC = () => <VersionPill from="0.9" to="1.0" progress={useSweep
     ok(&e, "video.delete", json!({"video_id": id}));
     relay_core::video::shutdown(&e);
 }
+
+/// The live preview for real: Remotion Studio opens on the video, answers its page, and listens
+/// on 127.0.0.1 alone (loopback.cjs), then stops.
+#[test]
+#[ignore = "needs Node.js 20+ and the kit video_e2e sets up: run with --ignored"]
+fn video_e2e_the_preview_is_studio_on_loopback() {
+    let e = engine();
+    assert_eq!(ok(&e, "video.kit.status", json!({}))["state"], "ready", "run video_e2e_the_starter_checks_looks_and_renders_for_real first");
+    let made = ok(&e, "video.create", json!({"project_id": 1, "title": "Preview", "seconds": 3}));
+    let id = made["video"]["id"].as_i64().unwrap();
+    let opened = timed("preview opens", || ok(&e, "video.preview", json!({"video_id": id})));
+    let url = opened["url"].as_str().unwrap().to_string();
+    println!("preview: {url}");
+    let port: u16 = url.trim_start_matches("http://127.0.0.1:").split('/').next().unwrap().parse().unwrap();
+    let page = std::process::Command::new("curl").args(["-s", "--max-time", "60", &url]).output().unwrap();
+    let html = String::from_utf8_lossy(&page.stdout);
+    assert!(html.contains("<html") || html.contains("<!DOCTYPE"), "{html}");
+    // Only loopback: what listens on the port is 127.0.0.1's.
+    let listening = std::process::Command::new("ss").args(["-ltnH", &format!("sport = :{port}")]).output().unwrap();
+    let listening = String::from_utf8_lossy(&listening.stdout);
+    println!("listening: {listening}");
+    assert!(listening.lines().all(|l| l.contains("127.0.0.1:")), "{listening}");
+    assert_eq!(ok(&e, "video.preview", json!({"video_id": id, "stop": true}))["running"], false);
+    ok(&e, "video.delete", json!({"video_id": id}));
+    relay_core::video::shutdown(&e);
+}

@@ -159,6 +159,16 @@ pub fn ffmpeg<S: AsRef<std::ffi::OsStr>>(engine: &Engine, args: &[S], what: &str
     }
 }
 
+/// `source` written to `out` as H.264 at a constant `fps` (frames repeated or dropped to keep
+/// time), its sound kept: a screen recording's frames come only when the screen changes.
+pub fn constant_rate(engine: &Engine, source: &Path, out: &Path, fps: f64) -> Result<(), BusError> {
+    let rate = format!("{fps}");
+    ffmpeg(engine, &[std::ffi::OsStr::new("-i"), source.as_os_str(), "-fps_mode".as_ref(), "cfr".as_ref(), "-r".as_ref(), rate.as_ref(),
+        "-c:v".as_ref(), "libx264".as_ref(), "-preset".as_ref(), "veryfast".as_ref(), "-crf".as_ref(), "16".as_ref(), "-pix_fmt".as_ref(), "yuv420p".as_ref(),
+        "-c:a".as_ref(), "aac".as_ref(), "-b:a".as_ref(), "192k".as_ref(), "-movflags".as_ref(), "+faststart".as_ref(), out.as_os_str()],
+        "writing the clip at a constant frame rate")
+}
+
 /// What ffprobe says of a file: its format and streams.
 pub fn probe(engine: &Engine, input: &Path) -> Result<Value, BusError> {
     let ffprobe = tool(engine, "ffprobe")?;

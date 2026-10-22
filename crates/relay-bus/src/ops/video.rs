@@ -5,7 +5,7 @@
 //!
 //! Every op but `video.kit.status` comes with the Video plugin (`.plugin("video")`): an agent may
 //! call them only in a project with it on. The person is never gated.
-use crate::registry::{OpMeta, Scope, Undo};
+use crate::registry::{Actors, Audit, OpMeta, Scope, Undo};
 use crate::types::{Id, Ts};
 use crate::{op, Empty};
 use serde_json::Value;
@@ -701,6 +701,258 @@ pub const MAX_WAIT_MS: u64 = 3_600_000;
 /// Most renders one `video.render.batch` queues.
 pub const MAX_BATCH: usize = 12;
 
+// ---------------------------------------------------------------- live preview
+
+payload!(#[schemars(rename = "VideoPreviewIn")] PreviewIn {
+    pub video_id: Id,
+    /// The composition to open on; default the video's.
+    pub composition: Option<String>,
+    /// Stop the preview instead.
+    pub stop: Option<bool>,
+});
+result!(#[schemars(rename = "VideoPreviewOut")] PreviewOut {
+    /// Where the person watches it with sound, in a browser on this machine (Remotion Studio:
+    /// play, scrub, step frames, its timeline, the props).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    pub running: bool,
+    /// It was started by this call (rather than already running).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub started: bool,
+});
+op!(Preview, "video.preview", PreviewIn => PreviewOut,
+    OpMeta::query(Scope::Project, 12, "A live preview of a video for the person to watch with sound, scrub and step through without rendering (Remotion Studio on this machine only); answers its link")
+        .plugin(PLUGIN));
+
+// ---------------------------------------------------------------- Android capture
+
+payload!(#[schemars(rename = "VideoCaptureStep")] CaptureStep {
+    /// Touch the screen at x, y (the device's px).
+    pub tap: Option<[f64; 2]>,
+    /// Drag from x1, y1 to x2, y2 over `ms` (default 300): a scroll.
+    pub swipe: Option<[f64; 4]>,
+    pub ms: Option<u32>,
+    /// Type this into the field in focus.
+    pub text: Option<String>,
+    /// Press a key: `BACK`, `HOME`, `ENTER`, `APP_SWITCH`, or a keycode number.
+    pub key: Option<String>,
+    /// Wait this many seconds.
+    pub wait: Option<f64>,
+    /// Open an app: a package (`com.example.app`) or an activity (`com.example.app/.MainActivity`).
+    pub launch: Option<String>,
+});
+payload!(#[schemars(rename = "VideoCaptureIn")] CaptureIn {
+    pub video_id: Id,
+    /// The device's serial (`device.list`); default the only one connected.
+    pub device: Option<String>,
+    /// An app to open before recording starts, so the clip opens in it.
+    pub launch: Option<String>,
+    /// What to do while recording, in order: taps, swipes, typing, keys, waits.
+    #[schemars(length(max = 200))]
+    pub steps: Vec<CaptureStep>,
+    /// Seconds to keep recording after the last step (default 1).
+    pub tail: Option<f64>,
+    /// The clip's constant frame rate (default 30): a screen recording's own is variable.
+    #[schemars(range(min = 1.0, max = 60.0))]
+    pub fps: Option<f64>,
+    /// Android's demo mode while recording: the status bar at 12:30, full battery and signal, no
+    /// notifications (default true).
+    pub demo: Option<bool>,
+    #[schemars(length(min = 1, max = 120))]
+    pub name: Option<String>,
+    pub overwrite: Option<bool>,
+});
+result!(#[schemars(rename = "VideoCaptureMark")] CaptureMark {
+    /// Which step, from 0, and what it did.
+    pub step: u32,
+    pub did: String,
+    /// When, in the clip: seconds and its frame (within a few frames: the recorder's start is
+    /// estimated; `motion` has the exact frames).
+    pub at_s: f64,
+    pub frame: u32,
+});
+result!(#[schemars(rename = "VideoCaptureOut")] CaptureOut {
+    pub asset: VideoAsset,
+    pub seconds: f64,
+    pub fps: f64,
+    pub frames: u32,
+    /// Where each step happened in the clip.
+    pub steps: Vec<CaptureMark>,
+    /// Where the picture changes (`video.asset.inspect`'s).
+    pub motion: Vec<MotionEvent>,
+    pub device: String,
+});
+op!(CaptureAndroid, "video.capture.android", CaptureIn => CaptureOut,
+    OpMeta::mutation(Scope::Project, 12, "Record an Android device's screen while it taps, swipes and types (holding the device's lease), at a constant frame rate with a clean status bar, into the video's assets; answers where each step and each screen change fell")
+        .plugin(PLUGIN));
+
+// ---------------------------------------------------------------- ElevenLabs
+
+payload!(#[schemars(rename = "VideoVoiceIn")] VoiceIn {
+    pub video_id: Id,
+    /// What is said.
+    #[schemars(length(min = 1, max = 5000))]
+    pub text: String,
+    /// The voice: its name ("Chris") or id, from `video.voices`.
+    #[schemars(length(min = 1, max = 100))]
+    pub voice: String,
+    /// Words said as other words: `{"Avex": "Ay-vex"}` when speech-to-text heard it wrong. The
+    /// words' timings still name the words as written.
+    pub say: Option<serde_json::Map<String, Value>>,
+    /// Default eleven_multilingual_v2.
+    #[schemars(length(min = 1, max = 60))]
+    pub model: Option<String>,
+    /// 0 to 1: higher is steadier and flatter (default 0.5).
+    pub stability: Option<f64>,
+    /// 0 to 1: how close to the voice (default 0.75).
+    pub similarity: Option<f64>,
+    /// 0 to 1: more of the voice's style (default 0).
+    pub style: Option<f64>,
+    /// 0.7 to 1.2 (default 1).
+    pub speed: Option<f64>,
+    /// The file's name under `assets/`; default from the words.
+    #[schemars(length(min = 1, max = 120))]
+    pub name: Option<String>,
+    pub overwrite: Option<bool>,
+});
+result!(#[schemars(rename = "VideoWord")] VoiceWord {
+    pub text: String,
+    /// Seconds from the line's start.
+    pub start: f64,
+    pub end: f64,
+});
+result!(#[schemars(rename = "VideoVoiceOut")] VoiceOut {
+    pub asset: VideoAsset,
+    pub seconds: f64,
+    /// Each word as written, when it is said.
+    pub words: Vec<VoiceWord>,
+    /// The words as Remotion's captions (`@remotion/captions` `Caption[]`, ms from the line's
+    /// start): add the line's start to `startMs`, `endMs` and `timestampMs`, then give them to the
+    /// kit's `Captions`.
+    pub captions: Value,
+    pub voice_id: String,
+    pub voice: String,
+    pub model: String,
+});
+op!(Voice, "video.voice", VoiceIn => VoiceOut,
+    OpMeta::mutation(Scope::Project, 12, "Speak a line with an ElevenLabs voice into the video's assets, with each word's timing (for captions); the text, voice and timings are kept beside the file")
+        .plugin(PLUGIN));
+
+payload!(#[schemars(rename = "VideoVoicesIn")] VoicesIn {
+    /// Only voices whose name, accent or description has this.
+    pub search: Option<String>,
+});
+result!(#[schemars(rename = "VideoVoiceInfo")] VoiceInfo {
+    pub voice_id: String,
+    pub name: String,
+    /// `premade`, `cloned`, `generated`, `professional`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// What ElevenLabs says of it: accent, age, gender, use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+});
+result!(#[schemars(rename = "VideoVoicesOut")] VoicesOut { pub voices: Vec<VoiceInfo> });
+op!(Voices, "video.voices", VoicesIn => VoicesOut,
+    OpMeta::query(Scope::Project, 12, "The ElevenLabs voices the saved key can use, by name").plugin(PLUGIN));
+
+payload!(#[schemars(rename = "VideoSfxIn")] SfxIn {
+    pub video_id: Id,
+    /// What it sounds like: "a soft UI tap", "a cartoon boing".
+    #[schemars(length(min = 1, max = 1000))]
+    pub prompt: String,
+    /// 0.5 to 30; default as long as the prompt suggests.
+    pub seconds: Option<f64>,
+    /// 0 to 1: how closely it follows the prompt (default 0.3).
+    pub influence: Option<f64>,
+    /// Made to loop seamlessly.
+    #[serde(rename = "loop")]
+    pub looped: Option<bool>,
+    #[schemars(length(min = 1, max = 120))]
+    pub name: Option<String>,
+    pub overwrite: Option<bool>,
+});
+result!(#[schemars(rename = "VideoMadeOut")] MadeOut {
+    pub asset: VideoAsset,
+    pub seconds: f64,
+});
+op!(Sfx, "video.sfx", SfxIn => MadeOut,
+    OpMeta::mutation(Scope::Project, 12, "Make a sound effect with ElevenLabs from a description, into the video's assets; the prompt is kept beside it")
+        .plugin(PLUGIN));
+
+payload!(#[schemars(rename = "VideoMusicIn")] MusicIn {
+    pub video_id: Id,
+    /// The music: genre, mood, instruments, tempo ("120 BPM"), and its shape over time.
+    #[schemars(length(min = 1, max = 4000))]
+    pub prompt: String,
+    /// 3 to 600.
+    pub seconds: f64,
+    /// No vocals (default true).
+    pub instrumental: Option<bool>,
+    /// Default music_v1.
+    #[schemars(length(min = 1, max = 40))]
+    pub model: Option<String>,
+    #[schemars(length(min = 1, max = 120))]
+    pub name: Option<String>,
+    pub overwrite: Option<bool>,
+});
+op!(Music, "video.music", MusicIn => MadeOut,
+    OpMeta::mutation(Scope::Project, 12, "Make music with ElevenLabs from a description and a length, into the video's assets; then video.audio.beats for its grid")
+        .plugin(PLUGIN));
+
+payload!(#[schemars(rename = "VideoTranscribeIn")] TranscribeIn {
+    pub video_id: Id,
+    /// A sound or clip: `assets/vo-03-home.mp3`, a render, or an absolute path.
+    #[schemars(length(min = 1, max = 4096))]
+    pub asset: String,
+    /// ISO 639 code; default detected.
+    pub language: Option<String>,
+    /// What it should say: the answer lists where what was heard differs.
+    #[schemars(length(max = 5000))]
+    pub expect: Option<String>,
+});
+result!(#[schemars(rename = "VideoMisheard")] Misheard {
+    /// The word written, and what was heard instead (`None`: not heard at all).
+    pub expected: String,
+    pub heard: Option<String>,
+    /// When, seconds.
+    pub at: Option<f64>,
+});
+result!(#[schemars(rename = "VideoTranscribeOut")] TranscribeOut {
+    pub text: String,
+    pub language: String,
+    pub words: Vec<VoiceWord>,
+    /// With `expect`: the words heard differently, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub misheard: Vec<Misheard>,
+});
+op!(Transcribe, "video.transcribe", TranscribeIn => TranscribeOut,
+    OpMeta::query(Scope::Project, 12, "Hear a voice line (ElevenLabs speech-to-text): its words and their timings, and, given what it should say, where it was heard differently (a name said wrong)")
+        .plugin(PLUGIN));
+
+payload!(#[schemars(rename = "VideoElevenKeySetIn")] ElevenKeySetIn {
+    /// The ElevenLabs API key (elevenlabs.io → API keys).
+    #[schemars(length(min = 1, max = 200))]
+    pub key: String,
+});
+result!(#[schemars(rename = "VideoElevenStatus")] ElevenStatus {
+    /// Whether a key is saved.
+    pub saved: bool,
+    /// What the key can do, when it was checked: the account's tier and its characters left.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub characters_left: Option<i64>,
+});
+op!(ElevenKeySet, "video.elevenlabs.key_set", ElevenKeySetIn => ElevenStatus,
+    OpMeta::mutation(Scope::Global, 12, "Check an ElevenLabs API key with ElevenLabs and keep it in the system keyring")
+        // The payload is the key itself: an audit row would keep it in the store and every backup.
+        .audit(Audit::Never).actors(Actors::UserOnly));
+op!(ElevenKeyRemove, "video.elevenlabs.key_remove", Empty => ElevenStatus,
+    OpMeta::mutation(Scope::Global, 12, "Forget the saved ElevenLabs key").actors(Actors::UserOnly));
+op!(ElevenStatusOp, "video.elevenlabs.status", Empty => ElevenStatus,
+    OpMeta::query(Scope::Global, 12, "Whether an ElevenLabs key is saved for voices, music and sound effects, and what it has left").plugin(PLUGIN));
+
 payload!(#[schemars(rename = "VideoTimelineIn")] TimelineIn {
     pub video_id: Id,
     /// Default the video's composition.
@@ -1113,7 +1365,8 @@ op!(KitInstall, "video.kit.install", KitInstallIn => KitStatus,
         .emits(&["video.kit.changed", "video.kit.progress"]).plugin(PLUGIN));
 
 entries!(List, Get, Create, Update, Delete, Restore, Check, Still, Scan, Render, RenderBatch, RenderWait, RenderGet, RenderCancel,
-    AssetAdd, AssetList, AssetInspect, AudioBeats, Timeline, VersionRestore, KitStatusOp, KitInstall);
+    AssetAdd, AssetList, AssetInspect, AudioBeats, Timeline, Preview, CaptureAndroid, Voice, Voices, Sfx, Music, Transcribe, ElevenKeySet, ElevenKeyRemove, ElevenStatusOp,
+    VersionRestore, KitStatusOp, KitInstall);
 
 #[cfg(test)]
 mod tests {

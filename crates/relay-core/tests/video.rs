@@ -517,3 +517,146 @@ fn png_size(path: &Path) -> (u32, u32) {
     let bytes = fs::read(path).unwrap();
     (u32::from_be_bytes(bytes[16..20].try_into().unwrap()), u32::from_be_bytes(bytes[20..24].try_into().unwrap()))
 }
+
+/// A stand-in for ElevenLabs: two voices, a line said with timings, a sound, music and a
+/// transcript that hears a name wrong; every call recorded.
+fn with_elevenlabs(e: &Engine) -> Arc<std::sync::Mutex<Vec<relay_core::video::eleven::Call>>> {
+    use relay_core::video::eleven::{Answer, Body, Call};
+    let calls: Arc<std::sync::Mutex<Vec<Call>>> = Arc::default();
+    let seen = calls.clone();
+    e.video.use_elevenlabs(Arc::new(move |call: &Call| {
+        seen.lock().unwrap().push(call.clone());
+        let ok = |body: Vec<u8>| Answer { status: 200, body };
+        let mp3 = b"ID3fake-mp3".to_vec();
+        match (call.method, call.path.as_str()) {
+            ("GET", "/v1/user/subscription") => ok(json!({"tier": "creator", "character_count": 1000, "character_limit": 100000}).to_string().into_bytes()),
+            ("GET", "/v1/voices") => ok(json!({"voices": [
+                {"voice_id": "iP95p4xoKVk53GoZ742B", "name": "Chris", "category": "premade", "labels": {"accent": "american"}, "description": "Natural and real"},
+                {"voice_id": "bIHbv24MWmeRgasZH58o", "name": "Will", "category": "premade"},
+            ]}).to_string().into_bytes()),
+            ("POST", path) if path.ends_with("/with-timestamps") => {
+                let Body::Json(body) = &call.body else { panic!("{call:?}") };
+                let text = body["text"].as_str().unwrap();
+                let chars: Vec<String> = text.chars().map(|c| c.to_string()).collect();
+                let starts: Vec<f64> = (0..chars.len()).map(|i| i as f64 * 0.05).collect();
+                let ends: Vec<f64> = starts.iter().map(|s| s + 0.05).collect();
+                use base64::Engine as _;
+                ok(json!({"audio_base64": base64::engine::general_purpose::STANDARD.encode(&mp3),
+                    "alignment": {"characters": chars, "character_start_times_seconds": starts, "character_end_times_seconds": ends}}).to_string().into_bytes())
+            }
+            ("POST", "/v1/sound-generation") | ("POST", "/v1/music") => ok(mp3),
+            ("POST", "/v1/speech-to-text") => ok(json!({"language_code": "en", "language_probability": 0.99, "text": "Meet Avox.",
+                "words": [{"text": "Meet", "type": "word", "start": 0.0, "end": 0.3}, {"text": " ", "type": "spacing", "start": 0.3, "end": 0.35},
+                          {"text": "Avox.", "type": "word", "start": 0.35, "end": 0.9}]}).to_string().into_bytes()),
+            _ => Answer { status: 404, body: br#"{"detail":"not found"}"#.to_vec() },
+        }
+    }));
+    calls
+}
+
+#[test]
+fn voice_lines_sounds_and_music_come_from_elevenlabs_with_how_they_were_made() {
+    let (e, _root) = project();
+    let calls = with_elevenlabs(&e);
+    let (id, dir) = create(&e);
+    // No key yet: refused, saying to ask the person, never for the key itself.
+    let none = call(&e, "video.voice", json!({"video_id": id, "text": "Hi", "voice": "Chris"}));
+    assert_eq!(code(none), "video.elevenlabs.no_key");
+    assert_eq!(ok(&e, "video.elevenlabs.status", json!({}))["saved"], false);
+    // The person saves it: checked, kept beside the test store, never answered back.
+    let saved = ok(&e, "video.elevenlabs.key_set", json!({"key": "sk_test_123"}));
+    assert_eq!((saved["saved"].as_bool(), saved["tier"].as_str(), saved["characters_left"].as_i64()), (Some(true), Some("creator"), Some(99000)));
+    assert!(!saved.to_string().contains("sk_test_123"));
+    let (agent_name, agent_actor) = agent(&e);
+    let _ = agent_name;
+    assert_eq!(code(call_as(&e, agent_actor.clone(), "video.elevenlabs.key_set", json!({"key": "x"}))), "actor.allowlist", "only the person saves a key");
+
+    let line = ok(&e, "video.voice", json!({"video_id": id, "text": "Meet Avex.", "voice": "chris", "say": {"Avex": "Ay-vex"}}));
+    assert_eq!((line["voice"].as_str(), line["voice_id"].as_str()), (Some("Chris"), Some("iP95p4xoKVk53GoZ742B")));
+    assert_eq!(line["asset"]["static_file"], "assets/vo-meet-avex.mp3");
+    let words: Vec<&str> = line["words"].as_array().unwrap().iter().map(|w| w["text"].as_str().unwrap()).collect();
+    assert_eq!(words, ["Meet", "Avex."], "timed as written, said as Ay-vex");
+    assert_eq!(line["captions"][1]["text"], " Avex.");
+    let sent = calls.lock().unwrap().iter().find(|c| c.path.ends_with("/with-timestamps")).cloned().unwrap();
+    let relay_core::video::eleven::Body::Json(body) = &sent.body else { panic!() };
+    assert_eq!(body["text"], "Meet Ay-vex.");
+    // How it was made is kept beside it, and listed with it.
+    let made: Value = serde_json::from_slice(&fs::read(dir.join("public/assets/vo-meet-avex.mp3.json")).unwrap()).unwrap();
+    assert_eq!((made["voice"].as_str(), made["text"].as_str(), made["said"].as_str()), (Some("Chris"), Some("Meet Avex."), Some("Meet Ay-vex.")));
+    let listed = ok(&e, "video.asset.list", json!({"video_id": id}));
+    assert_eq!(listed["assets"][0]["made"]["made_by"], "video.voice");
+
+    let sfx = ok(&e, "video.sfx", json!({"video_id": id, "prompt": "a soft UI tap", "seconds": 0.5}));
+    assert_eq!(sfx["asset"]["static_file"], "assets/sfx-a-soft-ui-tap.mp3");
+    let music = ok(&e, "video.music", json!({"video_id": id, "prompt": "warm lo-fi, 120 BPM", "seconds": 30}));
+    assert_eq!(music["asset"]["made"]["prompt"], "warm lo-fi, 120 BPM");
+    assert_eq!(code(call(&e, "video.music", json!({"video_id": id, "prompt": "x", "seconds": 1}))), "video.music");
+
+    // Hearing it back finds the name said wrong.
+    let heard = ok(&e, "video.transcribe", json!({"video_id": id, "asset": "assets/vo-meet-avex.mp3", "expect": "Meet Avex."}));
+    assert_eq!(heard["misheard"], json!([{"expected": "Avex.", "heard": "Avox.", "at": 0.35}]));
+    let voices = ok(&e, "video.voices", json!({"search": "american"}));
+    assert_eq!(voices["voices"].as_array().unwrap().len(), 1);
+    assert_eq!(ok(&e, "video.elevenlabs.key_remove", json!({}))["saved"], false);
+    assert_eq!(code(call(&e, "video.sfx", json!({"video_id": id, "prompt": "boing"}))), "video.elevenlabs.no_key");
+}
+
+#[test]
+fn an_android_capture_holds_the_device_records_the_steps_and_adds_an_even_clip() {
+    if which::which("ffmpeg").is_err() {
+        eprintln!("no ffmpeg: skipped");
+        return;
+    }
+    let (e, root) = project();
+    let (id, _) = create(&e);
+    // A clip the fake device hands back: two seconds that change at one second.
+    let clip = root.path().join("screen.mp4");
+    let made = std::process::Command::new("ffmpeg").args(["-v", "error", "-f", "lavfi", "-i", "color=c=gray:s=180x400:d=1:r=30", "-f", "lavfi", "-i",
+        "color=c=white:s=180x400:d=1:r=30", "-filter_complex", "[0][1]concat=n=2:v=1", "-c:v", "libx264", "-pix_fmt", "yuv420p"]).arg(&clip).status().unwrap();
+    assert!(made.success());
+    let log = root.path().join("adb.log");
+    std::env::set_var("FAKE_ADB_LOG", &log);
+    std::env::set_var("FAKE_ADB_CLIP", &clip);
+    let adb = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video/fake_adb.py");
+    e.store.lock().execute("INSERT INTO settings(path, value, updated_at) VALUES ('device.adb_path', ?1, 'now')", [json!(adb.display().to_string()).to_string()]).unwrap();
+    let mut rx = e.subscribe();
+    let captured = ok(&e, "video.capture.android", json!({"video_id": id, "launch": "com.quietsoftware.avex/.MainActivity", "name": "home",
+        "steps": [{"tap": [540, 1200]}, {"wait": 0.2}, {"swipe": [540, 1800, 540, 600], "ms": 250}, {"key": "BACK"}], "tail": 0.2}));
+    assert_eq!((captured["asset"]["static_file"].as_str(), captured["device"].as_str(), captured["fps"].as_f64()), (Some("assets/home.mp4"), Some("emulator-5554"), Some(30.0)));
+    let did: Vec<&str> = captured["steps"].as_array().unwrap().iter().map(|s| s["did"].as_str().unwrap()).collect();
+    assert_eq!(did, ["tap 540 1200", "wait 0.2 s", "swipe 540 1800 to 540 600", "key BACK"]);
+    assert!(captured["motion"].as_array().unwrap().iter().any(|m| m["kind"] == "cut" && m["frame"] == 30), "{}", captured["motion"]);
+    let sent = fs::read_to_string(&log).unwrap();
+    for wanted in ["shell am broadcast -a com.android.systemui.demo -e command enter", "shell am start -n com.quietsoftware.avex/.MainActivity",
+        "shell input tap 540 1200", "shell input swipe 540 1800 540 600 250", "shell input keyevent 4", "shell pkill -INT screenrecord",
+        "pull /sdcard/relay-capture.mp4", "-e command exit"] {
+        assert!(sent.contains(wanted), "{wanted} not sent:\n{sent}");
+    }
+    // The device was held for the capture, and let go.
+    let events: Vec<String> = drain(&mut rx).into_iter().map(|ev| ev.ev).collect();
+    assert!(events.contains(&"device.lease.acquired".to_string()) && events.contains(&"device.lease.released".to_string()), "{events:?}");
+    let inspected = ok(&e, "video.asset.inspect", json!({"video_id": id, "asset": "assets/home.mp4"}));
+    assert_eq!((inspected["fps"].as_f64(), inspected["frames"].as_u64(), inspected.get("variable_rate")), (Some(30.0), Some(60), None), "{inspected}");
+}
+
+#[test]
+fn a_preview_runs_one_at_a_time_and_answers_its_link() {
+    let (e, _root) = project();
+    // A plain server stands in for Studio.
+    e.video.preview.use_program(vec!["python3".into(), "-m".into(), "http.server".into(), "--bind".into(), "127.0.0.1".into(), "{port}".into()]);
+    let (first, _) = create(&e);
+    let opened = ok(&e, "video.preview", json!({"video_id": first}));
+    let url = opened["url"].as_str().unwrap().to_string();
+    assert!(url.starts_with("http://127.0.0.1:") && url.ends_with("/main"), "{url}");
+    assert_eq!((opened["running"].as_bool(), opened["started"].as_bool()), (Some(true), Some(true)));
+    // Asked again, the same one.
+    let again = ok(&e, "video.preview", json!({"video_id": first, "composition": "wide"}));
+    assert_eq!((again.get("started"), again["url"].as_str().map(|u| u.ends_with("/wide"))), (None, Some(true)));
+    // Another video's preview takes its place.
+    let second = ok(&e, "video.create", json!({"project_id": 1, "title": "Second"}))["video"]["id"].as_i64().unwrap();
+    let other = ok(&e, "video.preview", json!({"video_id": second}));
+    assert_ne!(other["url"], opened["url"]);
+    assert_eq!(relay_core::video::preview::running(&e, first), None);
+    assert_eq!(ok(&e, "video.preview", json!({"video_id": second, "stop": true}))["running"], false);
+    assert_eq!(relay_core::video::preview::running(&e, second), None);
+}

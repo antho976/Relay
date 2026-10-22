@@ -101,8 +101,8 @@ fn target(rel: &str) -> Option<String> {
     if rel == "tsconfig.base.json" {
         return Some(rel.into());
     }
-    if rel == "worker.mjs" {
-        return Some(".relay/worker.mjs".into());
+    if rel == "worker.mjs" || rel == "loopback.cjs" {
+        return Some(format!(".relay/{rel}"));
     }
     rel.strip_prefix("kit/").map(|kit| format!(".relay/kit/{kit}"))
 }

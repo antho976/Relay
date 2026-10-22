@@ -12,7 +12,8 @@ use crate::video::{self, assets, get_render, get_video, jobs, kit, live_video, q
 use relay_bus::design::{plain_label, MAX_NAME};
 use relay_bus::error::BusError;
 use relay_bus::ops::video::{
-    AssetAdd, AssetAddOut, AssetInspect, AssetList, AssetListOut, AudioBeats, BeatBar, BeatGrid, BeatSection, Check, Composition, Create, CreateOut, Delete, Format, Get, GetOut, KitInstall,
+    AssetAdd, AssetAddOut, AssetInspect, Preview, PreviewOut, CaptureAndroid, CaptureOut, ElevenKeyRemove, ElevenKeySet, ElevenStatusOp, MadeOut, Music, Sfx, Transcribe, TranscribeOut, VoiceInfo, Voices,
+    VoicesOut, VoiceOut, AssetList, AssetListOut, AudioBeats, BeatBar, BeatGrid, BeatSection, Check, Composition, Create, CreateOut, Delete, Format, Get, GetOut, KitInstall,
     KitState, KitStatusOp, List, ListOut, Quality, Render, RenderBatch, RenderCancel, RenderGet, RenderJob, RenderState, RenderWait,
     RendersOut, Restore, Scan, Still, Timeline, Update, Version, VersionRestore, VersionRestoreOut, VideoRender, MAX_ASSETS, MAX_SECONDS, MAX_SIDE,
 };
@@ -143,6 +144,8 @@ pub struct StagedAsset {
     out: AssetAddOut,
 }
 
+pub struct Staged<T>(T);
+
 /// One render made ready with nothing locked: what its row is inserted with.
 pub struct Job {
     composition: String,
@@ -270,6 +273,13 @@ fn asset_path(dir: &Path, raw: &str) -> Result<PathBuf, BusError> {
     Ok(path)
 }
 
+/// A file's length in seconds, by ffprobe; 0 when it cannot be read.
+fn length_of(engine: &Engine, path: &Path) -> f64 {
+    video::media::probe(engine, path).ok()
+        .and_then(|info| info["format"]["duration"].as_str().and_then(|d| d.parse::<f64>().ok()))
+        .map_or(0.0, |s| (s * 1000.0).round() / 1000.0)
+}
+
 /// The grid as the bus says it, in the video's frames at `fps`.
 fn beat_grid(grid: video::beats::Grid, fps: f64) -> BeatGrid {
     let r3 = |v: f64| (v * 1000.0).round() / 1000.0;
@@ -295,18 +305,14 @@ fn beat_grid(grid: video::beats::Grid, fps: f64) -> BeatGrid {
     }
 }
 
-/// Write `source` as an H.264 clip at a constant `fps` beside where it goes, for `assets::add` to
-/// take in its place; its sound kept.
+/// `source` as an H.264 clip at a constant `fps` in a folder of its own under `public/`, for
+/// `assets::add` to take in its place.
 fn constant_rate(engine: &Engine, dir: &Path, source: &Path, fps: f64) -> Result<PathBuf, BusError> {
     let stem = source.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "clip".into());
     let tmp = dir.join("public").join(format!(".{}-cfr", uuid::Uuid::new_v4()));
     fs::create_dir_all(&tmp).map_err(|e| BusError::unavailable("video.folder", format!("{}: {e}", tmp.display())))?;
     let out = tmp.join(format!("{stem}.mp4"));
-    let rate = format!("{fps}");
-    video::media::ffmpeg(engine, &[std::ffi::OsStr::new("-i"), source.as_os_str(), "-fps_mode".as_ref(), "cfr".as_ref(), "-r".as_ref(), rate.as_ref(),
-        "-c:v".as_ref(), "libx264".as_ref(), "-preset".as_ref(), "veryfast".as_ref(), "-crf".as_ref(), "16".as_ref(), "-pix_fmt".as_ref(), "yuv420p".as_ref(),
-        "-c:a".as_ref(), "aac".as_ref(), "-b:a".as_ref(), "192k".as_ref(), "-movflags".as_ref(), "+faststart".as_ref(), out.as_os_str()],
-        "writing the clip at a constant frame rate")?;
+    video::media::constant_rate(engine, source, &out, fps)?;
     Ok(out)
 }
 
@@ -722,6 +728,160 @@ pub fn register(e: &mut Engine) {
                 .with_hint("speech, a drone or a free-time piece has none; give bpm if you know it"))?;
         Ok(beat_grid(grid, video.fps))
     });
+
+    // ElevenLabs: the network and the file with nothing locked; the transaction only checks the
+    // video is still there and the caller's (as asset.add, nothing on a row changes).
+    e.register_staged::<relay_bus::ops::video::Voice, Staged<VoiceOut>>(|ctx, p| {
+        let video = read_video(ctx, p.video_id, true)?;
+        let text = p.text.trim();
+        if text.is_empty() {
+            return Err(BusError::invalid("video.voice", "say something"));
+        }
+        let unit = |v: Option<f64>, lo: f64, hi: f64, name: &str| -> Result<Option<f64>, BusError> {
+            match v {
+                Some(v) if !(lo..=hi).contains(&v) => Err(BusError::invalid("video.voice", format!("{name} is {lo} to {hi}"))),
+                v => Ok(v),
+            }
+        };
+        let settings = json!({
+            "stability": unit(p.stability, 0.0, 1.0, "stability")?.unwrap_or(0.5),
+            "similarity_boost": unit(p.similarity, 0.0, 1.0, "similarity")?.unwrap_or(0.75),
+            "style": unit(p.style, 0.0, 1.0, "style")?.unwrap_or(0.0),
+            "speed": unit(p.speed, 0.7, 1.2, "speed")?.unwrap_or(1.0),
+            "use_speaker_boost": true,
+        });
+        let engine = ctx.engine();
+        let (voice_id, voice) = video::eleven::voice_id(engine, p.voice.trim())?;
+        let say = p.say.clone().unwrap_or_default();
+        let (said, counts) = video::eleven::spoken(text, &say);
+        let model = p.model.clone().unwrap_or_else(|| video::eleven::TTS_MODEL.into());
+        let (audio, alignment) = video::eleven::speak(engine, &voice_id, &said, &model, settings.clone())?;
+        let words = video::eleven::written(text, &counts, video::eleven::words_of(&alignment));
+        let seconds = words.last().map_or(0.0, |w| w.end);
+        let captions = video::eleven::captions(&words);
+        let name = p.name.clone().unwrap_or_else(|| video::eleven::name_from("vo", text));
+        let made = json!({"made_by": "video.voice", "provider": "elevenlabs", "text": text, "said": said, "voice": voice, "voice_id": voice_id,
+            "model": model, "settings": settings, "words": words, "captions": captions, "seconds": seconds, "made_at": crate::time::now()});
+        let asset = video::eleven::keep(Path::new(&video.dir), &audio, &name, "mp3", p.overwrite.unwrap_or(false), made)?;
+        Ok(Staged(VoiceOut { asset, seconds, words, captions, voice_id, voice, model }))
+    }, |ctx: &mut Ctx, p, staged| {
+        let video = live_video(ctx.tx(), p.video_id)?;
+        assert_actor_project(ctx, video.project_id)?;
+        ctx.set_project(video.project_id);
+        Ok(staged.0)
+    });
+
+    // Unlocked: Studio opens (its first bundle) with nothing held.
+    e.register_unlocked::<Preview>(|ctx, p| {
+        let video = read_video(ctx, p.video_id, true)?;
+        if p.stop == Some(true) {
+            if video::preview::running(ctx.engine(), video.id).is_some() {
+                video::preview::stop(ctx.engine());
+            }
+            return Ok(PreviewOut { url: None, running: false, started: false });
+        }
+        let composition = p.composition.clone().unwrap_or_else(|| video.composition.clone());
+        let (url, started) = video::preview::open(ctx.engine(), &video, &composition)?;
+        Ok(PreviewOut { url: Some(url), running: true, started })
+    });
+
+    // Staged: the device is recorded with nothing locked (it holds the device's own lease).
+    e.register_staged::<CaptureAndroid, Staged<CaptureOut>>(|ctx, p| {
+        let video = read_video(ctx, p.video_id, true)?;
+        let fps = p.fps.unwrap_or(30.0);
+        let tail = p.tail.unwrap_or(1.0);
+        if !(1.0..=60.0).contains(&fps) || !(0.0..=30.0).contains(&tail) {
+            return Err(BusError::invalid("video.capture", "fps is 1 to 60, tail 0 to 30 seconds"));
+        }
+        let adb = ctx.read(crate::handlers::device::adb_path)?;
+        let holder = match (ctx.actor_session_id(), ctx.actor.session_name()) {
+            (Some(id), Some(name)) => crate::device_lease::Holder::Session { id, name: name.to_string() },
+            _ => crate::device_lease::Holder::User,
+        };
+        let plan = video::capture::Plan {
+            device: p.device.as_deref(), launch: p.launch.as_deref(), steps: &p.steps, tail, fps, demo: p.demo.unwrap_or(true),
+            name: p.name.as_deref(), overwrite: p.overwrite.unwrap_or(false),
+        };
+        let c = video::capture::capture(ctx.engine(), &adb, Path::new(&video.dir), holder, &plan)?;
+        Ok(Staged(CaptureOut { asset: c.asset, seconds: c.seconds, fps, frames: c.frames, steps: c.marks, motion: c.motion, device: c.device }))
+    }, |ctx: &mut Ctx, p, staged| {
+        let video = live_video(ctx.tx(), p.video_id)?;
+        assert_actor_project(ctx, video.project_id)?;
+        ctx.set_project(video.project_id);
+        Ok(staged.0)
+    });
+
+    e.register_unlocked::<Voices>(|ctx, p| {
+        let mut voices: Vec<VoiceInfo> = video::eleven::voices(ctx.engine())?;
+        if let Some(search) = p.search.as_deref().map(str::to_lowercase).filter(|s| !s.is_empty()) {
+            voices.retain(|v| v.name.to_lowercase().contains(&search) || v.description.as_deref().is_some_and(|d| d.to_lowercase().contains(&search)));
+        }
+        Ok(VoicesOut { voices })
+    });
+
+    e.register_staged::<Sfx, Staged<MadeOut>>(|ctx, p| {
+        let video = read_video(ctx, p.video_id, true)?;
+        if p.seconds.is_some_and(|s| !(0.5..=30.0).contains(&s)) || p.influence.is_some_and(|i| !(0.0..=1.0).contains(&i)) {
+            return Err(BusError::invalid("video.sfx", "seconds is 0.5 to 30, influence 0 to 1"));
+        }
+        let audio = video::eleven::sound_effect(ctx.engine(), p.prompt.trim(), p.seconds, p.influence, p.looped.unwrap_or(false))?;
+        let name = p.name.clone().unwrap_or_else(|| video::eleven::name_from("sfx", &p.prompt));
+        let made = json!({"made_by": "video.sfx", "provider": "elevenlabs", "prompt": p.prompt.trim(), "seconds": p.seconds,
+            "influence": p.influence, "loop": p.looped.unwrap_or(false), "made_at": crate::time::now()});
+        let asset = video::eleven::keep(Path::new(&video.dir), &audio, &name, "mp3", p.overwrite.unwrap_or(false), made)?;
+        let seconds = length_of(ctx.engine(), Path::new(&asset.path));
+        Ok(Staged(MadeOut { asset, seconds }))
+    }, |ctx: &mut Ctx, p, staged| {
+        let video = live_video(ctx.tx(), p.video_id)?;
+        assert_actor_project(ctx, video.project_id)?;
+        ctx.set_project(video.project_id);
+        Ok(staged.0)
+    });
+
+    e.register_staged::<Music, Staged<MadeOut>>(|ctx, p| {
+        let video = read_video(ctx, p.video_id, true)?;
+        if !(3.0..=600.0).contains(&p.seconds) {
+            return Err(BusError::invalid("video.music", "music is 3 to 600 seconds"));
+        }
+        let model = p.model.clone().unwrap_or_else(|| video::eleven::MUSIC_MODEL.into());
+        let instrumental = p.instrumental.unwrap_or(true);
+        let audio = video::eleven::compose(ctx.engine(), p.prompt.trim(), p.seconds, instrumental, &model)?;
+        let name = p.name.clone().unwrap_or_else(|| video::eleven::name_from("music", &p.prompt));
+        let made = json!({"made_by": "video.music", "provider": "elevenlabs", "prompt": p.prompt.trim(), "seconds": p.seconds,
+            "instrumental": instrumental, "model": model, "made_at": crate::time::now()});
+        let asset = video::eleven::keep(Path::new(&video.dir), &audio, &name, "mp3", p.overwrite.unwrap_or(false), made)?;
+        let seconds = length_of(ctx.engine(), Path::new(&asset.path));
+        Ok(Staged(MadeOut { asset, seconds }))
+    }, |ctx: &mut Ctx, p, staged| {
+        let video = live_video(ctx.tx(), p.video_id)?;
+        assert_actor_project(ctx, video.project_id)?;
+        ctx.set_project(video.project_id);
+        Ok(staged.0)
+    });
+
+    e.register_unlocked::<Transcribe>(|ctx, p| {
+        let video = read_video(ctx, p.video_id, false)?;
+        let dir = PathBuf::from(&video.dir);
+        let path = asset_path(&dir, &p.asset).or_else(|e| {
+            // A render, by its name in out/.
+            let out = dir.join("out").join(p.asset.trim());
+            if out.is_file() { Ok(out) } else { Err(e) }
+        })?;
+        let (text, language, words) = video::eleven::hear(ctx.engine(), &path, p.language.as_deref())?;
+        let misheard = p.expect.as_deref().map(|e| video::eleven::misheard(e, &words)).unwrap_or_default();
+        Ok(TranscribeOut { text, language, words, misheard })
+    });
+
+    e.register_unlocked::<ElevenStatusOp>(|ctx, _| video::eleven::status(ctx.engine()));
+
+    // Staged: the key is checked with ElevenLabs before it is kept, with nothing locked.
+    e.register_staged::<ElevenKeySet, Staged<relay_bus::ops::video::ElevenStatus>>(|ctx, p| {
+        let key = video::eleven::check_format(&p.key)?;
+        Ok(Staged(video::eleven::save(ctx.engine(), key)?))
+    }, |_ctx: &mut Ctx, _p, staged| Ok(staged.0));
+
+    e.register_staged::<ElevenKeyRemove, Staged<relay_bus::ops::video::ElevenStatus>>(|ctx, _| Ok(Staged(video::eleven::remove(ctx.engine())?)),
+        |_ctx: &mut Ctx, _p, staged| Ok(staged.0));
 
     e.register_unlocked::<AssetList>(|ctx, p| {
         let video = read_video(ctx, p.video_id, false)?;

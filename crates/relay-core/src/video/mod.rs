@@ -9,10 +9,13 @@
 pub mod assets;
 pub mod audio;
 pub mod beats;
+pub mod capture;
+pub mod eleven;
 pub mod inspect;
 pub mod jobs;
 pub mod kit;
 pub mod media;
+pub mod preview;
 pub mod probe;
 pub mod sheet;
 pub mod stills;
@@ -41,6 +44,10 @@ pub struct Hub {
     /// The newest timelines measured (`video.timeline`, a still's sound), by video, version,
     /// composition and props: a still after a timeline reuses its mix.
     pub(crate) timelines: Mutex<Vec<(String, std::sync::Arc<stills::Measured>)>>,
+    /// The live preview (Remotion Studio), one at a time.
+    pub preview: preview::Slot,
+    /// ElevenLabs: the saved key once read, and the tests' stand-in for the network.
+    pub(crate) eleven: eleven::State,
     /// Files' lengths in seconds, by path and change time (ffprobe).
     pub(crate) lengths: Mutex<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<f64>)>>,
     /// Tests only: the worker's command line instead of `node videos/.relay/worker.mjs`, with
@@ -51,6 +58,12 @@ pub struct Hub {
 impl Hub {
     pub(crate) fn program(&self) -> Option<Vec<String>> {
         self.program.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Answer ElevenLabs calls with `fake` instead of the network: what the engine tests use.
+    #[doc(hidden)]
+    pub fn use_elevenlabs(&self, fake: eleven::Fake) {
+        *self.eleven.fake.lock().unwrap_or_else(|e| e.into_inner()) = Some(fake);
     }
 
     /// Run `program` as the worker instead of Relay's, the kit counted as set up: what the engine
@@ -64,6 +77,7 @@ impl Hub {
 /// Stop the worker and what it runs: Relay is going.
 pub fn shutdown(engine: &Engine) {
     worker::stop(engine);
+    preview::stop(engine);
 }
 
 /// The folder a project's videos are made in: what every session of the project may write to

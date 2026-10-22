@@ -29,6 +29,6 @@
     "remotion": "4.0.534",
     "source-map": "0.7.6",
     "typescript": "6.0.3",
-    "zod": "4.6.5"
+    "zod": "4.5.4"
   }
 }
