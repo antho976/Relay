@@ -10,7 +10,11 @@ import com.forge.app.data.db.entities.ProgramCustomization
 import com.forge.app.data.db.entities.ProgramDay
 import com.forge.app.data.db.entities.ProgramSlot
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.data.repo.BlockRepository
 import com.forge.app.data.repo.ProgramRepository
+import com.forge.app.data.repo.WorkoutRepository
+import com.forge.app.domain.adapt.ProgressionAdvisor
+import com.forge.app.program.ExerciseUnit
 import com.forge.app.domain.schedule.WeeklySchedule
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.ui.common.ProgramChangeGuard
@@ -50,13 +54,46 @@ internal interface ProgramBuilderStore {
     suspend fun coachSwapTargets(): Map<String, String> = emptyMap()
     /** The user's "every week" swaps: base library id to the swapped lift's name and id. */
     suspend fun userSwapTargets(): Map<String, Pair<String, String?>> = emptyMap()
+    /** The running training block's week, length and phase; null when none runs. */
+    suspend fun blockReading(): BlockReading? = null
+    /** Today's load for [libId] planned at [reps]: the coach's next target, else last time's top. */
+    suspend fun plannedLoad(libId: String, reps: String): PlannedLoad? = null
 }
 
 internal class RepositoryProgramBuilderStore(
     private val programRepository: ProgramRepository,
     private val settingsRepo: SettingsRepository,
-    private val programChangeGuard: ProgramChangeGuard
+    private val programChangeGuard: ProgramChangeGuard,
+    private val workoutRepository: WorkoutRepository? = null,
+    private val blockRepository: BlockRepository? = null
 ) : ProgramBuilderStore {
+    override suspend fun blockReading(): BlockReading? = blockRepository?.active()?.let { b ->
+        val phase = com.forge.app.domain.coach.BlockPhase.fromCode(b.phase)?.displayName ?: return@let null
+        BlockReading(week = b.weekIndex, weeks = b.plannedWeeks, phase = phase)
+    }
+
+    override suspend fun plannedLoad(libId: String, reps: String): PlannedLoad? {
+        val workouts = workoutRepository ?: return null
+        val def = ExerciseLibrary.byId(libId)
+        val unit = def?.unit ?: com.forge.app.program.Program.exercise(libId)?.unit ?: ExerciseUnit.WEIGHT
+        val prevLE = workouts.lastLoggedExerciseBefore(libId, -1L) ?: return null
+        val prevSets = workouts.setsFor(prevLE.id).filter { it.setType != "warmup" }
+        val lastTop = prevSets.filter { !it.isAssisted }.mapNotNull { it.weightLb }.maxOrNull()
+        if (unit == ExerciseUnit.BODYWEIGHT) return PlannedLoad(lastTop, bodyweight = true)
+        val target = ProgressionAdvisor.suggestNextLoad(
+            exerciseId = libId,
+            exerciseName = def?.name ?: libId,
+            prevSets = prevSets,
+            prevEffort = prevLE.difficulty,
+            repsText = reps,
+            unit = unit,
+            plateLb = settingsRepo.plateWeightLb.first(),
+            phase = blockRepository?.phase(),
+            weightUnit = settingsRepo.weightUnit.first()
+        )?.targetWeightLb
+        return PlannedLoad(target ?: lastTop, bodyweight = false)
+    }
+
     override val freestyleMode: Flow<Boolean> get() = settingsRepo.freestyleMode
     override suspend fun currentDayRows(): List<ProgramDay> = programRepository.currentDayRows()
     override suspend fun slotRowsForDay(dayId: String): List<ProgramSlot> = programRepository.slotRowsForDay(dayId)
@@ -115,8 +152,25 @@ class ProgramBuilderViewModel internal constructor(
         programRepository: ProgramRepository,
         settingsRepo: SettingsRepository,
         programChangeGuard: ProgramChangeGuard,
+        workoutRepository: WorkoutRepository,
+        blockRepository: BlockRepository,
         savedStateHandle: SavedStateHandle
-    ) : this(RepositoryProgramBuilderStore(programRepository, settingsRepo, programChangeGuard), savedStateHandle)
+    ) : this(
+        RepositoryProgramBuilderStore(programRepository, settingsRepo, programChangeGuard, workoutRepository, blockRepository),
+        savedStateHandle
+    )
+
+    /** The running training block, for the line under the title ([programMeta]). */
+    var block by mutableStateOf<BlockReading?>(null)
+        private set
+
+    /** "dayKey|libId" to the coach's change on that lift this week ("↑ 1 rep"). */
+    var coachChanges by mutableStateOf<Map<String, String>>(emptyMap())
+        private set
+
+    /** Library id (of the lift trained) to today's load, filled after the plan lands. */
+    var loads by mutableStateOf<Map<String, PlannedLoad?>>(emptyMap())
+        private set
 
     var days by mutableStateOf<List<BuilderDay>>(emptyList())
         private set
@@ -205,6 +259,7 @@ class ProgramBuilderViewModel internal constructor(
         if (!blank) viewModelScope.launch {
             deloadWeekRunning = store.deloadWeekRunning()
             userSwaps = store.userSwapTargets()
+            block = store.blockReading()
         }
         if (loaded) return
         loaded = true
@@ -216,6 +271,7 @@ class ProgramBuilderViewModel internal constructor(
             // overwrites edits the user has already made.
             if (!dirty) days = rows
             loadComplete = true
+            refreshLoads()
         }
     }
 
@@ -230,6 +286,7 @@ class ProgramBuilderViewModel internal constructor(
         viewModelScope.launch {
             days = loadDays()
             loadComplete = true
+            refreshLoads()
         }
     }
 
@@ -279,16 +336,20 @@ class ProgramBuilderViewModel internal constructor(
      * decision was stamped "folded". Merged here, a save bakes the overlay into the base rows and
      * "folded" is true. Legacy custom_ add-rows have no library id and stay out, as before.
      */
-    private suspend fun loadDays(): List<BuilderDay> {
+    private suspend fun loadDays(): List<BuilderDay> = loadDaysWithChanges().also { coachChanges = it.second }.first
+
+    private suspend fun loadDaysWithChanges(): Pair<List<BuilderDay>, Map<String, String>> {
         val weekdays = store.scheduledWeekdays()
         val coachSwaps = store.coachSwapTargets()
-        return store.currentDayRows().map { pd ->
+        val changes = HashMap<String, String>()
+        val rows = store.currentDayRows().map { pd ->
             val slots = store.slotRowsForDay(pd.id)
             val overlay = store.overlaysForDay(pd.id).associateBy { it.exerciseId }
             val exercises = slots.mapIndexedNotNull { i, s ->
                 val c = overlay[s.exerciseLibId]
                 if (c?.removed == true) return@mapIndexedNotNull null
                 val libId = coachSwaps[s.exerciseLibId] ?: s.exerciseLibId
+                coachChangeTag(s.sets, s.reps, c)?.let { changes["${pd.id}|$libId"] = it }
                 val def = ExerciseLibrary.byId(libId)
                 val order = c?.orderOverride?.takeIf { it != UNSET_ORDER } ?: (i * 10)
                 // An id the library doesn't know (a seed slot, an import, a movement since removed)
@@ -305,6 +366,26 @@ class ProgramBuilderViewModel internal constructor(
                 accentHex = pd.accentHex, word = pd.word, weekdays = weekdays[pd.id].orEmpty(),
                 exercises = exercises
             )
+        }
+        return rows to changes
+    }
+
+    /**
+     * Today's load for every lift in the plan, read once per lift actually trained (the user's
+     * "every week" swap when there is one). Filled after the plan lands; the page shows the lifts
+     * meanwhile and the loads appear under them.
+     */
+    private fun refreshLoads() {
+        val plan = days
+        if (plan.isEmpty()) return
+        viewModelScope.launch {
+            // Read here rather than from [userSwaps], whose own read may not have landed yet.
+            val swaps = runCatching { store.userSwapTargets() }.getOrDefault(userSwaps)
+            val wanted = plan.flatMap { d -> d.exercises.map { e -> (swaps[e.libId]?.second ?: e.libId) to e.reps } }
+                .distinctBy { it.first }
+            val out = HashMap<String, PlannedLoad?>()
+            wanted.forEach { (id, reps) -> out[id] = runCatching { store.plannedLoad(id, reps) }.getOrNull() }
+            loads = out
         }
     }
 

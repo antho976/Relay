@@ -1,91 +1,136 @@
 package com.forge.app.ui.overview
 
 import com.forge.app.domain.adapt.HealthSnap
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * What Home's BODY section shows (2026-10-16). The watch used to surface on Home only as a steps
- * line that vanished without a grant, so a user with a watch had nothing telling them it was
- * connected, and a user without one had nothing telling them it could be.
+ * The readings Home can put in its two slots (2026-10-21 redesign). The user picks one per slot from
+ * the slot sheet; [id] is what [com.forge.app.data.prefs.SettingsRepository.homeSlots] stores, so it
+ * never changes once shipped.
  */
-sealed interface HomeBody {
-    /** Health Connect is on the phone but nothing is granted yet: Home offers to connect. */
-    data object Invite : HomeBody
+enum class HomeSlot(val id: String, val label: String, val pickerTitle: String, val needsWatch: Boolean) {
+    SLEEP("sleep", "Sleep", "Sleep", true),
+    RESTING_HR("resting_hr", "Resting HR", "Resting heart rate", true),
+    HRV("hrv", "HRV", "HRV", true),
+    STEPS("steps", "Steps", "Steps today", true),
+    BODY_WEIGHT("body_weight", "Body weight", "Body weight", false),
+    LAST_SESSION("last_session", "Last session", "Last session", false);
 
-    /** Connected. Each reading is null when the watch has not reported it. */
-    data class Readings(
-        val sleep: Reading?,
-        val restingHr: Reading?,
-        val hrv: Reading?,
-        val steps: Reading?
-    ) : HomeBody {
-        val isEmpty: Boolean get() = sleep == null && restingHr == null && hrv == null && steps == null
+    companion object {
+        val DEFAULT_LEFT = SLEEP
+        val DEFAULT_RIGHT = LAST_SESSION
+        fun of(id: String?): HomeSlot? = entries.firstOrNull { it.id == id }
     }
-
-    /** One tile: the figure and a short line comparing it to the user's own usual. */
-    data class Reading(val value: String, val compare: String?, val description: String)
 }
 
 /**
- * Builds the readings from a 15-day [snap]. "Usual" is the median of the days before today, needing
- * three of them; with fewer there is no comparison line rather than a made-up one.
+ * One reading as the redesign draws it: mono label → serif [figure] with its [unit] at half size →
+ * a mark ([spark] line or [bars]) → mono [change] line.
  */
-fun homeBodyReadings(snap: HealthSnap, todayStartMs: Long): HomeBody.Readings {
-    // Last night: the newest sleep that ended today (a nap after noon still counts as today's).
-    val nights = snap.sleepNights.sortedBy { it.endedAtMs }
-    val lastNight = nights.lastOrNull { it.endedAtMs >= todayStartMs }
-    val usualSleep = median(nights.filter { it.endedAtMs < todayStartMs }.map { it.durationMin })
-    val sleep = lastNight?.let { night ->
-        val compare = usualSleep?.let { usual ->
-            val delta = night.durationMin - usual
-            when {
-                abs(delta) < 15 -> "About your usual"
-                delta < 0 -> "${formatMinutes(-delta)} under usual"
-                else -> "${formatMinutes(delta)} over usual"
-            }
+data class SlotReading(
+    val figure: String,
+    /** Muted, half size, straight after the figure: "h", " bpm", "×5 squat". */
+    val unit: String = "",
+    /** Oldest → newest, drawn as the red sparkline. Fewer than two points draws nothing. */
+    val spark: List<Float> = emptyList(),
+    /** "Each lift vs last time" bars, for the last-session reading. */
+    val bars: List<Float?>? = null,
+    val change: String? = null,
+    /** True when the change line says something moved, so it reads in ink rather than muted. */
+    val changeMoved: Boolean = false,
+    /** Overrides the slot's own label: "Yesterday" or "Mon" for the last session. */
+    val label: String? = null,
+    /** The short value the slot sheet prints beside the option ("7.4h"). */
+    val picker: String = figure + unit,
+    val description: String,
+)
+
+/**
+ * What the watch can feed Home. [Invite] when Health Connect is on the phone but nothing is granted;
+ * [Readings] once connected, with a null reading where the watch has not reported it.
+ */
+sealed interface HomeBody {
+    data object Invite : HomeBody
+
+    data class Readings(
+        val sleep: SlotReading?,
+        val restingHr: SlotReading?,
+        val hrv: SlotReading?,
+        val steps: SlotReading?,
+    ) : HomeBody {
+        val isEmpty: Boolean get() = sleep == null && restingHr == null && hrv == null && steps == null
+    }
+}
+
+/** How many days the sparklines span. */
+private const val SPARK_DAYS = 7
+
+/**
+ * Builds the watch readings from a 15-day [snap]. "Usual" is the median of the days before today,
+ * needing three of them; with fewer there is no comparison line rather than a made-up one. A reading
+ * older than yesterday is not shown as today's.
+ */
+fun homeBodyReadings(snap: HealthSnap, todayStartMs: Long, zone: ZoneId = ZoneId.systemDefault()): HomeBody.Readings {
+    fun dayOf(ms: Long): LocalDate = Instant.ofEpochMilli(ms).atZone(zone).toLocalDate()
+
+    // Sleep, one total per morning: a night split in two by the watch is still one night's sleep.
+    val nights = snap.sleepNights.groupBy { dayOf(it.endedAtMs) }
+        .mapValues { (_, n) -> n.sumOf { it.durationMin } }
+        .toSortedMap()
+    val todayDate = dayOf(todayStartMs)
+    val lastNight = nights[todayDate]
+    val usualSleep = median(nights.filterKeys { it < todayDate }.values.toList())
+    val sleep = lastNight?.let { min ->
+        val hours = min / 60.0
+        val delta = usualSleep?.let { (min - it) / 60.0 }
+        val change = delta?.let {
+            if (abs(it) < 0.25) "About your usual"
+            else "${arrow(it)} ${"%.1f".format(abs(it))}h vs usual"
         }
-        HomeBody.Reading(
-            value = formatMinutes(night.durationMin),
-            compare = compare,
-            description = "Slept ${formatMinutes(night.durationMin)}" + (compare?.let { ", ${it.lowercase()}" } ?: "")
+        SlotReading(
+            figure = "%.1f".format(hours),
+            unit = "h",
+            spark = nights.values.toList().takeLast(SPARK_DAYS).map { it / 60f },
+            change = change,
+            changeMoved = delta != null && abs(delta) >= 0.25,
+            description = "Slept ${formatMinutes(min)}" + (change?.let { ", ${it.lowercase()}" } ?: ""),
         )
     }
 
+    val hrByDay = snap.restingHr.groupBy { dayOf(it.timeMs) }.mapValues { (_, s) -> s.maxBy { it.timeMs }.bpm }.toSortedMap()
     val latestHr = snap.restingHr.maxByOrNull { it.timeMs }?.takeIf { it.timeMs >= todayStartMs - DAY_MS }
     val usualHr = median(snap.restingHr.filter { it.timeMs < todayStartMs }.map { it.bpm })
     val restingHr = latestHr?.let { s ->
-        val compare = usualHr?.let { usual ->
-            val delta = s.bpm - usual
-            when {
-                abs(delta) <= 2 -> "Normal for you"
-                delta > 0 -> "$delta over usual"
-                else -> "${-delta} under usual"
-            }
-        }
-        HomeBody.Reading(
-            value = "${s.bpm} bpm",
-            compare = compare,
-            description = "Resting heart rate ${s.bpm} beats per minute" + (compare?.let { ", ${it.lowercase()}" } ?: "")
+        val delta = usualHr?.let { s.bpm - it }
+        val change = delta?.let { if (abs(it) <= 2) "Normal for you" else "${arrow(it.toDouble())} ${abs(it)} vs usual" }
+        SlotReading(
+            figure = "${s.bpm}",
+            unit = " bpm",
+            spark = hrByDay.values.toList().takeLast(SPARK_DAYS).map { it.toFloat() },
+            change = change,
+            changeMoved = delta != null && abs(delta) > 2,
+            description = "Resting heart rate ${s.bpm} beats per minute" + (change?.let { ", ${it.lowercase()}" } ?: ""),
         )
     }
 
+    val hrvByDay = snap.hrv.groupBy { dayOf(it.timeMs) }.mapValues { (_, s) -> s.maxBy { it.timeMs }.rmssdMs }.toSortedMap()
     val latestHrv = snap.hrv.maxByOrNull { it.timeMs }?.takeIf { it.timeMs >= todayStartMs - DAY_MS }
     val usualHrv = median(snap.hrv.filter { it.timeMs < todayStartMs }.map { it.rmssdMs.roundToInt() })
     val hrv = latestHrv?.let { s ->
         val ms = s.rmssdMs.roundToInt()
-        val compare = usualHrv?.takeIf { it > 0 }?.let { usual ->
-            val pct = ((ms - usual) * 100.0 / usual).roundToInt()
-            when {
-                abs(pct) < 10 -> "Normal for you"
-                pct < 0 -> "${-pct}% under usual"
-                else -> "$pct% over usual"
-            }
-        }
-        HomeBody.Reading(
-            value = "$ms ms",
-            compare = compare,
-            description = "Heart rate variability $ms milliseconds" + (compare?.let { ", ${it.lowercase()}" } ?: "")
+        val pct = usualHrv?.takeIf { it > 0 }?.let { ((ms - it) * 100.0 / it).roundToInt() }
+        val change = pct?.let { if (abs(it) < 10) "Normal for you" else "${arrow(it.toDouble())} ${abs(it)}% vs usual" }
+        SlotReading(
+            figure = "$ms",
+            unit = " ms",
+            spark = hrvByDay.values.toList().takeLast(SPARK_DAYS).map { it.toFloat() },
+            change = change,
+            changeMoved = pct != null && abs(pct) >= 10,
+            description = "Heart rate variability $ms milliseconds" + (change?.let { ", ${it.lowercase()}" } ?: ""),
         )
     }
 
@@ -93,16 +138,19 @@ fun homeBodyReadings(snap: HealthSnap, todayStartMs: Long): HomeBody.Readings {
     val typicalSteps = median(snap.dailySteps.filter { it.dayStartMs < todayStartMs && it.steps > 0 }.map { it.steps })
     val steps = if (todaySteps == null && snap.dailySteps.isEmpty()) null else {
         val count = todaySteps?.steps ?: 0
-        val compare = typicalSteps?.let { "Typical ${formatCount(it)}" }
-        HomeBody.Reading(
-            value = "%,d".format(count),
-            compare = compare,
-            description = "$count steps today" + (typicalSteps?.let { ", typical $it" } ?: "")
+        val change = typicalSteps?.let { "Typical ${formatCount(it)}" }
+        SlotReading(
+            figure = "%,d".format(count),
+            spark = snap.dailySteps.sortedBy { it.dayStartMs }.takeLast(SPARK_DAYS).map { it.steps.toFloat() },
+            change = change,
+            description = "$count steps today" + (typicalSteps?.let { ", typical $it" } ?: ""),
         )
     }
 
     return HomeBody.Readings(sleep = sleep, restingHr = restingHr, hrv = hrv, steps = steps)
 }
+
+private fun arrow(delta: Double) = if (delta < 0) "↓" else "↑"
 
 private fun median(values: List<Int>): Int? {
     if (values.size < 3) return null

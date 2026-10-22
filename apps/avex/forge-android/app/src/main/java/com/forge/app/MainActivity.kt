@@ -28,7 +28,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.padding
@@ -52,8 +52,11 @@ import com.forge.app.security.AppLockManager
 import com.forge.app.security.LocalAppLock
 import com.forge.app.security.LocalAppLockActive
 import com.forge.app.service.AutoBackupWorker
-import com.forge.app.ui.common.AvexIntro
 import com.forge.app.ui.common.ProvideTouchExploration
+import com.forge.app.ui.launch.LaunchCover
+import com.forge.app.ui.launch.launchIconFromComponent
+import com.forge.app.ui.launch.playSplashExit
+import com.forge.app.ui.launch.systemSplashDrawsIcon
 import com.forge.app.ui.nav.ForgeNavHost
 import com.forge.app.ui.onboarding.OnboardingScreen
 import com.forge.app.ui.security.AppLockScreen
@@ -132,6 +135,16 @@ class MainActivity : FragmentActivity() {
         widgetOpenRequest = null
     }
     private var privacyPolicyRequest by mutableStateOf(0)
+
+    /**
+     * Home's first frame (or onboarding's, or the lock screen's) is composed and laid out, or the
+     * 2 s safety cap ran out. The splash is held until then, and its hand-off starts from it.
+     */
+    private var contentReady by mutableStateOf(false)
+
+    /** The launch hand-off has finished (or there was none: a recreation). Gates the lock prompt
+     *  and the import dialog so neither lands on top of the fade. */
+    private var launchSettled by mutableStateOf(false)
 
     /** The chosen app-icon key, seeded in onCreate and kept live by a collector so [onStop] never has to
      *  block on a DataStore read. @Volatile because onStop (main thread) reads what the collector writes.
@@ -354,10 +367,22 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         // Secure before the first frame, including while recovery or preferences are slow.
         applyPrivacyMode(true)
-        var contentReady = false
-        splash.setKeepOnScreenCondition { !contentReady }
-        setContent { StartupMessage("Preparing Avex…") }
-        lifecycleScope.launch { delay(2000); contentReady = true }
+        // The launch (2026-10-21, see ui/launch/LaunchHandOff.kt): the splash is the chosen app icon
+        // on the app's dark, held only until the first screen is ready (2 s cap), then the icon fades
+        // and settles as the screen fades in. A recreation (rotation) has no launch to hand off.
+        launchSettled = savedInstanceState != null
+        // Android 12+ draws the icon itself (the launching alias's own); 8 to 11 draw it here.
+        val coverIcon = if (systemSplashDrawsIcon || savedInstanceState != null) null else {
+            launchIconFromComponent(intent?.component?.className)
+                ?: runCatching { appIconManager.currentIcon() }.getOrDefault(AppIcon.Default)
+        }
+        var startupSlow by mutableStateOf(false)
+        if (systemSplashDrawsIcon) {
+            splash.setKeepOnScreenCondition { !contentReady }
+            splash.setOnExitAnimationListener { provider -> playSplashExit(provider) { launchSettled = true } }
+        }
+        setContent { StartupMessage("Preparing Avex…", coverIcon = coverIcon, showMessage = coverIcon == null || startupSlow) }
+        lifecycleScope.launch { delay(2000); contentReady = true; startupSlow = true }
         // A staged restore restarts the app as soon as it is in the foreground, from any screen.
         lifecycleScope.launch {
             repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
@@ -485,10 +510,10 @@ class MainActivity : FragmentActivity() {
         applyPrivacyMode(startup.privacyMode || startup.appLockEnabled || startup.galleryLockEnabled)
         appLock.primeEnabled(startup.appLockEnabled, startup.galleryLockEnabled)
         applyAdaptiveWindowBackground(startup.amoledMode)
-        val introIconKey = startup.appIcon
-        val themedIntro = startup.themedLaunchIntro
         // The fallback's "" is not a real read, so the key stays unknown until the collector sees one.
-        if (!startupReadFailed) appIconKey = introIconKey
+        // (startup.themedLaunchIntro is still read and stored, but nothing plays it any more: the
+        // custom launch animation was removed on 2026-10-21.)
+        if (!startupReadFailed) appIconKey = startup.appIcon
         lifecycleScope.launch {
             // FLAG_SECURE follows privacy mode OR the app lock — turning on a lock implies keeping the
             // app out of the recents preview / screenshots, as every app-lock feature does.
@@ -564,7 +589,22 @@ class MainActivity : FragmentActivity() {
                 settingsRepo.onboardingDoneOrUnknown.collect { value = it }
                 if (value == null) prefsReadFailed = true
             }
-            LaunchedEffect(onboardingDone) { if (onboardingDone != null) contentReady = true }
+            // The first screen is composed once the gate knows which one it is; one frame later it
+            // is laid out under the splash, and that is when the splash may go.
+            LaunchedEffect(onboardingDone) {
+                if (onboardingDone != null) {
+                    withFrameNanos { }
+                    contentReady = true
+                }
+            }
+            // A launch the system showed no splash for never calls the exit listener, so the
+            // hand-off also settles by itself once its fade would have finished.
+            LaunchedEffect(contentReady) {
+                if (contentReady && !launchSettled) {
+                    delay(ForgeMotion.nominalDuration(ForgeMotion.DurationStandard) + 150L)
+                    launchSettled = true
+                }
+            }
 
             CompositionLocalProvider(LocalForgeSettings provides uiSettings) {
                 ForgeTheme(
@@ -574,12 +614,6 @@ class MainActivity : FragmentActivity() {
                 ) {
                     // One app-level touch-exploration observer feeds every bounceClick (A11y).
                     ProvideTouchExploration {
-                        // Launch wordmark plays once per cold launch, over the first screen composed
-                        // beneath it. rememberSaveable so a rotation mid-intro doesn't replay it.
-                        //
-                        // Not when the app lock is on: the lock screen is what the user sees first, and
-                        // its biometric prompt waited for the whole intro to play out behind it.
-                        var showIntro by rememberSaveable { mutableStateOf(!startup.appLockEnabled) }
                         // The app lock is provided here so both this top-level gate and the gallery
                         // gate (ForgeNavHost) share one session (GYMAP-69).
                         CompositionLocalProvider(LocalAppLock provides appLock) {
@@ -631,16 +665,20 @@ class MainActivity : FragmentActivity() {
                                 null -> if (prefsReadFailed) PreferencesUnavailableMessage(onRetry = { prefsAttempt++ })
                             }
                             // App-lock gate — an opaque overlay above the nav host (whose state is
-                            // preserved underneath), below the launch intro. The prompt waits for the
-                            // intro to finish. Never over onboarding (the lock is set up there).
+                            // preserved underneath), below the launch cover. The prompt waits for the
+                            // launch hand-off to settle. Never over onboarding (the lock is set up there).
                             if (lockActive) {
                                 AppLockScreen(
                                     subtitle = "Unlock with your fingerprint, face, or phone PIN",
-                                    promptReady = !showIntro,
+                                    promptReady = launchSettled,
                                     onUnlocked = { appLock.markAuthenticated() }
                                 )
                             }
-                            if (showIntro) AvexIntro(iconKey = introIconKey, themed = themedIntro, onDone = { showIntro = false })
+                            // Android 8 to 11 only: the icon cover the app draws in place of a splash
+                            // that could not wear the chosen icon (see LaunchHandOff.kt).
+                            if (coverIcon != null && !launchSettled) {
+                                LaunchCover(coverIcon, ready = contentReady, onGone = { launchSettled = true })
+                            }
                             // The app's one Undo snackbar (§13) — hosted here so a "deleted · Undo"
                             // message rides over any screen, including one popped back to after a delete.
                             // Not while locked: it is drawn after the gate, so its Undo stayed live over
@@ -650,7 +688,7 @@ class MainActivity : FragmentActivity() {
                             val showImportConfirmation = shouldShowImportConfirmation(
                                 onboardingDone = onboardingDone,
                                 appLocked = locked,
-                                showIntro = showIntro,
+                                showIntro = !launchSettled,
                                 hasPendingImport = pendingImportUri != null,
                             )
                             if (showImportConfirmation) {
@@ -718,16 +756,24 @@ private fun PreferencesUnavailableMessage(onRetry: () -> Unit) {
     }
 }
 
-/** Only visible during real startup latency or failed recovery, before private content exists. */
+/**
+ * Only visible during real startup latency or failed recovery, before private content exists. On
+ * Android 8 to 11 it carries the launch's icon cover from the app's first frame ([coverIcon]), with
+ * the message under it only once the start is slow.
+ */
 @Composable
-private fun StartupMessage(message: String) {
+private fun StartupMessage(message: String, coverIcon: AppIcon? = null, showMessage: Boolean = true) {
     ForgeTheme {
-        Box(
-            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
-                .safeDrawingPadding().padding(24.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+            if (coverIcon != null) LaunchCover(coverIcon, ready = false)
+            if (showMessage) {
+                Box(
+                    Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp),
+                    contentAlignment = if (coverIcon != null) Alignment.BottomCenter else Alignment.Center
+                ) {
+                    Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+                }
+            }
         }
     }
 }

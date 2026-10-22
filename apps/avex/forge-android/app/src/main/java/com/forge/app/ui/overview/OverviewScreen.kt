@@ -1,8 +1,7 @@
-@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package com.forge.app.ui.overview
 
-import com.forge.app.ui.goals.GoalProgressLine
 import androidx.compose.animation.core.Animatable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,22 +11,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,300 +31,86 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.semantics.contentDescription
-import com.forge.app.core.time.userWeekDayIndex
-import com.forge.app.ui.settings.SettingsIcons
-import com.forge.app.ui.common.NotificationBell
-import com.forge.app.ui.nav.NavIcons
-import com.forge.app.ui.common.bounceCombinedClick
-import com.forge.app.ui.common.clickableLabeled
-import com.forge.app.ui.overview.components.HeroHeadline
-import com.forge.app.ui.overview.state.OverviewRecentItem
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.forge.app.core.time.userWeekDayIndex
+import com.forge.app.ui.goals.customGoalValueLine
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.domain.units.formatVolume
+import com.forge.app.data.repo.CoachHomeSummary
+import com.forge.app.data.repo.StatsRepository
+import com.forge.app.domain.goal.customPinKey
+import com.forge.app.domain.goal.liftPinKey
+import com.forge.app.domain.units.weightInputValue
+import com.forge.app.program.Program
+import com.forge.app.ui.coach.callCopy
+import com.forge.app.ui.common.OpenDeltaBars
+import com.forge.app.ui.common.OpenLabel
+import com.forge.app.ui.common.OpenMeter
+import com.forge.app.ui.common.OpenNotificationBell
+import com.forge.app.ui.common.OpenPrTag
+import com.forge.app.ui.common.OpenPrimaryButton
+import com.forge.app.ui.common.OpenSectionHead
+import com.forge.app.ui.common.OpenSlotLabel
+import com.forge.app.ui.common.OpenSparkline
+import com.forge.app.ui.common.OpenTopBarIcon
+import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.touchSlop
+import com.forge.app.ui.goals.customGoalTitle
+import com.forge.app.ui.goals.goalCaption
+import com.forge.app.ui.overview.state.OverviewRecentItem
+import com.forge.app.ui.overview.state.OverviewUiState
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
-import com.forge.app.program.Program
-import com.forge.app.ui.common.ForgeHeroAction
-import com.forge.app.ui.experiment.CellShape
-import com.forge.app.ui.experiment.SectionAnchor
-import com.forge.app.ui.experiment.SurfaceListRow
-import com.forge.app.ui.experiment.SurfacePalette
-import com.forge.app.ui.experiment.WeekStrip
-import com.forge.app.ui.experiment.surfacePalette
-import com.forge.app.ui.goals.customGoalTitle
-import com.forge.app.ui.goals.customGoalValueLine
-import com.forge.app.ui.goals.goalCaption
-import com.forge.app.domain.goal.customPinKey
-import com.forge.app.ui.goals.goalGlyph
-import com.forge.app.ui.goals.liftGoalGlyph
-import com.forge.app.domain.goal.liftPinKey
+import com.forge.app.ui.theme.OpenColors
+import com.forge.app.ui.theme.OpenIcons
+import com.forge.app.ui.theme.OpenType
+import com.forge.app.domain.coach.TodayDirective
+import com.forge.app.domain.goal.GoalMetric
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 
-/**
- * Home's buttons take the page's own corner, not the app's pill.
+/*
+ * Home, as redesigned 2026-10-21 ("05 Open panel", Relay design 7, frame c5).
  *
- * They were `RoundedCornerShape(14.dp)`, a radius that exists nowhere in `Shape.kt` (§7 allows
- * 4/8/12/16/24 and `RoundedCornerShape(50)`) — so they matched neither the app nor the page. Pills
- * were the first correction and the wrong one: Home states a geometry of its own and states it
- * twice, in `CellShape`'s rounded-square week cells and in the RECENT rows' 10dp leading marks
- * ("a squared cell ... lines up with the rounded squares the RECENT rows' leading marks already
- * use, so the page shares one geometry" — `SurfaceKit`). The CTA row sits directly above the week
- * strip, so a pill there put the one shape that disagreed with the page immediately above the
- * element that defines it (Antho, 2026-08-22).
- *
- * This is [CellShape] itself rather than a matching literal, so the two can never drift apart.
- * The cost is real and accepted: Home's capsules are now the only non-pill buttons in the app.
+ * Top to bottom: the date and three glyphs; TODAY with the session in serif, its spec line, the
+ * COACH line and the week's dots; one red Start; two readings the user picks (Sleep and Yesterday by
+ * default); the goal scoreboard; the last three sessions. No boxes around any of it: sections hold
+ * by the 24dp gutter and ~52dp of air, and red is spent only on today, the action and what moved.
  */
-private val HomeCapsuleShape = CellShape
 
-@Composable
-private fun HomePrimaryAction(
-    text: String,
-    label: String,
-    modifier: Modifier = Modifier,
-    onLongClick: (() -> Unit)? = null,
-    emphasized: Boolean = true,
-    onClick: () -> Unit
-) {
-    // The drawing moved to `ui/common` when Cardio needed the same button (§2⑥) — this stays as the
-    // name Home's call site reads by, and as the home of the skip-warmup hold label.
-    ForgeHeroAction(
-        text = text,
-        onClick = onClick,
-        modifier = modifier,
-        label = label,
-        emphasized = emphasized,
-        onLongClick = onLongClick,
-        onLongClickLabel = if (onLongClick != null) "Start, skipping warmup" else null
-    )
-}
-
-@Composable
-private fun HomePlanAction(text: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .heightIn(min = 56.dp)
-            .clip(HomeCapsuleShape)
-            // Filled, not outlined (2026-09-27): the grouped kit's raised fill is what a secondary
-            // control wears now, beside the light primary.
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            // Bounce, not a bare clickable: this capsule sits shoulder to shoulder with the primary
-            // and a control that does not answer the press reads as the disabled one (§9).
-            .bounceCombinedClick(onClickLabel = text, onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 14.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onBackground,
-        )
-    }
-}
-
-/** Home shows at most three goals and three recent sessions, matching the second backup. */
+/** Home shows at most three goals and three recent sessions. */
 private const val HOME_LIST_CAP = 3
 
-// Two orders, one per Settings → Format → Week starts. The strip's cells are indexed in the user's
-// week (StatsRepository.weekDaysTrained, userWeekDayIndex), so the letters have to rotate with
-// them; a Sunday-first user saw an M..S strip with Sunday's session lit in the last cell.
+/** The air between sections, as drawn. */
+private val SECTION_GAP = 52.dp
+
+// Two orders, one per Settings → Format → Week starts. The dots are indexed in the user's week
+// (StatsRepository.weekDaysTrained, userWeekDayIndex), so the letters rotate with them.
 private val WEEK_INITIALS_MONDAY = listOf("M", "T", "W", "T", "F", "S", "S")
 private val WEEK_INITIALS_SUNDAY = listOf("S", "M", "T", "W", "T", "F", "S")
+private val WEEK_NAMES_MONDAY = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+private val WEEK_NAMES_SUNDAY = listOf("Sunday") + WEEK_NAMES_MONDAY.dropLast(1)
 
-@Composable
-private fun PromptLine(text: String, label: String, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .bounceCombinedClick(onClickLabel = label, onClick = onClick)
-            .padding(vertical = 10.dp)
-    ) {
-        Text(
-            "+",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.alignByBaseline()
-        )
-        Spacer(Modifier.width(10.dp))
-        Text(
-            text,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.alignByBaseline()
-        )
-    }
-}
-
-@Composable
-private fun RecentRow(
-    item: OverviewRecentItem,
-    palette: SurfacePalette,
-    onBg: Color,
-    weightUnit: com.forge.app.domain.units.WeightUnit,
-    useMiles: Boolean,
-    onClick: () -> Unit
-) {
-    val figure = when {
-        item.isGym && (item.volumeLb ?: 0.0) > 0.0 -> formatVolume(item.volumeLb!!, weightUnit)
-        !item.isGym && (item.distanceKm ?: 0.0) > 0.0 ->
-            com.forge.app.domain.units.formatDistance(item.distanceKm!!, useMiles)
-        else -> null
-    }
-    val delta = when {
-        item.isBest -> "BEST"
-        item.vsAvgPct != null -> "${if (item.vsAvgPct >= 0) "+" else ""}${item.vsAvgPct}% avg"
-        item.prCount > 0 -> "${item.prCount} PR"
-        else -> null
-    }
-    val deltaColor = when {
-        item.isBest -> palette.positive
-        item.vsAvgPct != null && item.vsAvgPct > 0 -> palette.positive
-        item.vsAvgPct != null && item.vsAvgPct < 0 -> palette.negative
-        else -> palette.mutedOnCard
-    }
-    val sub = listOfNotNull(
-        item.dayLabel.takeIf { it.isNotBlank() },
-        item.statusPill.takeIf { it.isNotBlank() },
-        item.topLift
-    ).joinToString(" · ")
-    // A custom cardio activity's name lives in the user's definitions, provided at the nav root;
-    // the mapper only had its storage code.
-    val title = item.displayTitle(com.forge.app.ui.cardio.LocalCardioTypes.current)
-
-    SurfaceListRow(
-        icon = if (item.isGym) com.forge.app.ui.common.ExerciseIcons.Dumbbell else NavIcons.Cardio,
-        hue = palette.hues[0],
-        label = title,
-        sub = sub,
-        figure = figure,
-        delta = delta,
-        deltaColor = deltaColor,
-        onBg = onBg,
-        muted = palette.mutedOnCard,
-        onClick = onClick,
-        clickLabel = "Open $title"
-    )
-}
-
-private data class GoalLineData(
-    val key: String,
-    val title: String,
-    val valueLine: String,
-    val fraction: Float,
-    val achieved: Boolean,
-    val icon: ImageVector,
-    /** The mono line under the meter — the clock on a period goal, the baseline on a cut. */
-    val caption: String?
-)
-
-@Composable
-private fun pinnedGoals(
-    state: com.forge.app.ui.overview.state.OverviewUiState,
-    pinnedKeys: List<String>
-): List<GoalLineData> {
-    val settings = LocalForgeSettings.current
-    // One timestamp for the whole trim, so three captions on one page can't disagree about the day
-    // — keyed on the day itself as well as on the goals, because a period boundary changes what the
-    // caption should say without necessarily changing any goal's numbers (M-32).
-    val now = remember(state.customGoals, state.todayStartMs) { System.currentTimeMillis() }
-    val lift = state.goals.map { goal ->
-        GoalLineData(
-            key = liftPinKey(goal.exerciseId),
-            title = goal.name,
-            valueLine = "${com.forge.app.domain.units.weightInputValue(goal.currentBestLb, settings.weightUnit)} / " +
-                "${com.forge.app.domain.units.weightInputValue(goal.targetLb, settings.weightUnit)} " +
-                com.forge.app.domain.units.unitLabel(settings.weightUnit),
-            fraction = goal.fraction,
-            achieved = goal.achieved,
-            icon = liftGoalGlyph(goal.exerciseId),
-            // A lift target has neither a window nor a baseline: it is done or it is not.
-            caption = if (goal.achieved) "Reached" else null
-        )
-    }
-    val custom = state.customGoals.map { goal ->
-        GoalLineData(
-            key = customPinKey(goal.id),
-            title = customGoalTitle(goal),
-            valueLine = customGoalValueLine(goal, settings.weightUnit, settings.useMiles),
-            fraction = goal.fraction,
-            achieved = goal.achieved,
-            icon = goalGlyph(goal.metric),
-            caption = goalCaption(
-                achieved = goal.achieved,
-                metric = goal.metric,
-                period = goal.period,
-                baselineValue = goal.baselineValue,
-                weightUnit = settings.weightUnit,
-                nowMs = now,
-            )
-        )
-    }
-    val all = lift + custom
-    val pinned = pinnedKeys.mapNotNull { key -> all.firstOrNull { it.key == key } }
-    return if (pinned.isNotEmpty()) {
-        pinned.take(HOME_LIST_CAP)
-    } else {
-        all.sortedWith(compareBy<GoalLineData> { it.achieved }.thenByDescending { it.fraction })
-            .take(HOME_LIST_CAP)
-    }
-}
-
-/** Half the slack between a top-bar icon's 48dp touch target and its 20dp glyph. */
-private val GUTTER_SLACK = 14.dp
-
-/** "Fri, Oct 16" in the top bar, in the phone's own locale. */
+/** "WED 21 OCT" in the top bar, in the phone's own locale. */
 private val HOME_DATE_FORMAT: java.time.format.DateTimeFormatter =
-    java.time.format.DateTimeFormatter.ofPattern("EEE, MMM d")
-
-/**
- * How far the profile and settings glyphs lean toward each other inside their own targets.
- *
- * The pair still measures 48dp per button, because that is the touch target and §14 does not
- * negotiate it — which also fixes the seam between them at 48dp apart and the whitespace between
- * two 20dp glyphs at 28dp. Moving the BOXES closer is therefore not available; moving the glyphs
- * within them is, and costs nothing, because a touch target has never been required to sit
- * concentric with the mark it answers for. Each glyph gives up 6dp of margin on its inner side and
- * keeps 8dp — you would have to tap nearly a glyph's width past one icon to reach the other.
- */
-private val PAIR_LEAN = 6.dp
-
-/**
- * Top-bar icon with a 48dp tappable area + spoken label, while the glyph stays visually small.
- *
- * [nudge] slides the glyph inside that area without moving the area — see [PAIR_LEAN].
- */
-@Composable
-private fun TopBarIconButton(
-    icon: ImageVector,
-    label: String,
-    tint: Color,
-    modifier: Modifier = Modifier,
-    nudge: Dp = 0.dp,
-    onClick: () -> Unit
-) {
-    Box(
-        modifier = modifier
-            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-            .clickableLabeled(label, onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            icon, contentDescription = label, tint = tint,
-            modifier = Modifier.size(20.dp).offset(x = nudge)
-        )
-    }
-}
+    java.time.format.DateTimeFormatter.ofPattern("EEE d MMM")
 
 @Composable
 fun OverviewScreen(
@@ -351,9 +132,9 @@ fun OverviewScreen(
     onViewAllHistory: () -> Unit = {},
     onLogFreestyle: () -> Unit = {},
     onBuildPlan: () -> Unit = {},
-    /** The BODY panel's tap: the full body view on Stats. */
+    /** A body reading's tap: the full body view on Stats. */
     onOpenBody: () -> Unit = {},
-    /** The BODY invite's tap: Settings → Wearable. */
+    /** A watch slot's "Connect": Settings → Wearable. */
     onConnectWatch: () -> Unit = {},
     viewModel: OverviewViewModel = hiltViewModel()
 ) {
@@ -362,34 +143,30 @@ fun OverviewScreen(
     val programEmpty by viewModel.programEmpty.collectAsStateWithLifecycle()
     val selectedItem by viewModel.selectedItem.collectAsStateWithLifecycle()
     val summaryLines by viewModel.sessionExerciseLines.collectAsStateWithLifecycle()
-    val body by viewModel.body.collectAsStateWithLifecycle()
+    val spec by viewModel.spec.collectAsStateWithLifecycle()
+    val coach by viewModel.coach.collectAsStateWithLifecycle()
+    val slots by viewModel.slots.collectAsStateWithLifecycle()
 
-    // Keep the body section current across a day of glances (W6): a night's sleep that synced, or
-    // steps taken while away, show on return. Same resume-refresh rule as the cardio hero (GYMAP-64).
-    val movementLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    androidx.compose.runtime.DisposableEffect(movementLifecycleOwner) {
+    // Keep the readings current across a day of glances (W6): a night's sleep that synced, steps
+    // taken while away, and today's answer, which is date- and session-sensitive (B2).
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
                 viewModel.refreshBody()
-                // The answer is date- and session-sensitive: a directive that still says "Push day"
-                // after you trained, or after midnight, is worse than none (B2).
                 viewModel.refreshDirective()
+                viewModel.refreshCoach()
             }
         }
-        movementLifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { movementLifecycleOwner.lifecycle.removeObserver(observer) }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    // Firing a milestone persists it (so it can't recompute/re-fire) AND queues it in the
-    // notifications feed. It used to flash here as a six-second toast, which meant a milestone earned
-    // while the app was closed was gone before it was ever read; it now waits under the bell.
+    // Firing a milestone persists it and queues it under the bell, where it waits to be read.
     LaunchedEffect(state.pendingMilestone) {
         state.pendingMilestone?.let { viewModel.onMilestoneShown(it.id) }
     }
 
-    // Rise + fade entrance, but ONLY on the first show after a cold launch — not every time you
-    // swipe back to Home (Home is a pager page that gets disposed/recomposed as you swipe away and
-    // back). The "played" flag is rememberSaveable so it survives the page leaving the viewport and
-    // returning; after the first play, Home settles in like any other swipable page.
+    // Rise + fade on the first show after a cold launch only; swiping back to Home just shows it.
     var entrancePlayed by rememberSaveable { mutableStateOf(false) }
     val entry = remember { Animatable(if (entrancePlayed) 1f else 0f) }
     LaunchedEffect(Unit) {
@@ -399,20 +176,12 @@ fun OverviewScreen(
         }
     }
 
+    var pickingSlot by remember { mutableStateOf<Boolean?>(null) }
+
     val settings = LocalForgeSettings.current
     val today = LocalDate.now()
-    // Indexed in the user's week, the same order StatsRepository lit weekDaysTrained in, so "today"
-    // in the strip and "trained today" in the hero both follow Week starts (2026-09-26 audit).
     val todayDow = userWeekDayIndex(today, settings.firstDayMonday)
-
     val nextDay = Program.days.firstOrNull { it.key == state.nextUpDayKey }
-
-    val baseColors = MaterialTheme.colorScheme
-    val palette = surfacePalette()
-    val onBg = baseColors.onBackground
-    val muted = baseColors.onSurfaceVariant
-    val accent = baseColors.primary
-    val outline = baseColors.outline
 
     if (selectedItem != null) {
         val item = selectedItem!!
@@ -431,15 +200,16 @@ fun OverviewScreen(
             onDismiss = { viewModel.clearSelectedItem() }
         )
     }
+    pickingSlot?.let { left ->
+        HomeSlotSheet(
+            left = left,
+            slots = slots,
+            onPick = { viewModel.setSlot(left, it); pickingSlot = null },
+            onDismiss = { pickingSlot = null }
+        )
+    }
 
-    // The ground under Home is the APP's ground.
-    //
-    // `ForgeTheme` paints the Pearl gradient (`#17120E → #0A0806`, §5) behind every screen and
-    // `HubScreen`'s Scaffold is deliberately transparent so each pager page sits on it. Home used
-    // to copy the scheme to pure black and then paint that opaque, which made the one screen you
-    // swipe through most the one screen whose ground changed under you: flat cold black on Home,
-    // warm gradient one swipe either side. It also undid the 2026-08-16 warm repalette on the exact
-    // page that repalette was for, and it flattened the AMOLED/Pearl distinction to nothing.
+    // The ground under Home is the app's own Pearl gradient (ForgeTheme); the Scaffold stays clear.
     Scaffold(containerColor = Color.Transparent) { inner ->
         Column(
             modifier = Modifier
@@ -450,46 +220,10 @@ fun OverviewScreen(
                     translationY = (1f - entry.value) * 18.dp.toPx()
                 }
                 .verticalScroll(rememberScrollState())
-                // §7's page gutter. Home sat at 20 and Stats sits at 16, so the content rail
-                // shifted under you as you swiped between two pages of the same pager.
                 .padding(horizontal = 24.dp)
         ) {
-            Spacer(Modifier.height(8.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // The date, so the page says what "today" below means without a lookup. The bell
-                // moved into the right-hand cluster with Profile and Settings: three actions in one
-                // place, where Android puts a screen's actions, instead of one stranded on the left.
-                Text(
-                    today.format(HOME_DATE_FORMAT).uppercase(),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Row(
-                    modifier = Modifier.offset(x = GUTTER_SLACK + PAIR_LEAN),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    NotificationBell(modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp))
-                    TopBarIconButton(
-                        NavIcons.Profile,
-                        "Profile",
-                        MaterialTheme.colorScheme.onSurfaceVariant,
-                        nudge = PAIR_LEAN,
-                        onClick = onOpenProfile
-                    )
-                    TopBarIconButton(
-                        Icons.Default.Settings,
-                        "Settings",
-                        MaterialTheme.colorScheme.onSurfaceVariant,
-                        nudge = -PAIR_LEAN,
-                        onClick = onOpenSettings
-                    )
-                }
-            }
+            Spacer(Modifier.height(4.dp))
+            TopRow(today, onOpenProfile = onOpenProfile, onOpenSettings = onOpenSettings)
 
             val directive = state.directive
             val resumeKey = state.activeSessionDayKey
@@ -500,230 +234,581 @@ fun OverviewScreen(
                 programEmpty -> "No plan yet"
                 else -> directive?.headline ?: state.customDayName ?: nextDay?.defaultName ?: "Ready"
             }
-            val reason = when {
-                freestyleMode -> "No fixed plan. Log what you trained and keep moving."
-                programEmpty -> "Build your plan once, then Home will always show what comes next."
-                directive != null -> directive.reason
-                nextDay != null -> "${nextDay.subtitle} · ${nextDay.exercises.size} exercises"
-                else -> "Your next session will appear here."
-            }
             val actionText = when {
                 resumeKey != null -> "Resume session"
                 freestyleMode -> "Log workout"
                 programEmpty -> "Build plan"
-                directive?.kind == com.forge.app.domain.coach.TodayDirective.Kind.CARDIO -> "Log cardio"
-                directive?.kind == com.forge.app.domain.coach.TodayDirective.Kind.LEARN -> "Open Academy"
-                directive?.kind == com.forge.app.domain.coach.TodayDirective.Kind.REST -> "Train anyway"
+                directive?.kind == TodayDirective.Kind.CARDIO -> "Log cardio"
+                directive?.kind == TodayDirective.Kind.LEARN -> "Open Academy"
+                directive?.kind == TodayDirective.Kind.REST -> "Train anyway"
                 else -> "Start session"
             }
             val action: () -> Unit = when {
                 resumeKey != null -> ({ onStartSession(resumeKey) })
                 freestyleMode -> onLogFreestyle
                 programEmpty -> onBuildPlan
-                directive?.kind == com.forge.app.domain.coach.TodayDirective.Kind.CARDIO -> onGoToCardio
-                directive?.kind == com.forge.app.domain.coach.TodayDirective.Kind.LEARN -> onOpenAcademy
+                directive?.kind == TodayDirective.Kind.CARDIO -> onGoToCardio
+                directive?.kind == TodayDirective.Kind.LEARN -> onOpenAcademy
                 else -> ({ onStartSession(sessionDayKey) })
             }
             val restDay = resumeKey == null && !freestyleMode && !programEmpty &&
-                directive?.kind == com.forge.app.domain.coach.TodayDirective.Kind.REST
+                directive?.kind == TodayDirective.Kind.REST
             val startsNewGymSession = resumeKey == null && !freestyleMode && !programEmpty &&
-                directive?.kind != com.forge.app.domain.coach.TodayDirective.Kind.CARDIO &&
-                directive?.kind != com.forge.app.domain.coach.TodayDirective.Kind.LEARN
-            val planAction = if (programEmpty || freestyleMode) onBuildPlan else onViewProgram
+                directive?.kind != TodayDirective.Kind.CARDIO &&
+                directive?.kind != TodayDirective.Kind.LEARN
+            // The spec line describes a gym session; a rest, cardio or lesson day has none to describe.
+            val specLine = when {
+                freestyleMode -> "No fixed plan · log what you trained"
+                programEmpty -> "Build your plan once"
+                restDay || !startsNewGymSession && resumeKey == null -> directive?.secondary
+                else -> spec?.let { "${it.exercises} exercises · ${it.sets} sets · ~${it.minutes} min" }
+            }
 
-            Spacer(Modifier.height(12.dp))
-            Text(
-                if (directive == null && trainedToday) "TOMORROW" else "TODAY",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Spacer(Modifier.height(32.dp))
+            OpenLabel(if (directive == null && trainedToday) "Tomorrow" else "Today")
             Spacer(Modifier.height(8.dp))
-            // The serif rung, through the shared clamp. This was `headlineLarge` overridden to
-            // SansSerif with a hand-set letterSpacing at the call site, so the page's biggest
-            // element opted out of the three-voice system (§6) -- every other overview in the app
-            // leads serif -- and out of the 1.3x hero clamp, which meant at 200% font scale it
-            // pushed the CTA off the fold. Same size, correct voice, survives the biggest font.
-            HeroHeadline(
-                headline,
-                MaterialTheme.colorScheme.onBackground,
-                MaterialTheme.typography.headlineLarge
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                reason,
-                style = MaterialTheme.typography.bodySmall,
-                fontStyle = FontStyle.Italic,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            directive?.secondary?.let { secondary ->
+            HeroLine(headline)
+            if (specLine != null) {
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    secondary,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                OpenLabel(specLine, style = OpenType.monoSTight)
             }
-
-            Spacer(Modifier.height(20.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                HomePrimaryAction(
-                    text = actionText,
-                    label = actionText,
-                    modifier = Modifier.weight(1f),
-                    // The hold stays as a shortcut for people who know it, and TalkBack lists it as
-                    // an action. It is no longer advertised: the warmup screen has its own "Start
-                    // lifting" and "Not today", where the choice actually comes up.
-                    onLongClick = if (startsNewGymSession) {
-                        { onStartSessionSkipWarmup(sessionDayKey) }
-                    } else null,
-                    // A rest day still offers the session, outlined: a filled button under "Done for
-                    // today" told you to do the thing the headline had just said not to.
-                    emphasized = !restDay,
-                    onClick = action
-                )
-                if (!programEmpty) {
-                    HomePlanAction("View plan", planAction)
-                }
+            coach?.let { summary ->
+                Spacer(Modifier.height(36.dp))
+                CoachRow(summary, onOpenCoachBrief)
             }
-
-            body?.let { currentBody ->
-                Spacer(Modifier.height(28.dp))
-                HomeBodySection(
-                    body = currentBody,
-                    onOpenBody = onOpenBody,
-                    onConnectWatch = onConnectWatch,
-                    onDismissInvite = viewModel::dismissBodyInvite
-                )
-            }
-
-            Spacer(Modifier.height(28.dp))
-            // The same anchor GOALS and RECENT use. This one was a sans `titleMedium` in sentence
-            // case carrying its own right meta, so a three-section page had three section-header
-            // treatments in three type voices -- exactly the kind of break you feel as "something
-            // is off" without ever looking straight at it.
-            SectionAnchor(
-                label = "This week",
-                muted = muted,
-                onBg = onBg,
-                // Days, not sessions. The strip below draws DAYS trained and the denominator is
-                // the program's training-day count, but this line counted SESSIONS — so three
-                // sessions logged on one Monday rendered "4 / 7 target" directly above a strip with
-                // a single cell lit: the section's header disagreeing with the section's own mark,
-                // in the same breath (Antho, 2026-08-24). Nothing in the page said which of the two
-                // numbers to believe, which is why it read as wrong without reading as broken.
-                // The session count is not restated anywhere on Home — a finished tally is settled,
-                // and Home carries what is at stake (`design/SETTLED.md`, 2026-08-16).
-                meta = run {
-                    val days = state.weekDaysTrained.size
-                    when {
-                        !freestyleMode && !programEmpty -> "$days / ${state.weeklyTrainingDays} days"
-                        days == 1 -> "1 day"
-                        else -> "$days days"
-                    }
-                }
-            )
-            Spacer(Modifier.height(12.dp))
-            // Open on the page: a filled panel around the strip boxed a mark that needs no frame.
-            WeekStrip(
-                trained = state.weekDaysTrained,
+            Spacer(Modifier.height(26.dp))
+            WeekRow(
+                state = state,
                 todayIndex = todayDow,
-                dayLabels = if (settings.firstDayMonday) WEEK_INITIALS_MONDAY else WEEK_INITIALS_SUNDAY,
-                reading = "This week, ${state.weekDaysTrained.size} of 7 days trained" + when (val r = state.weekRestDays.size) {
-                    0 -> ""
-                    1 -> ", 1 planned rest day"
-                    else -> ", $r planned rest days"
-                },
-                rest = state.weekRestDays,
-                dayWords = state.weekDayWords,
-                modifier = Modifier.fillMaxWidth()
+                initials = if (settings.firstDayMonday) WEEK_INITIALS_MONDAY else WEEK_INITIALS_SUNDAY,
+                names = if (settings.firstDayMonday) WEEK_NAMES_MONDAY else WEEK_NAMES_SUNDAY,
+                freestyle = freestyleMode || programEmpty,
+            )
+            Spacer(Modifier.height(38.dp))
+            OpenPrimaryButton(
+                text = actionText,
+                onClick = action,
+                // A rest day still offers the session, outlined: a filled button under "Rest today"
+                // would tell you to do what the headline just said not to.
+                emphasized = !restDay,
+                // The hold stays as a shortcut for people who know it; TalkBack lists it.
+                onLongClick = if (startsNewGymSession) ({ onStartSessionSkipWarmup(sessionDayKey) }) else null,
+                onLongClickLabel = if (startsNewGymSession) "Start, skipping warmup" else null,
             )
 
-            // Goals can be taken off Home (2026-09-27): "hide" sits beside "view all", Undo follows,
-            // and Settings → Appearance brings the section back.
-            if (HOME_GOALS_TILE !in settings.hiddenOverviewTiles) {
-                Spacer(Modifier.height(28.dp))
-                val goals = pinnedGoals(state, settings.pinnedGoalKeys)
-                SectionAnchor(
-                    label = "Goals",
-                    muted = muted,
-                    onBg = onBg,
-                    action = if (goals.isEmpty()) null else "view all",
-                    actionLabel = "Open goals",
-                    onAction = onOpenGoals,
-                    secondaryAction = "hide",
-                    secondaryActionLabel = "Hide goals from Home",
-                    onSecondaryAction = viewModel::hideHomeGoals
+            Spacer(Modifier.height(SECTION_GAP))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                SlotReadingView(
+                    slot = slots.left,
+                    reading = slots.readings[slots.left],
+                    watchInvite = slots.watchInvite,
+                    onChange = { pickingSlot = true },
+                    onConnectWatch = onConnectWatch,
+                    onOpen = slotTap(slots.left, onOpenBody, onViewAllHistory),
+                    modifier = Modifier.weight(1f)
                 )
-                // 4, not 12: an anchor carrying a link is already a 48dp row, so 12 more opened a gap
-                // twice the size of the one under a plain anchor.
-                Spacer(Modifier.height(4.dp))
-                // Nothing before the first read (todayStartMs is 0 until then): the empty prompts
-                // below used to flash for a returning user while their goals and sessions loaded.
-                if (state.todayStartMs == 0L) {
-                    // Empty until the first read lands.
-                } else if (goals.isEmpty()) {
-                    PromptLine("Pin a goal", "Pin a goal", onOpenGoals)
-                } else {
-                    goals.forEachIndexed { index, goal ->
-                        GoalProgressLine(
-                            title = goal.title,
-                            valueLine = goal.valueLine,
-                            fraction = goal.fraction,
-                            achieved = goal.achieved,
-                            onBg = onBg,
-                            muted = muted,
-                            accent = accent,
-                            outline = outline,
-                            caption = goal.caption,
-                            icon = goal.icon,
-                            onClick = onOpenGoals
-                        )
-                        if (index != goals.lastIndex) Spacer(Modifier.height(16.dp))
+                SlotReadingView(
+                    slot = slots.right,
+                    reading = slots.readings[slots.right],
+                    watchInvite = slots.watchInvite,
+                    onChange = { pickingSlot = false },
+                    onConnectWatch = onConnectWatch,
+                    onOpen = slotTap(slots.right, onOpenBody, onViewAllHistory),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            if (HOME_GOALS_TILE !in settings.hiddenOverviewTiles) {
+                val goals = scoreboardGoals(state, settings.pinnedGoalKeys)
+                Spacer(Modifier.height(SECTION_GAP))
+                OpenSectionHead(
+                    "Goals",
+                    action = "View all",
+                    actionLabel = "Open goals",
+                    onAction = onOpenGoals
+                )
+                Spacer(Modifier.height(20.dp))
+                // Nothing before the first read (todayStartMs is 0 until then), so a returning user
+                // never sees the empty prompt flash while their goals load.
+                if (state.todayStartMs != 0L) {
+                    if (goals.isEmpty()) {
+                        EmptyLine("Pin up to three goals to see them here.", "Pin a goal", onOpenGoals)
+                    } else {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                            goals.forEach { GoalColumn(it, onOpenGoals, Modifier.weight(1f)) }
+                            // Fewer than three keep their column width, so a lone goal is not a banner.
+                            repeat(HOME_LIST_CAP - goals.size) { Spacer(Modifier.weight(1f)) }
+                        }
                     }
                 }
             }
 
-            Spacer(Modifier.height(28.dp))
-            SectionAnchor(
-                label = "Recent",
-                muted = muted,
-                onBg = onBg,
-                action = if (state.recentItems.isEmpty()) null else "view all",
+            Spacer(Modifier.height(SECTION_GAP))
+            OpenSectionHead(
+                "Recent",
+                action = if (state.recentItems.isEmpty()) null else "View all",
                 actionLabel = "View all sessions",
                 onAction = onViewAllHistory
             )
-            Spacer(Modifier.height(4.dp))
-            if (state.todayStartMs == 0L) {
-                // Empty until the first read lands, as with the goals above.
-            } else if (state.recentItems.isEmpty()) {
-                Text(
-                    when {
-                        freestyleMode -> "Your first logged workout lands here."
-                        programEmpty -> "Build a plan above, then your first session lands here."
-                        else -> "Your first session lands here."
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = muted.copy(alpha = 0.65f)
-                )
-            } else {
-                state.recentItems.take(HOME_LIST_CAP).forEach { item ->
-                    RecentRow(
-                        item = item,
-                        palette = palette,
-                        onBg = onBg,
-                        weightUnit = settings.weightUnit,
-                        useMiles = settings.useMiles
-                    ) {
-                        if (item.isGym) onOpenSession(item.id) else viewModel.selectRecentItem(item)
+            Spacer(Modifier.height(22.dp))
+            if (state.todayStartMs != 0L) {
+                if (state.recentItems.isEmpty()) {
+                    Text(
+                        when {
+                            freestyleMode -> "Your first logged workout lands here."
+                            programEmpty -> "Build a plan above, then your first session lands here."
+                            else -> "Your first session lands here."
+                        },
+                        style = OpenType.body,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(26.dp)) {
+                        state.recentItems.take(HOME_LIST_CAP).forEach { item ->
+                            RecentRow(item) {
+                                if (item.isGym) onOpenSession(item.id) else viewModel.selectRecentItem(item)
+                            }
+                        }
                     }
                 }
             }
+            Spacer(Modifier.height(32.dp))
+        }
+    }
+}
 
-            Spacer(Modifier.height(28.dp))
+@Composable
+private fun TopRow(today: LocalDate, onOpenProfile: () -> Unit, onOpenSettings: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().height(48.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        OpenLabel(today.format(HOME_DATE_FORMAT), style = OpenType.monoM)
+        Row(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
+            OpenNotificationBell()
+            OpenTopBarIcon(OpenIcons.User, "Profile", onOpenProfile)
+            OpenTopBarIcon(OpenIcons.Settings, "Settings", onOpenSettings)
+        }
+    }
+}
+
+private val HERO_STEPS = listOf(OpenType.hero, OpenType.title, OpenType.heroS)
+
+/** The serif hero, its scaling clamped at 1.3× so the biggest font setting keeps Start on screen. */
+@Composable
+private fun HeroLine(text: String) {
+    val density = LocalDensity.current
+    CompositionLocalProvider(LocalDensity provides Density(density.density, density.fontScale.coerceAtMost(1.3f))) {
+        // "Pull B" is what the design drew at 76; a longer answer ("Done for today") steps down the
+        // serif rungs until it fits one line, and only wraps once it is at the smallest.
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+            val width = constraints.maxWidth
+            val style = remember(text, width) {
+                HERO_STEPS.firstOrNull { st ->
+                    measurer.measure(text, st, maxLines = 1, softWrap = false).size.width <= width
+                } ?: HERO_STEPS.last()
+            }
+            Text(
+                text,
+                style = style,
+                color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/**
+ * COACH on the left, the week's open call and what is on watch on the right, as one tappable row
+ * into the brief: "Barbell Row · Add load · Squat on watch".
+ */
+@Composable
+private fun CoachRow(summary: CoachHomeSummary, onOpen: () -> Unit) {
+    val line = coachLine(summary)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .touchSlop(vertical = 12.dp)
+            .clickableLabeled("Open the coach's brief", onClick = onOpen)
+            .padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        OpenLabel("Coach")
+        Row(
+            Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                line,
+                style = OpenType.body,
+                color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            Icon(OpenIcons.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+        }
+    }
+}
+
+/** The open call first, then what is on watch; "Holding steady" when the week asks nothing. */
+internal fun coachLine(summary: CoachHomeSummary): String {
+    val parts = mutableListOf<String>()
+    summary.open.firstOrNull()?.let { d ->
+        val c = callCopy(d)
+        parts += if (d.targetKey == "week") c.change else "${c.subject} · ${c.change}"
+        if (summary.open.size > 1) parts += "${summary.open.size - 1} more"
+    }
+    when (summary.watching.size) {
+        0 -> Unit
+        1 -> parts += "${summary.watching.first().targetName} on watch"
+        else -> parts += "${summary.watching.size} on watch"
+    }
+    return parts.joinToString(" · ").ifBlank { "Holding steady" }
+}
+
+/**
+ * THIS WEEK with the count, then seven dots: red with a dark letter for a day trained, a red ring on
+ * a wash for today, a moon for a planned rest day, an outlined letter for the rest.
+ */
+@Composable
+private fun WeekRow(
+    state: OverviewUiState,
+    todayIndex: Int,
+    initials: List<String>,
+    names: List<String>,
+    freestyle: Boolean,
+) {
+    val days = state.weekDaysTrained.size
+    val count = if (!freestyle && state.weeklyTrainingDays > 0) "$days / ${state.weeklyTrainingDays}" else if (days == 1) "1 day" else "$days days"
+    val ink = MaterialTheme.colorScheme.onBackground
+    val reading = "This week, $days of " + (if (!freestyle && state.weeklyTrainingDays > 0) "${state.weeklyTrainingDays} days trained" else "7 days trained")
+    val label = buildAnnotatedString {
+        append("THIS WEEK  ")
+        withStyle(SpanStyle(color = ink)) { append(count.uppercase()) }
+    }
+    val dots: @Composable (dot: androidx.compose.ui.unit.Dp, gap: androidx.compose.ui.unit.Dp, modifier: Modifier) -> Unit = { dot, gap, m ->
+        Row(horizontalArrangement = Arrangement.spacedBy(gap), modifier = m.clearAndSetSemantics { }) {
+            for (i in 0 until 7) {
+                WeekDot(
+                    letter = initials[i],
+                    trained = i in state.weekDaysTrained,
+                    today = i == todayIndex,
+                    rest = i in state.weekRestDays && i !in state.weekDaysTrained,
+                    name = names[i],
+                    size = dot,
+                )
+            }
+        }
+    }
+    // The design's row is 412 wide. A narrower phone (an S21 at 384dp) or a larger font left the
+    // count touching the first dot, so the dots close up first, then shrink, and only when even that
+    // will not leave 16dp of air does the label take its own line above them.
+    androidx.compose.foundation.layout.BoxWithConstraints(
+        Modifier.fillMaxWidth().semantics(mergeDescendants = true) { contentDescription = reading }
+    ) {
+        val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+        val density = LocalDensity.current
+        val labelWidth = with(density) { measurer.measure(label, OpenType.monoS).size.width.toDp() }
+        val width = maxWidth
+        val room = width - labelWidth - 16.dp
+        val full = 24.dp * 7 + 7.dp * 6
+        when {
+            room >= full -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(label, style = OpenType.monoS, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.clearAndSetSemantics { })
+                dots(24.dp, 7.dp, Modifier)
+            }
+            (room - 4.dp * 6) / 7 >= 20.dp -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(label, style = OpenType.monoS, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.clearAndSetSemantics { })
+                dots(minOf(24.dp, (room - 4.dp * 6) / 7), 4.dp, Modifier)
+            }
+            else -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(label, style = OpenType.monoS, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.clearAndSetSemantics { })
+                dots(24.dp, ((width - 24.dp * 7) / 6).coerceAtMost(16.dp), Modifier)
+            }
+        }
+    }
+}
+
+private val DotLetter = OpenType.tag.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.sp)
+
+@Composable
+private fun WeekDot(letter: String, trained: Boolean, today: Boolean, rest: Boolean, name: String, size: androidx.compose.ui.unit.Dp = 24.dp) {
+    val accent = MaterialTheme.colorScheme.primary
+    val base = Modifier.size(size)
+    val modifier = when {
+        trained -> base.background(accent, CircleShape)
+        today -> base.background(MaterialTheme.colorScheme.primaryContainer, CircleShape).border(1.5.dp, accent, CircleShape)
+        rest -> base.border(1.5.dp, OpenColors.Track, CircleShape)
+        else -> base.border(1.5.dp, OpenColors.Rule, CircleShape)
+    }
+    Box(modifier, contentAlignment = Alignment.Center) {
+        if (rest && !today) {
+            Icon(OpenIcons.Moon, contentDescription = "$name, rest", tint = OpenColors.Glyph, modifier = Modifier.size(12.dp))
+        } else {
+            Text(
+                letter,
+                style = DotLetter,
+                textAlign = TextAlign.Center,
+                color = when {
+                    trained -> MaterialTheme.colorScheme.onPrimary
+                    today -> MaterialTheme.colorScheme.onBackground
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        }
+    }
+}
+
+/** The unit an empty reading's zero wears, so "0h" reads as no sleep yet rather than a stray digit. */
+@Composable
+private fun emptyUnit(slot: HomeSlot): String = when (slot) {
+    HomeSlot.SLEEP -> "h"
+    HomeSlot.RESTING_HR -> " bpm"
+    HomeSlot.HRV -> " ms"
+    HomeSlot.STEPS -> ""
+    HomeSlot.BODY_WEIGHT -> " " + com.forge.app.domain.units.unitLabel(LocalForgeSettings.current.weightUnit)
+    HomeSlot.LAST_SESSION -> " min"
+}
+
+/** What tapping a reading's figure opens: the body view for the watch and weight, the log for a session. */
+private fun slotTap(slot: HomeSlot, onOpenBody: () -> Unit, onOpenHistory: () -> Unit): () -> Unit =
+    if (slot == HomeSlot.LAST_SESSION) onOpenHistory else onOpenBody
+
+/**
+ * One reading in its slot: the label with ▾ (tap to swap the reading), the serif figure with its unit,
+ * the mark, and the change line. A watch reading with nothing to show says why, once.
+ */
+@Composable
+private fun SlotReadingView(
+    slot: HomeSlot,
+    reading: SlotReading?,
+    watchInvite: Boolean,
+    onChange: () -> Unit,
+    onConnectWatch: () -> Unit,
+    onOpen: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val ink = MaterialTheme.colorScheme.onBackground
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OpenSlotLabel(reading?.label ?: slot.label, onClick = onChange)
+        if (reading == null) {
+            // Nothing to read yet: a zero in the figure's place and a bare baseline where the mark
+            // goes, so the empty slot keeps the same shape as the one beside it.
+            FigureLine(figureWithUnit("0", emptyUnit(slot), muted), muted)
+            OpenDeltaBars(emptyList(), Modifier.fillMaxWidth().height(30.dp))
+            when {
+                slot.needsWatch && watchInvite ->
+                    OpenLabel(
+                        "Connect a watch",
+                        style = OpenType.monoSTight,
+                        color = ink,
+                        modifier = Modifier.touchSlop(vertical = 14.dp).clickableLabeled("Connect a watch", onClick = onConnectWatch).padding(vertical = 14.dp)
+                    )
+                slot == HomeSlot.LAST_SESSION -> OpenLabel("No sessions yet", style = OpenType.monoSTight)
+                slot == HomeSlot.BODY_WEIGHT -> OpenLabel("No weigh-ins yet", style = OpenType.monoSTight)
+                slot == HomeSlot.STEPS -> OpenLabel("None counted yet", style = OpenType.monoSTight)
+                else -> OpenLabel("Nothing synced yet", style = OpenType.monoSTight)
+            }
+            return@Column
+        }
+        Column(
+            Modifier
+                .clickableLabeled(reading.description, onClick = onOpen)
+                .semantics(mergeDescendants = true) { contentDescription = reading.description },
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FigureLine(figureWithUnit(reading.figure, reading.unit, muted), ink)
+            when {
+                reading.bars != null -> OpenDeltaBars(reading.bars, Modifier.fillMaxWidth().height(30.dp), barWidth = 22.dp)
+                reading.spark.size < 2 -> OpenDeltaBars(emptyList(), Modifier.fillMaxWidth().height(30.dp))
+                reading.spark.size >= 2 -> OpenSparkline(reading.spark, Modifier.fillMaxWidth().height(30.dp))
+                else -> Spacer(Modifier.height(30.dp))
+            }
+            reading.change?.let {
+                OpenLabel(it, style = OpenType.monoSTight, color = if (reading.changeMoved) ink else muted, modifier = Modifier.clearAndSetSemantics { })
+            }
+        }
+    }
+}
+
+/** A reading's serif figure. One call for the real and the empty reading, so both rows line up. */
+@Composable
+private fun FigureLine(text: AnnotatedString, color: Color) {
+    Text(
+        text,
+        style = OpenType.figureL,
+        color = color,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Clip,
+        modifier = Modifier.clearAndSetSemantics { }
+    )
+}
+
+/** "7.4h": the figure at its size, the unit after it at half size in the muted voice. */
+private fun figureWithUnit(figure: String, unit: String, unitColor: Color): AnnotatedString =
+    buildAnnotatedString {
+        append(figure)
+        if (unit.isNotEmpty()) {
+            withStyle(OpenType.figureLUnit.toSpanStyle().copy(color = unitColor)) { append(unit) }
+        }
+    }
+
+/** One goal on the scoreboard. */
+internal data class ScoreGoal(
+    val key: String,
+    val label: String,
+    val figure: String,
+    /** The muted "/8" after a count figure, or empty. */
+    val denominator: String,
+    val fraction: Float,
+    val change: String?,
+    val changeMoved: Boolean,
+    val description: String,
+)
+
+/**
+ * The pinned goals (or, with none pinned, the reached ones last and the closest first), as the
+ * scoreboard reads them: "BENCH 225" over "205", the meter, "↑ 10 in 30d".
+ */
+@Composable
+private fun scoreboardGoals(state: OverviewUiState, pinnedKeys: List<String>): List<ScoreGoal> {
+    val settings = LocalForgeSettings.current
+    val now = remember(state.customGoals, state.todayStartMs) { System.currentTimeMillis() }
+    val unit = settings.weightUnit
+    val lift = state.goals.map { g ->
+        val delta = state.liftGoalChange30dLb[g.exerciseId]
+        val change = when {
+            g.achieved -> "Reached"
+            delta == null -> null
+            delta >= 0.5 -> "↑ ${weightInputValue(delta, unit)} in 30d"
+            else -> "Flat over 30d"
+        }
+        val target = weightInputValue(g.targetLb, unit)
+        val current = weightInputValue(g.currentBestLb, unit)
+        ScoreGoal(
+            key = liftPinKey(g.exerciseId),
+            label = "${goalShortName(g.name)} $target",
+            figure = current,
+            denominator = "",
+            fraction = g.fraction,
+            change = change,
+            changeMoved = g.achieved || (delta != null && delta >= 0.5),
+            description = "${g.name}, $current of $target" + (change?.let { ", ${it.replace("↑", "up")}" } ?: ""),
+        )
+    }
+    val custom = state.customGoals.map { g ->
+        val countable = g.metric == GoalMetric.SESSIONS || g.metric == GoalMetric.CARDIO_MINUTES
+        val valueLine = customGoalValueLine(g, unit, settings.useMiles)
+        val caption = goalCaption(g.achieved, g.metric, g.period, g.baselineValue, unit, now)
+        ScoreGoal(
+            key = customPinKey(g.id),
+            label = customGoalTitle(g),
+            figure = if (countable) "${g.currentValue.toInt()}" else valueLine.substringBefore(" ").trim(),
+            denominator = if (countable) "/${g.targetValue.toInt()}" else "",
+            fraction = g.fraction,
+            change = caption,
+            changeMoved = g.achieved,
+            description = "${customGoalTitle(g)}, $valueLine" + (caption?.let { ", $it" } ?: ""),
+        )
+    }
+    val all = lift + custom
+    val pinned = pinnedKeys.mapNotNull { key -> all.firstOrNull { it.key == key } }
+    return if (pinned.isNotEmpty()) pinned.take(HOME_LIST_CAP)
+    else all.sortedWith(compareBy<ScoreGoal> { it.fraction >= 1f }.thenByDescending { it.fraction }).take(HOME_LIST_CAP)
+}
+
+/** "Barbell Bench Press" → "Bench": the scoreboard column is a third of the page wide. */
+internal fun goalShortName(name: String): String {
+    val words = name.trim().split(' ').filter { it.isNotBlank() }
+    val dropped = words.filterNot { it.lowercase() in setOf("barbell", "dumbbell", "back", "press", "machine", "cable") }
+    return (dropped.firstOrNull() ?: words.firstOrNull() ?: name)
+}
+
+@Composable
+private fun GoalColumn(goal: ScoreGoal, onOpen: () -> Unit, modifier: Modifier = Modifier) {
+    com.forge.app.ui.common.OpenGoalColumn(
+        label = goal.label,
+        figure = goal.figure,
+        denominator = goal.denominator,
+        fraction = goal.fraction,
+        change = goal.change,
+        changeMoved = goal.changeMoved,
+        description = goal.description,
+        onClick = onOpen,
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun EmptyLine(text: String, action: String, onClick: () -> Unit) {
+    // The link's touch slop hides its padding from the layout, so the air between the two is this gap alone.
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(text, style = OpenType.body, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        OpenLabel(
+            action,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.touchSlop(vertical = 14.dp).clickableLabeled(action, onClick = onClick).padding(vertical = 14.dp)
+        )
+    }
+}
+
+/**
+ * A recent session: its date in a narrow column (MON over a serif 19), the title and "48 min ·
+ * Bench Press 205×5" with a PR tag when it set one, and the kind of session as a glyph on a quiet
+ * square tile at the right (Antho kept the old row's mark, 2026-10-21; the redesign squares its
+ * corners and drops its colour).
+ */
+@Composable
+private fun RecentRow(item: OverviewRecentItem, onClick: () -> Unit) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val ink = MaterialTheme.colorScheme.onBackground
+    val title = item.displayTitle(com.forge.app.ui.cardio.LocalCardioTypes.current)
+    val date = Instant.ofEpochMilli(item.timestampMs).atZone(ZoneId.systemDefault()).toLocalDate()
+    val dow = date.dayOfWeek.getDisplayName(java.time.format.TextStyle.SHORT, com.forge.app.ui.common.currentLocale())
+    val sub = listOfNotNull(
+        item.durationMin?.let { "$it min" },
+        if (item.isGym) item.topLift else item.distanceKm?.let {
+            com.forge.app.domain.units.formatDistance(it, LocalForgeSettings.current.useMiles)
+        }
+    ).joinToString(" · ")
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickableLabeled("Open $title", onClick = onClick),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.width(34.dp)) {
+            OpenLabel(dow, style = OpenType.monoXS)
+            Text("${date.dayOfMonth}", style = OpenType.figureS, color = ink)
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = OpenType.rowTitle, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(sub, style = OpenType.bodyS, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                if (item.prCount > 0) OpenPrTag()
+            }
+        }
+        Box(
+            Modifier
+                .size(32.dp)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh, androidx.compose.foundation.shape.RoundedCornerShape(4.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                if (item.isGym) OpenIcons.Dumbbell else OpenIcons.Activity,
+                contentDescription = null,
+                tint = muted,
+                modifier = Modifier.size(18.dp)
+            )
         }
     }
 }

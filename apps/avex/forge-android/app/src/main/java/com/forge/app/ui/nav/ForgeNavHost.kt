@@ -285,11 +285,16 @@ fun ForgeNavHost(
         ) {
             SessionDetailScreen(
                 onBack = { nav.popBackStack() },
-                onOpenLiftTrend = { liftId ->
-                    com.forge.app.ui.gym.stats.StatsLensRequests.pendingLift.value = liftId
-                    nav.popBackStack(Routes.OVERVIEW, false)
-                    pendingHubPage = BottomTab.STATS
-                }
+                onOpenLiftTrend = { liftId -> nav.navigate(Routes.liftDetail(liftId)) }
+            )
+        }
+        composable(
+            route = Routes.LIFT_DETAIL,
+            arguments = listOf(navArgument(Routes.ARG_LIFT_ID) { type = NavType.StringType })
+        ) {
+            com.forge.app.ui.gym.stats.LiftDetailScreen(
+                onBack = { nav.popBackStack() },
+                onSetGoal = { liftId -> nav.navigate(Routes.goalEditor(exerciseId = liftId)) }
             )
         }
         composable(
@@ -333,8 +338,9 @@ fun ForgeNavHost(
             com.forge.app.ui.profile.ProfileScreen(
                 onBack = { nav.popBackStack() },
                 // Single-top, like the hub's own entry points: a double tap stacked two copies.
-                onOpenTrophies = { nav.navigate(Routes.TROPHIES) { launchSingleTop = true } },
                 onOpenPhotoGallery = { nav.navigate(Routes.MIRROR_TEST) { launchSingleTop = true } },
+                // Gated like the gallery (its route shows the last shot as a pose ghost).
+                onOpenCamera = { nav.navigate(Routes.PROGRESS_CAMERA) { launchSingleTop = true } },
                 onOpenMeasurements = { nav.navigate(Routes.BODY_MEASUREMENTS) { launchSingleTop = true } },
                 // Out of the ACTIVITY day sheet, into the same two destinations History opens.
                 onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) },

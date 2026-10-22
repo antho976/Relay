@@ -24,7 +24,7 @@ class LessonNoticeGroupingTest {
     fun severalLessonsFoldIntoOneRowThatOpensTheAcademy() {
         val rows = NotificationFeed.groupLessons(listOf(lesson("a", "First"), lesson("b", "Second"), lesson("c", "Third")))
         assertEquals(1, rows.size)
-        assertEquals("3 new lessons in the Academy", rows[0].title)
+        assertEquals("3 new lessons", rows[0].title)
         assertEquals("First, Second and 1 more", rows[0].detail)
         assertEquals(NoticeAction.OpenAcademy, rows[0].action)
     }

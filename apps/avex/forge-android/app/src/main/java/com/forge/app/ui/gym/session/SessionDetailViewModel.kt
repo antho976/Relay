@@ -73,6 +73,7 @@ class SessionDetailViewModel @Inject constructor(
                     _state.update { it.copy(hrView = hrView) }
                 }
             }
+            _state.update { it.copy(hrChecked = true) }
         }
     }
 

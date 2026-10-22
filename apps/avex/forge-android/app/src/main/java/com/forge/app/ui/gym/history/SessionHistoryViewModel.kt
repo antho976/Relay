@@ -1,8 +1,8 @@
 package com.forge.app.ui.gym.history
 
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.db.dao.LoggedExerciseDao
@@ -22,6 +22,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class SessionHistoryUiState(
@@ -30,7 +32,10 @@ data class SessionHistoryUiState(
      * emission off the main thread, so the list reads a ready-made structure and the date is
      * resolved to its human label exactly once per day rather than once per row.
      */
-    val days: List<HistoryDay> = emptyList(),
+    val months: List<HistoryMonth> = emptyList(),
+    /** "212 workouts and 64 cardio sessions since Mar 2025", for what the filters leave. */
+    val meta: String = "",
+    val kind: HistoryKind = HistoryKind.ALL,
     /** How many entries and how much volume the current filters leave — the reading under the title. */
     val summary: HistorySummary = HistorySummary(0, 0.0),
     /** Distinct quick tags across all workouts — the source for the filter chips. */
@@ -44,9 +49,10 @@ data class SessionHistoryUiState(
 ) {
     /** Whether any filter or the search box is narrowing the list (drives the empty-state copy). */
     val anyFilterActive: Boolean
-        get() = query.isNotBlank() || tagFilter != null || durationFilter != null || volumeFilter != null
+        get() = query.isNotBlank() || tagFilter != null || durationFilter != null || volumeFilter != null ||
+            kind != HistoryKind.ALL
 
-    val isEmpty: Boolean get() = days.isEmpty()
+    val isEmpty: Boolean get() = months.isEmpty()
 }
 
 @HiltViewModel
@@ -54,8 +60,37 @@ class SessionHistoryViewModel @Inject constructor(
     private val sessionDao: SessionDao,
     private val loggedExerciseDao: LoggedExerciseDao,
     private val cardioRepo: CardioRepository,
-    private val settingsRepo: com.forge.app.data.prefs.SettingsRepository
+    private val settingsRepo: com.forge.app.data.prefs.SettingsRepository,
+    private val statsRepo: com.forge.app.data.repo.StatsRepository
 ) : ViewModel() {
+
+    /**
+     * Each gym row's heaviest set and its lifts against their last time, loaded once per session as
+     * its row comes into view. A finished session never changes, so the cache never goes stale.
+     */
+    private val details = androidx.compose.runtime.mutableStateMapOf<Long, HistoryRowDetail>()
+    private val requested = HashSet<Long>()
+
+    fun detailFor(sessionId: Long): HistoryRowDetail? = details[sessionId]
+
+    fun requestDetail(sessionId: Long) {
+        if (!requested.add(sessionId)) return
+        viewModelScope.launch {
+            val detail = runCatching {
+                val lines = statsRepo.getSessionExerciseLines(sessionId)
+                val top = lines.filter { (it.topWeightLb ?: 0.0) > 0.0 }.maxByOrNull { it.topWeightLb!! }
+                val unit = settingsRepo.weightUnit.first()
+                HistoryRowDetail(
+                    lead = top?.let {
+                        "${com.forge.app.ui.overview.compactLiftName(it.exerciseName)} " +
+                            "${com.forge.app.domain.units.weightInputValue(it.topWeightLb!!, unit)}×${it.topReps ?: 0}"
+                    },
+                    deltas = statsRepo.liftDeltas(sessionId).map { it.pct }
+                )
+            }.getOrNull()
+            if (detail != null) details[sessionId] = detail else requested.remove(sessionId)
+        }
+    }
 
     private val filters = MutableStateFlow(HistoryFilters())
 
@@ -102,7 +137,9 @@ class SessionHistoryViewModel @Inject constructor(
             heavyLb = heavyThresholdLb(data.workouts)
         )
         SessionHistoryUiState(
-            days = groupByDay(items) { historyDayLabel(it) },
+            months = groupByMonth(items),
+            meta = historyMeta(items),
+            kind = f.kind,
             summary = summarize(items),
             availableTags = data.availableTags,
             query = f.query,
@@ -121,6 +158,7 @@ class SessionHistoryViewModel @Inject constructor(
     fun setTagFilter(tag: String?) = filters.update { it.copy(tag = tag) }
     fun setDurationFilter(f: SessionHistoryFilter?) = filters.update { it.copy(duration = f) }
     fun setVolumeFilter(f: SessionHistoryFilter?) = filters.update { it.copy(volume = f) }
+    fun setKind(k: HistoryKind) = filters.update { it.copy(kind = k) }
 
     /** What the "All" pill does: drop every pill filter, leaving the search box alone. */
     fun clearPillFilters() = filters.update { it.copy(tag = null, duration = null, volume = null) }

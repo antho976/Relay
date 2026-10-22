@@ -3,7 +3,15 @@ package com.forge.app.ui.settings
 
 import android.content.Intent
 import android.provider.Settings
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
+import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.touchSlop
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -39,73 +47,112 @@ import com.forge.app.data.prefs.SettingsSection
 
 @Composable
 internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, onBack: () -> Unit) {
-    var showAppIconSheet by remember { mutableStateOf(false) }
-    SettingsScaffold("Appearance", onBack) {
-        ThemePreview()
+    AppearanceContent(
+        state,
+        AppearanceActions(
+            setAccentColorHex = vm::setAccentColorHex,
+            setAccentEnabled = vm::setAccentEnabled,
+            setAmoledMode = vm::setAmoledMode,
+            setAppIcon = vm::setAppIcon,
+            setAccentFromIcon = vm::setAccentFromIcon,
+            setTileHidden = vm::setTileHidden,
+            restoreDefaults = { vm.resetSection(SettingsSection.APPEARANCE) }
+        ),
+        onBack
+    )
+}
 
-        SettingsGroup("Theme") {
+/** What the Appearance page can change, so the page draws without its view model (goldens). */
+internal class AppearanceActions(
+    val setAccentColorHex: (String) -> Unit = {},
+    val setAccentEnabled: (Boolean) -> Unit = {},
+    val setAmoledMode: (Boolean) -> Unit = {},
+    val setAppIcon: (com.forge.app.appicon.AppIcon) -> Unit = {},
+    val setAccentFromIcon: (Boolean) -> Unit = {},
+    val setTileHidden: (String, Boolean) -> Unit = { _, _ -> },
+    val restoreDefaults: () -> Unit = {}
+)
+
+@Composable
+internal fun AppearanceContent(state: SettingsUiState, vm: AppearanceActions, onBack: () -> Unit) {
+    var showAppIconSheet by remember { mutableStateOf(false) }
+    val icon = com.forge.app.appicon.AppIcon.fromKey(state.appIconKey)
+    // The icon is steering the accent right now: on, and the icon has a colour of its own.
+    val iconAccent = state.accentFromIcon && icon.accentHex != null
+    // Relay design "sa": each choice shows itself. The accent swatches, the theme as two chips,
+    // the icon you see on the home screen as a strip of the icons themselves.
+    SettingsScaffold("Appearance", onBack) {
+        SettingsGroup(
+            "Accent",
+            headerTrailing = when {
+                !state.accentEnabled -> "Off"
+                iconAccent -> "From icon"
+                else -> accentName(state.accentColorHex)
+            }
+        ) {
+            // The swatches only mean something while the accent is on and is not being taken from
+            // the icon; the chosen colour is kept either way and comes back when it applies again.
+            if (state.accentEnabled && !iconAccent) AccentColorPicker(state.accentColorHex, vm.setAccentColorHex)
             SettingsSwitchRow(
-                "Pure black",
-                "True-black backgrounds. Saves battery on OLED screens.",
-                state.amoledMode,
-                onCheckedChange = vm::setAmoledMode
+                "Monochrome",
+                "Turns the accent off everywhere",
+                !state.accentEnabled,
+                onCheckedChange = { vm.setAccentEnabled(!it) }
+            )
+        }
+
+        Column {
+            SettingsGroupHeader("Theme")
+            SettingsSegmented(
+                options = listOf("Pearl", "AMOLED"),
+                selectedIndex = if (state.amoledMode) 1 else 0,
+                onSelect = { vm.setAmoledMode(it == 1) },
+                contentDescription = "Theme"
+            )
+            Spacer(Modifier.height(10.dp))
+            SettingsReading("Pearl is warm near-black · AMOLED is true black")
+        }
+
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) { SettingsGroupHeader("App icon") }
+                // Every icon, grouped by family, for when the strip is a long scroll.
+                Box(
+                    Modifier
+                        .padding(bottom = 18.dp)
+                        .touchSlop(vertical = 16.dp, horizontal = 8.dp)
+                        .clickableLabeled("See every app icon") { showAppIconSheet = true }
+                        .padding(vertical = 16.dp, horizontal = 8.dp)
+                ) { com.forge.app.ui.common.OpenLabel("All icons") }
+            }
+            AppIconStrip(state.appIconKey) { vm.setAppIcon(it) }
+            Spacer(Modifier.height(12.dp))
+            SettingsReading("${icon.displayName} · also your splash")
+            Spacer(Modifier.height(KitRowGap))
+            SettingsSwitchRow(
+                "Match accent to icon",
+                when {
+                    !state.accentEnabled -> "Turn the accent on to use this"
+                    icon.accentHex == null -> "${icon.displayName} has no colour of its own"
+                    else -> "Buttons take your icon's colour"
+                },
+                state.accentFromIcon,
+                // Nothing to steer while the app is monochrome; the choice is kept for later.
+                enabled = state.accentEnabled,
+                onCheckedChange = vm.setAccentFromIcon
             )
         }
 
         SettingsGroup("Home") {
             SettingsSwitchRow(
                 "Goals on Home",
-                "Your pinned goals under the week strip. They stay in Goals either way.",
+                "Your pinned goals under the week strip",
                 com.forge.app.ui.overview.HOME_GOALS_TILE !in state.hiddenOverviewTiles,
                 onCheckedChange = { vm.setTileHidden(com.forge.app.ui.overview.HOME_GOALS_TILE, !it) }
             )
         }
 
-        val icon = com.forge.app.appicon.AppIcon.fromKey(state.appIconKey)
-        // The icon is steering the accent right now: on, and the icon has a colour of its own.
-        val iconAccent = state.accentFromIcon && icon.accentHex != null
-        SettingsGroup(
-            "Accent color",
-            headerTrailing = when {
-                !state.accentEnabled -> null
-                iconAccent -> "From icon"
-                else -> accentName(state.accentColorHex)
-            }
-        ) {
-            SettingsSwitchRow(
-                "Use an accent color",
-                "Off keeps the app black and white.",
-                state.accentEnabled,
-                onCheckedChange = vm::setAccentEnabled
-            )
-            // The picker only means something while the accent is on and is not being taken from
-            // the icon; the chosen colour is kept either way and comes back when it applies again.
-            if (state.accentEnabled && !iconAccent) AccentColorPicker(state.accentColorHex, vm::setAccentColorHex)
-        }
-
-        SettingsGroup("Icon & startup") {
-            AppIconRow(state.appIconKey) { showAppIconSheet = true }
-            SettingsSwitchRow(
-                "Icon-themed startup",
-                "Plays the launch animation in your icon's style. Off shows the plain wordmark.",
-                state.themedLaunchIntro,
-                onCheckedChange = vm::setThemedLaunchIntro
-            )
-            SettingsSwitchRow(
-                "Match accent to icon",
-                when {
-                    !state.accentEnabled -> "Turn on the accent color above to use this."
-                    icon.accentHex == null -> "${icon.displayName} has no color of its own, so your picked accent stays."
-                    else -> "Buttons and highlights take your icon's color. Off goes back to the accent you picked."
-                },
-                state.accentFromIcon,
-                // Nothing to steer while the app is monochrome; the choice is kept for later.
-                enabled = state.accentEnabled,
-                onCheckedChange = vm::setAccentFromIcon
-            )
-        }
-
-        SettingsResetGroup(SettingsSection.APPEARANCE, vm)
+        SettingsRestoreDefaults(vm.restoreDefaults)
     }
 
     if (showAppIconSheet) {
@@ -228,45 +275,42 @@ private fun NoteTemplatesEditor(
     val scheme = MaterialTheme.colorScheme
     SettingsGroupBlock {
         if (sorted.isEmpty()) {
-            Text("None yet, so the note field starts blank.", style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
+            Text("None yet, so the note field starts blank.", style = com.forge.app.ui.theme.OpenType.bodyS, color = scheme.onSurfaceVariant)
         } else {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 sorted.forEach { t ->
-                    InputChip(
-                        selected = false,
-                        onClick = { onRemove(t) },
-                        label = { Text(t.trim()) },
-                        trailingIcon = {
-                            Icon(Icons.Rounded.Close, contentDescription = "Remove ${t.trim()}", modifier = Modifier.height(18.dp))
-                        },
-                        colors = InputChipDefaults.inputChipColors(
-                            containerColor = scheme.surfaceContainerHighest,
-                            labelColor = scheme.onSurface,
-                            trailingIconColor = scheme.onSurfaceVariant
-                        ),
-                        border = null
-                    )
+                    // A starter as a chip with its ✕: the whole chip removes it.
+                    Row(
+                        Modifier
+                            .touchSlop(vertical = 6.dp)
+                            .clickableLabeled("Remove ${t.trim()}") { onRemove(t) }
+                            .padding(vertical = 6.dp)
+                            .heightIn(min = 36.dp)
+                            .border(1.dp, com.forge.app.ui.theme.OpenColors.Rule, RoundedCornerShape(4.dp))
+                            .padding(start = 12.dp, end = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(t.trim(), style = com.forge.app.ui.theme.SettingsType.chip, color = scheme.onBackground)
+                        Icon(com.forge.app.ui.theme.OpenIcons.X, contentDescription = null, tint = com.forge.app.ui.theme.OpenColors.Glyph, modifier = Modifier.size(14.dp))
+                    }
                 }
             }
         }
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(14.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 value = input,
                 onValueChange = { input = it },
                 singleLine = true,
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(4.dp),
                 textStyle = MaterialTheme.typography.bodyLarge,
                 placeholder = { Text("Add a starter, e.g. tempo:", color = scheme.onSurfaceVariant) },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = scheme.primary,
-                    unfocusedBorderColor = scheme.outline,
-                    cursorColor = scheme.primary
-                ),
+                colors = settingsFieldColors(),
                 modifier = Modifier.weight(1f)
             )
             Spacer(Modifier.width(10.dp))
-            SettingsButton("Add", kind = ButtonKind.Tonal, enabled = input.isNotBlank()) {
+            SettingsButton("Add", kind = ButtonKind.Outlined, enabled = input.isNotBlank()) {
                 onAdd(input)
                 input = ""
             }
@@ -280,12 +324,14 @@ private fun NoteTemplatesEditor(
  */
 @Composable
 internal fun SettingsResetGroup(section: SettingsSection, vm: SettingsViewModel) {
+    SettingsRestoreDefaults { vm.resetSection(section) }
+}
+
+/** The page's quiet last row: put this page back to its defaults. */
+@Composable
+internal fun SettingsRestoreDefaults(onRestore: () -> Unit) {
     SettingsGroup {
-        SettingsActionRow(
-            "Restore defaults",
-            "Resets only this page. Your data stays.",
-            Icons.Rounded.RestartAlt
-        ) { vm.resetSection(section) }
+        SettingsActionRow("Restore defaults", "Resets only this page. Your data stays.", onClick = onRestore)
     }
 }
 

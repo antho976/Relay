@@ -43,6 +43,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import com.forge.app.program.Program
 
+/** Home's COACH row: open calls this week, and applied changes still inside their watch window. */
+data class CoachHomeSummary(val open: List<CoachDecision>, val watching: List<CoachDecision>)
+
 /** The one-line "new report ready" banner shown on Overview until the brief is seen. */
 data class CoachBanner(
     val weekId: String,
@@ -1071,6 +1074,20 @@ class CoachRepository @Inject constructor(
             recoverySignals = recovery,
             learnedBiases = learned
         )
+    }
+
+    /**
+     * What Home's COACH row reads (2026-10-21 redesign): this week's open calls and the applied
+     * changes the watcher has not ruled on yet. Null when there is nothing to coach (freestyle, or the
+     * coach switched off), which hides the row rather than printing "holding steady" for a coach
+     * that is not running.
+     */
+    suspend fun homeSummary(): CoachHomeSummary? {
+        if (settings.freestyleMode.first() || !settings.coachEnabled.first()) return null
+        val pass = ensureWeeklyPass()
+        val open = coachDao.decisionsFor(pass.weekId).filter { it.status == STATUS_PROPOSED }
+        val watching = coachDao.pendingOutcome().filter { it.status == STATUS_APPLIED || it.status == STATUS_FOLDED }
+        return CoachHomeSummary(open = open, watching = watching)
     }
 
     /** One-line summary of where [pass] landed (Overview banner + Settings entry). */

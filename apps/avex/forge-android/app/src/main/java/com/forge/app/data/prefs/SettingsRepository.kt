@@ -506,6 +506,12 @@ class SettingsRepository @Inject constructor(
     // ─── Overview tile visibility (#121) ─────────────────────────────────────
 
     val hiddenOverviewTiles: Flow<Set<String>> = pref { values(it).hiddenOverviewTiles }
+
+    /** Home's two reading slots as stored ids, left then right; unknown or missing ids are the caller's to default. */
+    val homeSlots: Flow<List<String>> =
+        pref { p -> p[PreferenceKeys.HOME_SLOTS]?.split(",")?.map { it.trim() }.orEmpty() }
+    suspend fun setHomeSlots(left: String, right: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.HOME_SLOTS] = "$left,$right" }
     suspend fun setTileHidden(tileId: String, hidden: Boolean) {
         context.forgePreferences.edit { prefs ->
             val current = prefs[PreferenceKeys.HIDDEN_OVERVIEW_TILES] ?: emptySet()

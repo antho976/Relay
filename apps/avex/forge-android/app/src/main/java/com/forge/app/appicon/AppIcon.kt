@@ -33,15 +33,15 @@ enum class IconFamily { Avex, Solid, Metal, Stealth, Molten, Nebula, Aurora, Gem
 enum class AppIcon(
     /** Short variant name shown under the tile ("Gold", "Chalk"). */
     val label: String,
-    /** Family the tile groups under; also the effect family the launch wordmark dispatches on. */
+    /** Family the tile groups under in the picker. */
     val family: IconFamily,
     /** The flattened icon as a launcher shows it (both layers, the visible 72dp square). */
     @param:DrawableRes val previewRes: Int,
     val isDefault: Boolean = false,
-    /** The icon's full colour story, as `0xAARRGGBB` sky→horizon, for the cold-launch effect (see
-     *  AvexIntro). null = no themed launch — the plain wordmark plays. A family shares an effect
-     *  STYLE; each icon supplies its own PALETTE (first = deep sky wash, last = horizon glow, the
-     *  ribbon sweeps through all of them). Kept as Longs so this model stays Compose-free. */
+    /** The icon's full colour story, as `0xAARRGGBB` deep backdrop → body → highlight glow. It once
+     *  drove the themed launch animation (removed 2026-10-21); it now feeds [accentHex], "match
+     *  accent to icon". null for the house icons, which have no colour of their own. Kept as Longs
+     *  so this model stays Compose-free. */
     val launchPalette: List<Long>? = null,
 ) {
     // Declaration order IS the picker order: the family headers come from
@@ -227,8 +227,8 @@ class AppIconManager @Inject constructor(
      * Make [desired] the enabled launcher alias if it isn't already. MUST be called SYNCHRONOUSLY from a
      * background transition ([MainActivity.onStop]) — completing the [PackageManager] toggle inline (not
      * on a fire-and-forget coroutine) is what guarantees the swap lands before the OS can reap the
-     * backgrounded process. A missed swap is invisible until noticed: the persisted pick already drives
-     * the launch intro, so the icon silently lags the animation.
+     * backgrounded process. A missed swap is invisible until noticed: the launcher icon, and with it the
+     * Android 12+ splash, silently lags the pick.
      */
     fun reconcileTo(desired: AppIcon) {
         if (appliedIcon == desired) return          // already applied this process — cheap no-op

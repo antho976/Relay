@@ -48,7 +48,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
+import com.forge.app.ui.theme.AvexFonts
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -78,7 +78,7 @@ private val CELL_GAP = 2.dp
 internal fun GalleryTheme(content: @Composable () -> Unit) {
     val base = MaterialTheme.typography
     val medium = base.bodySmall.copy(fontWeight = FontWeight.Medium)
-    fun TextStyle.sans() = copy(fontFamily = FontFamily.SansSerif)
+    fun TextStyle.sans() = copy(fontFamily = AvexFonts.SansSerif)
     val colors = MaterialTheme.colorScheme
     MaterialTheme(
         // The app theme never sets the secondary containers, so Material's selected chips and tonal

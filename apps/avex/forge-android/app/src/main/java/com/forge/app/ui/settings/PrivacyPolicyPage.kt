@@ -2,7 +2,6 @@ package com.forge.app.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.MaterialTheme
@@ -16,10 +15,10 @@ import androidx.compose.ui.unit.dp
 internal fun PrivacyPolicyPage(onBack: () -> Unit) {
     SettingsScaffold("Privacy policy", onBack) {
         Text(
-            "Last updated September 26, 2026",
-            style = MaterialTheme.typography.bodyMedium,
+            "Last updated September 26, 2026".uppercase(),
+            style = com.forge.app.ui.theme.OpenType.monoXS,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 8.dp)
+            modifier = Modifier
         )
 
         PolicySection(
@@ -59,19 +58,19 @@ internal fun PrivacyPolicyPage(onBack: () -> Unit) {
 @Composable
 private fun PolicySection(title: String, vararg paragraphs: String) {
     Column(
-        modifier = Modifier.padding(horizontal = 8.dp),
+        modifier = Modifier,
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text(
             title,
-            style = MaterialTheme.typography.titleMedium,
+            style = com.forge.app.ui.theme.OpenType.rowTitleL,
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.semantics { heading() }
         )
         paragraphs.forEach { paragraph ->
             Text(
                 paragraph,
-                style = MaterialTheme.typography.bodyLarge,
+                style = com.forge.app.ui.theme.OpenType.body,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }

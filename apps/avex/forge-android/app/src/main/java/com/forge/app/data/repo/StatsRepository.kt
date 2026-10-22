@@ -375,6 +375,36 @@ class StatsRepository @Inject constructor(
         }
     }
 
+    /** One lift of a session against the last time it was done. */
+    data class LiftDelta(
+        val exerciseName: String,
+        /** Best working e1RM this session vs the previous bout's, in percent. Null: no comparable bout. */
+        val pct: Float?,
+    )
+
+    /**
+     * "Each lift vs last time" for a finished session (the redesign's bar mark on Home): every
+     * non-skipped exercise with sets, in session order, compared on best working e1RM against its own
+     * previous bout before this session started. Bodyweight and timed lifts have no e1RM and come back
+     * null, as does a lift done for the first time. A finished session never changes, so callers
+     * memoise by session id.
+     */
+    suspend fun liftDeltas(sessionId: Long): List<LiftDelta> {
+        val session = sessionDao.get(sessionId) ?: return emptyList()
+        val exercises = loggedExerciseDao.forSession(sessionId).filterNot { it.skipped }
+        val setsByExId = loggedSetDao.allForSession(sessionId).groupBy { it.loggedExerciseId }
+        return exercises.mapNotNull { ex ->
+            val sets = setsByExId[ex.id].orEmpty()
+            if (sets.isEmpty()) return@mapNotNull null
+            val now = com.forge.app.domain.adapt.bestWorkingE1rm(sets)
+            val prev = if (now == null) null else
+                loggedExerciseDao.lastLoggedBeforeTime(ex.exerciseId, session.startedAt)
+                    ?.let { com.forge.app.domain.adapt.bestWorkingE1rm(loggedSetDao.forLoggedExercise(it.id)) }
+            val pct = if (now != null && prev != null && prev > 0.0) ((now - prev) / prev * 100.0).toFloat() else null
+            LiftDelta(Program.exerciseDisplayName(ex.exerciseId, ex.swappedName), pct)
+        }
+    }
+
     /**
      * The full per-session breakdown that drives the session-detail page: the session row's
      * aggregates plus every non-skipped exercise with its sets. Pure read — assembled off the
@@ -439,7 +469,11 @@ class StatsRepository @Inject constructor(
                 e1rmLb = e1rm,
                 // A best needs something to beat: a lift's first-ever session is not a best.
                 e1rmIsBest = e1rm != null && priorBestE1rm != null && e1rm > priorBestE1rm + 1e-6,
-                sets = setDetails
+                sets = setDetails,
+                // The top set last time, for the opened lift's "Top set +5 lb".
+                prevTopWeightLb = if (topWeight == null) null else
+                    loggedExerciseDao.lastLoggedBeforeTime(ex.exerciseId, session.startedAt)
+                        ?.let { prev -> loggedSetDao.forLoggedExercise(prev.id).mapNotNull { it.weightLb }.maxOrNull() }
             )
         }
 
@@ -515,7 +549,15 @@ class StatsRepository @Inject constructor(
         /** All-time best set per lift, heaviest first (Overview "records"). */
         val hallOfFame: List<PrRecord> = emptyList(),
         /** Lifetime totals for the Overview tiles. */
-        val lifetime: LifetimeMetrics? = null
+        val lifetime: LifetimeMetrics? = null,
+        /**
+         * Every tracked set, oldest session first (holds and assisted sets with their weight nulled).
+         * The redesigned Stats page slices it per range (4W / 12W / 6M / All) on the client, so one
+         * history read serves every range and its "the N before" comparison.
+         */
+        val statSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession> = emptyList(),
+        /** Every finished tracked session's volume and deload mark, oldest first (weekly volume bars). */
+        val sessionVolumes: List<SessionDao.SessionVolumeDeloadRow> = emptyList()
     )
 
     /**
@@ -551,7 +593,8 @@ class StatsRepository @Inject constructor(
             val deloadRowsD = async { sessionDao.allFinishedVolumeDeload() }
             val weekCompD = async { buildWeekComparison() }
             val prTimes = prTimesD.await()
-            val deloadTrend = buildVolumeDeloadTrend(deloadRowsD.await(), maxSessions = Int.MAX_VALUE)
+            val deloadRows = deloadRowsD.await()
+            val deloadTrend = buildVolumeDeloadTrend(deloadRows, maxSessions = Int.MAX_VALUE)
             GymStats(
                 recentPrs = buildPrEntries(prRows, allSets),
                 e1rmLifts = buildE1rmLifts(allSets),
@@ -572,7 +615,9 @@ class StatsRepository @Inject constructor(
                 // Heaviest-first so the Overview "records" card leads with the biggest lifts; relative
                 // strength is filled in by the bodyweight combine below.
                 hallOfFame = buildHallOfFame(allSets).sortedByDescending { it.maxWeightLb },
-                lifetime = buildLifetimeMetrics(allSets)
+                lifetime = buildLifetimeMetrics(allSets),
+                statSets = activitySets.sortedBy { it.sessionStartedAt },
+                sessionVolumes = deloadRows
             )
           }
         }.combine(bodyweightRepo.observeRecent(90)) { stats, bw ->

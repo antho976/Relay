@@ -84,7 +84,7 @@ internal val ACTION_ENTRIES = listOf(
 internal data class SettingsPageEntry(val page: SettingsPage, val tags: String)
 
 internal val PAGE_ENTRIES = listOf(
-    SettingsPageEntry(SettingsPage.Appearance, "appearance amoled dark theme accent color display look app icon launcher home screen startup animation"),
+    SettingsPageEntry(SettingsPage.Appearance, "appearance amoled dark theme accent color display look app icon launcher home screen splash"),
     SettingsPageEntry(SettingsPage.Format, "units format kg lb weight time clock 12h 24h week distance strength standards sex"),
     SettingsPageEntry(SettingsPage.Session, "session haptic feedback vibration notes templates rest timer between sets compound isolation"),
     SettingsPageEntry(SettingsPage.Notifications, "notifications reminders quiet hours recap timer alerts notify suppress daily check-in morning sleep soreness stress drive weight"),
@@ -137,13 +137,12 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("Daily check-ins", "morning sleep soreness stress drive weight readiness", SettingsPage.Notifications),
     // Rows the index never had, so searching for them found nothing.
     SettingsItem("Goals on Home", "goals home pin pinned show", SettingsPage.Appearance),
-    SettingsItem("Icon-themed startup", "launch startup animation intro icon splash", SettingsPage.Appearance),
     SettingsItem("Match accent to icon", "accent icon match color theme", SettingsPage.Appearance),
     SettingsItem("Automatic re-roll", "rotation reroll re-roll rotate exercises cadence sessions", SettingsPage.Program),
     SettingsItem("Plan builder", "plan builder edit days exercises custom program editor", SettingsPage.Program),
     SettingsItem("Generate a new plan", "generate new plan program split regenerate", SettingsPage.Program),
     SettingsItem("Deload week", "deload lighter recovery week", SettingsPage.Program),
-    SettingsItem("Days per week", "days per week schedule weekdays split frequency", SettingsPage.Program, ProgramSection.Plan),
+    SettingsItem("Days per week", "days per week schedule weekdays split frequency", SettingsPage.Program),
     SettingsItem("Priority muscles", "priority muscles emphasis focus weak", SettingsPage.Program, ProgramSection.Emphasis),
     SettingsItem("Problem areas", "problem areas injury pain sore avoid joints", SettingsPage.Program, ProgramSection.Emphasis),
     SettingsItem("Advanced tracking", "advanced tracking coach signals detail", SettingsPage.Coach),
@@ -218,6 +217,8 @@ fun SettingsScreen(
     val mainListState = rememberLazyListState()
     // Saveable so a rotation mid-confirm (restore / factory reset) keeps the dialog and the picked backup.
     var searchQuery by rememberSaveable { mutableStateOf("") }
+    // The root's search field lives in its top bar, opened from the glyph there.
+    var searchOpen by rememberSaveable { mutableStateOf(false) }
     var confirmReset by rememberSaveable { mutableStateOf<ResetTarget?>(null) }
     var showResetMenu by rememberSaveable { mutableStateOf(false) }
     var showDataDialog by rememberSaveable { mutableStateOf(false) }
@@ -277,10 +278,11 @@ fun SettingsScreen(
             onDeepLinkedPage && currentPage != null -> onBack()
             currentPage != null -> { currentPage = null; programSection = null }
             searchQuery.isNotBlank() -> searchQuery = ""
+            searchOpen -> searchOpen = false
             else -> onBack()
         }
     }
-    BackHandler(enabled = currentPage != null || searchQuery.isNotBlank()) { goBack() }
+    BackHandler(enabled = currentPage != null || searchQuery.isNotBlank() || searchOpen) { goBack() }
 
     val backupOn by viewModel.autoBackupEnabled.collectAsStateWithLifecycle()
     val backupSavedAt by viewModel.autoBackupSavedAt.collectAsStateWithLifecycle()
@@ -295,6 +297,15 @@ fun SettingsScreen(
     val storage by viewModel.storage.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { viewModel.refreshStorage() }
     val holidayStatus = remember(vacations) { holidayReading(vacations, java.time.LocalDate.now()) }
+    // The Watch & health row reads Health Connect's own state: how many of its readings are on.
+    val health: HealthConnectViewModel = hiltViewModel()
+    val healthState by health.state.collectAsStateWithLifecycle()
+    val watchStatus = if (healthState.loading) null
+        else watchReading(healthState.available, healthState.needsUpdate, connectedReadings(healthState))
+    // The plan's split, from the program facade the plan screens read.
+    val split = remember(state.daysPerWeek, state.freestyleMode) {
+        splitLabel(com.forge.app.program.Program.days.map { it.defaultName })
+    }
 
     SettingsTheme {
         AnimatedContent(
@@ -329,7 +340,11 @@ fun SettingsScreen(
                     backupStatus = backupStatus,
                     customCardioCount = customCardio.size,
                     holidayStatus = holidayStatus,
-                    storageUsed = storage?.let { formatBytes(it.totalBytes) }
+                    storageUsed = storage?.let { formatBytes(it.totalBytes) },
+                    watchStatus = watchStatus,
+                    split = split,
+                    searchOpen = searchOpen,
+                    onSearchOpenChange = { searchOpen = it }
                 )
                 SettingsPage.Appearance -> AppearancePage(state, viewModel, back)
                 SettingsPage.Format -> FormatPage(state, viewModel, back)
@@ -339,6 +354,7 @@ fun SettingsScreen(
                 SettingsPage.Program -> ProgramPage(
                     state = state,
                     vm = viewModel,
+                    split = split,
                     section = dest.section,
                     onSectionChange = { programSection = it },
                     onBack = back,

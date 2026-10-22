@@ -13,6 +13,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.size
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.cardio.CardioGlyphs
 import com.forge.app.domain.cardio.CustomCardioType
@@ -60,12 +62,12 @@ internal fun CardioActivitiesPage(vm: SettingsViewModel, onBack: () -> Unit) {
                         SettingsIconTile(if (t.glyphKey == CardioGlyphs.DEFAULT_KEY) com.forge.app.ui.nav.NavIcons.Cardio else CardioGlyphs.icon(t.glyphKey))
                         SettingsRowText(t.name)
                         IconButton(onClick = { vm.deleteCustomCardioType(t.code) }) {
-                            Icon(Icons.Outlined.DeleteOutline, contentDescription = "Delete ${t.name}", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Icon(com.forge.app.ui.theme.OpenIcons.Trash, contentDescription = "Delete ${t.name}", tint = com.forge.app.ui.theme.OpenColors.Glyph, modifier = Modifier.size(18.dp))
                         }
                     }
                 }
             }
-            SettingsActionRow("Add an activity", icon = Icons.Rounded.Add, tone = TileTone.Accent) { showCreate = true }
+            SettingsButton("Add an activity", kind = ButtonKind.Outlined, icon = com.forge.app.ui.theme.OpenIcons.Plus) { showCreate = true }
         }
     }
 }

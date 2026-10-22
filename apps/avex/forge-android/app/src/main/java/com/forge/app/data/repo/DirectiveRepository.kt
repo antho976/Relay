@@ -69,6 +69,37 @@ class DirectiveRepository @Inject constructor(
         )
     }
 
+    /** A lift's next prescribed session: the next program day that has it, and the coach's target there. */
+    data class NextLiftTarget(val dayKey: String, val dayName: String, val weightLb: Double?, val repsText: String)
+
+    /**
+     * For Stats' lift page (2026-10-21 redesign): walks the program from today's day (or the start)
+     * to the first day that trains [exerciseId], and reads the same brief the session will open
+     * with. Null without a program, when no day trains the lift, or on any failed read.
+     */
+    suspend fun nextTargetFor(exerciseId: String): NextLiftTarget? = runCatching {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            val days = Program.days
+            if (days.isEmpty()) return@withContext null
+            val answer = today()
+            val from = days.indexOfFirst { it.key == answer.directive.dayKey }.coerceAtLeast(0)
+            val day = (days.drop(from) + days.take(from)).firstOrNull { d -> d.exercises.any { it.id == exerciseId } }
+                ?: return@withContext null
+            val brief = answer.brief?.takeIf { it.dayKey == day.key } ?: run {
+                val snapshot = adaptationRepository.snapshotCached()
+                PreSessionBrief.build(
+                    s = snapshot,
+                    dayKey = day.key,
+                    readiness = null,
+                    life = com.forge.app.domain.coach.LifeEvents.State.NONE,
+                    weightUnit = protocolUnit(settingsRepository.weightUnit.first())
+                )
+            }
+            val t = brief?.targets?.firstOrNull { it.exerciseId == exerciseId } ?: return@withContext null
+            NextLiftTarget(day.key, day.defaultName, t.targetWeightLb, t.repsText)
+        }
+    }.getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it else null }
+
     private suspend fun compute(): TodayAnswer {
         val snapshot = adaptationRepository.snapshotCached()
         val life = adaptationRepository.lifeEvents(snapshot.nowMs, snapshot.sessions)

@@ -4,12 +4,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -17,355 +21,343 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.forge.app.data.repo.ExtendedGoalRepository
+import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.domain.cardio.CardioActivity
-import com.forge.app.domain.cardio.CardioActivityRecord
+import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.cardio.WHO_WEEKLY_ACTIVITY_MIN
-import com.forge.app.domain.cardio.pacePerUnit
 import com.forge.app.domain.units.distanceUnitLabel
-import com.forge.app.domain.units.formatDistance
-import com.forge.app.domain.units.toDisplayDistance
-import com.forge.app.ui.cardio.components.BarGeom
-import com.forge.app.ui.cardio.components.MeterBar
-import com.forge.app.ui.cardio.components.RankedBarRow
-import com.forge.app.ui.cardio.components.VerticalBarRow
-import com.forge.app.ui.cardio.state.CardioDayCell
-import com.forge.app.ui.common.EditorialFigure
-import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.GROUP_SEAM
-import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.cardio.state.CardioUiState
+import com.forge.app.ui.common.OpenColumnChart
+import com.forge.app.ui.common.OpenLabel
+import com.forge.app.ui.common.OpenMeter
+import com.forge.app.ui.common.OpenPrimaryButton
+import com.forge.app.ui.common.OpenSmallButton
+import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.common.bounceCombinedClick
 import com.forge.app.ui.common.clickableLabeled
-import com.forge.app.ui.common.rowShape
-import com.forge.app.ui.goals.GoalProgressLine
-import com.forge.app.ui.goals.customGoalTitle
-import com.forge.app.ui.goals.customGoalValueLine
-import com.forge.app.ui.goals.goalCaption
+import com.forge.app.ui.common.currentLocale
+import com.forge.app.ui.theme.CardioOpenColors
+import com.forge.app.ui.theme.CardioOpenType
 import com.forge.app.ui.theme.LocalForgeSettings
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import com.forge.app.ui.theme.OpenColors
+import com.forge.app.ui.theme.OpenIcons
+import com.forge.app.ui.theme.OpenType
+import com.forge.app.ui.theme.openOnAccentLarge
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.TextStyle as JavaTextStyle
+import java.time.temporal.ChronoUnit
 
 /**
- * The cardio hero — a THIS WEEK eyebrow with a `weeks →` action into the ledger, the week's open
- * serif figures (days · minutes · distance, streak once it exists), the Mon–Sun bar row and the
- * minutes meter. All honest zeros on a fresh week or a fresh install, so the empty screen is this
- * same screen at zero (§12).
- *
- * The hero itself is passive (2026-08-23): it used to be ONE page-wide tap target opening a
- * full-screen week pager, which put the page's richest content behind a gesture nothing announced.
- * Two named ways in replaced it — `weeks →` to the weeks chart, and the Mon–Sun strip, which opens
- * THIS week in full (Antho, 2026-08-23). The strip is a single tap target: seven day-wide ones would
- * each be under the 48dp minimum and would all lead to the same place anyway (§2③).
+ * The hub's hero: THIS WEEK · dates with Weeks ›, the week's three readings (minutes of the mark,
+ * distance against last week, days with the week streak), the seven day bars, the meter toward the
+ * weekly mark, and the red Log cardio bar. All honest zeros on a fresh week.
  */
 @Composable
 internal fun CardioHero(
-    weekLabel: String,
-    weekDays: Int,
-    weekMinutes: Int,
-    weekDistanceKm: Double,
-    streakDays: Int,
-    weekTargetMin: Int,
-    useMiles: Boolean,
-    days: List<CardioDayCell>,
+    state: CardioUiState,
+    weekStart: LocalDate,
     todayDow: Int,
-    onBg: Color,
-    muted: Color,
-    outline: Color,
-    accent: Color,
     onOpenWeeks: () -> Unit,
-    /** Tapping the Mon–Sun strip opens this week's own page. */
-    onOpenThisWeek: () -> Unit
+    onOpenThisWeek: () -> Unit,
+    onOpenLog: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier
+    val locale = currentLocale()
+    val personal = state.weekTargetMin > 0
+    val target = if (personal) state.weekTargetMin else WHO_WEEKLY_ACTIVITY_MIN
+    val unit = distanceUnitLabel(state.useMiles)
+    val range = remember(weekStart, locale) { weekRangeLabel(weekStart, weekStart.plusDays(6), locale) }
+    Column {
+        CardioLinkHead(
+            label = "This week · $range",
+            action = "Weeks",
+            actionLabel = "Browse your weeks",
+            onAction = onOpenWeeks
+        )
+        Spacer(Modifier.height(14.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+            CardioReading(
+                label = "Minutes",
+                figure = cardioFigure("${state.weekMinutes}", "", CardioOpenType.figureMUnit),
+                change = "Of $target",
+                moved = false,
+                description = "${state.weekMinutes} of $target minutes this week",
+                modifier = Modifier.weight(1f)
+            )
+            val (change, moved) = distanceVsLast(state.weekDistanceKm, state.lastWeekToDateKm, state.useMiles)
+            val dist = distanceNumber(state.weekDistanceKm, state.useMiles)
+            CardioReading(
+                label = "Distance",
+                figure = cardioFigure(dist, " $unit", CardioOpenType.figureMUnit),
+                change = change,
+                moved = moved,
+                description = "$dist $unit this week, $change",
+                modifier = Modifier.weight(1f)
+            )
+            val streak = state.cardioStreakWeeks
+            CardioReading(
+                label = "Days",
+                figure = cardioFigure("${state.cardioDaysThisWeek}", "", CardioOpenType.figureMUnit),
+                change = "Streak $streak wk",
+                moved = false,
+                description = "${state.cardioDaysThisWeek} days this week, a $streak week streak",
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Spacer(Modifier.height(20.dp))
+        CardioDayBars(state, todayDow, onOpenThisWeek)
+        Spacer(Modifier.height(14.dp))
+        OpenMeter(state.weekMinutes.toFloat() / target)
+        Spacer(Modifier.height(8.dp))
+        CardioChange(weekMeterCaption(state.weekMinutes, target, personal), moved = false)
+        Spacer(Modifier.height(28.dp))
+        CardioLogBar(watchCount = state.importSuggestions.size, onClick = onOpenLog)
+    }
+}
+
+/** The week's seven day bars: red for a day trained, a low quiet stub for a logged rest day. */
+@Composable
+private fun CardioDayBars(state: CardioUiState, todayDow: Int, onOpenThisWeek: () -> Unit) {
+    val accent = MaterialTheme.colorScheme.primary
+    val days = state.weekDays.ifEmpty { List(7) { com.forge.app.ui.cardio.state.CardioDayCell() } }
+    val letters = listOf("M", "T", "W", "T", "F", "S", "S")
+    val reading = remember(days) {
+        "This week, ${days.count { it.minutes > 0 }} of 7 days trained, ${days.sumOf { it.minutes }} minutes. Opens this week."
+    }
+    // Only trained days draw: an untrained day, today's included, is its letter over bare ground.
+    Box(Modifier.fillMaxWidth().clickableLabeled("Open this week", onClick = onOpenThisWeek)) {
+        OpenColumnChart(
+            values = days.map { it.minutes.toFloat() },
+            colors = days.map { accent },
+            // An untrained week is its letters over the meter: no tall empty plot above them.
+            height = if (days.any { it.minutes > 0 }) 96.dp else 28.dp,
+            columnLabels = letters,
+            gapFraction = 0.5f,
+            description = reading
+        )
+    }
+}
+
+/**
+ * The red Log cardio bar. When the watch picked up sessions with no entry yet it carries a small
+ * "N from watch" chip on its right (the sheet then opens with them on top); otherwise a +.
+ */
+@Composable
+internal fun CardioLogBar(watchCount: Int, onClick: () -> Unit) {
+    if (watchCount <= 0) {
+        OpenPrimaryButton("Log cardio", onClick = onClick, icon = OpenIcons.Plus)
+        return
+    }
+    val ink = openOnAccentLarge()
+    val label = "Log cardio, $watchCount from your watch"
+    Row(
+        Modifier
             .fillMaxWidth()
-            .padding(horizontal = 24.dp)
-            .padding(top = 12.dp)
+            .heightIn(min = 56.dp)
+            .bounceClick(role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = label }
+            .clip(CardioCorner)
+            .background(MaterialTheme.colorScheme.primary)
+            .padding(start = 20.dp, end = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
+        Text("Log cardio", style = OpenType.button, color = ink, modifier = Modifier.weight(1f).padding(vertical = 14.dp))
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            Modifier
+                .heightIn(min = 32.dp)
+                .clip(CardioCorner)
+                .background(CardioOpenColors.ChipWash)
+                .padding(horizontal = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                "THIS WEEK · $weekLabel",
-                style = MaterialTheme.typography.labelSmall,
-                color = muted, letterSpacing = 1.sp,
-                modifier = Modifier.weight(1f)
-            )
-            // Navigation is a small filled capsule with its own touch target.
-            CardioLinkCapsule("Weeks", "Browse earlier weeks", onOpenWeeks)
+            Icon(OpenIcons.Navigation, contentDescription = null, tint = ink, modifier = Modifier.size(14.dp))
+            Text("$watchCount from watch", style = CardioOpenType.chip, color = ink)
         }
-        Spacer(Modifier.height(10.dp))
-        // Figures wrap rather than clip at large font scales (§14) — four of them never fit one line
-        // at 200%, and a clipped streak is worse than a wrapped one.
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(20.dp)
-        ) {
-            EditorialFigure(
-                value = "$weekDays",
-                label = if (weekDays == 1) "day" else "days",
-                onBg = onBg, muted = muted, accent = accent,
-                modifier = Modifier.weight(1f)
-            )
-            EditorialFigure(
-                value = "$weekMinutes",
-                label = "minutes",
-                onBg = onBg, muted = muted, accent = accent,
-                modifier = Modifier.weight(1f)
-            )
-            EditorialFigure(
-                value = String.format(Locale.US, "%.1f", toDisplayDistance(weekDistanceKm, useMiles)),
-                label = distanceUnitLabel(useMiles),
-                onBg = onBg, muted = muted, accent = accent,
-                modifier = Modifier.weight(1f)
-            )
-            if (streakDays >= 2) {
-                EditorialFigure(
-                    value = "$streakDays",
-                    label = "day streak",
-                    onBg = onBg, muted = muted, accent = accent,
-                    modifier = Modifier.weight(1f)
-                )
-            } else {
-                Spacer(Modifier.weight(1f))
-            }
-        }
-        Spacer(Modifier.height(18.dp))
-        // The strip opens this week, so it sits on a filled panel: the surface is earned by the tap.
-        CardioChartPanel(
-            Modifier.clickableLabeled("Open this week", onClick = onOpenThisWeek)
-        ) {
-            WeekBoxRow(
-                days = days,
-                todayDow = todayDow,
-                onBg = onBg, muted = muted, outline = outline, accent = accent
-            )
-        }
-        Spacer(Modifier.height(16.dp))
-        // A personal minutes target fills its goal meter; without one, the WHO 150-min/week reference
-        // takes its place (GYMAP-42) so the week always reads against a baseline, never empty space.
-        val hasGoal = weekTargetMin > 0
-        val target = if (hasGoal) weekTargetMin else WHO_WEEKLY_ACTIVITY_MIN
-        MeterBar(
-            fraction = weekMinutes.toFloat() / target,
-            caption = when {
-                hasGoal && weekMinutes >= target -> "Goal hit · $weekMinutes of $target min"
-                hasGoal -> "$weekMinutes of $target min goal"
-                weekMinutes >= target -> "$weekMinutes of $target min · weekly guideline met"
-                else -> "$weekMinutes of $target min · WHO weekly guideline"
-            },
-            muted = muted, outline = outline, accent = accent,
-            contentDescription = "$weekMinutes of $target minutes this week"
-        )
     }
 }
 
 /**
- * GOALS — the cardio-metric custom goals (distance / minutes) as the same open progress lines Home
- * draws ([GoalProgressLine] is the shared component), in-progress-closest first, capped at three.
- * The header action and every line open the full Goals screen.
+ * WEEK — today on the watch (steps by hour against the usual by now), then this week's sessions.
+ * Without a watch the steps slot is the invite to connect one, until it is hidden.
  */
-@Composable
-internal fun CardioGoalsSection(
-    goals: List<ExtendedGoalRepository.Progress>,
-    /**
-     * Local midnight of the day the surrounding state describes (M-32). The deadline captions are
-     * date-grained readings — "3 days left" — and memoising them on the goal list alone let them
-     * outlive the day they were computed for: nothing about a goal ROW changes at midnight, so a
-     * tab left open counted down to a deadline that had already moved.
-     */
-    todayStartMs: Long,
-    onOpenGoals: () -> Unit,
-    onBg: Color,
-    muted: Color,
-    accent: Color,
-    outline: Color
+internal fun LazyListScope.cardioWeekTab(
+    state: CardioUiState,
+    today: LocalDate,
+    weekStartMs: Long,
+    zone: ZoneId,
+    actions: CardioHubActions,
+    showWatchInvite: Boolean,
 ) {
-    val settings = LocalForgeSettings.current
-    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-        CardioSectionHeader(
-            label = "Goals",
-            action = if (goals.size > 3) "All ${goals.size}" else "View all",
-            actionLabel = "Open all goals",
-            onAction = onOpenGoals
-        )
-        Spacer(Modifier.height(12.dp))
-        // In-progress goals lead (closest-first), then achieved — same ordering as Home's trim.
-        val preview = remember(goals) {
-            goals
-                .sortedWith(compareBy<ExtendedGoalRepository.Progress> { it.achieved }.thenByDescending { it.fraction })
-                .take(3)
+    val hasSteps = state.stepsConnected || state.todayWearable?.hasData == true
+    if (hasSteps || showWatchInvite) {
+        item("watch") {
+            Column {
+                Spacer(Modifier.height(10.dp))
+                OpenLabel("Today on your watch")
+                Spacer(Modifier.height(18.dp))
+                if (hasSteps) CardioStepsToday(state) else CardioWatchInvite(actions.onConnectWatch, actions.onDismissInvite)
+                Spacer(Modifier.height(CARDIO_SECTION))
+            }
         }
-        // One timestamp for the whole trim, so its captions can't disagree about the day — keyed on
-        // the day as well as on the goals, because a period boundary changes what the caption should
-        // say without changing any goal's numbers.
-        val now = remember(preview, todayStartMs) { System.currentTimeMillis() }
-        Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
-            preview.forEachIndexed { i, g ->
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(rowShape(i, preview.size))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                ) {
-                GoalProgressLine(
-                    title = customGoalTitle(g),
-                    valueLine = customGoalValueLine(g, settings.weightUnit, settings.useMiles),
-                    fraction = g.fraction,
-                    achieved = g.achieved,
-                    onBg = onBg, muted = muted, accent = accent, outline = outline,
-                    caption = goalCaption(
-                        achieved = g.achieved,
-                        metric = g.metric,
-                        period = g.period,
-                        baselineValue = g.baselineValue,
-                        weightUnit = settings.weightUnit,
-                        nowMs = now,
-                    ),
-                    onClick = onOpenGoals,
-                    contentPadding = PaddingValues(horizontal = ROW_H, vertical = 14.dp)
+    } else {
+        item("air") { Spacer(Modifier.height(10.dp)) }
+    }
+
+    val weekEntries = state.entries.filter { it.date >= weekStartMs }
+    item("sessions-head") {
+        Column {
+            CardioLinkHead(
+                label = "Sessions",
+                action = if (actions.historyExpands && state.historyExpanded) "Show less" else "View all",
+                actionLabel = "All sessions",
+                onAction = actions.onOpenHistory
+            )
+            Spacer(Modifier.height(4.dp))
+        }
+    }
+    if (weekEntries.isEmpty() && !state.isLoading) {
+        item("sessions-empty") {
+            val last = state.entries.firstOrNull { it.type != CardioType.REST.code }
+            Column {
+                Spacer(Modifier.height(14.dp))
+                CardioBodyLine(
+                    if (last == null) "0 sessions yet. Log one and it lands here."
+                    else "0 sessions this week."
                 )
+                if (last != null) {
+                    Spacer(Modifier.height(20.dp))
+                    OpenLabel("Last time", style = OpenType.monoXS)
+                    Spacer(Modifier.height(8.dp))
+                    CardioSessionRow(last, today, zone, state.useMiles, actions)
                 }
             }
         }
     }
+    items(weekEntries, key = { it.id }) { entry ->
+        Column {
+            Spacer(Modifier.height(14.dp))
+            CardioSessionRow(entry, today, zone, state.useMiles, actions)
+            Spacer(Modifier.height(10.dp))
+        }
+    }
+    // The inline fallback (no History route): the older rows grow in place under this week's.
+    if (actions.historyExpands && state.historyExpanded) {
+        val older = state.entries.filter { it.date < weekStartMs }
+        items(older, key = { "o${it.id}" }) { entry ->
+            Column {
+                Spacer(Modifier.height(14.dp))
+                CardioSessionRow(entry, today, zone, state.useMiles, actions)
+                Spacer(Modifier.height(10.dp))
+            }
+        }
+    }
 }
 
 /**
- * RECORDS — per-activity all-time bests (GYMAP-34), drawn as the same ranked bars BY ACTIVITY uses
- * so the PROGRESS lens reads as one visual language (§4.10). Each row's bar is that activity's
- * longest distance against the longest you have run in any activity; the fastest pace rides the row
- * as its reading. A row opens the record-setting session.
- *
- * The distance used to be accent-coloured body text, which fails AA on four of the five accents
- * (§14). It is onBg text now, and the accent is spent on the bar — where a colour can carry meaning
- * without being read.
+ * One session: its date column, the activity over "30 min · 7.1 mi", and its pace (or a ride's
+ * speed) in serif on the right. Tap opens it; a long press deletes it, with Undo.
  */
 @Composable
-internal fun CardioRecordsSection(
-    records: List<CardioActivityRecord>,
+internal fun CardioSessionRow(
+    entry: CardioEntry,
+    today: LocalDate,
+    zone: ZoneId,
     useMiles: Boolean,
-    onOpenSession: (Long) -> Unit,
-    onBg: Color,
-    muted: Color,
-    accent: Color,
-    outline: Color
+    actions: CardioHubActions,
 ) {
-    if (records.isEmpty()) return
-    val customs = LocalCardioTypes.current
-    val fmt = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
-    val leader = remember(records) {
-        records.maxOfOrNull { it.longestEntry.distanceKm ?: 0.0 }?.coerceAtLeast(0.1) ?: 0.1
-    }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-        EditorialHeader(label = "Records", muted = muted, accent = accent)
-        Spacer(Modifier.height(12.dp))
-        val shown = records.take(4)
-        Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
-            shown.forEachIndexed { i, r ->
-                val name = CardioActivity.resolve(r.typeCode, customs).displayName
-                val longestKm = r.longestEntry.distanceKm ?: 0.0
-                val pace = pacePerUnit(r.fastestEntry.durationMin, r.fastestEntry.distanceKm, useMiles)
-                Column(
-                    // The WHOLE row is the tap target (§2③) — never a nested one.
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(rowShape(i, shown.size))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                        .clickableLabeled("Show your longest $name") { onOpenSession(r.longestEntry.id) }
-                        .padding(horizontal = ROW_H, vertical = 14.dp)
-                ) {
-                    RankedBarRow(
-                        label = name,
-                        value = formatDistance(longestKm, useMiles),
-                        fraction = (longestKm / leader).toFloat(),
-                        onBg = onBg, muted = muted, outline = outline, accent = accent
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        buildString {
-                            append(fmt.format(Date(r.longestEntry.date)).uppercase())
-                            if (pace != null) append(" · BEST ${pace.uppercase()} /${distanceUnitLabel(useMiles).uppercase()}")
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = muted, letterSpacing = 0.5.sp
-                    )
-                }
-            }
+    val activity = CardioActivity.resolve(entry.type, LocalCardioTypes.current)
+    val locale = currentLocale()
+    val date = remember(entry.date, zone) { Instant.ofEpochMilli(entry.date).atZone(zone).toLocalDate() }
+    // A row from an earlier week leads with its month, so "19" is never ambiguous.
+    val sameWeek = ChronoUnit.DAYS.between(date, today) < 7 && !date.isAfter(today) &&
+        date.dayOfWeek.value <= today.dayOfWeek.value
+    val top = if (sameWeek) date.dayOfWeek.getDisplayName(JavaTextStyle.SHORT, locale)
+    else date.month.getDisplayName(JavaTextStyle.SHORT, locale)
+    val summary = sessionSummary(entry, activity.isRest, useMiles)
+    val figure = if (activity.isRest) null else sessionFigure(entry, useMiles)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .bounceCombinedClick(
+                onClickLabel = "Open ${activity.displayName}",
+                onLongClickLabel = "Delete this session",
+                onLongClick = { actions.onDeleteSession(entry.id) },
+                role = Role.Button,
+                onClick = { actions.onOpenSession(entry.id) }
+            )
+            .semantics(mergeDescendants = true) {},
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CardioDateColumn(top, "${date.dayOfMonth}")
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(activity.displayName, style = OpenType.rowTitle, color = MaterialTheme.colorScheme.onBackground)
+            Text(summary, style = OpenType.bodyS, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        if (figure != null) CardioRowFigure(figure.first, figure.second)
     }
 }
 
-/**
- * The Mon–Sun bar row — accent bars scale with each day's minutes; a rest day reads as a low muted
- * stub, today-so-far as a dashed slot, untouched days as ghost track marks. Passive: the hero's
- * panel around it is the one tap target that opens this week's page.
- */
+/** Steps today by hour, the hour now in red, against the usual by this hour. */
 @Composable
-internal fun WeekBoxRow(
-    days: List<CardioDayCell>,
-    todayDow: Int,
-    onBg: Color,
-    muted: Color,
-    outline: Color,
-    accent: Color
-) {
-    val dayLetters = listOf("M", "T", "W", "T", "F", "S", "S")
-    val maxMin = (days.maxOfOrNull { it.minutes } ?: 0).coerceAtLeast(1)
-    // (minutes, hasActivity, isRest) for a day. A rest day reads distinctly from an untrained one.
-    fun cellAt(i: Int): Triple<Int, Boolean, Boolean> {
-        val cell = days.getOrNull(i)
-        val mins = cell?.minutes ?: 0
-        val hasActivity = mins > 0
-        return Triple(mins, hasActivity, !hasActivity && (cell?.isRest ?: false))
-    }
-    val reading = remember(days) {
-        val total = days.sumOf { it.minutes }
-        val active = days.count { it.minutes > 0 }
-        "This week, $active of 7 days trained, $total minutes"
-    }
-    VerticalBarRow(
-        count = 7,
-        trackHeight = 48.dp,
-        modifier = Modifier
-            .fillMaxWidth()
-            // The strip's own value, so TalkBack reads the week rather than "button" (§14).
-            .semantics(mergeDescendants = true) { contentDescription = reading }
-            // Padding, not bar height, carries the ≥48dp touch target (§14) — the bars are 48dp of
-            // track but a ghost week draws only 4dp of it.
-            .padding(vertical = 4.dp),
-        bar = { i ->
-            val (mins, hasActivity, isRest) = cellAt(i)
-            val frac = (mins.toFloat() / maxMin).coerceIn(0f, 1f)
-            when {
-                hasActivity -> BarGeom(height = (8 + 40 * frac).dp, fill = accent)
-                isRest -> BarGeom(height = 12.dp, fill = muted.copy(alpha = 0.65f))
-                i == todayDow -> BarGeom(height = 4.dp, dashedOutline = muted.copy(alpha = 0.65f))
-                else -> BarGeom(height = 4.dp, fill = outline.copy(alpha = 0.35f))
+private fun CardioStepsToday(state: CardioUiState) {
+    val locale = currentLocale()
+    val use24h = LocalForgeSettings.current.timeFormat24h
+    val accent = MaterialTheme.colorScheme.primary
+    val wearable = state.todayWearable
+    val total = wearable?.totalSteps ?: 0
+    val nowHour = state.stepsHour.takeIf { it in 0..23 } ?: 23
+    val first = 6
+    val last = 21
+    val byHour = remember(wearable) {
+        val raw = IntArray(24)
+        wearable?.hourlySteps?.forEach { if (it.hour in 0..23) raw[it.hour] += it.steps }
+        (first..last).map { h ->
+            when (h) {
+                first -> (0..first).sumOf { raw[it] }
+                last -> (last..23).sumOf { raw[it] }
+                else -> raw[h]
             }
-        },
-        top = { i ->
-            val (mins, hasActivity, isRest) = cellAt(i)
-            when {
-                hasActivity -> Text("${mins}m", style = MaterialTheme.typography.labelSmall, color = onBg, fontWeight = FontWeight.SemiBold)
-                isRest -> Text("rest", style = MaterialTheme.typography.labelSmall, color = muted)
-            }
-        },
-        bottom = { i ->
-            Text(
-                dayLetters[i],
-                style = MaterialTheme.typography.labelSmall,
-                color = if (i == todayDow) onBg else muted,
-                fontWeight = if (i == todayDow) FontWeight.Bold else FontWeight.Normal
-            )
         }
-    )
+    }
+    val reading = buildString {
+        append(formatCount(total, locale))
+        state.usualStepsByNow?.let { append(" · usual ${formatCount(it, locale)} by now") }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Steps", style = OpenType.rowTitle, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.weight(1f))
+            OpenLabel(reading, style = OpenType.monoXS, color = MaterialTheme.colorScheme.onBackground)
+        }
+        OpenColumnChart(
+            values = byHour.map { it.toFloat() },
+            colors = (first..last).map { h -> if (h == nowHour.coerceIn(first, last)) accent else OpenColors.Bar },
+            height = 64.dp,
+            columnLabels = (first..last).map { h -> if ((h - first) % 3 == 0) hourTick(h, use24h) else "" },
+            gapFraction = 0.35f,
+            description = "Steps today by hour, $total so far" +
+                (state.usualStepsByNow?.let { ", usually $it by now" } ?: "")
+        )
+        if (total == 0) CardioChange("Your watch has sent no steps today yet", moved = false)
+    }
+}
+
+/** The steps slot without a watch: what connecting one gives, Connect, and a quiet way to hide it. */
+@Composable
+private fun CardioWatchInvite(onConnect: () -> Unit, onDismiss: () -> Unit) {
+    Column {
+        CardioBodyLine("Connect a watch or ring through Health Connect to see today's steps here and bring its workouts into Cardio.")
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            OpenSmallButton("Connect", filled = true, onClick = onConnect)
+            OpenSmallButton("Not now", filled = false, onClick = onDismiss)
+        }
+    }
 }

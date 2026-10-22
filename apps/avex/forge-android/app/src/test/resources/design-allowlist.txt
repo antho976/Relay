@@ -15,14 +15,8 @@
 #
 #   gradle -p forge-android :app:testDebugUnitTest --tests '*RegenerateAllowlist*' -Dforge.regen=true
 
-1 alpha ui/common/AvexWordmark.kt 0.90
 1 alpha ui/common/EmptyState.kt 0.5
 1 alpha ui/common/ForgeShimmer.kt 0.07
-1 alpha ui/common/LaunchScenes.kt 0.12
-1 alpha ui/common/LaunchScenes.kt 0.18
-1 alpha ui/common/LaunchScenes.kt 0.20
-1 alpha ui/common/LaunchScenes.kt 0.30
-1 alpha ui/common/LaunchScenes.kt 0.40
 3 alpha ui/gym/freestyle/ExerciseBrowserScreen.kt 0.12
 1 alpha ui/gym/freestyle/ExerciseBrowserScreen.kt 0.28
 1 alpha ui/gym/freestyle/ExerciseBrowserScreen.kt 0.3
@@ -38,28 +32,12 @@
 1 alpha ui/profile/BodyMeasurementsScreen.kt 0.30
 1 alpha ui/profile/BodyMeasurementsScreen.kt 0.55
 1 alpha ui/profile/MirrorTestCompare.kt 0.85
-1 alpha ui/profile/ProfileHeader.kt 0.06
-1 alpha ui/profile/ProfileHeader.kt 0.18
-1 alpha ui/profile/ProfileHeader.kt 0.40
-1 alpha ui/profile/ProfileHeader.kt 0.72
-1 alpha ui/profile/ProfileHeader.kt 0.75
-1 alpha ui/profile/ProfileHeader.kt 0.9
 1 alpha ui/profile/ProgressCameraScreen.kt 0.18
 1 alpha ui/profile/ProgressCameraScreen.kt 0.28
 1 alpha ui/profile/ProgressCameraScreen.kt 0.3
 1 alpha ui/profile/ProgressCameraScreen.kt 0.5
 2 alpha ui/profile/ProgressCameraScreen.kt 0.85
 1 alpha ui/profile/ProgressPhotoImage.kt 0.4
-1 alpha ui/profile/RankEmblem.kt 0.14
-1 alpha ui/profile/RankEmblem.kt 0.16
-1 alpha ui/profile/RankEmblem.kt 0.2
-1 alpha ui/profile/RankEmblem.kt 0.38
-1 alpha ui/profile/RankEmblem.kt 0.45
-1 alpha ui/profile/RankEmblem.kt 0.5
-2 alpha ui/profile/RankEmblem.kt 0.85
-1 alpha ui/profile/RankSection.kt 0.06
-1 alpha ui/profile/RankSection.kt 0.30
-1 alpha ui/profile/RankSection.kt 0.40
 1 alpha ui/settings/AccentColorPicker.kt 0.22
 1 alpha ui/trophies/TrophiesComponents.kt 0.18
 1 alpha ui/trophies/TrophiesComponents.kt 0.2
@@ -93,16 +71,11 @@
 # The lesson prose carries the same facts at the reader's size, and the canvas reads them to TalkBack.
 1 font-size ui/academy/AcademySketches.kt fontSize=
 2 font-size ui/cardio/components/CardioEntryRow.kt fontSize=
-1 font-size ui/cardio/components/CardioPaceTrendSection.kt fontSize=
 4 font-size ui/cardio/components/CardioWeekDetailComponents.kt fontSize=
-3 font-size ui/coach/CoachCharts.kt fontSize=
 1 font-size ui/common/DayLog.kt fontSize=
 3 font-size ui/common/Editorial.kt fontSize=
 1 font-size ui/common/SegmentPill.kt fontSize=
 2 font-size ui/gym/freestyle/FreestyleTemplatePicker.kt fontSize=
-3 font-size ui/gym/session/SessionDetailCharts.kt fontSize=
-3 font-size ui/gym/session/SessionDetailComponents.kt fontSize=
-2 font-size ui/gym/session/SessionDetailMetricCards.kt fontSize=
 2 font-size ui/gym/stats/StatsStrength.kt fontSize=
 2 font-size ui/gym/stats/StatsVolume.kt fontSize=
 3 font-size ui/gym/train/DaySessionContent.kt fontSize=
@@ -114,33 +87,23 @@
 3 font-size ui/gym/train/components/SessionSummarySheet.kt fontSize=
 11 font-size ui/gym/train/components/SetInputRow.kt fontSize=
 9 font-size ui/gym/train/components/SetRow.kt fontSize=
-1 font-size ui/nav/ForgeBottomBar.kt fontSize=
 1 font-size ui/onboarding/PlanModeVignettes.kt fontSize=
 1 font-size ui/overview/HistoryComponents.kt fontSize=
 2 font-size ui/overview/SummarySheet.kt fontSize=
-2 font-size ui/profile/ProfileHeader.kt fontSize=
-2 font-size ui/profile/ProfileLedger.kt fontSize=
-8 font-size ui/profile/RankSection.kt fontSize=
-5 font-size ui/profile/TrophyCaseSection.kt fontSize=
 6 font-size ui/trophies/TrophiesComponents.kt fontSize=
 2 hype program/ExerciseLibrary.kt "insane"
 1 hype program/Trophies.kt "Beast"
-1 literal-duration ui/common/AvexWordmark.kt literal duration
-1 literal-duration ui/common/LaunchScenes.kt literal duration
 2 literal-duration ui/gym/train/components/RestTimerBubble.kt literal duration
 16 literal-duration ui/profile/TrophyIconMotion.kt literal duration
 1 max-lines ui/common/Editorial.kt maxLines=1
 1 max-lines ui/goals/GoalsComponents.kt maxLines=1
 1 max-lines ui/gym/freestyle/FreestyleTemplatePicker.kt maxLines=1
-1 max-lines ui/gym/session/SessionDetailMetricCards.kt maxLines=1
 # DayCard spine: a rotated mono label (chrome), measured unrotated on one line so it reads whole.
 1 max-lines ui/gym/train/components/SetRow.kt maxLines=1
-1 max-lines ui/profile/ProfileHeader.kt maxLines=1
 2 paren-plural domain/trophy/TrophyEvaluator.kt (s)
 1 paren-plural ui/coach/CoachUi.kt (s)
 2 raw-color wear/ui/WearComponents.kt Color(0x
 7 raw-color wear/ui/WearTheme.kt Color(0x
-1 screen-name-title ui/coach/GoalPickerDialog.kt title={Text(
 1 screen-name-title ui/common/ProgramChangeGuardHost.kt title={Text(
 # AlertDialog titles, not a top bar: the fourth is the empty-workout FINISH confirm (2026-09-28 scan),
 # the fifth the finish-with-exercises-not-started confirm (2026-10-16): finishing can't be undone.
@@ -166,6 +129,10 @@
 2 snackbar-host ui/programbuilder/ProgramBuilderDayDetail.kt SnackbarHostState
 2 snackbar-host ui/programbuilder/ProgramBuilderScreen.kt SnackbarHostState
 1 unlabelled-clickable ui/common/BounceClick.kt .clickable(
-1 unlabelled-clickable ui/gym/session/SessionDetailComponents.kt .clickable(
-1 unlabelled-clickable ui/gym/session/SessionDetailMetricCards.kt .clickable(
 1 unlabelled-clickable ui/gym/stats/StatsStrength.kt .clickable(
+# The 2026-10-21 redesign draws these three exactly; none is text or a surface rung:
+# the sparkline's area under its line (accent 10%), and the bottom bar's ground (page 90%)
+# with its top hairline (white 8%), which content scrolls under.
+1 alpha ui/common/OpenPanel.kt 0.10
+1 alpha ui/nav/ForgeBottomBar.kt 0.08
+1 alpha ui/nav/ForgeBottomBar.kt 0.9

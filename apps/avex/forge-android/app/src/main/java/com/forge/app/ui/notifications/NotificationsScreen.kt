@@ -2,11 +2,10 @@
 
 package com.forge.app.ui.notifications
 
-import com.forge.app.ui.common.ForgeChromeIconButton
-import com.forge.app.ui.common.ForgeTopBar
 import android.content.Intent
 import android.provider.Settings as AndroidSettings
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,17 +15,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,31 +35,40 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.repo.AppNotice
 import com.forge.app.data.repo.NoticeAction
+import com.forge.app.data.repo.NoticeGlyph
+import com.forge.app.data.repo.NoticeKind
 import com.forge.app.ui.checkin.CheckinSheet
 import com.forge.app.ui.checkin.CheckinViewModel
-import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.common.OpenLabel
+import com.forge.app.ui.common.OpenTopBarIcon
+import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.bounceCombinedClick
-import com.forge.app.ui.common.forgeItemMotion
+import com.forge.app.ui.common.touchSlop
+import com.forge.app.ui.goals.OpenBackBar
+import com.forge.app.ui.theme.NoticeType
+import com.forge.app.ui.theme.OpenColors
+import com.forge.app.ui.theme.OpenIcons
+import com.forge.app.ui.theme.OpenType
 
 /**
- * The notifications page (DESIGN §3, list archetype) — every strip that used to sit at the top of
- * Home or Cardio, in one place, ranked live-first.
- *
- * It is the list recipe minus the search field: the feed tops out at a handful of rows, all of them
- * visible at once, so a search box would be a control that never earns a tap. Rows are NOT uniform
- * dot-text (§4.10) — each carries its own glyph, kind, reading and destination.
- *
- * Dismissal is deliberately not a per-row ×: that would be a tap nested inside the row's own tap
- * target (§2③). Acting on a row clears it, and the top bar's ONE action (§4.6) holds the two things
- * that apply to the whole page: Clear all, and the settings that decide which kinds appear at all.
+ * The notifications page (2026-10-21 redesign, "pg-notif nf"): the bell. Rows are grouped by what
+ * they ask of you, decisions first (Needs you), then news (New), then setup (Set up). A decision made
+ * right here carries its verb as a small outlined button; a row that goes somewhere carries a
+ * chevron. Swiping a clearable row clears it, with an Undo; the gear holds Clear all and the
+ * settings for which kinds appear at all.
  *
  * [viewModel] is the navigation host's root-scoped instance, the same one feeding every bell. It is
  * a required parameter rather than a `hiltViewModel()` default so the page can never quietly own a
@@ -79,11 +89,6 @@ fun NotificationsScreen(
     val notices by viewModel.notices.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var sheetOpen by remember { mutableStateOf(false) }
-
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accent = MaterialTheme.colorScheme.primary
-    val surfaceVariant = MaterialTheme.colorScheme.surfaceVariant
 
     fun act(notice: AppNotice) {
         when (val action = notice.action) {
@@ -118,112 +123,170 @@ fun NotificationsScreen(
 
     Scaffold(
         topBar = {
-            // The bar carries chrome only. The page names itself in its own hero below, and the
-            // bell isn't repeated here: you are already inside it.
-            ForgeTopBar(onBack = onBack) {
-                ForgeChromeIconButton(Icons.Default.Settings, "Notification options", onClick = { sheetOpen = true })
-            }
+            OpenBackBar(onBack) { OpenTopBarIcon(OpenIcons.Settings, "Notification options", { sheetOpen = true }) }
         },
         containerColor = Color.Transparent
     ) { inner ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(inner),
-            contentPadding = PaddingValues(horizontal = 24.dp)
-        ) {
-            item("hero") {
-                // §3: a list gets a TINY hero — one line and a count, never a display-size figure.
-                Spacer(Modifier.height(8.dp))
-                Text("Notifications", style = MaterialTheme.typography.headlineSmall, color = onBg)
-                Spacer(Modifier.height(2.dp))
-                // §12: an honest zero, never a dash and never hidden.
-                Text(
-                    "${notices.size} WAITING",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = muted
-                )
+        NotificationsPage(
+            notices = notices,
+            onAct = ::act,
+            onDismiss = { viewModel.dismiss(it.id) },
+            modifier = Modifier.padding(inner)
+        )
+    }
+}
+
+/** The page body, free of the ViewModel so the goldens render exactly what the app does. */
+@Composable
+internal fun NotificationsPage(
+    notices: List<AppNotice>,
+    onAct: (AppNotice) -> Unit,
+    onDismiss: (AppNotice) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val groups = remember(notices) { groupNotices(notices) }
+    LazyColumn(
+        modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 64.dp)
+    ) {
+        item("head") {
+            Column {
                 Spacer(Modifier.height(20.dp))
+                Text(
+                    "Notifications",
+                    style = NoticeType.pageTitle,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.semantics { heading() }
+                )
+                Spacer(Modifier.height(8.dp))
+                OpenLabel(noticesMetaLine(notices), style = OpenType.monoXS)
+                Spacer(Modifier.height(36.dp))
+                // An inbox has no shape to draw at zero; one plain line says what fills it.
+                if (notices.isEmpty()) OpenLabel("Nothing waiting on you · new calls and lessons land here", style = OpenType.monoXS)
             }
-
-            if (notices.isEmpty()) {
-                item("empty") {
-                    // §12: an inbox has no zero-SHAPE to draw — there is no mark for "nothing
-                    // happened". This is the last-resort case InlineEmptyHint exists for.
-                    InlineEmptyHint("Nothing waiting on you.", muted.copy(alpha = 0.65f))
-                }
-            } else {
-                items(notices, key = { it.id }) { notice ->
-                    // §9: lists take a light stagger, never the overview's entrance cascade.
-                    NoticeRow(
-                        notice = notice,
-                        onBg = onBg, muted = muted, accent = accent, surfaceVariant = surfaceVariant,
-                        onClick = { act(notice) },
-                        modifier = forgeItemMotion()
-                    )
-                    Spacer(Modifier.height(10.dp))
+        }
+        groups.forEachIndexed { gi, (group, rows) ->
+            item("g-${group.name}") {
+                Column {
+                    if (gi > 0) Spacer(Modifier.height(18.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        OpenLabel(group.label, Modifier.semantics { heading() })
+                        OpenLabel("${rows.size}")
+                    }
+                    Spacer(Modifier.height(16.dp))
                 }
             }
-
-            item("tail") { Spacer(Modifier.height(32.dp)) }
+            items(rows, key = { it.id }) { notice ->
+                Box(Modifier.padding(bottom = 22.dp)) {
+                    if (notice.dismissible) {
+                        SwipeRow(onDismiss = { onDismiss(notice) }) {
+                            NoticeRow(notice, group, onAct = { onAct(notice) }, onClear = { onDismiss(notice) })
+                        }
+                    } else {
+                        NoticeRow(notice, group, onAct = { onAct(notice) }, onClear = null)
+                    }
+                }
+            }
         }
     }
 }
 
 /**
- * One notice: a glyph chip, the line, and its one supporting reading.
- *
- * The row carries NO outline. §1 earns a border with interactivity, but a bordered row per notice
- * stacked into a wall of boxes on a page whose whole job is to be scanned; the chip IS the row's
- * mark (§12), and boxing a mark is not the same as boxing passive content. Actionable rows keep the
- * accent ` →` (§11) — with the border gone that arrow is the only thing separating a row that goes
- * somewhere from one that just happened, so it is load-bearing, not decoration.
+ * Swipe either way to clear. The dismiss is not confirmed here: the row leaves when the feed drops
+ * it, so a failed clear snaps back rather than vanishing while the notice still stands.
  */
 @Composable
-private fun NoticeRow(
-    notice: AppNotice,
-    onBg: Color,
-    muted: Color,
-    accent: Color,
-    surfaceVariant: Color,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val actionable = notice.action != NoticeAction.None
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .then(
-                if (actionable) Modifier.bounceCombinedClick(onClickLabel = notice.title, onClick = onClick)
-                else Modifier
-            )
-            .padding(vertical = 10.dp),
-        // Top-aligned so the chip stays beside the FIRST line when a long title wraps.
-        verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Box(
-            // Holds a glyph, not text, so a fixed size is safe at any font scale (§14).
-            Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(surfaceVariant),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                NoticeIcons.forGlyph(notice.glyph),
-                // The glyph replaced the mono eyebrow, so it carries the kind for TalkBack (§14).
-                contentDescription = notice.kind.label,
-                tint = muted,
-                modifier = Modifier.size(20.dp)
-            )
+private fun SwipeRow(onDismiss: () -> Unit, content: @Composable () -> Unit) {
+    val state = rememberSwipeToDismissBoxState(
+        confirmValueChange = { v ->
+            if (v != SwipeToDismissBoxValue.Settled) onDismiss()
+            false
         }
-        Column(Modifier.weight(1f)) {
-            // §14: no maxLines — a long coach summary wraps rather than clipping.
-            Text(notice.title, style = MaterialTheme.typography.bodyMedium, color = onBg)
-            notice.detail?.let { detail ->
-                Spacer(Modifier.height(4.dp))
-                Text(detail, style = MaterialTheme.typography.bodySmall, color = muted)
+    )
+    SwipeToDismissBox(
+        state = state,
+        backgroundContent = {
+            val start = state.dismissDirection == SwipeToDismissBoxValue.StartToEnd
+            Box(
+                Modifier.fillMaxSize(),
+                contentAlignment = if (start) Alignment.CenterStart else Alignment.CenterEnd
+            ) {
+                if (state.dismissDirection != SwipeToDismissBoxValue.Settled) OpenLabel("Clear", style = OpenType.monoXS)
             }
         }
-        if (actionable) Text("→", style = MaterialTheme.typography.bodyLarge, color = accent)
+    ) {
+        Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)) { content() }
+    }
+}
+
+/** The row's glyph, from the redesign's icon family, by what the row is. */
+private fun glyphFor(notice: AppNotice): ImageVector = when (notice.kind) {
+    NoticeKind.CHECK_IN -> OpenIcons.Activity
+    NoticeKind.COACH_BRIEF -> OpenIcons.Compass
+    else -> when (notice.glyph) {
+        NoticeGlyph.SESSION -> OpenIcons.Dumbbell
+        NoticeGlyph.COACH -> OpenIcons.Compass
+        NoticeGlyph.MILESTONE -> OpenIcons.Sparkles
+        NoticeGlyph.IMPORT -> OpenIcons.Copy
+        NoticeGlyph.BACKUP -> OpenIcons.History
+        NoticeGlyph.HOUSEKEEPING -> OpenIcons.Check
+        NoticeGlyph.BELL -> OpenIcons.Bell
+        NoticeGlyph.WATCH -> OpenIcons.Smartphone
+        NoticeGlyph.ACADEMY -> OpenIcons.Book
+    }
+}
+
+/**
+ * One notice: its glyph (red when it needs you), the line and its one supporting reading, then its
+ * verb as a small outlined button or a chevron when it goes somewhere.
+ */
+@Composable
+private fun NoticeRow(notice: AppNotice, group: NoticeGroup, onAct: () -> Unit, onClear: (() -> Unit)?) {
+    val ink = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val verb = actionVerb(notice.action)
+    val goes = verb == null && notice.action != NoticeAction.None
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .then(if (goes) Modifier.bounceCombinedClick(onClickLabel = notice.title, role = Role.Button, onClick = onAct) else Modifier)
+            .semantics(mergeDescendants = verb == null) {
+                if (onClear != null) customActions = listOf(CustomAccessibilityAction("Clear") { onClear(); true })
+            },
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Icon(
+            glyphFor(notice),
+            contentDescription = notice.kind.label,
+            tint = if (group == NoticeGroup.NEEDS_YOU) MaterialTheme.colorScheme.primary else muted,
+            modifier = Modifier.padding(top = 1.dp).size(20.dp)
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(notice.title, style = OpenType.rowTitleL, color = ink)
+            notice.detail?.let { Text(it, style = OpenType.bodyS, color = muted) }
+        }
+        when {
+            verb != null -> RowButton(verb, onAct)
+            goes -> Icon(OpenIcons.ChevronRight, contentDescription = null, tint = OpenColors.Glyph, modifier = Modifier.padding(top = 3.dp).size(16.dp))
+        }
+    }
+}
+
+/** A row's own verb: a 32dp outline, 48dp to the finger. */
+@Composable
+private fun RowButton(text: String, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(4.dp)
+    Box(
+        Modifier
+            .touchSlop(vertical = 8.dp)
+            .bounceClick(role = Role.Button, onClick = onClick)
+            .padding(vertical = 8.dp)
+            .heightIn(min = 32.dp)
+            .border(1.dp, OpenColors.Rule, shape)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text, style = NoticeType.action, color = MaterialTheme.colorScheme.onBackground)
     }
 }

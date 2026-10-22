@@ -307,12 +307,11 @@ object DesignDoctrine {
     // dropped or merged. It is not debt and it is not doctrine: it is a fence around a UI
     // experiment that deliberately argues with §1, §5 and §7 on exactly two screens.
     //
-    // Scoped as narrowly as this gate allows — four files, three rules, no shared config touched:
+    // Scoped as narrowly as this gate allows — three files (Profile's card sections left with the 2026-10-21 redesign), three rules, no shared config touched:
     //
     //   ui/experiment/SurfaceKit.kt              the forked card primitives + data palette
     //   ui/overview/OverviewScreen.kt            Home under test
     //   ui/overview/components/HomeSurfaceCards.kt   Home's card bodies (split at the §15 seam)
-    //   ui/profile/ProfileSurfaceSections.kt     Profile's card sections
     //
     // ProfileScreen.kt is NOT listed: the rewrite left it clean against every mechanical rule.
     // Every other screen in the app stays fully gated, and no rule is weakened globally.
@@ -349,7 +348,6 @@ object DesignDoctrine {
         "ui/experiment/SurfaceKit.kt",
         "ui/overview/OverviewScreen.kt",
         "ui/overview/components/HomeSurfaceCards.kt",
-        "ui/profile/ProfileSurfaceSections.kt",
     )
 
     // ── end branch-scoped exclusion ─────────────────────────────────────────────────────────────

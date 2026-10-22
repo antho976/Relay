@@ -1,159 +1,50 @@
 package com.forge.app.ui.gym.session
 
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.forge.app.domain.units.WeightUnit
-import com.forge.app.domain.units.formatVolume
-import com.forge.app.domain.units.formatWeight
-import com.forge.app.ui.common.ForgeSlidingSegments
-import com.forge.app.ui.common.rpeLabel
-import com.forge.app.ui.gym.session.state.ExerciseDetail
-import com.forge.app.ui.gym.session.state.SessionChartStyle
-import com.forge.app.ui.gym.session.state.SessionMetric
 import com.forge.app.ui.common.rememberDrawProgressState
-import com.forge.app.ui.common.staggeredProgress
+import com.forge.app.ui.gym.session.state.SessionMetric
 import com.forge.app.ui.theme.ForgeMotion
 
-/** Volume/weight/reps value as a short label for the chosen metric (weight & volume honor the kg setting). */
-internal fun formatMetricValue(value: Double, metric: SessionMetric, weightUnit: WeightUnit): String = when (metric) {
-    SessionMetric.WEIGHT -> formatWeight(value, weightUnit)
-    SessionMetric.VOLUME -> formatVolume(value, weightUnit)
-    SessionMetric.REPS -> "${value.toInt()}"
-    SessionMetric.RPE -> "RPE ${rpeLabel(value)}"
-}
-
-// ─── Page controls ────────────────────────────────────────────────────────────
-
 /**
- * One segmented control, reused for the page-level metric picker (Weight/Volume/Reps/RPE), the
- * Stats lens picker and the per-card bars/line style toggle. It is the grouped kit's
- * [ForgeSlidingSegments] (2026-09-27): a recessed track with one thumb that glides to the pick, in
- * place of a row of separate pills. [modifier] sizes the track; the default spans the row.
- *
- * The colour parameters are kept for the call sites; the control reads the theme.
- */
-@Suppress("UNUSED_PARAMETER")
-@Composable
-internal fun <T> SegmentRow(
-    items: List<T>,
-    isSelected: (T) -> Boolean,
-    label: (T) -> String,
-    onSelect: (T) -> Unit,
-    onBg: Color,
-    muted: Color,
-    accent: Color,
-    outline: Color,
-    modifier: Modifier = Modifier.fillMaxWidth()
-) {
-    ForgeSlidingSegments(
-        options = items.map(label),
-        selectedIndex = items.indexOfFirst(isSelected),
-        onSelect = { onSelect(items[it]) },
-        modifier = modifier
-    )
-}
-
-// ─── Per-exercise: chosen metric per set (bars or line) ─────────────────────────
-
-@Composable
-internal fun PerExerciseSetChart(
-    ex: ExerciseDetail,
-    metric: SessionMetric,
-    style: SessionChartStyle,
-    accent: Color,
-    muted: Color,
-    outline: Color,
-    /** Background color of the surface the chart sits on — used for the dot ring cut-out in LINE mode. */
-    pageBg: Color = MaterialTheme.colorScheme.background
-) {
-    // RPE is only meaningful on the sets that logged one — drop the rest so unrated sets don't read
-    // as a 0 trough. Every other metric maps one value per set.
-    val values = remember(ex.sets, metric) {
-        if (metric == SessionMetric.RPE) ex.sets.mapNotNull { it.rpe }
-        else ex.sets.map { it.metricValue(metric) }
-    }
-    // Nothing to plot (e.g. a bodyweight exercise under the Weight metric) — show why, don't vanish.
-    if (values.isEmpty() || values.none { it > 0.0 }) {
-        Text(
-            "No ${metric.label.lowercase()} logged for this exercise.",
-            style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f),
-            fontStyle = FontStyle.Italic, fontSize = 10.sp
-        )
-        return
-    }
-
-    // One set is a row, not a chart (§12): a lone bar stretched to the full width read as a solid
-    // accent slab, and the set table right below already says everything a single point could.
-    if (values.size < 2) return
-    when (style) {
-        SessionChartStyle.LINE -> PerSetLine(values, metric, accent, pageBg)
-        else -> SetBars(values, metric, accent)
-    }
-}
-
-/**
- * The per-set line: a smooth (Catmull-Rom) accent stroke over a soft gradient fill, with a "cut-out"
- * donut marker on every set and a faint underglow — a richer read than a hairline polyline. Every edge
- * is inset so end markers + the rounded stroke never clip ("points going outside"); the latest set's
- * marker is emphasized with a hollow centre. Reveals left→right; a flat series draws as a centred line.
+ * The opened lift's per-set chart drawn as a line (the section's "Line" pick): a smooth red stroke
+ * over a fading red area with a ring-cut dot on every set, the latest hollow. Inset on every edge so
+ * the end dots never clip, and revealed left to right on the slow draw curve.
  */
 @Composable
-private fun PerSetLine(values: List<Double>, metric: SessionMetric, accent: Color, pageBg: Color) {
-    // Reveal starts immediately but rides the slow, gentle draw curve so the line glides in over
-    // ~0.9 s instead of snapping — the default enter tween front-loads the motion and reads as sharp.
-    // Read only in the draw lambda below: the reveal redraws the chart, never recomposes it.
+internal fun PerSetLine(values: List<Double>, metric: SessionMetric, description: String) {
+    val accent = MaterialTheme.colorScheme.primary
+    val ground = MaterialTheme.colorScheme.background
     val progress = rememberDrawProgressState(metric, ForgeMotion.drawTween())
-    // The marker ring "cuts" each point out of the page background so dots read crisply on the open
-    // surface — now uses pageBg directly since there's no card fill beneath the chart.
-    val haloBg = pageBg
     val lo = values.min()
     val hi = values.max()
     val pad = if (hi - lo < 1e-6) 1.0 else 0.0
     val minV = lo - pad
-    val range = ((hi + pad) - minV).coerceAtLeast(1.0)
-    // The curve, fill and markers are built once per size; only the reveal clip moves per frame.
-    Spacer(Modifier.fillMaxWidth().height(64.dp).drawWithCache {
-        // Inset all four edges so the end markers + the rounded stroke sit clear of the canvas bounds.
+    val range = ((hi + pad) - minV).coerceAtLeast(1e-6)
+    Spacer(Modifier.fillMaxWidth().height(96.dp).clearAndSetSemantics { contentDescription = description }.drawWithCache {
         val hInset = 10.dp.toPx()
         val vInset = 9.dp.toPx()
         val plotW = (size.width - hInset * 2).coerceAtLeast(1f)
         val plotH = (size.height - vInset * 2).coerceAtLeast(1f)
         val stepX = if (values.size > 1) plotW / (values.size - 1) else 0f
-        fun yOf(v: Double): Float {
-            val t = ((v - minV) / range).toFloat().coerceIn(0f, 1f)
-            return vInset + (1f - t) * plotH
-        }
+        fun yOf(v: Double): Float = vInset + (1f - ((v - minV) / range).toFloat().coerceIn(0f, 1f)) * plotH
         val pts = values.mapIndexed { i, v -> Offset(hInset + stepX * i, yOf(v)) }
         val baseline = size.height - vInset
-        // Curve control points are clamped to the plot box so the spline can't bow past an end point.
         val line = smoothCurve(pts, minY = vInset, maxY = baseline)
         val fill = Path().apply {
             addPath(line)
@@ -161,22 +52,19 @@ private fun PerSetLine(values: List<Double>, metric: SessionMetric, accent: Colo
             lineTo(pts.first().x, baseline)
             close()
         }
-        // §10: area fades to transparent from a ≤0.15 top stop.
         val fillBrush = Brush.verticalGradient(listOf(accent.copy(alpha = 0.15f), accent.copy(alpha = 0f)))
-        val glowStroke = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-        val lineStroke = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val lineStroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
         onDrawBehind {
             val clip = (size.width * progress.value.coerceIn(0f, 1f)).coerceAtLeast(0.01f)
             clipRect(right = clip) {
                 drawPath(fill, brush = fillBrush)
-                drawPath(line, color = accent.copy(alpha = 0.15f), style = glowStroke)
                 drawPath(line, color = accent, style = lineStroke)
                 pts.forEachIndexed { i, p ->
                     val last = i == pts.lastIndex
                     val r = if (last) 4.dp.toPx() else 3.dp.toPx()
-                    drawCircle(color = haloBg, radius = r + 2.dp.toPx(), center = p)        // ring cuts the dot out
-                    drawCircle(color = accent, radius = r, center = p)                       // accent core
-                    if (last) drawCircle(color = haloBg, radius = 1.5.dp.toPx(), center = p) // hollow centre = latest set
+                    drawCircle(color = ground, radius = r + 2.dp.toPx(), center = p)
+                    drawCircle(color = accent, radius = r, center = p)
+                    if (last) drawCircle(color = ground, radius = 1.5.dp.toPx(), center = p)
                 }
             }
         }
@@ -184,9 +72,8 @@ private fun PerSetLine(values: List<Double>, metric: SessionMetric, accent: Colo
 }
 
 /**
- * A Catmull-Rom spline through [pts] as one cubic-bezier [Path]. Control-point Y is clamped to
- * [[minY], [maxY]] so the curve stays inside the plot box (an overshoot would clip a marker). Falls
- * back to a straight move/line for fewer than three points.
+ * A Catmull-Rom spline through [pts] as one cubic-bezier [Path], its control points clamped to
+ * [[minY], [maxY]] so the curve never bows out of the plot. Straight segments under three points.
  */
 private fun smoothCurve(pts: List<Offset>, minY: Float, maxY: Float): Path {
     val path = Path()
@@ -208,135 +95,4 @@ private fun smoothCurve(pts: List<Offset>, minY: Float, maxY: Float): Path {
         path.cubicTo(c1x, c1y, c2x, c2y, p2.x, p2.y)
     }
     return path
-}
-
-/**
- * Vertical per-set bars, growing from the baseline with a staggered reveal; the latest set full
- * accent, earlier ones the 0.6 rung. Each bar is capped at [SET_BAR_MAX_W] and the run starts at the
- * page edge, so two or three sets read as bars rather than as blocks filling the whole width.
- */
-@Composable
-private fun SetBars(values: List<Double>, metric: SessionMetric, accent: Color) {
-    val max = (values.maxOrNull() ?: 0.0).coerceAtLeast(1.0)
-    val secondary = MaterialTheme.colorScheme.secondary
-    val weightUnit = com.forge.app.ui.theme.LocalForgeSettings.current.weightUnit
-    // Keyed by metric so the first draw animates in; the play-once kit snaps on a later switch.
-    val progress = rememberDrawProgressState(metric, ForgeMotion.drawTween())
-    val desc = "Per set: " + values.joinToString(", ") { formatMetricValue(it, metric, weightUnit) }
-    Canvas(
-        Modifier.fillMaxWidth().height(56.dp).semantics { contentDescription = desc }
-    ) {
-        val n = values.size
-        val gap = 6.dp.toPx()
-        val barW = ((size.width - gap * (n - 1)) / n).coerceAtMost(SET_BAR_MAX_W.toPx())
-        val radius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx())
-        values.forEachIndexed { i, v ->
-            // The reveal is read here, in draw, so the growing bars never recompose SetBars.
-            val frac = ((v / max).toFloat() * staggeredProgress(progress.value, i, n)).coerceIn(0.03f, 1f)
-            val h = size.height * frac
-            val x = i * (barW + gap)
-            val left = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Rtl) size.width - x - barW else x
-            drawRoundRect(
-                color = if (i == values.lastIndex) accent else secondary,
-                topLeft = Offset(left, size.height - h),
-                size = androidx.compose.ui.geometry.Size(barW, h),
-                cornerRadius = radius
-            )
-        }
-    }
-}
-
-/** The widest a per-set bar may draw — a set is a thin mark, never a slab. */
-private val SET_BAR_MAX_W = 28.dp
-
-/**
- * The watch's heart rate over the session (W3): an open line (stroke `primary`, §10) with the
- * logged sets as on-line accent dots and exercise boundaries as vertical data hairlines. Header
- * meta carries AVG · MAX; the per-exercise readings + HRR line render beneath as §4.9 rows.
- */
-@Composable
-internal fun SessionHrSection(
-    hr: com.forge.app.domain.health.SessionHrView,
-    onBg: Color,
-    muted: Color,
-    accent: Color,
-    outline: Color
-) {
-    androidx.compose.foundation.layout.Column(Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            com.forge.app.ui.common.EditorialHeader(label = "Heart rate", muted = muted, accent = accent)
-            Text(
-                "AVG ${hr.avgBpm} · MAX ${hr.maxBpm} BPM",
-                style = MaterialTheme.typography.labelSmall,
-                color = muted, fontSize = 9.sp, letterSpacing = 0.5.sp
-            )
-        }
-        androidx.compose.foundation.layout.Spacer(Modifier.height(10.dp))
-        val progress = rememberDrawProgressState()
-        // The line and the set markers (a nearest-point search each) are built once per size; the
-        // reveal only moves the clip, read in draw.
-        Spacer(Modifier.fillMaxWidth().height(110.dp).drawWithCache {
-            val pts = hr.points
-            if (pts.size < 2) return@drawWithCache onDrawBehind {}
-            val t0 = pts.first().timeMs
-            val t1 = pts.last().timeMs
-            val span = (t1 - t0).coerceAtLeast(1L).toFloat()
-            val minBpm = pts.minOf { it.bpm }.toFloat()
-            val maxBpm = pts.maxOf { it.bpm }.toFloat()
-            val range = (maxBpm - minBpm).coerceAtLeast(1f)
-            fun x(ms: Long) = ((ms - t0) / span) * size.width
-            fun y(bpm: Int) = size.height - ((bpm - minBpm) / range) * (size.height * 0.9f) - size.height * 0.05f
-
-            val boundaryXs = hr.exerciseBoundariesMs.filter { it in t0..t1 }.map { x(it) }
-            val path = Path()
-            pts.forEachIndexed { i, p ->
-                if (i == 0) path.moveTo(x(p.timeMs), y(p.bpm)) else path.lineTo(x(p.timeMs), y(p.bpm))
-            }
-            val lineStroke = Stroke(2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-            // Set markers ride the line: the moment each set was logged.
-            val markers = hr.setMarkersMs.filter { it in t0..t1 }.mapNotNull { ms ->
-                val nearest = pts.minByOrNull { kotlin.math.abs(it.timeMs - ms) } ?: return@mapNotNull null
-                Offset(x(ms), y(nearest.bpm))
-            }
-            onDrawBehind {
-                // Exercise boundaries — lines as data (§1).
-                boundaryXs.forEach { bx ->
-                    drawLine(
-                        color = outline.copy(alpha = 0.25f),
-                        start = Offset(bx, 0f), end = Offset(bx, size.height),
-                        strokeWidth = 1.dp.toPx()
-                    )
-                }
-                clipRect(right = size.width * progress.value) {
-                    drawPath(path, color = accent, style = lineStroke)
-                    markers.forEach { m -> drawCircle(color = accent, radius = 2.5.dp.toPx(), center = m) }
-                }
-            }
-        })
-        androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp))
-        hr.perExercise.forEach { ex ->
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(ex.name, style = MaterialTheme.typography.bodySmall, color = muted)
-                Text(
-                    "AVG ${ex.avgBpm}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = onBg, fontSize = 9.sp, letterSpacing = 0.5.sp
-                )
-            }
-        }
-        hr.avgHrr60?.let { drop ->
-            androidx.compose.foundation.layout.Spacer(Modifier.height(4.dp))
-            Text(
-                "Recovery · you shed $drop bpm in the first minute of rest",
-                style = MaterialTheme.typography.bodySmall, color = muted
-            )
-        }
-    }
 }

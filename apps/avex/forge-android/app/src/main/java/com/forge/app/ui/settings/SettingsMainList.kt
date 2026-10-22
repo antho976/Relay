@@ -1,7 +1,10 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.forge.app.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -12,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -19,18 +23,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.forge.app.data.db.entities.VacationPeriod
+import com.forge.app.ui.common.OpenTopBarIcon
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.touchSlop
+import com.forge.app.ui.theme.OpenIcons
+import com.forge.app.ui.theme.OpenType
+import com.forge.app.ui.theme.SettingsColors
+import com.forge.app.ui.theme.SettingsType
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
 /**
- * The Settings root: an index of every page, in the app's own list voice (History's), not a phone's
- * settings app. Three groups under mono anchors, each row a page's name over its live value in the
- * mono reading voice, so the page answers "how is this set up" before a tap. Factory reset stands
- * apart, and the two pages about Avex itself close the page as buttons rather than rows.
+ * The Settings root (Relay design "st"): an index of every page. A back arrow and the search glyph
+ * in the bar, the serif title and the version, then three sections under mono labels (Training, App,
+ * Data), each row a page's name over its live value in the mono reading voice and a chevron, so the
+ * page answers "how is this set up" before a tap. The rare things close the page: the pages about
+ * Avex itself as outlined buttons, then Reset… and Factory reset as plain words.
  *
- * While a query is typed the groups give way to one ranked list of hits, each of which goes
- * straight to its page or action.
+ * The search is compact, as drawn: the glyph opens a field in the bar itself, and while a query is
+ * typed the sections give way to one ranked list of hits, each going straight to its page or action.
  */
 @Composable
 internal fun MainList(
@@ -54,7 +65,14 @@ internal fun MainList(
     customCardioCount: Int = 0,
     holidayStatus: String = "None planned",
     /** Space used, once measured; null until then. */
-    storageUsed: String? = null
+    storageUsed: String? = null,
+    /** The Watch & health row's value (see [watchReading]); null keeps the row's description. */
+    watchStatus: String? = null,
+    /** The active plan's split ("Upper · Lower", see [splitLabel]); blank leaves it out. */
+    split: String = "",
+    /** Whether the search field is open in the bar. A typed query keeps it open. */
+    searchOpen: Boolean = false,
+    onSearchOpenChange: (Boolean) -> Unit = {}
 ) {
     // Built once per query rather than on every recomposition, and holding targets rather than
     // lambdas so a fresh callback from the caller never invalidates it.
@@ -73,75 +91,89 @@ internal fun MainList(
         }
     }
     val page: @Composable (SettingsPage) -> Unit = { p ->
-        IndexRow(p.title, rowSubtitle(p, state)) { onOpenPage(p) }
+        SettingsNavigationRow(p.title, rowSubtitle(p, state, split)) { onOpenPage(p) }
     }
+    val showSearch = searchOpen || searchQuery.isNotBlank()
     SettingsLazyScaffold(
         title = "Settings",
         subtitle = "Avex ${com.forge.app.BuildConfig.VERSION_NAME}",
         onBack = onBack,
-        listState = listState
+        listState = listState,
+        topBarTrailing = {
+            OpenTopBarIcon(OpenIcons.Search, "Search settings", { onSearchOpenChange(true) })
+        },
+        topBarContent = if (showSearch) {
+            {
+                SettingsSearchField(
+                    query = searchQuery,
+                    placeholder = "Search settings",
+                    onQueryChange = onSearchChange,
+                    onBack = onBack,
+                    onClose = { onSearchChange(""); onSearchOpenChange(false) }
+                )
+            }
+        } else null
     ) {
-        // The title already leaves a group's space under it, so the gaps are placed per item: an
-        // arrangement would double the one above the search, and the hits sit 2dp apart.
-        val group = Modifier.padding(top = KitGroupSpacing)
-        item("search") { SettingsSearchBar(searchQuery, "Search settings", onSearchChange) }
         if (searchQuery.isBlank()) {
             // What shapes the training first: the plan, the coach that adjusts it, how a session
             // runs, which movements it draws on, and the weeks it should leave alone.
             item("training") {
-                SettingsGroup("Training", group) {
+                SettingsGroup("Training") {
                     page(SettingsPage.Program)
                     // Coach configuration only; the brief and its record live on the Coach tab.
                     // Freestyle has no plan to coach, so the row goes with the tab.
                     if (!state.freestyleMode) page(SettingsPage.Coach)
                     page(SettingsPage.Session)
                     page(SettingsPage.ExercisePrefs)
-                    IndexRow(SettingsPage.CardioActivities.title, cardioReading(customCardioCount)) {
+                    SettingsNavigationRow(SettingsPage.CardioActivities.title, cardioReading(customCardioCount)) {
                         onOpenPage(SettingsPage.CardioActivities)
                     }
-                    IndexRow(SettingsPage.Vacation.title, holidayStatus) { onOpenPage(SettingsPage.Vacation) }
+                    SettingsNavigationRow(SettingsPage.Vacation.title, holidayStatus) { onOpenPage(SettingsPage.Vacation) }
                 }
             }
             item("app") {
-                SettingsGroup("App & devices", group) {
-                    // The watch leads: it is the one setting that changes what the rest of the app
-                    // can show.
-                    page(SettingsPage.Recovery)
+                SettingsGroup("App", Modifier.padding(top = RootSectionGap)) {
                     page(SettingsPage.Appearance)
                     page(SettingsPage.Format)
                     page(SettingsPage.Notifications)
                     page(SettingsPage.Security)
+                    SettingsNavigationRow(SettingsPage.Recovery.title, watchStatus ?: rowSubtitle(SettingsPage.Recovery, state)) {
+                        onOpenPage(SettingsPage.Recovery)
+                    }
                 }
             }
             item("data") {
-                SettingsGroup("Data", group) {
+                SettingsGroup("Data", Modifier.padding(top = RootSectionGap)) {
                     // The backup's state, not what the page is for: the date of the last copy, or
                     // that it failed, is the one thing worth knowing before a phone gets lost.
-                    IndexRow(SettingsPage.Backup.title, backupStatus ?: rowSubtitle(SettingsPage.Backup, state)) {
+                    SettingsNavigationRow(SettingsPage.Backup.title, backupStatus ?: rowSubtitle(SettingsPage.Backup, state)) {
                         onOpenPage(SettingsPage.Backup)
                     }
-                    IndexRow("Export data", "Sessions · weekly · full backup · PDF", onClick = onOpenDataDialog)
-                    IndexRow("Import data", "Strong · Hevy · FitNotes · CSV", onClick = onImportData)
-                    IndexRow(SettingsPage.Storage.title, storageUsed?.let { "$it used" } ?: rowSubtitle(SettingsPage.Storage, state)) {
+                    SettingsNavigationRow("Export data", "Sessions, weekly, full backup, PDF", onClick = onOpenDataDialog)
+                    SettingsNavigationRow("Import data", "Strong, Hevy, FitNotes, CSV", onClick = onImportData)
+                    SettingsNavigationRow(SettingsPage.Storage.title, storageUsed?.let { "$it used" } ?: rowSubtitle(SettingsPage.Storage, state)) {
                         onOpenPage(SettingsPage.Storage)
-                    }
-                    // One entry for the targeted resets; factory reset stands apart below.
-                    IndexRow("Reset…", "Sessions · trophies · cardio · settings", onClick = onOpenResetMenu)
-                }
-            }
-            item("factory") {
-                // No reading: what it erases is the confirm dialog's to say, in a sentence.
-                SettingsGroup(modifier = group) {
-                    IndexRow(ResetTarget.FACTORY.label, null, danger = true) {
-                        onResetTarget(ResetTarget.FACTORY)
                     }
                 }
             }
             item("about") {
-                // About Avex rather than about your training, so not one more group of rows.
-                SettingsButtonBar(group) {
-                    SettingsButton(SettingsPage.WhatsNew.title, kind = ButtonKind.Tonal) { onOpenPage(SettingsPage.WhatsNew) }
-                    SettingsButton(SettingsPage.About.title, kind = ButtonKind.Tonal) { onOpenPage(SettingsPage.About) }
+                // About Avex rather than about your training, so not one more section of rows.
+                SettingsButtonBar(Modifier.padding(top = RootSectionGap)) {
+                    listOf(SettingsPage.WhatsNew, SettingsPage.About, SettingsPage.PrivacyPolicy).forEach { p ->
+                        SettingsCompactButton(p.title, height = 36.dp) { onOpenPage(p) }
+                    }
+                }
+            }
+            item("reset") {
+                // The rare, erasing acts last, as words: the targeted resets behind one menu, and
+                // factory reset in the soft danger red. What each erases is its confirm's to say.
+                FlowRow(
+                    Modifier.padding(top = 24.dp),
+                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                ) {
+                    RootTextAction("Reset…", MaterialTheme.colorScheme.onSurfaceVariant, onOpenResetMenu)
+                    RootTextAction(ResetTarget.FACTORY.label, SettingsColors.Danger) { onResetTarget(ResetTarget.FACTORY) }
                 }
             }
         } else {
@@ -149,26 +181,21 @@ internal fun MainList(
             // the setting lives.
             if (results.isEmpty()) {
                 item("empty") {
-                    SettingsGroup(modifier = group) {
-                        SettingsEmptyBlock(
-                            Icons.Rounded.SearchOff,
-                            "No settings match “$q”",
-                            "Try a broader word, like units, backup or lock."
-                        )
-                    }
+                    SettingsEmptyBlock(
+                        Icons.Rounded.SearchOff,
+                        "No settings match “$q”",
+                        "Try a broader word, like units, backup or lock."
+                    )
                 }
             } else {
-                // One lazy item per hit, shaped by position like a group's rows: a broad query can
-                // match dozens, and one item holding them all composed every row at once.
+                // One lazy item per hit: a broad query can match dozens, and one item holding them
+                // all composed every row at once.
                 item("results", contentType = "results-header") {
-                    SettingsGroupHeader(
-                        "${results.size} ${if (results.size == 1) "result" else "results"}",
-                        group
-                    )
+                    SettingsGroupHeader("${results.size} ${if (results.size == 1) "result" else "results"}")
                 }
                 itemsIndexed(results, key = { _, r -> r.key }, contentType = { _, _ -> "result" }) { i, r ->
                     KitLazyRow(i, results.size) {
-                        IndexRow(highlightMatch(r.name, q), r.where, label = r.name) { openResult(r) }
+                        SearchHitRow(highlightMatch(r.name, q), r.where, r.name) { openResult(r) }
                     }
                 }
             }
@@ -176,43 +203,37 @@ internal fun MainList(
     }
 }
 
-/**
- * A root row: the name, and under it the page's live value in the app's mono reading voice (the
- * voice History's dates and Coach's readings use). The whole slab is the tap; there is no chevron,
- * since a filled row on this page is already a promise of one.
- */
+/** The air between the root's sections, as drawn: a little more than a sub-page's. */
+private val RootSectionGap = 48.dp
+
+/** Reset… and Factory reset: plain words in 14/600, each a 48dp target. */
 @Composable
-private fun IndexRow(
-    title: AnnotatedString,
-    reading: String?,
-    label: String = title.text,
-    danger: Boolean = false,
-    onClick: () -> Unit
-) {
+private fun RootTextAction(label: String, color: Color, onClick: () -> Unit) {
+    Text(
+        label,
+        style = SettingsType.chip,
+        color = color,
+        modifier = Modifier
+            .touchSlop(vertical = 15.dp, horizontal = 4.dp)
+            .clickableLabeled(label, onClick = onClick)
+            .padding(vertical = 15.dp, horizontal = 4.dp)
+    )
+}
+
+/** A search hit: the name with its matched span in bold, where it lives, and a chevron. */
+@Composable
+private fun SearchHitRow(title: AnnotatedString, where: String, label: String, onClick: () -> Unit) {
     SettingsRowContainer(interaction = Modifier.clickableLabeled(label, onClick = onClick)) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-            )
-            if (reading != null) {
-                Text(reading, style = appTypography().labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(title, style = OpenType.rowTitleL.copy(fontWeight = FontWeight.Normal), color = MaterialTheme.colorScheme.onBackground)
+            SettingsReading(where)
         }
+        SettingsChevron()
     }
 }
 
-@Composable
-private fun IndexRow(title: String, reading: String?, danger: Boolean = false, onClick: () -> Unit) =
-    IndexRow(AnnotatedString(title), reading, danger = danger, onClick = onClick)
-
 /** The Cardio activities row's value: how many sports the user has added to the built-in list. */
-internal fun cardioReading(count: Int): String = when (count) {
-    0 -> "None added"
-    1 -> "1 added"
-    else -> "$count added"
-}
+internal fun cardioReading(count: Int): String = "$count of your own"
 
 private val HOLIDAY_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM d")
 
@@ -278,12 +299,12 @@ private fun searchRank(name: String, ql: String): Int {
     }
 }
 
-/** The group a page sits in on the root list, a page hit's breadcrumb. */
+/** The section a page sits in on the root list, a page hit's breadcrumb. */
 private fun pageSection(page: SettingsPage): String = when (page) {
     SettingsPage.Program, SettingsPage.Coach, SettingsPage.Session, SettingsPage.ExercisePrefs,
     SettingsPage.CardioActivities, SettingsPage.Vacation -> "Training"
     SettingsPage.Recovery, SettingsPage.Appearance, SettingsPage.Format, SettingsPage.Notifications,
-    SettingsPage.Security -> "App & devices"
+    SettingsPage.Security -> "App"
     SettingsPage.Backup, SettingsPage.Storage -> "Data"
     SettingsPage.WhatsNew, SettingsPage.PrivacyPolicy, SettingsPage.About -> "About"
 }
@@ -300,58 +321,94 @@ private fun highlightMatch(name: String, query: String): AnnotatedString = build
     }
 }
 
-internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when (page) {
-    SettingsPage.Appearance -> buildList {
-        add(if (s.amoledMode) "Pure black" else "Warm dark")
-        add(
-            when {
-                !s.accentEnabled -> "Monochrome"
-                s.accentFromIcon && com.forge.app.appicon.AppIcon.fromKey(s.appIconKey).accentHex != null -> "Icon accent"
-                else -> "${accentName(s.accentColorHex)} accent"
-            }
-        )
-    }.joinToString(" · ")
-    SettingsPage.Format -> "${s.weightUnit.label} · ${if (s.useMiles) "mi" else "km"} · ${if (s.useCm) "cm" else "in"} · ${if (s.timeFormat24h) "24h" else "12h"} · week from ${if (s.firstDayMonday) "Mon" else "Sun"}"
-    SettingsPage.Session -> "${if (s.hapticStrength == "off") "Haptics off" else "${s.hapticStrength.replaceFirstChar { it.uppercase() }} haptics"} · ${restLabel(s.restCompoundSeconds)} rest"
+/**
+ * The split a plan's days spell, from their names: the letter or number that tells two versions of
+ * a day apart is dropped and repeats fold, so "Upper A, Lower A, Upper B, Lower B" reads
+ * "Upper · Lower". Blank for no days.
+ */
+internal fun splitLabel(dayNames: List<String>): String =
+    dayNames
+        .map { it.trim().replace(Regex("""\s+([A-Za-z]|\d+)$"""), "") }
+        .filter { it.isNotBlank() }
+        .distinct()
+        .joinToString(" · ")
+
+/** "Upper · Lower, 4 days" — the plan in one line; "4 days a week" when the split has no names. */
+internal fun planLine(split: String, days: Int): String =
+    if (split.isBlank()) "$days days a week" else "$split, $days days"
+
+/** The equipment in a word: the active setup's name, "full gym" for everything, else a count. */
+internal fun gearReading(s: SettingsUiState): String {
+    val preset = activePreset(s)
+    return when {
+        s.availableEquipment.isEmpty() || s.availableEquipment.size >= com.forge.app.program.Equipment.entries.size -> "full gym"
+        preset != null -> preset.label.lowercase()
+        s.availableEquipment.size == 1 -> "1 piece of gear"
+        else -> "${s.availableEquipment.size} pieces of gear"
+    }
+}
+
+/** How many of the Notifications page's switches are on: the phone alerts and the in-app kinds. */
+internal fun notificationsOn(s: SettingsUiState): Int =
+    listOf(s.trainingReminderEnabled, s.weeklyRecapEnabled, s.restTimerAlertEnabled).count { it } +
+        com.forge.app.data.repo.NoticeKind.entries.count { it.key !in s.disabledNoticeKinds }
+
+/** The locks in one line: "App lock on", "App and photo locks on", "Privacy mode on", or "Off". */
+internal fun securityReading(s: SettingsUiState): String = when {
+    s.appLockEnabled && s.galleryLockEnabled -> "App and photo locks on"
+    s.appLockEnabled -> "App lock on"
+    s.galleryLockEnabled -> "Photo lock on"
+    s.privacyMode -> "Privacy mode on"
+    else -> "Off"
+}
+
+/**
+ * The Watch & health row's value: Health Connect and how many of its readings are on, or why it is
+ * not working yet.
+ */
+internal fun watchReading(available: Boolean, needsUpdate: Boolean, on: Int): String = when {
+    needsUpdate -> "Health Connect needs an update"
+    !available -> "Health Connect not installed"
+    on == 0 -> "Health Connect · not connected"
+    on == 1 -> "Health Connect · 1 reading"
+    else -> "Health Connect · $on readings"
+}
+
+internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState, split: String = ""): String = when (page) {
+    SettingsPage.Appearance -> {
+        val accent = when {
+            !s.accentEnabled -> "Monochrome"
+            s.accentFromIcon && com.forge.app.appicon.AppIcon.fromKey(s.appIconKey).accentHex != null -> "Icon accent"
+            else -> accentName(s.accentColorHex)
+        }
+        "$accent · ${if (s.amoledMode) "AMOLED" else "Pearl"}"
+    }
+    SettingsPage.Format -> "${s.weightUnit.label} · ${if (s.useMiles) "mi" else "km"} · ${if (s.useCm) "cm" else "in"} · " +
+        "${if (s.timeFormat24h) "24h" else "12h"} · week starts ${if (s.firstDayMonday) "Monday" else "Sunday"}"
+    SettingsPage.Session -> "Rest ${restLabel(s.restCompoundSeconds)} · " +
+        if (s.hapticStrength == "off") "haptics off" else "haptics ${s.hapticStrength}"
     SettingsPage.Notifications -> {
-        val on = buildList {
-            if (s.trainingReminderEnabled) add("Reminders")
-            if (s.weeklyRecapEnabled) add("recap")
-            if (s.restTimerAlertEnabled) add("timer")
-        }.joinToString(" · ").replaceFirstChar { it.uppercase() }.ifEmpty { "All off" }
+        val on = notificationsOn(s)
+        val head = if (on == 0) "All off" else "$on on"
         if (s.quietHoursEnabled) {
             // One window shared by every day reads as a time range; a per-day schedule reads "per day".
             val w = s.quietHoursSchedule.windows[0]
             val quiet =
                 if (s.quietHoursSchedule.isUniform && !w.isOff) "quiet ${windowLabel(w, s.timeFormat24h)}"
                 else "quiet per day"
-            "$on · $quiet"
-        } else on
+            "$head · $quiet"
+        } else head
     }
-    SettingsPage.Program -> {
-        // "1 pieces of gear" and a day count for a plan a freestyle user doesn't have, before.
-        val gear = when {
-            s.availableEquipment.isEmpty() || s.availableEquipment.size >= com.forge.app.program.Equipment.entries.size -> "all equipment"
-            s.availableEquipment.size == 1 -> "1 piece of gear"
-            else -> "${s.availableEquipment.size} pieces of gear"
-        }
-        if (s.freestyleMode) "Freestyle · $gear" else "${s.daysPerWeek} days a week · $gear"
-    }
+    SettingsPage.Program ->
+        gearReading(s).let { gear -> if (s.freestyleMode) "Freestyle · $gear" else "${planLine(split, s.daysPerWeek)} · $gear" }
     SettingsPage.Coach -> when {
         !s.coachEnabled -> "Off"
         s.coachMode == "auto" -> "On · earning auto-apply"
-        else -> "On · suggests every change"
+        else -> "On · asks before changing"
     }
-    SettingsPage.Security -> buildList {
-        if (s.appLockEnabled) add("App lock")
-        if (s.galleryLockEnabled) add("gallery lock")
-        if (s.privacyMode) add("privacy mode")
-    }.joinToString(" · ").replaceFirstChar { it.uppercase() }.ifEmpty { "No lock set" }
+    SettingsPage.Security -> securityReading(s)
     SettingsPage.Recovery -> "Health Connect · watch app"
-    SettingsPage.ExercisePrefs -> when {
-        s.liked.isEmpty() && s.disliked.isEmpty() -> "None set"
-        else -> "${s.liked.size} preferred · ${s.disliked.size} hidden"
-    }
+    SettingsPage.ExercisePrefs -> "${s.liked.size} liked · ${s.disliked.size} avoided"
     // The count lives on its own StateFlow, not SettingsUiState, so the row shows what it is for.
     SettingsPage.CardioActivities -> "Sports the built-in list misses"
     SettingsPage.Vacation -> "Pause your streak while you're away"

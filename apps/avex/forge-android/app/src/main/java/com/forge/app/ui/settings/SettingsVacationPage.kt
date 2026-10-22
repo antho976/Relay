@@ -1,6 +1,7 @@
 package com.forge.app.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -65,15 +66,14 @@ internal fun VacationPage(vm: SettingsViewModel, onBack: () -> Unit) {
             } else {
                 vacations.forEach { v ->
                     SettingsRowContainer {
-                        SettingsIconTile(Icons.Rounded.BeachAccess)
                         SettingsRowText(v.label.ifBlank { "Holiday" }, formatRange(v.startDate, v.endDate))
                         IconButton(onClick = { vm.deleteVacation(v) }) {
-                            Icon(Icons.Outlined.DeleteOutline, contentDescription = "Delete ${v.label.ifBlank { "holiday" }}", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Icon(com.forge.app.ui.theme.OpenIcons.Trash, contentDescription = "Delete ${v.label.ifBlank { "holiday" }}", tint = com.forge.app.ui.theme.OpenColors.Glyph, modifier = Modifier.size(18.dp))
                         }
                     }
                 }
             }
-            SettingsActionRow("Add a holiday", icon = Icons.Rounded.Add, tone = TileTone.Accent) { showAdd = true }
+            SettingsButton("Add a holiday", kind = ButtonKind.Outlined, icon = com.forge.app.ui.theme.OpenIcons.Plus) { showAdd = true }
         }
     }
 }
@@ -114,7 +114,7 @@ private fun AddVacationDialog(onSave: (String, String, String) -> Unit, onDismis
                 OutlinedTextField(
                     value = label, onValueChange = { label = it },
                     label = { Text("Name, optional") }, singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(4.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = MaterialTheme.colorScheme.primary,
                         unfocusedBorderColor = MaterialTheme.colorScheme.outline,
@@ -144,14 +144,13 @@ private fun DateRow(label: String, ms: Long?, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .border(1.dp, com.forge.app.ui.theme.OpenColors.Rule, RoundedCornerShape(4.dp))
             .clickableLabeled("Pick the $label date", onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(Icons.Rounded.CalendarMonth, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
+        Icon(com.forge.app.ui.theme.OpenIcons.Calendar, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
         Column(Modifier.weight(1f)) {
             Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(

@@ -81,6 +81,11 @@ object Routes {
 
     fun sessionDetail(sessionId: Long) = "gym/session-detail/$sessionId"
 
+    /** One lift's own page from Stats (2026-10-21 redesign). */
+    const val LIFT_DETAIL = "gym/lift/{liftId}"
+    const val ARG_LIFT_ID = "liftId"
+    fun liftDetail(liftId: String) = "gym/lift/${android.net.Uri.encode(liftId)}"
+
     fun cardioSession(cardioId: Long) = "cardio/session/$cardioId"
 
     /** The weeks chart — one bar per week (the hero's `weeks →`). An optional `week` argument

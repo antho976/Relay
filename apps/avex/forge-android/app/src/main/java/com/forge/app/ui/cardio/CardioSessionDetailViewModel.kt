@@ -17,6 +17,8 @@ import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.RoutePoint
 import com.forge.app.ui.nav.Routes
+import com.forge.app.domain.health.avgBpm
+import com.forge.app.domain.health.maxBpm
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,7 +51,14 @@ data class CardioSessionDetailState(
     /** A matching watch session has a route needing Health Connect consent; this is its record id. */
     val routeConsentId: String? = null,
     /** Avex holds the steps grant — show the steps section (with a placeholder) even before data syncs. */
-    val stepsConnected: Boolean = false
+    val stepsConnected: Boolean = false,
+    /** The matched watch workout's downsampled heart rate (null when none matched or no grant). */
+    val hr: List<com.forge.app.domain.health.HrPoint>? = null,
+    /** AVG / MAX of the RAW series behind [hr]; the downsampled series understates the peak. */
+    val hrAvgBpm: Int? = null,
+    val hrMaxBpm: Int? = null,
+    /** The matched watch workout with its measured duration / distance / calories. */
+    val watch: com.forge.app.domain.health.WatchWorkout? = null
 )
 
 /**
@@ -105,7 +114,10 @@ class CardioSessionDetailViewModel @Inject constructor(
             useMiles = useMiles
         )
     }.combine(wearable) { st, w ->
-        st.copy(wearable = w.day, route = w.route, routeConsentId = w.routeConsentId, stepsConnected = w.connected)
+        st.copy(
+            wearable = w.day, route = w.route, routeConsentId = w.routeConsentId, stepsConnected = w.connected,
+            hr = w.hr, hrAvgBpm = w.hrAvg, hrMaxBpm = w.hrMax, watch = w.watch
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CardioSessionDetailState())
 
     init {
@@ -134,11 +146,20 @@ class CardioSessionDetailViewModel @Inject constructor(
             val endMs = day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
             val steps = healthConnectManager.readStepsDay(startMs, endMs)
             val match = healthConnectManager.matchSessionRoute(entry.date, entry.durationMin, startMs, endMs)
+            // The same watch match the tab's overlay loads (W5), so a session opened from History
+            // shows its heart rate and offers the watch's measured stats too.
+            val watch = healthConnectManager.matchWatchSession(entry.date, entry.durationMin, startMs, endMs)
+            val rawHr = watch?.let { healthConnectManager.readHrSeries(it.startMs, it.endMs) }.orEmpty()
+            val hr = com.forge.app.domain.health.downsampleHr(rawHr).takeIf { it.size >= 2 }
             wearable.value = WearableBits(
                 day = steps,
                 route = match?.route,
                 routeConsentId = if (match?.route == null) match?.recordId else null,
-                connected = healthConnectManager.canReadSteps()
+                connected = healthConnectManager.canReadSteps(),
+                hr = hr,
+                hrAvg = if (hr != null) rawHr.avgBpm() else null,
+                hrMax = if (hr != null) rawHr.maxBpm() else null,
+                watch = watch
             )
         }
     }
@@ -147,6 +168,25 @@ class CardioSessionDetailViewModel @Inject constructor(
     fun onRouteConsented(route: ExerciseRoute?) {
         val points = healthConnectManager.routePoints(route).takeIf { it.size >= 2 }
         wearable.update { it.copy(route = points, routeConsentId = null) }
+    }
+
+    /**
+     * Adopt the matched watch workout's measured duration / distance onto this entry (W5), the same
+     * explicit, undoable step the tab's overlay offers. Only what the watch measured changes.
+     */
+    fun adoptWatchStats() {
+        val original = state.value.entry ?: return
+        val watch = state.value.watch ?: return
+        val updated = original.copy(
+            durationMin = watch.durationMin.takeIf { it > 0 } ?: original.durationMin,
+            distanceKm = watch.distanceKm ?: original.distanceKm
+        )
+        if (updated == original) return
+        viewModelScope.launch {
+            cardioRepo.update(updated)
+            viewModelScope.launch { runCatching { trophyRepo.evaluateAndUnlockNew() } }
+            snackbar.showUndo("Watch stats applied") { cardioRepo.update(original) }
+        }
     }
 
     fun openEdit() { editing.value = true }
@@ -207,6 +247,10 @@ class CardioSessionDetailViewModel @Inject constructor(
         val day: CardioWearableDay? = null,
         val route: List<RoutePoint>? = null,
         val routeConsentId: String? = null,
-        val connected: Boolean = false
+        val connected: Boolean = false,
+        val hr: List<com.forge.app.domain.health.HrPoint>? = null,
+        val hrAvg: Int? = null,
+        val hrMax: Int? = null,
+        val watch: com.forge.app.domain.health.WatchWorkout? = null
     )
 }

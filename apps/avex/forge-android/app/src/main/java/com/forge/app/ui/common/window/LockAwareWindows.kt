@@ -84,6 +84,8 @@ fun ModalBottomSheet(
     // Remembered here, outside the lock check, so a sheet hidden by the lock keeps its state.
     sheetState: SheetState = rememberModalBottomSheetState(),
     containerColor: Color = BottomSheetDefaults.ContainerColor,
+    shape: androidx.compose.ui.graphics.Shape = BottomSheetDefaults.ExpandedShape,
+    dragHandle: @Composable (() -> Unit)? = { BottomSheetDefaults.DragHandle() },
     content: @Composable ColumnScope.() -> Unit,
 ) {
     if (LocalAppLockActive.current) return
@@ -92,6 +94,8 @@ fun ModalBottomSheet(
         modifier = modifier,
         sheetState = sheetState,
         containerColor = containerColor,
+        shape = shape,
+        dragHandle = dragHandle,
         content = content,
     )
 }

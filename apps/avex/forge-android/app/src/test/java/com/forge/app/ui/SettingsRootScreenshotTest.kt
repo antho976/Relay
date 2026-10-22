@@ -39,7 +39,7 @@ class SettingsRootScreenshotTest {
     )
 
     @Composable
-    private fun Root(state: SettingsUiState = SettingsUiState(), query: String = "") {
+    private fun Root(state: SettingsUiState = designState, query: String = "", searchOpen: Boolean = false) {
         SettingsTheme {
             MainList(
                 state = state,
@@ -56,10 +56,21 @@ class SettingsRootScreenshotTest {
                 backupStatus = "Weekly · last copy Oct 12, 2026",
                 customCardioCount = 2,
                 holidayStatus = "Next from Nov 3",
-                storageUsed = "148.2 MB"
+                storageUsed = "48 MB",
+                watchStatus = "Health Connect · 6 readings",
+                split = "Push · Pull · Legs",
+                searchOpen = searchOpen
             )
         }
     }
+
+    /** Close to the design's account: five days, a few likes, the app lock on. */
+    private val designState = SettingsUiState(
+        daysPerWeek = 5,
+        liked = (1..12).map { "e$it" }.toSet(),
+        disliked = (1..3).map { "d$it" }.toSet(),
+        appLockEnabled = true
+    )
 
     private fun shoot(name: String, fontScale: Float = 1f, content: @Composable () -> Unit) {
         compose.setContent {
@@ -75,6 +86,11 @@ class SettingsRootScreenshotTest {
     @Test fun rootLargeFont() = shoot("settings-root-200", fontScale = 2f) { Root() }
     @Test fun rootFreestyle() = shoot("settings-root-freestyle") { Root(SettingsUiState(freestyleMode = true)) }
     @Test fun rootSearch() = shoot("settings-root-search") { Root(query = "lock") }
+    @Test fun rootSearchOpen() = shoot("settings-root-search-open") { Root(searchOpen = true) }
+    @Config(qualifiers = "w384dp-h1600dp-xxhdpi")
+    @Test fun root384() = shoot("settings-root-384") { Root() }
+    @Config(qualifiers = "w384dp-h1900dp-xxhdpi")
+    @Test fun root384Large() = shoot("settings-root-384-130", fontScale = 1.3f) { Root() }
 
     @Test fun rootAmoled() {
         compose.setContent { ForgeTheme(amoledMode = true) { Root() } }

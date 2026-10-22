@@ -34,7 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
+import com.forge.app.ui.theme.AvexFonts
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -74,30 +74,25 @@ internal fun AboutPage(
     if (showLicenses) LicensesDialog(onDismiss = { showLicenses = false })
 
     SettingsScaffold("About", onBack) {
-        SettingsGroup {
-            SettingsGroupBlock(padding = PaddingValues(20.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    AppIconPreviewImage(
-                        AppIcon.fromKey(iconKey.orEmpty()).previewRes,
-                        Modifier.size(56.dp).clip(RoundedCornerShape(14.dp))
-                    )
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("Avex", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface)
-                        Text(
-                            if (version.isBlank()) "Offline strength tracker" else "Version $version",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
-                Text(
-                    "A personal gym companion: generated programs, an adaptive coach, progress stats, " +
-                        "trophies and a rank ladder. Built for lifting, not for the cloud.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+        // Avex itself: your icon, the name in serif, the version in the reading voice, one line.
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                AppIconPreviewImage(
+                    AppIcon.fromKey(iconKey.orEmpty()).previewRes,
+                    Modifier.size(56.dp).clip(RoundedCornerShape(14.dp))
                 )
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Avex", style = com.forge.app.ui.theme.OpenType.figureRow, color = MaterialTheme.colorScheme.onBackground)
+                    SettingsReading(if (version.isBlank()) "Offline strength tracker" else "Version $version")
+                }
             }
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "A personal gym companion: generated programs, an adaptive coach, progress stats, " +
+                    "trophies and a rank ladder. Built for lifting, not for the cloud.",
+                style = com.forge.app.ui.theme.OpenType.bodyS,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
 
         // The privacy stance is four claims, each verifiable from the manifest.
@@ -132,14 +127,7 @@ internal fun AboutPage(
             SettingsNavigationRow("Open-source licenses", icon = Icons.Outlined.Description) { showLicenses = true }
         }
 
-        Text(
-            "Avex · a solo-built, offline-first project",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontStyle = FontStyle.Italic,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth()
-        )
+        SettingsReading("Avex · a solo-built, offline-first project")
     }
 }
 
@@ -182,7 +170,7 @@ private fun CrashLogViewerDialog(
                         Text(
                             text,
                             style = MaterialTheme.typography.bodySmall.copy(
-                                fontFamily = FontFamily.Monospace
+                                fontFamily = AvexFonts.Monospace
                             ),
                             color = muted.copy(alpha = 0.7f)
                         )
@@ -221,7 +209,7 @@ private fun LicensesDialog(onDismiss: () -> Unit) {
                 Text(
                     MIT_LICENSE_BODY_HIGHLIGHTER,
                     style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = AvexFonts.Monospace
                     ),
                     color = muted.copy(alpha = 0.7f)
                 )

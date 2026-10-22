@@ -62,13 +62,43 @@ import kotlinx.coroutines.withContext
 internal fun AppIconRow(currentKey: String, onOpen: () -> Unit) {
     val current = AppIcon.fromKey(currentKey)
     SettingsRowContainer(interaction = Modifier.clickableLabeled("App icon, ${current.displayName}. Change", onClick = onOpen)) {
-        AppIconThumb(current, isSelected = false, modifier = Modifier.size(40.dp), corner = 12.dp)
-        SettingsRowText("App icon", current.displayName)
-        Icon(
-            Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        AppIconThumb(current, isSelected = false, modifier = Modifier.size(36.dp), corner = 18.dp)
+        SettingsRowText("App icon", "${current.displayName} · also your splash")
+        SettingsChevron()
+    }
+}
+
+/**
+ * The Appearance page's icon strip (Relay design "sa"): every launcher icon as a 56dp tile with its
+ * name under it, scrolling to the screen's edge, the one you are on ringed in ink. A tap picks it.
+ * Opens scrolled so the current pick is in view.
+ */
+@Composable
+internal fun AppIconStrip(currentKey: String, onSelect: (AppIcon) -> Unit) {
+    val current = AppIcon.fromKey(currentKey)
+    val start = AppIcon.entries.indexOf(current).coerceAtLeast(0)
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState(
+        initialFirstVisibleItemIndex = (start - 2).coerceAtLeast(0)
+    )
+    androidx.compose.foundation.lazy.LazyRow(
+        state = listState,
+        modifier = Modifier.kitBleed(),
+        contentPadding = PaddingValues(horizontal = KitGutter),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        items(AppIcon.entries.size, key = { AppIcon.entries[it].name }) { i ->
+            val icon = AppIcon.entries[i]
+            val picked = icon == current
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                AppIconThumb(icon, isSelected = picked, modifier = Modifier.size(56.dp), onClick = { onSelect(icon) }, corner = 14.dp)
+                Text(
+                    icon.label.uppercase(),
+                    style = com.forge.app.ui.theme.OpenType.monoXS,
+                    color = if (picked) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
     }
 }
 
@@ -124,7 +154,7 @@ internal fun AppIconPickerSheet(
         ) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Column {
-                    Text("App icon", style = MaterialTheme.typography.headlineSmall, color = onBg)
+                    Text("App icon", style = com.forge.app.ui.theme.OpenType.sheetTitle, color = onBg)
                     Spacer(Modifier.height(4.dp))
                     Text(
                         "Your home screen updates a moment after you pick.",
@@ -177,8 +207,8 @@ private fun AppIconThumb(
     onClick: (() -> Unit)? = null,
     corner: androidx.compose.ui.unit.Dp = 16.dp,
 ) {
-    val accent = MaterialTheme.colorScheme.primary
-    val outline = MaterialTheme.colorScheme.outline
+    // The pick is ringed in ink, as the design draws it; the rest keep a hairline edge.
+    val ring = MaterialTheme.colorScheme.onBackground
     val shape = RoundedCornerShape(corner)
     val label = "${icon.family} ${icon.label} icon" + if (isSelected) ", selected" else ""
     Box(
@@ -188,7 +218,7 @@ private fun AppIconThumb(
             .then(if (onClick != null) Modifier.bounceClick(onClick = onClick) else Modifier)
             .border(
                 width = if (isSelected) 2.dp else 1.dp,
-                color = if (isSelected) accent else outline.copy(alpha = 0.35f),
+                color = if (isSelected) ring else com.forge.app.ui.theme.OpenColors.Track,
                 shape = shape,
             )
             .semantics { contentDescription = label },

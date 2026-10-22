@@ -59,7 +59,13 @@ data class StatsUiState(
     /** All-time best set per lift, heaviest first (Overview "records"). */
     val hallOfFame: List<PrRecord> = emptyList(),
     /** Lifetime totals for the Overview at-a-glance tiles. */
-    val lifetime: LifetimeMetrics? = null
+    val lifetime: LifetimeMetrics? = null,
+    /** Every tracked set, oldest first, for the per-range reads (see `StatsRanges.kt`). */
+    val statSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession> = emptyList(),
+    /** Every finished tracked session's volume and deload mark, oldest first. */
+    val sessionVolumes: List<com.forge.app.data.db.dao.SessionDao.SessionVolumeDeloadRow> = emptyList(),
+    /** When the coach applied a change to each lift, by exercise id: the diamonds on a lift's graph. */
+    val coachChanges: Map<String, List<Long>> = emptyMap()
 )
 
 /** One ISO week's total tonnage for the Volume trend bars. */

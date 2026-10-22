@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
@@ -36,6 +37,8 @@ import javax.inject.Inject
  *   - custom goals (cardio / bodyweight / sessions / volume with a target + period, [ExtendedGoalRepository]) —
  *     assembled from parameters and auto-tracked.
  */
+private const val DAY_MS = 86_400_000L
+
 @HiltViewModel
 class GoalsViewModel @Inject constructor(
     private val goalRepo: GoalRepository,
@@ -60,6 +63,12 @@ class GoalsViewModel @Inject constructor(
          * user's Hidden/disliked exercises (from Exercise likes) so hidden lifts never resurface here.
          */
         val liftPickerExclude: Set<String> = emptySet(),
+        /** Each lift's best-set change over 30 days (lb), for its pace. Absent with no set back then. */
+        val liftChange30d: Map<String, Double> = emptyMap(),
+        /** When each REACHED lift target was first met, from its session history. */
+        val liftReachedAtMs: Map<String, Long> = emptyMap(),
+        /** The last 60 days of weigh-ins (recorded at, lb), oldest first: a bodyweight goal's pace. */
+        val weighIns: List<Pair<Long, Double>> = emptyList(),
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -107,12 +116,25 @@ class GoalsViewModel @Inject constructor(
                 val customs = async { fetchOr(emptyList()) { extendedGoalRepo.goalsWithProgress() } }
                 lifts.await() to customs.await()
             }
+            val now = System.currentTimeMillis()
+            val ids = liftGoals.map { it.exerciseId }.distinct()
+            val before = fetchOr(emptyMap()) { goalRepo.bestWeightBefore(ids, now - 30L * DAY_MS) }
+            val change = liftGoals.mapNotNull { g -> before[g.exerciseId]?.let { g.exerciseId to (g.currentBestLb - it) } }.toMap()
+            val reachedAt = liftGoals.filter { it.achieved }.mapNotNull { g ->
+                firstReachedAt(fetchOr(emptyList()) { goalRepo.topSets(g.exerciseId) }, g.targetLb)?.let { g.exerciseId to it }
+            }.toMap()
+            val weighIns = if (customGoals.any { it.metric == GoalMetric.BODYWEIGHT }) {
+                fetchOr(emptyList()) { extendedGoalRepo.weighIns(now - 60L * DAY_MS) }
+            } else emptyList()
             _state.value = UiState(
                 loading = false,
                 todayStartMs = todayStartMs,
                 liftGoals = liftGoals,
                 customGoals = customGoals,
                 liftPickerExclude = excludeFrom(liftGoals, disliked),
+                liftChange30d = change,
+                liftReachedAtMs = reachedAt,
+                weighIns = weighIns,
             )
         }
     }
@@ -134,16 +156,39 @@ class GoalsViewModel @Inject constructor(
 
     // ─── Lift targets (exercise_goal) ──────────────────────────────────────────
 
-    fun setLiftGoal(exerciseId: String, targetWeightLb: Double) = viewModelScope.launch {
+    fun setLiftGoal(exerciseId: String, targetWeightLb: Double, pin: Boolean? = null) = viewModelScope.launch {
         // Repo-level GoalRepository has no floor; guard here so no picker path stores a degenerate
         // target (fraction math needs > 0).
         if (targetWeightLb <= 0) return@launch
-        withContext(NonCancellable) { goalRepo.setGoal(exerciseId, targetWeightLb) }
+        withContext(NonCancellable) {
+            goalRepo.setGoal(exerciseId, targetWeightLb)
+            // The target screen's Pin to Home switch is applied with the goal it belongs to.
+            val key = liftPinKey(exerciseId)
+            if (pin != null && pin != (key in settingsRepo.pinnedGoals.first())) {
+                settingsRepo.toggleGoalPin(key, max = HOME_PIN_SLOTS)
+            }
+        }
     }
 
     /** Where the lift stands now, shown under a target being set (§4.9: the reading beside the call). */
     suspend fun currentBestLb(exerciseId: String): Double? =
         fetchOr(null) { goalRepo.bestLb(exerciseId) }
+
+    /** What the Set-the-target screen reads for a lift: its best set and every session's top set. */
+    data class LiftHistory(val bestSet: Pair<Double, Int>?, val topSets: List<GoalRepository.TopSet>)
+
+    suspend fun liftHistory(exerciseId: String): LiftHistory = LiftHistory(
+        bestSet = fetchOr(null) { goalRepo.bestSet(exerciseId) },
+        topSets = fetchOr(emptyList()) { goalRepo.topSets(exerciseId) },
+    )
+
+    /** A cumulative metric's recent windows (canonical units, current last). */
+    suspend fun customHistory(metric: GoalMetric, period: GoalPeriod): List<Double> =
+        fetchOr(emptyList()) { extendedGoalRepo.history(metric, period, if (period == GoalPeriod.WEEK) 8 else 6) }
+
+    /** The last 90 days of weigh-ins (recorded at, lb), oldest first: a bodyweight target's pace. */
+    suspend fun weighIns90(): List<Pair<Long, Double>> =
+        fetchOr(emptyList()) { extendedGoalRepo.weighIns(System.currentTimeMillis() - 90L * DAY_MS) }
 
     /** Lifts the user actually trains, most-trained first, so the picker leads with them. */
     suspend fun recentlyTrainedIds(): List<String> = fetchOr(emptyList()) { goalRepo.recentlyTrainedIds() }
@@ -200,9 +245,15 @@ class GoalsViewModel @Inject constructor(
 
     // ─── Custom goals (extended_goal) ──────────────────────────────────────────
 
-    fun createCustomGoal(metric: GoalMetric, period: GoalPeriod, targetValue: Double, label: String) =
+    /** Toggle a pin by its key, as the list's bookmark does for either kind of goal. */
+    fun togglePinKey(key: String) = togglePin(key)
+
+    fun createCustomGoal(metric: GoalMetric, period: GoalPeriod, targetValue: Double, label: String, pin: Boolean = false) =
         viewModelScope.launch {
-            withContext(NonCancellable) { extendedGoalRepo.create(metric, period, targetValue, label) }
+            withContext(NonCancellable) {
+                val id = extendedGoalRepo.create(metric, period, targetValue, label) ?: return@withContext
+                if (pin) settingsRepo.toggleGoalPin(customPinKey(id), max = HOME_PIN_SLOTS)
+            }
         }
 
     fun updateCustomGoalTarget(id: Long, targetValue: Double) = viewModelScope.launch {

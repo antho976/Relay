@@ -1,26 +1,20 @@
-@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package com.forge.app.ui.onboarding
 
-import com.forge.app.ui.common.ForgeGearTile
-import com.forge.app.ui.common.ForgeGlyphBadge
-import com.forge.app.ui.common.ForgeGroupSection
-import com.forge.app.ui.common.ForgeLabelTile
-import com.forge.app.ui.common.ForgeRowGroup
-import com.forge.app.ui.common.ForgeTileGrid
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.semantics.Role
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -30,6 +24,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.forge.app.program.DayArchetype
 import com.forge.app.program.Equipment
@@ -38,14 +35,41 @@ import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.GeneratedDay
 import com.forge.app.program.equipmentGroups
 import com.forge.app.program.equipmentPresets
-import com.forge.app.ui.common.ExerciseIcons
 import com.forge.app.ui.theme.ForgeMotion
+import com.forge.app.ui.theme.OnboardingType
+import com.forge.app.ui.theme.OpenIcons
 
 /**
- * The gym half of the generated path: pick a setup, fine-tune the gear, then the week page. The
- * [PlanLedger] no longer sits under the gym and gear questions (2026-09-25): it pushed the tiles
- * down on the two pages with the most to tap. The week page is where the week is read.
+ * The gym half of the generated path: pick a setup, fine-tune the gear, flag sore spots, then the
+ * week page. Redrawn 2026-10-21: the setups are a quiet two-column grid whose piece count is the
+ * reading, the gear the same tiles three across.
  */
+
+/** Rows of equal-height tiles, [cols] across. A short last row keeps its tiles at full-row width. */
+@Composable
+internal fun <T> TileGrid(
+    items: List<T>,
+    cols: Int,
+    gap: Dp = 10.dp,
+    cell: @Composable (item: T, modifier: Modifier) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+        items.chunked(cols).forEach { row ->
+            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                row.forEach { cell(it, Modifier.weight(1f).fillMaxHeight()) }
+                repeat(cols - row.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+/** The house glyph for a setup tile, from the redesign's own icon set. */
+private fun presetIcon(id: String): ImageVector = when (id) {
+    "everything" -> OpenIcons.Store
+    "basic-gym", "dumbbells" -> OpenIcons.Dumbbell
+    "home-big", "home-small", "developer" -> OpenIcons.Home
+    else -> OpenIcons.User
+}
 
 /** GYMAP-20 step 1 of 2: pick the closest gym preset. */
 @Composable
@@ -54,50 +78,58 @@ internal fun StepGymPresets(
     frozenIds: Set<String>?,
     onSelectPreset: (EquipmentPreset) -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        StepTitle("What's in your gym?")
-        StepCaption("Pick the closest setup. You fine-tune every piece next.")
-        Spacer(Modifier.height(6.dp))
-        ForgeTileGrid(equipmentPresets, cols = 2) { preset, corners, modifier ->
-            ForgeLabelTile(
-                label = preset.label,
-                meta = presetMeta(preset),
-                selected = selected == preset.equipment && frozenIds == preset.frozenIds,
-                corners = corners,
-                onClick = { onSelectPreset(preset) },
-                modifier = modifier,
-                role = Role.RadioButton,
-                icon = OnboardingIcons.forPreset(preset.id)
-            )
+    Column {
+        StepHeader("What's in your gym?", "Pick the closest setup. You fine-tune every piece next.")
+        Spacer(Modifier.height(28.dp))
+        // Two across until a long name ("Home gym · small") would break mid-word, then one.
+        val cols = if (LocalDensity.current.fontScale > 1.3f) 1 else 2
+        TileGrid(equipmentPresets, cols) { preset, modifier ->
+            val picked = selected == preset.equipment && frozenIds == preset.frozenIds
+            OnbTile(selected = picked, onClick = { onSelectPreset(preset) }, modifier = modifier) {
+                Icon(
+                    presetIcon(preset.id), contentDescription = null,
+                    tint = if (picked) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(preset.label, style = OnboardingType.gridTitle, color = MaterialTheme.colorScheme.onBackground)
+                Spacer(Modifier.height(10.dp))
+                TileMeta(presetMeta(preset), picked)
+            }
         }
-        // The "in this setup" mono gear dump that used to close this page is gone (2026-08-22): the
-        // fine-tune page next lists every piece with its own on/off state. Two readouts of one
-        // answer broke the one-home rule.
     }
 }
 
-/** GYMAP-20 step 2 of 2: every piece of gear, grouped, toggleable. Each group is one connected
- *  grid of tiles under its anchor, so the page reads as four objects rather than seventeen. */
+/** GYMAP-20 step 2 of 2: every piece of gear, grouped, toggleable — the same tiles, three across. */
 @Composable
 internal fun StepFineTune(selected: Set<String>, onToggle: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        StepTitle("Fine-tune your gear")
-        StepCaption("Toggle anything the preset got wrong. Plans use only what's on.")
-        Spacer(Modifier.height(6.dp))
+    Column {
+        StepHeader("Fine-tune your gear", "Toggle anything the preset got wrong. Plans use only what's on.")
+        Spacer(Modifier.height(28.dp))
         // Three across until the names would break mid-word ("Dumbbell / s"), then two.
         val cols = if (LocalDensity.current.fontScale > 1.3f) 2 else 3
-        Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(32.dp)) {
             equipmentGroups.forEach { (group, items) ->
-                ForgeGroupSection(group, meta = "${items.count { it.name in selected }} on") {
-                    ForgeTileGrid(items, cols = cols) { e, corners, modifier ->
-                        ForgeGearTile(
-                            icon = OnboardingIcons.forEquipment(e),
-                            label = e.display,
-                            selected = e.name in selected,
-                            corners = corners,
+                Column {
+                    StepSectionLabel(group, meta = "${items.count { it.name in selected }} on")
+                    Spacer(Modifier.height(12.dp))
+                    TileGrid(items, cols, gap = 8.dp) { e, modifier ->
+                        val on = e.name in selected
+                        OnbTile(
+                            selected = on,
                             onClick = { onToggle(e.name) },
-                            modifier = modifier
-                        )
+                            modifier = modifier,
+                            multi = true,
+                            contentPadding = PaddingValues(12.dp)
+                        ) {
+                            Icon(
+                                OnboardingIcons.forEquipment(e), contentDescription = null,
+                                tint = if (on) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(e.display, style = OnboardingType.chip, color = MaterialTheme.colorScheme.onBackground)
+                        }
                     }
                 }
             }
@@ -114,30 +146,13 @@ private fun presetMeta(preset: EquipmentPreset): String = when {
 }
 
 /**
- * Last step of the generated path — the week, rebuilt 2026-08-23.
+ * Last plan step of the generated path: the week, drawn like the Program page. One bar per training
+ * day carrying that day's sets, red on the day you are reading and grey on the rest; tapping a bar
+ * opens that day underneath, its movements with their sets by reps. Every day is on screen with its
+ * real volume from the moment the page opens, one tap from being read in full.
  *
- * What it replaced: the same bar mark the user had been reading for three screens, drawn again at
- * full size, and then every exercise of every day dumped underneath it in one column. A four-day
- * week ran to roughly twenty-five uniform rows and three viewports, which §3 bans outright for this
- * archetype (only the optional closing step is exempt from the long scroll), and the volume of each
- * day was stated three separate times — once by a bar, once by a day header, once by its rows.
- *
- * What it is now: **the mark IS the week, and it navigates.** One bar per training day carrying that
- * day's sets, accent on the day you are reading and muted on the rest, and under it that one day in
- * full — its movements, each with its equipment glyph and its sets by reps. Tapping a bar swaps the
- * detail. That is §4.5's "aggregate visuals answer a tap with detail", it gives the mark a job
- * instead of repeating one it already did (§4.3), and it puts the whole page — every day reachable,
- * the CTA and the re-roll — inside one viewport.
- *
- * Approving what you cannot see was the thing to get right, and the rail is what answers it: every
- * day of the week is on screen with its real volume from the moment the page opens, one tap from
- * being read in full. Nothing is hidden, only stacked.
- *
- * The per-day colour dot each row used to carry went with the rewrite: seven hues at 8dp is exactly
- * the "scattered tiny accent" §5 forbids, and day identity already rides the mono name.
- *
- * The exact week shown is the week that gets saved (the re-roll sits beside the CTA in the bottom
- * bar; edits live in the Program Editor).
+ * The exact week shown is the week that gets saved (Re-roll sits beside the CTA in the footer; edits
+ * live in the Program Editor).
  */
 @Composable
 internal fun StepWeek(
@@ -153,31 +168,29 @@ internal fun StepWeek(
     val index = picked.coerceIn(0, (archetypes.size - 1).coerceAtLeast(0))
     val day = days?.getOrNull(index)
     // A one-day week has nothing to move between, so it gets no tap affordance and no line telling
-    // the user to use one. Its single bar IS the week, which is also why the day below drops its set
-    // count: at one day that number and the week total are the same fact (§4.3).
+    // the user to use one.
     val many = archetypes.size > 1
+    val sets = weekSets(archetypes, plannedSets, days)
 
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        StepTitle("Here's your week")
-        StepCaption(
+    Column(Modifier.fillMaxWidth()) {
+        StepHeader(
+            "Here's your week",
             if (many) "Tap a day to read it. Change any of it in the editor."
             else "Built from your answers. Change any of it in the editor."
         )
-        Spacer(Modifier.height(6.dp))
-        // The anchor says days and sets because the page title already said "your week" (§4.3).
-        PlanLedger(
-            archetypes = archetypes,
-            plannedSets = plannedSets,
-            days = days,
-            trackHeight = 104.dp,
-            label = if (many) "${archetypes.size} days" else "1 day",
+        Spacer(Modifier.height(28.dp))
+        StepSectionLabel(if (many) "${archetypes.size} days" else "1 day", meta = "${sets.sum()} sets")
+        Spacer(Modifier.height(14.dp))
+        WeekBars(
+            names = archetypes.map { it.name },
+            sets = sets,
+            trackWidth = 40.dp,
+            trackHeight = 100.dp,
+            labelGap = 8.dp,
             selectedIndex = index,
             onSelect = if (many) ({ picked = it }) else null
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(28.dp))
         // Crossfades on both moves the list can make: switching day, and a re-roll dealing fresh
         // movements into the day already open.
         AnimatedContent(
@@ -195,16 +208,11 @@ internal fun StepWeek(
     }
 }
 
-/**
- * The open day: mono anchor with its own reading as right meta, then one row per movement — the
- * equipment-class glyph (§8, same family the pickers lead with), the name, and the sets by reps at
- * the quiet mono rung so the movement names carry the row.
- */
+/** The open day: mono anchor with its own reading, then one row per movement and its sets by reps. */
 @Composable
 private fun WeekDay(day: GeneratedDay?, fallbackName: String, showSets: Boolean, building: Boolean = false) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val exercises = day?.exercises.orEmpty()
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column {
         StepSectionLabel(
             day?.name ?: fallbackName,
             meta = when {
@@ -213,41 +221,35 @@ private fun WeekDay(day: GeneratedDay?, fallbackName: String, showSets: Boolean,
                 else -> "${exercises.size} moves"
             }
         )
+        Spacer(Modifier.height(14.dp))
         // While the week is still being built the day shows its name alone: "nothing your gear
         // covers" would be a false statement about a week that doesn't exist yet.
         if (exercises.isEmpty() && !building) {
             // Effectively unreachable (the generator keeps a last-resort bodyweight fill), but a
             // blank day must still say what it means rather than mislabel itself.
-            Text(
-                "Nothing your gear covers yet",
-                style = MaterialTheme.typography.bodyMedium,
-                color = muted
-            )
+            Text("Nothing your gear covers yet", style = OnboardingType.movement, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        // The day's movements as one group of rows, the list language of the rest of the flow.
-        val rows: List<@Composable () -> Unit> = exercises.map { ex ->
-            {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            exercises.forEach { ex ->
                 val def = ExerciseLibrary.byId(ex.libId)
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                    Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    ForgeGlyphBadge(ExerciseIcons.forEquipment(def?.equipment.orEmpty()), selected = false, size = 34.dp)
                     Text(
                         def?.name ?: ex.libId,
-                        style = MaterialTheme.typography.bodyLarge,
+                        style = OnboardingType.movement,
                         color = MaterialTheme.colorScheme.onBackground,
                         modifier = Modifier.weight(1f)
                     )
                     Text(
-                        "${ex.sets} × ${ex.reps}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = muted
+                        "${ex.sets} × ${rangeCopy(ex.reps)}",
+                        style = OnboardingType.setsByReps,
+                        color = MaterialTheme.colorScheme.onBackground
                     )
                 }
             }
         }
-        ForgeRowGroup(*rows.toTypedArray())
     }
 }

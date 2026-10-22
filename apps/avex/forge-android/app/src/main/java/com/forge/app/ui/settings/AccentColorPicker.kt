@@ -115,18 +115,23 @@ internal fun AccentColorPicker(currentHex: String, onSelect: (String) -> Unit) {
         if (!dragging) liveHex = currentHex.ifEmpty { DEFAULT_ACCENT }
     }
 
-    SettingsGroupBlock {
-        // One choice among twelve, announced as such: `selectableGroup` + a radio role per swatch,
-        // each named by its colour.
-        Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            ACCENT_PRESETS.chunked(6).forEach { row ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    row.forEach { (hex, label) ->
-                        val selected = currentHex.equals(hex, ignoreCase = true) || (currentHex.isEmpty() && hex == DEFAULT_ACCENT)
-                        AccentSwatch(hex, label, selected) { onSelect(hex) }
-                    }
-                }
-            }
+    // One choice among twelve, announced as such: `selectableGroup` + a radio role per swatch, each
+    // named by its colour. One strip to the screen's edge, as drawn, opened on the current pick.
+    val pickedIndex = ACCENT_PRESETS.indexOfFirst { (hex, _) ->
+        currentHex.equals(hex, ignoreCase = true) || (currentHex.isEmpty() && hex == DEFAULT_ACCENT)
+    }
+    val stripState = androidx.compose.foundation.lazy.rememberLazyListState(
+        initialFirstVisibleItemIndex = (pickedIndex - 2).coerceAtLeast(0)
+    )
+    androidx.compose.foundation.lazy.LazyRow(
+        state = stripState,
+        modifier = Modifier.kitBleed().selectableGroup(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = KitGutter),
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        items(ACCENT_PRESETS.size, key = { ACCENT_PRESETS[it].first }) { i ->
+            val (hex, label) = ACCENT_PRESETS[i]
+            AccentSwatch(hex, label, i == pickedIndex) { onSelect(hex) }
         }
     }
 
@@ -137,35 +142,23 @@ internal fun AccentColorPicker(currentHex: String, onSelect: (String) -> Unit) {
             wheelVisible = !wheelVisible
         }
     ) {
-        // The live colour once a custom one is picked; until then a hue wheel, so the tile reads as
-        // "any colour" rather than repeating the preset above.
+        // The live colour once a custom one is picked; until then a hue wheel, so the dot reads as
+        // "any colour" rather than repeating a preset.
         val hueRing = remember {
             Brush.sweepGradient(listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red))
         }
         Box(
             Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .then(
-                    if (isCustom) Modifier.background(liveColor ?: MaterialTheme.colorScheme.surfaceContainerHighest)
-                    else Modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                )
-        ) {
-            if (!isCustom) {
-                Box(Modifier.align(Alignment.Center).size(24.dp).clip(CircleShape).background(hueRing))
-            } else {
-                Icon(
-                    Icons.Rounded.Check, contentDescription = null,
-                    tint = contentOn(liveColor),
-                    modifier = Modifier.align(Alignment.Center).size(20.dp)
-                )
-            }
-        }
-        SettingsRowText("Custom color", if (isCustom) liveHex else "Pick any shade on a wheel, or type a hex")
+                .size(20.dp)
+                .clip(CircleShape)
+                .then(if (isCustom) Modifier.background(liveColor ?: Color.Transparent) else Modifier.background(hueRing))
+        )
+        SettingsRowText("Custom color", if (isCustom) liveHex else "Any shade on a wheel, or a hex")
         Icon(
-            if (wheelVisible) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+            if (wheelVisible) com.forge.app.ui.theme.OpenIcons.ChevronUp else com.forge.app.ui.theme.OpenIcons.ChevronDown,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
+            tint = com.forge.app.ui.theme.OpenColors.Rule,
+            modifier = Modifier.size(16.dp)
         )
     }
 
@@ -200,24 +193,34 @@ internal fun AccentColorPicker(currentHex: String, onSelect: (String) -> Unit) {
     }
 }
 
-/** One preset: a 36dp disc inside a 48dp target, ringed and checked when it is the accent. */
+/**
+ * One preset (Relay design "sa"): a 40dp disc in a 52dp ring, ringed in ink when it is the accent,
+ * its name in mono under it (ink when picked).
+ */
 @Composable
 private fun AccentSwatch(hex: String, label: String, selected: Boolean, onClick: () -> Unit) {
     val color = remember(hex) { parseHex(hex) ?: Color.Gray }
-    val ring = MaterialTheme.colorScheme.onSurface
-    Box(
+    val ring = MaterialTheme.colorScheme.onBackground
+    Column(
         Modifier
-            .size(48.dp)
-            .clip(CircleShape)
             .semantics(mergeDescendants = true) { contentDescription = label }
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
-            .then(if (selected) Modifier.border(2.dp, ring, CircleShape) else Modifier)
-            .padding(5.dp)
-            .clip(CircleShape)
-            .background(color),
-        contentAlignment = Alignment.Center
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        if (selected) Icon(Icons.Rounded.Check, contentDescription = null, tint = contentOn(color), modifier = Modifier.size(20.dp))
+        Box(
+            Modifier
+                .size(52.dp)
+                .then(if (selected) Modifier.border(2.dp, ring, CircleShape) else Modifier)
+                .padding(6.dp)
+                .clip(CircleShape)
+                .background(color)
+        )
+        Text(
+            label.uppercase(),
+            style = com.forge.app.ui.theme.OpenType.monoXS,
+            color = if (selected) ring else MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -233,8 +236,7 @@ private fun HexField(livePreview: String, onSelect: (String) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+            .border(1.dp, com.forge.app.ui.theme.OpenColors.Rule, RoundedCornerShape(4.dp))
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)

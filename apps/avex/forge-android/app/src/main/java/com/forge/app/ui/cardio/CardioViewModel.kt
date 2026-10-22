@@ -165,8 +165,10 @@ class CardioViewModel @Inject constructor(
         val routes = healthConnectManager.canReadExercise()
         // Today's steps, hourly bars included — one read feeds the whole STEPS section. Fail-soft to
         // null so a read error just hides it rather than drawing a broken mark.
-        val today = if (steps) runCatching { loadStepsForDay(clock.nowMs()) }.getOrNull() else null
-        connection.value = WearableConnection(steps = steps, today = today)
+        val nowMs = clock.nowMs()
+        val today = if (steps) runCatching { loadStepsForDay(nowMs) }.getOrNull() else null
+        connection.value = connection.value.copy(steps = steps, today = today, hour = hourOf(nowMs))
+        if (steps) refreshUsualSteps(nowMs)
         // Candidate watch workouts for "recorded with your watch — import?" (W5). Already-logged and
         // dismissed sessions are filtered downstream against the live entry list.
         watchCandidates.value = if (routes) {
@@ -185,9 +187,33 @@ class CardioViewModel @Inject constructor(
      */
     private fun refreshTodaySteps() = viewModelScope.launch {
         if (!connection.value.steps) return@launch
-        val today = runCatching { loadStepsForDay(clock.nowMs()) }.getOrNull() ?: return@launch
-        connection.update { it.copy(today = today) }
+        val nowMs = clock.nowMs()
+        val today = runCatching { loadStepsForDay(nowMs) }.getOrNull() ?: return@launch
+        connection.update { it.copy(today = today, hour = hourOf(nowMs)) }
+        refreshUsualSteps(nowMs)
     }
+
+    /**
+     * The week before today, hour by hour, for the steps mark's "usual by now" (2026-10-21). Seven
+     * bounded one-day reads, fail-soft: a read that fails just leaves the usual unsaid.
+     */
+    private fun refreshUsualSteps(nowMs: Long) = viewModelScope.launch {
+        val zone = ZoneId.systemDefault()
+        val today = Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
+        val days = runCatching {
+            (1..7).map { back ->
+                val day = today.minusDays(back.toLong())
+                healthConnectManager.readStepsDay(
+                    day.atStartOfDay(zone).toInstant().toEpochMilli(),
+                    day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+                )
+            }
+        }.getOrNull() ?: return@launch
+        val usual = com.forge.app.domain.cardio.usualStepsByHour(days, hourOf(nowMs))
+        connection.update { it.copy(usual = usual) }
+    }
+
+    private fun hourOf(ms: Long): Int = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).hour
 
     // Raw watch-session candidates from Health Connect, refreshed with the connection (init/resume).
     private val watchCandidates = MutableStateFlow<List<WatchWorkout>>(emptyList())
@@ -248,7 +274,10 @@ class CardioViewModel @Inject constructor(
             // All-time per-activity bests (GYMAP-34) — off the full history, on this same background pass.
             records = cardioActivityRecords(all),
             // Per-activity pace series (GYMAP-35) for the PROGRESS lens's trend chart.
-            paceSeries = cardioPaceSeries(all)
+            paceSeries = cardioPaceSeries(all),
+            lastWeekToDateKm = com.forge.app.domain.cardio.lastWeekToDateKm(all, zone, today),
+            streakWeeks = com.forge.app.domain.cardio.cardioWeekStreak(all, zone, today),
+            recentTypes = com.forge.app.domain.cardio.recentCardioTypes(all)
         )
     }.flowOn(Dispatchers.Default)
 
@@ -301,12 +330,15 @@ class CardioViewModel @Inject constructor(
             sessionHrAvgBpm = tr.sessionHrAvgBpm,
             sessionHrMaxBpm = tr.sessionHrMaxBpm,
             sessionWatch = tr.sessionWatch,
-            historyExpanded = tr.historyExpanded
+            historyExpanded = tr.historyExpanded,
+            lastWeekToDateKm = d.lastWeekToDateKm,
+            cardioStreakWeeks = d.streakWeeks,
+            recentTypes = d.recentTypes
         )
     }.combine(settingsRepo.useMiles) { st, useMiles ->
         st.copy(useMiles = useMiles)
     }.combine(connection) { st, conn ->
-        st.copy(stepsConnected = conn.steps, todayWearable = conn.today)
+        st.copy(stepsConnected = conn.steps, todayWearable = conn.today, usualStepsByNow = conn.usual, stepsHour = conn.hour)
     }.combine(settingsRepo.lastCardioType) { st, lastType ->
         st.copy(lastCardioType = lastType)
     }.combine(importSuggestionsFlow) { st, suggestions ->
@@ -513,7 +545,11 @@ class CardioViewModel @Inject constructor(
     private data class WearableConnection(
         val steps: Boolean = false,
         /** Today's watch steps with their hourly split — the WEEK lens's STEPS mark. */
-        val today: CardioWearableDay? = null
+        val today: CardioWearableDay? = null,
+        /** The usual steps by this hour over the past week; null under three days of data. */
+        val usual: Int? = null,
+        /** The local hour [today] was read at. */
+        val hour: Int = -1
     )
 
     /** A watch workout already has a home when a NON-REST entry overlaps its span (or starts within
@@ -554,7 +590,10 @@ class CardioViewModel @Inject constructor(
         val weekDays: List<CardioDayCell>,
         val weekDistanceKm: Double,
         val records: List<com.forge.app.domain.cardio.CardioActivityRecord>,
-        val paceSeries: List<com.forge.app.domain.cardio.CardioPaceSeries>
+        val paceSeries: List<com.forge.app.domain.cardio.CardioPaceSeries>,
+        val lastWeekToDateKm: Double,
+        val streakWeeks: Int,
+        val recentTypes: List<String>
     )
 
     companion object {

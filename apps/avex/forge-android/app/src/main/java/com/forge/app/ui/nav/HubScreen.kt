@@ -173,6 +173,7 @@ fun HubScreen(
                     onConnectWatch = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } },
                     onOpenProfile = { pushOnce(Routes.PROFILE) },
                     onOpenCoach = if (BottomTab.COACH in tabs) ({ goToTab(BottomTab.COACH) }) else null,
+                    onOpenLift = { liftId -> nav.navigate(Routes.liftDetail(liftId)) },
                     initialTab = 1,
                     title = "Stats"
                 )
@@ -208,6 +209,8 @@ fun HubScreen(
                 )
                 BottomTab.COACH -> CoachScreen(
                     onBack = { goTo(homeIndex) },
+                    onOpenSettings = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Coach.name)) { launchSingleTop = true } },
+                    onOpenGoals = { pushOnce(Routes.GOALS) },
                     isVisible = pagerState.settledPage == page,
                     onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
                 )

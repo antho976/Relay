@@ -6,6 +6,19 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
+/**
+ * The three voices, as the phone's own faces.
+ *
+ * The redesign bundled Noto Serif Display, Noto Sans and Noto Sans Mono for a while (2026-10-21);
+ * Antho saw them on his phone and wanted the phone's fonts back, so these name the system families
+ * again. The object stays so every screen keeps reading its voice from one place.
+ */
+object AvexFonts {
+    val Serif: FontFamily = FontFamily.Serif
+    val SansSerif: FontFamily = FontFamily.SansSerif
+    val Monospace: FontFamily = FontFamily.Monospace
+}
+
 // `fontFeatureSettings = "tnum"` forces tabular (fixed-width) figures on the styles that render
 // big numbers — stat values, hero figures, counters. Without it, proportional digits shift the
 // layout horizontally as values change or animate (e.g. a count-up from 9 → 10). Prose body styles
@@ -22,7 +35,7 @@ private const val TabularFigures = "tnum"
  * sizes was not enough. Owned by `EditorialHeader`; nothing else should reach for it.
  */
 val MonoSectionAnchor = TextStyle(
-    fontFamily = FontFamily.Monospace,
+    fontFamily = AvexFonts.Monospace,
     fontWeight = FontWeight.Medium,
     fontSize = 15.sp,
     lineHeight = 18.sp,
@@ -31,7 +44,7 @@ val MonoSectionAnchor = TextStyle(
 
 val ForgeTypography = Typography(
     displayLarge = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = AvexFonts.Serif,
         fontWeight = FontWeight.Normal,
         fontSize = 52.sp,
         lineHeight = 58.sp,
@@ -39,7 +52,7 @@ val ForgeTypography = Typography(
         fontFeatureSettings = TabularFigures
     ),
     headlineLarge = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = AvexFonts.Serif,
         fontWeight = FontWeight.Normal,
         fontSize = 36.sp,
         lineHeight = 42.sp,
@@ -47,7 +60,7 @@ val ForgeTypography = Typography(
         fontFeatureSettings = TabularFigures
     ),
     headlineMedium = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = AvexFonts.Serif,
         fontWeight = FontWeight.Normal,
         fontSize = 28.sp,
         lineHeight = 34.sp,
@@ -55,7 +68,7 @@ val ForgeTypography = Typography(
         fontFeatureSettings = TabularFigures
     ),
     headlineSmall = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = AvexFonts.Serif,
         fontWeight = FontWeight.Normal,
         fontSize = 22.sp,
         lineHeight = 28.sp,
@@ -63,7 +76,7 @@ val ForgeTypography = Typography(
         fontFeatureSettings = TabularFigures
     ),
     titleLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = AvexFonts.SansSerif,
         fontWeight = FontWeight.Medium,
         fontSize = 18.sp,
         lineHeight = 24.sp,
@@ -71,56 +84,56 @@ val ForgeTypography = Typography(
         fontFeatureSettings = TabularFigures
     ),
     titleMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = AvexFonts.SansSerif,
         fontWeight = FontWeight.Medium,
         fontSize = 16.sp,
         lineHeight = 22.sp,
         letterSpacing = 0.15.sp
     ),
     titleSmall = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = AvexFonts.SansSerif,
         fontWeight = FontWeight.Medium,
         fontSize = 14.sp,
         lineHeight = 20.sp,
         letterSpacing = 0.1.sp
     ),
     bodyLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = AvexFonts.SansSerif,
         fontWeight = FontWeight.Normal,
         fontSize = 16.sp,
         lineHeight = 24.sp,
         letterSpacing = 0.sp
     ),
     bodyMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = AvexFonts.SansSerif,
         fontWeight = FontWeight.Normal,
         fontSize = 14.sp,
         lineHeight = 20.sp,
         letterSpacing = 0.sp
     ),
     bodySmall = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = AvexFonts.SansSerif,
         fontWeight = FontWeight.Normal,
         fontSize = 12.sp,
         lineHeight = 16.sp,
         letterSpacing = 0.sp
     ),
     labelLarge = TextStyle(
-        fontFamily = FontFamily.Monospace,
+        fontFamily = AvexFonts.Monospace,
         fontWeight = FontWeight.Medium,
         fontSize = 13.sp,
         lineHeight = 16.sp,
         letterSpacing = 0.8.sp
     ),
     labelMedium = TextStyle(
-        fontFamily = FontFamily.Monospace,
+        fontFamily = AvexFonts.Monospace,
         fontWeight = FontWeight.Normal,
         fontSize = 11.sp,
         lineHeight = 14.sp,
         letterSpacing = 0.6.sp
     ),
     labelSmall = TextStyle(
-        fontFamily = FontFamily.Monospace,
+        fontFamily = AvexFonts.Monospace,
         fontWeight = FontWeight.Normal,
         fontSize = 10.sp,
         lineHeight = 12.sp,

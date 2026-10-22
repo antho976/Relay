@@ -57,11 +57,16 @@ class ProfileViewModel @Inject constructor(
     // The ACTIVITY calendar's day sheet reads one day straight out of the DB rather than through
     // the profile snapshot — the snapshot carries per-day COUNTS, and the sheet needs the sessions.
     private val sessionDao: SessionDao,
-    private val cardioRepo: CardioRepository
+    private val cardioRepo: CardioRepository,
+    vacationRepo: com.forge.app.data.repo.VacationRepository
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ProfileUiState())
     val state: StateFlow<ProfileUiState> = _state.asStateFlow()
+
+    /** Holidays: the Consistency grid draws them as planned days off, not missed ones. */
+    val vacations: StateFlow<List<com.forge.app.data.db.entities.VacationPeriod>> =
+        vacationRepo.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** Every schedule change with its start day — lets ACTIVITY draw the rest days each day's plan had. */
     val scheduleHistory: StateFlow<List<com.forge.app.domain.schedule.ScheduleHistory.Entry>> =
@@ -162,10 +167,6 @@ class ProfileViewModel @Inject constructor(
         _bodyFatConnected.value = runCatching { bodyFatRepo.canImportFromHealthConnect() }.getOrDefault(false)
     }
 
-    /** True on this profile open iff the user just crossed into a higher tier since last visit. */
-    private val _showRankUpCelebration = MutableStateFlow(false)
-    val showRankUpCelebration: StateFlow<Boolean> = _showRankUpCelebration.asStateFlow()
-
     init {
         load()
         // Keep the filmstrip fresh when the photo store changes elsewhere — most importantly a shot
@@ -228,23 +229,6 @@ class ProfileViewModel @Inject constructor(
             data, _state.value.name, _state.value.photos, _state.value.hasAvatar, _state.value.avatarStamp,
             _state.value.avatarDefaultKey, _state.value.showAvatarHint
         )
-
-        // ── Rank-up celebration detection ─────────────────────────────────────
-        // Compare the current tier to the last-seen tier ordinal. A higher ordinal = tier upgrade.
-        // -1 = first ever profile open → write current tier as baseline with no celebration (avoid
-        // surprising brand-new users who haven't earned anything yet).
-        data.rank?.let { rank ->
-            val currentOrdinal = rank.tier.ordinal
-            val lastOrdinal = settingsRepo.lastSeenRankTierOrdinal.first()
-            if (lastOrdinal == -1) {
-                // First ever open — seed the baseline, no celebration.
-                settingsRepo.setLastSeenRankTierOrdinal(currentOrdinal)
-            } else if (currentOrdinal > lastOrdinal) {
-                // Tier crossed upward — celebrate, then advance the stored baseline.
-                _showRankUpCelebration.value = true
-                settingsRepo.setLastSeenRankTierOrdinal(currentOrdinal)
-            }
-        }
     }
 
     /** The in-flight [refresh], so a burst of resumes runs one fan-out rather than stacking them. */
@@ -279,8 +263,6 @@ class ProfileViewModel @Inject constructor(
         loading = false,
         name = name,
         sinceLabel = data.sinceLabel,
-        rank = data.rank,
-        xp = data.xp,
         totalSessions = data.totalSessions,
         totalVolumeLb = data.totalVolumeLb,
         totalPrs = data.totalPrs,
@@ -293,22 +275,17 @@ class ProfileViewModel @Inject constructor(
         setsLastWeek = data.setsLastWeek,
         prsThisWeek = data.prsThisWeek,
         prsLastWeek = data.prsLastWeek,
-        standings = data.standings,
+        prsThisMonth = data.prsThisMonth,
         photos = photos,
         hasAvatar = hasAvatar,
         avatarStamp = avatarStamp,
         avatarDefaultKey = avatarDefaultKey,
         showAvatarHint = showAvatarHint,
-        trophyUnlocked = data.trophyUnlocked,
-        trophyTotal = data.trophyTotal,
-        trophyGrid = data.trophyGrid,
-        closestTrophy = data.closestTrophy,
         lifetimeVolumeSeriesLb = data.lifetimeVolumeSeriesLb,
-        activityByDay = data.activityByDay
+        lifetimeVolumeTimesMs = data.lifetimeVolumeTimesMs,
+        activityByDay = data.activityByDay,
+        deloadDays = data.deloadDays
     )
-
-    /** Called by the UI after the one-shot celebration has played so it never replays on recompose. */
-    fun clearRankUpCelebration() { _showRankUpCelebration.value = false }
 
     // ── ACTIVITY day sheet ────────────────────────────────────────────────────────
 

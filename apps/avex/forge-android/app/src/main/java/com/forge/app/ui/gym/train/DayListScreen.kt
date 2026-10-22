@@ -78,6 +78,8 @@ fun DayListScreen(
     onOpenProfile: () -> Unit = {},
     /** Stats → a lift's plateau read → its call on the Coach tab; null without that tab. */
     onOpenCoach: (() -> Unit)? = null,
+    /** Stats → Every lift → a lift's own page. */
+    onOpenLift: (String) -> Unit = {},
     initialTab: Int = 0,
     /** Top-bar heading — "Stats" / "PRs" when hosting those sub-screens, "GYM" by default. */
     title: String = "GYM",
@@ -86,11 +88,12 @@ fun DayListScreen(
     Scaffold(
         topBar = {
             Column {
-                if (onBack != null) ForgeTopBar(onBack = onBack)
+                // Stats draws its own top row (back and history) in the redesign.
+                if (onBack != null && initialTab != 1) ForgeTopBar(onBack = onBack)
                 // Stats draws its own title inside its list so it scrolls away with the page. The
                 // back bar already holds the status bar; without one the spacer does.
                 if (initialTab == 1) {
-                    if (onBack == null) Spacer(Modifier.windowInsetsPadding(TopAppBarDefaults.windowInsets))
+                    Spacer(Modifier.windowInsetsPadding(TopAppBarDefaults.windowInsets))
                 } else Text(
                     title,
                     style = MaterialTheme.typography.headlineLarge,
@@ -117,7 +120,9 @@ fun DayListScreen(
                     onOpenHistory = onOpenHistory,
                     onOpenNotes = onOpenNotes,
                     onOpenRecap = onOpenRecap,
-                    onOpenCoach = onOpenCoach
+                    onOpenCoach = onOpenCoach,
+                    onBack = onBack,
+                    onOpenLift = onOpenLift
                 )
                 else -> TrainTab(
                     onOpenDay = onOpenDay,

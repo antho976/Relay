@@ -60,16 +60,15 @@ class BodyweightAuditTest {
             BodyweightEntry(id = 1, dateKey = "2026-09-01", weightLb = 182.0, recordedAt = 10 * day),
             BodyweightEntry(id = 2, dateKey = "2026-09-08", weightLb = 180.0, recordedAt = 17 * day)
         )
-        val st = weightMetric(entries, WeightUnit.ST) {}
+        val st = weightReading(entries, goalLb = null, unit = WeightUnit.ST)
         // 180 lb is 12 st 12 lb; the whole-stone figure used to read "13".
         assertEquals("12 st 12 lb", st.figure)
-        assertNull(st.unit)
-        assertEquals(-2.0, st.deltaValue!!, 1e-9)
-        assertEquals("2 lb", st.deltaText)
+        assertEquals("", st.unit)
+        assertEquals("↓ 2 lb since Sep 1", st.change)
 
-        val lb = weightMetric(entries, WeightUnit.LB) {}
-        assertEquals("180", lb.figure)
-        assertEquals("LB", lb.unit)
-        assertNull(lb.deltaText)
+        val lb = weightReading(entries, goalLb = null, unit = WeightUnit.LB)
+        assertEquals("180.0", lb.figure)
+        assertEquals(" lb", lb.unit)
+        assertEquals("↓ 2.0 lb since Sep 1", lb.change)
     }
 }
