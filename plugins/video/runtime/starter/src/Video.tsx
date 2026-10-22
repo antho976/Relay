@@ -1,22 +1,26 @@
-import { Glow, Gradient, Grid, pop, rise, theme, useSafePadding, useSpring, Words } from '@relay/video';
+import { Glow, Gradient, Grid, pop, rise, theme, useExit, useSafePadding, useSpring, Words } from '@relay/video';
 import { linearTiming, TransitionSeries } from '@remotion/transitions';
 import { fade } from '@remotion/transitions/fade';
 import { AbsoluteFill, useVideoConfig } from 'remotion';
 import type { Props } from './Root';
 
 // Two scenes with a fade between them. Every element a check should name has a data-id. The
-// title is already entering at frame 0 (a negative delay): the first frame is the thumbnail.
+// title is already entering at frame 0 (a negative delay): the first frame is the thumbnail. The
+// first scene's words leave before the fade starts, so the next scene's never land on them.
 
-const Intro: React.FC<Props> = ({ title, subtitle, accent }) => {
+const Intro: React.FC<Props & { leave: number }> = ({ title, subtitle, accent, leave }) => {
   const padding = useSafePadding();
   const sub = useSpring(4);
+  const out = useExit(leave, 10);
   const lastWord = title.trim().split(/\s+/).pop() ?? '';
   return (
     <AbsoluteFill>
       <Gradient />
       <Glow color={accent} />
       <Grid />
-      <AbsoluteFill style={{ ...padding, alignItems: 'center', justifyContent: 'center', gap: 36 }}>
+      <AbsoluteFill style={{
+        ...padding, alignItems: 'center', justifyContent: 'center', gap: 36, opacity: out, transform: `translateY(${(1 - out) * -24}px)`,
+      }}>
         <Words id="title" text={title} highlight={[lastWord]} highlightColor={accent} size={theme.type.display} delay={-10} />
         <div data-id="subtitle" style={{
           fontFamily: theme.fonts.body, fontSize: theme.type.subtitle, color: theme.colors.muted, textAlign: 'center',
@@ -56,7 +60,7 @@ export const Video: React.FC<Props> = (props) => {
   return (
     <TransitionSeries>
       <TransitionSeries.Sequence durationInFrames={intro} name="Intro">
-        <Intro {...props} />
+        <Intro {...props} leave={intro - fadeFrames} />
       </TransitionSeries.Sequence>
       <TransitionSeries.Transition presentation={fade()} timing={linearTiming({ durationInFrames: fadeFrames })} />
       <TransitionSeries.Sequence durationInFrames={outro} name="Outro">
