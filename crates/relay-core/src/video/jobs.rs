@@ -1,26 +1,73 @@
 //! Renders (`video.render`): queued rows run one at a time, oldest first, on a thread of their
 //! own, each through the worker. A render's row says where it is; `video.render.changed` carries
 //! it at each change of state and each tenth of the way, and `video.render.finished` once it is
-//! done, failed or stopped — what an agent waits on.
+//! done, failed or stopped. [`wait`] blocks on the row itself, so a render that finished before
+//! anyone started waiting is never missed (`video.render.wait`, `video.render {wait}`).
+//!
+//! The file is drawn to a partial name beside its own and renamed once its sound is measured (and
+//! brought to the loudness asked for, `audio`): a render that fails leaves the file it would have
+//! replaced as it was.
 
 use super::{bundle_dir, get_render, get_video, worker, Video};
 use crate::engine::{Engine, IntoBus};
 use relay_bus::error::BusError;
-use relay_bus::ops::video::{Format, Quality, RenderState, VideoRender};
+use relay_bus::ops::video::{AudioReport, Format, Quality, RenderState, VideoRender};
 use relay_bus::types::Id;
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::time::{Duration, Instant};
 
 /// The longest a render may run.
 const RENDER_WITHIN: Duration = Duration::from_secs(6 * 60 * 60);
+/// A wait looks at the rows again at least this often, whatever it was told.
+const WAIT_SLICE: Duration = Duration::from_secs(5);
 
-/// Whether a thread is running the queue.
+/// Whether a thread is running the queue, and a count of the changes to renders' rows that a
+/// [`wait`] sleeps on.
 #[derive(Default)]
 pub struct Queue {
     running: Mutex<bool>,
+    changes: Mutex<u64>,
+    changed: Condvar,
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Wake every [`wait`]: a render's row changed.
+pub fn notify(engine: &Engine) {
+    *lock(&engine.video.jobs.changes) += 1;
+    engine.video.jobs.changed.notify_all();
+}
+
+/// Block until every render of `ids` has finished (done, failed or cancelled), or `within` has
+/// passed: their rows as they stand, and whether it ran out. A render that finished before the
+/// call counts at once.
+pub fn wait(engine: &Engine, ids: &[Id], within: Duration) -> Result<(Vec<VideoRender>, bool), BusError> {
+    let deadline = Instant::now() + within;
+    let queue = &engine.video.jobs;
+    loop {
+        let seen = *lock(&queue.changes);
+        let renders = engine.read_store("video.render.wait", |conn| ids.iter().map(|id| get_render(conn, *id)).collect::<Result<Vec<_>, _>>())?;
+        let now = Instant::now();
+        if renders.iter().all(|r| r.state.is_final()) {
+            return Ok((renders, false));
+        }
+        if now >= deadline || engine.is_quitting() {
+            return Ok((renders, true));
+        }
+        let guard = lock(&queue.changes);
+        let slice = (deadline - now).min(WAIT_SLICE);
+        let _ = queue.changed.wait_timeout_while(guard, slice, |changes| *changes == seen);
+    }
+}
+
+/// How long a `wait` waits: `timeout_ms`, held to an hour; 30 minutes when none is given.
+pub fn wait_for(timeout_ms: Option<u64>) -> Duration {
+    Duration::from_millis(timeout_ms.unwrap_or(30 * 60 * 1000).clamp(1_000, relay_bus::ops::video::MAX_WAIT_MS))
 }
 
 /// The job name the worker knows render `id` by.
@@ -28,10 +75,32 @@ fn job(id: Id) -> String {
     format!("render-{id}")
 }
 
-/// Where render `id` of `video` is written: `out/<composition>-<id>.<ext>`.
-pub fn output(video: &Video, composition: &str, id: Id, format: Format) -> String {
-    let safe: String = composition.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect();
-    std::path::Path::new(&video.dir).join("out").join(format!("{safe}-{id}.{}", format.ext())).display().to_string()
+/// A render's name as asked for, made safe: letters, digits, dots, dashes and underscores, not
+/// starting with a dot, at most 80; `None` for one that keeps nothing.
+pub fn safe_name(raw: &str) -> Option<String> {
+    let name: String = raw.trim().chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '-' }).collect();
+    let name = name.trim_start_matches(['.', '-']).trim_end_matches(['.', '-']).chars().take(80).collect::<String>();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Where render `id` of `video` is written: `out/<name>.<ext>`, or `out/<composition>-<id>.<ext>`.
+pub fn output(video: &Video, composition: &str, id: Id, format: Format, name: Option<&str>) -> String {
+    let stem = match name.and_then(safe_name) {
+        Some(name) => name.strip_suffix(&format!(".{}", format.ext())).map(str::to_string).unwrap_or(name),
+        None => {
+            let safe: String = composition.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect();
+            format!("{safe}-{id}")
+        }
+    };
+    std::path::Path::new(&video.dir).join("out").join(format!("{stem}.{}", format.ext())).display().to_string()
+}
+
+/// The partial file a render draws to before it is renamed to `path`: hidden, beside it, with the
+/// same extension (Remotion reads the codec's container from it).
+fn partial(path: &str, id: Id) -> String {
+    let path = std::path::Path::new(path);
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    path.with_file_name(format!(".{id}.partial.{name}")).display().to_string()
 }
 
 /// The events a render's new row is announced with: always `video.render.changed`, and
@@ -46,11 +115,13 @@ pub fn events(render: &VideoRender) -> Vec<(String, Value)> {
 }
 
 fn advance(engine: &Engine, id: Id, project_id: Id, f: impl FnOnce(&Transaction, &str) -> Result<(), BusError>) -> Result<VideoRender, BusError> {
-    engine.system_write("video.render.advance", None, Some(project_id), None, json!({"render_id": id}), |tx, now| {
+    let render = engine.system_write("video.render.advance", None, Some(project_id), None, json!({"render_id": id}), |tx, now| {
         f(tx, now)?;
         let render = get_render(tx, id)?;
         Ok((render.clone(), events(&render)))
-    })
+    });
+    notify(engine);
+    render
 }
 
 /// Start the queue's thread unless it runs; it takes every queued render, oldest first.
@@ -101,8 +172,8 @@ fn render_one(engine: &Arc<Engine>, id: Id, project_id: Id) {
     let outcome = render_with_worker(engine, &render);
     let _ = advance(engine, id, project_id, |tx, now| {
         match &outcome {
-            Ok((path, bytes)) => tx.prepare_cached("UPDATE video_renders SET state = 'done', progress = 1, path = ?2, bytes = ?3, finished_at = ?4 WHERE id = ?1").bus()?
-                .execute(params![id, path, bytes, now]).bus()?,
+            Ok((path, bytes, audio)) => tx.prepare_cached("UPDATE video_renders SET state = 'done', progress = 1, path = ?2, bytes = ?3, audio = ?4, finished_at = ?5 WHERE id = ?1").bus()?
+                .execute(params![id, path, bytes, audio.as_ref().and_then(|a| serde_json::to_string(a).ok()), now]).bus()?,
             Err(e) => {
                 let state = if e.code == "video.render.cancelled" { "cancelled" } else { "failed" };
                 tx.prepare_cached("UPDATE video_renders SET state = ?2, error = ?3, finished_at = ?4 WHERE id = ?1").bus()?
@@ -113,14 +184,15 @@ fn render_one(engine: &Arc<Engine>, id: Id, project_id: Id) {
     });
 }
 
-fn render_with_worker(engine: &Arc<Engine>, render: &VideoRender) -> Result<(String, i64), BusError> {
+fn render_with_worker(engine: &Arc<Engine>, render: &VideoRender) -> Result<(String, i64, Option<AudioReport>), BusError> {
     let (video, props): (Video, String) = engine.read_store("video.render.read", |conn| {
         let props: String = conn.prepare_cached("SELECT props FROM video_renders WHERE id = ?1").bus()?.query_row([render.id], |r| r.get(0)).bus()?;
         Ok((get_video(conn, render.video_id)?, props))
     })?;
-    let path = output(&video, &render.composition, render.id, render.format);
+    let path = output(&video, &render.composition, render.id, render.format, render.name.as_deref());
     std::fs::create_dir_all(std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new(&video.dir)))
         .map_err(|e| BusError::internal(format!("out/: {e}")))?;
+    let drawn = partial(&path, render.id);
     let (scale, crf) = match render.quality {
         Quality::Preview => (0.5, Some(28)),
         Quality::Standard => (1.0, None),
@@ -146,12 +218,21 @@ fn render_with_worker(engine: &Arc<Engine>, render: &VideoRender) -> Result<(Str
     let range = render.range.map(|[a, b]| json!([a, b]));
     let result = worker::call(engine, "render", json!({
         "job": job(render.id), "dir": video.dir, "bundle_dir": bundle_dir(engine, video.id),
-        "composition": render.composition, "format": render.format.name(), "out": path, "scale": scale,
+        "composition": render.composition, "format": render.format.name(), "out": drawn, "scale": scale,
         "crf": crf, "props": serde_json::from_str::<Value>(&props).unwrap_or(json!({})), "range": range,
     }), RENDER_WITHIN);
     worker::unwatch(engine, &job(render.id));
-    let done = result?;
-    Ok((done["path"].as_str().unwrap_or(&path).to_string(), done["bytes"].as_i64().unwrap_or(0)))
+    let finished = result.and_then(|_| super::audio::finish(engine, render, std::path::Path::new(&drawn)));
+    let audio = match finished {
+        Ok(audio) => audio,
+        Err(e) => {
+            let _ = std::fs::remove_file(&drawn);
+            return Err(e);
+        }
+    };
+    std::fs::rename(&drawn, &path).map_err(|e| BusError::internal(format!("{path}: {e}")))?;
+    let bytes = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
+    Ok((path, bytes, audio))
 }
 
 /// Stop render `id`: a queued one at once; a running one through the worker, its thread then
@@ -190,7 +271,13 @@ mod tests {
             width: 1080, height: 1920, fps: 30.0, duration_frames: 300, version: 1, poster: None, last_render: None,
             created_by: "user".into(), updated_by: "user".into(), created_at: String::new(), updated_at: String::new(), deleted_at: None,
         };
-        assert_eq!(output(&video, "main", 12, Format::Mp4), "/v/p1/3-t/out/main-12.mp4");
-        assert_eq!(output(&video, "wide/../x", 13, Format::Prores), "/v/p1/3-t/out/wide----x-13.mov");
+        assert_eq!(output(&video, "main", 12, Format::Mp4, None), "/v/p1/3-t/out/main-12.mp4");
+        assert_eq!(output(&video, "wide/../x", 13, Format::Prores, None), "/v/p1/3-t/out/wide----x-13.mov");
+        // A name asked for is the file's, made safe; its own extension is not doubled.
+        assert_eq!(output(&video, "main", 14, Format::Mp4, Some("avex-1.0 voiceover")), "/v/p1/3-t/out/avex-1.0-voiceover.mp4");
+        assert_eq!(output(&video, "main", 15, Format::Wav, Some("mix.wav")), "/v/p1/3-t/out/mix.wav");
+        assert_eq!(output(&video, "main", 16, Format::Mp4, Some("../../etc")), "/v/p1/3-t/out/etc.mp4");
+        assert_eq!(output(&video, "main", 17, Format::Mp4, Some("...")), "/v/p1/3-t/out/main-17.mp4");
+        assert_eq!(partial("/v/p1/3-t/out/mix.wav", 15), "/v/p1/3-t/out/.15.partial.mix.wav");
     }
 }

@@ -114,6 +114,17 @@ fn letterbox(texture: &gdk::Texture, w: u32, h: u32) -> gdk::Texture {
     gdk::MemoryTexture::new(w as i32, h as i32, gdk::MemoryFormat::B8g8r8a8Premultiplied, &glib::Bytes::from_owned(out), w as usize * 4).upcast()
 }
 
+/// What the banner says while the kit is set up: the stage, how far, and for how long.
+fn installing(progress: Option<&relay_bus::ops::video::KitProgress>) -> String {
+    let Some(p) = progress else {
+        return "Setting up video rendering… it downloads about 600 MB once.".to_string();
+    };
+    let stage = if p.stage == "browser" { "Fetching Remotion's browser" } else { "Installing Remotion and its packages" };
+    let (m, s) = (p.elapsed_s / 60, p.elapsed_s % 60);
+    let took = if m > 0 { format!("{m} min {s} s") } else { format!("{s} s") };
+    format!("{stage}… {}% · {took}", (p.progress * 100.0).round())
+}
+
 /// What a card says of a video's newest render.
 fn render_note(v: &Video) -> String {
     match &v.last_render {
@@ -268,6 +279,12 @@ impl Shelf {
         if ev == "video.kit.changed" {
             *self.kit.borrow_mut() = serde_json::from_value(payload.clone()).ok();
             self.render();
+        } else if ev == "video.kit.progress" {
+            // How far the setup has come: the banner says it, nothing else changes.
+            if let Some(kit) = self.kit.borrow_mut().as_mut() {
+                kit.progress = serde_json::from_value(payload.clone()).ok();
+            }
+            self.render();
         } else if mine && (ev == "video.changed" || ev == "video.render.finished" || payload["progress"].as_f64() == Some(0.0)) {
             // A render's tenths change no card but its own state, which the start and the end carry.
             self.refresh();
@@ -302,7 +319,7 @@ impl Shelf {
         let (show, text, key, spin) = match state {
             _ if !on && !any => (false, String::new(), None, false),
             None | Some(KitState::Ready) => (false, String::new(), None, false),
-            Some(KitState::Installing) => (true, "Setting up video rendering… it downloads about 600 MB once.".to_string(), None, true),
+            Some(KitState::Installing) => (true, installing(kit.as_ref().and_then(|k| k.progress.as_ref())), None, true),
             Some(KitState::NoNode) => (true, "Rendering videos needs Node.js 20 or newer. Install nodejs and npm with your package manager, then come back.".to_string(), None, false),
             Some(KitState::Outdated) => (true, "Video rendering was set up for an older Relay.".to_string(), Some("Update"), false),
             Some(KitState::Failed) => (true, format!("Setting up video rendering failed: {}", kit.as_ref().and_then(|k| k.error.clone()).unwrap_or_default()), Some("Try again"), false),
@@ -448,6 +465,13 @@ impl Shelf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setting_up_says_how_far_it_has_come() {
+        let p = relay_bus::ops::video::KitProgress { stage: "browser".into(), progress: 0.734, detail: String::new(), elapsed_s: 95 };
+        assert_eq!(installing(Some(&p)), "Fetching Remotion's browser… 73% · 1 min 35 s");
+        assert!(installing(None).contains("600 MB"));
+    }
 
     #[test]
     fn lengths_and_shapes_read_as_people_say_them() {

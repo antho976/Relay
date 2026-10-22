@@ -46,6 +46,106 @@ takes about 600 MB, and runs on a thread of its own (`npm install`, then the bro
 went with `video.kit.changed`. Relay passes Remotion no licence key, so Remotion sends no usage
 reports; Remotion is free for individuals and companies of up to three people.
 
+## Renders
+
+`video.render` queues a render and answers its row; with `wait: true` it answers once the render
+has finished (`Ctx::finish_reply`, waiting on the queue's own condition with nothing locked).
+`video.render.wait {render_ids}` waits for renders started without it, and `video.render.batch`
+queues up to twelve at once (compositions, the soundtrack as WAV, platforms). Every wait reads the
+rows, so a render that finished before anyone waited is never missed; `bus.wait` also takes
+`since`, a moment from which it replays matching events it has kept (ten minutes, 1,024 events).
+
+A render is drawn to a hidden partial file beside its own and renamed once done: `out/<name>.<ext>`
+when it was given a `name` (a render of the same name replaces the file), else
+`out/<composition>-<id>.<ext>`. A failed render leaves the file it would have replaced.
+
+## Sound
+
+Every render with sound is measured once done (`video/audio.rs`), its sound decoded by ffmpeg as a
+player would read it: integrated loudness (ITU-R BS.1770-4 with EBU R128's gates), loudness range
+(EBU Tech 3342), the loudest 3 s, the true peak (BS.1770-4 Annex 2's 4× oversampling), the sample
+peak and the samples at full scale, with warnings: `clipping`, `hot` (over −1 dBTP), `silent`,
+`loud` and `quiet` (against what was asked, or the platforms' −14 LUFS). `loudness` and `peak`, or
+a `preset` (`youtube`, `shorts`, `reels`, `tiktok` −14 LUFS; `discord`, `podcast` −16;
+`broadcast` −23; all −1 dBTP), bring it there: one gain with a look-ahead true-peak limiter (5 ms
+ahead, about 80 ms to recover), worked out again from what came out until within 0.1 LU, the sound
+written back with the picture copied. No compression: ffmpeg's `loudnorm` falls back to dynamic
+processing whenever a plain gain would pass the peak.
+
+**Sync.** Remotion's MP4 carries an edit list that skips the AAC encoder's 2,048 priming samples,
+so it is in sync with its picture as players read it (0 samples against a WAV render of the same
+frames, in `video_e2e_sound_from_cues_to_loudness`); read without the edit list it is 42.67 ms
+late. A loudness rewrite keeps it in sync, under the same test.
+
+ffmpeg is the kit's (Remotion's compositor package ships one with its libraries), else the
+machine's. It has no raw muxers, so sound comes over a pipe as WAV and frames through
+`image2pipe`.
+
+**Beats** (`video.audio.beats`, `video/beats.rs`): the spectral flux of a 1024-point STFT every 256
+samples at 22.05 kHz; tempo by autocorrelation between 50 and 200 BPM with an octave-wide prior at
+120 (or at the `bpm` given); Ellis's dynamic-programming tracker; a least-squares constant-tempo
+grid through the beats it found (its RMS residual answered); the phase set on the attacks (a 2 ms
+envelope's steepest rise within 30 ms); downbeats where the low band jumps into a bar (a drop after
+a break), its energy, and the music's opening beat; sections where a bar's loudness or low band
+moves 3 or 6 dB against the two before. Readings: `docs/perf/VIDEO-2026-10-22.md`.
+
+## The timeline
+
+`video.timeline` makes one audio-only render with `RELAY_PROBE=timeline`: no pictures, and on each
+frame the probe reports the Sequences Remotion's sequence manager holds (`relayRoot` asks it to keep
+them outside the Studio: `Internals.SequenceRegistrationContext`), the kit's sounds, the sound
+Remotion collects for the mix (read in the page without taking it), and the beat grid a
+`useBeatGrid` set. Scenes are placed up their parents (`from` is in the parent's frames);
+Remotion's own components that register (`<AbsoluteFill>`) and the kit's sound wrappers are not
+scenes. A kit sound's start is exact (it says how long it has played); any other's comes from where
+it is in its file; each ends where its file does (ffprobe). The render's WAV is the mix, measured
+and kept as a waveform. The grid is the code's, or the call's `bpm`, or one found in `music`.
+
+What the sound gets wrong: `off_beat` (an effect or a top-level cut more than a frame from a beat),
+`voice_overlap`, `no_duck` (music under a voice line no more than 3 dB down from its usual level),
+`silence` (2 s with the mix under −50 dBFS, or, in a scan, nothing playing), `clipping`. `video.scan`
+checks the sound from the frames it measures; `video.still {sound: true}` draws the mix's waveform
+under its sheet, each frame numbered, the cues and voice lines marked. Both pictures are drawn by
+the engine (`video/timeline.rs`) in the sheets' pixel font.
+
+## Footage and assets
+
+- `video.asset.add` takes `path`, up to 100 `paths`, or an installed `font` by family (fontconfig:
+  the faces for `weights` and `italic`, under `assets/fonts/`, with the `loadFonts(…)` call). A
+  name another file has gets a number and the answer says so (`renamed_from`); `overwrite`
+  replaces it; `link` links the file where it is; `fps` writes a clip at a constant frame rate.
+- The worker hands Remotion a mirror of links for `public/` and hardens the links in the finished
+  bundle into hard links: Remotion copies a folder's files into every bundle and its file server
+  refuses links (`docs/perf/VIDEO-2026-10-22.md`).
+- `video.asset.inspect`: size, length, average fps, frame count, whether the frames are evenly
+  spaced (a phone's recording is not), its sound measured, and motion events from the clip shrunk
+  to 96 px in grey: `cut` (the screen changed at once), `change` (a tap, a value), `motion` (half a
+  second or more: a scroll), with where on screen.
+- `video.capture.android` (`video/capture.rs`) records a device through adb while its steps run,
+  holding the device's lease (`device_lease`, a `claim` for the capture's length): demo mode's
+  status bar, `screenrecord` stopped with SIGINT so its file is finished, pulled, written at a
+  constant frame rate, added, and answered with where each step fell and the motion events.
+
+## ElevenLabs
+
+`video.voice`, `video.sfx`, `video.music` and `video.transcribe` (`video/eleven.rs`) use the key the
+person saved (`video.elevenlabs.key_set`, from a video's board: checked with ElevenLabs, kept in
+the desktop keyring through the keyring tool's stdin, or a 0600 file beside the test store; never
+audited, answered or logged). Requests go to api.elevenlabs.io alone, over https, never following a
+redirect, each with a deadline and a cap. A voice line comes with each character's timing, made
+into words (and Remotion captions); `say` sends other words for some (`{"Avex": "Ay-vex"}`) and
+maps the timings back to the words as written. `video.transcribe {expect}` aligns what it heard
+with what was meant (an edit distance over words) and lists the differences. What Relay makes keeps
+how it was made beside it (`<file>.json`), which `video.asset.list` answers as `made`.
+
+## The live preview
+
+`video.preview` runs Remotion Studio (`@remotion/cli`, pinned with the kit) on one video at a
+time, for the person to watch with sound, scrub and step through without a render; the board's
+**Watch live** opens it in the browser. Studio binds every interface and checks npm for updates:
+`.relay/loopback.cjs`, loaded first, puts every server on 127.0.0.1 and answers the check
+offline. It stops when another video is previewed, after two hours, or with Relay.
+
 ## The worker
 
 One Node.js process per engine, `node videos/.relay/worker.mjs`, started by the first request that
@@ -111,6 +211,11 @@ the code as it is, then puts the version's back, and is undone by restoring the 
   transparency, and the sound alone. Progress shows over the player, with **Stop**.
 - A video opens on its poster; **Play** loads its newest render into the player (the media pipeline
   starts then, not when the board opens).
+- **Watch live** opens the live preview in the browser. **Render** also offers YouTube, Shorts,
+  Reels and TikTok (−14 LUFS) and Discord (−16 LUFS); each render's row says its name and its
+  sound (LUFS and true peak, red when it clips or runs hot).
+- **ElevenLabs**, at the foot of the side panel: the person saves their key there (a password
+  field) and sees the account's tier and characters left.
 - **Ask agent** pauses the player and sends the video's terminal one line: the video, the moment
   on screen (`1.5s · f45`), your request and the `video.still` that shows the agent that frame. It
   goes as a design's Ask does: typed at an agent at its prompt, priority mail to one at work, held
@@ -127,7 +232,16 @@ the code as it is, then puts the version's back, and is undone by restoring the 
 | Setting up the kit | `crates/relay-core/src/video/kit.rs` |
 | check, still and scan: versions first, stills, sheets, posters | `crates/relay-core/src/video/stills.rs` |
 | Issues from probed frames, motion between them, reading time | `crates/relay-core/src/video/probe.rs` |
-| PNGs, sheets with labels, contrast | `crates/relay-core/src/video/sheet.rs` |
+| PNGs, sheets with labels, contrast, the pixel font | `crates/relay-core/src/video/sheet.rs` |
+| ffmpeg and ffprobe: decoding, probing, frames, constant rates | `crates/relay-core/src/video/media.rs` |
+| Loudness, true peak, the limiter, a render's sound | `crates/relay-core/src/video/audio.rs` |
+| Beat grids | `crates/relay-core/src/video/beats.rs` |
+| The timeline, the sound's issues, its pictures | `crates/relay-core/src/video/timeline.rs` |
+| Assets: add, link, fonts, list | `crates/relay-core/src/video/assets.rs` |
+| Clips: frame rates and motion | `crates/relay-core/src/video/inspect.rs` |
+| ElevenLabs | `crates/relay-core/src/video/eleven.rs` |
+| Android capture | `crates/relay-core/src/video/capture.rs` |
+| The live preview | `crates/relay-core/src/video/preview.rs`, `plugins/video/runtime/loopback.cjs` |
 | Versions | `crates/relay-core/src/video/versions.rs` |
 | The render queue | `crates/relay-core/src/video/jobs.rs` |
 | Storage (migration v34) | `crates/relay-core/src/store.rs` |
@@ -146,8 +260,16 @@ the code as it is, then puts the version's back, and is undone by restoring the 
 - `crates/relay-core/tests/video_e2e.rs` (ignored; needs Node.js and, once, the network) sets the kit
   up for real and checks, looks at and renders the starter, finding a planted line in a missing font,
   too small and faint, under a platform's buttons; and a typo and a throw at their lines.
+- `video_e2e_sound_from_cues_to_loudness` (ignored, needs ffmpeg) makes music, a voice line and
+  cues, draws the kit's new pieces, checks the timeline, the beats, a render brought to −14 LUFS,
+  and the MP4's sync against a WAV render to the sample; `video_e2e_the_preview_is_studio_on_loopback`
+  opens Studio and checks it listens on 127.0.0.1 alone.
+- `crates/relay-core/tests/video.rs` also drives ElevenLabs through a stand-in for the network
+  (`Hub::use_elevenlabs`), the capture through a fake adb (`fixtures/video/fake_adb.py`), and the
+  preview through a plain server.
 - `scripts/video-smoke.py` makes two videos through the real worker on a disposable engine, borrowing
-  the kit `video_e2e` set up, and captures the gallery and both boards in a private virtual KWin.
+  the kit `video_e2e` set up (the promo with a music bed, rendered to YouTube's loudness), and
+  captures the gallery and both boards in a private virtual KWin.
 
 Readings on this machine (Ryzen, the engine's debug build, the kit warm in the page cache): a first
 check 3.9 s (worker start, bundle, typecheck, browser), a check with nothing changed 0.10 s, a contact

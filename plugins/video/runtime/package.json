@@ -10,6 +10,7 @@
     "@relay/video": "file:./.relay/kit",
     "@remotion/bundler": "4.0.534",
     "@remotion/captions": "4.0.534",
+    "@remotion/cli": "4.0.534",
     "@remotion/fonts": "4.0.534",
     "@remotion/layout-utils": "4.0.534",
     "@remotion/lottie": "4.0.534",
@@ -28,6 +29,6 @@
     "remotion": "4.0.534",
     "source-map": "0.7.6",
     "typescript": "6.0.3",
-    "zod": "4.6.5"
+    "zod": "4.5.4"
   }
 }

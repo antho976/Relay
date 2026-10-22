@@ -1,6 +1,6 @@
 ---
 name: video-code
-description: Make videos with code in Relay - a video is a folder of React components that Remotion draws frame by frame (compositions, props and zod schemas, timing with useCurrentFrame, interpolate and spring, Sequence, Series and TransitionSeries, Img, OffthreadVideo and Audio with staticFile), Relay's kit (@relay/video - Title, Words, FitText, Counter, Highlight, Phone drawn at phone points with its status bar, Window, Tap, Cursor, Donut and Bars charts, Captions, Gradient, Grid, Glow, Grain, safe areas, the theme, bundled fonts, motion helpers), the loop of editing with your file tools then video.check (errors at file and line), video.still (a picture or contact sheet with the problems found - clipped, offscreen, unsafe, contrast, small_text, text_overlap, font_fallback) and video.scan (the problems across the whole video, and words shown too briefly to read), assets through video.asset.add, putting a screen from a Relay design into a video, rendering with video.render and waiting on video.render.finished, versions, and the craft of pacing, type and layout for promos, explainers and social clips. Use whenever a task asks to make, edit, check or render a video, an animation to export as a video, a promo, a reel, a short, or a message starts with "[Relay video]".
+description: Make videos with code in Relay - a video is a folder of React components that Remotion draws frame by frame (compositions, props and zod schemas, timing with useCurrentFrame, interpolate and spring, Sequence, Series and TransitionSeries, Img, OffthreadVideo and Audio with staticFile), Relay's kit (@relay/video - Title, Words, FitText, Counter, Highlight, Phone as an iPhone or an Android phone with its status bar, BeforeAfter and VersionPill, Window, Tap, Cursor, Donut and Bars, Checklist, Captions, Cue, Voice and Music with one level table and ducking, useBeatGrid, Gradient, Grid, Glow, Grain, safe areas, the theme, bundled fonts, motion helpers), the loop of editing with your file tools then video.check, video.still (a picture or contact sheet with the problems found, and the sound under it), video.scan and video.timeline (every scene and sound on the beat grid, the mix's loudness, cues off the beat, voices over each other, music that does not duck, silences), sound - video.audio.beats for a music file's grid, ElevenLabs voice lines with word timings, music and sound effects, speech-to-text to hear a name said wrong, loudness targets for YouTube, Shorts, Reels, TikTok and Discord - footage (video.capture.android, video.asset.inspect for frame rates and where the screen changes, links, installed fonts), rendering with video.render {wait, name, preset} and batches, the live preview, versions, and the craft of pacing, type, sound and layout for promos, explainers and social clips. Use whenever a task asks to make, edit, check or render a video, an animation to export as a video, a promo, a reel, a short, or a message starts with "[Relay video]".
 ---
 
 # Videos as code in Relay
@@ -28,13 +28,23 @@ project's **Design** view.
 6. `video.scan {video_id}` before you call it done — every third frame of the whole video checked
    without pictures (about a second for 15 s): what the stills' samples missed, and words on screen
    too briefly to read.
-7. `video.render {video_id}` when the person wants the file. Wait:
-   `bus.wait {events: ["video.render.finished"], matching: {"id": <render id>}, timeout_ms: 600000}`,
-   then give them `path` (and say how long it is and its size).
+7. `video.render {video_id, name, wait: true}` when the person wants the file: it answers once the
+   render has finished, with `path`, `bytes` and `audio` (its loudness, true peak and warnings).
+   Without `wait` it answers at once; then `video.render.wait {render_ids: [id]}`, which reads the
+   row and so never misses a render that finished first. Give the person the path, its length
+   and size, and its loudness. Several files at once (compositions, the soundtrack as WAV,
+   platforms): `video.render.batch {video_id, jobs: [...], wait: true}`.
 
-If a call answers `video.kit.missing`, call `video.kit.install` once and
-`bus.wait {events: ["video.kit.changed"], timeout_ms: 900000}` until `state` is `ready` (it downloads
-about 600 MB the first time; say so). `video.kit.no_node` means Node.js is missing: ask the person.
+If a call answers `video.kit.missing`, call `video.kit.install` once: it answers the real state
+(`ready` when it already is). While `installing`, `video.kit.progress` reports the stage and how
+far along it is every few seconds; `bus.wait {events: ["video.kit.changed"], timeout_ms: 600000}`
+wakes once it is done (one to five minutes the first time, about 600 MB; say so).
+`video.kit.no_node` means Node.js is missing: ask the person.
+
+When the video has sound, also: `video.timeline {video_id}` (every scene and sound on one time
+axis with the beat grid, as a picture, and the sound's issues), and render with the platform's
+loudness (`preset: "youtube"`). To let the person watch it with sound before a render:
+`video.preview {video_id}` and give them the `url`.
 
 ## The tools
 
@@ -46,13 +56,27 @@ about 600 MB the first time; say so). `video.kit.no_node` means Node.js is missi
 | `video.check {video_id}` | Build + typecheck + list compositions (id, size, fps, length; their props schemas are in `video.get`). Errors: `{kind, file, line, col, message}`; kinds `syntax`, `bundle`, `type`, `runtime`, `probe`. |
 | `video.still {video_id, at? \| count?, from?, to?, composition?, scale?, props?, boxes?}` | The picture (`png`, attached through MCP) and `issues`; `boxes: true` adds every `data-id` element's box per frame. Default: 6 frames across it. `scale` is against the composition's size (0.6 of 1080×1920 is 648×1152); by default one frame is 1280 px on its long side, a sheet's frames 480. |
 | `video.scan {video_id, every?, from?, to?, composition?, props?}` | The issues across the whole video (or `from`–`to`), measured every `every` frames (default 3) with no pictures: no `contrast`, but words in motion are left out of the position checks, and `brief_text` finds words shown too short a time to read. |
-| `video.render {video_id, format?, quality?, from?, to?, composition?, props?}` | A render job; answers the render row at once. `format`: `mp4` (default), `webm`, `gif`, `prores` (keeps transparency), `mp3`, `wav`. `quality`: `preview` (half size, quick), `standard`, `high`. Writes `out/<composition>-<id>.<ext>`. |
+| `video.timeline {video_id, composition?, props?, bpm?, first_beat?, music?}` | Every scene (Sequence) and sound with its start frame and length, whether each starts on the beat grid (`on_beat`, `on_bar`, `off_by`, `beat: "bar 9 · beat 3"`), the mix's loudness, and the sound's issues: `off_beat`, `voice_overlap`, `no_duck`, `silence`, `clipping`. Through MCP the timeline comes as a picture: scenes, music, voice and cue lanes, the mix's waveform and the grid. The grid is the code's `useBeatGrid`, or `bpm`/`first_beat`, or found in `music`. |
+| `video.render {video_id, format?, quality?, from?, to?, composition?, props?, name?, loudness?, peak?, preset?, wait?}` | A render. `format`: `mp4` (default), `webm`, `gif`, `prores` (keeps transparency), `mp3`, `wav`. `quality`: `preview` (half size, quick), `standard`, `high`. Writes `out/<name>.<ext>` (default `<composition>-<id>`; a name used again is replaced). Every render with sound is measured (`audio`: LUFS, LRA, true peak, clipped samples, warnings); `loudness` (LUFS) and `peak` (dBTP), or `preset` (`youtube`, `shorts`, `reels`, `tiktok` -14; `discord`, `podcast` -16; `broadcast` -23), bring it there with a gain and a true-peak limiter. `wait: true` answers once it has finished. |
+| `video.render.batch {video_id, jobs: [{composition?, format?, name?, loudness?, preset?, …}], wait?}` | Up to 12 renders in one call, run in order. |
+| `video.render.wait {render_ids, timeout_ms?}` | Wait for renders started without `wait`: one already finished answers at once. |
 | `video.render.get {render_id}` / `video.render.cancel {render_id}` | Where a render is; stop one. |
-| `video.asset.add {video_id, path, name?}` | Copy a file (picture, clip, sound, font) into `public/assets/`; answers `static_file` for `staticFile()`. |
+| `video.asset.add {video_id, path \| paths \| font, name?, overwrite?, link?, fps?, weights?, italic?}` | Add files to `public/assets/`; answers `assets: [{static_file, …}]` for `staticFile()`. `paths`: up to 100 at once. A name another file has gets a number and the answer says so (`renamed_from`); `overwrite: true` replaces it instead. `link: true` links a large clip where it is (no copy). `fps: 30` writes a clip at a constant frame rate (phone recordings are variable). `font: "Noto Serif", weights: [400, 700], italic?` adds an installed family's files and answers the `loadFonts(…)` call. |
+| `video.asset.list {video_id}` | Every file under `public/`: kind, size, what a link points to, and how Relay made it (`made`). |
+| `video.asset.inspect {video_id, asset, motion?}` | A clip's size, length, fps and frame count, `variable_rate` (uneven frames), its sound's loudness, and `motion`: the frames where its picture changes (`cut` a new screen, `change` a tap or a value, `motion` a scroll), with where on screen. |
+| `video.audio.beats {video_id, asset, beats_per_bar?, bpm?}` | A music file's grid: `bpm`, `first_beat_s`, `first_downbeat_s`, `frames_per_beat`, every bar (`frame`, loudness), the `sections` where it gets louder or quieter or the bass comes in, and the kit's `useBeatGrid(…)` call for it. |
+| `video.preview {video_id, composition?, stop?}` | A live preview for the person: Remotion Studio on this machine (127.0.0.1 only) to play with sound, scrub, step frames and see the timeline, without a render. Answers `url`; give it to them. One video at a time. |
+| `video.voice {video_id, text, voice, say?, model?, stability?, similarity?, style?, speed?, name?}` | A voice line from ElevenLabs into `assets/vo-….mp3`: `words` (each word's start and end) and `captions` (Remotion `Caption[]` from the line's start). `say: {"Avex": "Ay-vex"}` changes how a word is said while its timing keeps its spelling. The text, voice and timings are kept beside the file. |
+| `video.voices {search?}` | The voices the person's key can use (name, id, accent, use). |
+| `video.sfx {video_id, prompt, seconds?, influence?, loop?, name?}` | A sound effect from a description into `assets/sfx-….mp3`. |
+| `video.music {video_id, prompt, seconds, instrumental?, name?}` | Music from a description (genre, mood, instruments, tempo, its shape over time) into `assets/music-….mp3`; then `video.audio.beats` for its grid. |
+| `video.transcribe {video_id, asset, expect?, language?}` | Hear a line back: its words and timings, and with `expect`, `misheard` (what was heard instead of each written word). Check every name and product. |
+| `video.elevenlabs.status {}` | Whether the person saved an ElevenLabs key, and its characters left. Never ask for the key: they save it in the Design view. |
+| `video.capture.android {video_id, steps, launch?, device?, fps?, tail?, demo?, name?}` | Record an Android device's screen while `steps` run (`{tap: [x, y]}`, `{swipe: [x1, y1, x2, y2], ms}`, `{text}`, `{key: "BACK"}`, `{wait: 1.5}`, `{launch: "pkg/.Activity"}`), holding the device's lease, with demo mode's clean status bar, at a constant `fps` (default 30). Answers the asset, where each step fell (`steps[].frame`) and `motion` (exact frames the screen changed). |
 | `video.update {video_id, title?, composition?, props?}` | Rename; pick the default composition; set props (`{"main": {...}}`, `null` to reset). |
 | `video.version.restore {video_id, version}` | Put the code back as a version had it (the current code is recorded first). |
 | `video.delete {video_id}` / `video.restore {video_id}` | Only when the person asked. |
-| `video.kit.status {}` / `video.kit.install {}` | Whether this machine can render; set it up. `kit_dir` is the kit's sources, to read when this skill is not enough; Remotion's types are in `node_modules/` under `root`. |
+| `video.kit.status {}` / `video.kit.install {force?}` | Whether this machine can render; set it up (the answer is the real state, with `progress` while installing). `kit_dir` is the kit's sources, to read when this skill is not enough; Remotion's types are in `node_modules/` under `root`. |
 
 Moments (`at`, `from`, `to`) are seconds as a number (`1.5`), or `"1.5s"`, `"1500ms"`, `"0:01.5"`,
 `"f45"` (a frame), `"50%"`, `"start"`, `"end"`. Past the end is the last frame.
@@ -132,12 +156,37 @@ Text (each takes `id` → its `data-id`, `delay`, `style`, and `size`, `color`, 
 | `<Counter to from duration decimals prefix suffix locale>` | A number counting up: `$1,240`, `98%`. |
 | `<Highlight>…</Highlight>` | A marker sweep behind inline words. |
 
+Sound (`Cue`, `Voice` and `Music` each mark themselves, so the timeline and the checks know what
+plays and when; prefer them to a bare `<Audio>`):
+
+| Export | Use |
+| --- | --- |
+| `LEVELS` | One level table: `music` 0.45, `voice` 1, `sfx` 0.6, `ui` 0.4, `whoosh` 0.4, `impact` 0.7, `ambience` 0.25. Normalise effect files to the same peak, then shape the mix here only. |
+| `<Cue src="assets/tap.wav" at={grid.beat(8)} level="ui" gain? name? frames? fadeOut?>` | An effect at a frame (in the sequence it is in). `src` takes `assets/…` or a `staticFile()`. |
+| `<Voice src at name? volume?>` | A voice line. |
+| `<Music src at? duckUnder={voiceSpans(lines)} duckDb={-9} fadeIn? fadeOut={15} frames?>` | The bed, ducking under the voice lines (spans in the same frames as `at`). Fade it out, never cut it mid-note. |
+| `duck(frame, spans, {db, attack, release})`, `voiceSpans([{at, frames}])` | The ducking as a function, for a volume of your own. |
+
+The beat grid (take its numbers from `video.audio.beats`, which answers the call):
+
+| Export | Use |
+| --- | --- |
+| `useBeatGrid({bpm, firstBeat, beatsPerBar})` | `grid.beat(n)` (frame of beat n from 0, fractions between), `grid.bar(n)` (bar n from 1), `framesPerBeat`, `framesPerBar`, `beatAt(f)`, `barAt(f)`, `nearestBeat(f)`, `onBeat(f)`, `pulse(f, decay)`. Frames are the composition's: inside a Sequence use `useTimelineFrame()`, not `useCurrentFrame()`. |
+| `useBeatPulse(grid, decay?, accent?)` | 1 on each beat fading to 0: `scale(1 + 0.04 * pulse)`. |
+
+Put every cut on a bar: `<Sequence from={grid.bar(9)} durationInFrames={grid.bar(13) - grid.bar(9)}>`.
+Cues on beats: `at={grid.beat(34)}`; one meant to follow something on screen (a tap) is fine off
+the beat, but say so.
+
 Screens and hands:
 
 | Export | Use |
 | --- | --- |
 | `<Phone src={staticFile(…)} width={520}>` or children | A modern phone, 19.5:9, with its island. Its screen is `phoneScreen(width)`: 487 × 1093 px for 520, the island over its top 60 px. |
 | `<Phone width={460} designWidth={390} statusBar="dark" homeIndicator>…</Phone>` | Draw the app's screen at iPhone points (390 × about 875) and it is scaled to fit; `statusBar` / `homeIndicator` draw the time, signal, battery and home bar, `"dark"` for a light app (`true` is dark), `"light"` for a dark one. Leave about 54 points at the top for the status bar. |
+| `<Phone model="android" width={500} designWidth={412} statusBar="light" homeIndicator="light">` | An Android phone: 20:9 with a punch-hole camera (`camera: 'none'` for none), so a 1080 × 2400 recording fills its screen exactly (`<OffthreadVideo src=… style={{width: '100%', height: '100%'}} />` as its child); its own status bar and gesture bar. A recording shows its own status bar: leave `statusBar` off then. `phoneScreen(width, 'android')` gives the screen's size. |
+| `<BeforeAfter before={…} after={…} at={20} duration={24} color="#FF3B30" direction="right">` | One screen, two versions: `after` revealed by a red edge sweeping across `before`. Put it in a `Phone` with the old and new recordings. Never two half-size phones side by side. |
+| `<VersionPill from="0.9" to="1.0" progress={useSweep(20, 24)} />` | The version tag handing over as the seam passes. |
 | `<Window src url title width height dark>` | A desktop app or browser window. |
 | `<Tap x y at size? color?>` | A tap ripple at frame `at`, `size` px across (default 90): white with a dark edge, seen on light and dark screens. Coordinates in its parent: put it beside the phone in a `position: relative` box. |
 | `<Cursor stops={[{x, y, at, click}]}>` | A pointer gliding between stops and clicking. |
@@ -148,6 +197,12 @@ Charts:
 | --- | --- |
 | `<Donut segments={[{value, color}]} size thickness gap track highlight delay duration>` | A donut sweeping in, `highlight` lifting one segment; its children sit in the middle (a total). `thickness` of half the size is a pie. |
 | `<Bars values labels colors max width height gap radius highlight showValues format step delay>` | Bars growing in turn, `step` frames apart; `highlight` keeps one bright and dims the rest. |
+
+Lists:
+
+| Export | Use |
+| --- | --- |
+| `<Checklist items title start every={grid.framesPerBeat / 2} counter progress ghosts mode="list">` | Items ticking in one after another, a `3/12` counter and a progress bar; `mode="one"` is a montage, one item at a time, large. |
 
 Captions, grounds, layout, look:
 
@@ -175,6 +230,11 @@ and what to do:
 | `text_overlap` | Two runs of words over each other (not one inside the other). |
 | `font_fallback` | The family is not there and something else drew: use a kit family, one `fc-list` shows, or load the file. |
 | `brief_text` | (`video.scan`) Two words or more on screen less than 0.4 s and 0.3 s a word: hold them longer, or say less. |
+| `off_beat` | (`video.scan`, `video.timeline`) A cue or a cut off the beat grid: `detail` names the beat and its frame. Move it there, or keep it when it follows something on screen. |
+| `voice_overlap` | Two voice lines over each other. |
+| `no_duck` | The music plays as loud under a voice line as without it: `Music duckUnder`. |
+| `silence` | Two seconds or more with nothing playing. |
+| `clipping` | (`video.timeline`) The mix peaks over 0 dBTP: lower the loudest cues, or render with `peak: -1`. |
 | `broken_image` / `console` | A picture did not load / the page logged an error. |
 
 A still judges each frame on its own, so an entrance or a transition caught mid-way can show
@@ -185,6 +245,43 @@ them like `video.check`'s. Words in an `aria-hidden` element are decoration and 
 
 Use `boxes: true` when you need exact positions: every element with a `data-id`, per frame, in
 the composition's px.
+
+## Sound
+
+The order that works, each step checked before the next:
+
+1. **Music**: the person's file (`video.asset.add`), or `video.music {prompt, seconds}` with the
+   tempo and the shape in the prompt ("120 BPM; quiet 8-bar intro; drops at 0:16; a breakdown at
+   0:40; ends on a hit at 0:58"). Generated music does not always follow its plan: listen with
+   `video.audio.beats`, whose `sections` say where it really gets louder or quieter.
+2. **The grid**: `video.audio.beats {asset}` → `useBeatGrid(...)` as it answers (`kit`). Check
+   `downbeat_confidence`: under about 0.3, the bar's first beat is a guess — look at the `bars`'
+   loudness and where the `sections` fall, and give `firstBeat` yourself.
+3. **Cuts on bars, cues on beats**, from the grid's frames.
+4. **Voice**: `video.voice` per line, placed at its frame with `<Voice>`; captions from its
+   `captions`; `video.transcribe {expect}` on each line with a name in it, and `say` to fix what
+   is misheard. Duck the music under the lines (`Music duckUnder`).
+5. **Effects**: files from the person, or `video.sfx`; one `LEVELS` table shapes them.
+6. **Check**: `video.timeline` (the picture shows every sound on the grid, and the issues),
+   `video.still {count: 8, sound: true}` to see where sounds land against the picture.
+7. **Render** with the platform's loudness: `preset: "youtube"` (-14 LUFS, -1 dBTP) for YouTube,
+   Shorts, Reels and TikTok; `"discord"` -16; `"broadcast"` -23. Read the render's `audio`: no
+   `clipping`, no `hot`, `lufs` where asked. Several platforms in one `video.render.batch`.
+
+The MP4's sound is in sync with its picture as rendered (its edit list skips the AAC encoder's
+priming); a tool that ignores edit lists reads it about 43 ms late. Do not mux it again by hand.
+
+## Footage
+
+- **An Android app**: `video.capture.android` with the steps the scene needs, at the speed it needs
+  (record again rather than speeding a clip up past 1.25×). `steps[].frame` and `motion` give the
+  frames to cut on: "the set is logged at frame 424" without stepping through stills.
+- **Any clip**: `video.asset.inspect {asset}` — `variable_rate: true` (a phone's own recording)
+  means frame numbers are not moments: add it again with `video.asset.add {path, fps: 30}`.
+- **Large clips**: `video.asset.add {path, link: true}` links instead of copying.
+- **Many files**: `video.asset.add {paths: [...]}`, one call.
+- **A font the machine has**: `video.asset.add {font: "Noto Serif", weights: [400, 500, 700], italic: true}`
+  answers the `loadFonts(…)` call to paste at module level.
 
 ## Assets and Relay's own designs
 
@@ -200,9 +297,13 @@ the composition's px.
 
 ## Rendering and versions
 
-- `video.render` answers the render row (`state: "queued"`); renders run one at a time.
-  `video.render.changed` reports each tenth; `video.render.finished` the end (`done` with `path`
-  and `bytes`, `failed` with `error`, or `cancelled`).
+- `video.render` answers the render row (`state: "queued"`), or with `wait: true` the finished
+  one; renders run one at a time. `video.render.changed` reports each tenth;
+  `video.render.finished` the end (`done` with `path`, `bytes` and `audio`, `failed` with `error`,
+  or `cancelled`). To wait on the event yourself, pass `since: <the render's created_at>` to
+  `bus.wait` so one that already fired still wakes you; `video.render.wait` is simpler.
+- Read `audio` on every render: `clipping` and `hot` mean the mix peaks too high (lower the loudest
+  cues, or render with `peak: -1`); `loud` / `quiet` say how far it is from the platforms' -14 LUFS.
 - A `preview` render is half size: fine to check pacing; render `standard` or `high` for the file
   the person will post.
 - Each check, still and render records a version when the code changed (`video.get` lists them).
@@ -279,4 +380,10 @@ rises after it, and the tap lands on the button. Read the issues before moving o
 | `video.moment` | A moment that cannot be read, or `to` before `from`. |
 | `video.props` | Props that do not fit the composition's schema. |
 | `video.timeout` / `video.worker` | The worker was slow or stopped: try again; a first bundle can take a while. |
+| `video.ffmpeg` / `video.media` | No ffmpeg (the kit brings one), or a file it cannot read. |
+| `video.audio.no_beat` | The file has no steady beat (speech, a drone): give `bpm` if you know it. |
+| `video.elevenlabs.no_key` / `.key` / `.quota` / `.busy` | No key saved, or ElevenLabs refused it, the account is out of credits, or it is limiting requests: tell the person (never ask for the key itself). |
+| `video.elevenlabs.voice` / `.invalid` | No such voice (`video.voices`), or ElevenLabs refused the request (the message says why). |
+| `video.capture` / `device.busy` | No device, a step that is not one, or a peer holds the device: `bus.wait` on `device.lease.released`. |
+| `video.loudness` / `video.name` / `video.batch` | A loudness out of range (or on a GIF), a name that keeps nothing, a batch of 0 or more than 12. |
 | `video.deleted` | It was deleted; `video.restore` brings it back (only when asked). |

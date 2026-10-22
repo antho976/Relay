@@ -5,7 +5,7 @@
 //!
 //! Every op but `video.kit.status` comes with the Video plugin (`.plugin("video")`): an agent may
 //! call them only in a project with it on. The person is never gated.
-use crate::registry::{OpMeta, Scope, Undo};
+use crate::registry::{Actors, Audit, OpMeta, Scope, Undo};
 use crate::types::{Id, Ts};
 use crate::{op, Empty};
 use serde_json::Value;
@@ -340,17 +340,97 @@ pub struct VideoRender {
     pub version: i64,
     /// The frames it covers, first and last (inclusive), when not the whole composition.
     pub range: Option<[u32; 2]>,
+    /// The file's name as asked for (`out/<name>.<ext>`); `None` is `<composition>-<id>`.
+    #[serde(default)]
+    pub name: Option<String>,
     /// The file, once done.
     pub path: Option<String>,
     pub bytes: Option<i64>,
     /// Why it failed.
     pub error: Option<String>,
+    /// Its sound as measured once done (formats with sound): loudness, peaks, clipping, and the
+    /// targets it was brought to.
+    #[serde(default)]
+    pub audio: Option<AudioReport>,
+    /// The loudness it was asked to reach, LUFS, and the true peak it may not pass, dBTP.
+    #[serde(default)]
+    pub loudness: Option<f64>,
+    #[serde(default)]
+    pub peak: Option<f64>,
     /// `user` or the session that asked for it.
     pub actor: String,
     pub created_at: Ts,
     pub started_at: Option<Ts>,
     pub finished_at: Option<Ts>,
 }
+
+/// Where a platform wants the sound: integrated loudness and the true peak it may not pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "VideoLoudnessPreset")]
+pub enum LoudnessPreset {
+    /// -14 LUFS, -1 dBTP: YouTube turns louder uploads down.
+    Youtube,
+    /// -14 LUFS, -1 dBTP: YouTube Shorts.
+    Shorts,
+    /// -14 LUFS, -1 dBTP: Instagram Reels.
+    Reels,
+    /// -14 LUFS, -1 dBTP.
+    Tiktok,
+    /// -16 LUFS, -1 dBTP: Discord does not normalise, and clips played beside voice chat sit
+    /// better a little under the streaming level.
+    Discord,
+    /// -16 LUFS, -1 dBTP: Apple Podcasts, a spoken explainer.
+    Podcast,
+    /// -23 LUFS, -1 dBTP: EBU R128 broadcast.
+    Broadcast,
+}
+
+impl LoudnessPreset {
+    /// Integrated loudness in LUFS and the true-peak ceiling in dBTP.
+    pub fn target(self) -> (f64, f64) {
+        match self {
+            LoudnessPreset::Youtube | LoudnessPreset::Shorts | LoudnessPreset::Reels | LoudnessPreset::Tiktok => (-14.0, -1.0),
+            LoudnessPreset::Discord | LoudnessPreset::Podcast => (-16.0, -1.0),
+            LoudnessPreset::Broadcast => (-23.0, -1.0),
+        }
+    }
+}
+
+result!(#[schemars(rename = "VideoAudioWarning")] AudioWarning {
+    /// `clipping` (samples at full scale, or a true peak over 0 dBTP), `hot` (a true peak over
+    /// -1 dBTP: lossy encoding will clip it), `silent` (no sound at all), `loud` / `quiet`
+    /// (more than 2 LU from the loudness asked for, or from -14 LUFS when none was).
+    pub kind: String,
+    pub detail: String,
+});
+
+result!(#[schemars(rename = "VideoAudioReport")] AudioReport {
+    /// Integrated loudness (ITU-R BS.1770-4, EBU R128 gating), LUFS; `None` when it is silent.
+    pub lufs: Option<f64>,
+    /// Loudness range (EBU Tech 3342), LU.
+    pub lra: Option<f64>,
+    /// The loudest 3 s, LUFS.
+    pub short_term_max: Option<f64>,
+    /// The highest true peak (4× oversampled), dBTP.
+    pub true_peak: f64,
+    /// The highest sample, dBFS.
+    pub sample_peak: f64,
+    /// Samples at full scale (clipped).
+    pub clipped: u64,
+    pub seconds: f64,
+    pub channels: u32,
+    /// The gain applied to reach the loudness asked for, dB (a limiter held the peaks).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gain_db: Option<f64>,
+    /// The loudness and true peak before that gain, when one was applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lufs_before: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub true_peak_before: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<AudioWarning>,
+});
 
 /// Whether the video kit (Node, Remotion and its browser) is set up on this machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -370,8 +450,22 @@ pub enum KitState {
     NoNode,
 }
 
+result!(#[schemars(rename = "VideoKitProgress")] KitProgress {
+    /// `packages` (npm installs the pinned packages) or `browser` (Remotion's headless Chrome).
+    pub stage: String,
+    /// 0 to 1 across the whole setup, as far as it can be told.
+    pub progress: f64,
+    /// What it is doing, in words.
+    pub detail: String,
+    /// Seconds since it started.
+    pub elapsed_s: u64,
+});
+
 result!(#[schemars(rename = "VideoKitStatus")] KitStatus {
     pub state: KitState,
+    /// While `installing`: how far it has come (`video.kit.progress` says so every few seconds).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<KitProgress>,
     /// Where the kit lives: every video's folder is under it.
     pub root: String,
     /// The `@relay/video` kit's sources, to read when the skill is not enough; `node_modules/`
@@ -511,6 +605,10 @@ payload!(#[schemars(rename = "VideoStillIn")] StillIn {
     pub props: Option<Value>,
     /// Answer the laid-out box of every element with a `data-id` (default false).
     pub boxes: Option<bool>,
+    /// Draw the sound under the picture (default false): the mix's waveform across the frames
+    /// drawn, each frame's moment marked, and where every cue and voice line plays. The first
+    /// for a version makes the mix (a pass without pictures); later ones reuse it.
+    pub sound: Option<bool>,
 });
 result!(#[schemars(rename = "VideoStillFrame")] StillFrame {
     pub frame: u32,
@@ -587,7 +685,8 @@ result!(#[schemars(rename = "VideoScanOut")] ScanOut {
     pub every: u32,
     /// As `video.still`'s, from every frame measured but without `contrast` (no pictures are
     /// drawn), with words in motion (entering, leaving, mid-transition) left out of the checks of
-    /// where they are, and `brief_text`: words on screen too short a time to read.
+    /// where they are, and `brief_text`: words on screen too short a time to read. And the
+    /// sound's: `off_beat`, `voice_overlap`, `no_duck` and `silence`, as `video.timeline`'s.
     pub issues: Vec<Issue>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<CodeError>,
@@ -595,6 +694,349 @@ result!(#[schemars(rename = "VideoScanOut")] ScanOut {
 });
 op!(Scan, "video.scan", ScanIn => ScanOut,
     OpMeta::query(Scope::Project, 12, "Check a whole video without pictures: the problems across every few frames, words in motion left out, and words shown too briefly to read")
+        .emits(&["video.changed"]).plugin(PLUGIN));
+
+/// Longest `wait` a render call blocks for, in ms (an hour).
+pub const MAX_WAIT_MS: u64 = 3_600_000;
+/// Most renders one `video.render.batch` queues.
+pub const MAX_BATCH: usize = 12;
+
+// ---------------------------------------------------------------- live preview
+
+payload!(#[schemars(rename = "VideoPreviewIn")] PreviewIn {
+    pub video_id: Id,
+    /// The composition to open on; default the video's.
+    pub composition: Option<String>,
+    /// Stop the preview instead.
+    pub stop: Option<bool>,
+});
+result!(#[schemars(rename = "VideoPreviewOut")] PreviewOut {
+    /// Where the person watches it with sound, in a browser on this machine (Remotion Studio:
+    /// play, scrub, step frames, its timeline, the props).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    pub running: bool,
+    /// It was started by this call (rather than already running).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub started: bool,
+});
+op!(Preview, "video.preview", PreviewIn => PreviewOut,
+    OpMeta::query(Scope::Project, 12, "A live preview of a video for the person to watch with sound, scrub and step through without rendering (Remotion Studio on this machine only); answers its link")
+        .plugin(PLUGIN));
+
+// ---------------------------------------------------------------- Android capture
+
+payload!(#[schemars(rename = "VideoCaptureStep")] CaptureStep {
+    /// Touch the screen at x, y (the device's px).
+    pub tap: Option<[f64; 2]>,
+    /// Drag from x1, y1 to x2, y2 over `ms` (default 300): a scroll.
+    pub swipe: Option<[f64; 4]>,
+    pub ms: Option<u32>,
+    /// Type this into the field in focus.
+    pub text: Option<String>,
+    /// Press a key: `BACK`, `HOME`, `ENTER`, `APP_SWITCH`, or a keycode number.
+    pub key: Option<String>,
+    /// Wait this many seconds.
+    pub wait: Option<f64>,
+    /// Open an app: a package (`com.example.app`) or an activity (`com.example.app/.MainActivity`).
+    pub launch: Option<String>,
+});
+payload!(#[schemars(rename = "VideoCaptureIn")] CaptureIn {
+    pub video_id: Id,
+    /// The device's serial (`device.list`); default the only one connected.
+    pub device: Option<String>,
+    /// An app to open before recording starts, so the clip opens in it.
+    pub launch: Option<String>,
+    /// What to do while recording, in order: taps, swipes, typing, keys, waits.
+    #[schemars(length(max = 200))]
+    pub steps: Vec<CaptureStep>,
+    /// Seconds to keep recording after the last step (default 1).
+    pub tail: Option<f64>,
+    /// The clip's constant frame rate (default 30): a screen recording's own is variable.
+    #[schemars(range(min = 1.0, max = 60.0))]
+    pub fps: Option<f64>,
+    /// Android's demo mode while recording: the status bar at 12:30, full battery and signal, no
+    /// notifications (default true).
+    pub demo: Option<bool>,
+    #[schemars(length(min = 1, max = 120))]
+    pub name: Option<String>,
+    pub overwrite: Option<bool>,
+});
+result!(#[schemars(rename = "VideoCaptureMark")] CaptureMark {
+    /// Which step, from 0, and what it did.
+    pub step: u32,
+    pub did: String,
+    /// When, in the clip: seconds and its frame (within a few frames: the recorder's start is
+    /// estimated; `motion` has the exact frames).
+    pub at_s: f64,
+    pub frame: u32,
+});
+result!(#[schemars(rename = "VideoCaptureOut")] CaptureOut {
+    pub asset: VideoAsset,
+    pub seconds: f64,
+    pub fps: f64,
+    pub frames: u32,
+    /// Where each step happened in the clip.
+    pub steps: Vec<CaptureMark>,
+    /// Where the picture changes (`video.asset.inspect`'s).
+    pub motion: Vec<MotionEvent>,
+    pub device: String,
+});
+op!(CaptureAndroid, "video.capture.android", CaptureIn => CaptureOut,
+    OpMeta::mutation(Scope::Project, 12, "Record an Android device's screen while it taps, swipes and types (holding the device's lease), at a constant frame rate with a clean status bar, into the video's assets; answers where each step and each screen change fell")
+        .plugin(PLUGIN));
+
+// ---------------------------------------------------------------- ElevenLabs
+
+payload!(#[schemars(rename = "VideoVoiceIn")] VoiceIn {
+    pub video_id: Id,
+    /// What is said.
+    #[schemars(length(min = 1, max = 5000))]
+    pub text: String,
+    /// The voice: its name ("Chris") or id, from `video.voices`.
+    #[schemars(length(min = 1, max = 100))]
+    pub voice: String,
+    /// Words said as other words: `{"Avex": "Ay-vex"}` when speech-to-text heard it wrong. The
+    /// words' timings still name the words as written.
+    pub say: Option<serde_json::Map<String, Value>>,
+    /// Default eleven_multilingual_v2.
+    #[schemars(length(min = 1, max = 60))]
+    pub model: Option<String>,
+    /// 0 to 1: higher is steadier and flatter (default 0.5).
+    pub stability: Option<f64>,
+    /// 0 to 1: how close to the voice (default 0.75).
+    pub similarity: Option<f64>,
+    /// 0 to 1: more of the voice's style (default 0).
+    pub style: Option<f64>,
+    /// 0.7 to 1.2 (default 1).
+    pub speed: Option<f64>,
+    /// The file's name under `assets/`; default from the words.
+    #[schemars(length(min = 1, max = 120))]
+    pub name: Option<String>,
+    pub overwrite: Option<bool>,
+});
+result!(#[schemars(rename = "VideoWord")] VoiceWord {
+    pub text: String,
+    /// Seconds from the line's start.
+    pub start: f64,
+    pub end: f64,
+});
+result!(#[schemars(rename = "VideoVoiceOut")] VoiceOut {
+    pub asset: VideoAsset,
+    pub seconds: f64,
+    /// Each word as written, when it is said.
+    pub words: Vec<VoiceWord>,
+    /// The words as Remotion's captions (`@remotion/captions` `Caption[]`, ms from the line's
+    /// start): add the line's start to `startMs`, `endMs` and `timestampMs`, then give them to the
+    /// kit's `Captions`.
+    pub captions: Value,
+    pub voice_id: String,
+    pub voice: String,
+    pub model: String,
+});
+op!(Voice, "video.voice", VoiceIn => VoiceOut,
+    OpMeta::mutation(Scope::Project, 12, "Speak a line with an ElevenLabs voice into the video's assets, with each word's timing (for captions); the text, voice and timings are kept beside the file")
+        .plugin(PLUGIN));
+
+payload!(#[schemars(rename = "VideoVoicesIn")] VoicesIn {
+    /// Only voices whose name, accent or description has this.
+    pub search: Option<String>,
+});
+result!(#[schemars(rename = "VideoVoiceInfo")] VoiceInfo {
+    pub voice_id: String,
+    pub name: String,
+    /// `premade`, `cloned`, `generated`, `professional`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// What ElevenLabs says of it: accent, age, gender, use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+});
+result!(#[schemars(rename = "VideoVoicesOut")] VoicesOut { pub voices: Vec<VoiceInfo> });
+op!(Voices, "video.voices", VoicesIn => VoicesOut,
+    OpMeta::query(Scope::Project, 12, "The ElevenLabs voices the saved key can use, by name").plugin(PLUGIN));
+
+payload!(#[schemars(rename = "VideoSfxIn")] SfxIn {
+    pub video_id: Id,
+    /// What it sounds like: "a soft UI tap", "a cartoon boing".
+    #[schemars(length(min = 1, max = 1000))]
+    pub prompt: String,
+    /// 0.5 to 30; default as long as the prompt suggests.
+    pub seconds: Option<f64>,
+    /// 0 to 1: how closely it follows the prompt (default 0.3).
+    pub influence: Option<f64>,
+    /// Made to loop seamlessly.
+    #[serde(rename = "loop")]
+    pub looped: Option<bool>,
+    #[schemars(length(min = 1, max = 120))]
+    pub name: Option<String>,
+    pub overwrite: Option<bool>,
+});
+result!(#[schemars(rename = "VideoMadeOut")] MadeOut {
+    pub asset: VideoAsset,
+    pub seconds: f64,
+});
+op!(Sfx, "video.sfx", SfxIn => MadeOut,
+    OpMeta::mutation(Scope::Project, 12, "Make a sound effect with ElevenLabs from a description, into the video's assets; the prompt is kept beside it")
+        .plugin(PLUGIN));
+
+payload!(#[schemars(rename = "VideoMusicIn")] MusicIn {
+    pub video_id: Id,
+    /// The music: genre, mood, instruments, tempo ("120 BPM"), and its shape over time.
+    #[schemars(length(min = 1, max = 4000))]
+    pub prompt: String,
+    /// 3 to 600.
+    pub seconds: f64,
+    /// No vocals (default true).
+    pub instrumental: Option<bool>,
+    /// Default music_v1.
+    #[schemars(length(min = 1, max = 40))]
+    pub model: Option<String>,
+    #[schemars(length(min = 1, max = 120))]
+    pub name: Option<String>,
+    pub overwrite: Option<bool>,
+});
+op!(Music, "video.music", MusicIn => MadeOut,
+    OpMeta::mutation(Scope::Project, 12, "Make music with ElevenLabs from a description and a length, into the video's assets; then video.audio.beats for its grid")
+        .plugin(PLUGIN));
+
+payload!(#[schemars(rename = "VideoTranscribeIn")] TranscribeIn {
+    pub video_id: Id,
+    /// A sound or clip: `assets/vo-03-home.mp3`, a render, or an absolute path.
+    #[schemars(length(min = 1, max = 4096))]
+    pub asset: String,
+    /// ISO 639 code; default detected.
+    pub language: Option<String>,
+    /// What it should say: the answer lists where what was heard differs.
+    #[schemars(length(max = 5000))]
+    pub expect: Option<String>,
+});
+result!(#[schemars(rename = "VideoMisheard")] Misheard {
+    /// The word written, and what was heard instead (`None`: not heard at all).
+    pub expected: String,
+    pub heard: Option<String>,
+    /// When, seconds.
+    pub at: Option<f64>,
+});
+result!(#[schemars(rename = "VideoTranscribeOut")] TranscribeOut {
+    pub text: String,
+    pub language: String,
+    pub words: Vec<VoiceWord>,
+    /// With `expect`: the words heard differently, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub misheard: Vec<Misheard>,
+});
+op!(Transcribe, "video.transcribe", TranscribeIn => TranscribeOut,
+    OpMeta::query(Scope::Project, 12, "Hear a voice line (ElevenLabs speech-to-text): its words and their timings, and, given what it should say, where it was heard differently (a name said wrong)")
+        .plugin(PLUGIN));
+
+payload!(#[schemars(rename = "VideoElevenKeySetIn")] ElevenKeySetIn {
+    /// The ElevenLabs API key (elevenlabs.io → API keys).
+    #[schemars(length(min = 1, max = 200))]
+    pub key: String,
+});
+result!(#[schemars(rename = "VideoElevenStatus")] ElevenStatus {
+    /// Whether a key is saved.
+    pub saved: bool,
+    /// What the key can do, when it was checked: the account's tier and its characters left.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub characters_left: Option<i64>,
+});
+op!(ElevenKeySet, "video.elevenlabs.key_set", ElevenKeySetIn => ElevenStatus,
+    OpMeta::mutation(Scope::Global, 12, "Check an ElevenLabs API key with ElevenLabs and keep it in the system keyring")
+        // The payload is the key itself: an audit row would keep it in the store and every backup.
+        .audit(Audit::Never).actors(Actors::UserOnly));
+op!(ElevenKeyRemove, "video.elevenlabs.key_remove", Empty => ElevenStatus,
+    OpMeta::mutation(Scope::Global, 12, "Forget the saved ElevenLabs key").actors(Actors::UserOnly));
+op!(ElevenStatusOp, "video.elevenlabs.status", Empty => ElevenStatus,
+    OpMeta::query(Scope::Global, 12, "Whether an ElevenLabs key is saved for voices, music and sound effects, and what it has left").plugin(PLUGIN));
+
+payload!(#[schemars(rename = "VideoTimelineIn")] TimelineIn {
+    pub video_id: Id,
+    /// Default the video's composition.
+    pub composition: Option<String>,
+    /// Props to draw with instead of the video's.
+    pub props: Option<Value>,
+    /// The beat grid to check against when the code sets none (`useBeatGrid`): its tempo …
+    #[schemars(range(min = 40.0, max = 240.0))]
+    pub bpm: Option<f64>,
+    /// … its first downbeat, seconds (default 0) …
+    pub first_beat: Option<f64>,
+    /// … and beats a bar (default 4).
+    #[schemars(range(min = 1, max = 12))]
+    pub beats_per_bar: Option<u32>,
+    /// Or the music to find the grid in (`video.audio.beats`): `assets/music.mp3`.
+    pub music: Option<String>,
+    /// Draw it as a picture (default true): the scenes, the sounds, the mix's waveform and the
+    /// beat grid on one time axis. Through `relay mcp` it is attached to the answer.
+    pub picture: Option<bool>,
+});
+result!(#[schemars(rename = "VideoTimelineItem")] TimelineItem {
+    /// A scene: `scene`. A sound: `music`, `voice`, `sfx`, `ui`, `whoosh`, `impact`, `ambience`
+    /// (the kit's levels), `clip` (a video's own sound) or `sound`.
+    pub kind: String,
+    /// Its Sequence's `name`, or the sound's (the kit's `name`, or its file's).
+    pub name: String,
+    /// A sound's file, as `staticFile()` names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// How deep a scene sits in others (0 at the top).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<u32>,
+    /// The composition's frames: its first, how many, and the one after its last.
+    pub start: u32,
+    pub frames: u32,
+    pub end: u32,
+    /// `2.0s · f60`.
+    pub at: String,
+    /// The loudest volume a sound plays at (the kit's level, or `<Audio volume>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f64>,
+    /// With a grid: whether it starts within a frame of a beat, and of a bar's first beat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_beat: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_bar: Option<bool>,
+    /// Frames from the nearest beat (positive: after it), and that beat as `bar 9 · beat 3`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off_by: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub beat: Option<String>,
+});
+result!(#[schemars(rename = "VideoTimelineGrid")] TimelineGrid {
+    pub bpm: f64,
+    pub first_beat_s: f64,
+    pub beats_per_bar: u32,
+    pub frames_per_beat: f64,
+    /// `code` (the video's `useBeatGrid`), `given` (this call's bpm) or `music` (found in it).
+    pub from: String,
+});
+result!(#[schemars(rename = "VideoTimelineOut")] TimelineOut {
+    pub composition: Composition,
+    /// The picture, when drawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub png: Option<String>,
+    /// Every Sequence, in start order: the scenes and what is in them.
+    pub scenes: Vec<TimelineItem>,
+    /// Every sound: the kit's `Music`, `Voice` and `Cue`, and any `<Audio>` or clip with sound.
+    pub sounds: Vec<TimelineItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid: Option<TimelineGrid>,
+    /// The sound mixed as a render mixes it, measured: loudness, peaks, clipping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mix: Option<AudioReport>,
+    /// What the sound gets wrong: `off_beat` (a cue off the grid), `voice_overlap`, `no_duck`
+    /// (music as loud under a voice as without), `silence` (two seconds or more of nothing),
+    /// `clipping` (the mix's peaks).
+    pub issues: Vec<Issue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<CodeError>,
+    pub version: i64,
+});
+op!(Timeline, "video.timeline", TimelineIn => TimelineOut,
+    OpMeta::query(Scope::Project, 12, "A video's timeline: every scene and sound with its start frame and length, whether each starts on the beat grid, the mix's loudness and what the sound gets wrong; through MCP the timeline comes as a picture with the waveform")
         .emits(&["video.changed"]).plugin(PLUGIN));
 
 payload!(#[schemars(rename = "VideoRenderIn")] RenderIn {
@@ -611,29 +1053,120 @@ payload!(#[schemars(rename = "VideoRenderIn")] RenderIn {
     pub to: Option<Moment>,
     /// Props to draw with instead of the video's.
     pub props: Option<Value>,
+    /// The file's name, `out/<name>.<ext>`: letters, digits, dots, dashes and underscores. A
+    /// render of the same name and format replaces the file. Default `<composition>-<render id>`.
+    #[schemars(length(min = 1, max = 80))]
+    pub name: Option<String>,
+    /// Bring the sound to this integrated loudness once rendered, -40 to -5 LUFS (a gain, with a
+    /// limiter holding the peaks under `peak`).
+    #[schemars(range(min = -40.0, max = -5.0))]
+    pub loudness: Option<f64>,
+    /// The true peak the sound may not pass, -9 to 0 dBTP; default -1 when `loudness` or `preset`
+    /// is given.
+    #[schemars(range(min = -9.0, max = 0.0))]
+    pub peak: Option<f64>,
+    /// A platform's loudness and peak instead of `loudness` and `peak`.
+    pub preset: Option<LoudnessPreset>,
+    /// Answer once the render has finished (done, failed or cancelled) instead of at once.
+    pub wait: Option<bool>,
+    /// How long `wait` blocks, ms: default 30 minutes, at most an hour. A render still going then
+    /// is answered as it stands.
+    pub timeout_ms: Option<u64>,
 });
 op!(Render, "video.render", RenderIn => VideoRender,
-    OpMeta::mutation(Scope::Project, 12, "Render a video to a file in its out/ folder; answers at once, then video.render.finished (wait on it matching {\"id\": <render id>})")
+    OpMeta::mutation(Scope::Project, 12, "Render a video to a file in its out/ folder, its sound measured (and brought to a loudness when asked); with wait: true answers once finished, else at once and video.render.wait waits")
         .emits(&["video.render.changed", "video.render.finished"]).plugin(PLUGIN));
+
+payload!(#[schemars(rename = "VideoRenderJob")] RenderJob {
+    /// Default the video's composition.
+    pub composition: Option<String>,
+    pub format: Option<Format>,
+    pub quality: Option<Quality>,
+    pub from: Option<Moment>,
+    pub to: Option<Moment>,
+    pub props: Option<Value>,
+    #[schemars(length(min = 1, max = 80))]
+    pub name: Option<String>,
+    #[schemars(range(min = -40.0, max = -5.0))]
+    pub loudness: Option<f64>,
+    #[schemars(range(min = -9.0, max = 0.0))]
+    pub peak: Option<f64>,
+    pub preset: Option<LoudnessPreset>,
+});
+payload!(#[schemars(rename = "VideoRenderBatchIn")] RenderBatchIn {
+    pub video_id: Id,
+    /// Up to 12 renders, each as `video.render`'s fields: several compositions, the picture and
+    /// the soundtrack (`format: "wav"`), several platforms' loudness. They run in this order.
+    #[schemars(length(min = 1, max = 12))]
+    pub jobs: Vec<RenderJob>,
+    /// Answer once every one has finished.
+    pub wait: Option<bool>,
+    pub timeout_ms: Option<u64>,
+});
+result!(#[schemars(rename = "VideoRendersOut")] RendersOut {
+    pub renders: Vec<VideoRender>,
+    /// A wait ran out with some still queued or rendering.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub timed_out: bool,
+});
+op!(RenderBatch, "video.render.batch", RenderBatchIn => RendersOut,
+    OpMeta::mutation(Scope::Project, 12, "Queue several renders of a video in one call (compositions, formats, platforms), optionally waiting for them all")
+        .emits(&["video.render.changed", "video.render.finished"]).plugin(PLUGIN));
+
+payload!(#[schemars(rename = "VideoRenderWaitIn")] RenderWaitIn {
+    /// The renders to wait for: answered once each is done, failed or cancelled. One that has
+    /// already finished counts at once, so nothing is missed however fast it was.
+    #[schemars(length(min = 1, max = 50))]
+    pub render_ids: Vec<Id>,
+    /// Default 30 minutes, at most an hour.
+    pub timeout_ms: Option<u64>,
+});
+op!(RenderWait, "video.render.wait", RenderWaitIn => RendersOut,
+    OpMeta::query(Scope::Project, 12, "Wait for renders to finish (each done, failed or cancelled): one that already finished answers at once").plugin(PLUGIN));
 
 payload!(#[schemars(rename = "VideoRenderIdIn")] RenderIdIn { pub render_id: Id });
 op!(RenderGet, "video.render.get", RenderIdIn => VideoRender,
-    OpMeta::query(Scope::Project, 12, "A render: its state, progress and file").plugin(PLUGIN));
+    OpMeta::query(Scope::Project, 12, "A render: its state, progress, file and its sound's loudness").plugin(PLUGIN));
 op!(RenderCancel, "video.render.cancel", RenderIdIn => VideoRender,
     OpMeta::mutation(Scope::Project, 12, "Stop a render that is queued or running")
         .emits(&["video.render.changed", "video.render.finished"]).plugin(PLUGIN));
 
+/// Most files one `video.asset.add` takes.
+pub const MAX_ASSETS: usize = 100;
+
 payload!(#[schemars(rename = "VideoAssetAddIn")] AssetAddIn {
     pub video_id: Id,
-    /// A file on this machine: a picture, a clip, a sound or a font. It is copied in, so the
-    /// video keeps it when the file moves.
+    /// A file on this machine: a picture, a clip, a sound or a font. It is copied in (or linked,
+    /// `link`), so the video keeps it when the file moves.
     #[schemars(length(min = 1, max = 4096))]
-    pub path: String,
-    /// The name to give it under `public/assets/`; default its own, made safe.
+    pub path: Option<String>,
+    /// Several files at once, instead of `path`: up to 100, each under its own name.
+    #[schemars(length(min = 1, max = 100))]
+    pub paths: Option<Vec<String>>,
+    /// A font installed on this machine by family name instead (`fc-list`): "Noto Serif". Its
+    /// files for `weights` (and `italic`) are added under `assets/fonts/`, and the answer has the
+    /// `loadFonts(…)` call that loads them.
+    #[schemars(length(min = 1, max = 120))]
+    pub font: Option<String>,
+    /// With `font`: the weights wanted, 100 to 900; default 400 and 700.
+    pub weights: Option<Vec<u32>>,
+    /// With `font`: the italics of those weights too.
+    pub italic: Option<bool>,
+    /// The name to give it under `public/assets/` (one `path` only); default its own, made safe.
     #[schemars(length(min = 1, max = 120))]
     pub name: Option<String>,
+    /// Replace a file of the same name (a clip recorded again). Without it a name another file
+    /// has gets a number (`sweep-2.wav`), and the answer says so (`renamed_from`).
+    pub overwrite: Option<bool>,
+    /// Link to the file where it is instead of copying it: no second copy of a large clip. The
+    /// video then needs the file to stay where it is.
+    pub link: Option<bool>,
+    /// Write a clip at this constant frame rate as it is added (H.264, `.mp4`): a phone's screen
+    /// recording has frames unevenly spaced, so its frame numbers do not map to time.
+    #[schemars(range(min = 1.0, max = 120.0))]
+    pub fps: Option<f64>,
 });
-result!(#[schemars(rename = "VideoAssetAddOut")] AssetAddOut {
+result!(#[schemars(rename = "VideoAsset")] VideoAsset {
     /// What `staticFile()` takes: `staticFile("assets/…")`.
     pub static_file: String,
     pub path: String,
@@ -645,10 +1178,167 @@ result!(#[schemars(rename = "VideoAssetAddOut")] AssetAddOut {
     pub w: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub h: Option<u32>,
+    /// The name it was given when the one asked for (this) belonged to another file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renamed_from: Option<String>,
+    /// It replaced a file of that name (`overwrite`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replaced: bool,
+    /// The same file was already there under this name: nothing was written.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unchanged: bool,
+    /// The file it links to (`link`), when it is not a copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked: Option<String>,
+    /// How it was made, when Relay made it (`video.voice`, `video.music`, `video.sfx`,
+    /// `video.capture.android`): the prompt, the voice, the words' timings. Kept beside it as
+    /// `<name>.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub made: Option<Value>,
+});
+result!(#[schemars(rename = "VideoFontAdded")] FontAdded {
+    /// The family to name in `fontFamily`.
+    pub family: String,
+    /// The weights and styles found, as `"400"`, `"700 italic"`.
+    pub faces: Vec<String>,
+    /// What was asked for and is not installed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
+    /// The call to put at module level (outside components): `loadFonts({family, file, weight}, …)`
+    /// from `@relay/video`.
+    pub load: String,
+});
+result!(#[schemars(rename = "VideoAssetAddOut")] AssetAddOut {
+    /// What was added, in the order asked.
+    pub assets: Vec<VideoAsset>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<FontAdded>,
 });
 op!(AssetAdd, "video.asset.add", AssetAddIn => AssetAddOut,
-    OpMeta::mutation(Scope::Project, 12, "Copy a picture, clip, sound or font into a video's public/assets/; answers the staticFile() name")
+    OpMeta::mutation(Scope::Project, 12, "Add pictures, clips, sounds or fonts to a video's public/assets/ (copied or linked, one or many, or a system font by name); answers each staticFile() name")
         .plugin(PLUGIN));
+
+payload!(#[schemars(rename = "VideoAssetInspectIn")] AssetInspectIn {
+    pub video_id: Id,
+    /// The file: its `staticFile()` name (`assets/clip.mp4`), or an absolute path on this machine.
+    #[schemars(length(min = 1, max = 4096))]
+    pub asset: String,
+    /// Look for where the picture changes (default true for a clip): taps, screens, scrolls.
+    pub motion: Option<bool>,
+});
+result!(#[schemars(rename = "VideoMotionEvent")] MotionEvent {
+    /// The clip's own frame it starts on, and its last.
+    pub frame: u32,
+    pub end_frame: u32,
+    /// Seconds into the clip.
+    pub at_s: f64,
+    pub end_s: f64,
+    /// `cut` (the screen changed at once: a new page, a tab), `motion` (half a second or more of
+    /// movement: a scroll, an animation) or `change` (a short local change: a tap, a value).
+    pub kind: String,
+    /// How much of the picture changed at its height, 0 to 1.
+    pub size: f64,
+    /// Where, in the clip's px: x, y, w, h.
+    pub region: [u32; 4],
+});
+result!(#[schemars(rename = "VideoAssetInfo")] AssetInfo {
+    pub asset: VideoAsset,
+    pub duration_s: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    /// Its frame rate, averaged over the clip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fps: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frames: Option<u32>,
+    /// Its frames are not evenly spaced (a phone's screen recording): frame numbers do not map to
+    /// time. `video.asset.add {fps: 30}` adds it at a constant rate.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub variable_rate: bool,
+    /// The shortest and longest gap between frames, ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_gap_ms: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_codec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_codec: Option<String>,
+    /// Its sound, measured as a render's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<AudioReport>,
+    /// Where its picture changes, in order; at most 300.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub motion: Vec<MotionEvent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+});
+op!(AssetInspect, "video.asset.inspect", AssetInspectIn => AssetInfo,
+    OpMeta::query(Scope::Project, 12, "Read a clip, sound or picture: size, length, frame rate and frame count, a variable-rate warning, its loudness, and the frames where its picture changes (taps, screens, scrolls)").plugin(PLUGIN));
+
+payload!(#[schemars(rename = "VideoAudioBeatsIn")] AudioBeatsIn {
+    pub video_id: Id,
+    /// The music: `assets/music.mp3` or an absolute path.
+    #[schemars(length(min = 1, max = 4096))]
+    pub asset: String,
+    /// Default 4.
+    #[schemars(range(min = 1, max = 12))]
+    pub beats_per_bar: Option<u32>,
+    /// About the tempo, when you know it: the search keeps near it (halves and doubles aside).
+    #[schemars(range(min = 40.0, max = 240.0))]
+    pub bpm: Option<f64>,
+});
+result!(#[schemars(rename = "VideoBeatBar")] BeatBar {
+    /// From 1, at the first downbeat.
+    pub n: u32,
+    pub start_s: f64,
+    /// The video's frame it starts on.
+    pub frame: u32,
+    /// RMS dBFS.
+    pub loudness_db: f64,
+});
+result!(#[schemars(rename = "VideoBeatSection")] BeatSection {
+    pub bar: u32,
+    pub start_s: f64,
+    pub frame: u32,
+    /// `louder`, `quieter` (3 dB or more against the two bars before), `bass_in`, `bass_out`.
+    pub kind: String,
+    pub change_db: f64,
+});
+result!(#[schemars(rename = "VideoBeatGrid")] BeatGrid {
+    pub bpm: f64,
+    pub beat_s: f64,
+    pub bar_s: f64,
+    pub beats_per_bar: u32,
+    pub first_beat_s: f64,
+    pub first_downbeat_s: f64,
+    /// The video's frame rate, and the grid in its frames.
+    pub fps: f64,
+    pub frames_per_beat: f64,
+    pub first_downbeat_frame: f64,
+    /// The beats the grid was fitted through, and how far they sit from it (RMS ms).
+    pub beats_found: u32,
+    pub fit_rms_ms: f64,
+    /// 0 to 1: how clearly the beat, and the downbeat among the bar's beats, stand out.
+    pub beat_confidence: f64,
+    pub downbeat_confidence: f64,
+    pub seconds: f64,
+    /// Every bar, at most 600.
+    pub bars: Vec<BeatBar>,
+    /// Where the music changes.
+    pub sections: Vec<BeatSection>,
+    /// The kit's call for this grid: `useBeatGrid({bpm, firstBeat, beatsPerBar})`.
+    pub kit: String,
+});
+op!(AudioBeats, "video.audio.beats", AudioBeatsIn => BeatGrid,
+    OpMeta::query(Scope::Project, 12, "A music file's beat grid: BPM, first beat and downbeat, every bar in the video's frames with its loudness, and where sections change; to cut on the beat").plugin(PLUGIN));
+
+result!(#[schemars(rename = "VideoAssetListOut")] AssetListOut {
+    /// Everything under `public/`, by name.
+    pub assets: Vec<VideoAsset>,
+});
+op!(AssetList, "video.asset.list", IdIn => AssetListOut,
+    OpMeta::query(Scope::Project, 12, "A video's assets: every file under public/ with its kind, size, the file a link points to, and how Relay made it").plugin(PLUGIN));
 
 payload!(#[schemars(rename = "VideoVersionRestoreIn")] VersionRestoreIn {
     pub video_id: Id,
@@ -666,11 +1356,16 @@ op!(VersionRestore, "video.version.restore", VersionRestoreIn => VersionRestoreO
 
 op!(KitStatusOp, "video.kit.status", Empty => KitStatus,
     OpMeta::query(Scope::Global, 12, "Whether this machine is set up to render videos (Node.js, Remotion and its browser)"));
-op!(KitInstall, "video.kit.install", Empty => KitStatus,
-    OpMeta::mutation(Scope::Global, 12, "Set this machine up to render videos: downloads Remotion and its browser (about 600 MB) once; answers at once, then video.kit.changed")
-        .emits(&["video.kit.changed"]).plugin(PLUGIN));
+payload!(#[schemars(rename = "VideoKitInstallIn")] KitInstallIn {
+    /// Set it up again even when it is ready (a damaged install).
+    pub force: Option<bool>,
+});
+op!(KitInstall, "video.kit.install", KitInstallIn => KitStatus,
+    OpMeta::mutation(Scope::Global, 12, "Set this machine up to render videos (Remotion and its browser, about 600 MB, once); answers the real state: ready when it already is, else installing, with video.kit.progress as it goes and video.kit.changed at the end")
+        .emits(&["video.kit.changed", "video.kit.progress"]).plugin(PLUGIN));
 
-entries!(List, Get, Create, Update, Delete, Restore, Check, Still, Scan, Render, RenderGet, RenderCancel, AssetAdd,
+entries!(List, Get, Create, Update, Delete, Restore, Check, Still, Scan, Render, RenderBatch, RenderWait, RenderGet, RenderCancel,
+    AssetAdd, AssetList, AssetInspect, AudioBeats, Timeline, Preview, CaptureAndroid, Voice, Voices, Sfx, Music, Transcribe, ElevenKeySet, ElevenKeyRemove, ElevenStatusOp,
     VersionRestore, KitStatusOp, KitInstall);
 
 #[cfg(test)]

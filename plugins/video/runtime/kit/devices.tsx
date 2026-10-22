@@ -18,15 +18,45 @@ type Screen = {
 const Fill: React.FC<{ src?: string; children?: React.ReactNode }> = ({ src, children }) =>
   src ? <Img src={src} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} /> : <>{children}</>;
 
+/** Which phone: an iPhone (19.5:9, the camera island) or an Android phone (20:9, a punch-hole
+ * camera, the gesture bar), whose screen is exactly a 1080 × 2400 recording's shape. */
+export type PhoneModel = 'iphone' | 'android';
+
+const bezelOf = (width: number, model: PhoneModel) => width * (model === 'android' ? 0.026 : 0.032);
+
 /** Where a `Phone` `width` px wide draws its screen: the screen's size in px, and the band at its
- * top the camera island covers. A 520 px phone has a 487 × 1093 px screen. */
-export const phoneScreen = (width = 520) => {
-  const bezel = width * 0.032;
+ * top the camera covers. A 520 px iPhone has a 487 × 1093 px screen; a 520 px Android phone a
+ * 493 × 1095 px one, 20:9 like its recordings. */
+export const phoneScreen = (width = 520, model: PhoneModel = 'iphone') => {
+  const bezel = bezelOf(width, model);
+  if (model === 'android') {
+    const w = width - 2 * bezel;
+    return { width: w, height: (w * 20) / 9, island: width * 0.075 };
+  }
   return { width: width - 2 * bezel, height: Math.round(width * 2.1667) - 2 * bezel, island: width * 0.115 };
 };
 
 type Tone = boolean | 'light' | 'dark';
 const ink = (tone: Tone) => (tone === 'light' ? '#FFFFFF' : '#0B0D12');
+
+/** An Android status bar at dp (412 wide): the time at the left; signal, Wi-Fi and battery at the
+ * right. */
+const AndroidStatusBar: React.FC<{ tone: Tone; time?: string }> = ({ tone, time = '12:30' }) => {
+  const c = ink(tone);
+  return (
+    <div aria-hidden="true" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 40, display: 'flex', alignItems: 'center',
+      justifyContent: 'space-between', padding: '0 22px 0 26px', color: c, fontFamily: 'Inter, sans-serif', fontWeight: 500, fontSize: 15 }}>
+      <span>{time}</span>
+      <svg width="62" height="14" viewBox="0 0 62 14" fill={c}>
+        <path d="M2 11.5a9 9 0 0 1 12.5 0l-1.4 1.5a7 7 0 0 0-9.7 0zM5 8.6a5.2 5.2 0 0 1 6.6 0L8.3 12z" />
+        <path d="M22 13h12V1z" />
+        <rect x="42" y="2" width="9" height="11" rx="1.6" fill="none" stroke={c} strokeWidth="1.3" />
+        <rect x="44" y="5" width="5" height="6.4" rx="0.6" />
+        <rect x="45" y="0.4" width="3" height="1.6" rx="0.5" />
+      </svg>
+    </div>
+  );
+};
 
 /** A phone's status bar, drawn at iPhone points (390 wide): the time and the signal, Wi-Fi and
  * battery marks, light or dark. */
@@ -48,42 +78,61 @@ const StatusBar: React.FC<{ tone: Tone }> = ({ tone }) => {
   );
 };
 
-/** A modern phone, `width` px wide (default 520) and 19.5:9 tall, its screen showing `src` or the
- * children. With `designWidth` (390 for iPhone points) the children are drawn at that width and
- * scaled to fit the screen, so an app screen is laid out as on a phone: 390 × about 875 points.
- * `statusBar` and `homeIndicator` draw a phone's own marks over it, `'dark'` (for a light app;
- * `true` is dark) or `'light'`. `phoneScreen(width)` gives the screen's size in px. */
-export const Phone: React.FC<Screen & { width?: number; designWidth?: number; statusBar?: Tone; homeIndicator?: Tone; frame?: string; screen?: string; shadow?: boolean }> = ({
-  id, src, children, style, width = 520, designWidth, statusBar = false, homeIndicator = false, frame = '#111317', screen = '#000', shadow = true,
+/** A modern phone, `width` px wide (default 520), its screen showing `src` or the children.
+ * `model: 'iphone'` (default) is 19.5:9 with the camera island; `'android'` is 20:9 with a
+ * punch-hole camera (`camera: 'none'` for none), so a 1080 × 2400 screen recording fills it
+ * exactly. With `designWidth` (390 for iPhone points, 412 for Android dp) the children are drawn at
+ * that width and scaled to fit, so an app screen is laid out as on the phone. `statusBar` and
+ * `homeIndicator` draw the phone's own marks over it (the gesture bar on Android), `'dark'` (for a
+ * light app; `true` is dark) or `'light'`. A recording already shows its own status bar: leave
+ * them off. `phoneScreen(width, model)` gives the screen's size in px. */
+export const Phone: React.FC<Screen & {
+  width?: number; model?: PhoneModel; camera?: 'island' | 'punch-hole' | 'none'; designWidth?: number; statusBar?: Tone;
+  homeIndicator?: Tone; time?: string; frame?: string; screen?: string; shadow?: boolean;
+}> = ({
+  id, src, children, style, width = 520, model = 'iphone', camera, designWidth, statusBar = false, homeIndicator = false, time,
+  frame = '#111317', screen = '#000', shadow = true,
 }) => {
-  const height = Math.round(width * 2.1667);
-  const bezel = width * 0.032;
-  const inner = phoneScreen(width);
+  const android = model === 'android';
+  const bezel = bezelOf(width, model);
+  const inner = phoneScreen(width, model);
+  const height = Math.round(inner.height + 2 * bezel);
   const scale = designWidth ? inner.width / designWidth : 1;
   const points = designWidth ?? inner.width;
   const marks = statusBar || homeIndicator;
+  const lens = camera ?? (android ? 'punch-hole' : 'island');
   return (
     <div data-id={id} style={{
-      position: 'relative', width, height, borderRadius: width * 0.15, background: frame, padding: bezel,
+      position: 'relative', width, height, borderRadius: width * (android ? 0.11 : 0.15), background: frame, padding: bezel,
       boxSizing: 'border-box', boxShadow: shadow ? `0 ${width * 0.08}px ${width * 0.2}px rgba(0,0,0,0.45), inset 0 0 0 ${Math.max(1, width * 0.004)}px rgba(255,255,255,0.12)` : undefined,
       ...style,
     }}>
-      <div data-relay-screen="" style={{ position: 'relative', width: '100%', height: '100%', borderRadius: width * 0.12, overflow: 'hidden', background: screen }}>
+      <div data-relay-screen="" style={{ position: 'relative', width: '100%', height: '100%', borderRadius: width * (android ? 0.088 : 0.12), overflow: 'hidden', background: screen }}>
         {designWidth || marks ? (
           <div style={{ position: 'absolute', top: 0, left: 0, width: points, height: inner.height / scale, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
             <Fill src={src}>{children}</Fill>
-            {statusBar ? <StatusBar tone={statusBar} /> : null}
+            {statusBar ? (android ? <AndroidStatusBar tone={statusBar} time={time} /> : <StatusBar tone={statusBar} />) : null}
             {homeIndicator ? (
-              <div style={{ position: 'absolute', bottom: 8, left: '50%', width: 134, height: 5, borderRadius: 3, transform: 'translateX(-50%)', background: ink(homeIndicator) }} />
+              <div style={{
+                position: 'absolute', bottom: android ? 9 : 8, left: '50%', width: android ? 108 : 134, height: android ? 4 : 5, borderRadius: 3,
+                transform: 'translateX(-50%)', background: ink(homeIndicator), opacity: android ? 0.85 : 1,
+              }} />
             ) : null}
           </div>
         ) : (
           <Fill src={src}>{children}</Fill>
         )}
-        <div style={{
-          position: 'absolute', top: width * 0.03, left: '50%', width: width * 0.3, height: width * 0.085,
-          transform: 'translateX(-50%)', borderRadius: width, background: '#000',
-        }} />
+        {lens === 'island' ? (
+          <div style={{
+            position: 'absolute', top: width * 0.03, left: '50%', width: width * 0.3, height: width * 0.085,
+            transform: 'translateX(-50%)', borderRadius: width, background: '#000',
+          }} />
+        ) : lens === 'punch-hole' ? (
+          <div style={{
+            position: 'absolute', top: width * 0.026, left: '50%', width: width * 0.042, height: width * 0.042,
+            transform: 'translateX(-50%)', borderRadius: width, background: '#000', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.08)',
+          }} />
+        ) : null}
       </div>
     </div>
   );

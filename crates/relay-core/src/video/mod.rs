@@ -6,11 +6,20 @@
 //! changed (`versions`); stills come back as pictures with the problems found in them (`probe`,
 //! `sheet`), and renders run one at a time on a thread of their own (`jobs`).
 
+pub mod assets;
+pub mod audio;
+pub mod beats;
+pub mod capture;
+pub mod eleven;
+pub mod inspect;
 pub mod jobs;
 pub mod kit;
+pub mod media;
+pub mod preview;
 pub mod probe;
 pub mod sheet;
 pub mod stills;
+pub mod timeline;
 pub mod versions;
 pub mod worker;
 
@@ -32,6 +41,15 @@ pub struct Hub {
     pub(crate) worker: worker::Slot,
     pub(crate) kit: kit::State,
     pub(crate) jobs: jobs::Queue,
+    /// The newest timelines measured (`video.timeline`, a still's sound), by video, version,
+    /// composition and props: a still after a timeline reuses its mix.
+    pub(crate) timelines: Mutex<Vec<(String, std::sync::Arc<stills::Measured>)>>,
+    /// The live preview (Remotion Studio), one at a time.
+    pub preview: preview::Slot,
+    /// ElevenLabs: the saved key once read, and the tests' stand-in for the network.
+    pub(crate) eleven: eleven::State,
+    /// Files' lengths in seconds, by path and change time (ffprobe).
+    pub(crate) lengths: Mutex<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<f64>)>>,
     /// Tests only: the worker's command line instead of `node videos/.relay/worker.mjs`, with
     /// the kit counted as set up.
     program: Mutex<Option<Vec<String>>>,
@@ -40,6 +58,12 @@ pub struct Hub {
 impl Hub {
     pub(crate) fn program(&self) -> Option<Vec<String>> {
         self.program.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Answer ElevenLabs calls with `fake` instead of the network: what the engine tests use.
+    #[doc(hidden)]
+    pub fn use_elevenlabs(&self, fake: eleven::Fake) {
+        *self.eleven.fake.lock().unwrap_or_else(|e| e.into_inner()) = Some(fake);
     }
 
     /// Run `program` as the worker instead of Relay's, the kit counted as set up: what the engine
@@ -53,6 +77,7 @@ impl Hub {
 /// Stop the worker and what it runs: Relay is going.
 pub fn shutdown(engine: &Engine) {
     worker::stop(engine);
+    preview::stop(engine);
 }
 
 /// The folder a project's videos are made in: what every session of the project may write to
@@ -154,7 +179,7 @@ pub fn live_video(conn: &Connection, id: Id) -> Result<Video, BusError> {
 }
 
 pub const RENDER_COLUMNS: &str = "id, video_id, project_id, composition, format, quality, state, progress, version, range_from, range_to, \
-    path, bytes, error, actor, created_at, started_at, finished_at";
+    path, bytes, error, actor, created_at, started_at, finished_at, name, audio, loudness, peak";
 
 pub fn render_row(row: &Row) -> rusqlite::Result<VideoRender> {
     let range = match (row.get::<_, Option<u32>>(9)?, row.get::<_, Option<u32>>(10)?) {
@@ -183,6 +208,10 @@ pub fn render_row(row: &Row) -> rusqlite::Result<VideoRender> {
         created_at: row.get(15)?,
         started_at: row.get(16)?,
         finished_at: row.get(17)?,
+        name: row.get(18)?,
+        audio: row.get::<_, Option<String>>(19)?.and_then(|text| serde_json::from_str(&text).ok()),
+        loudness: row.get(20)?,
+        peak: row.get(21)?,
     })
 }
 

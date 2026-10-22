@@ -93,6 +93,7 @@ pub struct VideoBoard {
     fields: RefCell<Vec<(String, Field)>>,
     renders_box: gtk::Box,
     versions_box: gtk::Box,
+    voices_box: gtk::Box,
     toast: gtk::Revealer,
     toast_label: gtk::Label,
     toast_serial: Cell<u64>,
@@ -121,6 +122,29 @@ fn megabytes(bytes: i64) -> String {
 }
 
 /// Whether a render's file plays here.
+/// A render's sound in a line: `-14.0 LUFS · peak -1.1 dBTP`, and what is wrong with it.
+fn sound_line(audio: &relay_bus::ops::video::AudioReport) -> String {
+    let lufs = audio.lufs.map_or_else(|| "silent".to_string(), |l| format!("{l:.1} LUFS"));
+    let mut line = format!("{lufs} · peak {:.1} dBTP", audio.true_peak);
+    if let Some(w) = audio.warnings.iter().find(|w| w.kind == "clipping" || w.kind == "hot") {
+        line.push_str(&format!(" · {}", if w.kind == "clipping" { "clips" } else { "hot" }));
+    }
+    line
+}
+
+/// 99000 as 99,000.
+fn group(n: i64) -> String {
+    let digits = n.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if n < 0 { format!("-{out}") } else { out }
+}
+
 fn playable(r: &VideoRender) -> bool {
     r.state == RenderState::Done && r.path.is_some() && matches!(r.format.name(), "mp4" | "webm")
 }
@@ -171,6 +195,16 @@ impl VideoBoard {
         let status = label("", "design-status");
         status.set_ellipsize(gtk::pango::EllipsizeMode::End);
         top.append(&status);
+        // The live preview: Remotion Studio in the browser, with sound, no render needed.
+        let live_key = gtk::Button::new();
+        live_key.add_css_class("quiet");
+        let live_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        live_row.append(&crate::icons::image("external", 14));
+        live_row.append(&label("Watch live", ""));
+        live_key.set_child(Some(&live_row));
+        live_key.set_tooltip_text(Some("Play it with sound in your browser, scrub and step through frames, without rendering"));
+        live_key.set_widget_name("video-live");
+        top.append(&live_key);
         let render_key = gtk::MenuButton::new();
         render_key.add_css_class("video-render-key");
         let render_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -330,6 +364,8 @@ impl VideoBoard {
         side_box.append(&renders_section);
         let (versions_section, versions_box) = section("Versions");
         side_box.append(&versions_section);
+        let (voices_section, voices_box) = section("ElevenLabs");
+        side_box.append(&voices_section);
         side.set_child(Some(&side_box));
         body.append(&side);
         root.append(&body);
@@ -363,6 +399,7 @@ impl VideoBoard {
             fields: RefCell::default(),
             renders_box,
             versions_box,
+            voices_box,
             toast,
             toast_label,
             toast_serial: Cell::new(0),
@@ -443,13 +480,121 @@ impl VideoBoard {
             }
         });
         let weak = Rc::downgrade(&b);
+        live_key.connect_clicked(move |key| {
+            if let Some(b) = weak.upgrade() {
+                b.watch_live(key.upcast_ref());
+            }
+        });
+        let weak = Rc::downgrade(&b);
         ask_key.connect_clicked(move |key| {
             if let Some(b) = weak.upgrade() {
                 b.ask(key.upcast_ref());
             }
         });
         b.reload();
+        b.show_voices();
         b
+    }
+
+    /// Open the live preview in the browser: Studio starts (a few seconds the first time) and its
+    /// link opens.
+    fn watch_live(&self, anchor: &gtk::Widget) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        self.say("Opening a live preview in your browser…");
+        let (weak, id) = (self.me.clone(), self.id);
+        let window = anchor.root().and_downcast::<gtk::Window>();
+        glib::spawn_future_local(async move {
+            let opened = ui.call("video.preview", json!({"video_id": id})).await;
+            let Some(b) = weak.upgrade() else { return };
+            match opened.ok().and_then(|v| v["url"].as_str().map(str::to_string)) {
+                Some(url) => {
+                    let weak = b.me.clone();
+                    gtk::UriLauncher::new(&url).launch(window.as_ref(), gio::Cancellable::NONE, move |r| {
+                        if let (Err(e), Some(b)) = (r, weak.upgrade()) {
+                            b.say(&format!("Could not open the browser: {e}"));
+                        }
+                    });
+                }
+                None => b.say("The live preview could not start: check the code (Ask agent), or set the kit up again from the gallery."),
+            }
+        });
+    }
+
+    /// The ElevenLabs key: saved here by the person, for voice lines, music and sound effects.
+    /// Agents use it and never see it.
+    fn show_voices(&self) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        let weak = self.me.clone();
+        glib::spawn_future_local(async move {
+            let status = ui.call("video.elevenlabs.status", json!({})).await;
+            let Some(b) = weak.upgrade() else { return };
+            clear(&b.voices_box);
+            let saved = status.as_ref().ok().and_then(|v| v["saved"].as_bool()).unwrap_or(false);
+            if saved {
+                let v = status.unwrap_or_default();
+                let mut text = "Key saved".to_string();
+                if let Some(tier) = v["tier"].as_str() {
+                    text.push_str(&format!(" · {tier}"));
+                }
+                if let Some(left) = v["characters_left"].as_i64() {
+                    text.push_str(&format!(" · {} characters left", group(left)));
+                }
+                let note = label(&text, "dim");
+                note.set_xalign(0.0);
+                note.set_wrap(true);
+                // A wrapped label asks for its whole text on one line unless held: the side
+                // panel must not take the player's room.
+                note.set_max_width_chars(36);
+                b.voices_box.append(&note);
+                let remove = gtk::Button::with_label("Remove key");
+                remove.set_halign(gtk::Align::Start);
+                let weak = b.me.clone();
+                remove.connect_clicked(move |_| {
+                    let Some(b) = weak.upgrade() else { return };
+                    let Some(ui) = b.ui.upgrade() else { return };
+                    let weak = b.me.clone();
+                    glib::spawn_future_local(async move {
+                        let _ = ui.call("video.elevenlabs.key_remove", json!({})).await;
+                        if let Some(b) = weak.upgrade() {
+                            b.show_voices();
+                        }
+                    });
+                });
+                b.voices_box.append(&remove);
+                return;
+            }
+            let note = label("Voice lines, music and sound effects use your ElevenLabs key (elevenlabs.io, API keys). It stays in your keyring; agents never see it.", "dim");
+            note.set_xalign(0.0);
+            note.set_wrap(true);
+            note.set_max_width_chars(36);
+            b.voices_box.append(&note);
+            let entry = gtk::PasswordEntry::new();
+            entry.set_show_peek_icon(true);
+            entry.set_placeholder_text(Some("ElevenLabs API key"));
+            b.voices_box.append(&entry);
+            let save = gtk::Button::with_label("Save key");
+            save.add_css_class("primary");
+            save.set_halign(gtk::Align::Start);
+            let weak = b.me.clone();
+            let field = entry.clone();
+            save.connect_clicked(move |_| {
+                let Some(b) = weak.upgrade() else { return };
+                let Some(ui) = b.ui.upgrade() else { return };
+                let key = field.text().to_string();
+                field.set_text("");
+                let weak = b.me.clone();
+                glib::spawn_future_local(async move {
+                    let saved = ui.call("video.elevenlabs.key_set", json!({"key": key})).await;
+                    let Some(b) = weak.upgrade() else { return };
+                    match saved {
+                        Ok(_) => b.say("ElevenLabs key saved."),
+                        Err(e) => b.say(&format!("The key was not saved: {e}")),
+                    }
+                    b.show_voices();
+                });
+            });
+            b.voices_box.append(&save);
+        });
     }
 
     fn video(&self) -> Option<Video> {
@@ -748,8 +893,10 @@ impl VideoBoard {
                 relay_bus::ops::video::Quality::High => " high",
                 relay_bus::ops::video::Quality::Standard => "",
             };
-            let head = label(&format!("{}{} · v{}", r.format.name().to_uppercase(), quality, r.version), "video-row-title");
+            let named = r.name.as_deref().map(|n| format!("{n} · ")).unwrap_or_default();
+            let head = label(&format!("{named}{}{} · v{}", r.format.name().to_uppercase(), quality, r.version), "video-row-title");
             head.set_xalign(0.0);
+            head.set_ellipsize(gtk::pango::EllipsizeMode::End);
             words.append(&head);
             let when = r.finished_at.as_deref().or(Some(r.created_at.as_str())).and_then(|t| ago(t, Form::CompactAgo)).unwrap_or_default();
             let detail_text = match r.state {
@@ -764,6 +911,19 @@ impl VideoBoard {
             sub.set_ellipsize(gtk::pango::EllipsizeMode::End);
             sub.set_tooltip_text(r.error.as_deref().or(r.path.as_deref()));
             words.append(&sub);
+            // Its sound as measured: loudness and peak, red when it clips.
+            if let Some(audio) = r.audio.as_ref().filter(|_| r.state == RenderState::Done) {
+                let line = sound_line(audio);
+                let warn = audio.warnings.iter().any(|w| w.kind == "clipping" || w.kind == "hot");
+                let sound = label(&line, if warn { "video-warn" } else { "dim" });
+                sound.set_xalign(0.0);
+                sound.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                let tip = audio.warnings.iter().map(|w| w.detail.as_str()).collect::<Vec<_>>().join("\n");
+                if !tip.is_empty() {
+                    sound.set_tooltip_text(Some(&tip));
+                }
+                words.append(&sound);
+            }
             row.append(&words);
             if let (true, Some(path)) = (playable(r), r.path.clone()) {
                 let play = crate::app::icon_button("play", "Play this render");
@@ -869,10 +1029,12 @@ impl VideoBoard {
 
     fn render_menu(&self, pop: &gtk::Popover) -> gtk::Box {
         let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        let choices: [(&str, Value); 7] = [
+        let choices: [(&str, Value); 9] = [
             ("Preview (half size, quick)", json!({"quality": "preview"})),
             ("MP4", json!({"format": "mp4"})),
             ("MP4, high quality", json!({"format": "mp4", "quality": "high"})),
+            ("For YouTube, Shorts, Reels, TikTok (−14 LUFS)", json!({"format": "mp4", "quality": "high", "preset": "youtube", "name": "youtube"})),
+            ("For Discord (−16 LUFS)", json!({"format": "mp4", "preset": "discord", "name": "discord"})),
             ("WebM", json!({"format": "webm"})),
             ("GIF", json!({"format": "gif"})),
             ("ProRes with transparency (.mov)", json!({"format": "prores"})),
@@ -1091,6 +1253,18 @@ fn session_state(listed: &Value, session: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_renders_sound_reads_in_a_line() {
+        let audio = relay_bus::ops::video::AudioReport {
+            lufs: Some(-14.04), lra: None, short_term_max: None, true_peak: -1.12, sample_peak: -1.2, clipped: 0, seconds: 8.0, channels: 2,
+            gain_db: None, lufs_before: None, true_peak_before: None, warnings: Vec::new(),
+        };
+        assert_eq!(sound_line(&audio), "-14.0 LUFS · peak -1.1 dBTP");
+        assert_eq!(group(99000), "99,000");
+        assert_eq!(group(1234567), "1,234,567");
+        assert_eq!(group(12), "12");
+    }
 
     #[test]
     fn colours_are_told_by_their_mark_or_their_value() {

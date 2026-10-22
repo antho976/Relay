@@ -127,6 +127,61 @@ let bundling = Promise.resolve();
 /** Bundles in use by a render, which a newer bundle must not remove from under it. */
 const inUse = new Map();
 
+/** A tree of links to every file under `from`, at `to`. Remotion copies its public folder into
+ * each bundle, a link as a link: given this, a bundle holds links to the video's files instead
+ * of a copy of every clip, made again on every edit. */
+const mirror = (from, to) => {
+  fs.mkdirSync(to, { recursive: true });
+  for (const e of safeReaddir(from)) {
+    const source = path.join(from, e);
+    let stat;
+    let linked;
+    try {
+      linked = fs.lstatSync(source).isSymbolicLink();
+      stat = fs.statSync(source);
+    } catch {
+      continue; // a link to nothing
+    }
+    // A folder's own folders are walked; a link to a folder is not (it could be the whole disk),
+    // as Remotion's server would not have served what is under it either.
+    if (stat.isDirectory()) {
+      if (!linked) mirror(source, path.join(to, e));
+    } else fs.symlinkSync(fs.realpathSync(source), path.join(to, e));
+  }
+};
+
+/** Every link under `dir` made a hard link to what it points at (a copy across filesystems):
+ * Remotion's file server refuses links, and a hard link is a plain file to it that shares the
+ * clip's bytes on disk. */
+const harden = (dir) => {
+  for (const e of safeReaddir(dir)) {
+    const p = path.join(dir, e);
+    let stat;
+    try {
+      stat = fs.lstatSync(p);
+    } catch {
+      continue;
+    }
+    if (stat.isDirectory()) {
+      harden(p);
+      continue;
+    }
+    if (!stat.isSymbolicLink()) continue;
+    let real;
+    try {
+      real = fs.realpathSync(p);
+    } catch {
+      continue; // a link to nothing stays, and is missing as it would be
+    }
+    fs.unlinkSync(p);
+    try {
+      fs.linkSync(real, p);
+    } catch {
+      fs.copyFileSync(real, p);
+    }
+  }
+};
+
 /** The video's bundle (a served folder), built again only when its files changed. */
 const bundleVideo = (dir, bundleRoot) => {
   const run = bundling.then(async () => {
@@ -137,13 +192,23 @@ const bundleVideo = (dir, bundleRoot) => {
     const entryPoint = path.join(dir, 'src', 'index.ts');
     if (!fs.existsSync(entryPoint)) throw new Refusal('video.entry', 'src/index.ts is missing: it registers the video (registerRoot(relayRoot(Root)))');
     const started = performance.now();
-    const serveUrl = await bundle({
-      entryPoint,
-      outDir,
-      publicDir: path.join(dir, 'public'),
-      enableCaching: true,
-      onProgress: () => {},
-    });
+    const publicDir = path.join(bundleRoot, `.public-${print}`);
+    fs.rmSync(publicDir, { recursive: true, force: true });
+    mirror(path.join(dir, 'public'), publicDir);
+    let serveUrl;
+    try {
+      serveUrl = await bundle({
+        entryPoint,
+        outDir,
+        publicDir,
+        enableCaching: true,
+        onProgress: () => {},
+        onSymlinkDetected: () => {},
+      });
+    } finally {
+      fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+    harden(path.join(outDir, 'public'));
     log(`bundled ${relative(ROOT, dir)} in ${Math.round(performance.now() - started)} ms`);
     Object.assign(v, { fingerprint: print, serveUrl, outDir });
     // Older bundles of this video go, but not one a render still reads.
@@ -311,6 +376,33 @@ const consoleErrors = (logs) => logs
   .slice(0, 10);
 
 const PROBE_ENV = { RELAY_PROBE: '1' };
+const TIMELINE_ENV = { RELAY_PROBE: 'timeline' };
+
+const round3 = (n) => Math.round(Number(n) * 1000) / 1000;
+
+/** The sound each frame Remotion drew holds, as renderFrames collected it for the mix: every
+ * <Audio>, and every clip that is not muted, with its volume and where in its file it is. */
+const soundsOf = (assetsInfo) => (assetsInfo?.assets ?? [])
+  .map((f) => ({
+    frame: f.frame,
+    assets: (f.audioAndVideoAssets ?? [])
+      .filter((a) => a.type === 'audio' || a.type === 'video')
+      .map((a) => ({ id: a.id, type: a.type, src: a.src, volume: round3(a.volume), media: round3(a.mediaFrame), rate: a.playbackRate })),
+  }))
+  .filter((f) => f.assets.length);
+
+const probesOf = (logs) => {
+  const probes = [];
+  for (const l of logs) {
+    if (!l.text?.startsWith(PROBE_PREFIX)) continue;
+    try {
+      probes.push(JSON.parse(l.text.slice(PROBE_PREFIX.length)));
+    } catch {
+      /* a line cut short */
+    }
+  }
+  return probes;
+};
 
 const commands = {
   async hello() {
@@ -441,9 +533,10 @@ const commands = {
     }
     const inputProps = props ?? {};
     const logs = [];
+    let drawn;
     try {
       const c = await withBrowser((puppeteerInstance) => selectComposition({ serveUrl: v.serveUrl, id: composition, inputProps, puppeteerInstance, logLevel: LOG_LEVEL }));
-      await withBrowser((puppeteerInstance) => renderFrames({
+      drawn = await withBrowser((puppeteerInstance) => renderFrames({
         serveUrl: v.serveUrl, composition: c, inputProps, imageFormat: 'none', everyNthFrame: every ?? 3, frameRange: range ?? null,
         envVariables: PROBE_ENV, onBrowserLog: (l) => logs.push(l), onStart: () => {}, onFrameUpdate: () => {}, outputDir: null,
         puppeteerInstance, logLevel: LOG_LEVEL,
@@ -452,16 +545,43 @@ const commands = {
       if (/Could not find composition/i.test(String(e?.message))) throw new Refusal('video.composition', String(e.message).split('\n')[0]);
       return { probes: [], errors: [await runtimeError(e, dir, v.outDir)] };
     }
-    const probes = [];
-    for (const l of logs) {
-      if (!l.text?.startsWith(PROBE_PREFIX)) continue;
-      try {
-        probes.push(JSON.parse(l.text.slice(PROBE_PREFIX.length)));
-      } catch {
-        /* a line cut short */
-      }
+    return { probes: probesOf(logs), sounds: soundsOf(drawn?.assetsInfo), console: [...new Set(consoleErrors(logs))], errors: [] };
+  },
+
+  /** Every frame without pictures, measuring only what the timeline needs (Sequences, the kit's
+   * sounds, every sound Remotion mixes, the beat grid), and the sound mixed as a render mixes it,
+   * to `mix` (a WAV): video.timeline and the waveform under a still. One audio-only render: it
+   * keeps Remotion's file server up while it fetches the sounds. */
+  async timeline({ dir, bundle_dir, composition, props, mix }) {
+    let v;
+    try {
+      v = await bundleVideo(dir, bundle_dir);
+    } catch (e) {
+      if (e instanceof Refusal) throw e;
+      return { probes: [], errors: bundleErrors(e, dir) };
     }
-    return { probes, console: [...new Set(consoleErrors(logs))], errors: [] };
+    const inputProps = props ?? {};
+    const logs = [];
+    let c;
+    try {
+      c = await withBrowser((puppeteerInstance) => selectComposition({ serveUrl: v.serveUrl, id: composition, inputProps, puppeteerInstance, logLevel: LOG_LEVEL }));
+    } catch (e) {
+      if (/Could not find composition/i.test(String(e?.message))) throw new Refusal('video.composition', String(e.message).split('\n')[0]);
+      return { probes: [], errors: [await runtimeError(e, dir, v.outDir)] };
+    }
+    let mixed = null;
+    try {
+      await withBrowser((puppeteerInstance) => renderMedia({
+        serveUrl: v.serveUrl, composition: c, codec: 'wav', outputLocation: mix, inputProps, puppeteerInstance, logLevel: LOG_LEVEL,
+        envVariables: TIMELINE_ENV, onBrowserLog: (l) => logs.push(l), overwrite: true,
+      }));
+      mixed = mix;
+    } catch (e) {
+      // A video with no sound has nothing to mix; the frames were still measured.
+      log('the timeline pass could not mix the sound:', String(e?.message ?? e).split('\n')[0]);
+      if (!probesOf(logs).length) return { probes: [], errors: [await runtimeError(e, dir, v.outDir)] };
+    }
+    return { composition: summary(c), probes: probesOf(logs), sounds: [], mix: mixed, console: [...new Set(consoleErrors(logs))], errors: [] };
   },
 
   /** Render the whole composition (or `range`) to `out`, reporting progress as it goes. */
@@ -532,7 +652,7 @@ const running = new Map();
 // Looking at videos (check, meta, still, scan) goes one request at a time: pages opened side by
 // side have been seen to lose each other's console lines, which is how the probe reports. A
 // render runs beside them; it needs no console.
-const LOOKS = new Set(['check', 'meta', 'still', 'scan']);
+const LOOKS = new Set(['check', 'meta', 'still', 'scan', 'timeline']);
 let looking = Promise.resolve();
 const inTurn = (f) => {
   const run = looking.then(f, f);

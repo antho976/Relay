@@ -751,7 +751,7 @@ pub fn run_by_id(engine: &Engine, id: Id) -> Result<Arc<RunRuntime>, BusError> {
 /// adb from Settings, else PATH, else the discovered Android SDK's `platform-tools` — the
 /// order `sdk_tool` uses for the emulator and avdmanager. Android Studio installs adb only
 /// there, and a desktop session's PATH rarely includes it.
-fn adb_path(conn: &rusqlite::Connection) -> Result<PathBuf, BusError> {
+pub(crate) fn adb_path(conn: &rusqlite::Connection) -> Result<PathBuf, BusError> {
     let configured: Option<String> = conn
         .prepare_cached("SELECT value FROM settings WHERE path='device.adb_path'")
         .bus()?

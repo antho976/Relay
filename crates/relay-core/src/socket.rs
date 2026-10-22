@@ -358,6 +358,20 @@ impl Recent {
             .find(|(seq, _, event)| *seq > floor && filter.matches(&event.ev) && payload_matches(&event.payload, matching))
             .map(|(_, _, event)| event.clone())
     }
+
+    /// For a wait given `since`: the earliest matching event the waiter may see that fired at or
+    /// after it, of those still kept (the last ten minutes, at most 1024 events). What it may see
+    /// is judged in the search: another project's event first must not hide its own.
+    fn since(&self, since: jiff::Timestamp, filter: &Filter, matching: Option<&serde_json::Value>, sees: impl Fn(&Event) -> bool) -> Option<Event> {
+        let mut inner = self.lock();
+        inner.drain();
+        inner.events.iter()
+            .find(|(_, _, event)| {
+                event.ts.parse::<jiff::Timestamp>().is_ok_and(|at| at >= since)
+                    && filter.matches(&event.ev) && payload_matches(&event.payload, matching) && sees(event)
+            })
+            .map(|(_, _, event)| event.clone())
+    }
 }
 
 /// Every task streaming output to one connection. Aborted on drop, so a connection that ends on
@@ -923,6 +937,14 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
                         let timeout = Duration::from_millis(
                             p.timeout_ms.unwrap_or(60_000).clamp(1_000, 3_600_000),
                         );
+                        let since = match p.since.as_deref().map(str::parse::<jiff::Timestamp>).transpose() {
+                            Ok(since) => since,
+                            Err(e) => {
+                                let refused = BusError::invalid("bus.since", format!("since is an RFC 3339 moment, like an event's ts: {e}"));
+                                let _ = out_tx.send(serde_json::to_string(&Response::err(req.id, refused))?).await;
+                                continue;
+                            }
+                        };
                         let mut rx = engine.subscribe();
                         // Subscribed first, so an answer is either already stored or still to come.
                         let exception = exception_waited(&filter, p.matching.as_ref());
@@ -933,7 +955,8 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
                         // Then whatever fired between this agent's last refusal and now.
                         let answered = answered
                             .or_else(|| recent.replay(&req, &filter, p.matching.as_ref()))
-                            .filter(|ev| visible(scope.as_ref(), ev));
+                            .filter(|ev| visible(scope.as_ref(), ev))
+                            .or_else(|| since.and_then(|since| recent.since(since, &filter, p.matching.as_ref(), |ev| visible(scope.as_ref(), ev))));
                         let wait = tokio::time::timeout(timeout, async {
                             if answered.is_some() {
                                 return Ok::<_, anyhow::Error>(answered);
@@ -1675,6 +1698,35 @@ mod conn_tests {
         let mut other = Client::connect(&server.path).await.unwrap();
         assert_eq!(wait(&mut other, Actor::agent("bystander")).await["timed_out"], true);
         assert_eq!(wait(&mut other, Actor::User).await["timed_out"], true);
+    }
+
+    /// A wait given `since` wakes on what fired after that moment even though it started later:
+    /// a render that finished in the second between starting it and waiting for it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_wait_since_a_moment_takes_what_fired_after_it() {
+        let (engine, _fixture, server) = server().await;
+        agents(&engine);
+        let mut conn = Client::connect(&server.path).await.unwrap();
+        engine.emit_system("video.render.finished", json!({"id": 1}));
+        let since = crate::time::now();
+        engine.emit_system("video.render.finished", json!({"id": 2}));
+        engine.emit_system("video.render.finished", json!({"id": 3}));
+        let waited = |matching: serde_json::Value, since: Option<String>| {
+            agent("ghost", "bus.wait", json!({"events": ["video.render.finished"], "matching": matching, "since": since, "timeout_ms": 1000}))
+        };
+        let woken = wait_as(&mut conn, waited(json!({"id": 3}), Some(since.clone()))).await;
+        assert_eq!((woken["timed_out"].as_bool(), woken["event"]["payload"]["id"].as_i64()), (Some(false), Some(3)), "{woken}");
+        // Before the moment is not after it; and without `since` nothing past is taken.
+        assert_eq!(wait_as(&mut conn, waited(json!({"id": 1}), Some(since))).await["timed_out"], true);
+        assert_eq!(wait_as(&mut conn, waited(json!({"id": 2}), None)).await["timed_out"], true);
+        let bad = conn.call(&waited(json!({}), Some("yesterday".into())), |_| {}).await.unwrap();
+        assert_eq!(bad.error.map(|e| e.code).as_deref(), Some("bus.since"));
+        // Another project's event first does not hide this one's.
+        let since = crate::time::now();
+        engine.emit_system("video.render.finished", json!({"id": 7, "project_id": 2}));
+        engine.emit_system("video.render.finished", json!({"id": 8, "project_id": 1}));
+        let mine = wait_as(&mut conn, waited(json!({}), Some(since))).await;
+        assert_eq!(mine["event"]["payload"]["id"], 8, "{mine}");
     }
 
     /// RA-336: the ops the door answers itself are refused exactly as the pipeline refuses.

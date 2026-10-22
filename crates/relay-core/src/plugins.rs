@@ -491,7 +491,7 @@ mod tests {
             .filter(|entry| entry.meta.plugin == Some(plugin.id()))
             .map(|entry| entry.name)
             .collect();
-        assert_eq!(brought.len(), 15, "{brought:?}");
+        assert_eq!(brought.len(), 29, "{brought:?}");
         for op in brought {
             assert!(skill.body.contains(&format!("`{op} ")), "the skill does not show {op}");
         }

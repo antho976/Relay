@@ -23,6 +23,18 @@ pub struct Probe {
     pub texts: Vec<ProbeText>,
     #[serde(default)]
     pub images: Vec<ProbeImage>,
+    /// The kit's sounds playing on it (`kit/sound.tsx`).
+    #[serde(default)]
+    pub sounds: Vec<super::timeline::SoundMark>,
+    /// The beat grid the video set up (`useBeatGrid`).
+    #[serde(default)]
+    pub grid: Option<super::timeline::GridSet>,
+    /// The Sequences it holds, when they changed since the page last said them.
+    #[serde(default)]
+    pub sequences: Option<Vec<super::timeline::SequenceSeen>>,
+    /// The sound Remotion collects for the mix, as the page read it (the timeline's pass).
+    #[serde(default)]
+    pub assets: Vec<super::timeline::SoundAsset>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -180,9 +192,12 @@ pub fn issues(frames: &[Drawn], fps: f64) -> Vec<Issue> {
                     if let Some(c) = text_contrast(picture, drawn.scale, [t.x, t.y, t.w, t.h], ink, alpha * t.opacity) {
                         let large = t.size >= short * 0.04;
                         let need = if large { 3.0 } else { 4.5 };
-                        if c < need {
+                        // Judged as it is said, to the hundredth: 4.497 reads 4.50 and passes, so
+                        // a flag never quotes the threshold back as a failure.
+                        let said = (c * 100.0).round() / 100.0;
+                        if said < need {
                             add("contrast", key.clone(), t.id.clone(), name(), p.frame,
-                                format!("{c:.1}:1 against what is under it; {need}:1 is the least for {} text", if large { "large" } else { "body" }));
+                                format!("{said:.2}:1 against what is under it; {need:.1}:1 is the least for {} text", if large { "large" } else { "body" }));
                         }
                     }
                 }
@@ -455,6 +470,24 @@ mod tests {
         let found = issues(&[Drawn { probe: &p, picture: Some(&picture), scale: 0.5, console: &[], moving: &[] }], 30.0);
         assert_eq!(kinds(&found), ["contrast"]);
         assert!(found[0].detail.contains(":1 against"), "{}", found[0].detail);
+    }
+
+    #[test]
+    fn contrast_is_said_to_the_hundredth_and_judged_as_said() {
+        let picture = Rgba::new(540, 960, [255, 255, 255, 255]);
+        let judged = |grey: u8| {
+            let mut words = text("caption", 200.0, 800.0, 400.0, 60.0);
+            words.color = format!("rgb({grey}, {grey}, {grey})");
+            words.size = 30.0;
+            let p = frame(0, vec![words]);
+            issues(&[Drawn { probe: &p, picture: Some(&picture), scale: 0.5, console: &[], moving: &[] }], 30.0)
+        };
+        // #777 on white is 4.48:1: under, and said so, not "4.5:1 … 4.5:1 is the least".
+        let under = judged(119);
+        assert_eq!(kinds(&under), ["contrast"]);
+        assert!(under[0].detail.starts_with("4.48:1"), "{}", under[0].detail);
+        // #767676 is 4.54:1: over the line, so nothing.
+        assert!(judged(118).is_empty(), "{:?}", judged(118));
     }
 
     #[test]

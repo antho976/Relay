@@ -6,6 +6,7 @@ import { continueRender, delayRender } from 'remotion';
 
 declare global {
   interface Window {
+    __relay_grid?: { bpm: number; firstBeat: number; beatsPerBar: number; fps: number };
     remotion_setFrame?: (frame: number, composition: string, attempt: number) => void;
     remotion_delayRenderTimeouts?: Record<string, unknown>;
     remotion_initialFrame?: number;
@@ -24,6 +25,27 @@ export const markCommitted = (frames: Record<string, number>) => {
  * a page that drew an earlier frame (a render's tab goes from frame to frame) keeps showing it
  * until React commits. */
 const shows = (composition: string, frame: number) => (committed[composition] ?? window.remotion_initialFrame ?? 0) === frame;
+
+/** A Sequence as the probe reports it: video.timeline's scenes. `from` is in its parent's frames. */
+export type Sequenced = { id: string; parent: string | null; type: string; name: string; from: number; duration: number | null; hidden: boolean };
+
+let sequences: Sequenced[] = [];
+let sequencesSaid = '';
+
+/** A sound Remotion collects for the mix on a frame. */
+export type SoundAsset = { id: string; type: string; src: string; frame: number; volume: number; media: number; rate: number };
+
+let assets: SoundAsset[] = [];
+
+/** relayRoot's AssetReader reports the sound of the frame (video.timeline's pass only). */
+export const markAssets = (list: SoundAsset[]) => {
+  assets = list;
+};
+
+/** relayRoot's SequenceReader reports the Sequences the frame holds. */
+export const markSequences = (list: Sequenced[]) => {
+  sequences = list;
+};
 
 /** The prefix of the console line a measurement goes out on. */
 export const PROBE_PREFIX = '__relay_probe__';
@@ -102,7 +124,34 @@ const pathOf = (el: Element): string => {
   return parts.join(' > ');
 };
 
+/** The kit's sounds playing on this frame (`sound.tsx` marks each), the beat grid a video set up
+ * (`useBeatGrid`), and the Sequences — the last only when they changed since this page last said
+ * them, so a long scan does not repeat the same list every frame. */
+const timeline = () => {
+  const sounds = Array.from(document.querySelectorAll<HTMLElement>('[data-relay-sound]')).slice(0, 200).map((el) => {
+    const n = (key: string) => (el.dataset[key] === undefined || el.dataset[key] === '' ? null : Number(el.dataset[key]));
+    return {
+      role: el.dataset.relaySound ?? 'sfx',
+      src: el.dataset.src ?? '',
+      name: el.dataset.name ?? '',
+      elapsed: n('elapsed') ?? 0,
+      volume: n('volume') ?? 1,
+      frames: n('frames'),
+      trim: n('trim'),
+      rate: n('rate'),
+    };
+  });
+  const said = JSON.stringify(sequences);
+  const changed = said !== sequencesSaid;
+  sequencesSaid = said;
+  return { sounds, grid: window.__relay_grid ?? null, ...(changed ? { sequences } : {}), ...(assets.length ? { assets } : {}) };
+};
+
 const measure = (frame: number) => {
+  if (process.env.RELAY_PROBE === 'timeline') {
+    console.log(PROBE_PREFIX + JSON.stringify({ frame, width: window.innerWidth, height: window.innerHeight, ...timeline() }));
+    return;
+  }
   const boxes = Array.from(document.querySelectorAll<HTMLElement>('[data-id]')).slice(0, MOST_BOXES).map((el) => {
     const [x, y, w, h] = rect(el.getBoundingClientRect());
     return { id: el.dataset.id ?? '', x, y, w, h, opacity: opacityOf(el) };
@@ -181,6 +230,7 @@ const measure = (frame: number) => {
     boxes,
     texts,
     images,
+    ...timeline(),
   }));
 };
 
@@ -190,7 +240,7 @@ let installed = false;
  * delayRender until React has drawn the frame; this one holds another until every other hold has
  * gone (pictures and fonts loaded), so the measurement is of the frame that is captured. */
 export const installProbe = () => {
-  if (installed || typeof window === 'undefined' || process.env.RELAY_PROBE !== '1') return;
+  if (installed || typeof window === 'undefined' || (process.env.RELAY_PROBE !== '1' && process.env.RELAY_PROBE !== 'timeline')) return;
   installed = true;
   let seek: Window['remotion_setFrame'];
   Object.defineProperty(window, 'remotion_setFrame', {
