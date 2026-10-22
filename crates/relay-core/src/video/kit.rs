@@ -12,7 +12,7 @@
 use super::Hub;
 use crate::engine::Engine;
 use relay_bus::error::BusError;
-use relay_bus::ops::video::{KitState, KitStatus};
+use relay_bus::ops::video::{KitProgress, KitState, KitStatus};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -35,12 +35,44 @@ const ABOUT: &str = "Setting up downloads Remotion, React, TypeScript and four o
     (about 350 MB) and Remotion's headless Chrome from Google (about 240 MB) into Relay's data folder, once. \
     Nothing is installed system-wide, and nothing is sent anywhere while videos render.";
 
+/// About what each stage puts on disk: npm's packages, then the browser. Progress is read as how
+/// much of it has landed, which is as near as npm lets anyone tell.
+const PACKAGES_BYTES: u64 = 360 * 1024 * 1024;
+const BROWSER_BYTES: u64 = 240 * 1024 * 1024;
+/// How the setup's progress divides between the stages.
+const PACKAGES_SHARE: f64 = 0.6;
+
 /// What the setup thread and the status share.
 #[derive(Default)]
 pub struct State {
     pub(super) installing: std::sync::atomic::AtomicBool,
     error: Mutex<Option<String>>,
     node: Mutex<Option<(Instant, Option<String>)>>,
+    /// While installing: the stage, its start, and the latest progress reading.
+    progress: Mutex<Option<(Instant, KitProgress)>>,
+}
+
+/// What an install that is just starting reports.
+pub fn starting() -> KitProgress {
+    KitProgress { stage: "packages".into(), progress: 0.0, detail: "starting: npm installs Remotion and its packages".into(), elapsed_s: 0 }
+}
+
+/// Bytes under `dir`, following nothing: how much of a stage has landed.
+fn bytes_under(dir: &Path) -> u64 {
+    let mut total = 0;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(at) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&at) else { continue };
+        for e in entries.flatten() {
+            let Ok(meta) = e.metadata() else { continue };
+            if meta.is_dir() {
+                stack.push(e.path());
+            } else {
+                total += meta.len();
+            }
+        }
+    }
+    total
 }
 
 /// `videos/.relay/kit.json`: what was set up, written last.
@@ -126,6 +158,7 @@ pub fn status(engine: &Engine) -> KitStatus {
     let hub = &engine.video;
     let mut out = KitStatus {
         state: KitState::Missing,
+        progress: None,
         root: root.display().to_string(),
         kit_dir: root.join(".relay/kit").display().to_string(),
         node: None,
@@ -139,6 +172,9 @@ pub fn status(engine: &Engine) -> KitStatus {
     }
     if hub.kit.installing.load(Ordering::SeqCst) {
         out.state = KitState::Installing;
+        out.progress = Some(hub.kit.progress.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+            .map(|(started, p)| KitProgress { elapsed_s: started.elapsed().as_secs(), ..p.clone() })
+            .unwrap_or_else(starting));
         return out;
     }
     out.node = node_version(hub);
@@ -185,12 +221,58 @@ pub fn install(engine: &Arc<Engine>) -> KitStatus {
         return status(engine);
     }
     *hub.kit.error.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *hub.kit.progress.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), starting()));
     let weak = Arc::downgrade(engine);
+    // The ticker: every few seconds, how much of the stage has landed, as `video.kit.progress`.
+    let ticking = weak.clone();
+    let _ = std::thread::Builder::new().name("video-kit-progress".into()).spawn(move || {
+        let mut said = -1.0;
+        loop {
+            std::thread::sleep(Duration::from_secs(3));
+            let Some(engine) = ticking.upgrade() else { return };
+            if !engine.video.kit.installing.load(Ordering::SeqCst) {
+                return;
+            }
+            let root = engine.store.videos_dir();
+            let reading = {
+                let guard = engine.video.kit.progress.lock().unwrap_or_else(|e| e.into_inner());
+                let Some((started, p)) = guard.as_ref() else { return };
+                let (stage, share) = match p.stage.as_str() {
+                    "browser" => {
+                        let landed = bytes_under(&root.join("node_modules/.remotion")) as f64 / BROWSER_BYTES as f64;
+                        ("browser", PACKAGES_SHARE + (1.0 - PACKAGES_SHARE) * landed.min(0.98))
+                    }
+                    _ => {
+                        let landed = bytes_under(&root.join("node_modules")) as f64 / PACKAGES_BYTES as f64;
+                        ("packages", PACKAGES_SHARE * landed.min(0.98))
+                    }
+                };
+                KitProgress { stage: stage.into(), progress: (share * 100.0).round() / 100.0, detail: p.detail.clone(), elapsed_s: started.elapsed().as_secs() }
+            };
+            if let Some((_, p)) = engine.video.kit.progress.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                p.progress = p.progress.max(reading.progress);
+            }
+            if reading.progress - said >= 0.02 {
+                said = reading.progress;
+                engine.emit_system("video.kit.progress", serde_json::to_value(&reading).unwrap_or_default());
+            }
+        }
+    });
     let started = std::thread::Builder::new().name("video-kit".into()).spawn(move || {
         let Some(engine) = weak.upgrade() else { return };
         let root = engine.store.videos_dir();
-        let result = set_up(&root);
+        let stage = |name: &str, detail: &str| {
+            if let Some((_, p)) = engine.video.kit.progress.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                p.stage = name.into();
+                p.detail = detail.into();
+                if name == "browser" {
+                    p.progress = p.progress.max(PACKAGES_SHARE);
+                }
+            }
+        };
+        let result = set_up(&root, &stage);
         let hub = &engine.video;
+        *hub.kit.progress.lock().unwrap_or_else(|e| e.into_inner()) = None;
         if let Err(e) = &result {
             tracing::warn!(error = %e, "video kit setup failed");
             *hub.kit.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.clone());
@@ -217,8 +299,9 @@ fn tail(bytes: &[u8]) -> String {
 
 /// The setup itself: Relay's files and the pinned `package.json`, `npm install`, then Remotion's
 /// browser; `kit.json` last, so a setup cut short reads as not done.
-fn set_up(root: &Path) -> Result<(), String> {
+fn set_up(root: &Path, stage: &dyn Fn(&str, &str)) -> Result<(), String> {
     fs::create_dir_all(root.join(".relay")).map_err(|e| format!("{}: {e}", root.display()))?;
+    stage("packages", "npm installs Remotion, React, TypeScript and the fonts (about 350 MB)");
     sync(root)?;
     let package = runtime_files().find(|(rel, _)| *rel == "package.json").map(|(_, b)| b).ok_or("the Video plugin has no runtime/package.json")?;
     fs::write(root.join("package.json"), package).map_err(|e| format!("package.json: {e}"))?;
@@ -234,6 +317,7 @@ fn set_up(root: &Path) -> Result<(), String> {
         return Err(format!("npm install failed: {}", tail(&out.stderr)));
     }
     let node = which::which("node").map_err(|_| "node is not installed".to_string())?;
+    stage("browser", "fetching Remotion's headless Chrome (about 240 MB)");
     let out = crate::proc::output_with_timeout(
         Command::new(node).arg(root.join(".relay/worker.mjs")).arg("ensure-browser").current_dir(root),
         BROWSER_WITHIN,

@@ -923,30 +923,47 @@ async fn do_cmd(instance: Instance, actor_override: Option<&str>, op: String, pa
         fill_project(&mut c, &actor, &token, &req.op, &mut req.payload).await?;
     }
     let resp = c.call(&req, |_| {}).await?;
+    print_response(&resp, pretty, &mut std::io::stdout().lock(), &mut std::io::stderr().lock())?;
+    Ok(exit_for(&resp))
+}
+
+/// What `q` and `cmd` print: stdout carries the JSON alone, so it pipes into a parser; a refusal
+/// and the priority-mail notice go to stderr.
+fn print_response(resp: &relay_bus::Response, pretty: bool, out: &mut impl std::io::Write, err: &mut impl std::io::Write) -> Result<()> {
     if pretty {
         match &resp.error {
-            None => println!("{}", serde_json::to_string_pretty(resp.result.as_ref().unwrap_or(&Value::Null))?),
+            None => writeln!(out, "{}", serde_json::to_string_pretty(resp.result.as_ref().unwrap_or(&Value::Null))?)?,
             // A typed refusal printed on stdout beside real results reads as a result — every
             // caller then has to special-case an error that arrived looking like success.
-            Some(e) => eprintln!("{}", serde_json::to_string_pretty(e)?),
+            Some(e) => writeln!(err, "{}", serde_json::to_string_pretty(e)?)?,
         }
-    } else {
-        println!("{}", serde_json::to_string(&resp)?);
-    }
-    if pretty {
         if let Some(mail) = &resp.mail {
-            eprintln!(
+            writeln!(err,
                 "RELAY priority mail: {} unread. Finish the current atomic action, then run mailbox.list with unread_only true and acknowledge each message.",
                 mail.priority
-            );
+            )?;
         }
+    } else {
+        writeln!(out, "{}", serde_json::to_string(resp)?)?;
     }
-    Ok(exit_for(&resp))
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Priority mail is told on stderr: stdout stays the result's JSON alone, whole, so a pipe
+    /// into `python3 -c 'json.load(sys.stdin)'` reads it.
+    #[test]
+    fn stdout_is_the_json_alone_and_the_mail_notice_goes_to_stderr() {
+        let mut resp = relay_bus::Response::ok(uuid::Uuid::new_v4(), json!({"ok": true, "errors": []}));
+        resp.mail = Some(relay_bus::MailHint { priority: 1 });
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        print_response(&resp, true, &mut out, &mut err).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&out).unwrap(), json!({"ok": true, "errors": []}));
+        assert!(String::from_utf8(err).unwrap().starts_with("RELAY priority mail: 1 unread"));
+    }
 
     /// RA-401: the tool's output is not forwarded; what session.report reads is.
     #[test]

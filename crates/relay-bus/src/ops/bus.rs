@@ -26,6 +26,10 @@ payload!(#[schemars(rename = "BusWaitIn")] WaitIn {
     #[serde(default, deserialize_with = "matching_object")]
     #[schemars(with = "Option<Map<String, Value>>")]
     pub matching: Option<Value>,
+    /// Also take a matching event that fired at or after this moment (RFC 3339, as an event's or
+    /// a row's timestamps are), up to ten minutes back: a wait started after what it waits for
+    /// already happened still wakes. Pass the `created_at` of what you started.
+    pub since: Option<String>,
 });
 result!(#[schemars(rename = "BusWaitOut")] WaitOut {
     pub event: Option<crate::envelope::Event>,

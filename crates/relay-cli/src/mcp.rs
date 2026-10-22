@@ -28,11 +28,53 @@ fn protocol(message: &Value) -> &'static str {
 }
 
 pub async fn serve(instance: Instance, actor: Actor, token: Option<String>) -> Result<u8> {
-    dispatch(stdin_lines(), Output::stdout(), move |message| {
+    let output = Output::stdout();
+    let watcher = tokio::spawn(watch_tools(instance, actor.clone(), token.clone(), output.clone()));
+    let code = dispatch(stdin_lines(), output, move |message| {
         let (actor, token) = (actor.clone(), token.clone());
         async move { handle(instance, &actor, token.as_deref(), message).await }
     })
-    .await
+    .await;
+    watcher.abort();
+    code
+}
+
+/// MCP's own word that the tools changed, which the client answers with a new `tools/list`.
+const TOOLS_CHANGED: &str = "notifications/tools/list_changed";
+
+/// Whether `event` changes what this session may call: a plugin switched on or off for its
+/// project (a session with no project hears every project's).
+fn changes_tools(event: &relay_bus::Event, project: Option<i64>) -> bool {
+    event.ev == "plugin.changed"
+        && (project.is_none() || event.project_id.or_else(|| event.payload["project_id"].as_i64()).is_none_or(|p| Some(p) == project))
+}
+
+/// Tell the client when this session's tools change: a plugin turned on mid-session brings its
+/// ops (Video's `video.*`), and one turned off takes them, without a restart. One subscription
+/// on its own connection, for as long as the server runs; a client that never asks again is no
+/// worse off than before.
+async fn watch_tools(instance: Instance, actor: Actor, token: Option<String>, output: Output) {
+    let ask = |op: &str, payload: Value| {
+        let request = Request::new(actor.clone(), op, payload);
+        match &token {
+            Some(token) => request.with_token(token.clone()),
+            None => request,
+        }
+    };
+    let Ok(mut client) = connect(instance).await else { return };
+    let project = client.call(&ask("bus.whoami", json!({})), |_| {}).await.ok()
+        .and_then(|r| r.result).and_then(|r| r["project_id"].as_i64());
+    match client.call(&ask("bus.subscribe", json!({"events": ["plugin.changed"]})), |_| {}).await {
+        Ok(response) if response.ok => {}
+        _ => return,
+    }
+    while let Ok(Some(line)) = client.next().await {
+        if let relay_core::socket::Line::Event(event) = line {
+            if changes_tools(&event, project) {
+                let _ = output.send(&json!({"jsonrpc":"2.0","method":TOOLS_CHANGED}));
+            }
+        }
+    }
 }
 
 /// The bus server's loop (RA-061). Each request runs as its own task, so one long `bus.wait`
@@ -426,7 +468,8 @@ async fn handle(instance: Instance, actor: &Actor, token: Option<&str>, message:
             };
             Ok(json!({
                 "protocolVersion": protocol(&message),
-                "capabilities": {"tools":{"listChanged":false}},
+                // The tools follow the project's plugins as they are switched (`watch_tools`).
+                "capabilities": {"tools":{"listChanged":true}},
                 "serverInfo": {"name":"relay","title":"Relay command bus","version":env!("CARGO_PKG_VERSION")},
                 "instructions": instructions
             }))
@@ -1233,6 +1276,26 @@ async fn connect(instance: Instance) -> Result<Client> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plugin_switched_in_this_project_changes_the_tools() {
+        let event = |ev: &str, project: Option<i64>| {
+            let mut event = relay_bus::Event::new(ev, "2026-10-22T00:00:00Z".into(), Actor::User, json!({"id": "video", "project_id": project, "enabled": true}));
+            event.project_id = project;
+            event
+        };
+        assert!(changes_tools(&event("plugin.changed", Some(1)), Some(1)));
+        assert!(!changes_tools(&event("plugin.changed", Some(2)), Some(1)), "another project's plugins are not ours");
+        assert!(changes_tools(&event("plugin.changed", Some(2)), None));
+        assert!(!changes_tools(&event("task.changed", Some(1)), Some(1)));
+    }
+
+    #[tokio::test]
+    async fn the_server_says_its_tools_can_change() {
+        let message = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":FALLBACK_PROTOCOL}});
+        let reply = handle(Instance::Test, &Actor::User, None, message).await.unwrap();
+        assert_eq!(reply["result"]["capabilities"]["tools"]["listChanged"], true, "{reply}");
+    }
 
     #[test]
     fn tool_is_the_bus_schema_and_streams_are_not_exposed() {

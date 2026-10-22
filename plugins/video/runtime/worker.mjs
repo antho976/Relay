@@ -127,6 +127,24 @@ let bundling = Promise.resolve();
 /** Bundles in use by a render, which a newer bundle must not remove from under it. */
 const inUse = new Map();
 
+/** A tree of links to every file under `from`, at `to`. Remotion copies its public folder into
+ * each bundle, a link as a link: given this, a bundle holds links to the video's files instead
+ * of a copy of every clip, made again on every edit. */
+const mirror = (from, to) => {
+  fs.mkdirSync(to, { recursive: true });
+  for (const e of safeReaddir(from)) {
+    const source = path.join(from, e);
+    let stat;
+    try {
+      stat = fs.statSync(source);
+    } catch {
+      continue; // a link to nothing
+    }
+    if (stat.isDirectory()) mirror(source, path.join(to, e));
+    else fs.symlinkSync(fs.realpathSync(source), path.join(to, e));
+  }
+};
+
 /** The video's bundle (a served folder), built again only when its files changed. */
 const bundleVideo = (dir, bundleRoot) => {
   const run = bundling.then(async () => {
@@ -137,13 +155,22 @@ const bundleVideo = (dir, bundleRoot) => {
     const entryPoint = path.join(dir, 'src', 'index.ts');
     if (!fs.existsSync(entryPoint)) throw new Refusal('video.entry', 'src/index.ts is missing: it registers the video (registerRoot(relayRoot(Root)))');
     const started = performance.now();
-    const serveUrl = await bundle({
-      entryPoint,
-      outDir,
-      publicDir: path.join(dir, 'public'),
-      enableCaching: true,
-      onProgress: () => {},
-    });
+    const publicDir = path.join(bundleRoot, `.public-${print}`);
+    fs.rmSync(publicDir, { recursive: true, force: true });
+    mirror(path.join(dir, 'public'), publicDir);
+    let serveUrl;
+    try {
+      serveUrl = await bundle({
+        entryPoint,
+        outDir,
+        publicDir,
+        enableCaching: true,
+        onProgress: () => {},
+        onSymlinkDetected: () => {},
+      });
+    } finally {
+      fs.rmSync(publicDir, { recursive: true, force: true });
+    }
     log(`bundled ${relative(ROOT, dir)} in ${Math.round(performance.now() - started)} ms`);
     Object.assign(v, { fingerprint: print, serveUrl, outDir });
     // Older bundles of this video go, but not one a render still reads.

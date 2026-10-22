@@ -292,23 +292,120 @@ fn props_the_person_sets_are_held_to_the_schema_and_drawn_with() {
 }
 
 #[test]
-fn assets_are_copied_in_and_never_written_over() {
+fn assets_are_copied_in_and_never_written_over_unasked() {
     let (e, root) = project();
     let (id, dir) = create(&e);
     let png: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, b'I', b'H', b'D', b'R', 0, 0, 0, 2, 0, 0, 0, 3, 8, 2, 0, 0, 0];
     let first = root.path().join("Logo Final.png");
     fs::write(&first, png).unwrap();
-    let added = ok(&e, "video.asset.add", json!({"video_id": id, "path": first}));
+    let added = ok(&e, "video.asset.add", json!({"video_id": id, "path": first}))["assets"][0].clone();
     assert_eq!((added["static_file"].as_str(), added["kind"].as_str()), (Some("assets/Logo-Final.png"), Some("image")));
     assert_eq!((added["w"].as_u64(), added["h"].as_u64()), (Some(2), Some(3)));
     assert!(dir.join("public/assets/Logo-Final.png").is_file());
-    // The same file again is the same asset; another under the same name gets a number.
-    assert_eq!(ok(&e, "video.asset.add", json!({"video_id": id, "path": first}))["static_file"], "assets/Logo-Final.png");
+    // The same file again is the same asset, and says nothing was written.
+    let again = ok(&e, "video.asset.add", json!({"video_id": id, "path": first}))["assets"][0].clone();
+    assert_eq!((again["static_file"].as_str(), again["unchanged"].as_bool()), (Some("assets/Logo-Final.png"), Some(true)));
+    // Another under the same name gets a number, and the answer says it was renamed.
     let other = root.path().join("other.png");
     fs::write(&other, [png, b"more"].concat()).unwrap();
-    assert_eq!(ok(&e, "video.asset.add", json!({"video_id": id, "path": other, "name": "Logo Final.png"}))["static_file"], "assets/Logo-Final-2.png");
+    let renamed = ok(&e, "video.asset.add", json!({"video_id": id, "path": other, "name": "Logo Final.png"}))["assets"][0].clone();
+    assert_eq!(renamed["static_file"], "assets/Logo-Final-2.png");
+    assert_eq!(renamed["renamed_from"], "assets/Logo-Final.png");
+    // overwrite replaces it instead: a clip recorded again keeps its name.
+    let replaced = ok(&e, "video.asset.add", json!({"video_id": id, "path": other, "name": "Logo Final.png", "overwrite": true}))["assets"][0].clone();
+    assert_eq!((replaced["static_file"].as_str(), replaced["replaced"].as_bool()), (Some("assets/Logo-Final.png"), Some(true)));
+    assert_eq!(fs::read(dir.join("public/assets/Logo-Final.png")).unwrap(), [png, b"more"].concat());
     assert_eq!(code(call(&e, "video.asset.add", json!({"video_id": id, "path": "relative.png"}))), "video.asset");
     assert_eq!(code(call(&e, "video.asset.add", json!({"video_id": id, "path": root.path().join("missing.mp3")}))), "video.asset");
+    assert_eq!(code(call(&e, "video.asset.add", json!({"video_id": id}))), "video.asset");
+}
+
+#[test]
+fn many_assets_go_in_one_call_and_a_large_one_can_be_linked() {
+    let (e, root) = project();
+    let (id, dir) = create(&e);
+    let clips = root.path().join("clips");
+    fs::create_dir_all(&clips).unwrap();
+    let names = ["tap.wav", "pop.wav", "intro.mp4"];
+    for (i, name) in names.iter().enumerate() {
+        fs::write(clips.join(name), vec![i as u8; 64]).unwrap();
+    }
+    let paths: Vec<PathBuf> = names.iter().map(|n| clips.join(n)).collect();
+    let added = ok(&e, "video.asset.add", json!({"video_id": id, "paths": paths}));
+    let files: Vec<&str> = added["assets"].as_array().unwrap().iter().map(|a| a["static_file"].as_str().unwrap()).collect();
+    assert_eq!(files, ["assets/tap.wav", "assets/pop.wav", "assets/intro.mp4"], "in the order asked");
+    assert_eq!(code(call(&e, "video.asset.add", json!({"video_id": id, "paths": paths, "name": "x"}))), "video.asset");
+    // A link is no copy: it points at the file where it is.
+    let big = root.path().join("recording.mp4");
+    fs::write(&big, vec![7u8; 4096]).unwrap();
+    let linked = ok(&e, "video.asset.add", json!({"video_id": id, "path": big, "link": true}))["assets"][0].clone();
+    assert_eq!(linked["static_file"], "assets/recording.mp4");
+    assert_eq!(linked["linked"].as_str().map(PathBuf::from), Some(fs::canonicalize(&big).unwrap()));
+    assert!(fs::symlink_metadata(dir.join("public/assets/recording.mp4")).unwrap().file_type().is_symlink());
+    let listed = ok(&e, "video.asset.list", json!({"video_id": id}));
+    let listed: Vec<(&str, &str)> = listed["assets"].as_array().unwrap().iter().map(|a| (a["static_file"].as_str().unwrap(), a["kind"].as_str().unwrap())).collect();
+    assert_eq!(listed, [("assets/intro.mp4", "video"), ("assets/pop.wav", "audio"), ("assets/recording.mp4", "video"), ("assets/tap.wav", "audio")]);
+}
+
+#[test]
+fn a_render_can_be_named_and_waited_for_in_the_same_call() {
+    let (e, _root) = project();
+    with_worker(&e);
+    let (id, dir) = create(&e);
+    ok(&e, "video.check", json!({"video_id": id}));
+    let done = ok(&e, "video.render", json!({"video_id": id, "name": "avex 1.0 voiceover", "wait": true}));
+    assert_eq!(done["state"], "done", "wait answers once it has finished: {done}");
+    assert_eq!(done["name"], "avex-1.0-voiceover");
+    assert_eq!(PathBuf::from(done["path"].as_str().unwrap()), dir.join("out/avex-1.0-voiceover.mp4"));
+    // Nothing but the file is left in out/: the partial it was drawn to is gone.
+    let out: Vec<String> = fs::read_dir(dir.join("out")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(out, ["avex-1.0-voiceover.mp4"]);
+    // The same name renders over the file.
+    let again = ok(&e, "video.render", json!({"video_id": id, "name": "avex-1.0-voiceover", "props": {"title": "Second"}, "wait": true}));
+    assert!(fs::read_to_string(again["path"].as_str().unwrap()).unwrap().contains("Second"));
+    assert_eq!(code(call(&e, "video.render", json!({"video_id": id, "name": "///"}))), "video.name");
+    assert_eq!(code(call(&e, "video.render", json!({"video_id": id, "format": "gif", "preset": "youtube"}))), "video.loudness");
+}
+
+#[test]
+fn a_wait_on_a_render_that_already_finished_answers_at_once() {
+    let (e, _root) = project();
+    with_worker(&e);
+    let (id, _) = create(&e);
+    let render_id = ok(&e, "video.render", json!({"video_id": id}))["id"].as_i64().unwrap();
+    wait_until("the render to finish", || ok(&e, "video.render.get", json!({"render_id": render_id}))["state"] == "done");
+    // The race the first test hit: the render finished before anyone waited. The wait reads the
+    // row, so it answers now rather than at its timeout.
+    let started = std::time::Instant::now();
+    let waited = ok(&e, "video.render.wait", json!({"render_ids": [render_id], "timeout_ms": 60000}));
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+    assert_eq!((waited["renders"][0]["state"].as_str(), waited.get("timed_out")), (Some("done"), None));
+}
+
+#[test]
+fn a_batch_queues_every_render_in_order_and_waits_for_them_all() {
+    let (e, _root) = project();
+    with_worker(&e);
+    let (id, dir) = create(&e);
+    ok(&e, "video.check", json!({"video_id": id}));
+    let batch = ok(&e, "video.render.batch", json!({"video_id": id, "wait": true, "jobs": [
+        {"name": "promo"}, {"name": "promo", "format": "wav"}, {"composition": "wide", "name": "promo-wide"},
+    ]}));
+    let renders = batch["renders"].as_array().unwrap();
+    assert_eq!(renders.len(), 3);
+    assert!(renders.iter().all(|r| r["state"] == "done"), "{batch}");
+    let paths: Vec<PathBuf> = renders.iter().map(|r| PathBuf::from(r["path"].as_str().unwrap())).collect();
+    assert_eq!(paths, [dir.join("out/promo.mp4"), dir.join("out/promo.wav"), dir.join("out/promo-wide.mp4")]);
+    assert!(renders[0]["id"].as_i64() < renders[1]["id"].as_i64(), "in the order asked");
+    assert_eq!(code(call(&e, "video.render.batch", json!({"video_id": id, "jobs": []}))), "video.batch");
+}
+
+#[test]
+fn setting_up_a_kit_that_is_ready_answers_ready() {
+    let (e, _root) = project();
+    with_worker(&e);
+    let status = ok(&e, "video.kit.install", json!({}));
+    assert_eq!(status["state"], "ready", "nothing to set up, and the answer says so: {status}");
 }
 
 #[test]

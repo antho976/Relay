@@ -6,8 +6,13 @@
 //! changed (`versions`); stills come back as pictures with the problems found in them (`probe`,
 //! `sheet`), and renders run one at a time on a thread of their own (`jobs`).
 
+pub mod assets;
+pub mod audio;
+pub mod beats;
+pub mod inspect;
 pub mod jobs;
 pub mod kit;
+pub mod media;
 pub mod probe;
 pub mod sheet;
 pub mod stills;
@@ -154,7 +159,7 @@ pub fn live_video(conn: &Connection, id: Id) -> Result<Video, BusError> {
 }
 
 pub const RENDER_COLUMNS: &str = "id, video_id, project_id, composition, format, quality, state, progress, version, range_from, range_to, \
-    path, bytes, error, actor, created_at, started_at, finished_at";
+    path, bytes, error, actor, created_at, started_at, finished_at, name, audio, loudness, peak";
 
 pub fn render_row(row: &Row) -> rusqlite::Result<VideoRender> {
     let range = match (row.get::<_, Option<u32>>(9)?, row.get::<_, Option<u32>>(10)?) {
@@ -183,6 +188,10 @@ pub fn render_row(row: &Row) -> rusqlite::Result<VideoRender> {
         created_at: row.get(15)?,
         started_at: row.get(16)?,
         finished_at: row.get(17)?,
+        name: row.get(18)?,
+        audio: row.get::<_, Option<String>>(19)?.and_then(|text| serde_json::from_str(&text).ok()),
+        loudness: row.get(20)?,
+        peak: row.get(21)?,
     })
 }
 

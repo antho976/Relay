@@ -8,13 +8,13 @@
 use crate::engine::{Ctx, Engine, IntoBus, Unlocked};
 use crate::handlers::notes::{actor_name, assert_actor_project, check_project};
 use crate::video::stills::{self, Caller};
-use crate::video::{self, get_render, get_video, jobs, kit, live_video, quality_name, render_row, select_videos, versions, video_row, RENDER_COLUMNS};
+use crate::video::{self, assets, get_render, get_video, jobs, kit, live_video, quality_name, render_row, select_videos, versions, video_row, RENDER_COLUMNS};
 use relay_bus::design::{plain_label, MAX_NAME};
 use relay_bus::error::BusError;
 use relay_bus::ops::video::{
-    AssetAdd, AssetAddOut, Check, Composition, Create, CreateOut, Delete, Format, Get, GetOut, KitInstall, KitState, KitStatusOp,
-    List, ListOut, Quality, Render, RenderCancel, RenderGet, RenderState, Restore, Scan, Still, Update, Version, VersionRestore,
-    VersionRestoreOut, MAX_SECONDS, MAX_SIDE,
+    AssetAdd, AssetAddOut, AssetInspect, AssetList, AssetListOut, AudioBeats, BeatBar, BeatGrid, BeatSection, Check, Composition, Create, CreateOut, Delete, Format, Get, GetOut, KitInstall,
+    KitState, KitStatusOp, List, ListOut, Quality, Render, RenderBatch, RenderCancel, RenderGet, RenderJob, RenderState, RenderWait,
+    RendersOut, Restore, Scan, Still, Update, Version, VersionRestore, VersionRestoreOut, VideoRender, MAX_ASSETS, MAX_SECONDS, MAX_SIDE,
 };
 use relay_bus::types::Id;
 use relay_bus::Empty;
@@ -139,44 +139,175 @@ fn write_starter(dir: &Path, title: &str, w: u32, h: u32, fps: f64, frames: u32)
     Ok(written)
 }
 
-/// What a file copied in is, by its extension.
-fn asset_kind(name: &str) -> &'static str {
-    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
-    match ext.as_str() {
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "avif" => "image",
-        "mp4" | "webm" | "mov" | "mkv" | "m4v" => "video",
-        "mp3" | "wav" | "ogg" | "m4a" | "aac" | "flac" | "opus" => "audio",
-        "woff2" | "woff" | "ttf" | "otf" => "font",
-        _ => "other",
-    }
-}
-
-/// A file name safe in a URL and on any disk: letters, digits, dots, dashes and underscores.
-fn safe_name(raw: &str) -> String {
-    let name: String = raw.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '-' }).collect();
-    let name = name.trim_matches(|c| c == '.' || c == '-').chars().take(120).collect::<String>();
-    if name.is_empty() { "asset".into() } else { name }
-}
-
-/// Most bytes `video.asset.add` copies (a long clip).
-const MOST_ASSET: u64 = 4 * 1024 * 1024 * 1024;
-
 pub struct StagedAsset {
     out: AssetAddOut,
+}
+
+/// One render made ready with nothing locked: what its row is inserted with.
+pub struct Job {
+    composition: String,
+    props: Value,
+    range: Option<[u32; 2]>,
+    format: Format,
+    quality: Quality,
+    name: Option<String>,
+    loudness: Option<f64>,
+    peak: Option<f64>,
 }
 
 pub struct StagedRender {
     video: relay_bus::ops::video::Video,
     scan: versions::Scan,
-    composition: String,
-    props: Value,
-    range: Option<[u32; 2]>,
+    jobs: Vec<Job>,
 }
 
 pub struct StagedRestore {
     before: versions::Scan,
     after: versions::Scan,
     missing: Vec<String>,
+}
+
+/// A job's fields checked against the video, with nothing locked: its composition, props, frames,
+/// file name and loudness.
+fn prepare(ctx: &mut Unlocked, video: &relay_bus::ops::video::Video, job: RenderJob) -> Result<Job, BusError> {
+    let composition = job.composition.clone().unwrap_or_else(|| video.composition.clone());
+    let props = stills::props_for(ctx.engine(), video.id, &composition, job.props.as_ref())?;
+    // The range is read against the composition as the last check found it.
+    let known = ctx.read(|conn| compositions(conn, video.id))?;
+    let (fps, frames) = known.iter().find(|c| c.id == composition)
+        .map_or((video.fps, video.duration_frames), |c| (c.fps, c.duration_frames));
+    let at = |m: &Option<relay_bus::ops::video::Moment>, default: u32| -> Result<u32, BusError> {
+        m.as_ref().map_or(Ok(default), |m| m.frame(fps, frames).map_err(|e| BusError::invalid("video.moment", e)))
+    };
+    let range = if job.from.is_some() || job.to.is_some() {
+        let (a, b) = (at(&job.from, 0)?, at(&job.to, frames.saturating_sub(1))?);
+        if b < a {
+            return Err(BusError::invalid("video.moment", "`to` is before `from`"));
+        }
+        Some([a, b])
+    } else {
+        None
+    };
+    let format = job.format.unwrap_or(Format::Mp4);
+    let name = match job.name.as_deref() {
+        Some(raw) => Some(jobs::safe_name(raw).ok_or_else(|| BusError::invalid("video.name", "a render's name keeps letters, digits, dots, dashes or underscores"))?),
+        None => None,
+    };
+    let (loudness, peak) = match (job.preset, job.loudness, job.peak) {
+        (Some(preset), _, peak) => {
+            let (l, p) = preset.target();
+            (Some(l), Some(peak.unwrap_or(p)))
+        }
+        (None, Some(l), peak) => (Some(l), Some(peak.unwrap_or(-1.0))),
+        (None, None, peak) => (None, peak),
+    };
+    if loudness.is_some_and(|l| !(-40.0..=-5.0).contains(&l)) || peak.is_some_and(|p| !(-9.0..=0.0).contains(&p)) {
+        return Err(BusError::invalid("video.loudness", "loudness is -40 to -5 LUFS, peak -9 to 0 dBTP"));
+    }
+    if format == Format::Gif && (loudness.is_some() || peak.is_some()) {
+        return Err(BusError::invalid("video.loudness", "a GIF has no sound to bring to a loudness"));
+    }
+    Ok(Job { composition, props, range, format, quality: job.quality.unwrap_or(Quality::Standard), name, loudness, peak })
+}
+
+/// Queue `jobs` of `video` in the transaction: the code's version recorded, a row each, the queue
+/// started once it commits; the rows in order.
+fn queue(ctx: &mut Ctx, video_id: Id, scan: &versions::Scan, jobs: &[Job]) -> Result<Vec<VideoRender>, BusError> {
+    let video = live_video(ctx.tx(), video_id)?;
+    assert_actor_project(ctx, video.project_id)?;
+    let by = actor_name(ctx)?;
+    let (version, new) = versions::record(ctx.tx(), video.id, scan, &by, &ctx.now)?;
+    let mut renders = Vec::with_capacity(jobs.len());
+    for job in jobs {
+        ctx.tx().execute(
+            "INSERT INTO video_renders(video_id, project_id, composition, format, quality, state, version, props, range_from, range_to,
+                name, loudness, peak, actor, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![video.id, video.project_id, job.composition, job.format.name(), quality_name(job.quality), version,
+                job.props.to_string(), job.range.map(|r| r[0]), job.range.map(|r| r[1]), job.name, job.loudness, job.peak, by, ctx.now],
+        ).bus()?;
+        renders.push(get_render(ctx.tx(), ctx.tx().last_insert_rowid())?);
+    }
+    ctx.set_project(video.project_id);
+    if new {
+        ctx.emit("video.changed", serde_json::to_value(get_video(ctx.tx(), video.id)?).bus()?);
+    }
+    for render in &renders {
+        for (ev, payload) in jobs::events(render) {
+            ctx.emit(&ev, payload);
+        }
+    }
+    ctx.after_commit(|engine| jobs::enqueue(&engine));
+    Ok(renders)
+}
+
+/// A file an agent names: an absolute path as it is, a relative one in its own checkout.
+fn source_path(ctx: &mut Unlocked, project_id: Id, raw: &str) -> Result<PathBuf, BusError> {
+    let raw = Path::new(raw);
+    if raw.is_absolute() {
+        return Ok(raw.to_path_buf());
+    }
+    let session_id = ctx.actor_session_id().ok_or_else(|| BusError::invalid("video.asset", "give the file's absolute path"))?;
+    let (project, chosen) = ctx.read(|conn| crate::handlers::file::root_choice(conn, Some(session_id), project_id, None))?;
+    Ok(crate::handlers::file::root_verify(&project, chosen, "video.asset")?.join(raw))
+}
+
+/// A file a measuring op names: an asset by its `staticFile()` name, or an absolute path.
+fn asset_path(dir: &Path, raw: &str) -> Result<PathBuf, BusError> {
+    let raw_path = Path::new(raw.trim());
+    let path = if raw_path.is_absolute() {
+        raw_path.to_path_buf()
+    } else {
+        if raw_path.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+            return Err(BusError::invalid("video.asset", format!("{raw:?} is not a file under public/")));
+        }
+        dir.join("public").join(raw_path)
+    };
+    if !path.is_file() {
+        return Err(BusError::invalid("video.asset", format!("{} is not a file", path.display()))
+            .with_hint("video.asset.list names the video's files"));
+    }
+    Ok(path)
+}
+
+/// The grid as the bus says it, in the video's frames at `fps`.
+fn beat_grid(grid: video::beats::Grid, fps: f64) -> BeatGrid {
+    let r3 = |v: f64| (v * 1000.0).round() / 1000.0;
+    let frame = |s: f64| (s * fps).round().max(0.0) as u32;
+    BeatGrid {
+        bpm: (grid.bpm * 1000.0).round() / 1000.0,
+        beat_s: (grid.beat_s * 100000.0).round() / 100000.0,
+        bar_s: (grid.beat_s * grid.beats_per_bar as f64 * 100000.0).round() / 100000.0,
+        beats_per_bar: grid.beats_per_bar,
+        first_beat_s: r3(grid.first_beat_s),
+        first_downbeat_s: r3(grid.first_downbeat_s),
+        fps,
+        frames_per_beat: (grid.beat_s * fps * 1000.0).round() / 1000.0,
+        first_downbeat_frame: (grid.first_downbeat_s * fps * 100.0).round() / 100.0,
+        beats_found: grid.beats_found,
+        fit_rms_ms: (grid.fit_rms_ms * 10.0).round() / 10.0,
+        beat_confidence: (grid.beat_confidence * 100.0).round() / 100.0,
+        downbeat_confidence: (grid.downbeat_confidence * 100.0).round() / 100.0,
+        seconds: r3(grid.seconds),
+        kit: format!("useBeatGrid({{ bpm: {:.3}, firstBeat: {:.3}, beatsPerBar: {} }})", grid.bpm, grid.first_downbeat_s, grid.beats_per_bar),
+        sections: grid.sections.iter().map(|s| BeatSection { bar: s.bar, start_s: r3(s.start_s), frame: frame(s.start_s), kind: s.kind.into(), change_db: s.change_db }).collect(),
+        bars: grid.bars.iter().map(|b| BeatBar { n: b.n, start_s: r3(b.start_s), frame: frame(b.start_s), loudness_db: (b.loudness_db * 10.0).round() / 10.0 }).collect(),
+    }
+}
+
+/// Write `source` as an H.264 clip at a constant `fps` beside where it goes, for `assets::add` to
+/// take in its place; its sound kept.
+fn constant_rate(engine: &Engine, dir: &Path, source: &Path, fps: f64) -> Result<PathBuf, BusError> {
+    let stem = source.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "clip".into());
+    let tmp = dir.join("public").join(format!(".{}-cfr", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&tmp).map_err(|e| BusError::unavailable("video.folder", format!("{}: {e}", tmp.display())))?;
+    let out = tmp.join(format!("{stem}.mp4"));
+    let rate = format!("{fps}");
+    video::media::ffmpeg(engine, &[std::ffi::OsStr::new("-i"), source.as_os_str(), "-fps_mode".as_ref(), "cfr".as_ref(), "-r".as_ref(), rate.as_ref(),
+        "-c:v".as_ref(), "libx264".as_ref(), "-preset".as_ref(), "veryfast".as_ref(), "-crf".as_ref(), "16".as_ref(), "-pix_fmt".as_ref(), "yuv420p".as_ref(),
+        "-c:a".as_ref(), "aac".as_ref(), "-b:a".as_ref(), "192k".as_ref(), "-movflags".as_ref(), "+faststart".as_ref(), out.as_os_str()],
+        "writing the clip at a constant frame rate")?;
+    Ok(out)
 }
 
 pub fn register(e: &mut Engine) {
@@ -390,54 +521,72 @@ pub fn register(e: &mut Engine) {
     });
 
     // Staged: the folder is read (and its new files kept) with the lock released; the
-    // transaction records the version and queues the render.
+    // transaction records the version and queues the render. With `wait`, the answer is finished
+    // with nothing locked once the render is (`jobs::wait`, on the row: never missed).
     e.register_staged::<Render, StagedRender>(|ctx, p| {
         let video = read_video(ctx, p.video_id, true)?;
         kit::ready(ctx.engine())?;
         let scan = versions::scan(Path::new(&video.dir), &video::blobs_dir(ctx.engine()))
             .map_err(|e| BusError::unavailable("video.folder", format!("could not read the video's folder: {e}")))?;
-        let composition = p.composition.clone().unwrap_or_else(|| video.composition.clone());
-        let props = stills::props_for(ctx.engine(), video.id, &composition, p.props.as_ref())?;
-        // The range is read against the composition as the last check found it.
-        let known = ctx.read(|conn| compositions(conn, video.id))?;
-        let (fps, frames) = known.iter().find(|c| c.id == composition)
-            .map_or((video.fps, video.duration_frames), |c| (c.fps, c.duration_frames));
-        let at = |m: &Option<relay_bus::ops::video::Moment>, default: u32| -> Result<u32, BusError> {
-            m.as_ref().map_or(Ok(default), |m| m.frame(fps, frames).map_err(|e| BusError::invalid("video.moment", e)))
-        };
-        let range = if p.from.is_some() || p.to.is_some() {
-            let (a, b) = (at(&p.from, 0)?, at(&p.to, frames.saturating_sub(1))?);
-            if b < a {
-                return Err(BusError::invalid("video.moment", "`to` is before `from`"));
-            }
-            Some([a, b])
-        } else {
-            None
-        };
-        Ok(StagedRender { video, scan, composition, props, range })
+        let job = prepare(ctx, &video, RenderJob {
+            composition: p.composition.clone(), format: p.format, quality: p.quality, from: p.from.clone(), to: p.to.clone(),
+            props: p.props.clone(), name: p.name.clone(), loudness: p.loudness, peak: p.peak, preset: p.preset,
+        })?;
+        Ok(StagedRender { video, scan, jobs: vec![job] })
     }, |ctx: &mut Ctx, p, staged| {
-        let video = live_video(ctx.tx(), staged.video.id)?;
-        assert_actor_project(ctx, video.project_id)?;
-        let by = actor_name(ctx)?;
-        let (version, new) = versions::record(ctx.tx(), video.id, &staged.scan, &by, &ctx.now)?;
-        let format = p.format.unwrap_or(Format::Mp4);
-        let quality = p.quality.unwrap_or(Quality::Standard);
-        ctx.tx().execute(
-            "INSERT INTO video_renders(video_id, project_id, composition, format, quality, state, version, props, range_from, range_to, actor, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![video.id, video.project_id, staged.composition, format.name(), quality_name(quality), version,
-                staged.props.to_string(), staged.range.map(|r| r[0]), staged.range.map(|r| r[1]), by, ctx.now],
-        ).bus()?;
-        let render = get_render(ctx.tx(), ctx.tx().last_insert_rowid())?;
-        ctx.set_project(video.project_id);
-        if new {
-            ctx.emit("video.changed", serde_json::to_value(get_video(ctx.tx(), video.id)?).bus()?);
+        let render = queue(ctx, staged.video.id, &staged.scan, &staged.jobs)?.remove(0);
+        if p.wait == Some(true) {
+            let (id, within) = (render.id, jobs::wait_for(p.timeout_ms));
+            ctx.finish_reply(move |engine, reply| {
+                if let Ok((renders, _)) = jobs::wait(engine, &[id], within) {
+                    if let Some(value) = renders.into_iter().next().and_then(|r| serde_json::to_value(r).ok()) {
+                        *reply = value;
+                    }
+                }
+            });
         }
-        for (ev, payload) in jobs::events(&render) {
-            ctx.emit(&ev, payload);
-        }
-        ctx.after_commit(|engine| jobs::enqueue(&engine));
         Ok(render)
+    });
+
+    e.register_staged::<RenderBatch, StagedRender>(|ctx, p| {
+        let video = read_video(ctx, p.video_id, true)?;
+        kit::ready(ctx.engine())?;
+        if p.jobs.is_empty() || p.jobs.len() > relay_bus::ops::video::MAX_BATCH {
+            return Err(BusError::invalid("video.batch", format!("1 to {} renders in one batch", relay_bus::ops::video::MAX_BATCH)));
+        }
+        let scan = versions::scan(Path::new(&video.dir), &video::blobs_dir(ctx.engine()))
+            .map_err(|e| BusError::unavailable("video.folder", format!("could not read the video's folder: {e}")))?;
+        let jobs = p.jobs.iter().cloned().map(|job| prepare(ctx, &video, job)).collect::<Result<Vec<_>, _>>()?;
+        Ok(StagedRender { video, scan, jobs })
+    }, |ctx: &mut Ctx, p, staged| {
+        let renders = queue(ctx, staged.video.id, &staged.scan, &staged.jobs)?;
+        if p.wait == Some(true) {
+            let (ids, within) = (renders.iter().map(|r| r.id).collect::<Vec<_>>(), jobs::wait_for(p.timeout_ms));
+            ctx.finish_reply(move |engine, reply| {
+                if let Ok((renders, timed_out)) = jobs::wait(engine, &ids, within) {
+                    if let Ok(value) = serde_json::to_value(RendersOut { renders, timed_out }) {
+                        *reply = value;
+                    }
+                }
+            });
+        }
+        Ok(RendersOut { renders, timed_out: false })
+    });
+
+    // Unlocked: it sleeps on the queue's changes, reading the rows each time one changes.
+    e.register_unlocked::<RenderWait>(|ctx, p| {
+        let (session_id, agent) = (ctx.actor_session_id(), ctx.actor.is_agent());
+        if p.render_ids.is_empty() || p.render_ids.len() > 50 {
+            return Err(BusError::invalid("video.render", "1 to 50 renders to wait for"));
+        }
+        ctx.read(|conn| {
+            for id in &p.render_ids {
+                check_project(conn, get_render(conn, *id)?.project_id, session_id, agent)?;
+            }
+            Ok(())
+        })?;
+        let (renders, timed_out) = jobs::wait(ctx.engine(), &p.render_ids, jobs::wait_for(p.timeout_ms))?;
+        Ok(RendersOut { renders, timed_out })
     });
 
     e.register_unlocked::<RenderGet>(|ctx, p| {
@@ -456,6 +605,7 @@ pub fn register(e: &mut Engine) {
             RenderState::Queued => {
                 ctx.tx().execute("UPDATE video_renders SET state = 'cancelled', finished_at = ?2 WHERE id = ?1", params![render.id, ctx.now]).bus()?;
                 let render = get_render(ctx.tx(), render.id)?;
+                ctx.after_commit(|engine| jobs::notify(&engine));
                 ctx.set_project(render.project_id);
                 for (ev, payload) in jobs::events(&render) {
                     ctx.emit(&ev, payload);
@@ -479,61 +629,96 @@ pub fn register(e: &mut Engine) {
     // no row, so it emits nothing (BUS.md §3.3's exemption).
     e.register_staged::<AssetAdd, StagedAsset>(|ctx, p| {
         let video = read_video(ctx, p.video_id, true)?;
-        let raw = Path::new(&p.path);
-        let source = if raw.is_absolute() {
-            raw.to_path_buf()
-        } else {
-            let session_id = ctx.actor_session_id().ok_or_else(|| BusError::invalid("video.asset", "give the file's absolute path"))?;
-            let (project, chosen) = ctx.read(|conn| crate::handlers::file::root_choice(conn, Some(session_id), video.project_id, None))?;
-            crate::handlers::file::root_verify(&project, chosen, "video.asset")?.join(raw)
-        };
-        let meta = fs::metadata(&source).map_err(|e| BusError::invalid("video.asset", format!("{}: {e}", source.display())))?;
-        if !meta.is_file() {
-            return Err(BusError::invalid("video.asset", format!("{} is not a file", source.display())));
+        let dir = PathBuf::from(&video.dir);
+        let (overwrite, link) = (p.overwrite.unwrap_or(false), p.link.unwrap_or(false));
+        let given = [p.path.is_some(), p.paths.is_some(), p.font.is_some()].iter().filter(|g| **g).count();
+        if given != 1 {
+            return Err(BusError::invalid("video.asset", "give one of path, paths (several files) or font (an installed family)"));
         }
-        if meta.len() > MOST_ASSET {
-            return Err(BusError::invalid("video.asset", "a file of at most 4 GiB"));
-        }
-        let original = source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let mut name = safe_name(p.name.as_deref().unwrap_or(&original));
-        if !name.contains('.') {
-            if let Some((_, ext)) = original.rsplit_once('.') {
-                name = format!("{name}.{}", safe_name(ext));
+        if let Some(family) = p.font.as_deref() {
+            let weights = p.weights.clone().unwrap_or_else(|| vec![400, 700]);
+            if weights.is_empty() || weights.iter().any(|w| !(100..=900).contains(w)) {
+                return Err(BusError::invalid("video.font", "weights are 100 to 900"));
             }
+            let faces = assets::faces(family.trim())?;
+            if faces.is_empty() {
+                return Err(BusError::invalid("video.font", format!("no font family {family:?} is installed"))
+                    .with_hint("fc-list : family lists the installed families; or add the font's files by path"));
+            }
+            let (chosen, missing) = assets::pick(&faces, &weights, p.italic.unwrap_or(false));
+            if chosen.is_empty() {
+                return Err(BusError::invalid("video.font", format!("{family} has none of those weights: {}", missing.join(", "))));
+            }
+            let mut added = Vec::new();
+            let mut files = Vec::new();
+            for (face, _) in &chosen {
+                let asset = assets::add(&dir, &assets::Add { source: &face.file, folder: "assets/fonts", name: None, overwrite, link })?;
+                files.push((asset.static_file.clone(), face));
+                added.push(asset);
+            }
+            let font = assets::font_added(family.trim(), &files, missing);
+            return Ok(StagedAsset { out: AssetAddOut { assets: added, font: Some(font) } });
         }
-        let folder = Path::new(&video.dir).join("public/assets");
-        fs::create_dir_all(&folder).map_err(|e| BusError::unavailable("video.folder", format!("{}: {e}", folder.display())))?;
-        let same = |a: &Path, b: &Path| -> bool {
-            fs::metadata(a).ok().map(|m| m.len()) == fs::metadata(b).ok().map(|m| m.len()) && fs::read(a).ok() == fs::read(b).ok()
+        let raws: Vec<String> = match (&p.path, &p.paths) {
+            (Some(path), _) => vec![path.clone()],
+            (_, Some(paths)) => paths.clone(),
+            _ => Vec::new(),
         };
-        let (stem, ext) = name.rsplit_once('.').map_or((name.clone(), String::new()), |(s, e)| (s.to_string(), format!(".{e}")));
-        let mut target = folder.join(&name);
-        let mut n = 2;
-        // Never written over: a name taken by other content gets a number.
-        while target.exists() && !same(&target, &source) {
-            target = folder.join(format!("{stem}-{n}{ext}"));
-            n += 1;
+        if raws.is_empty() || raws.len() > MAX_ASSETS {
+            return Err(BusError::invalid("video.asset", format!("1 to {MAX_ASSETS} files in one call")));
         }
-        if !target.exists() {
-            let part = target.with_extension("part");
-            fs::copy(&source, &part).and_then(|_| fs::rename(&part, &target))
-                .map_err(|e| BusError::unavailable("video.asset", format!("could not copy {}: {e}", source.display())))?;
+        if p.name.is_some() && raws.len() > 1 {
+            return Err(BusError::invalid("video.asset", "name is for one file; several keep their own names"));
         }
-        let file_name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let kind = asset_kind(&file_name);
-        let (w, h) = if kind == "image" && meta.len() <= 64 * 1024 * 1024 {
-            fs::read(&target).ok().and_then(|b| crate::picture::sniff(&b)).map_or((None, None), |p| (Some(p.w), Some(p.h)))
-        } else {
-            (None, None)
-        };
-        Ok(StagedAsset { out: AssetAddOut {
-            static_file: format!("assets/{file_name}"), path: target.display().to_string(), bytes: meta.len(), kind: kind.into(), w, h,
-        } })
+        if p.fps.is_some_and(|f| !(1.0..=120.0).contains(&f)) {
+            return Err(BusError::invalid("video.asset", "fps is 1 to 120"));
+        }
+        let mut added = Vec::with_capacity(raws.len());
+        for raw in &raws {
+            let source = source_path(ctx, video.project_id, raw)?;
+            let Some(fps) = p.fps.filter(|_| assets::kind(&source.to_string_lossy()) == "video") else {
+                added.push(assets::add(&dir, &assets::Add { source: &source, folder: "assets", name: p.name.as_deref(), overwrite, link })?);
+                continue;
+            };
+            // Converted: a new file, so copied whatever `link` says.
+            let converted = constant_rate(ctx.engine(), &dir, &source, fps)?;
+            let name = p.name.clone().map(|n| assets::target_name(&converted, Some(&n)));
+            let result = assets::add(&dir, &assets::Add { source: &converted, folder: "assets", name: name.as_deref(), overwrite, link: false });
+            if let Some(tmp) = converted.parent() {
+                let _ = fs::remove_dir_all(tmp);
+            }
+            added.push(result?);
+        }
+        Ok(StagedAsset { out: AssetAddOut { assets: added, font: None } })
     }, |ctx: &mut Ctx, p, staged| {
         let video = live_video(ctx.tx(), p.video_id)?;
         assert_actor_project(ctx, video.project_id)?;
         ctx.set_project(video.project_id);
         Ok(staged.out)
+    });
+
+    // Unlocked: ffprobe and ffmpeg read the file with nothing held.
+    e.register_unlocked::<AssetInspect>(|ctx, p| {
+        let video = read_video(ctx, p.video_id, false)?;
+        let dir = PathBuf::from(&video.dir);
+        let path = asset_path(&dir, &p.asset)?;
+        video::inspect::inspect(ctx.engine(), &dir, &path, p.motion)
+    });
+
+    e.register_unlocked::<AudioBeats>(|ctx, p| {
+        let video = read_video(ctx, p.video_id, false)?;
+        let path = asset_path(Path::new(&video.dir), &p.asset)?;
+        let pcm = video::media::decode(ctx.engine(), &path, video::beats::RATE, 1)?
+            .ok_or_else(|| BusError::invalid("video.audio", format!("{} has no sound", p.asset)))?;
+        let grid = video::beats::analyse(&pcm, p.beats_per_bar.unwrap_or(4).clamp(1, 12), p.bpm)
+            .ok_or_else(|| BusError::invalid("video.audio.no_beat", format!("{} has no steady beat to find", p.asset))
+                .with_hint("speech, a drone or a free-time piece has none; give bpm if you know it"))?;
+        Ok(beat_grid(grid, video.fps))
+    });
+
+    e.register_unlocked::<AssetList>(|ctx, p| {
+        let video = read_video(ctx, p.video_id, false)?;
+        Ok(AssetListOut { assets: assets::list(Path::new(&video.dir)) })
     });
 
     // Staged: the folder is put back with nothing locked, the code as it was recorded first, so
@@ -564,14 +749,22 @@ pub fn register(e: &mut Engine) {
 
     e.register_unlocked::<KitStatusOp>(|ctx, _| Ok(kit::status(ctx.engine())));
 
-    e.register::<KitInstall>(|ctx: &mut Ctx, _| {
+    // The answer is the kit's real state: ready stays ready unless `force`, installing says how far
+    // it has come, and only what needs setting up is set up.
+    e.register::<KitInstall>(|ctx: &mut Ctx, p| {
         let mut status = kit::status(ctx.engine());
-        if !matches!(status.state, KitState::NoNode | KitState::Installing) {
+        let wanted = match status.state {
+            KitState::Ready => p.force == Some(true),
+            KitState::NoNode | KitState::Installing => false,
+            KitState::Missing | KitState::Outdated | KitState::Failed => true,
+        };
+        if wanted {
             ctx.after_commit(|engine| {
                 kit::install(&engine);
             });
             status.state = KitState::Installing;
             status.error = None;
+            status.progress = Some(kit::starting());
         }
         Ok(status)
     });
@@ -592,15 +785,5 @@ mod tests {
         assert_eq!(ok(json!({"other": 1})).unwrap_err().code, "video.props");
         // No schema: anything goes.
         assert!(check_props(None, "main", json!({"x": 1}).as_object().unwrap()).is_ok());
-    }
-
-    #[test]
-    fn copied_files_get_safe_names_and_kinds() {
-        assert_eq!(safe_name("My Logo (final).PNG"), "My-Logo--final-.PNG");
-        assert_eq!(safe_name("../../etc/passwd"), "etc-passwd");
-        assert_eq!(asset_kind("clip.MOV"), "video");
-        assert_eq!(asset_kind("Inter.woff2"), "font");
-        assert_eq!(asset_kind("song.mp3"), "audio");
-        assert_eq!(asset_kind("notes.txt"), "other");
     }
 }

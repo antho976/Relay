@@ -28,13 +28,18 @@ project's **Design** view.
 6. `video.scan {video_id}` before you call it done — every third frame of the whole video checked
    without pictures (about a second for 15 s): what the stills' samples missed, and words on screen
    too briefly to read.
-7. `video.render {video_id}` when the person wants the file. Wait:
-   `bus.wait {events: ["video.render.finished"], matching: {"id": <render id>}, timeout_ms: 600000}`,
-   then give them `path` (and say how long it is and its size).
+7. `video.render {video_id, name, wait: true}` when the person wants the file: it answers once the
+   render has finished, with `path`, `bytes` and `audio` (its loudness, true peak and warnings).
+   Without `wait` it answers at once; then `video.render.wait {render_ids: [id]}`, which reads the
+   row and so never misses a render that finished first. Give the person the path, its length
+   and size, and its loudness. Several files at once (compositions, the soundtrack as WAV,
+   platforms): `video.render.batch {video_id, jobs: [...], wait: true}`.
 
-If a call answers `video.kit.missing`, call `video.kit.install` once and
-`bus.wait {events: ["video.kit.changed"], timeout_ms: 900000}` until `state` is `ready` (it downloads
-about 600 MB the first time; say so). `video.kit.no_node` means Node.js is missing: ask the person.
+If a call answers `video.kit.missing`, call `video.kit.install` once: it answers the real state
+(`ready` when it already is). While `installing`, `video.kit.progress` reports the stage and how
+far along it is every few seconds; `bus.wait {events: ["video.kit.changed"], timeout_ms: 600000}`
+wakes once it is done (one to five minutes the first time, about 600 MB; say so).
+`video.kit.no_node` means Node.js is missing: ask the person.
 
 ## The tools
 
@@ -46,13 +51,18 @@ about 600 MB the first time; say so). `video.kit.no_node` means Node.js is missi
 | `video.check {video_id}` | Build + typecheck + list compositions (id, size, fps, length; their props schemas are in `video.get`). Errors: `{kind, file, line, col, message}`; kinds `syntax`, `bundle`, `type`, `runtime`, `probe`. |
 | `video.still {video_id, at? \| count?, from?, to?, composition?, scale?, props?, boxes?}` | The picture (`png`, attached through MCP) and `issues`; `boxes: true` adds every `data-id` element's box per frame. Default: 6 frames across it. `scale` is against the composition's size (0.6 of 1080×1920 is 648×1152); by default one frame is 1280 px on its long side, a sheet's frames 480. |
 | `video.scan {video_id, every?, from?, to?, composition?, props?}` | The issues across the whole video (or `from`–`to`), measured every `every` frames (default 3) with no pictures: no `contrast`, but words in motion are left out of the position checks, and `brief_text` finds words shown too short a time to read. |
-| `video.render {video_id, format?, quality?, from?, to?, composition?, props?}` | A render job; answers the render row at once. `format`: `mp4` (default), `webm`, `gif`, `prores` (keeps transparency), `mp3`, `wav`. `quality`: `preview` (half size, quick), `standard`, `high`. Writes `out/<composition>-<id>.<ext>`. |
+| `video.render {video_id, format?, quality?, from?, to?, composition?, props?, name?, loudness?, peak?, preset?, wait?}` | A render. `format`: `mp4` (default), `webm`, `gif`, `prores` (keeps transparency), `mp3`, `wav`. `quality`: `preview` (half size, quick), `standard`, `high`. Writes `out/<name>.<ext>` (default `<composition>-<id>`; a name used again is replaced). Every render with sound is measured (`audio`: LUFS, LRA, true peak, clipped samples, warnings); `loudness` (LUFS) and `peak` (dBTP), or `preset` (`youtube`, `shorts`, `reels`, `tiktok` -14; `discord`, `podcast` -16; `broadcast` -23), bring it there with a gain and a true-peak limiter. `wait: true` answers once it has finished. |
+| `video.render.batch {video_id, jobs: [{composition?, format?, name?, loudness?, preset?, …}], wait?}` | Up to 12 renders in one call, run in order. |
+| `video.render.wait {render_ids, timeout_ms?}` | Wait for renders started without `wait`: one already finished answers at once. |
 | `video.render.get {render_id}` / `video.render.cancel {render_id}` | Where a render is; stop one. |
-| `video.asset.add {video_id, path, name?}` | Copy a file (picture, clip, sound, font) into `public/assets/`; answers `static_file` for `staticFile()`. |
+| `video.asset.add {video_id, path \| paths \| font, name?, overwrite?, link?, fps?, weights?, italic?}` | Add files to `public/assets/`; answers `assets: [{static_file, …}]` for `staticFile()`. `paths`: up to 100 at once. A name another file has gets a number and the answer says so (`renamed_from`); `overwrite: true` replaces it instead. `link: true` links a large clip where it is (no copy). `fps: 30` writes a clip at a constant frame rate (phone recordings are variable). `font: "Noto Serif", weights: [400, 700], italic?` adds an installed family's files and answers the `loadFonts(…)` call. |
+| `video.asset.list {video_id}` | Every file under `public/`: kind, size, what a link points to, and how Relay made it (`made`). |
+| `video.asset.inspect {video_id, asset, motion?}` | A clip's size, length, fps and frame count, `variable_rate` (uneven frames), its sound's loudness, and `motion`: the frames where its picture changes (`cut` a new screen, `change` a tap or a value, `motion` a scroll), with where on screen. |
+| `video.audio.beats {video_id, asset, beats_per_bar?, bpm?}` | A music file's grid: `bpm`, `first_beat_s`, `first_downbeat_s`, `frames_per_beat`, every bar (`frame`, loudness), the `sections` where it gets louder or quieter or the bass comes in, and the kit's `useBeatGrid(…)` call for it. |
 | `video.update {video_id, title?, composition?, props?}` | Rename; pick the default composition; set props (`{"main": {...}}`, `null` to reset). |
 | `video.version.restore {video_id, version}` | Put the code back as a version had it (the current code is recorded first). |
 | `video.delete {video_id}` / `video.restore {video_id}` | Only when the person asked. |
-| `video.kit.status {}` / `video.kit.install {}` | Whether this machine can render; set it up. `kit_dir` is the kit's sources, to read when this skill is not enough; Remotion's types are in `node_modules/` under `root`. |
+| `video.kit.status {}` / `video.kit.install {force?}` | Whether this machine can render; set it up (the answer is the real state, with `progress` while installing). `kit_dir` is the kit's sources, to read when this skill is not enough; Remotion's types are in `node_modules/` under `root`. |
 
 Moments (`at`, `from`, `to`) are seconds as a number (`1.5`), or `"1.5s"`, `"1500ms"`, `"0:01.5"`,
 `"f45"` (a frame), `"50%"`, `"start"`, `"end"`. Past the end is the last frame.
@@ -200,9 +210,13 @@ the composition's px.
 
 ## Rendering and versions
 
-- `video.render` answers the render row (`state: "queued"`); renders run one at a time.
-  `video.render.changed` reports each tenth; `video.render.finished` the end (`done` with `path`
-  and `bytes`, `failed` with `error`, or `cancelled`).
+- `video.render` answers the render row (`state: "queued"`), or with `wait: true` the finished
+  one; renders run one at a time. `video.render.changed` reports each tenth;
+  `video.render.finished` the end (`done` with `path`, `bytes` and `audio`, `failed` with `error`,
+  or `cancelled`). To wait on the event yourself, pass `since: <the render's created_at>` to
+  `bus.wait` so one that already fired still wakes you; `video.render.wait` is simpler.
+- Read `audio` on every render: `clipping` and `hot` mean the mix peaks too high (lower the loudest
+  cues, or render with `peak: -1`); `loud` / `quiet` say how far it is from the platforms' -14 LUFS.
 - A `preview` render is half size: fine to check pacing; render `standard` or `high` for the file
   the person will post.
 - Each check, still and render records a version when the code changed (`video.get` lists them).

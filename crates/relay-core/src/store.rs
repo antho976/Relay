@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 /// The schema version this build knows. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: i64 = 34;
+pub const SCHEMA_VERSION: i64 = 35;
 
 /// Numbered migrations; index 0 brings a fresh DB to `user_version = 1`.
 pub const MIGRATIONS: &[&str] = &[
@@ -562,6 +562,14 @@ pub const MIGRATIONS: &[&str] = &[
     CREATE INDEX video_renders_video ON video_renders(video_id, id);
     CREATE INDEX video_renders_project ON video_renders(project_id);
     CREATE INDEX video_renders_state ON video_renders(state) WHERE state IN ('queued','rendering');
+    "#,
+    // v35 - a render's file name as asked for (`out/<name>.<ext>`), the loudness and true peak it
+    // was asked to reach, and its sound as measured once done (JSON: `AudioReport`).
+    r#"
+    ALTER TABLE video_renders ADD COLUMN name TEXT;
+    ALTER TABLE video_renders ADD COLUMN loudness REAL;
+    ALTER TABLE video_renders ADD COLUMN peak REAL;
+    ALTER TABLE video_renders ADD COLUMN audio TEXT;
     "#,
 ];
 
