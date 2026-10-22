@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 367,
+  "op_count": 368,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -7026,6 +7026,26 @@
       },
       "result": {
         "$ref": "#/$defs/VideoBeatGrid"
+      }
+    },
+    "video.timeline": {
+      "summary": "A video's timeline: every scene and sound with its start frame and length, whether each starts on the beat grid, the mix's loudness and what the sound gets wrong; through MCP the timeline comes as a picture with the waveform",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "video.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoTimelineIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoTimelineOut"
       }
     },
     "video.version.restore": {
@@ -31833,6 +31853,13 @@
             "null"
           ],
           "description": "Answer the laid-out box of every element with a `data-id` (default false)."
+        },
+        "sound": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Draw the sound under the picture (default false): the mix's waveform across the frames\ndrawn, each frame's moment marked, and where every cue and voice line plays. The first\nfor a version makes the mix (a pass without pictures); later ones reuse it."
         }
       },
       "required": [
@@ -32084,7 +32111,7 @@
           "items": {
             "$ref": "#/$defs/VideoIssue"
           },
-          "description": "As `video.still`'s, from every frame measured but without `contrast` (no pictures are\ndrawn), with words in motion (entering, leaving, mid-transition) left out of the checks of\nwhere they are, and `brief_text`: words on screen too short a time to read."
+          "description": "As `video.still`'s, from every frame measured but without `contrast` (no pictures are\ndrawn), with words in motion (entering, leaving, mid-transition) left out of the checks of\nwhere they are, and `brief_text`: words on screen too short a time to read. And the\nsound's: `off_beat`, `voice_overlap`, `no_duck` and `silence`, as `video.timeline`'s."
         },
         "errors": {
           "type": "array",
@@ -33082,6 +33109,270 @@
         "frame",
         "kind",
         "change_db"
+      ]
+    },
+    "VideoTimelineIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "composition": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Default the video's composition."
+        },
+        "props": {
+          "description": "Props to draw with instead of the video's."
+        },
+        "bpm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "The beat grid to check against when the code sets none (`useBeatGrid`): its tempo …",
+          "minimum": 40.0,
+          "maximum": 240.0
+        },
+        "first_beat": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "… its first downbeat, seconds (default 0) …"
+        },
+        "beats_per_bar": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1,
+          "description": "… and beats a bar (default 4).",
+          "maximum": 12
+        },
+        "music": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Or the music to find the grid in (`video.audio.beats`): `assets/music.mp3`."
+        },
+        "picture": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Draw it as a picture (default true): the scenes, the sounds, the mix's waveform and the\nbeat grid on one time axis. Through `relay mcp` it is attached to the answer."
+        }
+      },
+      "required": [
+        "video_id"
+      ]
+    },
+    "VideoTimelineOut": {
+      "type": "object",
+      "properties": {
+        "composition": {
+          "$ref": "#/$defs/VideoComposition"
+        },
+        "png": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The picture, when drawn."
+        },
+        "scenes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoTimelineItem"
+          },
+          "description": "Every Sequence, in start order: the scenes and what is in them."
+        },
+        "sounds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoTimelineItem"
+          },
+          "description": "Every sound: the kit's `Music`, `Voice` and `Cue`, and any `<Audio>` or clip with sound."
+        },
+        "grid": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoTimelineGrid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mix": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoAudioReport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The sound mixed as a render mixes it, measured: loudness, peaks, clipping."
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoIssue"
+          },
+          "description": "What the sound gets wrong: `off_beat` (a cue off the grid), `voice_overlap`, `no_duck`\n(music as loud under a voice as without), `silence` (two seconds or more of nothing),\n`clipping` (the mix's peaks)."
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoCodeError"
+          }
+        },
+        "version": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "composition",
+        "scenes",
+        "sounds",
+        "issues",
+        "version"
+      ]
+    },
+    "VideoTimelineItem": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "A scene: `scene`. A sound: `music`, `voice`, `sfx`, `ui`, `whoosh`, `impact`, `ambience`\n(the kit's levels), `clip` (a video's own sound) or `sound`."
+        },
+        "name": {
+          "type": "string",
+          "description": "Its Sequence's `name`, or the sound's (the kit's `name`, or its file's)."
+        },
+        "file": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A sound's file, as `staticFile()` names it."
+        },
+        "depth": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How deep a scene sits in others (0 at the top)."
+        },
+        "start": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The composition's frames: its first, how many, and the one after its last."
+        },
+        "frames": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "end": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "at": {
+          "type": "string",
+          "description": "`2.0s · f60`."
+        },
+        "volume": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "The loudest volume a sound plays at (the kit's level, or `<Audio volume>`)."
+        },
+        "on_beat": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "With a grid: whether it starts within a frame of a beat, and of a bar's first beat."
+        },
+        "on_bar": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "off_by": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Frames from the nearest beat (positive: after it), and that beat as `bar 9 · beat 3`."
+        },
+        "beat": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "start",
+        "frames",
+        "end",
+        "at"
+      ]
+    },
+    "VideoTimelineGrid": {
+      "type": "object",
+      "properties": {
+        "bpm": {
+          "type": "number",
+          "format": "double"
+        },
+        "first_beat_s": {
+          "type": "number",
+          "format": "double"
+        },
+        "beats_per_bar": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "frames_per_beat": {
+          "type": "number",
+          "format": "double"
+        },
+        "from": {
+          "type": "string",
+          "description": "`code` (the video's `useBeatGrid`), `given` (this call's bpm) or `music` (found in it)."
+        }
+      },
+      "required": [
+        "bpm",
+        "first_beat_s",
+        "beats_per_bar",
+        "frames_per_beat",
+        "from"
       ]
     },
     "VideoVersionRestoreIn": {
