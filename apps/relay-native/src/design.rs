@@ -26,6 +26,8 @@ pub(crate) mod render;
 mod shape_panels;
 mod textedit;
 mod tools;
+mod video_board;
+mod videos;
 mod widgets;
 mod window;
 
@@ -33,6 +35,7 @@ use crate::app::Ui;
 use board::Board;
 use doc::Doc;
 use gallery::{Filter, Gallery, Origin};
+use video_board::VideoBoard;
 use gtk::prelude::*;
 use gtk4 as gtk;
 use serde_json::{json, Value};
@@ -40,13 +43,17 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
-/// The Design view of the main window: the gallery, or one design on the board.
+/// The Design view of the main window: the gallery, one design on the board, or one video.
 pub struct View {
     pub root: gtk::Stack,
     gallery: Rc<Gallery>,
     host: gtk::Box,
     board: RefCell<Option<Rc<Board>>>,
     opening: Opening,
+    /// The project's videos, in the gallery after its designs (videos.rs).
+    shelf: Rc<videos::Shelf>,
+    video_host: gtk::Box,
+    video: RefCell<Option<Rc<VideoBoard>>>,
 }
 
 /// Which open of the main view's board is the one asked for last (B79): an open that finishes
@@ -101,8 +108,19 @@ pub fn install(ui: &Rc<Ui>) {
     host.set_hexpand(true);
     host.set_vexpand(true);
     root.add_named(&host, Some("board"));
+    let video_host = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    video_host.set_hexpand(true);
+    video_host.set_vexpand(true);
+    root.add_named(&video_host, Some("video"));
     root.set_visible_child_name("gallery");
-    let view = Rc::new(View { root, gallery, host, board: RefCell::default(), opening: Opening::default() });
+    let shelf = videos::Shelf::new(ui, &gallery);
+    let view = Rc::new(View { root, gallery, host, board: RefCell::default(), opening: Opening::default(), shelf, video_host, video: RefCell::default() });
+    let weak = Rc::downgrade(ui);
+    *view.shelf.open.borrow_mut() = Some(Rc::new(move |id| {
+        if let Some(ui) = weak.upgrade() {
+            open_video(&ui, id);
+        }
+    }));
     let weak = Rc::downgrade(ui);
     *view.gallery.open.borrow_mut() = Some(Rc::new(move |id| {
         if let Some(ui) = weak.upgrade() {
@@ -143,6 +161,9 @@ fn shown(ui: &Rc<Ui>) {
 }
 
 fn close_board(view: &View) {
+    if let Some(v) = view.video.borrow_mut().take() {
+        view.video_host.remove(&v.root);
+    }
     if let Some(b) = view.board.borrow_mut().take() {
         b.end_edit(true);
         b.close_agent_panel();
@@ -186,6 +207,38 @@ pub fn show(ui: &Rc<Ui>, terminal: Option<String>) {
         // Opened afresh: a search left from before would hide what was asked for (TM-52).
         view.gallery.clear_search();
         view.gallery.refresh();
+    }
+}
+
+/// Open video `id` in the view: its player, props, renders and versions.
+pub fn open_video(ui: &Rc<Ui>, id: i64) {
+    let Some(view) = view() else {
+        return;
+    };
+    view.opening.cancel();
+    close_board(&view);
+    let v = VideoBoard::new(ui, id);
+    let weak = Rc::downgrade(&view);
+    *v.back.borrow_mut() = Some(Rc::new(move || {
+        if let Some(view) = weak.upgrade() {
+            close_board(&view);
+            view.gallery.refresh_designs();
+        }
+    }));
+    view.video_host.append(&v.root);
+    *view.video.borrow_mut() = Some(v);
+    view.root.set_visible_child_name("video");
+}
+
+/// `video.*`: the gallery's videos and the open video follow them; the kit's state too.
+pub fn video_event(_ui: &Rc<Ui>, ev: &str, payload: &Value) {
+    let Some(view) = view() else {
+        return;
+    };
+    view.shelf.event(ev, payload);
+    let open = view.video.borrow().clone();
+    if let Some(v) = open {
+        v.event(ev, payload);
     }
 }
 
@@ -574,6 +627,10 @@ pub(crate) fn session_changed(_ui: &Rc<Ui>, payload: &Value) {
     let project = payload["project_id"].as_i64();
     if let Some(view) = view().filter(|v| project.is_none_or(|p| p == v.gallery.project.get())) {
         view.gallery.session_changed(name, state);
+        let open = view.video.borrow().clone();
+        if let Some(v) = open {
+            v.session_changed(payload);
+        }
     }
     for b in boards() {
         let ours = {
@@ -593,6 +650,10 @@ pub fn smoke_open(ui: &Rc<Ui>) {
     ui.navigate("design");
     let ui = ui.clone();
     glib::timeout_add_local_once(std::time::Duration::from_millis(600), move || {
+        // A video's board instead (scripts/video-smoke.py).
+        if let Some(id) = std::env::var("RELAY_SMOKE_VIDEO_ID").ok().and_then(|id| id.parse::<i64>().ok()) {
+            return open_video(&ui, id);
+        }
         let named = std::env::var("RELAY_SMOKE_DESIGN_ID").ok().and_then(|id| id.parse::<i64>().ok());
         let first = named.or_else(|| view().and_then(|v| v.gallery_first()));
         if let Some(id) = first.filter(|_| std::env::var("RELAY_SMOKE_DESIGN_BOARD").is_ok()) {

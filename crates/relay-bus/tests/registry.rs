@@ -133,14 +133,18 @@ fn bus_wait_matching_must_be_an_object() {
 }
 
 /// pictures v2 §4.1: only the Pictures plugin's own ops carry it. The key is machine-wide and the
-/// person's: its ops carry no plugin, admit no agent, and setting it writes no audit row.
+/// person's: its ops carry no plugin, admit no agent, and setting it writes no audit row. The
+/// Video plugin brings every `video.*` op but `video.kit.status`, which says whether the machine
+/// could render at all (D167).
 #[test]
-fn only_the_picture_ops_come_with_a_plugin() {
+fn only_the_picture_and_video_ops_come_with_a_plugin() {
     use relay_bus::registry::{Actors, Scope};
     let reg = Registry::global();
     for e in reg.entries() {
-        let brought = ["design.picture.search", "design.picture.thumb", "design.picture.add"].contains(&e.name);
-        assert_eq!(e.meta.plugin, brought.then_some("pictures"), "{}", e.name);
+        let picture = ["design.picture.search", "design.picture.thumb", "design.picture.add"].contains(&e.name);
+        let video = e.name.starts_with("video.") && e.name != "video.kit.status";
+        let expected = if picture { Some("pictures") } else if video { Some("video") } else { None };
+        assert_eq!(e.meta.plugin, expected, "{}", e.name);
     }
     for op in ["design.picture.key_set", "design.picture.key_remove"] {
         let m = reg.get(op).unwrap_or_else(|| panic!("{op} is not registered")).meta;

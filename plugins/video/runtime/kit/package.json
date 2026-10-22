@@ -1,0 +1,8 @@
+{
+  "name": "@relay/video",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Relay's kit for videos written as code: text, devices, captions, backgrounds, motion helpers, fonts and the probe video.still reads frames with. Written by Relay; edits here are overwritten.",
+  "main": "index.ts",
+  "types": "index.ts"
+}

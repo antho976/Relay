@@ -202,9 +202,10 @@ fn codex_mcp_config_with(
 pub trait Driver: Sync {
     fn binary(&self) -> &'static str;
     /// `brief` is the compact session brief. Providers that read a prompt file ignore it;
-    /// providers with no such channel inline it. `assets` is the store's design-assets folder,
-    /// which a provider that asks before reading outside its checkout lets the session read.
-    fn args(&self, session: &Session, launch: Launch<'_>, brief: Option<&str>, assets: Option<&Path>) -> Vec<String>;
+    /// providers with no such channel inline it. `reads` are folders outside the checkout — the
+    /// store's design-assets, and with the Video plugin on the videos folder's kit — which a
+    /// provider that asks before reading outside its checkout lets the session read.
+    fn args(&self, session: &Session, launch: Launch<'_>, brief: Option<&str>, reads: &[&Path]) -> Vec<String>;
     /// Whether Relay's `PreToolUse` guardrail and lifecycle reports actually bind here.
     fn guarded(&self) -> bool;
     /// Who the CLI is signed in as: `Some(None)` when it answered and nobody is, `None` when
@@ -246,7 +247,7 @@ fn spawn_profile(drv: &dyn Driver) -> Value {
         created_at: String::new(), updated_at: String::new(), closed_at: None,
     };
     let shape = |launch| -> Vec<String> {
-        drv.args(&session, launch, None, None).into_iter().map(|arg| {
+        drv.args(&session, launch, None, &[]).into_iter().map(|arg| {
             if arg.len() <= 120 { return arg; }
             match arg.split_once('=') {
                 Some((key, _)) if key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') => format!("{key}=<{key}>"),
@@ -279,12 +280,12 @@ fn model_effort_args(session: &Session, claude: bool) -> Vec<String> {
 impl Driver for Claude {
     fn binary(&self) -> &'static str { "claude" }
     fn guarded(&self) -> bool { true }
-    fn args(&self, session: &Session, launch: Launch<'_>, _brief: Option<&str>, assets: Option<&Path>) -> Vec<String> {
+    fn args(&self, session: &Session, launch: Launch<'_>, _brief: Option<&str>, reads: &[&Path]) -> Vec<String> {
         let helper = session.use_api_key
             .then(|| crate::hooks::api_key_helper(&crate::hooks::key_proxy_token_path().unwrap_or_default()));
         let mut args = vec![
             "--mcp-config".into(), crate::hooks::MCP_CONFIG_RELATIVE.into(),
-            "--settings".into(), crate::hooks::claude_settings(helper.as_deref(), assets),
+            "--settings".into(), crate::hooks::claude_settings(helper.as_deref(), reads),
             "--append-system-prompt-file".into(), role_instructions_relative(&session.name),
         ];
         match launch {
@@ -314,7 +315,7 @@ impl Driver for Claude {
 impl Driver for Codex {
     fn binary(&self) -> &'static str { "codex" }
     fn guarded(&self) -> bool { true }
-    fn args(&self, session: &Session, launch: Launch<'_>, brief: Option<&str>, _assets: Option<&Path>) -> Vec<String> {
+    fn args(&self, session: &Session, launch: Launch<'_>, brief: Option<&str>, _reads: &[&Path]) -> Vec<String> {
         // Codex reads outside its workspace without asking.
         let mut args = Vec::new();
         match launch {
@@ -535,22 +536,22 @@ mod tests {
         assert!(role_instructions(Role::Builder).contains("query task.list"));
         assert_eq!(codex_notify_config(Path::new("/opt/Relay 2/relay")), "notify=[\"/opt/Relay 2/relay\",\"hook\",\"codex-notify\"]");
         let claude = session(Provider::Claude);
-        let settings = crate::hooks::claude_settings(None, None);
-        assert_eq!(driver(Provider::Claude).args(&claude, Launch::Fresh, None, None),
+        let settings = crate::hooks::claude_settings(None, &[]);
+        assert_eq!(driver(Provider::Claude).args(&claude, Launch::Fresh, None, &[]),
             ["--mcp-config", ".relay/relay.mcp.json", "--settings", settings.as_str(), "--append-system-prompt-file", ".relay/sessions/calm-otter/role-instructions.md", "--name", "calm-otter", "--model", "model-x", "--effort", "high"]);
-        assert_eq!(driver(Provider::Claude).args(&claude, Launch::Resume { provider_ref: Some("cc-id") }, None, None),
+        assert_eq!(driver(Provider::Claude).args(&claude, Launch::Resume { provider_ref: Some("cc-id") }, None, &[]),
             ["--mcp-config", ".relay/relay.mcp.json", "--settings", settings.as_str(), "--append-system-prompt-file", ".relay/sessions/calm-otter/role-instructions.md", "--resume", "cc-id", "--model", "model-x", "--effort", "high"]);
         // An API-key session differs only in its settings, on resume as on a fresh launch.
         let mut keyed = claude.clone();
         keyed.use_api_key = true;
-        let keyed_settings = crate::hooks::claude_settings(Some(&crate::hooks::api_key_helper(&crate::hooks::key_proxy_token_path().unwrap_or_default())), None);
+        let keyed_settings = crate::hooks::claude_settings(Some(&crate::hooks::api_key_helper(&crate::hooks::key_proxy_token_path().unwrap_or_default())), &[]);
         for launch in [Launch::Fresh, Launch::Resume { provider_ref: Some("cc-id") }] {
-            let args = driver(Provider::Claude).args(&keyed, launch, None, None);
+            let args = driver(Provider::Claude).args(&keyed, launch, None, &[]);
             assert_eq!(args[3], keyed_settings);
         }
         let mut codex = session(Provider::Codex);
         codex.role = Role::Reviewer;
-        let args = driver(Provider::Codex).args(&codex, Launch::Resume { provider_ref: Some("cx-id") }, None, None);
+        let args = driver(Provider::Codex).args(&codex, Launch::Resume { provider_ref: Some("cx-id") }, None, &[]);
         assert_eq!(&args[..7], ["resume", "--no-alt-screen", "--approve-for-me", "--model", "model-x", "--config", "model_reasoning_effort=\"high\""]);
         assert_eq!(args[7], "--config");
         assert!(args[8].starts_with("developer_instructions=\"You are this Relay session's reviewer."));
@@ -631,7 +632,7 @@ mod tests {
     #[test]
     fn codex_carries_the_brief_and_the_shell_path_it_actually_has() {
         let codex = session(Provider::Codex);
-        let args = driver(Provider::Codex).args(&codex, Launch::Fresh, Some("## Live peers\n- sly-egret"), None);
+        let args = driver(Provider::Codex).args(&codex, Launch::Fresh, Some("## Live peers\n- sly-egret"), &[]);
         assert_eq!(&args[..2], ["--no-alt-screen", "--approve-for-me"]);
         let config = args.iter().find(|arg| arg.starts_with("developer_instructions=")).expect("developer_instructions");
         assert!(config.contains("sly-egret"), "codex never receives its peers");
@@ -645,12 +646,12 @@ mod tests {
         let codex = session(Provider::Codex);
         // Quotes and newlines double in JSON; the cap is measured after escaping.
         let brief = "## Live peers\n- sly-egret \"quoted\"\n".repeat(20_000);
-        let args = driver(Provider::Codex).args(&codex, Launch::Fresh, Some(&brief), None);
+        let args = driver(Provider::Codex).args(&codex, Launch::Fresh, Some(&brief), &[]);
         let config = args.iter().find(|arg| arg.starts_with("developer_instructions=")).unwrap();
         assert!(config.len() < 128 * 1024, "{} bytes cannot be exec'd", config.len());
         assert!(config.contains("sly-egret"));
         assert!(config.contains("Read the whole of it at $RELAY_BRIEF"));
-        let short = driver(Provider::Codex).args(&codex, Launch::Fresh, Some("- sly-egret"), None);
+        let short = driver(Provider::Codex).args(&codex, Launch::Fresh, Some("- sly-egret"), &[]);
         assert!(!short.iter().any(|arg| arg.contains("cut short")));
     }
 

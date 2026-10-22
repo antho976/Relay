@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 346,
+  "op_count": 362,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -6679,6 +6679,318 @@
       },
       "result": {
         "$ref": "#/$defs/DesignPictureKeyOut"
+      }
+    },
+    "video.list": {
+      "summary": "A project's videos (code that renders to a video), newest change first; optionally one terminal's",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoListIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoListOut"
+      }
+    },
+    "video.get": {
+      "summary": "A video: its folder, compositions, the props the person set, versions and renders",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoGetOut"
+      }
+    },
+    "video.create": {
+      "summary": "Start a video, only when the person asked for one: a folder of Remotion code with a starter composition, to edit with your file tools",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "inverse",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "video.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoCreateIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoCreateOut"
+      }
+    },
+    "video.update": {
+      "summary": "Rename a video, tie it to another terminal, pick its default composition or set the props it draws with",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "inverse",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "video.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoUpdateIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Video"
+      }
+    },
+    "video.delete": {
+      "summary": "Delete a video, when the person asked; video.restore brings it back, folder and all",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "inverse",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "video.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "video.restore": {
+      "summary": "Bring a deleted video back",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "inverse",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "video.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Video"
+      }
+    },
+    "video.check": {
+      "summary": "Build a video's code and typecheck it: errors with file and line, and its compositions; run after every edit",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "video.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoCheckOut"
+      }
+    },
+    "video.still": {
+      "summary": "Look at a video: frames at moments of it (or a contact sheet across it) as a picture, with the problems found in them; through MCP the picture comes with the answer",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "video.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoStillIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoStillOut"
+      }
+    },
+    "video.scan": {
+      "summary": "Check a whole video without pictures: the problems across every few frames, words in motion left out, and words shown too briefly to read",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "video.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoScanIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoScanOut"
+      }
+    },
+    "video.render": {
+      "summary": "Render a video to a file in its out/ folder; answers at once, then video.render.finished (wait on it matching {\"id\": <render id>})",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "video.render.changed",
+        "video.render.finished"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoRenderIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoRender"
+      }
+    },
+    "video.render.get": {
+      "summary": "A render: its state, progress and file",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoRenderIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoRender"
+      }
+    },
+    "video.render.cancel": {
+      "summary": "Stop a render that is queued or running",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "video.render.changed",
+        "video.render.finished"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoRenderIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoRender"
+      }
+    },
+    "video.asset.add": {
+      "summary": "Copy a picture, clip, sound or font into a video's public/assets/; answers the staticFile() name",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoAssetAddIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoAssetAddOut"
+      }
+    },
+    "video.version.restore": {
+      "summary": "Put a video's code back as an earlier version had it (the code before is recorded first)",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "inverse",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "video.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoVersionRestoreIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoVersionRestoreOut"
+      }
+    },
+    "video.kit.status": {
+      "summary": "Whether this machine is set up to render videos (Node.js, Remotion and its browser)",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoKitStatus"
+      }
+    },
+    "video.kit.install": {
+      "summary": "Set this machine up to render videos: downloads Remotion and its browser (about 600 MB) once; answers at once, then video.kit.changed",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "video.kit.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoKitStatus"
       }
     }
   },
@@ -30288,6 +30600,1413 @@
       },
       "required": [
         "saved"
+      ]
+    },
+    "VideoListIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "project_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Only those tied to this terminal (session name)."
+        },
+        "include_deleted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Also deleted ones (`deleted_at` set)."
+        }
+      },
+      "required": [
+        "project_id"
+      ]
+    },
+    "VideoListOut": {
+      "type": "object",
+      "properties": {
+        "videos": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Video"
+          }
+        }
+      },
+      "required": [
+        "videos"
+      ]
+    },
+    "Video": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "project_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The terminal it belongs to, as a design's (`design.session`)."
+        },
+        "title": {
+          "type": "string"
+        },
+        "dir": {
+          "type": "string",
+          "description": "Its folder: `src/` holds the code, `public/` what `staticFile()` names, `out/` its renders."
+        },
+        "composition": {
+          "type": "string",
+          "description": "The composition stills and renders draw unless told otherwise (`main` at first)."
+        },
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The default composition's size, rate and length, as the last check found them."
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "fps": {
+          "type": "number",
+          "format": "double"
+        },
+        "duration_frames": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "version": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The latest version of its code Relay recorded (each check, still and render records the\ncode it read when it changed); 0 before the first."
+        },
+        "poster": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A frame of it to show for it: the latest still drawn of its default composition."
+        },
+        "last_render": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoRenderInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The newest render."
+        },
+        "created_by": {
+          "type": "string",
+          "description": "`user` or the session that made it."
+        },
+        "updated_by": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "deleted_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "title",
+        "dir",
+        "composition",
+        "width",
+        "height",
+        "fps",
+        "duration_frames",
+        "version",
+        "created_by",
+        "updated_by",
+        "created_at",
+        "updated_at"
+      ],
+      "description": "A video: a folder of code (`dir`) and what Relay knows of it."
+    },
+    "VideoRenderInfo": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "state": {
+          "$ref": "#/$defs/VideoRenderState"
+        },
+        "format": {
+          "$ref": "#/$defs/VideoFormat"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The finished file."
+        },
+        "preview": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The version of the code it drew."
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "state",
+        "format",
+        "version"
+      ]
+    },
+    "VideoRenderState": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "rendering",
+        "done",
+        "failed",
+        "cancelled"
+      ],
+      "description": "Where a render is."
+    },
+    "VideoFormat": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "wav"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "mp4",
+          "description": "H.264 with AAC: plays everywhere."
+        },
+        {
+          "type": "string",
+          "const": "webm",
+          "description": "VP8 with Opus."
+        },
+        {
+          "type": "string",
+          "const": "gif",
+          "description": "An animated GIF, no sound."
+        },
+        {
+          "type": "string",
+          "const": "prores",
+          "description": "ProRes 4444 with its transparency kept, to lay over other footage in an editor."
+        },
+        {
+          "type": "string",
+          "const": "mp3",
+          "description": "The sound alone."
+        }
+      ],
+      "description": "The file a render makes."
+    },
+    "VideoIdIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "video_id"
+      ]
+    },
+    "VideoGetOut": {
+      "type": "object",
+      "properties": {
+        "video": {
+          "$ref": "#/$defs/Video"
+        },
+        "entry": {
+          "type": "string",
+          "description": "The file to start reading: its default composition's component."
+        },
+        "compositions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoComposition"
+          },
+          "description": "Its compositions as the last check found them."
+        },
+        "props": {
+          "description": "The props the person set, by composition id: stills and renders draw with them unless\ngiven others."
+        },
+        "versions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoVersion"
+          },
+          "description": "The newest versions first, at most 20."
+        },
+        "renders": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoRender"
+          },
+          "description": "The newest renders first, at most 20."
+        }
+      },
+      "required": [
+        "video",
+        "entry",
+        "compositions",
+        "props",
+        "versions",
+        "renders"
+      ]
+    },
+    "VideoComposition": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Its `<Composition id>`."
+        },
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "fps": {
+          "type": "number",
+          "format": "double"
+        },
+        "duration_frames": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "default_props": {
+          "description": "Its `defaultProps`. `video.get` answers it; checks and stills leave it out."
+        },
+        "props_schema": {
+          "description": "Its zod `schema` as JSON Schema, when it has one: what the props panel edits. A string\ndescribed `__remotion-color` is a colour (`zColor()`). `video.get` answers it; checks and\nstills leave it out."
+        }
+      },
+      "required": [
+        "id",
+        "width",
+        "height",
+        "fps",
+        "duration_frames"
+      ]
+    },
+    "VideoVersion": {
+      "type": "object",
+      "properties": {
+        "n": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "actor": {
+          "type": "string",
+          "description": "`user`, `system` or the session whose call recorded it."
+        },
+        "files": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "changed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What changed from the version before: `src/Hook.tsx` (changed), `+src/Outro.tsx` (added),\n`-src/Old.tsx` (removed); at most 12."
+        }
+      },
+      "required": [
+        "n",
+        "actor",
+        "files",
+        "created_at"
+      ]
+    },
+    "VideoRender": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "project_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "composition": {
+          "type": "string"
+        },
+        "format": {
+          "$ref": "#/$defs/VideoFormat"
+        },
+        "quality": {
+          "$ref": "#/$defs/VideoQuality"
+        },
+        "state": {
+          "$ref": "#/$defs/VideoRenderState"
+        },
+        "progress": {
+          "type": "number",
+          "format": "double",
+          "description": "0 to 1."
+        },
+        "version": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The version of the code it draws."
+        },
+        "range": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "The frames it covers, first and last (inclusive), when not the whole composition."
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The file, once done."
+        },
+        "bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why it failed."
+        },
+        "actor": {
+          "type": "string",
+          "description": "`user` or the session that asked for it."
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "video_id",
+        "project_id",
+        "composition",
+        "format",
+        "quality",
+        "state",
+        "progress",
+        "version",
+        "actor",
+        "created_at"
+      ],
+      "description": "A render of a video."
+    },
+    "VideoQuality": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "preview",
+          "description": "Half size and quick: to watch the whole thing through."
+        },
+        {
+          "type": "string",
+          "const": "standard",
+          "description": "Full size; the default."
+        },
+        {
+          "type": "string",
+          "const": "high",
+          "description": "Full size, a lower CRF: a larger file for uploading."
+        }
+      ],
+      "description": "How much care a render takes over its pictures."
+    },
+    "VideoCreateIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "project_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Default \"Untitled video\"."
+        },
+        "shape": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoShape"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default vertical (1080 × 1920). `width` and `height` set a size of their own."
+        },
+        "width": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 16,
+          "description": "16 to 7680, even; with `height`, instead of a shape.",
+          "maximum": 7680
+        },
+        "height": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 16,
+          "maximum": 7680
+        },
+        "fps": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Frames a second, 1 to 120; default 30.",
+          "minimum": 1,
+          "maximum": 120
+        },
+        "seconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Its length to start with, 1 to 600; default 10. The code may change it.",
+          "minimum": 1,
+          "maximum": 600
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The terminal it belongs to. An agent's video is its own session's; the person may name\nany session of the project, or none."
+        }
+      },
+      "required": [
+        "project_id"
+      ]
+    },
+    "VideoShape": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "vertical",
+          "description": "1080 × 1920: Shorts, Reels, TikTok, stories."
+        },
+        {
+          "type": "string",
+          "const": "landscape",
+          "description": "1920 × 1080: YouTube, a site, a presentation."
+        },
+        {
+          "type": "string",
+          "const": "square",
+          "description": "1080 × 1080."
+        },
+        {
+          "type": "string",
+          "const": "portrait",
+          "description": "1080 × 1350: a 4:5 feed post."
+        }
+      ],
+      "description": "A video's shape when it is made."
+    },
+    "VideoCreateOut": {
+      "type": "object",
+      "properties": {
+        "video": {
+          "$ref": "#/$defs/Video"
+        },
+        "entry": {
+          "type": "string",
+          "description": "The component to edit first: `src/Video.tsx`."
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What the starter wrote, relative to the folder."
+        },
+        "kit": {
+          "$ref": "#/$defs/VideoKitStatus"
+        },
+        "next": {
+          "type": "string",
+          "description": "What to do next."
+        }
+      },
+      "required": [
+        "video",
+        "entry",
+        "files",
+        "kit",
+        "next"
+      ]
+    },
+    "VideoKitStatus": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/VideoKitState"
+        },
+        "root": {
+          "type": "string",
+          "description": "Where the kit lives: every video's folder is under it."
+        },
+        "kit_dir": {
+          "type": "string",
+          "description": "The `@relay/video` kit's sources, to read when the skill is not enough; `node_modules/`\nbeside them holds Remotion's own types."
+        },
+        "node": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`node --version`."
+        },
+        "remotion": {
+          "type": "string",
+          "description": "The Remotion version the kit pins."
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "about": {
+          "type": "string",
+          "description": "What setting up does, for the person to agree to."
+        }
+      },
+      "required": [
+        "state",
+        "root",
+        "kit_dir",
+        "remotion",
+        "about"
+      ]
+    },
+    "VideoKitState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "ready"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "missing",
+          "description": "Not set up: `video.kit.install`."
+        },
+        {
+          "type": "string",
+          "const": "installing",
+          "description": "Being set up; `video.kit.changed` says when it is done."
+        },
+        {
+          "type": "string",
+          "const": "outdated",
+          "description": "Set up for an older Relay: `video.kit.install` brings it up to date."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "The last setup failed (`error`)."
+        },
+        {
+          "type": "string",
+          "const": "no_node",
+          "description": "Node.js 20 or newer is not installed."
+        }
+      ],
+      "description": "Whether the video kit (Node, Remotion and its browser) is set up on this machine."
+    },
+    "VideoUpdateIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Tie it to another terminal (session name), or `null` to the project alone.",
+          "default": null
+        },
+        "composition": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The composition stills and renders draw by default."
+        },
+        "props": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true,
+          "description": "Props for one composition (`{\"main\": {\"title\": \"…\"}}`): stills and renders draw with them.\nA composition named with `null` goes back to its `defaultProps`."
+        }
+      },
+      "required": [
+        "video_id"
+      ]
+    },
+    "VideoCheckOut": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "description": "No syntax, bundle or runtime errors: it renders. Type errors leave it `ok`; fix them too."
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoCodeError"
+          },
+          "description": "At most 50, the most useful first."
+        },
+        "compositions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoComposition"
+          }
+        },
+        "version": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The version of the code it read."
+        }
+      },
+      "required": [
+        "ok",
+        "errors",
+        "compositions",
+        "version"
+      ]
+    },
+    "VideoCodeError": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/VideoErrorKind"
+        },
+        "file": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The file, relative to the video's folder."
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "col": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "message": {
+          "type": "string"
+        },
+        "frame": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The frame it threw on."
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ]
+    },
+    "VideoErrorKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "syntax",
+          "description": "It does not parse."
+        },
+        {
+          "type": "string",
+          "const": "bundle",
+          "description": "It parses but does not build: an import that does not resolve, a missing file."
+        },
+        {
+          "type": "string",
+          "const": "type",
+          "description": "TypeScript's check. It still renders; fix it anyway."
+        },
+        {
+          "type": "string",
+          "const": "runtime",
+          "description": "It threw while drawing (`frame` says which), or while listing its compositions."
+        },
+        {
+          "type": "string",
+          "const": "props",
+          "description": "Props that do not fit the composition's schema."
+        },
+        {
+          "type": "string",
+          "const": "probe",
+          "description": "`src/index.ts` no longer goes through `relayRoot`, so stills cannot see the frame."
+        }
+      ],
+      "description": "What kind of problem a check found in the code."
+    },
+    "VideoStillIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "composition": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Default the video's composition."
+        },
+        "at": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/VideoMoment"
+          },
+          "description": "The moments to draw, up to 24: seconds (1.5) or \"1.5s\", \"1500ms\", \"0:01.5\", \"f45\",\n\"50%\", \"start\", \"end\". Several make one contact sheet, labelled.",
+          "maxItems": 24
+        },
+        "count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 2,
+          "description": "Instead of `at`: this many moments, 2 to 24, evenly across it (or across `from`–`to`).",
+          "maximum": 24
+        },
+        "from": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoMoment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "to": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoMoment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scale": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Size of one frame against the video's, 0.05 to 1. Default: one frame's longer side at\n1280 px; a sheet's frames at 480.",
+          "minimum": 0.05,
+          "maximum": 1.0
+        },
+        "props": {
+          "description": "Props to draw with instead of the video's (`video.get`'s `props`)."
+        },
+        "boxes": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Answer the laid-out box of every element with a `data-id` (default false)."
+        }
+      },
+      "required": [
+        "video_id"
+      ]
+    },
+    "VideoMoment": {
+      "anyOf": [
+        {
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "A moment of a composition: seconds as a number, or text — `\"1.5s\"`, `\"1500ms\"`, `\"0:01.5\"`,\n`\"f45\"` (frame 45), `\"50%\"` of its length, `\"start\"` or `\"end\"` (its last frame)."
+    },
+    "VideoStillOut": {
+      "type": "object",
+      "properties": {
+        "png": {
+          "type": "string",
+          "description": "The picture: one frame, or a labelled contact sheet of them in order. Through `relay mcp`\nit is attached to the answer."
+        },
+        "composition": {
+          "$ref": "#/$defs/VideoComposition"
+        },
+        "frames": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoStillFrame"
+          }
+        },
+        "boxes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoBox"
+          }
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoIssue"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoCodeError"
+          },
+          "description": "What stopped a frame from drawing, or broke the build."
+        },
+        "version": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "png",
+        "composition",
+        "frames",
+        "issues",
+        "version"
+      ]
+    },
+    "VideoStillFrame": {
+      "type": "object",
+      "properties": {
+        "frame": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "at_ms": {
+          "type": "number",
+          "format": "double"
+        },
+        "label": {
+          "type": "string",
+          "description": "As the sheet labels it: `1.5s · f45`."
+        }
+      },
+      "required": [
+        "frame",
+        "at_ms",
+        "label"
+      ]
+    },
+    "VideoBox": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Its `data-id`."
+        },
+        "frame": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "x": {
+          "type": "number",
+          "format": "double",
+          "description": "In the composition's px."
+        },
+        "y": {
+          "type": "number",
+          "format": "double"
+        },
+        "w": {
+          "type": "number",
+          "format": "double"
+        },
+        "h": {
+          "type": "number",
+          "format": "double"
+        },
+        "opacity": {
+          "type": "number",
+          "format": "double",
+          "description": "As drawn: its own and its parents' opacity together."
+        }
+      },
+      "required": [
+        "id",
+        "frame",
+        "x",
+        "y",
+        "w",
+        "h",
+        "opacity"
+      ]
+    },
+    "VideoIssue": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "`clipped` (text cut off by a box that hides its overflow), `offscreen` (partly outside\nthe frame), `unsafe` (outside the area a platform's buttons and captions leave free),\n`text_overlap`, `small_text` (hard to read on a phone), `font_fallback` (the font it names\nis not there, so another stood in), `contrast` (against the pixels under it, as drawn),\n`brief_text` (from `video.scan`: on screen too short a time to read), `broken_image`,\n`console` (an error the page logged)."
+        },
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The element's `data-id`, or its nearest parent's."
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The words concerned, cut to 60 characters."
+        },
+        "frames": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "description": "The frames it was found on."
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "frames",
+        "detail"
+      ]
+    },
+    "VideoScanIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "composition": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Default the video's composition."
+        },
+        "every": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1,
+          "description": "Check every this many frames, 1 to 30; default 3 (ten times a second at 30 fps).",
+          "maximum": 30
+        },
+        "from": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoMoment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Only part of it, from this moment (as `video.still`'s `at`) …"
+        },
+        "to": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoMoment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "… to this one."
+        },
+        "props": {
+          "description": "Props to draw with instead of the video's."
+        }
+      },
+      "required": [
+        "video_id"
+      ]
+    },
+    "VideoScanOut": {
+      "type": "object",
+      "properties": {
+        "composition": {
+          "$ref": "#/$defs/VideoComposition"
+        },
+        "frames": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How many frames were measured."
+        },
+        "every": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoIssue"
+          },
+          "description": "As `video.still`'s, from every frame measured but without `contrast` (no pictures are\ndrawn), with words in motion (entering, leaving, mid-transition) left out of the checks of\nwhere they are, and `brief_text`: words on screen too short a time to read."
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoCodeError"
+          }
+        },
+        "version": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "composition",
+        "frames",
+        "every",
+        "issues",
+        "version"
+      ]
+    },
+    "VideoRenderIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "composition": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Default the video's composition."
+        },
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoFormat"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default mp4."
+        },
+        "quality": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoQuality"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default standard."
+        },
+        "from": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoMoment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Only part of it: from this moment (as `video.still`'s `at`) …"
+        },
+        "to": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoMoment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "… to this one, inclusive."
+        },
+        "props": {
+          "description": "Props to draw with instead of the video's."
+        }
+      },
+      "required": [
+        "video_id"
+      ]
+    },
+    "VideoRenderIdIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "render_id": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "render_id"
+      ]
+    },
+    "VideoAssetAddIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "path": {
+          "type": "string",
+          "description": "A file on this machine: a picture, a clip, a sound or a font. It is copied in, so the\nvideo keeps it when the file moves.",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The name to give it under `public/assets/`; default its own, made safe.",
+          "minLength": 1,
+          "maxLength": 120
+        }
+      },
+      "required": [
+        "video_id",
+        "path"
+      ]
+    },
+    "VideoAssetAddOut": {
+      "type": "object",
+      "properties": {
+        "static_file": {
+          "type": "string",
+          "description": "What `staticFile()` takes: `staticFile(\"assets/…\")`."
+        },
+        "path": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string",
+          "description": "`image`, `video`, `audio`, `font` or `other`."
+        },
+        "w": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "A picture's size in px."
+        },
+        "h": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "static_file",
+        "path",
+        "bytes",
+        "kind"
+      ]
+    },
+    "VideoVersionRestoreIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "version": {
+          "type": "integer",
+          "format": "int64",
+          "description": "A version `video.get` lists."
+        }
+      },
+      "required": [
+        "video_id",
+        "version"
+      ]
+    },
+    "VideoVersionRestoreOut": {
+      "type": "object",
+      "properties": {
+        "video": {
+          "$ref": "#/$defs/Video"
+        },
+        "previous": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The version recorded of the code as it was before, which a restore of it undoes this."
+        }
+      },
+      "required": [
+        "video",
+        "previous"
       ]
     }
   }

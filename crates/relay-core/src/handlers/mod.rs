@@ -26,6 +26,7 @@ pub mod session;
 pub mod settings;
 pub mod task;
 pub mod ui;
+pub mod video;
 pub mod workspace;
 
 use crate::engine::Engine;
@@ -43,6 +44,7 @@ pub fn register_all(e: &mut Engine) {
     notes::register(e);
     design::register(e);
     picture::register(e);
+    video::register(e);
     overlap::register(e);
     provider::register(e);
     session::register(e);

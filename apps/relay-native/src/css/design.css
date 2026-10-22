@@ -253,3 +253,19 @@ button.design-credit-key { min-height: 28px; padding: 0 6px; border-radius: 8px;
 .design-page-row button.design-layer-eye { min-height: 22px; min-width: 22px; padding: 0; }
 button.design-page-fold { min-height: 26px; padding: 0 8px; border-radius: 8px; background: none; box-shadow: none; color: @faint; font-size: 12px; }
 button.design-page-fold:hover { color: @ink; background: @wash_solid; }
+
+/* ---- Videos: the gallery's section and a video's board (design/videos.rs, video_board.rs) ---- */
+.video-shelf { margin-top: 36px; }
+.video-kit-banner { padding: 12px 14px; border: 1px solid @glass_edge; border-radius: 12px; background: @glass_card; }
+.video-thumb { background: #0b0d12; }
+.video-badge { padding: 1px 7px; border-radius: 999px; background: alpha(black, 0.62); color: white; font-family: 'Geist Mono'; font-size: 11px; }
+.video-play-glyph { color: white; opacity: 0; transition: opacity 140ms ease-out; -gtk-icon-shadow: 0 1px 6px alpha(black, 0.6); }
+.video-card:hover .video-play-glyph { opacity: 0.92; }
+.video-terminal { color: @secondary; font-size: 12px; font-weight: 600; }
+menubutton.video-render-key > button { min-height: 28px; padding: 0 10px; border-radius: 8px; font-weight: 600; }
+.video-stage { background: #07080b; }
+.video-pill { padding: 6px 8px 6px 14px; border-radius: 999px; border: 1px solid @glass_edge; background: alpha(#0b0d12, 0.86); color: @ink; font-size: 12.5px; }
+.video-side { border-left: 1px solid @glass_edge; }
+.video-row { padding: 4px 0; }
+.video-row-title { color: @ink; font-size: 12.5px; font-weight: 600; }
+.video-prop-label { color: @secondary; font-size: 12px; }

@@ -19,6 +19,9 @@ the project's terminals draw and revise designs alongside you.
   left in Deleted past the notes' retention.
 - **Open in a new window** (the board's window key, or a card's menu) puts a design in a window of
   its own, under the Notes window's compact chrome, to keep beside the terminals.
+- **Videos** follow the designs in the gallery, under the same chips and search: videos agents write
+  as code (Remotion) and Relay renders, each opening on a board of its own with its player, props,
+  renders and versions. They come with the Video plugin; `docs/VIDEO.md` has the rest.
 
 ## The board
 

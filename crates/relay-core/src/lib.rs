@@ -50,6 +50,7 @@ pub mod threads;
 pub mod time;
 pub mod transcript;
 pub mod usage;
+pub mod video;
 pub mod watch;
 pub mod worktree;
 

@@ -469,6 +469,35 @@ mod tests {
         assert!(skill.body.contains("`plugin.off`") && skill.body.contains("can_call"));
     }
 
+    #[test]
+    fn the_video_plugin_is_bundled_and_complete() {
+        let plugin = get(relay_bus::ops::video::PLUGIN).expect("video is bundled");
+        assert_eq!(plugin.manifest.name, "Video");
+        assert!(!plugin.instructions().is_empty());
+        for doc in &plugin.manifest.docs {
+            assert!(plugin.file(doc).is_some(), "manifest names a missing doc {doc}");
+        }
+        assert!(plugin.manifest.mcp_servers.is_empty());
+        assert_eq!(plugin.manifest.default_checkout, None);
+        let skills: Vec<&str> = plugin.skills.iter().map(|skill| skill.dir.as_str()).collect();
+        assert_eq!(skills, ["video-code"]);
+        let skill = &plugin.skills[0];
+        assert_eq!(frontmatter(&skill.body, "name").as_deref(), Some(skill.dir.as_str()));
+        assert_eq!(crate::skills::folder_name(&skill.dir), skill.dir, "not provider-safe");
+        assert!(plugin.instructions().contains("`video-code`"), "the rules name the skill");
+        // The runtime the engine writes beside the store comes with it, and is no skill's.
+        assert!(plugin.file("runtime/worker.mjs").is_some() && plugin.file("runtime/kit/index.ts").is_some());
+        let brought: Vec<&str> = relay_bus::registry::Registry::global().entries().iter()
+            .filter(|entry| entry.meta.plugin == Some(plugin.id()))
+            .map(|entry| entry.name)
+            .collect();
+        assert_eq!(brought.len(), 15, "{brought:?}");
+        for op in brought {
+            assert!(skill.body.contains(&format!("`{op} ")), "the skill does not show {op}");
+        }
+        assert!(skill.body.contains("`plugin.off`") && skill.body.contains("can_call"));
+    }
+
     /// pictures-SPEC-v2 §4: the plugin layer gates an op on the plugin its registry entry names,
     /// so that name must be one `plugin.enable` takes, or the op could never be switched on.
     #[test]

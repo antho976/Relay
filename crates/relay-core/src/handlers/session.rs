@@ -944,12 +944,19 @@ fn prepare_launch(engine: &Engine, plan: LaunchPlan) -> Result<PreparedLaunch, B
         "session.role_instructions_write_failed",
     )?;
     let assets = engine.store.design_assets_dir();
+    // With the Video plugin on, the project's videos folder is a write root; the kit beside it
+    // (its sources, Remotion's types) is there to read as well (D167).
+    let videos = engine.store.videos_dir();
+    let mut reads = vec![assets.as_path()];
+    if write_roots.iter().any(|root| root.starts_with(&videos)) {
+        reads.push(videos.as_path());
+    }
     let mut args = match kind {
         LaunchKind::Fresh => crate::providers::driver(row.session.provider).args(
             &row.session,
             crate::providers::Launch::Fresh,
             Some(&brief_compact),
-            Some(&assets),
+            &reads,
         ),
         LaunchKind::Resume => crate::providers::driver(row.session.provider).args(
             &row.session,
@@ -957,7 +964,7 @@ fn prepare_launch(engine: &Engine, plan: LaunchPlan) -> Result<PreparedLaunch, B
                 provider_ref: row.session.provider_ref.as_deref().filter(|value| crate::providers::is_provider_ref(value)),
             },
             Some(&brief_compact),
-            Some(&assets),
+            &reads,
         ),
     };
     if row.session.provider == Provider::Codex {

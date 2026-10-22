@@ -137,7 +137,23 @@ pub enum ConfigScope {
 /// Read the effective config: defaults <- global settings <- project override <- the
 /// project's legacy `protected_paths` / `critical_files` fields.
 pub fn config(conn: &Connection, project_id: Option<Id>) -> Result<GuardrailConfig, BusError> {
-    config_for(conn, project_id.map_or(ConfigScope::Global, ConfigScope::Project))
+    let mut cfg = config_for(conn, project_id.map_or(ConfigScope::Global, ConfigScope::Project))?;
+    // A project with the Video plugin on has its videos' folders beside the store, written with
+    // the agents' own file tools (D167): every session of it may write there, as it may in its
+    // checkout, and its agents get the folder with --add-dir at launch. The person's stored
+    // settings (`config_for`) do not show it.
+    if let Some(id) = project_id {
+        let on = crate::plugins::enabled_ids(conn, id).bus()?.iter().any(|p| p == crate::video::PLUGIN);
+        if let Some(db) = conn.path().filter(|path| !path.is_empty() && on) {
+            if let Some(dir) = Path::new(db).parent() {
+                let videos = crate::video::project_dir(&dir.join("videos"), id).display().to_string();
+                if !cfg.allowed_write_roots.contains(&videos) {
+                    cfg.allowed_write_roots.push(videos);
+                }
+            }
+        }
+    }
+    Ok(cfg)
 }
 
 /// The effective config at one scope: defaults <- global <- the workspace <- the project <- the
@@ -632,8 +648,9 @@ pub fn role_allowlist(cfg: &GuardrailConfig, role: Role) -> &Vec<String> {
 /// Ops every role may call whatever its allowlist says, so a saved list that predates them
 /// cannot shut them out. Designs are the person's to ask for and to undo (every `design.apply`
 /// carries its inverse, and the board's Undo replays it); `design.purge` stays the person's
-/// alone by its registry actors.
-pub const OPEN_TO_EVERY_ROLE: &[&str] = &["design.*"];
+/// alone by its registry actors. Videos likewise (D167): every change to one is undone by its
+/// inverse or a version, and the Video plugin decides where they exist at all.
+pub const OPEN_TO_EVERY_ROLE: &[&str] = &["design.*", "video.*"];
 
 /// Would layer 3 admit `op` for `role`? The escape hatches (`bus_writes`, `allow_ui`) are a
 /// property of the session, not the role, so callers apply those separately.

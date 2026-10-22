@@ -586,6 +586,9 @@ pub struct Engine {
     pub(crate) arbiter: crate::arbiter::Desk,
     /// Avex's training history (`gym.db`, opened on first use) and its loaded copy.
     pub(crate) gym: crate::gym::Shelf,
+    /// Videos written as code: the Node worker, the kit's setup and the render queue (`video`).
+    /// Its own locks; never the store's.
+    pub video: crate::video::Hub,
 }
 
 impl Engine {
@@ -633,6 +636,7 @@ impl Engine {
                 local: Default::default(),
                 arbiter: Default::default(),
                 gym: Default::default(),
+                video: Default::default(),
             };
             crate::handlers::register_all(&mut engine);
             engine
@@ -850,6 +854,7 @@ impl Engine {
     pub fn shutdown(&self) {
         crate::handlers::integration::shutdown(self);
         crate::local_models::stop(self);
+        crate::video::shutdown(self);
         for (_, mirror) in self.mirrors.lock().unwrap().drain() {
             mirror.stop();
         }

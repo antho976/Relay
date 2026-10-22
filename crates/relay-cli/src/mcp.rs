@@ -631,6 +631,9 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
         if name == relay_bus::ops::picture::Thumb::NAME {
             return Ok(thumb_success(value, mail.as_ref()));
         }
+        if name == relay_bus::ops::video::Still::NAME {
+            return Ok(still_success(value, mail.as_ref()));
+        }
         Ok(tool_success(value, mail.as_ref())?)
     } else {
         let mut error = serde_json::to_value(response.error)?;
@@ -1117,6 +1120,12 @@ fn thumb_success(value: Value, mail: Option<&MailHint>) -> Value {
     picture_success(value, "/path", &THUMBS, mail)
 }
 
+/// A video.still answer, as a render's: the compact JSON, then the frame or contact sheet itself,
+/// so the agent sees what it made without reading a file (D167).
+fn still_success(value: Value, mail: Option<&MailHint>) -> Value {
+    picture_success(value, "/png", &STILLS, mail)
+}
+
 /// An answer that names a picture at `pointer`: its compact JSON, then the picture as an image
 /// block when `shelf` holds it, else a line saying where it is; no `structuredContent`.
 fn picture_success(value: Value, pointer: &str, shelf: &Shelf, mail: Option<&MailHint>) -> Value {
@@ -1150,6 +1159,9 @@ const RENDERS: Shelf = Shelf { folder: "design-renders", named: render_name, max
 fn render_name(name: &str) -> bool {
     name.strip_suffix(".png").is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
 }
+
+/// video.still's pictures: `video-stills/<uuid>.png`, at most 4 MiB as a render's.
+const STILLS: Shelf = Shelf { folder: "video-stills", named: render_name, max: relay_core::picture::UPLOAD_MAX as u64 };
 
 /// design.picture.thumb's previews: `picture-cache/<openverse|pexels>-<key>.<jpg|png|webp|gif>`,
 /// at most 2 MiB, the most the engine fetches for one (`Want::Thumb`).
@@ -1565,6 +1577,25 @@ mod tests {
         assert_eq!(serde_json::from_str::<Value>(text).unwrap(), answer, "the whole answer, the path too, for a client that reads files");
         assert_eq!((&content[1]["type"], &content[1]["mimeType"]), (&json!("image"), &json!("image/png")));
         assert_eq!(decoded(&content[1]), PNG);
+    }
+
+    #[test]
+    fn a_still_comes_as_compact_text_then_its_picture_and_only_from_its_shelf() {
+        let dir = tempfile::tempdir().unwrap();
+        let stills = dir.path().join("video-stills");
+        std::fs::create_dir_all(&stills).unwrap();
+        let path = stills.join(format!("{}.png", uuid::Uuid::new_v4()));
+        std::fs::write(&path, PNG).unwrap();
+        let answer = json!({"png": path, "frames": [{"frame": 45, "at_ms": 1500.0, "label": "1.5s · f45"}], "issues": [], "version": 2});
+        let result = still_success(answer.clone(), None);
+        let content = result["content"].as_array().unwrap();
+        assert_eq!(serde_json::from_str::<Value>(content[0]["text"].as_str().unwrap()).unwrap(), answer);
+        assert_eq!((&content[1]["type"], &content[1]["mimeType"]), (&json!("image"), &json!("image/png")));
+        assert!(result.get("structuredContent").is_none());
+        // A render's folder is not a still's: the path stays a path.
+        let elsewhere = rendered(dir.path(), PNG);
+        let other = still_success(json!({"png": elsewhere}), None);
+        assert_eq!(other["content"][1]["type"], "text");
     }
 
     #[test]
