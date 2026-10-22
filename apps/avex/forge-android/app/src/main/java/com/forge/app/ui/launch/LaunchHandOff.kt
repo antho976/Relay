@@ -1,9 +1,5 @@
 package com.forge.app.ui.launch
 
-import android.animation.Animator
-import android.animation.AnimatorListenerAdapter
-import android.animation.AnimatorSet
-import android.animation.ObjectAnimator
 import android.os.Build
 import android.view.View
 import android.view.animation.DecelerateInterpolator
@@ -85,23 +81,20 @@ fun playSplashExit(provider: SplashScreenViewProvider, onDone: () -> Unit = {}) 
         return
     }
     val icon: View? = runCatching { provider.iconView }.getOrNull()
-    val parts = mutableListOf<Animator>(ObjectAnimator.ofFloat(splash, View.ALPHA, 1f, 0f))
-    if (icon != null) {
-        parts += ObjectAnimator.ofFloat(icon, View.SCALE_X, icon.scaleX, SETTLE_SCALE)
-        parts += ObjectAnimator.ofFloat(icon, View.SCALE_Y, icon.scaleY, SETTLE_SCALE)
-    }
-    AnimatorSet().apply {
-        playTogether(parts)
-        this.duration = duration
-        interpolator = DecelerateInterpolator()
-        addListener(object : AnimatorListenerAdapter() {
-            override fun onAnimationEnd(animation: Animator) {
-                provider.remove()
-                onDone()
-            }
-        })
-        start()
-    }
+    // The icon is a child of the splash, so fading the splash fades it too; the icon only settles.
+    icon?.animate()
+        ?.scaleX(SETTLE_SCALE)?.scaleY(SETTLE_SCALE)
+        ?.setDuration(duration)?.setInterpolator(DecelerateInterpolator())
+        ?.start()
+    splash.animate()
+        .alpha(0f)
+        .setDuration(duration)
+        .setInterpolator(DecelerateInterpolator())
+        .withEndAction {
+            provider.remove()
+            onDone()
+        }
+        .start()
 }
 
 /**
