@@ -304,8 +304,11 @@ fn video_e2e_sound_from_cues_to_loudness() {
     });
     wav(&files.join("vo-hello.wav"), 1.4, |t| 0.5 * (TAU * 180.0 * t).sin() * (TAU * 3.0 * t).sin().abs());
     wav(&files.join("sfx-tap.wav"), 0.15, |t| 0.8 * (TAU * 2400.0 * t).sin() * (-t * 40.0).exp());
-    let added = ok(&e, "video.asset.add", json!({"video_id": id, "paths": [files.join("music.wav"), files.join("vo-hello.wav"), files.join("sfx-tap.wav")]}));
-    assert_eq!(added["assets"].as_array().unwrap().len(), 3);
+    // The music linked where it is (a long clip would be), the rest copied: both must be served.
+    let linked = ok(&e, "video.asset.add", json!({"video_id": id, "path": files.join("music.wav"), "link": true}));
+    assert!(linked["assets"][0]["linked"].is_string(), "{linked}");
+    let added = ok(&e, "video.asset.add", json!({"video_id": id, "paths": [files.join("vo-hello.wav"), files.join("sfx-tap.wav")]}));
+    assert_eq!(added["assets"].as_array().unwrap().len(), 2);
     fs::write(dir.join("src/Video.tsx"), r##"import { BeforeAfter, Checklist, Cue, Music, Phone, Title, VersionPill, Voice, useBeatGrid, useSafePadding, useSweep } from '@relay/video';
 import { AbsoluteFill, Sequence } from 'remotion';
 import type { Props } from './Root';

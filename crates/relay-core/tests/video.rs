@@ -660,3 +660,28 @@ fn a_preview_runs_one_at_a_time_and_answers_its_link() {
     assert_eq!(ok(&e, "video.preview", json!({"video_id": second, "stop": true}))["running"], false);
     assert_eq!(relay_core::video::preview::running(&e, second), None);
 }
+
+#[test]
+fn an_installed_font_is_added_by_its_family() {
+    let Ok(listed) = std::process::Command::new("fc-list").args([":", "family"]).output() else {
+        eprintln!("no fontconfig: skipped");
+        return;
+    };
+    let families = String::from_utf8_lossy(&listed.stdout).to_string();
+    let Some(family) = ["DejaVu Sans", "Noto Serif", "Liberation Serif"].into_iter().find(|f| families.lines().any(|l| l.split(',').any(|n| n == *f))) else {
+        eprintln!("none of the families looked for is installed: skipped");
+        return;
+    };
+    let (e, _root) = project();
+    let (id, dir) = create(&e);
+    let added = ok(&e, "video.asset.add", json!({"video_id": id, "font": family, "weights": [400, 700]}));
+    let font = &added["font"];
+    assert_eq!(font["family"], family);
+    assert!(!added["assets"].as_array().unwrap().is_empty(), "{added}");
+    for asset in added["assets"].as_array().unwrap() {
+        let file = asset["static_file"].as_str().unwrap();
+        assert!(file.starts_with("assets/fonts/") && dir.join("public").join(file).is_file(), "{asset}");
+        assert!(font["load"].as_str().unwrap().contains(file), "the loadFonts call names {file}: {}", font["load"]);
+    }
+    assert_eq!(code(call(&e, "video.asset.add", json!({"video_id": id, "font": "No Such Family Anywhere"}))), "video.font");
+}
