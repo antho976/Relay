@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 368,
+  "op_count": 378,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -7046,6 +7046,186 @@
       },
       "result": {
         "$ref": "#/$defs/VideoTimelineOut"
+      }
+    },
+    "video.preview": {
+      "summary": "A live preview of a video for the person to watch with sound, scrub and step through without rendering (Remotion Studio on this machine only); answers its link",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoPreviewIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoPreviewOut"
+      }
+    },
+    "video.capture.android": {
+      "summary": "Record an Android device's screen while it taps, swipes and types (holding the device's lease), at a constant frame rate with a clean status bar, into the video's assets; answers where each step and each screen change fell",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoCaptureIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoCaptureOut"
+      }
+    },
+    "video.voice": {
+      "summary": "Speak a line with an ElevenLabs voice into the video's assets, with each word's timing (for captions); the text, voice and timings are kept beside the file",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoVoiceIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoVoiceOut"
+      }
+    },
+    "video.voices": {
+      "summary": "The ElevenLabs voices the saved key can use, by name",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoVoicesIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoVoicesOut"
+      }
+    },
+    "video.sfx": {
+      "summary": "Make a sound effect with ElevenLabs from a description, into the video's assets; the prompt is kept beside it",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoSfxIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoMadeOut"
+      }
+    },
+    "video.music": {
+      "summary": "Make music with ElevenLabs from a description and a length, into the video's assets; then video.audio.beats for its grid",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoMusicIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoMadeOut"
+      }
+    },
+    "video.transcribe": {
+      "summary": "Hear a voice line (ElevenLabs speech-to-text): its words and their timings, and, given what it should say, where it was heard differently (a name said wrong)",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoTranscribeIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoTranscribeOut"
+      }
+    },
+    "video.elevenlabs.key_set": {
+      "summary": "Check an ElevenLabs API key with ElevenLabs and keep it in the system keyring",
+      "kind": "mutation",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoElevenKeySetIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoElevenStatus"
+      }
+    },
+    "video.elevenlabs.key_remove": {
+      "summary": "Forget the saved ElevenLabs key",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoElevenStatus"
+      }
+    },
+    "video.elevenlabs.status": {
+      "summary": "Whether an ElevenLabs key is saved for voices, music and sound effects, and what it has left",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoElevenStatus"
       }
     },
     "video.version.restore": {
@@ -33373,6 +33553,745 @@
         "beats_per_bar",
         "frames_per_beat",
         "from"
+      ]
+    },
+    "VideoPreviewIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "composition": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The composition to open on; default the video's."
+        },
+        "stop": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Stop the preview instead."
+        }
+      },
+      "required": [
+        "video_id"
+      ]
+    },
+    "VideoPreviewOut": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Where the person watches it with sound, in a browser on this machine (Remotion Studio:\nplay, scrub, step frames, its timeline, the props)."
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "started": {
+          "type": "boolean",
+          "description": "It was started by this call (rather than already running)."
+        }
+      },
+      "required": [
+        "running"
+      ]
+    },
+    "VideoCaptureIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "device": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The device's serial (`device.list`); default the only one connected."
+        },
+        "launch": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "An app to open before recording starts, so the clip opens in it."
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoCaptureStep"
+          },
+          "description": "What to do while recording, in order: taps, swipes, typing, keys, waits.",
+          "maxItems": 200
+        },
+        "tail": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Seconds to keep recording after the last step (default 1)."
+        },
+        "fps": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "The clip's constant frame rate (default 30): a screen recording's own is variable.",
+          "minimum": 1.0,
+          "maximum": 60.0
+        },
+        "demo": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Android's demo mode while recording: the status bar at 12:30, full battery and signal, no\nnotifications (default true)."
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "overwrite": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "video_id",
+        "steps"
+      ]
+    },
+    "VideoCaptureStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tap": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "Touch the screen at x, y (the device's px)."
+        },
+        "swipe": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "minItems": 4,
+          "maxItems": 4,
+          "description": "Drag from x1, y1 to x2, y2 over `ms` (default 300): a scroll."
+        },
+        "ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Type this into the field in focus."
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Press a key: `BACK`, `HOME`, `ENTER`, `APP_SWITCH`, or a keycode number."
+        },
+        "wait": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Wait this many seconds."
+        },
+        "launch": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Open an app: a package (`com.example.app`) or an activity (`com.example.app/.MainActivity`)."
+        }
+      }
+    },
+    "VideoCaptureOut": {
+      "type": "object",
+      "properties": {
+        "asset": {
+          "$ref": "#/$defs/VideoAsset"
+        },
+        "seconds": {
+          "type": "number",
+          "format": "double"
+        },
+        "fps": {
+          "type": "number",
+          "format": "double"
+        },
+        "frames": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoCaptureMark"
+          },
+          "description": "Where each step happened in the clip."
+        },
+        "motion": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoMotionEvent"
+          },
+          "description": "Where the picture changes (`video.asset.inspect`'s)."
+        },
+        "device": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "asset",
+        "seconds",
+        "fps",
+        "frames",
+        "steps",
+        "motion",
+        "device"
+      ]
+    },
+    "VideoCaptureMark": {
+      "type": "object",
+      "properties": {
+        "step": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Which step, from 0, and what it did."
+        },
+        "did": {
+          "type": "string"
+        },
+        "at_s": {
+          "type": "number",
+          "format": "double",
+          "description": "When, in the clip: seconds and its frame (within a few frames: the recorder's start is\nestimated; `motion` has the exact frames)."
+        },
+        "frame": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "step",
+        "did",
+        "at_s",
+        "frame"
+      ]
+    },
+    "VideoVoiceIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "text": {
+          "type": "string",
+          "description": "What is said.",
+          "minLength": 1,
+          "maxLength": 5000
+        },
+        "voice": {
+          "type": "string",
+          "description": "The voice: its name (\"Chris\") or id, from `video.voices`.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "say": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true,
+          "description": "Words said as other words: `{\"Avex\": \"Ay-vex\"}` when speech-to-text heard it wrong. The\nwords' timings still name the words as written."
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Default eleven_multilingual_v2.",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "stability": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "0 to 1: higher is steadier and flatter (default 0.5)."
+        },
+        "similarity": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "0 to 1: how close to the voice (default 0.75)."
+        },
+        "style": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "0 to 1: more of the voice's style (default 0)."
+        },
+        "speed": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "0.7 to 1.2 (default 1)."
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The file's name under `assets/`; default from the words.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "overwrite": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "video_id",
+        "text",
+        "voice"
+      ]
+    },
+    "VideoVoiceOut": {
+      "type": "object",
+      "properties": {
+        "asset": {
+          "$ref": "#/$defs/VideoAsset"
+        },
+        "seconds": {
+          "type": "number",
+          "format": "double"
+        },
+        "words": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoWord"
+          },
+          "description": "Each word as written, when it is said."
+        },
+        "captions": {
+          "description": "The words as Remotion's captions (`@remotion/captions` `Caption[]`, ms from the line's\nstart): add the line's start to `startMs`, `endMs` and `timestampMs`, then give them to the\nkit's `Captions`."
+        },
+        "voice_id": {
+          "type": "string"
+        },
+        "voice": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "asset",
+        "seconds",
+        "words",
+        "captions",
+        "voice_id",
+        "voice",
+        "model"
+      ]
+    },
+    "VideoWord": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "start": {
+          "type": "number",
+          "format": "double",
+          "description": "Seconds from the line's start."
+        },
+        "end": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "text",
+        "start",
+        "end"
+      ]
+    },
+    "VideoVoicesIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "search": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Only voices whose name, accent or description has this."
+        }
+      }
+    },
+    "VideoVoicesOut": {
+      "type": "object",
+      "properties": {
+        "voices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoVoiceInfo"
+          }
+        }
+      },
+      "required": [
+        "voices"
+      ]
+    },
+    "VideoVoiceInfo": {
+      "type": "object",
+      "properties": {
+        "voice_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`premade`, `cloned`, `generated`, `professional`."
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What ElevenLabs says of it: accent, age, gender, use."
+        }
+      },
+      "required": [
+        "voice_id",
+        "name"
+      ]
+    },
+    "VideoSfxIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "prompt": {
+          "type": "string",
+          "description": "What it sounds like: \"a soft UI tap\", \"a cartoon boing\".",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "seconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "0.5 to 30; default as long as the prompt suggests."
+        },
+        "influence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "0 to 1: how closely it follows the prompt (default 0.3)."
+        },
+        "loop": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Made to loop seamlessly."
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "overwrite": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "video_id",
+        "prompt"
+      ]
+    },
+    "VideoMadeOut": {
+      "type": "object",
+      "properties": {
+        "asset": {
+          "$ref": "#/$defs/VideoAsset"
+        },
+        "seconds": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "asset",
+        "seconds"
+      ]
+    },
+    "VideoMusicIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "prompt": {
+          "type": "string",
+          "description": "The music: genre, mood, instruments, tempo (\"120 BPM\"), and its shape over time.",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "seconds": {
+          "type": "number",
+          "format": "double",
+          "description": "3 to 600."
+        },
+        "instrumental": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "No vocals (default true)."
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Default music_v1.",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "overwrite": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "video_id",
+        "prompt",
+        "seconds"
+      ]
+    },
+    "VideoTranscribeIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "asset": {
+          "type": "string",
+          "description": "A sound or clip: `assets/vo-03-home.mp3`, a render, or an absolute path.",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "ISO 639 code; default detected."
+        },
+        "expect": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What it should say: the answer lists where what was heard differs.",
+          "maxLength": 5000
+        }
+      },
+      "required": [
+        "video_id",
+        "asset"
+      ]
+    },
+    "VideoTranscribeOut": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "words": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoWord"
+          }
+        },
+        "misheard": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoMisheard"
+          },
+          "description": "With `expect`: the words heard differently, in order."
+        }
+      },
+      "required": [
+        "text",
+        "language",
+        "words"
+      ]
+    },
+    "VideoMisheard": {
+      "type": "object",
+      "properties": {
+        "expected": {
+          "type": "string",
+          "description": "The word written, and what was heard instead (`None`: not heard at all)."
+        },
+        "heard": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "at": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "When, seconds."
+        }
+      },
+      "required": [
+        "expected"
+      ]
+    },
+    "VideoElevenKeySetIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "The ElevenLabs API key (elevenlabs.io → API keys).",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "key"
+      ]
+    },
+    "VideoElevenStatus": {
+      "type": "object",
+      "properties": {
+        "saved": {
+          "type": "boolean",
+          "description": "Whether a key is saved."
+        },
+        "tier": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What the key can do, when it was checked: the account's tier and its characters left."
+        },
+        "characters_left": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "required": [
+        "saved"
       ]
     },
     "VideoVersionRestoreIn": {
