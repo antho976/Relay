@@ -1943,7 +1943,7 @@ impl Gallery {
                 let rev = got.design.rev.max(rev);
                 // Drawn as the board draws it: named colours and styles resolved.
                 let scene = Scene::new(got.nodes).with_styles(Styles { colors: got.colors, styles: got.styles });
-                let first = scene.pages().first().cloned();
+                let first = scene.first_page().cloned();
                 // Pictures decode off the main thread: wait for the first page's (a few seconds
                 // at most), or the thumbnail would keep their grey placeholders (E-export-9).
                 let loading = |g: &Gallery| first.as_deref().is_some_and(|page| g.painter.loading_under(&scene, page));
@@ -1996,7 +1996,7 @@ impl Gallery {
     }
 
     fn draw_thumb(&self, scene: &Scene) -> Option<gdk::Texture> {
-        let page = scene.pages().first()?.clone();
+        let page = scene.first_page()?.clone();
         let placed = layout::place(scene, &page, &*self.painter);
         let bounds = page_fit(scene, &placed, &*self.painter, &page);
         let canvas = scene.node(&page).and_then(super::paint::fill_of).unwrap_or_else(|| super::paint::CANVAS.into());

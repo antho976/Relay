@@ -209,8 +209,10 @@ textview.design-ask-text, textview.design-ask-text text { background: transparen
 .design-agent-column .threads-user { font-size: 13px; line-height: 20px; padding: 8px 12px; }
 .design-agent-reply .threads-reply { font-size: 13px; line-height: 20px; }
 .design-agent-composer { padding: 8px 10px 4px 10px; border-top: 1px solid @line_subtle; }
-.design-agent-corner { min-height: 14px; color: @faint; }
-.design-agent-corner:hover { color: @ink; }
+.design-agent-edge { background: none; }
+.design-agent-card { border-radius: 11px; }
+.design-agent-head button.design-agent-zoom { min-height: 24px; padding: 0 8px; border-radius: 7px; font-size: 12px; color: @faint; }
+.design-agent-head button.design-agent-zoom:hover { color: @ink; }
 
 /* Typing on the canvas: the text view is invisible but for the words and the caret. */
 textview.design-text-edit, textview.design-text-edit text { background: transparent; padding: 0; margin: 0; border: 0; box-shadow: none; caret-color: #4C9DFF; }
@@ -247,6 +249,10 @@ button.design-picture-cell:hover { background: @wash_solid; }
 .design-credit-title { color: @ink; font-weight: 600; }
 .design-credit-meta { color: @secondary; font-size: 12px; }
 button.design-credit-key { min-height: 28px; padding: 0 6px; border-radius: 8px; font-size: 12px; }
+.design-page-row.hidden { color: @ink_dim; }
+.design-page-row button.design-layer-eye { min-height: 22px; min-width: 22px; padding: 0; }
+button.design-page-fold { min-height: 26px; padding: 0 8px; border-radius: 8px; background: none; box-shadow: none; color: @faint; font-size: 12px; }
+button.design-page-fold:hover { color: @ink; background: @wash_solid; }
 
 /* ---- Videos: the gallery's section and a video's board (design/videos.rs, video_board.rs) ---- */
 .video-shelf { margin-top: 36px; }

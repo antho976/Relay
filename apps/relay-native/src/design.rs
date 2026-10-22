@@ -600,6 +600,24 @@ pub(crate) fn close_windows() {
     window::close_all();
 }
 
+/// The wall rebuilt session `name`'s pane (the engine reconnected) or let it go: the agent
+/// panel holding the old one shows the new one, or says it is gone, instead of a stopped
+/// terminal.
+pub(crate) fn pane_rebuilt(name: &str) {
+    for b in boards() {
+        let panel = b.agent_panel.borrow().clone();
+        if let Some(panel) = panel {
+            panel.pane_rebuilt(name);
+        }
+    }
+}
+
+/// The wall's Bring back on session `name`'s terminal: the agent panel holding it shows its
+/// conversation, handing the terminal back. False when no panel holds it.
+pub(crate) fn reclaim_pane(name: &str) -> bool {
+    boards().iter().filter_map(|b| b.agent_panel.borrow().clone()).any(|panel| panel.reclaim(name))
+}
+
 /// `session.changed`: the lamp of each board whose design belongs to that terminal follows its
 /// state (E-ask-3).
 pub(crate) fn session_changed(_ui: &Rc<Ui>, payload: &Value) {

@@ -81,8 +81,11 @@ the project's terminals draw and revise designs alongside you.
   Number fields take arithmetic (`120+16`) and units (`45°`), step with ↑/↓ (Shift: ten steps; a line
   height steps by 0.1), scrub by dragging their caption (Shift: finer), and Esc puts back what they
   showed.
-- **Pages and layers** (Alt+1): pages to add, rename, duplicate and delete, and the layer tree, top
-  layer first, opened along the way to the selection, with hide and lock on each row.
+- **Pages and layers** (Alt+1): pages to add, rename, duplicate and delete, dragged (or Move up and
+  down in a page's menu) to reorder, and hidden by the eye on their row: a hidden page waits under the
+  **Hidden** fold at the end of the same list, still opened from there, its eye showing it again (one
+  page stays shown, and a design opens on its first shown page). Then the layer tree, top layer
+  first, opened along the way to the selection, with hide and lock on each row.
 - **Text** is typed in place: double-click (or Enter, or the Text tool, or double-click on empty
   canvas) and a native text view sits exactly over the words, in their font, size, line height and
   colour at the current zoom.
@@ -217,10 +220,12 @@ MCP tools are generated from the same registry, with each node field documented 
   request stays in the composer until it has gone, and if the agent changed nothing 90 seconds later
   the status says "No change from <agent> yet".
 - **The agent panel** (the terminal key beside Ask) puts the design's terminal on the canvas as a
-  card, moved by its head and resized from its corner, kept where it was left for the next design
-  opened. **Terminal** shows the terminal itself: the wall's own pane, lent while it is here (off the
-  wall, and kept attached whatever page is open), so there is one PTY at one size; closing the panel
-  or the board hands it back. **Chat** shows the agent's conversation as Threads draws one, read
+  card, moved by its head and resized from any edge or corner (the cursor says where), kept where it
+  was left for the next design opened. Over it, Ctrl and the wheel (or Ctrl =, Ctrl -, Ctrl 0) size
+  its text from 70% to 250%. **Terminal** shows the terminal itself: the wall's own pane, lent while
+  it is here (off the wall, which shows a card in its place with **Bring it back here**, and kept
+  attached whatever page is open), so there is one PTY at one size; closing the panel or the board
+  hands it back, and a reconnect hands the panel the rebuilt pane. **Chat** shows the agent's conversation as Threads draws one, read
   from its provider's log (`session.transcript`, as the phone's chat reads it) about every second
   while the agent works and every few while it waits; an Ask shows as the words asked, and each tool
   the agent ran as one line. Its box sends with Enter: as an Ask about the selection (checked as Ask

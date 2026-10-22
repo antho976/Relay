@@ -553,7 +553,7 @@ impl Board {
         let pen_key = gtk::ToggleButton::new();
         let painter = Painter::new(&canvas);
         *painter.assets_dir.borrow_mut() = doc.assets_dir.borrow().clone();
-        let first_page = doc.scene.borrow().pages().first().cloned().unwrap_or_default();
+        let first_page = doc.scene.borrow().first_page().cloned().unwrap_or_default();
         let actions = gio::SimpleActionGroup::new();
         root.insert_action_group("design", Some(&actions));
 
@@ -844,7 +844,7 @@ impl Board {
             let Some((page, cam)) = read_view(&got["value"]) else {
                 return;
             };
-            let opened = *b.page.borrow() == b.doc.scene.borrow().pages().first().cloned().unwrap_or_default();
+            let opened = *b.page.borrow() == b.doc.scene.borrow().first_page().cloned().unwrap_or_default();
             if opened && !b.restored.get() && b.selection.borrow().is_empty() && b.doc.scene.borrow().node(&page).is_some_and(|n| n.kind == NodeKind::Page) {
                 b.fitted.set(true);
                 b.set_page(&page);
@@ -1079,6 +1079,10 @@ impl Board {
             }
         }
         self.selection_changed();
+        // The pages list lights the page on show, and opens its Hidden fold while that is hidden.
+        if let Some(l) = self.layers.borrow().as_ref() {
+            l.pages_changed();
+        }
     }
 
     pub(super) fn page_name(&self, id: &str) -> String {
@@ -1288,7 +1292,7 @@ impl Board {
     fn keep_page(&self) {
         let gone = self.doc.scene.borrow().node(&self.page.borrow()).is_none();
         if gone {
-            let first = self.doc.scene.borrow().pages().first().cloned().unwrap_or_default();
+            let first = self.doc.scene.borrow().first_page().cloned().unwrap_or_default();
             self.set_page(&first);
         }
         if let Some(layers) = self.layers.borrow().as_ref() {

@@ -154,6 +154,7 @@ impl Ui {
         let body = panel.body.clone();
         Some((panel, body))
     }
+    #[allow(clippy::type_complexity)]
     pub(super) fn layout(self: &Rc<Self>) {
         let started = std::time::Instant::now();
         let names: Vec<_> = self.ordered.borrow().iter().cloned().collect();
@@ -175,7 +176,11 @@ impl Ui {
         clear(&self.focus_tabs);
         self.focus_tabs
             .set_visible(mode == "focus" && names.len() > 1);
-        let mut targets: Vec<(Rc<Pane>, gtk::Grid, i32, i32)> = Vec::new();
+        if self.lent.borrow().is_none() {
+            self.lent_card.borrow_mut().take();
+        }
+        // Each one's pane (none for the lent card), widget, grid, column and row.
+        let mut targets: Vec<(Option<Rc<Pane>>, gtk::Widget, gtk::Grid, i32, i32)> = Vec::new();
         for (i, name) in names.iter().enumerate() {
             if mode == "focus" {
                 let b = button("", "focus-tab");
@@ -213,10 +218,6 @@ impl Ui {
             let Some(p) = self.panes.borrow().get(name).cloned() else {
                 continue;
             };
-            // Shown in a design's agent panel until it is handed back.
-            if self.lent.borrow().as_deref() == Some(name.as_str()) {
-                continue;
-            }
             if mode == "focus" && focus.as_ref() != Some(name) {
                 continue;
             }
@@ -246,7 +247,19 @@ impl Ui {
                 };
                 (&self.wall, i as i32 % cols, if mode == "focus" { 0 } else { i as i32 / cols })
             };
-            targets.push((p, grid.clone(), column, row));
+            // Shown in a design's agent panel until it is handed back: a card says so in its
+            // place.
+            if self.lent.borrow().as_deref() == Some(name.as_str()) {
+                let mut card = self.lent_card.borrow_mut();
+                if card.as_ref().is_none_or(|(n, _)| n != name) {
+                    *card = Some((name.clone(), self.build_lent_card(name)));
+                }
+                let widget = card.as_ref().map(|(_, w)| w.clone()).expect("built above");
+                targets.push((None, widget, grid.clone(), column, row));
+                continue;
+            }
+            let widget = p.root.clone().upcast();
+            targets.push((Some(p), widget, grid.clone(), column, row));
         }
         // Incremental: a pane already in its grid moves in place. Re-parenting a VTE unrealizes
         // and re-realizes it, so detaching the whole wall on every open or close redrew every
@@ -255,20 +268,22 @@ impl Ui {
             let mut child = grid.first_child();
             while let Some(widget) = child {
                 child = widget.next_sibling();
-                if !targets.iter().any(|(p, g, ..)| g == grid && p.root.upcast_ref::<gtk::Widget>() == &widget) {
+                if !targets.iter().any(|(_, w, g, ..)| g == grid && w == &widget) {
                     grid.remove(&widget);
                 }
             }
         }
         let mut moved = 0;
-        for (p, grid, column, row) in targets {
+        for (p, widget, grid, column, row) in targets {
             // Sizes can change without a move (a column appears or goes); the resize check
             // itself is a no-op when the grid did not change.
-            p.schedule_resize();
-            if p.root.parent().as_ref() == Some(grid.upcast_ref::<gtk::Widget>()) {
+            if let Some(p) = &p {
+                p.schedule_resize();
+            }
+            if widget.parent().as_ref() == Some(grid.upcast_ref::<gtk::Widget>()) {
                 let Some(cell) = grid
                     .layout_manager()
-                    .and_then(|manager| manager.layout_child(&p.root).downcast::<gtk::GridLayoutChild>().ok())
+                    .and_then(|manager| manager.layout_child(&widget).downcast::<gtk::GridLayoutChild>().ok())
                 else {
                     continue;
                 };
@@ -278,13 +293,13 @@ impl Ui {
                 cell.set_column(column);
                 cell.set_row(row);
             } else {
-                if let Some(parent) = p.root.parent() {
+                if let Some(parent) = widget.parent() {
                     match parent.downcast::<gtk::Grid>() {
-                        Ok(other) => other.remove(&p.root),
-                        Err(_) => p.root.unparent(),
+                        Ok(other) => other.remove(&widget),
+                        Err(_) => widget.unparent(),
                     }
                 }
-                grid.attach(&p.root, column, row, 1, 1);
+                grid.attach(&widget, column, row, 1, 1);
             }
             moved += 1;
         }
@@ -321,6 +336,50 @@ impl Ui {
     /// The session whose terminal a design's agent panel holds.
     pub fn lent_pane(&self) -> Option<String> {
         self.lent.borrow().clone()
+    }
+    /// The pane built now for `name`, the session lent to a design's agent panel: a new one
+    /// once the wall rebuilt its panes (the engine reconnected), which the panel shows in place
+    /// of the stopped one it held. `None` when `name` is not the one lent or has no pane.
+    pub fn relend_pane(&self, name: &str) -> Option<Rc<Pane>> {
+        if self.lent.borrow().as_deref() != Some(name) {
+            return None;
+        }
+        self.panes.borrow().get(name).cloned()
+    }
+    /// The wall's Bring back on a lent terminal: the design's agent panel shows its
+    /// conversation and hands the terminal back, or, with no panel holding it, the wall takes
+    /// it as it is.
+    fn reclaim_pane(self: &Rc<Self>, name: &str) {
+        if !crate::design::reclaim_pane(name) {
+            self.return_pane(name);
+        }
+    }
+    /// What the wall shows where a lent terminal stood: where it is, and a key to bring it
+    /// back (it was gone from Agents without a word while a design showed it).
+    fn build_lent_card(self: &Rc<Self>, name: &str) -> gtk::Widget {
+        let card = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        card.add_css_class("lent-card");
+        card.set_halign(gtk::Align::Center);
+        card.set_valign(gtk::Align::Center);
+        card.set_hexpand(true);
+        card.set_vexpand(true);
+        card.set_widget_name(&format!("lent-{name}"));
+        card.append(&label(name, "title"));
+        let note = label("This terminal is open in a design's agent panel.", "dim");
+        note.set_wrap(true);
+        note.set_justify(gtk::Justification::Center);
+        card.append(&note);
+        let back = button("Bring it back here", "lent-back");
+        back.set_halign(gtk::Align::Center);
+        let weak = Rc::downgrade(self);
+        let name = name.to_string();
+        back.connect_clicked(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                ui.reclaim_pane(&name);
+            }
+        });
+        card.append(&back);
+        card.upcast()
     }
     pub(super) fn set_mode(self: &Rc<Self>, mode: &str) {
         let previous = self.mode.replace(mode.into());
