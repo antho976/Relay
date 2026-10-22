@@ -363,6 +363,8 @@ pub struct Ui {
     /// The terminal lent to a design's agent panel (`lend_pane`): off the wall, and attached
     /// while it is shown there whatever page is open.
     lent: RefCell<Option<String>>,
+    /// What the wall shows in the lent terminal's place (`lent_card`), built once per lending.
+    lent_card: RefCell<Option<(String, gtk::Widget)>>,
     ordered: RefCell<Vec<String>>,
     columns: Cell<i32>,
     focused: RefCell<Option<String>>,
@@ -1227,6 +1229,7 @@ impl Ui {
             empty_title: wall.empty_title,
             panes: RefCell::default(),
             lent: RefCell::default(),
+            lent_card: RefCell::default(),
             ordered: RefCell::default(),
             columns: Cell::new(2),
             focused: RefCell::new(None),
@@ -2145,10 +2148,13 @@ impl Ui {
             }
         }
         let mut created = false;
+        let lent = self.lent.borrow().clone();
+        let mut lent_rebuilt = false;
         for s in &sessions {
             let name = text(s, "name");
             let new_pane = !self.panes.borrow().contains_key(name);
             created |= new_pane;
+            lent_rebuilt |= new_pane && lent.as_deref() == Some(name);
             if new_pane {
                 let pane = Pane::new(name, self.path.clone(), self.rt.clone());
                 self.install_pane_controls(&pane, name);
@@ -2170,6 +2176,15 @@ impl Ui {
         // Only layout() puts a pane in a grid. A new pane whose name is already in `ordered` (a
         // launch adopting its placeholder's slot, a restored layout) needs it as much as a new
         // order does, or it stays off the wall until something else lays out.
+        // The terminal a design's agent panel shows was rebuilt (the engine reconnected) or is
+        // gone: the panel takes the new pane, or hands back the one it held, which froze there
+        // while the wall skipped its replacement.
+        if let Some(name) = lent.filter(|n| lent_rebuilt || !self.panes.borrow().contains_key(n)) {
+            if !self.panes.borrow().contains_key(&name) {
+                *self.lent.borrow_mut() = None;
+            }
+            crate::design::pane_rebuilt(&name);
+        }
         if *self.ordered.borrow() != names || created {
             *self.ordered.borrow_mut() = names;
             self.layout();

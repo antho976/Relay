@@ -228,6 +228,13 @@ impl Scene {
         self.children.get(ROOT).map(Vec::as_slice).unwrap_or(&[])
     }
 
+    /// The page a design opens on and shows as its picture: the first not hidden from the
+    /// pages lists, or the first of all when every one is.
+    pub fn first_page(&self) -> Option<&String> {
+        let pages = self.pages();
+        pages.iter().find(|p| self.node(p).is_some_and(|n| !n.is_hidden())).or(pages.first())
+    }
+
     /// `id`'s children, bottom to top.
     pub fn children(&self, id: &str) -> &[String] {
         self.children.get(id).map(Vec::as_slice).unwrap_or(&[])
@@ -878,6 +885,20 @@ pub(crate) mod tests {
             node("c", Some("a"), NodeKind::Text, [100.0, 10.0, 0.0, 0.0]),
             node("d", Some("p1"), NodeKind::Ellipse, [500.0, 0.0, 80.0, 80.0]),
         ])
+    }
+
+    #[test]
+    fn a_design_opens_on_its_first_page_shown() {
+        let page = |id: &str, hidden: bool| {
+            let mut n = node(id, None, NodeKind::Page, [0.0; 4]);
+            n.hidden = hidden.then_some(true);
+            n
+        };
+        let s = Scene::new(vec![page("a", true), page("b", false), page("c", false)]);
+        assert_eq!(s.first_page().map(String::as_str), Some("b"));
+        let all = Scene::new(vec![page("a", true), page("b", true)]);
+        assert_eq!(all.first_page().map(String::as_str), Some("a"), "every page hidden: the first");
+        assert_eq!(Scene::new(vec![]).first_page(), None);
     }
 
     #[test]
