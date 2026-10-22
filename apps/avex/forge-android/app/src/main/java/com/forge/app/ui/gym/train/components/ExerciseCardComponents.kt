@@ -518,9 +518,10 @@ internal fun ExerciseCardFooter(
     Spacer(Modifier.height(16.dp))
 
     val context = LocalContext.current
-    var showNote by remember(state.effectiveName) { mutableStateOf(!state.note.isNullOrBlank()) }
+    val showNote = remember(state.effectiveName) { !state.note.isNullOrBlank() }
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-        ActionChip(icon = TrainIcons.Note, label = "NOTE") { showNote = !showNote }
+        // No NOTE here: the top bar's note sits beside Finish, and two note buttons read as one
+        // too many (Antho, 2026-10-21). A note already on the exercise still opens below.
         ActionChip(icon = TrainIcons.Video, label = "VIDEO") {
             runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName, state.effectiveUnit == ExerciseUnit.PLATES)) }
         }

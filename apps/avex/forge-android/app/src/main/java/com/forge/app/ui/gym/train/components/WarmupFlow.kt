@@ -13,28 +13,23 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.warmup.WarmupDrill
 import com.forge.app.domain.warmup.WarmupProtocol
-import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.Corners
-import com.forge.app.ui.common.ForgeChromeButton
-import com.forge.app.ui.common.ForgePrimaryCapsule
-import com.forge.app.ui.common.GROUP_SEAM
-import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.common.OpenLabel
+import com.forge.app.ui.common.OpenPrimaryButton
 import com.forge.app.ui.common.clickableLabeled
-import com.forge.app.ui.common.memberFill
-import com.forge.app.ui.common.memberShape
+import com.forge.app.ui.theme.OpenColors
+import com.forge.app.ui.theme.OpenIcons
+import com.forge.app.ui.theme.OpenType
 
 /**
  * The pre-session warmup: one screen, one button.
@@ -44,9 +39,9 @@ import com.forge.app.ui.common.memberShape
  * required, nothing is stored, and the button works from the first frame. There is exactly one
  * button because "start" and "skip" were the same action wearing two labels.
  *
- * Grouped-surface pass (2026-09-27): the drills are one group of filled members (a ticked one wears
- * the accent ring and wash), the start is the standard light [ForgePrimaryCapsule], and the two
- * opt-outs are small filled chrome capsules.
+ * Open panel pass (2026-10-21): no cards. A mono head with the count ticked, each drill as a ring,
+ * its name and its dose under it (so a long name never squeezes the dose off the row, at any font
+ * size), the red Start lifting, and the two opt-outs as quiet mono links.
  */
 @Composable
 fun WarmupFlow(
@@ -58,125 +53,91 @@ fun WarmupFlow(
     onDisableWeek: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accent = MaterialTheme.colorScheme.primary
-
     val prep = protocol.steps.filterIsInstance<WarmupDrill>()
+    val done = prep.count { it.id in checked }
 
-    Column(modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-
+    Column(modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
         // The gate draws with no top bar above it, so it owns its own clearance from the status bar.
         Spacer(Modifier.height(24.dp))
-        Box(Modifier.padding(horizontal = 8.dp)) {
-            EditorialHeader(label = "Warm-up", muted = muted, accent = accent)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            OpenLabel("Warm-up")
+            if (prep.isNotEmpty()) OpenLabel("$done of ${prep.size} done", color = if (done > 0) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
         if (prep.isNotEmpty()) {
-            Spacer(Modifier.height(10.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
-                prep.forEachIndexed { i, drill ->
-                    WarmupRow(
-                        drill.name, drill.prescription, drill.id in checked,
-                        Corners.ofRow(i, prep.size), onBg, muted, accent
-                    ) { onToggle(drill.id) }
+            Spacer(Modifier.height(20.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                prep.forEach { drill ->
+                    WarmupRow(drill.name, drill.prescription, drill.id in checked) { onToggle(drill.id) }
                 }
             }
         }
 
-        Spacer(Modifier.height(24.dp))
-
+        Spacer(Modifier.height(32.dp))
         // It starts the session at any tick count; nothing here is gated.
-        ForgePrimaryCapsule("Start lifting", onClick = onStart, modifier = Modifier.fillMaxWidth())
+        OpenPrimaryButton("Start lifting", onClick = onStart)
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(8.dp))
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+            horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            OptOut("NOT TODAY", muted, onDisableToday)
-            OptOut("NOT THIS WEEK", muted, onDisableWeek)
+            OptOut("Not today", onDisableToday)
+            OptOut("Not this week", onDisableWeek)
         }
         Spacer(Modifier.height(8.dp))
     }
 }
 
 /**
- * One tickable warmup row, a member of the drill group: a check disc, what to do, and its dose as
- * right-hand meta. The whole row is the tap target, so there is never a nested tap (§14). A ticked
- * row keeps the group's corners (pick-many) and wears the ring and wash alone.
+ * One tickable warmup row: a ring (red with a check once ticked), the drill, and its dose under it
+ * in mono. The whole row is the tap target, so there is never a nested tap (§14).
  */
 @Composable
-private fun WarmupRow(
-    label: String,
-    meta: String,
-    checked: Boolean,
-    corners: Corners,
-    onBg: Color,
-    muted: Color,
-    accent: Color,
-    onToggle: () -> Unit
-) {
-    val shape = memberShape(corners, selected = false)
+private fun WarmupRow(label: String, meta: String, checked: Boolean, onToggle: () -> Unit) {
+    val accent = MaterialTheme.colorScheme.primary
     Row(
         Modifier
             .fillMaxWidth()
-            .heightIn(min = 56.dp)
-            .memberFill(shape, checked)
             .clickableLabeled(
                 label = if (checked) "Untick $label" else "Tick $label",
                 role = Role.Checkbox,
                 onClick = onToggle
-            )
-            .padding(horizontal = ROW_H, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        CheckDisc(checked, muted, accent)
-        // At a large font scale the dose drops under the drill rather than squeezing its name.
-        if (LocalDensity.current.fontScale > 1.3f) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(label, style = MaterialTheme.typography.bodyLarge, color = if (checked) muted else onBg)
-                if (meta.isNotBlank()) Text(meta, style = MaterialTheme.typography.labelMedium, color = muted)
-            }
-        } else {
+        Box(
+            Modifier
+                .size(24.dp)
+                .clip(CircleShape)
+                .then(if (checked) Modifier.background(accent) else Modifier.border(1.5.dp, OpenColors.Rule, CircleShape)),
+            contentAlignment = Alignment.Center
+        ) {
+            if (checked) Icon(OpenIcons.Check, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(14.dp))
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(
                 label,
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (checked) muted else onBg,
-                modifier = Modifier.weight(1f)
+                style = OpenType.rowTitle,
+                color = if (checked) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onBackground
             )
-            if (meta.isNotBlank()) {
-                Text(meta, style = MaterialTheme.typography.labelMedium, color = muted)
-            }
+            if (meta.isNotBlank()) OpenLabel(meta, style = OpenType.monoXS)
         }
     }
 }
 
-/** Filled accent when ticked, hollow ring when not. Drawn, never independently clickable. */
+/** A persistent opt-out: a quiet mono link with a full-height touch target. */
 @Composable
-private fun CheckDisc(checked: Boolean, muted: Color, accent: Color) {
+private fun OptOut(label: String, onClick: () -> Unit) {
     Box(
         Modifier
-            .size(20.dp)
-            .clip(CircleShape)
-            .then(
-                if (checked) Modifier.background(accent)
-                else Modifier.border(1.5.dp, muted.copy(alpha = 0.65f), CircleShape)
-            )
-    )
-}
-
-/** A persistent opt-out: a small filled chrome capsule with its mono label. */
-@Composable
-private fun OptOut(label: String, muted: Color, onClick: () -> Unit) {
-    ForgeChromeButton(onClick = onClick, label = label) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelMedium,
-            color = muted,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
-        )
+            .heightIn(min = 48.dp)
+            .clickableLabeled(label, onClick = onClick)
+            .padding(horizontal = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        OpenLabel(label)
     }
 }

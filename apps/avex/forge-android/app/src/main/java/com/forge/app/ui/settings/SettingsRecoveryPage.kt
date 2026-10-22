@@ -234,32 +234,6 @@ internal fun RecoveryContent(
                 onManage = a.manage,
                 receiving = state.signalFlow?.weight
             )
-            if (state.weightGranted) {
-                if (state.weightWriteGranted) {
-                    SettingsSwitchRow("Write weigh-ins back", "Weigh-ins you log reach Health Connect", checked = state.writeBodyweight, indent = SignalDetailIndent) {
-                        a.setWriteBodyweight(it)
-                    }
-                } else {
-                    SignalAction("Write-back is off", "Allow it so weigh-ins you log reach Health Connect", "Allow") {
-                        a.allowWeightWrite()
-                    }
-                }
-                // A grant not given yet comes with the action that gives it; a provider with no
-                // extended history says so on the import itself, because there is nothing to tap.
-                SignalAction(
-                    "Latest weight",
-                    state.importMessage ?: when (state.historyAffordance) {
-                        BodyweightSync.HistoryAffordance.UNSUPPORTED -> "This Health Connect app only shares the last 30 days"
-                        else -> "Bring in your newest weigh-in now"
-                    },
-                    "Import"
-                ) { a.importWeight() }
-                if (state.historyAffordance == BodyweightSync.HistoryAffordance.RETRY) {
-                    SignalAction("Older weight", "Only the last 30 days came over. Older weigh-ins need history access", "Allow") {
-                        a.allowHistory()
-                    }
-                }
-            }
 
             ReadingRow(
                 title = "Body fat",
@@ -269,20 +243,6 @@ internal fun RecoveryContent(
                 onConnect = a.connectBodyFat,
                 onManage = a.manage
             )
-            if (state.bodyFatGranted) {
-                if (state.bodyFatWriteGranted) {
-                    SettingsSwitchRow("Write body fat back", "Body fat you log reaches Health Connect", checked = state.writeBodyFat, indent = SignalDetailIndent) {
-                        a.setWriteBodyFat(it)
-                    }
-                } else {
-                    SignalAction("Write-back is off", "Allow it so body fat you log reaches Health Connect", "Allow") {
-                        a.connectBodyFat()
-                    }
-                }
-                SignalAction("Latest body fat", state.bodyFatImportMessage ?: "Bring in your newest reading now", "Import") {
-                    a.importBodyFat()
-                }
-            }
 
             ReadingRow(
                 title = "Muscle mass",
@@ -292,11 +252,6 @@ internal fun RecoveryContent(
                 onConnect = a.connectLeanMass,
                 onManage = a.manage
             )
-            if (state.leanMassGranted) {
-                SignalAction("Latest muscle mass", state.leanMassImportMessage ?: "Bring in your newest reading now", "Import") {
-                    a.importLeanMass()
-                }
-            }
 
             ReadingRow(
                 title = "Workout calories",
@@ -306,11 +261,6 @@ internal fun RecoveryContent(
                 onConnect = a.connectCalories,
                 onManage = a.manage
             )
-            if (state.calorieGranted) {
-                SettingsSwitchRow("Write calories back", "Each session's burn reaches Health Connect", checked = state.writeCalories, indent = SignalDetailIndent) {
-                    a.setWriteCalories(it)
-                }
-            }
 
             ReadingRow(
                 title = "Workout sessions",
@@ -320,11 +270,6 @@ internal fun RecoveryContent(
                 onConnect = a.connectSessions,
                 onManage = a.manage
             )
-            if (state.sessionGranted) {
-                SettingsSwitchRow("Write workouts back", "Finished sessions reach Health Connect", checked = state.writeSessions, indent = SignalDetailIndent) {
-                    a.setWriteSessions(it)
-                }
-            }
 
             ReadingRow(
                 title = "Workouts from your watch",
@@ -358,6 +303,63 @@ internal fun RecoveryContent(
                 onManage = a.manage,
                 receiving = state.signalFlow?.route
             )
+        }
+
+        // What goes back to Health Connect, and what can be brought in on demand, sit in groups of
+        // their own under the switches: nested under each reading they made one long crowded list
+        // (Antho, 2026-10-21). Each group only appears once something in it applies.
+        val anyWrite = state.weightGranted || state.bodyFatGranted || state.calorieGranted || state.sessionGranted
+        if (anyWrite) {
+            SettingsGroup("Send back to Health Connect") {
+                if (state.weightGranted) {
+                    if (state.weightWriteGranted) {
+                        SettingsSwitchRow("Weigh-ins", "Weigh-ins you log reach Health Connect", checked = state.writeBodyweight) { a.setWriteBodyweight(it) }
+                    } else {
+                        SignalAction("Weigh-ins", "Allow it so weigh-ins you log reach Health Connect", "Allow") { a.allowWeightWrite() }
+                    }
+                }
+                if (state.bodyFatGranted) {
+                    if (state.bodyFatWriteGranted) {
+                        SettingsSwitchRow("Body fat", "Body fat you log reaches Health Connect", checked = state.writeBodyFat) { a.setWriteBodyFat(it) }
+                    } else {
+                        SignalAction("Body fat", "Allow it so body fat you log reaches Health Connect", "Allow") { a.connectBodyFat() }
+                    }
+                }
+                if (state.calorieGranted) {
+                    SettingsSwitchRow("Workout calories", "Each session's burn reaches Health Connect", checked = state.writeCalories) { a.setWriteCalories(it) }
+                }
+                if (state.sessionGranted) {
+                    SettingsSwitchRow("Workouts", "Finished sessions reach Health Connect", checked = state.writeSessions) { a.setWriteSessions(it) }
+                }
+            }
+        }
+
+        if (state.weightGranted || state.bodyFatGranted || state.leanMassGranted) {
+            SettingsGroup("Bring in now") {
+                if (state.weightGranted) {
+                    // A provider with no extended history says so on the import itself, because there
+                    // is nothing to tap.
+                    SignalAction(
+                        "Latest weight",
+                        state.importMessage ?: when (state.historyAffordance) {
+                            BodyweightSync.HistoryAffordance.UNSUPPORTED -> "This Health Connect app only shares the last 30 days"
+                            else -> "Your newest weigh-in"
+                        },
+                        "Import"
+                    ) { a.importWeight() }
+                    if (state.historyAffordance == BodyweightSync.HistoryAffordance.RETRY) {
+                        SignalAction("Older weight", "Only the last 30 days came over. Older weigh-ins need history access", "Allow") {
+                            a.allowHistory()
+                        }
+                    }
+                }
+                if (state.bodyFatGranted) {
+                    SignalAction("Latest body fat", state.bodyFatImportMessage ?: "Your newest reading", "Import") { a.importBodyFat() }
+                }
+                if (state.leanMassGranted) {
+                    SignalAction("Latest muscle mass", state.leanMassImportMessage ?: "Your newest reading", "Import") { a.importLeanMass() }
+                }
+            }
         }
 
         // The Wear OS app had no mention anywhere on the phone, so the only way to learn it existed

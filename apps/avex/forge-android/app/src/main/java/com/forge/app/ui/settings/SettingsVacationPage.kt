@@ -98,7 +98,7 @@ private fun AddVacationDialog(onSave: (String, String, String) -> Unit, onDismis
                     picking = null
                 }) { Text("OK") }
             },
-            dismissButton = { TextButton(onClick = { picking = null }) { Text("Cancel") } }
+            dismissButton = { SettingsDialogDismiss("Cancel") { picking = null } }
         ) { DatePicker(state = state) }
     }
 
@@ -134,7 +134,7 @@ private fun AddVacationDialog(onSave: (String, String, String) -> Unit, onDismis
                 onClick = { onSave(toKey(startMs!!), toKey(endMs!!), label) }
             ) { Text("Save") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+        dismissButton = { SettingsDialogDismiss("Cancel", onDismiss) }
     )
 }
 

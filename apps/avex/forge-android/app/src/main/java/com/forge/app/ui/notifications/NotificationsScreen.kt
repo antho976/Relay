@@ -215,7 +215,9 @@ private fun SwipeRow(onDismiss: () -> Unit, content: @Composable () -> Unit) {
             }
         }
     ) {
-        Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)) { content() }
+        // No fill of its own: the page is the app's gradient, and a flat background-coloured row drew
+        // as a lighter box on it (Antho, 2026-10-21). "Clear" only shows while a row is being swiped.
+        Box(Modifier.fillMaxWidth()) { content() }
     }
 }
 
