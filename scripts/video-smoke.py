@@ -87,14 +87,32 @@ try:
     sheet = timed("sheet", "video.still", {"video_id": promo, "count": 6})
     print("issues", json.dumps(sheet["issues"]))
     call("video.update", {"video_id": promo, "props": {"main": {"title": "Every euro in its place", "cta": "Get Tally", "accent": "#F5A524"}}})
-    render = call("video.render", {"video_id": promo, "quality": "preview"})
+    # A music bed, so the render has sound to measure and bring to YouTube's loudness.
+    import math, struct, wave
+    bed = base / "bed.wav"
+    with wave.open(str(bed), "wb") as w:
+        w.setnchannels(2); w.setsampwidth(2); w.setframerate(48000)
+        frames = bytearray()
+        for i in range(48000 * 6):
+            t = i / 48000
+            v = int(32767 * 0.25 * math.sin(2 * math.pi * 220 * t) * (0.6 + 0.4 * math.sin(2 * math.pi * 0.5 * t)))
+            frames += struct.pack("<hh", v, v)
+        w.writeframes(bytes(frames))
+    call("video.asset.add", {"video_id": promo, "path": str(bed)})
+    video_tsx = Path(call("video.get", {"video_id": promo})["video"]["dir"]) / "src/Video.tsx"
+    code = video_tsx.read_text()
+    code = code.replace("import { Glow,", "import { Music, Glow,", 1).replace("    <TransitionSeries>\n", "    <>\n    <Music src=\"assets/bed.wav\" fadeOut={15} />\n    <TransitionSeries>\n", 1)
+    code = code.replace("    </TransitionSeries>\n  );\n};", "    </TransitionSeries>\n    </>\n  );\n};", 1)
+    video_tsx.write_text(code)
+    checked = call("video.check", {"video_id": promo})
+    assert checked["ok"] and not checked["errors"], checked
     t0 = time.monotonic()
-    while call("video.render.get", {"render_id": render["id"]})["state"] in ("queued", "rendering"):
-        assert time.monotonic() - t0 < 300, "the render did not finish"
-        time.sleep(0.25)
-    done = call("video.render.get", {"render_id": render["id"]})
-    print(f"render: {round((time.monotonic() - t0) * 1000)} ms, {done['state']}, {done.get('bytes')} bytes")
+    done = call("video.render", {"video_id": promo, "quality": "preview", "preset": "youtube", "name": "youtube", "wait": True})
+    print(f"render: {round((time.monotonic() - t0) * 1000)} ms, {done['state']}, {done.get('bytes')} bytes, sound {json.dumps(done.get('audio'))}")
     assert done["state"] == "done", done
+    assert abs(done["audio"]["lufs"] + 14) < 0.6, done["audio"]
+    timeline = timed("timeline", "video.timeline", {"video_id": promo})
+    print("timeline", timeline["png"], json.dumps([s["name"] for s in timeline["sounds"]]))
     recap = call("video.create", {"project_id": 1, "title": "Avex weekly recap", "shape": "landscape", "seconds": 8})["video"]["id"]
     call("video.check", {"video_id": recap})
     call("video.still", {"video_id": recap, "at": ["2s"]})
