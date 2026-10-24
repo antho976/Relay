@@ -480,21 +480,33 @@ fn axis_label(fmt: &Fmt, value: i64, step: i64) -> String {
     }
 }
 
+/// A value axis for values from `lo` (at most 0) to `hi` (at least 0), the lowest drawn being
+/// `least`: its base, one step for every tick, and how many steps go above and below the base.
+/// A line that need not start at zero starts a step under its lowest value, on a tick of the
+/// same step as the rest (80.5 to 75 kg reads 72, 74 … 82, not 72, 77, 82). With values below
+/// zero the step fits the whole span, and nothing above zero leaves no empty half on top.
+fn axis(lo: i64, hi: i64, least: i64, from_zero: bool, digits: u32) -> (i64, i64, u32, u32) {
+    let steps = |span: i64, step: i64| ((span.max(0) + step - 1) / step) as u32;
+    if lo < 0 {
+        let (step, _) = ticks((hi - lo).max(1), digits);
+        return (0, step, steps(hi, step), steps(-lo, step));
+    }
+    if from_zero || least <= 0 {
+        let (step, up) = ticks(hi.max(1), digits);
+        return (0, step, up, 0);
+    }
+    let (step, _) = ticks((hi - least).max(1), digits);
+    let base = (least / step - 1).max(0) * step;
+    (base, step, steps(hi - base, step).max(1), 0)
+}
+
 /// Bars or lines over a value axis, labels under each group.
 fn plot(body: &gtk::Box, data: &Data, kind: ChartKind) {
     let all = data.series.iter().flat_map(|(_, v)| v.iter().flatten().copied());
     let (lo, hi) = all.fold((0_i64, 0_i64), |(lo, hi), x| (lo.min(x), hi.max(x)));
     let digits = data.fmt.fraction_digits();
-    // A line that need not start at zero starts a step under its lowest value.
     let least = data.series.iter().flat_map(|(_, v)| v.iter().flatten().copied()).min().unwrap_or(0);
-    let base = if data.from_zero || least <= 0 {
-        0
-    } else {
-        let (step, _) = ticks((hi - least).max(1), digits);
-        (least / step - 1).max(0) * step
-    };
-    let (step, up) = ticks((hi - base).max(-lo), digits);
-    let down = if lo < 0 { ((-lo + step - 1) / step) as u32 } else { 0 };
+    let (base, step, up, down) = axis(lo, hi, least, data.from_zero, digits);
     let (top, bottom) = (base + step * i64::from(up), base - step * i64::from(down));
     let span = (top - bottom).max(1) as f64;
     let y_of = move |value: i64, h: f64| PAD_T + (top - value) as f64 / span * (h - PAD_T - PAD_B);
@@ -1112,6 +1124,22 @@ mod tests {
         assert!(read_written(&toward, "CAD", ChartKind::Bar).from_zero);
         let balance = json!({"labels": ["Oct", "Nov"], "series": [{"name": "Balance", "values": [5000, 5200]}]});
         assert!(read_written(&balance, "CAD", ChartKind::Line).from_zero);
+    }
+
+    #[test]
+    fn an_axis_fits_what_it_draws() {
+        // 80.5 to 75 kg, tenths: one step for the base and the ticks.
+        let (base, step, up, down) = axis(0, 805, 750, false, 1);
+        assert_eq!((base, step, down), (720, 20, 0));
+        assert!(base + step * i64::from(up) >= 805 && base + step * i64::from(up - 1) < 805);
+        // Every month in deficit: nothing above zero, the steps all below it.
+        let (base, step, up, down) = axis(-120_000, 0, -120_000, true, 2);
+        assert_eq!((base, up), (0, 0));
+        assert!(step * i64::from(down) >= 120_000);
+        // Both sides: one step across the whole span.
+        let (_, step, up, down) = axis(-50_000, 150_000, -50_000, true, 2);
+        assert!(step * i64::from(up) >= 150_000 && step * i64::from(down) >= 50_000);
+        assert!(up + down <= 6, "{up} + {down} ticks");
     }
 
     #[test]
