@@ -84,7 +84,12 @@ pub fn exclude_paths(repo: &Path, entries: &[&str]) -> Result<()> {
             contents.push_str(entry);
             contents.push('\n');
         }
-        std::fs::write(&exclude, contents)?;
+        // Beside it, then renamed over it: written in place, a crash or a full disk midway
+        // truncated the person's own entries.
+        let staged = exclude.with_extension(format!("relay-{}", std::process::id()));
+        std::fs::write(&staged, contents)
+            .and_then(|()| std::fs::rename(&staged, &exclude))
+            .inspect_err(|_| { let _ = std::fs::remove_file(&staged); })?;
     }
     Ok(())
 }
