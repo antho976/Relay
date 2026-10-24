@@ -1033,8 +1033,7 @@ fn update(b: &Rc<Board>, x: f64, y: f64, dx: f64, dy: f64, mods: gdk::ModifierTy
                     sel.push(id);
                 }
             }
-            b.select(sel);
-            b.canvas.queue_draw();
+            b.select_sweeping(sel);
         }
         Gesture::Move { moved, .. } if !*moved && !far => {}
         Gesture::Move { .. } => {
@@ -1648,6 +1647,11 @@ fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
                 } else {
                     b.select(vec![scope]);
                 }
+            }
+            if moved {
+                // What the sweep picked, its chrome built once now.
+                b.release_fields();
+                b.selection_changed();
             }
             b.canvas.queue_draw();
         }

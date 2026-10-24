@@ -1111,6 +1111,21 @@ impl Board {
         self.selection_changed();
     }
 
+    /// [`Board::select`] for a marquee under way: the canvas shows the picks at once, and the
+    /// toolbar, inspector and layer list are rebuilt once, when it is let go (whole widget trees
+    /// a pointer move otherwise, for a toolbar hidden during the gesture anyway).
+    pub(super) fn select_sweeping(&self, ids: Vec<String>) {
+        if *self.selection.borrow() == ids {
+            return;
+        }
+        let editing = self.edit.borrow().as_ref().map(|e| e.id.clone());
+        if editing.is_some_and(|e| !ids.contains(&e)) {
+            self.end_edit(true);
+        }
+        *self.selection.borrow_mut() = ids;
+        self.canvas.queue_draw();
+    }
+
     pub(super) fn selection_changed(&self) {
         self.canvas.queue_draw();
         self.rebuild_context();
