@@ -46,4 +46,10 @@ class PairLinkTest {
         assertEquals(1, orderRoutes(routes, RoutePolicy.ServerOnly).size)
         assertEquals(3, orderRoutes(routes, RoutePolicy.DirectOnly).size)
     }
+
+    @Test
+    fun `a link cut mid-escape or with a bad escape is no link, not a crash`() {
+        assertNull(PairLink.parse("relay://pair?v=1&code=X&direct=ws%3A%2F%2F192.168.1.20%3"))
+        assertNull(PairLink.parse("relay://pair?v=1&code=X&direct=ws%3A%2F%2F192.168.1.20%zz7420"))
+    }
 }

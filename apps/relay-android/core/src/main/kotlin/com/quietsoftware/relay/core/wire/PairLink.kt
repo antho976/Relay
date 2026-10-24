@@ -23,9 +23,10 @@ data class PairLink(
             val trimmed = text.trim()
             if (!trimmed.startsWith("relay://pair?")) return null
             val query = trimmed.substringAfter('?')
+            // A link cut mid-escape when copied (`%3`) or a bad `%` in a scanned code is no link.
             val params = query.split('&').mapNotNull { part ->
                 val eq = part.indexOf('=')
-                if (eq <= 0) null else part.substring(0, eq) to decode(part.substring(eq + 1))
+                if (eq <= 0) null else part.substring(0, eq) to (decode(part.substring(eq + 1)) ?: return null)
             }.toMap()
             if (params["v"] != "1") return null
             val code = params["code"]?.takeIf { it.isNotBlank() } ?: return null
@@ -68,7 +69,7 @@ data class PairLink(
             return s.count { it == ':' } == 1 && s.substringAfter(':').all { it.isDigit() }
         }
 
-        private fun decode(s: String): String = URLDecoder.decode(s.replace("+", "%2B"), Charsets.UTF_8)
+        private fun decode(s: String): String? = runCatching { URLDecoder.decode(s.replace("+", "%2B"), Charsets.UTF_8) }.getOrNull()
     }
 }
 
