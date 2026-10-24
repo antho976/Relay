@@ -293,7 +293,18 @@ pub fn drop_index(scene: &Scene, placed: &Placed, parent: &str, moving: &[String
 }
 
 /// A size asked of a pass: the node, and the width offered it (only a filling one reads it).
-type SizeKey<'a> = (&'a str, Option<u64>);
+/// A node, the width offered it, and the rules it is measured under ([`As`]).
+type SizeKey<'a> = (&'a str, Option<u64>, As);
+
+/// The rules a size is asked under, besides the node's own: stretched across a column (its width
+/// read as filling), or measured as it hugs along an axis it fills, where the laid-out parent
+/// hugs that axis and so offers no room to fill (a menu's items in a menu that hugs them).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+struct As {
+    stretch: bool,
+    hug_w: bool,
+    hug_h: bool,
+}
 
 /// One `place`: the scene, the measure, what is placed so far, and every size already worked
 /// out. A size depends only on the node, the width offered it and the scene, none of which
@@ -347,42 +358,53 @@ impl<'a> Pass<'a> {
 
     /// A node's own size, given the width a laid-out parent offers it.
     fn size(&self, id: &'a str, offered: Option<f64>) -> (f64, f64) {
-        self.size_as(id, offered, false)
+        self.size_as(id, offered, As::default())
     }
 
     /// A node's size when a column stretches it `width` wide: as a filling width reads it,
     /// whatever its own width rule, keeping its height rule (B23).
     fn stretched(&self, id: &'a str, width: f64) -> (f64, f64) {
-        self.size_as(id, Some(width), true)
+        self.size_as(id, Some(width), As { stretch: true, ..As::default() })
     }
 
     /// A node's size, worked out once a pass.
-    fn size_as(&self, id: &'a str, offered: Option<f64>, fill: bool) -> (f64, f64) {
+    fn size_as(&self, id: &'a str, offered: Option<f64>, rules: As) -> (f64, f64) {
         let Some(n) = self.scene.node(id) else {
             return (0.0, 0.0);
         };
-        let ws = if fill { Sizing::Fill } else { w_sizing(n) };
+        let ws = match w_sizing(n) {
+            _ if rules.stretch => Sizing::Fill,
+            Sizing::Fill if rules.hug_w => Sizing::Hug,
+            ws => ws,
+        };
+        let hs = match h_sizing(n) {
+            Sizing::Fill if rules.hug_h => Sizing::Hug,
+            hs => hs,
+        };
         // Only a filling width reads what is offered: every other offer is the same question.
         let offered = offered.filter(|_| ws == Sizing::Fill);
-        let key = (id, offered.map(f64::to_bits));
+        // Rules that change nothing for this node ask the same question as none.
+        let rules = As { stretch: rules.stretch && w_sizing(n) != Sizing::Fill, hug_w: ws != w_sizing(n) && !rules.stretch, hug_h: hs != h_sizing(n) };
+        let key = (id, offered.map(f64::to_bits), rules);
         if let Some(size) = self.sizes.borrow().get(&key) {
             return *size;
         }
-        let size = self.size_of(n, ws, offered);
+        let size = self.size_of(n, ws, hs, offered);
         self.sizes.borrow_mut().insert(key, size);
         size
     }
 
-    /// A node's size under width rule `ws`, offered `offered` px across: its kind's rule, then
-    /// its min and max, and no more than `MAX_COORD` (B111: however many children a frame hugs,
-    /// what it offers a text to wrap at stays within what Pango's 32-bit units hold).
-    fn size_of(&self, n: &'a Node, ws: Sizing, offered: Option<f64>) -> (f64, f64) {
+    /// A node's size under width rule `ws` and height rule `hs`, offered `offered` px across:
+    /// its kind's rule, then its min and max, and no more than `MAX_COORD` (B111: however many
+    /// children a frame hugs, what it offers a text to wrap at stays within what Pango's 32-bit
+    /// units hold).
+    fn size_of(&self, n: &'a Node, ws: Sizing, hs: Sizing, offered: Option<f64>) -> (f64, f64) {
         let (w, h) = match n.kind {
             // A group is as big as its children, whatever its own `w`/`h` or sizing say (B2).
             NodeKind::Group => return self.group_bounds(n).map_or((0.0, 0.0), |b| (b.w, b.h)),
-            NodeKind::Text => self.text_size(n, ws, offered),
-            NodeKind::Sticky => self.sticky_size(n, ws, offered),
-            NodeKind::Frame if n.layout_mode() != Layout::None => self.frame_size(n, ws, offered),
+            NodeKind::Text => self.text_size(n, ws, hs, offered),
+            NodeKind::Sticky => self.sticky_size(n, ws, hs, offered),
+            NodeKind::Frame if n.layout_mode() != Layout::None => self.frame_size(n, ws, hs, offered),
             // A filling width takes what is offered; nothing offers one outside a layout.
             _ => (if ws == Sizing::Fill { offered.unwrap_or(n.w) } else { n.w }, n.h),
         };
@@ -396,7 +418,7 @@ impl<'a> Pass<'a> {
 
     /// A text: its words wrapped at its width (unwrapped while it hugs them, up to `max_w`), as
     /// tall as its lines unless its height is its own.
-    fn text_size(&self, n: &Node, ws: Sizing, offered: Option<f64>) -> (f64, f64) {
+    fn text_size(&self, n: &Node, ws: Sizing, hs: Sizing, offered: Option<f64>) -> (f64, f64) {
         let (w, lines) = match ws {
             Sizing::Hug => {
                 let (mw, mh) = self.words(n, None);
@@ -417,12 +439,12 @@ impl<'a> Pass<'a> {
                 None => self.words(n, None),
             },
         };
-        (w, if h_sizing(n) == Sizing::Hug { lines } else { n.h })
+        (w, if hs == Sizing::Hug { lines } else { n.h })
     }
 
     /// A sticky: as wide as it says (or as it fills, or its words while it hugs), and as tall
     /// as it says, growing to fit its words; hugging, exactly as tall as they are (B119).
-    fn sticky_size(&self, n: &Node, ws: Sizing, offered: Option<f64>) -> (f64, f64) {
+    fn sticky_size(&self, n: &Node, ws: Sizing, hs: Sizing, offered: Option<f64>) -> (f64, f64) {
         let pad = 2.0 * STICKY_PAD;
         let own = if n.w > 0.0 { n.w } else { STICKY_SIZE };
         let w = n.clamp_w(match ws {
@@ -431,15 +453,15 @@ impl<'a> Pass<'a> {
             Sizing::Fixed => own,
         });
         let words = self.words(n, Some((w - pad).max(1.0))).1 + pad;
-        let h = if h_sizing(n) == Sizing::Hug { words } else { (if n.h > 0.0 { n.h } else { STICKY_SIZE }).max(words) };
+        let h = if hs == Sizing::Hug { words } else { (if n.h > 0.0 { n.h } else { STICKY_SIZE }).max(words) };
         (w, h)
     }
 
     /// A laid-out frame: its width first (its own, what is offered, or what its children take
     /// while it hugs, within its min and max), then its children laid at that width, its
     /// height hugging what they take.
-    fn frame_size(&self, n: &'a Node, ws: Sizing, offered: Option<f64>) -> (f64, f64) {
-        let (hug_w, hug_h) = (ws == Sizing::Hug, h_sizing(n) == Sizing::Hug);
+    fn frame_size(&self, n: &'a Node, ws: Sizing, hs: Sizing, offered: Option<f64>) -> (f64, f64) {
+        let (hug_w, hug_h) = (ws == Sizing::Hug, hs == Sizing::Hug);
         let own = match ws {
             Sizing::Fixed => Some(n.w),
             Sizing::Fill => offered.or((n.w > 0.0).then_some(n.w)),
@@ -480,7 +502,7 @@ impl<'a> Pass<'a> {
         }
         let row = n.layout_mode() == Layout::Row;
         let (main, cross) = if row { (room, None) } else { (None, room) };
-        let slots = self.line_sizes(&kids, main, cross, row, n.items.unwrap_or(Items::Start), gap);
+        let slots = self.line_sizes(&kids, main, cross, row, false, n.items.unwrap_or(Items::Start), gap);
         let along = (slots.iter().map(|s| s.main).sum::<f64>() + gap * slots.len().saturating_sub(1) as f64).max(0.0);
         let across = slots.iter().map(|s| s.cross).fold(0.0, f64::max);
         if row {
@@ -508,7 +530,7 @@ impl<'a> Pass<'a> {
             .into_iter()
             .map(|range| {
                 let line = &kids[range.clone()];
-                let mut slots = self.line_sizes(line, room, None, true, items, gap);
+                let mut slots = self.line_sizes(line, room, None, true, false, items, gap);
                 let depth = slots.iter().map(|s| s.cross).fold(0.0, f64::max);
                 for (s, &c) in slots.iter_mut().zip(line).filter(|(s, _)| s.stretch) {
                     s.cross = scene.node(c).map_or(depth, |k| k.clamp_h(depth));
@@ -522,8 +544,12 @@ impl<'a> Pass<'a> {
     /// One line of auto layout: each child's length along it and depth across. Filling
     /// children share what `main` leaves, each within its min and max; stretched ones take
     /// `cross`, measured at it across a column (B23); a group does neither (B2). Without
-    /// `main` or `cross` (a frame that hugs), each takes its own.
-    fn line_sizes(&self, kids: &[&'a str], main: Option<f64>, cross: Option<f64>, row: bool, items: Items, gap: f64) -> Vec<Slot> {
+    /// `main` or `cross` (a frame that hugs), each takes its own, one that fills measured as it
+    /// would hug. `hugs_main`: the frame hugs along the line, so `main` is what its children
+    /// take, and those that fill keep what they measured unless a min or max gave it more or
+    /// less room.
+    #[allow(clippy::too_many_arguments)]
+    fn line_sizes(&self, kids: &[&'a str], main: Option<f64>, cross: Option<f64>, row: bool, hugs_main: bool, items: Items, gap: f64) -> Vec<Slot> {
         let scene = self.scene;
         let mut slots: Vec<Slot> = kids
             .iter()
@@ -532,10 +558,14 @@ impl<'a> Pass<'a> {
                 let (main_rule, cross_rule) = if row { (w_sizing(k), h_sizing(k)) } else { (h_sizing(k), w_sizing(k)) };
                 let group = k.kind == NodeKind::Group;
                 let stretch = !group && (cross_rule == Sizing::Fill || items == Items::Stretch);
+                // Along an axis the frame offers no room on, filling is hugging.
+                let (hug_main, hug_cross) = (main.is_none() || hugs_main, cross.is_none());
+                let (hug_w, hug_h) = if row { (hug_main, hug_cross) } else { (hug_cross, hug_main) };
+                let rules = As { stretch: false, hug_w, hug_h };
                 let (w, h) = match (row, cross) {
-                    (true, _) => self.size(c, None),
-                    (false, Some(room)) if stretch => self.stretched(c, room),
-                    (false, room) => self.size(c, room),
+                    (true, _) => self.size_as(c, None, rules),
+                    (false, Some(room)) if stretch => self.size_as(c, Some(room), As { stretch: true, ..rules }),
+                    (false, room) => self.size_as(c, room, rules),
                 };
                 let (along, mut across) = if row { (w, h) } else { (h, w) };
                 if let (true, true, Some(room)) = (row, stretch, cross) {
@@ -550,6 +580,13 @@ impl<'a> Pass<'a> {
         };
         let taken: f64 = slots.iter().filter(|s| !s.fill).map(|s| s.main).sum();
         let gaps = gap * (slots.len() - 1) as f64;
+        if hugs_main {
+            // The frame took what they measured: they keep it, rather than equal shares of it.
+            let measured: f64 = fills.iter().map(|&i| slots[i].main).sum();
+            if (room - taken - gaps - measured).abs() < 0.5 {
+                return slots;
+            }
+        }
         let bounds: Vec<(Option<f64>, Option<f64>)> = fills
             .iter()
             .map(|&i| scene.node(kids[i]).map_or((None, None), |k| if row { (k.min_w, k.max_w) } else { (k.min_h, k.max_h) }))
@@ -739,7 +776,8 @@ impl<'a> Pass<'a> {
         }
         let row = frame.layout_mode() == Layout::Row;
         let (main, cross) = if row { (inner.w, inner.h) } else { (inner.h, inner.w) };
-        let slots = self.line_sizes(&kids, Some(main), Some(cross), row, frame.items.unwrap_or(Items::Start), frame.gap.unwrap_or(0.0));
+        let hugs_main = (if row { w_sizing(frame) } else { h_sizing(frame) }) == Sizing::Hug;
+        let slots = self.line_sizes(&kids, Some(main), Some(cross), row, hugs_main, frame.items.unwrap_or(Items::Start), frame.gap.unwrap_or(0.0));
         self.place_line(frame, &kids, &slots, inner, row);
     }
 

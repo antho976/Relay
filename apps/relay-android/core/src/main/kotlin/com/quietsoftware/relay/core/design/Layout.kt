@@ -1,5 +1,6 @@
 package com.quietsoftware.relay.core.design
 
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
@@ -258,8 +259,15 @@ private class Slot(var main: Double, var cross: Double, val fill: Boolean, val s
 /** One line of a wrap layout: which children, their slots, how long it is and how deep. */
 private class WrapLine(val range: IntRange, val slots: List<Slot>, val along: Double, val depth: Double)
 
-/** A size asked of a pass: the node, and the width offered it (only a filling one reads it). */
-private data class SizeKey(val id: String, val offered: Long?)
+/** A size asked of a pass: the node, the width offered it (only a filling one reads it), and the rules it is measured under. */
+private data class SizeKey(val id: String, val offered: Long?, val rules: As)
+
+/**
+ * The rules a size is asked under, besides the node's own: stretched across a column (its width
+ * read as filling), or measured as it hugs along an axis it fills, where the laid-out parent hugs
+ * that axis and so offers no room to fill (a menu's items in a menu that hugs them).
+ */
+private data class As(val stretch: Boolean = false, val hugW: Boolean = false, val hugH: Boolean = false)
 
 /**
  * One [place]: the scene, the measure, what is placed so far, and every size already worked out.
@@ -284,31 +292,40 @@ private class LayoutPass(val scene: DesignScene, val measure: Measure) {
     fun flow(id: String): List<String> = scene.children(id).filter { c -> visible(c)?.let { !isAbsolute(it) } == true }
 
     /** A node's own size, given the width a laid-out parent offers it. */
-    fun size(id: String, offered: Double?): Dims = sizeAs(id, offered, false)
+    fun size(id: String, offered: Double?): Dims = sizeAs(id, offered, As())
 
     /** A node's size when a column stretches it [width] wide: as a filling width reads it, keeping its height rule (B23). */
-    fun stretched(id: String, width: Double): Dims = sizeAs(id, width, true)
+    fun stretched(id: String, width: Double): Dims = sizeAs(id, width, As(stretch = true))
 
-    private fun sizeAs(id: String, offered: Double?, fill: Boolean): Dims {
+    private fun sizeAs(id: String, offered: Double?, rules: As): Dims {
         val n = scene.node(id) ?: return Dims(0.0, 0.0)
-        val ws = if (fill) Sizing.Fill else wSizing(n)
+        val ownW = wSizing(n)
+        val ownH = hSizing(n)
+        val ws = when {
+            rules.stretch -> Sizing.Fill
+            ownW == Sizing.Fill && rules.hugW -> Sizing.Hug
+            else -> ownW
+        }
+        val hs = if (ownH == Sizing.Fill && rules.hugH) Sizing.Hug else ownH
         // Only a filling width reads what is offered: every other offer is the same question.
         val offer = if (ws == Sizing.Fill) offered else null
-        val key = SizeKey(id, offer?.toRawBits())
+        // Rules that change nothing for this node ask the same question as none.
+        val asked = As(stretch = rules.stretch && ownW != Sizing.Fill, hugW = ws != ownW && !rules.stretch, hugH = hs != ownH)
+        val key = SizeKey(id, offer?.toRawBits(), asked)
         sizes[key]?.let { return it }
-        val size = sizeOf(n, ws, offer)
+        val size = sizeOf(n, ws, hs, offer)
         sizes[key] = size
         return size
     }
 
-    /** A node's size under width rule [ws], offered [offered] px across: its kind's rule, then its min and max, and no more than [MAX_COORD] (B111). */
-    private fun sizeOf(n: DesignNode, ws: Sizing, offered: Double?): Dims {
+    /** A node's size under width rule [ws] and height rule [hs], offered [offered] px across: its kind's rule, then its min and max, and no more than [MAX_COORD] (B111). */
+    private fun sizeOf(n: DesignNode, ws: Sizing, hs: Sizing, offered: Double?): Dims {
         val (w, h) = when {
             // A group is as big as its children, whatever its own w/h or sizing say (B2).
             n.kind == "group" -> return groupBounds(n)?.let { Dims(it.w, it.h) } ?: Dims(0.0, 0.0)
-            n.kind == "text" -> textSize(n, ws, offered)
-            n.kind == "sticky" -> stickySize(n, ws, offered)
-            n.kind == "frame" && lays(n) -> frameSize(n, ws, offered)
+            n.kind == "text" -> textSize(n, ws, hs, offered)
+            n.kind == "sticky" -> stickySize(n, ws, hs, offered)
+            n.kind == "frame" && lays(n) -> frameSize(n, ws, hs, offered)
             // A filling width takes what is offered; nothing offers one outside a layout.
             else -> Dims(if (ws == Sizing.Fill) offered ?: n.w else n.w, n.h)
         }
@@ -322,7 +339,7 @@ private class LayoutPass(val scene: DesignScene, val measure: Measure) {
     private fun words(n: DesignNode, wrap: Double?): TextSize = measure.measure(n, wrap?.let { min(it, MAX_COORD) })
 
     /** A text: its words wrapped at its width (unwrapped while it hugs them, up to `max_w`), as tall as its lines unless its height is its own. */
-    private fun textSize(n: DesignNode, ws: Sizing, offered: Double?): Dims {
+    private fun textSize(n: DesignNode, ws: Sizing, hs: Sizing, offered: Double?): Dims {
         val (w, lines) = when (ws) {
             Sizing.Hug -> {
                 val m = words(n, null)
@@ -340,11 +357,11 @@ private class LayoutPass(val scene: DesignScene, val measure: Measure) {
                 else -> Dims(w, words(n, w).h)
             }
         }
-        return Dims(w, if (hSizing(n) == Sizing.Hug) lines else n.h)
+        return Dims(w, if (hs == Sizing.Hug) lines else n.h)
     }
 
     /** A sticky: as wide as it says (or as it fills, or its words while it hugs), and as tall as it says, growing to fit its words; hugging, exactly as tall as they are (B119). */
-    private fun stickySize(n: DesignNode, ws: Sizing, offered: Double?): Dims {
+    private fun stickySize(n: DesignNode, ws: Sizing, hs: Sizing, offered: Double?): Dims {
         val pad = 2.0 * STICKY_PAD
         val own = if (n.w > 0.0) n.w else STICKY_SIZE
         val w = clampW(
@@ -356,14 +373,14 @@ private class LayoutPass(val scene: DesignScene, val measure: Measure) {
             },
         )
         val words = words(n, max(w - pad, 1.0)).h + pad
-        val h = if (hSizing(n) == Sizing.Hug) words else max(if (n.h > 0.0) n.h else STICKY_SIZE, words)
+        val h = if (hs == Sizing.Hug) words else max(if (n.h > 0.0) n.h else STICKY_SIZE, words)
         return Dims(w, h)
     }
 
     /** A laid-out frame: its width first (its own, what is offered, or what its children take while it hugs, within its min and max), then its children laid at that width, its height hugging what they take. */
-    private fun frameSize(n: DesignNode, ws: Sizing, offered: Double?): Dims {
+    private fun frameSize(n: DesignNode, ws: Sizing, hs: Sizing, offered: Double?): Dims {
         val hugW = ws == Sizing.Hug
-        val hugH = hSizing(n) == Sizing.Hug
+        val hugH = hs == Sizing.Hug
         val own: Double? = when (ws) {
             Sizing.Fixed -> n.w
             Sizing.Fill -> offered ?: n.w.takeIf { it > 0.0 }
@@ -400,7 +417,7 @@ private class LayoutPass(val scene: DesignScene, val measure: Measure) {
             return Dims(max(wide, 0.0), max(deep + rows, 0.0))
         }
         val row = layoutMode(n) == LayoutMode.Row
-        val slots = lineSizes(kids, if (row) room else null, if (row) null else room, row, itemsOf(n), gap)
+        val slots = lineSizes(kids, if (row) room else null, if (row) null else room, row, false, itemsOf(n), gap)
         var mains = 0.0
         for (s in slots) mains += s.main
         val along = max(mains + gap * max(slots.size - 1, 0), 0.0)
@@ -423,7 +440,7 @@ private class LayoutPass(val scene: DesignScene, val measure: Measure) {
         }
         return breakLines(basis, room, gap).map { range ->
             val line = kids.subList(range.first, range.last + 1)
-            val slots = lineSizes(line, room, null, true, items, gap)
+            val slots = lineSizes(line, room, null, true, false, items, gap)
             val depth = slots.fold(0.0) { a, s -> max(a, s.cross) }
             for ((i, s) in slots.withIndex()) {
                 if (s.stretch) s.cross = scene.node(line[i])?.let { clampH(it, depth) } ?: depth
@@ -438,19 +455,25 @@ private class LayoutPass(val scene: DesignScene, val measure: Measure) {
      * One line of auto layout: each child's length along it and depth across. Filling children
      * share what [main] leaves, each within its min and max; stretched ones take [cross],
      * measured at it across a column (B23); a group does neither (B2). Without [main] or [cross]
-     * (a frame that hugs), each takes its own.
+     * (a frame that hugs), each takes its own, one that fills measured as it would hug.
+     * [hugsMain]: the frame hugs along the line, so [main] is what its children take, and those
+     * that fill keep what they measured unless a min or max gave it more or less room.
      */
-    private fun lineSizes(kids: List<String>, main: Double?, cross: Double?, row: Boolean, items: String, gap: Double): List<Slot> {
+    private fun lineSizes(kids: List<String>, main: Double?, cross: Double?, row: Boolean, hugsMain: Boolean, items: String, gap: Double): List<Slot> {
         val slots = kids.map { c ->
             val k = scene.node(c)!!
             val mainRule = if (row) wSizing(k) else hSizing(k)
             val crossRule = if (row) hSizing(k) else wSizing(k)
             val group = k.kind == "group"
             val stretch = !group && (crossRule == Sizing.Fill || items == "stretch")
+            // Along an axis the frame offers no room on, filling is hugging.
+            val hugMain = main == null || hugsMain
+            val hugCross = cross == null
+            val rules = if (row) As(hugW = hugMain, hugH = hugCross) else As(hugW = hugCross, hugH = hugMain)
             val (w, h) = when {
-                row -> size(c, null)
-                cross != null && stretch -> stretched(c, cross)
-                else -> size(c, cross)
+                row -> sizeAs(c, null, rules)
+                cross != null && stretch -> sizeAs(c, cross, rules.copy(stretch = true))
+                else -> sizeAs(c, cross, rules)
             }
             var across = if (row) h else w
             if (row && stretch && cross != null) across = clampH(k, cross)
@@ -461,6 +484,12 @@ private class LayoutPass(val scene: DesignScene, val measure: Measure) {
         var taken = 0.0
         for (s in slots) if (!s.fill) taken += s.main
         val gaps = gap * (slots.size - 1)
+        if (hugsMain) {
+            // The frame took what they measured: they keep it, rather than equal shares of it.
+            var measured = 0.0
+            for (i in fills) measured += slots[i].main
+            if (abs(main - taken - gaps - measured) < 0.5) return slots
+        }
         val limits = fills.map { i -> scene.node(kids[i])?.let { k -> if (row) k.minW to k.maxW else k.minH to k.maxH } ?: (null to null) }
         for ((i, share) in fills.zip(shares(main - taken - gaps, limits))) {
             slots[i].main = share
@@ -599,7 +628,8 @@ private class LayoutPass(val scene: DesignScene, val measure: Measure) {
             return
         }
         val row = layoutMode(frame) == LayoutMode.Row
-        val slots = lineSizes(kids, if (row) inner.w else inner.h, if (row) inner.h else inner.w, row, itemsOf(frame), frame.gap ?: 0.0)
+        val hugsMain = (if (row) wSizing(frame) else hSizing(frame)) == Sizing.Hug
+        val slots = lineSizes(kids, if (row) inner.w else inner.h, if (row) inner.h else inner.w, row, hugsMain, itemsOf(frame), frame.gap ?: 0.0)
         placeLine(frame, kids, slots, inner, row)
     }
 

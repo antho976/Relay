@@ -1822,6 +1822,84 @@
         "plain": [-40,160,180,120],
         "lost": [200,200,100,40]
       }
+    },
+    {
+      "name": "a_menu_that_hugs_holds_items_that_fill_it",
+      "page": "p1",
+      "nodes": [
+        {"id":"p1","kind":"page"},
+        {"id":"tip","parent":"p1","kind":"frame","layout":"column","padding":[8],"w_sizing":"hug","h_sizing":"hug"},
+        {"id":"row","parent":"tip","kind":"frame","layout":"row","w_sizing":"fill","h_sizing":"hug","w":100},
+        {"id":"t","parent":"row","kind":"text","text":"Hello there"},
+        {"id":"t2","parent":"tip","kind":"text","text":"Hi"}
+      ],
+      "rects": {
+        "p1": [0,0,0,0],
+        "tip": [0,0,104,56],
+        "row": [8,8,88,20],
+        "t": [8,8,88,20],
+        "t2": [8,28,16,20]
+      },
+      "bounds": {
+        "p1": [0,0,104,56],
+        "tip": [0,0,104,56],
+        "row": [8,8,88,20],
+        "t": [8,8,88,20],
+        "t2": [8,28,16,20]
+      }
+    },
+    {
+      "name": "a_row_that_hugs_keeps_its_filling_words_whole",
+      "page": "p1",
+      "nodes": [
+        {"id":"p1","kind":"page"},
+        {"id":"tabs","parent":"p1","kind":"frame","layout":"row","gap":8,"w_sizing":"hug","h_sizing":"hug"},
+        {"id":"a","parent":"tabs","kind":"text","text":"Day","w_sizing":"fill"},
+        {"id":"b","parent":"tabs","kind":"text","text":"Settings","w_sizing":"fill"}
+      ],
+      "rects": {
+        "p1": [0,0,0,0],
+        "tabs": [0,0,96,20],
+        "a": [0,0,24,20],
+        "b": [32,0,64,20]
+      },
+      "bounds": {
+        "p1": [0,0,96,20],
+        "tabs": [0,0,96,20],
+        "a": [0,0,24,20],
+        "b": [32,0,64,20]
+      }
+    },
+    {
+      "name": "a_column_that_hugs_keeps_its_filling_heights",
+      "page": "p1",
+      "nodes": [
+        {"id":"p1","kind":"page"},
+        {"id":"col","parent":"p1","kind":"frame","layout":"column","w":100,"h_sizing":"hug"},
+        {"id":"a","parent":"col","kind":"rect","w":100,"h":100,"h_sizing":"fill"},
+        {"id":"b","parent":"col","kind":"rect","w":100,"h":50,"h_sizing":"fill"},
+        {"id":"c","parent":"p1","kind":"frame","x":200,"layout":"row","w_sizing":"hug","h_sizing":"hug","min_w":200},
+        {"id":"c1","parent":"c","kind":"text","text":"Day","w_sizing":"fill"},
+        {"id":"c2","parent":"c","kind":"text","text":"Settings","w_sizing":"fill"}
+      ],
+      "rects": {
+        "p1": [0,0,0,0],
+        "col": [0,0,100,150],
+        "a": [0,0,100,100],
+        "b": [0,100,100,50],
+        "c": [200,0,200,20],
+        "c1": [200,0,100,20],
+        "c2": [300,0,100,20]
+      },
+      "bounds": {
+        "p1": [0,0,400,150],
+        "col": [0,0,100,150],
+        "a": [0,0,100,100],
+        "b": [0,100,100,50],
+        "c": [200,0,200,20],
+        "c1": [200,0,100,20],
+        "c2": [300,0,100,20]
+      }
     }
   ]
 }
