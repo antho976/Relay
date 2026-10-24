@@ -167,7 +167,8 @@ fn build(ui: &Rc<Ui>, spec: &'static Spec) -> Rc<Market> {
     root.set_vexpand(true);
     root.set_hexpand(true);
 
-    // Header: identity, the project the switches apply to, and page actions.
+    // Header: identity, the project the switches apply to, and page actions on the title's line;
+    // the description under them, at its own width rather than squeezed beside three controls.
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 14);
     head.add_css_class("ext-head");
     let tile = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -180,13 +181,19 @@ fn build(ui: &Rc<Ui>, spec: &'static Spec) -> Rc<Market> {
     glyph.set_halign(gtk::Align::Center);
     tile.append(&glyph);
     head.append(&tile);
-    let words = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    tile.set_valign(gtk::Align::Start);
+    let words = gtk::Box::new(gtk::Orientation::Vertical, 6);
     words.set_hexpand(true);
     words.set_valign(gtk::Align::Center);
-    words.append(&label(spec.title, "ext-title"));
+    let title_line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let title = label(spec.title, "ext-title");
+    title.set_hexpand(true);
+    title.set_valign(gtk::Align::Center);
+    title_line.append(&title);
+    words.append(&title_line);
     let subtitle = label(spec.subtitle, "ext-subtitle");
     subtitle.set_wrap(true);
-    subtitle.set_max_width_chars(88);
+    subtitle.set_max_width_chars(110);
     words.append(&subtitle);
     head.append(&words);
     let scope = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -223,11 +230,11 @@ fn build(ui: &Rc<Ui>, spec: &'static Spec) -> Rc<Market> {
     picker.set_factory(Some(&factory));
     picker.set_list_factory(Some(&factory));
     scope.append(&picker);
-    head.append(&scope);
+    title_line.append(&scope);
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     actions.add_css_class("ext-actions");
     actions.set_valign(gtk::Align::Center);
-    head.append(&actions);
+    title_line.append(&actions);
     root.append(&head);
 
     let banner = gtk::Box::new(gtk::Orientation::Vertical, 10);
@@ -1167,6 +1174,35 @@ pub(crate) fn facts(rows: &[(&str, String, bool)]) -> gtk::Grid {
         grid.attach(&value, 1, line as i32, 1, 1);
     }
     grid
+}
+
+/// A plugin's plate: the bundled plugins have a drawn mark for what they work on; any other
+/// plugin its monogram.
+pub(crate) fn plugin_mark(plugin: &Value, large: bool) -> gtk::Widget {
+    let glyph = match text(plugin, "id") {
+        "blender" => "cube",
+        "design" => "design",
+        "performance" => "gauge",
+        "pictures" => "picture",
+        "unreal-engine" => "gamepad",
+        "video" => "film",
+        _ => return monogram(text(plugin, "name"), large).upcast(),
+    };
+    let mark = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    mark.add_css_class("ext-mark");
+    mark.add_css_class("drawn");
+    if large {
+        mark.add_css_class("large");
+    }
+    // Centred both ways in the plate, as the page's header tile is.
+    mark.set_layout_manager(Some(gtk::BinLayout::new()));
+    let image = crate::icons::image(glyph, if large { 26 } else { 18 });
+    image.set_halign(gtk::Align::Center);
+    image.set_valign(gtk::Align::Center);
+    mark.append(&image);
+    mark.set_valign(gtk::Align::Start);
+    mark.set_halign(gtk::Align::Center);
+    mark.upcast()
 }
 
 /// A rounded monogram plate for items without their own artwork.

@@ -222,6 +222,11 @@ pub fn image_with_stroke(name: &str, size: i32, stroke: f64) -> gtk::Image {
         }
         "save" => r##"<path d="M3 3h8l2 2v8H3z" /><path d="M5 3v4h5V3M5 13V9h6v4" />"##,
         "design" => r##"<path d="M5.5 2v12M10.5 2v12M2 5.5h12M2 10.5h12"/>"##,
+        // The bundled plugins' marks (tools_market::plugin_mark): what each works on, drawn.
+        "cube" => r##"<path d="M8 1.75l5.5 3v6.5L8 14.25l-5.5-3v-6.5z" /><path d="M2.5 4.75L8 7.75l5.5-3M8 7.75v6.5" />"##,
+        "gauge" => r##"<path d="M2.25 11.5a5.75 5.75 0 1 1 11.5 0" /><path d="M8 11.5l2.75-3.25" /><path d="M4.25 11.5h.01M11.75 11.5h.01" />"##,
+        "picture" => r##"<rect x="2" y="3" width="12" height="10" rx="1.5" /><circle cx="5.75" cy="6.5" r="1.1" /><path d="M2.5 12.25l3.75-3.75 2.5 2.5 1.75-1.75 3 3" />"##,
+        "film" => r##"<rect x="2" y="3.5" width="12" height="9" rx="1.5" /><path d="M6.75 6.25v3.5L9.75 8z" />"##,
         "edit" => r##"<path d="M3 13l1-3.5L11 2.5l2.5 2.5L6.5 12z" /><path d="M9.5 4l2.5 2.5" />"##,
         "merge" => {
             r##"<circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="12.5" r="1.5" /><path d="M4.5 5v6M4.5 5a5 5 0 0 0 5 5h.5" />"##

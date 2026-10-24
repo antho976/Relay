@@ -510,9 +510,6 @@ struct TopBar {
     actions: gtk::Box,
     palette_key: gtk::Button,
     palette_keycap: gtk::Label,
-    /// The search key's words, the utility keys (or their More key) and New agent's caption,
-    /// folded in that order as the bar narrows (`fold_top_bar`).
-    folds: [crate::fold::Fold; 3],
     layouts_key: gtk::Button,
     skills_key: gtk::Button,
     plugins_key: gtk::Button,
@@ -746,7 +743,6 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
         actions: top_actions,
         palette_key,
         palette_keycap,
-        folds: [palette_fold, tools_fold, launch_fold],
         layouts_key,
         skills_key,
         plugins_key,
