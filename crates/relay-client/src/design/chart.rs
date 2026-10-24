@@ -191,20 +191,24 @@ impl Draw<'_> {
     /// How the values written over bars or points `slot` px apart are set so the widest fits its
     /// slot: in full, then without the words after them, then short, each at the chart's size or
     /// a point at a time smaller down to three quarters of it (and not under 8); short at that
-    /// smallest size when nothing fits.
-    fn value_fit(&self, slot: f64) -> (Form, f64) {
+    /// smallest size when nothing fits, with how far apart the widest needs values to be (its
+    /// words without their margin; 0 when every value fits its slot), so that only every so many
+    /// are written ([`every`]) rather than words over words.
+    fn value_fit(&self, slot: f64) -> (Form, f64, f64) {
         let shown = self.shown();
         let smallest = (self.size * 0.75).floor().max(8.0).min(self.size);
         for form in self.forms(&shown) {
             let mut size = self.size;
             while size >= smallest {
                 if shown.iter().all(|v| estimate(&self.written(*v, form), size) <= slot) {
-                    return (form, size);
+                    return (form, size, 0.0);
                 }
                 size -= 1.0;
             }
         }
-        (*self.forms(&shown).last().unwrap_or(&Form::Full), smallest)
+        let form = *self.forms(&shown).last().unwrap_or(&Form::Full);
+        let widest = shown.iter().map(|v| estimate(&self.written(*v, form), smallest)).fold(0.0, f64::max);
+        (form, smallest, (widest - 4.0).max(0.0))
     }
 
     /// The forms worth trying for `values`, fullest first: without the words after them only when
@@ -324,7 +328,9 @@ impl Draw<'_> {
         let (lh, room) = (self.line_h(), self.value_room());
         // Standing up, each value has its bar's share of the label's room.
         let slot = if stacked { band } else { band / m as f64 };
-        let (form, size) = if across { (Form::Full, self.size) } else { self.value_fit(slot) };
+        let (form, size, need) = if across { (Form::Full, self.size, 0.0) } else { self.value_fit(slot) };
+        // Side by side, a label's bars stand `thick` apart: the values are counted along them all.
+        let every = every(need, if stacked || m == 1 { band } else { thick });
         for i in 0..c.labels.len() {
             let (mut up, mut down) = (0.0_f64, 0.0_f64);
             for j in 0..m {
@@ -356,7 +362,8 @@ impl Draw<'_> {
                 let color = c.value_color(j, i);
                 let bar = self.node(NodeKind::Rect, format!("bar-{j}-{i}"), rect);
                 (bar.fill, bar.radii) = (Some(color), Some(radii));
-                if c.values == Some(true) && (!stacked || j + 1 == m) {
+                let nth = if stacked { i } else { i * m + j };
+                if c.values == Some(true) && (!stacked || j + 1 == m) && nth % every == 0 {
                     let shown = if stacked { up + down } else { v };
                     let words = self.written(shown, form);
                     let [x, y, w, h] = rect;
@@ -380,7 +387,8 @@ impl Draw<'_> {
         let c = self.chart;
         let base = plot.y + plot.h * (1.0 - axis.at(0.0_f64.clamp(axis.lo, axis.hi)));
         let lh = self.line_h();
-        let (form, size) = self.value_fit(band);
+        let (form, size, need) = self.value_fit(band);
+        let every = every(need, band);
         for (j, s) in c.series.iter().enumerate() {
             let color = c.series_color(j);
             let points: Vec<[f64; 2]> = s.values.iter().enumerate()
@@ -408,7 +416,7 @@ impl Draw<'_> {
                     let dot = self.node(NodeKind::Ellipse, format!("dot-{j}-{i}"), [x - 3.0, y - 3.0, 6.0, 6.0]);
                     dot.fill = Some(c.value_color(j, i));
                 }
-                if c.values == Some(true) {
+                if c.values == Some(true) && i % every == 0 {
                     let v = s.values[i];
                     let words = self.written(v, form);
                     let wide = band.max(estimate(&words, size));
@@ -529,6 +537,18 @@ fn estimate(words: &str, size: f64) -> f64 {
     (words.chars().count() as f64 * size * (ESTIMATE_EM + 0.07)).ceil() + 4.0
 }
 
+/// Write every how many values, `pitch` px apart, that need `need` px between their middles: 1
+/// when every one fits.
+fn every(need: f64, pitch: f64) -> usize {
+    if need <= 0.0 {
+        1
+    } else if pitch > 0.0 {
+        (need / pitch).ceil().clamp(1.0, 1e6) as usize
+    } else {
+        usize::MAX
+    }
+}
+
 fn round(v: f64) -> f64 {
     (v * 2.0).round() / 2.0
 }
@@ -605,6 +625,27 @@ mod tests {
         let roomy = parts(&frame(json!({"kind": "bar", "values": true, "suffix": " kcal", "labels": ["M", "T"], "series": [{"values": [7250, 6890]}]}), 480.0, 180.0));
         assert_eq!((part(&roomy, "value-0-0").text.as_deref(), part(&roomy, "value-0-0").font_size), (Some("7,250 kcal"), Some(12.0)));
         assert_eq!((short(7250.0, 0), short(12_000.0, 0), short(1_250_000.0, 0), short(-950.0, 0), short(150_000.0, 0)), ("7.3k".into(), "12k".into(), "1.3M".into(), "-950".into(), "150k".into()));
+    }
+
+    /// Past the smallest short form, only every so many values are written, never one over the
+    /// next: 12 bars in 160 px, 24 in 200, a 12-point line in 240, two series side by side.
+    #[test]
+    fn values_too_dense_for_any_form_are_thinned() {
+        for (w, n, kind, series) in [(160.0, 12, "bar", 1), (200.0, 24, "bar", 1), (240.0, 12, "line", 1), (200.0, 8, "bar", 2)] {
+            let labels: Vec<String> = (0..n).map(|i| format!("D{i}")).collect();
+            let all: Vec<serde_json::Value> = (0..series).map(|s| json!({"values": (0..n).map(|i| 7250.0 + (i + s * 3) as f64 * 10.0).collect::<Vec<_>>()})).collect();
+            let chart = json!({"kind": kind, "values": true, "suffix": " kcal", "labels": labels, "series": all});
+            let parts = parts(&frame(chart, w, 180.0));
+            let mut values: Vec<&Node> = parts.iter().filter(|p| p.id.contains(".value-")).collect();
+            values.sort_by(|a, b| (a.x + a.w / 2.0).total_cmp(&(b.x + b.w / 2.0)));
+            assert!(values.len() >= 2 && values.len() < n * series, "{kind} {n} in {w}: {} values", values.len());
+            for pair in values.windows(2) {
+                let (a, b) = (pair[0], pair[1]);
+                let half = |n: &Node| (estimate(n.text.as_deref().unwrap(), n.font_size.unwrap()) - 4.0) / 2.0;
+                let gap = (b.x + b.w / 2.0) - (a.x + a.w / 2.0) - half(a) - half(b);
+                assert!(gap >= -0.5, "{kind} {n} in {w}: {} and {} overlap by {}", a.id, b.id, -gap);
+            }
+        }
     }
 
     /// A bar lying across leaves room past its end for its value, however long it is written:
