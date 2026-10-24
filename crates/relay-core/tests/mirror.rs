@@ -85,7 +85,7 @@ fn push_args_target_relay_owned_path() {
             "push",
             "--sync",
             "/res/scrcpy-server-v4.1",
-            "/data/local/tmp/scrcpy-server-relay.jar",
+            "/data/local/tmp/scrcpy-server-relay-deacb991ed25.jar",
         ]
     );
 }
@@ -462,7 +462,7 @@ fn the_launch_line_is_pinned() {
             "-s",
             "S",
             "shell",
-            "CLASSPATH=/data/local/tmp/scrcpy-server-relay.jar",
+            "CLASSPATH=/data/local/tmp/scrcpy-server-relay-deacb991ed25.jar",
             "app_process",
             "/",
             "com.genymobile.scrcpy.Server",
