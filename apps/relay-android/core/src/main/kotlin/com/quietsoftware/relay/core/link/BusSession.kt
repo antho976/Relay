@@ -12,6 +12,7 @@ import com.quietsoftware.relay.core.wire.Wire
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
@@ -31,7 +32,7 @@ class BusSession internal constructor(
     val route: Route,
     val greeting: Greeting,
     val device: String,
-    scope: CoroutineScope,
+    private val scope: CoroutineScope,
 ) {
     private val pending = ConcurrentHashMap<String, CompletableDeferred<Response>>()
     private val closed = AtomicBoolean(false)
@@ -65,12 +66,27 @@ class BusSession internal constructor(
         }
     }
 
-    private fun deliver(event: Event) {
-        if (lostEvents > 0) {
-            val lagged = Event("bus.lagged", event.ts, "system", null, null, JsonObject(mapOf("dropped" to kotlinx.serialization.json.JsonPrimitive(lostEvents))))
-            if (_events.tryEmit(lagged)) lostEvents = 0
+    private var lagging: Job? = null
+
+    private fun deliver(event: Event) = synchronized(this) {
+        tellLost(event.ts)
+        if (!_events.tryEmit(event)) {
+            lostEvents++
+            // A burst that overflows and then goes quiet has no later event to carry the news:
+            // tell it as soon as the reader catches up.
+            if (lagging?.isActive != true) lagging = scope.launch {
+                while (synchronized(this@BusSession) { lostEvents > 0 && !tellLost(event.ts) }) delay(LAGGED_RETRY_MS)
+            }
         }
-        if (!_events.tryEmit(event)) lostEvents++
+    }
+
+    /** A `bus.lagged` for the events dropped so far, if there is room for it now; true once none are owed. Under the lock. */
+    private fun tellLost(ts: String): Boolean {
+        if (lostEvents == 0) return true
+        val lagged = Event("bus.lagged", ts, "system", null, null, JsonObject(mapOf("dropped" to kotlinx.serialization.json.JsonPrimitive(lostEvents))))
+        if (!_events.tryEmit(lagged)) return false
+        lostEvents = 0
+        return true
     }
 
     val isOpen: Boolean get() = !closed.get()
@@ -122,5 +138,7 @@ class BusSession internal constructor(
         const val DEFAULT_TIMEOUT_MS = 30_000L
         const val EVENT_BUFFER = 4096
         const val FRAME_BUFFER = 4096
+        /** How often a lagged marker that found no room is tried again. */
+        const val LAGGED_RETRY_MS = 50L
     }
 }
