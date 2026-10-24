@@ -935,7 +935,8 @@ fn connect_mirror_video(port: u16, deadline: Instant) -> Result<TcpStream, Strin
 fn drain_server_lines(pipe: Option<impl Read + Send + 'static>, ring: Arc<Mutex<Vec<String>>>) {
     let Some(pipe) = pipe else { return };
     std::thread::spawn(move || {
-        for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+        let (mut reader, mut buffer) = (BufReader::new(pipe), Vec::new());
+        while let Ok(Some(line)) = read_lossy_line(&mut reader, &mut buffer) {
             let mut lines = ring.lock().unwrap();
             lines.push(line);
             let overflow = lines.len().saturating_sub(30);
@@ -2791,10 +2792,37 @@ fn crash_line(line: &str) -> bool {
     line.contains("FATAL EXCEPTION") || line.contains("Fatal signal")
 }
 
-/// Read one line, invalid UTF-8 replaced rather than refused. `Ok(None)` at end of stream.
+/// The most of one log line kept: a run command that prints a huge blob with no newline would
+/// otherwise grow the engine without end, and the 512-line ring hold and broadcast it whole.
+const MAX_LOG_LINE: usize = 64 * 1024;
+
+/// Read one line, invalid UTF-8 replaced rather than refused, cut at [`MAX_LOG_LINE`] bytes
+/// (the rest of it read and dropped). `Ok(None)` at end of stream.
 fn read_lossy_line(reader: &mut impl BufRead, buffer: &mut Vec<u8>) -> std::io::Result<Option<String>> {
     buffer.clear();
-    if reader.read_until(b'\n', buffer)? == 0 {
+    let mut read = 0;
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(available) => available,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        if available.is_empty() {
+            break;
+        }
+        let (taken, ended) = match available.iter().position(|b| *b == b'\n') {
+            Some(at) => (at + 1, true),
+            None => (available.len(), false),
+        };
+        let room = MAX_LOG_LINE.saturating_sub(buffer.len());
+        buffer.extend_from_slice(&available[..taken.min(room)]);
+        reader.consume(taken);
+        read += taken;
+        if ended {
+            break;
+        }
+    }
+    if read == 0 {
         return Ok(None);
     }
     while matches!(buffer.last(), Some(b'\n' | b'\r')) {
@@ -3342,6 +3370,19 @@ fn run_row(row: &Row) -> rusqlite::Result<Run> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A line past the cap is cut there, the rest of it dropped, and the next line read whole;
+    /// invalid UTF-8 is replaced, a last line without a newline still read.
+    #[test]
+    fn a_log_line_is_cut_at_the_cap() {
+        let mut text = vec![b'x'; MAX_LOG_LINE * 3];
+        text.extend_from_slice(b"\r\nnext \xff\nlast");
+        let (mut reader, mut buffer) = (std::io::BufReader::with_capacity(4096, &text[..]), Vec::new());
+        assert_eq!(read_lossy_line(&mut reader, &mut buffer).unwrap().unwrap().len(), MAX_LOG_LINE);
+        assert_eq!(read_lossy_line(&mut reader, &mut buffer).unwrap().unwrap(), "next \u{fffd}");
+        assert_eq!(read_lossy_line(&mut reader, &mut buffer).unwrap().unwrap(), "last");
+        assert_eq!(read_lossy_line(&mut reader, &mut buffer).unwrap(), None);
+    }
 
     fn git(root: &Path, args: &[&str]) -> String {
         let output = Command::new("git")
