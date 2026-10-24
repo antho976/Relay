@@ -150,9 +150,18 @@ fn print_held(link: &Link) {
             Some(cloud::Whole::Pc) => " (sending this PC's on the next round)",
             None => "",
         };
+        let what = match held.lost {
+            Some(lost) => format!(
+                "the cloud copy sent changes that delete or rewrite {lost} of the {} accounts and entries here",
+                held.pc_rows
+            ),
+            None => format!(
+                "the cloud's ledger was replaced by one with {} accounts and entries, against {} here",
+                held.cloud_rows, held.pc_rows
+            ),
+        };
         println!(
-            "held:      the cloud's ledger was replaced by one with {} accounts and entries, against {} here{chosen}: `relay cloud accept cloud` takes it, `relay cloud accept pc` keeps this PC's",
-            held.cloud_rows, held.pc_rows
+            "held:      {what}{chosen}: `relay cloud accept cloud` takes the cloud's, `relay cloud accept pc` keeps this PC's"
         );
     }
 }
