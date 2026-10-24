@@ -320,6 +320,9 @@ pub struct Board {
     pub(super) page_label: gtk::Label,
     /// The dock's page list, rebuilt while open when the pages change.
     pages_popover: RefCell<Option<gtk::Popover>>,
+    /// What the dock's page list was built for, and the page on show then: while they stay,
+    /// an edit leaves its rows, and a rename or drag on one, alone.
+    pages_popover_sig: RefCell<Option<(super::layers::PageSig, String)>>,
     pub(super) context: RefCell<Option<gtk::Widget>>,
     pub(super) context_at: Cell<(i32, i32)>,
     /// The toolbar's width with its words showing, measured before it was made compact.
@@ -618,6 +621,7 @@ impl Board {
             pen_key,
             page_label,
             pages_popover: RefCell::default(),
+            pages_popover_sig: RefCell::default(),
             context: RefCell::default(),
             context_at: Cell::new((0, 0)),
             context_full: Cell::new(None),
@@ -1300,7 +1304,12 @@ impl Board {
         }
         // The dock's open page list lists the pages there are now (TM-69).
         if let Some(pop) = self.pages_popover.borrow().as_ref().filter(|p| p.is_visible()) {
-            pop.set_child(Some(&super::layers::pages_menu(&self.me(), pop)));
+            let me = self.me();
+            let sig = (super::layers::page_sig(&me), self.page.borrow().clone());
+            if self.pages_popover_sig.borrow().as_ref() != Some(&sig) {
+                pop.set_child(Some(&super::layers::pages_menu(&me, pop)));
+                *self.pages_popover_sig.borrow_mut() = Some(sig);
+            }
         }
     }
 
@@ -1356,6 +1365,11 @@ impl Board {
         }
         if let Some(layers) = self.layers.borrow().as_ref() {
             layers.pages_changed();
+        }
+        // Tied to another terminal (or a first one): the panel follows it.
+        let panel = self.agent_panel.borrow().clone();
+        if let Some(panel) = panel {
+            panel.follow_session();
         }
     }
 
@@ -2690,6 +2704,7 @@ impl Board {
         pages_popover.connect_show(move |pop| {
             if let Some(b) = weak.upgrade() {
                 pop.set_child(Some(&super::layers::pages_menu(&b, pop)));
+                *b.pages_popover_sig.borrow_mut() = Some((super::layers::page_sig(&b), b.page.borrow().clone()));
             }
         });
         dock.append(&page_key);

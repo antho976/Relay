@@ -205,7 +205,7 @@ fn tallest(n: &Node) -> f64 {
 
 /// The widest letter spacing `n`'s words carry, its own or a run's: what a line may run past
 /// its wrap width with nothing drawn there.
-fn trailing_spacing(n: &Node) -> f64 {
+pub(super) fn trailing_spacing(n: &Node) -> f64 {
     n.runs.iter().flatten().filter_map(|r| r.letter_spacing).fold(n.letter_spacing.unwrap_or(0.0), f64::max).max(0.0)
 }
 

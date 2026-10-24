@@ -1215,7 +1215,7 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                 assert lent["card"] and lent["back"], ("no card on the wall for the lent terminal", lent)
                 x, y, w, h = lent["back"]
                 go("click", x + w / 2, y + h / 2)
-            run = native(shot, "panel", script=["agent-panel:terminal", "wait:2500", "app-page:agents", "wait:1200", "lent-card",
+            run = native(shot, "panel", script=["agent-panel:terminal", "wait:2500", "agents-key", "wait:1200", "lent-card",
                                                 "mark:card", "wait:2500", "lent-card", "panel"], seconds=14, during=act)
             after = lines(run.log, "DESIGN_LENT")[-1]
             panel = lines(run.log, "DESIGN_PANEL")[-1]

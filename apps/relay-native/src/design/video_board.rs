@@ -91,6 +91,10 @@ pub struct VideoBoard {
     about: gtk::Label,
     props_box: gtk::Box,
     fields: RefCell<Vec<(String, Field)>>,
+    /// What the props fields were built from: the composition, its schema and defaults, and
+    /// the props stored. While they stay, a reread (a render finishing, an agent's change
+    /// elsewhere) leaves the fields, and what is typed in them, alone.
+    props_sig: RefCell<Option<String>>,
     renders_box: gtk::Box,
     versions_box: gtk::Box,
     voices_box: gtk::Box,
@@ -143,6 +147,12 @@ fn group(n: i64) -> String {
         out.push(c);
     }
     if n < 0 { format!("-{out}") } else { out }
+}
+
+/// The render the progress bar shows and Stop cancels: the one rendering, else the oldest still
+/// queued, the next to run. `renders` comes newest first.
+fn current_render(renders: &[VideoRender]) -> Option<&VideoRender> {
+    renders.iter().find(|r| r.state == RenderState::Rendering).or_else(|| renders.iter().rev().find(|r| !r.state.is_final()))
 }
 
 fn playable(r: &VideoRender) -> bool {
@@ -244,6 +254,13 @@ impl VideoBoard {
         player.set_autoplay(false);
         player.set_loop(true);
         player.set_vexpand(true);
+        // GtkVideo pauses itself on unmap only with autoplay on: left for another page, a video
+        // playing would go on looping, sound and all.
+        player.connect_unmap(|v| {
+            if let Some(stream) = v.media_stream() {
+                stream.pause();
+            }
+        });
         stage.add_named(&player, Some("player"));
         // The poster takes the height the note and the keys under it leave, so a tall video's
         // never pushes them off the stage.
@@ -397,6 +414,7 @@ impl VideoBoard {
             about,
             props_box,
             fields: RefCell::default(),
+            props_sig: RefCell::default(),
             renders_box,
             versions_box,
             voices_box,
@@ -451,7 +469,7 @@ impl VideoBoard {
         let weak = Rc::downgrade(&b);
         cancel_key.connect_clicked(move |_| {
             let Some(b) = weak.upgrade() else { return };
-            let running = b.detail.borrow().as_ref().and_then(|d| d.renders.iter().find(|r| !r.state.is_final()).map(|r| r.id));
+            let running = b.detail.borrow().as_ref().and_then(|d| current_render(&d.renders).map(|r| r.id));
             if let Some(render_id) = running {
                 b.call("video.render.cancel", json!({"render_id": render_id}), None);
             }
@@ -785,7 +803,7 @@ impl VideoBoard {
     }
 
     fn show_progress(&self) {
-        let running = self.detail.borrow().as_ref().and_then(|d| d.renders.iter().find(|r| !r.state.is_final()).cloned());
+        let running = self.detail.borrow().as_ref().and_then(|d| current_render(&d.renders).cloned());
         match running {
             Some(r) => {
                 self.progress.set_visible(true);
@@ -802,6 +820,17 @@ impl VideoBoard {
     }
 
     fn show_props(&self, detail: &GetOut) {
+        let comp = detail.compositions.iter().find(|c| c.id == detail.video.composition);
+        let sig = json!([
+            detail.video.composition,
+            comp.map(|c| (&c.props_schema, &c.default_props)),
+            detail.props.get(&detail.video.composition),
+        ])
+        .to_string();
+        if self.props_sig.borrow().as_deref() == Some(sig.as_str()) {
+            return;
+        }
+        *self.props_sig.borrow_mut() = Some(sig);
         clear(&self.props_box);
         self.fields.borrow_mut().clear();
         let Some(comp) = detail.compositions.iter().find(|c| c.id == detail.video.composition) else {
@@ -1264,6 +1293,24 @@ mod tests {
         assert_eq!(group(99000), "99,000");
         assert_eq!(group(1234567), "1,234,567");
         assert_eq!(group(12), "12");
+    }
+
+    #[test]
+    fn the_bar_follows_the_render_running_not_the_newest_queued() {
+        let render = |id, state| {
+            serde_json::from_value::<VideoRender>(json!({
+                "id": id, "video_id": 1, "project_id": 1, "composition": "main", "format": "mp4", "quality": "standard",
+                "state": state, "progress": 0.0, "version": 1, "range": null, "path": null, "bytes": null, "error": null,
+                "actor": "user", "created_at": "", "started_at": null, "finished_at": null
+            }))
+            .unwrap()
+        };
+        // Newest first, as the board keeps them.
+        let renders = vec![render(4, "queued"), render(3, "queued"), render(2, "rendering"), render(1, "done")];
+        assert_eq!(current_render(&renders).map(|r| r.id), Some(2));
+        let waiting = vec![render(4, "queued"), render(3, "queued"), render(1, "done")];
+        assert_eq!(current_render(&waiting).map(|r| r.id), Some(3));
+        assert!(current_render(&[render(1, "failed")]).is_none());
     }
 
     #[test]

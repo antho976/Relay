@@ -207,6 +207,10 @@ pub struct AgentPanel {
     place: Cell<Place>,
     /// Where the drag moving or resizing the card began, on the board.
     grabbed: Cell<Option<(f64, f64)>>,
+    /// A resize strip is held: the terminal's rows and columns follow once, on release.
+    sizing: Cell<bool>,
+    /// The size last placed at, so a canvas that shrinks the card resizes its terminal too.
+    shown_size: Cell<(i32, i32)>,
     /// The session shown, and the pane lent for it while the terminal shows.
     session: RefCell<Option<String>>,
     lent: RefCell<Option<(String, Rc<Pane>)>>,
@@ -366,6 +370,8 @@ impl AgentPanel {
             note,
             place: Cell::new(place),
             grabbed: Cell::new(None),
+            sizing: Cell::new(false),
+            shown_size: Cell::new((0, 0)),
             session: RefCell::default(),
             lent: RefCell::default(),
             cursor: Cell::new(None),
@@ -410,7 +416,7 @@ impl AgentPanel {
                 return;
             }
             g.set_state(gtk::EventSequenceState::Claimed);
-            f.set(p.place.get());
+            f.set(p.shown());
             p.grab(g, x, y);
         });
         let weak = Rc::downgrade(&panel);
@@ -463,6 +469,14 @@ impl AgentPanel {
             glib::Propagation::Stop
         });
         panel.root.add_controller(keys);
+        // The read loop stops while the card is off screen (another page, the Agents wall):
+        // shown again, it reads again, or the conversation would stay where it was left.
+        let weak = Rc::downgrade(&panel);
+        panel.root.connect_map(move |_| {
+            if let Some(p) = weak.upgrade().filter(|p| p.place.get().chat) {
+                p.read_chat();
+            }
+        });
         let weak = Rc::downgrade(&panel);
         panel.zoom_key.connect_clicked(move |_| {
             if let Some(p) = weak.upgrade() {
@@ -537,6 +551,15 @@ impl AgentPanel {
         }
     }
 
+    /// Show the design's terminal again when it is no longer the one shown: tied to another, or
+    /// to one for the first time.
+    pub fn follow_session(self: &Rc<Self>) {
+        let session = self.board.upgrade().and_then(|b| b.doc.session());
+        if *self.session.borrow() != session {
+            self.open();
+        }
+    }
+
     /// Put away: the terminal goes back to the wall, and nothing more is read.
     pub fn close(&self) {
         // A board dropped as the app quits, its thread's storage going: nothing to hand back to.
@@ -550,7 +573,15 @@ impl AgentPanel {
     /// Where the board places the card on a canvas `cw` by `ch`.
     pub fn placed(&self, cw: f64, ch: f64) -> gdk::Rectangle {
         let p = self.place.get().within(cw, ch);
-        gdk::Rectangle::new(p.x.round() as i32, p.y.round() as i32, p.w.round() as i32, p.h.round() as i32)
+        let r = gdk::Rectangle::new(p.x.round() as i32, p.y.round() as i32, p.w.round() as i32, p.h.round() as i32);
+        // Shrunk or grown by the canvas (a popped-out window resized), not by a strip: the
+        // agent draws for the new rows and columns, as VTE already does.
+        if self.shown_size.replace((r.width(), r.height())) != (r.width(), r.height()) && !self.sizing.get() {
+            if let Some((_, pane)) = self.lent.borrow().clone() {
+                pane.schedule_resize();
+            }
+        }
+        r
     }
 
     /// Show session `name`'s terminal in the card when it is the one shown: true when it now
@@ -589,6 +620,13 @@ impl AgentPanel {
             "window_box": self.root.root().and_then(|r| self.root.compute_bounds(&r)).map(|b| [b.x(), b.y(), b.width(), b.height()]),
             "zoom": self.zoom(),
         })
+    }
+
+    /// The place as the card is shown: the stored one held to the canvas as it is now. A drag
+    /// starts from it, or after the canvas shrank the card would stick, then jump.
+    fn shown(&self) -> Place {
+        let (cw, ch) = self.board.upgrade().map_or((f64::INFINITY, f64::INFINITY), |b| b.size.get());
+        self.place.get().within(cw, ch)
     }
 
     fn set_place(&self, to: Place) {
@@ -710,7 +748,8 @@ impl AgentPanel {
         sizing.connect_drag_begin(move |g, x, y| {
             if let Some(p) = weak.upgrade() {
                 g.set_state(gtk::EventSequenceState::Claimed);
-                f.set(p.place.get());
+                f.set(p.shown());
+                p.sizing.set(true);
                 p.grab(g, x, y);
             }
         });
@@ -728,7 +767,12 @@ impl AgentPanel {
         let weak = Rc::downgrade(self);
         sizing.connect_drag_end(move |_, _, _| {
             // The terminal's rows and columns follow once, at the size it was left at.
-            if let Some((_, pane)) = weak.upgrade().and_then(|p| p.lent.borrow().clone()) {
+            let Some(p) = weak.upgrade() else {
+                return;
+            };
+            p.sizing.set(false);
+            let lent = p.lent.borrow().clone();
+            if let Some((_, pane)) = lent {
                 pane.schedule_resize();
             }
         });
@@ -969,6 +1013,9 @@ impl AgentPanel {
         if text.is_empty() {
             return;
         }
+        // A text being typed on the canvas is finished first, as the top bar's Ask does, so the
+        // agent reads the words as they stand and its answer is not held behind the edit.
+        b.end_edit(true);
         self.note.set_visible(false);
         let weak = Rc::downgrade(self);
         if self.about.is_active() {
@@ -984,14 +1031,14 @@ impl AgentPanel {
                     p.say(&why);
                 }
             });
-            self.sent.set(true);
+            self.wake_chat();
             return;
         }
         let Some(ui) = b.ui.upgrade() else {
             return;
         };
         buffer.set_text("");
-        self.sent.set(true);
+        self.wake_chat();
         glib::spawn_future_local(async move {
             // One paste, then Enter on its own once it has landed (I-4).
             let typed = match ui.call("session.input", json!({"session": session, "data": text, "paste": true})).await {
@@ -1007,6 +1054,19 @@ impl AgentPanel {
                     buffer.set_text(&text);
                 }
                 p.say(&format!("Could not reach {session}: {e}"));
+            }
+        });
+    }
+
+    /// Read the conversation soon after a send, rather than when the loop's sleep ends (up to
+    /// 15 s for an exited agent): a read now retires the sleeping one.
+    fn wake_chat(self: &Rc<Self>) {
+        self.sent.set(true);
+        let (weak, serial) = (Rc::downgrade(self), self.serial.get());
+        glib::spawn_future_local(async move {
+            glib::timeout_future(read_delay("", true)).await;
+            if let Some(p) = weak.upgrade().filter(|p| p.serial.get() == serial && p.place.get().chat && p.root.is_mapped()) {
+                p.read_chat();
             }
         });
     }
