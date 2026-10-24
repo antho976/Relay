@@ -230,7 +230,8 @@ pub fn agent_pids(engine: &Engine) -> HashMap<u32, crate::peer::Peer> {
 
 /// How long an agent may sit with nothing to do before it is closed.
 pub const IDLE: Duration = Duration::from_secs(15 * 60);
-/// The most agents running at once; starting another closes the one used longest ago.
+/// The most agents running at once; starting another closes the one used longest ago, and is
+/// refused while every one of them is answering.
 pub const MAX_LIVE: usize = 4;
 /// The longest message a person may send, in characters.
 pub const MAX_TEXT: usize = 32_000;
@@ -1511,14 +1512,20 @@ fn spawn(engine: &Arc<Engine>, id: Id, token: u64, first_line: &str, local: Opti
             return Ok(false);
         }
         let serial = live.mint();
-        if live.agents.len() >= MAX_LIVE {
+        if live.agents.len() >= MAX_LIVE && !live.agents.contains_key(&id) {
             let oldest = live.agents.iter()
                 .filter(|(t, _)| !live.working.contains_key(t))
                 .min_by_key(|(_, a)| a.last_used)
                 .map(|(t, _)| *t);
-            if let Some(oldest) = oldest {
-                if let Some(agent) = live.agents.remove(&oldest) {
-                    kill(agent.pid);
+            match oldest.and_then(|oldest| live.agents.remove(&oldest)) {
+                Some(agent) => kill(agent.pid),
+                // Every one is mid-reply: a fifth Claude (a few hundred MB of Node each) is not
+                // started beside them; the cap is a cap.
+                None => {
+                    drop(live);
+                    kill(pid);
+                    let _ = child.wait();
+                    return Err(format!("{MAX_LIVE} conversations are answering at once. Send this again when one has finished."));
                 }
             }
         }

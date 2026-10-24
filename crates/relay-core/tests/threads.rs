@@ -845,3 +845,29 @@ done
     assert_eq!(answers[0]["result"]["thread_id"], created["id"], "the door named the agent's own thread");
     drop(server);
 }
+
+/// Four agents answering at once is the cap: a fifth thread's message is refused in words
+/// rather than starting a fifth Claude beside them.
+#[test]
+fn a_fifth_agent_waits_while_four_are_answering() {
+    let engine = engine();
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("claude");
+    std::fs::write(&script, "#!/bin/sh\nwhile IFS= read -r line; do sleep 20; done\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    ok(&engine, "settings.set", json!({"path": "providers.claude.path", "value": script}));
+    let ids: Vec<Value> = (0..4).map(|n| ok(&engine, "thread.create", json!({"text": format!("question {n}")}))["id"].clone()).collect();
+    wait_until("four agents at work", || ids.iter().all(|id| thread(&engine, id)["thread"]["live"] == true));
+    let fifth = ok(&engine, "thread.create", json!({"text": "one more"}));
+    let mut last = Value::Null;
+    wait_until("the fifth refused", || {
+        last = thread(&engine, &fifth["id"]);
+        last["messages"].as_array().unwrap().iter().any(|m| m["role"] == "error")
+    });
+    let error = last["messages"].as_array().unwrap().iter().find(|m| m["role"] == "error").unwrap();
+    assert!(error["body"]["text"].as_str().unwrap().contains("answering at once"), "{error}");
+    for id in ids.iter().chain([&fifth["id"]]) {
+        ok(&engine, "thread.stop", json!({"id": id}));
+    }
+}
