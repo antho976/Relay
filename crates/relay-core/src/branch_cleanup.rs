@@ -440,7 +440,10 @@ fn evaluate_as(candidate: &Candidate, live_worktrees: &[String], options: &Optio
     row.reason = merged.reason;
     row.merged = true;
 
-    if let Some(path) = &removable {
+    // A pooled folder deleted by hand leaves only git's record of it: nothing in it to keep,
+    // and `status` in it fails, which kept the branch at every sweep for good.
+    let folder_gone = removable.as_ref().is_some_and(|path| !path.exists());
+    if let Some(path) = removable.as_ref().filter(|_| !folder_gone) {
         if keep_worktree {
             return kept(row.clone(), format!("{}, but it is checked out at {}, which was kept at close", row.reason, path.display()));
         }
@@ -463,7 +466,12 @@ fn evaluate_as(candidate: &Candidate, live_worktrees: &[String], options: &Optio
         row.outcome = "would_delete".into();
         return row;
     }
-    if let Some(path) = &removable {
+    if folder_gone {
+        if let Err(error) = git.run(&["worktree", "prune"], GIT_TIMEOUT).map_err(|e| e.to_string()).and_then(|ran| if ran.ok { Ok(()) } else { Err(ran.err) }) {
+            return kept(row.clone(), format!("{}, but its deleted checkout could not be pruned: {error}", row.reason));
+        }
+        row.removed_worktree = true;
+    } else if let Some(path) = &removable {
         if let Some(why) = in_use(path) {
             return kept(row.clone(), format!("{}, but {} is in use now: {why}", row.reason, path.display()));
         }
@@ -531,10 +539,11 @@ fn evaluate_as(candidate: &Candidate, live_worktrees: &[String], options: &Optio
 type SweepMemo = HashMap<(PathBuf, String), (String, Instant, Duration)>;
 static SWEPT: Mutex<Option<SweepMemo>> = Mutex::new(None);
 
-/// One `for-each-ref` per repo for a sweep: every Relay branch tip and the base's two refs.
+/// One `for-each-ref` per repo for a sweep: every Relay branch tip, the local base and the base
+/// on every remote (a branch is judged against its own remote's, which need not be `origin`).
 /// What a branch is judged by is in here, so an unchanged one needs no git at all.
 fn sweep_refs(repo: &Path, base: &str) -> Option<HashMap<String, String>> {
-    let (local, remote) = (format!("refs/heads/{base}"), format!("refs/remotes/origin/{base}"));
+    let (local, remote) = (format!("refs/heads/{base}"), format!("refs/remotes/*/{base}"));
     let ran = Git { repo }.run(&["for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/relay/", &local, &remote], GIT_TIMEOUT).ok()?;
     ran.ok.then(|| ran.out.lines().filter_map(|line| line.split_once(' ')).map(|(name, sha)| (name.to_string(), sha.to_string())).collect())
 }
@@ -571,7 +580,12 @@ fn run_as(engine: &Engine, project_id: Option<Id>, only: Option<&[String]>, opti
                         continue;
                     };
                     let base = |name: String| refs.get(&name).map(String::as_str).unwrap_or("");
-                    let judged_by = format!("{tip} {} {}", base(format!("refs/heads/{}", candidate.base)), base(format!("refs/remotes/origin/{}", candidate.base)));
+                    let mut remotes: Vec<&str> = refs.iter()
+                        .filter(|(name, _)| name.starts_with("refs/remotes/") && name.ends_with(&format!("/{}", candidate.base)))
+                        .map(|(_, sha)| sha.as_str())
+                        .collect();
+                    remotes.sort_unstable();
+                    let judged_by = format!("{tip} {} {}", base(format!("refs/heads/{}", candidate.base)), remotes.join(" "));
                     let memo = SWEPT.lock().unwrap_or_else(|poison| poison.into_inner());
                     if memo.as_ref().and_then(|memo| memo.get(&memo_key)).is_some_and(|(seen, next, _)| *seen == judged_by && Instant::now() < *next) {
                         continue;
