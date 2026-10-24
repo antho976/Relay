@@ -2568,7 +2568,7 @@ fn load_sample(ui: &Rc<Ui>, key: &gtk::Button) {
     let key = key.clone();
     glib::spawn_future_local(async move {
         match ui.call("money.sample", json!({})).await {
-            Ok(v) => super::toast(&ui, &format!("Loaded a sample household: {}.", plural(n(&v, "transactions").max(0) as usize, "entry").replace("entrys", "entries")), None),
+            Ok(v) => super::toast(&ui, &format!("Loaded a sample household: {}.", copy::plural_as(n(&v, "transactions").max(0), "entry", "entries")), None),
             Err(e) => ui.show_error(&unavailable(&e)),
         }
         key.set_sensitive(true);
@@ -2614,7 +2614,7 @@ fn import(ui: &Rc<Ui>, empty: bool, syncs: bool) {
                 &ui,
                 &format!(
                     "Imported {} and {}.",
-                    plural(n(&v, "transactions").max(0) as usize, "entry").replace("entrys", "entries"),
+                    copy::plural_as(n(&v, "transactions").max(0), "entry", "entries"),
                     plural(n(&v, "accounts").max(0) as usize, "account")
                 ),
                 None,
@@ -2637,7 +2637,7 @@ fn export(ui: &Rc<Ui>) {
                 &ui,
                 &format!(
                     "Saved {} to {}.",
-                    plural(n(&v, "transactions").max(0) as usize, "entry").replace("entrys", "entries"),
+                    copy::plural_as(n(&v, "transactions").max(0), "entry", "entries"),
                     text(&v, "path")
                 ),
                 None,
