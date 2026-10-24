@@ -41,6 +41,7 @@ import com.quietsoftware.relay.data.db.toRow
 import com.quietsoftware.relay.data.link.CloudStore
 import com.quietsoftware.relay.data.link.OkHttpDialer
 import com.quietsoftware.relay.data.link.PcStore
+import com.quietsoftware.relay.service.forgetNotified
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -91,7 +92,27 @@ class Relay(
     /** The PC's raw event stream while connected, for screens that react to one (a run's crash). */
     val parked: SharedFlow<OutboxEntry> get() = hub.parked
 
-    fun start() = hub.start()
+    init {
+        // Disconnected before the process ended: the link starts out stopped, so a kick does not dial it.
+        scope.launch { if (pc.disconnected.first()) hub.link.stop() }
+    }
+
+    /**
+     * Start the link, from the app, a service or the background catch-up; not when the person
+     * disconnected it (MOBILE.md §5), which only [connect] undoes.
+     */
+    fun start() {
+        scope.launch { if (!pc.disconnected.first()) hub.start() }
+    }
+
+    /** The person asked to connect: the link starts and stays wanted. */
+    fun connect() {
+        scope.launch {
+            pc.setDisconnected(false)
+            hub.start()
+            kick()
+        }
+    }
 
     /** Dial now instead of waiting out the backoff; the server's copy too, if it is standing in for the PC. */
     fun kick() {
@@ -99,7 +120,11 @@ class Relay(
         hub.cloud.kick()
     }
 
-    fun disconnect() = hub.link.stop()
+    /** The person disconnected: stays so across the background catch-up, the service and a restart, until [connect]. */
+    fun disconnect() {
+        hub.link.stop()
+        scope.launch { pc.setDisconnected(true) }
+    }
 
     // ---- Reading the replica ----
 
@@ -107,17 +132,21 @@ class Relay(
 
     private fun rows(kind: Kind, projectId: Long): Flow<List<Row>> = db.entities().observeProject(kind.tag, projectId).map { list -> list.mapNotNull { it.toRow() } }
 
-    private fun row(kind: Kind, id: String): Flow<Row?> = db.entities().observeOne(kind.tag, id).map { it?.toRow() }
+    /**
+     * One row as it changes. Room re-reads it on every write to the table (an upsert writes even
+     * an unchanged row), so only a row that differs is parsed, off the main thread.
+     */
+    private fun row(kind: Kind, id: String): Flow<Row?> = db.entities().observeOne(kind.tag, id).distinctUntilChanged().map { it?.toRow() }.flowOn(Dispatchers.Default)
 
     fun workspaces(): Flow<List<Workspace>> = rows(Kind.Workspace).map { it.decodeAll<Workspace>().sortedBy { w -> w.order } }.flowOn(Dispatchers.Default)
 
     fun projects(): Flow<List<Project>> = rows(Kind.Project).map { it.decodeAll<Project>().sortedWith(compareBy({ p -> !p.pinned }, { p -> p.order }, { p -> p.name.lowercase() })) }.flowOn(Dispatchers.Default)
 
-    fun project(id: Long): Flow<Project?> = row(Kind.Project, id.toString()).map { it?.decode<Project>() }
+    fun project(id: Long): Flow<Project?> = row(Kind.Project, id.toString()).map { it?.decode<Project>() }.flowOn(Dispatchers.Default)
 
     fun sessions(): Flow<List<Session>> = rows(Kind.Session).map { it.decodeAll<Session>().sortedWith(SESSION_ORDER) }.flowOn(Dispatchers.Default)
 
-    fun session(name: String): Flow<Session?> = row(Kind.Session, name).map { it?.decode<Session>() }
+    fun session(name: String): Flow<Session?> = row(Kind.Session, name).map { it?.decode<Session>() }.flowOn(Dispatchers.Default)
 
     fun restorable(): Flow<List<Restorable>> = rows(Kind.Restorable).map { it.decodeAll<Restorable>() }.flowOn(Dispatchers.Default)
 
@@ -125,7 +154,7 @@ class Relay(
 
     fun allTasks(): Flow<List<Task>> = rows(Kind.Task).map { it.decodeAll<Task>().filter { t -> t.deletedAt == null } }.flowOn(Dispatchers.Default)
 
-    fun task(id: String): Flow<Task?> = row(Kind.Task, id).map { r -> r?.takeUnless { it.json.isHidden() }?.decode<Task>() }
+    fun task(id: String): Flow<Task?> = row(Kind.Task, id).map { r -> r?.takeUnless { it.json.isHidden() }?.decode<Task>() }.flowOn(Dispatchers.Default)
 
     /**
      * The id to show for [id]: itself, or, for a row the phone made (`tmp:<entry>`), the PC's id
@@ -146,7 +175,7 @@ class Relay(
 
     fun notes(projectId: Long): Flow<List<Note>> = rows(Kind.Note, projectId).map { it.decodeAll<Note>().sortedWith(compareBy<Note> { n -> !n.pinned }.thenByDescending { n -> n.updatedAt }) }.flowOn(Dispatchers.Default)
 
-    fun note(id: String): Flow<Note?> = row(Kind.Note, id).map { r -> r?.takeUnless { it.json.isHidden() }?.decode<Note>() }
+    fun note(id: String): Flow<Note?> = row(Kind.Note, id).map { r -> r?.takeUnless { it.json.isHidden() }?.decode<Note>() }.flowOn(Dispatchers.Default)
 
     fun holds(): Flow<List<Hold>> = rows(Kind.Hold).map { it.decodeAll<Hold>().filter { h -> h.state == "open" }.sortedByDescending { h -> h.createdAt } }.flowOn(Dispatchers.Default)
 
@@ -154,7 +183,7 @@ class Relay(
 
     fun threads(): Flow<List<Thread>> = rows(Kind.Thread).map { it.decodeAll<Thread>().sortedByDescending { t -> t.updatedAt } }.flowOn(Dispatchers.Default)
 
-    fun thread(id: String): Flow<Thread?> = row(Kind.Thread, id).map { r -> r?.takeUnless { it.json.isHidden() }?.decode<Thread>() }
+    fun thread(id: String): Flow<Thread?> = row(Kind.Thread, id).map { r -> r?.takeUnless { it.json.isHidden() }?.decode<Thread>() }.flowOn(Dispatchers.Default)
 
     fun messages(threadId: String): Flow<List<ThreadMessage>> =
         db.entities().observeParent(Kind.Message.tag, threadId).map { list -> list.mapNotNull { it.toRow() }.decodeAll<ThreadMessage>().sortedWith(compareBy({ m -> m.createdAt }, { m -> m.id.toLongOrNull() ?: Long.MAX_VALUE })) }.flowOn(Dispatchers.Default)
@@ -164,11 +193,13 @@ class Relay(
     fun labels(projectId: Long): Flow<List<Label>> = rows(Kind.Label, projectId).map { it.decodeAll<Label>().sortedBy { l -> l.name.lowercase() } }.flowOn(Dispatchers.Default)
 
     /** Everything the outbox still holds, oldest first. */
-    fun outbox(): Flow<List<OutboxEntry>> = db.outbox().observeOpen().map { list -> list.mapNotNull { it.toEntry() } }
+    fun outbox(): Flow<List<OutboxEntry>> = db.outbox().observeOpen().distinctUntilChanged().map { list -> list.mapNotNull { it.toEntry() } }.flowOn(Dispatchers.Default)
 
     /** A cached query answer, as it changes. */
     fun cached(op: String, payload: JsonObject = JsonObject(emptyMap())): Flow<Answer?> =
-        db.queries().observe(QueryKey.of(op, payload)).map { row -> row?.let { Answer(Wire.json.parseToJsonElement(it.json), it.at, fresh = false) } }
+        // Any query row written re-reads this one: parsed (up to a long answer) only when it changed, off Main.
+        db.queries().observe(QueryKey.of(op, payload)).distinctUntilChanged()
+            .map { row -> row?.let { Answer(Wire.json.parseToJsonElement(it.json), it.at, fresh = false) } }.flowOn(Dispatchers.Default)
 
     /**
      * A query a screen shows: the cached answer first, then the PC's (or, with the PC away, the
@@ -227,7 +258,10 @@ class Relay(
         val result = Handshake.pair(dialer, link, deviceName())
         result.onSuccess { profile ->
             val previous = pc.current()
-            if (previous != null && previous.hostId != profile.hostId) hub.forgetData()
+            if (previous != null && previous.hostId != profile.hostId) {
+                hub.forgetData()
+                forgetNotified(context)
+            }
             pc.save(profile)
             hub.link.restart()
         }
@@ -239,6 +273,7 @@ class Relay(
         hub.link.stop()
         pc.forget()
         hub.forgetData()
+        forgetNotified(context)
         hub.link.start()
     }
 
