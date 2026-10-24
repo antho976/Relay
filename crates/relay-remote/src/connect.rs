@@ -328,7 +328,7 @@ async fn confirm(ctx: &Ctx, code: &str, phone: &WaitingPhone) -> Result<()> {
                 None => {
                     crate::bridge::toast(
                         ctx.socket_path.clone(),
-                        format!("\"{}\" waits to pair with this PC. Run `relay remote approve` within a minute to let it in.", request.device_name),
+                        format!("\"{}\" waits to pair with this PC. Run `relay remote approve {}` within a minute to let it in.", request.device_name, pending.code),
                         "warn",
                         60_000,
                     )
