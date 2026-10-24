@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.quietsoftware.relay.R
 import com.quietsoftware.relay.core.Hub
 import com.quietsoftware.relay.core.model.Session
 import com.quietsoftware.relay.core.term.Keys
@@ -312,13 +313,24 @@ private class Hold {
     var shown = 11f
 }
 
+/**
+ * Keeps the screen awake while [on] and on screen. Counted on the window's root view: moving
+ * between the conversation and the terminal, the leaving screen lets go after the entering one
+ * took hold, and the screen stays awake.
+ */
 @Composable
 internal fun KeepScreenOn(on: Boolean) {
     val view = LocalView.current
     DisposableEffect(view, on) {
-        view.keepScreenOn = on
-        onDispose { view.keepScreenOn = false }
+        if (on) holdScreen(view, +1)
+        onDispose { if (on) holdScreen(view, -1) }
     }
+}
+
+internal fun holdScreen(view: android.view.View, by: Int) {
+    val holders = ((view.getTag(R.id.keep_screen_on) as? Int) ?: 0) + by
+    view.setTag(R.id.keep_screen_on, holders.coerceAtLeast(0))
+    view.keepScreenOn = holders > 0
 }
 
 // ---- Header and banner ----
