@@ -3,7 +3,8 @@
 It speaks the same JSON lines on stdin and stdout and answers as Remotion would for a video with
 two compositions: `main` (1080x1920, 30 fps, 3 s) and `wide` (1920x1080). A file in the video's
 `src/` changes what it does: `BROKEN` fails the build, `THROWS` throws on every frame, `SLOW`
-makes a render run until it is cancelled, `SOUND` gives `main` a sound track: a 120 BPM grid, music
+makes a render run until it is cancelled, `BUNDLING` makes a render bundle for a second first, when
+a stop does not reach it (as the worker before 2026-10-24 behaved), `SOUND` gives `main` a sound track: a 120 BPM grid, music
 that does not duck, a voice line from 1 s to 2 s and a tap cue at frame 20, five frames off the beat.
 """
 import json
@@ -61,6 +62,9 @@ def composition(name):
 
 
 def check(a):
+    # As Remotion prints the page's console: a probe line, which the log leaves out, and a word.
+    sys.stderr.write("__relay_probe__{\"frame\": 0}\n" + "checking " + a["dir"] + "\n")
+    sys.stderr.flush()
     if flag(a["dir"], "BROKEN"):
         return {"errors": [{"kind": "syntax", "file": "src/Video.tsx", "line": 3, "col": 7, "message": "Expected \"}\" but found \"<\""}], "compositions": []}
     errors = [{"kind": "type", "file": "src/Video.tsx", "line": 9, "col": 3, "message": "TS2322: Type 'string' is not assignable to type 'number'."}] if flag(a["dir"], "TYPED") else []
@@ -163,6 +167,10 @@ def timeline(a):
 
 def render(a):
     job = a["job"]
+    if flag(a["dir"], "BUNDLING"):
+        time.sleep(1.0)
+        # A stop that came while it bundled is lost, as the worker before 2026-10-24 lost it.
+        cancelled.discard(job)
     slow = flag(a["dir"], "SLOW")
     steps = [0.05, 0.15, 0.35, 0.55, 0.75, 0.95]
     for p in steps:
@@ -180,13 +188,19 @@ def render(a):
     return {"path": a["out"], "bytes": os.path.getsize(a["out"]), "frames": 90, "ms": 5}
 
 
+def forget(a):
+    sys.stderr.write("forgot " + a["dir"] + "\n")
+    sys.stderr.flush()
+    return {}
+
+
 def cancel(a):
     cancelled.add(a["job"])
     return {"cancelled": True}
 
 
 COMMANDS = {"hello": lambda a: {"node": "fake", "remotion": "4.0.534"}, "check": check, "meta": meta, "still": still, "scan": scan,
-            "timeline": timeline, "render": render, "cancel": cancel, "forget": lambda a: {}}
+            "timeline": timeline, "render": render, "cancel": cancel, "forget": forget}
 
 
 def handle(request):

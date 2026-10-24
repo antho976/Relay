@@ -564,6 +564,15 @@ async fn since_rev_pictures_what_changed() {
 
     assert_eq!(code_of(&fx.at_once(fx.render(json!({"since_rev": before, "nodes": ["card"]}))).await), "design.render.args");
     assert_eq!(code_of(&fx.at_once(fx.render(json!({"since_rev": fx.rev() + 1}))).await), "design.render.args");
+
+    // A list that only deleted leaves no row to picture: the answer says so.
+    let before = fx.rev();
+    ok(&fx.engine, "design.apply", json!({"design_id": fx.design, "ops": [{"op": "delete", "id": "receipt"}]}));
+    let call = fx.send(fx.render(json!({"since_rev": before}))).await;
+    let request = renderer.request().await;
+    assert!(renderer.draw(&request, fx.rev(), &[]).await);
+    let warnings = call.answer().await.result.unwrap()["warnings"].clone();
+    assert!(warnings.to_string().contains("only removals since (1)"), "{warnings}");
     renderer.quiet().await;
 }
 

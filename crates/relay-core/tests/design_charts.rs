@@ -160,3 +160,56 @@ fn dump_a_page_of_charts() {
     std::fs::write(path, serde_json::to_string(&ok(&e, "design.get", json!({"design_id": id}))).unwrap()).unwrap();
 }
 
+
+/// A chart frame copied in the list that adds it (one card, copied per metric) is drawn as the
+/// original is: the copy was taken before any part was drawn.
+#[test]
+fn a_chart_copied_in_its_own_list_is_drawn() {
+    let (e, _root) = project();
+    let id = ok(&e, "design.create", json!({"project_id": 1, "title": "Cards"}))["design"]["id"].as_i64().unwrap();
+    apply(&e, id, json!([
+        {"op": "add", "node": {"id": "c", "parent": "page-1", "kind": "frame", "w": 300, "h": 200, "chart": {"kind": "bar", "labels": ["A", "B"], "series": [{"values": [1, 2]}]}}},
+        {"op": "copy", "id": "c", "as": "c2", "dy": 300},
+    ]));
+    let (a, b) = (children(&e, id, "c"), children(&e, id, "c2"));
+    assert!(!a.is_empty() && a.len() == b.len(), "original {a:?}, copy {b:?}");
+    assert_eq!(node(&e, id, "c2.label-1").unwrap()["text"], "B");
+}
+
+/// A `where` broad enough to reach a chart's parts (every text, the palette's first colour) acts on
+/// the rest of the design and says what it left out, rather than refusing the list at a part.
+#[test]
+fn a_broad_where_leaves_the_parts_out() {
+    let (e, _root) = project();
+    let id = spend(&e);
+    apply(&e, id, json!([
+        {"op": "add", "node": {"id": "btn", "parent": "page-1", "kind": "rect", "x": 500, "w": 100, "h": 40, "fill": "#4C7DFF"}},
+        {"op": "add", "node": {"id": "lbl", "parent": "page-1", "kind": "text", "x": 500, "y": 60, "text": "Hello"}},
+    ]));
+    let out = apply(&e, id, json!([{"op": "update_many", "where": {"kind": ["text"]}, "set": {"font": "Sora"}}]));
+    assert_eq!(node(&e, id, "lbl").unwrap()["font"], "Sora");
+    assert_eq!(node(&e, id, "spend-title").unwrap()["font"], "Sora");
+    assert!(node(&e, id, "spend.label-0").unwrap().get("font").is_none_or(|f| f != "Sora"));
+    assert_eq!(out["matched"]["0"], 2, "{out}");
+    assert!(out["warnings"].to_string().contains("chart part"), "{out}");
+    let bars = nodes(&e, id).iter().filter(|n| n["fill"] == "#4C7DFF").count();
+    assert!(bars > 1, "the palette's first colour is on the bars too");
+    apply(&e, id, json!([{"op": "update_many", "where": {"fill": "#4C7DFF"}, "set": {"fill": "#2255EE"}}]));
+    assert_eq!(node(&e, id, "btn").unwrap()["fill"], "#2255EE");
+    apply(&e, id, json!([{"op": "delete_many", "where": {"kind": ["text"]}}]));
+    assert!(node(&e, id, "lbl").is_none() && node(&e, id, "spend.label-0").is_some());
+}
+
+/// Edits of many nodes are counted once expanded: repeating a broad `update_many` cannot make a
+/// list of hundreds of thousands of edits under the store's lock.
+#[test]
+fn edits_of_many_nodes_are_capped_once_expanded() {
+    let (e, _root) = project();
+    let id = ok(&e, "design.create", json!({"project_id": 1, "title": "Many"}))["design"]["id"].as_i64().unwrap();
+    let ops: Vec<Value> = (0..1000).map(|i| json!({"op": "add", "node": {"id": format!("r{i}"), "parent": "page-1", "kind": "rect", "x": i, "w": 4, "h": 4}})).collect();
+    apply(&e, id, Value::Array(ops));
+    let many = |n: usize| (0..n).map(|k| json!({"op": "update_many", "where": {"kind": ["rect"]}, "set": {"opacity": if k % 2 == 0 { 0.5 } else { 0.25 }}})).collect::<Vec<_>>();
+    apply(&e, id, Value::Array(many(7)));
+    let error = refused(call(&e, "design.apply", json!({"design_id": id, "ops": many(8)})));
+    assert_eq!(error.code, "design.too_large", "{}", error.message);
+}

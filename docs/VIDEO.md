@@ -38,7 +38,7 @@ the plugin's rules. The ops are BUS.md §10.19.
 | `.relay/bundles/<video>/` | the worker | each video's newest bundle |
 | `.relay/blobs/` | versions | file contents by sha-256 |
 | `.relay/posters/<video>.png` | stills | each video's poster |
-| `.relay/worker.log` | the worker | its stderr, from its latest start |
+| `.relay/worker.log` | the worker | its stderr but the page's probe lines, started again past 2 MiB |
 
 Setting up is never automatic: an agent calls `video.kit.install` when a call refuses
 `video.kit.missing`, or you press **Set up** in the gallery. It needs Node.js 20 or newer and npm,
@@ -195,7 +195,9 @@ no `contrast`, which needs the pixels; a still's frames have it.
 Agents' edits never pass through Relay, so each check, still and render reads the folder first and
 records a version when its files differ from the newest one's: a manifest of every file but `out/`,
 `public/assets/`, dot-files and files over 2 MiB, with contents kept once by hash. A restore records
-the code as it is, then puts the version's back, and is undone by restoring the one it recorded.
+the code as it is, then puts the version's back, and is undone by restoring the one it recorded. A
+file over 2 MiB, or a link, that the version does not name is left in place: no version keeps a
+copy to put it back.
 
 ## In the Design view
 

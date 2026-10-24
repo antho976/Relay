@@ -202,6 +202,95 @@ fn one_undo_takes_back_a_change_and_its_instances() {
 
 /// A design is marked as one that holds a main by the copy that makes one, and a duplicate of it
 /// is marked too; a design without one is not, so its lists skip the component rules.
+/// An agent's lenient list (one built from an old read) is followed as a strict one is: the chart
+/// it changed is drawn again, the main it changed brought to its instances, and a shape it added
+/// without a size given one. The person's undo of it puts back what was stored.
+#[test]
+fn an_agents_lenient_list_is_drawn_synced_and_sized() {
+    let (e, _root) = project();
+    let me = agent(&e);
+    let id = ok(&e, "design.create", json!({"project_id": 1, "title": "Lenient"}))["design"]["id"].as_i64().unwrap();
+    apply(&e, id, json!([
+        {"op": "add", "node": {"id": "c", "parent": "page-1", "kind": "frame", "w": 300, "h": 200, "chart": {"kind": "bar", "values": true, "labels": ["A", "B"], "series": [{"values": [1, 2]}]}}},
+        {"op": "add", "node": {"id": "m", "parent": "page-1", "kind": "frame", "x": 400, "w": 100, "h": 100, "fill": "#FFFFFF"}},
+        {"op": "copy", "id": "m", "as": "m-2", "dx": 200, "instance": true},
+    ]));
+    let before = content(&e, id);
+    let out = ok_as(&e, me, "design.apply", json!({"design_id": id, "lenient": true, "reply": "full", "ops": [
+        {"op": "update", "id": "c", "set": {"chart": {"kind": "bar", "values": true, "labels": ["A", "B"], "series": [{"values": [5, 9]}]}}},
+        {"op": "update", "id": "m", "set": {"fill": "#FF0000"}},
+        {"op": "add", "node": {"id": "r", "parent": "page-1", "kind": "rect", "fill": "#00FF00"}},
+    ]}));
+    assert_eq!(node(&e, id, "c.value-0-1")["text"], "9");
+    assert_eq!(node(&e, id, "m-2")["fill"], "#FF0000");
+    let r = node(&e, id, "r");
+    assert!(r["w"].as_f64() > Some(0.0) && r["h"].as_f64() > Some(0.0), "{r}");
+    ok(&e, "design.apply", json!({"design_id": id, "ops": out["inverse"], "lenient": true, "expect": out["expect"]}));
+    assert_eq!(content(&e, id), before);
+}
+
+/// An instance resized keeps its pinned children where the follow rule put them: a later change
+/// to the main brings its fields, not the place its child has in the main's size; and one the
+/// main gains is placed for the instance's size too.
+#[test]
+fn a_resized_instance_keeps_its_pinned_children_through_the_mains_changes() {
+    let (e, _root) = project();
+    let id = ok(&e, "design.create", json!({"project_id": 1, "title": "Pins"}))["design"]["id"].as_i64().unwrap();
+    apply(&e, id, json!([
+        {"op": "add", "node": {"id": "card", "parent": "page-1", "kind": "frame", "w": 200, "h": 100, "fill": "#FFFFFF"}},
+        {"op": "add", "node": {"id": "badge", "parent": "card", "kind": "rect", "x": 170, "y": 0, "w": 20, "h": 20, "pin_x": "right", "fill": "#FF0000"}},
+        {"op": "add", "node": {"id": "bar", "parent": "card", "kind": "rect", "x": 10, "y": 90, "w": 180, "h": 4, "pin_x": "left_right", "pin_y": "bottom"}},
+        {"op": "copy", "id": "card", "as": "card-2", "dx": 300, "instance": true},
+    ]));
+    apply(&e, id, json!([{"op": "update", "id": "card-2", "set": {"w": 300, "h": 120}}]));
+    let place = |n: &str| { let v = node(&e, id, n); (v["x"].as_f64().unwrap(), v["y"].as_f64().unwrap(), v["w"].as_f64().unwrap()) };
+    assert_eq!(place("card-2:badge"), (270.0, 0.0, 20.0));
+    assert_eq!(place("card-2:bar"), (10.0, 110.0, 280.0));
+    apply(&e, id, json!([{"op": "update", "id": "card", "set": {"fill": "#EEEEEE"}}]));
+    assert_eq!(node(&e, id, "card-2")["fill"], "#EEEEEE");
+    assert_eq!(place("card-2:badge"), (270.0, 0.0, 20.0), "the main's change keeps it where it follows");
+    assert_eq!(place("card-2:bar"), (10.0, 110.0, 280.0));
+    // A move of the main's child moves the instance's by as much, in its own size.
+    apply(&e, id, json!([{"op": "update", "id": "badge", "set": {"x": 160}}]));
+    assert_eq!(place("card-2:badge").0, 260.0);
+    assert_eq!(place("badge").0, 160.0);
+}
+
+/// What the engine writes is not an agent's to write: `generated` and `instance_of` on an add,
+/// `generated` on an update. A `generated` node left outside any chart (written before that was
+/// refused) is edited and deleted as any node is.
+#[test]
+fn an_agent_cannot_write_parts_or_instances_by_hand() {
+    let (e, _root) = project();
+    let me = agent(&e);
+    let id = ok(&e, "design.create", json!({"project_id": 1, "title": "Hand"}))["design"]["id"].as_i64().unwrap();
+    apply(&e, id, json!([
+        {"op": "add", "node": {"id": "f", "parent": "page-1", "kind": "frame", "w": 200, "h": 100}},
+        {"op": "add", "node": {"id": "m", "parent": "page-1", "kind": "frame", "x": 300, "w": 100, "h": 100, "component": true}},
+        // The person's canvas pastes nodes whole: a leftover part outside a chart.
+        {"op": "add", "node": {"id": "r", "parent": "f", "kind": "rect", "w": 10, "h": 10, "generated": true}},
+    ]));
+    for (op, field) in [
+        (json!({"op": "add", "node": {"id": "g", "parent": "f", "kind": "rect", "w": 10, "h": 10, "generated": true}}), "generated"),
+        (json!({"op": "add", "node": {"id": "fake", "parent": "page-1", "kind": "frame", "w": 50, "h": 50, "instance_of": "m"}}), "instance_of"),
+        (json!({"op": "update", "id": "f", "set": {"generated": true}}), "generated"),
+    ] {
+        let error = refused(call_as(&e, me.clone(), "design.apply", json!({"design_id": id, "ops": [op.clone()]})));
+        assert!(error.message.contains(field), "{op}: {}", error.message);
+    }
+    // Nor is anything copied into an instance, as nothing is added or moved into one.
+    apply(&e, id, json!([
+        {"op": "add", "node": {"id": "m-in", "parent": "m", "kind": "frame", "w": 50, "h": 50}},
+        {"op": "add", "node": {"id": "dot", "parent": "page-1", "kind": "ellipse", "x": 600, "w": 10, "h": 10}},
+        {"op": "copy", "id": "m", "as": "m2", "dx": 150, "instance": true},
+    ]));
+    let error = refused(call(&e, "design.apply", json!({"design_id": id, "ops": [{"op": "copy", "id": "dot", "as": "dot-2", "parent": "m2-in"}]})));
+    assert_eq!(error.code, "design.instance", "{}", error.message);
+    ok_as(&e, me.clone(), "design.apply", json!({"design_id": id, "ops": [{"op": "update", "id": "r", "set": {"fill": "#FF0000"}}]}));
+    ok_as(&e, me, "design.apply", json!({"design_id": id, "ops": [{"op": "delete", "id": "r"}]}));
+    assert!(nodes(&e, id).iter().all(|n| n["id"] != "r"));
+}
+
 #[test]
 fn a_design_is_marked_once_it_holds_a_main() {
     let (e, _root) = project();

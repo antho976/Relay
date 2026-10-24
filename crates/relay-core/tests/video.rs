@@ -8,6 +8,7 @@ mod common;
 use common::{call, call_as, code, committed_repo, engine_with_project, ok, ok_as, refused, wait_until};
 use relay_bus::{Actor, Event};
 use relay_core::engine::Engine;
+use rusqlite::params;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -123,6 +124,10 @@ fn a_check_builds_and_keeps_the_compositions() {
     assert_eq!(checked["version"], 1);
     let ids: Vec<&str> = checked["compositions"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect();
     assert_eq!(ids, ["main", "wide"]);
+    // The worker's log holds its words, not the page's probe lines.
+    let log_path = e.store.videos_dir().join(".relay/worker.log");
+    wait_until("the log to hold the check", || fs::read_to_string(&log_path).is_ok_and(|l| l.contains("checking ")));
+    assert!(!fs::read_to_string(&log_path).unwrap().contains("__relay_probe__"));
     // The row takes the default composition's size and length from the code.
     let video = &ok(&e, "video.get", json!({"video_id": id}))["video"];
     assert_eq!((video["duration_frames"].as_u64(), video["version"].as_i64()), (Some(90), Some(1)));
@@ -178,6 +183,21 @@ fn a_still_answers_a_picture_and_the_issues_across_its_frames() {
     let refusal = refused(call(&e, "video.still", json!({"video_id": id, "at": [0.5]})));
     assert_eq!(refusal.code, "video.runtime");
     assert!(refusal.message.starts_with("src/Video.tsx:12: boom"), "{}", refusal.message);
+}
+
+/// A still of many frames at full scale is drawn smaller, within the pixels a still may hold:
+/// 24 frames of a 1080 x 1920 composition come to 50 MP at full scale.
+#[test]
+fn a_still_of_many_full_frames_is_held_to_its_pixels() {
+    let (e, _root) = project();
+    with_worker(&e);
+    let (id, _) = create(&e);
+    let at: Vec<String> = (0..24).map(|i| format!("f{}", i * 3)).collect();
+    let still = ok(&e, "video.still", json!({"video_id": id, "at": at, "scale": 1.0}));
+    let (w, h) = png_size(Path::new(still["png"].as_str().unwrap()));
+    let pixels = w as f64 * h as f64;
+    assert!(pixels < 50_500_000.0, "{w} x {h}");
+    assert!(pixels > 40_000_000.0, "only as much smaller as it needs: {w} x {h}");
 }
 
 #[test]
@@ -258,17 +278,42 @@ fn a_render_is_cancelled_queued_or_running() {
     assert_eq!(ok(&e, "video.render.get", json!({"render_id": queued}))["started_at"], Value::Null);
 }
 
+/// A stop that lands while the worker still bundles (it does not know the render yet, and
+/// answers that nothing was stopped) is kept, and the render ends stopped, not done.
+#[test]
+fn a_render_stopped_while_it_bundles_is_stopped() {
+    let (e, _root) = project();
+    with_worker(&e);
+    let (id, dir) = create(&e);
+    fs::write(dir.join("src/BUNDLING"), "").unwrap();
+    let render = ok(&e, "video.render", json!({"video_id": id}))["id"].as_i64().unwrap();
+    wait_until("it to start", || ok(&e, "video.render.get", json!({"render_id": render}))["state"] == "rendering");
+    ok(&e, "video.render.cancel", json!({"render_id": render}));
+    wait_until("it to end", || ok(&e, "video.render.get", json!({"render_id": render}))["state"] != "rendering");
+    let row = ok(&e, "video.render.get", json!({"render_id": render}));
+    assert_eq!(row["state"], "cancelled", "{row}");
+    assert!(!dir.join("out/main-1.mp4").exists());
+}
+
 #[test]
 fn renders_left_running_by_a_stopped_relay_are_failed_at_start() {
     let (e, _root) = project();
-    let (id, _) = create(&e);
-    e.store.lock().execute(
-        "INSERT INTO video_renders(video_id, project_id, composition, format, quality, state, version, actor, created_at) VALUES (?1, 1, 'main', 'mp4', 'standard', 'rendering', 0, 'user', '2026-10-21T00:00:00Z')",
-        [id],
-    ).unwrap();
+    with_worker(&e);
+    let (id, dir) = create(&e);
+    for state in ["rendering", "queued"] {
+        e.store.lock().execute(
+            "INSERT INTO video_renders(video_id, project_id, composition, format, quality, state, version, actor, created_at) VALUES (?1, 1, 'main', 'mp4', 'standard', ?2, 0, 'user', '2026-10-21T00:00:00Z')",
+            params![id, state],
+        ).unwrap();
+    }
+    fs::create_dir_all(dir.join("out")).unwrap();
+    fs::write(dir.join("out/.1.partial.main-1.mp4"), "half").unwrap();
     relay_core::video::jobs::reconcile(&e);
     let render = ok(&e, "video.render.get", json!({"render_id": 1}));
     assert_eq!((render["state"].as_str(), render["error"].as_str()), (Some("failed"), Some("Relay stopped before it finished")));
+    assert!(!dir.join("out/.1.partial.main-1.mp4").exists(), "what it was drawing is removed");
+    // The one queued never started: it runs now.
+    wait_until("the queued one to run", || ok(&e, "video.render.get", json!({"render_id": 2}))["state"] == "done");
 }
 
 #[test]
@@ -406,6 +451,13 @@ fn setting_up_a_kit_that_is_ready_answers_ready() {
     with_worker(&e);
     let status = ok(&e, "video.kit.install", json!({}));
     assert_eq!(status["state"], "ready", "nothing to set up, and the answer says so: {status}");
+    // Set up again by force while a render runs: refused, as it would stop the render.
+    let (id, dir) = create(&e);
+    fs::write(dir.join("src/SLOW"), "").unwrap();
+    let render = ok(&e, "video.render", json!({"video_id": id}))["id"].as_i64().unwrap();
+    assert_eq!(code(call(&e, "video.kit.install", json!({"force": true}))), "video.kit.busy");
+    ok(&e, "video.render.cancel", json!({"render_id": render}));
+    wait_until("it to stop", || ok(&e, "video.render.get", json!({"render_id": render}))["state"] == "cancelled");
 }
 
 #[test]
@@ -413,7 +465,11 @@ fn a_deleted_video_is_listed_only_when_asked_and_comes_back() {
     let (e, _root) = project();
     with_worker(&e);
     let (id, dir) = create(&e);
+    ok(&e, "video.check", json!({"video_id": id}));
     ok(&e, "video.delete", json!({"video_id": id}));
+    // The running worker lets go of what it kept for it.
+    let log_path = e.store.videos_dir().join(".relay/worker.log");
+    wait_until("the worker to forget it", || fs::read_to_string(&log_path).is_ok_and(|l| l.contains(&format!("forgot {}", dir.display()))));
     assert_eq!(ok(&e, "video.list", json!({"project_id": 1}))["videos"], json!([]));
     assert_eq!(ok(&e, "video.list", json!({"project_id": 1, "include_deleted": true}))["videos"].as_array().unwrap().len(), 1);
     assert_eq!(code(call(&e, "video.still", json!({"video_id": id}))), "video.deleted");
@@ -601,6 +657,44 @@ fn voice_lines_sounds_and_music_come_from_elevenlabs_with_how_they_were_made() {
     assert_eq!(code(call(&e, "video.sfx", json!({"video_id": id, "prompt": "boing"}))), "video.elevenlabs.no_key");
 }
 
+/// A transcription sends the sound alone, small: ten seconds of stereo WAV go as a mono MP3.
+/// The keyring's "no key" is its answer for a minute, so every agent call does not ask it again
+/// (a locked one raises a prompt each time); saving a key asks again at once.
+#[test]
+fn a_missing_elevenlabs_key_is_not_looked_up_on_every_call() {
+    let (e, root) = project();
+    let (id, _) = create(&e);
+    with_elevenlabs(&e);
+    assert_eq!(code(call(&e, "video.sfx", json!({"video_id": id, "prompt": "tap"}))), "video.elevenlabs.no_key");
+    // Written behind Relay's back: not seen until the minute is up.
+    fs::write(root.path().join("store").join(relay_core::video::eleven::TEST_FILE), "sk_behind").unwrap();
+    assert_eq!(code(call(&e, "video.sfx", json!({"video_id": id, "prompt": "tap"}))), "video.elevenlabs.no_key");
+    ok(&e, "video.elevenlabs.key_set", json!({"key": "sk_test_123"}));
+    ok(&e, "video.sfx", json!({"video_id": id, "prompt": "tap"}));
+}
+
+#[test]
+fn a_transcription_sends_only_the_sound() {
+    if which::which("ffmpeg").is_err() {
+        eprintln!("no ffmpeg: skipped");
+        return;
+    }
+    let (e, _root) = project();
+    let (id, dir) = create(&e);
+    let calls = with_elevenlabs(&e);
+    ok(&e, "video.elevenlabs.key_set", json!({"key": "sk_test_123"}));
+    fs::create_dir_all(dir.join("public/assets")).unwrap();
+    let wav = dir.join("public/assets/talk.wav");
+    let made = std::process::Command::new("ffmpeg").args(["-v", "error", "-f", "lavfi", "-i", "sine=frequency=300:duration=10", "-ac", "2", "-ar", "48000"])
+        .arg(&wav).status().unwrap();
+    assert!(made.success());
+    ok(&e, "video.transcribe", json!({"video_id": id, "asset": "assets/talk.wav"}));
+    let sent = calls.lock().unwrap().iter().find(|c| c.path == "/v1/speech-to-text").cloned().unwrap();
+    let relay_core::video::eleven::Body::Form { file, .. } = &sent.body else { panic!("{sent:?}") };
+    assert_eq!(file.0, "talk.mp3");
+    assert!((file.1.len() as u64) < fs::metadata(&wav).unwrap().len() / 10, "{} bytes sent", file.1.len());
+}
+
 #[test]
 fn an_android_capture_holds_the_device_records_the_steps_and_adds_an_even_clip() {
     if which::which("ffmpeg").is_err() {
@@ -643,6 +737,53 @@ fn an_android_capture_holds_the_device_records_the_steps_and_adds_an_even_clip()
     assert!(held.to_string().contains("testing the release"), "the claim was kept as it was: {held}");
     let inspected = ok(&e, "video.asset.inspect", json!({"video_id": id, "asset": "assets/home.mp4"}));
     assert_eq!((inspected["fps"].as_f64(), inspected["frames"].as_u64(), inspected.get("variable_rate")), (Some(30.0), Some(60), None), "{inspected}");
+}
+
+/// Sound longer than a pipe's 64 MiB (5 min 50 s of stereo at 48 kHz) is read whole: a render's
+/// loudness preset, a timeline's mix and an asset's inspection all decode through it. The store is
+/// on disk under the target folder, the decode being about 70 MB.
+#[test]
+fn sound_past_six_minutes_is_read_whole() {
+    if which::which("ffmpeg").is_err() {
+        eprintln!("no ffmpeg: skipped");
+        return;
+    }
+    let root = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let (ws, repo) = (root.path().join("ws"), root.path().join("ws/app"));
+    committed_repo(&repo, &[("README.md", "# app\n")]);
+    let e = engine_with_project(root.path(), &ws, &repo);
+    let (id, dir) = create(&e);
+    fs::create_dir_all(dir.join("public/assets")).unwrap();
+    let made = std::process::Command::new("ffmpeg").args(["-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=400", "-c:a", "libopus", "-b:a", "24k"])
+        .arg(dir.join("public/assets/long.ogg")).status().unwrap();
+    assert!(made.success());
+    let inspected = ok(&e, "video.asset.inspect", json!({"video_id": id, "asset": "assets/long.ogg"}));
+    let seconds = inspected["audio"]["seconds"].as_f64().unwrap_or_default();
+    assert!((seconds - 400.0).abs() < 1.0, "read {seconds} s of 400: {inspected}");
+    let scratch = fs::read_dir(e.store.videos_dir().join(".relay/sound")).map(|d| d.count()).unwrap_or(0);
+    assert_eq!(scratch, 0, "the decode's file is removed");
+}
+
+/// The preview's guard (loopback.cjs, loaded before Studio) answers only requests that name the
+/// server by a loopback address: a page on another name rebound to 127.0.0.1 is refused.
+#[test]
+fn the_preview_answers_only_loopback_names() {
+    let Ok(node) = which::which("node") else {
+        eprintln!("no node: skipped");
+        return;
+    };
+    let guard = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/video/runtime/loopback.cjs");
+    let script = r#"
+        const http = require('node:http');
+        const srv = http.createServer((req, res) => res.end('ok'));
+        srv.listen(0, async () => {
+          const port = srv.address().port;
+          const ask = (host) => new Promise((r) => http.get({ host: '127.0.0.1', port, path: '/', headers: { host } }, (res) => { res.resume(); res.on('end', () => r(res.statusCode)); }));
+          console.log([await ask(`127.0.0.1:${port}`), await ask(`localhost:${port}`), await ask(`rebound.example:${port}`)].join(' '));
+          srv.close();
+        });"#;
+    let out = std::process::Command::new(node).arg("--require").arg(&guard).arg("-e").arg(script).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "200 200 403", "{}", String::from_utf8_lossy(&out.stderr));
 }
 
 #[test]

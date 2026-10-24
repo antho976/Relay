@@ -71,6 +71,7 @@ pub async fn start(instance: Instance, store_path: Option<PathBuf>) -> Result<Se
     crate::handlers::device::clear_stale_forwards(&engine);
     // Renders this engine's last run left queued or running did not finish (video::jobs).
     crate::video::jobs::reconcile(&engine);
+    crate::video::kit::warm(&engine);
     // Every checkout picks up the app-wide skill folders once at start, so a workspace that
     // already existed when a skill was installed does not wait for its next launch (D147).
     // One shot on a worker, not a timer: nothing here repeats.

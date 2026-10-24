@@ -165,15 +165,22 @@ pub fn manifest(conn: &Connection, video_id: Id, n: i64) -> Result<Vec<Entry>, B
 }
 
 /// Put the folder back as `entries` has it: each file written from its blob, and the files a
-/// version would hold that it does not name removed. A file too large to have been kept is left
-/// as it is. What it did: files written, files removed, and those it could not put back.
-pub fn restore(dir: &Path, blobs: &Path, entries: &[Entry]) -> Result<(usize, usize, Vec<String>), String> {
+/// version would hold that it does not name removed, but those no version could put back: one
+/// too large to keep (a version names it with no copy, so the undo could not bring it back) and
+/// a link, which stay as they are. A file too large to have been kept is left as it is. What it
+/// did: files written, files removed, those it could not put back, and those it left.
+pub fn restore(dir: &Path, blobs: &Path, entries: &[Entry]) -> Result<Restored, String> {
     let now = scan_paths(dir)?;
     let wanted: std::collections::HashSet<&str> = entries.iter().map(|e| e.path.as_str()).collect();
-    let mut removed = 0;
+    let (mut removed, mut left) = (0, Vec::new());
     for rel in &now {
         if !wanted.contains(rel.as_str()) {
-            fs::remove_file(dir.join(rel)).map_err(|e| format!("{rel}: {e}"))?;
+            let path = dir.join(rel);
+            if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink() || m.len() > MOST_KEPT) {
+                left.push(rel.clone());
+                continue;
+            }
+            fs::remove_file(&path).map_err(|e| format!("{rel}: {e}"))?;
             removed += 1;
         }
     }
@@ -197,7 +204,18 @@ pub fn restore(dir: &Path, blobs: &Path, entries: &[Entry]) -> Result<(usize, us
             Err(_) => missing.push(entry.path.clone()),
         }
     }
-    Ok((written, removed, missing))
+    Ok(Restored { written, removed, missing, left })
+}
+
+/// What [`restore`] did.
+#[derive(Debug, Default)]
+pub struct Restored {
+    pub written: usize,
+    pub removed: usize,
+    /// Named by the version, with no copy kept to write back.
+    pub missing: Vec<String>,
+    /// Not named by the version, and left: no version could put them back.
+    pub left: Vec<String>,
 }
 
 /// The relative paths of the files a version would hold, as they are now.
@@ -260,14 +278,35 @@ mod tests {
         fs::write(dir.join("src/Video.tsx"), "second").unwrap();
         fs::remove_file(dir.join("src/Scene.tsx")).unwrap();
         tree(&dir, &[("src/New.tsx", "new")]);
-        let (written, removed, missing) = restore(&dir, &blobs, &first.entries).unwrap();
-        assert_eq!((written, removed, missing.len()), (2, 1, 0));
+        let done = restore(&dir, &blobs, &first.entries).unwrap();
+        assert_eq!((done.written, done.removed, done.missing.len()), (2, 1, 0));
         assert_eq!(fs::read_to_string(dir.join("src/Video.tsx")).unwrap(), "first");
         assert_eq!(fs::read_to_string(dir.join("src/Scene.tsx")).unwrap(), "scene");
         assert!(!dir.join("src/New.tsx").exists());
         // Renders are not the code's: a restore leaves them.
         assert!(dir.join("out/main.mp4").exists());
         assert_eq!(scan(&dir, &blobs).unwrap().digest, first.digest);
+    }
+
+    /// A file too large for a version to keep, or a link, is never removed by a restore to a
+    /// version without it: nothing could put it back, the undo included.
+    #[test]
+    fn a_restore_leaves_what_no_version_could_put_back() {
+        let root = tempfile::tempdir().unwrap();
+        let (dir, blobs) = (root.path().join("v"), root.path().join("blobs"));
+        tree(&dir, &[("src/a.ts", "a")]);
+        let first = scan(&dir, &blobs).unwrap();
+        tree(&dir, &[("src/b.ts", "b")]);
+        fs::create_dir_all(dir.join("public")).unwrap();
+        fs::write(dir.join("public/music.mp3"), vec![7u8; (MOST_KEPT + 1) as usize]).unwrap();
+        std::os::unix::fs::symlink(root.path().join("elsewhere.mp4"), dir.join("public/clip.mp4")).unwrap();
+        let done = restore(&dir, &blobs, &first.entries).unwrap();
+        assert_eq!(done.removed, 1);
+        assert!(!dir.join("src/b.ts").exists());
+        let mut left = done.left.clone();
+        left.sort();
+        assert_eq!(left, ["public/clip.mp4", "public/music.mp3"]);
+        assert!(dir.join("public/music.mp3").exists() && fs::symlink_metadata(dir.join("public/clip.mp4")).is_ok());
     }
 
     #[test]

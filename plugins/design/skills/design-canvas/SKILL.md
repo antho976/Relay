@@ -424,8 +424,10 @@ in scope moves, the reply warns and gives one picture at rest.
 - **`lenient: true`** is for replaying an undo or a list built from an old read: an edit whose node
   or parent is gone, or that would overwrite a change since your `base_rev`, is skipped and listed
   in `skipped`, and a rule a strict list would refuse (a field the kind does not take, a key that is
-  no field) is applied as written with a warning instead of refusing the list. The default,
-  strict, refuses and teaches: prefer it. A list that applies nothing changes nothing.
+  no field) is applied as written with a warning instead of refusing the list. Charts are still
+  drawn and fitted, instances still follow their main, and a shape added without a size still gets
+  one, as in a strict list. The default, strict, refuses and teaches: prefer it. A list that applies
+  nothing changes nothing.
 
 ## Revising: change exactly what was asked
 

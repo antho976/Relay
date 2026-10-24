@@ -33,7 +33,12 @@ thread_local! {
     static LAST: Cell<Option<Place>> = const { Cell::new(None) };
     /// How large the card shows its terminal and conversation, for every design.
     static ZOOM: Cell<f64> = const { Cell::new(1.0) };
+    /// Whether the place and size kept in the settings have been asked for, once a launch.
+    static RECALLED: Cell<bool> = const { Cell::new(false) };
 }
+
+/// Where the card's place, size, view and text size are kept from one launch to the next.
+const KEPT: &str = "native.design.agent_panel";
 
 /// The card's place on the canvas (its top left corner, from the canvas's) and size, and
 /// whether it shows the conversation rather than the terminal.
@@ -207,6 +212,10 @@ pub struct AgentPanel {
     place: Cell<Place>,
     /// Where the drag moving or resizing the card began, on the board.
     grabbed: Cell<Option<(f64, f64)>>,
+    /// A resize strip is held: the terminal's rows and columns follow once, on release.
+    sizing: Cell<bool>,
+    /// The size last placed at, so a canvas that shrinks the card resizes its terminal too.
+    shown_size: Cell<(i32, i32)>,
     /// The session shown, and the pane lent for it while the terminal shows.
     session: RefCell<Option<String>>,
     lent: RefCell<Option<(String, Rc<Pane>)>>,
@@ -234,6 +243,11 @@ impl AgentPanel {
         let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
         card.add_css_class("design-agent-card");
         card.set_overflow(gtk::Overflow::Hidden);
+        // The resize strips lie in a margin around the card, not over its edge, where the
+        // terminal's scrollbar and the conversation's are.
+        for set in [gtk::Widget::set_margin_top, gtk::Widget::set_margin_bottom, gtk::Widget::set_margin_start, gtk::Widget::set_margin_end] {
+            set(card.upcast_ref(), EDGE);
+        }
         root.set_child(Some(&card));
 
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -263,7 +277,7 @@ impl AgentPanel {
         zoom_key.add_css_class("quiet");
         zoom_key.add_css_class("design-agent-zoom");
         zoom_key.set_cursor_from_name(Some("default"));
-        zoom_key.set_tooltip_text(Some("Text size: Ctrl and the wheel, or Ctrl = and Ctrl -, over the panel. Click for 100%"));
+        zoom_key.set_tooltip_text(Some("Text size: Ctrl and the wheel over the panel, or Ctrl = and Ctrl - while typing in it. Click for 100%"));
         zoom_key.set_visible(false);
         head.append(&zoom_key);
         let close = crate::app::icon_button("close", "Close the agent panel");
@@ -288,9 +302,16 @@ impl AgentPanel {
         missing_note.set_max_width_chars(40);
         missing_note.set_justify(gtk::Justification::Center);
         missing.append(&missing_note);
+        // The Terminal key is on already, so pressing it again does nothing: this asks again
+        // (the other design's panel closed, the terminal opened on the wall).
+        let missing_keys = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        missing_keys.set_halign(gtk::Align::Center);
+        let try_again = gtk::Button::with_label("Try again");
+        try_again.set_widget_name("design-agent-try-again");
+        missing_keys.append(&try_again);
         let to_chat = gtk::Button::with_label("Show the conversation");
-        to_chat.set_halign(gtk::Align::Center);
-        missing.append(&to_chat);
+        missing_keys.append(&to_chat);
+        missing.append(&missing_keys);
         missing.set_visible(false);
         terminal_page.add_overlay(&missing);
         stack.add_named(&terminal_page, Some("terminal"));
@@ -366,6 +387,8 @@ impl AgentPanel {
             note,
             place: Cell::new(place),
             grabbed: Cell::new(None),
+            sizing: Cell::new(false),
+            shown_size: Cell::new((0, 0)),
             session: RefCell::default(),
             lent: RefCell::default(),
             cursor: Cell::new(None),
@@ -410,7 +433,7 @@ impl AgentPanel {
                 return;
             }
             g.set_state(gtk::EventSequenceState::Claimed);
-            f.set(p.place.get());
+            f.set(p.shown());
             p.grab(g, x, y);
         });
         let weak = Rc::downgrade(&panel);
@@ -418,6 +441,12 @@ impl AgentPanel {
             if let Some((p, (dx, dy))) = weak.upgrade().and_then(|p| p.hand(g, dx, dy).map(|d| (p, d))) {
                 let start = from.get();
                 p.set_place(Place { x: start.x + dx, y: start.y + dy, ..p.place.get() });
+            }
+        });
+        let weak = Rc::downgrade(&panel);
+        moving.connect_drag_end(move |_, _, _| {
+            if let Some(p) = weak.upgrade() {
+                p.keep();
             }
         });
         head.add_controller(moving);
@@ -463,6 +492,14 @@ impl AgentPanel {
             glib::Propagation::Stop
         });
         panel.root.add_controller(keys);
+        // The read loop stops while the card is off screen (another page, the Agents wall):
+        // shown again, it reads again, or the conversation would stay where it was left.
+        let weak = Rc::downgrade(&panel);
+        panel.root.connect_map(move |_| {
+            if let Some(p) = weak.upgrade().filter(|p| p.place.get().chat) {
+                p.read_chat();
+            }
+        });
         let weak = Rc::downgrade(&panel);
         panel.zoom_key.connect_clicked(move |_| {
             if let Some(p) = weak.upgrade() {
@@ -480,6 +517,12 @@ impl AgentPanel {
         panel.chat_key.connect_toggled(move |key| {
             if let Some(p) = weak.upgrade().filter(|_| key.is_active()) {
                 p.show_mode(true);
+            }
+        });
+        let weak = Rc::downgrade(&panel);
+        try_again.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.borrow_terminal();
             }
         });
         let weak = Rc::downgrade(&panel);
@@ -514,6 +557,7 @@ impl AgentPanel {
             }
         });
         panel.input.add_controller(keys);
+        panel.recall();
         panel
     }
 
@@ -537,6 +581,15 @@ impl AgentPanel {
         }
     }
 
+    /// Show the design's terminal again when it is no longer the one shown: tied to another, or
+    /// to one for the first time.
+    pub fn follow_session(self: &Rc<Self>) {
+        let session = self.board.upgrade().and_then(|b| b.doc.session());
+        if *self.session.borrow() != session {
+            self.open();
+        }
+    }
+
     /// Put away: the terminal goes back to the wall, and nothing more is read.
     pub fn close(&self) {
         // A board dropped as the app quits, its thread's storage going: nothing to hand back to.
@@ -550,7 +603,15 @@ impl AgentPanel {
     /// Where the board places the card on a canvas `cw` by `ch`.
     pub fn placed(&self, cw: f64, ch: f64) -> gdk::Rectangle {
         let p = self.place.get().within(cw, ch);
-        gdk::Rectangle::new(p.x.round() as i32, p.y.round() as i32, p.w.round() as i32, p.h.round() as i32)
+        let r = gdk::Rectangle::new(p.x.round() as i32, p.y.round() as i32, p.w.round() as i32, p.h.round() as i32);
+        // Shrunk or grown by the canvas (a popped-out window resized), not by a strip: the
+        // agent draws for the new rows and columns, as VTE already does.
+        if self.shown_size.replace((r.width(), r.height())) != (r.width(), r.height()) && !self.sizing.get() {
+            if let Some((_, pane)) = self.lent.borrow().clone() {
+                pane.schedule_resize();
+            }
+        }
+        r
     }
 
     /// Show session `name`'s terminal in the card when it is the one shown: true when it now
@@ -591,6 +652,13 @@ impl AgentPanel {
         })
     }
 
+    /// The place as the card is shown: the stored one held to the canvas as it is now. A drag
+    /// starts from it, or after the canvas shrank the card would stick, then jump.
+    fn shown(&self) -> Place {
+        let (cw, ch) = self.board.upgrade().map_or((f64::INFINITY, f64::INFINITY), |b| b.size.get());
+        self.place.get().within(cw, ch)
+    }
+
     fn set_place(&self, to: Place) {
         let Some(b) = self.board.upgrade() else {
             return;
@@ -602,8 +670,12 @@ impl AgentPanel {
     }
 
     fn show_mode(self: &Rc<Self>, chat: bool) {
+        let was = self.place.get().chat;
         self.place.set(Place { chat, ..self.place.get() });
         LAST.with(|l| l.set(Some(self.place.get())));
+        if was != chat {
+            self.keep();
+        }
         self.stack.set_visible_child_name(if chat { "chat" } else { "terminal" });
         if chat {
             self.give_back();
@@ -710,7 +782,8 @@ impl AgentPanel {
         sizing.connect_drag_begin(move |g, x, y| {
             if let Some(p) = weak.upgrade() {
                 g.set_state(gtk::EventSequenceState::Claimed);
-                f.set(p.place.get());
+                f.set(p.shown());
+                p.sizing.set(true);
                 p.grab(g, x, y);
             }
         });
@@ -728,7 +801,13 @@ impl AgentPanel {
         let weak = Rc::downgrade(self);
         sizing.connect_drag_end(move |_, _, _| {
             // The terminal's rows and columns follow once, at the size it was left at.
-            if let Some((_, pane)) = weak.upgrade().and_then(|p| p.lent.borrow().clone()) {
+            let Some(p) = weak.upgrade() else {
+                return;
+            };
+            p.sizing.set(false);
+            p.keep();
+            let lent = p.lent.borrow().clone();
+            if let Some((_, pane)) = lent {
                 pane.schedule_resize();
             }
         });
@@ -748,16 +827,78 @@ impl AgentPanel {
         ZOOM.with(Cell::get)
     }
 
-    /// Show the terminal and the conversation at `zoom` times their size, as every card will.
-    fn set_zoom(&self, zoom: f64) {
-        if ZOOM.with(|z| z.replace(zoom)) == zoom {
+    /// The place, size, view and text size as the settings keep them.
+    fn kept(&self) -> Value {
+        let p = self.place.get();
+        json!({"x": p.x.round(), "y": p.y.round(), "w": p.w.round(), "h": p.h.round(), "chat": p.chat, "zoom": self.zoom()})
+    }
+
+    /// Keep where the card was left, its size, view and text size for the next launch.
+    fn keep(&self) {
+        let Some(ui) = self.ui.upgrade() else {
             return;
+        };
+        let value = self.kept();
+        glib::spawn_future_local(async move {
+            let _ = ui.call("settings.set", json!({"path": KEPT, "value": value})).await;
+        });
+    }
+
+    /// Once a launch: take the card's last place and text size from the settings, for this card
+    /// unless the person has moved or sized it meanwhile, and for the cards after it.
+    fn recall(self: &Rc<Self>) {
+        if RECALLED.with(|r| r.replace(true)) {
+            return;
+        }
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let (weak, opened) = (Rc::downgrade(self), self.place.get());
+        glib::spawn_future_local(async move {
+            let Ok(got) = ui.call("settings.get", json!({"path": KEPT})).await else {
+                return;
+            };
+            let v = &got["value"];
+            let num = |k: &str| v[k].as_f64().filter(|n| n.is_finite());
+            if let (Some(x), Some(y), Some(w), Some(h)) = (num("x"), num("y"), num("w"), num("h")) {
+                let kept = Place { x, y, w, h, chat: v["chat"].as_bool().unwrap_or(opened.chat) };
+                if LAST.with(Cell::get).is_none_or(|last| last == opened) {
+                    LAST.with(|l| l.set(Some(kept)));
+                }
+                if let Some(p) = weak.upgrade().filter(|p| p.place.get() == opened) {
+                    p.set_place(Place { chat: opened.chat, ..kept });
+                }
+            }
+            if let Some(zoom) = num("zoom").filter(|z| (0.5..=3.0).contains(z)) {
+                match weak.upgrade() {
+                    Some(p) => {
+                        p.apply_zoom(zoom);
+                    }
+                    None => ZOOM.with(|z| z.set(zoom)),
+                }
+            }
+        });
+    }
+
+    /// Show the terminal and the conversation at `zoom` times their size, as every card will,
+    /// and keep it for the next launch.
+    fn set_zoom(&self, zoom: f64) {
+        if self.apply_zoom(zoom) {
+            self.keep();
+        }
+    }
+
+    /// [`set_zoom`] without keeping it: whether it changed.
+    fn apply_zoom(&self, zoom: f64) -> bool {
+        if ZOOM.with(|z| z.replace(zoom)) == zoom {
+            return false;
         }
         if let Some((_, pane)) = self.lent.borrow().as_ref() {
             pane.terminal.set_font_scale(zoom);
         }
         scale_labels(self.column.upcast_ref(), zoom);
         self.show_zoom();
+        true
     }
 
     /// The size key: shown, with the size, while it is not 100%.
@@ -969,6 +1110,9 @@ impl AgentPanel {
         if text.is_empty() {
             return;
         }
+        // A text being typed on the canvas is finished first, as the top bar's Ask does, so the
+        // agent reads the words as they stand and its answer is not held behind the edit.
+        b.end_edit(true);
         self.note.set_visible(false);
         let weak = Rc::downgrade(self);
         if self.about.is_active() {
@@ -984,14 +1128,14 @@ impl AgentPanel {
                     p.say(&why);
                 }
             });
-            self.sent.set(true);
+            self.wake_chat();
             return;
         }
         let Some(ui) = b.ui.upgrade() else {
             return;
         };
         buffer.set_text("");
-        self.sent.set(true);
+        self.wake_chat();
         glib::spawn_future_local(async move {
             // One paste, then Enter on its own once it has landed (I-4).
             let typed = match ui.call("session.input", json!({"session": session, "data": text, "paste": true})).await {
@@ -1007,6 +1151,19 @@ impl AgentPanel {
                     buffer.set_text(&text);
                 }
                 p.say(&format!("Could not reach {session}: {e}"));
+            }
+        });
+    }
+
+    /// Read the conversation soon after a send, rather than when the loop's sleep ends (up to
+    /// 15 s for an exited agent): a read now retires the sleeping one.
+    fn wake_chat(self: &Rc<Self>) {
+        self.sent.set(true);
+        let (weak, serial) = (Rc::downgrade(self), self.serial.get());
+        glib::spawn_future_local(async move {
+            glib::timeout_future(read_delay("", true)).await;
+            if let Some(p) = weak.upgrade().filter(|p| p.serial.get() == serial && p.place.get().chat && p.root.is_mapped()) {
+                p.read_chat();
             }
         });
     }

@@ -163,12 +163,29 @@ pub fn describe(dir: &Path, path: &Path, renamed_from: Option<String>, replaced:
     let linked = path.symlink_metadata().ok().filter(|m| m.file_type().is_symlink())
         .and_then(|_| fs::read_link(path).ok()).map(|p| p.display().to_string());
     let (w, h) = if kind == "image" && bytes <= 64 * 1024 * 1024 {
-        fs::read(path).ok().and_then(|b| crate::picture::sniff(&b)).map_or((None, None), |p| (Some(p.w), Some(p.h)))
+        image_size(path, bytes).map_or((None, None), |(w, h)| (Some(w), Some(h)))
     } else {
         (None, None)
     };
     let made = fs::read(sidecar(path)).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     VideoAsset { static_file: rel, path: path.display().to_string(), bytes, kind: kind.into(), w, h, renamed_from, replaced, unchanged, linked, made }
+}
+
+/// An image's size from its head (the first 256 KB, where a PNG's, a GIF's or a WebP's header and
+/// all but the largest JPEG metadata end), read whole only when the head does not say: a list of
+/// a folder of photos reads kilobytes of each, not all of it.
+fn image_size(path: &Path, bytes: u64) -> Option<(u32, u32)> {
+    use std::io::Read;
+    const HEAD: u64 = 256 * 1024;
+    let mut head = Vec::with_capacity(HEAD.min(bytes) as usize);
+    fs::File::open(path).ok()?.take(HEAD).read_to_end(&mut head).ok()?;
+    if let Some(p) = crate::picture::sniff(&head) {
+        return Some((p.w, p.h));
+    }
+    if bytes <= HEAD {
+        return None;
+    }
+    fs::read(path).ok().and_then(|b| crate::picture::sniff(&b)).map(|p| (p.w, p.h))
 }
 
 /// Where how a file was made is kept: `<name>.json` beside it.
@@ -300,6 +317,22 @@ pub fn font_added(family: &str, added: &[(String, &Face)], missing: Vec<String>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An image's size comes from its head; a header past the head is still found, read whole.
+    #[test]
+    fn an_images_size_is_read_from_its_head() {
+        let root = tempfile::tempdir().unwrap();
+        let png = root.path().join("big.png");
+        let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\x01\xe0\0\0\x02\x80\x08\x06\0\0\0".to_vec();
+        bytes.resize(1 << 20, 0);
+        fs::write(&png, &bytes).unwrap();
+        assert_eq!(image_size(&png, bytes.len() as u64), Some((480, 640)));
+        // An SVG whose size is said only past the head.
+        let svg = root.path().join("late.svg");
+        let text = format!("<!--{}--><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"10\"/>", "x".repeat(300 * 1024));
+        fs::write(&svg, &text).unwrap();
+        assert_eq!(image_size(&svg, text.len() as u64), crate::picture::sniff(text.as_bytes()).map(|p| (p.w, p.h)));
+    }
 
     #[test]
     fn copied_files_get_safe_names_and_kinds() {

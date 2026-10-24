@@ -235,7 +235,12 @@ impl Board {
                 if let Some(b) = w.upgrade() {
                     let still = b.edit.borrow().as_ref().is_some_and(|e| e.view.has_focus());
                     let window = b.root.root().and_downcast::<gtk::Window>();
-                    let in_board = window.as_ref().and_then(gtk::prelude::GtkWindowExt::focus).is_some_and(|f| f.is_ancestor(&b.root));
+                    // The agent panel sits inside the board but is not part of the canvas:
+                    // typing there ends the edit, or rereads stay held behind it.
+                    let panel = b.agent_panel.borrow().as_ref().map(|p| p.root.clone());
+                    let in_board = window.as_ref().and_then(gtk::prelude::GtkWindowExt::focus).is_some_and(|f| {
+                        f.is_ancestor(&b.root) && !panel.as_ref().is_some_and(|p| f == *p.upcast_ref::<gtk::Widget>() || f.is_ancestor(p))
+                    });
                     let away = window.is_some_and(|w| !w.is_active());
                     if (!still && !in_board) || away {
                         b.end_edit(true);
@@ -282,7 +287,9 @@ impl Board {
             Rect::new(r.x + STICKY_PAD, r.y + STICKY_PAD, (r.w - 2.0 * STICKY_PAD).max(1.0), (r.h - 2.0 * STICKY_PAD).max(1.0))
         } else {
             match placed.wrap_width(n, &r) {
-                Some(w) => Rect::new(r.x, r.y, w, r.h),
+                // As the canvas lays it out (`paint::new_layout`): the last letter's spacing is
+                // room a line may take, or a letter-spaced word breaks here and not there.
+                Some(w) => Rect::new(r.x, r.y, w + super::paint::trailing_spacing(n), r.h),
                 None => Rect::new(r.x, r.y, r.w + 4.0 / zoom, r.h),
             }
         };

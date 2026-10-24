@@ -4,7 +4,8 @@
 //! moved or changed is updated, a new one is added and one no longer drawn is deleted, the parts
 //! under the frame's other children in the order they paint. Every write is an edit like any
 //! other, so one undo takes back the change and its parts. A chart in an instance is its main's
-//! (the component sync, which runs after, carries the parts); a lenient list draws nothing. An
+//! (the component sync, which runs after, carries the parts); the person's lenient list (an undo,
+//! a redo) draws nothing, its parts being in it (`Run::derives`). An
 //! `impl Run`, as the follow rule is.
 //!
 //! A chart frame that fills its laid-out parent (`w_sizing` or `h_sizing` `fill`) is drawn at the
@@ -57,9 +58,16 @@ impl Run<'_> {
             .with_hint("change the chart (its labels, series, colours or options) on the frame, and its parts are drawn again; add your own nodes beside them")
     }
 
+    /// Whether a `generated` node under `parent` is a chart's part: its frame holds a chart. One
+    /// left anywhere else (written by hand before that was refused) is edited as any node is.
+    pub(super) fn drawn_by_chart(&mut self, parent: Option<&str>) -> Result<bool, BusError> {
+        let Some(parent) = parent else { return Ok(false) };
+        Ok(self.row(parent)?.is_some_and(|row| row.body.contains("\"chart\":")))
+    }
+
     /// Note chart frame `id` to draw again once the list has run.
     pub(super) fn chart_changed(&mut self, id: &str) {
-        if !self.lenient && !self.charts.iter().any(|c| c == id) {
+        if self.derives() && !self.charts.iter().any(|c| c == id) {
             self.charts.push(id.to_string());
         }
     }
@@ -88,7 +96,7 @@ impl Run<'_> {
     /// Give each chart that fills, on a page the list reached, its laid-out size (see the module),
     /// and keep the design's list of them: one gone or no longer filling leaves it.
     pub(super) fn fit_charts(&mut self) -> Result<(), BusError> {
-        if !self.lenient && !self.fill_charts.is_empty() {
+        if self.derives() && !self.fill_charts.is_empty() {
             self.fit()?;
         }
         if std::mem::take(&mut self.fill_charts_changed) {
@@ -114,7 +122,9 @@ impl Run<'_> {
         for id in self.fill_charts.clone() {
             // Where it is comes from the parent index; its body is read only where it is reached.
             let top = self.top(&id)?;
-            if top.as_ref().is_some_and(|top| !reached.contains(top)) {
+            // A style or colour edit touches no node but can change any layout that names it
+            // (a label's font size beside the chart): every chart that fills is laid out again.
+            if !self.styles_changed && top.as_ref().is_some_and(|top| !reached.contains(top)) {
                 continue;
             }
             let chart = self.stored(&id)?.filter(|n| fills(n) && n.instance_of.is_none());

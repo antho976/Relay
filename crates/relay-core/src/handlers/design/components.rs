@@ -9,7 +9,8 @@
 //! it lost is deleted, its order is the main's), and a main that holds an instance of another is
 //! brought to its own instances after that one. Every write is an edit like any other, dated,
 //! counted, undone and expected, so one undo takes back the change and what it did to the
-//! instances. A lenient list (an undo, a redo) puts back what was stored and syncs nothing.
+//! instances. The person's lenient list (an undo, a redo) puts back what was stored and syncs
+//! nothing; an agent's is synced as a strict one is (`Run::derives`).
 //!
 //! A design that never held a main component pays nothing for all this: the flag
 //! (`designs.components`, migration v32) is read with the row every list reads.
@@ -17,7 +18,7 @@
 use super::apply::Run;
 use super::node_of;
 use crate::engine::IntoBus;
-use relay_bus::design::{copy_id, Node, NOT_OVERRIDDEN};
+use relay_bus::design::{copy_id, Layout, Node, NOT_OVERRIDDEN};
 use relay_bus::error::BusError;
 use relay_bus::ErrorKind;
 use rusqlite::params;
@@ -158,7 +159,7 @@ impl Run<'_> {
     /// mains to theirs (see the module). Refused (`design.component_cycle`) for an instance
     /// inside its own main, however deep.
     pub(super) fn sync_components(&mut self) -> Result<(), BusError> {
-        if self.lenient || !self.has_mains()? && self.mains_gone.is_empty() {
+        if !self.derives() || !self.has_mains()? && self.mains_gone.is_empty() {
             return Ok(());
         }
         let mut queue: VecDeque<String> = VecDeque::new();
@@ -300,11 +301,24 @@ impl Run<'_> {
         for m in &mains[1..] {
             order.entry(m.parent.clone().unwrap_or_default()).or_default().push(m.id.clone());
         }
+        let by_id: HashMap<&str, &Node> = mains.iter().map(|m| (m.id.as_str(), m)).collect();
+        // The size each of the main's frames has in the instance, as decided, parents first.
+        let mut sized: HashMap<&str, (f64, f64)> = HashMap::new();
         for (i, m) in mains.iter().enumerate() {
             let current = if i == 0 { own.first().cloned() } else { follower.get(&m.id).cloned() };
             let mut want = m.to_map();
             for key in NOT_OVERRIDDEN {
                 want.remove(*key);
+            }
+            // A pinned child of a frame the instance has at another size (its root resized, an
+            // override) sits where the follow rule puts the main's child in it, not at the
+            // main's place: copied, it would jump back on the main's next change.
+            let parent_sizes = m.parent.as_deref().and_then(|p| Some((by_id.get(p)?, *sized.get(p)?)));
+            if let Some((main_parent, (pw, ph))) = parent_sizes {
+                let laid = main_parent.layout_mode() != Layout::None;
+                if m.is_pinned() && (!laid || m.is_absolute()) && (pw, ph) != (main_parent.w, main_parent.h) {
+                    want.extend(m.follow((main_parent.w, main_parent.h), (pw, ph), true, true));
+                }
             }
             let kept: Vec<String> = current.as_ref().and_then(|c| c.overrides.clone()).unwrap_or_default();
             let mut keep: Vec<&str> = kept.iter().map(String::as_str).collect();
@@ -318,6 +332,8 @@ impl Run<'_> {
                     None => want.remove(key),
                 };
             }
+            let size = |key: &str, or: f64| want.get(key).and_then(Value::as_f64).unwrap_or(or);
+            sized.insert(m.id.as_str(), (size("w", m.w), size("h", m.h)));
             want.insert("instance_of".into(), Value::from(m.id.clone()));
             if !kept.is_empty() {
                 want.insert("overrides".into(), Value::from(kept.clone()));

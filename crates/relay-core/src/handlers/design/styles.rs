@@ -253,6 +253,10 @@ impl Run<'_> {
             if self.chain(&to).any(|at| at == id) {
                 return Err(self.fail_on("parent", ErrorKind::Invalid, "design.cycle", format!("{to:?} is inside {id:?}, which this copies")));
             }
+            // As an add or a move: what is inside an instance is its main's.
+            if !self.lenient && !self.syncing && self.has_mains()? && self.link(&to)?.is_some_and(|l| l.of.is_some()) {
+                return Err(self.inside_instance(&format!("{to:?} is part of an instance")));
+            }
             Some(to)
         };
         let rows = self.subtree_rows(id.clone(), root)?;
@@ -384,6 +388,12 @@ impl Run<'_> {
             self.added.insert(node.id.clone());
             if node.kind.holds_children() {
                 self.parents.insert(node.id.clone(), node.parent.clone());
+            }
+            // As an add does: a chart copied before its parts were drawn (in the list that added
+            // it) is drawn, and one that fills is fitted and listed with the others.
+            if node.chart.is_some() {
+                self.chart_changed(&node.id);
+                self.note_fill(node);
             }
         }
         self.copy_ids.push((self.at, nodes.iter().map(|n| (n.id.clone(), map[n.id.as_str()].clone())).collect()));

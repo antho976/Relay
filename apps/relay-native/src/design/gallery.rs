@@ -31,6 +31,8 @@ type Opener = Rc<dyn Fn(i64)>;
 type Then = Box<dyn FnOnce(&Rc<Gallery>, &Value)>;
 
 /// A card's picture, in pixels at 2× for a crisp 280 by 175 thumbnail.
+/// How long after a design's picture was drawn it may be drawn again.
+const SETTLE: Duration = Duration::from_secs(1);
 const THUMB_W: f64 = 560.0;
 const THUMB_H: f64 = 350.0;
 
@@ -163,6 +165,11 @@ pub struct Gallery {
     unsettled: RefCell<HashSet<i64>>,
     /// No picture is drawn before this: the board just closed (TM-80).
     hold: Cell<Option<Instant>>,
+    /// When each design's picture was last drawn: one an agent keeps editing is drawn again
+    /// once its edits pause ([`SETTLE`]), not once an edit (43 ms on this thread at 4,903 nodes).
+    drawn_at: RefCell<HashMap<i64, Instant>>,
+    /// A draw put off until a design settles is waiting on its timer.
+    settling: Cell<bool>,
     /// A frame is awaited for cards not laid out yet.
     ticking: Cell<bool>,
     painter: Rc<Painter>,
@@ -606,6 +613,8 @@ impl Gallery {
             retried: RefCell::default(),
             unsettled: RefCell::default(),
             hold: Cell::new(None),
+            drawn_at: RefCell::default(),
+            settling: Cell::new(false),
             ticking: Cell::new(false),
             painter,
             toast,
@@ -1930,9 +1939,25 @@ impl Gallery {
         let Some((id, rev)) = self.pick() else {
             return;
         };
+        let since = self.drawn_at.borrow().get(&id).map(Instant::elapsed);
+        if let Some(since) = since.filter(|since| *since < SETTLE) {
+            // Drawn a moment ago: again once the burst of edits has passed.
+            self.queue.borrow_mut().push_front((id, rev));
+            if !self.settling.replace(true) {
+                let weak = self.me.clone();
+                glib::timeout_add_local_once(SETTLE - since, move || {
+                    if let Some(g) = weak.upgrade() {
+                        g.settling.set(false);
+                        g.next_thumb();
+                    }
+                });
+            }
+            return;
+        }
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
+        self.drawn_at.borrow_mut().insert(id, Instant::now());
         self.rendering.set(true);
         let g = self.me();
         let started = Instant::now();

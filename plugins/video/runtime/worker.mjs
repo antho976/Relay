@@ -133,6 +133,9 @@ const inUse = new Map();
 const mirror = (from, to) => {
   fs.mkdirSync(to, { recursive: true });
   for (const e of safeReaddir(from)) {
+    // Relay's own staging (a conversion, a capture, a voice being made) is hidden and never
+    // the video's: left out of every bundle.
+    if (e.startsWith('.')) continue;
     const source = path.join(from, e);
     let stat;
     let linked;
@@ -586,21 +589,33 @@ const commands = {
 
   /** Render the whole composition (or `range`) to `out`, reporting progress as it goes. */
   async render({ job, dir, bundle_dir, composition, format, out: output, scale, crf, props, range }) {
+    // Stoppable from the start: a stop while it bundles (seconds, longer behind a check's
+    // bundle) is kept and honoured once bundling ends. Whether it was stopped is this flag's,
+    // never the error's words (an error naming a "cancelButton" is not a stop).
+    const { cancelSignal, cancel } = makeCancelSignal();
+    let stopped = false;
+    running.set(job, () => {
+      stopped = true;
+      cancel();
+    });
+    const wasStopped = () => new Refusal('video.render.cancelled', 'the render was stopped');
     let v;
     try {
       v = await bundleVideo(dir, bundle_dir);
     } catch (e) {
+      running.delete(job);
+      if (stopped) throw wasStopped();
       if (e instanceof Refusal) throw e;
       const [first] = bundleErrors(e, dir);
       throw new Refusal('video.build', `${first.file ? `${first.file}:${first.line ?? ''} ` : ''}${first.message}`);
     }
     const outDir = v.outDir;
     inUse.set(outDir, (inUse.get(outDir) ?? 0) + 1);
-    const { cancelSignal, cancel } = makeCancelSignal();
-    running.set(job, cancel);
     try {
+      if (stopped) throw wasStopped();
       const inputProps = props ?? {};
       const c = await withBrowser((puppeteerInstance) => selectComposition({ serveUrl: v.serveUrl, id: composition, inputProps, puppeteerInstance, logLevel: LOG_LEVEL }));
+      if (stopped) throw wasStopped();
       const codec = { mp4: 'h264', webm: 'vp8', gif: 'gif', prores: 'prores', mp3: 'mp3', wav: 'wav' }[format];
       if (!codec) throw new Refusal('video.format', `no format ${format}`);
       let last = 0;
@@ -623,7 +638,7 @@ const commands = {
       return { path: output, bytes: fs.statSync(output).size, frames, ms: Math.round(performance.now() - started) };
     } catch (e) {
       if (e instanceof Refusal) throw e;
-      if (/cancel/i.test(String(e?.message))) throw new Refusal('video.render.cancelled', 'the render was stopped');
+      if (stopped) throw wasStopped();
       const at = await runtimeError(e, dir, outDir);
       throw new Refusal('video.render.failed', `${at.file ? `${at.file}:${at.line ?? ''} ` : ''}${at.frame !== undefined ? `(frame ${at.frame}) ` : ''}${at.message}`);
     } finally {
@@ -642,6 +657,7 @@ const commands = {
 
   /** Forget a video (deleted): its bundle and service. */
   async forget({ dir }) {
+    videos.get(dir)?.ls?.dispose?.();
     videos.delete(dir);
     return {};
   },

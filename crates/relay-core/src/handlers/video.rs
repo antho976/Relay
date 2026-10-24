@@ -312,7 +312,12 @@ fn constant_rate(engine: &Engine, dir: &Path, source: &Path, fps: f64) -> Result
     let tmp = dir.join("public").join(format!(".{}-cfr", uuid::Uuid::new_v4()));
     fs::create_dir_all(&tmp).map_err(|e| BusError::unavailable("video.folder", format!("{}: {e}", tmp.display())))?;
     let out = tmp.join(format!("{stem}.mp4"));
-    video::media::constant_rate(engine, source, &out, fps)?;
+    // A failed or timed-out conversion leaves nothing behind (a partial clip can be GBs, and the
+    // worker would link it into every bundle).
+    if let Err(e) = video::media::constant_rate(engine, source, &out, fps) {
+        let _ = fs::remove_dir_all(&tmp);
+        return Err(e);
+    }
     Ok(out)
 }
 
@@ -490,6 +495,8 @@ pub fn register(e: &mut Engine) {
         let by = actor_name(ctx)?;
         ctx.tx().execute("UPDATE videos SET deleted_at = ?2, updated_at = ?2, updated_by = ?3 WHERE id = ?1", params![video.id, ctx.now, by]).bus()?;
         ctx.set_undo("video.restore", json!({"video_id": video.id}), None);
+        let dir = video.dir.clone();
+        ctx.after_commit(move |engine| video::worker::forget(&engine, &dir));
         emit(ctx, video.id)?;
         Ok(Empty {})
     });
@@ -896,7 +903,10 @@ pub fn register(e: &mut Engine) {
         let (dir, blobs) = (PathBuf::from(&video.dir), video::blobs_dir(ctx.engine()));
         let folder = |e: String| BusError::unavailable("video.folder", format!("could not read the video's folder: {e}"));
         let before = versions::scan(&dir, &blobs).map_err(folder)?;
-        let (_, _, missing) = versions::restore(&dir, &blobs, &entries).map_err(folder)?;
+        let versions::Restored { missing, left, .. } = versions::restore(&dir, &blobs, &entries).map_err(folder)?;
+        if !left.is_empty() {
+            tracing::info!(video = video.id, left = ?left, "video version restore: left files no version could put back");
+        }
         let after = versions::scan(&dir, &blobs).map_err(folder)?;
         Ok(StagedRestore { before, after, missing })
     }, |ctx: &mut Ctx, p, staged| {
@@ -920,6 +930,16 @@ pub fn register(e: &mut Engine) {
     // it has come, and only what needs setting up is set up.
     e.register::<KitInstall>(|ctx: &mut Ctx, p| {
         let mut status = kit::status(ctx.engine());
+        // Setting it up again replaces the packages a render is using and stops the worker,
+        // which would end a render as if someone had stopped it.
+        if status.state == KitState::Ready && p.force == Some(true) {
+            let busy: bool = ctx.tx().prepare_cached("SELECT EXISTS(SELECT 1 FROM video_renders WHERE state IN ('queued', 'rendering'))").bus()?
+                .query_row([], |r| r.get(0)).bus()?;
+            if busy {
+                return Err(BusError::conflict("video.kit.busy", "renders are queued or running; setting the kit up again would stop them")
+                    .with_hint("wait for them (video.render.wait) or stop them, then try again"));
+            }
+        }
         let wanted = match status.state {
             KitState::Ready => p.force == Some(true),
             KitState::NoNode | KitState::Installing => false,

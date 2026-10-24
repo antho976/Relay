@@ -37,7 +37,7 @@ fn rename_set(text: &str, shown: &str) -> Option<Value> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct Row {
     id: String,
     depth: u32,
@@ -47,7 +47,7 @@ struct Row {
 
 /// What a pages list was built for: each page, its name and whether it is hidden, and
 /// whether the fold of hidden pages is open.
-type PageSig = (Vec<(String, String, bool)>, bool);
+pub(super) type PageSig = (Vec<(String, String, bool)>, bool);
 
 thread_local! {
     /// Whether the pages lists open their fold of hidden pages.
@@ -63,6 +63,9 @@ pub struct Layers {
     page_sig: RefCell<PageSig>,
     model: gtk::StringList,
     rows: RefCell<Vec<Row>>,
+    /// What each row was last drawn showing (its layer's name, kind, eye, lock and whether it
+    /// is selected): a refresh with the same rows rebinds only those whose look changed.
+    looks: RefCell<Vec<u64>>,
     open: RefCell<HashSet<String>>,
     /// Said in place of the list when the page has nothing on it.
     empty: gtk::Label,
@@ -111,6 +114,7 @@ impl Layers {
             page_sig: RefCell::default(),
             model,
             rows: RefCell::default(),
+            looks: RefCell::default(),
             open: RefCell::default(),
             empty,
         });
@@ -390,7 +394,8 @@ impl Layers {
         let (Some(n), Some(t)) = (scene.node(id), scene.node(target)) else {
             return false;
         };
-        if id == target || n.is_locked() || scene.is_inside(target, id) {
+        // A page row dragged from the pages list is not a layer: it has no parent to change.
+        if id == target || n.is_locked() || n.kind == NodeKind::Page || scene.is_inside(target, id) {
             return false;
         }
         let into = t.kind.holds_children() && (0.3..0.7).contains(&at);
@@ -450,9 +455,30 @@ impl Layers {
             }
         }
         drop(open);
+        let selection = b.selection.borrow();
+        let looks: Vec<u64> = rows.iter().map(|r| {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            if let Some(n) = scene.node(&r.id) {
+                (display_name(n), kind_glyph(n.kind), n.is_hidden(), n.is_locked()).hash(&mut h);
+            }
+            selection.contains(&r.id).hash(&mut h);
+            h.finish()
+        }).collect();
+        drop(selection);
         drop(scene);
-        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         self.empty.set_visible(rows.is_empty());
+        let same_rows = *self.rows.borrow() == rows;
+        let before = self.looks.replace(looks.clone());
+        if same_rows && before.len() == looks.len() {
+            // The same rows: only those that look otherwise are bound again, one at a time; on
+            // a page of thousands of layers a whole splice is a new object and a rebind a row.
+            for (i, row) in rows.iter().enumerate().filter(|(i, _)| before[*i] != looks[*i]) {
+                self.model.splice(i as u32, 1, &[row.id.as_str()]);
+            }
+            return;
+        }
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         *self.rows.borrow_mut() = rows.clone();
         self.model.splice(0, self.model.n_items(), &ids);
     }
@@ -516,7 +542,7 @@ impl Layers {
 
 /// The pages, their names and whether each is hidden, and whether the fold of hidden pages
 /// shows: a pages list built for them stays.
-fn page_sig(b: &Rc<Board>) -> PageSig {
+pub(super) fn page_sig(b: &Rc<Board>) -> PageSig {
     let scene = b.doc.scene.borrow();
     let pages: Vec<_> = scene.pages().iter().map(|p| (p.clone(), b.page_name(p), scene.node(p).is_some_and(|n| n.is_hidden()))).collect();
     let current = b.page.borrow().clone();

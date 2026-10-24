@@ -321,7 +321,9 @@ impl Ui {
         if let Some(grid) = pane.root.parent().and_downcast::<gtk::Grid>() {
             grid.remove(&pane.root);
         }
-        self.update_attachments();
+        // The card in its place is built by the layout, which ends in `update_attachments`:
+        // without it the wall shows an empty cell when the page is reached by a view key.
+        self.layout();
         Some(pane)
     }
     /// Take back the terminal lent to a design's agent panel: on the wall again, where the

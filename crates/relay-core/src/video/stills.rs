@@ -25,6 +25,9 @@ const META_WITHIN: Duration = Duration::from_secs(120);
 const KEEP_STILLS: usize = 64;
 /// Most boxes one still answers with.
 const MOST_BOXES: usize = 400;
+/// Most pixels the frames of one still hold together: each is decoded at once and laid into a
+/// sheet as large, so 24 frames of an 8K composition at full scale would hold gigabytes.
+const MOST_PIXELS: f64 = 48_000_000.0;
 
 /// Who a system write is on behalf of: the request's actor and its session.
 pub struct Caller<'a> {
@@ -205,6 +208,9 @@ pub fn still(engine: &Engine, video: &Video, p: &StillIn, by: &Caller) -> Result
         let long = comp.width.max(comp.height).max(1) as f64;
         (if sheet_of { 480.0 } else { 1280.0 } / long).min(1.0)
     }).clamp(0.05, 1.0);
+    // Within the pixels a still may hold, whatever scale was asked for.
+    let asked = comp.width.max(1) as f64 * comp.height.max(1) as f64 * frames.len() as f64;
+    let scale = scale.min((MOST_PIXELS / asked).sqrt()).max(0.01);
 
     let dir = engine.store.video_stills_dir();
     fs::create_dir_all(&dir).map_err(|e| BusError::internal(format!("{}: {e}", dir.display())))?;
@@ -260,7 +266,7 @@ pub fn still(engine: &Engine, video: &Video, p: &StillIn, by: &Caller) -> Result
     };
     if sheet_of {
         let blank = Rgba::new((comp.width as f64 * scale).round().max(1.0) as u32, (comp.height as f64 * scale).round().max(1.0) as u32, [60, 20, 24, 255]);
-        let tiles_drawn: Vec<Rgba> = pictures.iter().map(|p| p.clone().unwrap_or_else(|| blank.clone())).collect();
+        let tiles_drawn: Vec<Rgba> = pictures.into_iter().map(|p| p.unwrap_or_else(|| blank.clone())).collect();
         sheet::encode(&png, &with_strip(sheet::sheet(&tiles_drawn, &labels))).map_err(BusError::internal)?;
     } else if let Some(path) = drawn.stills[0].path.as_ref() {
         if strip.is_some() {

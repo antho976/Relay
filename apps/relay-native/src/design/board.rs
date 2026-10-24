@@ -320,6 +320,9 @@ pub struct Board {
     pub(super) page_label: gtk::Label,
     /// The dock's page list, rebuilt while open when the pages change.
     pages_popover: RefCell<Option<gtk::Popover>>,
+    /// What the dock's page list was built for, and the page on show then: while they stay,
+    /// an edit leaves its rows, and a rename or drag on one, alone.
+    pages_popover_sig: RefCell<Option<(super::layers::PageSig, String)>>,
     pub(super) context: RefCell<Option<gtk::Widget>>,
     pub(super) context_at: Cell<(i32, i32)>,
     /// The toolbar's width with its words showing, measured before it was made compact.
@@ -618,6 +621,7 @@ impl Board {
             pen_key,
             page_label,
             pages_popover: RefCell::default(),
+            pages_popover_sig: RefCell::default(),
             context: RefCell::default(),
             context_at: Cell::new((0, 0)),
             context_full: Cell::new(None),
@@ -1107,6 +1111,21 @@ impl Board {
         self.selection_changed();
     }
 
+    /// [`Board::select`] for a marquee under way: the canvas shows the picks at once, and the
+    /// toolbar, inspector and layer list are rebuilt once, when it is let go (whole widget trees
+    /// a pointer move otherwise, for a toolbar hidden during the gesture anyway).
+    pub(super) fn select_sweeping(&self, ids: Vec<String>) {
+        if *self.selection.borrow() == ids {
+            return;
+        }
+        let editing = self.edit.borrow().as_ref().map(|e| e.id.clone());
+        if editing.is_some_and(|e| !ids.contains(&e)) {
+            self.end_edit(true);
+        }
+        *self.selection.borrow_mut() = ids;
+        self.canvas.queue_draw();
+    }
+
     pub(super) fn selection_changed(&self) {
         self.canvas.queue_draw();
         self.rebuild_context();
@@ -1300,7 +1319,12 @@ impl Board {
         }
         // The dock's open page list lists the pages there are now (TM-69).
         if let Some(pop) = self.pages_popover.borrow().as_ref().filter(|p| p.is_visible()) {
-            pop.set_child(Some(&super::layers::pages_menu(&self.me(), pop)));
+            let me = self.me();
+            let sig = (super::layers::page_sig(&me), self.page.borrow().clone());
+            if self.pages_popover_sig.borrow().as_ref() != Some(&sig) {
+                pop.set_child(Some(&super::layers::pages_menu(&me, pop)));
+                *self.pages_popover_sig.borrow_mut() = Some(sig);
+            }
         }
     }
 
@@ -1356,6 +1380,11 @@ impl Board {
         }
         if let Some(layers) = self.layers.borrow().as_ref() {
             layers.pages_changed();
+        }
+        // Tied to another terminal (or a first one): the panel follows it.
+        let panel = self.agent_panel.borrow().clone();
+        if let Some(panel) = panel {
+            panel.follow_session();
         }
     }
 
@@ -1626,8 +1655,13 @@ impl Board {
         d.set_absolute_size(size * pango::SCALE as f64);
         d.set_weight(weight);
         l.set_font_description(Some(&d));
-        if labels.len() > 400 {
-            labels.clear();
+        // Kept for the names on show; past the bound (thousands of artboards) half of them go,
+        // not all at once: cleared whole past 400, every name was laid out again each frame.
+        if labels.len() > 2000 {
+            let drop: Vec<String> = labels.keys().take(labels.len() / 2).cloned().collect();
+            for key in drop {
+                labels.remove(&key);
+            }
         }
         labels.insert(key.to_string(), l.clone());
         l
@@ -1648,7 +1682,10 @@ impl Board {
                 continue;
             };
             let s = self.screen(&r);
-            if s.w < 28.0 || s.bottom() < 0.0 || s.y > self.size.get().1 + 20.0 {
+            // Off screen on any side, its name is not laid out (pages of hundreds of artboards
+            // laid every name every frame).
+            let (cw, ch) = self.size.get();
+            if s.w < 28.0 || s.bottom() < 0.0 || s.y > ch + 20.0 || s.right() < 0.0 || s.x > cw {
                 continue;
             }
             let name = frame_label(n);
@@ -2690,6 +2727,7 @@ impl Board {
         pages_popover.connect_show(move |pop| {
             if let Some(b) = weak.upgrade() {
                 pop.set_child(Some(&super::layers::pages_menu(&b, pop)));
+                *b.pages_popover_sig.borrow_mut() = Some((super::layers::page_sig(&b), b.page.borrow().clone()));
             }
         });
         dock.append(&page_key);
@@ -3217,6 +3255,20 @@ impl Board {
                 });
             }
             return Some(away);
+        }
+        // Too wide for the room beside the inspector even compact (a window near 1080 px): below
+        // it, at the canvas's foot, rather than over its rows (W and Hug were covered), clear of
+        // the zoom keys in the corner.
+        if inspector.is_some_and(|iw| cw - iw - 8.0 - (w as f64) < 8.0) {
+            let below = self.inspector_scroll.compute_bounds(&self.overlay)
+                .map_or(f64::INFINITY, |r| f64::from(r.y() + r.height())) + 8.0;
+            let y = ch - h as f64 - 12.0;
+            if y >= below {
+                let zoom = 200.0;
+                let x = (s.cx() - w as f64 / 2.0).round().clamp(8.0, (cw - zoom - w as f64).max(8.0));
+                self.context_at.set((x as i32, y as i32));
+                return Some(gdk::Rectangle::new(x as i32, y as i32, w, h));
+            }
         }
         let mut right = cw - 8.0;
         if let Some(iw) = inspector.filter(|iw| cw - iw - 8.0 - w as f64 >= 8.0) {

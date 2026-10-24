@@ -8,7 +8,8 @@
 //! `frame` `ungroup` `copy` `paste` `undo` `redo` `ask:words` `zoom:1.5` `fit` `layers` `wait:ms`
 //! `print` (the scene, the selection and the colours and styles); `pages` prints `DESIGN_PAGES`
 //! with the Layers panel's page rows, their eyes and the hidden fold; `app-page:agents` goes to
-//! that page of the app, and `lent-card` prints `DESIGN_LENT`, the wall's card for the terminal
+//! that page of the app, `agents-key` presses the project's Agents key (which, unlike
+//! `app-page`, does not lay the wall out on its own), and `lent-card` prints `DESIGN_LENT`, the wall's card for the terminal
 //! the agent panel holds; `mark:name` prints
 //! `DESIGN_MARK name`, for a harness that acts between steps (as an agent would); `chrome`
 //! prints `DESIGN_CHROME` with what the top bar and the toast say, whether Undo agent shows and
@@ -300,6 +301,12 @@ fn next(b: Rc<Board>, steps: Vec<String>, at: usize) {
             // `app-page:agents`: the app goes to that page, as its tabs take it there.
             if let Some(ui) = b.ui.upgrade() {
                 ui.navigate(arg);
+            }
+            pause = 600;
+        }
+        "agents-key" => {
+            if let Some(ui) = b.ui.upgrade() {
+                ui.editor.show_agents();
             }
             pause = 600;
         }

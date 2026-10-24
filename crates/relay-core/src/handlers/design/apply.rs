@@ -109,7 +109,8 @@ pub(super) struct Run<'a> {
     /// An undo or a redo: a written rule's breach is applied as written, and an edit of a node
     /// that is gone or cannot be read is skipped, where a strict list refuses either.
     pub(super) lenient: bool,
-    /// An agent asked: what a lenient list let through is told it in `warnings`.
+    /// An agent asked: what a lenient list let through is told it in `warnings`, and what it
+    /// changes is drawn, synced and sized as a strict list's is ([`Run::derives`]).
     pub(super) agent: bool,
     pub(super) warnings: Vec<String>,
     pub(super) pages: i64,
@@ -810,7 +811,19 @@ impl Run<'_> {
         }
     }
 
+    /// Whether what the list changes is followed by what it draws from: charts drawn and fitted,
+    /// instances synced, shapes added without a size given one. A strict list's always; a
+    /// lenient one's when an agent sent it (a list built from an old read). The person's undo
+    /// and redo put back exactly what was stored, the follow-ups included.
+    pub(super) fn derives(&self) -> bool {
+        !self.lenient || self.agent
+    }
+
     pub(super) fn add(&mut self, mut node: Node, index: Option<u32>) -> Result<Option<String>, BusError> {
+        if self.lenient && self.agent {
+            node.fill_default_size();
+            node.contain_points();
+        }
         if !self.lenient {
             // B49: a shape, frame or icon added without a size gets one; B3: a free line's or
             // path's box is fitted to its points. An undo puts back exactly what was stored.
@@ -825,6 +838,20 @@ impl Run<'_> {
             }
         }
         node.validate().map_err(|why| self.fail(ErrorKind::Invalid, "design.node_invalid", why))?;
+        // What the engine writes is not written by an agent: a part a chart draws (its next
+        // redraw would delete it), or an instance made but by a copy. The person's canvas pastes
+        // and duplicates nodes whole, parts and links with them, and the chart and the sync then
+        // make them right.
+        if self.agent && !self.lenient && !self.syncing {
+            if node.generated.is_some() {
+                return Err(self.fail_on("generated", ErrorKind::Invalid, "design.node_invalid", "generated: a chart's parts are drawn by its frame; leave it out")
+                    .with_hint("give a frame a chart and its parts are drawn as generated children"));
+            }
+            if node.instance_of.is_some() || node.overrides.is_some() {
+                let field = if node.instance_of.is_some() { "instance_of" } else { "overrides" };
+                return Err(self.fail_on(field, ErrorKind::Invalid, "design.instance", format!("{field}: an instance is made by a copy with instance: true")));
+            }
+        }
         if let Err(why) = node.check_new() {
             self.breach(why)?;
         }
@@ -946,7 +973,10 @@ impl Run<'_> {
             }
         }
         let mut detaching = false;
-        if !self.lenient && !self.syncing && node.generated == Some(true) {
+        if !self.lenient && !self.syncing && set.contains_key("generated") {
+            return Err(self.fail_on("generated", ErrorKind::Invalid, "design.node_invalid", "generated: a chart's parts are drawn by its frame; it is not set by hand"));
+        }
+        if !self.lenient && !self.syncing && node.generated == Some(true) && self.drawn_by_chart(node.parent.as_deref())? {
             return Err(self.chart_part(&id));
         }
         if !self.lenient && !self.syncing {
@@ -1021,7 +1051,8 @@ impl Run<'_> {
             return Ok(None);
         }
         let Some((from, kind, ord)) = self.meta(&id)? else { return self.missing("no such node") };
-        if !self.lenient && !self.syncing && id.contains('.') && self.row(&id)?.is_some_and(|row| row.body.contains("\"generated\":true")) {
+        if !self.lenient && !self.syncing && id.contains('.') && self.row(&id)?.is_some_and(|row| row.body.contains("\"generated\":true"))
+            && self.drawn_by_chart(from.as_deref())? {
             return Err(self.chart_part(&id));
         }
         if !self.lenient && !self.syncing && self.has_mains()? {
@@ -1061,8 +1092,11 @@ impl Run<'_> {
             }
             // Into another parent: not one inside the node itself.
             if from.as_deref() != Some(to.as_str()) {
+                // Bounded as every other walk here: a parent loop in stored rows (corrupt, or
+                // another build's) would otherwise spin under the store's lock.
                 let mut up = self.meta(&to)?.and_then(|(parent, _, _)| parent);
-                while let Some(ancestor) = up {
+                for _ in 0..=MAX_NODES {
+                    let Some(ancestor) = up else { break };
                     if ancestor == id {
                         return Err(self.fail_on("parent", ErrorKind::Invalid, "design.cycle", format!("{to:?} is inside {id:?}")));
                     }
@@ -1151,7 +1185,7 @@ impl Run<'_> {
             return Ok(None);
         }
         let Some(root) = self.row(&id)? else { return self.missing("no such node") };
-        if !self.lenient && !self.syncing && root.body.contains("\"generated\":true") {
+        if !self.lenient && !self.syncing && root.body.contains("\"generated\":true") && self.drawn_by_chart(root.parent.as_deref())? {
             return Err(self.chart_part(&id));
         }
         if !self.lenient && !self.syncing && root.body.contains("\"instance_of\":") && self.instance_root(&id)?.is_none() {

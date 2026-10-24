@@ -4,7 +4,7 @@
 //! see the nodes themselves, and a refusal names the node at fault under the edit's own index.
 
 use super::find::Query;
-use relay_bus::design::{NodeOp, Where};
+use relay_bus::design::{NodeOp, Where, MAX_NODES, MAX_OPS};
 use relay_bus::error::BusError;
 use relay_bus::types::Id;
 use rusqlite::Connection;
@@ -70,11 +70,16 @@ pub(super) fn expand(conn: &Connection, design: Id, ops: Vec<NodeOp>) -> Result<
             }
         }
         if let Some(w) = &where_ {
-            let found = found(conn, design, w, &mut rows).map_err(|mut e| {
+            let (found, parts) = found(conn, design, w, &mut rows).map_err(|mut e| {
                 e.message = format!("ops[{at}] {name}: where: {}", e.message);
                 e
             })?;
-            if found.is_empty() {
+            // A chart's parts are drawn by its frame: a `where` broad enough to reach them (every
+            // text, the palette's first colour) acts on the rest, rather than refusing the list.
+            if parts > 0 {
+                out.warnings.push(format!("ops[{at}] {name}: where left out {parts} chart part{}, which their frame's chart draws; change the chart on the frame instead", if parts == 1 { "" } else { "s" }));
+            }
+            if found.is_empty() && parts == 0 {
                 out.warnings.push(format!("ops[{at}] {name}: where finds no node, so it changed nothing; design.find with the same filters lists what they find"));
             }
             for id in found {
@@ -104,6 +109,12 @@ pub(super) fn expand(conn: &Connection, design: Id, ops: Vec<NodeOp>) -> Result<
             picked = outer;
         }
         out.matched.insert(at.to_string(), picked.len() as u32);
+        // Every edit made here runs under the store's lock: as many as a whole design holds,
+        // beside a list's worth, and no more.
+        if out.ops.len() + picked.len() > MAX_OPS + MAX_NODES {
+            return Err(BusError::invalid("design.too_large", format!("ops[{at}] {name}: the list's edits of many nodes come to over {} node edits", MAX_OPS + MAX_NODES))
+                .with_hint("one update_many reaches every node its where finds: send it once rather than repeating it"));
+        }
         for id in picked {
             out.ops.push(match &set {
                 Some(set) => NodeOp::Update { id, set: set.clone() },
@@ -115,8 +126,9 @@ pub(super) fn expand(conn: &Connection, design: Id, ops: Vec<NodeOp>) -> Result<
     Ok(out)
 }
 
-/// The ids `w` finds in `design`, its rows read the first time a list asks.
-fn found(conn: &Connection, design: Id, w: &Where, rows: &mut Option<(Vec<super::get::Raw>, String)>) -> Result<Vec<String>, BusError> {
+/// The ids `w` finds in `design`, its rows read the first time a list asks, and how many chart
+/// parts it found and left out.
+fn found(conn: &Connection, design: Id, w: &Where, rows: &mut Option<(Vec<super::get::Raw>, String)>) -> Result<(Vec<String>, usize), BusError> {
     if w.is_empty() {
         return Err(BusError::invalid("design.where", "name at least one filter (page, inside, kind, name, text, a colour or font): an empty where would find every node"));
     }
@@ -126,7 +138,8 @@ fn found(conn: &Connection, design: Id, w: &Where, rows: &mut Option<(Vec<super:
         None => rows.insert(Query::rows(conn, design)?),
     };
     // A query moves the rows it reads: each `where` reads a copy.
-    Ok(query.run(design, raw.clone(), styles)?.into_iter().map(|n| n.id).collect())
+    let (parts, ids): (Vec<_>, Vec<_>) = query.run(design, raw.clone(), styles)?.into_iter().partition(|n| n.generated == Some(true));
+    Ok((ids.into_iter().map(|n| n.id).collect(), parts.len()))
 }
 
 fn parent_map(conn: &Connection, design: Id) -> Result<HashMap<String, Option<String>>, BusError> {
