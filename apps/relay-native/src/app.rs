@@ -304,7 +304,10 @@ pub struct Ui {
     /// need its output: the engine keeps the scrollback ring either way, so detaching costs
     /// nothing and saves the whole per-frame chain — socket read, parse, VTE feed and redraw —
     /// for as long as the window is minimized or covered.
-    window_visible: Cell<bool>,
+    pub(crate) window_visible: Cell<bool>,
+    /// Periodic work that came due while the window was hidden, run once when it shows
+    /// (`catch_up`): the drift fetch, the usage clock, a wallpaper turn.
+    pub(crate) due_while_hidden: RefCell<BTreeSet<&'static str>>,
     applying_ui: Cell<bool>,
     navigation_pending: RefCell<Option<(i64, String)>>,
     navigation_sending: Cell<bool>,
@@ -1186,6 +1189,7 @@ impl Ui {
             projects: RefCell::default(),
             page: RefCell::new("agents".into()),
             window_visible: Cell::new(true),
+            due_while_hidden: RefCell::default(),
             applying_ui: Cell::new(false),
             navigation_pending: RefCell::default(),
             navigation_sending: Cell::new(false),
@@ -2266,7 +2270,7 @@ impl Ui {
         let weak = Rc::downgrade(self);
         glib::timeout_add_seconds_local(DRIFT_FETCH_SECS, move || {
             let Some(ui) = weak.upgrade() else { return glib::ControlFlow::Break };
-            if ui.connected.get() {
+            if ui.connected.get() && !ui.later_if_hidden("drift") {
                 ui.fetch_for_drift();
             }
             glib::ControlFlow::Continue
@@ -2279,9 +2283,10 @@ impl Ui {
         }
         let ui = self.clone();
         glib::spawn_future_local(async move {
-            // Offline or no remote: the counts stay against the refs already fetched.
+            // Offline or no remote: the counts stay against the refs already fetched. A fetch
+            // that went through says so with git.changed, which reads the drift again: reading
+            // it here as well made two reads of it every 5 minutes.
             let _ = ui.call("git.fetch", json!({"project_id": project})).await;
-            ui.refresh_drift();
         });
     }
     /// Re-read `worktree.drift` for the current project; calls while one is out coalesce.
@@ -2350,9 +2355,33 @@ impl Ui {
                 let visible = !hidden(toplevel.state());
                 if ui.window_visible.replace(visible) != visible {
                     ui.update_attachments();
+                    if visible {
+                        ui.catch_up();
+                    }
                 }
             });
         });
+    }
+    /// Periodic work asks this first: true, and noted for `catch_up`, while nobody can see the
+    /// window (lead 11: a git fetch every 5 minutes and a card redrawn every 30 s while minimized).
+    pub(crate) fn later_if_hidden(&self, what: &'static str) -> bool {
+        if self.window_visible.get() {
+            return false;
+        }
+        self.due_while_hidden.borrow_mut().insert(what);
+        true
+    }
+    /// The window shows again: what came due while it was hidden runs once now.
+    fn catch_up(self: &Rc<Self>) {
+        let due = std::mem::take(&mut *self.due_while_hidden.borrow_mut());
+        for what in due {
+            match what {
+                "drift" if self.connected.get() => self.fetch_for_drift(),
+                "usage" => self.usage_tick(),
+                "wallpaper" => crate::wallpaper_rotation::turn(self),
+                _ => {}
+            }
+        }
     }
     fn update_attachments(&self) {
         let focus = self.focused.borrow();

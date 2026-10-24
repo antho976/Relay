@@ -10,11 +10,12 @@ thread_local! {
     /// burst of device and run events reads it at most twice.
     static DEVICES_BUSY: Cell<bool> = const { Cell::new(false) };
     static DEVICES_QUEUED: Cell<bool> = const { Cell::new(false) };
+    /// The counts the status bar shows: every reconcile asks, and most change none of them.
+    static COUNTS_SHOWN: Cell<Option<(usize, usize, usize)>> = const { Cell::new(None) };
 }
 
 impl Ui {
     pub(super) fn render_status_counts(&self) {
-        clear(&self.resource_status);
         let sessions = self.sessions.borrow();
         let blocked = sessions
             .iter()
@@ -28,6 +29,12 @@ impl Ui {
             .iter()
             .filter(|s| text(s, "state") == "parked")
             .count();
+        if COUNTS_SHOWN.with(|shown| shown.replace(Some((blocked, live, parked)))) == Some((blocked, live, parked))
+            && self.resource_status.first_child().is_some()
+        {
+            return;
+        }
+        clear(&self.resource_status);
         for (count, caption, color) in [
             (blocked, if blocked == 1 { "needs you" } else { "need you" }, (0.898, 0.22, 0.18)),
             (
@@ -166,7 +173,8 @@ impl Ui {
             }
             while let Ok(notice) = notices.recv().await {
                 match notice {
-                    Notice::Event(e) if e.ev == "resource.sample" => {
+                    // Every 2 s while the panel is open: drawn only while it can be seen.
+                    Notice::Event(e) if e.ev == "resource.sample" && crate::app::on_screen(&body) => {
                         render_resources(&body, &e.payload, &history, &mut view)
                     }
                     Notice::Disconnected(e) => {
