@@ -1061,7 +1061,16 @@ impl VideoBoard {
                 p.popdown();
             }
             let Some(b) = weak.upgrade() else { return };
-            b.call("video.delete", json!({"video_id": b.id}), None);
+            // At once, as a design's delete, with an Undo on the gallery it goes back to.
+            if let Some(ui) = b.ui.upgrade() {
+                let (id, title) = (b.id, b.video().map(|v| v.title).unwrap_or_default());
+                glib::spawn_future_local(async move {
+                    match ui.call("video.delete", json!({"video_id": id})).await {
+                        Ok(_) => crate::design::video_deleted(&ui, id, &title),
+                        Err(e) => ui.show_info(&format!("Could not delete the video: {e}")),
+                    }
+                });
+            }
             let back = b.back.borrow().clone();
             if let Some(back) = back {
                 back();

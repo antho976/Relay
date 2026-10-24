@@ -230,6 +230,25 @@ pub fn open_video(ui: &Rc<Ui>, id: i64) {
     view.root.set_visible_child_name("video");
 }
 
+/// Video `id` was deleted from its board: the gallery says so, with an Undo that brings it back
+/// and opens it again.
+pub fn video_deleted(ui: &Rc<Ui>, id: i64, title: &str) {
+    let note = format!("Deleted “{}”", relay_bus::design::strip_controls(title, false));
+    let Some(view) = view().filter(|v| v.root.is_mapped()) else {
+        ui.show_info(&format!("{note}. It waits in Deleted videos."));
+        return;
+    };
+    let weak = Rc::downgrade(ui);
+    view.gallery.toast(&note, Some(Rc::new(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        glib::spawn_future_local(async move {
+            if ui.call("video.restore", json!({"video_id": id})).await.is_ok() {
+                open_video(&ui, id);
+            }
+        });
+    })));
+}
+
 /// `video.*`: the gallery's videos and the open video follow them; the kit's state too.
 pub fn video_event(_ui: &Rc<Ui>, ev: &str, payload: &Value) {
     let Some(view) = view() else {
