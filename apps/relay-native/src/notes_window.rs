@@ -204,6 +204,7 @@ pub fn show_project(ui: &Rc<Ui>, project: i64) {
     }
     window.window.present();
     refresh_notes(ui);
+    super::note_pages::shown(ui);
 }
 pub fn refresh_notes(ui: &Rc<Ui>) {
     let Some(window) = ui.notes_window.borrow().clone() else {

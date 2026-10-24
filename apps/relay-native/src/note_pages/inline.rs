@@ -31,7 +31,24 @@ struct Decoded {
     waiting: Option<Vec<std::rc::Weak<Doc>>>,
 }
 
+/// A picture being dragged, as its drag offers it: nothing outside Relay, and no text view,
+/// takes this type, so only `picture_drop` handles the drop. The number names the drag.
+#[derive(Clone, Copy, Debug, glib::Boxed)]
+#[boxed_type(name = "RelayNotePictureDrag")]
+pub struct PictureDrag(u64);
+
+/// Where a dragged picture's reference line is: a mark of its own at the line's start, made
+/// when the drag began, so a redraw that hands the picture slots out again (`refresh`) can't
+/// point the move at another picture.
+struct Dragging {
+    serial: u64,
+    doc: std::rc::Weak<Doc>,
+    mark: gtk::TextMark,
+}
+
 thread_local! {
+    static DRAGGING: RefCell<Option<Dragging>> = const { RefCell::new(None) };
+    static DRAG_SERIAL: Cell<u64> = const { Cell::new(0) };
     static TEXTURES: RefCell<HashMap<PathBuf, Decoded>> = RefCell::new(HashMap::new());
     /// Image files being written for a paste or drop, so a second one in the same second is
     /// not given the same name.
@@ -77,7 +94,7 @@ fn texture(doc: &Rc<Doc>, path: &Path) -> Option<gtk::gdk::Texture> {
                 if modified.is_some() && modified == known {
                     return (modified, None);
                 }
-                (modified, Some(modified.and_then(|_| gtk::gdk::Texture::from_filename(&file).ok())))
+                (modified, Some(modified.and_then(|_| decode_fitted(&file))))
             })
             .await
             .unwrap_or((None, Some(None)));
@@ -106,12 +123,41 @@ fn texture(doc: &Rc<Doc>, path: &Path) -> Option<gtk::gdk::Texture> {
     texture
 }
 
-/// The picture `path` holds now, read here if it is not in memory: Copy puts it on the
-/// clipboard.
-fn texture_now(path: &Path) -> Option<gtk::gdk::Texture> {
-    TEXTURES
-        .with(|cache| cache.borrow().get(path).and_then(|d| d.texture.clone()))
-        .or_else(|| gtk::gdk::Texture::from_filename(path).ok())
+/// The picture in `file`, decoded no larger than twice the size it is drawn at, sharp on a
+/// 2× screen: a 4K screenshot is 33 MB as a texture, and at most 440 × 300 of it shows.
+/// Runs on a worker thread.
+fn decode_fitted(file: &Path) -> Option<gtk::gdk::Texture> {
+    use gtk::gdk_pixbuf::Pixbuf;
+    let (most_w, most_h) = ((MAX_W * 2.) as i32, (MAX_H * 2.) as i32);
+    match Pixbuf::file_info(file) {
+        Some((_, w, h)) if w > most_w || h > most_h => {
+            let pixbuf = Pixbuf::from_file_at_scale(file, most_w, most_h, true).ok()?;
+            let format = if pixbuf.has_alpha() { gtk::gdk::MemoryFormat::R8g8b8a8 } else { gtk::gdk::MemoryFormat::R8g8b8 };
+            let bytes = pixbuf.read_pixel_bytes();
+            Some(gtk::gdk::MemoryTexture::new(pixbuf.width(), pixbuf.height(), format, &bytes, pixbuf.rowstride() as usize).upcast())
+        }
+        _ => gtk::gdk::Texture::from_filename(file).ok(),
+    }
+}
+
+/// Drop the pictures no open note draws any more, once the current main-loop pass is done.
+fn prune_soon() {
+    thread_local!(static PRUNING: Cell<bool> = const { Cell::new(false) });
+    if PRUNING.with(|p| p.replace(true)) {
+        return;
+    }
+    glib::idle_add_local_once(|| {
+        PRUNING.with(|p| p.set(false));
+        let drawn: std::collections::HashSet<PathBuf> = super::DOCS.with(|docs| {
+            docs.borrow()
+                .values()
+                .flat_map(|doc| {
+                    doc.inline.pictures.borrow().iter().filter(|s| s.frame.is_visible()).map(|s| s.path.borrow().clone()).collect::<Vec<_>>()
+                })
+                .collect()
+        });
+        TEXTURES.with(|cache| cache.borrow_mut().retain(|path, decoded| decoded.waiting.is_some() || drawn.contains(path)));
+    });
 }
 
 /// The size a picture is drawn at: its own, scaled down to fit `MAX_W` × `MAX_H`.
@@ -153,6 +199,8 @@ pub struct Inline {
     reference: gtk::TextTag,
     /// Room below a reference line for its picture, by height.
     rooms: RefCell<HashMap<i32, gtk::TextTag>>,
+    /// Pasted or dropped pictures still being written: the note's tab waits for them to close.
+    pub writing: Cell<u32>,
 }
 
 impl Inline {
@@ -186,6 +234,7 @@ impl Inline {
             done,
             reference,
             rooms: RefCell::new(HashMap::new()),
+            writing: Cell::new(0),
         }
     }
 
@@ -195,6 +244,11 @@ impl Inline {
                 timer.remove();
             }
         }
+        // Its pictures go from memory once no other open note draws them.
+        for shown in self.pictures.borrow().iter() {
+            shown.frame.set_visible(false);
+        }
+        prune_soon();
     }
 }
 
@@ -299,6 +353,9 @@ fn refresh(doc: &Rc<Doc>) {
                 check.syncing.set(true);
                 check.button.set_active(ticked);
                 check.syncing.set(false);
+                // A screen reader names the box by its item.
+                let item = line.get(column + 4..).unwrap_or("").trim();
+                check.button.update_property(&[gtk::accessible::Property::Label(if item.is_empty() { "Checklist item" } else { item })]);
                 check.button.set_visible(true);
                 checks += 1;
             }
@@ -310,6 +367,10 @@ fn refresh(doc: &Rc<Doc>) {
                 shown.picture.set_paintable(Some(&picture));
                 shown.picture.set_size_request(w, h);
                 shown.picture.set_alternative_text(Some(&path.to_string_lossy()));
+                shown.frame.update_property(&[gtk::accessible::Property::Label(&format!(
+                    "Picture {}. Menu key on its line for its actions",
+                    path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()
+                ))]);
                 shown.frame.set_tooltip_text(Some(&format!(
                     "{}\nDouble-click to copy the image · drag to move it · right-click for more",
                     path.display()
@@ -337,10 +398,15 @@ fn refresh(doc: &Rc<Doc>) {
         check.button.set_visible(false);
         take_mark(buffer, &check.mark);
     }
+    let mut dropped = false;
     for shown in inline.pictures.borrow().iter().skip(pictures) {
+        dropped |= shown.frame.is_visible();
         shown.frame.set_visible(false);
         shown.picture.set_paintable(gtk::gdk::Paintable::NONE);
         take_mark(buffer, &shown.mark);
+    }
+    if dropped {
+        prune_soon();
     }
     place(doc);
 }
@@ -438,36 +504,130 @@ fn picture_slot(doc: &Rc<Doc>, index: usize) -> Rc<Shown> {
             image_menu(&doc, &shown, x, y);
         } else if presses == 2 {
             gesture.set_state(gtk::EventSequenceState::Claimed);
-            copy_images(&doc.view.clipboard(), None, &[path]);
+            copy_images(&doc.view.clipboard(), reference_of(&doc, &shown).as_deref(), &[path]);
             doc.flash("Image copied");
         }
     });
     shown.frame.add_controller(clicks);
 
-    // Dragging a picture moves its reference line to wherever it is dropped in the text.
+    // Dragging a picture moves its reference line between the lines it is dropped at
+    // (`picture_drop`), in this note or another open one.
     let drag = gtk::DragSource::new();
     drag.set_actions(gtk::gdk::DragAction::MOVE);
     let (weak, slot) = (Rc::downgrade(doc), Rc::downgrade(&shown));
     drag.connect_prepare(move |drag, _, _| {
         let (doc, shown) = (weak.upgrade()?, slot.upgrade()?);
         let mark = shown.mark.borrow().clone().filter(|m| !m.is_deleted())?;
-        let line = line_text(&doc.buffer, doc.buffer.iter_at_mark(&mark).line());
         if let Some(paintable) = shown.picture.paintable() {
             drag.set_icon(Some(&paintable), 12, 12);
         }
-        Some(gtk::gdk::ContentProvider::for_value(&format!("{line}\n").to_value()))
+        let serial = DRAG_SERIAL.with(|s| {
+            s.set(s.get() + 1);
+            s.get()
+        });
+        // Right gravity: text put in at the line's start goes before the mark, which stays
+        // on the picture's own line.
+        let own = doc.buffer.create_mark(None, &doc.buffer.iter_at_mark(&mark), false);
+        end_drag();
+        DRAGGING.with(|d| *d.borrow_mut() = Some(Dragging { serial, doc: Rc::downgrade(&doc), mark: own }));
+        Some(gtk::gdk::ContentProvider::for_value(&PictureDrag(serial).to_value()))
     });
-    let (weak, slot) = (Rc::downgrade(doc), Rc::downgrade(&shown));
-    drag.connect_drag_end(move |_, _, moved| {
-        let (Some(doc), Some(shown)) = (weak.upgrade(), slot.upgrade()) else { return };
-        let mark = shown.mark.borrow().clone().filter(|m| !m.is_deleted());
-        if let (true, Some(mark)) = (moved, mark) {
-            remove_line(&doc, doc.buffer.iter_at_mark(&mark).line());
-        }
-    });
+    drag.connect_drag_end(|_, _, _| end_drag());
     shown.frame.add_controller(drag);
     doc.inline.pictures.borrow_mut().push(shown.clone());
     shown
+}
+
+/// The Menu key (or Shift+F10) on a picture's reference line opens that picture's menu, which
+/// is otherwise a right-click away: the picture itself takes no keyboard focus.
+pub fn menu_keys(doc: &Rc<Doc>) -> gtk::EventControllerKey {
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak = Rc::downgrade(doc);
+    keys.connect_key_pressed(move |_, key, _, modifiers| {
+        let menu = key == gtk::gdk::Key::Menu || (key == gtk::gdk::Key::F10 && modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK));
+        let Some(doc) = weak.upgrade().filter(|_| menu) else { return glib::Propagation::Proceed };
+        let line = doc.buffer.iter_at_mark(&doc.buffer.get_insert()).line();
+        let shown = doc.inline.pictures.borrow().iter().find(|s| {
+            s.frame.is_visible() && s.mark.borrow().as_ref().is_some_and(|m| !m.is_deleted() && doc.buffer.iter_at_mark(m).line() == line)
+        }).cloned();
+        match shown {
+            Some(shown) => {
+                let (w, h) = (shown.frame.width(), shown.frame.height());
+                image_menu(&doc, &shown, f64::from(w / 2), f64::from(h / 2));
+                glib::Propagation::Stop
+            }
+            None => glib::Propagation::Proceed,
+        }
+    });
+    keys
+}
+
+/// The reference line a picture is drawn for, which a copy of it pastes back as in a note: a
+/// paste this window copied itself goes in as text (`paste`), and a bare path is no picture.
+fn reference_of(doc: &Doc, shown: &Shown) -> Option<String> {
+    let mark = shown.mark.borrow().clone().filter(|m| !m.is_deleted())?;
+    let line = line_text(&doc.buffer, doc.buffer.iter_at_mark(&mark).line());
+    tx::image_ref(&line).map(|(alt, path, ..)| tx::image_markdown(&alt, &path))
+}
+
+/// Forget the picture drag in progress, and its mark.
+fn end_drag() {
+    if let Some(drag) = DRAGGING.with(|d| d.borrow_mut().take()) {
+        if let (Some(doc), false) = (drag.doc.upgrade(), drag.mark.is_deleted()) {
+            doc.buffer.delete_mark(&drag.mark);
+        }
+    }
+}
+
+/// A dragged picture dropped on a note's text: its reference line moves to the line boundary
+/// nearest the pointer, as one undo step in its own note. A drop on the picture's own line,
+/// or on the boundary just under it, changes nothing.
+pub fn picture_drop(doc: &Rc<Doc>) -> gtk::DropTarget {
+    let target = gtk::DropTarget::new(PictureDrag::static_type(), gtk::gdk::DragAction::MOVE);
+    let weak = Rc::downgrade(doc);
+    target.connect_drop(move |_, value, x, y| {
+        let (Some(doc), Ok(PictureDrag(serial))) = (weak.upgrade(), value.get::<PictureDrag>()) else { return false };
+        let Some((from, mark)) = DRAGGING.with(|d| {
+            d.borrow().as_ref().filter(|d| d.serial == serial && !d.mark.is_deleted()).and_then(|d| Some((d.doc.upgrade()?, d.mark.clone())))
+        }) else {
+            return false;
+        };
+        // By height alone: a drop in the margin, or past a line's end, still has a line.
+        let (_, by) = doc.view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
+        let (over, top) = doc.view.line_at_y(by);
+        // The boundary above the line under the pointer, or below it from the line's lower
+        // half (a picture's line includes the room it is drawn in).
+        let (_, height) = doc.view.line_yrange(&over);
+        let below = by > top + height / 2;
+        let source = from.buffer.iter_at_mark(&mark).line();
+        let target_line = over.line() + i32::from(below);
+        if Rc::ptr_eq(&from, &doc) && (target_line == source || target_line == source + 1) {
+            end_drag();
+            return true;
+        }
+        let line = line_text(&from.buffer, source);
+        let buffer = &doc.buffer;
+        buffer.begin_user_action();
+        match buffer.iter_at_line(target_line).filter(|_| target_line < buffer.line_count()) {
+            Some(mut at) => buffer.insert(&mut at, &format!("{line}\n")),
+            None => {
+                // Below the last line: a line of its own at the end.
+                let mut end = buffer.end_iter();
+                let lead = if end.starts_line() { "" } else { "\n" };
+                buffer.insert(&mut end, &format!("{lead}{line}"));
+            }
+        }
+        if !Rc::ptr_eq(&from, &doc) {
+            buffer.end_user_action();
+            from.buffer.begin_user_action();
+        }
+        remove_line(&from, from.buffer.iter_at_mark(&mark).line(), false);
+        from.buffer.end_user_action();
+        end_drag();
+        true
+    });
+    target
 }
 
 fn line_text(buffer: &sourceview5::Buffer, line: i32) -> String {
@@ -479,8 +639,9 @@ fn line_text(buffer: &sourceview5::Buffer, line: i32) -> String {
     buffer.text(&start, &end, true).to_string()
 }
 
-/// Delete line `line` with its line break, as one undo step.
-fn remove_line(doc: &Doc, line: i32) {
+/// Delete line `line` with its line break, as one undo step when `step` (otherwise inside
+/// the caller's).
+fn remove_line(doc: &Doc, line: i32, step: bool) {
     let buffer = &doc.buffer;
     let Some(mut start) = buffer.iter_at_line(line) else { return };
     let mut end = start;
@@ -491,9 +652,13 @@ fn remove_line(doc: &Doc, line: i32) {
             start.backward_char();
         }
     }
-    buffer.begin_user_action();
+    if step {
+        buffer.begin_user_action();
+    }
     buffer.delete(&mut start, &mut end);
-    buffer.end_user_action();
+    if step {
+        buffer.end_user_action();
+    }
 }
 
 fn image_menu(doc: &Rc<Doc>, shown: &Rc<Shown>, x: f64, y: f64) {
@@ -504,12 +669,12 @@ fn image_menu(doc: &Rc<Doc>, shown: &Rc<Shown>, x: f64, y: f64) {
         action.connect_activate(move |_, _| f());
         actions.add_action(&action);
     };
-    let (weak, file) = (Rc::downgrade(doc), path.clone());
+    let (weak, file, reference) = (Rc::downgrade(doc), path.clone(), reference_of(doc, shown));
     add(
         "copy",
         Box::new(move || {
             if let Some(doc) = weak.upgrade() {
-                copy_images(&doc.view.clipboard(), None, std::slice::from_ref(&file));
+                copy_images(&doc.view.clipboard(), reference.as_deref(), std::slice::from_ref(&file));
                 doc.flash("Image copied");
             }
         }),
@@ -550,7 +715,7 @@ fn image_menu(doc: &Rc<Doc>, shown: &Rc<Shown>, x: f64, y: f64) {
             let (Some(doc), Some(shown)) = (weak.upgrade(), slot.upgrade()) else { return };
             let mark = shown.mark.borrow().clone().filter(|m| !m.is_deleted());
             if let Some(mark) = mark {
-                remove_line(&doc, doc.buffer.iter_at_mark(&mark).line());
+                remove_line(&doc, doc.buffer.iter_at_mark(&mark).line(), true);
             }
         }),
     );
@@ -582,18 +747,28 @@ fn image_menu(doc: &Rc<Doc>, shown: &Rc<Shown>, x: f64, y: f64) {
 
 /// Put `paths` on the clipboard as files, as the picture itself when there is one, and as
 /// `text` (or the paths) for anything that only takes text.
+/// The picture of a single path is decoded at full size on a worker thread and joins the
+/// copy when it is ready, if nothing was copied since.
 pub fn copy_images(clipboard: &gtk::gdk::Clipboard, text: Option<&str>, paths: &[PathBuf]) {
     let fallback = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>().join("\n");
-    let mut providers = Vec::new();
-    if let [only] = paths {
-        if let Some(picture) = texture_now(only) {
-            providers.push(gtk::gdk::ContentProvider::for_value(&picture.to_value()));
-        }
-    }
+    let text = text.unwrap_or(&fallback).to_string();
     let files: Vec<gio::File> = paths.iter().map(gio::File::for_path).collect();
-    providers.push(gtk::gdk::ContentProvider::for_value(&gtk::gdk::FileList::from_array(&files).to_value()));
-    providers.push(gtk::gdk::ContentProvider::for_value(&text.unwrap_or(&fallback).to_value()));
-    clipboard.set_content(Some(&gtk::gdk::ContentProvider::new_union(&providers))).ok();
+    let content = move |picture: Option<gtk::gdk::Texture>| {
+        let mut providers: Vec<gtk::gdk::ContentProvider> = picture.iter().map(|p| gtk::gdk::ContentProvider::for_value(&p.to_value())).collect();
+        providers.push(gtk::gdk::ContentProvider::for_value(&gtk::gdk::FileList::from_array(&files).to_value()));
+        providers.push(gtk::gdk::ContentProvider::for_value(&text.to_value()));
+        gtk::gdk::ContentProvider::new_union(&providers)
+    };
+    let first = content(None);
+    clipboard.set_content(Some(&first)).ok();
+    let [only] = paths else { return };
+    let (clipboard, file) = (clipboard.clone(), only.clone());
+    glib::spawn_future_local(async move {
+        let Ok(Some(picture)) = gio::spawn_blocking(move || gtk::gdk::Texture::from_filename(&file).ok()).await else { return };
+        if clipboard.content().as_ref() == Some(&first) {
+            clipboard.set_content(Some(&content(Some(picture)))).ok();
+        }
+    });
 }
 
 /// The image files a selection references, for Copy and Cut.
@@ -648,8 +823,27 @@ fn release(paths: &[PathBuf]) {
     });
 }
 
-/// Insert references to `paths` at the cursor, each on a line of its own.
-fn insert_refs(doc: &Doc, paths: &[PathBuf]) {
+/// Where a paste or drop puts what it brings: the selection goes at once, as a text paste's
+/// does, and the references go where it was when they are ready, wherever the cursor is then.
+fn landing(doc: &Doc) -> gtk::TextMark {
+    let buffer = &doc.buffer;
+    buffer.delete_selection(true, true);
+    buffer.create_mark(None, &buffer.iter_at_mark(&buffer.get_insert()), false)
+}
+
+/// A picture or file write for `doc` started (`true`) or ended. A tab asked to close while
+/// one ran closes when the last ends.
+fn writing(ui: &Rc<Ui>, doc: &Rc<Doc>, started: bool) {
+    let count = &doc.inline.writing;
+    count.set(if started { count.get() + 1 } else { count.get().saturating_sub(1) });
+    if !started && count.get() == 0 && doc.close_pending.get() && !doc.draft.busy.get() {
+        doc.close_pending.set(false);
+        super::doc::request_close(ui, doc);
+    }
+}
+
+/// Insert references to `paths` at `at`, each on a line of its own.
+fn insert_refs(doc: &Doc, paths: &[PathBuf], at: &gtk::TextMark) {
     let buffer = &doc.buffer;
     let mut number = tx::next_image_number(&doc.body());
     let lines: Vec<String> = paths
@@ -660,15 +854,17 @@ fn insert_refs(doc: &Doc, paths: &[PathBuf]) {
             line
         })
         .collect();
+    let mut iter = buffer.iter_at_mark(at);
+    let lead = if iter.starts_line() { "" } else { "\n" };
+    let tail = if iter.ends_line() { "\n" } else { "\n\n" };
     buffer.begin_user_action();
-    buffer.delete_selection(true, true);
-    let at = buffer.iter_at_mark(&buffer.get_insert());
-    let lead = if at.starts_line() { "" } else { "\n" };
-    let tail = if at.ends_line() { "\n" } else { "\n\n" };
-    buffer.insert_at_cursor(&format!("{lead}{}{tail}", lines.join("\n")));
+    buffer.insert(&mut iter, &format!("{lead}{}{tail}", lines.join("\n")));
     buffer.end_user_action();
-    doc.view.grab_focus();
-    doc.view.scroll_mark_onscreen(&buffer.get_insert());
+    // The note the person is in shows it; one in a background tab is not brought forward.
+    if doc.view.has_focus() {
+        doc.view.scroll_to_mark(at, 0.1, false, 0., 0.);
+    }
+    buffer.delete_mark(at);
 }
 
 /// What a launch that failed says in the note's status bar; one dismissed (an app chooser
@@ -687,6 +883,8 @@ fn launch_failed(doc: &std::rc::Weak<Doc>, what: &'static str) -> impl FnOnce(Re
 fn store_texture(ui: &Rc<Ui>, doc: &Rc<Doc>, picture: &gtk::gdk::Texture) {
     let dir = images_dir(ui, doc.project);
     let path = fresh_name(&dir, doc.id, "png");
+    let at = landing(doc);
+    writing(ui, doc, true);
     let (ui, doc, picture, target) = (ui.clone(), doc.clone(), picture.clone(), path.clone());
     glib::spawn_future_local(async move {
         let saved = gio::spawn_blocking(move || {
@@ -698,9 +896,13 @@ fn store_texture(ui: &Rc<Ui>, doc: &Rc<Doc>, picture: &gtk::gdk::Texture) {
         .unwrap_or_else(|_| Err("the image could not be written".into()));
         release(std::slice::from_ref(&path));
         match saved {
-            Ok(()) => insert_refs(&doc, &[path]),
-            Err(error) => doc.show_notice(&ui, &format!("Could not keep the image: {error}"), Vec::new()),
+            Ok(()) => insert_refs(&doc, &[path], &at),
+            Err(error) => {
+                doc.buffer.delete_mark(&at);
+                doc.show_notice(&ui, &format!("Could not keep the image: {error}"), Vec::new());
+            }
         }
+        writing(&ui, &doc, false);
     });
 }
 
@@ -721,6 +923,8 @@ fn store_files(ui: &Rc<Ui>, doc: &Rc<Doc>, files: &[PathBuf]) {
         .filter(|f| !is_image(&f.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()))
         .map(|f| f.to_string_lossy().into_owned())
         .collect();
+    let at = landing(doc);
+    writing(ui, doc, true);
     let (ui, doc) = (ui.clone(), doc.clone());
     glib::spawn_future_local(async move {
         let names: Vec<PathBuf> = copies.iter().map(|(_, copy)| copy.clone()).collect();
@@ -737,19 +941,18 @@ fn store_files(ui: &Rc<Ui>, doc: &Rc<Doc>, files: &[PathBuf]) {
         .await
         .unwrap_or_else(|_| Err("Could not keep the images".into()));
         release(&names);
-        let kept = match made {
-            Ok(kept) => kept,
+        match made {
+            Ok(kept) if !kept.is_empty() => insert_refs(&doc, &kept, &at),
+            Ok(_) => doc.buffer.delete_mark(&at),
             Err(error) => {
+                doc.buffer.delete_mark(&at);
                 doc.show_notice(&ui, &error, Vec::new());
-                return;
             }
-        };
-        if !kept.is_empty() {
-            insert_refs(&doc, &kept);
         }
         if !others.is_empty() {
             doc.insert_text(&others.join("\n"));
         }
+        writing(&ui, &doc, false);
     });
 }
 
