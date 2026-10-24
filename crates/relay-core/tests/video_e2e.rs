@@ -413,6 +413,9 @@ fn video_e2e_the_preview_is_studio_on_loopback() {
     let listening = String::from_utf8_lossy(&listening.stdout);
     println!("listening: {listening}");
     assert!(listening.lines().all(|l| l.contains("127.0.0.1:")), "{listening}");
+    // A page on another name rebound to 127.0.0.1 is refused.
+    let rebound = std::process::Command::new("curl").args(["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "10", "-H", &format!("Host: rebound.example:{port}"), &url]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&rebound.stdout), "403");
     assert_eq!(ok(&e, "video.preview", json!({"video_id": id, "stop": true}))["running"], false);
     ok(&e, "video.delete", json!({"video_id": id}));
     relay_core::video::shutdown(&e);

@@ -1,11 +1,13 @@
 // Loaded before Remotion Studio (`node --require .relay/loopback.cjs`) by video.preview: Studio
 // binds every interface (0.0.0.0 or ::), which would put a server that can render and open files
-// on the network. Here every server listens on 127.0.0.1 alone, and Studio's check for a newer
-// Remotion on npm is answered at once without leaving the machine.
+// on the network. Here every server listens on 127.0.0.1 alone, a request that does not name it
+// by that address or `localhost` (a page that rebinds its own name to 127.0.0.1) is refused, and
+// Studio's check for a newer Remotion on npm is answered at once without leaving the machine.
 //
 // Written by Relay from plugins/video/runtime: edits here are overwritten.
 'use strict';
 const net = require('node:net');
+const http = require('node:http');
 const https = require('node:https');
 const { EventEmitter } = require('node:events');
 
@@ -31,4 +33,25 @@ https.get = function (url, ...rest) {
     return req;
   }
   return get.call(this, url, ...rest);
+};
+
+// Studio trusts a request whose Origin matches its Host, which a page on another name rebound to
+// 127.0.0.1 satisfies: only the loopback names, at this server's port, are let in.
+const emit = http.Server.prototype.emit;
+http.Server.prototype.emit = function (event, req, resOrSocket, ...rest) {
+  if ((event === 'request' || event === 'upgrade') && req && req.headers) {
+    const port = this.address() && this.address().port;
+    const host = String(req.headers.host || '').toLowerCase();
+    const allowed = [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`];
+    if (!allowed.includes(host)) {
+      if (event === 'request') {
+        resOrSocket.statusCode = 403;
+        resOrSocket.end('Forbidden: Relay serves this preview on 127.0.0.1 only');
+      } else {
+        resOrSocket.destroy();
+      }
+      return true;
+    }
+  }
+  return emit.call(this, event, req, resOrSocket, ...rest);
 };

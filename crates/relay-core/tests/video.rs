@@ -764,6 +764,28 @@ fn sound_past_six_minutes_is_read_whole() {
     assert_eq!(scratch, 0, "the decode's file is removed");
 }
 
+/// The preview's guard (loopback.cjs, loaded before Studio) answers only requests that name the
+/// server by a loopback address: a page on another name rebound to 127.0.0.1 is refused.
+#[test]
+fn the_preview_answers_only_loopback_names() {
+    let Ok(node) = which::which("node") else {
+        eprintln!("no node: skipped");
+        return;
+    };
+    let guard = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/video/runtime/loopback.cjs");
+    let script = r#"
+        const http = require('node:http');
+        const srv = http.createServer((req, res) => res.end('ok'));
+        srv.listen(0, async () => {
+          const port = srv.address().port;
+          const ask = (host) => new Promise((r) => http.get({ host: '127.0.0.1', port, path: '/', headers: { host } }, (res) => { res.resume(); res.on('end', () => r(res.statusCode)); }));
+          console.log([await ask(`127.0.0.1:${port}`), await ask(`localhost:${port}`), await ask(`rebound.example:${port}`)].join(' '));
+          srv.close();
+        });"#;
+    let out = std::process::Command::new(node).arg("--require").arg(&guard).arg("-e").arg(script).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "200 200 403", "{}", String::from_utf8_lossy(&out.stderr));
+}
+
 #[test]
 fn a_preview_runs_one_at_a_time_and_answers_its_link() {
     let (e, _root) = project();
