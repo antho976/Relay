@@ -1092,6 +1092,20 @@ impl VideoBoard {
 
     fn render(&self, mut payload: Value) {
         payload["video_id"] = json!(self.id);
+        // A new preview supersedes those still waiting: Apply pressed three times renders once
+        // more, not three times over.
+        if payload["quality"] == "preview" {
+            let waiting: Vec<i64> = self.detail.borrow().as_ref().map(|d| d.renders.iter()
+                .filter(|r| r.state == RenderState::Queued && r.quality == relay_bus::ops::video::Quality::Preview)
+                .map(|r| r.id).collect()).unwrap_or_default();
+            if let (Some(ui), false) = (self.ui.upgrade(), waiting.is_empty()) {
+                glib::spawn_future_local(async move {
+                    for render_id in waiting {
+                        let _ = ui.call("video.render.cancel", json!({"render_id": render_id})).await;
+                    }
+                });
+            }
+        }
         self.call("video.render", payload, Some("Rendering; it plays here when it is done.".into()));
     }
 
