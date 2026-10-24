@@ -256,6 +256,41 @@ fn a_resized_instance_keeps_its_pinned_children_through_the_mains_changes() {
     assert_eq!(place("badge").0, 160.0);
 }
 
+/// What the engine writes is not an agent's to write: `generated` and `instance_of` on an add,
+/// `generated` on an update. A `generated` node left outside any chart (written before that was
+/// refused) is edited and deleted as any node is.
+#[test]
+fn an_agent_cannot_write_parts_or_instances_by_hand() {
+    let (e, _root) = project();
+    let me = agent(&e);
+    let id = ok(&e, "design.create", json!({"project_id": 1, "title": "Hand"}))["design"]["id"].as_i64().unwrap();
+    apply(&e, id, json!([
+        {"op": "add", "node": {"id": "f", "parent": "page-1", "kind": "frame", "w": 200, "h": 100}},
+        {"op": "add", "node": {"id": "m", "parent": "page-1", "kind": "frame", "x": 300, "w": 100, "h": 100, "component": true}},
+        // The person's canvas pastes nodes whole: a leftover part outside a chart.
+        {"op": "add", "node": {"id": "r", "parent": "f", "kind": "rect", "w": 10, "h": 10, "generated": true}},
+    ]));
+    for (op, field) in [
+        (json!({"op": "add", "node": {"id": "g", "parent": "f", "kind": "rect", "w": 10, "h": 10, "generated": true}}), "generated"),
+        (json!({"op": "add", "node": {"id": "fake", "parent": "page-1", "kind": "frame", "w": 50, "h": 50, "instance_of": "m"}}), "instance_of"),
+        (json!({"op": "update", "id": "f", "set": {"generated": true}}), "generated"),
+    ] {
+        let error = refused(call_as(&e, me.clone(), "design.apply", json!({"design_id": id, "ops": [op.clone()]})));
+        assert!(error.message.contains(field), "{op}: {}", error.message);
+    }
+    // Nor is anything copied into an instance, as nothing is added or moved into one.
+    apply(&e, id, json!([
+        {"op": "add", "node": {"id": "m-in", "parent": "m", "kind": "frame", "w": 50, "h": 50}},
+        {"op": "add", "node": {"id": "dot", "parent": "page-1", "kind": "ellipse", "x": 600, "w": 10, "h": 10}},
+        {"op": "copy", "id": "m", "as": "m2", "dx": 150, "instance": true},
+    ]));
+    let error = refused(call(&e, "design.apply", json!({"design_id": id, "ops": [{"op": "copy", "id": "dot", "as": "dot-2", "parent": "m2-in"}]})));
+    assert_eq!(error.code, "design.instance", "{}", error.message);
+    ok_as(&e, me.clone(), "design.apply", json!({"design_id": id, "ops": [{"op": "update", "id": "r", "set": {"fill": "#FF0000"}}]}));
+    ok_as(&e, me, "design.apply", json!({"design_id": id, "ops": [{"op": "delete", "id": "r"}]}));
+    assert!(nodes(&e, id).iter().all(|n| n["id"] != "r"));
+}
+
 #[test]
 fn a_design_is_marked_once_it_holds_a_main() {
     let (e, _root) = project();

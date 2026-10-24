@@ -58,6 +58,13 @@ impl Run<'_> {
             .with_hint("change the chart (its labels, series, colours or options) on the frame, and its parts are drawn again; add your own nodes beside them")
     }
 
+    /// Whether a `generated` node under `parent` is a chart's part: its frame holds a chart. One
+    /// left anywhere else (written by hand before that was refused) is edited as any node is.
+    pub(super) fn drawn_by_chart(&mut self, parent: Option<&str>) -> Result<bool, BusError> {
+        let Some(parent) = parent else { return Ok(false) };
+        Ok(self.row(parent)?.is_some_and(|row| row.body.contains("\"chart\":")))
+    }
+
     /// Note chart frame `id` to draw again once the list has run.
     pub(super) fn chart_changed(&mut self, id: &str) {
         if self.derives() && !self.charts.iter().any(|c| c == id) {

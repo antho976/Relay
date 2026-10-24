@@ -253,6 +253,10 @@ impl Run<'_> {
             if self.chain(&to).any(|at| at == id) {
                 return Err(self.fail_on("parent", ErrorKind::Invalid, "design.cycle", format!("{to:?} is inside {id:?}, which this copies")));
             }
+            // As an add or a move: what is inside an instance is its main's.
+            if !self.lenient && !self.syncing && self.has_mains()? && self.link(&to)?.is_some_and(|l| l.of.is_some()) {
+                return Err(self.inside_instance(&format!("{to:?} is part of an instance")));
+            }
             Some(to)
         };
         let rows = self.subtree_rows(id.clone(), root)?;
