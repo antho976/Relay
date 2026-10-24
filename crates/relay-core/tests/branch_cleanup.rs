@@ -235,6 +235,14 @@ fn a_worktree_kept_at_close_and_its_ignored_files_survive_cleanup() {
     assert!(work.worktree.join(".env").exists());
 
     std::fs::remove_file(work.worktree.join(".env")).unwrap();
+    // A shell working inside the checkout keeps it, however the sweep judged the branch.
+    let mut shell = std::process::Command::new("sleep").arg("30").current_dir(&work.worktree).spawn().unwrap();
+    let row = cleanup(&f, &work.branch, None);
+    let _ = shell.kill();
+    let _ = shell.wait();
+    assert_eq!(row.outcome, "kept", "{row:?}");
+    assert!(row.reason.contains("in use now"), "{row:?}");
+    assert!(work.worktree.exists());
     let row = cleanup(&f, &work.branch, None);
     assert_eq!(row.outcome, "deleted", "Relay's own hook files are not the user's: {row:?}");
     assert!(row.removed_worktree && !work.worktree.exists());

@@ -328,11 +328,15 @@ fn keepers_in(dir: &Path, shown: &str, depth: usize, budget: &mut usize, keepers
 
 /// Decide one candidate and, unless `dry_run`, act on it.
 pub fn evaluate(candidate: &Candidate, live_worktrees: &[String], options: &Options) -> BranchCleanupRow {
-    evaluate_as(candidate, live_worktrees, options, false)
+    evaluate_as(candidate, live_worktrees, options, false, &|path| crate::disk_sweep::someone_inside(path).then(|| "a process is working in it".into()))
 }
 
 /// [`evaluate`], keeping any checkout that still holds the branch when `keep_worktree`.
-fn evaluate_as(candidate: &Candidate, live_worktrees: &[String], options: &Options, keep_worktree: bool) -> BranchCleanupRow {
+/// `in_use` is asked about a checkout just before it is removed, with nothing locked: why it is
+/// in use now, if it is. The open sessions were read once for the whole sweep, which can run
+/// for minutes on `gh` calls; a session made since, the other instance's, or a person's shell
+/// inside the checkout would otherwise lose it from under them.
+fn evaluate_as(candidate: &Candidate, live_worktrees: &[String], options: &Options, keep_worktree: bool, in_use: &dyn Fn(&Path) -> Option<String>) -> BranchCleanupRow {
     let git = Git { repo: &candidate.repo };
     let branch = candidate.branch.as_str();
     let mut row = BranchCleanupRow {
@@ -460,6 +464,9 @@ fn evaluate_as(candidate: &Candidate, live_worktrees: &[String], options: &Optio
         return row;
     }
     if let Some(path) = &removable {
+        if let Some(why) = in_use(path) {
+            return kept(row.clone(), format!("{}, but {} is in use now: {why}", row.reason, path.display()));
+        }
         if let Err(error) = worktree::remove(&candidate.repo, path, true) {
             return kept(row.clone(), format!("{}, but removing {} failed: {error}", row.reason, path.display()));
         }
@@ -575,7 +582,17 @@ fn run_as(engine: &Engine, project_id: Option<Id>, only: Option<&[String]>, opti
             },
             false => None,
         };
-        let row = evaluate_as(candidate, live.get(&candidate.project_id).map(Vec::as_slice).unwrap_or_default(), options, keep_worktrees);
+        let in_use = |path: &Path| -> Option<String> {
+            let open: Vec<String> = engine.store.lock()
+                .prepare_cached("SELECT worktree FROM sessions WHERE state != 'closed' AND worktree != ''")
+                .and_then(|mut statement| statement.query_map([], |r| r.get::<_, String>(0))?.collect())
+                .unwrap_or_else(|_| vec![path.display().to_string()]);
+            if open.iter().any(|live| canon(Path::new(live)) == canon(path)) {
+                return Some("an open session works in it".into());
+            }
+            crate::disk_sweep::someone_inside(path).then(|| "a process is working in it".into())
+        };
+        let row = evaluate_as(candidate, live.get(&candidate.project_id).map(Vec::as_slice).unwrap_or_default(), options, keep_worktrees, &in_use);
         if row.outcome == "gone" { continue; }
         if let Some(judged_by) = judged_by {
             let mut memo = SWEPT.lock().unwrap_or_else(|poison| poison.into_inner());

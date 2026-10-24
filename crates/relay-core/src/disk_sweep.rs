@@ -278,6 +278,12 @@ fn remove_tree(dir: &Path) -> std::io::Result<()> {
     })
 }
 
+/// Whether any process this user can see works inside `wt`: a session's agent, a person's
+/// shell, an editor, a build. What branch cleanup asks just before it removes a checkout.
+pub(crate) fn someone_inside(wt: &Path) -> bool {
+    Procs::read().inside(wt)
+}
+
 /// The processes this user can see: what each runs, and where.
 struct Procs(Vec<(String, Option<PathBuf>, Option<PathBuf>)>);
 
